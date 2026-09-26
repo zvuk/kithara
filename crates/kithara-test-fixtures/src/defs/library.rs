@@ -9,12 +9,12 @@ use crate::{
     remote_file::{RemoteFileError, fetch_verified},
 };
 
-enum Library {}
+mod consts {
+    use super::Duration;
 
-impl Library {
-    const BASE: &str = "https://stream.silvercomet.top/fixtures/";
-    const STALL: Duration = Duration::from_secs(20);
-    const TIMEOUT: Duration = Duration::from_secs(600);
+    pub(super) const BASE: &str = "https://stream.silvercomet.top/fixtures/";
+    pub(super) const STALL: Duration = Duration::from_secs(20);
+    pub(super) const TIMEOUT: Duration = Duration::from_secs(600);
 }
 
 #[kithara::asset(ext = "flac", content_type = "audio/flac", optional)]
@@ -79,9 +79,9 @@ fn library_flac(
     sha256: &str,
     length: u64,
 ) -> Result<Vec<u8>, RemoteFileError> {
-    let url = Url::parse(Library::BASE)?.join(file)?;
+    let url = Url::parse(consts::BASE)?.join(file)?;
     Ok(
-        fetch_verified(&url, sha256, length, Library::TIMEOUT, Library::STALL).unwrap_or_else(
+        fetch_verified(&url, sha256, length, consts::TIMEOUT, consts::STALL).unwrap_or_else(
             |error| panic!("requested library fixture `{file}` failed verification: {error}"),
         ),
     )
@@ -126,9 +126,9 @@ fn library_mp3(
     sha256: &str,
     length: u64,
 ) -> Result<Vec<u8>, RemoteFileError> {
-    let url = Url::parse(Library::BASE)?.join(file)?;
+    let url = Url::parse(consts::BASE)?.join(file)?;
     Ok(
-        fetch_verified(&url, sha256, length, Library::TIMEOUT, Library::STALL).unwrap_or_else(
+        fetch_verified(&url, sha256, length, consts::TIMEOUT, consts::STALL).unwrap_or_else(
             |error| panic!("requested library fixture `{file}` failed verification: {error}"),
         ),
     )

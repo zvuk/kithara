@@ -12,7 +12,7 @@ use kithara::{
     },
     warp::BeatGridId,
 };
-use kithara_integration_tests::test_defaults::Consts as Shared;
+use kithara_integration_tests::test_defaults::consts as shared;
 
 use crate::bufpool_ext::{TestPools, pools};
 
@@ -39,11 +39,11 @@ fn response_budget() -> NonZeroUsize {
 fn make_engine() -> EngineImpl<TestPools> {
     EngineImpl::new(
         EngineConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
             .grid_id(BeatGridId::allocate().expect("fixture grid id"))
             .session(SessionBinding::new(
                 Arc::new(FixtureSession),
-                Shared::NON_ZERO_SAMPLE_RATE,
+                shared::NON_ZERO_SAMPLE_RATE,
             ))
             .pools(pools())
             .response_budget_frames(response_budget())
@@ -93,7 +93,7 @@ fn engine_config_builder() {
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
         .session(SessionBinding::new(
             Arc::new(FixtureSession),
-            Shared::NON_ZERO_SAMPLE_RATE,
+            shared::NON_ZERO_SAMPLE_RATE,
         ))
         .max_slots(8)
         .sample_rate(NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"))
@@ -156,7 +156,7 @@ fn engine_master_sample_rate_returns_config_when_stopped() {
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
         .session(SessionBinding::new(
             Arc::new(FixtureSession),
-            Shared::NON_ZERO_SAMPLE_RATE,
+            shared::NON_ZERO_SAMPLE_RATE,
         ))
         .sample_rate(NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"))
         .pools(pools())

@@ -24,7 +24,9 @@ use crate::{
     style::config::QualifiedPathDepthConfig,
 };
 
-pub(crate) const ID: &str = "qualified_path_depth";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "qualified_path_depth";
+}
 
 pub(crate) struct QualifiedPathDepth;
 
@@ -40,8 +42,8 @@ impl Check for QualifiedPathDepth {
             let Some(src) = ctx.scan.source(path) else {
                 continue;
             };
-            let rewrite =
-                rewrite(cfg, &src).with_context(|| format!("{ID} fix failed for {rel}"))?;
+            let rewrite = rewrite(cfg, &src)
+                .with_context(|| format!("{ID} fix failed for {rel}", ID = consts::ID))?;
             for reason in rewrite.skipped {
                 outcome.skipped.push(format!("{rel}: {reason}"));
             }
@@ -56,7 +58,7 @@ impl Check for QualifiedPathDepth {
     }
 
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -79,7 +81,7 @@ impl Check for QualifiedPathDepth {
                 let printed = print_path(found.path);
                 let line = found.path.segments[0].ident.span().start().line;
                 violations.push(Violation::warn(
-                    ID,
+                    consts::ID,
                     format!("{rel}:{line}::{printed}"),
                     format!(
                         "qualified path `{printed}` is {} segments deep; \

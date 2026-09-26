@@ -11,13 +11,15 @@ use crate::{
     idioms::config::FatLoopBodyConfig,
 };
 
-pub(crate) const ID: &str = "fat_loop_body";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "fat_loop_body";
+}
 
 pub(crate) struct FatLoopBody;
 
 impl Check for FatLoopBody {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -84,12 +86,12 @@ fn analyze_file(
             if nested < self.cfg.nested_ctrl_threshold {
                 return;
             }
-            if self.sup.is_suppressed(line, ID) {
+            if self.sup.is_suppressed(line, consts::ID) {
                 return;
             }
             let key = format!("{}:{}:{kind}_body", self.rel, line);
             self.out.push(Violation::warn(
-                ID,
+                consts::ID,
                 key,
                 format!(
                     "`{kind}` body has {stmt_count} statements (threshold {threshold}) and \

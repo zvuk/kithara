@@ -15,9 +15,10 @@ use kithara_storage::{
 
 use super::AssetDeleter;
 use crate::{
+    consts,
     decorator::{Assets, Capabilities},
     error::{AssetsError, AssetsResult},
-    index::{ABSOLUTE_ROOT, AvailabilityIndex, PinDurability},
+    index::{AvailabilityIndex, PinDurability},
     layout::{ResourceKey, ResourceKeyKind},
     resource::{AcquisitionResult, AssetResourceState, BaseReader, BaseWriter, RequestIdentity},
 };
@@ -425,7 +426,7 @@ pub(crate) fn delete_asset_dir(root_dir: &Path, asset_root: &str) -> io::Result<
 
 /// The file an availability-index entry names.
 pub(crate) fn indexed_path(root_dir: &Path, root: &str, path: &str) -> Option<PathBuf> {
-    if root == ABSOLUTE_ROOT {
+    if root == consts::ABSOLUTE_ROOT {
         return Some(PathBuf::from(path));
     }
     Some(

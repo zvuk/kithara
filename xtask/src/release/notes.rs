@@ -57,31 +57,26 @@ fn list(notes: &mut String, artifacts: &[(String, String)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const CHANGELOG: &str = "# Changelog\n\n\
-        ## [0.0.2](https://github.com/zvuk/kithara/releases/tag/v0.0.2) - 2026-09-24\n\n\
-        ### Features\n\n- **audio**: Faster seeks\n\n\
-        ## [0.0.1](https://github.com/zvuk/kithara/releases/tag/v0.0.1) - 2026-07-01\n\n\
-        ### Fixed\n\n- Older fix\n";
+    use crate::consts;
 
     #[test]
     fn a_release_reads_its_own_changelog_section() {
         assert_eq!(
-            changelog_section(CHANGELOG, "0.0.2").unwrap(),
+            changelog_section(consts::CHANGELOG, "0.0.2").unwrap(),
             "### Features\n\n- **audio**: Faster seeks"
         );
         assert_eq!(
-            changelog_section(CHANGELOG, "0.0.1").unwrap(),
+            changelog_section(consts::CHANGELOG, "0.0.1").unwrap(),
             "### Fixed\n\n- Older fix"
         );
     }
 
     #[test]
     fn a_release_without_a_changelog_section_stops() {
-        let error = changelog_section(CHANGELOG, "0.0.3").unwrap_err();
+        let error = changelog_section(consts::CHANGELOG, "0.0.3").unwrap_err();
 
         assert!(error.to_string().contains("## [0.0.3]"), "{error}");
-        assert!(changelog_section(CHANGELOG, "0.0").is_err());
+        assert!(changelog_section(consts::CHANGELOG, "0.0").is_err());
     }
 
     #[test]

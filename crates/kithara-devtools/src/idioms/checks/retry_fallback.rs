@@ -15,9 +15,10 @@ use crate::{
     idioms::config::RetryFallbackConfig,
 };
 
-pub(crate) const ID: &str = "retry_fallback";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "retry_fallback";
 
-const EXPLANATION: &str = "\
+    pub(super) const EXPLANATION: &str = "\
 Detected a retry/attempt counter or try-then-fallback chain. Both \
 patterns paper over a broken primary path: if the first call may fail, \
 fix the contract — don't hide the bug behind N attempts or a chain of \
@@ -46,12 +47,13 @@ Suppress with `// xtask-lint-ignore: retry_fallback` ONLY for legitimate \
 user-facing defaults (e.g. a config field literally named `fallback_url` \
 where the user opted in to two endpoints). Suppression for control flow \
 is a code smell that should be discussed and fixed, not silenced.";
+}
 
 pub(crate) struct RetryFallback;
 
 impl Check for RetryFallback {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -114,7 +116,7 @@ fn is_cfg_test(attrs: &[Attribute]) -> bool {
 
 impl<'a> IdentVisitor<'a> {
     fn flag(&mut self, line: usize, name: &str, kind: &str) {
-        if self.inside_test_mod || self.suppress.is_suppressed(line, ID) {
+        if self.inside_test_mod || self.suppress.is_suppressed(line, consts::ID) {
             return;
         }
         let key = format!("{}:{line}:{name}", self.rel);
@@ -128,7 +130,7 @@ impl<'a> IdentVisitor<'a> {
             name = name,
         );
         self.out
-            .push(Violation::deny(ID, key, message).with_explanation(EXPLANATION));
+            .push(Violation::deny(consts::ID, key, message).with_explanation(consts::EXPLANATION));
     }
 }
 

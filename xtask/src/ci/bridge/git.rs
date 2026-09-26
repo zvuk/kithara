@@ -10,8 +10,8 @@ use super::{
     api::{Github, Gitlab},
     command::BridgeConfig,
     control::{ControlChange, classify},
-    model::CONTROL_PATHS,
 };
+use crate::consts;
 
 pub(super) struct GitRepo {
     root: PathBuf,
@@ -152,7 +152,7 @@ impl GitRepo {
                 head,
                 "--",
             ])
-            .args(CONTROL_PATHS)
+            .args(consts::CONTROL_PATHS)
             .output()
             .context("running git diff for CI control paths")?;
         let paths = String::from_utf8(checked(output, "git diff for CI control paths")?)
@@ -246,7 +246,7 @@ impl GitRepo {
     }
 
     fn restore_control_paths(&self, tree: &Path, base: &str) -> Result<()> {
-        for path in CONTROL_PATHS {
+        for path in consts::CONTROL_PATHS {
             let path = path.trim_end_matches('/');
             if self.exists_at(base, path)? {
                 git_in(tree, &["checkout", base, "--", path])?;
@@ -455,8 +455,8 @@ fn merge_base_into(tree: &Path, base: &str) -> Result<bool> {
     let message = format!("quarantine: merge {base} to verify against it");
     let output = Command::new("git")
         .current_dir(tree)
-        .env("GIT_AUTHOR_DATE", EPOCH)
-        .env("GIT_COMMITTER_DATE", EPOCH)
+        .env("GIT_AUTHOR_DATE", consts::EPOCH)
+        .env("GIT_COMMITTER_DATE", consts::EPOCH)
         .args([
             "-c",
             "user.name=kithara-bridge",
@@ -487,13 +487,11 @@ fn merge_base_into(tree: &Path, base: &str) -> Result<bool> {
     }
 }
 
-const EPOCH: &str = "1970-01-01T00:00:00Z";
-
 fn git_in_with_date(tree: &Path, args: &[&str]) -> Result<Vec<u8>> {
     let output = Command::new("git")
         .current_dir(tree)
-        .env("GIT_AUTHOR_DATE", EPOCH)
-        .env("GIT_COMMITTER_DATE", EPOCH)
+        .env("GIT_AUTHOR_DATE", consts::EPOCH)
+        .env("GIT_COMMITTER_DATE", consts::EPOCH)
         .args(args)
         .output()
         .with_context(|| format!("running git {}", args.first().unwrap_or(&"<unknown>")))?;

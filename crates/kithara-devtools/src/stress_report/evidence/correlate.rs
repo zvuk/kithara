@@ -770,6 +770,7 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consts;
 
     fn evidence() -> StressEvidenceConfig {
         StressEvidenceConfig {
@@ -913,9 +914,6 @@ mod tests {
         assert_eq!(normalized, "committed=1207437641712345678 state=Runnable");
     }
 
-    /// The first line the flash engine writes into a hang dump.
-    const ENGINE_COUNTERS: &str = "virtual_now_ns=86410020000000 active=1 active_async=0 real_io=0 pace_anchor=none yielders=0";
-
     /// The engine's counter line is neither a primitive, a holder, nor a
     /// waiter, so `direct_markers` is the only route that carries it into a
     /// section — and it is the causal line of the whole dump.
@@ -925,7 +923,10 @@ mod tests {
         evidence.direct_markers.push("pace_anchor=".to_owned());
 
         let signatures = wait_signatures(
-            &format!("[wait dump] audio_worker_loop\n{ENGINE_COUNTERS}\n"),
+            &format!(
+                "[wait dump] audio_worker_loop\n{ENGINE_COUNTERS}\n",
+                ENGINE_COUNTERS = consts::ENGINE_COUNTERS
+            ),
             &evidence,
             &StressRenderBudgets::default(),
         );
@@ -941,7 +942,7 @@ mod tests {
     /// one whose work never started.
     #[test]
     fn a_pacing_signature_keeps_the_real_io_count() {
-        let normalized = normalize_wait(ENGINE_COUNTERS, &StressRenderBudgets::default());
+        let normalized = normalize_wait(consts::ENGINE_COUNTERS, &StressRenderBudgets::default());
 
         assert!(normalized.contains("real_io=0"), "{normalized}");
     }
@@ -951,7 +952,7 @@ mod tests {
     /// work in flight.
     #[test]
     fn a_pacing_signature_keeps_the_pace_anchor_state() {
-        let normalized = normalize_wait(ENGINE_COUNTERS, &StressRenderBudgets::default());
+        let normalized = normalize_wait(consts::ENGINE_COUNTERS, &StressRenderBudgets::default());
 
         assert!(normalized.contains("pace_anchor=none"), "{normalized}");
     }
@@ -960,7 +961,7 @@ mod tests {
     /// give each hang a cluster of its own.
     #[test]
     fn a_pacing_signature_drops_the_virtual_clock() {
-        let normalized = normalize_wait(ENGINE_COUNTERS, &StressRenderBudgets::default());
+        let normalized = normalize_wait(consts::ENGINE_COUNTERS, &StressRenderBudgets::default());
 
         assert!(
             normalized.contains("virtual_now_ns=<volatile>"),

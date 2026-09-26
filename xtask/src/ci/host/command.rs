@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use super::{linux::command::LinuxArgs, mac::command::MacArgs, provision};
-use crate::ci::{config::PINS_PATH, process::Process};
+use crate::{ci::process::Process, consts};
 
 /// One CI machine, addressed by the platform it serves.
 ///
@@ -36,7 +36,7 @@ pub(crate) struct ProvisionArgs {
     #[arg(long, env = "KITHARA_CI_HOST_CONFIG")]
     config: Option<PathBuf>,
     /// Reviewed build pins tracked in the repository.
-    #[arg(long, env = "KITHARA_CI_PINS", default_value = PINS_PATH)]
+    #[arg(long, env = "KITHARA_CI_PINS", default_value = consts::PINS_PATH)]
     pins: PathBuf,
 }
 

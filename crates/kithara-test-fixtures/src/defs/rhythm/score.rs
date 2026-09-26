@@ -7,19 +7,17 @@ use num_traits::cast;
 
 use crate::signal::header;
 
-struct Consts;
-
-impl Consts {
-    const BEATS_PER_BAR: usize = 4;
-    const BED_PEAK: f32 = 0.42;
-    const CHANNELS: u16 = 2;
-    const LOOP_BEATS: usize = 8;
-    const MISSING_BEAT: usize = 5;
-    const PPQ: u32 = 960;
-    const SAMPLE_RATE: u32 = 48_000;
-    const SECONDS: usize = 12;
-    const SECONDS_PER_MINUTE: f64 = 60.0;
-    const TOTAL_FRAMES: usize = 48_000 * Self::SECONDS;
+mod consts {
+    pub(super) const BEATS_PER_BAR: usize = 4;
+    pub(super) const BED_PEAK: f32 = 0.42;
+    pub(super) const CHANNELS: u16 = 2;
+    pub(super) const LOOP_BEATS: usize = 8;
+    pub(super) const MISSING_BEAT: usize = 5;
+    pub(super) const PPQ: u32 = 960;
+    pub(super) const SAMPLE_RATE: u32 = 48_000;
+    pub(super) const SECONDS: usize = 12;
+    pub(super) const SECONDS_PER_MINUTE: f64 = 60.0;
+    pub(super) const TOTAL_FRAMES: usize = 48_000 * SECONDS;
 }
 
 static BEDS: [OnceLock<Vec<f32>>; 6] = [const { OnceLock::new() }; 6];
@@ -179,7 +177,7 @@ pub(super) fn wav_with_layout_at_origin(
         control,
         layout,
         origin,
-        Consts::TOTAL_FRAMES as u64,
+        consts::TOTAL_FRAMES as u64,
     )
 }
 
@@ -192,7 +190,7 @@ pub(super) fn wav_with_layout_at_origin_for_frames(
 ) -> Vec<u8> {
     let total_frames = usize::try_from(total_frames).expect("fixture frame count fits usize");
     let pcm = pcm(style, control, layout, origin, total_frames);
-    let mut bytes = header(Consts::SAMPLE_RATE, Consts::CHANNELS, Some(pcm.len()));
+    let mut bytes = header(consts::SAMPLE_RATE, consts::CHANNELS, Some(pcm.len()));
     bytes.extend(pcm);
     bytes
 }
@@ -202,7 +200,7 @@ pub(super) fn truth(style: Style, control: Control) -> Truth {
 }
 
 pub(super) fn truth_at_origin(style: Style, control: Control, origin: Origin) -> Truth {
-    truth_at_origin_for_frames(style, control, origin, Consts::TOTAL_FRAMES as u64)
+    truth_at_origin_for_frames(style, control, origin, consts::TOTAL_FRAMES as u64)
 }
 
 pub(super) fn truth_at_origin_for_frames(
@@ -218,12 +216,12 @@ pub(super) fn truth_at_origin_for_frames(
     let mut beats = Vec::new();
     let mut downbeats = Vec::new();
     for (beat, frame) in (first..total_frames).step_by(beat_frames).enumerate() {
-        if matches!(control, Control::MissingBeat) && beat == Consts::MISSING_BEAT {
+        if matches!(control, Control::MissingBeat) && beat == consts::MISSING_BEAT {
             continue;
         }
         let mark = (u64::try_from(frame).unwrap_or(u64::MAX), Some(1.0));
         beats.push(mark);
-        if beat % Consts::BEATS_PER_BAR == bar_phase {
+        if beat % consts::BEATS_PER_BAR == bar_phase {
             downbeats.push(mark);
         }
     }
@@ -245,7 +243,7 @@ fn pcm(
     let first = first_beat_frame(beat_frames, control, origin);
     let bed = bed(style, beat_frames);
     let mut bytes =
-        Vec::with_capacity(total_frames * usize::from(Consts::CHANNELS) * size_of::<i16>());
+        Vec::with_capacity(total_frames * usize::from(consts::CHANNELS) * size_of::<i16>());
 
     for frame in 0..total_frames {
         let Some(since_first) = frame.checked_sub(first) else {
@@ -254,16 +252,16 @@ fn pcm(
         };
         let beat = since_first / beat_frames;
         let within = since_first % beat_frames;
-        let missing = matches!(control, Control::MissingBeat) && beat == Consts::MISSING_BEAT;
+        let missing = matches!(control, Control::MissingBeat) && beat == consts::MISSING_BEAT;
         if missing {
             push_frame(&mut bytes, layout.frame([0, 0]));
             continue;
         }
 
         let bar_phase = usize::from(matches!(control, Control::OneBeatBarLate));
-        let pattern_beat = beat + Consts::BEATS_PER_BAR - bar_phase;
+        let pattern_beat = beat + consts::BEATS_PER_BAR - bar_phase;
         if within == 0 {
-            let marker = if pattern_beat.is_multiple_of(Consts::BEATS_PER_BAR) {
+            let marker = if pattern_beat.is_multiple_of(consts::BEATS_PER_BAR) {
                 28_000
             } else {
                 22_000
@@ -275,12 +273,12 @@ fn pcm(
         let phase_offset = if bar_phase == 0 {
             0
         } else {
-            (Consts::BEATS_PER_BAR - 1) * beat_frames
+            (consts::BEATS_PER_BAR - 1) * beat_frames
         };
-        let loop_frames = Consts::LOOP_BEATS * beat_frames;
-        let source = ((since_first + phase_offset) % loop_frames) * usize::from(Consts::CHANNELS);
+        let loop_frames = consts::LOOP_BEATS * beat_frames;
+        let source = ((since_first + phase_offset) % loop_frames) * usize::from(consts::CHANNELS);
         let frame = bed
-            .get(source..source + usize::from(Consts::CHANNELS))
+            .get(source..source + usize::from(consts::CHANNELS))
             .map_or([0, 0], |samples| {
                 [pcm_sample(samples[0]), pcm_sample(samples[1])]
             });
@@ -296,7 +294,7 @@ fn bed(style: Style, beat_frames: usize) -> &'static [f32] {
 }
 
 fn render_bed(style: Style, beat_frames: usize) -> Vec<f32> {
-    let mut score = Score::new(SampleRate(Consts::SAMPLE_RATE), Ppq(Consts::PPQ))
+    let mut score = Score::new(SampleRate(consts::SAMPLE_RATE), Ppq(consts::PPQ))
         .tempo(Ticks::ZERO, Bpm(style.bpm()))
         .track("kick", Instrument::preset("kick"))
         .track("snare", Instrument::preset("snare"))
@@ -305,7 +303,7 @@ fn render_bed(style: Style, beat_frames: usize) -> Vec<f32> {
         .track("music", Instrument::preset(style.music_preset()))
         .insert("music", Insert::preset("reverb"));
 
-    for beat in 0..Consts::LOOP_BEATS {
+    for beat in 0..consts::LOOP_BEATS {
         score = add_beat(score, style, beat);
     }
 
@@ -315,12 +313,12 @@ fn render_bed(style: Style, beat_frames: usize) -> Vec<f32> {
     let peak = mix
         .iter()
         .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
-    let gain = Consts::BED_PEAK / peak.max(Consts::BED_PEAK);
+    let gain = consts::BED_PEAK / peak.max(consts::BED_PEAK);
     for sample in &mut mix {
         *sample *= gain;
     }
-    let frames = Consts::LOOP_BEATS * beat_frames;
-    mix.resize(frames * usize::from(Consts::CHANNELS), 0.0);
+    let frames = consts::LOOP_BEATS * beat_frames;
+    mix.resize(frames * usize::from(consts::CHANNELS), 0.0);
     mix
 }
 
@@ -429,7 +427,7 @@ fn beat_at(beat: usize, division: usize, divisions: usize) -> Ticks {
     let beat = u64::try_from(beat).expect("invariant: fixture beat index fits u64");
     let division = u64::try_from(division).expect("invariant: fixture division fits u64");
     let divisions = u64::try_from(divisions).expect("invariant: fixture divisions fit u64");
-    let ppq = u64::from(Consts::PPQ);
+    let ppq = u64::from(consts::PPQ);
     Ticks(beat * ppq + division * (ppq / divisions))
 }
 
@@ -444,7 +442,7 @@ fn pcm_sample(sample: f32) -> i16 {
 }
 
 fn beat_frames(style: Style) -> usize {
-    cast((f64::from(Consts::SAMPLE_RATE) * Consts::SECONDS_PER_MINUTE / style.bpm()).round())
+    cast((f64::from(consts::SAMPLE_RATE) * consts::SECONDS_PER_MINUTE / style.bpm()).round())
         .expect("invariant: a rhythm beat period fits usize")
 }
 

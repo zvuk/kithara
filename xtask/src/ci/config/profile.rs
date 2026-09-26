@@ -51,10 +51,7 @@ mod tests {
     use std::fs;
 
     use super::*;
-
-    /// Keys nextest reads on a profile. Inside a `junit` table it drops them
-    /// with a warning, which is how `[profile.ci.junit]` swallowed two of them.
-    const PROFILE_KEYS: &[&str] = &["fail-fast", "leak-timeout", "slow-timeout", "test-threads"];
+    use crate::consts;
 
     #[test]
     fn the_ci_junit_report_lands_where_the_lanes_collect_it() {
@@ -70,7 +67,7 @@ mod tests {
             "nextest resolves junit.path against the profile store directory, so `{path}` \
              nests the report under `target/nextest/ci/` twice and CI collects nothing"
         );
-        for key in PROFILE_KEYS {
+        for key in consts::PROFILE_KEYS {
             assert!(
                 !junit.contains_key(*key),
                 "`{key}` belongs on `[profile.ci]`; inside the junit table nextest ignores it"

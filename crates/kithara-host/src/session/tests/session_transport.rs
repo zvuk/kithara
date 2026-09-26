@@ -9,9 +9,7 @@ use kithara_test_utils::{bufpool::pools, kithara};
 use kithara_warp::BeatGridId;
 
 use super::ring::{ManualRingConfig, ManualRingSession};
-use crate::session::TransportEvent;
-
-const SAMPLE_RATE: u32 = 48_000;
+use crate::{consts, session::TransportEvent};
 
 #[derive(Clone, Copy)]
 enum CommitCase {
@@ -20,7 +18,8 @@ enum CommitCase {
 }
 
 fn session(block_frames: u32, capacity_blocks: usize) -> ManualRingSession {
-    let rate = NonZeroU32::new(SAMPLE_RATE).expect("invariant: test sample rate is non-zero");
+    let rate = NonZeroU32::new(consts::RING_ADMISSION_SAMPLE_RATE)
+        .expect("invariant: test sample rate is non-zero");
     ManualRingSession::start(ManualRingConfig::new(rate, block_frames, capacity_blocks))
         .expect("invariant: manual ring session starts")
 }
@@ -43,7 +42,7 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver<Trans
             eq_layout: Vec::new(),
             gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
             pools: pools(),
-            sample_rate: SAMPLE_RATE,
+            sample_rate: consts::RING_ADMISSION_SAMPLE_RATE,
         })
         .expect("invariant: player registration reaches the session")
     {
@@ -129,7 +128,7 @@ fn clock_samples(session: &ManualRingSession) -> u64 {
 }
 
 fn sample_tolerance(beats_per_second: f64) -> f64 {
-    beats_per_second / f64::from(SAMPLE_RATE)
+    beats_per_second / f64::from(consts::RING_ADMISSION_SAMPLE_RATE)
 }
 
 #[kithara::test]
@@ -269,7 +268,7 @@ fn session_transport_advances_with_rendered_frames() {
     let frames = clock_samples(&session);
     let expected =
         f64::from(u32::try_from(frames).expect("invariant: rendered frame count fits u32")) * 2.0
-            / f64::from(SAMPLE_RATE);
+            / f64::from(consts::RING_ADMISSION_SAMPLE_RATE);
     assert!((position(&session) - expected).abs() <= sample_tolerance(2.0));
 }
 
@@ -308,7 +307,7 @@ fn tempo_change_preserves_beat_and_changes_slope_at_the_scheduled_boundary() {
         .credit(1)
         .expect("invariant: old tempo reaches the scheduled boundary");
     let boundary = snapshot(&session);
-    let old_step = f64::from(BLOCK_FRAMES) * 2.0 / f64::from(SAMPLE_RATE);
+    let old_step = f64::from(BLOCK_FRAMES) * 2.0 / f64::from(consts::RING_ADMISSION_SAMPLE_RATE);
     assert_eq!(boundary.revision(), initial.revision());
     assert!(
         (f64::from(boundary.position()) - f64::from(initial.position()) - old_step).abs()
@@ -319,7 +318,7 @@ fn tempo_change_preserves_beat_and_changes_slope_at_the_scheduled_boundary() {
         .credit(1)
         .expect("invariant: new tempo applies at the boundary");
     let changed = snapshot(&session);
-    let elapsed = f64::from(BLOCK_FRAMES) / f64::from(SAMPLE_RATE);
+    let elapsed = f64::from(BLOCK_FRAMES) / f64::from(consts::RING_ADMISSION_SAMPLE_RATE);
     let new_step = elapsed + 0.005 * (1.0 - (-elapsed / 0.005).exp());
     assert_eq!(
         u64::from(changed.revision()),
@@ -387,7 +386,8 @@ fn session_seek_relocates_to_the_exact_target_beat() {
         .credit(1)
         .expect("invariant: seek applies at the exact boundary");
 
-    let rendered_step = f64::from(BLOCK_FRAMES) * 2.0 / f64::from(SAMPLE_RATE);
+    let rendered_step =
+        f64::from(BLOCK_FRAMES) * 2.0 / f64::from(consts::RING_ADMISSION_SAMPLE_RATE);
     let relocated_boundary = f64::from(snapshot(&session).position()) - rendered_step;
     assert!((relocated_boundary - f64::from(target)).abs() <= sample_tolerance(2.0));
 }
@@ -461,7 +461,7 @@ fn resuming_after_a_pause_continues_from_the_held_position() {
         .expect("invariant: resume applies at its boundary");
     let resumed = snapshot(&session);
 
-    let step = f64::from(BLOCK_FRAMES) * 2.0 / f64::from(SAMPLE_RATE);
+    let step = f64::from(BLOCK_FRAMES) * 2.0 / f64::from(consts::RING_ADMISSION_SAMPLE_RATE);
     assert!(resumed.is_playing());
     assert!(
         (f64::from(resumed.position()) - f64::from(paused.position()) - step).abs()

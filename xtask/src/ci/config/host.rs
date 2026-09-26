@@ -8,15 +8,7 @@ use anyhow::{Context, Result, bail};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
-use crate::ci::{SCCACHE_SLOT_CONTROL_NAMESPACE, TARGET_SLOT_CACHE_NAMESPACE};
-
-/// Directory every Unix executor reads the installed host profile from.
-pub(crate) const LANE_CONFIG_DIR: &str = "/etc/kithara-ci";
-
-/// Installed profile of the Mac mini and the guests it hosts, read through
-/// `KITHARA_CI_HOST_CONFIG`. A Linux machine carries its own; see
-/// [`crate::ci::host::linux`].
-pub(crate) const MAC_CONFIG_PATH: &str = "/etc/kithara-ci/mac-host.toml";
+use crate::consts;
 
 /// Machine profile of one CI host: volumes, accounts, and installed roots.
 /// It is provisioned per machine and never tracked in the repository; the
@@ -447,16 +439,16 @@ fn default_removable_roots() -> Vec<String> {
 /// slot.
 ///
 /// The two code-owned names are spelled once, in
-/// [`SCCACHE_SLOT_CONTROL_NAMESPACE`] and [`TARGET_SLOT_CACHE_NAMESPACE`], so a
+/// [`SCCACHE_SLOT_CONTROL_NAMESPACE`](consts::SCCACHE_SLOT_CONTROL_NAMESPACE) and [`TARGET_SLOT_CACHE_NAMESPACE`](consts::TARGET_SLOT_CACHE_NAMESPACE), so a
 /// profile that never overrides this key cannot spell either a second way.
 fn default_cache_namespaces() -> Vec<String> {
     [
-        SCCACHE_SLOT_CONTROL_NAMESPACE,
+        consts::SCCACHE_SLOT_CONTROL_NAMESPACE,
         "bootstrap",
         "gitlab-runner",
         "quarantine",
         "review",
-        TARGET_SLOT_CACHE_NAMESPACE,
+        consts::TARGET_SLOT_CACHE_NAMESPACE,
         "trusted",
     ]
     .map(String::from)
@@ -810,12 +802,12 @@ mod tests {
 
         assert_eq!(
             host.cache_namespaces.first().map(String::as_str),
-            Some(SCCACHE_SLOT_CONTROL_NAMESPACE)
+            Some(consts::SCCACHE_SLOT_CONTROL_NAMESPACE)
         );
         assert!(
             host.cache_namespaces
                 .iter()
-                .any(|namespace| namespace == TARGET_SLOT_CACHE_NAMESPACE),
+                .any(|namespace| namespace == consts::TARGET_SLOT_CACHE_NAMESPACE),
             "an operator profile that omits the build cache loses it to cleanup"
         );
     }
@@ -887,12 +879,12 @@ mod tests {
         assert_eq!(
             host.cache_namespaces,
             [
-                SCCACHE_SLOT_CONTROL_NAMESPACE,
+                consts::SCCACHE_SLOT_CONTROL_NAMESPACE,
                 "bootstrap",
                 "gitlab-runner",
                 "quarantine",
                 "review",
-                TARGET_SLOT_CACHE_NAMESPACE,
+                consts::TARGET_SLOT_CACHE_NAMESPACE,
                 "trusted"
             ]
         );

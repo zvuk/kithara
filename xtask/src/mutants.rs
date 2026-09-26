@@ -12,7 +12,7 @@ use kithara_devtools::Ctx;
 use serde::Deserialize;
 use tracing::info;
 
-const CONFIG_PATH: &str = ".config/mutation-suites.toml";
+use crate::consts;
 
 #[derive(Debug, Args)]
 pub(crate) struct MutantsArgs {
@@ -187,7 +187,7 @@ fn rooted(root: &Path, path: &Path) -> PathBuf {
 
 impl MutationConfig {
     fn load(root: &Path) -> Result<Self> {
-        let path = root.join(CONFIG_PATH);
+        let path = root.join(consts::CONFIG_PATH);
         let content =
             fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         let config: Self =
@@ -213,7 +213,8 @@ impl MutationConfig {
             let known: BTreeSet<&str> = self.suite.iter().map(|s| s.group.as_str()).collect();
             bail!(
                 "no mutation suite is in group `{group}`; {CONFIG_PATH} declares {}",
-                known.into_iter().collect::<Vec<_>>().join(", ")
+                known.into_iter().collect::<Vec<_>>().join(", "),
+                CONFIG_PATH = consts::CONFIG_PATH
             );
         }
         Ok(selected)
@@ -221,7 +222,10 @@ impl MutationConfig {
 
     fn validate(&self, root: &Path) -> Result<()> {
         if self.suite.is_empty() {
-            bail!("{CONFIG_PATH} must define at least one [[suite]]");
+            bail!(
+                "{CONFIG_PATH} must define at least one [[suite]]",
+                CONFIG_PATH = consts::CONFIG_PATH
+            );
         }
 
         let mut names = BTreeSet::new();
@@ -410,7 +414,7 @@ mod tests {
         fs::create_dir_all(source.parent().unwrap()).unwrap();
         fs::write(source, "pub fn value() -> bool { true }\n").unwrap();
         fs::create_dir_all(root.join(".config")).unwrap();
-        fs::write(root.join(CONFIG_PATH), content).unwrap();
+        fs::write(root.join(consts::CONFIG_PATH), content).unwrap();
     }
 
     /// The suites the repository ships, not a fixture. Every other test here
@@ -425,8 +429,12 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("xtask sits beside the workspace root");
-        MutationConfig::load(root)
-            .unwrap_or_else(|error| panic!("the shipped {CONFIG_PATH} is unusable: {error:#}"));
+        MutationConfig::load(root).unwrap_or_else(|error| {
+            panic!(
+                "the shipped {CONFIG_PATH} is unusable: {error:#}",
+                CONFIG_PATH = consts::CONFIG_PATH
+            )
+        });
     }
 
     #[test]

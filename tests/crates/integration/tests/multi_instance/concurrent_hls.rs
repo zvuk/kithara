@@ -19,19 +19,18 @@ use tracing::info;
 
 use crate::common::test_defaults::SawWav;
 
-struct Consts;
-impl Consts {
+mod consts {
     #[cfg(not(target_arch = "wasm32"))]
-    const SEGMENT_COUNT: usize = 10;
+    pub(super) const SEGMENT_COUNT: usize = 10;
     #[cfg(target_arch = "wasm32")]
-    const SEGMENT_COUNT: usize = 4;
+    pub(super) const SEGMENT_COUNT: usize = 4;
 }
 
 /// Create an HLS server; `abr_variants == 1` → single variant, otherwise ABR.
 async fn create_hls_server(wav_data: Arc<Vec<u8>>, abr_variants: usize) -> HlsTestServer {
     let config = HlsTestServerConfig {
         variant_count: abr_variants,
-        segments_per_variant: Consts::SEGMENT_COUNT,
+        segments_per_variant: consts::SEGMENT_COUNT,
         segment_size: SawWav::DEFAULT.segment_size,
         segment_duration_secs: SawWav::DEFAULT.segment_duration_secs(),
         custom_data: Some(wav_data),

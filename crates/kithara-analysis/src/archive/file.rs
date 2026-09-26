@@ -12,12 +12,8 @@ use crate::{
     AnalysisFingerprint, AnalysisProgress, TrackAnalysis,
     archive::{AnalysisFileError, AnalysisFilePatch, AnalysisFileUpdate, AnalysisFileWrite},
     blob::{MAX_PREALLOC, Reader},
+    consts,
 };
-
-pub(super) const FINGERPRINT_MAX: usize = 1024;
-pub(super) const INDEX_ENTRY_LEN: usize = 1;
-const HEADER_FIELDS_LEN: usize = 88;
-pub(super) const HEADER_LEN: usize = HEADER_FIELDS_LEN + 2 * (size_of::<u32>() + FINGERPRINT_MAX);
 
 /// Immutable identity and fixed-chunk layout of one analysis file.
 #[derive(Clone, Debug)]
@@ -97,14 +93,15 @@ impl AnalysisFileSpec {
             return Err(AnalysisFileError::TooLarge);
         }
         let index_bytes = count
-            .checked_mul(INDEX_ENTRY_LEN)
+            .checked_mul(consts::INDEX_ENTRY_LEN)
             .ok_or(AnalysisFileError::TooLarge)?;
-        let payload_offset = HEADER_LEN
+        let payload_offset = consts::HEADER_LEN
             .checked_add(index_bytes)
             .ok_or(AnalysisFileError::TooLarge)?;
         Ok(Layout {
             chunk_count,
-            index_offset: u64::try_from(HEADER_LEN).map_err(|_| AnalysisFileError::TooLarge)?,
+            index_offset: u64::try_from(consts::HEADER_LEN)
+                .map_err(|_| AnalysisFileError::TooLarge)?,
             payload_offset: u64::try_from(payload_offset)
                 .map_err(|_| AnalysisFileError::TooLarge)?,
         })
@@ -166,7 +163,9 @@ impl AnalysisFile {
         bytes: &[u8],
         expected_fingerprint: &AnalysisFingerprint,
     ) -> Result<Self, AnalysisFileError> {
-        let header_bytes = bytes.get(..HEADER_LEN).ok_or(AnalysisFileError::Corrupt)?;
+        let header_bytes = bytes
+            .get(..consts::HEADER_LEN)
+            .ok_or(AnalysisFileError::Corrupt)?;
         let header = Header::decode(header_bytes)?;
         if &header.fingerprint != expected_fingerprint {
             return Err(AnalysisFileError::Config);
@@ -188,12 +187,12 @@ impl AnalysisFile {
             .get(index_start..index_end)
             .ok_or(AnalysisFileError::Corrupt)?;
         let count = usize::try_from(header.chunk_count).map_err(|_| AnalysisFileError::Corrupt)?;
-        if index_bytes.len() != count.saturating_mul(INDEX_ENTRY_LEN) {
+        if index_bytes.len() != count.saturating_mul(consts::INDEX_ENTRY_LEN) {
             return Err(AnalysisFileError::Corrupt);
         }
 
         let mut index: Vec<IndexEntry> = Vec::with_capacity(count);
-        for raw in index_bytes.chunks_exact(INDEX_ENTRY_LEN) {
+        for raw in index_bytes.chunks_exact(consts::INDEX_ENTRY_LEN) {
             let entry = IndexEntry::decode(raw)?;
             index.push(entry);
         }
@@ -363,7 +362,7 @@ impl Header {
     }
 
     fn encode(&self) -> Result<Bytes, AnalysisFileError> {
-        let mut out = BytesMut::with_capacity(HEADER_LEN);
+        let mut out = BytesMut::with_capacity(consts::HEADER_LEN);
         push_u32(&mut out, Self::VERSION);
         out.put_u8(u8::from(self.settled));
         out.extend_from_slice(&[0; 3]);
@@ -380,7 +379,7 @@ impl Header {
         push_u64(&mut out, self.latest_payload_len);
         push_fingerprint(&mut out, self.fingerprint.waveform())?;
         push_fingerprint(&mut out, self.fingerprint.beat())?;
-        if out.len() != HEADER_LEN {
+        if out.len() != consts::HEADER_LEN {
             return Err(AnalysisFileError::Corrupt);
         }
         Ok(out.freeze())
@@ -421,7 +420,7 @@ impl IndexEntry {
         Ok(entry)
     }
 
-    fn encode(self) -> [u8; INDEX_ENTRY_LEN] {
+    fn encode(self) -> [u8; consts::INDEX_ENTRY_LEN] {
         [u8::from(self.0)]
     }
 
@@ -556,7 +555,9 @@ fn chunk_range(spec: &AnalysisFileSpec, id: u64) -> Result<Range<u64>, AnalysisF
 
 fn index_entry_offset(layout: Layout, id: u64) -> Result<u64, AnalysisFileError> {
     let relative = id
-        .checked_mul(u64::try_from(INDEX_ENTRY_LEN).map_err(|_| AnalysisFileError::TooLarge)?)
+        .checked_mul(
+            u64::try_from(consts::INDEX_ENTRY_LEN).map_err(|_| AnalysisFileError::TooLarge)?,
+        )
         .ok_or(AnalysisFileError::TooLarge)?;
     layout
         .index_offset
@@ -570,10 +571,10 @@ fn validate_fingerprint(fingerprint: &AnalysisFingerprint) -> Result<(), Analysi
             return Err(AnalysisFileError::Config);
         }
         let len = value.map_or(0, str::len);
-        if len > FINGERPRINT_MAX {
+        if len > consts::FINGERPRINT_MAX {
             return Err(AnalysisFileError::FingerprintTooLong {
                 len,
-                max: FINGERPRINT_MAX,
+                max: consts::FINGERPRINT_MAX,
             });
         }
     }
@@ -582,10 +583,10 @@ fn validate_fingerprint(fingerprint: &AnalysisFingerprint) -> Result<(), Analysi
 
 fn push_fingerprint(out: &mut BytesMut, value: Option<&str>) -> Result<(), AnalysisFileError> {
     let bytes = value.map_or(&[][..], str::as_bytes);
-    if bytes.len() > FINGERPRINT_MAX {
+    if bytes.len() > consts::FINGERPRINT_MAX {
         return Err(AnalysisFileError::FingerprintTooLong {
             len: bytes.len(),
-            max: FINGERPRINT_MAX,
+            max: consts::FINGERPRINT_MAX,
         });
     }
     push_u32(
@@ -593,7 +594,7 @@ fn push_fingerprint(out: &mut BytesMut, value: Option<&str>) -> Result<(), Analy
         u32::try_from(bytes.len()).map_err(|_| AnalysisFileError::TooLarge)?,
     );
     let start = out.len();
-    out.resize(start + FINGERPRINT_MAX, 0);
+    out.resize(start + consts::FINGERPRINT_MAX, 0);
     out[start..start + bytes.len()].copy_from_slice(bytes);
     Ok(())
 }
@@ -602,9 +603,9 @@ fn read_fingerprint(reader: &mut Reader<'_>) -> Result<Option<String>, AnalysisF
     let len = usize::try_from(reader.read_u32().map_err(|_| AnalysisFileError::Corrupt)?)
         .map_err(|_| AnalysisFileError::Corrupt)?;
     let slot = reader
-        .read_array::<FINGERPRINT_MAX>()
+        .read_array::<{ consts::FINGERPRINT_MAX }>()
         .map_err(|_| AnalysisFileError::Corrupt)?;
-    if len > FINGERPRINT_MAX || slot[len..].iter().any(|byte| *byte != 0) {
+    if len > consts::FINGERPRINT_MAX || slot[len..].iter().any(|byte| *byte != 0) {
         return Err(AnalysisFileError::Corrupt);
     }
     if len == 0 {

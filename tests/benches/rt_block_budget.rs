@@ -23,16 +23,14 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::integration_fixtures::benchmark_half;
 use ringbuf::traits::Producer;
 
-struct Consts;
-
-impl Consts {
-    const BLOCK_FRAMES: u32 = 128;
-    const CHANNELS: u16 = 2;
-    const MEASURED_BLOCKS: usize = 20_000;
-    const SAMPLE_RATE: u32 = 48_000;
-    const TRACK_COUNTS: [usize; 3] = [1, 2, 4];
-    const TRACK_SECONDS: f64 = 600.0;
-    const WARMUP_BLOCKS: usize = 2_000;
+mod consts {
+    pub(super) const BLOCK_FRAMES: u32 = 128;
+    pub(super) const CHANNELS: u16 = 2;
+    pub(super) const MEASURED_BLOCKS: usize = 20_000;
+    pub(super) const SAMPLE_RATE: u32 = 48_000;
+    pub(super) const TRACK_COUNTS: [usize; 3] = [1, 2, 4];
+    pub(super) const TRACK_SECONDS: f64 = 600.0;
+    pub(super) const WARMUP_BLOCKS: usize = 2_000;
 }
 
 struct Measurement {
@@ -46,18 +44,18 @@ fn non_zero(value: u32, label: &str) -> NonZeroU32 {
 }
 
 fn block_frames() -> usize {
-    usize::try_from(Consts::BLOCK_FRAMES)
+    usize::try_from(consts::BLOCK_FRAMES)
         .unwrap_or_else(|_| panic!("bench block frames exceed usize"))
 }
 
 fn block_budget() -> Duration {
-    Duration::from_secs_f64(f64::from(Consts::BLOCK_FRAMES) / f64::from(Consts::SAMPLE_RATE))
+    Duration::from_secs_f64(f64::from(consts::BLOCK_FRAMES) / f64::from(consts::SAMPLE_RATE))
 }
 
 fn spec() -> AudioSpec {
     AudioSpec::new(
-        Consts::CHANNELS,
-        non_zero(Consts::SAMPLE_RATE, "sample rate"),
+        consts::CHANNELS,
+        non_zero(consts::SAMPLE_RATE, "sample rate"),
     )
 }
 
@@ -65,8 +63,8 @@ fn processor() -> (PlayerNodeProcessor, SlotControl, Pools) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
     let pools = pools();
     let shape = StreamShape {
-        sample_rate: non_zero(Consts::SAMPLE_RATE, "sample rate"),
-        max_block_frames: non_zero(Consts::BLOCK_FRAMES, "block frames"),
+        sample_rate: non_zero(consts::SAMPLE_RATE, "sample rate"),
+        max_block_frames: non_zero(consts::BLOCK_FRAMES, "block frames"),
     };
     (
         PlayerNodeProcessor::new(inputs, shape, &pools, kithara::play::DEFAULT_GATE_SMOOTHING),
@@ -98,7 +96,7 @@ fn load_tracks(
 
     for (item_id, src) in &tracks {
         let resource = Resource::from_reader(
-            TestPcmReader::from_pcm(spec(), Consts::TRACK_SECONDS, benchmark_half()),
+            TestPcmReader::from_pcm(spec(), consts::TRACK_SECONDS, benchmark_half()),
             Some(Arc::clone(src)),
         );
         send(
@@ -160,14 +158,14 @@ fn measure(tracks: usize) -> Measurement {
     let mut out_l = vec![0.0_f32; frames];
     let mut out_r = vec![0.0_f32; frames];
 
-    for _ in 0..Consts::WARMUP_BLOCKS {
+    for _ in 0..consts::WARMUP_BLOCKS {
         render_block(&mut processor, &control, &mut out_l, &mut out_r);
     }
 
     let before = control.playback.metrics().snapshot();
-    let mut durations = Vec::with_capacity(Consts::MEASURED_BLOCKS);
+    let mut durations = Vec::with_capacity(consts::MEASURED_BLOCKS);
     let mut peak = 0.0_f32;
-    for _ in 0..Consts::MEASURED_BLOCKS {
+    for _ in 0..consts::MEASURED_BLOCKS {
         durations.push(render_block(
             &mut processor,
             &control,
@@ -227,21 +225,21 @@ fn main() {
     println!(
         "PlayerNodeProcessor block budget: {:.3} ms ({} frames @ {} Hz, {} ch)",
         budget.as_secs_f64() * 1e3,
-        Consts::BLOCK_FRAMES,
-        Consts::SAMPLE_RATE,
-        Consts::CHANNELS,
+        consts::BLOCK_FRAMES,
+        consts::SAMPLE_RATE,
+        consts::CHANNELS,
     );
     println!(
         "{} blocks measured per lane after {} warm-up blocks",
-        Consts::MEASURED_BLOCKS,
-        Consts::WARMUP_BLOCKS,
+        consts::MEASURED_BLOCKS,
+        consts::WARMUP_BLOCKS,
     );
     println!(
         "{:>7}  {:>22}  {:>22}  {:>22}",
         "tracks", "p50", "p99", "max"
     );
 
-    for count in Consts::TRACK_COUNTS {
+    for count in consts::TRACK_COUNTS {
         let measurement = measure(count);
         println!(
             "{:>7}  {:>22}  {:>22}  {:>22}",

@@ -9,12 +9,7 @@ use kithara_platform::sync::Arc;
 ))]
 use kithara_stretch::{ElasticBackendConfig, ElasticBackendConfigPatch};
 
-use crate::{StretchControls, WarpPlan, WarpPlanSlot};
-
-const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) {
-    Some(frames) => frames,
-    None => unreachable!(),
-};
+use crate::{StretchControls, WarpPlan, WarpPlanSlot, consts};
 
 /// Fixed resources used to construct one resident [`super::Warp`].
 ///
@@ -52,7 +47,7 @@ pub struct WarpConfig {
     #[patch(nested)]
     backends: ElasticBackendConfig,
     /// Maximum source frames admitted to one elastic render operation.
-    #[builder(default = DEFAULT_SOURCE_BLOCK_FRAMES)]
+    #[builder(default = consts::DEFAULT_SOURCE_BLOCK_FRAMES)]
     #[field(get, copy)]
     source_block_frames: NonZeroUsize,
     /// Output-frame window used to smooth live rate changes.

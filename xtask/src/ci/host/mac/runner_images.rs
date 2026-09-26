@@ -4,42 +4,12 @@ use anyhow::{Context, Result, bail};
 use tracing::info;
 
 use super::{
-    runner_guest::{GUEST_SHARE, guest_developer_dir},
+    runner_guest::guest_developer_dir,
     runners::{
         RunnerManager, Tokens, docker_host, path_text, read_trimmed, require_macos, write_secure,
     },
 };
-use crate::ci::image::linux_build_args;
-
-/// The floating tag the Linux runner runs. It always names the image the most
-/// recent pipeline pinned, so the runner configuration never changes with a pin.
-pub(super) const LINUX_LATEST_IMAGE: &str = "kithara-ci:linux-latest";
-
-/// The throwaway VM the macOS lane clones for every job.
-pub(super) struct JobVm;
-
-impl JobVm {
-    pub(super) const NAME: &'static str = "kithara-ci-job";
-    const BOOT_ATTEMPTS: u32 = 40;
-    const BOOT_POLL: Duration = Duration::from_secs(5);
-    const WAIT_SECONDS: u32 = 7200;
-    /// How many jobs a guest serves before it is thrown away. The build
-    /// directory is kept between jobs, so it only ever grows, and the guest's
-    /// own disk is what runs out first.
-    ///
-    /// Measured over one nightly: the 90-gigabyte disk presents a 78-gibibyte
-    /// container, macOS and its swap hold about 20 of it, and eleven macOS
-    /// jobs left 44 gibibytes under `target` — 18 in `debug`, 9 in
-    /// `test-release`, the rest spread over one directory per Apple triple.
-    /// That reached 114 mebibytes free, and `apple:ios` stopped in `lipo` on
-    /// "No space left on device" while writing the universal archive.
-    ///
-    /// Six jobs keeps the peak near 30 gibibytes, which leaves room for the
-    /// transient a universal link needs. It costs one extra cold build per
-    /// nightly. Raising it again means giving the guest a larger disk, and
-    /// that needs room on the CI volume the quota does not currently allow.
-    const MAX_BUILDS: u32 = 6;
-}
+use crate::{ci::image::linux_build_args, consts};
 
 impl RunnerManager<'_> {
     /// Makes the image this commit pins the one every Linux job runs.
@@ -76,7 +46,11 @@ impl RunnerManager<'_> {
                 "DOCKER_HOST",
                 docker_host(&home, &self.config.host.colima_profile),
             )
-            .args(["tag", &self.config.pins.linux_image, LINUX_LATEST_IMAGE]);
+            .args([
+                "tag",
+                &self.config.pins.linux_image,
+                consts::LINUX_LATEST_IMAGE,
+            ]);
         self.process
             .run_command(&mut command, "tag pinned Linux CI image as latest")?;
         let config_root = home.join(".config/kithara-ci");
@@ -85,7 +59,7 @@ impl RunnerManager<'_> {
             &config_root.join("linux-image.digest"),
             &format!("{digest}\n"),
         )?;
-        info!(image = self.config.pins.linux_image, latest = LINUX_LATEST_IMAGE, %digest, "Linux CI image active");
+        info!(image = self.config.pins.linux_image, latest = consts::LINUX_LATEST_IMAGE, %digest, "Linux CI image active");
         Ok(())
     }
 
@@ -304,7 +278,7 @@ impl RunnerManager<'_> {
             self.destroy_job_vm(&tart);
             self.process.run(
                 &tart,
-                &["clone", self.base_vm_name()?, JobVm::NAME],
+                &["clone", self.base_vm_name()?, consts::JOB_VM_NAME],
                 "clone CI macOS VM",
             )?;
             let outcome = self
@@ -354,15 +328,15 @@ impl RunnerManager<'_> {
             // jobs never play audible sound, so nothing is lost.
             .args(["run", "--no-graphics", "--no-audio"])
             .args(self.job_vm_mounts())
-            .arg(JobVm::NAME)
+            .arg(consts::JOB_VM_NAME)
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         command.spawn().context("starting CI macOS VM")?;
-        for _ in 0..JobVm::BOOT_ATTEMPTS {
-            thread::sleep(JobVm::BOOT_POLL);
+        for _ in 0..consts::BOOT_ATTEMPTS {
+            thread::sleep(consts::BOOT_POLL);
             if let Ok(address) =
                 self.process
-                    .capture(tart, &["ip", JobVm::NAME], "CI macOS VM address")
+                    .capture(tart, &["ip", consts::JOB_VM_NAME], "CI macOS VM address")
                 && !address.trim().is_empty()
             {
                 return Ok(address.trim().to_string());
@@ -405,7 +379,7 @@ impl RunnerManager<'_> {
     }
 
     fn serve_jobs(&self, address: &str) -> Result<()> {
-        let shared = GUEST_SHARE;
+        let shared = consts::GUEST_SHARE;
         let brew = self.config.host.brew_root.join("bin");
         let brew = brew.display();
         let path = format!("$HOME/.cargo/bin:{brew}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
@@ -455,8 +429,8 @@ impl RunnerManager<'_> {
                  --max-builds {} --wait-timeout {}",
                 guest_developer_dir(),
                 self.config.host.gitlab_origin(),
-                JobVm::MAX_BUILDS,
-                JobVm::WAIT_SECONDS,
+                consts::MAX_BUILDS,
+                consts::WAIT_SECONDS,
             ),
             "serve GitLab jobs",
             Some(&tokens.macos),
@@ -512,9 +486,9 @@ impl RunnerManager<'_> {
 
     fn destroy_job_vm(&self, tart: &str) {
         self.process
-            .best_effort(tart, &["stop", JobVm::NAME], "stop CI macOS VM");
+            .best_effort(tart, &["stop", consts::JOB_VM_NAME], "stop CI macOS VM");
         self.process
-            .best_effort(tart, &["delete", JobVm::NAME], "delete CI macOS VM");
+            .best_effort(tart, &["delete", consts::JOB_VM_NAME], "delete CI macOS VM");
     }
 
     pub(super) fn linux_image_digest(&self, home: &Path) -> Result<String> {
@@ -564,7 +538,7 @@ mod tests {
         assert_eq!(
             crate::ci::image::floating_tag(&crate::ci::config::fixture().pins.linux_image)
                 .expect("the pin carries a tag"),
-            LINUX_LATEST_IMAGE
+            consts::LINUX_LATEST_IMAGE
         );
     }
 

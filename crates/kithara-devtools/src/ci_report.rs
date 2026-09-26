@@ -12,24 +12,9 @@ use serde_json::Value;
 use crate::{
     Ctx,
     common::project::{HealthConfig, ProjectConfig},
+    consts,
     quality_assessment::lcom,
 };
-
-/// Names the producing tools own. They are contracts with those tools rather
-/// than policy, so they stay here while how much of each to carry lives in
-/// `.config/xtask.toml` under `[ci_report]`.
-struct Consts;
-impl Consts {
-    const ASSESSMENT_DIRECTORY: &'static str = "quality-assessment";
-    const ASSESSMENT_MANIFEST: &'static str = "manifest.json";
-    const CRAP_DIRECTORY: &'static str = "cargo-crap";
-    const CRAP_REPORT: &'static str = "report.md";
-    const METRICS: &'static str = "metrics.json";
-    const SIMILARITY_ARTIFACT: &'static str = "similarity-report";
-    const SIMILARITY_REPORT: &'static str = "report.md";
-    /// Where the health report stops being a verdict and starts being logs.
-    const STAGE_DETAILS: &'static str = "## Stage details";
-}
 
 #[derive(Debug, Args)]
 pub struct CiReportArgs {
@@ -72,7 +57,7 @@ fn render(artifacts: &Path, config: &ProjectConfig) -> Result<String> {
 
 fn type_cohesion(artifacts: &Path, rows: usize) -> Result<String> {
     let Some(assessment) = find(artifacts, &|path| {
-        named(path, "assessment.json") && under(path, Consts::ASSESSMENT_DIRECTORY)
+        named(path, "assessment.json") && under(path, consts::ASSESSMENT_DIRECTORY)
     })?
     else {
         return Ok(missing(
@@ -98,7 +83,7 @@ fn health_report_name(config: &HealthConfig) -> Result<&str> {
 /// summary, so this says where it is rather than carrying it.
 fn assessment(artifacts: &Path) -> Result<String> {
     let Some(manifest) = find(artifacts, &|path| {
-        named(path, Consts::ASSESSMENT_MANIFEST) && under(path, Consts::ASSESSMENT_DIRECTORY)
+        named(path, consts::ASSESSMENT_MANIFEST) && under(path, consts::ASSESSMENT_DIRECTORY)
     })?
     else {
         return Ok(missing("Repository assessment", "quality-assessment"));
@@ -125,11 +110,11 @@ fn assessment(artifacts: &Path) -> Result<String> {
 
 fn duplication(artifacts: &Path, rows: usize) -> Result<String> {
     let (report, flattened) = if let Some(report) = find(artifacts, &|path| {
-        named(path, Consts::SIMILARITY_REPORT) && under(path, Consts::SIMILARITY_ARTIFACT)
+        named(path, consts::SIMILARITY_REPORT) && under(path, consts::SIMILARITY_ARTIFACT)
     })? {
         (report, false)
     } else {
-        let Some(report) = find(artifacts, &|path| named(path, Consts::SIMILARITY_REPORT))? else {
+        let Some(report) = find(artifacts, &|path| named(path, consts::SIMILARITY_REPORT))? else {
             return Ok(missing("Duplication", "similarity-report"));
         };
         (report, true)
@@ -179,7 +164,7 @@ fn health(artifacts: &Path, report_name: &str) -> Result<String> {
     };
     let text = read(&report)?;
     let summary = text
-        .split_once(Consts::STAGE_DETAILS)
+        .split_once(consts::STAGE_DETAILS)
         .map_or(text.as_str(), |(before, _)| before);
     let (title, body) = summary.split_once('\n').unwrap_or((summary, ""));
     if !title.starts_with("# ") || !title.ends_with(" health report") {
@@ -190,7 +175,7 @@ fn health(artifacts: &Path, report_name: &str) -> Result<String> {
 
 fn coverage_risk(artifacts: &Path, rows: usize) -> Result<String> {
     let Some(report) = find(artifacts, &|path| {
-        named(path, Consts::CRAP_REPORT) && parent_named(path, Consts::CRAP_DIRECTORY)
+        named(path, consts::CRAP_REPORT) && parent_named(path, consts::CRAP_DIRECTORY)
     })?
     else {
         return Ok(missing("Coverage risk (CRAP)", "coverage-risk"));
@@ -206,7 +191,7 @@ fn coverage_risk(artifacts: &Path, rows: usize) -> Result<String> {
 }
 
 fn architecture(artifacts: &Path, top_contours: usize) -> Result<String> {
-    let Some(metrics) = find(artifacts, &|path| named(path, Consts::METRICS))? else {
+    let Some(metrics) = find(artifacts, &|path| named(path, consts::METRICS))? else {
         return Ok(missing("Architecture complexity", "architecture"));
     };
     let text = read(&metrics)?;

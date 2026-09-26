@@ -10,10 +10,10 @@ use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 
 use super::{
-    Consts, StretchControls, WarpRenderer, chunk, dominant_bin, expected_bin, flush_serviced,
+    StretchControls, WarpRenderer, chunk, dominant_bin, expected_bin, flush_serviced,
     render_serviced, renderer, spec,
 };
-use crate::{Warp, WarpConfig, test_pools::pools};
+use crate::{Warp, WarpConfig, consts, test_pools::pools};
 
 #[kithara::test]
 #[cfg_attr(
@@ -180,15 +180,15 @@ fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
     let pools = fx.pools.clone();
     let mut out: Vec<f32> = Vec::new();
     let mut tail_frames = 0;
-    let block = 4096 * usize::from(Consts::CH);
+    let block = 4096 * usize::from(consts::CH);
     for data in input.chunks(block) {
         if let Some(c) = render_serviced(fx, chunk(&pools, data)) {
             assert_eq!(
                 c.spec().sample_rate.get(),
-                Consts::SR,
+                consts::SR,
                 "stretch preserves sample rate"
             );
-            assert_eq!(c.spec().channels, Consts::CH);
+            assert_eq!(c.spec().channels, consts::CH);
             out.extend_from_slice(&c.samples);
         }
     }
@@ -196,10 +196,10 @@ fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
         // A non-empty flush chunk carries real audio, so its spec must stay
         // the source spec - never the `AudioChunkInfo::default()` sentinel (0
         // channels) that a `None` `last_input_meta` would otherwise yield.
-        assert_eq!(c.spec().channels, Consts::CH, "flush preserves channels");
+        assert_eq!(c.spec().channels, consts::CH, "flush preserves channels");
         assert_eq!(
             c.spec().sample_rate.get(),
-            Consts::SR,
+            consts::SR,
             "flush preserves sample rate"
         );
         tail_frames += c.frames();
@@ -230,8 +230,8 @@ fn run_vinyl(warp_sine: &[f32], kind: StretchKind, speed: f32, in_frames: usize)
 /// Half playback speed -> stretch 2.0 -> ~double duration, pitch held.
 /// Shared across every compiled-in backend.
 fn assert_half_speed_contract(warp_sine: &[f32], kind: StretchKind) {
-    let channels = usize::from(Consts::CH);
-    let in_frames = usize::try_from(Consts::SR).unwrap() * 2; // 2 s
+    let channels = usize::from(consts::CH);
+    let in_frames = usize::try_from(consts::SR).unwrap() * 2; // 2 s
     let (out, tail_frames) = run_keylocked_with_tail(warp_sine, kind, 0.5, in_frames);
     let out_frames = out.len() / channels;
     let timeline_frames = out_frames - tail_frames;
@@ -254,11 +254,11 @@ fn assert_half_speed_contract(warp_sine: &[f32], kind: StretchKind) {
     // a resampler-in-disguise would shift it).
     let mono: Vec<f32> = out.iter().step_by(channels).copied().collect();
     assert!(
-        mono.len() >= Consts::N,
+        mono.len() >= consts::N,
         "{kind:?}: not enough output for the FFT window"
     );
     let peak = dominant_bin(&mono);
-    let want = expected_bin(Consts::F0);
+    let want = expected_bin(consts::F0);
     assert!(
         peak.abs_diff(want) <= 3,
         "{kind:?}: pitch moved under time-stretch: peak bin {peak}, expected {want}"
@@ -266,7 +266,7 @@ fn assert_half_speed_contract(warp_sine: &[f32], kind: StretchKind) {
 }
 
 fn assert_unity_contract(warp_sine: &[f32], kind: StretchKind) {
-    let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
+    let in_frames = usize::try_from(consts::SR).unwrap() * 2;
     let input = warp_sine[..(in_frames) * 2].to_vec();
     let out = render(&mut keylocked(kind, 1.0), &input);
     assert_eq!(out, input, "{kind:?}: unity speed must bypass byte-exact");
@@ -328,7 +328,7 @@ fn rendered_source_frontier_excludes_backend_lookahead(
         renderer.rendered_source_end(),
         Some((
             expected_frame,
-            NonZeroU32::new(Consts::SR).expect("test sample rate is non-zero"),
+            NonZeroU32::new(consts::SR).expect("test sample rate is non-zero"),
         )),
         "rendered progress excludes source still retained by the backend"
     );
@@ -410,7 +410,7 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
-    let channels = usize::from(Consts::CH);
+    let channels = usize::from(consts::CH);
     let mut fx = keylocked(backend, 0.5);
     let pools = fx.pools.clone();
     let cf = 1024usize;
@@ -436,8 +436,8 @@ fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind, warp_sin
         assert_eq!(
             o.spec(),
             AudioSpec {
-                channels: Consts::CH,
-                sample_rate: NonZero::new(Consts::SR).unwrap()
+                channels: consts::CH,
+                sample_rate: NonZero::new(consts::SR).unwrap()
             },
             "spec (incl. sample rate) preserved verbatim"
         );
@@ -461,8 +461,8 @@ fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind, warp_sin
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn keylocked_double_speed_preserves_pitch(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
-    let channels = usize::from(Consts::CH);
-    let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
+    let channels = usize::from(consts::CH);
+    let in_frames = usize::try_from(consts::SR).unwrap() * 2;
     let (out, _tail) = run_keylocked_with_tail(&warp_sine, backend, 2.0, in_frames);
     let out_frames = out.len() / channels;
     assert!(
@@ -472,11 +472,11 @@ fn keylocked_double_speed_preserves_pitch(#[case] backend: StretchKind, warp_sin
 
     let mono: Vec<f32> = out.iter().step_by(channels).copied().collect();
     assert!(
-        mono.len() >= Consts::N,
+        mono.len() >= consts::N,
         "not enough key-locked output for the pitch window"
     );
     let peak = dominant_bin(&mono);
-    let want = expected_bin(Consts::F0);
+    let want = expected_bin(consts::F0);
     assert!(
         peak.abs_diff(want) <= 3,
         "key-locked playback rate shifted pitch: peak bin {peak}, expected {want}"
@@ -492,8 +492,8 @@ fn keylocked_double_speed_preserves_pitch(#[case] backend: StretchKind, warp_sin
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn vinyl_speed_scales_duration_and_pitch(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
-    let channels = usize::from(Consts::CH);
-    let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
+    let channels = usize::from(consts::CH);
+    let in_frames = usize::try_from(consts::SR).unwrap() * 2;
     let out = run_vinyl(&warp_sine, backend, 2.0, in_frames);
     let out_frames = out.len() / channels;
     assert!(
@@ -502,11 +502,11 @@ fn vinyl_speed_scales_duration_and_pitch(#[case] backend: StretchKind, warp_sine
     );
     let mono: Vec<f32> = out.iter().step_by(channels).copied().collect();
     assert!(
-        mono.len() >= Consts::N,
+        mono.len() >= consts::N,
         "not enough vinyl output for the FFT window"
     );
     let peak = dominant_bin(&mono);
-    let want = expected_bin(Consts::F0 * 2.0);
+    let want = expected_bin(consts::F0 * 2.0);
     assert!(
         peak.abs_diff(want) <= 4,
         "vinyl pitch did not follow speed: peak bin {peak}, expected {want}"
@@ -569,11 +569,11 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_si
     }
     let vinyl_mono: Vec<f32> = vinyl_out
         .iter()
-        .step_by(usize::from(Consts::CH))
+        .step_by(usize::from(consts::CH))
         .copied()
         .collect();
     assert!(
-        dominant_bin(&vinyl_mono).abs_diff(expected_bin(Consts::F0 * 0.5)) <= 4,
+        dominant_bin(&vinyl_mono).abs_diff(expected_bin(consts::F0 * 0.5)) <= 4,
         "off: vinyl pitch follows speed"
     );
 
@@ -595,15 +595,15 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_si
     }
     let mono: Vec<f32> = stretched
         .iter()
-        .step_by(usize::from(Consts::CH))
+        .step_by(usize::from(consts::CH))
         .copied()
         .collect();
     assert!(
-        mono.len() >= Consts::N,
+        mono.len() >= consts::N,
         "on: not enough output for the FFT window"
     );
     assert!(
-        dominant_bin(&mono).abs_diff(expected_bin(Consts::F0)) <= 3,
+        dominant_bin(&mono).abs_diff(expected_bin(consts::F0)) <= 3,
         "on: pitch preserved after live toggle"
     );
 }

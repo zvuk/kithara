@@ -1,10 +1,6 @@
 use std::{env, ffi::OsStr, process::Command};
 
-/// Environment variable naming the compiler-cache wrapper Cargo runs.
-const WRAPPER: &str = "RUSTC_WRAPPER";
-
-/// Environment variable Cargo reads to decide on incremental compilation.
-const INCREMENTAL: &str = "CARGO_INCREMENTAL";
+use crate::consts;
 
 /// Whether this run is one whose build cost is being accounted for.
 fn in_ci() -> bool {
@@ -27,7 +23,7 @@ fn set(value: Option<&OsStr>) -> bool {
 /// lane's verdict is about the workspace, never about whether a cache daemon
 /// answered.
 pub(crate) fn report_stats(program: &str) {
-    if !worth_reporting(in_ci(), env::var_os(WRAPPER).as_deref()) {
+    if !worth_reporting(in_ci(), env::var_os(consts::WRAPPER).as_deref()) {
         return;
     }
     match Command::new(program).arg("--show-stats").status() {
@@ -73,7 +69,11 @@ pub(crate) fn clippy_cleared() -> &'static [&'static str] {
 /// Only `clippy-driver`'s own compilations - the workspace crates - go
 /// uncached either way, which is the part this cannot help.
 const fn clippy_cleared_for(in_ci: bool) -> &'static [&'static str] {
-    if in_ci { &[] } else { &[WRAPPER, INCREMENTAL] }
+    if in_ci {
+        &[]
+    } else {
+        &[consts::WRAPPER, consts::INCREMENTAL]
+    }
 }
 
 #[cfg(test)]
@@ -107,6 +107,9 @@ mod tests {
 
     #[test]
     fn a_workstation_clippy_run_trades_the_cache_for_incremental() {
-        assert_eq!(clippy_cleared_for(false), [WRAPPER, INCREMENTAL]);
+        assert_eq!(
+            clippy_cleared_for(false),
+            [consts::WRAPPER, consts::INCREMENTAL]
+        );
     }
 }

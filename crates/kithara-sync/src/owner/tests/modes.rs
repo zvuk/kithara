@@ -12,11 +12,8 @@ use super::{Accept, TestGrid, TestGroup, session_grid};
 use crate::{
     AlignmentSource, GroupState, LoadGeneration, ParentGridUpdate, SessionAxisUpdate,
     SyncAdmission, SyncCapability, SyncError, SyncGroup, SyncIntent, SyncMember, SyncMemberKind,
-    SyncMode, SyncOperation, SyncStatusSnapshot, TopologyOperation, owner::descent::Parent,
+    SyncMode, SyncOperation, SyncStatusSnapshot, TopologyOperation, consts, owner::descent::Parent,
 };
-
-/// Time constant the tempo fixtures approach a new target with.
-const SMOOTHING_SECONDS: f64 = 0.005;
 
 pub(super) type Group = GroupState<TestGroup>;
 
@@ -103,7 +100,7 @@ pub(super) fn tempo_at(
         target,
         tempo: BeatsPerMinute::try_from(value).expect("finite positive bpm"),
         commit,
-        smoothing: SMOOTHING_SECONDS,
+        smoothing: consts::SMOOTHING_SECONDS,
     }
 }
 
@@ -272,7 +269,7 @@ fn local_tempo_transaction_preserves_the_beat_at_its_commit_frame() {
     assert!(matches!(admission, SyncAdmission::StateChanged { .. }));
     assert_eq!(group.mode(), SyncMode::LocalSync);
     assert_eq!(grid_beat_at(&group, 48_000), 2.0);
-    let approach_surplus = (2.0 - 1.5) * SMOOTHING_SECONDS;
+    let approach_surplus = (2.0 - 1.5) * consts::SMOOTHING_SECONDS;
     assert!(
         (grid_beat_at(&group, 96_000) - (3.5 + approach_surplus)).abs() < 1e-9,
         "a second after the commit the group has played its target tempo plus \

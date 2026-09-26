@@ -9,7 +9,7 @@ use kithara_platform::time::Duration;
 use kithara_ui::capture::{Film, Geometry, read_geometry};
 use num_traits::cast::AsPrimitive;
 
-use crate::{capture::Shot, fixture::Consts};
+use crate::{capture::Shot, fixture::consts};
 
 /// Which host draws the gallery.
 ///
@@ -28,14 +28,14 @@ pub(crate) enum Host {
 
 /// The smallest size a window can be dragged to unless a run asks for another.
 pub(crate) const MIN_WINDOW: Extent = Extent {
-    height: Consts::MIN_HEIGHT,
-    width: Consts::MIN_WIDTH,
+    height: consts::MIN_HEIGHT,
+    width: consts::MIN_WIDTH,
 };
 
 /// The size the gallery opens at unless a run asks for another.
 pub(crate) const WINDOW: Extent = Extent {
-    height: Consts::HEIGHT,
-    width: Consts::WIDTH,
+    height: consts::HEIGHT,
+    width: consts::WIDTH,
 };
 
 /// A size written the way a person writes one: `1300x720`.
@@ -130,11 +130,11 @@ pub(crate) struct Args {
     /// The scale a photograph is taken at. One means a page's pixels are its
     /// points, so a difference between two sets is a difference in what was
     /// drawn rather than in how it was sampled.
-    #[arg(long, value_name = "N", default_value_t = Consts::SCALE)]
+    #[arg(long, value_name = "N", default_value_t = consts::SCALE)]
     pub(crate) scale: f32,
 
     /// How long one frame of a moving page takes.
-    #[arg(long, value_name = "MS", default_value_t = Consts::STRESS_TICK_MS)]
+    #[arg(long, value_name = "MS", default_value_t = consts::STRESS_TICK_MS)]
     pub(crate) tick: u64,
 
     /// How many photographs to take of each page. More than one shows a page

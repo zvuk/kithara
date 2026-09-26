@@ -20,16 +20,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use kithara_devtools::lock::FileLock;
 
-struct Consts;
-
-impl Consts {
-    /// Held by the one job building in the directory.
-    const LOCK_FILE: &str = ".kithara-lane.lock";
-    /// The content the directory's artifacts may have been built from.
-    const SOURCES_FILE: &str = ".kithara-lane-sources";
-    /// Stands for content a build the record did not see may have used.
-    const UNKNOWN_BLOB: &str = "unknown";
-}
+use crate::consts;
 
 /// Git blob ids per tracked path.
 type Sources = BTreeMap<String, BTreeSet<String>>;
@@ -54,18 +45,18 @@ impl LaneBuild {
             .create(true)
             .truncate(false)
             .write(true)
-            .open(dir.join(Consts::LOCK_FILE))
+            .open(dir.join(consts::LOCK_FILE))
             .with_context(|| format!("opening the lane build lock in {}", dir.display()))?;
         let lock = FileLock::exclusive(lock).context("waiting for the lane build lock")?;
         let tracked = tracked_sources(project_root)?;
-        let record = dir.join(Consts::SOURCES_FILE);
+        let record = dir.join(consts::SOURCES_FILE);
         let mut recorded = read_sources(&record)?;
         if unseen_build(dir, &record)? {
             for path in tracked.keys() {
                 recorded
                     .entry(path.clone())
                     .or_default()
-                    .insert(Consts::UNKNOWN_BLOB.to_owned());
+                    .insert(consts::UNKNOWN_BLOB.to_owned());
             }
         }
         let now = SystemTime::now();
@@ -103,7 +94,7 @@ impl LaneBuild {
             uncertain
                 .entry(path.clone())
                 .or_default()
-                .insert(Consts::UNKNOWN_BLOB.to_owned());
+                .insert(consts::UNKNOWN_BLOB.to_owned());
         }
         write_sources(&self.record, &uncertain)
     }
@@ -307,7 +298,7 @@ mod tests {
             .set_modified(old)
             .unwrap();
         write_sources(
-            &lane.path().join(Consts::SOURCES_FILE),
+            &lane.path().join(consts::SOURCES_FILE),
             &sources(&[("lib.rs", "other")]),
         )
         .unwrap();
@@ -361,7 +352,7 @@ mod tests {
                 .unwrap();
         };
         set_old(&file);
-        let record = lane.path().join(Consts::SOURCES_FILE);
+        let record = lane.path().join(consts::SOURCES_FILE);
         write_sources(&record, &tracked_sources(checkout.path()).unwrap()).unwrap();
         set_old(&record);
         let unit = lane.path().join("debug/.fingerprint/lib-0123");

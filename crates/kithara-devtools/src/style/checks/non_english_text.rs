@@ -9,13 +9,15 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to},
 };
 
-pub(crate) const ID: &str = "non_english_text";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "non_english_text";
+}
 
 pub(crate) struct NonEnglishText;
 
 impl Check for NonEnglishText {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -69,7 +71,7 @@ fn scan_lines(rel: &str, src: &str, excerpt_chars: usize) -> Vec<Violation> {
             }
             let line_no = idx + 1;
             Some(Violation::deny(
-                ID,
+                consts::ID,
                 format!("{rel}:{line_no}"),
                 format!(
                     "Cyrillic text is not allowed in tracked text files at line {line_no}: {}",

@@ -9,7 +9,7 @@ use firewheel::{
 };
 use kithara_platform::time::Duration;
 
-use super::{OfflineSessionError, task::CHANNELS};
+use super::{OfflineSessionError, task::consts::CHANNELS};
 
 #[derive(Builder, Clone, Copy)]
 #[builder(state_mod(vis = "pub(crate)"))]

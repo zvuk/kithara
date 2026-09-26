@@ -15,53 +15,51 @@ use super::{
 };
 use crate::{BeatArtifact, artifact::MarkedBeat};
 
-#[cfg(feature = "beat-backend")]
-pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v5";
+pub(crate) mod consts {
+    pub(super) const ALIGN_BARS: usize = 4;
+    pub(super) const BEATS_PER_BAR: f64 = 4.0;
+    pub(super) const MAX_BAR_RATIO: f64 = 2.0;
+    pub(super) const MEDIAN_TRUST_RATIO: f64 = 0.10;
+    pub(super) const MERGE_RATIO_EPS: f64 = 1e-3;
+    pub(super) const MIN_BAR_RATIO: f64 = 0.5;
+    pub(super) const MIN_BEAT_GAPS: usize = 8;
+    pub(super) const MIN_DOWNBEATS: usize = 2;
+    pub(super) const MIN_GAP_RATIO: f64 = 0.7;
+    pub(super) const MIN_LEAF_BARS: usize = 8;
+    pub(super) const MIN_MAP_BEATS: usize = 2;
+    pub(super) const OUTLIER_RATIO: f64 = 0.04;
+    pub(super) const OUTLIER_WINDOW: usize = 4;
+    pub(super) const RESIDUAL_MS: f64 = 18.0;
+    pub(super) const SECS_PER_MIN: f64 = 60.0;
+    pub(super) const STABLE_WINDOW_BARS: usize = 16;
 
-struct Consts;
-
-impl Consts {
-    const ALIGN_BARS: usize = 4;
-    const BEATS_PER_BAR: f64 = 4.0;
-    const MAX_BAR_RATIO: f64 = 2.0;
-    const MEDIAN_TRUST_RATIO: f64 = 0.10;
-    const MERGE_RATIO_EPS: f64 = 1e-3;
-    const MIN_BAR_RATIO: f64 = 0.5;
-    const MIN_BEAT_GAPS: usize = 8;
-    const MIN_DOWNBEATS: usize = 2;
-    const MIN_GAP_RATIO: f64 = 0.7;
-    const MIN_LEAF_BARS: usize = 8;
-    const MIN_MAP_BEATS: usize = 2;
-    const OUTLIER_RATIO: f64 = 0.04;
-    const OUTLIER_WINDOW: usize = 4;
-    const RESIDUAL_MS: f64 = 18.0;
-    const SECS_PER_MIN: f64 = 60.0;
-    const STABLE_WINDOW_BARS: usize = 16;
+    #[cfg(feature = "beat-backend")]
+    pub(crate) const GRID_SEMANTICS_TAG: &str = "grid_bpm_from_beats_v5";
 }
 
 #[derive(Builder, Debug, Clone, PartialEq, kithara_derive::BuiltDefault)]
 pub(crate) struct GridParams {
-    #[builder(default = Consts::MAX_BAR_RATIO)]
+    #[builder(default = consts::MAX_BAR_RATIO)]
     pub(crate) max_bar_ratio: f64,
-    #[builder(default = Consts::MEDIAN_TRUST_RATIO)]
+    #[builder(default = consts::MEDIAN_TRUST_RATIO)]
     pub(crate) median_trust_ratio: f64,
-    #[builder(default = Consts::MERGE_RATIO_EPS)]
+    #[builder(default = consts::MERGE_RATIO_EPS)]
     pub(crate) merge_ratio_eps: f64,
-    #[builder(default = Consts::MIN_BAR_RATIO)]
+    #[builder(default = consts::MIN_BAR_RATIO)]
     pub(crate) min_bar_ratio: f64,
-    #[builder(default = Consts::MIN_GAP_RATIO)]
+    #[builder(default = consts::MIN_GAP_RATIO)]
     pub(crate) min_gap_ratio: f64,
-    #[builder(default = Consts::OUTLIER_RATIO)]
+    #[builder(default = consts::OUTLIER_RATIO)]
     pub(crate) outlier_ratio: f64,
-    #[builder(default = Consts::RESIDUAL_MS)]
+    #[builder(default = consts::RESIDUAL_MS)]
     pub(crate) residual_ms: f64,
-    #[builder(default = Consts::ALIGN_BARS)]
+    #[builder(default = consts::ALIGN_BARS)]
     pub(crate) align_bars: usize,
-    #[builder(default = Consts::MIN_LEAF_BARS)]
+    #[builder(default = consts::MIN_LEAF_BARS)]
     pub(crate) min_leaf_bars: usize,
-    #[builder(default = Consts::OUTLIER_WINDOW)]
+    #[builder(default = consts::OUTLIER_WINDOW)]
     pub(crate) outlier_window: usize,
-    #[builder(default = Consts::STABLE_WINDOW_BARS)]
+    #[builder(default = consts::STABLE_WINDOW_BARS)]
     pub(crate) stable_window_bars: usize,
 }
 
@@ -114,7 +112,7 @@ pub(crate) fn build_grid_with(
     )?;
     let marks_bpm = beats_bpm(&buffers.marks, &mut buffers.gaps, &mut buffers.sorted)?;
     let beats = marks_to_frames(&buffers.marks, &raw.beats, sr);
-    if beats.len() >= Consts::MIN_MAP_BEATS {
+    if beats.len() >= consts::MIN_MAP_BEATS {
         retain(&mut buffers.positions, |position| {
             position_to_frame(position, sr).is_some_and(|frame| {
                 beats
@@ -124,7 +122,7 @@ pub(crate) fn build_grid_with(
         });
     }
 
-    if buffers.positions.len() < Consts::MIN_DOWNBEATS {
+    if buffers.positions.len() < consts::MIN_DOWNBEATS {
         return Ok(BeatArtifact::new(
             marks_bpm.unwrap_or(downbeat_bpm),
             beats,
@@ -193,7 +191,7 @@ fn beats_bpm(
 ) -> Result<Option<f64>, PoolError> {
     bar_gaps(beats, gaps)?;
     retain(gaps, |gap| gap > 0.0);
-    if gaps.len() < Consts::MIN_BEAT_GAPS {
+    if gaps.len() < consts::MIN_BEAT_GAPS {
         return Ok(None);
     }
 
@@ -217,7 +215,7 @@ fn beats_bpm(
         }
         beat = span / count;
     }
-    Ok((beat > 0.0).then(|| Consts::SECS_PER_MIN / beat))
+    Ok((beat > 0.0).then(|| consts::SECS_PER_MIN / beat))
 }
 
 fn marks_to_frames(positions: &[f32], detected: &[BeatMark], sample_rate: f64) -> Vec<MarkedBeat> {
@@ -254,7 +252,7 @@ fn position_to_frame(position: f32, sample_rate: f64) -> Option<u64> {
 
 fn bar_to_bpm(bar_seconds: f64) -> f64 {
     if bar_seconds > 0.0 {
-        Consts::BEATS_PER_BAR * Consts::SECS_PER_MIN / bar_seconds
+        consts::BEATS_PER_BAR * consts::SECS_PER_MIN / bar_seconds
     } else {
         0.0
     }
@@ -265,15 +263,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::pools;
-
-    struct Consts;
-
-    impl Consts {
-        const SR: u32 = 44_100;
-        const TOL_100MS: u64 = 4_410;
-        const TOL_20MS: u64 = 882;
-    }
+    use crate::{consts, test_pools::pools};
 
     fn marks(times: Vec<f32>) -> Vec<BeatMark> {
         times.into_iter().map(|at| BeatMark::new(at, 0.9)).collect()
@@ -332,11 +322,11 @@ mod tests {
         let pools = pools();
         let raw = RawBeats::new(marks(steady(0.0, 0.5, 128)), marks(steady(0.0, 2.0, 64)));
 
-        super::build_grid(&raw, Consts::SR, &GridParams::default(), &pools)
+        super::build_grid(&raw, consts::CORE_SR, &GridParams::default(), &pools)
             .expect("first grid fits the PCM pool budget");
         let allocated = pools.stats().allocated_bytes;
 
-        super::build_grid(&raw, Consts::SR, &GridParams::default(), &pools)
+        super::build_grid(&raw, consts::CORE_SR, &GridParams::default(), &pools)
             .expect("second grid fits the PCM pool budget");
 
         assert_eq!(pools.stats().allocated_bytes, allocated);
@@ -352,7 +342,7 @@ mod tests {
 
         let grid = build_grid(
             &RawBeats::new(marks(beats), marks(steady(0.0, 2.0, 16))),
-            Consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -373,7 +363,7 @@ mod tests {
 
         let grid = build_grid(
             &RawBeats::new(marks(beats), marks(downbeats)),
-            Consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -426,7 +416,7 @@ mod tests {
         let beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * 0.5).collect();
         let grid = build_grid(
             &RawBeats::new(marks(beats), marks(steady(0.0, 2.0, 16))),
-            Consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -446,7 +436,7 @@ mod tests {
 
         let grid = build_grid(
             &RawBeats::new(marks(beats), Vec::new()),
-            Consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -471,7 +461,7 @@ mod tests {
 
         let grid = build_grid(
             &RawBeats::new(marks(beats), Vec::new()),
-            Consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -493,7 +483,7 @@ mod tests {
         let beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * 0.4).collect();
         let grid = build_grid(
             &RawBeats::new(marks(beats.clone()), marks(beats)),
-            Consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -536,7 +526,7 @@ mod tests {
     fn clean_track_is_one_on_grid_segment() {
         let grid = build_grid(
             &raw(steady(1.0, 2.0, 64)),
-            Consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -556,8 +546,8 @@ mod tests {
         );
         let first = 44_100; // 1.0 s
         let last = 129 * 44_100; // 1.0 s + 64 bars of 2.0 s
-        assert!(seg.start_frame().abs_diff(first) < Consts::TOL_20MS);
-        assert!(seg.end_frame().abs_diff(last) < Consts::TOL_20MS);
+        assert!(seg.start_frame().abs_diff(first) < consts::TOL_20MS);
+        assert!(seg.end_frame().abs_diff(last) < consts::TOL_20MS);
     }
 
     #[kithara::test(native, flash(false))]
@@ -574,7 +564,7 @@ mod tests {
             t += 2.06;
         }
         db.push(t);
-        let grid = build_grid(&raw(db), Consts::SR, &GridParams::default());
+        let grid = build_grid(&raw(db), consts::CORE_SR, &GridParams::default());
 
         assert!(
             grid.regions().len() >= 2,
@@ -602,7 +592,7 @@ mod tests {
             let idx = nearest_downbeat_idx(grid.downbeats(), boundary);
             let near = grid.downbeats()[idx].abs_diff(boundary);
             assert!(
-                near < Consts::TOL_100MS,
+                near < consts::TOL_100MS,
                 "segment boundary must land on a downbeat"
             );
             assert_eq!(idx % 4, 0, "boundary bar {idx} must sit on a 4-bar phrase");
@@ -624,7 +614,7 @@ mod tests {
         let extras: Vec<f32> = [10usize, 20, 30].iter().map(|&i| db[i] + 1.0).collect();
         db.extend(extras);
         db.sort_by(f32::total_cmp);
-        let grid = build_grid(&raw(db), Consts::SR, &GridParams::default());
+        let grid = build_grid(&raw(db), consts::CORE_SR, &GridParams::default());
 
         assert_eq!(
             grid.downbeats().len(),
@@ -643,7 +633,7 @@ mod tests {
         for t in [132.2f32, 135.0, 138.4, 141.0] {
             db.push(t);
         }
-        let grid = build_grid(&raw(db), Consts::SR, &GridParams::default());
+        let grid = build_grid(&raw(db), consts::CORE_SR, &GridParams::default());
 
         assert!((grid.bpm() - 120.0).abs() < 0.5, "bpm {}", grid.bpm());
         for seg in grid.regions() {
@@ -661,7 +651,7 @@ mod tests {
         let beats = vec![0.5f32, 1.0, 1.5];
         let grid = build_grid(
             &RawBeats::new(marks(beats), marks(steady(1.0, 2.0, 8))),
-            Consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 
@@ -683,7 +673,7 @@ mod tests {
     fn downbeat_only_short_track_remains_a_degraded_tempo_grid() {
         let grid = build_grid(
             &raw(steady(1.0, 2.0, 8)),
-            Consts::SR,
+            consts::CORE_SR,
             &GridParams::default(),
         );
 

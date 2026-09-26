@@ -189,21 +189,23 @@ mod tests {
 
     use super::*;
 
-    /// The toolkit documents this build ships its own version of.
-    ///
-    /// The application's own documents are read over the toolkit's, so one
-    /// standing at a path the toolkit also ships replaces it. These two do so
-    /// deliberately: the toolkit's menu commands `ui.window.focus`,
-    /// `ui.window.open`, `ui.window.close`, `ui.window.cycle_display`,
-    /// `ui.window.hidden`, `ui.window.can_open`, `ui.settings.open`,
-    /// `ui.library.add_folder` and `ui.modules.title`, which this application
-    /// answers on nowhere, so drawing it here would be refused. Everything
-    /// else the menu is built from - its module cell, layout row, toggle row
-    /// and hint row - is taken from the toolkit rather than copied.
-    const REPLACED: [&str; 2] = [
-        "modules/app-menu.kmodule.ron",
-        "modules/app-menu/window-row.kmodule.ron",
-    ];
+    mod consts {
+        /// The toolkit documents this build ships its own version of.
+        ///
+        /// The application's own documents are read over the toolkit's, so one
+        /// standing at a path the toolkit also ships replaces it. These two do so
+        /// deliberately: the toolkit's menu commands `ui.window.focus`,
+        /// `ui.window.open`, `ui.window.close`, `ui.window.cycle_display`,
+        /// `ui.window.hidden`, `ui.window.can_open`, `ui.settings.open`,
+        /// `ui.library.add_folder` and `ui.modules.title`, which this application
+        /// answers on nowhere, so drawing it here would be refused. Everything
+        /// else the menu is built from - its module cell, layout row, toggle row
+        /// and hint row - is taken from the toolkit rather than copied.
+        pub(super) const REPLACED: [&str; 2] = [
+            "modules/app-menu.kmodule.ron",
+            "modules/app-menu/window-row.kmodule.ron",
+        ];
+    }
 
     /// A document copied into this application under a name the toolkit
     /// already ships takes that name over without saying so, and then drifts
@@ -218,7 +220,7 @@ mod tests {
             .filter(|path| toolkit.load(None, path).is_ok())
             .collect();
 
-        assert_eq!(replaced, REPLACED);
+        assert_eq!(replaced, consts::REPLACED);
     }
 
     #[kithara::test]

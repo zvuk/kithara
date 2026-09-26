@@ -130,14 +130,18 @@ mod tests {
     use super::*;
     use crate::{builtin, draw::DrawCmd};
 
-    /// A header the whole width of a module, and the cell the chevron sits in
-    /// at the end of it.
-    const HEADER: Rect = Rect {
-        h: 26.0,
-        w: 200.0,
-        x: 12.0,
-        y: 4.0,
-    };
+    mod consts {
+        use super::*;
+
+        /// A header the whole width of a module, and the cell the chevron sits in
+        /// at the end of it.
+        pub(super) const HEADER: Rect = Rect {
+            h: 26.0,
+            w: 200.0,
+            x: 12.0,
+            y: 4.0,
+        };
+    }
 
     fn drawn(paint: impl FnOnce(&mut DrawListBuilder, &mut TextContext)) -> Vec<DrawCmd> {
         let skin = builtin::skin();
@@ -151,7 +155,7 @@ mod tests {
     fn a_chip_draws_its_box_before_its_word() {
         let skin = builtin::skin();
         let commands = drawn(|list, text| {
-            ChromeLabel::chip(skin).paint(list, text, "FX", HEADER);
+            ChromeLabel::chip(skin).paint(list, text, "FX", consts::HEADER);
         });
 
         assert!(
@@ -167,7 +171,7 @@ mod tests {
     fn a_chip_sets_its_word_in_the_colour_the_skin_names() {
         let skin = builtin::skin();
         let commands = drawn(|list, text| {
-            ChromeLabel::chip(skin).paint(list, text, "FX", HEADER);
+            ChromeLabel::chip(skin).paint(list, text, "FX", consts::HEADER);
         });
 
         let Some(DrawCmd::Text { color, .. }) = commands.last() else {

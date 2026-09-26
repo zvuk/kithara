@@ -1,11 +1,8 @@
 use bon::Builder;
-use firewheel::{dsp::filter::smoothing_filter::MIN_SETTLE_RATIO, param::smoother::SmootherConfig};
+use firewheel::param::smoother::SmootherConfig;
 use kithara_bufpool::PoolRegion;
 
-const DEFAULT_EQ_SMOOTHING: SmootherConfig = SmootherConfig {
-    smooth_seconds: 0.01,
-    settle_ratio: MIN_SETTLE_RATIO,
-};
+use crate::consts;
 
 /// Resources shared by one equalizer instance.
 #[derive(Builder, fieldwork::Fieldwork)]
@@ -19,7 +16,7 @@ pub struct EqConfig<S> {
     #[field(get)]
     pools: PoolRegion<S>,
     /// Runtime gain and layout transition smoothing.
-    #[builder(default = DEFAULT_EQ_SMOOTHING)]
+    #[builder(default = consts::DEFAULT_EQ_SMOOTHING)]
     #[field(get, copy)]
     smoothing: SmootherConfig,
 }

@@ -11,13 +11,15 @@ use crate::{
     idioms::config::NestedIfLetPyramidConfig,
 };
 
-pub(crate) const ID: &str = "nested_if_let_pyramid";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "nested_if_let_pyramid";
+}
 
 pub(crate) struct NestedIfLetPyramid;
 
 impl Check for NestedIfLetPyramid {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -66,10 +68,10 @@ fn analyze_file(
                 && depth >= self.cfg.min_depth
             {
                 let line = e.if_token.span.start().line;
-                if !self.sup.is_suppressed(line, ID) {
+                if !self.sup.is_suppressed(line, consts::ID) {
                     let key = format!("{}:{}:depth_{}", self.rel, line, depth);
                     self.out.push(Violation::warn(
-                        ID,
+                        consts::ID,
                         key,
                         format!(
                             "nested `if let Some/Ok` pyramid (depth {depth}) — each level \

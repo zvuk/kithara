@@ -232,12 +232,16 @@ mod cached {
     use super::*;
     use crate::{builtin, render::Marked};
 
-    const BOX: Rect = Rect {
-        h: 20.0,
-        w: 160.0,
-        x: 0.0,
-        y: 0.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOX: Rect = Rect {
+            h: 20.0,
+            w: 160.0,
+            x: 0.0,
+            y: 0.0,
+        };
+    }
 
     /// One frame of the immediate-mode host: the paragraph is built afresh, and
     /// the canvas state is the one thing that survived the last frame.
@@ -248,7 +252,9 @@ mod cached {
             role: skin.text_role(TextStyle::Body, None, None, false),
             skin,
         };
-        state.mark(painted.key(BOX), || painted.list(state, BOX))
+        state.mark(painted.key(consts::BOX), || {
+            painted.list(state, consts::BOX)
+        })
     }
 
     /// Shaping a paragraph and tessellating its outlines is the most expensive

@@ -274,11 +274,11 @@ mod tests {
         skin::parse_skin_over,
     };
 
-    struct Consts;
+    mod consts {
+        use super::Size;
 
-    impl Consts {
-        const KIND: &'static str = "press-extension";
-        const VIEWPORT: Size = Size {
+        pub(super) const KIND: &str = "press-extension";
+        pub(super) const VIEWPORT: Size = Size {
             width: 200.0,
             height: 120.0,
         };
@@ -330,7 +330,7 @@ mod tests {
 
     fn kinds(repaint: Repaint) -> CustomKinds {
         CustomKinds::default().with(
-            Consts::KIND,
+            consts::KIND,
             move || PressExtension(repaint),
             |()| UiEvent::OpenSettings,
         )
@@ -346,7 +346,7 @@ mod tests {
         let text = format!(
             r#"(schema: "kithara.skin", version: 1, id: "dressed",
                 custom: {{ "{kind}": {{ "ink": Color("{ink}") }} }})"#,
-            kind = Consts::KIND,
+            kind = consts::KIND,
         );
         let document =
             parse_skin_over(builtin::skin_doc(), &text, &origin).expect("the patch parses");
@@ -357,13 +357,13 @@ mod tests {
     /// What the mounted extension draws under one skin.
     fn drawn(skin: &Skin) -> DrawList {
         let kinds = kinds(Repaint::None);
-        let custom = Custom::new(Consts::KIND, Some(&kinds), skin);
-        let state = CustomState::new(Consts::KIND, Some(&kinds));
+        let custom = Custom::new(consts::KIND, Some(&kinds), skin);
+        let state = CustomState::new(consts::KIND, Some(&kinds));
         custom.list(
             &state,
             Rect {
-                h: Consts::VIEWPORT.height,
-                w: Consts::VIEWPORT.width,
+                h: consts::VIEWPORT.height,
+                w: consts::VIEWPORT.width,
                 x: 0.0,
                 y: 0.0,
             },
@@ -385,13 +385,13 @@ mod tests {
     /// and whether it kept the event to itself.
     fn press(kinds: &CustomKinds) -> (Vec<UiEvent>, bool) {
         let mut element: Element<'_, UiEvent> =
-            Custom::new(Consts::KIND, Some(kinds), builtin::skin()).into();
+            Custom::new(consts::KIND, Some(kinds), builtin::skin()).into();
         let renderer = renderer();
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
-            &Limits::new(Size::ZERO, Consts::VIEWPORT),
+            &Limits::new(Size::ZERO, consts::VIEWPORT),
         );
         let mut clipboard = clipboard::Null;
         let mut messages = Vec::new();
@@ -404,7 +404,7 @@ mod tests {
             &renderer,
             &mut clipboard,
             &mut shell,
-            &Rectangle::with_size(Consts::VIEWPORT),
+            &Rectangle::with_size(consts::VIEWPORT),
         );
         let captured = shell.is_event_captured();
         drop(shell);
@@ -415,13 +415,13 @@ mod tests {
     /// frame.
     fn after_a_frame(kinds: &CustomKinds) -> window::RedrawRequest {
         let mut element: Element<'_, UiEvent> =
-            Custom::new(Consts::KIND, Some(kinds), builtin::skin()).into();
+            Custom::new(consts::KIND, Some(kinds), builtin::skin()).into();
         let renderer = renderer();
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
-            &Limits::new(Size::ZERO, Consts::VIEWPORT),
+            &Limits::new(Size::ZERO, consts::VIEWPORT),
         );
         let mut clipboard = clipboard::Null;
         let mut messages = Vec::new();
@@ -436,7 +436,7 @@ mod tests {
             &renderer,
             &mut clipboard,
             &mut shell,
-            &Rectangle::with_size(Consts::VIEWPORT),
+            &Rectangle::with_size(consts::VIEWPORT),
         );
         let asked = shell.redraw_request();
         drop(shell);

@@ -1,10 +1,8 @@
-use crate::{Interaction, Scenario};
-
 /// What every host and case of this harness share: the fixture layout, the box
 /// each control is mounted alone in, and the table of controls it measures.
-pub(crate) struct Consts;
+pub(crate) mod consts {
+    use crate::{Interaction, Scenario};
 
-impl Consts {
     pub(crate) const HEIGHT: u16 = 120;
     pub(crate) const LAYOUT: &str = "fixture.klayout.ron";
     pub(crate) const SCENARIOS: &[Scenario] = &[

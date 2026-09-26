@@ -17,11 +17,13 @@ use crate::{
     web::{bridge::WorkerBridge, commands::WorkerCmd, observer::router::Routes},
 };
 
-/// Number of EQ bands surfaced through the wasm facade. Module-level
-/// because the struct's `eq_gains` array length references it (a position
-/// where `Self::` is not yet in scope); the remaining scalar defaults
-/// live as `WasmInner` associated consts.
-const EQ_BANDS: usize = 10;
+mod consts {
+    /// Number of EQ bands surfaced through the wasm facade. Module-level
+    /// because the struct's `eq_gains` array length references it (a position
+    /// where `Self::` is not yet in scope); the remaining scalar defaults
+    /// live as `WasmInner` associated consts.
+    pub(super) const EQ_BANDS: usize = 10;
+}
 
 /// Caller-facing ordered queue view: the `(TrackId, item)` pairs the
 /// caller inserted, in queue order. The worker owns the canonical
@@ -54,7 +56,7 @@ pub(crate) struct WasmInner {
     repeat_mode: Mutex<FfiRepeatMode>,
     routes: Routes,
     bridge: WorkerBridge,
-    eq_gains: [AtomicU32; EQ_BANDS],
+    eq_gains: [AtomicU32; consts::EQ_BANDS],
 }
 
 impl Default for WasmInner {
@@ -76,7 +78,7 @@ impl Default for WasmInner {
             playback_order: Mutex::new(FfiPlaybackOrder::Sequential),
             action_at_item_end: Mutex::new(FfiActionAtItemEnd::Advance),
             muted: Mutex::default(),
-            eq_gains: [const { AtomicU32::new(0) }; EQ_BANDS],
+            eq_gains: [const { AtomicU32::new(0) }; consts::EQ_BANDS],
         }
     }
 }

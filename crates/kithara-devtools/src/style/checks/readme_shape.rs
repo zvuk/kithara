@@ -12,7 +12,9 @@ use crate::{
     style::config::ReadmeShapeConfig,
 };
 
-pub(crate) const ID: &str = "readme_shape";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "readme_shape";
+}
 
 pub(crate) struct ReadmeShape;
 
@@ -25,7 +27,7 @@ struct Package {
 
 impl Check for ReadmeShape {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -131,7 +133,7 @@ fn header_violations(rel: &str, document: &Document<'_>, package: &Package) -> V
     let mut violations = Vec::new();
     if !document.preamble.contains("logo.svg") {
         violations.push(Violation::deny(
-            ID,
+            consts::ID,
             format!("{rel}:header"),
             format!("{rel} does not open with the shared header: the centered logo, then the badge block"),
         ));
@@ -140,13 +142,13 @@ fn header_violations(rel: &str, document: &Document<'_>, package: &Package) -> V
         let present = document.preamble.contains(&marker);
         if package.published && !present {
             violations.push(Violation::deny(
-                ID,
+                consts::ID,
                 format!("{rel}:badge:{badge}"),
                 format!("{rel} is published and its header carries no {badge} badge"),
             ));
         } else if !package.published && present {
             violations.push(Violation::deny(
-                ID,
+                consts::ID,
                 format!("{rel}:badge:{badge}"),
                 format!("{rel} is `publish = false` and its header advertises a {badge} page"),
             ));
@@ -155,14 +157,14 @@ fn header_violations(rel: &str, document: &Document<'_>, package: &Package) -> V
     let license = &package.license;
     if !document.preamble.contains(&license_badge(license)) {
         violations.push(Violation::deny(
-            ID,
+            consts::ID,
             format!("{rel}:badge:license"),
             format!("{rel} header carries no `{license}` license badge, the license its manifest declares"),
         ));
     }
     if document.preamble.contains("../") {
         violations.push(Violation::deny(
-            ID,
+            consts::ID,
             format!("{rel}:header:escape"),
             format!("{rel} header reaches outside the package with `../`; crates.io and docs.rs render this README where that path does not exist, so the logo and the license link are repository URLs"),
         ));
@@ -188,12 +190,12 @@ fn title_violations(rel: &str, document: &Document<'_>, package: &Package) -> Ve
     let mut violations = Vec::new();
     match document.title {
         None => violations.push(Violation::deny(
-            ID,
+            consts::ID,
             format!("{rel}:title"),
             format!("{rel} has no `# ` title"),
         )),
         Some(title) if title != package.name => violations.push(Violation::deny(
-            ID,
+            consts::ID,
             format!("{rel}:title"),
             format!(
                 "{rel} is titled `{title}`, not the package name `{}`",
@@ -210,7 +212,7 @@ fn lead_violations(rel: &str, document: &Document<'_>) -> Vec<Violation> {
         return Vec::new();
     }
     vec![Violation::deny(
-        ID,
+        consts::ID,
         format!("{rel}:lead"),
         format!("{rel} states no role between its title and its first section"),
     )]
@@ -226,7 +228,7 @@ fn section_violations(
     for section in &document.sections {
         let Some(rank) = cfg.sections.iter().position(|known| known == section) else {
             violations.push(Violation::deny(
-                ID,
+                consts::ID,
                 format!("{rel}:section:{section}"),
                 format!(
                     "{rel} carries the top-level section `{section}`; the template allows {}, and anything else nests under one of them as `###`",
@@ -237,7 +239,7 @@ fn section_violations(
         };
         if previous.is_some_and(|previous| rank <= previous) {
             violations.push(Violation::deny(
-                ID,
+                consts::ID,
                 format!("{rel}:order:{section}"),
                 format!(
                     "{rel} places `{section}` out of template order ({})",

@@ -8,7 +8,11 @@ use crate::{
     registry::{EndpointCategory, EndpointRegistry, ValueKind},
 };
 
-pub(super) const BLOCK_HIDDEN: ValueKind = ValueKind::Bool;
+pub(in crate::validate) mod consts {
+    use super::*;
+
+    pub(in crate::validate) const BLOCK_HIDDEN: ValueKind = ValueKind::Bool;
+}
 
 #[derive(Clone, Copy)]
 pub(super) enum BindingSide {
@@ -24,7 +28,7 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         | ControlNode::Text { .. }
         | ControlNode::Readout { .. } => (Some(ValueKind::Text), None),
         ControlNode::ContextBar { .. } => (Some(ValueKind::Text), Some(ValueKind::Scalar)),
-        ControlNode::Optional { .. } => (Some(BLOCK_HIDDEN), None),
+        ControlNode::Optional { .. } => (Some(consts::BLOCK_HIDDEN), None),
         ControlNode::Popover { .. } => (Some(ValueKind::Bool), None),
         ControlNode::Pressable { .. } => (None, Some(ValueKind::Trigger)),
         ControlNode::Button { .. }

@@ -20,9 +20,11 @@ use tracing_subscriber::{
     registry::LookupSpan,
 };
 
-/// Payload fields one probe firing can carry: the USDT provider's six `u64`
-/// arguments minus the operation id.
-const MAX_FIELDS: usize = 5;
+mod consts {
+    /// Payload fields one probe firing can carry: the USDT provider's six `u64`
+    /// arguments minus the operation id.
+    pub(super) const MAX_FIELDS: usize = 5;
+}
 
 /// Firings of one probe a scope's history holds. Past it that probe stops
 /// entering the history and every reader of it fails, so a hot probe can
@@ -44,7 +46,7 @@ pub struct ProbeEvent {
     pub line: Option<u32>,
     /// Thread the probe fired on.
     pub thread: ThreadId,
-    fields: [(&'static str, u64); MAX_FIELDS],
+    fields: [(&'static str, u64); consts::MAX_FIELDS],
     len: usize,
 }
 
@@ -354,7 +356,7 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
         }
         let mut visitor = ProbeVisitor {
             probe: None,
-            fields: [("", 0); MAX_FIELDS],
+            fields: [("", 0); consts::MAX_FIELDS],
             len: 0,
         };
         let mut state = lock(&STATE);
@@ -403,7 +405,7 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
 
 struct ProbeVisitor {
     probe: Option<&'static str>,
-    fields: [(&'static str, u64); MAX_FIELDS],
+    fields: [(&'static str, u64); consts::MAX_FIELDS],
     len: usize,
 }
 

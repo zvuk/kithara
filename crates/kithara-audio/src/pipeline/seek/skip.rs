@@ -4,17 +4,14 @@ use kithara_stream::StreamType;
 use num_traits::cast::ToPrimitive;
 use tracing::debug;
 
-use crate::pipeline::{decode::DecoderGeneration, seek::ResumeState, stream::shared::SharedStream};
-
-struct Consts;
-
-impl Consts {
-    const NANOS_PER_SEC: u128 = 1_000_000_000;
-}
+use crate::{
+    consts,
+    pipeline::{decode::DecoderGeneration, seek::ResumeState, stream::shared::SharedStream},
+};
 
 pub(crate) fn duration(spec: AudioSpec, frames: usize) -> Duration {
     let nanos = (frames as u128)
-        .saturating_mul(Consts::NANOS_PER_SEC)
+        .saturating_mul(consts::NANOS_PER_SEC)
         .saturating_div(u128::from(spec.sample_rate.get()));
     let nanos = ToPrimitive::to_u64(&nanos).unwrap_or(u64::MAX);
     Duration::from_nanos(nanos)
@@ -24,7 +21,7 @@ pub(crate) fn frames(spec: AudioSpec, duration: Duration) -> usize {
     let frames = duration
         .as_nanos()
         .saturating_mul(u128::from(spec.sample_rate.get()))
-        .saturating_div(Consts::NANOS_PER_SEC);
+        .saturating_div(consts::NANOS_PER_SEC);
     assert!(
         frames <= usize::MAX as u128,
         "post-seek frame count {frames} exceeds usize::MAX for {duration:?} at {} Hz",

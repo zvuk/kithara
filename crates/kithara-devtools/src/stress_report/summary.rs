@@ -14,16 +14,10 @@ use serde::Deserialize;
 use super::evidence;
 use crate::{
     common::project::{StressEvidenceConfig, StressRenderBudgets},
+    consts,
     junit::{CaseTiming, parse_junit_report},
     verdict::NotClean,
 };
-
-const PERCENT_SCALE: usize = 100;
-const MAX_INVENTORY_CASES: usize = 100_000;
-pub(crate) const MAX_INVENTORY_BYTES: u64 = 64 * 1_024 * 1_024;
-pub(crate) const MAX_JUNIT_BYTES: u64 = 512 * 1_024 * 1_024;
-/// Bounds a lane log, which a run appends to once per attempt.
-pub(crate) const MAX_LANE_LOG_BYTES: u64 = 512 * 1_024 * 1_024;
 
 #[derive(Debug, Args, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
@@ -263,7 +257,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
             ));
         }
     };
-    let xml = match read_bounded_utf8(&args.junit, MAX_JUNIT_BYTES, "stress JUnit") {
+    let xml = match read_bounded_utf8(&args.junit, consts::MAX_JUNIT_BYTES, "stress JUnit") {
         Ok(xml) => xml,
         Err(error)
             if error
@@ -390,7 +384,7 @@ pub(crate) fn validate_primary_evidence(
 ) -> Result<()> {
     validate_expected_count(expected_count)?;
     let inventory = read_inventory(inventory_path).map_err(primary_evidence_finding)?;
-    let xml = read_bounded_utf8(junit_path, MAX_JUNIT_BYTES, "stress JUnit")
+    let xml = read_bounded_utf8(junit_path, consts::MAX_JUNIT_BYTES, "stress JUnit")
         .map_err(primary_evidence_finding)?;
     let junit = parse_junit_report(&xml).map_err(primary_evidence_finding)?;
     validate_correlation_metadata(&junit).map_err(primary_evidence_finding)?;
@@ -484,7 +478,7 @@ fn render_invalid_artifact(
 }
 
 fn read_inventory(path: &Path) -> Result<BTreeSet<TestId>> {
-    let json = read_bounded_utf8(path, MAX_INVENTORY_BYTES, "stress inventory")?;
+    let json = read_bounded_utf8(path, consts::MAX_INVENTORY_BYTES, "stress inventory")?;
     parse_inventory(&json)
 }
 
@@ -565,9 +559,10 @@ fn parse_inventory(json: &str) -> Result<BTreeSet<TestId>> {
 }
 
 fn validate_inventory_case_count(count: usize) -> Result<()> {
-    if count > MAX_INVENTORY_CASES {
+    if count > consts::MAX_INVENTORY_CASES {
         bail!(
-            "stress inventory exceeds the deterministic limit of {MAX_INVENTORY_CASES} testcases"
+            "stress inventory exceeds the deterministic limit of {MAX_INVENTORY_CASES} testcases",
+            MAX_INVENTORY_CASES = consts::MAX_INVENTORY_CASES
         );
     }
     Ok(())
@@ -1407,7 +1402,7 @@ pub(super) fn test_id(case: &CaseTiming, budgets: &StressRenderBudgets) -> Strin
 }
 
 pub(crate) fn rate_percent(failures: usize, attempts: usize) -> String {
-    const PERCENT_HUNDREDTHS: usize = PERCENT_SCALE * PERCENT_SCALE;
+    const PERCENT_HUNDREDTHS: usize = consts::PERCENT_SCALE * consts::PERCENT_SCALE;
 
     if attempts == 0 {
         return "0.00%".to_owned();
@@ -1415,8 +1410,8 @@ pub(crate) fn rate_percent(failures: usize, attempts: usize) -> String {
     let hundredths = failures.saturating_mul(PERCENT_HUNDREDTHS) / attempts;
     format!(
         "{}.{:02}%",
-        hundredths / PERCENT_SCALE,
-        hundredths % PERCENT_SCALE
+        hundredths / consts::PERCENT_SCALE,
+        hundredths % consts::PERCENT_SCALE
     )
 }
 
@@ -2029,7 +2024,7 @@ seek landed short of the requested frame
         )
         .expect("write inventory");
         let junit = temp.path().join("junit.xml");
-        let oversized = "y".repeat(crate::junit::MAX_CASE_OUTPUT_BYTES);
+        let oversized = "y".repeat(consts::MAX_CASE_OUTPUT_BYTES);
         fs::write(
             &junit,
             format!(
@@ -2743,8 +2738,9 @@ seek landed short of the requested frame
             validate_expected_count(count).expect("valid expected count");
         }
         assert!(validate_expected_count(0).is_err());
-        validate_inventory_case_count(MAX_INVENTORY_CASES).expect("case limit is inclusive");
-        assert!(validate_inventory_case_count(MAX_INVENTORY_CASES + 1).is_err());
+        validate_inventory_case_count(consts::MAX_INVENTORY_CASES)
+            .expect("case limit is inclusive");
+        assert!(validate_inventory_case_count(consts::MAX_INVENTORY_CASES + 1).is_err());
     }
 
     #[test]

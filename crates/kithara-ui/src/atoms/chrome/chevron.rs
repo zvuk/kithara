@@ -89,14 +89,18 @@ mod tests {
         shaping::TextContext,
     };
 
-    /// A header the whole width of a module, and the cell the chevron sits in
-    /// at the end of it.
-    const HEADER: Rect = Rect {
-        h: 26.0,
-        w: 200.0,
-        x: 12.0,
-        y: 4.0,
-    };
+    mod consts {
+        use super::*;
+
+        /// A header the whole width of a module, and the cell the chevron sits in
+        /// at the end of it.
+        pub(super) const HEADER: Rect = Rect {
+            h: 26.0,
+            w: 200.0,
+            x: 12.0,
+            y: 4.0,
+        };
+    }
 
     fn drawn(paint: impl FnOnce(&mut DrawListBuilder, &mut TextContext)) -> Vec<DrawCmd> {
         let skin = builtin::skin();
@@ -127,12 +131,15 @@ mod tests {
     /// place, or the two hosts draw a different module shell.
     #[kithara::test]
     fn the_chevron_marks_the_same_place_from_the_header_and_from_its_cell() {
-        assert_eq!(chevron(HEADER, false), chevron(cell(HEADER), false));
+        assert_eq!(
+            chevron(consts::HEADER, false),
+            chevron(cell(consts::HEADER), false)
+        );
     }
 
     #[kithara::test]
     fn the_chevron_points_down_when_the_module_is_folded() {
-        let commands = chevron(HEADER, true);
+        let commands = chevron(consts::HEADER, true);
 
         assert!(
             elbow(&commands) > ends(&commands),
@@ -142,7 +149,7 @@ mod tests {
 
     #[kithara::test]
     fn the_chevron_points_up_when_the_module_is_open() {
-        let commands = chevron(HEADER, false);
+        let commands = chevron(consts::HEADER, false);
 
         assert!(
             elbow(&commands) < ends(&commands),
@@ -152,7 +159,7 @@ mod tests {
 
     #[kithara::test]
     fn the_chevron_cuts_its_cell_off_at_the_line_the_skin_gives_it() {
-        let commands = chevron(HEADER, false);
+        let commands = chevron(consts::HEADER, false);
 
         let Some(DrawCmd::Fill {
             geom: Geom::Rect(line),
@@ -161,7 +168,7 @@ mod tests {
         else {
             panic!("the chevron must cut its cell off first: {commands:?}");
         };
-        assert_eq!(line.x, cell(HEADER).x);
+        assert_eq!(line.x, cell(consts::HEADER).x);
     }
 
     /// Where the chevron's elbow sits, and where the two ends it joins sit.

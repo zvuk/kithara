@@ -17,7 +17,7 @@ use kithara_ui::{
     view,
 };
 
-use crate::scenarios::Consts;
+use crate::scenarios::consts;
 
 /// The readings every census control binds to, all moved by one call so a
 /// data-change frame is a frame the reading really did move under.
@@ -314,7 +314,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     root: Module(instance: "demo", source: "fixture.kmodule.ron", size: (w: Fill, h: Fill)))"#;
 
         let mut resolver = MemResolver::default();
-        resolver.insert(Consts::LAYOUT, LAYOUT_RON);
+        resolver.insert(consts::LAYOUT, LAYOUT_RON);
         resolver.insert(
             Self::MODULE,
             &format!(
@@ -334,7 +334,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 
     pub(crate) fn compiled(&self) -> CompiledUi {
         compile(
-            Consts::LAYOUT,
+            consts::LAYOUT,
             &self.resolver,
             &self.registry,
             builtin::skin_doc(),

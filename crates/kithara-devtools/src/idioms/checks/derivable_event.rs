@@ -15,14 +15,16 @@ use crate::common::{
     violation::Violation, walker::relative_to,
 };
 
-pub(crate) const ID: &str = "derivable_event";
-const EXPLANATION: &str = "Every event type must be reachable from the FFI surface. Add its type to an #[derive(EventSet)] enum under crates/kithara-ffi/src, or list it in [derivable_event] unforwarded with the reason it is deliberately internal. Event is implemented only by #[derive(Event)]; a hand-written impl outside kithara-events bypasses the census.";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "derivable_event";
+    pub(super) const EXPLANATION: &str = "Every event type must be reachable from the FFI surface. Add its type to an #[derive(EventSet)] enum under crates/kithara-ffi/src, or list it in [derivable_event] unforwarded with the reason it is deliberately internal. Event is implemented only by #[derive(Event)]; a hand-written impl outside kithara-events bypasses the census.";
+}
 
 pub(crate) struct DerivableEvent;
 
 impl Check for DerivableEvent {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn policy(&self) -> super::CheckPolicy {
@@ -47,21 +49,21 @@ impl Check for DerivableEvent {
             let mut census = Census::default();
             census.visit_file(&file);
             declared.extend(census.events.into_iter().filter_map(|(name, span)| {
-                (!suppress.is_suppressed(span.start().line, ID)).then_some(name)
+                (!suppress.is_suppressed(span.start().line, consts::ID)).then_some(name)
             }));
             if relative.starts_with("crates/kithara-ffi/src") {
                 forwarded.extend(census.forwarded);
             }
             if !relative.starts_with("crates/kithara-events") {
                 for (name, span) in census.manual {
-                    if !suppress.is_suppressed(span.start().line, ID) {
+                    if !suppress.is_suppressed(span.start().line, consts::ID) {
                         out.push(
                             Violation::deny(
-                                ID,
+                                consts::ID,
                                 format!("{}::{name}", relative.display()),
                                 format!("{name} implements Event by hand outside kithara-events"),
                             )
-                            .with_explanation(EXPLANATION),
+                            .with_explanation(consts::EXPLANATION),
                         );
                     }
                 }
@@ -71,11 +73,11 @@ impl Check for DerivableEvent {
             if !config.unforwarded.contains(name) {
                 out.push(
                     Violation::deny(
-                        ID,
+                        consts::ID,
                         name.clone(),
                         format!("{name} derives Event but no EventSet forwards it"),
                     )
-                    .with_explanation(EXPLANATION),
+                    .with_explanation(consts::EXPLANATION),
                 );
             }
         }

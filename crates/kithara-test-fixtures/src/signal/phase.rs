@@ -2,17 +2,15 @@ use num_traits::cast;
 
 use super::SAW_PERIOD;
 
-struct Consts;
-
-impl Consts {
+mod consts {
     /// Half a period: the point a shortest-path step folds around.
-    const HALF_PERIOD: i32 = Self::PERIOD / 2;
+    pub(super) const HALF_PERIOD: i32 = PERIOD / 2;
     /// One saw period in the signed units the wrapping arithmetic here needs.
     ///
     /// The generator advances the saw by exactly one i16 unit per frame, so a
     /// phase in units and a phase in frames are the same number; only the type
     /// differs.
-    const PERIOD: i32 = 65_536;
+    pub(super) const PERIOD: i32 = 65_536;
 }
 
 const _: () = assert!(
@@ -28,11 +26,11 @@ const _: () = assert!(
 /// amplitude.
 #[must_use]
 pub fn units(sample: f32) -> usize {
-    let scaled = (f64::from(sample) * f64::from(Consts::HALF_PERIOD))
+    let scaled = (f64::from(sample) * f64::from(consts::HALF_PERIOD))
         .round()
-        .rem_euclid(f64::from(Consts::PERIOD));
+        .rem_euclid(f64::from(consts::PERIOD));
     let value: i32 = cast(scaled).expect("a phase is defined only for a finite sample");
-    let phase = (value + Consts::HALF_PERIOD).rem_euclid(Consts::PERIOD);
+    let phase = (value + consts::HALF_PERIOD).rem_euclid(consts::PERIOD);
     usize::try_from(phase).expect("invariant: a phase is never negative")
 }
 
@@ -49,7 +47,7 @@ pub fn units(sample: f32) -> usize {
 pub fn delta(from: usize, to: usize) -> i16 {
     let from = i32::try_from(from).expect("invariant: a phase fits i32");
     let to = i32::try_from(to).expect("invariant: a phase fits i32");
-    let folded = (to - from + Consts::HALF_PERIOD).rem_euclid(Consts::PERIOD) - Consts::HALF_PERIOD;
+    let folded = (to - from + consts::HALF_PERIOD).rem_euclid(consts::PERIOD) - consts::HALF_PERIOD;
     cast(folded).expect("invariant: a folded step spans exactly the 16-bit range")
 }
 

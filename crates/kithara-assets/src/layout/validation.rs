@@ -3,15 +3,7 @@
 use sha2::{Digest, Sha256};
 
 use super::AssetSource;
-use crate::{AssetsError, AssetsResult};
-
-pub(crate) const MAX_COMPONENT_LEN: usize = 96;
-
-struct Consts;
-impl Consts {
-    const HASH_PREFIX_BYTES: usize = 16;
-    const MAX_EXTENSION_LEN: usize = 16;
-}
+use crate::{AssetsError, AssetsResult, consts};
 
 pub(crate) fn append_component_suffix(component: &str, suffix: &str, identity: &[u8]) -> String {
     let mut encoded = String::with_capacity(component.len() + suffix.len());
@@ -66,7 +58,7 @@ pub(crate) fn encode_url_leaf(leaf: &str, query: Option<&str>) -> String {
 #[must_use]
 pub(crate) fn fingerprint(value: &[u8]) -> String {
     let digest = Sha256::digest(value);
-    hex::encode(&digest[..Consts::HASH_PREFIX_BYTES])
+    hex::encode(&digest[..consts::HASH_PREFIX_BYTES])
 }
 
 fn fingerprint_url_leaf(leaf: &str, query: Option<&str>) -> String {
@@ -77,7 +69,7 @@ fn fingerprint_url_leaf(leaf: &str, query: Option<&str>) -> String {
         digest.update(query.as_bytes());
     }
     let digest = digest.finalize();
-    hex::encode(&digest[..Consts::HASH_PREFIX_BYTES])
+    hex::encode(&digest[..consts::HASH_PREFIX_BYTES])
 }
 
 pub(crate) fn validate_path(path: &str) -> AssetsResult<()> {
@@ -174,12 +166,12 @@ where
         encoded.insert_str(0, "~r");
     }
 
-    if encoded.len() <= MAX_COMPONENT_LEN {
+    if encoded.len() <= consts::MAX_COMPONENT_LEN {
         return encoded;
     }
 
     let suffix = format!("~h{}", fingerprint());
-    encoded.truncate(MAX_COMPONENT_LEN - suffix.len());
+    encoded.truncate(consts::MAX_COMPONENT_LEN - suffix.len());
     encoded.push_str(&suffix);
     encoded
 }
@@ -220,7 +212,7 @@ fn usable_extension(leaf: &str) -> Option<(&str, &str)> {
     let (stem, extension) = leaf.rsplit_once('.')?;
     (!stem.is_empty()
         && !extension.is_empty()
-        && extension.len() <= Consts::MAX_EXTENSION_LEN
+        && extension.len() <= consts::MAX_EXTENSION_LEN
         && extension.bytes().all(|byte| byte.is_ascii_alphanumeric()))
     .then_some((stem, extension))
 }
@@ -229,7 +221,7 @@ fn validate_component(component: &str) -> AssetsResult<()> {
     if component.is_empty()
         || component == "."
         || component == ".."
-        || component.len() > MAX_COMPONENT_LEN
+        || component.len() > consts::MAX_COMPONENT_LEN
         || !component.is_ascii()
         || component.ends_with(['.', ' '])
         || component.bytes().any(|byte| {
@@ -273,8 +265,8 @@ mod tests {
         let first = encode_component(&first);
         let second = encode_component(&second);
 
-        assert_eq!(first.len(), MAX_COMPONENT_LEN);
-        assert_eq!(second.len(), MAX_COMPONENT_LEN);
+        assert_eq!(first.len(), consts::MAX_COMPONENT_LEN);
+        assert_eq!(second.len(), consts::MAX_COMPONENT_LEN);
         assert_ne!(first, second);
     }
 

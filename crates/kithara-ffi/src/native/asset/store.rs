@@ -9,10 +9,10 @@ use kithara::{
 use super::FfiAssetLayoutRegistry;
 use crate::pools::{FfiStore, Pools, build as build_pools};
 
-struct Consts;
+mod consts {
+    use super::NonZeroUsize;
 
-impl Consts {
-    const ASSET_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(128).unwrap();
+    pub(super) const ASSET_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(128).unwrap();
 }
 
 /// Shareable Rust-owned asset store used by one or more players.
@@ -45,7 +45,7 @@ impl FfiAssetStore {
         let shutdown = CancelScope::new(None);
         let inner = FfiStore::builder(pools.clone())
             .backend(backend)
-            .cache_capacity(Consts::ASSET_CACHE_CAPACITY)
+            .cache_capacity(consts::ASSET_CACHE_CAPACITY)
             .cancel(shutdown.token())
             .layouts(layouts)
             .build();
@@ -200,7 +200,7 @@ mod tests {
 
         assert_eq!(
             store.handle().ephemeral_cache_capacity(),
-            Some(Consts::ASSET_CACHE_CAPACITY)
+            Some(consts::ASSET_CACHE_CAPACITY)
         );
     }
 

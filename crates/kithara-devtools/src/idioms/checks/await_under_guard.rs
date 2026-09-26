@@ -13,9 +13,10 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to},
 };
 
-pub(crate) const ID: &str = "await_under_guard";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "await_under_guard";
 
-const EXPLANATION: &str = "\
+    pub(super) const EXPLANATION: &str = "\
 Detected an `.await` point inside a scope that still holds a `MutexGuard` \
 / `RwLockReadGuard` / `RwLockWriteGuard`.
 
@@ -50,12 +51,13 @@ span `.await`), (2) the awaited future provably doesn't re-enter the same \
 lock and isn't on a single-threaded runtime, (3) explicit `drop(guard)` \
 precedes `.await` but the heuristic missed it. Document why it's safe — \
 deadlocks are silent.";
+}
 
 pub(crate) struct AwaitUnderGuard;
 
 impl Check for AwaitUnderGuard {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -117,7 +119,7 @@ impl<'ast> Visit<'ast> for AwaitVisitor<'_> {
             return;
         }
         let s = a.await_token.span().start();
-        if self.suppress.is_suppressed(s.line, ID) {
+        if self.suppress.is_suppressed(s.line, consts::ID) {
             return;
         }
         for g in self.guards.clone() {
@@ -132,7 +134,7 @@ impl<'ast> Visit<'ast> for AwaitVisitor<'_> {
                 decl_line = g.decl_line,
             );
             self.out
-                .push(Violation::warn(ID, key, msg).with_explanation(EXPLANATION));
+                .push(Violation::warn(consts::ID, key, msg).with_explanation(consts::EXPLANATION));
         }
     }
 

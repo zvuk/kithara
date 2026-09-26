@@ -36,3 +36,4 @@ pub use decorator::{Atomic, AtomicChunked, Barrier, OpenIntent};
 pub use error::{StorageError, StorageResult};
 pub use resource::{OpenMode, ResourceStatus, WaitOutcome};
 pub use unified::StorageResource;
+mod consts;

@@ -14,10 +14,8 @@ use tracing::{debug, warn};
 
 use crate::pools::{AppResourceConfig, AppStore, Pools};
 
-struct Consts;
-
-impl Consts {
-    const MAX_MEM_ENTRIES: usize = 64;
+mod consts {
+    pub(super) const MAX_MEM_ENTRIES: usize = 64;
 }
 
 #[derive(Clone, Debug, fieldwork::Fieldwork)]
@@ -152,7 +150,7 @@ impl TrackAnalysisCache {
         });
         self.order.push_back(target);
 
-        while self.order.len() > Consts::MAX_MEM_ENTRIES {
+        while self.order.len() > consts::MAX_MEM_ENTRIES {
             if let Some(old) = self.order.pop_front() {
                 let bucket_is_empty = self.mem.get_mut(old.key()).is_some_and(|entries| {
                     entries.retain(|entry| !entry.target.is_same(&old));
@@ -197,7 +195,7 @@ mod tests {
     };
     use kithara_test_utils::kithara;
 
-    use super::{AnalysisTarget, Consts, TrackAnalysisCache};
+    use super::{AnalysisTarget, TrackAnalysisCache, consts};
     use crate::pools::{self, AppPools, AppResourceConfig, AppStore, Pools};
 
     fn fingerprint(wave: &str, beat: &str) -> AnalysisFingerprint {
@@ -593,14 +591,14 @@ mod tests {
         let store = memory_store();
         let mut cache = analysis_cache();
         let oldest = target(&store, "root_0");
-        for i in 0..=Consts::MAX_MEM_ENTRIES {
+        for i in 0..=consts::MAX_MEM_ENTRIES {
             cache.put(
                 target(&store, &format!("root_{i}")),
                 progress(full_analysis()),
             );
         }
         assert!(
-            cache.order.len() <= Consts::MAX_MEM_ENTRIES,
+            cache.order.len() <= consts::MAX_MEM_ENTRIES,
             "memory tier stays bounded under a whole-library sweep"
         );
         assert!(

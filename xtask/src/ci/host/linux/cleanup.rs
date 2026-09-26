@@ -4,10 +4,10 @@ use anyhow::{Result, bail};
 use tracing::info;
 
 use super::{container::Container, profile::LinuxHost};
-use crate::ci::{build_cache, process::Process};
-
-/// Build cache older than this is rebuilt faster than it is worth keeping.
-const BUILD_CACHE_AGE: &str = "168h";
+use crate::{
+    ci::{build_cache, process::Process},
+    consts,
+};
 
 /// Reclaim what this project left behind, and nothing else.
 ///
@@ -78,7 +78,10 @@ pub(super) fn run(process: &Process, host: &LinuxHost, keep: &[String]) -> Resul
             "prune",
             "--force",
             "--filter",
-            &format!("until={BUILD_CACHE_AGE}"),
+            &format!(
+                "until={BUILD_CACHE_AGE}",
+                BUILD_CACHE_AGE = consts::BUILD_CACHE_AGE
+            ),
         ],
         "prune the build cache",
     );
@@ -133,12 +136,6 @@ fn target_dirs(host: &LinuxHost) -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
-    const LISTED: &str = "kithara-ci:linux-20260729\n\
-                          kithara-ci:linux-20260806d\n\
-                          kithara-ci-android:linux-20260806c\n\
-                          kithara-ci-android-runner:linux-20260806c\n\
-                          kithara-ci-runner:linux-20260806d\n";
-
     fn keep(images: &[&str]) -> Vec<String> {
         images.iter().map(|image| (*image).to_owned()).collect()
     }
@@ -190,7 +187,10 @@ mod tests {
             "kithara-ci-android:linux-20260806c",
             "kithara-ci-android-runner:linux-20260806c",
         ]);
-        assert_eq!(superseded(LISTED, &kept), ["kithara-ci:linux-20260729"]);
+        assert_eq!(
+            superseded(consts::LISTED, &kept),
+            ["kithara-ci:linux-20260729"]
+        );
     }
 
     /// The emulator lane runs a generation of its own, and a rule that kept one
@@ -203,7 +203,7 @@ mod tests {
             "kithara-ci-android:linux-20260806c",
             "kithara-ci-android-runner:linux-20260806c",
         ]);
-        assert!(!superseded(LISTED, &kept).contains(&"kithara-ci-android:linux-20260806c"));
+        assert!(!superseded(consts::LISTED, &kept).contains(&"kithara-ci-android:linux-20260806c"));
     }
 
     /// The pins move with the repository and the timer does not, so cleanup is
@@ -215,9 +215,11 @@ mod tests {
             "kithara-ci:linux-20260810a",
             "kithara-ci-runner:linux-20260810a",
         ]);
-        assert!(superseded(LISTED, &bumped).contains(&"kithara-ci-runner:linux-20260806d"));
+        assert!(superseded(consts::LISTED, &bumped).contains(&"kithara-ci-runner:linux-20260806d"));
 
         let installed = keep(&["kithara-ci-runner:linux-20260806d"]);
-        assert!(!superseded(LISTED, &installed).contains(&"kithara-ci-runner:linux-20260806d"));
+        assert!(
+            !superseded(consts::LISTED, &installed).contains(&"kithara-ci-runner:linux-20260806d")
+        );
     }
 }

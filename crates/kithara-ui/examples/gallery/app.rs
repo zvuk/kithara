@@ -14,7 +14,7 @@ use kithara_ui::{
 use crate::{
     capture::{Capture, Shot},
     demo::DemoReads,
-    fixture::{Consts, Resolver, resolver},
+    fixture::{Resolver, consts, resolver},
     sections,
 };
 
@@ -105,7 +105,7 @@ impl Gallery {
             ),
             window_id: Id::unique(),
             clock: Clock::default(),
-            step: Duration::from_millis(Consts::STRESS_TICK_MS),
+            step: Duration::from_millis(consts::STRESS_TICK_MS),
             reads: DemoReads::default(),
             kinds: crate::custom::kinds(),
             capture: None,

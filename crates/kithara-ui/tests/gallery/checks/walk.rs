@@ -188,7 +188,7 @@ mod retained {
     use super::{FRAMES, Shot, Walked};
     use crate::{
         custom, demo,
-        fixture::{Consts, resolver},
+        fixture::{consts, resolver},
         host::{self, Gallery},
         sections,
     };
@@ -256,8 +256,8 @@ mod retained {
             .kinds(&kinds)
             .build();
         let size = (
-            num_traits::cast::AsPrimitive::<u32>::as_(Consts::WIDTH),
-            num_traits::cast::AsPrimitive::<u32>::as_(Consts::HEIGHT),
+            num_traits::cast::AsPrimitive::<u32>::as_(consts::WIDTH),
+            num_traits::cast::AsPrimitive::<u32>::as_(consts::HEIGHT),
         );
         // Read from the document rather than from the host, so the two sides of
         // the comparison come from two places: what the page says, and what the

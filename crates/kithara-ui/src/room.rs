@@ -5,7 +5,8 @@ use crate::{
     ids::{NodeId, SourceUri},
     module::MeasureAxis,
     size::{
-        Cells, NOTHING, SizeSpec, axis_dim, axis_min, combine_vertical, min_size, rooms, settled,
+        Cells, SizeSpec, axis_dim, axis_min, combine_vertical, consts::NOTHING, min_size, rooms,
+        settled,
     },
     skin::SkinDoc,
     validate::NodePath,

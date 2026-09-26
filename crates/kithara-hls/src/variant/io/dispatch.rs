@@ -6,8 +6,11 @@ use kithara_storage::StorageError;
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
-use super::{HlsVariant, PlanCtx, PlanRevision, core::NO_PREFETCH_DEFERRAL};
-use crate::segment::{Downloading, FetchClaim, PlannedFetch, Segment};
+use super::{HlsVariant, PlanCtx, PlanRevision};
+use crate::{
+    consts,
+    segment::{Downloading, FetchClaim, PlannedFetch, Segment},
+};
 
 /// The cancel pair one dispatch rides. `fetch` covers owed work — inits,
 /// size demands, and segments inside the owed window; `lookahead` covers an
@@ -224,7 +227,7 @@ where
                 queue.requeue_if_current(planned, revision);
             }
         }
-        self.defer_prefetch_until(resume_at.unwrap_or(NO_PREFETCH_DEFERRAL));
+        self.defer_prefetch_until(resume_at.unwrap_or(consts::NO_PREFETCH_DEFERRAL));
         out
     }
 
@@ -324,7 +327,6 @@ mod tests {
     use std::{io, path::PathBuf};
 
     use super::*;
-    use crate::config::DEFAULT_ACQUIRE_ATTEMPT_BUDGET;
 
     fn tmp_claimed() -> AssetsError {
         AssetsError::Storage(StorageError::TmpClaimed(PathBuf::from("seg.m4s.tmp")))
@@ -334,15 +336,13 @@ mod tests {
         AssetsError::Io(io::Error::from(io::ErrorKind::IsADirectory))
     }
 
-    const BUDGET: u8 = DEFAULT_ACQUIRE_ATTEMPT_BUDGET;
-
     /// The holder of a claimed tmp always settles and releases it, so this
     /// retry resolves on its own however long it takes.
     #[kithara::test]
     fn a_claimed_tmp_requeues_without_a_budget() {
-        for failures in [1, BUDGET, u8::MAX] {
+        for failures in [1, consts::BUDGET, u8::MAX] {
             assert_eq!(
-                settle_for(&tmp_claimed(), failures, BUDGET),
+                settle_for(&tmp_claimed(), failures, consts::BUDGET),
                 AcquireSettle::Requeue,
                 "a live writer's tmp must never fail the slot ({failures} failures)"
             );
@@ -353,11 +353,12 @@ mod tests {
     /// indistinguishable from the standing ones at the point of failure.
     #[kithara::test]
     fn another_error_retries_inside_the_budget() {
-        for failures in 1..BUDGET {
+        for failures in 1..consts::BUDGET {
             assert_eq!(
-                settle_for(&other(), failures, BUDGET),
+                settle_for(&other(), failures, consts::BUDGET),
                 AcquireSettle::Requeue,
-                "failure {failures} of {BUDGET} must not be terminal"
+                "failure {failures} of {BUDGET} must not be terminal",
+                BUDGET = consts::BUDGET
             );
         }
     }
@@ -366,14 +367,20 @@ mod tests {
     /// reaches the reader instead of parking the decode gate for good.
     #[kithara::test]
     fn another_error_fails_the_slot_once_the_budget_is_spent() {
-        assert_eq!(settle_for(&other(), BUDGET, BUDGET), AcquireSettle::Fail);
+        assert_eq!(
+            settle_for(&other(), consts::BUDGET, consts::BUDGET),
+            AcquireSettle::Fail
+        );
     }
 
     /// Saturating the counter must not wrap back under the budget and hand a
     /// standing obstruction a fresh set of retries.
     #[kithara::test]
     fn a_saturated_counter_stays_terminal() {
-        assert_eq!(settle_for(&other(), u8::MAX, BUDGET), AcquireSettle::Fail);
+        assert_eq!(
+            settle_for(&other(), u8::MAX, consts::BUDGET),
+            AcquireSettle::Fail
+        );
     }
 
     /// The budget is a config field, not a constant: a caller that raises it
@@ -382,7 +389,7 @@ mod tests {
     #[kithara::test]
     fn the_budget_comes_from_the_caller() {
         assert_eq!(
-            settle_for(&other(), BUDGET, BUDGET + 1),
+            settle_for(&other(), consts::BUDGET, consts::BUDGET + 1),
             AcquireSettle::Requeue,
             "a raised budget must grant the extra round"
         );

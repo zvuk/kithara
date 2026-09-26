@@ -16,17 +16,7 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::lock::FileLock;
 use sha2::{Digest, Sha256};
 
-use crate::{child, config::AndroidConfig};
-
-struct Consts;
-
-impl Consts {
-    const ATTACH_POLL: Duration = Duration::from_millis(500);
-    const ATTACH_DEADLINE: Duration = Duration::from_secs(180);
-    const CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
-    const EMULATOR: &'static str = "the emulator this run booted";
-    const ORIGIN_PROBE: Duration = Duration::from_secs(5);
-}
+use crate::{child, config::AndroidConfig, consts};
 
 #[derive(Clone, Copy)]
 pub(crate) enum Screen {
@@ -130,7 +120,7 @@ impl Selected {
         let Some(mut emulator) = self.emulator.take() else {
             return Ok(());
         };
-        child::stop(&mut emulator, Consts::EMULATOR).map(drop)
+        child::stop(&mut emulator, consts::EMULATOR).map(drop)
     }
 }
 
@@ -241,7 +231,7 @@ pub(crate) fn probe_origin(
     let output = child::output(
         device.adb().args(origin_probe_args(port)),
         cancel,
-        Consts::ORIGIN_PROBE,
+        consts::ORIGIN_PROBE,
     )?;
     if origin_probe_reached(&output) {
         return Ok(());
@@ -404,7 +394,7 @@ pub(crate) fn control(
     command: &mut Command,
     cancel: Option<&child::Cancel>,
 ) -> Result<std::process::Output> {
-    child::output(command, cancel, Consts::CONTROL_TIMEOUT)
+    child::output(command, cancel, consts::CONTROL_TIMEOUT)
 }
 
 fn online_devices(adb: &Path, cancel: Option<&child::Cancel>) -> Result<Vec<Online>> {
@@ -463,7 +453,7 @@ fn boot(
     }) {
         Ok(serial) => serial,
         Err(error) => {
-            let stopped = child::stop(&mut child, Consts::EMULATOR);
+            let stopped = child::stop(&mut child, consts::EMULATOR);
             return Err(match stopped {
                 Ok(_) => error.context("emulator cleanup: ok"),
                 Err(stop_error) => error.context(stop_error),
@@ -515,14 +505,14 @@ fn reported_serial(
     emulator: &mut Child,
     cancel: Option<&child::Cancel>,
 ) -> Result<String> {
-    let deadline = Instant::now() + Consts::ATTACH_DEADLINE;
+    let deadline = Instant::now() + consts::ATTACH_DEADLINE;
     loop {
         child::check(cancel)?;
         require_running(emulator)?;
         match report.accept() {
             Ok((connection, _)) => {
                 connection.set_nonblocking(false)?;
-                connection.set_read_timeout(Some(Consts::CONTROL_TIMEOUT))?;
+                connection.set_read_timeout(Some(consts::CONTROL_TIMEOUT))?;
                 let mut port = String::new();
                 connection.take(16).read_to_string(&mut port)?;
                 require_running(emulator)?;
@@ -541,7 +531,7 @@ fn reported_serial(
         if Instant::now() >= deadline {
             bail!("emulator console report timed out");
         }
-        thread::sleep(Consts::ATTACH_POLL);
+        thread::sleep(consts::ATTACH_POLL);
     }
 }
 
@@ -558,7 +548,7 @@ fn await_serial(
     emulator: &mut Child,
     cancel: Option<&child::Cancel>,
 ) -> Result<()> {
-    let deadline = Instant::now() + Consts::ATTACH_DEADLINE;
+    let deadline = Instant::now() + consts::ATTACH_DEADLINE;
     loop {
         child::check(cancel)?;
         require_running(emulator)?;
@@ -575,10 +565,10 @@ fn await_serial(
         if Instant::now() >= deadline {
             bail!(
                 "the emulator did not attach as {serial} within {}s",
-                Consts::ATTACH_DEADLINE.as_secs()
+                consts::ATTACH_DEADLINE.as_secs()
             );
         }
-        thread::sleep(Consts::ATTACH_POLL);
+        thread::sleep(consts::ATTACH_POLL);
     }
 }
 
@@ -617,7 +607,7 @@ fn await_boot_complete(
         let deadline = Instant::now() + poll_interval;
         while Instant::now() < deadline {
             child::check(cancel)?;
-            thread::sleep(Consts::ATTACH_POLL);
+            thread::sleep(consts::ATTACH_POLL);
         }
     }
     let timeout_secs = u64::from(max_attempts).saturating_mul(poll_interval.as_secs());
@@ -772,7 +762,7 @@ mod tests {
         use std::{fs, process::Stdio};
 
         use super::*;
-        use crate::testing::install_script;
+        use crate::{consts, testing::install_script};
 
         fn recording_adb(dir: &Path, trace: &Path, code: i32) -> PathBuf {
             let path = dir.join("adb");
@@ -880,7 +870,7 @@ mod tests {
             device.release().unwrap();
             assert_eq!(recorded(&trace), "");
             assert!(
-                started.elapsed() < Consts::CONTROL_TIMEOUT,
+                started.elapsed() < consts::CONTROL_TIMEOUT,
                 "release took {:?}",
                 started.elapsed()
             );
@@ -954,7 +944,7 @@ mod tests {
                     .to_string()
                     .contains("deadline")
             );
-            assert!(started.elapsed() < Consts::CONTROL_TIMEOUT + Duration::from_secs(5));
+            assert!(started.elapsed() < consts::CONTROL_TIMEOUT + Duration::from_secs(5));
         }
 
         #[test]

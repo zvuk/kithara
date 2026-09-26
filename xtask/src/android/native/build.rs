@@ -26,9 +26,8 @@ use crate::{
     android::{android_sdk_root, device::Selected, ndk_prebuilt, ndk_root},
     child,
     config::KitharaExt,
+    consts,
 };
-
-const PACKAGE: &str = "com.kithara.nativetest";
 
 pub(super) fn prepare(
     root: &Path,
@@ -118,7 +117,7 @@ pub(super) fn prepare(
     let session = Session {
         adb: android_sdk_root()?.join("platform-tools/adb"),
         serial: device.serial.clone(),
-        package: PACKAGE.into(),
+        package: consts::PACKAGE.into(),
         directory,
         evidence: evidence.join("invocations"),
         environment: BTreeMap::new(),
@@ -126,10 +125,13 @@ pub(super) fn prepare(
     };
     fs::create_dir_all(&session.evidence)?;
     if let Err(error) = session.control(
-        &["run-as", PACKAGE, "mkdir", "-p", &session.directory],
+        &["run-as", consts::PACKAGE, "mkdir", "-p", &session.directory],
         Some(cancel),
     ) {
-        return match session.control(&["run-as", PACKAGE, "rm", "-rf", &session.directory], None) {
+        return match session.control(
+            &["run-as", consts::PACKAGE, "rm", "-rf", &session.directory],
+            None,
+        ) {
             Ok(_) => Err(error),
             Err(cleanup) => Err(error.context(cleanup)),
         };
@@ -529,7 +531,9 @@ fn install(
         bail!("native test APK install failed; see install.log");
     }
     let home = child::output(
-        device.adb().args(["shell", "run-as", PACKAGE, "pwd"]),
+        device
+            .adb()
+            .args(["shell", "run-as", consts::PACKAGE, "pwd"]),
         Some(cancel),
         Duration::from_secs(10),
     )?;
@@ -548,46 +552,14 @@ mod tests {
             .expect("nextest inventory is valid JSON")
     }
 
-    const ASSETS_LIB: &str = r#""kithara-assets": {
-        "binary-id": "kithara-assets",
-        "binary-name": "kithara_assets",
-        "kind": "lib",
-        "binary-path": "/deps/kithara_assets-1",
-        "build-platform": "target"
-    }"#;
-    const ASSETS_TEST: &str = r#""kithara-assets::crash_recovery": {
-        "binary-id": "kithara-assets::crash_recovery",
-        "binary-name": "crash_recovery",
-        "kind": "test",
-        "binary-path": "/deps/crash_recovery-2",
-        "build-platform": "target"
-    }"#;
-    const MACROS_PROC: &str = r#""kithara-test-macros": {
-        "binary-id": "kithara-test-macros",
-        "binary-name": "kithara_test_macros",
-        "kind": "proc-macro",
-        "binary-path": "/deps/kithara_test_macros-3",
-        "build-platform": "host"
-    }"#;
-    const DEVTOOLS_LIB: &str = r#""kithara-devtools": {
-        "binary-id": "kithara-devtools",
-        "binary-name": "kithara_devtools",
-        "kind": "lib",
-        "binary-path": "/deps/kithara_devtools-4",
-        "build-platform": "host"
-    }"#;
-    const INTEGRATION_LIB: &str = r#""kithara-integration-tests": {
-        "binary-id": "kithara-integration-tests",
-        "binary-name": "kithara_integration_tests",
-        "kind": "lib",
-        "binary-path": "/deps/kithara_integration_tests-5",
-        "build-platform": "target"
-    }"#;
-
     #[test]
     fn staging_takes_every_target_platform_test_image() {
         let images = device_test_images(inventory(&format!(
-            "{ASSETS_LIB}, {ASSETS_TEST}, {MACROS_PROC}, {DEVTOOLS_LIB}"
+            "{ASSETS_LIB}, {ASSETS_TEST}, {MACROS_PROC}, {DEVTOOLS_LIB}",
+            ASSETS_LIB = consts::ASSETS_LIB,
+            ASSETS_TEST = consts::ASSETS_TEST,
+            DEVTOOLS_LIB = consts::DEVTOOLS_LIB,
+            MACROS_PROC = consts::MACROS_PROC
         )))
         .expect("the inventory names known build platforms");
         assert!(images.contains(&PathBuf::from("/deps/kithara_assets-1")));
@@ -597,8 +569,12 @@ mod tests {
 
     #[test]
     fn staging_leaves_out_the_integration_helper_library() {
-        let images = device_test_images(inventory(&format!("{INTEGRATION_LIB}, {ASSETS_TEST}")))
-            .expect("the inventory names known build platforms");
+        let images = device_test_images(inventory(&format!(
+            "{INTEGRATION_LIB}, {ASSETS_TEST}",
+            ASSETS_TEST = consts::ASSETS_TEST,
+            INTEGRATION_LIB = consts::INTEGRATION_LIB
+        )))
+        .expect("the inventory names known build platforms");
         assert_eq!(images, vec![PathBuf::from("/deps/crash_recovery-2")]);
     }
 

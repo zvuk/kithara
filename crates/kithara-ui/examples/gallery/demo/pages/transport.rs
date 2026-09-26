@@ -136,25 +136,23 @@ mod tests {
 
     use super::*;
 
-    struct Consts;
-
-    impl Consts {
-        const BPM: f32 = 70.0;
-        const CUES: &[f32] = &[0.27, 0.31];
-        const DURATION_SECS: f64 = 360.0;
-        const LOOP_REGION: [f32; 2] = [0.30, 0.34];
-        const POSITION_SECS: f64 = 103.0;
-        const ZOOM: f64 = 0.12;
+    mod consts {
+        pub(super) const BPM: f32 = 70.0;
+        pub(super) const CUES: &[f32] = &[0.27, 0.31];
+        pub(super) const DURATION_SECS: f64 = 360.0;
+        pub(super) const LOOP_REGION: [f32; 2] = [0.30, 0.34];
+        pub(super) const POSITION_SECS: f64 = 103.0;
+        pub(super) const ZOOM: f64 = 0.12;
     }
 
     fn transport() -> DeckTransport {
         DeckTransport::new(
-            Consts::BPM,
-            Consts::CUES,
-            Consts::DURATION_SECS,
-            Consts::LOOP_REGION,
-            Consts::POSITION_SECS,
-            Consts::ZOOM,
+            consts::BPM,
+            consts::CUES,
+            consts::DURATION_SECS,
+            consts::LOOP_REGION,
+            consts::POSITION_SECS,
+            consts::ZOOM,
         )
     }
 
@@ -173,7 +171,7 @@ mod tests {
         assert!(
             transport
                 .cues()
-                .contains(&(Consts::POSITION_SECS / Consts::DURATION_SECS).as_())
+                .contains(&(consts::POSITION_SECS / consts::DURATION_SECS).as_())
         );
         assert!(transport.cues().contains(&0.5));
         assert!(!transport.cues().contains(&0.75));
@@ -191,10 +189,10 @@ mod tests {
         let four_bars = DeckTransport::BARS_PER_LOOP
             * DeckTransport::BEATS_PER_BAR
             * DeckTransport::SECS_PER_MINUTE
-            / f64::from(Consts::BPM);
+            / f64::from(consts::BPM);
         assert_eq!(
             transport.loop_region(),
-            Some([0.25, (0.25 + four_bars / Consts::DURATION_SECS).as_()])
+            Some([0.25, (0.25 + four_bars / consts::DURATION_SECS).as_()])
         );
     }
 
@@ -232,13 +230,13 @@ mod tests {
     fn beat_jump_moves_one_bar_and_clamps_to_track_bounds() {
         let mut transport = transport();
         let one_bar =
-            DeckTransport::BEATS_PER_BAR * DeckTransport::SECS_PER_MINUTE / f64::from(Consts::BPM);
+            DeckTransport::BEATS_PER_BAR * DeckTransport::SECS_PER_MINUTE / f64::from(consts::BPM);
 
         transport.seek_normalized(0.5);
         transport.activate("modules/deck/transport/jump-back");
         assert_eq!(
             transport.position_secs(),
-            Consts::DURATION_SECS * 0.5 - one_bar
+            consts::DURATION_SECS * 0.5 - one_bar
         );
         transport.seek_normalized(0.999);
         transport.activate("modules/deck/transport/jump-forward");
@@ -255,7 +253,7 @@ mod tests {
         transport.activate("modules/deck/transport/zoom-out");
         assert_eq!(
             transport.zoom(),
-            f64::from(f32::from(zoom_out(zoom_from_f64(Consts::ZOOM))))
+            f64::from(f32::from(zoom_out(zoom_from_f64(consts::ZOOM))))
         );
         transport.set_zoom(0.49);
         transport.activate("modules/deck/transport/zoom-out");

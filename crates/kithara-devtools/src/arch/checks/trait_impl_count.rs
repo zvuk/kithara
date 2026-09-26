@@ -9,13 +9,15 @@ use crate::common::{
     walker::{relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "trait_impl_count";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "trait_impl_count";
+}
 
 pub(crate) struct TraitImplCount;
 
 impl Check for TraitImplCount {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -42,7 +44,7 @@ impl Check for TraitImplCount {
                          consider splitting roles via wrapper/embedded types",
                         cfg.warn
                     );
-                    violations.push(Violation::warn(ID, key, msg));
+                    violations.push(Violation::warn(consts::ID, key, msg));
                 }
             }
         }

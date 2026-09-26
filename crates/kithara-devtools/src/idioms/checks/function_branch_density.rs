@@ -13,13 +13,15 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to},
 };
 
-pub(crate) const ID: &str = "function_branch_density";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "function_branch_density";
+}
 
 pub(crate) struct FunctionBranchDensity;
 
 impl Check for FunctionBranchDensity {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -116,7 +118,7 @@ fn flag_if_dense(
          does not reduce the count — the same conditional jumps still execute.",
         counter.own_branches
     );
-    out.push(Violation::warn(ID, key, msg));
+    out.push(Violation::warn(consts::ID, key, msg));
 }
 
 struct BranchCounter {

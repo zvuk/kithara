@@ -21,18 +21,17 @@ use num_traits::cast::AsPrimitive;
 use crate::shared::{Endpoints, collect_rows, renderer};
 
 /// The shape of the documents below, and the window both hosts are given.
-struct Consts;
-
-impl Consts {
+mod consts {
     /// The room the window leaves, wide and tall enough for every block.
-    const CASE: (u32, u32) = (300, 240);
+    pub(super) const CASE: (u32, u32) = (300, 240);
     /// Every leaf the flow document lays out, in the order it holds them: a
     /// row of the flow, the block that flow hides, the row after it, and the
     /// cell the split hides beside them.
-    const FLOW_LEAVES: [&'static str; 4] = ["flow/head", "flow/body", "flow/tail", "aside/aside"];
+    pub(super) const FLOW_LEAVES: [&str; 4] =
+        ["flow/head", "flow/body", "flow/tail", "aside/aside"];
     /// The same three leaves of the slot document, the middle one held by a
     /// slot rather than by the column itself.
-    const SLOT_LEAVES: [&'static str; 3] = ["well/head", "well/body", "well/tail"];
+    pub(super) const SLOT_LEAVES: [&str; 3] = ["well/head", "well/body", "well/tail"];
 }
 
 /// One document, and the leaves it lays out in the order it holds them.
@@ -46,12 +45,12 @@ impl Case {
     /// A block held by the flow that draws it, and one held by a split.
     const FLOW: Self = Self {
         document: "blocks.klayout.ron",
-        leaves: &Consts::FLOW_LEAVES,
+        leaves: &consts::FLOW_LEAVES,
     };
     /// A block held by a slot, which is a flow the facade used to speak for.
     const SLOT: Self = Self {
         document: "slot.klayout.ron",
-        leaves: &Consts::SLOT_LEAVES,
+        leaves: &consts::SLOT_LEAVES,
     };
 }
 
@@ -171,7 +170,7 @@ impl App for Blocks {
 fn retained(case: Case) -> Vec<Rect> {
     let endpoints = Endpoints::default();
     let resolver = documents();
-    let (width, height) = Consts::CASE;
+    let (width, height) = consts::CASE;
     let mut ui = Ui::new(
         Blocks::hidden(case),
         Config::builder()
@@ -228,7 +227,7 @@ fn neutral(case: Case) -> Vec<Rect> {
         &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("the block fixture must compile: {error}"));
-    let (width, height) = Consts::CASE;
+    let (width, height) = consts::CASE;
     let renderer = renderer();
     let viewport = Size::new(width.as_(), height.as_());
     let mut element = tree::render(

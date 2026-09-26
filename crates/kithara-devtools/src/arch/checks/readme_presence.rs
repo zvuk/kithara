@@ -5,13 +5,15 @@ use anyhow::Result;
 use super::{Check, Context};
 use crate::common::{scope::packages_in_scope, violation::Violation};
 
-pub(crate) const ID: &str = "readme_presence";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "readme_presence";
+}
 
 pub(crate) struct ReadmePresence;
 
 impl Check for ReadmePresence {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -34,7 +36,7 @@ impl Check for ReadmePresence {
             match fs::metadata(&readme) {
                 Ok(meta) if meta.len() >= cfg.min_bytes => {}
                 Ok(meta) => violations.push(Violation::deny(
-                    ID,
+                    consts::ID,
                     key,
                     format!(
                         "stub README.md ({} bytes < min {})",
@@ -43,7 +45,7 @@ impl Check for ReadmePresence {
                     ),
                 )),
                 Err(_) => violations.push(Violation::deny(
-                    ID,
+                    consts::ID,
                     key,
                     format!("README.md missing at {}", readme.display()),
                 )),

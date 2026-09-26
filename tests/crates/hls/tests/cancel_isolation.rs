@@ -15,11 +15,10 @@ use kithara_integration_tests::{
     temp_dir,
 };
 
-struct Consts;
-impl Consts {
-    const NUM_SEGMENTS: usize = 6;
-    const HTML_SEGMENT_INDEX: usize = 3;
-    const SEGMENT_SIZE: usize = 64 * 1024;
+mod consts {
+    pub(super) const NUM_SEGMENTS: usize = 6;
+    pub(super) const HTML_SEGMENT_INDEX: usize = 3;
+    pub(super) const SEGMENT_SIZE: usize = 64 * 1024;
 }
 
 /// One html-bodied segment (segment 3) must NOT prevent the Downloader from
@@ -39,9 +38,9 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
 
     // 6 segment behaviors: index 3 = HTML, others = 64KB of 0xAB.
-    let segments: Vec<BehaviorHandle> = (0..Consts::NUM_SEGMENTS)
+    let segments: Vec<BehaviorHandle> = (0..consts::NUM_SEGMENTS)
         .map(|i| {
-            if i == Consts::HTML_SEGMENT_INDEX {
+            if i == consts::HTML_SEGMENT_INDEX {
                 helper.register_behavior(FixtureBehavior {
                     content: Content::HtmlError("<html><body>503 Backend Error</body></html>"),
                     delivery: Delivery::Normal,
@@ -49,7 +48,7 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
             } else {
                 helper.register_behavior(FixtureBehavior {
                     content: Content::StaticBytes {
-                        bytes: Arc::new(vec![0xABu8; Consts::SEGMENT_SIZE]),
+                        bytes: Arc::new(vec![0xABu8; consts::SEGMENT_SIZE]),
                         content_type: Some("video/mp2t"),
                     },
                     delivery: Delivery::Range,
@@ -110,10 +109,10 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
         let mut buf = vec![0u8; 4096];
         let deadline = Instant::now() + Duration::from_secs(8);
         for (seg, handle) in segments_for_blocking.iter().enumerate() {
-            if seg == Consts::HTML_SEGMENT_INDEX {
+            if seg == consts::HTML_SEGMENT_INDEX {
                 continue;
             }
-            let offset = (seg * Consts::SEGMENT_SIZE) as u64;
+            let offset = (seg * consts::SEGMENT_SIZE) as u64;
             let _ = stream.seek(SeekFrom::Start(offset));
             let _ = stream.read(&mut buf);
             while handle.request_count() == 0 && Instant::now() < deadline {
@@ -138,7 +137,7 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
 
     let mut missing: Vec<usize> = Vec::new();
     for (idx, hits) in snapshot.iter().enumerate() {
-        if idx == Consts::HTML_SEGMENT_INDEX {
+        if idx == consts::HTML_SEGMENT_INDEX {
             continue;
         }
         if *hits == 0 {
@@ -151,11 +150,11 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
         "sibling segment fetch cancelled when one sibling returned html: \
          missing segments {missing:?}, full hit map {snapshot:?} \
          (html segment is index {html_idx})",
-        html_idx = Consts::HTML_SEGMENT_INDEX,
+        html_idx = consts::HTML_SEGMENT_INDEX,
     );
 
     assert!(
-        segments[Consts::HTML_SEGMENT_INDEX].request_count() >= 1,
+        segments[consts::HTML_SEGMENT_INDEX].request_count() >= 1,
         "rigged html segment was never requested — test fixture broken",
     );
 }

@@ -1,7 +1,7 @@
 use js_sys::{Array, Object, Reflect};
 use wasm_bindgen::JsValue;
 
-use super::marshal::{KIND, set_bool, set_f64, set_opt_f64, set_opt_str, set_str};
+use super::marshal::{consts::KIND, set_bool, set_f64, set_opt_f64, set_opt_str, set_str};
 use crate::types::{
     FfiAudioCodecKind, FfiCancelReason, FfiContainerKind, FfiDecodeErrorClass, FfiDecodeErrorKind,
     FfiDecoderBackend, FfiDecoderChangeCause, FfiFrameDomain, FfiItemEvent, FfiItemStatus,

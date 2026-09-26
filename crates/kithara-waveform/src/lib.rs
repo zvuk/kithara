@@ -23,3 +23,4 @@ pub use bucket::{Bucket, MAX_BUCKETS, WAVEFORM_BYTES_VERSION, Waveform, Waveform
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 pub use params::AnalysisParams;
 pub use resume::{WaveformPartialResume, WaveformResume};
+mod consts;

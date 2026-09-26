@@ -9,7 +9,7 @@ use kithara_ui::{
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    consts::Consts,
+    consts,
     data::CATALOG,
     pages::{
         clock::ClockState,
@@ -171,22 +171,22 @@ impl Default for DemoReads {
             volume: 0.7,
             waveform: waveform(),
             transport: DeckTransport::new(
-                Consts::BPM_VALUE,
-                Consts::CUES,
-                Consts::DURATION_SECS,
-                Consts::LOOP_REGION,
-                Consts::POSITION_SECS,
-                Consts::ZOOM,
+                consts::BPM_VALUE,
+                consts::CUES,
+                consts::DURATION_SECS,
+                consts::LOOP_REGION,
+                consts::POSITION_SECS,
+                consts::ZOOM,
             ),
-            table_columns: Consts::TABLE_QUEUE,
-            table_preset: Consts::TABLE_QUEUE_PRESET,
+            table_columns: consts::TABLE_QUEUE,
+            table_preset: consts::TABLE_QUEUE_PRESET,
             table_widths: BTreeMap::new(),
             tree_rows: Vec::with_capacity(CATALOG.tree.len()),
             tree_visible_indices: Vec::with_capacity(CATALOG.tree.len()),
-            motion_phase: Consts::MOTION_START,
-            motion_clock: Consts::MOTION_CLOCK_START,
-            sprite_scrub: Consts::SPRITE_SCRUB_START,
-            lottie_scrub: Consts::LOTTIE_SCRUB_START,
+            motion_phase: consts::MOTION_START,
+            motion_clock: consts::MOTION_CLOCK_START,
+            sprite_scrub: consts::SPRITE_SCRUB_START,
+            lottie_scrub: consts::LOTTIE_SCRUB_START,
             vis_levels: [0.66, 0.52],
             vis_phase: 0.0,
             vis_preset: 0,
@@ -404,9 +404,9 @@ impl DemoReads {
 
     fn set_table_preset(&mut self, index: usize) {
         let Some(columns) = [
-            Consts::TABLE_LIBRARY,
-            Consts::TABLE_QUEUE,
-            Consts::TABLE_MICRO,
+            consts::TABLE_LIBRARY,
+            consts::TABLE_QUEUE,
+            consts::TABLE_MICRO,
         ]
         .get(index)
         .copied() else {
@@ -417,7 +417,7 @@ impl DemoReads {
     }
 
     fn set_table_width(&mut self, name: &str, value: f64) {
-        if !Consts::table_columns()
+        if !consts::table_columns()
             .iter()
             .any(|column| column.id() == name)
         {
@@ -482,18 +482,18 @@ impl DemoReads {
     /// along that puts each object is the document's business, not its own.
     fn tick_clock(&mut self) {
         self.motion_clock =
-            (self.motion_clock + Consts::MOTION_TICK_SECS) % Consts::MOTION_CLOCK_PERIOD;
+            (self.motion_clock + consts::MOTION_TICK_SECS) % consts::MOTION_CLOCK_PERIOD;
     }
 
     /// One sawtooth from 0 to 1, which is every track on the objects page: an
     /// application that already knows how far along each object is hands the
     /// number over and the document spends it.
     fn tick_phase(&mut self) {
-        self.motion_phase = (self.motion_phase + Consts::MOTION_STEP).fract();
+        self.motion_phase = (self.motion_phase + consts::MOTION_STEP).fract();
     }
 
     fn tick_vis(&mut self) {
-        self.vis_time_secs += Consts::VIS_TICK_SECS;
+        self.vis_time_secs += consts::VIS_TICK_SECS;
         self.vis_phase += 0.17;
         self.vis_rng = self
             .vis_rng
@@ -522,7 +522,7 @@ impl DemoReads {
     }
 
     fn toggle_table_column(&mut self, name: &str) {
-        let Some(index) = Consts::table_columns()
+        let Some(index) = consts::table_columns()
             .iter()
             .position(|column| column.id() == name)
         else {
@@ -571,13 +571,13 @@ impl Reads for DemoReads {
             return Some(ReadValue::Scalar(f64::from(index)));
         }
         if let Some(name) = endpoint.strip_prefix("gallery.table.columns.width.") {
-            Consts::table_columns()
+            consts::table_columns()
                 .iter()
                 .find(|column| column.id() == name)?;
             return self.table_widths.get(name).copied().map(ReadValue::Scalar);
         }
         if let Some(name) = endpoint.strip_prefix("gallery.table.columns.") {
-            let index = Consts::table_columns()
+            let index = consts::table_columns()
                 .iter()
                 .position(|column| column.id() == name)?;
             return Some(ReadValue::Bool(self.table_columns[index]));
@@ -614,33 +614,33 @@ impl Reads for DemoReads {
             "deck.playback.position_normalized" => {
                 ReadValue::Scalar(self.transport.position_normalized())
             }
-            "deck.playback.cached_normalized" => ReadValue::Scalar(Consts::CACHED_NORMALIZED),
+            "deck.playback.cached_normalized" => ReadValue::Scalar(consts::CACHED_NORMALIZED),
             "deck.playback.remaining_secs" => {
-                ReadValue::Scalar(Consts::DURATION_SECS - self.transport.position_secs())
+                ReadValue::Scalar(consts::DURATION_SECS - self.transport.position_secs())
             }
             "deck.playback.position_secs" => ReadValue::Scalar(self.transport.position_secs()),
-            "deck.playback.duration_secs" => ReadValue::Scalar(Consts::DURATION_SECS),
+            "deck.playback.duration_secs" => ReadValue::Scalar(consts::DURATION_SECS),
             "deck.playback.looping" => ReadValue::Bool(self.transport.loop_region().is_some()),
             "deck.playback.reverse" => ReadValue::Bool(self.transport.reverse()),
             "deck.playback.synced" | "demo.button.sync" => ReadValue::Bool(self.button_sync),
-            "deck.playback.tempo" => ReadValue::Text(Consts::TEMPO),
+            "deck.playback.tempo" => ReadValue::Text(consts::TEMPO),
             "deck.playback.waveform" => ReadValue::Waveform(WaveformView {
                 buckets: &self.waveform,
                 revision: 0,
                 beats: &self.wave_beats,
                 downbeats: &self.wave_downbeats,
-                unready: &Consts::WAVE_UNREADY,
-                bpm: Some(Consts::BPM_VALUE),
+                unready: &consts::WAVE_UNREADY,
+                bpm: Some(consts::BPM_VALUE),
                 r#loop: self.transport.loop_region(),
                 cues: self.transport.cues(),
             }),
             "deck.track.title" | "demo.track.title" => ReadValue::Text(CATALOG.title),
-            "deck.track.source_kind" => ReadValue::Text(Consts::ON_AIR),
+            "deck.track.source_kind" => ReadValue::Text(consts::ON_AIR),
             "demo.track.artist" => ReadValue::Text(CATALOG.artist),
-            "engine.load" => ReadValue::Scalar(Consts::ENGINE_LOAD),
-            "engine.latency" => ReadValue::Text(Consts::LATENCY),
-            "ui.set.record_time" => ReadValue::Text(Consts::RECORD_TIME),
-            "deck.track.key" | "demo.key" => ReadValue::Text(Consts::KEY),
+            "engine.load" => ReadValue::Scalar(consts::ENGINE_LOAD),
+            "engine.latency" => ReadValue::Text(consts::LATENCY),
+            "ui.set.record_time" => ReadValue::Text(consts::RECORD_TIME),
+            "deck.track.key" | "demo.key" => ReadValue::Text(consts::KEY),
             "deck.view.zoom" => ReadValue::Scalar(self.transport.zoom()),
             "player.output.levels" => ReadValue::Stereo(StereoLevels {
                 l: if self.showing == "vis" {
@@ -663,8 +663,8 @@ impl Reads for DemoReads {
             "library.query" => ReadValue::Text(&self.library_query),
             "library.scope" => ReadValue::Scalar(self.library_scope.as_()),
             "ui.preset" => ReadValue::Text("player"),
-            "demo.bpm" => ReadValue::Text(Consts::BPM),
-            "demo.remain" | "deck.playback.remain" => ReadValue::Text(Consts::REMAIN),
+            "demo.bpm" => ReadValue::Text(consts::BPM),
+            "demo.remain" | "deck.playback.remain" => ReadValue::Text(consts::REMAIN),
             "demo.knob.26" => ReadValue::Scalar(self.knobs[0]),
             "demo.knob.28" => ReadValue::Scalar(self.knobs[1]),
             "demo.knob.34" => ReadValue::Scalar(self.knobs[2]),
@@ -691,8 +691,8 @@ impl Reads for DemoReads {
 }
 
 fn waveform() -> Vec<WaveBucket> {
-    let total: f32 = Consts::WAVE_BUCKETS.as_();
-    (0..Consts::WAVE_BUCKETS)
+    let total: f32 = consts::WAVE_BUCKETS.as_();
+    (0..consts::WAVE_BUCKETS)
         .map(|index| {
             let high: f32 = ((index * 41 + 23) % 55).as_();
             let low: f32 = ((index * 17) % 70).as_();
@@ -701,7 +701,7 @@ fn waveform() -> Vec<WaveBucket> {
             let phase = phase / total;
             let envelope =
                 (phase * 44.0).sin().mul_add(0.3, 0.62) * (phase * 5.0).cos().mul_add(0.18, 0.82);
-            if Consts::WAVE_UNREADY
+            if consts::WAVE_UNREADY
                 .iter()
                 .any(|hole| phase >= hole[0] && phase < hole[1])
             {
@@ -717,7 +717,7 @@ fn waveform() -> Vec<WaveBucket> {
 }
 
 fn beat_grid() -> (Vec<f32>, Vec<f32>) {
-    let beat_count: usize = (Consts::DURATION_SECS * f64::from(Consts::BPM_VALUE) / 60.0)
+    let beat_count: usize = (consts::DURATION_SECS * f64::from(consts::BPM_VALUE) / 60.0)
         .floor()
         .as_();
     let beat_count_f: f32 = beat_count.as_();

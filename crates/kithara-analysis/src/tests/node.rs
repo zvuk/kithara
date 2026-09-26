@@ -47,8 +47,6 @@ use unimock::{MockFn, Unimock, matching};
 use super::super::beat::BeatDetector;
 #[cfg(feature = "analysis-beat")]
 use super::super::beat::{BeatDetectorMock, BeatMark, GridParams, RawBeats};
-#[cfg(feature = "analysis-waveform")]
-use super::fixtures::CH;
 #[cfg(feature = "analysis-beat")]
 use super::fixtures::shareable;
 use super::{
@@ -57,7 +55,7 @@ use super::{
         analyzer::AnalyzerBuilder,
         worker::{AnalysisNode, Job},
     },
-    fixtures::{FakeReader, SR, sine},
+    fixtures::{FakeReader, sine},
 };
 #[cfg(feature = "analysis-beat")]
 use crate::BeatState;
@@ -66,6 +64,7 @@ use crate::BeatState;
 use crate::analyzer::BeatAnalysisConfig;
 #[cfg(feature = "analysis-waveform")]
 use crate::blob::to_bytes;
+use crate::consts;
 #[cfg(feature = "analysis-waveform")]
 use crate::producer::{AnalysisProducer, ring};
 #[cfg(all(feature = "analysis-beat", not(feature = "analysis-waveform")))]
@@ -79,9 +78,6 @@ use crate::{
     AnalysisProgress, TrackAnalysis,
     test_pools::{TestPools, pools},
 };
-
-#[cfg(feature = "analysis-waveform")]
-const BUCKETS: usize = 64;
 
 pub(super) struct NodeHarness<B, S>
 where
@@ -159,7 +155,7 @@ where
 
 #[cfg(feature = "analysis-waveform")]
 fn waveform_only() -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
-    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_waveform(BUCKETS)
+    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_waveform(consts::NODE_BUCKETS)
 }
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -170,7 +166,7 @@ fn beat_waveform(
 ) -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
     let config = BeatAnalysisConfig::builder()
         .resampler_backend(NoResamplerBackend)
-        .target_rate(SR)
+        .target_rate(consts::FIXTURES_SR)
         .detector_min_window_seconds(min_window_seconds)
         .detector_window_seconds(window_seconds)
         .detector_overlap_seconds(0)
@@ -178,7 +174,7 @@ fn beat_waveform(
     AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
         .with_beat_config(config)
         .with_beat_detector(detector, GridParams::default())
-        .with_waveform(BUCKETS)
+        .with_waveform(consts::NODE_BUCKETS)
 }
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -412,7 +408,7 @@ fn an_offer_reaches_only_the_pass_its_handle_names(analysis_pcm: &'static [f32])
 fn an_offer_on_another_axis_leaves_the_coverage_alone(analysis_pcm: &'static [f32]) {
     let rate = super::fixtures::spec().sample_rate;
     let foreign = AudioSpec {
-        channels: CH,
+        channels: consts::CH,
         sample_rate: NonZeroU32::new(48_000).expect("test rate is non-zero"),
     };
     let (jobs, receiver) = mpsc::channel();
@@ -831,16 +827,16 @@ where
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
 async fn matches_direct_waveform_analyzer_over_chunked_stream(analysis_pcm: &'static [f32]) {
-    let samples = sine(analysis_pcm, usize::try_from(SR).unwrap());
-    let frames = u64::try_from(samples.len() / usize::from(CH)).unwrap_or(0);
+    let samples = sine(analysis_pcm, usize::try_from(consts::FIXTURES_SR).unwrap());
+    let frames = u64::try_from(samples.len() / usize::from(consts::CH)).unwrap_or(0);
     let builder = waveform_only();
     let pools = builder.pools().clone();
-    let mut direct = WaveformAnalyzer::new(SR, AnalysisParams::default(), &pools)
+    let mut direct = WaveformAnalyzer::new(consts::FIXTURES_SR, AnalysisParams::default(), &pools)
         .expect("waveform buffers fit the test region");
     direct
-        .push(&pools, &samples, usize::from(CH), 0)
+        .push(&pools, &samples, usize::from(consts::CH), 0)
         .expect("waveform buffers fit the test region");
-    let want = direct.snapshot(BUCKETS, Some(frames));
+    let want = direct.snapshot(consts::NODE_BUCKETS, Some(frames));
 
     let reader = Box::new(FakeReader::chunked(&pools, &samples, 4));
     let out = stages(reader, builder, &CancelToken::root()).await;
@@ -915,7 +911,7 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress(analysis_pcm: &'static
     )));
     let builder = beat_waveform(detector, 1, 1);
     let rate = super::fixtures::spec().sample_rate;
-    let frames = usize::try_from(SR).expect("test rate fits usize");
+    let frames = usize::try_from(consts::FIXTURES_SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "same-track".into());
@@ -947,7 +943,7 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress(analysis_pcm: &'static
         "one source second reaches the detector"
     );
 
-    let offered_at = 2 * u64::from(SR);
+    let offered_at = 2 * u64::from(consts::FIXTURES_SR);
     assert_eq!(
         producer.offer(
             &sine(analysis_pcm, frames),
@@ -969,14 +965,14 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress(analysis_pcm: &'static
         snapshot
             .analysis()
             .coverage()
-            .covers(&(u64::from(SR)..2 * u64::from(SR))),
+            .covers(&(u64::from(consts::FIXTURES_SR)..2 * u64::from(consts::FIXTURES_SR))),
         "the decoder reached its second chunk"
     );
     assert!(
         snapshot
             .analysis()
             .coverage()
-            .covers(&(offered_at..offered_at + u64::from(SR))),
+            .covers(&(offered_at..offered_at + u64::from(consts::FIXTURES_SR))),
         "the playback ring was drained"
     );
 
@@ -997,11 +993,11 @@ fn saturation_retries_the_exact_detection_payload_once(analysis_pcm: &'static [f
             })),
     )));
     let builder = beat_waveform(detector, 1, 1);
-    let frames = usize::try_from(SR).expect("test rate fits usize");
+    let frames = usize::try_from(consts::FIXTURES_SR).expect("test rate fits usize");
     let pcm = sine(analysis_pcm, frames);
     let expected: Vec<f32> = pcm
-        .chunks_exact(usize::from(CH))
-        .map(|frame| frame.iter().sum::<f32>() / f32::from(CH))
+        .chunks_exact(usize::from(consts::CH))
+        .map(|frame| frame.iter().sum::<f32>() / f32::from(consts::CH))
         .collect();
     let (jobs, receiver) = mpsc::channel();
     let results = enqueue(
@@ -1086,7 +1082,7 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass(analysis_pc
             })),
     )));
     let builder = beat_waveform(detector, 1, 1);
-    let frames = usize::try_from(SR).expect("test rate fits usize");
+    let frames = usize::try_from(consts::FIXTURES_SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
     let cancel_a = CancelToken::root();
     let mut results_a = enqueue(
@@ -1156,11 +1152,11 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass(analysis_pc
         .artifact()
         .beats();
     assert!(
-        beats.contains(&(3 * u64::from(SR) / 4)),
+        beats.contains(&(3 * u64::from(consts::FIXTURES_SR) / 4)),
         "B's marker is retained: {beats:?}"
     );
     assert!(
-        !beats.contains(&(u64::from(SR) / 4)),
+        !beats.contains(&(u64::from(consts::FIXTURES_SR) / 4)),
         "A's late marker cannot enter B: {beats:?}"
     );
 }
@@ -1181,7 +1177,7 @@ fn final_publication_waits_for_trailing_detection(analysis_pcm: &'static [f32]) 
             })),
     )));
     let builder = beat_waveform(detector, 2, 2);
-    let frames = usize::try_from(SR).expect("test rate fits usize");
+    let frames = usize::try_from(consts::FIXTURES_SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
     let mut results = enqueue(
         &jobs,
@@ -1240,7 +1236,7 @@ fn final_publication_waits_for_trailing_detection(analysis_pcm: &'static [f32]) 
 #[kithara::test(native, flash(false))]
 fn producer_drain_limit_bounds_one_tick(analysis_pcm: &'static [f32]) {
     let rate = super::fixtures::spec().sample_rate;
-    let frames = usize::try_from(SR).expect("test rate fits usize");
+    let frames = usize::try_from(consts::FIXTURES_SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "drain-track".into());
@@ -1261,7 +1257,11 @@ fn producer_drain_limit_bounds_one_tick(analysis_pcm: &'static [f32]) {
     let pcm = sine(analysis_pcm, frames);
     for block in 0..3u64 {
         assert_eq!(
-            producer.offer(&pcm, super::fixtures::spec(), block * u64::from(SR)),
+            producer.offer(
+                &pcm,
+                super::fixtures::spec(),
+                block * u64::from(consts::FIXTURES_SR)
+            ),
             Ok(())
         );
     }
@@ -1274,7 +1274,7 @@ fn producer_drain_limit_bounds_one_tick(analysis_pcm: &'static [f32]) {
             .expect("each drained source second is published");
         assert_eq!(
             snapshot.analysis().coverage().iter().collect::<Vec<_>>(),
-            &[&(0..expected * u64::from(SR))],
+            &[&(0..expected * u64::from(consts::FIXTURES_SR))],
             "one tick drains exactly one descriptor"
         );
     }
@@ -1300,7 +1300,10 @@ async fn beat_slot_fills_the_beat_grid(analysis_pcm: &'static [f32]) {
 
     let reader = Box::new(FakeReader::chunked(
         builder.pools(),
-        &sine(analysis_pcm, 17 * usize::try_from(SR).unwrap()),
+        &sine(
+            analysis_pcm,
+            17 * usize::try_from(consts::FIXTURES_SR).unwrap(),
+        ),
         3,
     ));
     let out = stages(reader, builder, &CancelToken::root()).await;
@@ -1350,7 +1353,7 @@ async fn beat_slot_fills_the_beat_grid(analysis_pcm: &'static [f32]) {
     let last = out.last().expect("at least one publication");
     assert_eq!(
         last.extent(),
-        Some(u64::from(SR) * 17),
+        Some(u64::from(consts::FIXTURES_SR) * 17),
         "end of stream pins the extent to what was covered"
     );
     let grid = last
@@ -1371,7 +1374,7 @@ async fn beat_slot_fills_the_beat_grid(analysis_pcm: &'static [f32]) {
         .collect();
     gaps.sort_unstable();
     let bar_frames = gaps.get(gaps.len() / 2).copied().unwrap_or(0);
-    let bar_seconds = bar_frames.to_f64().unwrap_or(1.0) / f64::from(SR);
+    let bar_seconds = bar_frames.to_f64().unwrap_or(1.0) / f64::from(consts::FIXTURES_SR);
     let bpm_from_marks = 4.0 * 60.0 / bar_seconds;
     assert!(
         (bpm_from_marks - grid.artifact().bpm()).abs() < 1e-6,
@@ -1380,7 +1383,7 @@ async fn beat_slot_fills_the_beat_grid(analysis_pcm: &'static [f32]) {
     );
     assert_eq!(
         grid.artifact().downbeats()[1],
-        u64::from(SR) * 2,
+        u64::from(consts::FIXTURES_SR) * 2,
         "source frames"
     );
 }

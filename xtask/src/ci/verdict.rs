@@ -16,11 +16,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use super::run::PipelineKind;
-
-/// How many `main` runs the journal keeps. One is not enough: a test that fails
-/// a quarter of the time would otherwise land in a branch's column whenever the
-/// single remembered run happened to be green, and block on its own noise.
-const REMEMBERED_RUNS: usize = 5;
+use crate::consts;
 
 #[derive(Debug, Args)]
 pub(crate) struct VerdictArgs {
@@ -194,7 +190,7 @@ impl Journal {
     fn record(&mut self, run: Run) {
         self.runs.retain(|kept| kept.sha != run.sha);
         self.runs.push(run);
-        let excess = self.runs.len().saturating_sub(REMEMBERED_RUNS);
+        let excess = self.runs.len().saturating_sub(consts::REMEMBERED_RUNS);
         self.runs.drain(..excess);
     }
 
@@ -249,11 +245,6 @@ fn case_id(case: &CaseTiming, aliases: &BTreeMap<String, String>) -> String {
     canonical_id(&format!("{}::{}", case.suite, case.name), aliases)
 }
 
-/// Where the verdict expects every lane to leave what it produced. Artifacts
-/// travel between runners at their own paths, so one directory is what makes a
-/// report from the simulator and a report from a container comparable.
-pub(crate) const REPORT_DIR: &str = ".ci-artifacts/junit";
-
 /// The report a lane writes, before it is collected. A lane that writes none
 /// still leaves a marker when it fails, which is how a browser suite or a
 /// sanitiser run — neither of which can name a test — still holds a merge
@@ -277,7 +268,7 @@ pub(crate) fn produced_report(lane: &str) -> Option<&'static str> {
 /// is outside the persistent Cargo targets, so checkout cleanup removes absent
 /// evidence before `GitLab` downloads a verdict's needs.
 pub(crate) fn clear(root: &Path, lane: &str) -> Result<()> {
-    let directory = root.join(REPORT_DIR);
+    let directory = root.join(consts::REPORT_DIR);
     if lane != "verdict" && directory.exists() {
         fs::remove_dir_all(&directory)
             .with_context(|| format!("removing {}", directory.display()))?;
@@ -302,7 +293,7 @@ pub(crate) fn clear(root: &Path, lane: &str) -> Result<()> {
 /// Collect what this lane produced into the one directory the verdict reads,
 /// and record a bare failure for a lane that cannot name its tests.
 pub(crate) fn gather(root: &Path, lane: &str, failed: bool) -> Result<()> {
-    let directory = root.join(REPORT_DIR);
+    let directory = root.join(consts::REPORT_DIR);
     fs::create_dir_all(&directory).with_context(|| format!("creating {}", directory.display()))?;
     if let Some(report) = produced_report(lane) {
         let from = root.join(report);
@@ -334,7 +325,7 @@ pub(crate) fn lane(
     aliases: &BTreeMap<String, String>,
 ) -> Result<()> {
     let common = Common {
-        reports: root.join(REPORT_DIR),
+        reports: root.join(consts::REPORT_DIR),
         journal: journal_path(shared_root),
         base: std::env::var("CI_MERGE_REQUEST_DIFF_BASE_SHA").ok(),
     };
@@ -609,14 +600,14 @@ mod tests {
     #[test]
     fn the_window_forgets_what_falls_out_of_it() {
         let mut journal = Journal::default();
-        for index in 0..=REMEMBERED_RUNS {
+        for index in 0..=consts::REMEMBERED_RUNS {
             journal.record(run_of(
                 &index.to_string(),
                 &[&format!("suite::{index}")],
                 &[],
             ));
         }
-        assert_eq!(journal.runs.len(), REMEMBERED_RUNS);
+        assert_eq!(journal.runs.len(), consts::REMEMBERED_RUNS);
         assert!(!journal.tests().contains("suite::0"));
         assert!(journal.tests().contains("suite::5"));
     }
@@ -671,9 +662,9 @@ mod tests {
     fn a_lane_that_produced_nothing_publishes_nothing() {
         let directory = tempfile::tempdir().unwrap();
         gather(directory.path(), "apple-lint", false).unwrap();
-        assert!(directory.path().join(REPORT_DIR).exists());
+        assert!(directory.path().join(consts::REPORT_DIR).exists());
         assert!(
-            fs::read_dir(directory.path().join(REPORT_DIR))
+            fs::read_dir(directory.path().join(consts::REPORT_DIR))
                 .unwrap()
                 .next()
                 .is_none()
@@ -685,7 +676,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         gather(directory.path(), "web-chromium", true).unwrap();
         assert_eq!(
-            failed_markers(&directory.path().join(REPORT_DIR)).unwrap(),
+            failed_markers(&directory.path().join(consts::REPORT_DIR)).unwrap(),
             BTreeSet::from(["web-chromium".to_owned()])
         );
     }
@@ -702,7 +693,7 @@ mod tests {
         assert!(
             !directory
                 .path()
-                .join(REPORT_DIR)
+                .join(consts::REPORT_DIR)
                 .join("apple-test.xml")
                 .exists(),
             "the build directory survives between jobs, so a stale report must not travel"
@@ -712,7 +703,7 @@ mod tests {
     #[test]
     fn a_retried_lane_publishes_only_its_current_evidence() {
         let directory = tempfile::tempdir().unwrap();
-        let reports = directory.path().join(REPORT_DIR);
+        let reports = directory.path().join(consts::REPORT_DIR);
         fs::create_dir_all(&reports).unwrap();
         fs::write(reports.join("apple-ios-test.failed"), "").unwrap();
         fs::write(reports.join("apple-lint.failed"), "").unwrap();
@@ -735,7 +726,7 @@ mod tests {
     #[test]
     fn a_retried_verdict_keeps_downloaded_evidence_but_drops_its_own_marker() {
         let directory = tempfile::tempdir().unwrap();
-        let reports = directory.path().join(REPORT_DIR);
+        let reports = directory.path().join(consts::REPORT_DIR);
         fs::create_dir_all(&reports).unwrap();
         fs::write(reports.join("apple-test.xml"), "<testsuites/>").unwrap();
         fs::write(reports.join("apple-ios-test.failed"), "").unwrap();
@@ -754,7 +745,7 @@ mod tests {
     #[test]
     fn checkout_cleanup_removes_stale_evidence_before_needs_are_downloaded() {
         let directory = tempfile::tempdir().unwrap();
-        let reports = directory.path().join(REPORT_DIR);
+        let reports = directory.path().join(consts::REPORT_DIR);
         fs::create_dir_all(&reports).unwrap();
         fs::write(reports.join("apple-ios-test.failed"), "").unwrap();
 

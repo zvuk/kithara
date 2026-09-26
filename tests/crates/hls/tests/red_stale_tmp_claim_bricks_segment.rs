@@ -41,14 +41,13 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 
-struct Consts;
-impl Consts {
-    const SEGMENT_SIZE: usize = 50_000;
-    const SEGMENT_COUNT: usize = 5;
+mod consts {
+    pub(super) const SEGMENT_SIZE: usize = 50_000;
+    pub(super) const SEGMENT_COUNT: usize = 5;
     /// Mid-playlist, so playback has to cross committed segments first and the
     /// stall lands where a listener hears it: in the middle of the track.
-    const STALE_SEGMENT: usize = 3;
-    const READ_CHUNK: usize = 8 * 1024;
+    pub(super) const STALE_SEGMENT: usize = 3;
+    pub(super) const READ_CHUNK: usize = 8 * 1024;
 }
 
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
@@ -67,12 +66,12 @@ async fn stale_tmp_from_a_dead_writer_does_not_brick_a_segment() {
         read_bytes,
         fixture.server.total_bytes(),
         "playback stopped short at segment {}",
-        Consts::STALE_SEGMENT
+        consts::STALE_SEGMENT
     );
     assert!(
         fixture.canonical.is_file(),
         "segment {} never landed at {}",
-        Consts::STALE_SEGMENT,
+        consts::STALE_SEGMENT,
         fixture.canonical.display()
     );
     assert!(
@@ -107,7 +106,7 @@ async fn a_segment_that_can_never_be_acquired_fails_the_read() {
     );
 }
 
-/// Server, store, and the on-disk path of [`Consts::STALE_SEGMENT`].
+/// Server, store, and the on-disk path of [`consts::STALE_SEGMENT`].
 struct Fixture {
     server: HlsTestServer,
     /// The path the store commits the stale segment to. Derived through the
@@ -122,13 +121,13 @@ impl Fixture {
     async fn new() -> Self {
         let temp_dir = TestTempDir::new();
         let server = HlsTestServer::new(HlsTestServerConfig {
-            segment_size: Consts::SEGMENT_SIZE,
-            segments_per_variant: Consts::SEGMENT_COUNT,
+            segment_size: consts::SEGMENT_SIZE,
+            segments_per_variant: consts::SEGMENT_COUNT,
             ..Default::default()
         })
         .await;
         let master_url = server.url("/master.m3u8");
-        let stale_url = server.url(&format!("/seg/v0_{}.bin", Consts::STALE_SEGMENT));
+        let stale_url = server.url(&format!("/seg/v0_{}.bin", consts::STALE_SEGMENT));
 
         let root = temp_dir.path().to_path_buf();
         let pools = pools();
@@ -168,7 +167,7 @@ impl Fixture {
             .await
             .expect("create stream");
         spawn_blocking(move || {
-            let mut buf = vec![0u8; Consts::READ_CHUNK];
+            let mut buf = vec![0u8; consts::READ_CHUNK];
             let mut total = 0u64;
             loop {
                 let n = stream.read(&mut buf)?;

@@ -13,7 +13,9 @@ use kithara_platform::{
 use super::transport::{HostBuffer, HostCall, HostFailure};
 use crate::{backend::pooled::ByteBuffers, error::NetError};
 
-pub(super) const READ_SIZE: usize = 64 * 1024;
+pub(in crate::backend::host) mod consts {
+    pub(in crate::backend::host) const READ_SIZE: usize = 64 * 1024;
+}
 
 pub(super) struct Response {
     pub(super) headers: Vec<(String, String)>,
@@ -225,7 +227,7 @@ impl Stream for HostBodyStream {
             return this.stop(NetError::Cancelled);
         }
         if !this.outstanding {
-            match HostBuffer::with_len(&this.buffers, READ_SIZE) {
+            match HostBuffer::with_len(&this.buffers, consts::READ_SIZE) {
                 Ok(buffer) => this.call.read(buffer),
                 Err(error) => return this.stop(error),
             }

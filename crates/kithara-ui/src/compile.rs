@@ -17,9 +17,8 @@ use crate::{
     room,
     shader::ShaderCache,
     size::{
-        BlockNode, Cell, Cells, DEFAULTS, SizeSpec, Snapshot, at_least, axis_min,
-        combine_horizontal, combine_vertical, compute_size, has_blocks, min_size,
-        with_module_chrome,
+        BlockNode, Cell, Cells, SizeSpec, Snapshot, at_least, axis_min, combine_horizontal,
+        combine_vertical, compute_size, consts::DEFAULTS, has_blocks, min_size, with_module_chrome,
     },
     skin::SkinDoc,
     source::{SourceResolver, UiConfig},

@@ -6,11 +6,12 @@ mod decrypt {
     };
     use kithara_test_utils::kithara;
 
-    use crate::{DecryptContext, aes128_cbc_process_chunk, decrypt::AES_BLOCK_SIZE};
+    use crate::{DecryptContext, aes128_cbc_process_chunk, consts};
 
     fn encrypt_aes128_cbc(plaintext: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
         let encryptor = Encryptor::<Aes128>::new(key.into(), iv.into());
-        let padded_len = plaintext.len() + (AES_BLOCK_SIZE - plaintext.len() % AES_BLOCK_SIZE);
+        let padded_len =
+            plaintext.len() + (consts::AES_BLOCK_SIZE - plaintext.len() % consts::AES_BLOCK_SIZE);
         let mut buf = vec![0u8; padded_len];
         buf[..plaintext.len()].copy_from_slice(plaintext);
         let ct = encryptor

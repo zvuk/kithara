@@ -71,16 +71,20 @@ mod tests {
         draw::{DrawCmd, Geom, Paint},
     };
 
-    const BOX: Rect = Rect {
-        h: 24.0,
-        w: 200.0,
-        x: 10.0,
-        y: 4.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOX: Rect = Rect {
+            h: 24.0,
+            w: 200.0,
+            x: 10.0,
+            y: 4.0,
+        };
+    }
 
     fn painted(value: ScalarRange) -> Vec<DrawCmd> {
         let mut list = DrawListBuilder::default();
-        Range::new(builtin::skin()).paint(&mut list, value, BOX);
+        Range::new(builtin::skin()).paint(&mut list, value, consts::BOX);
         list.finish().commands().to_vec()
     }
 
@@ -104,7 +108,7 @@ mod tests {
         else {
             panic!("a range must draw its selection over its rail");
         };
-        assert_eq!(selection.x, BOX.x + 50.0);
+        assert_eq!(selection.x, consts::BOX.x + 50.0);
         assert_eq!(selection.w, 100.0);
     }
 

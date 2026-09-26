@@ -6,13 +6,15 @@ use cargo_metadata::{DependencyKind, Metadata, Node, Package};
 use super::{Check, Context};
 use crate::common::{scope::packages_in_scope, violation::Violation};
 
-pub(crate) const ID: &str = "direction";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "direction";
+}
 
 pub(crate) struct Direction;
 
 impl Check for Direction {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -54,7 +56,7 @@ impl Check for Direction {
                     "crate '{member}' (layer {from_idx} '{from_name}') transitively depends on \
                      '{dep}' (layer {to_idx} '{to_name}'), which is higher in the hierarchy"
                 );
-                violations.push(Violation::deny(ID, key, message));
+                violations.push(Violation::deny(consts::ID, key, message));
             }
         }
         Ok(violations)
@@ -122,31 +124,7 @@ mod tests {
     use cargo_metadata::MetadataCommand;
 
     use super::*;
-
-    /// Hardcoded crate lists from the legacy checks. Kept here as a regression
-    /// guard: any future restructuring must not weaken these invariants.
-    mod legacy {
-        pub(super) const BASE_CRATES: &[&str] = &["kithara-platform", "kithara-abr", "kithara-drm"];
-        pub(super) const HIGH_CRATES: &[&str] = &[
-            "kithara-hls",
-            "kithara-file",
-            "kithara-audio",
-            "kithara-decode",
-        ];
-        pub(super) const MID_CRATES: &[&str] = &[
-            "kithara-storage",
-            "kithara-bufpool",
-            "kithara-assets",
-            "kithara-net",
-            "kithara-stream",
-            "kithara-decode",
-            "kithara-file",
-            "kithara-hls",
-            "kithara-audio",
-            "kithara-events",
-        ];
-        pub(super) const FACADE_CRATE: &str = "kithara";
-    }
+    use crate::consts;
 
     #[test]
     fn transitive_deps_returns_empty_for_unknown_crate() {
@@ -158,9 +136,9 @@ mod tests {
     #[test]
     fn transitive_deps_base_does_not_include_high_crates() {
         let metadata = MetadataCommand::new().exec().expect("cargo metadata");
-        let high_set: HashSet<&str> = legacy::HIGH_CRATES.iter().copied().collect();
+        let high_set: HashSet<&str> = consts::HIGH_CRATES.iter().copied().collect();
 
-        for &base in legacy::BASE_CRATES {
+        for &base in consts::BASE_CRATES {
             let deps = transitive_deps(base, &metadata);
             for dep in &deps {
                 assert!(
@@ -175,12 +153,12 @@ mod tests {
     fn transitive_deps_mid_crates_do_not_include_facade() {
         let metadata = MetadataCommand::new().exec().expect("cargo metadata");
 
-        for &mid in legacy::MID_CRATES {
+        for &mid in consts::MID_CRATES {
             let deps = transitive_deps(mid, &metadata);
             assert!(
-                !deps.contains(legacy::FACADE_CRATE),
+                !deps.contains(consts::FACADE_CRATE),
                 "mid crate '{mid}' transitively depends on facade crate '{facade}'",
-                facade = legacy::FACADE_CRATE,
+                facade = consts::FACADE_CRATE,
             );
         }
     }

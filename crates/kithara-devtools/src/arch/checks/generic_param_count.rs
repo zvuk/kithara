@@ -7,13 +7,15 @@ use crate::common::{
     walker::{relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "generic_param_count";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "generic_param_count";
+}
 
 pub(crate) struct GenericParamCount;
 
 impl Check for GenericParamCount {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -35,7 +37,7 @@ impl Check for GenericParamCount {
                 let key = format!("{rel}::{label}", label = h.label);
                 if h.params >= cfg.warn_params {
                     violations.push(Violation::warn(
-                        ID,
+                        consts::ID,
                         key.clone(),
                         format!(
                             "{l}: {n} generic parameters (warn threshold {th}); narrow the \
@@ -48,7 +50,7 @@ impl Check for GenericParamCount {
                 }
                 if h.where_bounds >= cfg.warn_where {
                     violations.push(Violation::warn(
-                        ID,
+                        consts::ID,
                         key,
                         format!(
                             "{l}: {n} where-clause predicates (warn threshold {th}); \

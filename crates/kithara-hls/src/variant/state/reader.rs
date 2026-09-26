@@ -3,6 +3,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use kithara_platform::sync::Arc;
 use kithara_stream::SeekObserve;
 
+use crate::consts;
+
 /// Seek-observe state consulted by one variant for flushing gates, plus the
 /// byte end of the range the reader is currently parked on.
 pub(super) struct ReaderRuntime {
@@ -13,18 +15,16 @@ pub(super) struct ReaderRuntime {
     wait_end: AtomicU64,
 }
 
-const NO_WAIT: u64 = 0;
-
 impl ReaderRuntime {
     pub(super) fn new(seek_obs: Arc<dyn SeekObserve>) -> Self {
         Self {
             seek_obs,
-            wait_end: AtomicU64::new(NO_WAIT),
+            wait_end: AtomicU64::new(consts::NO_WAIT),
         }
     }
 
     pub(super) fn clear_wait(&self) {
-        self.wait_end.store(NO_WAIT, Ordering::Release);
+        self.wait_end.store(consts::NO_WAIT, Ordering::Release);
     }
 
     pub(super) fn is_flushing(&self) -> bool {
@@ -41,7 +41,7 @@ impl ReaderRuntime {
 
     pub(super) fn wait_end(&self) -> Option<u64> {
         match self.wait_end.load(Ordering::Acquire) {
-            NO_WAIT => None,
+            consts::NO_WAIT => None,
             end => Some(end),
         }
     }

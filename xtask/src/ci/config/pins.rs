@@ -4,9 +4,6 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::common::tools::ToolsConfig;
 use serde::{Deserialize, Serialize};
 
-/// Repository-relative location of the reviewed build pins.
-pub(crate) const PINS_PATH: &str = ".config/ci-pins.toml";
-
 /// Reviewed build contract: everything a CI job installs, pulls, or pins.
 /// Machine-specific paths and accounts live in [`super::CiHost`].
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -265,7 +262,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::ci::config::profile::workspace_root;
+    use crate::{ci::config::profile::workspace_root, consts};
 
     #[test]
     fn digests_are_bounded() {
@@ -336,7 +333,7 @@ mod tests {
     /// path.
     #[test]
     fn the_installed_ffmpeg_line_matches_the_crate_that_binds_to_it() {
-        let pins = CiPins::load(&workspace_root().join(PINS_PATH)).unwrap();
+        let pins = CiPins::load(&workspace_root().join(consts::PINS_PATH)).unwrap();
         let line = pins
             .brew_formulae
             .iter()

@@ -19,7 +19,7 @@ use kithara_integration_tests::{
     TestServerHelper, kithara,
     offline::OfflineHostHarness,
     smoothing::{
-        Consts, SmoothingCase, assert_step_is_ramped, last_block_peak, observe, observe_until,
+        SmoothingCase, assert_step_is_ramped, consts, last_block_peak, observe, observe_until,
         peak, sine_queue,
     },
 };
@@ -38,15 +38,15 @@ use crate::bufpool_ext::pools;
 async fn the_observation_window_carries_no_silent_block() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
 
-    let pcm = observe(&harness, Consts::OBSERVE_BLOCKS).await;
+    let pcm = observe(&harness, consts::OBSERVE_BLOCKS).await;
 
-    let block = Consts::BLOCK_FRAMES * Consts::CHANNELS;
+    let block = consts::BLOCK_FRAMES * consts::CHANNELS;
     let quietest = pcm
         .chunks_exact(block)
         .map(peak)
         .fold(f32::INFINITY, f32::min);
     assert!(
-        quietest > Consts::AUDIBLE_PEAK,
+        quietest > consts::AUDIBLE_PEAK,
         "the observation window carried a block at peak {quietest}; the window the step \
          oracles measure carries frames the decoder never produced"
     );
@@ -56,7 +56,7 @@ async fn the_observation_window_carries_no_silent_block() {
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn deck_volume_step_is_ramped() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
-    let before = observe(&harness, Consts::OBSERVE_BLOCKS).await;
+    let before = observe(&harness, consts::OBSERVE_BLOCKS).await;
     harness.run(|deck| deck.set_volume(0.0)).await;
     let (after, silent) = observe_until(&harness, |block| peak(block) == 0.0).await;
     assert!(
@@ -119,10 +119,10 @@ async fn prepared_deck_preserves_play_pause_order() {
 #[kithara::test(tokio)]
 async fn failed_deck_preparation_releases_host_membership() {
     let region = pools();
-    let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate");
+    let sample_rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate");
     let config = HostConfig::offline(region.clone())
         .sample_rate(sample_rate)
-        .max_block_frames(NonZeroU32::new(Consts::BLOCK_FRAMES as u32).expect("block size"))
+        .max_block_frames(NonZeroU32::new(consts::BLOCK_FRAMES as u32).expect("block size"))
         .build();
     let host = OfflineHostHarness::new(config).await.expect("offline host");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());

@@ -90,34 +90,43 @@ mod tests {
 
     use super::bake;
 
-    const APP: &str = include_str!("../../app.yaml");
-    const WEB: &str = include_str!("../../app.web.yaml");
-    const SENTINEL: &str = "kithara-bake-sentinel";
+    mod consts {
+        pub(super) const APP: &str = include_str!("../../app.yaml");
+        pub(super) const WEB: &str = include_str!("../../app.web.yaml");
+        pub(super) const SENTINEL: &str = "kithara-bake-sentinel";
+    }
 
     fn env() -> HashMap<String, String> {
-        HashMap::from([("KITHARA_DRM_PROD_KEY".to_owned(), SENTINEL.to_owned())])
+        HashMap::from([(
+            "KITHARA_DRM_PROD_KEY".to_owned(),
+            consts::SENTINEL.to_owned(),
+        )])
     }
 
     #[kithara::test(native, flash(false))]
     fn a_wasm32_bake_lays_the_overlay_and_resolves_an_empty_table() {
-        let baked = bake("wasm32", APP, WEB, &env()).expect("both documents parse");
+        let baked = bake("wasm32", consts::APP, consts::WEB, &env()).expect("both documents parse");
 
         let document: Value = serde_yaml_ng::from_str(&baked.document).expect("the bake parses");
         assert_eq!(document["drm"]["providers"], Value::Sequence(Vec::new()));
         assert!(baked.refs.is_empty());
         assert!(baked.resolved.is_empty());
         assert!(!baked.document.contains("KITHARA"));
-        assert!(!baked.document.contains(SENTINEL));
+        assert!(!baked.document.contains(consts::SENTINEL));
     }
 
     #[kithara::test(native, flash(false))]
     fn a_native_bake_embeds_the_document_verbatim_and_resolves_its_references() {
-        let baked = bake("aarch64", APP, WEB, &env()).expect("both documents parse");
+        let baked =
+            bake("aarch64", consts::APP, consts::WEB, &env()).expect("both documents parse");
 
-        assert_eq!(baked.document, APP);
+        assert_eq!(baked.document, consts::APP);
         assert_eq!(
             baked.resolved,
-            [("KITHARA_DRM_PROD_KEY".to_owned(), SENTINEL.to_owned())]
+            [(
+                "KITHARA_DRM_PROD_KEY".to_owned(),
+                consts::SENTINEL.to_owned()
+            )]
         );
     }
 }

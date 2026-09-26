@@ -15,13 +15,15 @@ use crate::{
     idioms::config::AccumulatorLoopsConfig,
 };
 
-pub(crate) const ID: &str = "accumulator_loops";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "accumulator_loops";
+}
 
 pub(crate) struct AccumulatorLoops;
 
 impl Check for AccumulatorLoops {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -60,7 +62,8 @@ impl<'ast> Visit<'ast> for LoopVisitor<'_> {
         if let Some(pattern) = classify_loop(self.cfg, e) {
             let s = e.for_token.span().start();
             let key = format!("{}:{}:{}", self.rel, s.line, s.column);
-            self.out.push(Violation::warn(ID, key, pattern.message()));
+            self.out
+                .push(Violation::warn(consts::ID, key, pattern.message()));
         }
         visit::visit_expr_for_loop(self, e);
     }

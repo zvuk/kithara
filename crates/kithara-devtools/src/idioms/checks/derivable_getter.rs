@@ -31,7 +31,9 @@ use crate::{
     idioms::config::{DerivableSeverity, QualifiedDerefRemap},
 };
 
-pub(crate) const ID: &str = "derivable_getter";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "derivable_getter";
+}
 
 pub(crate) struct DerivableGetter;
 
@@ -110,7 +112,7 @@ impl Check for DerivableGetter {
     }
 
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -174,8 +176,8 @@ impl Check for DerivableGetter {
 
 fn emit(severity: DerivableSeverity, key: String, message: String) -> Violation {
     match severity {
-        DerivableSeverity::Warn => Violation::warn(ID, key, message),
-        DerivableSeverity::Deny => Violation::deny(ID, key, message),
+        DerivableSeverity::Warn => Violation::warn(consts::ID, key, message),
+        DerivableSeverity::Deny => Violation::deny(consts::ID, key, message),
     }
 }
 

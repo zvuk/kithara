@@ -12,8 +12,12 @@ use kithara_bufpool::{HasPool, PoolRegion};
 
 use crate::{EncodeError, EncodeResult, PcmSource};
 
-pub(crate) const PCM_INPUT_FORMAT: Sample = Sample::I16(SampleType::Packed);
-const I16_SCALE: f32 = 32_768.0;
+pub(crate) mod consts {
+    use super::*;
+
+    pub(crate) const PCM_INPUT_FORMAT: Sample = Sample::I16(SampleType::Packed);
+    pub(super) const I16_SCALE: f32 = 32_768.0;
+}
 
 fn pump_pcm_bytes<S>(
     pcm: &dyn PcmSource,
@@ -78,7 +82,7 @@ where
             .iter_mut()
             .zip(frames.chunks_exact(size_of::<i16>()))
         {
-            *sample = f32::from(i16::from_le_bytes([pair[0], pair[1]])) / I16_SCALE;
+            *sample = f32::from(i16::from_le_bytes([pair[0], pair[1]])) / consts::I16_SCALE;
         }
         on_samples(&samples)
     })
@@ -102,7 +106,7 @@ pub(crate) fn pump_pcm_frames(
     while offset < total_byte_len {
         let read_bytes = (total_byte_len - offset).min(chunk_bytes);
         let mut audio_frame = AudioFrame::new(
-            PCM_INPUT_FORMAT,
+            consts::PCM_INPUT_FORMAT,
             chunk_frames,
             ChannelLayout::default(i32::from(channels)),
         );

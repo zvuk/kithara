@@ -160,9 +160,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{Handle, spawn, spawn_on};
-    use crate::time::{Duration, sleep};
-
-    const TICK: Duration = Duration::from_millis(10);
+    use crate::{consts, time::sleep};
 
     #[kithara::test(wasm, flash(false))]
     async fn abort_stops_the_task_and_the_join_reports_cancelled() {
@@ -172,7 +170,7 @@ mod tests {
 
             let future = async move {
                 loop {
-                    sleep(TICK).await;
+                    sleep(consts::TICK).await;
                     ticks.set(ticks.get() + 1);
                 }
             };
@@ -182,12 +180,12 @@ mod tests {
             };
 
             while counter.get() == 0 {
-                sleep(TICK).await;
+                sleep(consts::TICK).await;
             }
 
             handle.abort();
             let stopped_at = counter.get();
-            sleep(TICK * 4).await;
+            sleep(consts::TICK * 4).await;
 
             assert_eq!(counter.get(), stopped_at);
             let err = handle.await.expect_err("aborted task joins with an error");
@@ -204,7 +202,7 @@ mod tests {
                 None => spawn(future),
             };
 
-            sleep(TICK * 4).await;
+            sleep(consts::TICK * 4).await;
             handle.abort();
 
             assert_eq!(handle.await.expect("finished task yields its value"), 7);

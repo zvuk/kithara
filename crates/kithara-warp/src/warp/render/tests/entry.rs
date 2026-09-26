@@ -9,19 +9,7 @@ use kithara_signal::AudioChunk;
 use kithara_stretch::StretchKind;
 
 use super::*;
-use crate::{WarpPlan, WarpRenderError, test_grids};
-
-mod consts {
-    /// Source beat the entered plan activates at: well inside the recording,
-    /// so the engine history before it is real audio rather than padding.
-    pub(super) const CUE_BEAT: f64 = 4.0;
-    /// Decoder chunks alternating a long span with a single frame, which at a
-    /// slowed rate projects to less than one audible source frame.
-    pub(super) const ALTERNATING_CHUNKS: [usize; 2] = [1_023, 1];
-    pub(super) const CHUNK_PAIRS: usize = 64;
-    /// How far the audible source may trail the decoded one.
-    pub(super) const LAG_FRAMES: u64 = 16 * 1024;
-}
+use crate::{WarpPlan, WarpRenderError, consts, test_grids};
 
 #[cfg(any(
     feature = "stretch-signalsmith",
@@ -86,7 +74,7 @@ fn admit_history(renderer: &mut WarpRenderer, entry: u64, cue: u64) {
         panic!("audio before the activation is history, got {preroll:?}");
     };
     assert_eq!(frames.get(), history);
-    let (head, _) = landing.samples.split_at(history * usize::from(Consts::CH));
+    let (head, _) = landing.samples.split_at(history * usize::from(consts::CH));
     let mut head_meta = landing.meta;
     head_meta.frames = u32::try_from(history).expect("history fits u32");
     renderer
@@ -98,7 +86,7 @@ fn admit_history(renderer: &mut WarpRenderer, entry: u64, cue: u64) {
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-glide"))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith_keylocked(Consts::SR, StretchKind::Signalsmith, true)
+    case::signalsmith_keylocked(consts::SR, StretchKind::Signalsmith, true)
 )]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -106,11 +94,11 @@ fn admit_history(renderer: &mut WarpRenderer, entry: u64, cue: u64) {
 )]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith_varispeed(Consts::SR, StretchKind::Signalsmith, false)
+    case::signalsmith_varispeed(consts::SR, StretchKind::Signalsmith, false)
 )]
 #[cfg_attr(
     feature = "stretch-glide",
-    case::glide(Consts::SR, StretchKind::Glide, false)
+    case::glide(consts::SR, StretchKind::Glide, false)
 )]
 #[cfg_attr(
     feature = "stretch-glide",

@@ -14,17 +14,17 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use super::{
-    runner_images::JobVm,
-    runners::{docker_host, docker_socket},
-};
+use super::runners::{docker_host, docker_socket};
 #[cfg(test)]
 use crate::ci::process::Recording;
-use crate::ci::{
-    build_cache,
-    config::CiConfig,
-    environment::{CacheTrust, scratch_root},
-    process::Process,
+use crate::{
+    ci::{
+        build_cache,
+        config::CiConfig,
+        environment::{CacheTrust, scratch_root},
+        process::Process,
+    },
+    consts,
 };
 
 /// Whether a stale tree still has to be asked if anything is using it.
@@ -65,16 +65,6 @@ pub(super) struct HostStorage<'a> {
     /// a pressure and a free-space reading that can contradict each other.
     #[cfg(test)]
     available_sequence: RefCell<VecDeque<u64>>,
-}
-
-struct Agents;
-
-impl Agents {
-    const LAUNCHCTL: &'static str = "/bin/launchctl";
-    const RUNNING: &'static str = "running";
-    /// A host with no launchd has no agents to be wrong about, and the Linux
-    /// executor runs this same command.
-    const ABSENT: &'static str = "not-applicable";
 }
 
 #[derive(Serialize)]
@@ -348,7 +338,7 @@ impl<'a> HostStorage<'a> {
         let agents = self.agent_states();
         let down: Vec<&str> = agents
             .iter()
-            .filter(|(_, state)| ![Agents::RUNNING, Agents::ABSENT].contains(*state))
+            .filter(|(_, state)| ![consts::AGENT_RUNNING, consts::AGENT_ABSENT].contains(*state))
             .map(|(name, _)| *name)
             .collect();
         serde_json::to_writer(
@@ -379,18 +369,18 @@ impl<'a> HostStorage<'a> {
     /// On a host with no launchd there is nothing to say, and this must not
     /// invent a fault: the Linux executor runs the same command.
     fn agent_states(&self) -> BTreeMap<&'a str, &'static str> {
-        if !Path::new(Agents::LAUNCHCTL).is_file() {
+        if !Path::new(consts::LAUNCHCTL).is_file() {
             return self
                 .config
                 .host
                 .always_on_agents
                 .iter()
-                .map(|name| (name.as_str(), Agents::ABSENT))
+                .map(|name| (name.as_str(), consts::AGENT_ABSENT))
                 .collect();
         }
         let listing = self
             .process
-            .capture(Agents::LAUNCHCTL, &["list"], "launchd agent listing")
+            .capture(consts::LAUNCHCTL, &["list"], "launchd agent listing")
             .unwrap_or_default();
         agent_states_from(&listing, &self.config.host.always_on_agents)
     }
@@ -792,7 +782,7 @@ impl<'a> HostStorage<'a> {
 
     /// Delete the macOS job VM once no runner is serving from it.
     ///
-    /// The macOS lane clones [`JobVm::NAME`] from the base bundle and destroys
+    /// The macOS lane clones [`JOB_VM_NAME`](consts::JOB_VM_NAME) from the base bundle and destroys
     /// it at both ends of every runner loop, so the clone is disposable by
     /// construction: a runner that finds it missing makes another. When the
     /// runner dies between those ends the clone outlives it, and nothing ever
@@ -827,7 +817,7 @@ impl<'a> HostStorage<'a> {
         let Ok(home) = self.config.host.tart_home() else {
             return;
         };
-        let bundle = home.join("vms").join(JobVm::NAME);
+        let bundle = home.join("vms").join(consts::JOB_VM_NAME);
         if !tart.is_file() || !bundle.is_dir() {
             return;
         }
@@ -837,9 +827,9 @@ impl<'a> HostStorage<'a> {
         if !older_than_time(touched, age) || self.job_vm_is_running(&tart) {
             return;
         }
-        info!(vm = JobVm::NAME, bundle = %bundle.display(), "removing abandoned macOS job VM");
+        info!(vm = consts::JOB_VM_NAME, bundle = %bundle.display(), "removing abandoned macOS job VM");
         let mut command = self.process.command(&tart);
-        command.args(["delete", JobVm::NAME]);
+        command.args(["delete", consts::JOB_VM_NAME]);
         if let Err(error) = self
             .process
             .run_command(&mut command, "delete abandoned CI macOS VM")
@@ -867,7 +857,9 @@ impl<'a> HostStorage<'a> {
         let Ok(listed) = serde_json::from_slice::<Vec<TartVm>>(&output.stdout) else {
             return true;
         };
-        listed.iter().any(|vm| vm.name == JobVm::NAME && vm.running)
+        listed
+            .iter()
+            .any(|vm| vm.name == consts::JOB_VM_NAME && vm.running)
     }
 
     fn prune_docker_cache(&self, age: &str) {
@@ -1139,7 +1131,7 @@ fn agent_states_from<'a>(
                         if pid == "-" {
                             "stopped"
                         } else {
-                            Agents::RUNNING
+                            consts::AGENT_RUNNING
                         }
                     })
                 })
@@ -1225,13 +1217,6 @@ mod tests {
         config.host.aggressive_cleanup_bytes = 270;
         config.host.soft_cleanup_bytes = 240;
         config
-    }
-
-    /// Free bytes that read as each rung under `config`, whose 240/270/285
-    /// used-byte thresholds against a 300 quota keep 60/30/15 free.
-    mod free {
-        pub(super) const NORMAL: u64 = 100;
-        pub(super) const AGGRESSIVE: u64 = 20;
     }
 
     #[test]
@@ -1336,21 +1321,12 @@ mod tests {
         );
     }
 
-    /// Verbatim from the host while the macOS runner was crash-looping.
-    const CRASH_LOOP_LISTING: &str = "\
-82778\t0\tcom.zvuk.kithara-ci.gitlab-runner
--\t0\tcom.zvuk.kithara-ci.health
--\t1\tcom.zvuk.kithara-ci.macos-runner
--\t0\tcom.zvuk.kithara-ci.cleanup
-54543\t0\tcom.zvuk.kithara-ci.colima
-";
-
     #[test]
     fn legacy_macos_runner_is_not_health_owned() {
         let host = fixture().host;
 
         assert!(
-            !agent_states_from(CRASH_LOOP_LISTING, &host.always_on_agents)
+            !agent_states_from(consts::CRASH_LOOP_LISTING, &host.always_on_agents)
                 .contains_key("macos-runner")
         );
     }
@@ -1359,7 +1335,7 @@ mod tests {
     fn the_agents_still_holding_a_process_read_as_running() {
         let host = fixture().host;
 
-        let states = agent_states_from(CRASH_LOOP_LISTING, &host.always_on_agents);
+        let states = agent_states_from(consts::CRASH_LOOP_LISTING, &host.always_on_agents);
 
         assert_eq!(states.get("gitlab-runner"), Some(&"running"));
         assert_eq!(states.get("colima"), Some(&"running"));
@@ -1553,7 +1529,11 @@ mod tests {
         let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_available_sequence([free::NORMAL, free::NORMAL, free::NORMAL]);
+        storage.set_available_sequence([
+            consts::FREE_NORMAL,
+            consts::FREE_NORMAL,
+            consts::FREE_NORMAL,
+        ]);
 
         storage.cleanup().unwrap();
 
@@ -1572,7 +1552,11 @@ mod tests {
         let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_available_sequence([free::NORMAL, free::NORMAL, free::NORMAL]);
+        storage.set_available_sequence([
+            consts::FREE_NORMAL,
+            consts::FREE_NORMAL,
+            consts::FREE_NORMAL,
+        ]);
 
         storage.cleanup().unwrap();
 
@@ -1641,7 +1625,11 @@ mod tests {
             .unwrap();
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_available_sequence([free::NORMAL, free::NORMAL, free::NORMAL]);
+        storage.set_available_sequence([
+            consts::FREE_NORMAL,
+            consts::FREE_NORMAL,
+            consts::FREE_NORMAL,
+        ]);
 
         storage.cleanup().unwrap();
 
@@ -1686,7 +1674,11 @@ mod tests {
             .unwrap();
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_available_sequence([free::AGGRESSIVE, free::AGGRESSIVE, free::NORMAL]);
+        storage.set_available_sequence([
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_NORMAL,
+        ]);
 
         storage.cleanup().unwrap();
 
@@ -1704,7 +1696,11 @@ mod tests {
         cfg.host.brew_root = directory.path().join("brew");
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_available_sequence([free::AGGRESSIVE, free::NORMAL, free::NORMAL]);
+        storage.set_available_sequence([
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_NORMAL,
+            consts::FREE_NORMAL,
+        ]);
 
         storage.cleanup().unwrap();
 
@@ -1728,7 +1724,11 @@ mod tests {
         cfg.host.brew_root = directory.path().join("brew");
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_available_sequence([free::AGGRESSIVE, free::AGGRESSIVE, free::NORMAL]);
+        storage.set_available_sequence([
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_NORMAL,
+        ]);
 
         storage.cleanup().unwrap();
 
@@ -1748,7 +1748,11 @@ mod tests {
         cfg.host.brew_root = directory.path().join("brew");
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_available_sequence([free::AGGRESSIVE, free::AGGRESSIVE, free::AGGRESSIVE]);
+        storage.set_available_sequence([
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
+        ]);
 
         assert!(storage.cleanup().is_err());
     }
@@ -1771,7 +1775,11 @@ mod tests {
         cfg.host.brew_root = directory.path().join("brew");
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_available_sequence([free::AGGRESSIVE, free::AGGRESSIVE, free::AGGRESSIVE]);
+        storage.set_available_sequence([
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
+        ]);
 
         let error = storage.cleanup().unwrap_err().to_string();
 
@@ -1794,7 +1802,11 @@ mod tests {
         cfg.host.brew_root = directory.path().join("brew");
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_available_sequence([free::AGGRESSIVE, free::AGGRESSIVE, free::NORMAL]);
+        storage.set_available_sequence([
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_NORMAL,
+        ]);
 
         storage.cleanup().unwrap();
 
@@ -1874,7 +1886,11 @@ mod tests {
         tart_vms(&mut cfg, directory.path(), Some(10 * HostStorage::DAY));
         let process = Process::new(directory.path(), tart_vars(&asked, false));
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        storage.set_available_sequence([free::NORMAL, free::NORMAL, free::NORMAL]);
+        storage.set_available_sequence([
+            consts::FREE_NORMAL,
+            consts::FREE_NORMAL,
+            consts::FREE_NORMAL,
+        ]);
 
         storage.cleanup().unwrap();
 

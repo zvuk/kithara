@@ -11,9 +11,7 @@ use kithara_ui::{
     source::{FileResolver, MemResolver, OverlayResolver},
 };
 
-pub(crate) struct Consts;
-
-impl Consts {
+pub(crate) mod consts {
     pub(crate) const HEIGHT: f32 = 720.0;
     /// The smallest window the gallery opens to, so a page can be dragged
     /// down to the room its adaptive and revealed cells answer.

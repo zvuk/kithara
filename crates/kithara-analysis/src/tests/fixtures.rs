@@ -20,7 +20,6 @@ use unimock::Unimock;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use unimock::{MockFn, matching};
 
-use crate::test_pools::{Pools, sample_buffer};
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use crate::{
     Waveform,
@@ -28,9 +27,10 @@ use crate::{
     beat::{BeatDetector, BeatDetectorMock, BeatMark, RawBeats},
     blob::to_bytes,
 };
-
-#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
-pub(super) const MARKER_TOLERANCE: u64 = 64;
+use crate::{
+    consts,
+    test_pools::{Pools, sample_buffer},
+};
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 pub(super) type Artifacts = (Waveform, Vec<u64>);
@@ -113,19 +113,16 @@ pub(super) fn assert_agrees(want: &Artifacts, got: &Artifacts, what: &str) {
     );
     for (a, b) in want.1.iter().zip(got.1.iter()) {
         assert!(
-            a.abs_diff(*b) <= MARKER_TOLERANCE,
+            a.abs_diff(*b) <= consts::MARKER_TOLERANCE,
             "{what}: marker moved from {a} to {b}"
         );
     }
 }
 
-pub(super) const SR: u32 = 44_100;
-pub(super) const CH: u16 = 2;
-
 pub(super) fn spec() -> AudioSpec {
     AudioSpec {
-        channels: CH,
-        sample_rate: NonZeroU32::new(SR).unwrap(),
+        channels: consts::CH,
+        sample_rate: NonZeroU32::new(consts::FIXTURES_SR).unwrap(),
     }
 }
 
@@ -135,11 +132,11 @@ pub(super) fn sine(pcm: &[f32], frames: usize) -> &[f32] {
 
 pub(super) fn sine_from(pcm: &[f32], at: u64, frames: usize) -> &[f32] {
     let start = usize::try_from(at).expect("prepared frame offset fits usize");
-    &pcm[start * usize::from(CH)..(start + frames) * usize::from(CH)]
+    &pcm[start * usize::from(consts::CH)..(start + frames) * usize::from(consts::CH)]
 }
 
 pub(super) fn chunk(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioChunk {
-    let frames = samples.len() / usize::from(CH);
+    let frames = samples.len() / usize::from(consts::CH);
     AudioChunk::new(
         AudioChunkInfo {
             spec: spec(),
@@ -167,13 +164,14 @@ impl FakeReader {
     }
 
     pub(super) fn chunked(pools: &Pools, samples: &[f32], parts: usize) -> Self {
-        let per = samples.len().div_ceil(parts.max(1)) / usize::from(CH) * usize::from(CH);
+        let per = samples.len().div_ceil(parts.max(1)) / usize::from(consts::CH)
+            * usize::from(consts::CH);
         let mut frame_offset = 0;
         let mut outcomes: VecDeque<_> = samples
-            .chunks(per.max(usize::from(CH)))
+            .chunks(per.max(usize::from(consts::CH)))
             .map(|part| {
                 let at = frame_offset;
-                frame_offset += u64::try_from(part.len() / usize::from(CH)).unwrap_or(0);
+                frame_offset += u64::try_from(part.len() / usize::from(consts::CH)).unwrap_or(0);
                 Ok(ChunkOutcome::Chunk(chunk(pools, part, at)))
             })
             .collect();

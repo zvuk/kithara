@@ -9,13 +9,13 @@ use tracing::debug;
 
 use super::{
     WaveformAnalyzer,
-    waveform::{Consts, Partial},
+    waveform::{Partial, consts},
 };
 use crate::Band;
 
 impl WaveformAnalyzer {
     pub(super) fn evict_overflow(&mut self) {
-        while self.partial.len() > Consts::MAX_PARTIAL {
+        while self.partial.len() > consts::MAX_PARTIAL {
             let oldest = self
                 .partial
                 .iter()

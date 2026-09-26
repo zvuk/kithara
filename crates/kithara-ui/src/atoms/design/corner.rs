@@ -180,18 +180,22 @@ mod tests {
     use super::{FrameCorners, Rect, corner_verbs};
     use crate::draw::Verb;
 
-    const BOX: Rect = Rect {
-        h: 40.0,
-        w: 60.0,
-        x: 10.0,
-        y: 20.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOX: Rect = Rect {
+            h: 40.0,
+            w: 60.0,
+            x: 10.0,
+            y: 20.0,
+        };
+    }
 
     /// A box with no rounded corner is the rectangle it started as: four sides
     /// and no curve.
     #[kithara::test]
     fn a_box_with_no_rounded_corner_carries_no_curve() {
-        let verbs = corner_verbs(BOX, 8.0, FrameCorners::EMPTY);
+        let verbs = corner_verbs(consts::BOX, 8.0, FrameCorners::EMPTY);
 
         assert!(
             !verbs
@@ -205,7 +209,7 @@ mod tests {
     #[kithara::test]
     fn one_named_corner_is_one_curve() {
         let verbs = corner_verbs(
-            BOX,
+            consts::BOX,
             8.0,
             FrameCorners {
                 top_left: true,
@@ -227,12 +231,15 @@ mod tests {
     /// itself.
     #[kithara::test]
     fn a_radius_wider_than_the_box_is_held_to_half_of_its_shorter_side() {
-        let verbs = corner_verbs(BOX, 400.0, FrameCorners::ALL);
+        let verbs = corner_verbs(consts::BOX, 400.0, FrameCorners::ALL);
         let start = verbs.iter().find_map(|verb| match verb {
             Verb::MoveTo(point) => Some(*point),
             _ => None,
         });
 
-        assert_eq!(start.map(|point| point.x), Some(BOX.x + BOX.h / 2.0));
+        assert_eq!(
+            start.map(|point| point.x),
+            Some(consts::BOX.x + consts::BOX.h / 2.0)
+        );
     }
 }

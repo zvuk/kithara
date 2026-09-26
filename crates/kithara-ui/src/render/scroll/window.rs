@@ -4,9 +4,11 @@ use crate::{
     interact::{Input, recognizers::wheel},
 };
 
-/// How far one wheel detent moves the content. A viewport of rows is read by
-/// the row, so a detent is worth about one of them rather than a page.
-const STEP: f32 = 40.0;
+mod consts {
+    /// How far one wheel detent moves the content. A viewport of rows is read by
+    /// the row, so a detent is worth about one of them rather than a page.
+    pub(super) const STEP: f32 = 40.0;
+}
 
 /// A bounded window over content taller than itself.
 ///
@@ -80,7 +82,9 @@ impl Window {
         if steps == 0.0 {
             return false;
         }
-        let next = steps.mul_add(STEP, self.offset).clamp(0.0, self.travel());
+        let next = steps
+            .mul_add(consts::STEP, self.offset)
+            .clamp(0.0, self.travel());
         std::mem::replace(&mut self.offset, next) != next
     }
 }
@@ -89,7 +93,7 @@ impl Window {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{Bar, STEP, Window};
+    use super::{Bar, Window, consts::STEP};
     use crate::{
         builtin,
         draw::{DrawCmd, DrawListBuilder, Geom, Rect},

@@ -45,25 +45,26 @@ use crate::bufpool_ext::{TestPools, pools};
 /// `PlayWorker::open`. If the shortcut bypasses re-arming, the new read path
 /// observes a still-closed gate and never makes progress.
 
-struct Consts;
-impl Consts {
+mod consts {
+    use super::Duration;
+
     /// Per-segment delay applied to every fixture. Small enough that the
     /// first two loads complete promptly, but non-zero so the test exercises
     /// real loader timing.
-    const SEGMENT_DELAY_MS: u64 = 20;
+    pub(super) const SEGMENT_DELAY_MS: u64 = 20;
     /// Each fixture: 4 segments × 2 s = 8 s of media. Enough that the
     /// loader has to drive multiple fetches per session.
-    const SEGMENT_COUNT: usize = 4;
-    const SEGMENT_DURATION_S: f64 = 2.0;
+    pub(super) const SEGMENT_COUNT: usize = 4;
+    pub(super) const SEGMENT_DURATION_S: f64 = 2.0;
     /// Per-load deadline. Generous to keep the test stable on slow CI;
     /// the bug is observed as a budget-exhaustion failure inside the
     /// loader long before this fires.
-    const LOAD_DEADLINE: Duration = Duration::from_secs(20);
+    pub(super) const LOAD_DEADLINE: Duration = Duration::from_secs(20);
     /// AES-128 key/IV used by the encrypted variant. Matches the
     /// "0123456789abcdef" + zero-IV pair already used elsewhere in the
     /// integration suite (see `local_track_plays.rs`).
-    const AES_KEY: &'static [u8] = b"0123456789abcdef";
-    const AES_IV: [u8; 16] = [0u8; 16];
+    pub(super) const AES_KEY: &[u8] = b"0123456789abcdef";
+    pub(super) const AES_IV: [u8; 16] = [0u8; 16];
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -83,19 +84,19 @@ fn hex_encode(bytes: &[u8]) -> String {
 async fn build_hls(helper: &TestServerHelper, mode: FixtureMode) -> Url {
     let mut builder = HlsFixtureBuilder::new()
         .variant_count(1)
-        .segments_per_variant(Consts::SEGMENT_COUNT)
-        .segment_duration_secs(Consts::SEGMENT_DURATION_S)
+        .segments_per_variant(consts::SEGMENT_COUNT)
+        .segment_duration_secs(consts::SEGMENT_DURATION_S)
         .packaged_audio_aac_lc(44_100, 2)
         .delay_rules(vec![DelayRule {
             variant: None,
             segment_eq: None,
             segment_gte: None,
-            delay_ms: Consts::SEGMENT_DELAY_MS,
+            delay_ms: consts::SEGMENT_DELAY_MS,
         }]);
     if matches!(mode, FixtureMode::Aes128) {
         builder = builder.encryption(EncryptionRequest {
-            key_hex: hex_encode(Consts::AES_KEY),
-            iv_hex: Some(hex_encode(&Consts::AES_IV)),
+            key_hex: hex_encode(consts::AES_KEY),
+            iv_hex: Some(hex_encode(&consts::AES_IV)),
         });
     }
     helper
@@ -259,10 +260,10 @@ async fn replay_track_after_switch_does_not_hang_loader(
         .await
         .expect("append track B");
 
-    wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
+    wait_for_loader_done(&queue, id_a, consts::LOAD_DEADLINE)
         .await
         .unwrap_or_else(|e| panic!("[{mode:?}] initial load A: {e}"));
-    wait_for_loader_done(&queue, id_b, Consts::LOAD_DEADLINE)
+    wait_for_loader_done(&queue, id_b, consts::LOAD_DEADLINE)
         .await
         .unwrap_or_else(|e| panic!("[{mode:?}] initial load B: {e}"));
 
@@ -272,20 +273,20 @@ async fn replay_track_after_switch_does_not_hang_loader(
         .await
         .expect("select A (first)");
     queue.run(QueueControl::play).await;
-    wait_for_current_track(&mut events, id_a, Consts::LOAD_DEADLINE).await;
+    wait_for_current_track(&mut events, id_a, consts::LOAD_DEADLINE).await;
 
     queue
         .run(move |q| q.select(id_b, Transition::None))
         .await
         .expect("select B");
-    wait_for_current_track(&mut events, id_b, Consts::LOAD_DEADLINE).await;
+    wait_for_current_track(&mut events, id_b, consts::LOAD_DEADLINE).await;
 
     queue
         .run(move |q| q.select(id_a, Transition::None))
         .await
         .expect("re-select A after B");
 
-    let result = wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE).await;
+    let result = wait_for_loader_done(&queue, id_a, consts::LOAD_DEADLINE).await;
 
     tick_handle.stop().await;
 
@@ -370,10 +371,10 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
         })
         .await
         .expect("append track B");
-    wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
+    wait_for_loader_done(&queue, id_a, consts::LOAD_DEADLINE)
         .await
         .expect("initial load A");
-    wait_for_loader_done(&queue, id_b, Consts::LOAD_DEADLINE)
+    wait_for_loader_done(&queue, id_b, consts::LOAD_DEADLINE)
         .await
         .expect("initial load B");
 
@@ -395,7 +396,7 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
         .await
         .expect("select A");
     queue.run(QueueControl::play).await;
-    wait_for_position(&queue, Consts::LOAD_DEADLINE, "A playing", |p| p >= 3.0).await;
+    wait_for_position(&queue, consts::LOAD_DEADLINE, "A playing", |p| p >= 3.0).await;
     assert!(sounds_like_a(&queue), "arena must be sounding the mp3");
 
     queue
@@ -410,7 +411,7 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
         .run(move |q| q.select(id_a, transition))
         .await
         .expect("switch back to A");
-    wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
+    wait_for_loader_done(&queue, id_a, consts::LOAD_DEADLINE)
         .await
         .expect("A reloaded after switch-back");
 

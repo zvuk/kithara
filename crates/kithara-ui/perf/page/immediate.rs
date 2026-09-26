@@ -30,9 +30,9 @@ use crate::{
     Page, PageHost,
     app::PageApp,
     census::{Census, Pool},
-    fixture::Consts,
+    fixture::consts::{HEIGHT, WIDTH},
     gpu::{ImmediateGpu, digest, drain, height, readback, width},
-    pages::Harness,
+    pages::consts::IMMEDIATE_FORMAT,
     theme,
 };
 
@@ -78,7 +78,7 @@ impl Immediate {
     fn draw(&mut self) -> Census {
         let before = self.ui.draw_pool_stats();
         self.app.tick();
-        let bounds = Size::new(Consts::WIDTH, Consts::HEIGHT);
+        let bounds = Size::new(WIDTH, HEIGHT);
         let element = measure_block!(
             "iced.view",
             self.app.reads(|reads| tree::render(
@@ -148,12 +148,7 @@ impl Immediate {
         let viewport = Viewport::with_physical_size(Size::new(width(), height()), 1.0);
         match &mut self.renderer {
             FallbackRenderer::Primary(wgpu) => {
-                wgpu.present(
-                    Some(background),
-                    Harness::IMMEDIATE_FORMAT,
-                    &view,
-                    &viewport,
-                );
+                wgpu.present(Some(background), IMMEDIATE_FORMAT, &view, &viewport);
             }
             FallbackRenderer::Secondary(_) => {
                 panic!("the immediate page host must be built on the wgpu renderer")

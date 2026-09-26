@@ -41,8 +41,10 @@ use crate::{
     pools::PoolsSection,
 };
 
-/// Path the baked document is reported under in parse errors.
-const BAKED_PATH: &str = "<baked app.yaml>";
+mod consts {
+    /// Path the baked document is reported under in parse errors.
+    pub(super) const BAKED_PATH: &str = "<baked app.yaml>";
+}
 
 /// The configuration this process runs on, and the document it came from.
 #[derive(Clone)]
@@ -228,7 +230,7 @@ impl Config {
         let mut source: Value =
             serde_yaml_ng::from_str(BAKED_DOCUMENT).map_err(|source| LoadError::Parse {
                 source,
-                path: PathBuf::from(BAKED_PATH),
+                path: PathBuf::from(consts::BAKED_PATH),
             })?;
 
         let overlay_path = Self::overlay_path(explicit, beside)?;
@@ -250,8 +252,14 @@ impl Config {
         expand(&mut expanded, lookup).map_err(LoadError::Env)?;
 
         let resource = overlay_path.as_deref().map_or_else(
-            || BAKED_PATH.to_string(),
-            |path| format!("{BAKED_PATH} merged with {}", path.display()),
+            || consts::BAKED_PATH.to_string(),
+            |path| {
+                format!(
+                    "{BAKED_PATH} merged with {}",
+                    path.display(),
+                    BAKED_PATH = consts::BAKED_PATH
+                )
+            },
         );
         let document = serde_yaml_ng::from_value(expanded).map_err(|_| LoadError::Schema {
             resource,
@@ -391,7 +399,7 @@ mod tests {
     };
     use tempfile::TempDir;
 
-    use super::{BAKED_PATH, Config, LoadError, StorageBackend};
+    use super::{Config, LoadError, StorageBackend, consts::BAKED_PATH};
     use crate::{
         config::AppConfig,
         pools::{self, AppPools},

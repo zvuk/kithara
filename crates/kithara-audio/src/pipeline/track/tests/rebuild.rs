@@ -31,7 +31,7 @@ use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
 use kithara_test_utils::{kithara, mock::CallCounter};
 
 use crate::{
-    AudioEvent, AudioLaneEvent, DecoderChangeCause, DecoderEvent, TrackFailureKind,
+    AudioEvent, AudioLaneEvent, DecoderChangeCause, DecoderEvent, TrackFailureKind, consts,
     pipeline::{
         decode::{
             DecoderGeneration,
@@ -66,20 +66,11 @@ pub(super) fn produced_data(fetch: Fetch<AudioChunk>) -> AudioChunk {
     data
 }
 
-pub(super) struct Consts;
-
-impl Consts {
-    const CHANNELS: u16 = 2;
-    pub(super) const ROUTE_CHUNK_FRAMES: usize = 256;
-    const ROUTE_SAMPLE_RATE: u32 = 48_000;
-    pub(super) const SAMPLE_RATE: u32 = 44_100;
-
-    pub(super) fn spec(sample_rate: u32) -> AudioSpec {
-        AudioSpec::new(
-            Self::CHANNELS,
-            NonZeroU32::new(sample_rate).expect("test sample rate is non-zero"),
-        )
-    }
+pub(super) fn spec(sample_rate: u32) -> AudioSpec {
+    AudioSpec::new(
+        consts::REBUILD_CHANNELS,
+        NonZeroU32::new(sample_rate).expect("test sample rate is non-zero"),
+    )
 }
 
 pub(super) struct TestDecoder {
@@ -240,7 +231,7 @@ impl RouteSignalDecoder {
     }
 
     fn audio_spec(&self) -> AudioSpec {
-        Consts::spec(self.sample_rate)
+        spec(self.sample_rate)
     }
 }
 
@@ -267,8 +258,8 @@ impl Decoder for RouteSignalDecoder {
             *remaining = remaining.saturating_sub(1);
         }
         let spec = self.audio_spec();
-        let channels = usize::from(Consts::CHANNELS);
-        let frames = Consts::ROUTE_CHUNK_FRAMES;
+        let channels = usize::from(consts::REBUILD_CHANNELS);
+        let frames = consts::ROUTE_CHUNK_FRAMES;
         let start_sample =
             usize::try_from(self.next_frame).expect("fixture frame index") * channels;
         let samples = &self.pcm[start_sample..start_sample + frames * channels];
@@ -914,7 +905,7 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
         gapless_mode,
         decoder: Box::new(TestDecoder::new(1, drops.clone())),
         decoder_backend: kithara_decode::DecoderBackend::default(),
-        host_sample_rate: Arc::new(AtomicU32::new(Consts::SAMPLE_RATE)),
+        host_sample_rate: Arc::new(AtomicU32::new(consts::SAMPLE_RATE)),
         media_info: Some(media_info(0)),
         playback_resampler_backend: "none",
         pools: pools.clone(),
@@ -1145,7 +1136,7 @@ async fn route_source(route_pcm: &RoutePcm, params: RouteParams) -> RouteFixture
             RouteSignalDecoder::new(
                 route_pcm,
                 1,
-                Consts::SAMPLE_RATE,
+                consts::SAMPLE_RATE,
                 gapless,
                 chunks_before_eof,
                 drops.clone(),
@@ -1200,7 +1191,7 @@ pub(super) async fn route_signal_source_with_gaps(
             chunks_before_eof: None,
             gapless: None,
             incoming_chunks_before_eof: None,
-            initial_host_rate: Consts::SAMPLE_RATE,
+            initial_host_rate: consts::SAMPLE_RATE,
             segmented: false,
         },
     )
@@ -1344,7 +1335,7 @@ fn route_generation(
         Box::new(RouteSignalDecoder::new(
             route_pcm,
             decoder_id,
-            Consts::SAMPLE_RATE,
+            consts::SAMPLE_RATE,
             None,
             None,
             drops,
@@ -1662,7 +1653,7 @@ async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source(route_pc
         pools,
         mut source,
         ..
-    } = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
+    } = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     let mut route_recreated = false;
     let chunk = next_decoded_chunk(&mut source, &mut route_recreated);
     let epoch = source.seek_obs.epoch();
@@ -1708,7 +1699,7 @@ async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source(route_pc
     assert_eq!(
         control.landing(),
         Some(
-            Consts::spec(rendered.1)
+            spec(rendered.1)
                 .duration_for(rendered.0)
                 .expect("rendered fixture landing fits Duration"),
         ),
@@ -1783,7 +1774,7 @@ async fn route_change_host_rate_delta_starts_decoder_recreate(route_pcm: RoutePc
         host_sample_rate,
         mut source,
         ..
-    } = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
+    } = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
 
     host_sample_rate.store(48_000, Ordering::Release);
 
@@ -1813,38 +1804,38 @@ async fn route_change_resumes_from_the_rendered_source_frontier(route_pcm: Route
         host_sample_rate,
         mut source,
         ..
-    } = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
+    } = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     let mut route_recreated = false;
     let chunk = next_decoded_chunk(&mut source, &mut route_recreated);
     let epoch = source.seek_engine.epoch();
     let rendered_frame =
-        u64::try_from(Consts::ROUTE_CHUNK_FRAMES / 2).expect("rendered fixture frame fits u64");
-    let rendered = Consts::spec(Consts::SAMPLE_RATE)
+        u64::try_from(consts::ROUTE_CHUNK_FRAMES / 2).expect("rendered fixture frame fits u64");
+    let rendered = spec(consts::SAMPLE_RATE)
         .duration_for(rendered_frame)
         .expect("rendered fixture position fits Duration");
 
     assert_ne!(
         source.resume.decode_head(epoch),
-        Some((rendered_frame, Consts::SAMPLE_RATE)),
+        Some((rendered_frame, consts::SAMPLE_RATE)),
         "the fixture must distinguish raw decode progress from rendered progress"
     );
     assert_eq!(
         chunk.meta.end_timestamp,
-        Consts::spec(Consts::SAMPLE_RATE)
+        spec(consts::SAMPLE_RATE)
             .duration_for(
-                u64::try_from(Consts::ROUTE_CHUNK_FRAMES).expect("route chunk frames fit u64"),
+                u64::try_from(consts::ROUTE_CHUNK_FRAMES).expect("route chunk frames fit u64"),
             )
             .expect("route chunk duration fits Duration")
     );
     source.commit_source_end(
         SourceEnd::new(
             rendered_frame,
-            NonZeroU32::new(Consts::SAMPLE_RATE).expect("test sample rate is non-zero"),
+            NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate is non-zero"),
         ),
         epoch,
     );
 
-    host_sample_rate.store(Consts::ROUTE_SAMPLE_RATE, Ordering::Release);
+    host_sample_rate.store(consts::ROUTE_SAMPLE_RATE, Ordering::Release);
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
     let CurrentFsm::RecreatingDecoder(handle) = &source.state else {
         panic!("expected route-change recreate");
@@ -1866,13 +1857,13 @@ async fn route_change_recreate_preserves_position_and_output_rate_continuity_met
         host_sample_rate,
         mut source,
         ..
-    } = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
+    } = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     let mut left = Vec::new();
     let mut route_recreated = false;
 
     for _ in 0..8 {
         let chunk = next_test_chunk(&mut source, &mut route_recreated);
-        assert_eq!(chunk.meta.spec.sample_rate.get(), Consts::SAMPLE_RATE);
+        assert_eq!(chunk.meta.spec.sample_rate.get(), consts::SAMPLE_RATE);
         append_left_channel(&mut left, &chunk);
         source
             .playhead
@@ -1881,7 +1872,7 @@ async fn route_change_recreate_preserves_position_and_output_rate_continuity_met
 
     let route_frame = left.len();
     let route_position = source.playhead.position();
-    host_sample_rate.store(Consts::ROUTE_SAMPLE_RATE, Ordering::Release);
+    host_sample_rate.store(consts::ROUTE_SAMPLE_RATE, Ordering::Release);
 
     let mut first_route_timestamp = None;
     let mut saw_new_rate = false;
@@ -1890,7 +1881,7 @@ async fn route_change_recreate_preserves_position_and_output_rate_continuity_met
         if first_route_timestamp.is_none() {
             first_route_timestamp = Some(chunk.meta.timestamp);
         }
-        saw_new_rate |= chunk.meta.spec.sample_rate.get() == Consts::ROUTE_SAMPLE_RATE;
+        saw_new_rate |= chunk.meta.spec.sample_rate.get() == consts::ROUTE_SAMPLE_RATE;
         append_left_channel(&mut left, &chunk);
         source
             .playhead
@@ -1907,7 +1898,7 @@ async fn route_change_recreate_preserves_position_and_output_rate_continuity_met
     );
     assert_eq!(
         source.decode.active().decoder().spec().sample_rate.get(),
-        Consts::ROUTE_SAMPLE_RATE
+        consts::ROUTE_SAMPLE_RATE
     );
     let first_route_timestamp =
         first_route_timestamp.expect("route change should produce post-route PCM");
@@ -1918,7 +1909,7 @@ async fn route_change_recreate_preserves_position_and_output_rate_continuity_met
     );
 
     let route_peak = peak_first_diff(&left, route_frame, 64);
-    let control_peak = peak_first_diff(&left, Consts::ROUTE_CHUNK_FRAMES * 4, 64);
+    let control_peak = peak_first_diff(&left, consts::ROUTE_CHUNK_FRAMES * 4, 64);
     let ratio = route_peak / control_peak.max(f32::EPSILON);
     println!(
         "S_ROUTE_CONTINUITY route_peak={route_peak:.6} control_peak={control_peak:.6} ratio={ratio:.3}"
@@ -1948,7 +1939,7 @@ async fn route_change_recreate_roots_the_demuxer_at_the_container_origin(route_p
             incoming_chunks_before_eof: None,
             active_timeline_gap: 0,
             incoming_timeline_gap: 0,
-            initial_host_rate: Consts::SAMPLE_RATE,
+            initial_host_rate: consts::SAMPLE_RATE,
             segmented: true,
         },
     )
@@ -1973,7 +1964,7 @@ async fn route_change_recreate_roots_the_demuxer_at_the_container_origin(route_p
         "fixture precondition: the resume anchor must be a media byte, not the container origin"
     );
 
-    host_sample_rate.store(Consts::ROUTE_SAMPLE_RATE, Ordering::Release);
+    host_sample_rate.store(consts::ROUTE_SAMPLE_RATE, Ordering::Release);
 
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
     let CurrentFsm::RecreatingDecoder(handle) = &source.state else {
@@ -1989,7 +1980,7 @@ async fn route_change_recreate_roots_the_demuxer_at_the_container_origin(route_p
     let mut saw_new_rate = false;
     for _ in 0..4 {
         let chunk = next_test_chunk(&mut source, &mut route_recreated);
-        saw_new_rate |= chunk.meta.spec.sample_rate.get() == Consts::ROUTE_SAMPLE_RATE;
+        saw_new_rate |= chunk.meta.spec.sample_rate.get() == consts::ROUTE_SAMPLE_RATE;
         source
             .playhead
             .advance(&crate::audio::chunk_position(&chunk.meta));
@@ -2016,10 +2007,10 @@ async fn first_matching_host_rate_latches_without_route_recreate(route_pcm: Rout
         ..
     } = route_signal_source(&route_pcm, 0).await;
 
-    host_sample_rate.store(Consts::SAMPLE_RATE, Ordering::Release);
+    host_sample_rate.store(consts::SAMPLE_RATE, Ordering::Release);
 
     assert!(!track::start_route_change_recreate_if_needed(&mut source));
-    assert_eq!(source.resume.decoder_rate(), Consts::SAMPLE_RATE);
+    assert_eq!(source.resume.decoder_rate(), consts::SAMPLE_RATE);
     assert!(matches!(source.state, CurrentFsm::Decoding(_)));
 }
 
@@ -2031,10 +2022,10 @@ async fn first_mismatched_host_rate_still_starts_route_recreate(route_pcm: Route
         ..
     } = route_signal_source(&route_pcm, 0).await;
 
-    host_sample_rate.store(Consts::ROUTE_SAMPLE_RATE, Ordering::Release);
+    host_sample_rate.store(consts::ROUTE_SAMPLE_RATE, Ordering::Release);
 
     assert!(track::start_route_change_recreate_if_needed(&mut source));
-    assert_eq!(source.resume.decoder_rate(), Consts::ROUTE_SAMPLE_RATE);
+    assert_eq!(source.resume.decoder_rate(), consts::ROUTE_SAMPLE_RATE);
     match &source.state {
         CurrentFsm::RecreatingDecoder(handle) => {
             assert_eq!(handle.data().cause, RecreateCause::RouteChange);
@@ -2134,7 +2125,7 @@ async fn deferred_preparation_does_not_read_before_seek_is_applied() {
 
 #[kithara::test(tokio)]
 async fn completed_seek_is_consumed_when_landing_bytes_are_no_longer_ready(route_pcm: RoutePcm) {
-    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
+    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     let target = Duration::from_millis(10);
     let epoch = fixture.source.seek.begin(target);
     let seek = SeekContext { target, epoch };

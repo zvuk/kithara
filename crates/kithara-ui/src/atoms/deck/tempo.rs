@@ -6,8 +6,10 @@ use crate::{
     skin::{DeckSkin, TextRoleSkin},
 };
 
-/// What the caption above a position reading says.
-const ELAPSED: &str = "TIME";
+mod consts {
+    /// What the caption above a position reading says.
+    pub(super) const ELAPSED: &str = "TIME";
+}
 
 /// The deck's tempo, or where it is when no tempo has been measured.
 #[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
@@ -72,13 +74,13 @@ impl Tempo {
             }
             Reading::Position(seconds) => {
                 let content = clock_reading(seconds);
-                let caption = text.shape(ELAPSED, self.caption_role, None);
+                let caption = text.shape(consts::ELAPSED, self.caption_role, None);
                 let run = text.shape(&content, self.role, None);
                 let stacked = caption.height() + self.metrics.readout_gap + run.height();
                 let y = bounds.y + (bounds.h - stacked) / 2.0;
                 list.text(
                     &caption,
-                    ELAPSED,
+                    consts::ELAPSED,
                     Transform::translate(Pt {
                         y,
                         x: bounds.x + (bounds.w - caption.width()) / 2.0,
@@ -106,18 +108,22 @@ mod tests {
     use super::{DrawListBuilder, Reading, Rect, Tempo, TextContext};
     use crate::{builtin, draw::DrawList};
 
-    const BOUNDS: Rect = Rect {
-        h: 34.0,
-        w: 56.0,
-        x: 1.0,
-        y: 2.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOUNDS: Rect = Rect {
+            h: 34.0,
+            w: 56.0,
+            x: 1.0,
+            y: 2.0,
+        };
+    }
 
     fn drawn(data: Reading) -> DrawList {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources());
         let mut list = DrawListBuilder::default();
-        Tempo::new(skin).paint(&mut list, &mut text, &data, BOUNDS);
+        Tempo::new(skin).paint(&mut list, &mut text, &data, consts::BOUNDS);
         list.finish()
     }
 

@@ -1,8 +1,10 @@
 use kithara_bufpool::PooledVec;
 
-const SHARDS: usize = 1;
+mod consts {
+    pub(super) const SHARDS: usize = 1;
+}
 
-pub(in crate::draw) type VecGuard<T> = PooledVec<T, SHARDS>;
+pub(in crate::draw) type VecGuard<T> = PooledVec<T, { consts::SHARDS }>;
 
 #[derive(derive_more::Debug)]
 #[debug(bound(T: std::fmt::Debug))]

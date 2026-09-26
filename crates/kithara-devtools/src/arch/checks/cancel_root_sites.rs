@@ -10,7 +10,30 @@ use crate::common::{
     walker::{relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "cancel_root_sites";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "cancel_root_sites";
+
+    pub(super) const EXPLANATION: &str = "\
+Summary: minting a fresh cancel root — `CancelToken::root()` (owning master) or
+`CancelToken::never()` (never-cancelled sentinel) — outside the allowlisted
+sites roots a new cancel tree that no parent shutdown pulse reaches.
+
+Why: every production cancel token should be either (a) a master root owned at a
+consumer-crate top (`App` / FFI player) or vended by `CancelScope`, or (b) a
+child derived via `.child()` from such a master. A root minted at subsystem
+level is an orphan: dropping the player leaves its orphan-rooted tasks running,
+and a child of an orphan never observes the real master cancel on the
+produce-core.
+
+Fix: derive a child from the cancel handed in via your config
+(`CancelScope::new(config.cancel).token().child()`), or take a `CancelToken`
+parameter from your caller. Genuine owner / bridge / sentinel sites are
+sanctioned per-file in the `cancel_root_sites` allowlist (see
+`.config/arch/thresholds.toml`); add a file there only with a clear owner
+reason.
+
+See `crates/kithara-play/README.md` \"Cancel Hierarchy\" and `AGENTS.md`.";
+}
 
 pub(crate) struct CancelRootSites;
 
@@ -21,7 +44,7 @@ pub(super) struct PatternSite {
 
 impl Check for CancelRootSites {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -32,14 +55,14 @@ impl Check for CancelRootSites {
                     .into_iter()
                     .map(|site| {
                         Violation::deny(
-                            ID,
+                            consts::ID,
                             site.location,
                             format!(
                                 "orphan `{}()` cancel-root minting in production code",
                                 site.pattern
                             ),
                         )
-                        .with_explanation(EXPLANATION)
+                        .with_explanation(consts::EXPLANATION)
                     })
                     .collect()
             },
@@ -123,27 +146,6 @@ fn scan_source(content: &str, patterns: &[String]) -> Vec<(usize, String)> {
 fn is_test_or_bench_path(rel_str: &str) -> bool {
     rel_str.starts_with("tests/") || rel_str.contains("/tests/") || rel_str.contains("/benches/")
 }
-
-const EXPLANATION: &str = "\
-Summary: minting a fresh cancel root — `CancelToken::root()` (owning master) or
-`CancelToken::never()` (never-cancelled sentinel) — outside the allowlisted
-sites roots a new cancel tree that no parent shutdown pulse reaches.
-
-Why: every production cancel token should be either (a) a master root owned at a
-consumer-crate top (`App` / FFI player) or vended by `CancelScope`, or (b) a
-child derived via `.child()` from such a master. A root minted at subsystem
-level is an orphan: dropping the player leaves its orphan-rooted tasks running,
-and a child of an orphan never observes the real master cancel on the
-produce-core.
-
-Fix: derive a child from the cancel handed in via your config
-(`CancelScope::new(config.cancel).token().child()`), or take a `CancelToken`
-parameter from your caller. Genuine owner / bridge / sentinel sites are
-sanctioned per-file in the `cancel_root_sites` allowlist (see
-`.config/arch/thresholds.toml`); add a file there only with a clear owner
-reason.
-
-See `crates/kithara-play/README.md` \"Cancel Hierarchy\" and `AGENTS.md`.";
 
 fn collect_test_ranges(items: &[Item], out: &mut Vec<(usize, usize)>) {
     for item in items {

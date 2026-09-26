@@ -334,9 +334,7 @@ fn manifest_field(manifest: &str, key: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const MANIFEST_SAMPLE: &str =
-        "// header\nlet version = \"0.0.1-alpha3\"\nlet checksum = \"abc\"\nlet other = 1\n";
+    use crate::consts;
 
     fn remotes() -> [Remote; 2] {
         [
@@ -347,7 +345,7 @@ mod tests {
 
     #[test]
     fn stamp_replaces_version_and_checksum() {
-        let out = stamp_manifest(MANIFEST_SAMPLE, "0.0.2", "deadbeef").unwrap();
+        let out = stamp_manifest(consts::MANIFEST_SAMPLE, "0.0.2", "deadbeef").unwrap();
         assert!(out.contains("let version = \"0.0.2\"\n"));
         assert!(out.contains("let checksum = \"deadbeef\"\n"));
         assert!(out.contains("// header\n"));
@@ -363,11 +361,14 @@ mod tests {
     #[test]
     fn manifest_field_reads_values() {
         assert_eq!(
-            manifest_field(MANIFEST_SAMPLE, "version").unwrap(),
+            manifest_field(consts::MANIFEST_SAMPLE, "version").unwrap(),
             "0.0.1-alpha3"
         );
-        assert_eq!(manifest_field(MANIFEST_SAMPLE, "checksum").unwrap(), "abc");
-        assert!(manifest_field(MANIFEST_SAMPLE, "missing").is_err());
+        assert_eq!(
+            manifest_field(consts::MANIFEST_SAMPLE, "checksum").unwrap(),
+            "abc"
+        );
+        assert!(manifest_field(consts::MANIFEST_SAMPLE, "missing").is_err());
     }
 
     #[test]

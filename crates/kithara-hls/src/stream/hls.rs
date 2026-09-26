@@ -24,7 +24,8 @@ use super::{
 };
 use crate::{
     HlsEvent, HlsFailure,
-    config::{DEFAULT_LOOK_AHEAD_BYTES, HlsConfig},
+    config::HlsConfig,
+    consts,
     handle::StreamPeer,
     peer::HlsPeer,
     playlist::{
@@ -129,7 +130,11 @@ where
             .prefetch_aes128_keys(&media_playlists)
             .await
             .map_err(SourceError::from)?;
-        let look_ahead_bytes = Some(config.look_ahead_bytes.unwrap_or(DEFAULT_LOOK_AHEAD_BYTES));
+        let look_ahead_bytes = Some(
+            config
+                .look_ahead_bytes
+                .unwrap_or(consts::DEFAULT_LOOK_AHEAD_BYTES),
+        );
         let look_ahead_segments = effective_look_ahead_segments(&config);
 
         playhead.set_duration(playlist_state.track_duration());

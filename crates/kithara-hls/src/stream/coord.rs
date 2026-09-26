@@ -24,17 +24,10 @@ use kithara_test_utils::kithara;
 
 use super::{session::HlsSession, transition::SessionSlots};
 use crate::{
-    HlsEvent,
+    HlsEvent, consts,
     signal::SizeSignal,
     variant::{HlsVariant, PlanCtx},
 };
-
-/// Watchdog timeout for the off-RT blocking `wait_range(_, None)`: must exceed
-/// the `kithara-net` per-fetch total timeout so a stalled upstream is failed by
-/// the network layer (the wait then returns a terminal `Err`) before this
-/// deadlock watchdog fires. Mirrors `kithara-storage` `WAIT_HANG_TIMEOUT`. Only
-/// a wait that never wakes after every signal site fired is a real deadlock.
-const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Infrastructure handles shared with every [`HlsCoord`]:
 /// the parent cancel token (cancel hierarchy owner of `HlsCoord.cancel`)
@@ -360,7 +353,7 @@ where
     /// though the probe predicate and the gate sit under different locks
     /// (mirrors `kithara-storage` `wait_range_inner`). A genuine wedge (no
     /// signal at all) trips the hang watchdog rather than parking forever.
-    #[kithara::hang_watchdog(timeout = WAIT_HANG_TIMEOUT)]
+    #[kithara::hang_watchdog(timeout = consts::WAIT_HANG_TIMEOUT)]
     pub(super) fn wait_range_blocking(
         signal: &SizeSignal,
         cancel: &CancelToken,

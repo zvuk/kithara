@@ -1,6 +1,8 @@
 use super::VisFrame;
 
-pub(crate) const SHADER: &str = include_str!("../../../assets/shaders/vis.wgsl");
+pub(crate) mod consts {
+    pub(crate) const SHADER: &str = include_str!("../../../assets/shaders/vis.wgsl");
+}
 
 #[derive(Clone, Copy)]
 pub(crate) struct Uniforms {

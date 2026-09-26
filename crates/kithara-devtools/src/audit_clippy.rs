@@ -202,11 +202,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::common::project::ProjectConfig;
-
-    const PASS_ENV: &str = "DEVTOOLS_AUDIT_CLIPPY_PASS";
-    const PASS_LOG: &str = "DEVTOOLS_AUDIT_CLIPPY_LOG";
-    const PASS_EXIT: &str = "DEVTOOLS_AUDIT_CLIPPY_EXIT";
+    use crate::{common::project::ProjectConfig, consts};
 
     fn command_args(command: &Command) -> Vec<String> {
         command
@@ -356,24 +352,24 @@ mod tests {
                 module_path!(),
                 "append_pass_marker",
             ))
-            .env(PASS_ENV, label)
-            .env(PASS_LOG, log)
-            .env(PASS_EXIT, exit.to_string());
+            .env(consts::PASS_ENV, label)
+            .env(consts::PASS_LOG, log)
+            .env(consts::PASS_EXIT, exit.to_string());
         command
     }
 
     #[test]
     #[ignore = "subprocess entrypoint"]
     fn append_pass_marker() {
-        let label = env::var(PASS_ENV).expect("pass label");
-        let log = env::var(PASS_LOG).expect("pass log path");
+        let label = env::var(consts::PASS_ENV).expect("pass label");
+        let log = env::var(consts::PASS_LOG).expect("pass log path");
         let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(log)
             .expect("open pass log");
         writeln!(file, "{label}").expect("append pass marker");
-        let exit = env::var(PASS_EXIT)
+        let exit = env::var(consts::PASS_EXIT)
             .expect("pass exit code")
             .parse()
             .expect("pass exit code is an integer");

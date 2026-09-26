@@ -11,8 +11,7 @@ use super::{
     Direction, Profile, Substitution,
     analysis::{AbstractionRef, AnalysisReport, Candidate, Recommendation},
 };
-
-const SCHEMA_VERSION: u32 = 2;
+use crate::consts;
 
 pub(super) struct ArtifactSet {
     pub(super) document: PathBuf,
@@ -76,7 +75,7 @@ pub(super) fn write(
             profile,
             roots,
             include_default_excluded,
-            schema_version: SCHEMA_VERSION,
+            schema_version: consts::COLLECT_SCHEMA_VERSION,
             status: if report.candidates.is_empty() {
                 "clean"
             } else {
@@ -110,7 +109,7 @@ fn graph(report: &AnalysisReport) -> Graph<'_> {
         }
     }
     Graph {
-        schema_version: SCHEMA_VERSION,
+        schema_version: consts::COLLECT_SCHEMA_VERSION,
         nodes: nodes
             .into_iter()
             .map(|(id, abstraction)| GraphNode { abstraction, id })

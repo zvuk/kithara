@@ -13,18 +13,22 @@ use num_traits::cast::AsPrimitive;
 
 use super::{CursorShape, Input, InputMethod, Key, Modifiers, PointerButton, Scroll};
 
-const NAMED_KEYS: [(NamedKey, Key<'static>); 10] = [
-    (NamedKey::ArrowDown, Key::ArrowDown),
-    (NamedKey::ArrowLeft, Key::ArrowLeft),
-    (NamedKey::ArrowRight, Key::ArrowRight),
-    (NamedKey::ArrowUp, Key::ArrowUp),
-    (NamedKey::Backspace, Key::Backspace),
-    (NamedKey::Delete, Key::Delete),
-    (NamedKey::End, Key::End),
-    (NamedKey::Enter, Key::Enter),
-    (NamedKey::Escape, Key::Escape),
-    (NamedKey::Home, Key::Home),
-];
+mod consts {
+    use super::*;
+
+    pub(super) const NAMED_KEYS: [(NamedKey, Key<'static>); 10] = [
+        (NamedKey::ArrowDown, Key::ArrowDown),
+        (NamedKey::ArrowLeft, Key::ArrowLeft),
+        (NamedKey::ArrowRight, Key::ArrowRight),
+        (NamedKey::ArrowUp, Key::ArrowUp),
+        (NamedKey::Backspace, Key::Backspace),
+        (NamedKey::Delete, Key::Delete),
+        (NamedKey::End, Key::End),
+        (NamedKey::Enter, Key::Enter),
+        (NamedKey::Escape, Key::Escape),
+        (NamedKey::Home, Key::Home),
+    ];
+}
 
 #[must_use]
 pub fn portable_text_input(event: &TextEvent) -> Option<Input<'_>> {
@@ -100,7 +104,9 @@ fn portable_key(key: &MasonryKey) -> Key<'_> {
         MasonryKey::Character(character) if character == " " => Key::Space,
         MasonryKey::Character(character) => Key::Character(character),
         MasonryKey::Named(named) => {
-            let Some((_, neutral)) = NAMED_KEYS.iter().find(|(candidate, _)| candidate == named)
+            let Some((_, neutral)) = consts::NAMED_KEYS
+                .iter()
+                .find(|(candidate, _)| candidate == named)
             else {
                 return Key::Other;
             };
@@ -115,7 +121,9 @@ fn masonry_key(key: Key<'_>) -> MasonryKey {
         Key::Character(text) => MasonryKey::Character(text.to_owned()),
         Key::Other => MasonryKey::Named(NamedKey::Unidentified),
         named => {
-            let Some((candidate, _)) = NAMED_KEYS.iter().find(|(_, neutral)| *neutral == named)
+            let Some((candidate, _)) = consts::NAMED_KEYS
+                .iter()
+                .find(|(_, neutral)| *neutral == named)
             else {
                 return MasonryKey::Named(NamedKey::Unidentified);
             };

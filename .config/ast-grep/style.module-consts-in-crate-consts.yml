@@ -1,0 +1,53 @@
+id: style.module-consts-in-crate-consts
+message: |
+  Module-level constant outside a `consts` module.
+
+  Every module-level constant that is not `pub` lives in a module named
+  `consts`, referenced as `consts::NAME`:
+
+  - Ungated constants, and constants used only by tests, go in the crate's
+    one `src/consts.rs` (`mod consts;` at the crate root, items
+    `pub(crate)`). Two modules that need the same value share one constant
+    there instead of each declaring its own.
+  - A constant whose module is compiled only under a feature or platform
+    `cfg`, or whose value names a private item of its module, stays in that
+    module inside one inline `mod consts` per file, so the crate file does
+    not repeat the module's gate.
+
+  A `pub` constant is public API and stays where it is exported. Constants
+  inside a function body and associated constants of a type are not
+  module-level and stay where they are.
+severity: error
+language: Rust
+ignores:
+  - "**/consts.rs"
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/benches/**"
+  - "**/examples/**"
+  - "**/build.rs"
+rule:
+  all:
+    - kind: const_item
+    - not:
+        has:
+          kind: visibility_modifier
+          regex: "^pub$"
+    - not:
+        has:
+          field: name
+          regex: "^_$"
+    - any:
+        - inside:
+            kind: source_file
+        - inside:
+            kind: declaration_list
+            inside:
+              kind: mod_item
+              not:
+                has:
+                  field: name
+                  regex: "^consts$"

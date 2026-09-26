@@ -8,7 +8,7 @@ use glob::Pattern;
 use serde::{Deserialize, Serialize};
 use toml::Table;
 
-const CONFIG_REL: &str = ".config/xtask.toml";
+use crate::consts;
 
 /// Project-specific identity and per-tool settings for the otherwise
 /// project-agnostic xtask. Loaded from `.config/xtask.toml`; every field
@@ -1032,7 +1032,7 @@ impl ProjectConfig {
     ///
     /// Returns an error if the config file cannot be read or parsed.
     pub fn load(workspace_root: &Path) -> Result<Self> {
-        let path = workspace_root.join(CONFIG_REL);
+        let path = workspace_root.join(consts::PROJECT_CONFIG_REL);
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -1162,7 +1162,7 @@ mod architecture_tests {
     fn load(text: &str) -> Result<ProjectConfig> {
         let temp = tempdir().expect("tempdir");
         fs::create_dir(temp.path().join(".config")).expect("config dir");
-        fs::write(temp.path().join(CONFIG_REL), text).expect("config");
+        fs::write(temp.path().join(consts::PROJECT_CONFIG_REL), text).expect("config");
         ProjectConfig::load(temp.path())
     }
 

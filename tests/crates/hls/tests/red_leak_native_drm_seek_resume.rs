@@ -22,20 +22,19 @@ use kithara_integration_tests::{
 use tracing::info;
 use url::Url;
 
-struct Consts;
-impl Consts {
-    const ITERATIONS: usize = 4;
-    const SEEK_TARGETS_SECS: &'static [f64] = &[30.0, 60.0, 10.0];
+mod consts {
+    pub(super) const ITERATIONS: usize = 4;
+    pub(super) const SEEK_TARGETS_SECS: &[f64] = &[30.0, 60.0, 10.0];
     /// Encrypted ladder the cycle runs against: two variants so `auto` ABR
     /// has somewhere to go, and long enough that every seek target above
     /// lands inside the track.
-    const VARIANTS: usize = 2;
-    const SEGMENTS: usize = 12;
-    const SEGMENT_SECS: f64 = 6.0;
+    pub(super) const VARIANTS: usize = 2;
+    pub(super) const SEGMENTS: usize = 12;
+    pub(super) const SEGMENT_SECS: f64 = 6.0;
+}
 
-    fn media_secs() -> f64 {
-        Self::SEGMENTS as f64 * Self::SEGMENT_SECS
-    }
+fn media_secs() -> f64 {
+    consts::SEGMENTS as f64 * consts::SEGMENT_SECS
 }
 
 async fn next_chunk_or_timeout(
@@ -99,7 +98,7 @@ async fn run_drm_seek_resume_cycle(
         next_chunk_or_timeout(&mut audio, &format!("iter_{iter_idx}_warmup_{w}")).await;
     }
 
-    for (seek_idx, &seek_secs) in Consts::SEEK_TARGETS_SECS.iter().enumerate() {
+    for (seek_idx, &seek_secs) in consts::SEEK_TARGETS_SECS.iter().enumerate() {
         audio
             .seek(Duration::from_secs_f64(seek_secs))
             .expect("seek must succeed");
@@ -127,9 +126,9 @@ async fn encrypted_ladder() -> (TestServerHelper, Url) {
     let created = server
         .create_hls(
             HlsFixtureBuilder::new()
-                .variant_count(Consts::VARIANTS)
-                .segments_per_variant(Consts::SEGMENTS)
-                .segment_duration_secs(Consts::SEGMENT_SECS)
+                .variant_count(consts::VARIANTS)
+                .segments_per_variant(consts::SEGMENTS)
+                .segment_duration_secs(consts::SEGMENT_SECS)
                 .packaged_audio_aac_lc(44_100, 2)
                 .encryption(EncryptionRequest {
                     key_hex: hex::encode(aes128_key_bytes()),
@@ -162,12 +161,12 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
     // targets were inside by a wide margin; on a fixture sized here, that
     // has to be checked.
     assert!(
-        Consts::SEEK_TARGETS_SECS
+        consts::SEEK_TARGETS_SECS
             .iter()
-            .all(|&target| target < Consts::media_secs()),
+            .all(|&target| target < media_secs()),
         "seek targets {:?} must land inside the {} s ladder",
-        Consts::SEEK_TARGETS_SECS,
-        Consts::media_secs(),
+        consts::SEEK_TARGETS_SECS,
+        media_secs(),
     );
 
     let (_server, url) = encrypted_ladder;
@@ -194,7 +193,7 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
 
     info!(threads_baseline, "baseline after warmup DRM seek cycle");
 
-    for i in 1..=Consts::ITERATIONS {
+    for i in 1..=consts::ITERATIONS {
         run_drm_seek_resume_cycle(&url, &downloader, &shared_worker, &pools, i).await;
         let now = wait_thread_count_quiesced(Duration::from_secs(30)).await;
         info!(
@@ -215,7 +214,7 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
          (HlsPeer, KeyStore cache, ProcessedResource, decoder state) \
          are not released on Audio::drop.",
         growth,
-        Consts::ITERATIONS,
+        consts::ITERATIONS,
         threads_baseline,
         threads_after,
     );

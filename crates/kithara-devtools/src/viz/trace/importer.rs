@@ -13,7 +13,9 @@ use crate::viz::graph::{
     Edge, EdgeKind, Evidence, EvidenceGraph, Node, NodeId, NodeKind, SourceLocation,
 };
 
-const TRACE_EVENT_BUDGET: usize = 10_000;
+mod consts {
+    pub(super) const TRACE_EVENT_BUDGET: usize = 10_000;
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -90,9 +92,9 @@ fn import_records(
         };
     }
     let total = records.len();
-    let truncated = total > TRACE_EVENT_BUDGET;
+    let truncated = total > consts::TRACE_EVENT_BUDGET;
     let mut context = ImportContext::new(graph, scenario, manual);
-    for record in records.into_iter().take(TRACE_EVENT_BUDGET) {
+    for record in records.into_iter().take(consts::TRACE_EVENT_BUDGET) {
         context.import_record(&record);
     }
     context.finish(total, truncated)
@@ -274,10 +276,11 @@ impl<'a> ImportContext<'a> {
     fn finish(mut self, total: usize, truncated: bool) -> TraceSummary {
         if truncated {
             self.diagnostics.push(format!(
-                "trace has {total} records; imported first {TRACE_EVENT_BUDGET}"
+                "trace has {total} records; imported first {TRACE_EVENT_BUDGET}",
+                TRACE_EVENT_BUDGET = consts::TRACE_EVENT_BUDGET
             ));
         }
-        let imported = total.min(TRACE_EVENT_BUDGET);
+        let imported = total.min(consts::TRACE_EVENT_BUDGET);
         TraceSummary {
             state: if truncated {
                 TraceState::Truncated

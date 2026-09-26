@@ -599,6 +599,136 @@ fn values(plain: Option<u8>, captured: Option<u8>, key: &str) {
     }
 
     #[test]
+    fn impl_only_consts_rule_rejects_a_type_used_as_a_constant_namespace() {
+        let source = r#"
+struct Consts;
+
+impl Consts {
+    const FIRST: u32 = 1;
+    const SECOND: u32 = 2;
+    const THIRD: u32 = 3;
+}
+
+pub(crate) enum Limits {}
+
+impl Limits {
+    pub(crate) const LOW: u32 = 1;
+    pub(crate) const MID: u32 = 2;
+    pub(crate) const HIGH: u32 = 3;
+}
+"#;
+
+        assert_eq!(rule_hits("style.no-impl-only-consts.yml", source), 2);
+    }
+
+    #[test]
+    fn impl_only_consts_rule_keeps_constant_modules_and_real_types() {
+        let source = r#"
+mod consts {
+    pub(super) const FIRST: u32 = 1;
+    pub(super) const SECOND: u32 = 2;
+    pub(super) const THIRD: u32 = 3;
+}
+
+struct Band {
+    gain: f32,
+}
+
+impl Band {
+    const LOW: u32 = 1;
+    const MID: u32 = 2;
+    const HIGH: u32 = 3;
+}
+
+enum Mode {
+    Fast,
+    Slow,
+}
+
+impl Mode {
+    const FIRST: u32 = 1;
+    const SECOND: u32 = 2;
+    const THIRD: u32 = 3;
+}
+
+struct Widget;
+
+impl Widget {
+    const FIRST: u32 = 1;
+    const SECOND: u32 = 2;
+    const THIRD: u32 = 3;
+}
+
+impl Clone for Widget {
+    fn clone(&self) -> Self {
+        Self
+    }
+}
+"#;
+
+        assert_eq!(rule_hits("style.no-impl-only-consts.yml", source), 0);
+    }
+
+    #[test]
+    fn module_consts_rule_rejects_private_constants_outside_a_consts_module() {
+        let source = r#"
+const LOOSE: u32 = 1;
+pub(crate) const SHARED: u32 = 2;
+
+mod nested {
+    pub(super) const INNER: u32 = 3;
+}
+"#;
+
+        assert_eq!(
+            rule_hits("style.module-consts-in-crate-consts.yml", source),
+            3
+        );
+    }
+
+    #[test]
+    fn module_consts_rule_keeps_consts_modules_public_api_and_scoped_constants() {
+        let source = r#"
+pub const EXPORTED: u32 = 1;
+const _: () = ();
+
+mod consts {
+    pub(super) const GATED: u32 = 2;
+}
+
+struct Band;
+
+impl Band {
+    const LOW: u32 = 3;
+}
+
+fn local() -> u32 {
+    const STEP: u32 = 4;
+    STEP
+}
+"#;
+
+        assert_eq!(
+            rule_hits("style.module-consts-in-crate-consts.yml", source),
+            0
+        );
+    }
+
+    #[test]
+    fn module_consts_rule_skips_the_crate_consts_file() {
+        let source = "pub(crate) const SHARED: u32 = 1;\n";
+
+        assert_eq!(
+            rule_hits_at(
+                "style.module-consts-in-crate-consts.yml",
+                "crates/kithara-audio/src/consts.rs",
+                source,
+            ),
+            0
+        );
+    }
+
+    #[test]
     fn a_reported_hit_names_the_line_an_editor_calls_it() {
         let stdout = r#"{"file":"crates/kithara-ui/src/capture/set.rs","message":"m","ruleId":"perf.prefer-primitive-pool","severity":"error","range":{"start":{"line":29,"column":4}}}"#;
         let mut by_rule = BTreeMap::new();

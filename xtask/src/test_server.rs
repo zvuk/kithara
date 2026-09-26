@@ -7,14 +7,14 @@ use std::{
     process::{Child, Stdio},
     sync::mpsc::{self, Receiver, RecvTimeoutError},
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use anyhow::{Context, Result, bail};
 use reqwest::blocking::Client;
 use tracing::warn;
 
-use crate::{child, ci::process::Process};
+use crate::{child, ci::process::Process, consts};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Port {
@@ -33,16 +33,6 @@ impl Port {
             Self::Ephemeral => 0,
         }
     }
-}
-
-struct Consts;
-
-impl Consts {
-    /// The line the server prints once its listener is bound. Its origin is
-    /// `STARTUP_RECORD` in `tests/crates/integration/src/test_server/native.rs`.
-    const STARTUP_RECORD: &'static str = "test server listening on";
-    const POLL: Duration = Duration::from_millis(200);
-    const READY: Duration = Duration::from_secs(60);
 }
 
 #[derive(fieldwork::Fieldwork)]
@@ -140,10 +130,10 @@ impl TestServer {
         port: Port,
         cancel: Option<&child::Cancel>,
     ) -> Result<String> {
-        let deadline = Instant::now() + Consts::READY;
+        let deadline = Instant::now() + consts::READY;
         loop {
             child::check(cancel)?;
-            match announced.recv_timeout(Consts::POLL) {
+            match announced.recv_timeout(consts::TEST_SERVER_POLL) {
                 Ok(line) => {
                     let bound = bound_port(&line)?;
                     if let Port::Fixed(expected) = port
@@ -165,7 +155,7 @@ impl TestServer {
                     if Instant::now() >= deadline {
                         bail!(
                             "the hermetic test server did not report a bound address within {}s",
-                            Consts::READY.as_secs()
+                            consts::READY.as_secs()
                         );
                     }
                 }
@@ -175,11 +165,11 @@ impl TestServer {
 
     fn await_health(&mut self, cancel: Option<&child::Cancel>) -> Result<()> {
         let client = Client::builder()
-            .timeout(Consts::POLL)
+            .timeout(consts::TEST_SERVER_POLL)
             .build()
             .context("building the readiness client")?;
         let endpoint = format!("{}/health", self.url);
-        let deadline = Instant::now() + Consts::READY;
+        let deadline = Instant::now() + consts::READY;
         loop {
             child::check(cancel)?;
             if let Some(status) = self.exited()? {
@@ -194,10 +184,10 @@ impl TestServer {
             if Instant::now() >= deadline {
                 bail!(
                     "the hermetic test server did not answer {endpoint} within {}s",
-                    Consts::READY.as_secs()
+                    consts::READY.as_secs()
                 );
             }
-            thread::sleep(Consts::POLL);
+            thread::sleep(consts::TEST_SERVER_POLL);
         }
     }
 
@@ -257,7 +247,7 @@ fn drain_stdout(
         let mut announced = false;
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             let _ = writeln!(file, "{line}");
-            if !announced && line.contains(Consts::STARTUP_RECORD) {
+            if !announced && line.contains(consts::STARTUP_RECORD) {
                 announced = sender.send(line).is_ok();
             }
         }
@@ -269,7 +259,7 @@ fn drain_stdout(
 fn bound_port(line: &str) -> Result<u16> {
     let address = line
         .trim()
-        .rsplit_once(Consts::STARTUP_RECORD)
+        .rsplit_once(consts::STARTUP_RECORD)
         .map(|(_, address)| address.trim())
         .context("the hermetic test server announced no address")?;
     let authority = address

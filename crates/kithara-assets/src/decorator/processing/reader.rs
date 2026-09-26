@@ -5,12 +5,8 @@ use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
-use super::{
-    contract::ProcessCtx,
-    gate::ReadinessGate,
-    writer::{DEFAULT_CHUNK_SIZE, DEFAULT_GATE_POLL_INTERVAL, ProcessedWriter},
-};
-use crate::resource::ReadSide;
+use super::{contract::ProcessCtx, gate::ReadinessGate, writer::ProcessedWriter};
+use crate::{consts, resource::ReadSide};
 
 /// Read view over a resource that exposes bytes only after processing completes.
 #[derive_where::derive_where(Clone; R: Clone)]
@@ -100,8 +96,8 @@ where
         inner: R,
         processor: Option<ProcessCtx>,
         pools: PoolRegion<S>,
-        #[builder(default = DEFAULT_CHUNK_SIZE)] chunk_size: usize,
-        #[builder(default = DEFAULT_GATE_POLL_INTERVAL)] gate_poll_interval: Duration,
+        #[builder(default = consts::DEFAULT_CHUNK_SIZE)] chunk_size: usize,
+        #[builder(default = consts::DEFAULT_GATE_POLL_INTERVAL)] gate_poll_interval: Duration,
     ) -> Self {
         let ready =
             processor.is_none() || matches!(inner.status(), ResourceStatus::Committed { .. });

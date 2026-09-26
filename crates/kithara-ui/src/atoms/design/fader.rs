@@ -290,12 +290,16 @@ mod tests {
         skin::parse_skin_over,
     };
 
-    const BOUNDS: Rect = Rect {
-        h: 34.0,
-        w: 220.0,
-        x: 0.0,
-        y: 0.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOUNDS: Rect = Rect {
+            h: 34.0,
+            w: 220.0,
+            x: 0.0,
+            y: 0.0,
+        };
+    }
 
     fn record(style: FaderStyle, value: f32, label: Option<&str>) -> DrawList {
         let mut list = DrawListBuilder::default();
@@ -304,7 +308,7 @@ mod tests {
             &mut TextContext::new().unwrap(),
             value,
             label,
-            BOUNDS,
+            consts::BOUNDS,
         );
         list.finish()
     }
@@ -344,7 +348,7 @@ mod tests {
             &mut TextContext::new().unwrap(),
             0.5,
             None,
-            BOUNDS,
+            consts::BOUNDS,
         );
         let list = list.finish();
         list.commands()
@@ -394,7 +398,7 @@ mod tests {
             "the handle must move right as the value rises, but it read {low:?} {mid:?} {high:?}"
         );
         assert!(
-            high.x + high.w <= BOUNDS.w,
+            high.x + high.w <= consts::BOUNDS.w,
             "at the top of its travel the handle must still be inside the control, not at {high:?}"
         );
     }
@@ -450,7 +454,7 @@ mod tests {
     fn the_handle_stays_inside_the_rail_the_engine_drags() {
         for labelled in [None, Some("VOL")] {
             let rail = rail_bounds(
-                BOUNDS,
+                consts::BOUNDS,
                 FaderStyle::Default,
                 labelled.is_some(),
                 builtin::skin().fader,
@@ -503,7 +507,12 @@ mod tests {
     /// The band it is cut at is what keeps the two apart.
     #[kithara::test]
     fn a_caption_wider_than_its_band_is_cut_at_it() {
-        let rail = rail_bounds(BOUNDS, FaderStyle::Default, true, builtin::skin().fader);
+        let rail = rail_bounds(
+            consts::BOUNDS,
+            FaderStyle::Default,
+            true,
+            builtin::skin().fader,
+        );
         let band = band("SCRUBBING").expect("the caption must be drawn in a band of its own");
 
         assert!(

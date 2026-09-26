@@ -6,13 +6,15 @@ use regex::Regex;
 use super::{Check, Context};
 use crate::common::{violation::Violation, walker::walk_rs_files};
 
-pub(crate) const ID: &str = "canonical_types";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "canonical_types";
+}
 
 pub(crate) struct CanonicalTypes;
 
 impl Check for CanonicalTypes {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -57,7 +59,7 @@ impl Check for CanonicalTypes {
             match hits.len() {
                 0 => {
                     violations.push(Violation::deny(
-                        ID,
+                        consts::ID,
                         key,
                         format!(
                             "canonical {} '{}' is not defined anywhere (expected in '{}')",
@@ -70,7 +72,7 @@ impl Check for CanonicalTypes {
                     let owner_marker = format!("crates/{}/", entry.owner);
                     if !location.contains(&owner_marker) {
                         violations.push(Violation::deny(
-                            ID,
+                            consts::ID,
                             key,
                             format!(
                                 "canonical {} '{}' is defined in '{}', but expected in '{}'",
@@ -82,7 +84,7 @@ impl Check for CanonicalTypes {
                 _ => {
                     let joined = hits.join(", ");
                     violations.push(Violation::deny(
-                        ID,
+                        consts::ID,
                         key,
                         format!(
                             "canonical {} '{}' defined {} times: {}",

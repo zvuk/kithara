@@ -75,7 +75,7 @@ impl AppleAudioFile {
     }
 
     /// Open a complete local `source` as an audio file. `hint` is one of the
-    /// `kAudioFile*Type` four-cc constants in [`Consts`]; pass `None` to let
+    /// `kAudioFile*Type` four-cc constants in [`super::consts`]; pass `None` to let
     /// `AudioFileServices` auto-detect. The total length is fully present, so
     /// the size is frozen ([`SizeMode::Snapshot`]) and the packet count /
     /// max packet size are resolved eagerly — for VBR formats with no on-disk

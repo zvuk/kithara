@@ -213,11 +213,13 @@ mod tests {
 
     use super::*;
 
-    const SAMPLE_RATE: u32 = 48_000;
+    mod consts {
+        pub(super) const SAMPLE_RATE: u32 = 48_000;
+    }
 
     fn render(wave: Wave, frames: usize) -> Vec<i16> {
         (0..frames)
-            .map(|frame| wave.sample(frame, SAMPLE_RATE))
+            .map(|frame| wave.sample(frame, consts::SAMPLE_RATE))
             .collect()
     }
 
@@ -239,7 +241,7 @@ mod tests {
     }
 
     fn frequency(samples: &[i16]) -> f64 {
-        let seconds = samples.len() as f64 / f64::from(SAMPLE_RATE);
+        let seconds = samples.len() as f64 / f64::from(consts::SAMPLE_RATE);
         zero_crossings(samples) as f64 / (2.0 * seconds)
     }
 
@@ -257,17 +259,23 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_saw_climbs_the_whole_16_bit_range() {
-        assert_eq!(Wave::Sawtooth.sample(0, SAMPLE_RATE), i16::MIN);
-        assert_eq!(Wave::Sawtooth.sample(1, SAMPLE_RATE), i16::MIN + 1);
-        assert_eq!(Wave::Sawtooth.sample(SAW_PERIOD - 1, SAMPLE_RATE), i16::MAX);
-        assert_eq!(Wave::Sawtooth.sample(SAW_PERIOD, SAMPLE_RATE), i16::MIN);
+        assert_eq!(Wave::Sawtooth.sample(0, consts::SAMPLE_RATE), i16::MIN);
+        assert_eq!(Wave::Sawtooth.sample(1, consts::SAMPLE_RATE), i16::MIN + 1);
+        assert_eq!(
+            Wave::Sawtooth.sample(SAW_PERIOD - 1, consts::SAMPLE_RATE),
+            i16::MAX
+        );
+        assert_eq!(
+            Wave::Sawtooth.sample(SAW_PERIOD, consts::SAMPLE_RATE),
+            i16::MIN
+        );
     }
 
     #[kithara::test(native, flash(false))]
     fn a_descending_saw_mirrors_the_ascending_one() {
         for frame in [0, 1, 12_345, SAW_PERIOD - 1] {
-            let up = i32::from(Wave::Sawtooth.sample(frame, SAMPLE_RATE));
-            let down = i32::from(Wave::SawtoothDescending.sample(frame, SAMPLE_RATE));
+            let up = i32::from(Wave::Sawtooth.sample(frame, consts::SAMPLE_RATE));
+            let down = i32::from(Wave::SawtoothDescending.sample(frame, consts::SAMPLE_RATE));
 
             assert_eq!(up + down, -1, "frame {frame}");
         }
@@ -277,8 +285,8 @@ mod tests {
     fn a_shifted_saw_leads_by_half_a_period() {
         for frame in [0, 1, 12_345] {
             assert_eq!(
-                Wave::SawtoothShifted.sample(frame, SAMPLE_RATE),
-                Wave::Sawtooth.sample(frame + SAW_PERIOD / 2, SAMPLE_RATE),
+                Wave::SawtoothShifted.sample(frame, consts::SAMPLE_RATE),
+                Wave::Sawtooth.sample(frame + SAW_PERIOD / 2, consts::SAMPLE_RATE),
                 "frame {frame}"
             );
         }
@@ -286,26 +294,26 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_sine_starts_at_zero_and_reaches_its_peak() {
-        let sine = Wave::sine(f64::from(SAMPLE_RATE) / 4.0);
+        let sine = Wave::sine(f64::from(consts::SAMPLE_RATE) / 4.0);
 
-        assert_eq!(sine.sample(0, SAMPLE_RATE), 0);
-        assert_eq!(sine.sample(1, SAMPLE_RATE), i16::MAX);
+        assert_eq!(sine.sample(0, consts::SAMPLE_RATE), 0);
+        assert_eq!(sine.sample(1, consts::SAMPLE_RATE), i16::MAX);
     }
 
     #[kithara::test(native, flash(false))]
     fn a_sine_honours_its_peak() {
         let quiet = Wave::Sine {
-            hz: f64::from(SAMPLE_RATE) / 4.0,
+            hz: f64::from(consts::SAMPLE_RATE) / 4.0,
             peak: 1_000,
         };
 
-        assert_eq!(quiet.sample(1, SAMPLE_RATE), 1_000);
+        assert_eq!(quiet.sample(1, consts::SAMPLE_RATE), 1_000);
     }
 
     #[kithara::test(native, flash(false))]
     fn clicks_fade_out_and_leave_the_rest_of_the_period_silent() {
-        let period = SAMPLE_RATE as usize / 2;
-        let burst = SAMPLE_RATE as usize / 100;
+        let period = consts::SAMPLE_RATE as usize / 2;
+        let burst = consts::SAMPLE_RATE as usize / 100;
         let clicks = Wave::clicks(1_000.0, period, burst);
         let samples = render(clicks, period * 2);
 
@@ -327,16 +335,16 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_sweep_starts_at_zero_and_ends_after_its_span() {
-        let frames = SAMPLE_RATE as usize;
+        let frames = consts::SAMPLE_RATE as usize;
         let sweep = Wave::sweep(100.0, 8_000.0, frames, SweepMode::Linear);
 
-        assert_eq!(sweep.sample(0, SAMPLE_RATE), 0);
-        assert_eq!(sweep.sample(frames, SAMPLE_RATE), 0);
+        assert_eq!(sweep.sample(0, consts::SAMPLE_RATE), 0);
+        assert_eq!(sweep.sample(frames, consts::SAMPLE_RATE), 0);
     }
 
     #[kithara::test(native, flash(false))]
     fn a_sweep_gets_denser_over_time() {
-        let frames = (SAMPLE_RATE * 2) as usize;
+        let frames = (consts::SAMPLE_RATE * 2) as usize;
         let samples = render(
             Wave::sweep(100.0, 6_400.0, frames, SweepMode::Linear),
             frames,
@@ -352,7 +360,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_sweep_reaches_its_target_frequency() {
-        let frames = SAMPLE_RATE as usize;
+        let frames = consts::SAMPLE_RATE as usize;
         let samples = render(
             Wave::sweep(100.0, 4_000.0, frames, SweepMode::Linear),
             frames,
@@ -364,7 +372,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_log_sweep_passes_the_geometric_mean_at_its_midpoint() {
-        let frames = (SAMPLE_RATE * 2) as usize;
+        let frames = (consts::SAMPLE_RATE * 2) as usize;
         let samples = render(Wave::sweep(100.0, 1_000.0, frames, SweepMode::Log), frames);
         let midpoint = frames / 2;
         let estimate = frequency(window(&samples, midpoint - 2_048..midpoint + 2_048));

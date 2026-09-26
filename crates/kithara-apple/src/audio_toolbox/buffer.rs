@@ -11,8 +11,12 @@ use super::{
     sys::{AudioBuffer, AudioBufferList, BYTES_PER_F32_SAMPLE, UInt32},
 };
 
-const AUDIO_BUFFER_LIST_HEADER_BYTES: usize =
-    size_of::<AudioBufferList>() - size_of::<AudioBuffer>();
+mod consts {
+    use super::*;
+
+    pub(super) const AUDIO_BUFFER_LIST_HEADER_BYTES: usize =
+        size_of::<AudioBufferList>() - size_of::<AudioBuffer>();
+}
 
 pub trait AudioBufferListTarget {
     fn as_audio_buffer_list_mut_ptr(&mut self) -> *mut AudioBufferList;
@@ -264,7 +268,7 @@ const unsafe fn buffer_ptr(list: *mut AudioBufferList, channel: usize) -> *mut A
     // SAFETY: caller guarantees enough AudioBufferList tail storage for channel.
     unsafe {
         list.cast::<u8>()
-            .add(AUDIO_BUFFER_LIST_HEADER_BYTES)
+            .add(consts::AUDIO_BUFFER_LIST_HEADER_BYTES)
             .cast::<AudioBuffer>()
             .add(channel)
     }
@@ -274,7 +278,7 @@ fn buffer_list_layout(capacity: usize) -> Result<Layout, AudioToolboxError> {
     let buffer_bytes = size_of::<AudioBuffer>()
         .checked_mul(capacity)
         .ok_or_else(|| AudioToolboxError::config("audio buffer list size overflow"))?;
-    let total_bytes = AUDIO_BUFFER_LIST_HEADER_BYTES
+    let total_bytes = consts::AUDIO_BUFFER_LIST_HEADER_BYTES
         .checked_add(buffer_bytes)
         .ok_or_else(|| AudioToolboxError::config("audio buffer list size overflow"))?;
     Layout::from_size_align(total_bytes, align_of::<AudioBufferList>())

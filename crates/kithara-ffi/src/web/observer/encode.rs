@@ -1,7 +1,7 @@
 use js_sys::Object;
 use wasm_bindgen::JsValue;
 
-use super::marshal::{KIND, set_bool, set_f64, set_opt_f64, set_opt_id, set_str};
+use super::marshal::{consts::KIND, set_bool, set_f64, set_opt_f64, set_opt_id, set_str};
 use crate::types::{
     FfiActionAtItemEnd, FfiAdvanceReason, FfiCrossfadeCurve, FfiEvictReason, FfiPlaybackOrder,
     FfiPlayerEvent, FfiPlayerStatus, FfiRepeatMode, FfiRouteChangeReason, FfiStretchBackendKind,

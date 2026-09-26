@@ -140,18 +140,14 @@ impl<'a> InterleavedView<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-
     use kithara_core_test_fixtures::{channel_signals, pcm_ramp, stereo_pair};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{PlanarBuffer, test_pools::pools_with_budget};
-
-    const RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("48 kHz is non-zero");
+    use crate::{PlanarBuffer, consts, test_pools::pools_with_budget};
 
     fn spec(channels: u16) -> AudioSpec {
-        AudioSpec::new(channels, RATE)
+        AudioSpec::new(channels, consts::INTERLEAVED_RATE)
     }
 
     #[kithara::test]

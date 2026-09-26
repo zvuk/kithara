@@ -10,7 +10,7 @@ use kithara_signal::{AudioSpec, FrameCount};
 use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, PrerollHint};
 use num_traits::ToPrimitive;
 
-use super::{audio_file::AppleAudioFile, consts::Consts, flac::StreamInfo};
+use super::{audio_file::AppleAudioFile, consts, flac::StreamInfo};
 use crate::{
     GaplessInfo,
     codec::CodecPriming,
@@ -109,17 +109,17 @@ impl AppleAudioFileDemuxer {
     /// match arm here.
     const fn file_type_id(codec: AudioCodec, container: ContainerFormat) -> Option<u32> {
         Some(match (codec, container) {
-            (AudioCodec::Pcm, ContainerFormat::Wav) => Consts::FILE_WAVE_TYPE,
-            (AudioCodec::Flac, ContainerFormat::Flac) => Consts::FILE_FLAC_TYPE,
-            (AudioCodec::Alac, ContainerFormat::Mp4) => Consts::FILE_M4A_TYPE,
-            (AudioCodec::Alac, ContainerFormat::Caf) => Consts::FILE_CAF_TYPE,
+            (AudioCodec::Pcm, ContainerFormat::Wav) => consts::FILE_WAVE_TYPE,
+            (AudioCodec::Flac, ContainerFormat::Flac) => consts::FILE_FLAC_TYPE,
+            (AudioCodec::Alac, ContainerFormat::Mp4) => consts::FILE_M4A_TYPE,
+            (AudioCodec::Alac, ContainerFormat::Caf) => consts::FILE_CAF_TYPE,
             (AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2, ContainerFormat::Mp4) => {
-                Consts::FILE_M4A_TYPE
+                consts::FILE_M4A_TYPE
             }
             (
                 AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
                 ContainerFormat::Adts,
-            ) => Consts::FILE_AAC_ADTS_TYPE,
+            ) => consts::FILE_AAC_ADTS_TYPE,
             _ => return None,
         })
     }

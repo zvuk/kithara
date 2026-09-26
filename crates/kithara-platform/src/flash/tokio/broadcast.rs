@@ -331,15 +331,9 @@ mod tests {
 
     use super::{RecvError, TryRecvError, channel};
     use crate::{
-        flash,
+        consts, flash,
         tokio::task::{spawn, yield_now},
     };
-
-    struct Consts;
-    impl Consts {
-        const MSGS: usize = 100;
-        const SUBS: usize = 4;
-    }
 
     /// One sender fans out to several subscribers across worker threads; each
     /// must receive every message. Subscribers park on the engine waiter between
@@ -350,15 +344,15 @@ mod tests {
     async fn fan_out_no_lost_wakeup() {
         flash::reset();
         // Capacity > MSGS so no subscriber lags within the run.
-        let (tx, _rx0) = channel::<usize>(Consts::MSGS + 1);
-        let handles: Vec<_> = (0..Consts::SUBS)
+        let (tx, _rx0) = channel::<usize>(consts::MSGS + 1);
+        let handles: Vec<_> = (0..consts::SUBS)
             .map(|_| {
                 let mut rx = tx.subscribe();
                 spawn(async move {
                     let mut got = Vec::new();
                     while let Ok(value) = rx.recv().await {
                         got.push(value);
-                        if got.len() == Consts::MSGS {
+                        if got.len() == consts::MSGS {
                             break;
                         }
                     }
@@ -366,13 +360,13 @@ mod tests {
                 })
             })
             .collect();
-        for i in 0..Consts::MSGS {
+        for i in 0..consts::MSGS {
             tx.send(i).expect("subscribers present");
         }
         for handle in handles {
             assert_eq!(
                 handle.await.expect("task joined"),
-                (0..Consts::MSGS).collect::<Vec<_>>()
+                (0..consts::MSGS).collect::<Vec<_>>()
             );
         }
     }

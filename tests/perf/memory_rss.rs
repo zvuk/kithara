@@ -24,27 +24,28 @@ use memory_stats::memory_stats;
 use tracing::info;
 use url::Url;
 
-struct Consts;
-impl Consts {
-    const MB: usize = 1024 * 1024;
-    const BUDGET_RUNS: usize = 3;
-    const READ_FRAMES: usize = 4096;
+mod consts {
+    use super::Duration;
+
+    pub(super) const MB: usize = 1024 * 1024;
+    pub(super) const BUDGET_RUNS: usize = 3;
+    pub(super) const READ_FRAMES: usize = 4096;
     /// Upper bound on one drain. Nothing paces the reader, so a healthy drain
     /// ends far below this; it is here so a stalled stream fails the test
     /// instead of hanging it.
-    const DRAIN_LIMIT: Duration = Duration::from_secs(20);
+    pub(super) const DRAIN_LIMIT: Duration = Duration::from_secs(20);
     /// Share of a drain that counts as warmup. Measured 2026-08-31: RSS climbs
     /// from 43.7 MB to 47.0 MB and then stays flat, so a quarter of the drain
     /// clears the ramp as long as the ladder below is long enough.
-    const WARMUP_SHARE: usize = 4;
+    pub(super) const WARMUP_SHARE: usize = 4;
     /// Reads it took RSS to reach its plateau, measured 2026-08-31: 257, or
     /// about 12 s of audio. The ramp is a fixed startup cost - pools, decoder,
     /// first prefetch - and does not grow with the stream, so the warmup share
     /// has to clear it or warmup gets read off the ramp and every drain looks
     /// like a leak.
-    const SETTLE_READS: usize = 257;
-    const RSS_BUDGET_MB: usize = 30;
-    const LEAK_TOLERANCE_MB: usize = 5;
+    pub(super) const SETTLE_READS: usize = 257;
+    pub(super) const RSS_BUDGET_MB: usize = 30;
+    pub(super) const LEAK_TOLERANCE_MB: usize = 5;
 }
 
 #[cfg(target_os = "linux")]
@@ -103,12 +104,12 @@ impl Drain {
             ),
         }
         assert!(
-            self.samples.len() / Consts::WARMUP_SHARE > Consts::SETTLE_READS,
+            self.samples.len() / consts::WARMUP_SHARE > consts::SETTLE_READS,
             "drain produced {} reads, so its warmup share is {} and RSS needs {} \
              to settle - warmup would be read off the ramp",
             self.samples.len(),
-            self.samples.len() / Consts::WARMUP_SHARE,
-            Consts::SETTLE_READS,
+            self.samples.len() / consts::WARMUP_SHARE,
+            consts::SETTLE_READS,
         );
         &self.samples
     }
@@ -131,12 +132,12 @@ fn ladder_url(server: &TestServerHelper) -> Url {
 /// a few seconds. That is why the samples are indexed by read below and not by
 /// elapsed time.
 fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
-    let mut buf = vec![0f32; Consts::READ_FRAMES];
+    let mut buf = vec![0f32; consts::READ_FRAMES];
     let mut samples = Vec::new();
     let start = Instant::now();
 
     let end = loop {
-        if start.elapsed() >= Consts::DRAIN_LIMIT {
+        if start.elapsed() >= consts::DRAIN_LIMIT {
             break DrainEnd::Deadline;
         }
         match audio.read(&mut buf) {
@@ -169,10 +170,10 @@ async fn test_hls_playback_rss_within_budget(
     #[future(awt)] rss_source: (TestServerHelper, Url),
 ) {
     let _guard = HotpathGuardBuilder::new("rss_budget").build();
-    let mut run_deltas = Vec::with_capacity(Consts::BUDGET_RUNS);
+    let mut run_deltas = Vec::with_capacity(consts::BUDGET_RUNS);
     let (_server, url) = rss_source;
 
-    for run in 0..Consts::BUDGET_RUNS {
+    for run in 0..consts::BUDGET_RUNS {
         let baseline_rss = physical_memory().expect("RSS measurement unsupported");
 
         let pools = pools();
@@ -205,9 +206,9 @@ async fn test_hls_playback_rss_within_budget(
 
         info!(
             "Run {run}: baseline={:.1}MB peak={:.1}MB delta={:.1}MB reads={} elapsed={:?}",
-            baseline_rss as f64 / Consts::MB as f64,
-            peak_rss as f64 / Consts::MB as f64,
-            delta as f64 / Consts::MB as f64,
+            baseline_rss as f64 / consts::MB as f64,
+            peak_rss as f64 / consts::MB as f64,
+            delta as f64 / consts::MB as f64,
             samples.len(),
             drain.elapsed,
         );
@@ -219,17 +220,17 @@ async fn test_hls_playback_rss_within_budget(
 
     info!(
         "RSS deltas: min={:.1}MB mean={:.1}MB max={:.1}MB budget={}MB",
-        min_delta as f64 / Consts::MB as f64,
-        mean_delta as f64 / Consts::MB as f64,
-        max_delta as f64 / Consts::MB as f64,
-        Consts::RSS_BUDGET_MB
+        min_delta as f64 / consts::MB as f64,
+        mean_delta as f64 / consts::MB as f64,
+        max_delta as f64 / consts::MB as f64,
+        consts::RSS_BUDGET_MB
     );
 
     assert!(
-        max_delta < Consts::RSS_BUDGET_MB * Consts::MB,
+        max_delta < consts::RSS_BUDGET_MB * consts::MB,
         "RSS exceeded budget: max delta {:.1}MB > {}MB",
-        max_delta as f64 / Consts::MB as f64,
-        Consts::RSS_BUDGET_MB
+        max_delta as f64 / consts::MB as f64,
+        consts::RSS_BUDGET_MB
     );
 }
 
@@ -268,7 +269,7 @@ async fn test_hls_playback_no_rss_leak(
         .expect("spawn_blocking");
 
     let samples = drain.complete_samples();
-    let warmup_reads = samples.len() / Consts::WARMUP_SHARE;
+    let warmup_reads = samples.len() / consts::WARMUP_SHARE;
     let warmup_rss = samples[..warmup_reads]
         .iter()
         .copied()
@@ -280,20 +281,20 @@ async fn test_hls_playback_no_rss_leak(
     info!(
         "Leak test: warmup={:.1}MB final={:.1}MB growth={:.1}MB tolerance={}MB \
          reads={} warmup_reads={warmup_reads}",
-        warmup_rss as f64 / Consts::MB as f64,
-        final_rss as f64 / Consts::MB as f64,
-        growth as f64 / Consts::MB as f64,
-        Consts::LEAK_TOLERANCE_MB,
+        warmup_rss as f64 / consts::MB as f64,
+        final_rss as f64 / consts::MB as f64,
+        growth as f64 / consts::MB as f64,
+        consts::LEAK_TOLERANCE_MB,
         samples.len(),
     );
 
     assert!(
-        growth < Consts::LEAK_TOLERANCE_MB * Consts::MB,
+        growth < consts::LEAK_TOLERANCE_MB * consts::MB,
         "RSS grew after warmup: {:.1}MB > {}MB (warmup={:.1}MB final={:.1}MB)",
-        growth as f64 / Consts::MB as f64,
-        Consts::LEAK_TOLERANCE_MB,
-        warmup_rss as f64 / Consts::MB as f64,
-        final_rss as f64 / Consts::MB as f64,
+        growth as f64 / consts::MB as f64,
+        consts::LEAK_TOLERANCE_MB,
+        warmup_rss as f64 / consts::MB as f64,
+        final_rss as f64 / consts::MB as f64,
     );
 }
 

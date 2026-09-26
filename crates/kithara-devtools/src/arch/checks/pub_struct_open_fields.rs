@@ -10,13 +10,15 @@ use crate::common::{
     walker::{relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "pub_struct_open_fields";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "pub_struct_open_fields";
+}
 
 pub(crate) struct PubStructOpenFields;
 
 impl Check for PubStructOpenFields {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -43,7 +45,7 @@ impl Check for PubStructOpenFields {
                          a typed value",
                         cfg.warn
                     );
-                    violations.push(Violation::warn(ID, key, msg));
+                    violations.push(Violation::warn(consts::ID, key, msg));
                 }
             }
         }

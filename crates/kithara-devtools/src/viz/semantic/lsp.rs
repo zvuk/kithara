@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use url::Url;
 
-const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+mod consts {
+    pub(super) const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+}
 
 #[derive(Debug, derive_more::Display, derive_more::From)]
 pub(super) enum ClientError {
@@ -458,7 +460,7 @@ fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<Value>> {
     let content_length = content_length.ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, "missing Content-Length")
     })?;
-    if content_length > MAX_MESSAGE_BYTES {
+    if content_length > consts::MAX_MESSAGE_BYTES {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "LSP message exceeds size budget",
@@ -498,7 +500,7 @@ mod tests {
         let malformed = b"Content-Length: 4\r\n\r\nnope";
         assert!(read_message(&mut Cursor::new(malformed)).is_err());
 
-        let oversized = format!("Content-Length: {}\r\n\r\n", MAX_MESSAGE_BYTES + 1);
+        let oversized = format!("Content-Length: {}\r\n\r\n", consts::MAX_MESSAGE_BYTES + 1);
         assert!(read_message(&mut Cursor::new(oversized)).is_err());
     }
 

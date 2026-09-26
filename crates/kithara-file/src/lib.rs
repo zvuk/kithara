@@ -14,3 +14,4 @@ use humantime_serde as _;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 pub use stream::File;
+mod consts;

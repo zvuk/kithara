@@ -19,7 +19,7 @@ use super::{
     compile::{AppUi, compile_ui},
     events::route,
     package::Package,
-    scope::MICRO_DECK,
+    scope::consts::MICRO_DECK,
 };
 
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];

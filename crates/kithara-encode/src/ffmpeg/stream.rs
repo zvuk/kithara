@@ -24,7 +24,11 @@ use crate::{
     types::EncodedAccessUnit,
 };
 
-const INPUT_FORMAT: Sample = Sample::F32(SampleType::Packed);
+mod consts {
+    use super::*;
+
+    pub(super) const INPUT_FORMAT: Sample = Sample::F32(SampleType::Packed);
+}
 
 pub(crate) struct FfmpegStream {
     encoder: AudioEncoder,
@@ -74,7 +78,7 @@ impl FfmpegStream {
         encoder.set_time_base((1, rate));
 
         let encoder = encoder.open_as_with(output_codec, Dictionary::new())?;
-        let filter = build_direct_filter(&encoder, sample_rate, channels, INPUT_FORMAT)?;
+        let filter = build_direct_filter(&encoder, sample_rate, channels, consts::INPUT_FORMAT)?;
 
         Ok(Self {
             encoder,
@@ -129,7 +133,7 @@ impl AacStream for FfmpegStream {
         })?;
 
         let mut frame = AudioFrame::new(
-            INPUT_FORMAT,
+            consts::INPUT_FORMAT,
             frames,
             ChannelLayout::default(i32::from(self.channels)),
         );

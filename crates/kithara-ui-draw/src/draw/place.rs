@@ -310,16 +310,20 @@ mod tests {
     use super::{Transform, bounds, ink, rect_verbs, turned, turned_ink};
     use crate::draw::{DrawListBuilder, Image, ImageId, Pt, Rect, Rgba, Verb};
 
-    const BOX: Rect = Rect {
-        h: 20.0,
-        w: 40.0,
-        x: 10.0,
-        y: 5.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOX: Rect = Rect {
+            h: 20.0,
+            w: 40.0,
+            x: 10.0,
+            y: 5.0,
+        };
+    }
 
     #[kithara::test]
     fn a_translation_moves_a_rectangle_and_keeps_its_extent() {
-        let moved = bounds(BOX, Transform::translate(Pt { x: 3.0, y: -2.0 }));
+        let moved = bounds(consts::BOX, Transform::translate(Pt { x: 3.0, y: -2.0 }));
 
         assert_eq!(
             moved,
@@ -336,21 +340,21 @@ mod tests {
     /// negative extent to hand a backend.
     #[kithara::test]
     fn a_mirrored_rectangle_is_normalised() {
-        let mirrored = bounds(BOX, Transform::scale(Pt { x: -1.0, y: 1.0 }));
+        let mirrored = bounds(consts::BOX, Transform::scale(Pt { x: -1.0, y: 1.0 }));
 
         assert_eq!(mirrored.x, -50.0);
     }
 
     #[kithara::test]
     fn a_mirrored_rectangle_keeps_its_width() {
-        let mirrored = bounds(BOX, Transform::scale(Pt { x: -1.0, y: 1.0 }));
+        let mirrored = bounds(consts::BOX, Transform::scale(Pt { x: -1.0, y: 1.0 }));
 
         assert_eq!(mirrored.w, 40.0);
     }
 
     #[kithara::test]
     fn a_rectangle_walked_as_an_outline_closes() {
-        let verbs = rect_verbs(BOX, Transform::IDENTITY);
+        let verbs = rect_verbs(consts::BOX, Transform::IDENTITY);
 
         assert_eq!(verbs.last(), Some(&Verb::Close));
     }
@@ -361,7 +365,7 @@ mod tests {
     /// the rotation puts it, not how the library rounds.
     #[kithara::test]
     fn a_quarter_turn_puts_the_first_corner_where_the_rotation_sends_it() {
-        let verbs = rect_verbs(BOX, Transform::rotate(core::f32::consts::FRAC_PI_2));
+        let verbs = rect_verbs(consts::BOX, Transform::rotate(core::f32::consts::FRAC_PI_2));
         let Some(&Verb::MoveTo(corner)) = verbs.first() else {
             panic!("a rectangle starts by moving to its near corner");
         };
@@ -383,9 +387,9 @@ mod tests {
     #[kithara::test]
     fn a_filled_rectangle_inks_itself() {
         let mut list = DrawListBuilder::default();
-        list.fill_rect(BOX, paint());
+        list.fill_rect(consts::BOX, paint());
 
-        assert_eq!(ink(&list.finish()), Some(BOX));
+        assert_eq!(ink(&list.finish()), Some(consts::BOX));
     }
 
     /// Half a pen sits either side of the line it draws, so a stroked shape
@@ -393,12 +397,12 @@ mod tests {
     #[kithara::test]
     fn a_stroke_inks_half_its_pen_past_the_shape() {
         let mut list = DrawListBuilder::default();
-        list.stroke_rounded_rect(BOX, 0.0, paint(), 4.0);
+        list.stroke_rounded_rect(consts::BOX, 0.0, paint(), 4.0);
 
         let Some(inked) = ink(&list.finish()) else {
             panic!("a stroked rectangle inks something");
         };
-        assert_eq!(inked.x, BOX.x - 2.0);
+        assert_eq!(inked.x, consts::BOX.x - 2.0);
     }
 
     /// The one case the caller needs: a pose carried the drawing out of the box
@@ -408,19 +412,19 @@ mod tests {
     fn a_transformed_list_inks_where_the_transform_put_it() {
         let mut list = DrawListBuilder::default();
         list.transformed(Transform::translate(Pt { x: 100.0, y: 0.0 }), |list| {
-            list.fill_rect(BOX, paint());
+            list.fill_rect(consts::BOX, paint());
         });
 
         let Some(inked) = ink(&list.finish()) else {
             panic!("a moved rectangle inks something");
         };
-        assert_eq!(inked.x, BOX.x + 100.0);
+        assert_eq!(inked.x, consts::BOX.x + 100.0);
     }
 
     #[kithara::test]
     fn a_list_of_two_shapes_inks_both() {
         let mut list = DrawListBuilder::default();
-        list.fill_rect(BOX, paint());
+        list.fill_rect(consts::BOX, paint());
         list.fill_circle(Pt { x: 0.0, y: 0.0 }, 5.0, paint());
 
         let Some(inked) = ink(&list.finish()) else {
@@ -431,57 +435,63 @@ mod tests {
 
     #[kithara::test]
     fn a_turned_picture_keeps_the_size_it_was_given() {
-        let (box_of, _) = turned(BOX, Transform::rotate(std::f32::consts::FRAC_PI_4));
+        let (box_of, _) = turned(consts::BOX, Transform::rotate(std::f32::consts::FRAC_PI_4));
 
-        assert!((box_of.w - BOX.w).abs() < 1e-4);
+        assert!((box_of.w - consts::BOX.w).abs() < 1e-4);
     }
 
     #[kithara::test]
     fn a_turned_picture_reports_the_angle_it_was_turned_by() {
-        let (_, turn) = turned(BOX, Transform::rotate(std::f32::consts::FRAC_PI_4));
+        let (_, turn) = turned(consts::BOX, Transform::rotate(std::f32::consts::FRAC_PI_4));
 
         assert!((turn - std::f32::consts::FRAC_PI_4).abs() < 1e-4);
     }
 
     #[kithara::test]
     fn a_scaled_picture_reports_the_size_the_scale_gave_it() {
-        let (box_of, _) = turned(BOX, Transform::scale(Pt { x: 2.0, y: 3.0 }));
+        let (box_of, _) = turned(consts::BOX, Transform::scale(Pt { x: 2.0, y: 3.0 }));
 
-        assert_eq!([box_of.w, box_of.h], [BOX.w * 2.0, BOX.h * 3.0]);
+        assert_eq!(
+            [box_of.w, box_of.h],
+            [consts::BOX.w * 2.0, consts::BOX.h * 3.0]
+        );
     }
 
     #[kithara::test]
     fn a_moved_picture_lands_where_the_move_put_its_centre() {
-        let (box_of, _) = turned(BOX, Transform::translate(Pt { x: 7.0, y: -3.0 }));
+        let (box_of, _) = turned(consts::BOX, Transform::translate(Pt { x: 7.0, y: -3.0 }));
 
-        assert_eq!([box_of.x, box_of.y], [BOX.x + 7.0, BOX.y - 3.0]);
+        assert_eq!(
+            [box_of.x, box_of.y],
+            [consts::BOX.x + 7.0, consts::BOX.y - 3.0]
+        );
     }
 
     /// A picture is drawn turned rather than flattened, so what it reaches is
     /// wider than the box it was given — which is what a host must not clip to.
     #[kithara::test]
     fn a_turned_picture_reaches_outside_its_own_box() {
-        let reached = turned_ink(BOX, std::f32::consts::FRAC_PI_4);
+        let reached = turned_ink(consts::BOX, std::f32::consts::FRAC_PI_4);
 
-        assert!(reached.w > BOX.w);
+        assert!(reached.w > consts::BOX.w);
     }
 
     #[kithara::test]
     fn an_upright_picture_reaches_exactly_its_own_box() {
-        assert_eq!(turned_ink(BOX, 0.0), BOX);
+        assert_eq!(turned_ink(consts::BOX, 0.0), consts::BOX);
     }
 
     #[kithara::test]
     fn a_picture_under_a_pose_inks_where_the_pose_carried_it() {
         let mut list = DrawListBuilder::default();
         list.transformed(Transform::translate(Pt { x: 100.0, y: 0.0 }), |list| {
-            list.image(picture(), BOX);
+            list.image(picture(), consts::BOX);
         });
 
         let Some(inked) = ink(&list.finish()) else {
             panic!("a picture inks something");
         };
-        assert_eq!(inked.x, BOX.x + 100.0);
+        assert_eq!(inked.x, consts::BOX.x + 100.0);
     }
 
     fn picture() -> Image {

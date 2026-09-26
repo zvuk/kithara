@@ -10,13 +10,15 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to},
 };
 
-pub(crate) const ID: &str = "parallel_loops";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "parallel_loops";
+}
 
 pub(crate) struct ParallelLoops;
 
 impl Check for ParallelLoops {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -84,7 +86,7 @@ fn scan_block(rel: &str, b: &Block, out: &mut Vec<Violation>) {
             lines.join(", "),
             loops.len(),
         );
-        out.push(Violation::warn(ID, key, msg));
+        out.push(Violation::warn(consts::ID, key, msg));
     }
 }
 

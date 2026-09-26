@@ -6,13 +6,15 @@ use regex::Regex;
 use super::{Check, Context};
 use crate::common::{violation::Violation, walker::walk_rs_files};
 
-pub(crate) const ID: &str = "duplicate_error_enums";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "duplicate_error_enums";
+}
 
 pub(crate) struct DuplicateErrorEnums;
 
 impl Check for DuplicateErrorEnums {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -41,7 +43,7 @@ impl Check for DuplicateErrorEnums {
         for (crate_name, count) in counts {
             if count > 1 {
                 violations.push(Violation::warn(
-                    ID,
+                    consts::ID,
                     crate_name.clone(),
                     format!("crate '{crate_name}' defines 'pub enum Error' {count} times"),
                 ));

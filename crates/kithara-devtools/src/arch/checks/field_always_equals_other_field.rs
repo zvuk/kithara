@@ -6,13 +6,15 @@ use super::{
 };
 use crate::common::{suppress::Suppressions, violation::Violation, walker::compile_globs};
 
-pub(crate) const ID: &str = "field_always_equals_other_field";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "field_always_equals_other_field";
+}
 
 pub(crate) struct FieldAlwaysEqualsOtherField;
 
 impl Check for FieldAlwaysEqualsOtherField {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -45,12 +47,12 @@ fn emit(idx: &WorkspaceStructIndex, min_call_sites: usize, out: &mut Vec<Violati
                     continue;
                 };
                 let sup = idx.suppressions.get(&info.rel).unwrap_or(&empty);
-                if sup.is_suppressed(info.line, ID) {
+                if sup.is_suppressed(info.line, consts::ID) {
                     continue;
                 }
                 let key = format!("{}:{}:{}::{a}=={b}", info.rel, info.line, name);
                 out.push(Violation::warn(
-                    ID,
+                    consts::ID,
                     key,
                     format!(
                         "fields `{name}.{a}` and `{name}.{b}` are initialised with the same \

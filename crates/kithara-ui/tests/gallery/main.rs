@@ -35,7 +35,7 @@ use self::{
     app::{Gallery, Message, update},
     capture::{Capture, Shot},
     demo::{DemoReads, reads::FONT_FAMILIES},
-    fixture::{Consts, resolver},
+    fixture::{consts, resolver},
     sections::Page,
 };
 
@@ -1865,16 +1865,16 @@ mod tests {
     #[kithara::test]
     fn the_gallery_opens_no_smaller_than_the_window_it_allows() {
         assert!(
-            Consts::WIDTH >= Consts::MIN_WIDTH,
+            consts::WIDTH >= consts::MIN_WIDTH,
             "the gallery opens at {} wide, below the {} it allows",
-            Consts::WIDTH,
-            Consts::MIN_WIDTH,
+            consts::WIDTH,
+            consts::MIN_WIDTH,
         );
         assert!(
-            Consts::HEIGHT >= Consts::MIN_HEIGHT,
+            consts::HEIGHT >= consts::MIN_HEIGHT,
             "the gallery opens at {} tall, below the {} it allows",
-            Consts::HEIGHT,
-            Consts::MIN_HEIGHT,
+            consts::HEIGHT,
+            consts::MIN_HEIGHT,
         );
     }
 }

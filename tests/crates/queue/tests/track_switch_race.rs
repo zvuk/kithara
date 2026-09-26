@@ -46,50 +46,51 @@ use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
 
-struct Consts;
-impl Consts {
+mod consts {
+    use super::Duration;
+
     /// Number of repetitions inside the concurrent-completion stress case.
     /// Pre-`select_apply`-lock this barged in; kept high for catch rate.
-    const STRESS_ITERATIONS: u32 = 30;
+    pub(super) const STRESS_ITERATIONS: u32 = 30;
     /// `fast` fixture: 1 segment × 2 s = 2 s. Short enough that it plays to
     /// its natural end inside the observation window, opening the
     /// auto-advance gate so the test exercises the "after fast plays out"
     /// branch.
-    const FAST_SEGMENT_COUNT: usize = 1;
-    const FAST_SEGMENT_DURATION_S: f64 = 2.0;
+    pub(super) const FAST_SEGMENT_COUNT: usize = 1;
+    pub(super) const FAST_SEGMENT_DURATION_S: f64 = 2.0;
     /// `slow` fixture: several segments so it cannot finish during the
     /// observation window once released.
-    const SLOW_SEGMENT_COUNT: usize = 4;
-    const SLOW_SEGMENT_DURATION_S: f64 = 4.0;
+    pub(super) const SLOW_SEGMENT_COUNT: usize = 4;
+    pub(super) const SLOW_SEGMENT_DURATION_S: f64 = 4.0;
     /// The single variant of each fixture; its init segment is what the gate
     /// withholds.
-    const VARIANT: usize = 0;
+    pub(super) const VARIANT: usize = 0;
     /// Loader settle deadline.
-    const LOAD_DEADLINE: Duration = Duration::from_secs(30);
+    pub(super) const LOAD_DEADLINE: Duration = Duration::from_secs(30);
     /// Deadline for an observable to reach an expected value (init GET
     /// arrival, status transition, current-id change). A real stall trips
     /// this rather than being masked.
-    const OBSERVE_DEADLINE: Duration = Duration::from_secs(10);
+    pub(super) const OBSERVE_DEADLINE: Duration = Duration::from_secs(10);
     /// Hard cap on the post-`fast` current-track event watch — the window in
     /// which an unauthorised flip to `slow` would surface as
     /// `CurrentTrackChanged { id: Some(slow_id) }`. Exceeds
     /// `FAST_SEGMENT_DURATION_S` so `fast`'s natural end (and the auto-advance
     /// that must skip the cancelled `slow`) fires inside it.
-    const POST_FAST_OBSERVE: Duration = Duration::from_secs(5);
+    pub(super) const POST_FAST_OBSERVE: Duration = Duration::from_secs(5);
     /// Polling interval for the init-gate counter observable
     /// (`wait_for_init_requested`).
-    const STATUS_POLL: Duration = Duration::from_millis(5);
+    pub(super) const STATUS_POLL: Duration = Duration::from_millis(5);
     /// Gap between `select(slow)` and `select(fast)` in the completion-race
     /// test: long enough for slow's loader completion to fire around the
     /// superseding select (the contended window), short relative to
     /// `RACE_OBSERVE`. A deliberate race-widening pacing delay with no
     /// state-wait equivalent — synchronising on a settled state would dissolve
     /// the contended window (see the test's own note).
-    const RACE_GAP: Duration = Duration::from_millis(50);
+    pub(super) const RACE_GAP: Duration = Duration::from_millis(50);
     /// Window after the selects during which the completion-race test watches
     /// for a barge-in (slow stomping current fast). Ample for the racing
     /// completion's `select_item` to land (~tens of ms when it does).
-    const RACE_OBSERVE: Duration = Duration::from_secs(1);
+    pub(super) const RACE_OBSERVE: Duration = Duration::from_secs(1);
 }
 
 /// Build a single-variant HLS fixture and return its [`CreatedHls`] handle so
@@ -258,7 +259,7 @@ async fn wait_for_init_requested(gate: &InitGateHandle, deadline: Duration) -> R
                 gate.requested()
             ));
         }
-        sleep(Consts::STATUS_POLL).await;
+        sleep(consts::STATUS_POLL).await;
     }
 }
 
@@ -267,7 +268,7 @@ async fn wait_for_init_requested(gate: &InitGateHandle, deadline: Duration) -> R
 /// skips the cancelled slow, queue ends) is [`QueueEvent::QueueEnded`] or
 /// [`QueueEvent::CurrentTrackChanged`] with `id: None`; the forbidden event is
 /// `CurrentTrackChanged { id: Some(slow_id) }`. Bounded by
-/// `Consts::POST_FAST_OBSERVE` as a hard cap — exhausting it without a
+/// `consts::POST_FAST_OBSERVE` as a hard cap — exhausting it without a
 /// barge-in is itself the absence-over-the-window success. Caller must have
 /// already confirmed `fast` is current, so the only future current-change is
 /// the end-of-`fast` auto-advance this races.
@@ -276,7 +277,7 @@ async fn assert_no_barge_in(
     slow_id: TrackId,
 ) -> Result<(), String> {
     let mut rx = queue.subscribe();
-    let terminal = next_queue_event(&mut rx, Consts::POST_FAST_OBSERVE, |ev| match ev {
+    let terminal = next_queue_event(&mut rx, consts::POST_FAST_OBSERVE, |ev| match ev {
         QueueEvent::QueueEnded | QueueEvent::CurrentTrackChanged { id: None } => true,
         QueueEvent::CurrentTrackChanged { id: Some(id) } => *id == slow_id,
         QueueEvent::TrackAdded { .. }
@@ -325,7 +326,7 @@ async fn supersede_while_loading_cancels_slow_track(
 ) {
     let (helper, fast, slow) = race_tracks;
     // Withhold slow's active-variant init body: holds its loader in `Loading`.
-    let slow_init = helper.register_init_gate(slow.token(), Consts::VARIANT);
+    let slow_init = helper.register_init_gate(slow.token(), consts::VARIANT);
     let fast_url = fast.master_url();
     let slow_url = slow.master_url();
 
@@ -349,14 +350,14 @@ async fn supersede_while_loading_cancels_slow_track(
         .expect("append slow track");
 
     // fast is undelayed and ungated → it reaches a terminal loaded state.
-    wait_for_loader_done(&queue, fast_id, Consts::LOAD_DEADLINE)
+    wait_for_loader_done(&queue, fast_id, consts::LOAD_DEADLINE)
         .await
         .unwrap_or_else(|e| panic!("fast load: {e}"));
 
     // EMPIRICAL PROOF the gate holds slow in a loading state: the init GET
     // reached the gate, and slow is NOT `Loaded` (it is parked, not merely
     // slow). Without this, the supersede path below would not be taken.
-    wait_for_init_requested(&slow_init, Consts::OBSERVE_DEADLINE)
+    wait_for_init_requested(&slow_init, consts::OBSERVE_DEADLINE)
         .await
         .unwrap_or_else(|e| panic!("slow init gate: {e}"));
     let slow_status = queue.track(slow_id).map(|e| e.status);
@@ -382,7 +383,7 @@ async fn supersede_while_loading_cancels_slow_track(
     // Deterministic: the supersede marked slow Cancelled synchronously.
     let cancelled = wait_for_queue_state(
         &queue,
-        Consts::OBSERVE_DEADLINE,
+        consts::OBSERVE_DEADLINE,
         |queue| queue.track(slow_id).map(|entry| entry.status) == Some(TrackStatus::Cancelled),
         |event| {
             matches!(
@@ -396,7 +397,7 @@ async fn supersede_while_loading_cancels_slow_track(
     assert!(
         cancelled,
         "supersede must cancel slow within {:?} (last={:?})",
-        Consts::OBSERVE_DEADLINE,
+        consts::OBSERVE_DEADLINE,
         queue.track(slow_id).map(|entry| entry.status),
     );
 
@@ -404,7 +405,7 @@ async fn supersede_while_loading_cancels_slow_track(
     // completion must observe the Cancelled status and skip `replace_item`, so
     // slow stays Cancelled (never Loaded → never plantable for handover).
     slow_init.release();
-    wait_for_loader_done(&queue, slow_id, Consts::LOAD_DEADLINE)
+    wait_for_loader_done(&queue, slow_id, consts::LOAD_DEADLINE)
         .await
         .unwrap_or_else(|e| panic!("slow load after release: {e}"));
     assert_eq!(
@@ -415,7 +416,7 @@ async fn supersede_while_loading_cancels_slow_track(
 
     let fast_current = wait_for_queue_state(
         &queue,
-        Consts::OBSERVE_DEADLINE,
+        consts::OBSERVE_DEADLINE,
         |queue| queue.current().map(|entry| entry.id) == Some(fast_id),
         |event| {
             matches!(
@@ -428,7 +429,7 @@ async fn supersede_while_loading_cancels_slow_track(
     assert!(
         fast_current,
         "fast never became current within {:?} (last={:?})",
-        Consts::OBSERVE_DEADLINE,
+        consts::OBSERVE_DEADLINE,
         queue.current().map(|entry| entry.id),
     );
 
@@ -451,8 +452,8 @@ async fn play_keeps_pending_select_of_loading_track(
     #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
 ) {
     let (helper, head, target) = race_tracks;
-    let head_init = helper.register_init_gate(head.token(), Consts::VARIANT);
-    let target_init = helper.register_init_gate(target.token(), Consts::VARIANT);
+    let head_init = helper.register_init_gate(head.token(), consts::VARIANT);
+    let target_init = helper.register_init_gate(target.token(), consts::VARIANT);
     let head_url = head.master_url();
     let target_url = target.master_url();
 
@@ -474,10 +475,10 @@ async fn play_keeps_pending_select_of_loading_track(
         })
         .await
         .expect("append target track");
-    wait_for_init_requested(&head_init, Consts::OBSERVE_DEADLINE)
+    wait_for_init_requested(&head_init, consts::OBSERVE_DEADLINE)
         .await
         .unwrap_or_else(|e| panic!("head init gate: {e}"));
-    wait_for_init_requested(&target_init, Consts::OBSERVE_DEADLINE)
+    wait_for_init_requested(&target_init, consts::OBSERVE_DEADLINE)
         .await
         .unwrap_or_else(|e| panic!("target init gate: {e}"));
 
@@ -497,7 +498,7 @@ async fn play_keeps_pending_select_of_loading_track(
     target_init.release();
     let target_current = wait_for_queue_state(
         &queue,
-        Consts::LOAD_DEADLINE,
+        consts::LOAD_DEADLINE,
         |queue| queue.current().map(|entry| entry.id) == Some(target_id),
         |event| {
             matches!(
@@ -568,7 +569,7 @@ async fn concurrent_completion_race_does_not_barge_in(
 
     let mut barge_ins: Vec<String> = Vec::new();
 
-    for iter in 0..Consts::STRESS_ITERATIONS {
+    for iter in 0..consts::STRESS_ITERATIONS {
         let temp = temp_dir();
         // No tick: auto-advance is disabled, so `slow` can only become current
         // via the loader-completion race we are probing.
@@ -598,7 +599,7 @@ async fn concurrent_completion_race_does_not_barge_in(
             .run(move |q| q.select(slow_id, Transition::None))
             .await
             .unwrap_or_else(|e| panic!("[iter {iter}] select slow: {e}"));
-        time::sleep(Consts::RACE_GAP).await;
+        time::sleep(consts::RACE_GAP).await;
         queue
             .run(move |q| q.select(fast_id, Transition::None))
             .await
@@ -615,7 +616,7 @@ async fn concurrent_completion_race_does_not_barge_in(
         let mut history: Vec<Option<TrackId>> = vec![queue.current().map(|e| e.id)];
         let mut saw_fast = history.last().copied().flatten() == Some(fast_id);
         loop {
-            let remaining = Consts::RACE_OBSERVE.saturating_sub(watch.elapsed());
+            let remaining = consts::RACE_OBSERVE.saturating_sub(watch.elapsed());
             if remaining.is_zero() {
                 break;
             }
@@ -650,7 +651,7 @@ async fn concurrent_completion_race_does_not_barge_in(
         "concurrent completion race: {n}/{iters} iteration(s) saw slow barge in over current fast:\n{}",
         barge_ins.join("\n"),
         n = barge_ins.len(),
-        iters = Consts::STRESS_ITERATIONS,
+        iters = consts::STRESS_ITERATIONS,
     );
 }
 
@@ -659,14 +660,14 @@ async fn race_tracks() -> (TestServerHelper, CreatedHls, CreatedHls) {
     let helper = TestServerHelper::new().await;
     let fast = build_hls(
         &helper,
-        Consts::FAST_SEGMENT_COUNT,
-        Consts::FAST_SEGMENT_DURATION_S,
+        consts::FAST_SEGMENT_COUNT,
+        consts::FAST_SEGMENT_DURATION_S,
     )
     .await;
     let slow = build_hls(
         &helper,
-        Consts::SLOW_SEGMENT_COUNT,
-        Consts::SLOW_SEGMENT_DURATION_S,
+        consts::SLOW_SEGMENT_COUNT,
+        consts::SLOW_SEGMENT_DURATION_S,
     )
     .await;
     (helper, fast, slow)

@@ -12,9 +12,10 @@ use super::{
     manifest::{InvocationManifest, Profile, Status, Tool, ToolManifest},
     native, workspace,
 };
-use crate::common::process::{ProcessError, ProcessRequest, run_process};
-
-const MANIFEST_SCHEMA_VERSION: u32 = 1;
+use crate::{
+    common::process::{ProcessError, ProcessRequest, run_process},
+    consts,
+};
 
 pub(super) struct ToolRunContext<'a> {
     pub(super) options: &'a AdapterOptions<'a>,
@@ -42,7 +43,7 @@ pub(super) fn run_tool(
                 &tool_dir,
                 ToolManifest {
                     tool,
-                    schema_version: MANIFEST_SCHEMA_VERSION,
+                    schema_version: consts::MANIFEST_SCHEMA_VERSION,
                     revision: context.revision.to_owned(),
                     profile: context.profile,
                     tool_version: tool_config.version.clone(),
@@ -76,7 +77,7 @@ pub(super) fn run_tool(
             ToolManifest {
                 tool,
                 invocations,
-                schema_version: MANIFEST_SCHEMA_VERSION,
+                schema_version: consts::MANIFEST_SCHEMA_VERSION,
                 revision: context.revision.to_owned(),
                 profile: context.profile,
                 tool_version: tool_config.version.clone(),
@@ -110,7 +111,7 @@ pub(super) fn run_tool(
                 status,
                 invocations,
                 note,
-                schema_version: MANIFEST_SCHEMA_VERSION,
+                schema_version: consts::MANIFEST_SCHEMA_VERSION,
                 revision: context.revision.to_owned(),
                 profile: context.profile,
                 tool_version: tool_config.version.clone(),
@@ -135,7 +136,7 @@ pub(super) fn run_tool(
             status,
             invocations,
             note,
-            schema_version: MANIFEST_SCHEMA_VERSION,
+            schema_version: consts::MANIFEST_SCHEMA_VERSION,
             revision: context.revision.to_owned(),
             profile: context.profile,
             tool_version: tool_config.version.clone(),
@@ -392,7 +393,7 @@ pub(super) fn error_manifest(
     ToolManifest {
         profile,
         tool,
-        schema_version: MANIFEST_SCHEMA_VERSION,
+        schema_version: consts::MANIFEST_SCHEMA_VERSION,
         revision: revision.to_owned(),
         tool_version: version.to_owned(),
         status: Status::ToolError,
@@ -421,24 +422,6 @@ mod tests {
     use super::*;
     use crate::quality_lab::adapter::{InvocationSpec, ReportKind};
 
-    /// Budget for the tests whose subject is not the budget.
-    ///
-    /// These prove how an invocation's exit status and output become a
-    /// [`Status`]. A reachable budget can only change that by killing the
-    /// child, which reports no exit code and lands in the tool-error arm — so
-    /// on a busy host the assertion would be answering a question about the
-    /// machine. The budget-exhausted arms are proven by their own doubles.
-    const NOT_UNDER_TEST: Duration = Duration::MAX;
-
-    /// The name of the double's binary target.
-    const DOUBLE: &str = "kithara-devtools-fake-tool";
-
-    /// The version the double answers `--version` with.
-    ///
-    /// It reaches the double through its behaviour file rather than being
-    /// compiled into it, so this test and the double cannot drift apart.
-    const DOUBLE_VERSION: &str = "1.2.3";
-
     #[test]
     fn version_matching_rejects_prefix_versions() {
         assert!(contains_exact_version("rustqual 1.8.1", "1.8.1"));
@@ -452,13 +435,13 @@ mod tests {
         let spec = fake_spec(&temp, r#"{"findings":1}"#, 1);
         let mut invocations = Vec::new();
         let started = Instant::now();
-        let budget = NOT_UNDER_TEST;
+        let budget = consts::NOT_UNDER_TEST;
 
         let (version_status, version_note) = check_version(
             &spec,
             temp.path(),
             temp.path(),
-            DOUBLE_VERSION,
+            consts::DOUBLE_VERSION,
             started,
             budget,
             &mut invocations,
@@ -490,7 +473,7 @@ mod tests {
             temp.path(),
             temp.path(),
             Instant::now(),
-            NOT_UNDER_TEST,
+            consts::NOT_UNDER_TEST,
             &mut invocations,
         );
 
@@ -506,7 +489,11 @@ mod tests {
     /// Windows refuses to start a file that has lost its `.exe`, so the copy
     /// each test makes is named the same way as the binary Cargo built.
     fn double_name() -> String {
-        format!("{DOUBLE}{}", env::consts::EXE_SUFFIX)
+        format!(
+            "{DOUBLE}{}",
+            env::consts::EXE_SUFFIX,
+            DOUBLE = consts::DOUBLE
+        )
     }
 
     /// Where Cargo put the double, which a unit test cannot ask it for.
@@ -524,7 +511,8 @@ mod tests {
         assert!(
             built.is_file(),
             "{} is not built; run `cargo build -p kithara-devtools --bin {DOUBLE}` first",
-            built.display()
+            built.display(),
+            DOUBLE = consts::DOUBLE
         );
         built
     }
@@ -534,7 +522,11 @@ mod tests {
         fs::copy(double(), &program).expect("copy the double");
         fs::write(
             program.with_extension("behaviour"),
-            format!("{DOUBLE} {DOUBLE_VERSION}\n{exit_code}\n{report}\n"),
+            format!(
+                "{DOUBLE} {DOUBLE_VERSION}\n{exit_code}\n{report}\n",
+                DOUBLE = consts::DOUBLE,
+                DOUBLE_VERSION = consts::DOUBLE_VERSION
+            ),
         )
         .expect("behaviour");
         ToolSpec {

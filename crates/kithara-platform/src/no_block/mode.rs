@@ -9,21 +9,21 @@ use std::{
     time::Duration,
 };
 
+mod consts {
+    use super::Duration;
+
+    pub(super) const ENV_BUDGET_MS: &str = "KITHARA_NO_BLOCK_BUDGET_MS";
+    pub(super) const ENV_LOG: &str = "KITHARA_NO_BLOCK_LOG";
+    pub(super) const ENV_MODE: &str = "KITHARA_NO_BLOCK";
+    /// Blanket budget panics on CPU spin only; wait class logs by construction, and `KITHARA_NO_BLOCK_BUDGET_MS` overrides.
+    pub(super) const DEFAULT_BLANKET_BUDGET: Duration = Duration::from_millis(3_000);
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
     Off,
     Census,
     Panic,
-}
-
-struct Consts;
-
-impl Consts {
-    const ENV_BUDGET_MS: &str = "KITHARA_NO_BLOCK_BUDGET_MS";
-    const ENV_LOG: &str = "KITHARA_NO_BLOCK_LOG";
-    const ENV_MODE: &str = "KITHARA_NO_BLOCK";
-    /// Blanket budget panics on CPU spin only; wait class logs by construction, and `KITHARA_NO_BLOCK_BUDGET_MS` overrides.
-    const FALLBACK_BLANKET: Duration = Duration::from_millis(3_000);
 }
 
 #[cfg(test)]
@@ -75,7 +75,7 @@ pub(super) fn mode() -> Mode {
     }
 
     static CACHED: OnceLock<Mode> = OnceLock::new();
-    *CACHED.get_or_init(|| match std::env::var(Consts::ENV_MODE).as_deref() {
+    *CACHED.get_or_init(|| match std::env::var(consts::ENV_MODE).as_deref() {
         Ok("off") => Mode::Off,
         Ok("census") => Mode::Census,
         _ => Mode::Panic,
@@ -96,11 +96,11 @@ pub(super) fn blanket_budget() -> Duration {
 
     static CACHED: OnceLock<Duration> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        std::env::var(Consts::ENV_BUDGET_MS)
+        std::env::var(consts::ENV_BUDGET_MS)
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|ms| *ms > 0)
-            .map_or(Consts::FALLBACK_BLANKET, Duration::from_millis)
+            .map_or(consts::DEFAULT_BLANKET_BUDGET, Duration::from_millis)
     })
 }
 
@@ -114,7 +114,7 @@ pub(super) fn log_path() -> Option<PathBuf> {
 
     static CACHED: OnceLock<Option<PathBuf>> = OnceLock::new();
     CACHED
-        .get_or_init(|| std::env::var_os(Consts::ENV_LOG).map(PathBuf::from))
+        .get_or_init(|| std::env::var_os(consts::ENV_LOG).map(PathBuf::from))
         .clone()
 }
 

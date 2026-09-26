@@ -8,24 +8,8 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand};
 
-use super::{
-    super::config::{CiPins, PINS_PATH},
-    provision, snapshot,
-    snapshot::SnapshotArgs,
-    verify,
-};
-use crate::ci::host::mac::read_secret;
-
-const CLIENT_KEYS: [&str; 8] = [
-    "SCCACHE_BUCKET",
-    "SCCACHE_S3_KEY_PREFIX",
-    "SCCACHE_ENDPOINT",
-    "SCCACHE_REGION",
-    "SCCACHE_S3_USE_SSL",
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_EC2_METADATA_DISABLED",
-];
+use super::{super::config::CiPins, provision, snapshot, snapshot::SnapshotArgs, verify};
+use crate::{ci::host::mac::read_secret, consts};
 
 /// Read the restricted environment a cache client may inherit.
 pub(crate) fn client_environment(path: &Path) -> Result<BTreeMap<String, String>> {
@@ -42,7 +26,7 @@ pub(crate) fn client_environment(path: &Path) -> Result<BTreeMap<String, String>
 /// Read the restricted cache credentials injected into a CI job.
 pub(crate) fn current_client_environment() -> Result<BTreeMap<String, String>> {
     let mut environment = BTreeMap::new();
-    for key in CLIENT_KEYS {
+    for key in consts::CLIENT_KEYS {
         let value = env::var(key).with_context(|| format!("{key} must be configured"))?;
         insert_client_environment(&mut environment, key, &value)?;
     }
@@ -55,7 +39,7 @@ fn insert_client_environment(
     value: &str,
 ) -> Result<()> {
     ensure!(
-        CLIENT_KEYS.contains(&key),
+        consts::CLIENT_KEYS.contains(&key),
         "unexpected cache environment key"
     );
     ensure!(!value.is_empty(), "empty cache environment value");
@@ -78,7 +62,7 @@ fn complete_client_environment(
     environment: BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>> {
     ensure!(
-        environment.len() == CLIENT_KEYS.len(),
+        environment.len() == consts::CLIENT_KEYS.len(),
         "incomplete cache environment"
     );
     Ok(environment)
@@ -114,7 +98,7 @@ pub(crate) fn run(args: &CacheArgs) -> Result<()> {
             env_file,
             arguments,
         } => {
-            let pins = CiPins::load(Path::new(PINS_PATH))?;
+            let pins = CiPins::load(Path::new(consts::PINS_PATH))?;
             let status = Command::new("docker")
                 .args(["compose", "--env-file"])
                 .arg(env_file)

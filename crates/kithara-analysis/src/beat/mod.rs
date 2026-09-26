@@ -18,4 +18,4 @@ pub(crate) use kithara_beat::BeatDetector;
 pub(crate) use kithara_beat::{BeatDetectorMock, BeatMark, RawBeats};
 pub(crate) use pass::BeatPass;
 #[cfg(feature = "beat-backend")]
-pub(crate) use runs::DETECTOR_AUDIO_TAG;
+pub(crate) use runs::consts::DETECTOR_AUDIO_TAG;

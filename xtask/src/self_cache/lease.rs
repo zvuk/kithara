@@ -9,7 +9,8 @@ use fs4::TryLockError;
 use kithara_devtools::lock::FileLock;
 use tracing::warn;
 
-use super::layout::{self, GENERATION_PREFIX, LEASE_FILE, REFRESH_LOCK};
+use super::layout;
+use crate::consts;
 
 #[derive(Debug)]
 pub(crate) struct GenerationLease {
@@ -26,7 +27,7 @@ struct LeaseCleanup {
 
 impl GenerationLease {
     fn open(generation: &Path) -> Result<File> {
-        let path = generation.join(LEASE_FILE);
+        let path = generation.join(consts::LEASE_FILE);
         OpenOptions::new()
             .read(true)
             .write(true)
@@ -139,7 +140,7 @@ fn open_refresh(root: &Path) -> Result<(File, PathBuf)> {
     let cache = layout::cache_dir(root)?;
     fs::create_dir_all(&cache)
         .with_context(|| format!("create self-cache directory {}", cache.display()))?;
-    let path = cache.join(REFRESH_LOCK);
+    let path = cache.join(consts::REFRESH_LOCK);
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -191,7 +192,7 @@ pub(super) fn cleanup(
         if protected.iter().any(|candidate| candidate == &path) {
             continue;
         }
-        let lease_path = path.join(LEASE_FILE);
+        let lease_path = path.join(consts::LEASE_FILE);
         let lease = match OpenOptions::new().read(true).write(true).open(&lease_path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -241,11 +242,11 @@ fn is_generation(entry: &fs::DirEntry) -> Result<bool> {
         && entry
             .file_name()
             .to_str()
-            .is_some_and(|name| name.starts_with(GENERATION_PREFIX)))
+            .is_some_and(|name| name.starts_with(consts::GENERATION_PREFIX)))
 }
 
 fn has_regular_lease(generation: &Path) -> Result<bool> {
-    let path = generation.join(LEASE_FILE);
+    let path = generation.join(consts::LEASE_FILE);
     match fs::symlink_metadata(&path) {
         Ok(metadata) => Ok(metadata.file_type().is_file()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -285,6 +286,7 @@ mod tests {
     use super::{GenerationLease, LeaseCleanup, cleanup};
     use crate::{
         config::XtaskCacheConfig,
+        consts,
         self_cache::{layout, manifest::CacheManifest, publish},
     };
 
@@ -421,7 +423,7 @@ mod tests {
         let path = generation.path;
         let file = GenerationLease::open(&path)?;
         let lease = GenerationLease::finish(&root, &path, file)?;
-        let refresh = layout::cache_dir(&root)?.join(layout::REFRESH_LOCK);
+        let refresh = layout::cache_dir(&root)?.join(consts::REFRESH_LOCK);
 
         drop(lease);
 
@@ -440,7 +442,7 @@ mod tests {
         let retained = cache.join("generation-z");
         for generation in [&leased, &retained] {
             fs::create_dir(generation)?;
-            fs::write(generation.join(layout::LEASE_FILE), b"")?;
+            fs::write(generation.join(consts::LEASE_FILE), b"")?;
         }
         set_age(&leased, Duration::from_secs(30))?;
         set_age(&retained, Duration::from_secs(10))?;
@@ -478,7 +480,7 @@ mod tests {
         let second = cache.join("generation-extra-b");
         for generation in [&first, &second] {
             fs::create_dir(generation)?;
-            fs::write(generation.join(layout::LEASE_FILE), b"")?;
+            fs::write(generation.join(consts::LEASE_FILE), b"")?;
         }
         set_age(&old, Duration::from_secs(30))?;
         set_age(&first, Duration::from_secs(20))?;
@@ -500,7 +502,7 @@ mod tests {
         let cache = layout::cache_dir(&root)?;
         let leased = cache.join("generation-inactive");
         fs::create_dir(&leased)?;
-        fs::write(leased.join(layout::LEASE_FILE), b"")?;
+        fs::write(leased.join(consts::LEASE_FILE), b"")?;
         let mut lease = GenerationLease::acquire(&leased)?;
         lease.cleanup = Some(LeaseCleanup::new(&root, leased.clone()));
         let _refresh = super::refresh(&root)?;

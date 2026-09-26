@@ -22,13 +22,14 @@ use url::Url;
 
 use crate::common::test_defaults::SawWav;
 
-struct Consts;
-impl Consts {
-    const D: SawWav = SawWav::DEFAULT;
-    const VARIANT_COUNT: usize = 2;
-    const SEGMENT_COUNT: usize = 50;
-    const SEEK_ITERATIONS: usize = 200;
-    const WARMUP_TIMEOUT_SECS: u64 = 30;
+mod consts {
+    use super::SawWav;
+
+    pub(super) const D: SawWav = SawWav::DEFAULT;
+    pub(super) const VARIANT_COUNT: usize = 2;
+    pub(super) const SEGMENT_COUNT: usize = 50;
+    pub(super) const SEEK_ITERATIONS: usize = 200;
+    pub(super) const WARMUP_TIMEOUT_SECS: u64 = 30;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -144,8 +145,8 @@ async fn wav_abr(
     hls_pcm_fifty: Vec<u8>,
     hls_pcm_fifty_descending: Vec<u8>,
 ) -> (Url, SizeProbeCounter) {
-    let segment_duration = Consts::D.segment_size as f64
-        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
+    let segment_duration = consts::D.segment_size as f64
+        / (f64::from(consts::D.sample_rate) * f64::from(consts::D.channels) * 2.0);
     let delay_rules = vec![DelayRule {
         variant: Some(0),
         segment_gte: Some(3),
@@ -160,14 +161,14 @@ async fn wav_abr(
         init_size = init_segment.len(),
         v0_size = v0_pcm.len(),
         v1_size = v1_pcm.len(),
-        segments = Consts::SEGMENT_COUNT,
+        segments = consts::SEGMENT_COUNT,
         "Generated WAV data for two variants"
     );
 
     let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: Consts::VARIANT_COUNT,
-        segments_per_variant: Consts::SEGMENT_COUNT,
-        segment_size: Consts::D.segment_size,
+        variant_count: consts::VARIANT_COUNT,
+        segments_per_variant: consts::SEGMENT_COUNT,
+        segment_size: consts::D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data_per_variant: Some(vec![Arc::clone(&v0_pcm), Arc::clone(&v1_pcm)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
@@ -184,8 +185,8 @@ async fn wav_abr(
 
 #[kithara::fixture]
 async fn flac_abr() -> (Url, SizeProbeCounter) {
-    let segment_duration = Consts::D.segment_size as f64
-        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
+    let segment_duration = consts::D.segment_size as f64
+        / (f64::from(consts::D.sample_rate) * f64::from(consts::D.channels) * 2.0);
     let delay_rules = vec![DelayRule {
         variant: Some(0),
         segment_gte: Some(3),
@@ -196,14 +197,14 @@ async fn flac_abr() -> (Url, SizeProbeCounter) {
     let created = helper
         .create_hls(
             HlsFixtureBuilder::new()
-                .variant_count(Consts::VARIANT_COUNT)
-                .segments_per_variant(Consts::SEGMENT_COUNT)
+                .variant_count(consts::VARIANT_COUNT)
+                .segments_per_variant(consts::SEGMENT_COUNT)
                 .segment_duration_secs(segment_duration)
                 .variant_bandwidths(vec![5_000_000, 1_000_000])
                 .delay_rules(delay_rules)
                 .packaged_audio_per_variant_pcm_flac(
-                    Consts::D.sample_rate,
-                    Consts::D.channels,
+                    consts::D.sample_rate,
+                    consts::D.channels,
                     vec![PcmPattern::Ascending, PcmPattern::Descending],
                 ),
         )
@@ -215,9 +216,9 @@ async fn flac_abr() -> (Url, SizeProbeCounter) {
         url,
         SizeProbeCounter::Helper {
             helper,
-            segments: Consts::SEGMENT_COUNT,
+            segments: consts::SEGMENT_COUNT,
             token,
-            variants: Consts::VARIANT_COUNT,
+            variants: consts::VARIANT_COUNT,
         },
     )
 }
@@ -298,7 +299,7 @@ async fn stress_seek_abr_audio(
         info!("Phase 1: waiting for ABR switch (ascending -> descending)...");
 
         let warmup_start = kithara::platform::time::Instant::now();
-        let warmup_timeout = Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
+        let warmup_timeout = Duration::from_secs(consts::WARMUP_TIMEOUT_SECS);
         let mut warmup_ascending_chunks = 0u64;
         let mut warmup_unknown_chunks = 0u64;
 
@@ -306,7 +307,7 @@ async fn stress_seek_abr_audio(
             if warmup_start.elapsed() > warmup_timeout {
                 panic!(
                     "ABR switch not detected within {}s (ascending={}, unknown={})",
-                    Consts::WARMUP_TIMEOUT_SECS,
+                    consts::WARMUP_TIMEOUT_SECS,
                     warmup_ascending_chunks,
                     warmup_unknown_chunks
                 );
@@ -438,12 +439,12 @@ async fn stress_seek_abr_audio(
 
         info!(
             "Phase 3: {} random seek+read cycles...",
-            Consts::SEEK_ITERATIONS
+            consts::SEEK_ITERATIONS
         );
 
         let total_duration = audio.duration();
         let total_secs = total_duration.map_or(
-            Consts::SEGMENT_COUNT as f64 * chunk_duration_secs * 20.0,
+            consts::SEGMENT_COUNT as f64 * chunk_duration_secs * 20.0,
             |d| d.as_secs_f64(),
         );
         let max_seek_secs = (total_secs - chunk_duration_secs).max(0.1);
@@ -454,7 +455,7 @@ async fn stress_seek_abr_audio(
         let mut continuity_errors = 0u64;
         let mut direction_errors = 0u64;
 
-        for i in 0..Consts::SEEK_ITERATIONS {
+        for i in 0..consts::SEEK_ITERATIONS {
             let pos_secs = rng.range_f64(0.001, max_seek_secs);
             let position = Duration::from_secs_f64(pos_secs);
 
@@ -552,7 +553,7 @@ async fn stress_seek_abr_audio(
             continuity_errors,
             direction_errors,
             "Phase 3 complete: {} seek+read cycles",
-            Consts::SEEK_ITERATIONS
+            consts::SEEK_ITERATIONS
         );
 
         assert_eq!(

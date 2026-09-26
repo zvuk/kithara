@@ -7,13 +7,15 @@ use crate::common::{
     walker::{relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "single_impl_size";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "single_impl_size";
+}
 
 pub(crate) struct SingleImplSize;
 
 impl Check for SingleImplSize {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -58,9 +60,9 @@ impl Check for SingleImplSize {
                     continue;
                 };
                 if lines >= cfg.deny_lines {
-                    violations.push(Violation::deny(ID, key, msg));
+                    violations.push(Violation::deny(consts::ID, key, msg));
                 } else {
-                    violations.push(Violation::warn(ID, key, msg));
+                    violations.push(Violation::warn(consts::ID, key, msg));
                 }
             }
         }

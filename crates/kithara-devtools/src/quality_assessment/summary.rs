@@ -13,7 +13,7 @@ use super::{
     AssessmentDepth, AssessmentProfile, adapters, artifact, collect,
     model::{Assessment, CoverageStatus, StageStatus},
 };
-use crate::{Ctx, common::project::QualityRenderBudgets, quality_lab::CRAP_THRESHOLD};
+use crate::{Ctx, common::project::QualityRenderBudgets, consts};
 
 #[derive(Deserialize)]
 struct CrapReport {
@@ -153,12 +153,13 @@ fn append_crap(
     });
     let above_threshold = entries
         .iter()
-        .filter(|entry| entry.crap > CRAP_THRESHOLD)
+        .filter(|entry| entry.crap > consts::CRAP_THRESHOLD)
         .count();
     writeln!(output, "- Functions analysed: {}", entries.len())?;
     writeln!(
         output,
-        "- Above threshold (> {CRAP_THRESHOLD:.1}): {above_threshold}"
+        "- Above threshold (> {CRAP_THRESHOLD:.1}): {above_threshold}",
+        CRAP_THRESHOLD = consts::CRAP_THRESHOLD
     )?;
     if let Some(worst) = entries.first() {
         writeln!(output, "- Worst CRAP score: {:.2}\n", worst.crap)?;

@@ -7,13 +7,15 @@ use crate::common::{
     walker::{relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "mixed_entities";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "mixed_entities";
+}
 
 pub(crate) struct MixedEntities;
 
 impl Check for MixedEntities {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -53,9 +55,9 @@ impl Check for MixedEntities {
                 cfg.min_fns_per_type, cfg.min_impl_blocks
             );
             if count >= cfg.deny {
-                violations.push(Violation::deny(ID, key, msg));
+                violations.push(Violation::deny(consts::ID, key, msg));
             } else {
-                violations.push(Violation::warn(ID, key, msg));
+                violations.push(Violation::warn(consts::ID, key, msg));
             }
         }
         Ok(violations)

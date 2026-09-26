@@ -32,7 +32,7 @@ use super::{
 use crate::bufpool_ext::pools;
 
 /// AES-128 key+IV pair shared across the integration suite. Mirrors
-/// `track_replay_after_switch.rs::Consts::AES_KEY` and the
+/// `track_replay_after_switch.rs::consts::AES_KEY` and the
 /// `local_track_plays.rs` encrypted fixtures.
 const AES_KEY: &[u8] = b"0123456789abcdef";
 const AES_IV: [u8; 16] = [0u8; 16];

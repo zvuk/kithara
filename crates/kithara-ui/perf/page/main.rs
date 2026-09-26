@@ -31,7 +31,7 @@ use crate::{
     census::{Census, Natives, Tally, leaves},
     gpu::{Gpu, ImmediateGpu, RetainedGpu, painted},
     immediate::Immediate,
-    pages::{Fixture, Harness},
+    pages::{Fixture, consts},
     retained::Retained,
 };
 
@@ -359,7 +359,7 @@ fn ui_drag_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &
 /// rather than by the hotpath table.
 fn measure_one(label: &'static str, host: Host, group: Group, name: &'static str) {
     load_fonts();
-    let page = Harness::PAGES
+    let page = consts::PAGES
         .iter()
         .find(|page| page.name == name)
         .unwrap_or_else(|| panic!("{name} is not a measured page"));
@@ -707,7 +707,7 @@ fn the_page_table_is_pinned_to_the_gallery() {
         .chain(demos)
         .copied()
         .filter(|tab| {
-            !Harness::PAGES
+            !consts::PAGES
                 .iter()
                 .any(|page| page.own.is_none() && page.tab == *tab)
         })
@@ -718,7 +718,7 @@ fn the_page_table_is_pinned_to_the_gallery() {
         offered - unmeasured.len()
     );
 
-    for page in Harness::PAGES {
+    for page in consts::PAGES {
         assert!(
             page.own.is_some() || tabs.contains(&page.tab),
             "{} names {}, which is neither a page of the gallery's screen nor this harness's own",

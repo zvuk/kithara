@@ -1,16 +1,14 @@
 use super::Wave;
 
-struct Consts;
-
-impl Consts {
-    const BITS_PER_SAMPLE: u16 = 16;
-    const FMT_CHUNK_BYTES: u32 = 16;
-    const HEADER_BYTES: usize = 44;
-    const PCM_FORMAT_TAG: u16 = 1;
-    const RIFF_PRELUDE_BYTES: usize = 8;
-    const SAMPLE_BYTES: usize = 2;
+mod consts {
+    pub(super) const BITS_PER_SAMPLE: u16 = 16;
+    pub(super) const FMT_CHUNK_BYTES: u32 = 16;
+    pub(super) const HEADER_BYTES: usize = 44;
+    pub(super) const PCM_FORMAT_TAG: u16 = 1;
+    pub(super) const RIFF_PRELUDE_BYTES: usize = 8;
+    pub(super) const SAMPLE_BYTES: usize = 2;
     /// Size fields of a streaming header, which names no total.
-    const UNKNOWN_SIZE: u32 = 0xFFFF_FFFF;
+    pub(super) const UNKNOWN_SIZE: u32 = 0xFFFF_FFFF;
 }
 
 /// The 44-byte RIFF/WAVE header for interleaved 16-bit PCM.
@@ -19,7 +17,7 @@ impl Consts {
 /// `0xFFFFFFFF` because the total is not known when the header is written.
 #[must_use]
 pub fn header(sample_rate: u32, channels: u16, data_bytes: Option<usize>) -> Vec<u8> {
-    let mut out = Vec::with_capacity(Consts::HEADER_BYTES);
+    let mut out = Vec::with_capacity(consts::HEADER_BYTES);
     write_header(&mut out, sample_rate, channels, data_bytes);
     out
 }
@@ -33,9 +31,9 @@ pub fn header(sample_rate: u32, channels: u16, data_bytes: Option<usize>) -> Vec
 #[must_use]
 pub fn wav_of_size(sample_rate: u32, channels: u16, total_bytes: usize, wave: Wave) -> Vec<u8> {
     let payload = total_bytes
-        .checked_sub(Consts::HEADER_BYTES)
+        .checked_sub(consts::HEADER_BYTES)
         .expect("a WAV of a given size has room for its 44-byte header");
-    let frames = payload / (usize::from(channels) * Consts::SAMPLE_BYTES);
+    let frames = payload / (usize::from(channels) * consts::SAMPLE_BYTES);
     wav(sample_rate, channels, frames, wave)
 }
 
@@ -56,8 +54,8 @@ pub fn wav_from_fn<S: Fn(usize) -> i16>(
     total_frames: usize,
     sample: S,
 ) -> Vec<u8> {
-    let data_bytes = total_frames * usize::from(channels) * Consts::SAMPLE_BYTES;
-    let mut out = Vec::with_capacity(Consts::HEADER_BYTES + data_bytes);
+    let data_bytes = total_frames * usize::from(channels) * consts::SAMPLE_BYTES;
+    let mut out = Vec::with_capacity(consts::HEADER_BYTES + data_bytes);
     write_header(&mut out, sample_rate, channels, Some(data_bytes));
 
     for frame in 0..total_frames {
@@ -71,14 +69,14 @@ pub fn wav_from_fn<S: Fn(usize) -> i16>(
 
 fn write_header(out: &mut Vec<u8>, sample_rate: u32, channels: u16, data_bytes: Option<usize>) {
     let block_align =
-        channels * u16::try_from(Consts::SAMPLE_BYTES).expect("invariant: 2 fits u16");
+        channels * u16::try_from(consts::SAMPLE_BYTES).expect("invariant: 2 fits u16");
     let byte_rate = sample_rate * u32::from(block_align);
     let (riff_bytes, data_field) =
-        data_bytes.map_or((Consts::UNKNOWN_SIZE, Consts::UNKNOWN_SIZE), |data_bytes| {
+        data_bytes.map_or((consts::UNKNOWN_SIZE, consts::UNKNOWN_SIZE), |data_bytes| {
             let data_field =
                 u32::try_from(data_bytes).expect("invariant: a fixture WAV payload fits u32");
             let riff_bytes =
-                u32::try_from(Consts::HEADER_BYTES - Consts::RIFF_PRELUDE_BYTES + data_bytes)
+                u32::try_from(consts::HEADER_BYTES - consts::RIFF_PRELUDE_BYTES + data_bytes)
                     .expect("invariant: a fixture WAV fits u32");
             (riff_bytes, data_field)
         });
@@ -86,13 +84,13 @@ fn write_header(out: &mut Vec<u8>, sample_rate: u32, channels: u16, data_bytes: 
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&riff_bytes.to_le_bytes());
     out.extend_from_slice(b"WAVEfmt ");
-    out.extend_from_slice(&Consts::FMT_CHUNK_BYTES.to_le_bytes());
-    out.extend_from_slice(&Consts::PCM_FORMAT_TAG.to_le_bytes());
+    out.extend_from_slice(&consts::FMT_CHUNK_BYTES.to_le_bytes());
+    out.extend_from_slice(&consts::PCM_FORMAT_TAG.to_le_bytes());
     out.extend_from_slice(&channels.to_le_bytes());
     out.extend_from_slice(&sample_rate.to_le_bytes());
     out.extend_from_slice(&byte_rate.to_le_bytes());
     out.extend_from_slice(&block_align.to_le_bytes());
-    out.extend_from_slice(&Consts::BITS_PER_SAMPLE.to_le_bytes());
+    out.extend_from_slice(&consts::BITS_PER_SAMPLE.to_le_bytes());
     out.extend_from_slice(b"data");
     out.extend_from_slice(&data_field.to_le_bytes());
 }
@@ -111,7 +109,7 @@ mod tests {
     fn a_header_names_its_riff_chunks() {
         let head = header(44_100, 2, Some(0));
 
-        assert_eq!(head.len(), Consts::HEADER_BYTES);
+        assert_eq!(head.len(), consts::HEADER_BYTES);
         assert_eq!(&head[0..4], b"RIFF");
         assert_eq!(&head[8..12], b"WAVE");
         assert_eq!(&head[36..40], b"data");
@@ -142,8 +140,8 @@ mod tests {
     fn a_streaming_header_states_neither_total() {
         let head = header(44_100, 2, None);
 
-        assert_eq!(field(&head, 4), Consts::UNKNOWN_SIZE);
-        assert_eq!(field(&head, 40), Consts::UNKNOWN_SIZE);
+        assert_eq!(field(&head, 4), consts::UNKNOWN_SIZE);
+        assert_eq!(field(&head, 40), consts::UNKNOWN_SIZE);
     }
 
     #[kithara::test(native, flash(false))]

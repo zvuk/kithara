@@ -9,20 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const SECRET_ENV_KEYS: &[&str] = &[
-    "ANTHROPIC_API_KEY",
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_SESSION_TOKEN",
-    "CARGO_REGISTRY_TOKEN",
-    "CI_JOB_TOKEN",
-    "CODECOV_TOKEN",
-    "GH_TOKEN",
-    "GITHUB_TOKEN",
-    "GITLAB_TOKEN",
-    "NPM_TOKEN",
-    "OPENAI_API_KEY",
-];
+use crate::consts;
 
 #[derive(Debug, derive_more::Display, derive_more::Error)]
 #[error(ignore)]
@@ -99,7 +86,7 @@ pub(crate) fn run_process_with_env(
 }
 
 fn remove_secret_environment(command: &mut Command) {
-    for key in SECRET_ENV_KEYS {
+    for key in consts::SECRET_ENV_KEYS {
         command.env_remove(key);
     }
 }
@@ -112,15 +99,6 @@ mod tests {
 
     use super::*;
 
-    /// Budget for the tests whose subject is not the budget.
-    ///
-    /// [`terminates_timed_out_process`] owns the timeout contract and proves it
-    /// against a child that never finishes on its own. Everywhere else a
-    /// reachable budget can only decide the outcome by firing, and a killed
-    /// child reports no exit code — so a busy host would quietly substitute
-    /// "the machine was slow" for the exit-status mapping under test.
-    const NOT_UNDER_TEST: Duration = Duration::MAX;
-
     #[test]
     fn missing_executable_is_typed() {
         let temp = tempdir().expect("tempdir");
@@ -131,7 +109,7 @@ mod tests {
             cwd: temp.path(),
             stdout_path: &temp.path().join("stdout.log"),
             stderr_path: &temp.path().join("stderr.log"),
-            timeout: NOT_UNDER_TEST,
+            timeout: consts::NOT_UNDER_TEST,
         })
         .expect_err("missing executable");
 
@@ -148,17 +126,10 @@ mod tests {
             .get_envs()
             .filter_map(|(key, value)| value.is_none().then_some(key))
             .collect::<Vec<_>>();
-        for key in SECRET_ENV_KEYS {
+        for key in consts::SECRET_ENV_KEYS {
             assert!(removed.iter().any(|removed| removed == key));
         }
     }
-
-    const CHILD_ENV: &str = "DEVTOOLS_PROCESS_CHILD";
-    const CHILD_EMIT: &str = "emit";
-    const CHILD_SLEEP: &str = "sleep";
-    const CHILD_EXIT_CODE: i32 = 3;
-    const STDOUT_MARKER: &str = "devtools-process-stdout-marker";
-    const STDERR_MARKER: &str = "devtools-process-stderr-marker";
 
     #[test]
     fn captures_output_and_exit_status() {
@@ -175,23 +146,29 @@ mod tests {
                 cwd: temp.path(),
                 stdout_path: &stdout,
                 stderr_path: &stderr,
-                timeout: NOT_UNDER_TEST,
+                timeout: consts::NOT_UNDER_TEST,
             },
-            &[(CHILD_ENV, OsStr::new(CHILD_EMIT))],
+            &[(consts::PROCESS_CHILD_ENV, OsStr::new(consts::CHILD_EMIT))],
         )
         .expect("process");
 
         let out = fs::read_to_string(&stdout).expect("stdout");
         let err = fs::read_to_string(&stderr).expect("stderr");
-        assert_eq!(outcome.status.code(), Some(CHILD_EXIT_CODE));
-        assert!(out.contains(STDOUT_MARKER), "stdout file: {out}");
+        assert_eq!(outcome.status.code(), Some(consts::PROCESS_CHILD_EXIT_CODE));
         assert!(
-            !out.contains(STDERR_MARKER),
+            out.contains(consts::PROCESS_STDOUT_MARKER),
+            "stdout file: {out}"
+        );
+        assert!(
+            !out.contains(consts::PROCESS_STDERR_MARKER),
             "stderr leaked into stdout: {out}"
         );
-        assert!(err.contains(STDERR_MARKER), "stderr file: {err}");
         assert!(
-            !err.contains(STDOUT_MARKER),
+            err.contains(consts::PROCESS_STDERR_MARKER),
+            "stderr file: {err}"
+        );
+        assert!(
+            !err.contains(consts::PROCESS_STDOUT_MARKER),
             "stdout leaked into stderr: {err}"
         );
         assert!(!outcome.timed_out);
@@ -212,7 +189,7 @@ mod tests {
                 stderr_path: &temp.path().join("stderr.log"),
                 timeout: Duration::from_millis(30),
             },
-            &[(CHILD_ENV, OsStr::new(CHILD_SLEEP))],
+            &[(consts::PROCESS_CHILD_ENV, OsStr::new(consts::CHILD_SLEEP))],
         )
         .expect("process");
 
@@ -223,18 +200,30 @@ mod tests {
     #[test]
     #[ignore = "subprocess entrypoint"]
     fn emit_child_streams() {
-        assert_eq!(env::var(CHILD_ENV).as_deref(), Ok(CHILD_EMIT));
-        println!("{STDOUT_MARKER}");
-        eprintln!("{STDERR_MARKER}");
+        assert_eq!(
+            env::var(consts::PROCESS_CHILD_ENV).as_deref(),
+            Ok(consts::CHILD_EMIT)
+        );
+        println!(
+            "{STDOUT_MARKER}",
+            STDOUT_MARKER = consts::PROCESS_STDOUT_MARKER
+        );
+        eprintln!(
+            "{STDERR_MARKER}",
+            STDERR_MARKER = consts::PROCESS_STDERR_MARKER
+        );
         io::Write::flush(&mut io::stdout()).expect("flush stdout");
         io::Write::flush(&mut io::stderr()).expect("flush stderr");
-        std::process::exit(CHILD_EXIT_CODE);
+        std::process::exit(consts::PROCESS_CHILD_EXIT_CODE);
     }
 
     #[test]
     #[ignore = "subprocess entrypoint"]
     fn sleep_past_any_budget() {
-        assert_eq!(env::var(CHILD_ENV).as_deref(), Ok(CHILD_SLEEP));
+        assert_eq!(
+            env::var(consts::PROCESS_CHILD_ENV).as_deref(),
+            Ok(consts::CHILD_SLEEP)
+        );
         thread::sleep(Duration::from_secs(5));
     }
 }

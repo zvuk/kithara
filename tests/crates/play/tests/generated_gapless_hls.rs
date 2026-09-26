@@ -15,16 +15,14 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::signal::ascending_phase_replays;
 
-struct Consts;
-
-impl Consts {
-    const BOUNDARY_SECONDS: [u64; 8] = [4, 8, 18, 28, 38, 48, 58, 68];
-    const CHANNELS: usize = 2;
-    const LOSSLESS_VARIANT: usize = 3;
-    const PHASE_TOLERANCE: i32 = 3;
-    const READ_SAMPLES: usize = 8_192;
-    const SAMPLE_RATE: usize = 44_100;
-    const WINDOW_FRAMES: usize = 2_048;
+mod consts {
+    pub(super) const BOUNDARY_SECONDS: [u64; 8] = [4, 8, 18, 28, 38, 48, 58, 68];
+    pub(super) const CHANNELS: usize = 2;
+    pub(super) const LOSSLESS_VARIANT: usize = 3;
+    pub(super) const PHASE_TOLERANCE: i32 = 3;
+    pub(super) const READ_SAMPLES: usize = 8_192;
+    pub(super) const SAMPLE_RATE: usize = 44_100;
+    pub(super) const WINDOW_FRAMES: usize = 2_048;
 }
 
 #[kithara::fixture]
@@ -52,7 +50,7 @@ async fn nonuniform_gapless_hls_is_continuous_at_every_boundary(
         .store(memory_asset_store())
         .pools(pools.clone())
         .cancel(CancelToken::never())
-        .initial_abr_mode(AbrMode::manual(Consts::LOSSLESS_VARIANT))
+        .initial_abr_mode(AbrMode::manual(consts::LOSSLESS_VARIANT))
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls).build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
@@ -65,15 +63,15 @@ async fn nonuniform_gapless_hls_is_continuous_at_every_boundary(
         .unwrap_or_else(|error| panic!("preload {path}: {error}"));
     assert_eq!(
         audio.spec().channels,
-        u16::try_from(Consts::CHANNELS).expect("invariant: stereo")
+        u16::try_from(consts::CHANNELS).expect("invariant: stereo")
     );
     assert_eq!(
         audio.spec().sample_rate.get(),
-        u32::try_from(Consts::SAMPLE_RATE).expect("invariant: fixture rate fits u32")
+        u32::try_from(consts::SAMPLE_RATE).expect("invariant: fixture rate fits u32")
     );
 
     let mut pcm = Vec::new();
-    let mut block = vec![0.0; Consts::READ_SAMPLES];
+    let mut block = vec![0.0; consts::READ_SAMPLES];
     loop {
         match audio.read(&mut block) {
             Ok(ReadOutcome::Frames { count, .. }) => pcm.extend_from_slice(&block[..count.get()]),
@@ -83,27 +81,27 @@ async fn nonuniform_gapless_hls_is_continuous_at_every_boundary(
         }
     }
 
-    assert!(pcm.len().is_multiple_of(Consts::CHANNELS));
+    assert!(pcm.len().is_multiple_of(consts::CHANNELS));
     let left = pcm
-        .chunks_exact(Consts::CHANNELS)
+        .chunks_exact(consts::CHANNELS)
         .map(|frame| frame[0])
         .collect::<Vec<_>>();
-    let whole = ascending_phase_replays(&left, 0, left.len(), Consts::PHASE_TOLERANCE);
+    let whole = ascending_phase_replays(&left, 0, left.len(), consts::PHASE_TOLERANCE);
     assert!(
         whole.is_empty(),
         "{path}: phase replay in full track: {whole:?}"
     );
 
-    for seconds in Consts::BOUNDARY_SECONDS {
+    for seconds in consts::BOUNDARY_SECONDS {
         let seconds = usize::try_from(seconds).expect("invariant: boundary fits usize");
-        let boundary = seconds * Consts::SAMPLE_RATE;
-        let start = boundary.saturating_sub(Consts::WINDOW_FRAMES);
-        let end = boundary.saturating_add(Consts::WINDOW_FRAMES);
+        let boundary = seconds * consts::SAMPLE_RATE;
+        let start = boundary.saturating_sub(consts::WINDOW_FRAMES);
+        let end = boundary.saturating_add(consts::WINDOW_FRAMES);
         assert!(
             end <= left.len(),
             "{path}: decoded track ends before {seconds}s boundary"
         );
-        let replays = ascending_phase_replays(&left, start, end, Consts::PHASE_TOLERANCE);
+        let replays = ascending_phase_replays(&left, start, end, consts::PHASE_TOLERANCE);
         assert!(
             replays.is_empty(),
             "{path}: phase replay around {seconds}s boundary: {replays:?}"

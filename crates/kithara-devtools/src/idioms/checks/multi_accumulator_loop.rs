@@ -17,13 +17,15 @@ use crate::{
     idioms::config::MultiAccumulatorLoopConfig,
 };
 
-pub(crate) const ID: &str = "multi_accumulator_loop";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "multi_accumulator_loop";
+}
 
 pub(crate) struct MultiAccumulatorLoop;
 
 impl Check for MultiAccumulatorLoop {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -69,7 +71,7 @@ impl<'ast> Visit<'ast> for LoopVisitor<'_> {
                  `fold((init1, init2), ...)` if the accumulators are coupled",
                 targets.len(),
             );
-            self.out.push(Violation::warn(ID, key, msg));
+            self.out.push(Violation::warn(consts::ID, key, msg));
         }
         visit::visit_expr_for_loop(self, e);
     }

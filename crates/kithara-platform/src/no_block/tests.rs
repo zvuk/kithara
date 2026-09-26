@@ -23,16 +23,9 @@ use super::{
     mode::{Mode, force_blanket_budget, force_log_path, force_mode, force_no_log_path},
     *,
 };
+use crate::consts;
 
-const FIRST_LOG_FILE_ID: usize = 0;
-const BLANKET_TEST_BUDGET_MS: u64 = 10;
-const BLANKET_TEST_SPIN_MS: u64 = 50;
-const CENSUS_LOG_BUDGET_MS: u64 = 10_000;
-const CENSUS_LOG_SLEEP_MS: u64 = 1;
-const WORK_TEST_BUDGET_MS: u64 = 10;
-const WORK_TEST_SPIN_CPU_MS: u64 = 50;
-
-static LOG_FILE_ID: AtomicUsize = AtomicUsize::new(FIRST_LOG_FILE_ID);
+static LOG_FILE_ID: AtomicUsize = AtomicUsize::new(consts::FIRST_LOG_FILE_ID);
 
 fn poll_once<F: Future>(fut: F) -> Poll<F::Output> {
     let mut fut = pin!(fut);
@@ -73,8 +66,8 @@ fn spin_cpu_for(cpu: Duration) {
 
 /// Drive one over-budget poll, which reports a single census observation.
 fn census_once(task: &'static str) {
-    let fut = watch_budget(task, CENSUS_LOG_BUDGET_MS, async {
-        crate::thread::sleep(Duration::from_millis(CENSUS_LOG_SLEEP_MS));
+    let fut = watch_budget(task, consts::CENSUS_LOG_BUDGET_MS, async {
+        crate::thread::sleep(Duration::from_millis(consts::CENSUS_LOG_SLEEP_MS));
     });
     let _ = poll_once(fut);
 }
@@ -138,7 +131,7 @@ fn blanket_wait_over_budget_logs_not_panics() {
     const BLANKET_TEST_SLEEP_MS: u64 = 50;
 
     force_mode(Mode::Panic);
-    force_blanket_budget(Duration::from_millis(BLANKET_TEST_BUDGET_MS));
+    force_blanket_budget(Duration::from_millis(consts::BLANKET_TEST_BUDGET_MS));
 
     let path = temp_log_path("blanket-wait");
     let _ = fs::remove_file(&path);
@@ -168,12 +161,12 @@ fn blanket_spin_over_budget_panics() {
     const FORCED_SPIN_CPU_MS: u64 = 10_000;
 
     force_mode(Mode::Panic);
-    force_blanket_budget(Duration::from_millis(BLANKET_TEST_BUDGET_MS));
+    force_blanket_budget(Duration::from_millis(consts::BLANKET_TEST_BUDGET_MS));
     force_cpu_elapsed(Some(Duration::from_millis(FORCED_SPIN_CPU_MS)));
 
     let caught = std::panic::catch_unwind(|| {
         let fut = watch_blanket("blanket_spin_task", async {
-            spin_for(Duration::from_millis(BLANKET_TEST_SPIN_MS));
+            spin_for(Duration::from_millis(consts::BLANKET_TEST_SPIN_MS));
         });
         let _ = poll_once(fut);
     });
@@ -236,13 +229,13 @@ fn budget_ignores_paused_cpu() {
 
     force_mode(Mode::Census);
     force_no_log_path();
-    force_blanket_budget(Duration::from_millis(BLANKET_TEST_BUDGET_MS));
+    force_blanket_budget(Duration::from_millis(consts::BLANKET_TEST_BUDGET_MS));
 
     let traced = capture_tracing(|| {
         let fut = watch_blanket("paused_cpu_task", async {
             {
                 let _p = permit();
-                spin_for(Duration::from_millis(BLANKET_TEST_SPIN_MS));
+                spin_for(Duration::from_millis(consts::BLANKET_TEST_SPIN_MS));
             }
             thread::sleep(Duration::from_millis(PAUSED_CPU_SLEEP_MS));
         });
@@ -268,7 +261,7 @@ fn a_work_budget_ignores_a_poll_that_did_no_work() {
 
     force_mode(Mode::Panic);
 
-    let fut = watch_cpu_budget("descheduled_task", WORK_TEST_BUDGET_MS, async {
+    let fut = watch_cpu_budget("descheduled_task", consts::WORK_TEST_BUDGET_MS, async {
         thread::sleep(Duration::from_millis(WORK_TEST_SLEEP_MS));
     });
     let _ = poll_once(fut);
@@ -280,9 +273,9 @@ fn a_work_budget_ignores_a_poll_that_did_no_work() {
 fn a_work_budget_ignores_sanctioned_work() {
     force_mode(Mode::Panic);
 
-    let fut = watch_cpu_budget("sanctioned_work_task", WORK_TEST_BUDGET_MS, async {
+    let fut = watch_cpu_budget("sanctioned_work_task", consts::WORK_TEST_BUDGET_MS, async {
         let _p = permit();
-        spin_cpu_for(Duration::from_millis(WORK_TEST_SPIN_CPU_MS));
+        spin_cpu_for(Duration::from_millis(consts::WORK_TEST_SPIN_CPU_MS));
     });
     let _ = poll_once(fut);
 }
@@ -292,8 +285,8 @@ fn a_work_budget_flags_a_poll_that_spent_it() {
     force_mode(Mode::Panic);
 
     let caught = std::panic::catch_unwind(|| {
-        let fut = watch_cpu_budget("work_task", WORK_TEST_BUDGET_MS, async {
-            spin_cpu_for(Duration::from_millis(WORK_TEST_SPIN_CPU_MS));
+        let fut = watch_cpu_budget("work_task", consts::WORK_TEST_BUDGET_MS, async {
+            spin_cpu_for(Duration::from_millis(consts::WORK_TEST_SPIN_CPU_MS));
         });
         let _ = poll_once(fut);
     });
@@ -321,8 +314,8 @@ fn census_writes_to_forced_log_path() {
     let _ = fs::remove_file(&path);
     force_log_path(path.clone());
 
-    let fut = watch_budget("census_file_task", CENSUS_LOG_BUDGET_MS, async {
-        crate::thread::sleep(Duration::from_millis(CENSUS_LOG_SLEEP_MS));
+    let fut = watch_budget("census_file_task", consts::CENSUS_LOG_BUDGET_MS, async {
+        crate::thread::sleep(Duration::from_millis(consts::CENSUS_LOG_SLEEP_MS));
     });
     let _ = poll_once(fut);
 
@@ -345,9 +338,13 @@ fn census_panics_when_configured_log_cannot_be_written() {
     force_log_path(path.clone());
 
     let caught = std::panic::catch_unwind(|| {
-        let fut = watch_budget("unwritable_census_task", CENSUS_LOG_BUDGET_MS, async {
-            crate::thread::sleep(Duration::from_millis(CENSUS_LOG_SLEEP_MS));
-        });
+        let fut = watch_budget(
+            "unwritable_census_task",
+            consts::CENSUS_LOG_BUDGET_MS,
+            async {
+                crate::thread::sleep(Duration::from_millis(consts::CENSUS_LOG_SLEEP_MS));
+            },
+        );
         let _ = poll_once(fut);
     });
 

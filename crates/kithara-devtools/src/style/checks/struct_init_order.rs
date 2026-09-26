@@ -26,7 +26,9 @@ use crate::{
     style::config::StructInitOrderConfig,
 };
 
-pub(crate) const ID: &str = "struct_init_order";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "struct_init_order";
+}
 
 pub(crate) struct StructInitOrder;
 
@@ -73,7 +75,7 @@ impl Check for StructInitOrder {
                 }
                 let new_src = rw
                     .finish()
-                    .with_context(|| format!("{ID} fix failed for {rel}"))?;
+                    .with_context(|| format!("{ID} fix failed for {rel}", ID = consts::ID))?;
                 ctx.scan.write(path, new_src)?;
                 wrote = true;
             }
@@ -84,7 +86,7 @@ impl Check for StructInitOrder {
     }
 
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -535,7 +537,7 @@ fn check_expr_struct(rel: &str, e: &ExprStruct, order: ExpectedOrder, out: &mut 
         "init `{type_name} {{ ... }}` should {rule}: \
          expected [{expected_summary}], found [{actual_summary}]"
     );
-    out.push(Violation::warn(ID, key, msg));
+    out.push(Violation::warn(consts::ID, key, msg));
 }
 
 /// True iff some shorthand field name is referenced by another field's

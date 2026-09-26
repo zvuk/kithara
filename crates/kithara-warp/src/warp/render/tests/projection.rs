@@ -1,6 +1,7 @@
 use kithara_test_fixtures::unit_fixtures::{warp_pair, warp_sine};
 
 use super::*;
+use crate::consts;
 
 #[kithara::test]
 fn a_projected_quantum_uses_the_map_instead_of_manual_speed() {
@@ -35,7 +36,7 @@ fn a_projected_quantum_uses_the_map_instead_of_manual_speed() {
                 .get(),
             192
         );
-        let mut input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(Consts::CH)]);
+        let mut input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(consts::CH)]);
         input.meta.frame_offset = source_start;
         let output = renderer
             .render_quantum(input)
@@ -88,7 +89,7 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
     let mut renderer = warp.renderer(spec(), pools());
     for source_start in [0, 192, 384] {
         renderer.prepare(spec());
-        let mut input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(Consts::CH)]);
+        let mut input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(consts::CH)]);
         input.meta.frame_offset = source_start;
         renderer
             .prepare_quantum(input.meta, input.frames())
@@ -149,7 +150,7 @@ fn projected_source_endpoints_do_not_drift_across_sample_rate_partitions() {
                 .get();
             let mut input = chunk(
                 &renderer.pools,
-                &vec![0.25; frames * usize::from(Consts::CH)],
+                &vec![0.25; frames * usize::from(consts::CH)],
             );
             input.meta.frame_offset = source_start;
             let output = renderer
@@ -189,7 +190,7 @@ fn projected_tail_keeps_sample_rate_rounding_across_partitions() {
         for frames in partitions {
             let output = chunk(
                 &renderer.pools,
-                &vec![0.25; frames * usize::from(Consts::CH)],
+                &vec![0.25; frames * usize::from(consts::CH)],
             );
             renderer.commit_render(None, &output);
         }
@@ -213,7 +214,7 @@ fn a_future_projection_retains_the_active_producer_until_activation() {
     let mut renderer = Warp::new((), &config).renderer(spec(), pools());
     for source_start in [0, 192, 384] {
         renderer.prepare(spec());
-        let mut input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(Consts::CH)]);
+        let mut input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(consts::CH)]);
         input.meta.frame_offset = source_start;
         renderer
             .prepare_quantum(input.meta, input.frames())
@@ -336,7 +337,7 @@ fn planned_renderer_with_publisher(
     let mut warp = Warp::new((), &config);
     let publisher = warp.take_publisher().expect("fixture owns publisher");
     let output = OutputContext::new(
-        SessionFrame::new(0)..SessionFrame::new(i64::from(Consts::SR)),
+        SessionFrame::new(0)..SessionFrame::new(i64::from(consts::SR)),
         spec().sample_rate,
         SessionEpoch::new(0),
         Some(kithara_signal::TransportRevision::first()),
@@ -446,7 +447,7 @@ fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
     let (mut renderer, slot) = planned_renderer(controls);
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
-    let samples = vec![0.25; 128 * usize::from(Consts::CH)];
+    let samples = vec![0.25; 128 * usize::from(consts::CH)];
     let input = chunk(&pools, &samples);
 
     renderer
@@ -629,7 +630,7 @@ fn prepared_projection_refuses_another_source_origin_without_consuming_pcm() {
         spec().sample_rate,
     ))));
     renderer.prepare(spec());
-    let input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(Consts::CH)]);
+    let input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(consts::CH)]);
     let count = renderer
         .prepare_quantum(input.meta, input.frames())
         .expect("projected span");
@@ -739,8 +740,8 @@ fn distant_reanchor_keeps_each_source_quantum_bounded(
     slot.install(Some(Arc::new(crate::test_grids::plan_over_at(
         crate::test_grids::asset_grid(60.0, spec().sample_rate),
         crate::test_grids::session_grid(60.0, spec().sample_rate),
-        4_864.0 / f64::from(Consts::SR),
-        40_128.0 / f64::from(Consts::SR),
+        4_864.0 / f64::from(consts::SR),
+        40_128.0 / f64::from(consts::SR),
         SessionFrame::new(40_128),
     ))));
     renderer.prepare(spec());
@@ -799,7 +800,7 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
             .get();
         let mut input = chunk(
             &renderer.pools,
-            &vec![0.25; frames * usize::from(Consts::CH)],
+            &vec![0.25; frames * usize::from(consts::CH)],
         );
         input.meta.frame_offset = source;
         renderer
@@ -828,7 +829,7 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
         .get();
     let mut input = chunk(
         &renderer.pools,
-        &vec![0.25; frames * usize::from(Consts::CH)],
+        &vec![0.25; frames * usize::from(consts::CH)],
     );
     input.meta.frame_offset = source;
     let output = renderer

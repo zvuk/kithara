@@ -24,3 +24,4 @@ pub use sample::sanitize_sample;
 pub use session::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
 pub use spec::AudioSpec;
 pub use units::{FrameCount, SampleCount};
+mod consts;

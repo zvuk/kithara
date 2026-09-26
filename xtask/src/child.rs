@@ -27,13 +27,7 @@ use signal_hook::{
     flag, low_level,
 };
 
-struct Consts;
-
-impl Consts {
-    const POLL: Duration = Duration::from_millis(20);
-    /// How long a child gets to leave after it is killed outright.
-    const GRACE: Duration = Duration::from_secs(10);
-}
+use crate::consts;
 
 /// Children of a run get their own process group, including commands they spawn.
 #[cfg(unix)]
@@ -65,11 +59,11 @@ fn kill_owned(child: &mut Child) -> Result<()> {
         .args(["/PID", &child.id().to_string(), "/T", "/F"])
         .spawn()
         .context("stopping owned process tree")?;
-    let status = if let Some(status) = reap(&mut taskkill, Consts::GRACE, "taskkill")? {
+    let status = if let Some(status) = reap(&mut taskkill, consts::GRACE, "taskkill")? {
         status
     } else {
         taskkill.kill().context("stopping timed-out taskkill")?;
-        reap(&mut taskkill, Consts::GRACE, "taskkill")?.context("taskkill did not exit")?;
+        reap(&mut taskkill, consts::GRACE, "taskkill")?.context("taskkill did not exit")?;
         bail!("taskkill exceeded its deadline");
     };
     if !status.success() && child.try_wait()?.is_none() {
@@ -80,10 +74,10 @@ fn kill_owned(child: &mut Child) -> Result<()> {
 
 pub(crate) fn stop(child: &mut Child, what: &str) -> Result<ExitStatus> {
     kill_owned(child).with_context(|| format!("stopping {what}"))?;
-    reap(child, Consts::GRACE, what)?.with_context(|| {
+    reap(child, consts::GRACE, what)?.with_context(|| {
         format!(
             "{what} outlived the {}s stop grace",
-            Consts::GRACE.as_secs()
+            consts::GRACE.as_secs()
         )
     })
 }
@@ -122,7 +116,7 @@ pub(crate) fn supervise(
                 kill_owned(child)?;
                 return Ok(status);
             }
-            Ok(None) => thread::sleep(Consts::POLL),
+            Ok(None) => thread::sleep(consts::CHILD_POLL),
             Err(error) => {
                 return Err(match stop(child, "failed command wait") {
                     Ok(_) => error,
@@ -162,10 +156,10 @@ pub(crate) fn output(
     let stderr = read(Box::new(stderr));
     let status = supervise(&mut child, cancel, Some(timeout))?;
     let stdout = stdout
-        .recv_timeout(Consts::GRACE)
+        .recv_timeout(consts::GRACE)
         .context("draining command stdout")??;
     let stderr = stderr
-        .recv_timeout(Consts::GRACE)
+        .recv_timeout(consts::GRACE)
         .context("draining command stderr")??;
     Ok(Output {
         status,
@@ -186,7 +180,7 @@ fn reap(child: &mut Child, grace: Duration, what: &str) -> Result<Option<ExitSta
         if Instant::now() >= deadline {
             return Ok(None);
         }
-        thread::sleep(Consts::POLL);
+        thread::sleep(consts::CHILD_POLL);
     }
 }
 

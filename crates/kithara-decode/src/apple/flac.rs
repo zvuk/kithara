@@ -1,4 +1,4 @@
-use super::consts::Consts;
+use super::consts;
 use crate::error::{DecodeError, DecodeResult};
 
 /// Normalise the two STREAMINFO carrier shapes to the raw 34-byte body:
@@ -17,7 +17,7 @@ pub(crate) fn streaminfo_body(extra: &[u8]) -> DecodeResult<&[u8]> {
     } else {
         Some(extra)
     };
-    body.and_then(|b| b.get(..Consts::FLAC_STREAMINFO_LEN))
+    body.and_then(|b| b.get(..consts::FLAC_STREAMINFO_LEN))
         .ok_or_else(|| DecodeError::InvalidData {
             detail: "flac: STREAMINFO unavailable from codec config",
         })
@@ -95,7 +95,7 @@ mod tests {
         bits: u8,
         total_samples: u64,
     ) -> Vec<u8> {
-        let mut b = vec![0u8; Consts::FLAC_STREAMINFO_LEN];
+        let mut b = vec![0u8; consts::FLAC_STREAMINFO_LEN];
         b[2..4].copy_from_slice(&max_block.to_be_bytes());
         let mf = max_frame.to_be_bytes();
         b[7..10].copy_from_slice(&mf[1..4]);

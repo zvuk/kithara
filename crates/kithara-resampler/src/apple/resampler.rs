@@ -15,7 +15,9 @@ use crate::{
     ResamplerProcess,
 };
 
-const BACKEND_APPLE: &str = "apple-audio-converter";
+mod consts {
+    pub(super) const BACKEND_APPLE: &str = "apple-audio-converter";
+}
 
 pub struct AppleResampler {
     converter: AudioConverter,
@@ -67,7 +69,7 @@ impl AppleResampler {
         let input_state = Box::new(
             AppleResamplerInputState::new(channels.get(), chunk_size, pools).map_err(|err| {
                 ResamplerBuildError::BackendBuild {
-                    backend: BACKEND_APPLE,
+                    backend: consts::BACKEND_APPLE,
                     detail: err.to_string(),
                 }
             })?,
@@ -253,21 +255,21 @@ fn frames_to_u32(frames: usize) -> Result<u32, ResamplerError> {
 pub(super) fn apple_build_config(detail: &'static str) -> ResamplerBuildError {
     ResamplerBuildError::BackendBuild {
         detail: detail.into(),
-        backend: BACKEND_APPLE,
+        backend: consts::BACKEND_APPLE,
     }
 }
 
 const fn apple_build_config_owned(detail: String) -> ResamplerBuildError {
     ResamplerBuildError::BackendBuild {
         detail,
-        backend: BACKEND_APPLE,
+        backend: consts::BACKEND_APPLE,
     }
 }
 
 fn apple_build_status(op: &'static str, status: OSStatus) -> ResamplerBuildError {
     ResamplerBuildError::BackendBuild {
         detail: format!("{op}: {}", os_status_to_string(status)),
-        backend: BACKEND_APPLE,
+        backend: consts::BACKEND_APPLE,
     }
 }
 
@@ -298,7 +300,6 @@ const fn err_status(err: &AudioToolboxError) -> OSStatus {
 
 #[cfg(all(test, feature = "resample-rubato"))]
 mod tests {
-
     use kithara_test_fixtures::unit_fixtures::{
         apple_planar_44100, apple_planar_48000, trim_silence,
     };
@@ -309,18 +310,10 @@ mod tests {
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings,
         apple::AppleAudioConverterBackend,
-        create_resampler,
+        consts, create_resampler,
         rubato::{RubatoBackend, RubatoResampler},
         test_pools::{TestPools, pools},
     };
-
-    mod test_consts {
-        pub(super) const CHUNK_FRAMES: usize = 1024;
-        pub(super) const DRAIN_LIMIT: usize = 16;
-        pub(super) const FLUSH_FRAME_TOLERANCE: usize = 1;
-        pub(super) const PASSTHROUGH_RMS_TOLERANCE: f64 = 0.000_01;
-        pub(super) const SHAPE_ENERGY_DELTA_TOLERANCE: f64 = 0.12;
-    }
 
     struct Rendered {
         output: Vec<Vec<f32>>,
@@ -364,7 +357,7 @@ mod tests {
         let input_energy = energy(&input);
         let output_energy = energy(&rendered.output);
 
-        assert!(rendered.drain_calls <= test_consts::DRAIN_LIMIT);
+        assert!(rendered.drain_calls <= consts::DRAIN_LIMIT);
         assert!(output_energy > input_energy * 0.5);
     }
 
@@ -380,12 +373,8 @@ mod tests {
         let rendered = render(TestBackend::Apple, &input, 48_000, 48_000, &trim_silence);
         let rms = rms_diff(&input, &rendered.output);
 
-        assert_len_close(
-            "apple passthrough",
-            rendered.frames,
-            test_consts::CHUNK_FRAMES,
-        );
-        assert!(rms <= test_consts::PASSTHROUGH_RMS_TOLERANCE);
+        assert_len_close("apple passthrough", rendered.frames, consts::CHUNK_FRAMES);
+        assert!(rms <= consts::PASSTHROUGH_RMS_TOLERANCE);
     }
 
     #[kithara::test(native, flash(false))]
@@ -404,7 +393,7 @@ mod tests {
         let energy_delta = normalized_delta(apple_energy, rubato_energy);
 
         assert_len_close("apple/rubato shape", apple.frames, rubato.frames);
-        assert!(energy_delta <= test_consts::SHAPE_ENERGY_DELTA_TOLERANCE);
+        assert!(energy_delta <= consts::SHAPE_ENERGY_DELTA_TOLERANCE);
     }
 
     fn assert_length_contract(
@@ -417,7 +406,7 @@ mod tests {
             .chunks_exact(1024)
             .map(<[f32]>::to_vec)
             .collect::<Vec<_>>();
-        let expected = expected_frames(test_consts::CHUNK_FRAMES, source_rate, target_rate);
+        let expected = expected_frames(consts::CHUNK_FRAMES, source_rate, target_rate);
         let apple = render(
             TestBackend::Apple,
             &input,
@@ -496,7 +485,7 @@ mod tests {
             if produced == 0 {
                 break;
             }
-            assert!(drain_calls <= test_consts::DRAIN_LIMIT);
+            assert!(drain_calls <= consts::DRAIN_LIMIT);
             append_planar(&mut output, &drain, produced);
         }
 
@@ -587,7 +576,7 @@ mod tests {
                 .process_into_buffer(&zero_input_refs, &mut zero_output_refs)
                 .unwrap_or_else(|err| panic!("rubato zero-pump failed: {err}"));
             pump_count += 1;
-            assert!(pump_count <= test_consts::DRAIN_LIMIT);
+            assert!(pump_count <= consts::DRAIN_LIMIT);
             let needed = contract_frames.saturating_sub(frame_count(output));
             append_planar(output, &zero_output, process.output_frames.min(needed));
         }
@@ -633,7 +622,7 @@ mod tests {
     fn assert_len_close(label: &str, actual: usize, expected: usize) {
         let delta = actual.abs_diff(expected);
         assert!(
-            delta <= test_consts::FLUSH_FRAME_TOLERANCE,
+            delta <= consts::FLUSH_FRAME_TOLERANCE,
             "{label}: actual={actual} expected={expected} delta={delta}"
         );
     }

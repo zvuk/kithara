@@ -14,28 +14,32 @@ use tracing_subscriber::{
     registry::LookupSpan,
 };
 
-/// In-memory flight recorder: the last kithara events, whatever the fmt
-/// layer's filter admits to stdout. A red test's dump (panic or hang)
-/// carries this tail, so the evidence does not depend on guessing the right
-/// per-test tracing filter in advance.
-///
-/// Two lanes so volume cannot evict signal: `#[kithara::probe]` sites fire
-/// on every call and would flush rare FSM-transition DEBUG lines out of a
-/// shared ring within milliseconds.
-const MAX_EVENTS: usize = 256;
-const MAX_EVENT_BYTES: usize = 512;
-/// Fields a repeat is allowed to differ in and still fold.
-///
-/// Every probe event carries a monotonic sequence, so comparing whole lines
-/// made each firing unique and the fold above never once collapsed the probe
-/// lane: a dump's tail was the last [`MAX_EVENTS`] firings of whichever probe
-/// happened to be hottest, and a rare transition that led to the failure was
-/// gone. Measured on one green run of `packaged_abr_switch_keeps_player_
-/// continuity`: 19314 firings, 372 distinct once the counters are excluded.
-///
-/// The counters are dropped from the comparison only — the retained line keeps
-/// the first firing's values, and the fold count carries the tempo.
-const FOLD_COUNTERS: &[&str] = &["seq", "thread_seq"];
+mod consts {
+    /// In-memory flight recorder: the last kithara events, whatever the fmt
+    /// layer's filter admits to stdout. A red test's dump (panic or hang)
+    /// carries this tail, so the evidence does not depend on guessing the right
+    /// per-test tracing filter in advance.
+    ///
+    /// Two lanes so volume cannot evict signal: `#[kithara::probe]` sites fire
+    /// on every call and would flush rare FSM-transition DEBUG lines out of a
+    /// shared ring within milliseconds.
+    pub(super) const MAX_EVENTS: usize = 256;
+
+    pub(super) const MAX_EVENT_BYTES: usize = 512;
+
+    /// Fields a repeat is allowed to differ in and still fold.
+    ///
+    /// Every probe event carries a monotonic sequence, so comparing whole lines
+    /// made each firing unique and the fold above never once collapsed the probe
+    /// lane: a dump's tail was the last [`MAX_EVENTS`] firings of whichever probe
+    /// happened to be hottest, and a rare transition that led to the failure was
+    /// gone. Measured on one green run of `packaged_abr_switch_keeps_player_
+    /// continuity`: 19314 firings, 372 distinct once the counters are excluded.
+    ///
+    /// The counters are dropped from the comparison only — the retained line keeps
+    /// the first firing's values, and the fold count carries the tempo.
+    pub(super) const FOLD_COUNTERS: &[&str] = &["seq", "thread_seq"];
+}
 
 static EVENTS: Mutex<VecDeque<Entry>> = Mutex::new(VecDeque::new());
 static PROBES: Mutex<VecDeque<Entry>> = Mutex::new(VecDeque::new());
@@ -162,7 +166,7 @@ fn record(ring: &Mutex<VecDeque<Entry>>, line: String, key: String) {
         entry.repeats = entry.repeats.saturating_add(1);
         return;
     }
-    if ring.len() == MAX_EVENTS {
+    if ring.len() == consts::MAX_EVENTS {
         ring.pop_front();
     }
     ring.push_back(Entry {
@@ -173,10 +177,10 @@ fn record(ring: &Mutex<VecDeque<Entry>>, line: String, key: String) {
 }
 
 fn clamp(mut text: String) -> String {
-    if text.len() <= MAX_EVENT_BYTES {
+    if text.len() <= consts::MAX_EVENT_BYTES {
         return text;
     }
-    let mut end = MAX_EVENT_BYTES;
+    let mut end = consts::MAX_EVENT_BYTES;
     while !text.is_char_boundary(end) {
         end -= 1;
     }
@@ -198,7 +202,7 @@ impl Visit for LineVisitor<'_> {
             return;
         }
         let _ = write!(self.line, " {name}={value:?}", name = field.name());
-        if !FOLD_COUNTERS.contains(&field.name()) {
+        if !consts::FOLD_COUNTERS.contains(&field.name()) {
             let _ = write!(self.key, " {name}={value:?}", name = field.name());
         }
     }
@@ -211,7 +215,10 @@ mod tests {
     use tracing::debug;
     use tracing_subscriber::layer::SubscriberExt;
 
-    use super::{MAX_EVENT_BYTES, MAX_EVENTS, layer, probes_tail, tail};
+    use super::{
+        consts::{MAX_EVENT_BYTES, MAX_EVENTS},
+        layer, probes_tail, tail,
+    };
     use crate::kithara;
 
     /// The rings are process-global and the capacity tests flood them, so a

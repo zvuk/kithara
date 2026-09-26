@@ -21,16 +21,14 @@ pub(super) const PAGE: &str = "page";
 pub(super) const MODULE: &str = "module";
 
 /// What the gallery's package calls the screen this module reads.
-struct Consts;
-
-impl Consts {
+mod consts {
     /// The one screen the package declares, which every page lives in.
-    const SCREEN: &'static str = "gallery";
+    pub(super) const SCREEN: &str = "gallery";
 }
 
 /// The file the package puts behind the gallery's screen.
 pub(super) fn entry() -> &'static str {
-    fixture::document(Consts::SCREEN)
+    fixture::document(consts::SCREEN)
 }
 
 /// The page the gallery opens on, which is the one its screen calls initial.

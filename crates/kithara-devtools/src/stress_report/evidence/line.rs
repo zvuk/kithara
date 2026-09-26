@@ -8,9 +8,8 @@ use super::{
     line_reader::for_each_bounded_line,
     normalize_signature, render_clusters,
 };
-use crate::common::project::StressRenderBudgets;
+use crate::{common::project::StressRenderBudgets, consts};
 
-const MAX_LINE_BYTES: usize = 64 * 1_024;
 pub(super) fn append(
     out: &mut String,
     path: &Path,
@@ -26,7 +25,7 @@ pub(super) fn append(
     let mut foreign = 0usize;
     let mut invalid = 0usize;
     let mut records = 0usize;
-    let read = for_each_bounded_line(path, MAX_LINE_BYTES, |line| {
+    let read = for_each_bounded_line(path, consts::EVIDENCE_LINE_BYTES, |line| {
         if !marker.is_some_and(|marker| line.contains(marker)) {
             return ControlFlow::Continue(());
         }

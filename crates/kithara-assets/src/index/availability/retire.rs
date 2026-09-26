@@ -34,11 +34,6 @@ pub(super) struct Retired {
     overflowed: AtomicBool,
 }
 
-/// Capacity of each retire queue. It buys time, not a bound: no capacity can
-/// span an unbounded read:write ratio, so raising this number only moves the
-/// overflow threshold.
-pub(super) const RETIRE_CAPACITY: usize = 256;
-
 impl Retired {
     pub(super) fn new(capacity: usize) -> Self {
         Self {

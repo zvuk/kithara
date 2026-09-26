@@ -19,7 +19,9 @@ use crate::{
     style::config::CommentHygieneConfig,
 };
 
-pub(crate) const ID: &str = "comment_hygiene";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "comment_hygiene";
+}
 
 pub(crate) struct CommentHygiene;
 
@@ -60,14 +62,15 @@ impl Check for CommentHygiene {
         }
         if outcome.writes == 0 {
             outcome.skipped.push(format!(
-                "{ID}: size and density violations require manual review"
+                "{ID}: size and density violations require manual review",
+                ID = consts::ID
             ));
         }
         Ok(outcome)
     }
 
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -584,7 +587,7 @@ fn detect_category(
              machine markup ({})",
             cfg.allowed_inline_markers.join(", "),
         );
-        out.push(Violation::warn(ID, key, msg));
+        out.push(Violation::warn(consts::ID, key, msg));
     }
 }
 
@@ -666,7 +669,7 @@ fn detect_size(
                 "{label} spans {lines} lines (limit {limit}); shorten or move long contracts \
                  to the owning crate `README.md`"
             );
-            out.push(Violation::warn(ID, key, msg));
+            out.push(Violation::warn(consts::ID, key, msg));
         }
     }
 }
@@ -744,7 +747,7 @@ fn detect_density(
                  doc-block above the fn",
                 fs.name
             );
-            out.push(Violation::warn(ID, key, msg));
+            out.push(Violation::warn(consts::ID, key, msg));
         }
     }
 }

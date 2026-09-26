@@ -3,8 +3,7 @@
 use anyhow::{Context, Result, bail};
 use roxmltree::Document;
 
-const MAX_JUNIT_CASES: usize = 750_000;
-pub(crate) const MAX_CASE_OUTPUT_BYTES: usize = 8 * 1_024 * 1_024;
+use crate::consts;
 
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -142,8 +141,11 @@ pub(crate) fn parse_junit_report(xml: &str) -> Result<JunitReport> {
 }
 
 fn validate_case_count(count: usize) -> Result<()> {
-    if count > MAX_JUNIT_CASES {
-        bail!("JUnit exceeds the deterministic limit of {MAX_JUNIT_CASES} testcases");
+    if count > consts::MAX_JUNIT_CASES {
+        bail!(
+            "JUnit exceeds the deterministic limit of {MAX_JUNIT_CASES} testcases",
+            MAX_JUNIT_CASES = consts::MAX_JUNIT_CASES
+        );
     }
     Ok(())
 }
@@ -231,7 +233,7 @@ fn append_failure_description(output: &mut String, node: roxmltree::Node<'_, '_>
 /// and the whole lane keeps its other cases.
 fn append_output(output: &mut String, separator: &str, text: &str) -> bool {
     let separator = if output.is_empty() { "" } else { separator };
-    let budget = MAX_CASE_OUTPUT_BYTES.saturating_sub(output.len());
+    let budget = consts::MAX_CASE_OUTPUT_BYTES.saturating_sub(output.len());
     if budget < separator.len() {
         return true;
     }
@@ -259,56 +261,12 @@ fn stress_suite(suite: &str) -> Option<(&str, usize)> {
 mod tests {
     use super::*;
 
-    const XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="nextest-run" tests="2" failures="1">
-  <testsuite name="demo-tests::suite_light" tests="2" failures="1">
-    <testcase name="offline::gapless" classname="demo-tests::suite_light" time="1.532"/>
-    <testcase name="offline::seek" classname="demo-tests::suite_light" time="0.201">
-      <failure type="test failure">boom</failure>
-    </testcase>
-  </testsuite>
-</testsuites>"#;
-
-    /// What nextest writes for a test that failed an attempt and passed a later
-    /// one: the failing attempt is described inside `flakyFailure`, streams
-    /// included, while the `testcase` keeps the streams of the attempt that
-    /// passed.
-    const RETRIED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="nextest-run" tests="1" failures="0">
-  <testsuite name="demo-tests::suite_stress" tests="1" failures="0">
-    <testcase name="abr::switch" classname="demo-tests::suite_stress" time="2.100">
-      <flakyFailure type="test failure" message="boom">panicked at abr.rs:7
-        <system-out>red stdout</system-out>
-        <system-err>red stderr</system-err>
-      </flakyFailure>
-      <system-out>green stdout</system-out>
-      <system-err></system-err>
-    </testcase>
-  </testsuite>
-</testsuites>"#;
-
-    /// What nextest writes for a failed `assert_eq!`: the panic header is
-    /// lifted into `message` and the body repeats it verbatim.
-    const PANIC: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="nextest-run" tests="1" failures="1">
-  <testsuite name="demo-tests::suite_light" tests="1" failures="1">
-    <testcase name="audio::warms_pool" classname="demo-tests::suite_light" time="0.536">
-      <failure message="thread 'audio::warms_pool' (971370) panicked at tests/demo.rs:166:5" type="test failure with exit code 101">thread 'audio::warms_pool' (971370) panicked at tests/demo.rs:166:5:
-assertion `left == right` failed: a warmed pool must serve decode-sized buffers without allocating
-  left: 0
- right: 1
-stack backtrace:
-   0: __rustc::rust_begin_unwind</failure>
-    </testcase>
-  </testsuite>
-</testsuites>"#;
-
     /// The header is worth keeping once. Kept twice it consumed the retained
     /// output a report row can show, and what fell off the end was the only
     /// part that says which defect this is: the assertion's own values.
     #[test]
     fn a_panic_header_lifted_into_the_message_is_not_kept_twice() {
-        let cases = parse_junit(PANIC).expect("parse junit");
+        let cases = parse_junit(consts::PANIC).expect("parse junit");
 
         let output = &cases[0].output;
         assert_eq!(output.matches("panicked at").count(), 1, "{output}");
@@ -320,7 +278,7 @@ stack backtrace:
     /// dropping it would lose the only description such a failure has.
     #[test]
     fn a_message_the_body_does_not_repeat_is_kept() {
-        let cases = parse_junit(&PANIC.replace(
+        let cases = parse_junit(&consts::PANIC.replace(
             "message=\"thread 'audio::warms_pool' (971370) panicked at tests/demo.rs:166:5\"",
             "message=\"the runner killed it\"",
         ))
@@ -336,7 +294,7 @@ stack backtrace:
     /// Retries buy nothing if a passed-on-retry case still reads as failed.
     #[test]
     fn a_test_that_passed_on_a_retry_is_not_a_failure() {
-        let cases = parse_junit(RETRIED).expect("parse junit");
+        let cases = parse_junit(consts::RETRIED).expect("parse junit");
 
         assert_eq!(cases.len(), 1);
         assert!(!cases[0].failed);
@@ -346,7 +304,7 @@ stack backtrace:
     /// the outcome a stress run is looking for.
     #[test]
     fn a_test_that_passed_on_a_retry_is_recorded_as_flaky() {
-        let cases = parse_junit(RETRIED).expect("parse junit");
+        let cases = parse_junit(consts::RETRIED).expect("parse junit");
 
         assert_eq!(cases.len(), 1);
         assert!(cases[0].flaky);
@@ -356,7 +314,7 @@ stack backtrace:
     /// flaky row names a test and says nothing about why it broke.
     #[test]
     fn a_retried_pass_keeps_the_failing_attempts_streams() {
-        let cases = parse_junit(RETRIED).expect("parse junit");
+        let cases = parse_junit(consts::RETRIED).expect("parse junit");
 
         assert_eq!(cases.len(), 1);
         assert!(
@@ -375,7 +333,7 @@ stack backtrace:
     /// as the case's output describes the green run under a red heading.
     #[test]
     fn a_retried_pass_drops_the_passing_attempts_streams() {
-        let cases = parse_junit(RETRIED).expect("parse junit");
+        let cases = parse_junit(consts::RETRIED).expect("parse junit");
 
         assert_eq!(cases.len(), 1);
         assert!(
@@ -387,7 +345,7 @@ stack backtrace:
 
     #[test]
     fn a_case_that_passed_on_a_retry_is_failing() {
-        let cases = parse_junit(RETRIED).expect("parse junit");
+        let cases = parse_junit(consts::RETRIED).expect("parse junit");
 
         assert_eq!(cases.len(), 1);
         assert!(cases[0].failing());
@@ -395,7 +353,7 @@ stack backtrace:
 
     #[test]
     fn a_failed_case_is_failing() {
-        let cases = parse_junit(XML).expect("parse junit");
+        let cases = parse_junit(consts::XML).expect("parse junit");
 
         let failed = cases.iter().find(|case| case.failed).expect("failed case");
         assert!(failed.failing());
@@ -403,7 +361,7 @@ stack backtrace:
 
     #[test]
     fn a_clean_pass_is_not_failing() {
-        let cases = parse_junit(XML).expect("parse junit");
+        let cases = parse_junit(consts::XML).expect("parse junit");
 
         let passed = cases.iter().find(|case| !case.failed).expect("passed case");
         assert!(!passed.failing());
@@ -411,7 +369,7 @@ stack backtrace:
 
     #[test]
     fn a_failed_case_is_not_also_flaky() {
-        let cases = parse_junit(XML).expect("parse junit");
+        let cases = parse_junit(consts::XML).expect("parse junit");
 
         let failed = cases.iter().find(|case| case.failed).expect("failed case");
         assert!(!failed.flaky);
@@ -419,7 +377,7 @@ stack backtrace:
 
     #[test]
     fn parses_cases_and_failures() {
-        let cases = parse_junit(XML).expect("parse junit");
+        let cases = parse_junit(consts::XML).expect("parse junit");
 
         assert_eq!(cases.len(), 2);
         assert_eq!(cases[0].suite, "demo-tests::suite_light");
@@ -543,8 +501,8 @@ stack backtrace:
 
     #[test]
     fn testcase_limit_is_inclusive() {
-        validate_case_count(MAX_JUNIT_CASES).expect("case limit is inclusive");
-        assert!(validate_case_count(MAX_JUNIT_CASES + 1).is_err());
+        validate_case_count(consts::MAX_JUNIT_CASES).expect("case limit is inclusive");
+        assert!(validate_case_count(consts::MAX_JUNIT_CASES + 1).is_err());
     }
 
     /// One case's runaway output loses its tail, never the artifact: the head
@@ -557,9 +515,9 @@ stack backtrace:
         assert!(append_output(
             &mut output,
             "\n",
-            &"\u{1f980}".repeat(MAX_CASE_OUTPUT_BYTES)
+            &"\u{1f980}".repeat(consts::MAX_CASE_OUTPUT_BYTES)
         ));
-        assert!(output.len() <= MAX_CASE_OUTPUT_BYTES);
+        assert!(output.len() <= consts::MAX_CASE_OUTPUT_BYTES);
         assert!(output.is_char_boundary(output.len()), "cut on a boundary");
         assert!(output.starts_with("assert head\n"), "head survives");
         assert!(output.len() > head, "budget is spent, not abandoned");
@@ -568,7 +526,7 @@ stack backtrace:
 
     #[test]
     fn a_truncated_case_still_parses_and_is_named() {
-        let oversized = "y".repeat(MAX_CASE_OUTPUT_BYTES);
+        let oversized = "y".repeat(consts::MAX_CASE_OUTPUT_BYTES);
         let xml = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="nextest-run" tests="1" failures="1">
@@ -586,6 +544,6 @@ stack backtrace:
         assert_eq!(cases.len(), 1);
         assert!(cases[0].output_truncated);
         assert!(cases[0].output.starts_with("test failure"), "head survives");
-        assert!(cases[0].output.len() <= MAX_CASE_OUTPUT_BYTES);
+        assert!(cases[0].output.len() <= consts::MAX_CASE_OUTPUT_BYTES);
     }
 }

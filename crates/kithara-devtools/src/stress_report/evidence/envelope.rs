@@ -19,10 +19,10 @@ use super::{
     },
     normalize_signature, render_clusters, strip_ansi, wait_signatures,
 };
-use crate::common::project::{StressEvidenceConfig, StressRenderBudgets};
-
-const MAX_ENVELOPE_BYTES: u64 = 4 * 1_024 * 1_024;
-const MAX_ENVELOPE_DIRECTORY_ENTRIES: usize = 100_000;
+use crate::{
+    common::project::{StressEvidenceConfig, StressRenderBudgets},
+    consts,
+};
 
 /// Flight-recorder tail lines from attempt envelopes, clustered across
 /// repeats. Only failed attempts write dumps, so the passed column stays
@@ -219,7 +219,8 @@ pub(super) fn append(
     if files.limit_exceeded {
         let _ = writeln!(
             out,
-            "\nEvidence problem: the envelope directory exceeds the deterministic limit of `{MAX_ENVELOPE_DIRECTORY_ENTRIES}` entries. The raw directory was left untouched."
+            "\nEvidence problem: the envelope directory exceeds the deterministic limit of `{MAX_ENVELOPE_DIRECTORY_ENTRIES}` entries. The raw directory was left untouched.",
+            MAX_ENVELOPE_DIRECTORY_ENTRIES = consts::MAX_ENVELOPE_DIRECTORY_ENTRIES
         );
     }
     let missing = input.expected.difference(&matched).collect::<Vec<_>>();
@@ -298,7 +299,7 @@ fn envelope_files(dir: &Path) -> Option<EnvelopeFiles> {
     let mut invalid = 0usize;
     let mut limit_exceeded = false;
     for (index, entry) in entries.enumerate() {
-        if index >= MAX_ENVELOPE_DIRECTORY_ENTRIES {
+        if index >= consts::MAX_ENVELOPE_DIRECTORY_ENTRIES {
             limit_exceeded = true;
             break;
         }
@@ -435,13 +436,13 @@ fn display_flight_line(line: &str) -> String {
 fn read_envelope(path: &Path) -> Option<String> {
     let file = File::open(path).ok()?;
     let length = file.metadata().ok()?.len();
-    if length > MAX_ENVELOPE_BYTES {
+    if length > consts::MAX_ENVELOPE_BYTES {
         return None;
     }
     let capacity = usize::try_from(length).ok()?;
     let mut bytes = Vec::with_capacity(capacity.checked_add(1)?);
-    let max_bytes = usize::try_from(MAX_ENVELOPE_BYTES).ok()?;
-    file.take(MAX_ENVELOPE_BYTES.saturating_add(1))
+    let max_bytes = usize::try_from(consts::MAX_ENVELOPE_BYTES).ok()?;
+    file.take(consts::MAX_ENVELOPE_BYTES.saturating_add(1))
         .read_to_end(&mut bytes)
         .ok()?;
     if bytes.len() > max_bytes {
@@ -683,7 +684,8 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("hang.json");
         let file = File::create(&path).expect("create fixture");
-        file.set_len(MAX_ENVELOPE_BYTES + 1).expect("size fixture");
+        file.set_len(consts::MAX_ENVELOPE_BYTES + 1)
+            .expect("size fixture");
 
         assert!(read_envelope(&path).is_none());
     }

@@ -11,11 +11,9 @@ use regex::Regex;
 use crate::{
     Ctx,
     common::{project::ProjectConfig, timestamp::utc_timestamp, walker::walk_rs_files},
-    quality_assessment, quality_lab,
+    consts, quality_assessment, quality_lab,
     verdict::NotClean,
 };
-
-const MOCK_COVERAGE_PATTERN: &str = r"(unimock::unimock\(|#\[\s*kithara::mock)";
 
 #[derive(Debug, Subcommand)]
 pub enum QualityCommand {
@@ -164,7 +162,7 @@ fn run_report(
     let test_files = collect_rs_files(&[&tests_dir])?;
 
     let re_pub_trait = Regex::new(r"pub trait ")?;
-    let re_mock_coverage = Regex::new(MOCK_COVERAGE_PATTERN)?;
+    let re_mock_coverage = Regex::new(consts::MOCK_COVERAGE_PATTERN)?;
     let re_rstest = Regex::new(r"#\[rstest\]")?;
     let re_plain_test = Regex::new(r"#\[(tokio::)?test\]")?;
     let re_tcp_listener = Regex::new(r#"TcpListener::bind\("127\.0\.0\.1:0"\)"#)?;
@@ -377,7 +375,7 @@ fn scan_trait_files(root: &Path) -> Result<Vec<TraitFileInfo>> {
     let files = walk_rs_files(&crates_dir)?;
 
     let re_pub_trait = Regex::new(r"pub trait ")?;
-    let re_mock_coverage = Regex::new(MOCK_COVERAGE_PATTERN)?;
+    let re_mock_coverage = Regex::new(consts::MOCK_COVERAGE_PATTERN)?;
 
     let mut results = Vec::new();
 
@@ -547,7 +545,7 @@ fn run_unimock_check() -> Result<()> {
     let files = walk_rs_files(&traits_dir)?;
 
     let re_pub_trait = Regex::new(r"pub trait ")?;
-    let re_mock_coverage = Regex::new(MOCK_COVERAGE_PATTERN)?;
+    let re_mock_coverage = Regex::new(consts::MOCK_COVERAGE_PATTERN)?;
 
     let mut checked = 0usize;
     let mut missing: Vec<String> = Vec::new();

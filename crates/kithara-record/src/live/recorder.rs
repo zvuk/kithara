@@ -14,15 +14,7 @@ use ringbuf::{
 };
 
 use super::task::RecordingTask;
-use crate::{LiveRecordingConfig, LiveRecordingError, PartSinkFactory};
-
-pub(super) struct Consts;
-
-impl Consts {
-    pub(super) const CHANNELS: u16 = 2;
-    pub(super) const NO_CUT: u64 = u64::MAX;
-    pub(super) const STEREO: usize = 2;
-}
+use crate::{LiveRecordingConfig, LiveRecordingError, PartSinkFactory, consts};
 
 #[derive(Clone, Copy)]
 pub(crate) struct FormatChange {
@@ -108,7 +100,7 @@ impl LiveOutput for RecordingOutput {
             self.control.writing.store(false, Ordering::Release);
             return;
         }
-        let Some(samples) = frames.checked_mul(Consts::STEREO) else {
+        let Some(samples) = frames.checked_mul(consts::STEREO) else {
             self.control.writing.store(false, Ordering::Release);
             self.overflow();
             return;
@@ -124,7 +116,7 @@ impl LiveOutput for RecordingOutput {
             if self
                 .control
                 .cut_at
-                .compare_exchange(Consts::NO_CUT, at, Ordering::Release, Ordering::Relaxed)
+                .compare_exchange(consts::NO_CUT, at, Ordering::Release, Ordering::Relaxed)
                 .is_err()
             {
                 self.control.cut_requested.store(true, Ordering::Release);
@@ -224,19 +216,19 @@ impl LiveRecorder {
         F: PartSinkFactory,
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        if config.recording.encode().channels != Consts::CHANNELS {
+        if config.recording.encode().channels != consts::CHANNELS {
             return Err(LiveRecordingError::ChannelCount(
                 config.recording.encode().channels,
             ));
         }
         let buffer_frames = config.buffer_frames.get();
         let buffer_samples = buffer_frames
-            .checked_mul(Consts::STEREO)
+            .checked_mul(consts::STEREO)
             .ok_or(LiveRecordingError::CapacityOverflow)?;
         let tick_samples = config
             .tick_frames
             .get()
-            .checked_mul(Consts::STEREO)
+            .checked_mul(consts::STEREO)
             .ok_or(LiveRecordingError::CapacityOverflow)?;
         let scratch = config.pools.get_with_len::<f32>(tick_samples)?;
         let (pcm_tx, pcm_rx) = config.pools.ring::<f32>(buffer_samples)?;
@@ -259,7 +251,7 @@ impl LiveRecorder {
         let wake = dispatcher.wake_handle();
         let control = Arc::new(Control {
             accepting: AtomicBool::new(true),
-            cut_at: AtomicU64::new(Consts::NO_CUT),
+            cut_at: AtomicU64::new(consts::NO_CUT),
             ..Control::default()
         });
         let task_control = Arc::clone(&control);

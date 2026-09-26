@@ -17,24 +17,25 @@ use kithara_integration_tests::{
 
 use crate::{
     bufpool_ext::{TestPools, pools},
-    common::test_defaults::Consts as Shared,
+    common::test_defaults::{blocks_for_seconds, consts as shared},
 };
 
-struct Consts;
-impl Consts {
-    const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
-    const BLOCK_FRAMES: usize = 512;
-    const PRE_SEEK_RENDER_SECS: f64 = 1.5;
+mod consts {
+    use super::shared;
+
+    pub(super) const SAMPLE_RATE: u32 = shared::SAMPLE_RATE;
+    pub(super) const BLOCK_FRAMES: usize = 512;
+    pub(super) const PRE_SEEK_RENDER_SECS: f64 = 1.5;
     /// Warm-up success gate: the decoder has demonstrably produced PCM.
-    const PRE_SEEK_MIN_POSITION_SECS: f64 = 0.25;
+    pub(super) const PRE_SEEK_MIN_POSITION_SECS: f64 = 0.25;
     /// No-progress watchdog budget for the warm-up render (same sizing as
     /// the `hls_seek_middle_stress` warm-up over the same packaged server).
-    const PRE_SEEK_WALL_MS: u64 = 1_500;
-    const POST_SEEK_RENDER_SECS: f64 = 6.0;
+    pub(super) const PRE_SEEK_WALL_MS: u64 = 1_500;
+    pub(super) const POST_SEEK_RENDER_SECS: f64 = 6.0;
     /// Far past the 12 s fixture duration. The decoder must reject this
     /// (Symphonia returns "seek past EOF"), forcing the
     /// `recover_from_decoder_seek_error` branch.
-    const SEEK_TARGET_SECS: f64 = 50.0;
+    pub(super) const SEEK_TARGET_SECS: f64 = 50.0;
 }
 
 async fn render_burst(player: &mut OfflinePlayer, blocks: u32) {
@@ -43,7 +44,7 @@ async fn render_burst(player: &mut OfflinePlayer, blocks: u32) {
     while remaining > 0 {
         let this = remaining.min(BATCH);
         for _ in 0..this {
-            let _ = player.render(Consts::BLOCK_FRAMES).await;
+            let _ = player.render(consts::BLOCK_FRAMES).await;
         }
         remaining -= this;
         sleep(Duration::from_millis(1)).await;
@@ -73,7 +74,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
-            .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+            .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
     )
     .await;
@@ -86,10 +87,10 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     // no-progress watchdog still bounds a genuinely wedged pipeline.
     render_until_position(
         &mut player,
-        Shared::blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS, Consts::BLOCK_FRAMES),
-        Consts::PRE_SEEK_MIN_POSITION_SECS,
-        Consts::BLOCK_FRAMES,
-        Consts::PRE_SEEK_WALL_MS,
+        blocks_for_seconds(consts::PRE_SEEK_RENDER_SECS, consts::BLOCK_FRAMES),
+        consts::PRE_SEEK_MIN_POSITION_SECS,
+        consts::BLOCK_FRAMES,
+        consts::PRE_SEEK_WALL_MS,
     )
     .await;
     let pos_before = player.position();
@@ -99,15 +100,15 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     );
     let _ = player.take_notification_kinds();
 
-    player.seek(Consts::SEEK_TARGET_SECS, 1);
+    player.seek(consts::SEEK_TARGET_SECS, 1);
     eprintln!(
         "[red] seek issued target={:.1}s (past 12 s fixture duration)",
-        Consts::SEEK_TARGET_SECS
+        consts::SEEK_TARGET_SECS
     );
 
     render_burst(
         &mut player,
-        Shared::blocks_for_seconds(Consts::POST_SEEK_RENDER_SECS, Consts::BLOCK_FRAMES),
+        blocks_for_seconds(consts::POST_SEEK_RENDER_SECS, consts::BLOCK_FRAMES),
     )
     .await;
 
@@ -123,7 +124,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
         "recreate-loop signature: no terminal notification within \
          {wall_secs:.1} s of seek; position frozen at {pos_after:.3}s, \
          notifications received: {kinds:?}",
-        wall_secs = Consts::POST_SEEK_RENDER_SECS,
+        wall_secs = consts::POST_SEEK_RENDER_SECS,
     );
 
     player.close().await;

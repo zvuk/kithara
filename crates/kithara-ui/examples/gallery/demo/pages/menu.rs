@@ -1,27 +1,27 @@
 use kithara_ui::render::ReadValue;
 
-struct Consts;
+mod consts {
+    use super::MenuTrack;
 
-impl Consts {
-    const CLUB_MODULES: [bool; 11] = [
+    pub(super) const CLUB_MODULES: [bool; 11] = [
         true, true, true, false, true, true, false, false, true, true, true,
     ];
-    const DISPLAYS: [&str; 3] = ["MACBOOK PRO 16\"", "DELL U2720Q", "IPAD · SIDECAR"];
-    const LAYOUTS: [&str; 4] = [
+    pub(super) const DISPLAYS: [&str; 3] = ["MACBOOK PRO 16\"", "DELL U2720Q", "IPAD · SIDECAR"];
+    pub(super) const LAYOUTS: [&str; 4] = [
         "CLUB · 2 DECKS",
         "STUDIO · 4 DECKS + VST",
         "VISUALS + TIMELINE",
         "NARROW WINDOW · TABS",
     ];
-    const MAX_WINDOWS: usize = 3;
-    const MODULES: [&str; 11] = [
+    pub(super) const MAX_WINDOWS: usize = 3;
+    pub(super) const MODULES: [&str; 11] = [
         "ov", "mix", "fx1", "fx2", "vcf", "rec", "vis", "tl", "cpu", "net", "buf",
     ];
-    const NEW_WINDOW_LAYOUT: usize = 3;
-    const NEW_WINDOW_MODULES: [bool; 11] = [
+    pub(super) const NEW_WINDOW_LAYOUT: usize = 3;
+    pub(super) const NEW_WINDOW_MODULES: [bool; 11] = [
         true, true, false, false, false, false, false, false, false, false, false,
     ];
-    const TRACKS: [MenuTrack; 4] = [
+    pub(super) const TRACKS: [MenuTrack; 4] = [
         MenuTrack {
             title: "AURORA DRIFT",
             meta: "124 · 8A",
@@ -43,7 +43,7 @@ impl Consts {
             energy: 0.36,
         },
     ];
-    const VISUAL_MODULES: [bool; 11] = [
+    pub(super) const VISUAL_MODULES: [bool; 11] = [
         false, false, false, false, false, false, true, true, false, false, false,
     ];
 }
@@ -105,8 +105,8 @@ impl Default for MenuState {
         let mut state = Self {
             group: MenuGroup::Win,
             windows: vec![
-                MenuWindow::new(0, 0, Consts::CLUB_MODULES),
-                MenuWindow::new(1, 2, Consts::VISUAL_MODULES),
+                MenuWindow::new(0, 0, consts::CLUB_MODULES),
+                MenuWindow::new(1, 2, consts::VISUAL_MODULES),
             ],
             active: 0,
             wave_follow: true,
@@ -156,7 +156,7 @@ impl MenuState {
     }
 
     fn apply_layout(&mut self, number: &str) -> bool {
-        let Some(index) = row_index(number).filter(|index| *index < Consts::LAYOUTS.len()) else {
+        let Some(index) = row_index(number).filter(|index| *index < consts::LAYOUTS.len()) else {
             return false;
         };
         let active = self.active;
@@ -166,7 +166,7 @@ impl MenuState {
     }
 
     const fn can_open(&self) -> bool {
-        self.windows.len() < Consts::MAX_WINDOWS
+        self.windows.len() < consts::MAX_WINDOWS
     }
 
     const fn closable(&self, index: usize) -> bool {
@@ -188,7 +188,7 @@ impl MenuState {
         let Some(window) = self.windows.get_mut(index) else {
             return;
         };
-        window.display = (window.display + 1) % Consts::DISPLAYS.len();
+        window.display = (window.display + 1) % consts::DISPLAYS.len();
         self.rebuild();
     }
 
@@ -228,7 +228,7 @@ impl MenuState {
                 ReadValue::Bool(scoped_index(scope, "layout")? == self.windows[self.active].layout)
             }
             "ui.layouts.active" => {
-                ReadValue::Text(Consts::LAYOUTS[self.windows[self.active].layout])
+                ReadValue::Text(consts::LAYOUTS[self.windows[self.active].layout])
             }
             "ui.prefs.wave_follow" => ReadValue::Bool(self.wave_follow),
             "ui.prefs.autogain" => ReadValue::Bool(self.autogain),
@@ -259,8 +259,8 @@ impl MenuState {
         let display = self.windows.len();
         self.windows.push(MenuWindow::new(
             display,
-            Consts::NEW_WINDOW_LAYOUT,
-            Consts::NEW_WINDOW_MODULES,
+            consts::NEW_WINDOW_LAYOUT,
+            consts::NEW_WINDOW_MODULES,
         ));
         self.rebuild();
     }
@@ -268,10 +268,10 @@ impl MenuState {
     fn rebuild(&mut self) {
         for (index, window) in self.windows.iter_mut().enumerate() {
             let number = index + 1;
-            window.title = format!("WINDOW {number} · {}", Consts::LAYOUTS[window.layout]);
+            window.title = format!("WINDOW {number} · {}", consts::LAYOUTS[window.layout]);
             window.caption = format!(
                 "{} · {} MOD.",
-                Consts::DISPLAYS[window.display],
+                consts::DISPLAYS[window.display],
                 window.modules_on()
             );
         }
@@ -361,7 +361,7 @@ impl ContextState {
         }
         let (id, scope) = endpoint.split_once('@').unwrap_or((endpoint, ""));
         let row = scoped_index(scope, "row")?;
-        let track = Consts::TRACKS.get(row)?;
+        let track = consts::TRACKS.get(row)?;
         let value = match id {
             "gallery.menu.context" => ReadValue::Bool(self.open == Some(row)),
             "gallery.menu.selected" => ReadValue::Bool(self.selected == row),
@@ -389,7 +389,7 @@ impl ContextState {
 fn track_address(path: &str) -> Option<(usize, &str)> {
     let rest = path.strip_prefix("ctx/")?.strip_prefix("track-")?;
     let (number, node) = rest.split_once('/')?;
-    let row = row_index(number).filter(|row| *row < Consts::TRACKS.len())?;
+    let row = row_index(number).filter(|row| *row < consts::TRACKS.len())?;
     Some((row, node))
 }
 
@@ -406,5 +406,5 @@ fn module_index(scope: &str) -> Option<usize> {
 }
 
 fn module_index_of(key: &str) -> Option<usize> {
-    Consts::MODULES.iter().position(|name| *name == key)
+    consts::MODULES.iter().position(|name| *name == key)
 }

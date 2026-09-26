@@ -79,7 +79,7 @@ where
 {
     let buffer = read_probe_window(source, pools)?;
     let audio_start = skip_id3v2(&buffer);
-    if buffer.len() < Consts::WINDOW_BYTES || audio_start < Consts::WINDOW_BYTES {
+    if buffer.len() < consts::WINDOW_BYTES || audio_start < consts::WINDOW_BYTES {
         return Ok(buffer);
     }
 
@@ -95,11 +95,9 @@ where
     }
 }
 
-struct Consts;
-
-impl Consts {
-    const CHUNK_BYTES: usize = 1024;
-    const WINDOW_BYTES: usize = 16 * 1024;
+mod consts {
+    pub(super) const CHUNK_BYTES: usize = 1024;
+    pub(super) const WINDOW_BYTES: usize = 16 * 1024;
 }
 
 fn read_probe_window<S>(
@@ -109,8 +107,8 @@ fn read_probe_window<S>(
 where
     S: HasPool<u8>,
 {
-    const WINDOW_BYTES: usize = Consts::WINDOW_BYTES;
-    const CHUNK_BYTES: usize = Consts::CHUNK_BYTES;
+    const WINDOW_BYTES: usize = consts::WINDOW_BYTES;
+    const CHUNK_BYTES: usize = consts::CHUNK_BYTES;
 
     let mut buffer = pools.get_with_len::<u8>(WINDOW_BYTES)?;
     buffer.clear();

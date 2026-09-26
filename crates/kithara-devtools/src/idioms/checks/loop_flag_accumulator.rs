@@ -13,13 +13,15 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to},
 };
 
-pub(crate) const ID: &str = "loop_flag_accumulator";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "loop_flag_accumulator";
+}
 
 pub(crate) struct LoopFlagAccumulator;
 
 impl Check for LoopFlagAccumulator {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -244,12 +246,12 @@ fn check_loop(
         if read.contains(&name) {
             continue;
         }
-        if sup.is_suppressed(line, ID) {
+        if sup.is_suppressed(line, consts::ID) {
             continue;
         }
         let key = format!("{rel}:{line}:{name}");
         out.push(Violation::warn(
-            ID,
+            consts::ID,
             key,
             format!(
                 "`{name} = true` set under `if` inside a loop is a hand-rolled \

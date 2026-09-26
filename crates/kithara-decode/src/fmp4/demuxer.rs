@@ -1,6 +1,6 @@
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_stream::{AudioCodec, ByteMap, PendingReason, ReaderInput, SegmentDescriptor};
+use kithara_stream::{AudioCodec, ByteMap, PendingReason, SegmentDescriptor};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -13,8 +13,6 @@ use crate::{
     error::{DecodeError, DecodeResult},
     traits::BoxedSource,
 };
-
-pub(crate) const REQUIRED_INPUT: ReaderInput = ReaderInput::InitOnly;
 
 struct SegmentCursor {
     frames: Option<DecodedFrames>,

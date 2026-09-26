@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use super::{
-    binding::{BLOCK_HIDDEN, BindingSide, check_binding},
+    binding::{BindingSide, check_binding, consts::BLOCK_HIDDEN},
     measure::{Sibling, check_block_position, check_measured_box, check_reveal, check_thresholds},
     module::{claim, record_block},
     path::{NodePath, check_id, check_state_id},

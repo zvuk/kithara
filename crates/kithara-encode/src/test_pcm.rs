@@ -1,10 +1,7 @@
 #[cfg(feature = "ffmpeg")]
 use std::mem::size_of;
 
-use crate::PcmSource;
-
-#[cfg(feature = "ffmpeg")]
-const I16_SCALE: f32 = 32_768.0;
+use crate::{PcmSource, consts};
 
 pub(crate) struct TestPcm {
     bytes: Vec<u8>,
@@ -25,7 +22,7 @@ impl TestPcm {
     pub(crate) fn samples_f32(&self) -> Vec<f32> {
         self.bytes
             .chunks_exact(size_of::<i16>())
-            .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / I16_SCALE)
+            .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / consts::I16_SCALE)
             .collect()
     }
 }

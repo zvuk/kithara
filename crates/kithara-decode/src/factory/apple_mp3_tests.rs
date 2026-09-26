@@ -18,16 +18,15 @@ use crate::{
     traits::Decoder,
 };
 
-struct Consts;
-
-impl Consts {
+mod consts {
+    use super::Duration;
     /// One beat of the 120 BPM fixture at 48 kHz.
-    const BEAT_FRAMES: usize = 24_000;
-    const BEAT_ENERGY_TOLERANCE: f64 = 0.05;
-    const MPEG_FRAME: u64 = 1_152;
-    const ONSET_WINDOW_FRAMES: usize = 480;
-    const READY_PREFIX: u64 = 32 * 1024;
-    const SEEK: Duration = Duration::from_secs(8);
+    pub(super) const BEAT_FRAMES: usize = 24_000;
+    pub(super) const BEAT_ENERGY_TOLERANCE: f64 = 0.05;
+    pub(super) const MPEG_FRAME: u64 = 1_152;
+    pub(super) const ONSET_WINDOW_FRAMES: usize = 480;
+    pub(super) const READY_PREFIX: u64 = 32 * 1024;
+    pub(super) const SEEK: Duration = Duration::from_secs(8);
 }
 
 /// Bytes past `ready` answer the way a streamed source answers a range that is still downloading.
@@ -80,12 +79,12 @@ impl Decoded {
     /// RMS of each whole beat, centred on its pulse so a sub-beat offset between decoders
     /// cannot move a pulse into the neighbouring window.
     fn beat_energy(&self, from: usize, to: usize) -> Vec<f64> {
-        let half = Consts::BEAT_FRAMES / 2;
-        let first = from.saturating_sub(half).div_ceil(Consts::BEAT_FRAMES);
+        let half = consts::BEAT_FRAMES / 2;
+        let first = from.saturating_sub(half).div_ceil(consts::BEAT_FRAMES);
         (first..)
-            .map(|beat| beat * Consts::BEAT_FRAMES + half)
-            .take_while(|window| window + Consts::BEAT_FRAMES <= to)
-            .map(|window| rms(&self.mono[window - self.start..][..Consts::BEAT_FRAMES]))
+            .map(|beat| beat * consts::BEAT_FRAMES + half)
+            .take_while(|window| window + consts::BEAT_FRAMES <= to)
+            .map(|window| rms(&self.mono[window - self.start..][..consts::BEAT_FRAMES]))
             .collect()
     }
 
@@ -93,7 +92,7 @@ impl Decoded {
     fn onsets(&self) -> Vec<usize> {
         let levels: Vec<f64> = self
             .mono
-            .chunks_exact(Consts::ONSET_WINDOW_FRAMES)
+            .chunks_exact(consts::ONSET_WINDOW_FRAMES)
             .map(rms)
             .collect();
         let threshold = levels.iter().copied().fold(0.0_f64, f64::max) / 2.0;
@@ -101,7 +100,7 @@ impl Decoded {
             .windows(2)
             .enumerate()
             .filter(|(_, pair)| pair[0] <= threshold && pair[1] > threshold)
-            .map(|(index, _)| self.start + (index + 1) * Consts::ONSET_WINDOW_FRAMES)
+            .map(|(index, _)| self.start + (index + 1) * consts::ONSET_WINDOW_FRAMES)
             .collect()
     }
 }
@@ -197,7 +196,7 @@ fn reference(bytes: &[u8], seek: Option<Duration>) -> Decoded {
 
 fn streamed_apple(bytes: &[u8], seek: Option<Duration>) -> (Decoded, bool) {
     let total = u64::try_from(bytes.len()).expect("fixture length fits u64");
-    let ready = Arc::new(AtomicU64::new(Consts::READY_PREFIX));
+    let ready = Arc::new(AtomicU64::new(consts::READY_PREFIX));
     let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
         DecoderConfig::builder()
             .backend(DecoderBackend::Apple)
@@ -217,7 +216,7 @@ fn streamed_apple(bytes: &[u8], seek: Option<Duration>) -> (Decoded, bool) {
 /// A streamed MP3 that the decoder reaches before its bytes do must play on once they arrive:
 /// the same span, the same pulse per beat, and the same beat grid as Symphonia on the same file.
 #[kithara::test]
-#[case::seek_past_the_download(Some(Consts::SEEK))]
+#[case::seek_past_the_download(Some(consts::SEEK))]
 #[case::read_up_to_the_download(None)]
 fn streamed_apple_mp3_resumes_where_the_download_arrives(#[case] seek: Option<Duration>) {
     let bytes = rhythm_mp3_deck_a_120bpm_48k().bytes();
@@ -236,7 +235,7 @@ fn streamed_apple_mp3_resumes_where_the_download_arrives(#[case] seek: Option<Du
             decoded.landed_byte
         );
     }
-    let tolerance = usize::try_from(2 * Consts::MPEG_FRAME).expect("tolerance fits usize");
+    let tolerance = usize::try_from(2 * consts::MPEG_FRAME).expect("tolerance fits usize");
     assert!(
         decoded.end().abs_diff(expected.end()) <= tolerance,
         "the track ends at frame {} where symphonia ends at {}",
@@ -257,7 +256,7 @@ fn streamed_apple_mp3_resumes_where_the_download_arrives(#[case] seek: Option<Du
     assert!(!expected_energy.is_empty(), "the span holds whole beats");
     for (beat, (got, want)) in energy.iter().zip(&expected_energy).enumerate() {
         assert!(
-            (got - want).abs() <= want * Consts::BEAT_ENERGY_TOLERANCE,
+            (got - want).abs() <= want * consts::BEAT_ENERGY_TOLERANCE,
             "beat {beat} carries RMS {got} where symphonia carries {want}"
         );
     }
@@ -271,13 +270,13 @@ fn streamed_apple_mp3_resumes_where_the_download_arrives(#[case] seek: Option<Du
     );
     for (got, want) in onsets.iter().zip(&expected_onsets) {
         assert!(
-            got.abs_diff(*want) <= Consts::ONSET_WINDOW_FRAMES,
+            got.abs_diff(*want) <= consts::ONSET_WINDOW_FRAMES,
             "a pulse lands at frame {got} where symphonia puts it at {want}"
         );
     }
     for pair in onsets.windows(2) {
         assert!(
-            (pair[1] - pair[0]).abs_diff(Consts::BEAT_FRAMES) <= Consts::ONSET_WINDOW_FRAMES,
+            (pair[1] - pair[0]).abs_diff(consts::BEAT_FRAMES) <= consts::ONSET_WINDOW_FRAMES,
             "pulses {} frames apart break the 120 BPM grid",
             pair[1] - pair[0]
         );

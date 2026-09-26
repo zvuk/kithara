@@ -9,11 +9,9 @@ use num_traits::cast::AsPrimitive;
 
 use crate::demo::DemoRegistry;
 
-struct Consts;
-
-impl Consts {
-    const FRAME_WINDOW: usize = 300;
-    const WAVE_BUCKETS: u16 = 8_192;
+mod consts {
+    pub(super) const FRAME_WINDOW: usize = 300;
+    pub(super) const WAVE_BUCKETS: u16 = 8_192;
 }
 
 pub(crate) struct StressState {
@@ -36,7 +34,7 @@ pub(crate) struct StressState {
 
 impl Default for StressState {
     fn default() -> Self {
-        Self::new(Consts::WAVE_BUCKETS)
+        Self::new(consts::WAVE_BUCKETS)
     }
 }
 
@@ -49,9 +47,9 @@ impl StressState {
     pub(crate) fn new(buckets: u16) -> Self {
         Self {
             fader: 0.7,
-            frame_ms: VecDeque::with_capacity(Consts::FRAME_WINDOW),
+            frame_ms: VecDeque::with_capacity(consts::FRAME_WINDOW),
             frame_ms_avg: "--".to_owned(),
-            frame_ms_ordered: Vec::with_capacity(Consts::FRAME_WINDOW),
+            frame_ms_ordered: Vec::with_capacity(consts::FRAME_WINDOW),
             frame_ms_p99: "--".to_owned(),
             fps: "--".to_owned(),
             last_tick: None,
@@ -106,7 +104,7 @@ impl StressState {
     }
 
     fn record_frame(&mut self, frame_ms: f64) {
-        if self.frame_ms.len() == Consts::FRAME_WINDOW {
+        if self.frame_ms.len() == consts::FRAME_WINDOW {
             self.frame_ms.pop_front();
         }
         self.frame_ms.push_back(frame_ms);

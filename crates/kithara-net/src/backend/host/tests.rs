@@ -19,7 +19,7 @@ use url::Url;
 
 use super::{
     AlreadyInstalled, HostBuffer, HostCall, HostEvents, HostFailure, HostMethod, HostRequest,
-    HostTransport, HttpClient, call::READ_SIZE, install,
+    HostTransport, HttpClient, call::consts::READ_SIZE, install,
 };
 use crate::{
     error::NetError,

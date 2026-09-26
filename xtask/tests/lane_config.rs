@@ -195,8 +195,8 @@ fn xtask_pipeline_kind_names() -> Vec<String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("xtask has a workspace root");
-    let source = fs::read_to_string(root.join("xtask/src/config.rs"))
-        .expect("the xtask config source is readable");
+    let source = fs::read_to_string(root.join("xtask/src/consts.rs"))
+        .expect("the xtask constants source is readable");
     let start = source
         .find("pub(crate) const PIPELINE_KINDS")
         .expect("PIPELINE_KINDS is declared");
@@ -218,8 +218,8 @@ fn xtask_lane_role_names() -> Vec<String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("xtask has a workspace root");
-    let source = fs::read_to_string(root.join("xtask/src/config.rs"))
-        .expect("the xtask config source is readable");
+    let source = fs::read_to_string(root.join("xtask/src/consts.rs"))
+        .expect("the xtask constants source is readable");
     let start = source
         .find("pub(crate) const LANE_ROLES")
         .expect("LANE_ROLES is declared");

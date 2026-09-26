@@ -3,9 +3,9 @@ use std::{cmp::Ordering, ops::RangeInclusive};
 use kithara_platform::sync::Arc;
 
 use super::{BeatEvidence, BeatMarker, BeatsPerMinute, Meter, SegmentFacts};
-use crate::{AssetFrame, AxisKind, Beat, FrameUncertainty, MapAxis, MapPosition, SessionFrame};
-
-const SECONDS_PER_MINUTE: f64 = 60.0;
+use crate::{
+    AssetFrame, AxisKind, Beat, FrameUncertainty, MapAxis, MapPosition, SessionFrame, consts,
+};
 
 /// Which segment endpoint failed validation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -211,7 +211,8 @@ impl MapSegment {
         let frames =
             f64::try_from(self.end_position).ok()? - f64::try_from(self.start_position).ok()?;
         let beats = f64::from(self.end_beat) - f64::from(self.start_beat);
-        let bpm = beats * f64::from(axis.sample_rate().get()) * SECONDS_PER_MINUTE / frames;
+        let bpm =
+            beats * f64::from(axis.sample_rate().get()) * consts::MODEL_SECONDS_PER_MINUTE / frames;
         BeatsPerMinute::try_from(bpm).ok()
     }
 

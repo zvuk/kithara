@@ -11,9 +11,9 @@ use kithara_ui::{
 use crate::{Group, Page, Program, demo, fixture, sections};
 
 /// The constants every host and page of this harness share.
-pub(crate) struct Harness;
+pub(crate) mod consts {
+    use super::{Group, Page, Program, Pt, TextureFormat};
 
-impl Harness {
     /// The format each host rasterises into. The retained one matches the gallery's
     /// own capture; iced's engine is built for a surface format, which is the sRGB
     /// pair.
@@ -258,7 +258,7 @@ impl Harness {
         Page {
             name: "perf-scroll-vis",
             group: Group::Scroll,
-            own: Some(Self::SCROLL_VIS_LAYOUT),
+            own: Some(SCROLL_VIS_LAYOUT),
             tab: "vis",
             frames: 60,
             program: Program::Wheels(&[0, 1, 4, 8]),
@@ -279,7 +279,7 @@ impl Harness {
     /// The list is the navigator's: it is the only one in the gallery whose content
     /// outgrows its viewport, and a wheel over a viewport nothing overflows is a
     /// measurement of a clamp rather than of a scroll.
-    const SCROLL_VIS_LAYOUT: &str = "perf-scroll-vis.klayout.ron";
+    pub(super) const SCROLL_VIS_LAYOUT: &str = "perf-scroll-vis.klayout.ron";
 }
 
 /// The gallery's nav beside a full-bleed visualiser: the wheel goes to the
@@ -319,7 +319,7 @@ pub(crate) struct Fixture {
 impl Default for Fixture {
     fn default() -> Self {
         let mut extra = MemResolver::default();
-        extra.insert(Harness::SCROLL_VIS_LAYOUT, &scroll_vis_ron());
+        extra.insert(consts::SCROLL_VIS_LAYOUT, &scroll_vis_ron());
         Self {
             registry: Box::new(demo::registry()),
             resolver: OverlayResolver::new(extra, fixture::resolver()),

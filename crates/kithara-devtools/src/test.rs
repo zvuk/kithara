@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig},
-    retried, sccache, touched,
+    consts, retried, sccache, touched,
     verdict::ChildFailure,
 };
 
@@ -279,9 +279,11 @@ fn validate_config(config: &TestCommandConfig) -> Result<()> {
     }
     for (name, lane) in &config.lanes {
         for entry in &lane.undeclared_toggles {
-            if entry != FLASH_TOGGLE && entry != NO_BLOCK_TOGGLE {
+            if entry != consts::FLASH_TOGGLE && entry != consts::NO_BLOCK_TOGGLE {
                 bail!(
-                    "test.lanes.{name}.undeclared_toggles carries `{entry}`; valid toggles are `{FLASH_TOGGLE}` and `{NO_BLOCK_TOGGLE}`"
+                    "test.lanes.{name}.undeclared_toggles carries `{entry}`; valid toggles are `{FLASH_TOGGLE}` and `{NO_BLOCK_TOGGLE}`",
+                    FLASH_TOGGLE = consts::FLASH_TOGGLE,
+                    NO_BLOCK_TOGGLE = consts::NO_BLOCK_TOGGLE
                 );
             }
         }
@@ -372,9 +374,6 @@ pub(crate) struct LaneToggles {
     pub(crate) no_block: bool,
 }
 
-pub(crate) const FLASH_TOGGLE: &str = "flash";
-pub(crate) const NO_BLOCK_TOGGLE: &str = "no-block";
-
 /// Resolve one toggle for a lane.
 ///
 /// A lane lists a toggle in `undeclared_toggles` when none of its packages
@@ -403,14 +402,14 @@ fn lane_toggles(
 ) -> LaneToggles {
     LaneToggles {
         flash: toggle(
-            FLASH_TOGGLE,
+            consts::FLASH_TOGGLE,
             request.and_then(|request| request.flash),
             lane.default_flash,
             lane,
             config.flash.default,
         ),
         no_block: toggle(
-            NO_BLOCK_TOGGLE,
+            consts::NO_BLOCK_TOGGLE,
             request.and_then(|request| request.no_block),
             lane.default_no_block,
             lane,
@@ -835,7 +834,10 @@ mod tests {
                 default_backend: None,
                 default_flash: None,
                 default_no_block: None,
-                undeclared_toggles: vec![FLASH_TOGGLE.to_owned(), NO_BLOCK_TOGGLE.to_owned()],
+                undeclared_toggles: vec![
+                    consts::FLASH_TOGGLE.to_owned(),
+                    consts::NO_BLOCK_TOGGLE.to_owned(),
+                ],
                 passthrough: String::new(),
                 env: BTreeMap::new(),
                 owns: Vec::new(),

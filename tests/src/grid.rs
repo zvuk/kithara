@@ -210,8 +210,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-
-    const BEAT_FRAMES: u64 = 24_000;
+    use crate::consts;
 
     fn artifact(downbeats: &[u64]) -> BeatArtifact {
         artifact_of(8, downbeats)
@@ -219,14 +218,14 @@ mod tests {
 
     fn artifact_of(beat_count: u64, downbeats: &[u64]) -> BeatArtifact {
         let beats = (0..beat_count)
-            .map(|beat| (beat * BEAT_FRAMES, Some(1.0)))
+            .map(|beat| (beat * consts::BEAT_FRAMES, Some(1.0)))
             .collect();
         BeatArtifact::new(
             120.0,
             beats,
             downbeats
                 .iter()
-                .map(|beat| (beat * BEAT_FRAMES, Some(1.0)))
+                .map(|beat| (beat * consts::BEAT_FRAMES, Some(1.0)))
                 .collect(),
         )
     }
@@ -234,7 +233,7 @@ mod tests {
     fn axis() -> AssetAxis {
         AssetAxis::new(
             NonZeroU32::new(48_000).expect("rate"),
-            AssetExtent::Bounded(8 * BEAT_FRAMES),
+            AssetExtent::Bounded(8 * consts::BEAT_FRAMES),
         )
     }
 
@@ -273,7 +272,7 @@ mod tests {
         let beats = 26;
         let axis = AssetAxis::new(
             NonZeroU32::new(48_000).expect("rate"),
-            AssetExtent::Bounded(beats * BEAT_FRAMES),
+            AssetExtent::Bounded(beats * consts::BEAT_FRAMES),
         );
         let set = segment_set(&artifact_of(beats, &[1, 7, 13, 17, 21, 25]), axis).expect("set");
         let meter = meter_at(set, 14.0);
@@ -288,7 +287,11 @@ mod tests {
         let downbeats = BeatArtifact::new(
             base.bpm(),
             base.beats().iter().map(|&b| (b, None)).collect(),
-            vec![(0, None), (BEAT_FRAMES + 1, None), (4 * BEAT_FRAMES, None)],
+            vec![
+                (0, None),
+                (consts::BEAT_FRAMES + 1, None),
+                (4 * consts::BEAT_FRAMES, None),
+            ],
         );
         let meter = meter_at(segment_set(&downbeats, axis()).expect("set"), 3.0);
 

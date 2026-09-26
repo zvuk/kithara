@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use sha2::{Digest as _, Sha256};
 
-const BUFFER_SIZE: usize = 64 * 1024;
+use crate::consts;
 
 pub(super) struct TreeDigest {
     entries: u64,
@@ -106,8 +106,8 @@ impl TreeDigest {
     fn add_file(&mut self, physical: &Path, logical: &Path) -> Result<()> {
         let file = fs::File::open(physical)
             .with_context(|| format!("read cache input {}", physical.display()))?;
-        let mut reader = BufReader::with_capacity(BUFFER_SIZE, file);
-        let mut buffer = [0_u8; BUFFER_SIZE];
+        let mut reader = BufReader::with_capacity(consts::BUFFER_SIZE, file);
+        let mut buffer = [0_u8; consts::BUFFER_SIZE];
         let mut hasher = Sha256::new();
         update_field(&mut hasher, b"file");
         update_field(&mut hasher, logical.as_os_str().as_encoded_bytes());
@@ -189,9 +189,10 @@ mod tests {
 
     use anyhow::Result;
 
-    use super::{BUFFER_SIZE, tree};
+    use super::tree;
+    use crate::consts;
 
-    const _: () = assert!(BUFFER_SIZE <= 1024 * 1024);
+    const _: () = assert!(consts::BUFFER_SIZE <= 1024 * 1024);
 
     #[test]
     fn digest_is_independent_of_creation_order() -> Result<()> {

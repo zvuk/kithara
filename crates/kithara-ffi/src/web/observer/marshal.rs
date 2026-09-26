@@ -2,7 +2,9 @@ use js_sys::{Object, Reflect};
 use kithara::events::TrackId;
 use wasm_bindgen::JsValue;
 
-pub(crate) const KIND: &str = "kind";
+pub(crate) mod consts {
+    pub(crate) const KIND: &str = "kind";
+}
 
 pub(crate) fn set_str(obj: &Object, key: &str, val: &str) {
     let _ = Reflect::set(obj, &JsValue::from_str(key), &JsValue::from_str(val));

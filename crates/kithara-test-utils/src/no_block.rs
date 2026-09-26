@@ -141,8 +141,8 @@ mod tests {
     };
     use kithara_test_utils::kithara;
 
-    const BUDGET_MS: u64 = 5;
-    const SLEEP_MS: u64 = 1;
+    use crate::consts;
+
     fn run<F: Future<Output = ()>>(fut: F) {
         let rt = kithara_platform::tokio::runtime::Builder::new_current_thread()
             .build()
@@ -173,7 +173,7 @@ mod tests {
 
     #[kithara::allow_block]
     fn sync_allowed_sleep() {
-        kithara_platform::thread::sleep(Duration::from_millis(SLEEP_MS));
+        kithara_platform::thread::sleep(Duration::from_millis(consts::SLEEP_MS));
     }
 
     #[kithara::no_block(budget_ms = 10_000)]
@@ -183,7 +183,7 @@ mod tests {
 
     #[kithara::allow_block]
     async fn async_allowed_sleep() {
-        kithara_platform::thread::sleep(Duration::from_millis(SLEEP_MS));
+        kithara_platform::thread::sleep(Duration::from_millis(consts::SLEEP_MS));
     }
 
     #[kithara::no_block(budget_ms = 10_000)]
@@ -202,7 +202,13 @@ mod tests {
             msg.contains(concat!(module_path!(), "::no_block_spin_panics")),
             "got: {msg}"
         );
-        assert!(msg.contains(&format!("budget {BUDGET_MS}ms")), "got: {msg}");
+        assert!(
+            msg.contains(&format!(
+                "budget {BUDGET_MS}ms",
+                BUDGET_MS = consts::BUDGET_MS
+            )),
+            "got: {msg}"
+        );
     }
 
     #[test]

@@ -11,7 +11,9 @@ use crate::common::{
     walker::{relative_to, walk_rs_files},
 };
 
-pub(crate) const ID: &str = "split_module";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "split_module";
+}
 
 /// A module whose declaring file sits beside its own directory: `foo.rs` next
 /// to `foo/`. The module is read from two places, which is the shape a split
@@ -22,7 +24,7 @@ pub(crate) struct SplitModule;
 
 impl Check for SplitModule {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -79,7 +81,7 @@ fn split_modules<'a>(
             format!("move the crate root to `{dir_key}/{target}`")
         };
         violations.push(Violation::deny(
-            ID,
+            consts::ID,
             key.clone(),
             format!("`{key}` sits beside its own directory; {remedy}"),
         ));

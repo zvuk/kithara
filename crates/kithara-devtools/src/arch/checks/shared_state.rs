@@ -9,13 +9,15 @@ use crate::common::{
     walker::{relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "shared_state";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "shared_state";
+}
 
 pub(crate) struct SharedState;
 
 impl Check for SharedState {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -46,7 +48,7 @@ impl Check for SharedState {
                 .replace('\\', "/");
             if count >= cfg.deny {
                 violations.push(Violation::deny(
-                    ID,
+                    consts::ID,
                     key,
                     format!(
                         "{count} Arc<Mutex/RwLock> occurrences in one file (deny threshold {})",
@@ -55,7 +57,7 @@ impl Check for SharedState {
                 ));
             } else if count >= cfg.warn {
                 violations.push(Violation::warn(
-                    ID,
+                    consts::ID,
                     key,
                     format!(
                         "{count} Arc<Mutex/RwLock> occurrences in one file (warn threshold {})",

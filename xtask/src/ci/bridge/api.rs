@@ -12,6 +12,7 @@ use super::{
     command::BridgeConfig,
     model::{PipelineObservation, PullRequest, pipeline_observation},
 };
+use crate::consts;
 
 enum Payload<'a> {
     Json(&'a Value),
@@ -76,8 +77,6 @@ pub(super) struct Github {
     api: Api,
     token: String,
 }
-
-const STATUS_CONTEXT: &str = "kithara/gitlab-verification";
 
 impl Github {
     pub(super) fn new(config: &BridgeConfig) -> Result<Self> {
@@ -152,7 +151,7 @@ impl Github {
             &format!("/repos/{}/statuses/{sha}", self.config.github_repo),
             Some(&json!({
                 "state": state,
-                "context": STATUS_CONTEXT,
+                "context": consts::STATUS_CONTEXT,
                 "description": status_description(description),
             })),
         )?;
@@ -482,7 +481,7 @@ mod tests {
         let path = format!("/repos/owner/repo/statuses/{sha}");
         let body = json!({
             "state": "pending",
-            "context": STATUS_CONTEXT,
+            "context": consts::STATUS_CONTEXT,
             "description": status_description("GitLab verification running"),
         });
 

@@ -9,13 +9,15 @@ use crate::common::{
     walker::{relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "no_lib_statics";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "no_lib_statics";
+}
 
 pub(crate) struct NoLibStatics;
 
 impl Check for NoLibStatics {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -37,7 +39,7 @@ impl Check for NoLibStatics {
 
             for label in hits {
                 violations.push(Violation::warn(
-                    ID,
+                    consts::ID,
                     format!("{key}::{label}"),
                     format!(
                         "{label}: hidden global in library code; pass the singleton \

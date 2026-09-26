@@ -5,27 +5,25 @@ use num_traits::cast;
 
 use crate::signal::{Pcm, Wave, header, wav, wav_from_fn, wav_of_size};
 
-struct Consts;
-
-impl Consts {
-    const BEATS_PER_BAR: usize = 4;
-    const BEAT_MARKER_PEAK: i16 = 22_000;
-    const BEAT_TONE_PEAK: i16 = 10_000;
-    const CHANNELS: u16 = 2;
-    const DOWNBEAT_MARKER_PEAK: i16 = 28_000;
-    const DOWNBEAT_TONE_PEAK: i16 = 14_000;
-    const LONG_FRAMES: usize = 529_200;
-    const MARKER_FRAMES: usize = 2_205;
-    const MARKER_PEAK: i16 = 2_000;
-    const MARKER_STARTS: [usize; 2] = [17_640, 35_280];
-    const MILLIS_PER_SECOND: usize = 1_000;
-    const PULSE_DURATION_MS: usize = 40;
-    const SAMPLE_RATE: u32 = 44_100;
-    const SECONDS_PER_MINUTE: f64 = 60.0;
-    const SHORT_FRAMES: usize = 88_200;
-    const SOURCE_FRAMES: usize = 264_600;
-    const TONE_HZ: f64 = 440.0;
-    const TONE_PEAK: i16 = 16_000;
+mod consts {
+    pub(super) const BEATS_PER_BAR: usize = 4;
+    pub(super) const BEAT_MARKER_PEAK: i16 = 22_000;
+    pub(super) const BEAT_TONE_PEAK: i16 = 10_000;
+    pub(super) const CHANNELS: u16 = 2;
+    pub(super) const DOWNBEAT_MARKER_PEAK: i16 = 28_000;
+    pub(super) const DOWNBEAT_TONE_PEAK: i16 = 14_000;
+    pub(super) const LONG_FRAMES: usize = 529_200;
+    pub(super) const MARKER_FRAMES: usize = 2_205;
+    pub(super) const MARKER_PEAK: i16 = 2_000;
+    pub(super) const MARKER_STARTS: [usize; 2] = [17_640, 35_280];
+    pub(super) const MILLIS_PER_SECOND: usize = 1_000;
+    pub(super) const PULSE_DURATION_MS: usize = 40;
+    pub(super) const SAMPLE_RATE: u32 = 44_100;
+    pub(super) const SECONDS_PER_MINUTE: f64 = 60.0;
+    pub(super) const SHORT_FRAMES: usize = 88_200;
+    pub(super) const SOURCE_FRAMES: usize = 264_600;
+    pub(super) const TONE_HZ: f64 = 440.0;
+    pub(super) const TONE_PEAK: i16 = 16_000;
 }
 
 #[derive(Clone, Copy)]
@@ -40,18 +38,18 @@ pub(super) enum RhythmControl {
 #[case::a440_10_frames(10, i16::MAX)]
 #[case::a440_100_frames(100, i16::MAX)]
 #[case::a440_10000_frames(10_000, i16::MAX)]
-#[case::a440_full_scale_2s(Consts::SHORT_FRAMES, i16::MAX)]
-#[case::a440_2s(Consts::SHORT_FRAMES, Consts::TONE_PEAK)]
-#[case::a440_6s(Consts::SOURCE_FRAMES, Consts::TONE_PEAK)]
-#[case::a440_12s(Consts::LONG_FRAMES, Consts::TONE_PEAK)]
+#[case::a440_full_scale_2s(consts::SHORT_FRAMES, i16::MAX)]
+#[case::a440_2s(consts::SHORT_FRAMES, consts::TONE_PEAK)]
+#[case::a440_6s(consts::SOURCE_FRAMES, consts::TONE_PEAK)]
+#[case::a440_12s(consts::LONG_FRAMES, consts::TONE_PEAK)]
 fn sine_wav(total_frames: usize, peak: i16) -> Vec<u8> {
     wav(
-        Consts::SAMPLE_RATE,
-        Consts::CHANNELS,
+        consts::SAMPLE_RATE,
+        consts::CHANNELS,
         total_frames,
         Wave::Sine {
             peak,
-            hz: Consts::TONE_HZ,
+            hz: consts::TONE_HZ,
         },
     )
 }
@@ -79,29 +77,29 @@ fn sine_wav(total_frames: usize, peak: i16) -> Vec<u8> {
 #[case::loud_8s(352_800, 26_213)]
 #[case::loud_30s(1_323_000, 26_213)]
 fn constant_wav(total_frames: usize, level: i16) -> Vec<u8> {
-    wav_from_fn(Consts::SAMPLE_RATE, Consts::CHANNELS, total_frames, |_| {
+    wav_from_fn(consts::SAMPLE_RATE, consts::CHANNELS, total_frames, |_| {
         level
     })
 }
 
 /// 440 Hz tone with two lower-amplitude source-time markers.
 #[kithara::asset(ext = "wav", content_type = "audio/wav", embed)]
-#[case::a440_6s(Consts::SOURCE_FRAMES, Consts::TONE_PEAK, Consts::MARKER_PEAK)]
+#[case::a440_6s(consts::SOURCE_FRAMES, consts::TONE_PEAK, consts::MARKER_PEAK)]
 fn marked_sine_wav(total_frames: usize, peak: i16, marker_peak: i16) -> Vec<u8> {
     wav_from_fn(
-        Consts::SAMPLE_RATE,
-        Consts::CHANNELS,
+        consts::SAMPLE_RATE,
+        consts::CHANNELS,
         total_frames,
         |frame| {
-            let in_marker = Consts::MARKER_STARTS
+            let in_marker = consts::MARKER_STARTS
                 .iter()
-                .any(|start| frame >= *start && frame < start + Consts::MARKER_FRAMES);
+                .any(|start| frame >= *start && frame < start + consts::MARKER_FRAMES);
             let peak = if in_marker { marker_peak } else { peak };
             Wave::Sine {
                 peak,
-                hz: Consts::TONE_HZ,
+                hz: consts::TONE_HZ,
             }
-            .sample(frame, Consts::SAMPLE_RATE)
+            .sample(frame, consts::SAMPLE_RATE)
         },
     )
 }
@@ -175,12 +173,12 @@ pub(super) fn rhythm_pcm(
     control: RhythmControl,
 ) -> Pcm {
     let beat_frames: usize =
-        cast((f64::from(sample_rate) * Consts::SECONDS_PER_MINUTE / bpm).round())
+        cast((f64::from(sample_rate) * consts::SECONDS_PER_MINUTE / bpm).round())
             .expect("invariant: a fixture beat period fits usize");
     let first_beat = beat_frames + phase_frame;
     let pulse_frames = usize::try_from(sample_rate).expect("invariant: a sample rate fits usize")
-        * Consts::PULSE_DURATION_MS
-        / Consts::MILLIS_PER_SECOND;
+        * consts::PULSE_DURATION_MS
+        / consts::MILLIS_PER_SECOND;
     let (bar_phase, missing_beat) = match control {
         RhythmControl::Aligned => (0, None),
         RhythmControl::BarPhaseBeats(phase) => (phase, None),
@@ -196,12 +194,12 @@ pub(super) fn rhythm_pcm(
         if missing_beat == Some(beat) {
             return 0;
         }
-        let downbeat = beat % Consts::BEATS_PER_BAR == bar_phase;
+        let downbeat = beat % consts::BEATS_PER_BAR == bar_phase;
         if within_beat == 0 {
             return if downbeat {
-                Consts::DOWNBEAT_MARKER_PEAK
+                consts::DOWNBEAT_MARKER_PEAK
             } else {
-                Consts::BEAT_MARKER_PEAK
+                consts::BEAT_MARKER_PEAK
             };
         }
         if within_beat >= pulse_frames {
@@ -211,9 +209,9 @@ pub(super) fn rhythm_pcm(
         Wave::Sine {
             hz: carrier_hz,
             peak: if downbeat {
-                Consts::DOWNBEAT_TONE_PEAK
+                consts::DOWNBEAT_TONE_PEAK
             } else {
-                Consts::BEAT_TONE_PEAK
+                consts::BEAT_TONE_PEAK
             },
         }
         .sample(within_beat, sample_rate)
@@ -223,7 +221,7 @@ pub(super) fn rhythm_pcm(
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]
 #[case::timeline_saw_2mb(2_000_000, Wave::Sawtooth)]
 fn sized_wav(total_bytes: usize, wave: Wave) -> Vec<u8> {
-    wav_of_size(Consts::SAMPLE_RATE, Consts::CHANNELS, total_bytes, wave)
+    wav_of_size(consts::SAMPLE_RATE, consts::CHANNELS, total_bytes, wave)
 }
 
 #[kithara::asset(ext = "wav", content_type = "audio/wav", embed)]

@@ -17,7 +17,7 @@ use kithara_integration_tests::{
     kithara,
     offline::{OfflineQueue, QueueTicker},
     temp_dir,
-    test_defaults::Consts as Shared,
+    test_defaults::consts as shared,
     test_server::NetworkMode,
     waits::{wait_for_event, wait_for_position_event},
 };
@@ -77,7 +77,7 @@ async fn first_sound_arrives_after_an_outage_before_playback(
     );
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))

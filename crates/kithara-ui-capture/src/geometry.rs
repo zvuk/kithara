@@ -7,6 +7,11 @@ use std::{
 
 use png::{BitDepth, ColorType, Encoder, Writer};
 
+mod consts {
+    /// The name the first capture set was written with, and every set since.
+    pub(super) const GEOMETRY_FILE: &str = "frame.txt";
+}
+
 /// The pixel geometry one capture set was taken at.
 ///
 /// Written beside the pages so another host can be photographed on exactly the
@@ -19,15 +24,12 @@ pub struct Geometry {
     pub width: u32,
 }
 
-/// The name the first capture set was written with, and every set since.
-const GEOMETRY_FILE: &str = "frame.txt";
-
 /// Records the geometry a set was photographed at, beside the set.
 ///
 /// # Errors
 /// Fails when the file cannot be written.
 pub fn write_geometry(dir: &Path, geometry: Geometry) -> Result<(), String> {
-    let path = dir.join(GEOMETRY_FILE);
+    let path = dir.join(consts::GEOMETRY_FILE);
     write(
         &path,
         format!(
@@ -41,7 +43,7 @@ pub fn write_geometry(dir: &Path, geometry: Geometry) -> Result<(), String> {
 /// Reads the geometry a capture set was taken at, if one was recorded.
 #[must_use]
 pub fn read_geometry(dir: &Path) -> Option<Geometry> {
-    let text = read_to_string(dir.join(GEOMETRY_FILE)).ok()?;
+    let text = read_to_string(dir.join(consts::GEOMETRY_FILE)).ok()?;
     let mut parts = text.split_whitespace();
     Some(Geometry {
         width: parts.next()?.parse().ok()?,

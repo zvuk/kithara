@@ -6,13 +6,39 @@ use toml::Value;
 use super::{Check, Context};
 use crate::common::{scope::packages_in_scope, violation::Violation};
 
-pub(crate) const ID: &str = "tokio_dep_quarantine";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "tokio_dep_quarantine";
+
+    pub(super) const EXPLANATION: &str = "\
+Summary: a crate other than `kithara-platform` declares a direct *production*
+dependency on `tokio` / `tokio-util` / `tokio-stream`. The platform crate is the
+single quarantine boundary for the async runtime: it wraps tokio's runtime,
+sync, time, and task primitives behind `kithara_platform::{tokio, time, sync}`
+so the workspace has one swappable runtime seam (and so wasm builds, which use
+`tokio_with_wasm`, stay buildable).
+
+Why: spreading direct tokio deps re-couples every crate to a specific runtime
+and to un-virtualizable tokio timers/locks, defeating the flash virtual clock
+and the wasm portability layer. reqwest and axum pull tokio *transitively* —
+that is fine; the ban is on a *direct, named* tokio dependency in a crate's own
+manifest.
+
+Exempt: `kithara-workspace-hack` (the feature-unification shim that must name
+every transitive dep) and the test-support crates. Dev- and build-dependencies
+are not scanned: a test-only tokio runtime (e.g. an axum fixture server in
+`[dev-dependencies]`, as in `kithara-net`) is not production coupling.
+
+Fix: drop the direct dep and use `kithara_platform`'s re-exports. The
+`allowed_crates` list in `.config/arch/thresholds.toml` holds crates whose
+production tokio coupling is not yet migrated — those entries are debt to remove,
+not a standing exemption.";
+}
 
 pub(crate) struct TokioDepQuarantine;
 
 impl Check for TokioDepQuarantine {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -35,14 +61,14 @@ impl Check for TokioDepQuarantine {
             for dep in production_tokio_deps(&parsed, &cfg.quarantined) {
                 violations.push(
                     Violation::deny(
-                        ID,
+                        consts::ID,
                         format!("{name}::{dep}"),
                         format!(
                             "direct production dependency on `{dep}`; only `kithara-platform` \
                              may couple to tokio — depend on its re-exports instead"
                         ),
                     )
-                    .with_explanation(EXPLANATION),
+                    .with_explanation(consts::EXPLANATION),
                 );
             }
         }
@@ -77,30 +103,6 @@ fn collect_from_table(table: Option<&Value>, quarantined: &[String], out: &mut B
         }
     }
 }
-
-const EXPLANATION: &str = "\
-Summary: a crate other than `kithara-platform` declares a direct *production*
-dependency on `tokio` / `tokio-util` / `tokio-stream`. The platform crate is the
-single quarantine boundary for the async runtime: it wraps tokio's runtime,
-sync, time, and task primitives behind `kithara_platform::{tokio, time, sync}`
-so the workspace has one swappable runtime seam (and so wasm builds, which use
-`tokio_with_wasm`, stay buildable).
-
-Why: spreading direct tokio deps re-couples every crate to a specific runtime
-and to un-virtualizable tokio timers/locks, defeating the flash virtual clock
-and the wasm portability layer. reqwest and axum pull tokio *transitively* —
-that is fine; the ban is on a *direct, named* tokio dependency in a crate's own
-manifest.
-
-Exempt: `kithara-workspace-hack` (the feature-unification shim that must name
-every transitive dep) and the test-support crates. Dev- and build-dependencies
-are not scanned: a test-only tokio runtime (e.g. an axum fixture server in
-`[dev-dependencies]`, as in `kithara-net`) is not production coupling.
-
-Fix: drop the direct dep and use `kithara_platform`'s re-exports. The
-`allowed_crates` list in `.config/arch/thresholds.toml` holds crates whose
-production tokio coupling is not yet migrated — those entries are debt to remove,
-not a standing exemption.";
 
 #[cfg(test)]
 mod tests {

@@ -1,5 +1,7 @@
 use tracing_subscriber::EnvFilter;
 
+use crate::consts;
+
 pub fn setup_tracing() {
     setup_tracing_with_filter("warn");
 }
@@ -60,16 +62,12 @@ fn merged_directives(env: Option<&str>, directives: &str) -> String {
     let merged = levels
         .into_iter()
         .map(|(target, level)| {
-            let level = LEVELS[level];
+            let level = consts::LEVELS[level];
             target.map_or_else(|| level.to_owned(), |target| format!("{target}={level}"))
         })
         .chain(passed_through.into_iter().map(str::to_owned));
     merged.collect::<Vec<_>>().join(",")
 }
-
-/// Verbosity order, so a merge can take the wider of two levels.
-#[cfg(not(rtsan))]
-const LEVELS: [&str; 6] = ["off", "error", "warn", "info", "debug", "trace"];
 
 /// `(target, verbosity)` of a plain directive, or `None` for anything carrying
 /// span or field syntax. A bare target means every level, as in `RUST_LOG`.
@@ -79,14 +77,18 @@ fn read_directive(part: &str) -> Option<(Option<&str>, usize)> {
         return None;
     }
     let level_of = |name: &str| {
-        LEVELS
+        consts::LEVELS
             .iter()
             .position(|level| name.eq_ignore_ascii_case(level))
     };
     match part.split_once('=') {
         Some((target, level)) if !target.is_empty() => Some((Some(target), level_of(level)?)),
         Some(_) => None,
-        None => Some(level_of(part).map_or((Some(part), LEVELS.len() - 1), |level| (None, level))),
+        None => Some(
+            level_of(part).map_or((Some(part), consts::LEVELS.len() - 1), |level| {
+                (None, level)
+            }),
+        ),
     }
 }
 

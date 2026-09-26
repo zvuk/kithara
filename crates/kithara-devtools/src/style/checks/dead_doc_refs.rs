@@ -12,13 +12,15 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to, workspace_tracked_files},
 };
 
-pub(crate) const ID: &str = "dead_doc_refs";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "dead_doc_refs";
+}
 
 pub(crate) struct DeadDocRefs;
 
 impl Check for DeadDocRefs {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -84,7 +86,7 @@ struct DeadDocRef {
 impl DeadDocRef {
     fn into_violation(self, rel: &str) -> Violation {
         Violation::deny(
-            ID,
+            consts::ID,
             format!("{rel}:{}:{}", self.line_no, self.target),
             format!(
                 "dead document reference at line {}: '{}' resolves to '{}', which is not tracked by git",

@@ -20,19 +20,27 @@ use crate::{
     signal::{Pcm, Wave},
 };
 
-struct Consts;
+mod consts {
+    use super::{AudioCodec, VariantSpec};
 
-impl Consts {
-    const CHANNELS: u16 = 2;
-    const ENCODERS: usize = 4;
-    const IV: [u8; 16] = [0; 16];
-    const KEY: [u8; 16] = *b"0123456789abcdef";
-    const SAMPLE_RATE: u32 = 44_100;
-    const SEGMENTS: usize = 37;
-    const SEGMENT_MILLIS: u64 = 6_000;
-    const TARGET_DURATION: u8 = 6;
-    const TOTAL_MILLIS: u64 = 220_200;
-    const VARIANTS: [VariantSpec; 4] = [
+    pub(super) const CHANNELS: u16 = 2;
+    pub(super) const ENCODERS: usize = 4;
+    pub(super) const GAPLESS_BOUNDARY_MILLIS: [u64; 9] = [
+        4_000, 8_000, 18_000, 28_000, 38_000, 48_000, 58_000, 68_000, 71_250,
+    ];
+    pub(super) const GAPLESS_TARGET_DURATION: u8 = 10;
+    pub(super) const IV: [u8; 16] = [0; 16];
+    pub(super) const KEY: [u8; 16] = *b"0123456789abcdef";
+    pub(super) const MILLIS_PER_SECOND: u64 = 1_000;
+    pub(super) const RSS_SEGMENTS: usize = 25;
+    pub(super) const RSS_SEGMENT_MILLIS: u64 = 4_000;
+    pub(super) const RSS_TARGET_DURATION: u8 = 4;
+    pub(super) const SAMPLE_RATE: u32 = 44_100;
+    pub(super) const SEGMENTS: usize = 37;
+    pub(super) const SEGMENT_MILLIS: u64 = 6_000;
+    pub(super) const TARGET_DURATION: u8 = 6;
+    pub(super) const TOTAL_MILLIS: u64 = 220_200;
+    pub(super) const VARIANTS: [VariantSpec; 4] = [
         VariantSpec {
             bandwidth: 66_005,
             bit_rate: 64_000,
@@ -64,24 +72,6 @@ impl Consts {
     ];
 }
 
-struct GaplessConsts;
-
-impl GaplessConsts {
-    const BOUNDARY_MILLIS: [u64; 9] = [
-        4_000, 8_000, 18_000, 28_000, 38_000, 48_000, 58_000, 68_000, 71_250,
-    ];
-    const MILLIS_PER_SECOND: u64 = 1_000;
-    const TARGET_DURATION: u8 = 10;
-}
-
-struct RssConsts;
-
-impl RssConsts {
-    const SEGMENTS: usize = 25;
-    const SEGMENT_MILLIS: u64 = 4_000;
-    const TARGET_DURATION: u8 = 4;
-}
-
 #[derive(Clone, Copy)]
 struct VariantSpec {
     codecs: &'static str,
@@ -107,16 +97,16 @@ fn encode_track(
     packets_per_segment: usize,
 ) -> EncodedTrack {
     let pcm = Pcm::new(
-        Consts::SAMPLE_RATE,
-        Consts::CHANNELS,
+        consts::SAMPLE_RATE,
+        consts::CHANNELS,
         total_frames,
         Wave::Sawtooth,
     );
     let media_info = MediaInfo::builder()
         .codec(spec.codec)
         .container(ContainerFormat::Fmp4)
-        .sample_rate(Consts::SAMPLE_RATE)
-        .channels(Consts::CHANNELS)
+        .sample_rate(consts::SAMPLE_RATE)
+        .channels(consts::CHANNELS)
         .build();
     let pools = pools();
     EncoderFactory::encode_packaged(
@@ -124,7 +114,7 @@ fn encode_track(
         &PackagedEncodeRequest::builder()
             .pcm(&pcm)
             .media_info(media_info)
-            .timescale(Consts::SAMPLE_RATE)
+            .timescale(consts::SAMPLE_RATE)
             .bit_rate(spec.bit_rate)
             .packets_per_segment(packets_per_segment)
             .encoder_delay(0)
@@ -148,16 +138,16 @@ fn encode(spec: VariantSpec) -> EncodedVariant {
             spec.codec
         )
     });
-    let segment_frames = usize::try_from(Consts::SAMPLE_RATE)
+    let segment_frames = usize::try_from(consts::SAMPLE_RATE)
         .expect("invariant: sample rate fits usize")
-        * usize::try_from(Consts::SEGMENT_MILLIS).expect("invariant: duration fits usize")
-        / usize::try_from(GaplessConsts::MILLIS_PER_SECOND)
+        * usize::try_from(consts::SEGMENT_MILLIS).expect("invariant: duration fits usize")
+        / usize::try_from(consts::MILLIS_PER_SECOND)
             .expect("invariant: millisecond scale fits usize");
     let packets_per_segment = segment_frames.div_ceil(frame_samples);
-    let encoded_frames = usize::try_from(Consts::SAMPLE_RATE)
+    let encoded_frames = usize::try_from(consts::SAMPLE_RATE)
         .expect("invariant: sample rate fits usize")
-        * usize::try_from(Consts::TOTAL_MILLIS).expect("invariant: duration fits usize")
-        / usize::try_from(GaplessConsts::MILLIS_PER_SECOND)
+        * usize::try_from(consts::TOTAL_MILLIS).expect("invariant: duration fits usize")
+        / usize::try_from(consts::MILLIS_PER_SECOND)
             .expect("invariant: millisecond scale fits usize");
     let total_frames = if spec.codec == AudioCodec::AacLc {
         encoded_frames
@@ -174,10 +164,10 @@ fn encoded_variants() -> &'static [EncodedVariant] {
     static ENCODED: OnceLock<Vec<EncodedVariant>> = OnceLock::new();
     ENCODED.get_or_init(|| {
         rayon::ThreadPoolBuilder::new()
-            .num_threads(Consts::ENCODERS)
+            .num_threads(consts::ENCODERS)
             .build()
             .expect("invariant: fixture encoder pool builds")
-            .install(|| Consts::VARIANTS.par_iter().copied().map(encode).collect())
+            .install(|| consts::VARIANTS.par_iter().copied().map(encode).collect())
     })
 }
 
@@ -190,8 +180,7 @@ fn boundaries_at(track: &EncodedTrack, target_millis: impl IntoIterator<Item = u
     for (index, unit) in track.access_units.iter().enumerate() {
         let next_duration = duration.saturating_add(u64::from(unit.duration));
         while let Some(millis) = target {
-            let target_duration =
-                millis * u64::from(track.timescale) / GaplessConsts::MILLIS_PER_SECOND;
+            let target_duration = millis * u64::from(track.timescale) / consts::MILLIS_PER_SECOND;
             if next_duration < target_duration {
                 break;
             }
@@ -219,25 +208,25 @@ fn boundaries_at(track: &EncodedTrack, target_millis: impl IntoIterator<Item = u
 fn long_boundaries(track: &EncodedTrack) -> Vec<usize> {
     boundaries_at(
         track,
-        (1..Consts::SEGMENTS)
+        (1..consts::SEGMENTS)
             .map(|index| {
                 u64::try_from(index).expect("invariant: segment index fits u64")
-                    * Consts::SEGMENT_MILLIS
+                    * consts::SEGMENT_MILLIS
             })
-            .chain(std::iter::once(Consts::TOTAL_MILLIS)),
+            .chain(std::iter::once(consts::TOTAL_MILLIS)),
     )
 }
 
 fn gapless_boundaries(track: &EncodedTrack) -> Vec<usize> {
-    boundaries_at(track, GaplessConsts::BOUNDARY_MILLIS)
+    boundaries_at(track, consts::GAPLESS_BOUNDARY_MILLIS)
 }
 
 fn rss_boundaries(track: &EncodedTrack) -> Vec<usize> {
     boundaries_at(
         track,
-        (1..=RssConsts::SEGMENTS).map(|index| {
+        (1..=consts::RSS_SEGMENTS).map(|index| {
             u64::try_from(index).expect("invariant: RSS segment index fits u64")
-                * RssConsts::SEGMENT_MILLIS
+                * consts::RSS_SEGMENT_MILLIS
         }),
     )
 }
@@ -285,7 +274,7 @@ fn encrypt(bytes: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity(bytes.len() + 16);
     output.extend_from_slice(bytes);
     output.resize(bytes.len() + 16, 0);
-    Encryptor::<Aes128>::new((&Consts::KEY).into(), (&Consts::IV).into())
+    Encryptor::<Aes128>::new((&consts::KEY).into(), (&consts::IV).into())
         .encrypt_padded::<Pkcs7>(&mut output, bytes.len())
         .expect("invariant: one padding block is reserved")
         .to_vec()
@@ -328,7 +317,7 @@ fn media_playlist(variant: &Variant, encrypted: bool, target_duration: u8) -> St
     if encrypted {
         playlist.push_str(&format!(
             "#EXT-X-KEY:METHOD=AES-128,URI={label}.key,IV=0x{}\n",
-            hex::encode_upper(Consts::IV)
+            hex::encode_upper(consts::IV)
         ));
     }
     playlist.push_str(&format!("#EXT-X-MAP:URI=\"init-{label}-a1.mp4\"\n"));
@@ -344,7 +333,7 @@ fn media_playlist(variant: &Variant, encrypted: bool, target_duration: u8) -> St
 
 fn master_playlist() -> String {
     let mut master = String::from("#EXTM3U\n");
-    for spec in Consts::VARIANTS {
+    for spec in consts::VARIANTS {
         master.push_str(&format!(
             "#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH={},CODECS=\"{}\",AVERAGE-BANDWIDTH={}\n\
              index-{}-a1.m3u8\n",
@@ -369,7 +358,7 @@ fn bundle(
                 &mut resources,
                 &format!("{label}.key"),
                 "application/octet-stream",
-                &Consts::KEY,
+                &consts::KEY,
             )?;
         }
         add(
@@ -420,7 +409,7 @@ fn bundle(
 #[case::plain(false)]
 #[case::drm(true)]
 fn long_hls(context: &BuildContext<'_>, encrypted: bool) -> Vec<u8> {
-    bundle(context, encrypted, variants(), Consts::TARGET_DURATION)
+    bundle(context, encrypted, variants(), consts::TARGET_DURATION)
         .unwrap_or_else(|error| panic!("kithara-test-fixtures: long HLS bundle failed: {error}"))
 }
 
@@ -436,7 +425,7 @@ fn gapless_hls(context: &BuildContext<'_>, encrypted: bool) -> Vec<u8> {
         context,
         encrypted,
         gapless_variants(),
-        GaplessConsts::TARGET_DURATION,
+        consts::GAPLESS_TARGET_DURATION,
     )
     .unwrap_or_else(|error| panic!("kithara-test-fixtures: gapless HLS bundle failed: {error}"))
 }
@@ -452,7 +441,7 @@ fn rss_hls(context: &BuildContext<'_>, encrypted: bool) -> Vec<u8> {
         context,
         encrypted,
         rss_variants(),
-        RssConsts::TARGET_DURATION,
+        consts::RSS_TARGET_DURATION,
     )
     .unwrap_or_else(|error| panic!("kithara-test-fixtures: RSS HLS bundle failed: {error}"))
 }

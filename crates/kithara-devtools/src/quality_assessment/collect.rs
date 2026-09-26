@@ -22,9 +22,9 @@ use crate::{
     common::{
         baseline::Baseline, project::QualityAssessmentToolPolicyConfig, walker::walk_rs_files,
     },
+    consts,
 };
 
-const SCHEMA_VERSION: u32 = 2;
 pub(super) struct Revision {
     pub(super) digest: Option<String>,
     pub(super) directory: String,
@@ -113,7 +113,7 @@ pub(super) fn collect(
     )?;
     Ok(Assessment {
         lcom4,
-        schema_version: SCHEMA_VERSION,
+        schema_version: consts::COLLECT_SCHEMA_VERSION,
         revision: revision.directory,
         content_digest: revision.digest,
         profile: args.profile,

@@ -6,10 +6,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 use super::manifest::Tool;
-
-const CHA_PLUGINS: &str = "data_clumps,feature_envy,inappropriate_intimacy,shotgun_surgery,\
-                           divergent_change,speculative_generality,async_callback_leak";
-pub(crate) const CRAP_THRESHOLD: f64 = 30.0;
+use crate::consts;
 
 pub(super) struct AdapterOptions<'a> {
     pub(super) baseline: Option<&'a Path>,
@@ -68,7 +65,7 @@ fn cargo_crap(_workspace_root: &Path, options: &AdapterOptions<'_>) -> Result<To
             (
                 &[1],
                 ReportKind::CargoCrapDelta {
-                    threshold: CRAP_THRESHOLD,
+                    threshold: consts::CRAP_THRESHOLD,
                 },
             )
         } else {
@@ -107,7 +104,7 @@ fn crap_scoring(lcov: &Path) -> Vec<String> {
         "--missing".to_owned(),
         "pessimistic".to_owned(),
         "--threshold".to_owned(),
-        CRAP_THRESHOLD.to_string(),
+        consts::CRAP_THRESHOLD.to_string(),
         "--exclude".to_owned(),
         "fuzz/**".to_owned(),
     ]
@@ -149,7 +146,7 @@ fn cha() -> ToolSpec {
                     "analyze".to_owned(),
                     "--no-cache".to_owned(),
                     "--plugin".to_owned(),
-                    CHA_PLUGINS.to_owned(),
+                    consts::CHA_PLUGINS.to_owned(),
                     "--format".to_owned(),
                     "json".to_owned(),
                     "--fail-on".to_owned(),
@@ -367,7 +364,7 @@ mod tests {
         )
         .expect("delta spec");
 
-        let threshold = CRAP_THRESHOLD.to_string();
+        let threshold = consts::CRAP_THRESHOLD.to_string();
         assert!(
             spec.invocations
                 .iter()

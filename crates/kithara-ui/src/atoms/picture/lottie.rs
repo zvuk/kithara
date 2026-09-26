@@ -93,17 +93,21 @@ mod tests {
     use super::fitted;
     use crate::draw::{Pt, Rect, Transform};
 
-    const BOX: Rect = Rect {
-        h: 40.0,
-        w: 100.0,
-        x: 10.0,
-        y: 20.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOX: Rect = Rect {
+            h: 40.0,
+            w: 100.0,
+            x: 10.0,
+            y: 20.0,
+        };
+    }
 
     /// A square artwork of 200 in the wide box above, which is the case a
     /// stretch would show.
     fn placed() -> Transform {
-        fitted((200.0, 200.0), BOX)
+        fitted((200.0, 200.0), consts::BOX)
     }
 
     #[kithara::test]
@@ -111,7 +115,7 @@ mod tests {
         let placed = placed();
         let corner = placed.apply(Pt { x: 200.0, y: 200.0 });
 
-        assert_eq!(corner.y - placed.dy, BOX.h);
+        assert_eq!(corner.y - placed.dy, consts::BOX.h);
     }
 
     #[kithara::test]
@@ -127,6 +131,6 @@ mod tests {
         let placed = placed();
         let middle = placed.apply(Pt { x: 100.0, y: 100.0 });
 
-        assert_eq!(middle.x, BOX.x + BOX.w / 2.0);
+        assert_eq!(middle.x, consts::BOX.x + consts::BOX.w / 2.0);
     }
 }

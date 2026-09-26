@@ -14,7 +14,7 @@ use kithara_platform::{CancelToken, time::Duration};
 use tempfile::TempDir;
 
 use super::core::{AtomicChunked, OpenIntent, make_tmp_path};
-use crate::{MmapDriver, MmapOptions, OpenMode, Resource, ResourceRead, StorageResult};
+use crate::{MmapDriver, MmapOptions, OpenMode, Resource, ResourceRead, StorageResult, consts};
 
 fn open_chunked(dir: &TempDir, name: &str) -> (AtomicChunked<MmapDriver>, PathBuf, PathBuf) {
     let canonical = dir.path().join(name);
@@ -119,9 +119,6 @@ fn open_reclaims_a_stale_tmp_no_live_writer_holds() {
     assert!(!tmp.exists(), "tmp consumed by the atomic rename");
 }
 
-/// What a dead owner left in the tmp a successor reclaims.
-const DEAD_OWNERS_BYTES: &[u8] = b"stale-from-previous-process";
-
 /// Reclaiming a stale tmp starts from an empty file. `create_new` used to
 /// give that for free; the lock-based claim has to do it itself. The bytes are
 /// read through a mapping because the claim's lock refuses plain reads through
@@ -130,7 +127,7 @@ const DEAD_OWNERS_BYTES: &[u8] = b"stale-from-previous-process";
 fn a_reclaimed_tmp_carries_no_byte_of_its_dead_owner() {
     let dir = TempDir::new().unwrap();
     let stale_tmp = make_tmp_path(&dir.path().join("tail.bin")).unwrap();
-    fs::write(&stale_tmp, DEAD_OWNERS_BYTES).unwrap();
+    fs::write(&stale_tmp, consts::DEAD_OWNERS_BYTES).unwrap();
 
     let (_res, _canonical, tmp) = open_chunked(&dir, "tail.bin");
 
@@ -139,7 +136,7 @@ fn a_reclaimed_tmp_carries_no_byte_of_its_dead_owner() {
         MmapOptions::for_path(tmp).mode(OpenMode::ReadOnly).build(),
     )
     .unwrap();
-    let mut bytes = vec![0xff; DEAD_OWNERS_BYTES.len()];
+    let mut bytes = vec![0xff; consts::DEAD_OWNERS_BYTES.len()];
     let read = reader.read_at(0, &mut bytes).unwrap();
     assert!(
         bytes[..read].iter().all(|byte| *byte == 0),
@@ -156,12 +153,12 @@ fn a_reclaimed_tmp_carries_no_byte_of_its_dead_owner() {
 fn a_reclaimed_tmp_offers_none_of_its_dead_owner_as_payload() {
     let dir = TempDir::new().unwrap();
     let stale_tmp = make_tmp_path(&dir.path().join("adopted.bin")).unwrap();
-    fs::write(&stale_tmp, DEAD_OWNERS_BYTES).unwrap();
+    fs::write(&stale_tmp, consts::DEAD_OWNERS_BYTES).unwrap();
 
     let (res, _canonical, _tmp) = open_chunked(&dir, "adopted.bin");
 
     assert!(
-        !res.contains_range(0..DEAD_OWNERS_BYTES.len() as u64),
+        !res.contains_range(0..consts::DEAD_OWNERS_BYTES.len() as u64),
         "the dead owner's bytes came back as available payload"
     );
 }

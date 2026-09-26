@@ -2,11 +2,15 @@ use iced::Size;
 
 use super::{cache::DeckLayout, modules::Modules};
 
-/// Window size in logical pixels the app opens at.
-pub(in crate::gui) const WINDOW_SIZE: Size = Size {
-    width: 1280.0,
-    height: 760.0,
-};
+pub(in crate::gui) mod consts {
+    use super::*;
+
+    /// Window size in logical pixels the app opens at.
+    pub(in crate::gui) const WINDOW_SIZE: Size = Size {
+        width: 1280.0,
+        height: 760.0,
+    };
+}
 
 /// What the menu says about the window this app runs: the layout it draws and
 /// the size and module count it draws them at.
@@ -45,7 +49,7 @@ impl WindowState {
 impl Default for WindowState {
     fn default() -> Self {
         let mut state = Self {
-            size: WINDOW_SIZE,
+            size: consts::WINDOW_SIZE,
             title: String::new(),
             caption: String::new(),
             chrome_hidden: false,

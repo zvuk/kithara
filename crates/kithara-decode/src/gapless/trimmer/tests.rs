@@ -18,10 +18,10 @@ use kithara_test_fixtures::unit_fixtures::{
 };
 use kithara_test_utils::kithara;
 
-use super::{Consts, GaplessTrimmer};
+use super::GaplessTrimmer;
 use crate::{
-    DropChunks, GaplessInfo, GaplessTailCompensation, gapless::heuristic::SilenceTrimParams,
-    test_pools::pools,
+    DropChunks, GaplessInfo, GaplessTailCompensation, consts,
+    gapless::heuristic::SilenceTrimParams, test_pools::pools,
 };
 
 fn sample_buffer(values: &[f32]) -> SampleBuffer {
@@ -77,7 +77,7 @@ fn stereo_spec() -> AudioSpec {
 }
 
 fn fade_frames_for(spec: AudioSpec) -> usize {
-    let computed = (u64::from(spec.sample_rate.get()) * Consts::FADE_IN_DURATION_MS) / 1000;
+    let computed = (u64::from(spec.sample_rate.get()) * consts::FADE_IN_DURATION_MS) / 1000;
     computed.max(1) as usize
 }
 
@@ -474,7 +474,7 @@ fn silence_trim_trailing_enabled(trim_silence_trim_trailing_enabled: Vec<f32>) {
     assert_eq!(pcm_out.len(), audible_frames);
 
     let fade_frames =
-        (u64::from(spec.sample_rate.get()) * Consts::FADE_OUT_DURATION_MS / 1000).max(1) as usize;
+        (u64::from(spec.sample_rate.get()) * consts::FADE_OUT_DURATION_MS / 1000).max(1) as usize;
     let untouched = pcm_out.len().saturating_sub(fade_frames);
     for &sample in &pcm_out[..untouched] {
         assert!(
@@ -519,7 +519,7 @@ fn silence_trim_trailing_window_rms_ignores_zero_crossings_in_audible_signal(
     assert_eq!(pcm_out.len(), sine_frames as usize);
 
     let fade_frames =
-        (u64::from(spec.sample_rate.get()) * Consts::FADE_OUT_DURATION_MS / 1000).max(1) as usize;
+        (u64::from(spec.sample_rate.get()) * consts::FADE_OUT_DURATION_MS / 1000).max(1) as usize;
     let pre_fade_end = pcm_out.len().saturating_sub(fade_frames);
     let pre_fade = &pcm_out[..pre_fade_end];
     let pre_fade_len = u32::try_from(pre_fade.len()).expect("BUG: pre-fade window fits in u32");

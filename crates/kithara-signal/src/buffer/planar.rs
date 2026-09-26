@@ -2,9 +2,7 @@ use std::ops::Range;
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 
-use crate::{AudioSpec, FrameCount, InterleavedView, SignalError};
-
-const FAST_CHANNELS: usize = 8;
+use crate::{AudioSpec, FrameCount, InterleavedView, SignalError, consts};
 
 /// Pool-backed channel-major samples with independent logical length and stride.
 #[derive(Debug)]
@@ -271,8 +269,8 @@ impl<'a> PlanarView<'a> {
         let output = &mut output[..required];
         let channel_count = self.spec.channel_count()?;
         let channels = channel_count.get();
-        if channels <= FAST_CHANNELS {
-            let mut input = [&[][..]; FAST_CHANNELS];
+        if channels <= consts::FAST_CHANNELS {
+            let mut input = [&[][..]; consts::FAST_CHANNELS];
             for (channel, slot) in input.iter_mut().enumerate().take(channels) {
                 *slot = self.channel(channel)?;
             }
@@ -366,7 +364,6 @@ fn subrange(
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
 
     use kithara_core_test_fixtures::{negative_pcm_ramp, pcm_ramp};
     use kithara_test_utils::kithara;
@@ -374,10 +371,8 @@ mod tests {
     use super::*;
     use crate::test_pools::pools_with_budget;
 
-    const RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("48 kHz is non-zero");
-
     fn stereo() -> AudioSpec {
-        AudioSpec::new(2, RATE)
+        AudioSpec::new(2, consts::INTERLEAVED_RATE)
     }
 
     #[kithara::test]

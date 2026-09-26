@@ -11,13 +11,13 @@ use kithara_platform::time::Duration;
 
 use super::disk;
 
-struct Consts;
+mod consts {
+    use super::Duration;
 
-impl Consts {
-    const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-    const HEADER_BODY_SEPARATOR: &'static [u8] = b"\r\n\r\n";
-    const READ_TIMEOUT: Duration = Duration::from_secs(60);
-    const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+    pub(super) const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+    pub(super) const HEADER_BODY_SEPARATOR: &[u8] = b"\r\n\r\n";
+    pub(super) const READ_TIMEOUT: Duration = Duration::from_secs(60);
+    pub(super) const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 }
 
 /// HTTP origin of store records. When set, [`file`] fetches from this URL and
@@ -188,16 +188,16 @@ fn get(origin: &str, relative: &Path) -> io::Result<Vec<u8>> {
             format!("fixture origin {origin} is not a socket address: {error}"),
         )
     })?;
-    let mut stream = TcpStream::connect_timeout(&addr, Consts::CONNECT_TIMEOUT)
+    let mut stream = TcpStream::connect_timeout(&addr, consts::CONNECT_TIMEOUT)
         .map_err(|error| origin_unreachable(origin, &error))?;
     stream
         .set_nodelay(true)
         .map_err(|error| origin_unreachable(origin, &error))?;
     stream
-        .set_read_timeout(Some(Consts::READ_TIMEOUT))
+        .set_read_timeout(Some(consts::READ_TIMEOUT))
         .map_err(|error| origin_unreachable(origin, &error))?;
     stream
-        .set_write_timeout(Some(Consts::WRITE_TIMEOUT))
+        .set_write_timeout(Some(consts::WRITE_TIMEOUT))
         .map_err(|error| origin_unreachable(origin, &error))?;
     let request =
         format!("GET /store/{encoded} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n");
@@ -245,9 +245,9 @@ fn encode_relative(relative: &Path) -> io::Result<String> {
 
 fn parse_body(origin: &str, response: &[u8]) -> io::Result<Vec<u8>> {
     let split = response
-        .windows(Consts::HEADER_BODY_SEPARATOR.len())
-        .position(|window| window == Consts::HEADER_BODY_SEPARATOR)
-        .map(|index| index + Consts::HEADER_BODY_SEPARATOR.len())
+        .windows(consts::HEADER_BODY_SEPARATOR.len())
+        .position(|window| window == consts::HEADER_BODY_SEPARATOR)
+        .map(|index| index + consts::HEADER_BODY_SEPARATOR.len())
         .ok_or_else(|| {
             origin_unreachable(
                 origin,

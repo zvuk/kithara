@@ -18,13 +18,15 @@ use crate::{
     idioms::config::BranchChainsConfig,
 };
 
-pub(crate) const ID: &str = "branch_chains";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "branch_chains";
+}
 
 pub(crate) struct BranchChains;
 
 impl Check for BranchChains {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -122,7 +124,7 @@ impl ChainVisitor<'_> {
                  consider restructuring (extract predicates, decision table)"
             ),
         };
-        self.out.push(Violation::warn(ID, key, msg));
+        self.out.push(Violation::warn(consts::ID, key, msg));
     }
 }
 

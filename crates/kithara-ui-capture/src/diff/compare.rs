@@ -11,9 +11,11 @@ use png::Decoder;
 
 use crate::geometry::{read_geometry, write_png};
 
-/// A channel difference below this is rasteriser noise: two hosts run
-/// different rasterisers, so antialiased edges never match bit for bit.
-const NOISE: u8 = 24;
+mod consts {
+    /// A channel difference below this is rasteriser noise: two hosts run
+    /// different rasterisers, so antialiased edges never match bit for bit.
+    pub(super) const NOISE: u8 = 24;
+}
 
 /// How far apart one page's two photographs are, as shares of its pixels.
 #[derive(Clone, Copy, Debug)]
@@ -86,7 +88,8 @@ impl fmt::Display for Report {
             "\ndifference masks in {}; a channel gap under {NOISE} is treated as rasteriser \
              noise, because the two hosts rasterise with different engines. ink disagreement is \
              the share of pixels drawn by one host and left as background by the other.",
-            self.masks.display()
+            self.masks.display(),
+            NOISE = consts::NOISE
         )?;
         if !self.judged {
             return writeln!(
@@ -301,7 +304,7 @@ pub(super) fn difference(left: &Image, right: &Image) -> (f64, Vec<u8>) {
             .max()
             .unwrap_or(0);
         let at = index * 4;
-        if gap > NOISE {
+        if gap > consts::NOISE {
             differing += 1;
             mask[at] = 255;
             mask[at + 1] = 32;
@@ -350,7 +353,7 @@ fn is_ink(pixel: &[u8], background: [u8; 4]) -> bool {
         .map(|(a, b)| a.abs_diff(b))
         .max()
         .unwrap_or(0)
-        > NOISE
+        > consts::NOISE
 }
 
 /// The share of pixels that are ink — drawn over the background — in exactly

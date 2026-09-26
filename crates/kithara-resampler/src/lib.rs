@@ -29,3 +29,4 @@ pub use factory::create_resampler;
 pub use mode::ResamplerMode;
 pub use mono::{MonoStream, MonoStreamConfig};
 pub use traits::{Resampler, ResamplerControl, ResamplerProcess};
+mod consts;

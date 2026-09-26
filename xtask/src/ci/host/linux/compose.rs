@@ -8,7 +8,7 @@ use super::{
     profile::LinuxHost,
     services::cpuset,
 };
-use crate::ci::config::CiPins;
+use crate::{ci::config::CiPins, consts};
 
 /// Write the whole fleet as one Compose project, generated from the profile.
 ///
@@ -54,7 +54,7 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
          name: {network}\n    \
          external: true\n\n\
          volumes:",
-        file = FILE,
+        file = consts::FILE,
         network = host.network,
     )?;
     let mut volumes: Vec<String> = host
@@ -121,9 +121,6 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
     }
     Ok(yaml)
 }
-
-/// Where the generated project is written when no path is given.
-pub(super) const FILE: &str = "/etc/kithara-ci/docker-compose.yml";
 
 #[cfg(test)]
 mod tests {

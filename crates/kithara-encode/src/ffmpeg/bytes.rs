@@ -14,7 +14,7 @@ use ffmpeg_next::filter::Graph;
 use super::{
     build_direct_filter, ensure_ffmpeg_initialized, find_encoder,
     pcm::{
-        PCM_INPUT_FORMAT, drain_filtered_frames, flush_filter, pump_pcm_frames,
+        consts::PCM_INPUT_FORMAT, drain_filtered_frames, flush_filter, pump_pcm_frames,
         send_eof_to_encoder, send_frame_to_filter,
     },
 };

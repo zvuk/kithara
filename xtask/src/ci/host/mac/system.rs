@@ -551,6 +551,7 @@ fn parse_volume_quota(text: &str, device: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consts;
 
     #[test]
     fn root_container_parser_accepts_current_diskutil_shape() {
@@ -560,37 +561,18 @@ mod tests {
         assert!(!is_disk_identifier("disk3s1"));
     }
 
-    /// Shape produced by `diskutil apfs list` on the CI host: every field line
-    /// carries the container's `|` tree guides.
-    const APFS_LIST: &str = "\
-|   +-> Volume disk3s6 4E1F0D1A-0000-0000-0000-000000000000\n\
-|   |   ---------------------------------------------------\n\
-|   |   APFS Volume Disk (Role):   disk3s6 (VM)\n\
-|   |   Name:                      VM (Case-insensitive)\n\
-|   |   Capacity Consumed:         2147504128 B (2.1 GB)\n\
-|   |\n\
-|   +-> Volume disk3s7 07077B7C-0000-0000-0000-000000000000\n\
-|       ---------------------------------------------------\n\
-|       APFS Volume Disk (Role):   disk3s7 (No specific role)\n\
-|       Name:                      KitharaCI (Case-sensitive)\n\
-|       Mount Point:               /Volumes/KitharaCI\n\
-|       Capacity Consumed:         28917514240 B (28.9 GB)\n\
-|       Capacity Reserve:          None\n\
-|       Capacity Quota:            300000002048 B (300.0 GB) (9.6% reached)\n\
-|       Sealed:                    No\n";
-
     #[test]
     fn quota_parser_reads_the_tree_shape_diskutil_emits() {
         assert_eq!(
-            parse_volume_quota(APFS_LIST, "disk3s7"),
+            parse_volume_quota(consts::APFS_LIST, "disk3s7"),
             Some(300_000_002_048)
         );
     }
 
     #[test]
     fn quota_parser_is_scoped_to_device() {
-        assert_eq!(parse_volume_quota(APFS_LIST, "disk3s6"), None);
-        assert_eq!(parse_volume_quota(APFS_LIST, "disk9s1"), None);
+        assert_eq!(parse_volume_quota(consts::APFS_LIST, "disk3s6"), None);
+        assert_eq!(parse_volume_quota(consts::APFS_LIST, "disk9s1"), None);
     }
 
     #[test]

@@ -4,14 +4,10 @@ use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_stream::AudioCodec;
 use re_mp4::{BoxHeader, BoxType, Mp4, StsdBoxContent};
 
-use crate::error::{DecodeError, DecodeResult};
-
-struct Consts;
-
-impl Consts {
-    const FLAC_STREAMINFO_BYTES: usize = 34;
-    const FOURCC_FLAC: u32 = 0x664c_6143;
-}
+use crate::{
+    consts,
+    error::{DecodeError, DecodeResult},
+};
 
 /// Codec-specific decoder config bytes carried in the init segment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,7 +15,7 @@ pub(crate) enum CodecConfig {
     /// AAC `AudioSpecificConfig` bytes (`ESDS` `DecoderSpecificInfo` body).
     Aac(Vec<u8>),
     /// FLAC `STREAMINFO` block payload (34 bytes, no metadata header).
-    Flac([u8; Consts::FLAC_STREAMINFO_BYTES]),
+    Flac([u8; consts::FLAC_STREAMINFO_BYTES]),
 }
 
 impl AsRef<[u8]> for CodecConfig {
@@ -98,7 +94,7 @@ where
                 CodecConfig::Aac(asc),
             )
         }
-        StsdBoxContent::Unknown(fourcc) if u32::from(*fourcc) == Consts::FOURCC_FLAC => {
+        StsdBoxContent::Unknown(fourcc) if u32::from(*fourcc) == consts::FOURCC_FLAC => {
             let (sample_rate, channels, streaminfo) = parse_flac_sample_entry(bytes)?;
             (
                 AudioCodec::Flac,
@@ -305,7 +301,7 @@ fn read_descriptor_header(cursor: &mut Cursor<&[u8]>) -> DecodeResult<(u8, u32)>
 /// associated `dfLa` box payload (FLAC STREAMINFO).
 fn parse_flac_sample_entry(
     bytes: &[u8],
-) -> DecodeResult<(u32, u16, [u8; Consts::FLAC_STREAMINFO_BYTES])> {
+) -> DecodeResult<(u32, u16, [u8; consts::FLAC_STREAMINFO_BYTES])> {
     const FOURCC_DFLA: u32 = 0x6466_4c61;
 
     let mut cursor = Cursor::new(bytes);
@@ -331,7 +327,7 @@ fn parse_flac_sample_entry(
 
     let entry_start = cursor.position();
     let (entry_type, entry_size) = read_header(&mut cursor)?;
-    if u32::from(entry_type) != Consts::FOURCC_FLAC {
+    if u32::from(entry_type) != consts::FOURCC_FLAC {
         return Err(DecodeError::InvalidData {
             detail: "expected fLaC sample entry",
         });
@@ -356,7 +352,7 @@ fn parse_flac_sample_entry(
             cursor
                 .seek(SeekFrom::Current(4 + 4))
                 .map_err(|e| DecodeError::parse("seek past dfLa header", e))?;
-            let mut payload = [0u8; Consts::FLAC_STREAMINFO_BYTES];
+            let mut payload = [0u8; consts::FLAC_STREAMINFO_BYTES];
             cursor
                 .read_exact(&mut payload)
                 .map_err(|e| DecodeError::parse("read STREAMINFO", e))?;

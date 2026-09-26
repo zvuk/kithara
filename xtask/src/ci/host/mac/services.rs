@@ -6,10 +6,9 @@ use std::{
 use anyhow::{Context, Result, bail};
 use tracing::info;
 
-use crate::ci::{
-    bridge,
-    config::{CiConfig, LANE_CONFIG_DIR, MAC_CONFIG_PATH},
-    process::Process,
+use crate::{
+    ci::{bridge, config::CiConfig, process::Process},
+    consts,
 };
 
 pub(super) struct ServiceInstaller<'a> {
@@ -235,8 +234,8 @@ impl<'a> ServiceInstaller<'a> {
                 &self.config.host.ci_user,
             )?;
         }
-        self.install_directory(Path::new(LANE_CONFIG_DIR), "0755", "root")?;
-        self.install_file(&host, Path::new(MAC_CONFIG_PATH), "0644", "root")
+        self.install_directory(Path::new(consts::LANE_CONFIG_DIR), "0755", "root")?;
+        self.install_file(&host, Path::new(consts::MAC_CONFIG_PATH), "0644", "root")
     }
 
     fn install_maintenance_agents(&self) -> Result<()> {

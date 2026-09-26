@@ -8,14 +8,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-struct Consts;
+mod consts {
+    use super::Duration;
 
-impl Consts {
-    const HEARTBEAT_FILE: &'static str = ".kithara-job-heartbeat";
+    pub(super) const HEARTBEAT_FILE: &str = ".kithara-job-heartbeat";
     // Refresh far faster than the five-minute host cleanup interval. Polling the
     // child at 100 ms keeps the wrapper's exit latency below a measurable CI phase.
-    const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
-    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    pub(super) const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+    pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(100);
 }
 
 struct Heartbeat {
@@ -28,7 +28,7 @@ impl Heartbeat {
             .parent()
             .ok_or_else(|| io::Error::other("lease path has no build directory"))?;
         let heartbeat = Self {
-            path: parent.join(Consts::HEARTBEAT_FILE),
+            path: parent.join(consts::HEARTBEAT_FILE),
         };
         heartbeat.refresh()?;
         Ok(heartbeat)
@@ -74,7 +74,7 @@ fn run() -> io::Result<ExitStatus> {
     let heartbeat = Heartbeat::start(&lease)?;
     let _ = env::current_exe().and_then(fs::remove_file);
     let mut child = Command::new(command).args(args).spawn()?;
-    let mut refresh_at = Instant::now() + Consts::HEARTBEAT_INTERVAL;
+    let mut refresh_at = Instant::now() + consts::HEARTBEAT_INTERVAL;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status),
@@ -91,8 +91,8 @@ fn run() -> io::Result<ExitStatus> {
                 let _ = child.wait();
                 return Err(error);
             }
-            refresh_at = Instant::now() + Consts::HEARTBEAT_INTERVAL;
+            refresh_at = Instant::now() + consts::HEARTBEAT_INTERVAL;
         }
-        thread::sleep(Consts::POLL_INTERVAL);
+        thread::sleep(consts::POLL_INTERVAL);
     }
 }

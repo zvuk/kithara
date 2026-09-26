@@ -5,11 +5,11 @@ struct QualityVariant {
     sub: &'static str,
 }
 
-struct Consts;
+mod consts {
+    use super::QualityVariant;
 
-impl Consts {
-    const SLOTS: usize = 6;
-    const VARIANTS: [QualityVariant; 3] = [
+    pub(super) const SLOTS: usize = 6;
+    pub(super) const VARIANTS: [QualityVariant; 3] = [
         QualityVariant {
             label: "FLAC",
             sub: "1.4 MBPS",
@@ -75,7 +75,7 @@ impl QualityState {
             "deck.stream.quality_hidden" => ReadValue::Bool(false),
             "deck.stream.variant_active" => ReadValue::Bool(self.active(variant(scope)?)?),
             "deck.stream.variant_hidden" => {
-                ReadValue::Bool(index(variant(scope)?)? >= Consts::VARIANTS.len())
+                ReadValue::Bool(index(variant(scope)?)? >= consts::VARIANTS.len())
             }
             "deck.stream.variant_label" => ReadValue::Text(Self::text(variant(scope)?)?.label),
             "deck.stream.variant_sub" => ReadValue::Text(Self::text(variant(scope)?)?.sub),
@@ -85,7 +85,7 @@ impl QualityState {
     }
 
     fn rebuild(&mut self) {
-        let label = Consts::VARIANTS[self.current].label;
+        let label = consts::VARIANTS[self.current].label;
         self.value = if self.auto {
             format!("AUTO·{label}")
         } else {
@@ -109,7 +109,7 @@ impl QualityState {
         let Some(index) = node
             .strip_prefix("variant-")
             .and_then(index)
-            .filter(|slot| *slot < Consts::VARIANTS.len())
+            .filter(|slot| *slot < consts::VARIANTS.len())
         else {
             return false;
         };
@@ -118,7 +118,7 @@ impl QualityState {
     }
 
     fn text(variant: &str) -> Option<&'static QualityVariant> {
-        Consts::VARIANTS.get(index(variant)?)
+        consts::VARIANTS.get(index(variant)?)
     }
 }
 
@@ -129,5 +129,5 @@ fn variant(scope: &str) -> Option<&str> {
 }
 
 fn index(variant: &str) -> Option<usize> {
-    variant.parse().ok().filter(|slot| *slot < Consts::SLOTS)
+    variant.parse().ok().filter(|slot| *slot < consts::SLOTS)
 }

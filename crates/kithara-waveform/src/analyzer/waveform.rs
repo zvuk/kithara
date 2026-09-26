@@ -16,13 +16,11 @@ use crate::{
     resume::WaveformResume,
 };
 
-pub(super) struct Consts;
-
-impl Consts {
-    const HANN_A0: f32 = 0.5;
-    const HOP_DIVISOR: usize = 4;
-    pub(super) const MAX_PARTIAL: usize = 256;
-    const MIN_FFT_SIZE: usize = 2;
+pub(super) mod consts {
+    pub(super) const HANN_A0: f32 = 0.5;
+    pub(super) const HOP_DIVISOR: usize = 4;
+    pub(crate) const MAX_PARTIAL: usize = 256;
+    pub(super) const MIN_FFT_SIZE: usize = 2;
 }
 
 pub(super) struct Partial {
@@ -71,7 +69,7 @@ impl WaveformAnalyzer {
     where
         S: HasPool<f32>,
     {
-        let fft_size = params.fft_size().max(Consts::MIN_FFT_SIZE);
+        let fft_size = params.fft_size().max(consts::MIN_FFT_SIZE);
         let mut planner = RealFftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(fft_size);
         let fft_input = pools.get_with_len::<f32>(fft_size)?;
@@ -103,7 +101,7 @@ impl WaveformAnalyzer {
             fft_output,
             fft_scratch,
             downmix: pools.get::<f32>(),
-            window_hop: (fft_size / Consts::HOP_DIVISOR).max(1),
+            window_hop: (fft_size / consts::HOP_DIVISOR).max(1),
             bands: BTreeMap::new(),
             partial: BTreeMap::new(),
             opened: 0,
@@ -195,7 +193,7 @@ impl WaveformAnalyzer {
     where
         S: HasPool<f32>,
     {
-        if resume.partials.len() > Consts::MAX_PARTIAL {
+        if resume.partials.len() > consts::MAX_PARTIAL {
             return Err(BlobError::Corrupt);
         }
 
@@ -313,7 +311,7 @@ where
     let scale = std::f32::consts::TAU / denom;
     for (n, sample) in hann.iter_mut().enumerate() {
         let phase = scale * n.to_f32().unwrap_or(0.0);
-        *sample = Consts::HANN_A0.mul_add(-phase.cos(), Consts::HANN_A0);
+        *sample = consts::HANN_A0.mul_add(-phase.cos(), consts::HANN_A0);
     }
     Ok(hann)
 }
@@ -364,16 +362,10 @@ mod tests {
     use crate::{
         AnalysisParams, Band,
         bucket::Bucket,
+        consts,
         resume::{WaveformPartialResume, WaveformResume},
         test_pools::{TestPools, pools},
     };
-
-    struct Consts;
-
-    impl Consts {
-        const EPS: f32 = 1e-6;
-        const SR: u32 = 44_100;
-    }
 
     struct Pass {
         pools: kithara_bufpool::PoolRegion<TestPools>,
@@ -384,7 +376,7 @@ mod tests {
         fn new(params: AnalysisParams) -> Self {
             let pools = pools();
             Self {
-                analyzer: WaveformAnalyzer::new(Consts::SR, params, &pools)
+                analyzer: WaveformAnalyzer::new(consts::SR, params, &pools)
                     .expect("waveform buffers fit the test region"),
                 pools,
             }
@@ -411,7 +403,7 @@ mod tests {
     macro_rules! assert_approx {
         ($actual:expr, $want:expr, $($msg:tt)+) => {
             let (actual, want) = ($actual, $want);
-            assert!((actual - want).abs() <= Consts::EPS, $($msg)+);
+            assert!((actual - want).abs() <= consts::EPS, $($msg)+);
         };
     }
 
@@ -513,13 +505,13 @@ mod tests {
 
         assert!(
             Pass::new(flat!())
-                .restore(fill(super::Consts::MAX_PARTIAL))
+                .restore(fill(super::consts::MAX_PARTIAL))
                 .is_ok(),
             "a record holding exactly the limit is still a record"
         );
         assert!(
             matches!(
-                Pass::new(flat!()).restore(fill(super::Consts::MAX_PARTIAL + 1)),
+                Pass::new(flat!()).restore(fill(super::consts::MAX_PARTIAL + 1)),
                 Err(BlobError::Corrupt)
             ),
             "one partial past the limit is not a record this pass wrote"
@@ -627,7 +619,7 @@ mod tests {
         assert_eq!(hann.len(), size);
         assert!(
             hann.iter()
-                .all(|&sample| (sample - 1.0).abs() <= Consts::EPS),
+                .all(|&sample| (sample - 1.0).abs() <= consts::EPS),
             "a window with no slope to describe leaves every sample as it was"
         );
     }

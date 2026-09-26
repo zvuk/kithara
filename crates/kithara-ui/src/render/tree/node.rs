@@ -427,6 +427,12 @@ mod tests {
         render::{ReadValue, Reads, document::probe, fonts::SANS},
     };
 
+    mod consts {
+        /// The box each child of the stage asks for. The stage itself is taller,
+        /// which is the only way a child being stretched to it shows up at all.
+        pub(super) const CHILD: f32 = 96.0;
+    }
+
     #[kithara::test]
     fn a_node_declaring_no_box_takes_the_whole_room() {
         assert_eq!(content_size(None), (Length::Fill, Length::Fill));
@@ -440,10 +446,6 @@ mod tests {
         );
     }
 
-    /// The box each child of the stage asks for. The stage itself is taller,
-    /// which is the only way a child being stretched to it shows up at all.
-    const CHILD: f32 = 96.0;
-
     /// The boxes a stage lays the children a document wrote into.
     ///
     /// Read from the end, so this says nothing about what a stage may put
@@ -453,11 +455,14 @@ mod tests {
             .map(|_| {
                 apply_size(
                     Rendered::leading(Space::new().into()),
-                    Some(SizeSpec::new(Dim::Fixed(CHILD), Dim::Fixed(CHILD))),
+                    Some(SizeSpec::new(
+                        Dim::Fixed(consts::CHILD),
+                        Dim::Fixed(consts::CHILD),
+                    )),
                 )
             })
             .collect();
-        let stage_height = CHILD + 16.0;
+        let stage_height = consts::CHILD + 16.0;
         let mut element = stage(
             children,
             Some(SizeSpec::new(Dim::Fill, Dim::Fixed(stage_height))),
@@ -490,14 +495,20 @@ mod tests {
 
     #[kithara::test]
     fn the_child_a_document_wrote_first_keeps_the_box_it_asked_for() {
-        assert_eq!(document_children(2)[0], Size::new(CHILD, CHILD));
+        assert_eq!(
+            document_children(2)[0],
+            Size::new(consts::CHILD, consts::CHILD)
+        );
     }
 
     /// A stage with one child has no sibling to disagree with, so this is the
     /// only place the stretch shows as itself.
     #[kithara::test]
     fn a_stages_only_child_keeps_the_box_it_asked_for() {
-        assert_eq!(document_children(1)[0], Size::new(CHILD, CHILD));
+        assert_eq!(
+            document_children(1)[0],
+            Size::new(consts::CHILD, consts::CHILD)
+        );
     }
 
     /// A viewport is a window, and a window's first row is at its own top.
@@ -516,7 +527,7 @@ mod tests {
             }
         }
 
-        let window = CHILD + 64.0;
+        let window = consts::CHILD + 64.0;
         let silent = Silent;
         let mut host = IcedHost::new(probe(&silent), builtin::skin());
         let mut interner = Interner::new(1024);
@@ -525,7 +536,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("the viewport path must intern: {error}"));
         let child = apply_size(
             Rendered::leading(Space::new().into()),
-            Some(SizeSpec::new(Dim::Fill, Dim::Fixed(CHILD))),
+            Some(SizeSpec::new(Dim::Fill, Dim::Fixed(consts::CHILD))),
         );
         let mut element = host.scroll(id, child, Some(SizeSpec::new(Dim::Fill, Dim::Fill)));
         let renderer: Renderer =

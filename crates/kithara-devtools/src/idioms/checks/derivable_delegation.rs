@@ -24,9 +24,13 @@ use crate::{
     idioms::config::DerivableSeverity,
 };
 
-pub(crate) const ID: &str = "derivable_delegation";
-const NON_SIMPLE_DELEGATE_TARGET: &str = "impl has a non-simple delegate! target";
-const UNSUPPORTED_DELEGATE_SYNTAX: &str = "existing delegate! block has unsupported syntax";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "derivable_delegation";
+    pub(super) const NON_SIMPLE_DELEGATE_TARGET: &str = "impl has a non-simple delegate! target";
+
+    pub(super) const UNSUPPORTED_DELEGATE_SYNTAX: &str =
+        "existing delegate! block has unsupported syntax";
+}
 
 pub(crate) struct DerivableDelegation;
 
@@ -106,7 +110,7 @@ impl Check for DerivableDelegation {
     }
 
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -182,8 +186,8 @@ impl Check for DerivableDelegation {
 
 fn emit(severity: DerivableSeverity, key: String, message: String) -> Violation {
     match severity {
-        DerivableSeverity::Warn => Violation::warn(ID, key, message),
-        DerivableSeverity::Deny => Violation::deny(ID, key, message),
+        DerivableSeverity::Warn => Violation::warn(consts::ID, key, message),
+        DerivableSeverity::Deny => Violation::deny(consts::ID, key, message),
     }
 }
 
@@ -204,7 +208,7 @@ struct Edit {
 }
 
 fn is_reportable(candidate: &Candidate) -> bool {
-    candidate.skip.as_deref() != Some(NON_SIMPLE_DELEGATE_TARGET)
+    candidate.skip.as_deref() != Some(consts::NON_SIMPLE_DELEGATE_TARGET)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -452,8 +456,8 @@ fn candidate(
         Ok(segments) => segments,
         Err(error) => {
             let reason = match error {
-                DelegateParseError::NonSimpleTarget => NON_SIMPLE_DELEGATE_TARGET,
-                DelegateParseError::UnsupportedSyntax => UNSUPPORTED_DELEGATE_SYNTAX,
+                DelegateParseError::NonSimpleTarget => consts::NON_SIMPLE_DELEGATE_TARGET,
+                DelegateParseError::UnsupportedSyntax => consts::UNSUPPORTED_DELEGATE_SYNTAX,
             };
             return Some(Candidate {
                 target,
@@ -2342,7 +2346,7 @@ mod tests {
             assert_eq!(count(source), 0);
             let (fixed, outcome) = fix_source(source)?;
             assert_eq!(outcome.writes, 0);
-            assert_eq!(outcome.skipped, [NON_SIMPLE_DELEGATE_TARGET]);
+            assert_eq!(outcome.skipped, [consts::NON_SIMPLE_DELEGATE_TARGET]);
             assert_eq!(fixed, source);
         }
         Ok(())
@@ -2354,7 +2358,7 @@ mod tests {
         assert_eq!(count(source), 1);
         let (fixed, outcome) = fix_source(source)?;
         assert_eq!(outcome.writes, 0);
-        assert_eq!(outcome.skipped, [UNSUPPORTED_DELEGATE_SYNTAX]);
+        assert_eq!(outcome.skipped, [consts::UNSUPPORTED_DELEGATE_SYNTAX]);
         assert_eq!(fixed, source);
         Ok(())
     }

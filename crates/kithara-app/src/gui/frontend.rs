@@ -14,7 +14,7 @@ use kithara::{
 
 use super::{
     app::Kithara,
-    ui::{AppUi, package::Package, window::WINDOW_SIZE},
+    ui::{AppUi, package::Package, window::consts::WINDOW_SIZE},
     update, view,
 };
 use crate::{

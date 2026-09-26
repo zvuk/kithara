@@ -158,12 +158,16 @@ mod tests {
     use super::{DrawListBuilder, Rect, Segmented, SegmentedData, TextContext, cell_width};
     use crate::{builtin, draw::DrawList};
 
-    const BOUNDS: Rect = Rect {
-        h: 24.0,
-        w: 180.0,
-        x: 3.0,
-        y: 5.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOUNDS: Rect = Rect {
+            h: 24.0,
+            w: 180.0,
+            x: 3.0,
+            y: 5.0,
+        };
+    }
 
     fn drawn(active: Option<usize>) -> DrawList {
         let skin = builtin::skin();
@@ -176,7 +180,7 @@ mod tests {
                 active,
                 items: vec!["ONE".to_owned(), "TWO".to_owned(), "THREE".to_owned()],
             },
-            BOUNDS,
+            consts::BOUNDS,
         );
         list.finish()
     }
@@ -196,7 +200,7 @@ mod tests {
     /// A row with nothing in it draws nothing rather than an empty frame.
     #[kithara::test]
     fn a_row_with_no_cells_draws_nothing() {
-        assert_eq!(cell_width(BOUNDS.w, 0), None);
+        assert_eq!(cell_width(consts::BOUNDS.w, 0), None);
     }
 
     #[kithara::test]

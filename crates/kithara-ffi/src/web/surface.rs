@@ -13,8 +13,10 @@ use crate::{
     web::observer::shim::{ItemObserverJs, KeyProcessorJs, PlayerObserverJs, SeekCallbackJs},
 };
 
-/// Milliseconds per second.
-const MS_PER_SECOND: f64 = 1000.0;
+mod consts {
+    /// Milliseconds per second.
+    pub(super) const MS_PER_SECOND: f64 = 1000.0;
+}
 
 fn item_for_url(url: String) -> Arc<AudioPlayerItem> {
     AudioPlayerItem::new(FfiItemConfig {
@@ -129,7 +131,7 @@ impl AudioPlayer {
     #[wasm_bindgen(js_name = currentTimeMs)]
     #[must_use]
     pub fn current_time_ms_js(&self) -> f64 {
-        self.inner.current_time() * MS_PER_SECOND
+        self.inner.current_time() * consts::MS_PER_SECOND
     }
 
     #[wasm_bindgen(js_name = eqBandCount)]
@@ -334,7 +336,7 @@ impl AudioPlayer {
             .map_err(|_| JsValue::from_str("callback must be a function"))?;
         let callback: Arc<dyn crate::observer::SeekCallback> = Arc::new(SeekCallbackJs::new(func));
         self.inner
-            .seek(position_ms / MS_PER_SECOND, None, &callback);
+            .seek(position_ms / consts::MS_PER_SECOND, None, &callback);
         Ok(())
     }
 

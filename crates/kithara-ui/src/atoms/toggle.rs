@@ -119,12 +119,16 @@ mod tests {
         draw::{DrawCmd, Geom, Paint, Pen},
     };
 
-    const TOGGLE: Rect = Rect {
-        h: 14.0,
-        w: 26.0,
-        x: 0.0,
-        y: 0.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const TOGGLE: Rect = Rect {
+            h: 14.0,
+            w: 26.0,
+            x: 0.0,
+            y: 0.0,
+        };
+    }
 
     /// The thumb travels to the far end when the switch is on, and the body
     /// only exists there — an idle toggle is an outline.
@@ -134,7 +138,7 @@ mod tests {
         let toggle = Binary::toggle(skin);
         let draw = |active| {
             let mut list = DrawListBuilder::default();
-            toggle.paint(&mut list, active, TOGGLE);
+            toggle.paint(&mut list, active, consts::TOGGLE);
             list.finish()
         };
 
@@ -147,7 +151,7 @@ mod tests {
             DrawCmd::Fill {
                 geom: Geom::Rect(rect),
                 paint: Paint::Solid(color),
-            } if *rect == TOGGLE && *color == skin.palette.accent
+            } if *rect == consts::TOGGLE && *color == skin.palette.accent
         ));
         assert!(matches!(
             thumb,

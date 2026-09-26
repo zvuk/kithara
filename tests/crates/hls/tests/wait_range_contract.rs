@@ -15,13 +15,12 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 
-struct Consts;
-impl Consts {
-    const SEGMENT_SIZE: usize = 50_000;
-    const SEGMENT_COUNT: usize = 40;
-    const SEEK_ITERATIONS: usize = 800;
-    const PROBE_SIZE: usize = 64;
-    const TAIL_CHUNK_SIZE: usize = 32 * 1024;
+mod consts {
+    pub(super) const SEGMENT_SIZE: usize = 50_000;
+    pub(super) const SEGMENT_COUNT: usize = 40;
+    pub(super) const SEEK_ITERATIONS: usize = 800;
+    pub(super) const PROBE_SIZE: usize = 64;
+    pub(super) const TAIL_CHUNK_SIZE: usize = 32 * 1024;
 }
 
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
@@ -31,8 +30,8 @@ impl Consts {
 async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     let temp_dir = TestTempDir::new();
     let server = HlsTestServer::new(HlsTestServerConfig {
-        segment_size: Consts::SEGMENT_SIZE,
-        segments_per_variant: Consts::SEGMENT_COUNT,
+        segment_size: consts::SEGMENT_SIZE,
+        segments_per_variant: consts::SEGMENT_COUNT,
         ..Default::default()
     })
     .await;
@@ -62,16 +61,16 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
 
     let total_bytes = server.total_bytes();
     assert!(
-        total_bytes > Consts::PROBE_SIZE as u64 + 1,
+        total_bytes > consts::PROBE_SIZE as u64 + 1,
         "fixture stream must be larger than probe"
     );
 
     let result = spawn_blocking(move || {
         let mut rng = Xorshift64::new(0xA11C_EE55_D00D_BA5E);
-        let max_seek = total_bytes - Consts::PROBE_SIZE as u64;
-        let mut probe = [0u8; Consts::PROBE_SIZE];
+        let max_seek = total_bytes - consts::PROBE_SIZE as u64;
+        let mut probe = [0u8; consts::PROBE_SIZE];
 
-        for _ in 0..Consts::SEEK_ITERATIONS {
+        for _ in 0..consts::SEEK_ITERATIONS {
             let seek_pos = rng.range_u64(1, max_seek);
             let actual = stream
                 .seek(SeekFrom::Start(seek_pos))
@@ -93,7 +92,7 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
             .expect("tail seek must succeed");
         assert_eq!(actual, tail_start);
 
-        let mut tail_buf = vec![0u8; Consts::TAIL_CHUNK_SIZE];
+        let mut tail_buf = vec![0u8; consts::TAIL_CHUNK_SIZE];
         let mut offset = tail_start;
         let mut total_read = 0u64;
 

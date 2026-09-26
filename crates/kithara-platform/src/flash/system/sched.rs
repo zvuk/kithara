@@ -19,6 +19,12 @@ use crate::{
     sync::Arc,
 };
 
+pub(crate) mod consts {
+    /// How far, in nanoseconds, the paced clock may trail real time when a
+    /// deadline is registered: a few OS timer quanta.
+    pub(crate) const MAX_PACE_LAG_NANOS: u64 = 50_000_000;
+}
+
 /// What kind of waiter an [`Entry`] is, so a signal targets the right group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum WaitKind {
@@ -60,10 +66,6 @@ impl Parked {
         }
     }
 }
-
-/// How far, in nanoseconds, the paced clock may trail real time when a
-/// deadline is registered: a few OS timer quanta.
-pub(super) const MAX_PACE_LAG_NANOS: u64 = 50_000_000;
 
 /// What a timed park's deadline MEANS to the engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,11 +207,11 @@ impl Core {
         };
         let now = clock.now_nanos();
         let elapsed = u64::try_from(real.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        if elapsed.saturating_sub(now.saturating_sub(virt)) <= MAX_PACE_LAG_NANOS {
+        if elapsed.saturating_sub(now.saturating_sub(virt)) <= consts::MAX_PACE_LAG_NANOS {
             return;
         }
         if let Some(real) =
-            RealInstant::now().checked_sub(StdDuration::from_nanos(MAX_PACE_LAG_NANOS))
+            RealInstant::now().checked_sub(StdDuration::from_nanos(consts::MAX_PACE_LAG_NANOS))
         {
             self.sched.pace_anchor = Some((real, now));
         }

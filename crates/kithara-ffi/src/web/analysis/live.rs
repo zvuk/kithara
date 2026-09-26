@@ -11,14 +11,11 @@ mod encode {
 
     use crate::analysis::seconds_at;
 
-    /// Scope tag every analysis message carries on the player event channel.
-    pub(crate) const ANALYSIS_SCOPE: &str = "analysis";
-
-    struct Consts;
-
-    impl Consts {
-        const BANDS_PER_BUCKET: usize = 3;
-        const STAGE: usize = 768;
+    pub(super) mod consts {
+        /// Scope tag every analysis message carries on the player event channel.
+        pub(in super::super) const ANALYSIS_SCOPE: &str = "analysis";
+        pub(super) const BANDS_PER_BUCKET: usize = 3;
+        pub(super) const STAGE: usize = 768;
     }
 
     /// One analysis publication as the plain JS object the registered callback
@@ -29,7 +26,11 @@ mod encode {
         let artifact = beat.map(BeatSnapshot::artifact);
 
         let message = Object::new();
-        set(&message, "scope", &JsValue::from_str(ANALYSIS_SCOPE));
+        set(
+            &message,
+            "scope",
+            &JsValue::from_str(consts::ANALYSIS_SCOPE),
+        );
         set(&message, "trackId", &number(track_id.as_u64()));
         set(&message, "revision", &number(analysis.revision()));
         set(
@@ -64,17 +65,17 @@ mod encode {
     fn waveform(analysis: &TrackAnalysis) -> Float32Array {
         let buckets = analysis.waveform().map_or(&[][..], Waveform::buckets);
         let out =
-            Float32Array::new_with_length(length_of(buckets.len() * Consts::BANDS_PER_BUCKET));
-        let mut staged = [0.0_f32; Consts::STAGE];
+            Float32Array::new_with_length(length_of(buckets.len() * consts::BANDS_PER_BUCKET));
+        let mut staged = [0.0_f32; consts::STAGE];
         let mut written: u32 = 0;
-        for group in buckets.chunks(Consts::STAGE / Consts::BANDS_PER_BUCKET) {
-            for (slot, bucket) in staged.chunks_exact_mut(Consts::BANDS_PER_BUCKET).zip(group) {
+        for group in buckets.chunks(consts::STAGE / consts::BANDS_PER_BUCKET) {
+            for (slot, bucket) in staged.chunks_exact_mut(consts::BANDS_PER_BUCKET).zip(group) {
                 let [low, mid, high] = slot else { continue };
                 *low = bucket.low();
                 *mid = bucket.mid();
                 *high = bucket.high();
             }
-            let filled = group.len() * Consts::BANDS_PER_BUCKET;
+            let filled = group.len() * consts::BANDS_PER_BUCKET;
             let end = written.saturating_add(length_of(filled));
             out.subarray(written, end).copy_from(&staged[..filled]);
             written = end;
@@ -84,9 +85,9 @@ mod encode {
 
     fn markers(frames: &[u64], rate: NonZeroU32) -> Float64Array {
         let out = Float64Array::new_with_length(length_of(frames.len()));
-        let mut staged = [0.0_f64; Consts::STAGE];
+        let mut staged = [0.0_f64; consts::STAGE];
         let mut written: u32 = 0;
-        for group in frames.chunks(Consts::STAGE) {
+        for group in frames.chunks(consts::STAGE) {
             for (slot, frame) in staged.iter_mut().zip(group) {
                 *slot = seconds_at(*frame, rate);
             }
@@ -116,7 +117,7 @@ mod route {
     use send_wrapper::SendWrapper;
     use wasm_bindgen::{JsCast, JsValue};
 
-    use super::encode::ANALYSIS_SCOPE;
+    use super::encode::consts::ANALYSIS_SCOPE;
 
     #[derive(Clone, Default)]
     pub(crate) struct AnalysisRoute {
@@ -166,14 +167,12 @@ mod runs {
     use super::encode::encode;
     use crate::{
         pools::{FfiPools, FfiQueueControl, FfiResourceConfig, Pools},
-        web::{interop::send_reply, observer::source::EVENT_CHANNEL},
+        web::{interop::send_reply, observer::source::consts::EVENT_CHANNEL},
     };
 
-    struct Consts;
-
-    impl Consts {
-        const CALLER_HOLDS_NO_REVISION: u64 = 0;
-        const WAVEFORM_MAX_BUCKETS: usize = 96_000;
+    mod consts {
+        pub(super) const CALLER_HOLDS_NO_REVISION: u64 = 0;
+        pub(super) const WAVEFORM_MAX_BUCKETS: usize = 96_000;
     }
 
     type WebAnalyzerBuilder = AnalyzerBuilder<PlaybackResamplerBackend, FfiPools>;
@@ -190,7 +189,7 @@ mod runs {
         pub(crate) fn new(pools: Pools) -> Self {
             let builder: WebAnalyzerBuilder = AnalyzerBuilder::new(pools)
                 .with_beat_config(BeatAnalysisConfig::default())
-                .with_waveform(Consts::WAVEFORM_MAX_BUCKETS)
+                .with_waveform(consts::WAVEFORM_MAX_BUCKETS)
                 .with_beat();
             Self {
                 worker: Arc::new(AnalysisWorker::new(
@@ -233,7 +232,7 @@ mod runs {
             let (rx, producer, pass) = match self.worker.open(
                 token,
                 rate,
-                Consts::CALLER_HOLDS_NO_REVISION,
+                consts::CALLER_HOLDS_NO_REVISION,
                 AnalysisDemand::ALL,
             ) {
                 Ok(opened) => opened,

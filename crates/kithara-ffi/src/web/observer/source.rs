@@ -17,13 +17,15 @@ use crate::{
     types::FfiPlayerEvent,
 };
 
-/// `BroadcastChannel` name carrying structured player events from the
-/// worker to the main-thread [`router`](crate::web::observer::router).
-pub(crate) const EVENT_CHANNEL: &str = "kithara-events";
+pub(crate) mod consts {
+    /// `BroadcastChannel` name carrying structured player events from the
+    /// worker to the main-thread [`router`](crate::web::observer::router).
+    pub(crate) const EVENT_CHANNEL: &str = "kithara-events";
+}
 
 /// Subscribe to the queue's event bus inside the worker and forward every
 /// translated [`FfiPlayerEvent`] to the main thread over
-/// [`EVENT_CHANNEL`]. Spawned from
+/// [`EVENT_CHANNEL`](consts::EVENT_CHANNEL). Spawned from
 /// [`worker_main`](crate::web::worker::worker_main).
 pub(crate) fn spawn(queue: &FfiQueueControl) {
     let rx = queue.subscribe::<QueueBusEvent>();
@@ -48,7 +50,7 @@ fn spawn_duration_poll(queue: &FfiQueueControl) {
 
     let queue = queue.clone();
     task_spawn(async move {
-        let Ok(channel) = BroadcastChannel::new(EVENT_CHANNEL) else {
+        let Ok(channel) = BroadcastChannel::new(consts::EVENT_CHANNEL) else {
             return;
         };
         let mut last: Option<f64> = None;
@@ -69,7 +71,7 @@ fn spawn_duration_poll(queue: &FfiQueueControl) {
 }
 
 async fn run(mut rx: EventReceiver<QueueBusEvent>) {
-    let Ok(channel) = BroadcastChannel::new(EVENT_CHANNEL) else {
+    let Ok(channel) = BroadcastChannel::new(consts::EVENT_CHANNEL) else {
         console::warn_1(&JsValue::from_str(
             "kithara: BroadcastChannel unavailable in worker; event bridge disabled",
         ));
@@ -114,7 +116,7 @@ fn to_ffi(event: &QueueBusEvent) -> Option<FfiPlayerEvent> {
 }
 
 async fn run_items(mut rx: EventReceiver<ItemBusEvent>) {
-    let Ok(channel) = BroadcastChannel::new(EVENT_CHANNEL) else {
+    let Ok(channel) = BroadcastChannel::new(consts::EVENT_CHANNEL) else {
         return;
     };
     loop {

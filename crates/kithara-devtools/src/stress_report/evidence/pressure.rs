@@ -6,9 +6,8 @@ use super::{
     AttemptDossier, attempt::AttemptKey, duration_ms,
     line_reader::for_each_bounded_line_with_limit, parse_timestamp_ms,
 };
-use crate::{junit::CaseTiming, stress::pressure::SCHEMA};
+use crate::{consts, junit::CaseTiming};
 
-const MAX_LINE_BYTES: usize = 1_048_576;
 #[derive(Debug, Deserialize)]
 struct PressureSample {
     metrics: BTreeMap<String, String>,
@@ -66,81 +65,81 @@ pub(super) fn append(out: &mut String, path: &Path) -> (Vec<PressurePoint>, bool
     let mut ends = 0usize;
     let mut healthy_end = false;
     let mut last_marker = None::<PressureMarker>;
-    let read =
-        for_each_bounded_line_with_limit(path, MAX_LINE_BYTES, MAX_PRESSURE_RECORDS, |line| {
-            let Ok(sample) = serde_json::from_str::<PressureSample>(line) else {
-                summary.malformed = summary.malformed.saturating_add(1);
-                return ControlFlow::Continue(());
-            };
-            if sample.schema != SCHEMA
-                || sample
-                    .load1
-                    .is_some_and(|load| !load.is_finite() || load < 0.0)
-            {
-                summary.malformed = summary.malformed.saturating_add(1);
-                return ControlFlow::Continue(());
-            }
-            if previous_timestamp.is_some_and(|previous| sample.timestamp_ms <= previous) {
-                summary.nonmonotonic = summary.nonmonotonic.saturating_add(1);
-                return ControlFlow::Continue(());
-            }
-            previous_timestamp = Some(sample.timestamp_ms);
-            records = records.saturating_add(1);
-            last_marker = Some(sample.marker);
+    let line_bytes = consts::PRESSURE_LINE_BYTES;
+    let read = for_each_bounded_line_with_limit(path, line_bytes, MAX_PRESSURE_RECORDS, |line| {
+        let Ok(sample) = serde_json::from_str::<PressureSample>(line) else {
+            summary.malformed = summary.malformed.saturating_add(1);
+            return ControlFlow::Continue(());
+        };
+        if sample.schema != consts::SCHEMA
+            || sample
+                .load1
+                .is_some_and(|load| !load.is_finite() || load < 0.0)
+        {
+            summary.malformed = summary.malformed.saturating_add(1);
+            return ControlFlow::Continue(());
+        }
+        if previous_timestamp.is_some_and(|previous| sample.timestamp_ms <= previous) {
+            summary.nonmonotonic = summary.nonmonotonic.saturating_add(1);
+            return ControlFlow::Continue(());
+        }
+        previous_timestamp = Some(sample.timestamp_ms);
+        records = records.saturating_add(1);
+        last_marker = Some(sample.marker);
 
-            match sample.marker {
-                PressureMarker::Start => {
-                    starts = starts.saturating_add(1);
-                    if records != 1 || starts != 1 || ends != 0 {
-                        summary.structure_errors = summary.structure_errors.saturating_add(1);
-                    }
-                }
-                PressureMarker::Sample => {
-                    if starts != 1 || ends != 0 {
-                        summary.structure_errors = summary.structure_errors.saturating_add(1);
-                    }
-                }
-                PressureMarker::End => {
-                    ends = ends.saturating_add(1);
-                    healthy_end = sample.sampler_healthy == Some(true);
-                    if starts != 1
-                        || ends != 1
-                        || !healthy_end
-                        || sample.primary_exit_code.is_none()
-                        || sample.load1.is_some()
-                        || !sample.metrics.is_empty()
-                    {
-                        summary.structure_errors = summary.structure_errors.saturating_add(1);
-                    }
-                    return ControlFlow::Continue(());
+        match sample.marker {
+            PressureMarker::Start => {
+                starts = starts.saturating_add(1);
+                if records != 1 || starts != 1 || ends != 0 {
+                    summary.structure_errors = summary.structure_errors.saturating_add(1);
                 }
             }
+            PressureMarker::Sample => {
+                if starts != 1 || ends != 0 {
+                    summary.structure_errors = summary.structure_errors.saturating_add(1);
+                }
+            }
+            PressureMarker::End => {
+                ends = ends.saturating_add(1);
+                healthy_end = sample.sampler_healthy == Some(true);
+                if starts != 1
+                    || ends != 1
+                    || !healthy_end
+                    || sample.primary_exit_code.is_none()
+                    || sample.load1.is_some()
+                    || !sample.metrics.is_empty()
+                {
+                    summary.structure_errors = summary.structure_errors.saturating_add(1);
+                }
+                return ControlFlow::Continue(());
+            }
+        }
 
-            summary.samples = summary.samples.saturating_add(1);
-            summary
-                .first_timestamp_ms
-                .get_or_insert(sample.timestamp_ms);
-            summary.last_timestamp_ms = Some(sample.timestamp_ms);
-            if let Some(load) = sample.load1 {
-                summary.max_load = summary.max_load.max(load);
-            }
-            let mut point_psi = BTreeMap::new();
-            for (source, value) in sample.metrics {
-                collect_psi(&mut summary.psi, &source, &value);
-                collect_psi(&mut point_psi, &source, &value);
-                for field in ["nr_throttled", "throttled_usec", "oom", "oom_kill", "max"] {
-                    if let Some(value) = read_counter(&value, field) {
-                        update_counter(&mut summary, &source, field, value);
-                    }
+        summary.samples = summary.samples.saturating_add(1);
+        summary
+            .first_timestamp_ms
+            .get_or_insert(sample.timestamp_ms);
+        summary.last_timestamp_ms = Some(sample.timestamp_ms);
+        if let Some(load) = sample.load1 {
+            summary.max_load = summary.max_load.max(load);
+        }
+        let mut point_psi = BTreeMap::new();
+        for (source, value) in sample.metrics {
+            collect_psi(&mut summary.psi, &source, &value);
+            collect_psi(&mut point_psi, &source, &value);
+            for field in ["nr_throttled", "throttled_usec", "oom", "oom_kill", "max"] {
+                if let Some(value) = read_counter(&value, field) {
+                    update_counter(&mut summary, &source, field, value);
                 }
             }
-            points.push(PressurePoint {
-                timestamp_ms: sample.timestamp_ms,
-                load1: sample.load1,
-                psi: point_psi,
-            });
-            ControlFlow::Continue(())
+        }
+        points.push(PressurePoint {
+            timestamp_ms: sample.timestamp_ms,
+            load1: sample.load1,
+            psi: point_psi,
         });
+        ControlFlow::Continue(())
+    });
     let Ok(read) = read else {
         let _ = writeln!(
             out,

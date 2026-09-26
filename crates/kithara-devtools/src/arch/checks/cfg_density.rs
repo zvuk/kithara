@@ -9,59 +9,10 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "cfg_density";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "cfg_density";
 
-pub(crate) struct CfgDensity;
-
-impl Check for CfgDensity {
-    fn id(&self) -> &'static str {
-        ID
-    }
-
-    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        let cfg = &ctx.config.thresholds.cfg_density;
-        let exclude = compile_globs(&cfg.exclude_globs);
-        let exempt_crates: Vec<&str> = cfg.exempt_crates.iter().map(String::as_str).collect();
-        let mut violations = Vec::new();
-
-        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let rel = relative_to(ctx.workspace_root, &path);
-            if matches_any(&exclude, rel) {
-                continue;
-            }
-            if is_exempt_crate(rel, &exempt_crates) {
-                continue;
-            }
-
-            let content = fs::read_to_string(&path)?;
-            let count = count_cfg_attributes(&content);
-            let key = rel.to_string_lossy().replace('\\', "/");
-
-            if count >= cfg.deny {
-                violations.push(
-                    Violation::deny(
-                        ID,
-                        &key,
-                        format!("{count} #[cfg] attributes (deny threshold {})", cfg.deny),
-                    )
-                    .with_explanation(EXPLANATION),
-                );
-            } else if count >= cfg.warn {
-                violations.push(
-                    Violation::warn(
-                        ID,
-                        &key,
-                        format!("{count} #[cfg] attributes (warn threshold {})", cfg.warn),
-                    )
-                    .with_explanation(EXPLANATION),
-                );
-            }
-        }
-        Ok(violations)
-    }
-}
-
-const EXPLANATION: &str = "\
+    pub(super) const EXPLANATION: &str = "\
 Summary: Too many `#[cfg(...)]` gates scattered across individual items.
 
 Why: Repeated cfg attributes are noisy, error-prone (easy to forget one
@@ -86,6 +37,57 @@ Good:
 Resolve: move gated production items into dedicated platform or feature
 modules and gate each module once. Test-only item ranges are excluded
 automatically.";
+}
+
+pub(crate) struct CfgDensity;
+
+impl Check for CfgDensity {
+    fn id(&self) -> &'static str {
+        consts::ID
+    }
+
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        let cfg = &ctx.config.thresholds.cfg_density;
+        let exclude = compile_globs(&cfg.exclude_globs);
+        let exempt_crates: Vec<&str> = cfg.exempt_crates.iter().map(String::as_str).collect();
+        let mut violations = Vec::new();
+
+        for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
+            let rel = relative_to(ctx.workspace_root, &path);
+            if matches_any(&exclude, rel) {
+                continue;
+            }
+            if is_exempt_crate(rel, &exempt_crates) {
+                continue;
+            }
+
+            let content = fs::read_to_string(&path)?;
+            let count = count_cfg_attributes(&content);
+            let key = rel.to_string_lossy().replace('\\', "/");
+
+            if count >= cfg.deny {
+                violations.push(
+                    Violation::deny(
+                        consts::ID,
+                        &key,
+                        format!("{count} #[cfg] attributes (deny threshold {})", cfg.deny),
+                    )
+                    .with_explanation(consts::EXPLANATION),
+                );
+            } else if count >= cfg.warn {
+                violations.push(
+                    Violation::warn(
+                        consts::ID,
+                        &key,
+                        format!("{count} #[cfg] attributes (warn threshold {})", cfg.warn),
+                    )
+                    .with_explanation(consts::EXPLANATION),
+                );
+            }
+        }
+        Ok(violations)
+    }
+}
 
 fn count_cfg_attributes(source: &str) -> usize {
     let test_lines = cfg_test_lines(source);

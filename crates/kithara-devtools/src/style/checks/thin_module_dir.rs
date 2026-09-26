@@ -9,7 +9,9 @@ use anyhow::{Context as _, Result};
 use super::{Check, Context};
 use crate::common::{violation::Violation, walker::relative_to};
 
-pub(crate) const ID: &str = "thin_module_dir";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "thin_module_dir";
+}
 
 /// A module directory that holds only its `mod.rs`, or `mod.rs` and one more
 /// source file. The directory adds a level without splitting anything, so the
@@ -20,7 +22,7 @@ pub(crate) struct ThinModuleDir;
 
 impl Check for ThinModuleDir {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -79,7 +81,7 @@ fn thin_module_dirs<'a>(
             |name| format!("only `mod.rs` and `{name}`"),
         );
         violations.push(Violation::deny(
-            ID,
+            consts::ID,
             dir_key.clone(),
             format!("`{dir_key}/` holds {holds}; fold the module into `{dir_key}.rs`"),
         ));

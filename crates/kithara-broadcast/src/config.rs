@@ -11,7 +11,7 @@ use kithara_platform::{CancelToken, time::Duration};
 use kithara_stream::{AudioCodec, ContainerFormat};
 use kithara_worker::{Priority, Worker};
 
-use crate::{BroadcastError, BroadcastResult};
+use crate::{BroadcastError, BroadcastResult, consts};
 
 /// Audio, segmentation, retention, and origin settings for a live broadcast.
 ///
@@ -60,25 +60,25 @@ pub struct BroadcastConfig<S> {
     #[patch(humantime)]
     pub wait_timeout: Duration,
     /// Consecutive progress passes before the dispatcher yields.
-    #[builder(default = Defaults::FAIRNESS_YIELD_INTERVAL)]
+    #[builder(default = consts::FAIRNESS_YIELD_INTERVAL)]
     pub fairness_yield_interval: NonZeroU32,
     /// Maximum consecutive packager ticks in one dispatcher visit.
     #[builder(default = NonZeroU32::MIN)]
     pub task_burst: NonZeroU32,
     /// Maximum stereo PCM frames waiting between RT and the packager worker.
-    #[builder(default = Defaults::BUFFER_FRAMES)]
+    #[builder(default = consts::BUFFER_FRAMES)]
     pub buffer_frames: NonZeroUsize,
     /// Maximum tasks admitted to the broadcast dispatcher.
     #[builder(default = NonZeroUsize::MIN)]
     pub dispatcher_capacity: NonZeroUsize,
     /// Maximum queued master-format generations waiting for the packager.
-    #[builder(default = Defaults::GENERATION_CAPACITY)]
+    #[builder(default = consts::GENERATION_CAPACITY)]
     pub generation_capacity: NonZeroUsize,
     /// Maximum compute jobs admitted for the packager task.
     #[builder(default = NonZeroUsize::MIN)]
     pub max_compute_tasks: NonZeroUsize,
     /// Maximum stereo PCM frames packaged during one worker tick.
-    #[builder(default = Defaults::TICK_FRAMES)]
+    #[builder(default = consts::TICK_FRAMES)]
     pub tick_frames: NonZeroUsize,
     /// Optional cancellation parent for the broadcast lifetime.
     #[patch(skip)]
@@ -110,27 +110,6 @@ pub struct BroadcastConfig<S> {
     /// Segments a client sees in the playlist.
     #[builder(default = 6)]
     pub window: usize,
-}
-
-struct Defaults;
-
-impl Defaults {
-    const BUFFER_FRAMES: NonZeroUsize = match NonZeroUsize::new(96_000) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-    const FAIRNESS_YIELD_INTERVAL: NonZeroU32 = match NonZeroU32::new(16) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-    const GENERATION_CAPACITY: NonZeroUsize = match NonZeroUsize::new(8) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-    const TICK_FRAMES: NonZeroUsize = match NonZeroUsize::new(4_096) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
 }
 
 impl<S> fmt::Debug for BroadcastConfig<S> {

@@ -8,14 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
 
-/// Who every commit the release makes is recorded as. The commits land in a
-/// public repository, so they carry no person's name or address.
-const IDENTITY: [(&str, &str); 4] = [
-    ("GIT_AUTHOR_NAME", "kithara-release"),
-    ("GIT_AUTHOR_EMAIL", "kithara-release@localhost"),
-    ("GIT_COMMITTER_NAME", "kithara-release"),
-    ("GIT_COMMITTER_EMAIL", "kithara-release@localhost"),
-];
+use crate::consts;
 
 /// A repository the release reaches over HTTPS. The token travels in an HTTP
 /// header set through the environment, so it lands in no URL, remote
@@ -127,7 +120,7 @@ pub(super) fn command(root: &Path) -> Command {
 /// `git` in `root`, recording commits as the release.
 pub(super) fn committer(root: &Path) -> Command {
     let mut command = command(root);
-    command.envs(IDENTITY);
+    command.envs(consts::IDENTITY);
     command
 }
 

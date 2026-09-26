@@ -253,7 +253,7 @@ mod tests {
         let elapsed = start.elapsed();
         flash.real_io_exit();
 
-        let lag = Duration::from_nanos(super::super::sched::MAX_PACE_LAG_NANOS);
+        let lag = Duration::from_nanos(super::super::sched::consts::MAX_PACE_LAG_NANOS);
         assert_paced_elapsed(elapsed + lag, 200);
     }
 

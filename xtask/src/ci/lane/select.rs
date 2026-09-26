@@ -7,7 +7,8 @@ use serde::Serialize;
 
 use crate::{
     ci::run::PipelineKind,
-    config::{CiLaneArtifact, CiLaneConfig, KitharaExt, LANE_ROLES},
+    config::{CiLaneArtifact, CiLaneConfig, KitharaExt},
+    consts,
 };
 
 /// Which CI system is asking. A lane may answer them differently, because the
@@ -117,11 +118,11 @@ pub(crate) fn render(
     lanes: &BTreeMap<String, CiLaneConfig>,
     args: &LanesArgs,
 ) -> Result<Selection> {
-    if !LANE_ROLES.contains(&args.role.as_str()) {
+    if !consts::LANE_ROLES.contains(&args.role.as_str()) {
         bail!(
             "`{}` is not a CI lane role; this repository has {}",
             args.role,
-            LANE_ROLES.join(", ")
+            consts::LANE_ROLES.join(", ")
         );
     }
     for name in args.only.iter().filter(|name| name.as_str() != "all") {

@@ -17,3 +17,4 @@ pub use observer::{Event, Observer, PassOutcome, PassReport};
 pub use task::{Priority, Task, TaskContext, TaskControl, TaskId, TickResult};
 pub use wake::Wake;
 pub use worker::Worker;
+mod consts;

@@ -80,11 +80,11 @@ mod tests {
     };
 
     /// The boxes and the ink the checks below are drawn with.
-    struct Fixture;
+    mod consts {
+        use super::{Rect, Rgba};
 
-    impl Fixture {
         /// The box both frame checks draw into.
-        const BOX: Rect = Rect {
+        pub(super) const BOX: Rect = Rect {
             h: 20.0,
             w: 40.0,
             x: 4.0,
@@ -92,7 +92,7 @@ mod tests {
         };
 
         /// The box every rule below runs down.
-        const COLUMN: Rect = Rect {
+        pub(super) const COLUMN: Rect = Rect {
             h: 60.0,
             w: 300.0,
             x: 0.0,
@@ -100,7 +100,7 @@ mod tests {
         };
 
         /// The colour every mark is asked for in.
-        const INK: Rgba = Rgba {
+        pub(super) const INK: Rgba = Rgba {
             a: 1.0,
             b: 1.0,
             g: 1.0,
@@ -121,7 +121,7 @@ mod tests {
     #[kithara::test]
     fn a_border_sits_inside_the_box_it_frames() {
         let mut list = DrawListBuilder::default();
-        border(&mut list, Fixture::BOX, framed(2.0), Fixture::INK);
+        border(&mut list, consts::BOX, framed(2.0), consts::INK);
 
         assert!(matches!(
             list.finish().commands(),
@@ -145,10 +145,10 @@ mod tests {
         let mut list = DrawListBuilder::default();
         quad(
             &mut list,
-            Fixture::BOX,
+            consts::BOX,
             framed(0.0),
-            Fixture::INK,
-            Fixture::INK,
+            consts::INK,
+            consts::INK,
         );
 
         assert!(matches!(list.finish().commands(), [DrawCmd::Fill { .. }]));
@@ -156,7 +156,7 @@ mod tests {
 
     fn ruled(x: f32, width: f32) -> Rect {
         let mut list = DrawListBuilder::default();
-        rule(&mut list, Fixture::COLUMN, x, width, Fixture::INK);
+        rule(&mut list, consts::COLUMN, x, width, consts::INK);
         let commands = list.finish().commands().to_vec();
         match commands.as_slice() {
             [
@@ -194,6 +194,6 @@ mod tests {
     fn a_rule_runs_the_height_of_the_box_it_marks() {
         let drawn = ruled(10.3, 1.0);
 
-        assert_eq!((drawn.y, drawn.h), (Fixture::COLUMN.y, Fixture::COLUMN.h));
+        assert_eq!((drawn.y, drawn.h), (consts::COLUMN.y, consts::COLUMN.h));
     }
 }

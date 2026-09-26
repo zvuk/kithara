@@ -8,13 +8,15 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "flat_directory";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "flat_directory";
+}
 
 pub(crate) struct FlatDirectory;
 
 impl Check for FlatDirectory {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -42,7 +44,7 @@ impl Check for FlatDirectory {
             let key = dir.to_string_lossy().replace('\\', "/");
             if count >= cfg.deny {
                 violations.push(Violation::deny(
-                    ID,
+                    consts::ID,
                     key,
                     format!(
                         "{count} sibling .rs files in one directory (deny threshold {}); \
@@ -52,7 +54,7 @@ impl Check for FlatDirectory {
                 ));
             } else if count >= cfg.warn {
                 violations.push(Violation::warn(
-                    ID,
+                    consts::ID,
                     key,
                     format!(
                         "{count} sibling .rs files in one directory (warn threshold {}); \

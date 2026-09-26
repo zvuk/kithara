@@ -6,7 +6,11 @@ use masonry::vello::{
     },
 };
 
-pub(super) const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+pub(in crate::app) mod consts {
+    use super::*;
+
+    pub(in crate::app) const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+}
 
 pub(super) fn replace(surface: &mut RenderSurface<'_>, device: &Device, width: u32, height: u32) {
     let texture = device.create_texture(&TextureDescriptor {
@@ -19,7 +23,7 @@ pub(super) fn replace(surface: &mut RenderSurface<'_>, device: &Device, width: u
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format: FORMAT,
+        format: consts::FORMAT,
         usage: TextureUsages::STORAGE_BINDING
             | TextureUsages::RENDER_ATTACHMENT
             | TextureUsages::TEXTURE_BINDING,

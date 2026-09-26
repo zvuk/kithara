@@ -28,3 +28,4 @@ pub use registry::{
     KeyProcessResult, KeyProcessor, KeyProcessorRegistry, KeyRequest, KeyRequestFactory,
     KeyRequestResolver, PreparedKeyRequest,
 };
+mod consts;

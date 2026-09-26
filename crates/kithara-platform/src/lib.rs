@@ -59,3 +59,4 @@ pub use common::{
 };
 #[cfg(all(not(target_arch = "wasm32"), feature = "flash"))]
 pub use flash::*;
+mod consts;

@@ -26,16 +26,12 @@ use super::{
 };
 use crate::{
     HlsError, HlsEvent, HlsResult,
-    config::{DEFAULT_ACQUIRE_ATTEMPT_BUDGET, DEFAULT_DOWNLOAD_BATCH_SIZE, SizeProbeMethod},
+    config::SizeProbeMethod,
+    consts,
     playlist::PlaylistState,
     segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
     signal::SizeSignal,
 };
-
-pub(super) const INIT_PLACEHOLDER_BYTES: u64 = 16 * 1024;
-/// Reserved [`VariantFlow::prefetch_resume_at`] marker for "nothing is
-/// deferred" (a `2^64 - 1` byte cursor is unreachable).
-pub(super) const NO_PREFETCH_DEFERRAL: u64 = u64::MAX;
 
 /// The `HlsConfig`-derived slice of a plan: everything the dispatch policy
 /// reads, resolved once when the stream is built and carried unchanged into
@@ -65,11 +61,11 @@ pub(crate) struct PlanConfig {
     pub(crate) size_probe_method: SizeProbeMethod,
     /// Mirrors `HlsConfig::acquire_attempt_budget`: dispatch rounds a slot
     /// gets before an acquire failure settles it terminally.
-    #[builder(default = DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
+    #[builder(default = consts::DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
     pub(crate) acquire_attempt_budget: u8,
     /// Mirrors `HlsConfig::download_batch_size`: segments one dispatch round
     /// may emit.
-    #[builder(default = DEFAULT_DOWNLOAD_BATCH_SIZE)]
+    #[builder(default = consts::DEFAULT_DOWNLOAD_BATCH_SIZE)]
     pub(crate) prefetch_budget: usize,
 }
 
@@ -308,7 +304,7 @@ impl VariantFlow {
     fn new(seek_obs: Arc<dyn SeekObserve>, num_segments: usize) -> Self {
         Self {
             prefetch_anchor: AtomicU64::new(0),
-            prefetch_resume_at: AtomicU64::new(NO_PREFETCH_DEFERRAL),
+            prefetch_resume_at: AtomicU64::new(consts::NO_PREFETCH_DEFERRAL),
             queue: PlanQueue::new(num_segments.saturating_add(2), num_segments),
             reader: ReaderRuntime::new(seek_obs),
         }

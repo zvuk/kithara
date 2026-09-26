@@ -2,39 +2,10 @@ use anyhow::{Context, Result, bail};
 use tracing::info;
 
 use super::profile::LinuxHost;
-use crate::ci::{
-    config::{CiPins, PINS_PATH},
-    process::Process,
+use crate::{
+    ci::{config::CiPins, process::Process},
+    consts,
 };
-
-/// Host packages a runner machine needs beyond Docker itself. Everything a job
-/// compiles with lives in the image; these are the pieces that must sit on the
-/// host because they reach hardware.
-///
-/// Most of them are what a Windows guest costs: the daemon that owns it, the
-/// resolver its network cannot start without, the tool that creates its disk,
-/// firmware it can boot from, a
-/// software TPM it refuses to install without, the tool that creates it, and
-/// one to build the answer file that installs it unattended.
-struct Consts;
-impl Consts {
-    /// The uid the runner image runs its jobs as. It is the image's, not this
-    /// machine's, so it is written beside the code that mounts into that image.
-    const JOB_USER: u32 = 1000;
-
-    const HOST_PACKAGES: [&'static str; 10] = [
-        "iptables",
-        "dnsmasq-base",
-        "qemu-utils",
-        "nvidia-container-toolkit",
-        "qemu-system-x86",
-        "libvirt-daemon-system",
-        "ovmf",
-        "swtpm-tools",
-        "virtinst",
-        "xorriso",
-    ];
-}
 
 /// Prepare the machine a runner will live on: its caches, its network, and the
 /// packages that cannot live in an image.
@@ -71,7 +42,7 @@ pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
         .collect();
     volumes.sort();
     volumes.dedup();
-    let pins = CiPins::load(std::path::Path::new(PINS_PATH))?;
+    let pins = CiPins::load(std::path::Path::new(consts::PINS_PATH))?;
     for volume in &volumes {
         if std::path::Path::new(volume).is_absolute() {
             std::fs::create_dir_all(volume)
@@ -97,7 +68,7 @@ pub(super) fn install_tools(process: &Process) -> Result<()> {
     // Only what is missing. Naming a package that is already installed invites
     // apt to upgrade it, and upgrading the GPU stack underneath a machine that
     // is serving other work is not this command's business.
-    let missing: Vec<&str> = Consts::HOST_PACKAGES
+    let missing: Vec<&str> = consts::HOST_PACKAGES
         .into_iter()
         .filter(|package| {
             // A package dpkg cannot describe at all is missing just as surely
@@ -162,7 +133,7 @@ fn require_linux() -> Result<()> {
 fn give_to_the_job(process: &Process, volume: &str, pins: &CiPins) -> Result<()> {
     let mount_type = super::container::Container::mount_type(volume);
     let mount = format!("type={mount_type},source={volume},target=/volume");
-    let owner = format!("chown {user}:{user} /volume", user = Consts::JOB_USER);
+    let owner = format!("chown {user}:{user} /volume", user = consts::JOB_USER);
     process.run(
         "docker",
         &[

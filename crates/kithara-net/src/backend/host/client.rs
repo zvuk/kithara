@@ -10,7 +10,7 @@ use url::Url;
 
 use super::{
     exchange::{Exchange, Opened, Target},
-    protocol::{HTTP_PARTIAL_CONTENT, check_status},
+    protocol::{check_status, consts::HTTP_PARTIAL_CONTENT},
     transport::HostMethod,
 };
 use crate::{

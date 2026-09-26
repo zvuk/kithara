@@ -2,9 +2,11 @@ use std::ops::Deref;
 
 use kithara_bufpool::PooledString;
 
-const SHARDS: usize = 1;
+mod consts {
+    pub(super) const SHARDS: usize = 1;
+}
 
-type TextGuard = PooledString<SHARDS>;
+type TextGuard = PooledString<{ consts::SHARDS }>;
 
 /// UTF-8 text whose allocation can return to its owning draw-pool family.
 #[derive(derive_more::Debug)]

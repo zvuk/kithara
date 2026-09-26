@@ -121,12 +121,16 @@ mod tests {
     use super::{DeckSummaryStyle, DrawListBuilder, Loaded, Rect, Summary, TextContext};
     use crate::{atoms::painter::ControlPainter, builtin, draw::DrawList};
 
-    const BOUNDS: Rect = Rect {
-        h: 44.0,
-        w: 200.0,
-        x: 2.0,
-        y: 4.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOUNDS: Rect = Rect {
+            h: 44.0,
+            w: 200.0,
+            x: 2.0,
+            y: 4.0,
+        };
+    }
 
     fn loaded(title: &str) -> Loaded {
         Loaded {
@@ -153,7 +157,7 @@ mod tests {
                 source: "FILE".to_owned(),
                 title: "Midnight Circuit".to_owned(),
             },
-            BOUNDS,
+            consts::BOUNDS,
         );
         list.finish()
     }

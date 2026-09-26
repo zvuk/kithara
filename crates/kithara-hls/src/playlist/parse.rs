@@ -10,7 +10,7 @@ use kithara_platform::{time::Duration, traits::FromWithParams};
 use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;
 
-use crate::HlsResult;
+use crate::{HlsResult, consts};
 
 /// Cap error messages to avoid dumping binary data into logs.
 fn truncate_error(msg: &str) -> String {
@@ -21,9 +21,6 @@ fn truncate_error(msg: &str) -> String {
     let truncated = &msg[..msg.floor_char_boundary(MAX_LEN)];
     format!("{truncated}… ({} bytes total)", msg.len())
 }
-
-/// AES initialization vector length in bytes.
-const IV_LEN: usize = 16;
 
 /// Rejects an attribute list whose quoted strings are not well formed. A
 /// quoted string opens a value and closes before the next attribute; the
@@ -118,7 +115,7 @@ pub struct KeyInfo {
     /// The encryption method to be used.
     pub method: EncryptionMethod,
     /// The initialization vector (IV), if specified.
-    pub iv: Option<[u8; IV_LEN]>,
+    pub iv: Option<[u8; consts::IV_LEN]>,
     /// The URI of the encryption key. Can be relative to the playlist.
     pub uri: Option<String>,
 }
@@ -434,83 +431,6 @@ mod tests {
     use super::*;
     use crate::HlsError;
 
-    /// Static playlist fixtures used by the test cases below. Grouped in a
-    /// nested module to avoid `style.multiple-private-module-consts`
-    /// (>2 free private consts) and `style.no-impl-only-consts` (consts-
-    /// only inherent impl) rules.
-    mod fixtures {
-        pub(super) const SIMPLE_MASTER_PLAYLIST: &[u8] = b"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS=\"mp4a.40.2\"
-audio.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=2000000,CODECS=\"mp4a.40.2\"
-audio_high.m3u8";
-
-        pub(super) const SIMPLE_MEDIA_PLAYLIST: &[u8] = b"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXTINF:4.0,
-segment0.ts
-#EXTINF:4.0,
-segment1.ts
-#EXT-X-ENDLIST";
-
-        pub(super) const MEDIA_PLAYLIST_WITH_INIT: &[u8] = b"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-MAP:URI=\"init.mp4\"
-#EXTINF:4.0,
-segment0.m4s
-#EXT-X-ENDLIST";
-
-        pub(super) const MEDIA_PLAYLIST_WITH_LATER_INIT_MAP: &[u8] = b"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:0
-#EXTINF:4.0,
-segment0.m4s
-#EXT-X-MAP:URI=\"init.mp4\"
-#EXTINF:4.0,
-segment1.m4s
-#EXT-X-ENDLIST";
-
-        pub(super) const LIVE_MEDIA_PLAYLIST_SEQUENCE_100: &[u8] = b"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:100
-#EXTINF:4.0,
-segment100.ts
-#EXTINF:4.0,
-segment101.ts";
-
-        pub(super) const INVALID_PLAYLIST: &[u8] = b"NOT A VALID PLAYLIST";
-
-        pub(super) const EMPTY_MASTER_PLAYLIST: &[u8] = b"#EXTM3U
-#EXT-X-VERSION:6";
-
-        pub(super) const MASTER_PLAYLIST_WITH_CODEC: &[u8] = b"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS=\"mp4a.40.2,avc1.64001f\",RESOLUTION=1280x720
-video.m3u8";
-
-        pub(super) const MASTER_PLAYLIST_WITH_MIXED_CASE_FLAC_CODEC: &[u8] = b"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS=\"fLaC\"
-audio_flac.m3u8";
-
-        pub(super) const MASTER_PLAYLIST_WITH_UNCLOSED_QUOTE: &[u8] = b"#EXTM3U
-#EXT-X-SESSION-KEY:METHOD=AES-128,URI=\"";
-
-        pub(super) const MEDIA_PLAYLIST_WITH_UNCLOSED_QUOTE: &[u8] = b"#EXTM3U
-#EXT-X-TARGETDURATION:4
-#EXT-X-KEY:METHOD=AES-128,URI=\"
-#EXTINF:4,
-seg0.ts";
-    }
-
     #[kithara::test]
     fn test_variant_id_creation() {
         assert_eq!(VariantId(42).0, 42);
@@ -518,7 +438,7 @@ seg0.ts";
 
     #[kithara::test]
     fn test_parse_simple_master_playlist() {
-        let simple_master_playlist_data = fixtures::SIMPLE_MASTER_PLAYLIST;
+        let simple_master_playlist_data = consts::SIMPLE_MASTER_PLAYLIST;
         let result = parse_master_playlist(simple_master_playlist_data);
         assert!(
             result.is_ok(),
@@ -540,7 +460,7 @@ seg0.ts";
 
     #[kithara::test]
     fn test_parse_simple_media_playlist() {
-        let simple_media_playlist_data = fixtures::SIMPLE_MEDIA_PLAYLIST;
+        let simple_media_playlist_data = consts::SIMPLE_MEDIA_PLAYLIST;
         let url: Url = "http://example.com/v0.m3u8".parse().expect("test url");
         let result = parse_media_playlist(url, simple_media_playlist_data);
         assert!(
@@ -562,7 +482,7 @@ seg0.ts";
     #[kithara::test]
     fn test_parse_live_media_playlist_offsets_sequence() {
         let url: Url = "http://example.com/v0.m3u8".parse().expect("test url");
-        let media = parse_media_playlist(url, fixtures::LIVE_MEDIA_PLAYLIST_SEQUENCE_100)
+        let media = parse_media_playlist(url, consts::LIVE_MEDIA_PLAYLIST_SEQUENCE_100)
             .expect("parse live media playlist");
 
         assert_eq!(media.segments.len(), 2);
@@ -572,7 +492,7 @@ seg0.ts";
 
     #[kithara::test]
     fn test_parse_media_playlist_with_init_segment() {
-        let media_playlist_with_init_data = fixtures::MEDIA_PLAYLIST_WITH_INIT;
+        let media_playlist_with_init_data = consts::MEDIA_PLAYLIST_WITH_INIT;
         let url: Url = "http://example.com/v0.m3u8".parse().expect("test url");
         let result = parse_media_playlist(url, media_playlist_with_init_data);
         assert!(
@@ -592,7 +512,7 @@ seg0.ts";
     #[kithara::test]
     fn test_parse_media_playlist_detects_later_init_map_container() {
         let url: Url = "http://example.com/v0.m3u8".parse().expect("test url");
-        let media = parse_media_playlist(url, fixtures::MEDIA_PLAYLIST_WITH_LATER_INIT_MAP)
+        let media = parse_media_playlist(url, consts::MEDIA_PLAYLIST_WITH_LATER_INIT_MAP)
             .expect("playlist parses");
 
         let init = media.init_segment.expect("init segment");
@@ -631,7 +551,7 @@ seg0.ts";
 
     #[kithara::test]
     fn test_parse_invalid_playlist() {
-        let invalid_playlist_data = fixtures::INVALID_PLAYLIST;
+        let invalid_playlist_data = consts::INVALID_PLAYLIST;
         let result = parse_master_playlist(invalid_playlist_data);
         assert!(result.is_err(), "Should fail to parse invalid playlist");
 
@@ -646,19 +566,19 @@ seg0.ts";
     #[kithara::test]
     fn an_unclosed_quoted_string_is_a_parse_error() {
         assert!(matches!(
-            parse_master_playlist(fixtures::MASTER_PLAYLIST_WITH_UNCLOSED_QUOTE),
+            parse_master_playlist(consts::MASTER_PLAYLIST_WITH_UNCLOSED_QUOTE),
             Err(HlsError::PlaylistParse(_))
         ));
         let url = Url::parse("http://example.com/media.m3u8").unwrap();
         assert!(matches!(
-            parse_media_playlist(url, fixtures::MEDIA_PLAYLIST_WITH_UNCLOSED_QUOTE),
+            parse_media_playlist(url, consts::MEDIA_PLAYLIST_WITH_UNCLOSED_QUOTE),
             Err(HlsError::PlaylistParse(_))
         ));
     }
 
     #[kithara::test]
     fn test_empty_master_playlist() {
-        let empty_master_playlist_data = fixtures::EMPTY_MASTER_PLAYLIST;
+        let empty_master_playlist_data = consts::EMPTY_MASTER_PLAYLIST;
         let result = parse_master_playlist(empty_master_playlist_data);
         assert!(result.is_ok(), "Empty master playlist should parse");
 
@@ -668,7 +588,7 @@ seg0.ts";
 
     #[kithara::test]
     fn test_master_playlist_with_codec_info() {
-        let master_playlist_with_codec_data = fixtures::MASTER_PLAYLIST_WITH_CODEC;
+        let master_playlist_with_codec_data = consts::MASTER_PLAYLIST_WITH_CODEC;
         let result = parse_master_playlist(master_playlist_with_codec_data);
         assert!(result.is_ok());
 
@@ -688,7 +608,7 @@ seg0.ts";
     #[kithara::test]
     fn test_master_playlist_with_mixed_case_flac_codec() {
         let master_playlist_with_mixed_case_flac_codec_data =
-            fixtures::MASTER_PLAYLIST_WITH_MIXED_CASE_FLAC_CODEC;
+            consts::MASTER_PLAYLIST_WITH_MIXED_CASE_FLAC_CODEC;
         let result = parse_master_playlist(master_playlist_with_mixed_case_flac_codec_data);
         assert!(result.is_ok());
 

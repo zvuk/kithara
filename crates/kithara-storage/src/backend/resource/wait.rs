@@ -2,28 +2,22 @@
 
 use std::ops::Range;
 
-use kithara_platform::{CancelToken, sync::Arc, time::Duration};
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_test_utils::kithara;
 
 use crate::{
     StorageError, StorageResult,
     backend::{resource::state::ResourceCore, traits::DriverIo},
+    consts,
     resource::{WaitOutcome, range_covered_by},
 };
-
-/// Watchdog timeout for the network-bound `wait_range_inner`: sized well
-/// above the `kithara-net` `inactivity_timeout` (plus retry backoff) so a
-/// stalled upstream is failed by the network layer (this wait then returns
-/// `Failed`) before the deadlock-watchdog fires. Only a wait that never
-/// returns after the fetch resolved is a real deadlock.
-const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 
 impl<D: DriverIo> ResourceCore<D> {
     /// Tracks how far the available prefix of the range reaches; since bytes arrive front-to-back
     /// for a sequential fetch, its advance signals progress and resets the hang watchdog. Failing a
     /// fast check, the wait parks until the gate is notified — event-driven, with no timer.
     #[kithara::measure]
-    #[kithara::hang_watchdog(timeout = WAIT_HANG_TIMEOUT)]
+    #[kithara::hang_watchdog(timeout = consts::WAIT_HANG_TIMEOUT)]
     pub(super) fn wait_range_inner(
         &self,
         range: Range<u64>,

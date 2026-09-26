@@ -6,14 +6,15 @@ use kithara_stream::{ByteMap, DeferredWake, ReaderInput, SeekControl, SourcePhas
 use kithara_test_utils::kithara;
 use tracing::trace;
 
-use crate::pipeline::{
-    rebuild::RecreateState,
-    seek::{ApplySeekState, ResumeState, SeekMode},
-    stream::shared::SharedStream,
-    track::{WaitContext, WaitingReason, map_source_phase},
+use crate::{
+    consts,
+    pipeline::{
+        rebuild::RecreateState,
+        seek::{ApplySeekState, ResumeState, SeekMode},
+        stream::shared::SharedStream,
+        track::{WaitContext, WaitingReason, map_source_phase},
+    },
 };
-
-const DEFAULT_READ_AHEAD_BYTES: u64 = 32 * 1024;
 
 /// Owns source-readiness ranges and the lock-free peer-wake contract.
 ///
@@ -275,7 +276,7 @@ fn seek_landing_end<T: StreamType>(stream: &SharedStream<T>, byte: u64) -> u64 {
 /// must be allowed to drain it before a pending decode moves to the wider
 /// playback wait window.
 fn chunk_lookahead_range<T: StreamType>(stream: &SharedStream<T>, byte: u64) -> Range<u64> {
-    let lookahead_end = byte.saturating_add(DEFAULT_READ_AHEAD_BYTES);
+    let lookahead_end = byte.saturating_add(consts::DEFAULT_READ_AHEAD_BYTES);
     let check_end = stream
         .byte_map()
         .and_then(|layout| layout.segment_after_byte(byte))
@@ -308,14 +309,14 @@ fn forward_window(pos: u64, byte_map: Option<&dyn ByteMap>, len: Option<u64>) ->
     let end = byte_map
         .and_then(|map| map.segment_after_byte(pos))
         .map_or_else(
-            || pos.saturating_add(DEFAULT_READ_AHEAD_BYTES),
+            || pos.saturating_add(consts::DEFAULT_READ_AHEAD_BYTES),
             |segment| segment.byte_range.end,
         );
     pos..len.map_or(end, |len| end.min(len))
 }
 
 fn boundary_end<T: StreamType>(stream: &SharedStream<T>, start: u64) -> u64 {
-    range_end(stream, start, DEFAULT_READ_AHEAD_BYTES)
+    range_end(stream, start, consts::DEFAULT_READ_AHEAD_BYTES)
 }
 
 fn range_end<T: StreamType>(stream: &SharedStream<T>, start: u64, read_ahead_bytes: u64) -> u64 {
@@ -333,7 +334,8 @@ mod tests {
     use kithara_stream::{ByteMap, SegmentDescriptor};
     use kithara_test_utils::kithara;
 
-    use super::{DEFAULT_READ_AHEAD_BYTES, forward_window};
+    use super::forward_window;
+    use crate::consts;
 
     /// Equal media segments behind an init range, as HLS delivers them.
     struct SegmentedMap;
@@ -414,6 +416,6 @@ mod tests {
 
         let window = forward_window(pos, None, None);
 
-        assert_eq!(window, pos..pos + DEFAULT_READ_AHEAD_BYTES);
+        assert_eq!(window, pos..pos + consts::DEFAULT_READ_AHEAD_BYTES);
     }
 }

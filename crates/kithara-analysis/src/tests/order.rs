@@ -4,20 +4,19 @@ use kithara_test_utils::kithara;
 
 use super::{
     super::analyzer::AnalyzerBuilder,
-    fixtures::{Artifacts, CH, SR, artifacts, assert_agrees, beat_detector, chunk, sine, spec},
+    fixtures::{Artifacts, artifacts, assert_agrees, beat_detector, chunk, sine, spec},
 };
 use crate::{
     analyzer::{AnalysisDemand, Extent},
     beat::GridParams,
+    consts,
     test_pools::pools,
 };
-
-const BUCKETS: usize = 64;
 
 fn analyse(samples: &[f32], blocks: &[(u64, usize, usize)]) -> Artifacts {
     let pools = pools();
     let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
-        .with_waveform(BUCKETS)
+        .with_waveform(consts::HOLD_BUCKETS)
         .with_beat_detector(beat_detector(), GridParams::default());
     let mut beat = builder.take_detector();
     let mut extent = Extent::default();
@@ -35,7 +34,7 @@ fn analyse(samples: &[f32], blocks: &[(u64, usize, usize)]) -> Artifacts {
         analyzers.push(&chunk(&pools, part, *at), &mut extent, beat.as_mut());
     }
 
-    let frames = u64::try_from(samples.len() / usize::from(CH)).unwrap_or(0);
+    let frames = u64::try_from(samples.len() / usize::from(consts::CH)).unwrap_or(0);
     artifacts(&analyzers.snapshot(beat.as_mut(), true, Some(frames)))
 }
 
@@ -50,14 +49,18 @@ fn blocks(frames: usize, count: usize) -> Vec<(u64, usize, usize)> {
                 start + per
             };
             let at = u64::try_from(start).unwrap_or(0);
-            (at, start * usize::from(CH), end * usize::from(CH))
+            (
+                at,
+                start * usize::from(consts::CH),
+                end * usize::from(consts::CH),
+            )
         })
         .collect()
 }
 
 #[kithara::test]
 fn arrival_order_does_not_change_the_artifacts(analysis_pcm: &'static [f32]) {
-    let frames = 12 * usize::try_from(SR).unwrap_or(1);
+    let frames = 12 * usize::try_from(consts::FIXTURES_SR).unwrap_or(1);
     let samples = sine(analysis_pcm, frames);
     let ascending = blocks(frames, 12);
     let want = analyse(&samples, &ascending);
@@ -82,8 +85,8 @@ fn arrival_order_does_not_change_the_artifacts(analysis_pcm: &'static [f32]) {
             let end = (start + per).min(frames);
             (
                 u64::try_from(start).unwrap_or(0),
-                start * usize::from(CH),
-                end * usize::from(CH),
+                start * usize::from(consts::CH),
+                end * usize::from(consts::CH),
             )
         })
         .filter(|(_, from, to)| to > from)

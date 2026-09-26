@@ -480,7 +480,7 @@ mod tests {
 
     /// The wave the held-strip tests paint, named once so the box and the
     /// colour the assertions read cannot drift apart.
-    mod strip {
+    mod consts {
         use super::{Rect, Rgba, color};
 
         pub(super) const BOUNDS: Rect = Rect {
@@ -501,7 +501,7 @@ mod tests {
             style,
             background: color(0.01),
             border: color(0.02),
-            cache_strip: strip::COLOR,
+            cache_strip: consts::COLOR,
             cue_badge: color(0.03),
             cue_text: color(0.04),
             metrics: builtin::skin().wave,
@@ -523,7 +523,7 @@ mod tests {
         let mut text = TextContext::from(builtin::skin().text_resources());
         let mut list = DrawListBuilder::default();
 
-        paint.paint(&mut list, &mut text, strip::BOUNDS, false);
+        paint.paint(&mut list, &mut text, consts::BOUNDS, false);
 
         list.finish()
     }
@@ -531,17 +531,17 @@ mod tests {
     #[kithara::test]
     fn the_micro_strip_runs_from_the_playhead_to_what_the_host_holds() {
         let list = strip_face(WaveStyle::Micro, 0.8);
-        let strip = fill_rect(list.commands(), strip::COLOR).expect("held strip");
+        let strip = fill_rect(list.commands(), consts::COLOR).expect("held strip");
 
-        assert_eq!(strip.x, strip::BOUNDS.x + 0.5 * strip::BOUNDS.w);
-        assert_eq!(strip.w, 0.3 * strip::BOUNDS.w);
+        assert_eq!(strip.x, consts::BOUNDS.x + 0.5 * consts::BOUNDS.w);
+        assert_eq!(strip.w, 0.3 * consts::BOUNDS.w);
     }
 
     #[kithara::test]
     fn the_micro_strip_sits_along_the_bottom_of_the_wave() {
         let height = builtin::skin().wave.cache_strip_height;
         let list = strip_face(WaveStyle::Micro, 0.8);
-        let strip = fill_rect(list.commands(), strip::COLOR).expect("held strip");
+        let strip = fill_rect(list.commands(), consts::COLOR).expect("held strip");
 
         assert_eq!(strip.h, height);
     }
@@ -549,16 +549,16 @@ mod tests {
     #[kithara::test]
     fn the_micro_strip_ends_where_the_wave_ends() {
         let list = strip_face(WaveStyle::Micro, 0.8);
-        let strip = fill_rect(list.commands(), strip::COLOR).expect("held strip");
+        let strip = fill_rect(list.commands(), consts::COLOR).expect("held strip");
 
-        assert_eq!(strip.y + strip.h, strip::BOUNDS.y + strip::BOUNDS.h);
+        assert_eq!(strip.y + strip.h, consts::BOUNDS.y + consts::BOUNDS.h);
     }
 
     #[kithara::test]
     fn a_deck_holding_nothing_ahead_of_the_playhead_draws_no_strip() {
         let list = strip_face(WaveStyle::Micro, 0.5);
 
-        assert!(fill_rect(list.commands(), strip::COLOR).is_none());
+        assert!(fill_rect(list.commands(), consts::COLOR).is_none());
     }
 
     #[kithara::test]
@@ -567,7 +567,7 @@ mod tests {
             let list = strip_face(style, 0.8);
 
             assert!(
-                fill_rect(list.commands(), strip::COLOR).is_none(),
+                fill_rect(list.commands(), consts::COLOR).is_none(),
                 "{style:?} drew the held strip"
             );
         }

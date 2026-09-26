@@ -25,13 +25,14 @@ use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;
 
-struct Consts;
-impl Consts {
-    const D: SawWav = SawWav::DEFAULT;
-    const SEGMENT_COUNT: usize = 40;
-    const VARIANT_COUNT: usize = 3;
-    const STRESS_SEEK_ITERATIONS: usize = 2000;
-    const MAX_ZERO_READS: usize = 50;
+mod consts {
+    use super::SawWav;
+
+    pub(super) const D: SawWav = SawWav::DEFAULT;
+    pub(super) const SEGMENT_COUNT: usize = 40;
+    pub(super) const VARIANT_COUNT: usize = 3;
+    pub(super) const STRESS_SEEK_ITERATIONS: usize = 2000;
+    pub(super) const MAX_ZERO_READS: usize = 50;
 }
 
 /// Read with retry: keeps trying until data arrives, a terminal signal is
@@ -45,7 +46,7 @@ impl Consts {
 /// them identically: end of this read loop. A terminal Err counts against
 /// the `dead_seeks` tolerance budget (1% of `STRESS_SEEK_ITERATIONS`).
 fn read_with_retry<R: AudioRead>(audio: &mut R, buf: &mut [f32]) -> (usize, usize, bool) {
-    for retry in 0..Consts::MAX_ZERO_READS {
+    for retry in 0..consts::MAX_ZERO_READS {
         match audio.read(buf) {
             Ok(ReadOutcome::Frames { count, .. }) => return (count.get(), retry, false),
             Ok(ReadOutcome::Pending { .. }) => {}
@@ -59,7 +60,7 @@ fn read_with_retry<R: AudioRead>(audio: &mut R, buf: &mut [f32]) -> (usize, usiz
             }
         }
     }
-    (0, Consts::MAX_ZERO_READS, false)
+    (0, consts::MAX_ZERO_READS, false)
 }
 
 /// Break sites carried into the continuity panic message.
@@ -102,22 +103,22 @@ async fn audio_server(
     let v1_pcm = Arc::new(hls_pcm_forty_descending);
     let v2_pcm = Arc::new(hls_pcm_forty_shifted);
 
-    let segment_duration = Consts::D.segment_size as f64
-        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
-    let total_secs = segment_duration * Consts::SEGMENT_COUNT as f64;
+    let segment_duration = consts::D.segment_size as f64
+        / (f64::from(consts::D.sample_rate) * f64::from(consts::D.channels) * 2.0);
+    let total_secs = segment_duration * consts::SEGMENT_COUNT as f64;
 
     info!(
-        segments = Consts::SEGMENT_COUNT,
-        variants = Consts::VARIANT_COUNT,
+        segments = consts::SEGMENT_COUNT,
+        variants = consts::VARIANT_COUNT,
         segment_duration,
         total_secs = format!("{total_secs:.2}"),
         "Test data generated"
     );
 
     let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: Consts::VARIANT_COUNT,
-        segments_per_variant: Consts::SEGMENT_COUNT,
-        segment_size: Consts::D.segment_size,
+        variant_count: consts::VARIANT_COUNT,
+        segments_per_variant: consts::SEGMENT_COUNT,
+        segment_size: consts::D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data_per_variant: Some(vec![
             Arc::clone(&v0_pcm),
@@ -161,7 +162,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
 ) {
     let server = audio_server;
     let segment_duration = server.config().segment_duration_secs;
-    let total_secs = segment_duration * Consts::SEGMENT_COUNT as f64;
+    let total_secs = segment_duration * consts::SEGMENT_COUNT as f64;
     let url = server.url("/master.m3u8");
     info!(%url, "HLS server ready");
 
@@ -176,7 +177,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
 
     let store = if ephemeral {
         let cap =
-            NonZeroUsize::new(Consts::SEGMENT_COUNT * Consts::VARIANT_COUNT + 20).expect("nz");
+            NonZeroUsize::new(consts::SEGMENT_COUNT * consts::VARIANT_COUNT + 20).expect("nz");
         AssetStore::builder(pools.clone())
             .backend(StorageBackend::Memory)
             .cache_capacity(cap)
@@ -255,7 +256,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
             warn!("ABR switch not detected during warmup - continuing anyway");
         }
 
-        info!("Phase 2: {} rapid random seeks", Consts::STRESS_SEEK_ITERATIONS);
+        info!("Phase 2: {} rapid random seeks", consts::STRESS_SEEK_ITERATIONS);
         let max_seek_secs = total_secs - 0.1;
         let mut dead_seeks = 0u64;
         let mut total_retries = 0u64;
@@ -263,7 +264,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
         let mut integrity_errors = 0u64;
         let mut channel_mismatches = 0u64;
 
-        for i in 0..Consts::STRESS_SEEK_ITERATIONS {
+        for i in 0..consts::STRESS_SEEK_ITERATIONS {
             let r = rng.next_f64();
             let pos_secs = if r < 0.1 {
                 rng.range_f64(0.0, 1.0)
@@ -295,7 +296,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
                         pos_secs,
                         is_eof = saw_eof,
                         retries,
-                        "STUCK: read returned 0 after {} retries", Consts::MAX_ZERO_READS
+                        "STUCK: read returned 0 after {} retries", consts::MAX_ZERO_READS
                     );
                 }
                 continue;
@@ -340,11 +341,11 @@ async fn stress_seek_lifecycle_with_zero_reset(
             "Phase 2 complete"
         );
 
-        let max_dead = (Consts::STRESS_SEEK_ITERATIONS as u64) / 100;
+        let max_dead = (consts::STRESS_SEEK_ITERATIONS as u64) / 100;
         assert!(
             dead_seeks <= max_dead,
             "too many dead seeks: {}/{} (>{max_dead} = 1% threshold) - pipeline stalls after seek",
-            dead_seeks, Consts::STRESS_SEEK_ITERATIONS
+            dead_seeks, consts::STRESS_SEEK_ITERATIONS
         );
         assert_eq!(
             integrity_errors, 0,
@@ -382,13 +383,13 @@ async fn stress_seek_lifecycle_with_zero_reset(
                     final_saw_eof = true;
                     break;
                 }
-                if retries >= Consts::MAX_ZERO_READS {
+                if retries >= consts::MAX_ZERO_READS {
                     panic!(
                         "STUCK at position {:.3}s after seek to 0: \
                          read returned 0 after {} retries, \
                          total_frames_read={}",
                         audio.position().as_secs_f64(),
-                        Consts::MAX_ZERO_READS,
+                        consts::MAX_ZERO_READS,
                         total_frames_read,
                     );
                 }
@@ -466,7 +467,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
 
         assert!(final_saw_eof, "expected EOF after full track read");
 
-        let expected_frames = (Consts::SEGMENT_COUNT * Consts::D.segment_size) / (Consts::D.channels as usize * 2);
+        let expected_frames = (consts::SEGMENT_COUNT * consts::D.segment_size) / (consts::D.channels as usize * 2);
         let frame_diff = total_frames_read.abs_diff(expected_frames as u64);
         let tolerance = (expected_frames as u64) / 50;
 

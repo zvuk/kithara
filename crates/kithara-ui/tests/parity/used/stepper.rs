@@ -24,13 +24,11 @@ use num_traits::cast::AsPrimitive;
 use crate::shared::{Endpoints, renderer};
 
 /// The shape of the document below, and the window both hosts are given.
-struct Consts;
-
-impl Consts {
+mod consts {
     /// The room the window leaves, which the row fills.
-    const CASE: (u32, u32) = (300, 60);
+    pub(super) const CASE: (u32, u32) = (300, 60);
     /// One detent up, which both hosts owe the same reading of.
-    const DETENT: f32 = -1.0;
+    pub(super) const DETENT: f32 = -1.0;
 }
 
 /// A document whose whole content is a row that names what it writes, the way a
@@ -90,7 +88,7 @@ impl App for Tempo {
 fn retained() -> Vec<UiEvent> {
     let endpoints = Endpoints::default();
     let resolver = documents();
-    let (width, height) = Consts::CASE;
+    let (width, height) = consts::CASE;
     let mut ui = Ui::new(
         Tempo::default(),
         Config::builder()
@@ -118,7 +116,7 @@ fn retained() -> Vec<UiEvent> {
 
     ui.input(Input::Wheel(Scroll::Lines {
         x: 0.0,
-        y: Consts::DETENT,
+        y: consts::DETENT,
     }));
 
     ui.app().published.clone()
@@ -136,7 +134,7 @@ fn neutral() -> Vec<UiEvent> {
         &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("the tempo fixture must compile: {error}"));
-    let (width, height) = Consts::CASE;
+    let (width, height) = consts::CASE;
     let renderer = renderer();
     let viewport = Size::new(width.as_(), height.as_());
     let mut element = tree::render(
@@ -161,7 +159,7 @@ fn neutral() -> Vec<UiEvent> {
         &Event::Mouse(mouse::Event::WheelScrolled {
             delta: ScrollDelta::Lines {
                 x: 0.0,
-                y: Consts::DETENT,
+                y: consts::DETENT,
             },
         }),
         Layout::new(&node),

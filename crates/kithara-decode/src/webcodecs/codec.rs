@@ -19,15 +19,15 @@ use crate::{
     types::{DecoderTrackInfo, checked_audio_spec},
 };
 
-struct Consts;
-
 static NEXT_DECODER_ID: AtomicU64 = AtomicU64::new(1);
 
-impl Consts {
-    const DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
-    const FLAC_DESCRIPTION_LEN: usize = 42;
-    const FLAC_STREAMINFO_LEN: u8 = 34;
-    const OUTPUT_TIMEOUT: Duration = Duration::from_millis(10);
+mod consts {
+    use super::Duration;
+
+    pub(super) const DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
+    pub(super) const FLAC_DESCRIPTION_LEN: usize = 42;
+    pub(super) const FLAC_STREAMINFO_LEN: u8 = 34;
+    pub(super) const OUTPUT_TIMEOUT: Duration = Duration::from_millis(10);
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -85,7 +85,7 @@ where
     S: HasPool<u8>,
 {
     fn drain_output(&mut self, out: &mut SampleBuffer) -> DecodeResult<u32> {
-        let deadline = Instant::now() + Consts::DRAIN_TIMEOUT;
+        let deadline = Instant::now() + consts::DRAIN_TIMEOUT;
         loop {
             let output = match self.out.recv_timeout(deadline) {
                 Ok(output) => output,
@@ -204,7 +204,7 @@ where
     fn poll_output(&mut self, out: &mut SampleBuffer) -> DecodeResult<u32> {
         let first = match self
             .out
-            .recv_timeout(Instant::now() + Consts::OUTPUT_TIMEOUT)
+            .recv_timeout(Instant::now() + consts::OUTPUT_TIMEOUT)
         {
             Ok(output) => output,
             Err(RecvTimeoutError::Timeout) => {
@@ -461,14 +461,14 @@ pub(super) const fn codec_string(codec: AudioCodec) -> Option<&'static str> {
 }
 
 fn flac_description(streaminfo: &[u8]) -> DecodeResult<Arc<[u8]>> {
-    if streaminfo.len() != usize::from(Consts::FLAC_STREAMINFO_LEN) {
+    if streaminfo.len() != usize::from(consts::FLAC_STREAMINFO_LEN) {
         return Err(DecodeError::InvalidData {
             detail: "WebCodecs FLAC description requires a 34-byte STREAMINFO payload",
         });
     }
-    let mut description = [0; Consts::FLAC_DESCRIPTION_LEN];
+    let mut description = [0; consts::FLAC_DESCRIPTION_LEN];
     description[..4].copy_from_slice(b"fLaC");
-    description[4..8].copy_from_slice(&[0x80, 0, 0, Consts::FLAC_STREAMINFO_LEN]);
+    description[4..8].copy_from_slice(&[0x80, 0, 0, consts::FLAC_STREAMINFO_LEN]);
     description[8..].copy_from_slice(streaminfo);
     Ok(Arc::from(description))
 }

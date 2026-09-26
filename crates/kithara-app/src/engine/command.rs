@@ -57,7 +57,9 @@ mod tests {
 
     use crate::gui::rig::Rig;
 
-    const KNOB: f64 = 1e-4;
+    mod consts {
+        pub(super) const KNOB: f64 = 1e-4;
+    }
 
     #[kithara::test(native, tokio, flash(false))]
     async fn a_gain_for_a_replaced_band_layout_is_rejected_and_echoed() {
@@ -69,7 +71,7 @@ mod tests {
             rig.send("mixer/a/mid-3", ControlAction::SetScalar(0.75));
             rig.pump();
             rig.frame();
-            assert!((rig.scalar("deck.eq.mid@deck=a") - 0.75).abs() < KNOB);
+            assert!((rig.scalar("deck.eq.mid@deck=a") - 0.75).abs() < consts::KNOB);
             assert_eq!(rig.queues[0].eq_gain(1), Some(mid));
 
             rig.send("mixer/a/eq-4", ControlAction::Activate);
@@ -96,8 +98,8 @@ mod tests {
             );
             assert_eq!(queue.eq_gain(3), Some(0.0), "the high band is untouched");
             assert!((rig.scalar("deck.eq.bands@deck=a") - 4.0).abs() < f64::EPSILON);
-            assert!((rig.scalar("deck.eq.high_mid@deck=a") - 0.75).abs() < KNOB);
-            assert!((rig.scalar("deck.eq.high@deck=a") - 0.5).abs() < KNOB);
+            assert!((rig.scalar("deck.eq.high_mid@deck=a") - 0.75).abs() < consts::KNOB);
+            assert!((rig.scalar("deck.eq.high@deck=a") - 0.5).abs() < consts::KNOB);
         })
         .await;
         rig.close().await;

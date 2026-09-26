@@ -12,10 +12,11 @@ use kithara_platform::{
 };
 use rangemap::RangeSet;
 
-use super::retire::{RETIRE_CAPACITY, Retired};
+use super::retire::Retired;
 use crate::{
     StorageError, StorageResult,
     backend::traits::{AvailabilityObserver, Driver, DriverIo},
+    consts,
 };
 
 /// Common state tracked by `Resource<D>`.
@@ -129,7 +130,7 @@ impl<D: Driver> ResourceCore<D> {
                 committed: AtomicBool::new(is_committed),
                 stamp_on_drop: AtomicBool::new(true),
                 available_snapshot: ArcSwap::from_pointee(available.clone()),
-                retired: Retired::new(RETIRE_CAPACITY),
+                retired: Retired::new(consts::RETIRE_CAPACITY),
                 gate: CondvarGate::new(CommonState {
                     final_len,
                     available,

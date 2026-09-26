@@ -10,11 +10,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use tracing::info;
 
-use super::{runner_images::LINUX_LATEST_IMAGE, services::launchd};
-use crate::ci::{
-    cache::client_environment,
-    config::{CiConfig, MAC_CONFIG_PATH},
-    process::Process,
+use super::services::launchd;
+use crate::{
+    ci::{cache::client_environment, config::CiConfig, process::Process},
+    consts,
 };
 
 pub(super) struct RunnerManager<'a> {
@@ -275,8 +274,8 @@ impl<'a> RunnerManager<'a> {
         let builds = self.config.host.build_root().display();
         let url = self.config.host.gitlab_origin();
         let cache = self.config.host.cache_root_linux.display();
-        let lane_config = MAC_CONFIG_PATH;
-        let image = LINUX_LATEST_IMAGE;
+        let lane_config = consts::MAC_CONFIG_PATH;
+        let image = consts::LINUX_LATEST_IMAGE;
         let sccache_environment = self
             .config
             .host
@@ -976,7 +975,10 @@ mod tests {
             .iter()
             .find(|runner| runner["name"].as_str() == Some("kithara-mac-mini-linux"))
             .unwrap();
-        assert_eq!(linux["docker"]["image"].as_str(), Some(LINUX_LATEST_IMAGE));
+        assert_eq!(
+            linux["docker"]["image"].as_str(),
+            Some(consts::LINUX_LATEST_IMAGE)
+        );
         assert_eq!(linux["docker"]["pull_policy"].as_str(), Some("never"));
         assert_eq!(
             linux["docker"]["allowed_pull_policies"][0].as_str(),
@@ -984,7 +986,7 @@ mod tests {
         );
         assert_eq!(
             linux["docker"]["allowed_images"][0].as_str(),
-            Some(LINUX_LATEST_IMAGE)
+            Some(consts::LINUX_LATEST_IMAGE)
         );
     }
 

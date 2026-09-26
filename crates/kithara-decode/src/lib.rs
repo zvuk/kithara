@@ -58,3 +58,4 @@ pub use traits::{
 pub use types::{BlenderProfile, DecoderTrackInfo, GaplessProfile, TrackMetadata};
 #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
 pub use webcodecs::probe::spawn_webcodecs_probe;
+mod consts;

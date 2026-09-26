@@ -7,6 +7,8 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::{Ctx, common::project::ProjectConfig};
 use serde::{Deserialize, Serialize};
 
+use crate::consts;
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct KitharaExt {
@@ -169,45 +171,6 @@ pub(crate) enum ArtifactWhen {
     Failure,
 }
 
-/// The pipeline kinds a lane may name. Kept beside the cache groups, which the
-/// catalog already validates by name for the same reason: the executor's enum
-/// lives in `ci::run`, and a lane is refused at configuration load, before any
-/// executor is consulted. `lane_config.rs` pins the two lists together.
-pub(crate) const PIPELINE_KINDS: [&str; 8] = [
-    "branch",
-    "platforms",
-    "merge-request",
-    "quarantine",
-    "main",
-    "nightly",
-    "weekly",
-    "release",
-];
-
-pub(crate) const LANE_ROLES: [&str; 6] =
-    ["gate", "platforms", "deep", "mutants", "quality", "release"];
-
-/// The lane's own executable. A Windows job runs the binary it started as
-/// rather than `cargo xtask`, which would rebuild it - and Windows refuses to
-/// replace a running image, so Cargo reported that as a failure to remove
-/// `xtask.exe`.
-pub(crate) const SELF_PROGRAM: &str = "<xtask>";
-
-/// The checkout a lane resolves in. A compiler flag that has to name a file in
-/// the repository needs an absolute path, and only the runner knows it.
-pub(crate) const ROOT_PLACEHOLDER: &str = "{root}";
-
-/// The build-cache directory the process leased, i.e. `CARGO_TARGET_DIR` as
-/// the executor set it, not `{root}/target`. A lane that writes its own build
-/// under a fixed `{root}`-relative path escapes the lease the eviction and
-/// reclaim machinery tracks; one that asks for `{target}` stays inside it the
-/// same way the process's own build does.
-pub(crate) const TARGET_PLACEHOLDER: &str = "{target}";
-
-/// A reviewed pin, by name: `{pin.msrv_toolchain}` is the value that key holds
-/// in `.config/ci-pins.toml`.
-pub(crate) const PIN_PREFIX: &str = "{pin.";
-
 /// A version check: ask `tool` how old it is, and require the answer to carry
 /// the value `pin` names in `.config/ci-pins.toml`.
 #[derive(Debug, Default, Deserialize)]
@@ -287,11 +250,12 @@ impl CiProjectConfig {
                 && lane.steps.iter().any(|step| {
                     step.env
                         .get("CARGO_TARGET_DIR")
-                        .is_some_and(|target| target != TARGET_PLACEHOLDER)
+                        .is_some_and(|target| target != consts::TARGET_PLACEHOLDER)
                 })
             {
                 bail!(
-                    "ext.ci.lanes.{name} restores its target snapshot into the executor target, so its steps must keep CARGO_TARGET_DIR at {TARGET_PLACEHOLDER}"
+                    "ext.ci.lanes.{name} restores its target snapshot into the executor target, so its steps must keep CARGO_TARGET_DIR at {TARGET_PLACEHOLDER}",
+                    TARGET_PLACEHOLDER = consts::TARGET_PLACEHOLDER
                 );
             }
             if lane.label.is_empty() {
@@ -314,16 +278,16 @@ impl CiProjectConfig {
                     validate_substitutions(name, "an argument", value)?;
                 }
             }
-            if !LANE_ROLES.contains(&lane.role.as_str()) {
+            if !consts::LANE_ROLES.contains(&lane.role.as_str()) {
                 bail!(
                     "ext.ci.lanes.{name}.role must be one of {}, got `{}`",
-                    LANE_ROLES.join(", "),
+                    consts::LANE_ROLES.join(", "),
                     lane.role
                 );
             }
             for (field, listed) in [("kinds", &lane.kinds), ("kinds_github", &lane.kinds_github)] {
                 for kind in listed {
-                    if !PIPELINE_KINDS.contains(&kind.as_str()) {
+                    if !consts::PIPELINE_KINDS.contains(&kind.as_str()) {
                         bail!("ext.ci.lanes.{name}.{field} names unknown kind `{kind}`");
                     }
                 }
@@ -373,18 +337,24 @@ impl CiProjectConfig {
 /// than as a bad config.
 fn validate_substitutions(lane: &str, whose: &str, value: &str) -> Result<()> {
     let mut rest = value
-        .replace(ROOT_PLACEHOLDER, "")
-        .replace(TARGET_PLACEHOLDER, "");
-    while let Some(start) = rest.find(PIN_PREFIX) {
+        .replace(consts::ROOT_PLACEHOLDER, "")
+        .replace(consts::TARGET_PLACEHOLDER, "");
+    while let Some(start) = rest.find(consts::PIN_PREFIX) {
         let Some(end) = rest[start..].find('}') else {
-            bail!("ext.ci.lanes.{lane} leaves {PIN_PREFIX} unclosed in {whose}: `{value}`");
+            bail!(
+                "ext.ci.lanes.{lane} leaves {PIN_PREFIX} unclosed in {whose}: `{value}`",
+                PIN_PREFIX = consts::PIN_PREFIX
+            );
         };
         rest.replace_range(start..=start + end, "");
     }
     if rest.contains('{') {
         bail!(
             "ext.ci.lanes.{lane} names something other than {ROOT_PLACEHOLDER}, \
-             {TARGET_PLACEHOLDER}, or {PIN_PREFIX}<key>}} in {whose}: `{value}`"
+             {TARGET_PLACEHOLDER}, or {PIN_PREFIX}<key>}} in {whose}: `{value}`",
+            PIN_PREFIX = consts::PIN_PREFIX,
+            ROOT_PLACEHOLDER = consts::ROOT_PLACEHOLDER,
+            TARGET_PLACEHOLDER = consts::TARGET_PLACEHOLDER
         );
     }
     Ok(())

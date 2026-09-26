@@ -4,6 +4,7 @@ use std::{
 };
 
 use super::*;
+use crate::consts;
 
 #[derive(Debug, Eq, PartialEq)]
 enum ImportAction {
@@ -567,31 +568,26 @@ fn an_unmergeable_head_is_failed_and_rejected_with_the_reason() {
     );
 }
 
-const CURRENT_BASE: &str = "04fcb5a0a1978c3d1f0e2b3a4c5d6e7f80910111";
-const OLDER_BASE: &str = "418167884f6c2e1d3a4b5c6d7e8f90a1b2c3d4e5";
-const PULL_HEAD: &str = "8a4e697a770d5e6f8091a2b3c4d5e6f708192a3b";
-const RETIRED_HEAD: &str = "6cd1433327cd8f9e0a1b2c3d4e5f60718293a4b5";
-
 fn live_heads() -> Vec<String> {
-    vec![PULL_HEAD.to_owned()]
+    vec![consts::PULL_HEAD.to_owned()]
 }
 
 #[test]
 fn a_quarantine_ref_judged_against_an_older_base_is_superseded() {
-    let refs = [quarantine_ref(PULL_HEAD, OLDER_BASE, 1)];
+    let refs = [quarantine_ref(consts::PULL_HEAD, consts::OLDER_BASE, 1)];
 
     assert_eq!(
-        superseded_quarantine_refs(&refs, CURRENT_BASE, &live_heads()),
+        superseded_quarantine_refs(&refs, consts::CURRENT_BASE, &live_heads()),
         [refs[0].as_str()]
     );
 }
 
 #[test]
 fn a_quarantine_ref_judged_against_the_current_base_is_kept() {
-    let refs = [quarantine_ref(PULL_HEAD, CURRENT_BASE, 2)];
+    let refs = [quarantine_ref(consts::PULL_HEAD, consts::CURRENT_BASE, 2)];
 
     assert_eq!(
-        superseded_quarantine_refs(&refs, CURRENT_BASE, &live_heads()),
+        superseded_quarantine_refs(&refs, consts::CURRENT_BASE, &live_heads()),
         [] as [&str; 0]
     );
 }
@@ -601,7 +597,7 @@ fn a_branch_that_is_not_a_verification_run_is_never_swept() {
     let refs = ["develop".to_owned(), "laba/419-connectivity".to_owned()];
 
     assert_eq!(
-        superseded_quarantine_refs(&refs, CURRENT_BASE, &live_heads()),
+        superseded_quarantine_refs(&refs, consts::CURRENT_BASE, &live_heads()),
         [] as [&str; 0]
     );
 }
@@ -609,24 +605,26 @@ fn a_branch_that_is_not_a_verification_run_is_never_swept() {
 #[test]
 fn the_older_quarantine_naming_scheme_is_swept_by_the_same_rule() {
     let refs = [format!(
-        "quarantine/github/{PULL_HEAD}/{OLDER_BASE}/attempt-1"
+        "quarantine/github/{PULL_HEAD}/{OLDER_BASE}/attempt-1",
+        OLDER_BASE = consts::OLDER_BASE,
+        PULL_HEAD = consts::PULL_HEAD
     )];
 
     assert_eq!(
-        superseded_quarantine_refs(&refs, CURRENT_BASE, &live_heads()),
+        superseded_quarantine_refs(&refs, consts::CURRENT_BASE, &live_heads()),
         [refs[0].as_str()]
     );
 }
 
 #[test]
 fn a_sweep_drops_every_branch_a_moved_base_left_behind() {
-    let stale = quarantine_ref(PULL_HEAD, OLDER_BASE, 1);
-    let live = quarantine_ref(PULL_HEAD, CURRENT_BASE, 2);
+    let stale = quarantine_ref(consts::PULL_HEAD, consts::OLDER_BASE, 1);
+    let live = quarantine_ref(consts::PULL_HEAD, consts::CURRENT_BASE, 2);
     let listed = vec![stale.clone(), live, "develop".to_owned()];
     let deleted = RefCell::new(Vec::new());
 
     sweep_quarantine_refs(
-        CURRENT_BASE,
+        consts::CURRENT_BASE,
         &live_heads(),
         || Ok(listed),
         |_| Ok(()),
@@ -647,9 +645,15 @@ fn a_sweep_with_nothing_left_behind_never_reaches_the_remote() {
     let called = Cell::new(false);
 
     sweep_quarantine_refs(
-        CURRENT_BASE,
+        consts::CURRENT_BASE,
         &live_heads(),
-        || Ok(vec![quarantine_ref(PULL_HEAD, CURRENT_BASE, 1)]),
+        || {
+            Ok(vec![quarantine_ref(
+                consts::PULL_HEAD,
+                consts::CURRENT_BASE,
+                1,
+            )])
+        },
         |_| Ok(()),
         |_| {
             called.set(true);
@@ -668,20 +672,24 @@ fn a_sweep_with_nothing_left_behind_never_reaches_the_remote() {
 /// the base did not move — the head did.
 #[test]
 fn a_quarantine_ref_for_a_head_no_open_pull_request_names_is_superseded() {
-    let refs = [quarantine_ref(RETIRED_HEAD, CURRENT_BASE, 1)];
+    let refs = [quarantine_ref(
+        consts::RETIRED_HEAD,
+        consts::CURRENT_BASE,
+        1,
+    )];
 
     assert_eq!(
-        superseded_quarantine_refs(&refs, CURRENT_BASE, &live_heads()),
+        superseded_quarantine_refs(&refs, consts::CURRENT_BASE, &live_heads()),
         [refs[0].as_str()]
     );
 }
 
 #[test]
 fn a_quarantine_ref_for_an_open_pull_requests_head_is_kept() {
-    let refs = [quarantine_ref(PULL_HEAD, CURRENT_BASE, 1)];
+    let refs = [quarantine_ref(consts::PULL_HEAD, consts::CURRENT_BASE, 1)];
 
     assert_eq!(
-        superseded_quarantine_refs(&refs, CURRENT_BASE, &live_heads()),
+        superseded_quarantine_refs(&refs, consts::CURRENT_BASE, &live_heads()),
         [] as [&str; 0]
     );
 }
@@ -691,13 +699,13 @@ fn a_quarantine_ref_for_an_open_pull_requests_head_is_kept() {
 /// taken by a commit nobody will merge.
 #[test]
 fn a_sweep_cancels_the_run_of_every_branch_it_drops() {
-    let stale = quarantine_ref(RETIRED_HEAD, CURRENT_BASE, 1);
-    let live = quarantine_ref(PULL_HEAD, CURRENT_BASE, 1);
+    let stale = quarantine_ref(consts::RETIRED_HEAD, consts::CURRENT_BASE, 1);
+    let live = quarantine_ref(consts::PULL_HEAD, consts::CURRENT_BASE, 1);
     let listed = vec![stale.clone(), live, "develop".to_owned()];
     let cancelled = RefCell::new(Vec::new());
 
     sweep_quarantine_refs(
-        CURRENT_BASE,
+        consts::CURRENT_BASE,
         &live_heads(),
         || Ok(listed),
         |reference| {

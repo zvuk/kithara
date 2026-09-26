@@ -27,13 +27,11 @@ use num_traits::cast::ToPrimitive;
 
 use super::{
     super::{AnalysisDemand, analyzer::AnalyzerBuilder, producer::ring, worker::Job},
-    fixtures::{SR, spec},
+    fixtures::spec,
     node::NodeHarness,
     track::Track,
 };
-use crate::AnalysisProgress;
-
-const CHUNK_FRAMES: u64 = 8820;
+use crate::{AnalysisProgress, consts};
 
 #[kithara::fixture]
 fn probe_pcm() -> Option<Vec<f32>> {
@@ -54,7 +52,7 @@ fn a_real_track_reaches_its_end_whole(probe_pcm: Option<Vec<f32>>) {
         return;
     };
     let pools = crate::test_pools::pools();
-    let track = Track::new(pools.clone(), spec(), CHUNK_FRAMES, pcm);
+    let track = Track::new(pools.clone(), spec(), consts::PROBE_CHUNK_FRAMES, pcm);
     let frames = track.frames();
     let rate = spec().sample_rate;
 
@@ -104,7 +102,7 @@ fn a_real_track_reaches_its_end_whole(probe_pcm: Option<Vec<f32>>) {
     let lost: u64 = beat.unanalysed().iter().map(|range| range.frames()).sum();
     eprintln!(
         "{:.1}s track, wall {:.1}s, {ticks} ticks, covered {} of {frames}, lost {lost}, bpm {:.4}, beats {}",
-        frames.to_f64().unwrap_or(0.0) / f64::from(SR),
+        frames.to_f64().unwrap_or(0.0) / f64::from(consts::FIXTURES_SR),
         elapsed.as_secs_f64(),
         analysis.coverage().frames(),
         beat.artifact().bpm(),

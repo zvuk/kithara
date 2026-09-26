@@ -13,10 +13,6 @@ use crate::ci::{
     environment::CacheTrust,
 };
 
-/// Installed profile every Linux CI machine reads through
-/// `KITHARA_CI_LINUX_CONFIG`.
-pub(crate) const LINUX_CONFIG_PATH: &str = "/etc/kithara-ci/linux-host.toml";
-
 /// Machine profile of one Linux CI host: the runners it serves and what each of
 /// them may consume. It is provisioned per machine and never tracked in the
 /// repository; the reviewed build contract lives in

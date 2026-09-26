@@ -27,7 +27,7 @@ use url::Url;
 
 use super::{PlanConfig, SizeDemand, VariantParts, segment_placeholder_size};
 use crate::{
-    HlsEvent,
+    HlsEvent, consts,
     playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
         Downloading, InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
@@ -1577,7 +1577,6 @@ fn a_planned_segment_is_owed_not_escalated() {
     );
 }
 
-const EXACT_SEEK_LANDING: u32 = 2;
 /// Register an exact-seek demand on `EXACT_SEEK_LANDING`, then report the URL
 /// of every fetch one plan emits. The fetch queue is left empty on purpose:
 /// with no body planned, the only thing a dispatch can emit is a size probe,
@@ -1619,9 +1618,9 @@ fn exact_seek_probe_urls(
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
     }
     .into_variant(0, &ctx);
-    let anchor = EXACT_SEEK_SEGMENT_BYTES * u64::from(EXACT_SEEK_LANDING);
+    let anchor = EXACT_SEEK_SEGMENT_BYTES * u64::from(consts::EXACT_SEEK_LANDING);
     v.set_prefetch_anchor(anchor);
-    v.set_exact_seek_demand(anchor, EXACT_SEEK_LANDING);
+    v.set_exact_seek_demand(anchor, consts::EXACT_SEEK_LANDING);
     let session = active_session(&v, &ctx, anchor);
 
     session
@@ -1654,7 +1653,7 @@ fn an_exact_seek_probes_the_unknown_prefix_and_nothing_else() {
             init_url(),
             segment_url(0),
             segment_url(1),
-            segment_url(EXACT_SEEK_LANDING),
+            segment_url(consts::EXACT_SEEK_LANDING),
         ]
     );
 }

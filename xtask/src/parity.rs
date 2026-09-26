@@ -9,28 +9,7 @@ use clap::Args;
 use kithara_devtools::Ctx;
 use tracing::info;
 
-/// What this programme is pinned to: the price lists it judges against, the
-/// control it photographs on its own, and the sets it owns.
-struct Consts;
-
-impl Consts {
-    /// The one control this programme photographs by itself, so the shortest
-    /// capture path runs somewhere. Any page that draws a control by a known
-    /// path would do; this one is pinned so a page that stops drawing it says
-    /// so.
-    const ELEMENT_PAGE: &'static str = "clock";
-    const ELEMENT_PATH: &'static str = "clock-components/title";
-    /// What a page of the gallery, and a shipped studio page, are allowed to
-    /// differ by before the programme ends non-zero.
-    const GALLERY_BUDGET: &'static str = "crates/kithara-ui/examples/gallery/parity-budget.txt";
-    /// The sets this programme writes, cleared before it starts so a set left
-    /// by an earlier run cannot be compared as if this run had taken it.
-    const SETS: [&'static str; 5] = ["iced", "masonry", "masks", "parts", "studio"];
-    const STUDIO_BUDGET: &'static str = "crates/kithara-app/assets/ui/parity-budget.txt";
-    /// Where the studio capture is told to write its two sets. It is driven
-    /// from a test, and a test has no command line of its own to be told on.
-    const STUDIO_CAPTURE: &'static str = "KITHARA_STUDIO_CAPTURE";
-}
+use crate::consts;
 
 #[derive(Debug, Args)]
 pub(crate) struct ParityArgs {
@@ -46,7 +25,7 @@ pub(crate) struct ParityArgs {
 /// its budget allows, or when a page is missing from one of the two sets.
 pub(crate) fn run(args: &ParityArgs, ctx: &Ctx) -> Result<()> {
     let dir = rooted(&ctx.root, &args.dir);
-    for set in Consts::SETS {
+    for set in consts::SETS {
         let path = dir.join(set);
         if path.exists() {
             fs::remove_dir_all(&path).with_context(|| format!("clearing {}", path.display()))?;
@@ -63,7 +42,7 @@ pub(crate) fn run(args: &ParityArgs, ctx: &Ctx) -> Result<()> {
     gallery.compare(
         "the gallery, host against host",
         [&dir.join("iced"), &dir.join("masonry"), &dir.join("masks")],
-        &ctx.root.join(Consts::GALLERY_BUDGET),
+        &ctx.root.join(consts::GALLERY_BUDGET),
     )?;
     gallery.element(&dir.join("parts"))?;
 
@@ -76,7 +55,7 @@ pub(crate) fn run(args: &ParityArgs, ctx: &Ctx) -> Result<()> {
             &studio.join("masonry"),
             &studio.join("masks"),
         ],
-        &ctx.root.join(Consts::STUDIO_BUDGET),
+        &ctx.root.join(consts::STUDIO_BUDGET),
     )
 }
 
@@ -134,9 +113,9 @@ impl Gallery<'_> {
             .arg(dir)
             .args([
                 "--page",
-                Consts::ELEMENT_PAGE,
+                consts::ELEMENT_PAGE,
                 "--element",
-                Consts::ELEMENT_PATH,
+                consts::ELEMENT_PATH,
             ]);
         finish(command, "one control of one gallery page")
     }
@@ -148,7 +127,7 @@ fn studio_capture(root: &Path, dir: &Path) -> Result<()> {
     let mut command = Command::new("cargo");
     command
         .current_dir(root)
-        .env(Consts::STUDIO_CAPTURE, dir)
+        .env(consts::STUDIO_CAPTURE, dir)
         .args([
             "test",
             "-p",

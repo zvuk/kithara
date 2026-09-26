@@ -124,14 +124,7 @@ mod tests {
     use kithara_worker::{Worker, WorkerConfig};
 
     use super::LiveWindow;
-    use crate::{config::BroadcastConfig, segment::Segment};
-
-    struct Consts;
-
-    impl Consts {
-        const DURATION_TS: u32 = 192_512;
-        const TIMESCALE: u32 = 48_000;
-    }
+    use crate::{config::BroadcastConfig, consts, segment::Segment};
 
     fn config() -> BroadcastConfig<TestPools> {
         BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools()).build()
@@ -149,9 +142,9 @@ mod tests {
         Segment {
             seq,
             bytes: Bytes::from(vec![u8::try_from(seq % 256).expect("fits"); 8]),
-            duration_ts: Consts::DURATION_TS,
+            duration_ts: consts::DURATION_TS,
             discontinuity,
-            timescale: Consts::TIMESCALE,
+            timescale: consts::TIMESCALE,
         }
     }
 
@@ -298,7 +291,7 @@ mod tests {
         window.push(segment(0, false));
         let running = window.snapshot();
         window.push(Segment {
-            duration_ts: 6 * Consts::TIMESCALE,
+            duration_ts: 6 * consts::TIMESCALE,
             ..segment(1, false)
         });
         let overlong = window.snapshot();
@@ -317,7 +310,7 @@ mod tests {
         let mut window = window();
 
         window.push(Segment {
-            duration_ts: Consts::TIMESCALE / 2,
+            duration_ts: consts::TIMESCALE / 2,
             ..segment(0, true)
         });
 

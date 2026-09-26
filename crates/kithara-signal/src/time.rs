@@ -2,13 +2,11 @@ use std::num::NonZeroU32;
 
 use kithara_platform::time::Duration;
 
-use crate::SignalError;
-
-const NANOS_PER_SECOND: u128 = 1_000_000_000;
+use crate::{SignalError, consts};
 
 pub(super) fn duration_for(sample_rate: NonZeroU32, frames: u64) -> Result<Duration, SignalError> {
     let nanos = u128::from(frames)
-        .checked_mul(NANOS_PER_SECOND)
+        .checked_mul(consts::NANOS_PER_SECOND)
         .and_then(|value| value.checked_div(u128::from(sample_rate.get())))
         .and_then(|value| u64::try_from(value).ok())
         .ok_or_else(|| SignalError::DurationOverflow {
@@ -26,7 +24,7 @@ pub(super) fn frames_for(
     let frames = duration
         .as_nanos()
         .checked_mul(u128::from(sample_rate.get()))
-        .and_then(|value| value.checked_div(NANOS_PER_SECOND))
+        .and_then(|value| value.checked_div(consts::NANOS_PER_SECOND))
         .and_then(|value| usize::try_from(value).ok())
         .ok_or_else(|| SignalError::FrameCountOverflow {
             duration_nanos,

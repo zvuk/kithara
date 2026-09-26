@@ -9,13 +9,8 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 
-use super::{
-    layout::{self, BINARY, GENERATION_PREFIX, LEASE_FILE, MANIFEST_FILE, STAMP_FILE},
-    lease,
-    manifest::CacheManifest,
-};
-
-const RESERVATION_ATTEMPTS: usize = 1_000;
+use super::{layout, lease, manifest::CacheManifest};
+use crate::consts;
 
 fn publish(root: &Path, source: &Path, manifest: &CacheManifest) -> Result<PathBuf> {
     publish_with_activation(root, source, manifest, activate)
@@ -74,14 +69,14 @@ fn publish_reserved<F>(
 where
     F: FnOnce(&Path, &Path, &str) -> Result<()>,
 {
-    let binary = temporary.join(BINARY);
+    let binary = temporary.join(consts::BINARY);
     copy_executable(source, &binary)?;
-    write_new(&temporary.join(MANIFEST_FILE), &manifest.encode()?)?;
+    write_new(&temporary.join(consts::MANIFEST_FILE), &manifest.encode()?)?;
     write_new(
-        &temporary.join(STAMP_FILE),
+        &temporary.join(consts::STAMP_FILE),
         format!("{}\n", manifest.source_stamp).as_bytes(),
     )?;
-    write_new(&temporary.join(LEASE_FILE), b"")?;
+    write_new(&temporary.join(consts::LEASE_FILE), b"")?;
     #[cfg(unix)]
     sync_directory(temporary)?;
     fs::rename(temporary, generation).with_context(|| {
@@ -106,14 +101,17 @@ where
     ) {
         eprintln!("warning: self-cache cleanup failed: {error:#}");
     }
-    Ok(generation.join(BINARY))
+    Ok(generation.join(consts::BINARY))
 }
 
 fn reserve(cache: &Path, stamp: &str) -> Result<(PathBuf, PathBuf, String)> {
     let process = std::process::id();
-    for attempt in 0..RESERVATION_ATTEMPTS {
+    for attempt in 0..consts::RESERVATION_ATTEMPTS {
         let suffix = format!("{process}-{attempt}");
-        let name = format!("{GENERATION_PREFIX}{stamp}-{suffix}");
+        let name = format!(
+            "{GENERATION_PREFIX}{stamp}-{suffix}",
+            GENERATION_PREFIX = consts::GENERATION_PREFIX
+        );
         let temporary = cache.join(format!(".{name}"));
         let generation = cache.join(name);
         match fs::create_dir(&temporary) {

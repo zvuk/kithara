@@ -6,12 +6,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
-struct Consts;
-
-impl Consts {
-    const CGROUP_ROOT: &str = "/sys/fs/cgroup";
-    const PROC_ROOT: &str = "/proc";
-}
+use crate::consts;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -64,7 +59,7 @@ pub(super) struct Limits {
 }
 
 pub(super) fn capture() -> Result<SystemSnapshot> {
-    capture_from(Path::new(Consts::PROC_ROOT), Path::new(Consts::CGROUP_ROOT))
+    capture_from(Path::new(consts::PROC_ROOT), Path::new(consts::CGROUP_ROOT))
 }
 
 fn capture_from(proc_root: &Path, cgroup_root: &Path) -> Result<SystemSnapshot> {

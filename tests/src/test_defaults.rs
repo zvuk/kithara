@@ -86,20 +86,20 @@ impl Default for SawWav {
 ///
 /// New entries should be added only when the same value recurs in ≥2
 /// modules. Genuinely local values stay in their own file.
-pub struct Consts;
+pub mod consts {
+    use super::{AudioSpec, Duration, NonZeroU32, SawWav};
 
-impl Consts {
     /// Default sample rate for generated WAV / expected streams.
     pub const SAMPLE_RATE: u32 = SawWav::DEFAULT.sample_rate;
     /// Typed form passed explicitly into playback configuration.
-    pub const NON_ZERO_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(Self::SAMPLE_RATE) {
+    pub const NON_ZERO_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(SAMPLE_RATE) {
         Some(sample_rate) => sample_rate,
         None => unreachable!(),
     };
     /// Default channel count.
     pub const CHANNELS: u16 = SawWav::DEFAULT.channels;
     /// Default decoded-audio format used by playback fixtures.
-    pub const AUDIO_SPEC: AudioSpec = AudioSpec::new(Self::CHANNELS, Self::NON_ZERO_SAMPLE_RATE);
+    pub const AUDIO_SPEC: AudioSpec = AudioSpec::new(CHANNELS, NON_ZERO_SAMPLE_RATE);
     /// Default packaged HLS segment size (bytes).
     pub const SEGMENT_SIZE: usize = SawWav::DEFAULT.segment_size;
 
@@ -110,16 +110,16 @@ impl Consts {
 
     /// Default soft read timeout for resource/decoder integration tests.
     pub const READ_TIMEOUT: Duration = Duration::from_secs(5);
+}
 
-    /// Render blocks needed to cover `seconds` at the default sample rate.
-    pub fn blocks_for_seconds(seconds: f64, block_frames: usize) -> u32 {
-        let blocks = (seconds * f64::from(Self::SAMPLE_RATE) / block_frames as f64).ceil();
-        #[expect(
-            clippy::cast_sign_loss,
-            clippy::cast_possible_truncation,
-            reason = "positive ceiling fits in u32 for second-scale windows"
-        )]
-        let result = blocks as u32;
-        result
-    }
+/// Render blocks needed to cover `seconds` at the default sample rate.
+pub fn blocks_for_seconds(seconds: f64, block_frames: usize) -> u32 {
+    let blocks = (seconds * f64::from(consts::SAMPLE_RATE) / block_frames as f64).ceil();
+    #[expect(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "positive ceiling fits in u32 for second-scale windows"
+    )]
+    let result = blocks as u32;
+    result
 }

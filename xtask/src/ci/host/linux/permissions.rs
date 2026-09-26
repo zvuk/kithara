@@ -10,12 +10,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-/// A mode only its owner may read and write.
-pub(super) const OWNER_ONLY: u32 = 0o600;
-
-/// A mode anyone may read and run, and only its owner may write.
-pub(super) const EXECUTABLE: u32 = 0o755;
-
 /// Give `path` the mode a Unix machine would enforce.
 ///
 /// Off Unix there is no mode to give: the provisioning this serves never runs

@@ -16,7 +16,9 @@ use crate::{
     },
 };
 
-pub(crate) const ID: &str = "redundant_accessors";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "redundant_accessors";
+}
 
 pub(crate) struct RedundantAccessors;
 
@@ -50,7 +52,7 @@ type MethodEntry<'a> = (MethodFacts<'a>, &'a str, &'a str);
 
 impl Check for RedundantAccessors {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -389,8 +391,8 @@ fn detect_p4(
 
 fn emit(sev: AccessorSeverity, key: String, message: String) -> Violation {
     match sev {
-        AccessorSeverity::Deny => Violation::deny(ID, key, message),
-        AccessorSeverity::Warn => Violation::warn(ID, key, message),
+        AccessorSeverity::Deny => Violation::deny(consts::ID, key, message),
+        AccessorSeverity::Warn => Violation::warn(consts::ID, key, message),
         AccessorSeverity::Off => unreachable!("off severity should be filtered earlier"),
     }
 }

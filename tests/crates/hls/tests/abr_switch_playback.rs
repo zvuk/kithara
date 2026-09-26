@@ -871,6 +871,29 @@ async fn mp3_stream_continues_after_seek(
     .expect("read phase join");
 }
 
+/// Collect the ABR events that carry a decision, dropping the measurement
+/// stream that reports throughput, estimates and buffer depth.
+fn drain_abr_decisions(events: &mut EventReceiver<TestEvent>, sink: &mut Vec<AbrEvent>) {
+    loop {
+        match events.try_recv() {
+            Ok(envelope) => {
+                if let TestEvent::Abr(event) = envelope.event
+                    && !matches!(
+                        event,
+                        AbrEvent::ThroughputSample { .. }
+                            | AbrEvent::BandwidthEstimate { .. }
+                            | AbrEvent::BufferAhead { .. }
+                    )
+                {
+                    sink.push(event);
+                }
+            }
+            Err(TryRecvError::Lagged(_)) => {}
+            Err(TryRecvError::Empty | TryRecvError::Closed) => return,
+        }
+    }
+}
+
 fn lowest_pending_estimate(events: &mut EventReceiver<TestEvent>) -> Option<u64> {
     let mut lowest: Option<u64> = None;
     loop {
@@ -889,8 +912,12 @@ fn lowest_pending_estimate(events: &mut EventReceiver<TestEvent>) -> Option<u64>
 /// ABR is locked while a seek is pending, so the seek lands on the variant that
 /// played before it even after the estimate fell below that variant. The lock
 /// ends with the seek and a switch splices at the decode head, so the first
-/// tick after the landing may already move the rest of the landing segment;
-/// ABR must then leave the top variant within a bounded number of boundaries.
+/// tick after the landing may already move the rest of the landing segment.
+///
+/// The assertion is on the decision ABR makes, not on how many segment
+/// boundaries play before it takes effect. Segments requested while the lock
+/// was held still arrive, and how many of them there are depends on how long
+/// the seek stayed pending — not on ABR.
 #[kithara::test(
     tokio,
     native,
@@ -905,9 +932,6 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     const INITIAL_VARIANT: usize = 0;
     const TOP_VARIANT: usize = 3;
     const PREFETCH_SEGMENTS: usize = 3;
-    // Segments fetched while the seek was held play on the top variant before
-    // a switch can land.
-    const MOVE_WITHIN_BOUNDARIES: usize = PREFETCH_SEGMENTS + 2;
     const SEEK_SEGMENT: usize = 25;
     const SLOW_FROM_SEGMENT: usize = SEEK_SEGMENT + 1;
     const SEEK_TARGET: Duration = Duration::from_secs(153);
@@ -1054,27 +1078,39 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         "the seek must land on the variant that played before it, although the \
          estimate fell below it while the seek was pending"
     );
-    let mut previous_segment = SEEK_SEGMENT as u32;
-    let mut boundaries_after_seek = 0;
+    let mut decisions = Vec::new();
     loop {
         let chunk = next_chunk(&mut audio)
             .await
             .expect("ABR must move off the top variant before the track ends");
-        let segment = chunk.meta.segment_index.expect("HLS chunk has a segment");
         let variant = chunk.meta.variant_index.expect("HLS chunk has a variant");
-        if segment != previous_segment {
-            boundaries_after_seek += 1;
-            previous_segment = segment;
-        }
-        assert!(
-            boundaries_after_seek <= MOVE_WITHIN_BOUNDARIES,
-            "ABR stayed on the top variant for {boundaries_after_seek} boundaries after the seek; limit is {MOVE_WITHIN_BOUNDARIES}"
-        );
+        drain_abr_decisions(&mut events, &mut decisions);
         if variant != TOP_VARIANT {
             assert!(variant < TOP_VARIANT, "ABR must switch down");
             break;
         }
     }
+    let unlocked = decisions
+        .iter()
+        .rposition(|event| matches!(event, AbrEvent::Unlocked))
+        .expect("the seek lock must end once the landing output is committed");
+    let decided = decisions[unlocked + 1..]
+        .iter()
+        .find(|event| {
+            matches!(
+                event,
+                AbrEvent::VariantApplied { .. } | AbrEvent::DecisionSkipped { .. }
+            )
+        })
+        .expect("ABR must decide once the seek lock ended");
+    assert!(
+        matches!(
+            decided,
+            AbrEvent::VariantApplied { from, to, .. }
+                if from.get() == TOP_VARIANT && to.get() < TOP_VARIANT
+        ),
+        "the first ABR decision after the seek lock ended must leave the top variant, got {decided:?}"
+    );
 }
 
 #[derive(Debug)]

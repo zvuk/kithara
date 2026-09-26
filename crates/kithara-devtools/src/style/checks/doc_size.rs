@@ -11,13 +11,15 @@ use crate::{
     style::config::DocSizeConfig,
 };
 
-pub(crate) const ID: &str = "doc_size";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "doc_size";
+}
 
 pub(crate) struct DocSize;
 
 impl Check for DocSize {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -54,7 +56,7 @@ fn scan_content(cfg: &DocSizeConfig, rel: &str, src: &str) -> Vec<Violation> {
         }
         if bytes > limit.deny {
             return vec![Violation::deny(
-                ID,
+                consts::ID,
                 rel.to_string(),
                 format!(
                     "{rel} is {bytes} bytes, above the {} byte limit",
@@ -64,7 +66,7 @@ fn scan_content(cfg: &DocSizeConfig, rel: &str, src: &str) -> Vec<Violation> {
         }
         if bytes > limit.warn {
             return vec![Violation::warn(
-                ID,
+                consts::ID,
                 rel.to_string(),
                 format!(
                     "{rel} is {bytes} bytes, above the {} byte limit",

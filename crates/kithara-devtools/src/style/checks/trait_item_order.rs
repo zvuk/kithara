@@ -14,7 +14,9 @@ use crate::{
     style::config::TraitItemOrderConfig,
 };
 
-pub(crate) const ID: &str = "trait_item_order";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "trait_item_order";
+}
 
 pub(crate) struct TraitItemOrder;
 
@@ -44,7 +46,7 @@ impl Check for TraitItemOrder {
     }
 
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -384,7 +386,7 @@ fn emit_if_misordered(
         "{block_kind} `{type_name}` items should be ordered (kind, name): \
          expected [{expected_summary}], found [{actual_summary}]"
     );
-    out.push(Violation::warn(ID, key, msg));
+    out.push(Violation::warn(consts::ID, key, msg));
 }
 
 fn trait_item_kind_and_name(it: &TraitItem) -> (&'static str, String) {

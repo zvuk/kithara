@@ -259,20 +259,11 @@ mod tests {
         BeatGridState, BeatGridUnavailable, BeatGridView, BeatMarker, BeatOrdinal,
         FrameUncertainty, MapAxis, MapPoint, MapPosition, MapRegion, MapRegionError, MapSegment,
         Meter, MeterFacts, SegmentError, SegmentFacts, SegmentSet, SessionAnchor, SessionBeat,
-        SessionEpoch, SessionFrame, beat_grid::session::SessionGridView,
+        SessionEpoch, SessionFrame, beat_grid::session::SessionGridView, consts,
     };
 
-    struct Consts;
-
-    impl Consts {
-        const AFTER_EOF_FRAME: f64 = 48_000.5;
-        const EOF_FRAME: f64 = 48_000.0;
-        const FRAME_COUNT: u64 = 48_000;
-        const SAMPLE_RATE: u32 = 48_000;
-    }
-
     fn sample_rate() -> NonZeroU32 {
-        NonZeroU32::new(Consts::SAMPLE_RATE).expect("invariant: fixture sample rate is non-zero")
+        NonZeroU32::new(consts::SAMPLE_RATE).expect("invariant: fixture sample rate is non-zero")
     }
 
     fn asset_frame(value: f64) -> AssetFrame {
@@ -380,7 +371,7 @@ mod tests {
         let segments = SegmentSet::new(
             MapAxis::Asset(AssetAxis::new(
                 sample_rate(),
-                AssetExtent::Bounded(Consts::FRAME_COUNT),
+                AssetExtent::Bounded(consts::FRAME_COUNT),
             )),
             vec![segment],
         )
@@ -421,7 +412,7 @@ mod tests {
         let segments = SegmentSet::new(
             MapAxis::Asset(AssetAxis::new(
                 sample_rate(),
-                AssetExtent::Bounded(Consts::FRAME_COUNT),
+                AssetExtent::Bounded(consts::FRAME_COUNT),
             )),
             vec![segment],
         )
@@ -438,7 +429,7 @@ mod tests {
         assert_eq!(
             grid.rate_at(MapPoint::new(
                 stamp,
-                MapPosition::Asset(asset_frame(Consts::AFTER_EOF_FRAME))
+                MapPosition::Asset(asset_frame(consts::AFTER_EOF_FRAME))
             )),
             BeatGridQuery::OutsideDomain,
             "a position past the recording carries no ratio"
@@ -463,15 +454,15 @@ mod tests {
 
     #[kithara::test]
     fn complete_asset_grid_round_trips_a_segment_endpoint_at_eof() {
-        let asset_axis = AssetAxis::new(sample_rate(), AssetExtent::Bounded(Consts::FRAME_COUNT));
-        let eof = asset_frame(Consts::EOF_FRAME);
+        let asset_axis = AssetAxis::new(sample_rate(), AssetExtent::Bounded(consts::FRAME_COUNT));
+        let eof = asset_frame(consts::EOF_FRAME);
         assert!(
             !asset_axis.contains(eof),
             "the EOF boundary is not an addressable source sample"
         );
         let segment = MapSegment::new(
             asset_marker(0.0, 0),
-            asset_marker(Consts::EOF_FRAME, 2),
+            asset_marker(consts::EOF_FRAME, 2),
             SegmentFacts::new(BeatEvidence::Interpolated, FrameUncertainty::ZERO, None),
         )
         .expect("invariant: fixture markers form an increasing affine relation");
@@ -498,14 +489,14 @@ mod tests {
         };
         assert_eq!(*round_tripped.value().value(), endpoint_beat);
 
-        let beyond_eof = asset_frame(Consts::AFTER_EOF_FRAME);
+        let beyond_eof = asset_frame(consts::AFTER_EOF_FRAME);
         assert!(matches!(
             grid.beat_at(MapPoint::new(grid.stamp(), MapPosition::Asset(beyond_eof),)),
             BeatGridQuery::OutsideDomain
         ));
         let beyond_segment = MapSegment::new(
             asset_marker(0.0, 0),
-            asset_marker(Consts::AFTER_EOF_FRAME, 2),
+            asset_marker(consts::AFTER_EOF_FRAME, 2),
             SegmentFacts::new(BeatEvidence::Interpolated, FrameUncertainty::ZERO, None),
         )
         .expect("invariant: the overlong fixture remains an affine relation");
@@ -517,10 +508,10 @@ mod tests {
 
     #[kithara::test]
     fn uncovered_eof_uses_grid_lifecycle_instead_of_current_geometry() {
-        let asset_axis = AssetAxis::new(sample_rate(), AssetExtent::Bounded(Consts::FRAME_COUNT));
+        let asset_axis = AssetAxis::new(sample_rate(), AssetExtent::Bounded(consts::FRAME_COUNT));
         let axis = MapAxis::Asset(asset_axis);
-        let eof = MapPosition::Asset(asset_frame(Consts::EOF_FRAME));
-        let beyond_eof = MapPosition::Asset(asset_frame(Consts::AFTER_EOF_FRAME));
+        let eof = MapPosition::Asset(asset_frame(consts::EOF_FRAME));
+        let beyond_eof = MapPosition::Asset(asset_frame(consts::AFTER_EOF_FRAME));
         let building = BeatGridSnapshot::segments(
             BeatGridId::allocate().expect("invariant: fixture grid id can be allocated"),
             BeatGridRevision::first(),
@@ -567,11 +558,11 @@ mod tests {
     fn a_finished_gap_answers_the_next_charted_beat_while_a_building_gap_waits() {
         let axis = MapAxis::Asset(AssetAxis::new(
             sample_rate(),
-            AssetExtent::Bounded(Consts::FRAME_COUNT),
+            AssetExtent::Bounded(consts::FRAME_COUNT),
         ));
         let segment = MapSegment::new(
             asset_marker(24_000.0, 3),
-            asset_marker(Consts::EOF_FRAME, 5),
+            asset_marker(consts::EOF_FRAME, 5),
             SegmentFacts::new(BeatEvidence::Interpolated, FrameUncertainty::ZERO, None),
         )
         .expect("invariant: fixture markers form an increasing affine relation");
@@ -606,7 +597,7 @@ mod tests {
         assert!(matches!(
             complete.beat_at_or_next(MapPoint::new(
                 complete.stamp(),
-                MapPosition::Asset(asset_frame(Consts::AFTER_EOF_FRAME))
+                MapPosition::Asset(asset_frame(consts::AFTER_EOF_FRAME))
             )),
             BeatGridQuery::OutsideDomain
         ));

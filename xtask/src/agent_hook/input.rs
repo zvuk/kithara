@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::Value;
 
-const INPUT_BYTES: usize = 32 * 1024 * 1024;
+use crate::consts;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct HookInput {
@@ -40,7 +40,7 @@ impl HookInput {
 
 pub(super) fn read() -> Result<HookInput> {
     let stdin = io::stdin();
-    read_from(stdin.lock(), INPUT_BYTES)
+    read_from(stdin.lock(), consts::INPUT_BYTES)
 }
 
 fn read_from(reader: impl Read, limit: usize) -> Result<HookInput> {

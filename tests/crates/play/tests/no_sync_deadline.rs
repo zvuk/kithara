@@ -20,25 +20,23 @@ use ringbuf::traits::Producer;
 
 use crate::bufpool_ext::pools;
 
-struct Consts;
-
-impl Consts {
-    const BLOCK_FRAMES: [u32; 4] = [128, 256, 512, 1_024];
+mod consts {
+    pub(super) const BLOCK_FRAMES: [u32; 4] = [128, 256, 512, 1_024];
     /// Callbacks one census window covers. A mix that walked its track list per
     /// frame would fire the probe `block_frames` times per track per callback,
     /// and this window keeps even that history inside `usdt::MAX_EVENTS`, so
     /// the walk count is what fails there, not the recorder.
-    const CENSUS_BLOCKS: usize = 32;
-    const CHANNELS: u16 = 2;
+    pub(super) const CENSUS_BLOCKS: usize = 32;
+    pub(super) const CHANNELS: u16 = 2;
     /// Callbacks a cell renders after warmup, read as
     /// `MEASURED_BLOCKS / CENSUS_BLOCKS` windows. Every one of them is checked
     /// for the exact sum of all its tracks, so the length is the PCM evidence;
     /// the walk count is already exact inside a single window.
-    const MEASURED_BLOCKS: usize = 4_096;
-    const SAMPLE_RATE: u32 = 48_000;
-    const TRACK_COUNTS: [usize; 3] = [1, 2, 4];
-    const TRACK_SECONDS: f64 = 300.0;
-    const WARMUP_BLOCKS: usize = 512;
+    pub(super) const MEASURED_BLOCKS: usize = 4_096;
+    pub(super) const SAMPLE_RATE: u32 = 48_000;
+    pub(super) const TRACK_COUNTS: [usize; 3] = [1, 2, 4];
+    pub(super) const TRACK_SECONDS: f64 = 300.0;
+    pub(super) const WARMUP_BLOCKS: usize = 512;
 }
 
 fn non_zero(value: u32, label: &str) -> NonZeroU32 {
@@ -47,15 +45,15 @@ fn non_zero(value: u32, label: &str) -> NonZeroU32 {
 
 fn spec() -> AudioSpec {
     AudioSpec::new(
-        Consts::CHANNELS,
-        non_zero(Consts::SAMPLE_RATE, "sample rate"),
+        consts::CHANNELS,
+        non_zero(consts::SAMPLE_RATE, "sample rate"),
     )
 }
 
 fn processor(block_frames: u32) -> (PlayerNodeProcessor, SlotControl) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
     let shape = StreamShape {
-        sample_rate: non_zero(Consts::SAMPLE_RATE, "sample rate"),
+        sample_rate: non_zero(consts::SAMPLE_RATE, "sample rate"),
         max_block_frames: non_zero(block_frames, "block frames"),
     };
     (
@@ -96,7 +94,7 @@ fn load_tracks(
         let value = f32::from(u16::try_from(idx + 1).expect("track index fits u16")) * 0.02;
         expected_sample += value;
         let resource = Resource::from_reader(
-            TestPcmReader::from_pcm(spec(), Consts::TRACK_SECONDS, deadline_tracks[idx]),
+            TestPcmReader::from_pcm(spec(), consts::TRACK_SECONDS, deadline_tracks[idx]),
             Some(Arc::clone(src)),
         );
         send(
@@ -178,10 +176,10 @@ fn assert_one_walk_per_track_per_block(recorded: &[ProbeEvent], block_frames: u3
          {tracks} playing track(s), observed {walks:?}"
     );
     assert!(
-        walks.values().all(|count| *count == Consts::CENSUS_BLOCKS),
+        walks.values().all(|count| *count == consts::CENSUS_BLOCKS),
         "the mix must walk each of {tracks} track(s) once per callback; \
          {} callbacks at {block_frames} frames walked {walks:?}",
-        Consts::CENSUS_BLOCKS,
+        consts::CENSUS_BLOCKS,
     );
 }
 
@@ -214,7 +212,7 @@ fn census(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4])
     let mut out_r = vec![0.0_f32; frames];
     let metrics_before = control.playback.metrics().snapshot();
 
-    for _ in 0..Consts::WARMUP_BLOCKS {
+    for _ in 0..consts::WARMUP_BLOCKS {
         render_block(&mut processor, &control, &mut out_l, &mut out_r);
     }
     assert!(
@@ -224,9 +222,9 @@ fn census(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4])
     assert_all_tracks_contributed(&out_l, expected_sample, block_frames, tracks);
     assert_all_tracks_contributed(&out_r, expected_sample, block_frames, tracks);
 
-    for _ in 0..Consts::MEASURED_BLOCKS / Consts::CENSUS_BLOCKS {
+    for _ in 0..consts::MEASURED_BLOCKS / consts::CENSUS_BLOCKS {
         let trace = usdt::scope();
-        for _ in 0..Consts::CENSUS_BLOCKS {
+        for _ in 0..consts::CENSUS_BLOCKS {
             render_block(&mut processor, &control, &mut out_l, &mut out_r);
             assert_all_tracks_contributed(&out_l, expected_sample, block_frames, tracks);
             assert_all_tracks_contributed(&out_r, expected_sample, block_frames, tracks);
@@ -272,8 +270,8 @@ fn census(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4])
 /// clock for no verdict.
 #[kithara::test(native, serial, flash(false))]
 fn mixing_a_track_costs_the_same_however_many_tracks_play(deadline_tracks: [&'static [u8]; 4]) {
-    for block_frames in Consts::BLOCK_FRAMES {
-        for tracks in Consts::TRACK_COUNTS {
+    for block_frames in consts::BLOCK_FRAMES {
+        for tracks in consts::TRACK_COUNTS {
             census(block_frames, tracks, deadline_tracks);
         }
     }

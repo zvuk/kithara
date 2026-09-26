@@ -9,13 +9,15 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "file_size";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "file_size";
+}
 
 pub(crate) struct FileSize;
 
 impl Check for FileSize {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -33,13 +35,13 @@ impl Check for FileSize {
             let key = rel.to_string_lossy().replace('\\', "/");
             if lines >= cfg.deny {
                 violations.push(Violation::deny(
-                    ID,
+                    consts::ID,
                     key,
                     format!("{lines} lines (deny threshold {})", cfg.deny),
                 ));
             } else if lines >= cfg.warn {
                 violations.push(Violation::warn(
-                    ID,
+                    consts::ID,
                     key,
                     format!("{lines} lines (warn threshold {})", cfg.warn),
                 ));

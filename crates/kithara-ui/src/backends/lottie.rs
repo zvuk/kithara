@@ -17,13 +17,16 @@ use crate::{
     lottie::emit,
 };
 
-/// One artwork with a merged pair of contours under one fill, a stroked
-/// open contour, a ramp, a turned layer and a layer opacity — one of each
-/// thing the pairing rule and the alpha fold decide.
-const PROBE: &str = include_str!("../../../kithara-ui-lottie/tests/lottie/probe.json");
+mod consts {
+    /// One artwork with a merged pair of contours under one fill, a stroked
+    /// open contour, a ramp, a turned layer and a layer opacity — one of each
+    /// thing the pairing rule and the alpha fold decide.
+    pub(super) const PROBE: &str =
+        include_str!("../../../kithara-ui-lottie/tests/lottie/probe.json");
+}
 
 fn artwork() -> Composition {
-    Composition::from_slice(PROBE.as_bytes())
+    Composition::from_slice(consts::PROBE.as_bytes())
         .unwrap_or_else(|error| panic!("the probe artwork must read: {error}"))
 }
 

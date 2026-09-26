@@ -229,12 +229,16 @@ mod tests {
         solve::{Length, Size},
     };
 
-    const BOUNDS: Rect = Rect {
-        h: 42.0,
-        w: 126.0,
-        x: 4.0,
-        y: 6.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOUNDS: Rect = Rect {
+            h: 42.0,
+            w: 126.0,
+            x: 4.0,
+            y: 6.0,
+        };
+    }
 
     struct NoReads;
 
@@ -254,7 +258,7 @@ mod tests {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources());
         let mut list = DrawListBuilder::default();
-        Preset::new(skin).paint(&mut list, &mut text, &data(active), BOUNDS, visual);
+        Preset::new(skin).paint(&mut list, &mut text, &data(active), consts::BOUNDS, visual);
         list.finish()
     }
 
@@ -285,7 +289,7 @@ mod tests {
     fn geometry_uses_the_selector_size_padding_gap_and_frames_from_the_skin() {
         let skin = builtin::skin();
         let painter = Preset::new(skin);
-        let selector = painter.selector(BOUNDS);
+        let selector = painter.selector(consts::BOUNDS);
         let list = draw(Some(0), IndexedVisual::default());
         let fills = fills(&list);
         let chip_width = (selector.w - skin.global_bar.chip_gap) / 2.0;
@@ -300,13 +304,13 @@ mod tests {
         assert_eq!(
             selector,
             Rect {
-                h: BOUNDS.h - skin.global_bar.selector_padding_y * 2.0,
-                w: BOUNDS.w - skin.global_bar.selector_padding_x * 2.0,
-                x: BOUNDS.x + skin.global_bar.selector_padding_x,
-                y: BOUNDS.y + skin.global_bar.selector_padding_y,
+                h: consts::BOUNDS.h - skin.global_bar.selector_padding_y * 2.0,
+                w: consts::BOUNDS.w - skin.global_bar.selector_padding_x * 2.0,
+                x: consts::BOUNDS.x + skin.global_bar.selector_padding_x,
+                y: consts::BOUNDS.y + skin.global_bar.selector_padding_y,
             }
         );
-        assert_eq!(fills[0].0, BOUNDS);
+        assert_eq!(fills[0].0, consts::BOUNDS);
         assert_eq!(fills[0].1, Paint::Solid(skin.palette.bg_panel));
         assert_eq!(fills[1].0, selector);
         assert_eq!(fills[1].1, Paint::Solid(skin.palette.line));
@@ -423,12 +427,14 @@ mod tests {
     fn the_middle_of_the_control_is_not_dead() {
         let painter = Preset::new(builtin::skin());
         let middle = Pt {
-            x: BOUNDS.x + BOUNDS.w / 2.0,
-            y: BOUNDS.y + BOUNDS.h / 2.0,
+            x: consts::BOUNDS.x + consts::BOUNDS.w / 2.0,
+            y: consts::BOUNDS.y + consts::BOUNDS.h / 2.0,
         };
 
         assert!(
-            painter.hit_index(&data(Some(0)), BOUNDS, middle).is_some(),
+            painter
+                .hit_index(&data(Some(0)), consts::BOUNDS, middle)
+                .is_some(),
             "the centre of the control at x={} selected no chip",
             middle.x
         );
@@ -441,13 +447,17 @@ mod tests {
     fn every_column_of_the_selector_belongs_to_a_chip() {
         let painter = Preset::new(builtin::skin());
         let data = data(Some(0));
-        let selector = painter.selector(BOUNDS);
+        let selector = painter.selector(consts::BOUNDS);
         let y = selector.y + selector.h / 2.0;
 
         let dead: Vec<f32> = (0_u16..)
             .map(|step| selector.x + f32::from(step) * 0.5)
             .take_while(|x| *x < selector.x + selector.w)
-            .filter(|x| painter.hit_index(&data, BOUNDS, Pt { y, x: *x }).is_none())
+            .filter(|x| {
+                painter
+                    .hit_index(&data, consts::BOUNDS, Pt { y, x: *x })
+                    .is_none()
+            })
             .collect();
 
         assert_eq!(dead, [] as [f32; 0]);
@@ -459,14 +469,14 @@ mod tests {
     fn the_column_left_of_a_cell_boundary_is_the_chip_before_it() {
         let painter = Preset::new(builtin::skin());
         let data = data(Some(0));
-        let selector = painter.selector(BOUNDS);
+        let selector = painter.selector(consts::BOUNDS);
         let y = selector.y + selector.h / 2.0;
         let last_left = Pt {
             y,
             x: selector.x + selector.w / 2.0 - 0.5,
         };
 
-        assert_eq!(painter.hit_index(&data, BOUNDS, last_left), Some(0));
+        assert_eq!(painter.hit_index(&data, consts::BOUNDS, last_left), Some(0));
     }
 
     /// And the boundary itself is the chip after it.
@@ -474,14 +484,17 @@ mod tests {
     fn a_cell_boundary_is_the_chip_after_it() {
         let painter = Preset::new(builtin::skin());
         let data = data(Some(0));
-        let selector = painter.selector(BOUNDS);
+        let selector = painter.selector(consts::BOUNDS);
         let y = selector.y + selector.h / 2.0;
         let first_right = Pt {
             y,
             x: selector.x + selector.w / 2.0,
         };
 
-        assert_eq!(painter.hit_index(&data, BOUNDS, first_right), Some(1));
+        assert_eq!(
+            painter.hit_index(&data, consts::BOUNDS, first_right),
+            Some(1)
+        );
     }
 
     /// The padding the selector is inset by is still nobody's: a press outside
@@ -490,12 +503,16 @@ mod tests {
     fn the_padding_outside_the_selector_selects_nothing() {
         let painter = Preset::new(builtin::skin());
         let inside_bounds_left_of_selector = Pt {
-            x: BOUNDS.x,
-            y: BOUNDS.y + BOUNDS.h / 2.0,
+            x: consts::BOUNDS.x,
+            y: consts::BOUNDS.y + consts::BOUNDS.h / 2.0,
         };
 
         assert_eq!(
-            painter.hit_index(&data(Some(0)), BOUNDS, inside_bounds_left_of_selector),
+            painter.hit_index(
+                &data(Some(0)),
+                consts::BOUNDS,
+                inside_bounds_left_of_selector
+            ),
             None
         );
     }

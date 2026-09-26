@@ -2,12 +2,7 @@ use anyhow::Result;
 use tracing::info;
 
 use super::profile::LinuxHost;
-use crate::ci::process::Process;
-
-/// Address blocks a job has no business reaching. The machine's neighbours live
-/// on private addresses, and a CI job that can open a port on them is a CI job
-/// that can read a database it was never given.
-const PRIVATE_BLOCKS: [&str; 3] = ["172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"];
+use crate::{ci::process::Process, consts};
 
 /// Keep the runners' subnet away from the host and from its neighbours.
 ///
@@ -16,7 +11,7 @@ const PRIVATE_BLOCKS: [&str; 3] = ["172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/1
 /// should not be made to choose. Each rule is checked before it is added, so
 /// repeated starts do not stack duplicates.
 pub(super) fn apply(process: &Process, host: &LinuxHost) -> Result<()> {
-    for destination in PRIVATE_BLOCKS {
+    for destination in consts::PRIVATE_BLOCKS {
         ensure(
             process,
             &[

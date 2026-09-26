@@ -156,12 +156,11 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
-
-    const BLOCK_FRAMES: usize = 480;
+    use crate::consts;
 
     fn context() -> OutputContext {
         OutputContext::new(
-            SessionFrame::new(0)..SessionFrame::new(BLOCK_FRAMES as i64),
+            SessionFrame::new(0)..SessionFrame::new(consts::BLOCK_FRAMES as i64),
             NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero"),
             SessionEpoch::new(7),
             Some(TransportRevision::first()),
@@ -185,7 +184,7 @@ mod tests {
     #[kithara::test]
     fn derives_exact_output_subrange() {
         let second_half = context()
-            .for_output_range(BLOCK_FRAMES / 2..BLOCK_FRAMES)
+            .for_output_range(consts::BLOCK_FRAMES / 2..consts::BLOCK_FRAMES)
             .expect("invariant: second half is inside the block");
 
         assert_eq!(
@@ -203,7 +202,7 @@ mod tests {
     fn rejects_output_range_outside_the_block() {
         assert!(
             context()
-                .for_output_range(BLOCK_FRAMES..BLOCK_FRAMES + 1)
+                .for_output_range(consts::BLOCK_FRAMES..consts::BLOCK_FRAMES + 1)
                 .is_none()
         );
     }

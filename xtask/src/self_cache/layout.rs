@@ -9,17 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 
 use super::manifest::CacheManifest;
-
-pub(super) const BINARY: &str = if cfg!(windows) { "xtask.exe" } else { "xtask" };
-pub(super) const CACHE_DIRECTORY: &str = "xtask-cache";
-pub(super) const GENERATION_PREFIX: &str = "generation-";
-pub(super) const LEASE_FILE: &str = "lease.lock";
-pub(super) const LOCATOR_FILE: &str = "active";
-pub(super) const MANIFEST_FILE: &str = "manifest.json";
-pub(super) const REFRESH_LOCK: &str = "refresh.lock";
-pub(super) const STAMP_FILE: &str = "stamp";
-
-const CONTROL_FILE_LIMIT: usize = 16 * 1024;
+use crate::consts;
 
 #[derive(Debug)]
 pub(super) struct Generation {
@@ -52,7 +42,7 @@ pub(super) fn git_dir(root: &Path) -> Result<PathBuf> {
     let body = String::from_utf8(read_bounded(
         &dot_git,
         "Git directory file",
-        CONTROL_FILE_LIMIT,
+        consts::CONTROL_FILE_LIMIT,
     )?)
     .context("Git directory file is not UTF-8")?;
     let mut lines = body.lines();
@@ -72,7 +62,7 @@ pub(super) fn git_dir(root: &Path) -> Result<PathBuf> {
 }
 
 pub(super) fn cache_dir(root: &Path) -> Result<PathBuf> {
-    Ok(git_dir(root)?.join(CACHE_DIRECTORY))
+    Ok(git_dir(root)?.join(consts::CACHE_DIRECTORY))
 }
 
 pub(super) fn target_dir(root: &Path) -> PathBuf {
@@ -93,7 +83,7 @@ pub(super) fn target_dir(root: &Path) -> PathBuf {
 ///
 /// Returns an error if the Git directory cannot be resolved.
 pub(super) fn locator(root: &Path) -> Result<PathBuf> {
-    Ok(cache_dir(root)?.join(LOCATOR_FILE))
+    Ok(cache_dir(root)?.join(consts::LOCATOR_FILE))
 }
 
 pub(super) fn active(root: &Path) -> Result<Generation> {
@@ -102,7 +92,11 @@ pub(super) fn active(root: &Path) -> Result<Generation> {
 }
 
 pub(super) fn locator_snapshot(root: &Path) -> Result<Option<Vec<u8>>> {
-    match read_bounded(&locator(root)?, "self-cache locator", CONTROL_FILE_LIMIT) {
+    match read_bounded(
+        &locator(root)?,
+        "self-cache locator",
+        consts::CONTROL_FILE_LIMIT,
+    ) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error)
             if error
@@ -121,7 +115,9 @@ pub(super) fn current() -> Result<Option<Generation>> {
     let Some(generation) = executable.parent() else {
         return Ok(None);
     };
-    if !generation.join(MANIFEST_FILE).is_file() || !generation.join(LEASE_FILE).is_file() {
+    if !generation.join(consts::MANIFEST_FILE).is_file()
+        || !generation.join(consts::LEASE_FILE).is_file()
+    {
         return Ok(None);
     }
     let root = root()?;
@@ -160,18 +156,18 @@ pub(super) fn load(root: &Path, path: &Path) -> Result<Generation> {
         .and_then(|value| value.to_str())
         .context("self-cache generation has an invalid name")?;
     ensure!(
-        name.starts_with(GENERATION_PREFIX),
+        name.starts_with(consts::GENERATION_PREFIX),
         "self-cache generation has an invalid name"
     );
 
-    let manifest = CacheManifest::read(&path.join(MANIFEST_FILE))?;
+    let manifest = CacheManifest::read(&path.join(consts::MANIFEST_FILE))?;
     manifest.validate(root, &expected_cache)?;
-    let stamp = read_line(&path.join(STAMP_FILE), "self-cache stamp")?;
+    let stamp = read_line(&path.join(consts::STAMP_FILE), "self-cache stamp")?;
     ensure!(
         stamp == manifest.source_stamp,
         "self-cache stamp does not match its manifest"
     );
-    let binary = path.join(BINARY);
+    let binary = path.join(consts::BINARY);
     let binary_metadata = fs::symlink_metadata(&binary)
         .with_context(|| format!("read self-cache binary {}", binary.display()))?;
     ensure!(
@@ -183,8 +179,8 @@ pub(super) fn load(root: &Path, path: &Path) -> Result<Generation> {
         binary_metadata.permissions().mode() & 0o111 != 0,
         "self-cache binary is not executable"
     );
-    let lease =
-        fs::symlink_metadata(path.join(LEASE_FILE)).context("read self-cache lease file")?;
+    let lease = fs::symlink_metadata(path.join(consts::LEASE_FILE))
+        .context("read self-cache lease file")?;
     ensure!(
         lease.file_type().is_file(),
         "self-cache lease is not a regular file"
@@ -210,7 +206,7 @@ pub(super) fn validate_relative(path: &Path, label: &str) -> Result<()> {
 }
 
 pub(super) fn read_line(path: &Path, label: &str) -> Result<String> {
-    let bytes = read_bounded(path, label, CONTROL_FILE_LIMIT)?;
+    let bytes = read_bounded(path, label, consts::CONTROL_FILE_LIMIT)?;
     let body = String::from_utf8(bytes)
         .with_context(|| format!("{label} is not UTF-8: {}", path.display()))?;
     let value = body

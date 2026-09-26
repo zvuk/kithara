@@ -25,24 +25,13 @@ use super::{
 use crate::{
     AnalysisProgress, BeatAnalysisConfig, BeatSnapshot, BeatState, TrackAnalysis,
     beat::GridParams,
+    consts,
     slots::beat::detect,
     test_pools::{Pools, TestPools, pools},
 };
 
-struct Consts;
-
-impl Consts {
-    const BUCKETS: usize = 64;
-    const CHUNK_FRAMES: u64 = 200;
-    const CHUNK_SECONDS: u32 = 16;
-    const HOG_FRAMES: usize = 8192;
-    const PATIENCE: u32 = 16;
-    const RATE: u32 = 1000;
-    const TICK_LIMIT: u64 = 1 << 20;
-}
-
 fn rate() -> NonZeroU32 {
-    NonZeroU32::new(Consts::RATE).expect("the test rate is non-zero")
+    NonZeroU32::new(consts::HOLD_RATE).expect("the test rate is non-zero")
 }
 
 fn spec() -> AudioSpec {
@@ -55,18 +44,18 @@ struct Livelock {
 
 fn builder(pools: Pools) -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
     AnalyzerBuilder::<NoResamplerBackend, _>::new(pools)
-        .with_waveform(Consts::BUCKETS)
+        .with_waveform(consts::HOLD_BUCKETS)
         .with_beat_config(
             BeatAnalysisConfig::builder()
                 .resampler_backend(NoResamplerBackend)
-                .target_rate(Consts::RATE)
+                .target_rate(consts::HOLD_RATE)
                 .build(),
         )
         .with_beat_detector(beat_detector(), GridParams::default())
 }
 
 fn chunk_seconds() -> NonZeroU32 {
-    NonZeroU32::new(Consts::CHUNK_SECONDS).expect("non-zero")
+    NonZeroU32::new(consts::HOLD_CHUNK_SECONDS).expect("non-zero")
 }
 
 fn read_whole(track: Track) -> Result<TrackAnalysis, Livelock> {
@@ -122,7 +111,7 @@ fn run(
             }
         }
         ticks += 1;
-        assert!(ticks < Consts::TICK_LIMIT, "the pass reads without end");
+        assert!(ticks < consts::TICK_LIMIT, "the pass reads without end");
         let result = task.tick(&builder, None);
         if matches!(results.has_changed(), Ok(true))
             && results
@@ -144,7 +133,7 @@ fn run(
                     waited = 0;
                 } else {
                     waited += 1;
-                    if waited > Consts::PATIENCE {
+                    if waited > consts::PATIENCE {
                         return Err(Livelock { ticks });
                     }
                 }
@@ -160,7 +149,7 @@ fn run(
 }
 
 fn exhaust(pools: &Pools, hog: &mut Vec<SampleBuffer>) {
-    while let Ok(buffer) = pools.get_with_len::<f32>(Consts::HOG_FRAMES) {
+    while let Ok(buffer) = pools.get_with_len::<f32>(consts::HOG_FRAMES) {
         hog.push(buffer);
     }
     hog.pop();
@@ -178,7 +167,7 @@ fn a_track_the_reader_outruns_the_detector_on_reaches_its_end(analysis_silence: 
         &analysis_silence,
         pools(),
         spec(),
-        Consts::CHUNK_FRAMES,
+        consts::HOLD_CHUNK_FRAMES,
         266.06,
     ))
     .unwrap_or_else(|Livelock { ticks }| {
@@ -202,7 +191,7 @@ fn a_gap_at_the_start_is_taken_rather_than_declared_covered(analysis_silence: Ve
         &analysis_silence,
         pools(),
         spec(),
-        Consts::CHUNK_FRAMES,
+        consts::HOLD_CHUNK_FRAMES,
         407.2,
     ))
     .unwrap_or_else(|Livelock { ticks }| {
@@ -223,7 +212,7 @@ fn a_pass_that_cannot_feed_its_detector_reads_on(analysis_silence: Vec<f32>) {
         &analysis_silence,
         pools.clone(),
         spec(),
-        Consts::CHUNK_FRAMES,
+        consts::HOLD_CHUNK_FRAMES,
         330.0,
     );
     let mut hog = Vec::new();
@@ -248,7 +237,7 @@ fn a_source_that_ends_before_its_claimed_length_is_complete(analysis_silence: Ve
         &analysis_silence,
         pools(),
         spec(),
-        Consts::CHUNK_FRAMES,
+        consts::HOLD_CHUNK_FRAMES,
         40.0,
         40.5,
     );
@@ -280,7 +269,7 @@ fn claiming(analysis_silence: &[f32], pools: Pools) -> Track {
         &analysis_silence,
         pools,
         spec(),
-        Consts::CHUNK_FRAMES,
+        consts::HOLD_CHUNK_FRAMES,
         40.0,
         40.5,
     )
@@ -340,7 +329,7 @@ fn a_source_that_cannot_deliver_its_head_is_settled_with_a_final_grid(analysis_s
         &analysis_silence,
         pools(),
         spec(),
-        Consts::CHUNK_FRAMES,
+        consts::HOLD_CHUNK_FRAMES,
         40.0,
         PRIMING,
     ))

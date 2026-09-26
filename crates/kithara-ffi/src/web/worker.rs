@@ -28,14 +28,14 @@ use crate::{
     web::{analysis::AnalysisRuns, commands::WorkerCmd, key_processor_bridge},
 };
 
-struct Consts;
+mod consts {
+    use super::NonZeroUsize;
 
-impl Consts {
     /// Capacity for concurrent playback and crossfade HLS working sets.
-    const ASSET_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(128).unwrap();
+    pub(super) const ASSET_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(128).unwrap();
     /// Bound cached media while leaving wasm linear-memory headroom for decode
     /// and PCM buffers.
-    const ASSET_CACHE_MAX_BYTES: u64 = 128 * 1024 * 1024;
+    pub(super) const ASSET_CACHE_MAX_BYTES: u64 = 128 * 1024 * 1024;
 }
 
 /// Player-wide DRM + network state owned by the engine Worker, parallel to
@@ -55,8 +55,8 @@ impl BuildState {
     fn new(pools: Pools) -> Self {
         let store = FfiStore::builder(pools.clone())
             .backend(StorageBackend::Memory)
-            .cache_capacity(Consts::ASSET_CACHE_CAPACITY)
-            .max_bytes(Consts::ASSET_CACHE_MAX_BYTES)
+            .cache_capacity(consts::ASSET_CACHE_CAPACITY)
+            .max_bytes(consts::ASSET_CACHE_MAX_BYTES)
             .build();
         let worker = FfiWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         Self {
@@ -467,8 +467,8 @@ mod tests {
 
         assert_eq!(
             state.store.ephemeral_cache_capacity(),
-            Some(Consts::ASSET_CACHE_CAPACITY)
+            Some(consts::ASSET_CACHE_CAPACITY)
         );
-        assert_eq!(Consts::ASSET_CACHE_MAX_BYTES, 128 * 1024 * 1024);
+        assert_eq!(consts::ASSET_CACHE_MAX_BYTES, 128 * 1024 * 1024);
     }
 }

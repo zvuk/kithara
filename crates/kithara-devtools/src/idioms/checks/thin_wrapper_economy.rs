@@ -26,7 +26,9 @@ use crate::common::{
     walker::relative_to,
 };
 
-pub(crate) const ID: &str = "thin_wrapper_economy";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "thin_wrapper_economy";
+}
 
 type SymbolKey = (String, String);
 
@@ -34,7 +36,7 @@ pub(crate) struct ThinWrapperEconomy;
 
 impl Check for ThinWrapperEconomy {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -136,7 +138,7 @@ impl Finding {
             format!("; exact metric unavailable: {reason}")
         });
         Some(Violation::warn(
-            ID,
+            consts::ID,
             key,
             format!(
                 "thin wrapper `{}`: {economy}, threshold={threshold}{uncertainty}",

@@ -1,9 +1,8 @@
 use super::{decision::deny_reason_for_bash, shell::shell_tokens};
-
-const OVERRIDE_ENV: &str = "KITHARA_AGENT_ALLOW_DESTRUCTIVE_GIT";
+use crate::consts;
 
 fn denied(command: &str) -> bool {
-    deny_reason_for_bash(command, false, OVERRIDE_ENV).is_some()
+    deny_reason_for_bash(command, false, consts::OVERRIDE_ENV).is_some()
 }
 
 #[test]
@@ -76,7 +75,7 @@ fn denies_destructive_git_through_rtk() {
 #[test]
 fn denies_timed_full_harness_through_rtk() {
     assert!(denied("timeout 60s rtk cargo xtask test"));
-    assert!(deny_reason_for_bash("rtk just test", true, OVERRIDE_ENV).is_some());
+    assert!(deny_reason_for_bash("rtk just test", true, consts::OVERRIDE_ENV).is_some());
 }
 
 #[test]
@@ -125,7 +124,7 @@ fn denies_timeout_around_full_harness() {
     assert!(denied(
         "timeout --kill-after=5s 120s cargo xtask test --lane workspace"
     ));
-    assert!(deny_reason_for_bash("just test", true, OVERRIDE_ENV).is_some());
+    assert!(deny_reason_for_bash("just test", true, consts::OVERRIDE_ENV).is_some());
 }
 
 #[test]

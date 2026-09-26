@@ -22,9 +22,7 @@ use kithara_stream::{AudioCodec, MediaInfo, WorkerWake};
 use url::Url;
 
 use super::segments::FileSegmentIndex;
-use crate::{FileError, FileEvent, TotalBytesSource, coord::FileCoord};
-
-const CODEC_SNIFF_BYTES: usize = 16;
+use crate::{FileError, FileEvent, TotalBytesSource, consts, coord::FileCoord};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileTerminalState {
@@ -355,7 +353,7 @@ pub(crate) fn sniff_codec<S>(reader: &AssetReader<S>) -> Option<AudioCodec>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    let mut buf = [0u8; CODEC_SNIFF_BYTES];
+    let mut buf = [0u8; consts::CODEC_SNIFF_BYTES];
     let read = reader.read_at(0, &mut buf).ok()?;
     AudioCodec::try_from(&buf[..read]).ok()
 }

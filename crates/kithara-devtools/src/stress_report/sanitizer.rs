@@ -10,10 +10,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::evidence::{backtrace_signature, strip_ansi};
-use crate::common::project::{StressEvidenceConfig, StressRenderBudgets};
-
-/// Written to the lane log before each attempt so findings can be attributed.
-pub(crate) const ATTEMPT_MARKER: &str = "[kithara_stress] attempt ";
+use crate::{
+    common::project::{StressEvidenceConfig, StressRenderBudgets},
+    consts,
+};
 
 /// Every distinct finding, and the attempts it appeared in.
 pub(crate) type Findings = BTreeMap<String, BTreeSet<usize>>;
@@ -135,7 +135,11 @@ fn error_kind(line: &str) -> Option<String> {
 }
 
 fn attempt_index(line: &str) -> Option<usize> {
-    line.split_once(ATTEMPT_MARKER)?.1.trim().parse().ok()
+    line.split_once(consts::ATTEMPT_MARKER)?
+        .1
+        .trim()
+        .parse()
+        .ok()
 }
 
 fn quoted(line: &str) -> Option<String> {
@@ -148,30 +152,17 @@ fn quoted(line: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    const UNSAFE_CALL: &str = "\
-==2534==ERROR: RealtimeSanitizer: unsafe-library-call
-Intercepted call to real-time unsafe function `malloc` in real-time context!
-    #0 0x5628d3a1b2c0 in malloc (/opt/bin/suite_light+0x1042c0)
-    #1 0x5628d3b0e1a4 in alloc::alloc::alloc /rustc/abc/library/alloc/src/alloc.rs:100:9
-    #2 0x5628d3c11f30 in kithara_audio::renderer::mix crates/kithara-audio/src/renderer/mix.rs:214:23
-
-test kithara_play::rt_metrics::a_healthy_track_reports_no_trouble ... ok
-";
-
-    const BLOCKING_CALL: &str = "\
-==2534==ERROR: RealtimeSanitizer: blocking-call
-Call to blocking function `pthread_mutex_lock` in real-time context!
-    #0 0x5628d3a1b2c0 in pthread_mutex_lock (/opt/bin/suite_light+0x1042c0)
-    #1 0x5628d3c11f30 in kithara_audio::renderer::slot crates/kithara-audio/src/renderer/slot.rs:88:9
-";
-
     fn evidence() -> StressEvidenceConfig {
         StressEvidenceConfig::default()
     }
 
     #[test]
     fn a_finding_names_the_violated_contract_the_call_and_where_it_came_from() {
-        let found = findings(UNSAFE_CALL, &evidence(), &StressRenderBudgets::default());
+        let found = findings(
+            consts::UNSAFE_CALL,
+            &evidence(),
+            &StressRenderBudgets::default(),
+        );
 
         let (signature, attempts) = found.iter().next().expect("one finding");
         assert!(signature.contains("RealtimeSanitizer: unsafe-library-call"));
@@ -185,7 +176,11 @@ Call to blocking function `pthread_mutex_lock` in real-time context!
     /// would leave a one-in-fifty violation looking the same as a certain one.
     #[test]
     fn the_same_violation_on_two_attempts_is_one_finding_with_both_attempts() {
-        let log = format!("{ATTEMPT_MARKER}0\n{UNSAFE_CALL}\n{ATTEMPT_MARKER}3\n{UNSAFE_CALL}");
+        let log = format!(
+            "{ATTEMPT_MARKER}0\n{UNSAFE_CALL}\n{ATTEMPT_MARKER}3\n{UNSAFE_CALL}",
+            ATTEMPT_MARKER = consts::ATTEMPT_MARKER,
+            UNSAFE_CALL = consts::UNSAFE_CALL
+        );
 
         let found = findings(&log, &evidence(), &StressRenderBudgets::default());
 
@@ -198,7 +193,11 @@ Call to blocking function `pthread_mutex_lock` in real-time context!
 
     #[test]
     fn two_different_violations_stay_apart() {
-        let log = format!("{UNSAFE_CALL}\n{BLOCKING_CALL}");
+        let log = format!(
+            "{UNSAFE_CALL}\n{BLOCKING_CALL}",
+            BLOCKING_CALL = consts::BLOCKING_CALL,
+            UNSAFE_CALL = consts::UNSAFE_CALL
+        );
 
         let found = findings(&log, &evidence(), &StressRenderBudgets::default());
 
@@ -209,7 +208,11 @@ Call to blocking function `pthread_mutex_lock` in real-time context!
     /// attribute the next test's source locations to this violation.
     #[test]
     fn output_after_the_report_does_not_join_the_finding() {
-        let found = findings(UNSAFE_CALL, &evidence(), &StressRenderBudgets::default());
+        let found = findings(
+            consts::UNSAFE_CALL,
+            &evidence(),
+            &StressRenderBudgets::default(),
+        );
 
         let signature = found.keys().next().expect("one finding");
         assert!(!signature.contains("rt_metrics"), "{signature}");

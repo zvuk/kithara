@@ -12,17 +12,7 @@ use kithara_net::{Headers, NetOptions};
 use kithara_platform::CancelToken;
 use url::Url;
 
-/// Enough rounds for an obstruction another task is already clearing to
-/// disappear, few enough that a standing one reaches the reader instead of
-/// parking it.
-pub(crate) const DEFAULT_ACQUIRE_ATTEMPT_BUDGET: u8 = 3;
-pub(crate) const DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW: usize = 60;
-pub(crate) const DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW: usize = 3;
-pub(crate) const DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE: usize = 4;
-pub(crate) const DEFAULT_DOWNLOAD_BATCH_SIZE: usize = 3;
-/// Production HLS streams need a downloader backpressure cap so an idle reader
-/// does not drain the whole playlist into cache.
-pub(crate) const DEFAULT_LOOK_AHEAD_BYTES: u64 = 2 * 1024 * 1024;
+use crate::consts;
 
 /// Encryption key handling configuration.
 ///
@@ -147,29 +137,29 @@ where
     /// poll, so this counts dispatch rounds, not wall-clock time. A tmp held
     /// by a live sibling writer is exempt — that holder always settles and
     /// releases, so its retry resolves on its own.
-    #[builder(default = DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
+    #[builder(default = consts::DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
     pub acquire_attempt_budget: u8,
     /// Max segments to download per step. Three keep the fetcher busy across
     /// one round-trip without planning further ahead than a look-ahead cap
     /// would allow anyway.
-    #[builder(default = DEFAULT_DOWNLOAD_BATCH_SIZE)]
+    #[builder(default = consts::DEFAULT_DOWNLOAD_BATCH_SIZE)]
     pub download_batch_size: usize,
     /// Maximum media-segment prefetch window for ephemeral HLS stores.
     /// The effective maximum is never lower than
     /// [`Self::ephemeral_cache_min_media_window`]. Sized for a shared
     /// 128-entry cache: two concurrent streams each retain 60 media and four
     /// non-media entries.
-    #[builder(default = DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW)]
+    #[builder(default = consts::DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW)]
     #[debug(skip)]
     pub ephemeral_cache_max_media_window: usize,
     /// Minimum media-segment prefetch window for ephemeral HLS stores after
     /// applying [`Self::ephemeral_cache_non_media_reserve`].
-    #[builder(default = DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW)]
+    #[builder(default = consts::DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW)]
     #[debug(skip)]
     pub ephemeral_cache_min_media_window: usize,
     /// Number of non-media HLS cache entries reserved when deriving the
     /// ephemeral media prefetch window from the store cache capacity.
-    #[builder(default = DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE)]
+    #[builder(default = consts::DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE)]
     #[debug(skip)]
     pub ephemeral_cache_non_media_reserve: usize,
     /// Capacity of the event bus channel (used when `bus` is not provided).

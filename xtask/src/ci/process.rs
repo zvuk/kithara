@@ -473,8 +473,7 @@ fn output_text(output: Output, label: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const FIXTURE_FAILURE_EXIT_CODE: i32 = 7;
+    use crate::consts;
 
     fn fixture_ensure(
         process: &Process,
@@ -545,7 +544,7 @@ mod tests {
         };
 
         fixture_ensure(&process, script, |output| {
-            output.status.code() == Some(FIXTURE_FAILURE_EXIT_CODE)
+            output.status.code() == Some(consts::FIXTURE_FAILURE_EXIT_CODE)
         })
         .unwrap();
     }

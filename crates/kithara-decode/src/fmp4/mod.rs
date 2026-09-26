@@ -14,7 +14,7 @@ pub(crate) mod demuxer;
 pub(crate) mod parsing;
 pub(crate) mod source_io;
 
-pub(crate) use demuxer::{Fmp4SegmentDemuxer, REQUIRED_INPUT};
+pub(crate) use demuxer::Fmp4SegmentDemuxer;
 
 #[cfg(test)]
 #[cfg(all(

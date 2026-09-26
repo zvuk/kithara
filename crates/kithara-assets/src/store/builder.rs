@@ -22,6 +22,7 @@ use crate::backend::{DiskAssetDeleter, DiskAssetStore, indexed_path};
 use crate::decorator::ByteRecorder;
 use crate::{
     backend::{AssetDeleter, MemAssetDeleter, MemAssetStore, MemStoreSetup},
+    consts,
     decorator::{
         CachedAssets, EvictAssets, EvictDeps, EvictionEvents, EvictionRouter, LeaseAssets,
         LeaseEvents, ProcessingAssets,
@@ -32,13 +33,6 @@ use crate::{
     },
     layout::{AssetLayoutRegistry, ResourceKey},
 };
-
-/// Private module-level defaults, grouped per ast-grep style rule.
-struct Consts;
-impl Consts {
-    /// Default in-memory LRU cache capacity (init + 2-3 media segments).
-    const DEFAULT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(5).unwrap();
-}
 
 /// Storage backend selection: where committed resource bytes live.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -281,7 +275,7 @@ where
                 pins: pins.clone(),
             },
         ));
-        let capacity = cache_capacity.unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
+        let capacity = cache_capacity.unwrap_or(consts::DEFAULT_CACHE_CAPACITY);
         let processing_assets = Arc::new(ProcessingAssets::new(
             Arc::clone(&evict),
             pools,
@@ -410,7 +404,7 @@ where
         processing_chunk_size,
         processing_gate_poll_interval,
     ));
-    let capacity = cache_capacity.unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
+    let capacity = cache_capacity.unwrap_or(consts::DEFAULT_CACHE_CAPACITY);
     let cached = Arc::new(CachedAssets::new(processing_assets, capacity, None, false));
     let byte_recorder: Option<Arc<dyn ByteRecorder>> =
         Some(Arc::clone(&evict) as Arc<dyn ByteRecorder>);
@@ -488,8 +482,6 @@ mod tests {
         resource::{AcquisitionResult, ReadSide, WriteSide},
     };
 
-    const ROOT: &str = "test_asset";
-
     type TestAssetWriter = AssetWriter<crate::test_pools::TestPools>;
     type TestResourceAcquisition = ResourceAcquisition<crate::test_pools::TestPools>;
 
@@ -524,7 +516,7 @@ mod tests {
             .backend(StorageBackend::Memory)
             .event_bus(bus)
             .build();
-        let key = ResourceKey::relative(ROOT, "seg.m4s");
+        let key = ResourceKey::relative(consts::BUILDER_ROOT, "seg.m4s");
 
         write_commit(store.acquire_resource(&key, None).unwrap(), b"data");
 
@@ -535,7 +527,7 @@ mod tests {
                 asset_root,
                 rel_path,
                 final_len: Some(4),
-            } if asset_root == ROOT && rel_path == "seg.m4s"
+            } if asset_root == consts::BUILDER_ROOT && rel_path == "seg.m4s"
         )));
     }
 
@@ -552,7 +544,7 @@ mod tests {
                 root: dir.path().into(),
             })
             .build();
-        let key = ResourceKey::relative(ROOT, "seg.m4s");
+        let key = ResourceKey::relative(consts::BUILDER_ROOT, "seg.m4s");
 
         let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
             panic!("expected a Pending writer");
@@ -582,7 +574,7 @@ mod tests {
             .backend(StorageBackend::Memory)
             .event_bus(bus)
             .build();
-        let key = ResourceKey::relative(ROOT, "seg.m4s");
+        let key = ResourceKey::relative(consts::BUILDER_ROOT, "seg.m4s");
         let writer = pending(store.acquire_resource(&key, None).unwrap());
 
         writer.fail("fixture failure".to_string());
@@ -594,7 +586,7 @@ mod tests {
                 asset_root,
                 rel_path,
                 reason,
-            } if asset_root == ROOT && rel_path == "seg.m4s" && reason == "fixture failure"
+            } if asset_root == consts::BUILDER_ROOT && rel_path == "seg.m4s" && reason == "fixture failure"
         )));
     }
 
@@ -702,7 +694,7 @@ mod tests {
             })
             .build();
 
-        let key = ResourceKey::relative(ROOT, "test.bin");
+        let key = ResourceKey::relative(consts::BUILDER_ROOT, "test.bin");
         let writer = pending(store.acquire_resource(&key, None).unwrap());
         writer.write_at(0, b"hello").unwrap();
 
@@ -739,7 +731,7 @@ mod tests {
             .backend(StorageBackend::Memory)
             .build();
 
-        let key = ResourceKey::relative(ROOT, "seg.m4s");
+        let key = ResourceKey::relative(consts::BUILDER_ROOT, "seg.m4s");
         write_commit(store.acquire_resource(&key, None).unwrap(), b"data");
 
         let reader = store.open_resource(&key, None).unwrap();
@@ -751,7 +743,7 @@ mod tests {
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn disk_backend_persists_across_store_reopen() {
         let dir = tempdir().unwrap();
-        let key = ResourceKey::relative(ROOT, "seg.m4s");
+        let key = ResourceKey::relative(consts::BUILDER_ROOT, "seg.m4s");
 
         {
             let store = AssetStore::builder(crate::test_pools::pools())
@@ -808,7 +800,7 @@ mod tests {
             .build();
 
         let keys: Vec<ResourceKey> = (0..4)
-            .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
+            .map(|i| ResourceKey::relative(consts::BUILDER_ROOT, format!("seg_{i}.m4s")))
             .collect();
 
         for key in &keys {
@@ -831,7 +823,7 @@ mod tests {
             .build();
 
         let keys: Vec<ResourceKey> = (0..4)
-            .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
+            .map(|i| ResourceKey::relative(consts::BUILDER_ROOT, format!("seg_{i}.m4s")))
             .collect();
 
         for key in &keys {
@@ -852,7 +844,7 @@ mod tests {
             .backend(StorageBackend::Memory)
             .build();
         let keys: Vec<ResourceKey> = (0..3)
-            .map(|i| ResourceKey::relative(ROOT, format!("track_{i}.mp3")))
+            .map(|i| ResourceKey::relative(consts::BUILDER_ROOT, format!("track_{i}.mp3")))
             .collect();
 
         for key in &keys {
@@ -874,7 +866,7 @@ mod tests {
             .max_bytes(4)
             .backend(StorageBackend::Memory)
             .build();
-        let key = ResourceKey::relative(ROOT, "oversized.mp3");
+        let key = ResourceKey::relative(consts::BUILDER_ROOT, "oversized.mp3");
 
         write_commit(backend.acquire_resource(&key, None).unwrap(), b"12345678");
 
@@ -1117,7 +1109,7 @@ mod tests {
             .build();
 
         let keys: Vec<ResourceKey> = (0..2)
-            .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
+            .map(|i| ResourceKey::relative(consts::BUILDER_ROOT, format!("seg_{i}.m4s")))
             .collect();
         for key in &keys {
             write_commit(store.acquire_resource(key, None).unwrap(), b"data");

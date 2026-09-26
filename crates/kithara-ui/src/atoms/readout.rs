@@ -90,12 +90,16 @@ mod tests {
     use super::{DrawListBuilder, Readout, ReadoutData, Rect, TextContext, Tone};
     use crate::{builtin, draw::DrawCmd};
 
-    const BOUNDS: Rect = Rect {
-        h: 40.0,
-        w: 90.0,
-        x: 2.0,
-        y: 3.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOUNDS: Rect = Rect {
+            h: 40.0,
+            w: 90.0,
+            x: 2.0,
+            y: 3.0,
+        };
+    }
 
     fn data() -> ReadoutData {
         ReadoutData {
@@ -108,7 +112,7 @@ mod tests {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources());
         let mut list = DrawListBuilder::default();
-        Readout::new(tone, framed, skin).paint(&mut list, &mut text, &data(), BOUNDS);
+        Readout::new(tone, framed, skin).paint(&mut list, &mut text, &data(), consts::BOUNDS);
         list.finish()
     }
 

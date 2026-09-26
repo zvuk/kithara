@@ -31,3 +31,4 @@ pub use event::{CancelReason, DownloaderEvent, RequestId, RequestMethod, Request
 use humantime_serde as _;
 pub use peer::{Peer, PeerHandle};
 pub use response::{BodyStream, FetchResponse};
+mod consts;

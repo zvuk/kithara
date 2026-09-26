@@ -1,3 +1,12 @@
+pub(crate) mod consts {
+    use super::*;
+
+    #[cfg(feature = "beat-nn")]
+    pub(crate) const SELECTED_DETECTOR: BeatDetectorKind = BeatDetectorKind::NnBeatThis;
+
+    #[cfg(all(not(feature = "beat-nn"), feature = "beat-dsp"))]
+    pub(crate) const SELECTED_DETECTOR: BeatDetectorKind = BeatDetectorKind::DspSpectral;
+}
 #[cfg(not(any(feature = "beat-nn", feature = "beat-dsp")))]
 compile_error!("the beat backend needs a detector: beat-nn or beat-dsp");
 
@@ -21,11 +30,6 @@ pub(crate) enum BeatDetectorKind {
     #[cfg(feature = "beat-dsp")]
     DspSpectral,
 }
-
-#[cfg(feature = "beat-nn")]
-pub(crate) const SELECTED_DETECTOR: BeatDetectorKind = BeatDetectorKind::NnBeatThis;
-#[cfg(all(not(feature = "beat-nn"), feature = "beat-dsp"))]
-pub(crate) const SELECTED_DETECTOR: BeatDetectorKind = BeatDetectorKind::DspSpectral;
 
 impl BeatDetectorKind {
     pub(crate) const fn model_tag(self) -> &'static str {

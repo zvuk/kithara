@@ -32,7 +32,7 @@
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
-use crate::{capture::Shot, fixture::Consts};
+use crate::{capture::Shot, fixture::consts};
 
 /// What is done to a page between one picture and the next.
 #[derive(Clone, Copy, Debug)]
@@ -51,7 +51,7 @@ impl Between {
 
     /// How far the clock moves in total.
     fn elapsed(self) -> Duration {
-        Duration::from_millis(Consts::STRESS_TICK_MS) * whole(self.ticks())
+        Duration::from_millis(consts::STRESS_TICK_MS) * whole(self.ticks())
     }
 
     /// How many of the gallery's frames pass.
@@ -150,7 +150,7 @@ const fn hosts() -> &'static [Host] {
 /// one pixel to the point, so a pixel that differs is something drawn
 /// differently rather than something sampled differently.
 fn physical() -> (u32, u32) {
-    (whole_f32(Consts::WIDTH), whole_f32(Consts::HEIGHT))
+    (whole_f32(consts::WIDTH), whole_f32(consts::HEIGHT))
 }
 
 fn whole(value: usize) -> u32 {
@@ -312,7 +312,7 @@ mod retained {
     use super::{Between, Picture, Shot, physical};
     use crate::{
         custom, demo,
-        fixture::{Consts, resolver},
+        fixture::{consts, resolver},
         host::{self, Gallery},
     };
 
@@ -366,7 +366,7 @@ mod retained {
     /// all, and a moving one is stepped at the rate the window tells the pass.
     fn run(ui: &mut Ui<Gallery>, between: Between) {
         for _ in 0..between.ticks() {
-            ui.frame(Duration::from_millis(Consts::STRESS_TICK_MS));
+            ui.frame(Duration::from_millis(consts::STRESS_TICK_MS));
         }
     }
 }

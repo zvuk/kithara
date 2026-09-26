@@ -6,20 +6,13 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 use super::runners::{RunnerManager, path_text, require_macos};
-use crate::ci::config::{LANE_CONFIG_DIR, MAC_CONFIG_PATH};
-
-/// Where the guest reaches the shared directories.
-///
-/// virtiofs auto-mounts them under `/Volumes/My Shared Files`, and GNU make
-/// cannot represent a path containing spaces at all — space is its separator
-/// between targets, with no escape. `xcrun` resolves symlinks before handing
-/// the toolchain path to cmake, cmake writes it into the generated Makefile,
-/// and make then reports `/Volumes/My: No such file or directory`. Only a real
-/// mount elsewhere fixes it, so the guest moves the share here on startup.
-pub(super) const GUEST_SHARE: &str = "/opt/kithara";
+use crate::consts;
 
 pub(super) fn guest_developer_dir() -> String {
-    format!("{GUEST_SHARE}/Xcode.app/Contents/Developer")
+    format!(
+        "{GUEST_SHARE}/Xcode.app/Contents/Developer",
+        GUEST_SHARE = consts::GUEST_SHARE
+    )
 }
 
 impl RunnerManager<'_> {
@@ -28,7 +21,7 @@ impl RunnerManager<'_> {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .context("guest HOME is not set")?;
-        let shared = Path::new(GUEST_SHARE);
+        let shared = Path::new(consts::GUEST_SHARE);
         for (name, source) in [
             (".cargo", shared.join("kithara-cargo")),
             (".rustup", shared.join("kithara-rustup")),
@@ -51,7 +44,10 @@ impl RunnerManager<'_> {
             &[
                 "ln",
                 "-sfn",
-                &format!("{GUEST_SHARE}/kithara-brew"),
+                &format!(
+                    "{GUEST_SHARE}/kithara-brew",
+                    GUEST_SHARE = consts::GUEST_SHARE
+                ),
                 path_text(brew)?,
             ],
             "link guest Homebrew prefix",
@@ -131,7 +127,7 @@ impl RunnerManager<'_> {
             "install guest xcodegen",
         )?;
         sudo(
-            &["install", "-d", "-m", "0755", LANE_CONFIG_DIR],
+            &["install", "-d", "-m", "0755", consts::LANE_CONFIG_DIR],
             "create guest lane configuration directory",
         )?;
         sudo(
@@ -140,7 +136,7 @@ impl RunnerManager<'_> {
                 "-m",
                 "0644",
                 path_text(&shared.join("kithara-tools/mac-host.toml"))?,
-                MAC_CONFIG_PATH,
+                consts::MAC_CONFIG_PATH,
             ],
             "install guest host profile",
         )?;

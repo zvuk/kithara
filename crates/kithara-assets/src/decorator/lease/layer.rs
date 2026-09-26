@@ -311,9 +311,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{backend::DiskAssetStore, layout::ResourceKey, resource::WriteSide};
-
-    const ROOT: &str = "test_asset";
+    use crate::{backend::DiskAssetStore, consts, layout::ResourceKey, resource::WriteSide};
 
     fn make_pins_disk(dir: &Path) -> PinsIndex {
         let pools = crate::test_pools::pools();
@@ -358,7 +356,7 @@ mod tests {
     fn reading_a_committed_resource_does_not_write_the_pins_index() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease(dir.path());
-        let key = ResourceKey::relative(ROOT, "audio.mp3");
+        let key = ResourceKey::relative(consts::LAYER_ROOT, "audio.mp3");
         commit_resource(&lease, &key, b"data");
 
         let path = dir.path().join("_index").join("pins.bin");
@@ -380,13 +378,13 @@ mod tests {
     fn reader_lease_still_guards_the_asset_against_eviction() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease(dir.path());
-        let key = ResourceKey::relative(ROOT, "audio.mp3");
+        let key = ResourceKey::relative(consts::LAYER_ROOT, "audio.mp3");
         commit_resource(&lease, &key, b"data");
 
         let _reader = lease.open_resource(&key, None).unwrap();
 
         assert!(
-            lease.pins.snapshot().contains(ROOT),
+            lease.pins.snapshot().contains(consts::LAYER_ROOT),
             "a live reader must keep its asset root pinned in memory"
         );
     }
@@ -395,13 +393,13 @@ mod tests {
     fn pin_persists_immediately() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease(dir.path());
-        let key = ResourceKey::relative(ROOT, "audio.mp3");
+        let key = ResourceKey::relative(consts::LAYER_ROOT, "audio.mp3");
 
         let _res = lease.acquire_resource(&key, None).unwrap();
 
         let on_disk = load_persisted_pins(dir.path());
         assert!(
-            on_disk.contains(ROOT),
+            on_disk.contains(consts::LAYER_ROOT),
             "pin should be persisted immediately"
         );
     }
@@ -409,12 +407,12 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn drop_guard_eagerly_persists_unpin() {
         let dir = tempfile::tempdir().unwrap();
-        let key = ResourceKey::relative(ROOT, "audio.mp3");
+        let key = ResourceKey::relative(consts::LAYER_ROOT, "audio.mp3");
 
         let lease = make_lease(dir.path());
         let res = lease.acquire_resource(&key, None).unwrap();
 
-        assert!(load_persisted_pins(dir.path()).contains(ROOT));
+        assert!(load_persisted_pins(dir.path()).contains(consts::LAYER_ROOT));
 
         drop(res);
 
@@ -429,7 +427,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn clone_pin_persists_immediately() {
         let dir = tempfile::tempdir().unwrap();
-        let key = ResourceKey::relative(ROOT, "audio.mp3");
+        let key = ResourceKey::relative(consts::LAYER_ROOT, "audio.mp3");
 
         let lease = make_lease(dir.path());
         let lease_clone = lease.clone();
@@ -437,14 +435,14 @@ mod tests {
         let _res = lease_clone.acquire_resource(&key, None).unwrap();
 
         assert!(
-            load_persisted_pins(dir.path()).contains(ROOT),
+            load_persisted_pins(dir.path()).contains(consts::LAYER_ROOT),
             "pin via clone should be persisted immediately"
         );
 
         drop(lease_clone);
 
         assert!(
-            load_persisted_pins(dir.path()).contains(ROOT),
+            load_persisted_pins(dir.path()).contains(consts::LAYER_ROOT),
             "pin should remain while resource handle is alive"
         );
     }

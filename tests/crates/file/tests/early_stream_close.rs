@@ -27,10 +27,9 @@ use kithara_integration_tests::{
     event::TestEvent,
 };
 
-struct Consts;
-impl Consts {
-    const TOTAL_SIZE: usize = 1_024_000;
-    const STREAM_CLOSES_AT: usize = 512_000;
+mod consts {
+    pub(super) const TOTAL_SIZE: usize = 1_024_000;
+    pub(super) const STREAM_CLOSES_AT: usize = 512_000;
 }
 
 fn clean_temp_dir() -> TestTempDir {
@@ -85,7 +84,7 @@ async fn file_stream_closes_early_seek_still_works() {
     let clean_temp_dir = clean_temp_dir();
     let cancel_token = CancelToken::never();
 
-    let file_data: Vec<u8> = (0..Consts::TOTAL_SIZE)
+    let file_data: Vec<u8> = (0..consts::TOTAL_SIZE)
         .map(|i| u8::try_from(i % 256).unwrap_or(0))
         .collect();
     let helper = TestServerHelper::new().await;
@@ -95,7 +94,7 @@ async fn file_stream_closes_early_seek_still_works() {
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::EarlyClose {
-            after_bytes: Consts::STREAM_CLOSES_AT,
+            after_bytes: consts::STREAM_CLOSES_AT,
         },
     });
     let url = handle.url();
@@ -180,7 +179,7 @@ async fn file_stream_closes_early_seek_still_works() {
         tracing::info!(
             "Seeking to {}KB (beyond {}KB stream)",
             seek_offset / 1024,
-            Consts::STREAM_CLOSES_AT / 1024
+            consts::STREAM_CLOSES_AT / 1024
         );
 
         match stream.seek(SeekFrom::Start(seek_offset)) {
@@ -215,7 +214,7 @@ async fn file_stream_closes_early_seek_still_works() {
             Ok(Err(e)) => panic!("Blocking task panicked: {:?}", e),
             Err(_) => panic!(
                 "DEADLOCK: seek hung waiting for data beyond {}KB. On-demand mode not working.",
-                Consts::STREAM_CLOSES_AT / 1024
+                consts::STREAM_CLOSES_AT / 1024
             ),
         }
     };
@@ -234,7 +233,7 @@ async fn file_stream_closes_early_seek_still_works() {
 async fn partial_cache_resume_works() {
     let cache_dir = clean_temp_dir();
 
-    let file_data: Vec<u8> = (0..Consts::TOTAL_SIZE)
+    let file_data: Vec<u8> = (0..consts::TOTAL_SIZE)
         .map(|i| u8::try_from(i % 256).unwrap_or(0))
         .collect();
     let helper = TestServerHelper::new().await;
@@ -244,7 +243,7 @@ async fn partial_cache_resume_works() {
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::EarlyClose {
-            after_bytes: Consts::STREAM_CLOSES_AT,
+            after_bytes: consts::STREAM_CLOSES_AT,
         },
     });
     let url = handle.url();
@@ -320,7 +319,7 @@ async fn partial_cache_resume_works() {
         tracing::info!(
             "Phase 2: seeking to {}KB (beyond {}KB partial cache)",
             seek_offset / 1024,
-            Consts::STREAM_CLOSES_AT / 1024
+            consts::STREAM_CLOSES_AT / 1024
         );
 
         let pos = stream2.seek(SeekFrom::Start(seek_offset)).unwrap();

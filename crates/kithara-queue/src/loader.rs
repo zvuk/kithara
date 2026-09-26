@@ -384,6 +384,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        consts,
         event::QueueEvent,
         test_pools::{TestPools, pools},
         track::TrackRecord,
@@ -619,7 +620,7 @@ mod tests {
             let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
             let player = PlayerImpl::new(
                 PlayerConfig::builder()
-                    .sample_rate(crate::queue::TEST_SAMPLE_RATE)
+                    .sample_rate(consts::TEST_SAMPLE_RATE)
                     .worker(worker)
                     .session(crate::queue::test_session())
                     .build(),

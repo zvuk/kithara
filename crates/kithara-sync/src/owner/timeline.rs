@@ -11,10 +11,8 @@ use super::{
 };
 use crate::{
     ParentFact, ParentGridUpdate, ParentWithdrawal, SyncAdmission, SyncCapability, SyncError,
-    SyncGroup, SyncIntent, SyncMode, SyncOperationId,
+    SyncGroup, SyncIntent, SyncMode, SyncOperationId, consts,
 };
-
-const SECONDS_PER_MINUTE: f64 = 60.0;
 
 /// The beat timeline one group follows, owned together with its mode.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -90,7 +88,7 @@ impl Timeline {
             Self::Local(Some(local)) => local.anchor.target_beats_per_second(),
             Self::Host => parent?.anchor().target_beats_per_second(),
         };
-        BeatsPerMinute::try_from(beats_per_second * SECONDS_PER_MINUTE).ok()
+        BeatsPerMinute::try_from(beats_per_second * consts::SECONDS_PER_MINUTE).ok()
     }
 
     /// The same mode on a new physical axis, where no frame of the old one
@@ -127,7 +125,7 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         commit: SessionFrame,
         smoothing: f64,
     ) -> Result<SyncAdmission, SyncError> {
-        let beats_per_second = f64::from(tempo) / SECONDS_PER_MINUTE;
+        let beats_per_second = f64::from(tempo) / consts::SECONDS_PER_MINUTE;
         let local = match self.timeline {
             Timeline::Off => {
                 return Err(SyncError::CapabilityUnavailable {
@@ -362,7 +360,7 @@ fn latch_at(
     let anchor = SessionAnchor::new(
         frame,
         SessionBeat::new(f64::from(*beat.value().value()))?,
-        f64::from(*tempo.value()) / SECONDS_PER_MINUTE,
+        f64::from(*tempo.value()) / consts::SECONDS_PER_MINUTE,
         axis.sample_rate(),
     )?;
     Ok(Some(LocalTimeline { anchor, meter }))

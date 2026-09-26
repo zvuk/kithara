@@ -542,9 +542,9 @@ mod tests {
         );
     }
 
-    use fixture::{BATCH, INTERRUPTED, REMAINDER};
+    use consts::{BATCH, INTERRUPTED, REMAINDER};
 
-    mod fixture {
+    mod consts {
         pub(super) const BATCH: &str = include_str!("../../../tests/fixtures/libtest-batch.txt");
         pub(super) const INTERRUPTED: &str =
             include_str!("../../../tests/fixtures/libtest-interrupted.txt");

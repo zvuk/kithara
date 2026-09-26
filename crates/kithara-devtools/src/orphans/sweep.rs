@@ -13,20 +13,7 @@ use cargo_metadata::{Metadata, MetadataCommand};
 use clap::Args;
 
 use super::declared::{declared_files, normalize};
-use crate::{Ctx, util::check_tool};
-
-struct Consts;
-impl Consts {
-    const INSTALL_HINT: &'static str = "cargo install cargo-modules";
-    const MARKER: &'static str = "orphaned module `";
-    /// A cgroup v2 job container reports its own cap here; a machine without
-    /// one has no such file and is bounded by its cores alone.
-    const MEMORY_MAX: &'static str = "/sys/fs/cgroup/memory.max";
-    /// What one `cargo modules` run needs. It loads the whole workspace into a
-    /// rust-analyzer database and peaked at three gibibytes on this one, so
-    /// the budget is that measurement with room for the workspace to grow.
-    const WORKER_MEMORY: u64 = 3584 * 1024 * 1024;
-}
+use crate::{Ctx, consts, util::check_tool};
 
 #[derive(Debug, Args)]
 pub struct OrphansArgs {
@@ -98,7 +85,7 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
         &["modules", "--version"],
         ctx.config
             .tools
-            .install_hint("cargo-modules", Consts::INSTALL_HINT),
+            .install_hint("cargo-modules", consts::SWEEP_INSTALL_HINT),
     )?;
 
     if args.packages.is_empty() && args.audit_mode {
@@ -183,7 +170,7 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
 /// databases than that: the kernel kills the job before it reports anything.
 fn workers(cpus: usize, memory: Option<u64>, max_parallelism: usize) -> usize {
     let by_memory = memory.map_or(max_parallelism, |bytes| {
-        usize::try_from(bytes / Consts::WORKER_MEMORY).unwrap_or(max_parallelism)
+        usize::try_from(bytes / consts::WORKER_MEMORY).unwrap_or(max_parallelism)
     });
     cpus.min(by_memory).clamp(1, max_parallelism)
 }
@@ -201,7 +188,7 @@ fn failure(program: &str, status: &str, text: &str) -> String {
 /// `max` on an unbounded cgroup, which is not a size and leaves the count to
 /// the cores.
 fn memory_limit() -> Option<u64> {
-    fs::read_to_string(Consts::MEMORY_MAX)
+    fs::read_to_string(consts::MEMORY_MAX)
         .ok()?
         .trim()
         .parse()
@@ -347,7 +334,7 @@ fn findings(text: &str, root: &Path) -> Vec<Finding> {
 }
 
 fn finding(line: &str, root: &Path) -> Option<Finding> {
-    let (_, rest) = line.split_once(Consts::MARKER)?;
+    let (_, rest) = line.split_once(consts::MARKER)?;
     let (module, rest) = rest.split_once('`')?;
     let (_, path) = rest.split_once(" at ")?;
     let path = Path::new(path.split('\u{1b}').next().unwrap_or(path).trim());
@@ -490,8 +477,6 @@ mod tests {
         assert!(orphans.is_empty());
     }
 
-    const GIB: u64 = 1024 * 1024 * 1024;
-
     /// A worker the kernel kills leaves nothing behind, and a package reported
     /// as unchecked without a reason reads as a broken tool rather than as a
     /// job that ran out of room.
@@ -529,7 +514,7 @@ mod tests {
         assert_eq!(
             workers(
                 3,
-                Some(8 * GIB),
+                Some(8 * consts::GIB),
                 ProjectConfig::default().orphans.max_parallelism
             ),
             2
@@ -548,7 +533,7 @@ mod tests {
         assert_eq!(
             workers(
                 3,
-                Some(GIB),
+                Some(consts::GIB),
                 ProjectConfig::default().orphans.max_parallelism
             ),
             1
@@ -560,7 +545,7 @@ mod tests {
         assert_eq!(
             workers(
                 2,
-                Some(64 * GIB),
+                Some(64 * consts::GIB),
                 ProjectConfig::default().orphans.max_parallelism
             ),
             2

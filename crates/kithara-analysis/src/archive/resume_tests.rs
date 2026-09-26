@@ -10,12 +10,11 @@ use crate::{
     AnalysisProgress, AnalyzerBuilder,
     analyzer::{AnalysisDemand, Detector, Extent, Ingest, TrackAnalyzers},
     beat::GridParams,
+    consts,
     test_pools::{Pools, TestPools, pools, sample_buffer},
     tests::fixtures::beat_detector,
 };
 
-const CHUNK_FRAMES: u64 = 128;
-const EXTENT: u64 = 4 * CHUNK_FRAMES;
 fn configured(pools: Pools) -> (AnalyzerBuilder<NoResamplerBackend, TestPools>, Detector) {
     let mut builder = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools)
         .with_waveform(8)
@@ -33,15 +32,16 @@ fn rate() -> NonZeroU32 {
 }
 
 fn chunk_frames() -> NonZeroU64 {
-    NonZeroU64::new(CHUNK_FRAMES).expect("fixture chunk is non-zero")
+    NonZeroU64::new(consts::RESUME_TESTS_CHUNK_FRAMES).expect("fixture chunk is non-zero")
 }
 
 fn decoded(pools: &Pools, at: u64, pcm: &[f32]) -> AudioChunk {
     const CHANNELS: u16 = 2;
 
     let start = usize::try_from(at).expect("fixture frame fits usize") * usize::from(CHANNELS);
-    let count =
-        usize::try_from(CHUNK_FRAMES).expect("fixture length fits usize") * usize::from(CHANNELS);
+    let count = usize::try_from(consts::RESUME_TESTS_CHUNK_FRAMES)
+        .expect("fixture length fits usize")
+        * usize::from(CHANNELS);
     let samples = &pcm[start..start + count];
     AudioChunk::new(
         AudioChunkInfo {
@@ -49,7 +49,7 @@ fn decoded(pools: &Pools, at: u64, pcm: &[f32]) -> AudioChunk {
                 channels: CHANNELS,
                 sample_rate: rate(),
             },
-            frames: u32::try_from(CHUNK_FRAMES).unwrap_or(0),
+            frames: u32::try_from(consts::RESUME_TESTS_CHUNK_FRAMES).unwrap_or(0),
             frame_offset: at,
             ..Default::default()
         },
@@ -110,13 +110,13 @@ fn finish(
     analyzers: &mut TrackAnalyzers<NoResamplerBackend, TestPools>,
     detector: &mut Detector,
 ) -> crate::TrackAnalysis {
-    analyzers.snapshot(Some(detector), true, Some(EXTENT))
+    analyzers.snapshot(Some(detector), true, Some(consts::RESUME_TESTS_EXTENT))
 }
 
 #[kithara::test(native, flash(false))]
 fn archived_partial_resumes_without_decoding_completed_chunks(archive_tone: Vec<f32>) {
     let pools = pools();
-    let seed = [0, 2 * CHUNK_FRAMES];
+    let seed = [0, 2 * consts::RESUME_TESTS_CHUNK_FRAMES];
     let (builder, mut detector) = configured(pools.clone());
     let mut partial = builder
         .build(rate(), "resume-track".into(), 0, AnalysisDemand::ALL)
@@ -124,7 +124,12 @@ fn archived_partial_resumes_without_decoding_completed_chunks(archive_tone: Vec<
     for at in seed {
         fold(&pools, &mut partial, &mut detector, at, &archive_tone);
     }
-    let progress = partial.progress(Some(&mut detector), false, chunk_frames(), Some(EXTENT));
+    let progress = partial.progress(
+        Some(&mut detector),
+        false,
+        chunk_frames(),
+        Some(consts::RESUME_TESTS_EXTENT),
+    );
     let partial_revision = progress.analysis().revision();
 
     let bytes = persist(&progress);
@@ -147,11 +152,17 @@ fn archived_partial_resumes_without_decoding_completed_chunks(archive_tone: Vec<
         .expect("active analyzer config restores the opaque state");
     let requested: Vec<u64> = resumed
         .coverage()
-        .gaps(&(0..EXTENT))
+        .gaps(&(0..consts::RESUME_TESTS_EXTENT))
         .into_iter()
         .map(|range| range.start)
         .collect();
-    assert_eq!(requested, [CHUNK_FRAMES, 3 * CHUNK_FRAMES]);
+    assert_eq!(
+        requested,
+        [
+            consts::RESUME_TESTS_CHUNK_FRAMES,
+            3 * consts::RESUME_TESTS_CHUNK_FRAMES
+        ]
+    );
     assert!(
         requested.iter().all(|at| !seed.contains(at)),
         "completed fixed chunks are never requested again"

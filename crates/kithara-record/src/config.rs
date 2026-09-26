@@ -6,29 +6,7 @@ use kithara_encode::EncodeConfig;
 use kithara_platform::time::Duration;
 use kithara_worker::{Priority, Worker};
 
-use crate::PartSinkFactory;
-
-struct Defaults;
-
-impl Defaults {
-    const BUFFER_FRAMES: NonZeroUsize = match NonZeroUsize::new(96_000) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-    const DISPATCHER_CAPACITY: NonZeroUsize = NonZeroUsize::MIN;
-    const FAIRNESS_YIELD_INTERVAL: NonZeroU32 = match NonZeroU32::new(16) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-    const GENERATION_CAPACITY: NonZeroUsize = match NonZeroUsize::new(8) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-    const TICK_FRAMES: NonZeroUsize = match NonZeroUsize::new(1_024) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
-}
+use crate::{PartSinkFactory, consts};
 
 /// Configuration for one independently playable recording part.
 #[derive(Clone, Debug, Builder)]
@@ -83,25 +61,25 @@ where
     #[builder(default = Duration::from_millis(10))]
     pub(crate) wait_timeout: Duration,
     /// Consecutive progress passes before the dispatcher yields.
-    #[builder(default = Defaults::FAIRNESS_YIELD_INTERVAL)]
+    #[builder(default = consts::FAIRNESS_YIELD_INTERVAL)]
     pub(crate) fairness_yield_interval: NonZeroU32,
     /// Maximum consecutive recorder ticks in one dispatcher visit.
     #[builder(default = NonZeroU32::MIN)]
     pub(crate) task_burst: NonZeroU32,
     /// Maximum stereo PCM frames waiting between RT and the encoder worker.
-    #[builder(default = Defaults::BUFFER_FRAMES)]
+    #[builder(default = consts::BUFFER_FRAMES)]
     pub(crate) buffer_frames: NonZeroUsize,
     /// Maximum tasks admitted to the recorder dispatcher.
-    #[builder(default = Defaults::DISPATCHER_CAPACITY)]
+    #[builder(default = consts::DISPATCHER_CAPACITY)]
     pub(crate) dispatcher_capacity: NonZeroUsize,
     /// Maximum queued master-format generations waiting for the worker.
-    #[builder(default = Defaults::GENERATION_CAPACITY)]
+    #[builder(default = consts::GENERATION_CAPACITY)]
     pub(crate) generation_capacity: NonZeroUsize,
     /// Maximum compute jobs admitted for the recorder task.
     #[builder(default = NonZeroUsize::MIN)]
     pub(crate) max_compute_tasks: NonZeroUsize,
     /// Maximum stereo PCM frames encoded during one worker tick.
-    #[builder(default = Defaults::TICK_FRAMES)]
+    #[builder(default = consts::TICK_FRAMES)]
     pub(crate) tick_frames: NonZeroUsize,
     /// Optional exact frame count at which each part rotates automatically.
     pub(crate) rotation_frames: Option<NonZeroU64>,

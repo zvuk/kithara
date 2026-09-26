@@ -8,9 +8,8 @@ use rangemap::RangeSet;
 use crate::{
     BlobError, TrackAnalysis,
     blob::{MAX_PREALLOC, Reader, Writer},
+    consts,
 };
-
-const RESUME_VERSION: u32 = 0x4b41_5202;
 
 /// One atomic analysis publication and the opaque state needed to continue it.
 #[derive(Clone, Debug)]
@@ -99,7 +98,7 @@ impl AnalysisResume {
     ) -> Self {
         let mut bytes = Vec::new();
         let mut writer = Writer::new(&mut bytes);
-        writer.write_u32(RESUME_VERSION);
+        writer.write_u32(consts::RESUME_VERSION);
         writer.write_u64(chunk_frames.get());
         write_section(&mut writer, waveform);
         write_section(&mut writer, beat);
@@ -253,10 +252,10 @@ fn write_section(writer: &mut Writer<'_>, bytes: Option<&[u8]>) {
 fn decode_resume(bytes: &[u8]) -> Result<ResumeState, BlobError> {
     let mut reader = Reader::new(bytes);
     let version = reader.read_u32()?;
-    if version != RESUME_VERSION {
+    if version != consts::RESUME_VERSION {
         return Err(BlobError::Version {
             found: version,
-            expected: RESUME_VERSION,
+            expected: consts::RESUME_VERSION,
         });
     }
     let chunk_frames = NonZeroU64::new(reader.read_u64()?).ok_or(BlobError::Corrupt)?;

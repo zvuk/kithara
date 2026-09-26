@@ -28,30 +28,31 @@ use url::Url;
 
 use crate::{
     bufpool_ext::{TestPools, pools},
-    common::test_defaults::Consts as Shared,
+    common::test_defaults::{blocks_for_seconds, consts as shared},
 };
 
-struct Consts;
-impl Consts {
-    const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
-    const BLOCK_FRAMES: usize = 512;
+mod consts {
+    use super::shared;
+
+    pub(super) const SAMPLE_RATE: u32 = shared::SAMPLE_RATE;
+    pub(super) const BLOCK_FRAMES: usize = 512;
     /// Produced-audio horizon for the event-driven warmup: the warmup
     /// drives the render pull until `PlaybackProgress` advances past this
     /// position, proving the decode worker primed the pipeline before the
     /// first measurement window (synthetic fixture has no cold-CDN latency).
-    const WARMUP_SECS: f64 = 0.5;
+    pub(super) const WARMUP_SECS: f64 = 0.5;
     /// Measurement window: long enough that a real hang manifests as
     /// >=20% silent blocks but short enough to keep the test fast.
-    const PLAY_WINDOW_SECS: f64 = 1.5;
-    const MAX_SILENCE_FRACTION: f32 = 0.20;
-    const MIN_WINDOW_RMS: f32 = 0.03;
-    const ITERATIONS: usize = 3;
+    pub(super) const PLAY_WINDOW_SECS: f64 = 1.5;
+    pub(super) const MAX_SILENCE_FRACTION: f32 = 0.20;
+    pub(super) const MIN_WINDOW_RMS: f32 = 0.03;
+    pub(super) const ITERATIONS: usize = 3;
     /// Variants × segments × duration → fixture is 64 s long. Seek +30 s
     /// from a position around 2 s leaves >>1 segment of fresh fetch
     /// after the seek, exercising the same recreate path silvercomet
     /// did.
-    const SEGMENTS_PER_VARIANT: usize = 16;
-    const SEGMENT_DURATION_SECS: f64 = 4.0;
+    pub(super) const SEGMENTS_PER_VARIANT: usize = 16;
+    pub(super) const SEGMENT_DURATION_SECS: f64 = 4.0;
 }
 
 /// Render `blocks` measured blocks, parking on the virtual clock between
@@ -83,7 +84,7 @@ async fn render_and_collect(
 ) -> WindowStats {
     const ACTIVE_THRESHOLD: f32 = 0.001;
     let block_budget =
-        Duration::from_secs_f64(Consts::BLOCK_FRAMES as f64 / f64::from(Consts::SAMPLE_RATE));
+        Duration::from_secs_f64(consts::BLOCK_FRAMES as f64 / f64::from(consts::SAMPLE_RATE));
 
     let window_start_sample = samples_out.len();
     let mut silent_blocks = 0u32;
@@ -95,7 +96,7 @@ async fn render_and_collect(
         // frames for it; a silent block is an underrun, so we let virtual time
         // advance and re-pull rather than counting ring-empty silence.
         let out = loop {
-            let out = player.render(Consts::BLOCK_FRAMES).await;
+            let out = player.render(consts::BLOCK_FRAMES).await;
             // Drain progress/lifecycle events so the bounded bus cannot lag and
             // so polling them rides the virtual clock alongside the sleep below.
             drain_events(events);
@@ -159,12 +160,12 @@ async fn render_until_audio(
     stage: &str,
 ) {
     let block_budget =
-        Duration::from_secs_f64(Consts::BLOCK_FRAMES as f64 / f64::from(Consts::SAMPLE_RATE));
+        Duration::from_secs_f64(consts::BLOCK_FRAMES as f64 / f64::from(consts::SAMPLE_RATE));
     // ms threshold computed via `Duration` so no float→int cast is needed.
     let min_position_ms = Duration::from_secs_f64(min_position_secs).as_millis();
 
     loop {
-        let _ = player.render(Consts::BLOCK_FRAMES).await;
+        let _ = player.render(consts::BLOCK_FRAMES).await;
 
         let mut advanced = false;
         loop {
@@ -272,10 +273,10 @@ async fn local_seek_middle_hang_iters(
 
     let (_helper, master) = seek_source;
 
-    let window_blocks = Shared::blocks_for_seconds(Consts::PLAY_WINDOW_SECS, Consts::BLOCK_FRAMES);
+    let window_blocks = blocks_for_seconds(consts::PLAY_WINDOW_SECS, consts::BLOCK_FRAMES);
     let mut next_seek_epoch = 1u64;
 
-    for iter in 0..Consts::ITERATIONS {
+    for iter in 0..consts::ITERATIONS {
         let iter_label = format!("iter-{iter}");
         let temp = temp_dir();
         let store = kithara_integration_tests::disk_asset_store(temp.path());
@@ -283,7 +284,7 @@ async fn local_seek_middle_hang_iters(
 
         let mut player = OfflinePlayer::new(
             HostConfig::offline(pools())
-                .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+                .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"))
                 .build(),
         )
         .await;
@@ -304,7 +305,7 @@ async fn local_seek_middle_hang_iters(
         render_until_audio(
             &mut player,
             &mut events,
-            Consts::WARMUP_SECS,
+            consts::WARMUP_SECS,
             warmup_deadline,
             "warmup",
         )
@@ -331,17 +332,17 @@ async fn local_seek_middle_hang_iters(
                 );
 
         assert!(
-            initial_silence_fraction <= Consts::MAX_SILENCE_FRACTION,
+            initial_silence_fraction <= consts::MAX_SILENCE_FRACTION,
             "[iter {iter}] local hls: initial silent fraction = {:.1}% \
              (max {:.0}% allowed) — pre-seek window had no audio",
             initial_silence_fraction * 100.0,
-            Consts::MAX_SILENCE_FRACTION * 100.0,
+            consts::MAX_SILENCE_FRACTION * 100.0,
         );
         assert!(
-            initial_rms >= Consts::MIN_WINDOW_RMS,
+            initial_rms >= consts::MIN_WINDOW_RMS,
             "[iter {iter}] local hls: initial RMS = {initial_rms:.4} \
              (min {:.4} required) — no real audio in pre-seek window",
-            Consts::MIN_WINDOW_RMS,
+            consts::MIN_WINDOW_RMS,
         );
 
         let seek_target = player.position() + 30.0;
@@ -387,17 +388,17 @@ async fn local_seek_middle_hang_iters(
                 / f32::from(u16::try_from(after.total_blocks).unwrap_or(u16::MAX).max(1));
 
         assert!(
-            after_silence_fraction <= Consts::MAX_SILENCE_FRACTION,
+            after_silence_fraction <= consts::MAX_SILENCE_FRACTION,
             "[iter {iter}] local hls after seek→{seek_target:.1}s: silent fraction = \
              {:.1}% (max {:.0}% allowed) — HANG: decoder produced mostly silence after seek",
             after_silence_fraction * 100.0,
-            Consts::MAX_SILENCE_FRACTION * 100.0,
+            consts::MAX_SILENCE_FRACTION * 100.0,
         );
         assert!(
-            after_rms >= Consts::MIN_WINDOW_RMS,
+            after_rms >= consts::MIN_WINDOW_RMS,
             "[iter {iter}] local hls after seek→{seek_target:.1}s: window RMS = \
              {after_rms:.4} (min {:.4} required) — HANG: post-seek window has no real audio",
-            Consts::MIN_WINDOW_RMS,
+            consts::MIN_WINDOW_RMS,
         );
 
         player.close().await;
@@ -411,10 +412,10 @@ async fn seek_source() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()
         .variant_count(3)
-        .segments_per_variant(Consts::SEGMENTS_PER_VARIANT)
-        .segment_duration_secs(Consts::SEGMENT_DURATION_SECS)
+        .segments_per_variant(consts::SEGMENTS_PER_VARIANT)
+        .segment_duration_secs(consts::SEGMENT_DURATION_SECS)
         .variant_bandwidths(vec![640_000, 1_280_000, 2_560_000])
-        .packaged_audio_aac_lc(Consts::SAMPLE_RATE, 2);
+        .packaged_audio_aac_lc(consts::SAMPLE_RATE, 2);
     let master = helper
         .create_hls(builder)
         .await

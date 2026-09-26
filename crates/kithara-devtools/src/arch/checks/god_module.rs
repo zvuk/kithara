@@ -10,13 +10,15 @@ use crate::common::{
     walker::{relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "god_module";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "god_module";
+}
 
 pub(crate) struct GodModule;
 
 impl Check for GodModule {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -39,7 +41,7 @@ impl Check for GodModule {
             let count = count_pub_items_top_level(file);
             if count >= warn {
                 violations.push(Violation::warn(
-                    ID,
+                    consts::ID,
                     key,
                     format!("{count} pub/pub(crate) items in one module (warn threshold {warn})"),
                 ));

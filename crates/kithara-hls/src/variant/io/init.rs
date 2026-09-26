@@ -9,9 +9,9 @@ use kithara_drm::DecryptContext;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::{StreamResult, needs_exact_byte_sizes};
 
-use super::{HlsVariant, PlanCtx, core::INIT_PLACEHOLDER_BYTES};
+use super::{HlsVariant, PlanCtx};
 use crate::{
-    HlsResult,
+    HlsResult, consts,
     handle::ResourceHandle,
     playlist::PlaylistState,
     segment::{
@@ -76,7 +76,7 @@ where
             playlist_state.variant_container(variant_idx),
         );
         let size = if !needs_exact {
-            SegmentSize::placeholder(INIT_PLACEHOLDER_BYTES)
+            SegmentSize::placeholder(consts::INIT_PLACEHOLDER_BYTES)
         } else {
             SegmentSize::default()
         };

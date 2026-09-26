@@ -785,7 +785,9 @@ mod tests {
         size::SizeSpec,
     };
 
-    const GAP: f32 = 4.0;
+    mod consts {
+        pub(super) const GAP: f32 = 4.0;
+    }
 
     fn renderer() -> Renderer {
         let mut fonts = font_system()
@@ -818,7 +820,7 @@ mod tests {
             (cell(20.0), None, Band::new(440.0, None)),
             (cell(30.0), None, Band::new(350.0, None)),
         ])
-        .spacing(GAP)
+        .spacing(consts::GAP)
         .align(Alignment::Center)
         .width(Length::Fill)
         .height(Length::Fixed(42.0))
@@ -917,7 +919,7 @@ mod tests {
             (cell(10.0), None, Band::new(0.0, Some(350.0))),
             (cell(30.0), None, Band::new(350.0, None)),
         ])
-        .spacing(GAP)
+        .spacing(consts::GAP)
         .align(Alignment::Center)
         .width(Length::Fill)
         .height(Length::Fixed(42.0))

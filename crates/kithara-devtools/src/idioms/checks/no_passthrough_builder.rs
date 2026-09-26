@@ -17,13 +17,15 @@ use crate::{
     idioms::config::NoPassthroughBuilderConfig,
 };
 
-pub(crate) const ID: &str = "no_passthrough_builder";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "no_passthrough_builder";
+}
 
 pub(crate) struct NoPassthroughBuilder;
 
 impl Check for NoPassthroughBuilder {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -119,7 +121,7 @@ fn check_fn(
         struct_ident,
         usage.fields.len()
     );
-    out.push(Violation::warn(ID, key, msg));
+    out.push(Violation::warn(consts::ID, key, msg));
 }
 
 /// Returns (`param_ident`, `type_ident`) when the function takes a single

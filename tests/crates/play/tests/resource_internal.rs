@@ -15,21 +15,21 @@ use kithara::{
     play::Resource,
 };
 use kithara_integration_tests::{
-    audio_mock::TestPcmReader, event::TestEvent, test_defaults::Consts,
+    audio_mock::TestPcmReader, event::TestEvent, test_defaults::consts,
 };
 use kithara_test_fixtures::integration_fixtures::default_pcm;
 
 #[kithara::fixture]
 fn make_resource(default_pcm: Vec<f32>) -> Resource {
     Resource::from_reader(
-        TestPcmReader::from_samples(Consts::AUDIO_SPEC, default_pcm),
+        TestPcmReader::from_samples(consts::AUDIO_SPEC, default_pcm),
         None,
     )
 }
 
 #[kithara::fixture]
 fn make_resource_with_bus(default_pcm: Vec<f32>) -> (Resource, EventBus) {
-    let reader = TestPcmReader::from_samples(Consts::AUDIO_SPEC, default_pcm);
+    let reader = TestPcmReader::from_samples(consts::AUDIO_SPEC, default_pcm);
     let bus = reader.event_bus().clone();
     let resource = Resource::from_reader(reader, None);
     (resource, bus)
@@ -132,7 +132,7 @@ async fn test_resource_subscribe_receives_events(make_resource_with_bus: (Resour
     let (resource, bus) = make_resource_with_bus;
     let mut rx = resource.subscribe();
 
-    let spec = Consts::AUDIO_SPEC;
+    let spec = consts::AUDIO_SPEC;
     bus.publish(AudioEvent::FormatDetected { spec });
 
     let event = time::timeout(Duration::from_millis(200), rx.recv())

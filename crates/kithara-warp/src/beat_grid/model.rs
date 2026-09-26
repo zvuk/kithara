@@ -18,10 +18,8 @@ use super::{BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridSnapshotErro
 use crate::{
     AssetAxis, AssetExtent, AssetFrame, BeatEvidence, BeatMarker, BeatOrdinal, FrameUncertainty,
     MapAxis, MapCoordinateError, MapSegment, Meter, MeterError, MeterFacts, SegmentError,
-    SegmentFacts, SegmentSet,
+    SegmentFacts, SegmentSet, consts,
 };
-
-const SECONDS_PER_MINUTE: f64 = 60.0;
 
 /// A served beat grid cannot be expressed on the decoded axis it was given.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -67,7 +65,7 @@ impl BeatGridSnapshot {
     ) -> Result<Self, BeatGridModelError> {
         let raw = model.as_raw();
         let rate = f64::from(axis.sample_rate().get());
-        let beat_frames = rate * SECONDS_PER_MINUTE / raw.bpm;
+        let beat_frames = rate * consts::MODEL_SECONDS_PER_MINUTE / raw.bpm;
         let meter = meter_facts(raw)?;
         let anchors = anchors(raw, axis, rate)?;
         let segments = segments(
@@ -345,22 +343,13 @@ mod tests {
     use super::*;
     use crate::{Beat, BeatGridQuery, BeatGridUnavailable, MapPoint, MapPosition, SessionFrame};
 
-    struct Consts;
-
-    impl Consts {
-        const BPM: f64 = 120.0;
-        const RATES: [u32; 3] = [44_100, 48_000, 96_000];
-        const SAMPLE_RATE: u32 = 48_000;
-        const SECONDS_PER_BEAT: f64 = 0.5;
-    }
-
     fn rate(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).expect("invariant: fixture sample rate is non-zero")
     }
 
     fn beat(ordinal: i64, confidence: Option<f32>) -> GridBeat {
         GridBeat {
-            at: ordinal.to_f64().unwrap_or_default() * Consts::SECONDS_PER_BEAT,
+            at: ordinal.to_f64().unwrap_or_default() * consts::SECONDS_PER_BEAT,
             ordinal,
             confidence,
         }
@@ -374,7 +363,7 @@ mod tests {
             revision: 1,
             state: WireState::Final,
             duration: None,
-            bpm: Consts::BPM,
+            bpm: consts::BPM,
             downbeats: Vec::new(),
             meter: None,
         }
@@ -442,7 +431,7 @@ mod tests {
             BeatGridId::allocate().expect("invariant: fixture grid id can be allocated"),
             BeatGridRevision::first(),
             &model,
-            bounded(Consts::SAMPLE_RATE, 4.0),
+            bounded(consts::SAMPLE_RATE, 4.0),
         )
         .expect("invariant: the served grid materializes on its own axis");
         let beat_point = MapPoint::new(
@@ -463,7 +452,7 @@ mod tests {
         let BeatGridQuery::Resolved(tempo) = grid.tempo_at(*position.value()) else {
             panic!("a marked span of the served grid must carry its measured tempo");
         };
-        assert_eq!(f64::from(*tempo.value()), Consts::BPM);
+        assert_eq!(f64::from(*tempo.value()), consts::BPM);
         let BeatGridQuery::Resolved(meter) = grid.meter_at(beat_point) else {
             panic!("a grid whose downbeats were heard must carry its meter");
         };
@@ -488,7 +477,7 @@ mod tests {
                     beat(3, Some(1.0)),
                 ])
             },
-            bounded(Consts::SAMPLE_RATE, 2.0),
+            bounded(consts::SAMPLE_RATE, 2.0),
         );
 
         let BeatGridQuery::Resolved(fitted) = beat_at_estimate(&grid, 6_000.0) else {
@@ -523,7 +512,7 @@ mod tests {
             }),
             ..served(Vec::new())
         };
-        let grid = grid(raw, bounded(Consts::SAMPLE_RATE, 2.0));
+        let grid = grid(raw, bounded(consts::SAMPLE_RATE, 2.0));
         let beat = MapPoint::new(
             grid.stamp(),
             Beat::new(1.0).expect("invariant: fixture beat is finite"),
@@ -548,7 +537,7 @@ mod tests {
     fn one_marked_beat_fixes_the_phase_the_tempo_extends() {
         let grid = grid(
             served(vec![beat(4, Some(1.0))]),
-            bounded(Consts::SAMPLE_RATE, 4.0),
+            bounded(consts::SAMPLE_RATE, 4.0),
         );
 
         assert_eq!(
@@ -569,7 +558,7 @@ mod tests {
                 beat(4, Some(1.0)),
                 beat(5, Some(1.0)),
             ]),
-            bounded(Consts::SAMPLE_RATE, 4.0),
+            bounded(consts::SAMPLE_RATE, 4.0),
         );
 
         assert_eq!(
@@ -589,7 +578,7 @@ mod tests {
                 BeatGridId::allocate().expect("invariant: fixture grid id can be allocated"),
                 BeatGridRevision::first(),
                 &checked(raw),
-                bounded(Consts::SAMPLE_RATE, 2.0),
+                bounded(consts::SAMPLE_RATE, 2.0),
             )
             .err(),
             Some(BeatGridModelError::OutsideExtent { ordinal: 8 })
@@ -603,7 +592,7 @@ mod tests {
                 state: WireState::Final,
                 ..served(vec![beat(0, Some(1.0)), beat(2, Some(1.0))])
             },
-            AssetAxis::new(rate(Consts::SAMPLE_RATE), AssetExtent::Unknown),
+            AssetAxis::new(rate(consts::SAMPLE_RATE), AssetExtent::Unknown),
         );
 
         assert_eq!(
@@ -621,7 +610,7 @@ mod tests {
     fn a_known_extent_stays_the_bound_the_grid_answers_inside() {
         let grid = grid(
             served(vec![beat(0, Some(1.0)), beat(2, Some(1.0))]),
-            bounded(Consts::SAMPLE_RATE, 2.0),
+            bounded(consts::SAMPLE_RATE, 2.0),
         );
 
         assert_eq!(grid.state(), BeatGridState::Complete);
@@ -636,7 +625,7 @@ mod tests {
                 duration: Some(1.0),
                 ..served(vec![beat(0, Some(1.0)), beat(2, Some(1.0))])
             },
-            bounded(Consts::SAMPLE_RATE, 4.0),
+            bounded(consts::SAMPLE_RATE, 4.0),
         );
 
         assert_eq!(beat_at(&grid, 48_000.0), BeatGridQuery::Resolved(2.0));
@@ -648,7 +637,7 @@ mod tests {
 
     #[kithara::test]
     fn the_same_media_beat_round_trips_on_every_decoded_rate() {
-        for sample_rate in Consts::RATES {
+        for sample_rate in consts::RATES {
             let grid = grid(
                 served(vec![beat(0, Some(1.0)), beat(4, Some(1.0))]),
                 bounded(sample_rate, 4.0),
@@ -684,7 +673,7 @@ mod tests {
             BeatGridId::allocate().expect("invariant: fixture grid id can be allocated"),
             BeatGridRevision::first(),
             &model,
-            bounded(Consts::SAMPLE_RATE, 2.0),
+            bounded(consts::SAMPLE_RATE, 2.0),
         )
         .expect("invariant: the fixture grid materializes on its own axis");
 
@@ -721,7 +710,7 @@ mod tests {
     fn a_grid_of_one_beat_states_the_geometry_its_tempo_gives_it() {
         let grid = grid(
             served(vec![beat(0, None)]),
-            bounded(Consts::SAMPLE_RATE, 2.0),
+            bounded(consts::SAMPLE_RATE, 2.0),
         );
 
         assert_eq!(
@@ -753,7 +742,7 @@ mod tests {
     fn an_unavailable_geometry_stays_typed_on_the_materialized_grid() {
         let grid = grid(
             served(vec![beat(0, Some(1.0)), beat(2, Some(1.0))]),
-            bounded(Consts::SAMPLE_RATE, 2.0),
+            bounded(consts::SAMPLE_RATE, 2.0),
         );
         let beat = MapPoint::new(
             grid.stamp(),

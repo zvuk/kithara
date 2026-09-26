@@ -19,11 +19,8 @@ use super::{
 use crate::{
     AlignmentSource, LoadGeneration, SessionAxisUpdate, SyncAdmission, SyncCapability, SyncEffect,
     SyncError, SyncGroup, SyncMember, SyncMemberKind, SyncMode, SyncOperation, SyncStatusSnapshot,
-    SyncTransition, TopologyOperation,
+    SyncTransition, TopologyOperation, consts,
 };
-
-/// The first session frame no caller can use.
-const OPEN_END: i64 = i64::MAX;
 
 /// Beats every `beat_frames` from `first_beat_frame` through `covered`, on a
 /// recording `extent` frames long.
@@ -167,7 +164,7 @@ pub(super) fn prepare(
     source: AlignmentSource,
     earliest: i64,
 ) -> SyncAdmission {
-    prepare_in(group, target, source, window(earliest, OPEN_END))
+    prepare_in(group, target, source, window(earliest, consts::OPEN_END))
         .expect("the preparation is admitted")
 }
 
@@ -267,7 +264,7 @@ fn an_audible_member_without_a_forward_speed_is_refused() {
                 &mut group,
                 track,
                 frontier_at_speed(0, 0, speed),
-                window(0, OPEN_END)
+                window(0, consts::OPEN_END)
             ),
             Err(SyncError::Coordinate(CoordinateError::NonInvertibleRate)),
             "{speed}"
@@ -550,7 +547,7 @@ fn an_off_deck_prepares_no_member() {
     attach_grid(&mut group, asset_grid(track, 480_000, 24_000));
 
     assert_eq!(
-        prepare_in(&mut group, track, cue(0), window(0, OPEN_END)),
+        prepare_in(&mut group, track, cue(0), window(0, consts::OPEN_END)),
         Err(SyncError::CapabilityUnavailable {
             capability: SyncCapability::Alignment,
         })
@@ -573,7 +570,7 @@ fn an_audible_member_under_a_map_the_group_never_applied_is_refused() {
     };
 
     assert_eq!(
-        prepare_in(&mut group, track, source, window(0, OPEN_END)),
+        prepare_in(&mut group, track, source, window(0, consts::OPEN_END)),
         Err(SyncError::AudibleMapMismatch {
             member_id: track,
             expected: None,
@@ -606,7 +603,7 @@ fn a_member_absent_from_the_group_is_not_prepared() {
     let mut group = synced_deck();
     let stranger = BeatGridId::allocate().expect("grid id");
 
-    assert!(prepare_in(&mut group, stranger, cue(0), window(0, OPEN_END)).is_err());
+    assert!(prepare_in(&mut group, stranger, cue(0), window(0, consts::OPEN_END)).is_err());
     assert!(group.pending.is_empty());
 }
 

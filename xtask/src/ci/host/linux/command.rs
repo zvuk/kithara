@@ -9,23 +9,26 @@ use tracing::info;
 
 use super::{
     cleanup, compose, firewall,
-    profile::{LINUX_CONFIG_PATH, LinuxHost, RunnerFlavor},
+    profile::{LinuxHost, RunnerFlavor},
     registration, services, system, windows,
 };
-use crate::ci::{
-    config::{CiPins, PINS_PATH},
-    host::provision::Provision,
-    image::{self, ImageCommand},
-    process::Process,
+use crate::{
+    ci::{
+        config::CiPins,
+        host::provision::Provision,
+        image::{self, ImageCommand},
+        process::Process,
+    },
+    consts,
 };
 
 #[derive(Debug, Args)]
 pub(crate) struct LinuxArgs {
     /// Machine profile of this Linux CI host, provisioned outside the repository.
-    #[arg(long, env = "KITHARA_CI_LINUX_CONFIG", default_value = LINUX_CONFIG_PATH)]
+    #[arg(long, env = "KITHARA_CI_LINUX_CONFIG", default_value = consts::LINUX_CONFIG_PATH)]
     config: PathBuf,
     /// Reviewed build pins tracked in the repository.
-    #[arg(long, env = "KITHARA_CI_PINS", default_value = PINS_PATH)]
+    #[arg(long, env = "KITHARA_CI_PINS", default_value = consts::PINS_PATH)]
     pins: PathBuf,
     #[command(subcommand)]
     command: LinuxCommand,
@@ -53,7 +56,7 @@ enum LinuxCommand {
     /// Generate the whole fleet as one Compose project, from the same profile.
     Compose {
         /// Where the project is written.
-        #[arg(long, default_value = compose::FILE)]
+        #[arg(long, default_value = consts::FILE)]
         out: PathBuf,
         /// Mint every runner's registration first. They are accepted once, so
         /// this runs immediately before `docker compose up`, not ahead of time.
@@ -86,7 +89,10 @@ pub(in crate::ci::host) fn provision(
     config: Option<&Path>,
     pins: &Path,
 ) -> Result<()> {
-    let config = config.map_or_else(|| PathBuf::from(LINUX_CONFIG_PATH), Path::to_path_buf);
+    let config = config.map_or_else(
+        || PathBuf::from(consts::LINUX_CONFIG_PATH),
+        Path::to_path_buf,
+    );
     let host = LinuxHost::load(&config)?;
     let provision = Provision {
         process,

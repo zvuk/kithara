@@ -17,7 +17,7 @@ use kithara_integration_tests::{
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
-    test_defaults::Consts as Shared,
+    test_defaults::consts as shared,
     waits::{wait_for_event, wait_for_loader_done_event},
 };
 use kithara_test_fixtures::fixtures::tone_mp3;
@@ -103,7 +103,7 @@ async fn progressive_download_fills_the_buffer_bar(tone_mp3: &'static [u8], temp
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))

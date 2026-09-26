@@ -8,13 +8,15 @@ use crate::common::{
     walker::{relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "max_nesting";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "max_nesting";
+}
 
 pub(crate) struct MaxNesting;
 
 impl Check for MaxNesting {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -35,7 +37,7 @@ impl Check for MaxNesting {
             if depth > cfg.max_depth {
                 let key = rel.to_string_lossy().replace('\\', "/");
                 violations.push(Violation::deny(
-                    ID,
+                    consts::ID,
                     key,
                     format!(
                         "module nesting depth {depth} under src/ exceeds max {}",

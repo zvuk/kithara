@@ -6,6 +6,7 @@ use kithara_devtools::{common::tools::ToolsConfig, verdict::ChildFailure};
 use crate::{
     child,
     ci::{config::CiConfig, process::Process, xcresult},
+    consts,
     test_server::{Port, TestServer},
 };
 
@@ -72,7 +73,7 @@ pub(crate) fn ios_test(process: &Process, config: &CiConfig, tools: &ToolsConfig
     let cancel = child::Cancel::install()?;
     let server = TestServer::start(
         process,
-        Port::Fixed(Consts::TEST_SERVER_PORT),
+        Port::Fixed(consts::TEST_SERVER_PORT),
         &process.root().join("target/xcresult/test-server.log"),
         Some(&cancel),
     )?;
@@ -113,15 +114,6 @@ pub(crate) fn ios_test(process: &Process, config: &CiConfig, tools: &ToolsConfig
         )?;
     }
     outcome.and(stopped)
-}
-
-struct Consts;
-
-impl Consts {
-    /// The simulator shares the host network stack, so it reaches the server
-    /// over loopback. The port is fixed because Apple simulator suites are
-    /// serialized on the host, so another CI lane cannot bind it concurrently.
-    const TEST_SERVER_PORT: u16 = 3444;
 }
 
 fn build_xcframework(process: &Process, tools: &ToolsConfig) -> Result<()> {

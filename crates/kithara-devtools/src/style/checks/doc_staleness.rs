@@ -15,13 +15,15 @@ use crate::{
     style::config::DocStalenessConfig,
 };
 
-pub(crate) const ID: &str = "doc_staleness";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "doc_staleness";
+}
 
 pub(crate) struct DocStaleness;
 
 impl Check for DocStaleness {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -90,7 +92,7 @@ fn scan_content(
             continue;
         }
         violations.push(Violation::deny(
-            ID,
+            consts::ID,
             format!("{rel}::{ident}"),
             format!("{rel} documents `{ident}`, which no longer exists in the sources"),
         ));

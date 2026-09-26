@@ -10,10 +10,9 @@ use anyhow::{Context, Result, ensure};
 
 use crate::{
     common::project::StressRenderBudgets,
+    consts,
     stress::{run_output, run_stderr_output},
-    stress_report::{
-        MAX_INVENTORY_BYTES, read_bounded_utf8, validate_inventory, validate_primary_evidence,
-    },
+    stress_report::{read_bounded_utf8, validate_inventory, validate_primary_evidence},
     test::{ConfiguredLane, NextestAction, nextest_configured_lane_command},
     verdict::ChildFailure,
 };
@@ -75,7 +74,11 @@ pub(crate) fn run(
             status.code(),
         ));
     }
-    let json = read_bounded_utf8(&args.inventory, MAX_INVENTORY_BYTES, "stress inventory")?;
+    let json = read_bounded_utf8(
+        &args.inventory,
+        consts::MAX_INVENTORY_BYTES,
+        "stress inventory",
+    )?;
     validate_inventory(&json).context("validate nextest inventory")?;
 
     let run_args = vec![
@@ -165,12 +168,6 @@ fn run_child(command: &mut Command, log_path: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    const PASSED_JUNIT: &str = r#"<testsuites uuid="run" timestamp="2026-08-13T12:00:00Z">
-  <testsuite name="demo::tests@stress-0">
-    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:00Z"/>
-  </testsuite>
-</testsuites>"#;
-
     fn evidence_paths(temp: &tempfile::TempDir, junit: &str) -> (PathBuf, PathBuf) {
         const INVENTORY: &str = r#"{
   "rust-suites": {
@@ -218,7 +215,7 @@ mod tests {
     #[test]
     fn passed_junit_is_a_clean_stress_outcome() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let (inventory, junit) = evidence_paths(&temp, PASSED_JUNIT);
+        let (inventory, junit) = evidence_paths(&temp, consts::PASSED_JUNIT);
 
         validate_primary_evidence(&inventory, &junit, 1, &StressRenderBudgets::default())
             .expect("passed JUnit must be clean");
@@ -270,7 +267,7 @@ mod tests {
         );
 
         let partial = temp.path().join("partial.xml");
-        fs::write(&partial, PASSED_JUNIT).expect("write partial JUnit fixture");
+        fs::write(&partial, consts::PASSED_JUNIT).expect("write partial JUnit fixture");
         let partial_error =
             validate_primary_evidence(&inventory, &partial, 2, &StressRenderBudgets::default())
                 .expect_err("partial JUnit must fail closed");

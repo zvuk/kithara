@@ -34,22 +34,23 @@ use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
 
-struct Consts;
-impl Consts {
+mod consts {
+    use super::Duration;
+
     /// Big enough that "near end" is past any plausible initial-loading
     /// prefetch window AND the target segment cannot already be in
     /// flight at seek time.
-    const SEGMENT_COUNT: usize = 50;
-    const SEGMENT_DURATION_S: f64 = 4.0;
+    pub(super) const SEGMENT_COUNT: usize = 50;
+    pub(super) const SEGMENT_DURATION_S: f64 = 4.0;
     /// Server-side artificial delay per segment. Picked much larger
     /// than the test-server roundtrip so initial-loading fetches are
     /// guaranteed in flight when the seek fires.
-    const SEGMENT_DELAY_MS: u64 = 800;
+    pub(super) const SEGMENT_DELAY_MS: u64 = 800;
     /// Tightens the Downloader to a small concurrency so the
     /// stale-fetch starvation is observable. Production default is 5.
-    const MAX_CONCURRENT: usize = 3;
+    pub(super) const MAX_CONCURRENT: usize = 3;
     /// Loader settle deadline.
-    const LOAD_DEADLINE: Duration = Duration::from_secs(20);
+    pub(super) const LOAD_DEADLINE: Duration = Duration::from_secs(20);
     /// Give-up deadline for collecting post-seek events, so a seek that never
     /// reaches the reader fails on the discriminating panic below instead of on
     /// the harness timeout. It bounds diagnostics, not the contract — the
@@ -63,9 +64,9 @@ impl Consts {
     /// states, just later. A flat deadline an order of magnitude above the
     /// healthy latency keeps the panic precise without pinning the test to a
     /// clock the fixture cannot hold.
-    const POST_SEEK_OBSERVATION: Duration = Duration::from_secs(30);
+    pub(super) const POST_SEEK_OBSERVATION: Duration = Duration::from_secs(30);
     /// Allow 1 segment of HLS readahead before the `ReaderSeek` landing.
-    const WARMUP_TOLERANCE: usize = 1;
+    pub(super) const WARMUP_TOLERANCE: usize = 1;
 }
 
 fn parse_segment_url(url: &str) -> Option<(usize, usize)> {
@@ -80,15 +81,15 @@ fn parse_segment_url(url: &str) -> Option<(usize, usize)> {
 async fn build_hls_with_delay(helper: &TestServerHelper) -> Url {
     let builder = HlsFixtureBuilder::new()
         .variant_count(1)
-        .segments_per_variant(Consts::SEGMENT_COUNT)
-        .segment_duration_secs(Consts::SEGMENT_DURATION_S)
+        .segments_per_variant(consts::SEGMENT_COUNT)
+        .segment_duration_secs(consts::SEGMENT_DURATION_S)
         .packaged_audio_aac_lc(44_100, 2)
         .include_sidx(false)
         .push_delay_rule(DelayRule {
             variant: None,
             segment_eq: None,
             segment_gte: None,
-            delay_ms: Consts::SEGMENT_DELAY_MS,
+            delay_ms: consts::SEGMENT_DELAY_MS,
         });
     helper
         .create_hls(builder)
@@ -135,7 +136,7 @@ async fn build_queue_with_tick(
             pools,
             CancelToken::never(),
         ))
-        .max_concurrent(Consts::MAX_CONCURRENT)
+        .max_concurrent(consts::MAX_CONCURRENT)
         .build(),
     );
     (queue, downloader, store, tick_handle)
@@ -217,7 +218,7 @@ async fn hls_seek_near_end_skips_prefix(
         .expect("select");
     queue.run(QueueControl::play).await;
 
-    wait_for_loader_done(&queue, track_id, Consts::LOAD_DEADLINE)
+    wait_for_loader_done(&queue, track_id, consts::LOAD_DEADLINE)
         .await
         .expect("loader settled");
 
@@ -242,7 +243,7 @@ async fn hls_seek_near_end_skips_prefix(
     // complete. The `time::timeout` is a safety deadline bounding a hang, not
     // a pacing wait; under flash the `rx.recv().await` parks on the virtual
     // clock so the render cadence (and scheduler) advance between events.
-    let _ = time::timeout(Consts::LOAD_DEADLINE, async {
+    let _ = time::timeout(consts::LOAD_DEADLINE, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
                 Ok(TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
@@ -299,7 +300,7 @@ async fn hls_seek_near_end_skips_prefix(
     let (observation, _reset_evt) = tokio::join!(
         observe_post_seek(&mut rx, seek_at, &pre_seek_enqueued),
         time::timeout(
-            Consts::POST_SEEK_OBSERVATION,
+            consts::POST_SEEK_OBSERVATION,
             probe_recorder.wait_for(|events| {
                 events[pre_seek..]
                     .iter()
@@ -356,12 +357,12 @@ async fn hls_seek_near_end_skips_prefix(
              any committed segment — segment map not ready / seek too early"
         )
     });
-    let target_floor = target_segment.saturating_sub(Consts::WARMUP_TOLERANCE);
+    let target_floor = target_segment.saturating_sub(consts::WARMUP_TOLERANCE);
     assert!(
-        target_floor >= Consts::MAX_CONCURRENT,
+        target_floor >= consts::MAX_CONCURRENT,
         "[{backend:?}] ReaderSeek landed inside the initial prefix window: \
          segment={target_segment}, floor={target_floor}, max_concurrent={}",
-        Consts::MAX_CONCURRENT,
+        consts::MAX_CONCURRENT,
     );
 
     let post_seek_prefix_emissions: Vec<_> = probe_events
@@ -415,7 +416,7 @@ async fn hls_seek_near_end_skips_prefix(
         panic!(
             "[{backend:?}] no HlsEvent::SegmentReadStart after seek — reader \
              did not start consuming any segment within {:?}",
-            Consts::POST_SEEK_OBSERVATION,
+            consts::POST_SEEK_OBSERVATION,
         );
     };
     assert!(
@@ -427,11 +428,11 @@ async fn hls_seek_near_end_skips_prefix(
     );
 
     assert!(
-        observation.prefix_enqueued_after_seek.len() <= Consts::MAX_CONCURRENT,
+        observation.prefix_enqueued_after_seek.len() <= consts::MAX_CONCURRENT,
         "[bug, {backend:?}] {} new prefix RequestEnqueued events after seek \
          (cap = MAX_CONCURRENT = {})",
         observation.prefix_enqueued_after_seek.len(),
-        Consts::MAX_CONCURRENT,
+        consts::MAX_CONCURRENT,
     );
 
     // TestEvent-driven progress contract: the new epoch must START a download
@@ -450,7 +451,7 @@ async fn hls_seek_near_end_skips_prefix(
         "[{backend:?}] no RequestStarted observed for any post-seek \
          RequestEnqueued within {:?} — the new epoch never started a fetch \
          (seek dropped silently, or the target starved behind stale fetches)",
-        Consts::POST_SEEK_OBSERVATION,
+        consts::POST_SEEK_OBSERVATION,
     );
     queue.close().await;
 }
@@ -479,7 +480,7 @@ async fn observe_post_seek(
     // field still terminates here with a partial `obs`; the discriminating
     // panics live in the caller and fire on the missing field, so this give-up
     // never silently passes an assertion.
-    let _ = time::timeout(Consts::POST_SEEK_OBSERVATION, async {
+    let _ = time::timeout(consts::POST_SEEK_OBSERVATION, async {
         loop {
             match rx.recv().await {
                 Ok(env) => match &env.event {
@@ -504,7 +505,7 @@ async fn observe_post_seek(
                             enqueue_url.insert(*request_id, url.to_string());
                             if let (Some(target), Some((_v, seg_idx))) =
                                 (target_segment, parse_segment_url(url.as_str()))
-                                && seg_idx + Consts::WARMUP_TOLERANCE < target
+                                && seg_idx + consts::WARMUP_TOLERANCE < target
                             {
                                 obs.prefix_enqueued_after_seek.insert(*request_id);
                             }

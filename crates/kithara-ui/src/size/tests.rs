@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use kithara_test_utils::kithara;
 
-use super::spec::*;
+use super::spec::{consts::DEFAULTS, *};
 use crate::{
     builtin,
     compile::{CompiledNode, SplitCell},
@@ -910,6 +910,12 @@ mod compiled {
         view,
     };
 
+    mod consts {
+        use super::{Snapshot, SnapshotFixture};
+
+        pub(super) const HIDDEN: &dyn Snapshot = &SnapshotFixture::all_hidden();
+    }
+
     struct Registry {
         flag: EndpointDesc,
         scalar: EndpointDesc,
@@ -960,8 +966,6 @@ mod compiled {
     fn size_of(ui: &CompiledUi, snapshot: &dyn Snapshot) -> SizeSpec {
         node_size(&ui.root, builtin::skin_doc(), snapshot)
     }
-
-    const HIDDEN: &dyn Snapshot = &SnapshotFixture::all_hidden();
 
     #[kithara::test]
     fn an_adaptive_bank_is_the_size_of_the_branch_its_measure_selects() {
@@ -1020,7 +1024,7 @@ mod compiled {
                 ]))"#,
         );
 
-        assert_eq!(size_of(&full, HIDDEN), size_of(&trimmed, DEFAULTS));
+        assert_eq!(size_of(&full, consts::HIDDEN), size_of(&trimmed, DEFAULTS));
         assert_ne!(
             size_of(&full, DEFAULTS),
             size_of(&trimmed, DEFAULTS),
@@ -1047,7 +1051,7 @@ mod compiled {
                 ]))"#,
         );
 
-        assert_eq!(size_of(&full, HIDDEN), size_of(&trimmed, DEFAULTS));
+        assert_eq!(size_of(&full, consts::HIDDEN), size_of(&trimmed, DEFAULTS));
     }
 
     #[kithara::test]
@@ -1064,7 +1068,7 @@ mod compiled {
                 root: Slot(id: "extra"))"#,
         );
 
-        assert_eq!(size_of(&full, HIDDEN), size_of(&empty, DEFAULTS));
+        assert_eq!(size_of(&full, consts::HIDDEN), size_of(&empty, DEFAULTS));
         assert_ne!(size_of(&full, DEFAULTS), size_of(&empty, DEFAULTS));
     }
 
@@ -1140,9 +1144,9 @@ mod compiled {
         .unwrap();
 
         assert_eq!(
-            size_of(&ui, HIDDEN),
+            size_of(&ui, consts::HIDDEN),
             SizeSpec::new(Dim::Fixed(0.0), Dim::Fixed(0.0)),
         );
-        assert_ne!(size_of(&ui, DEFAULTS), size_of(&ui, HIDDEN));
+        assert_ne!(size_of(&ui, DEFAULTS), size_of(&ui, consts::HIDDEN));
     }
 }

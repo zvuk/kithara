@@ -6,10 +6,9 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{
-    Consts, StretchControls, WarpRenderer, chunk, f64_of, flush_serviced, render_serviced,
-    renderer, spec,
+    StretchControls, WarpRenderer, chunk, f64_of, flush_serviced, render_serviced, renderer, spec,
 };
-use crate::{GridSegment, RegionPlan, Warp, WarpConfig};
+use crate::{GridSegment, RegionPlan, Warp, WarpConfig, consts};
 
 fn finish_unity_transition(
     renderer: &mut WarpRenderer,
@@ -80,7 +79,7 @@ fn manual_ramp_to_the_rate_limit_keeps_quantized_requests_bounded() {
             .prepare_quantum(input.meta, 128)
             .expect("a continuous ramp keeps accepting source quanta")
             .get();
-        input.samples.truncate(frames * usize::from(Consts::CH));
+        input.samples.truncate(frames * usize::from(consts::CH));
         input.meta.frames = u32::try_from(frames).expect("quantum fits u32");
         source_frame += u64::try_from(frames).expect("quantum fits u64");
         let output = fx
@@ -174,13 +173,13 @@ fn one_frame_regions_accumulate_into_one_portable_request(
     let source = warp_sine[..(4) * 2].to_vec();
 
     for frame in 0..3_u64 {
-        let start = usize::try_from(frame).unwrap_or_default() * usize::from(Consts::CH);
-        let mut input = chunk(&pools, &source[start..start + usize::from(Consts::CH)]);
+        let start = usize::try_from(frame).unwrap_or_default() * usize::from(consts::CH);
+        let mut input = chunk(&pools, &source[start..start + usize::from(consts::CH)]);
         input.meta.frame_offset = frame;
         assert!(render_serviced(&mut fx, input).is_none());
     }
 
-    let mut input = chunk(&pools, &source[3 * usize::from(Consts::CH)..]);
+    let mut input = chunk(&pools, &source[3 * usize::from(consts::CH)..]);
     input.meta.frame_offset = 3;
     let output = render_serviced(&mut fx, input)
         .expect("the fourth source frame completes one output frame");
@@ -223,7 +222,7 @@ fn pending_span_uses_earliest_start_and_latest_frontier(
     let mut fx = renderer(controls);
     let pools = fx.pools.clone();
     let source = warp_sine[..(3) * 2].to_vec();
-    let mut first = chunk(&pools, &source[..2 * usize::from(Consts::CH)]);
+    let mut first = chunk(&pools, &source[..2 * usize::from(consts::CH)]);
     first.meta.end_timestamp = Duration::from_millis(20);
     first.meta.segment_index = Some(1);
     first.meta.variant_index = Some(1);
@@ -232,7 +231,7 @@ fn pending_span_uses_earliest_start_and_latest_frontier(
     first.meta.source_bytes = 20;
     let first_output = render_serviced(&mut fx, first).expect("first frame renders");
 
-    let mut second = chunk(&pools, &source[2 * usize::from(Consts::CH)..]);
+    let mut second = chunk(&pools, &source[2 * usize::from(consts::CH)..]);
     second.meta.frame_offset = 2;
     second.meta.timestamp = Duration::from_millis(20);
     second.meta.end_timestamp = Duration::from_millis(30);
@@ -291,7 +290,7 @@ fn rendered_source_frontier_excludes_pending_source(
     )));
 
     let source = warp_sine[..(source_latency + 2) * 2].to_vec();
-    let split = source_latency * usize::from(Consts::CH);
+    let split = source_latency * usize::from(consts::CH);
     render_serviced(&mut fx, chunk(&pools, &source[..split])).expect("latency-sized span renders");
 
     let mut input = chunk(&pools, &source[split..]);
@@ -299,7 +298,7 @@ fn rendered_source_frontier_excludes_pending_source(
     let output = render_serviced(&mut fx, input).expect("the unity source frame renders");
 
     assert_eq!(output.frames(), 1);
-    assert_eq!(fx.pending_frames(usize::from(Consts::CH)), 1);
+    assert_eq!(fx.pending_frames(usize::from(consts::CH)), 1);
     assert_eq!(
         fx.rendered_source_end(),
         Some((1, spec().sample_rate)),
@@ -326,14 +325,14 @@ fn pending_span_is_committed_before_live_unity_passthrough(
     let mut fx = renderer(Arc::clone(&controls));
     let pools = fx.pools.clone();
     let source = warp_sine[..(3) * 2].to_vec();
-    let mut pending = chunk(&pools, &source[..usize::from(Consts::CH)]);
+    let mut pending = chunk(&pools, &source[..usize::from(consts::CH)]);
     pending.meta.end_timestamp = Duration::from_millis(10);
     assert!(render_serviced(&mut fx, pending).is_none());
 
     controls.set_region_plan(None);
     let mut unity = chunk(
         &pools,
-        &source[usize::from(Consts::CH)..2 * usize::from(Consts::CH)],
+        &source[usize::from(consts::CH)..2 * usize::from(consts::CH)],
     );
     unity.meta.frame_offset = 1;
     unity.meta.timestamp = Duration::from_millis(10);
@@ -354,13 +353,13 @@ fn pending_span_is_committed_before_live_unity_passthrough(
     );
     assert_eq!(
         &unity.samples[..],
-        &source[usize::from(Consts::CH)..2 * usize::from(Consts::CH)],
+        &source[usize::from(consts::CH)..2 * usize::from(consts::CH)],
         "unity frame follows the complete backend tail byte-for-byte"
     );
     assert_eq!(unity.meta.frame_offset, 1);
     assert_eq!(unity.meta.end_timestamp, Duration::from_millis(20));
 
-    let mut next = chunk(&pools, &source[2 * usize::from(Consts::CH)..]);
+    let mut next = chunk(&pools, &source[2 * usize::from(consts::CH)..]);
     next.meta.frame_offset = 2;
     let next_samples = next.samples.to_vec();
     let passthrough = render_serviced(&mut fx, next).expect("unity remains zero-copy");
@@ -382,7 +381,7 @@ fn live_unity_transition_drains_active_backend_tail(
     const UNITY_FRAMES: usize = 1024;
 
     let source = warp_constant;
-    let split = ACTIVE_FRAMES * usize::from(Consts::CH);
+    let split = ACTIVE_FRAMES * usize::from(consts::CH);
 
     let reference_controls = StretchControls::new(0.5);
     reference_controls.set_keylock(true);
@@ -532,12 +531,12 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
     let pools = reference.pools.clone();
     let reference_first = render_serviced(
         &mut reference,
-        chunk(&pools, &source[..usize::from(Consts::CH)]),
+        chunk(&pools, &source[..usize::from(consts::CH)]),
     )
     .expect("the no-debt span emits two frames");
     assert_eq!(reference_first.frames(), 2);
     reference_controls.set_region_plan(None);
-    let mut reference_unity = chunk(&pools, &source[2 * usize::from(Consts::CH)..]);
+    let mut reference_unity = chunk(&pools, &source[2 * usize::from(consts::CH)..]);
     reference_unity.meta.frame_offset = 2;
     let reference_transition = render_serviced(&mut reference, reference_unity)
         .expect("the no-debt transition starts its tail");
@@ -559,19 +558,19 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
     )));
     let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
     let mut fx = Warp::new((), &config).renderer(spec(), pools.clone());
-    let first = render_serviced(&mut fx, chunk(&pools, &source[..usize::from(Consts::CH)]))
+    let first = render_serviced(&mut fx, chunk(&pools, &source[..usize::from(consts::CH)]))
         .expect("the first span rounds to two frames");
     assert_eq!(first.frames(), 2);
 
     let mut debt = chunk(
         &pools,
-        &source[usize::from(Consts::CH)..2 * usize::from(Consts::CH)],
+        &source[usize::from(consts::CH)..2 * usize::from(consts::CH)],
     );
     debt.meta.frame_offset = 1;
     assert!(render_serviced(&mut fx, debt).is_none());
 
     controls.set_region_plan(None);
-    let mut unity = chunk(&pools, &source[2 * usize::from(Consts::CH)..]);
+    let mut unity = chunk(&pools, &source[2 * usize::from(consts::CH)..]);
     unity.meta.frame_offset = 2;
     let transition = render_serviced(&mut fx, unity).expect("the debt transition starts its tail");
     let (tail, unity, _) = finish_unity_transition(&mut fx, transition);
@@ -579,8 +578,8 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
     actual_samples.extend_from_slice(&tail);
     actual_samples.extend_from_slice(&unity.samples);
     assert_eq!(
-        actual_samples.len() / usize::from(Consts::CH),
-        reference_samples.len() / usize::from(Consts::CH),
+        actual_samples.len() / usize::from(consts::CH),
+        reference_samples.len() / usize::from(consts::CH),
         "negative rounding debt adds no output frame"
     );
     assert_eq!(
@@ -608,12 +607,12 @@ fn reset_discards_pending_span_before_new_timeline(
     let mut fx = renderer(Arc::clone(&controls));
     let pools = fx.pools.clone();
     let source = warp_sine[..(2) * 2].to_vec();
-    assert!(render_serviced(&mut fx, chunk(&pools, &source[..usize::from(Consts::CH)])).is_none());
+    assert!(render_serviced(&mut fx, chunk(&pools, &source[..usize::from(consts::CH)])).is_none());
 
     fx.reset();
     controls.set_region_plan(None);
     fx.prepare(spec());
-    let mut landed = chunk(&pools, &source[usize::from(Consts::CH)..]);
+    let mut landed = chunk(&pools, &source[usize::from(consts::CH)..]);
     landed.meta.frame_offset = 100;
     landed.meta.timestamp = Duration::from_secs(1);
     landed.meta.end_timestamp = Duration::from_millis(1_010);
@@ -630,7 +629,7 @@ fn moving_target_renderer() -> WarpRenderer {
     let mut fx = renderer(StretchControls::new(1.0));
     fx.applied_speed = Some(SmoothedParam::new(
         1.0,
-        super::super::SPEED_SMOOTHING_SPAN,
+        super::super::consts::SPEED_SMOOTHING_SPAN,
         SmootherConfig::default(),
         spec().sample_rate,
     ));

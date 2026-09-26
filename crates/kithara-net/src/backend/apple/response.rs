@@ -13,7 +13,10 @@ use crate::{
     types::{AcceptEncodingPolicy, Headers},
 };
 
-pub(super) const HTTP_PARTIAL_CONTENT: u16 = 206;
+pub(in crate::backend::selected) mod consts {
+    pub(in crate::backend::selected) const HTTP_PARTIAL_CONTENT: u16 = 206;
+}
+
 pub(super) type HttpResponseParts = (Option<u16>, Headers);
 
 pub(crate) struct AppleDataResponse {

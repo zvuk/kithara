@@ -18,11 +18,9 @@ use super::{
     toolchain::ToolchainInstaller,
     windows::{Boot, WindowsHost},
 };
-use crate::ci::{
-    config::{CiConfig, PINS_PATH},
-    host::provision::Provision,
-    image::ImageCommand,
-    process::Process,
+use crate::{
+    ci::{config::CiConfig, host::provision::Provision, image::ImageCommand, process::Process},
+    consts,
 };
 
 #[derive(Debug, Args)]
@@ -31,7 +29,7 @@ pub(crate) struct MacArgs {
     #[arg(long, env = "KITHARA_CI_HOST_CONFIG")]
     config: PathBuf,
     /// Reviewed build pins tracked in the repository.
-    #[arg(long, env = "KITHARA_CI_PINS", default_value = PINS_PATH)]
+    #[arg(long, env = "KITHARA_CI_PINS", default_value = consts::PINS_PATH)]
     pins: PathBuf,
     #[command(subcommand)]
     command: MacCommand,

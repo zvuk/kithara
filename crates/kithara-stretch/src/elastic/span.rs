@@ -4,8 +4,7 @@ use num_traits::ToPrimitive;
 use smallvec::SmallVec;
 
 use super::{ElasticCapabilities, ElasticError, ElasticRequest, ElasticSpanConfig};
-
-const MAX_SPANS: usize = 4;
+use crate::consts;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceDirection {
@@ -139,12 +138,12 @@ pub struct ElasticSpanPlan {
     #[field(get, copy)]
     cursor: ElasticCursor,
     #[field(skip)]
-    segments: SmallVec<[ElasticSpanRequest; MAX_SPANS]>,
+    segments: SmallVec<[ElasticSpanRequest; consts::MAX_SPANS]>,
 }
 
 impl ElasticSpanPlan {
     /// Maximum number of source spans accepted for one real-time render block.
-    pub const MAX_SPANS: usize = MAX_SPANS;
+    pub const MAX_SPANS: usize = consts::MAX_SPANS;
 
     /// Quantizes up to four continuous source spans inside one capability envelope.
     /// # Errors
@@ -159,10 +158,12 @@ impl ElasticSpanPlan {
     where
         I: IntoIterator<Item = ElasticSpan>,
     {
-        let mut continuous = SmallVec::<[ElasticSpan; MAX_SPANS]>::new();
+        let mut continuous = SmallVec::<[ElasticSpan; consts::MAX_SPANS]>::new();
         for span in spans {
-            if continuous.len() == MAX_SPANS {
-                return Err(ElasticError::SpanLimit { limit: MAX_SPANS });
+            if continuous.len() == consts::MAX_SPANS {
+                return Err(ElasticError::SpanLimit {
+                    limit: consts::MAX_SPANS,
+                });
             }
             continuous.push(span);
         }
@@ -187,7 +188,7 @@ impl ElasticSpanPlan {
         let minimum_rate = envelope.min_source_frames_per_output();
         let maximum_rate = envelope.max_source_frames_per_output();
         let mut cumulative_output_frames = 0usize;
-        let mut segments = SmallVec::<[ElasticSpanRequest; MAX_SPANS]>::new();
+        let mut segments = SmallVec::<[ElasticSpanRequest; consts::MAX_SPANS]>::new();
         for span in &continuous {
             cumulative_output_frames = cumulative_output_frames
                 .checked_add(span.output_frames)

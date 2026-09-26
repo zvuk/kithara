@@ -10,13 +10,15 @@ use crate::common::{
     walker::{relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "god_struct";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "god_struct";
+}
 
 pub(crate) struct GodStruct;
 
 impl Check for GodStruct {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -49,7 +51,7 @@ impl Check for GodStruct {
                     "{}: {} substantial methods, {} fields (warn threshold {})",
                     hit.name, hit.methods, hit.fields, cfg.warn
                 );
-                Violation::warn(ID, hit.key, msg)
+                Violation::warn(consts::ID, hit.key, msg)
             })
             .collect();
         Ok(violations)

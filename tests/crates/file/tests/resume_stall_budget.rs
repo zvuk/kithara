@@ -38,18 +38,19 @@ use kithara_integration_tests::{
     kithara,
 };
 
-struct Consts;
-impl Consts {
+mod consts {
+    use super::Duration;
+
     /// Advertised full length; the stall leaves a large permanent gap.
-    const TOTAL: usize = 1_024_000;
+    pub(super) const TOTAL: usize = 1_024_000;
     /// Bytes the server actually delivers before going dark.
-    const HEAD: usize = 64 * 1024;
+    pub(super) const HEAD: usize = 64 * 1024;
     /// Short idle timeout so each dead fetch cycles quickly.
-    const INACTIVITY: Duration = Duration::from_millis(300);
+    pub(super) const INACTIVITY: Duration = Duration::from_millis(300);
     /// Wall-clock ceiling for the terminal error. Generous against the
     /// per-cycle cost (idle timeout + one retry) so a pass is a real
     /// budget, not a lucky race.
-    const ERROR_DEADLINE: Duration = Duration::from_secs(20);
+    pub(super) const ERROR_DEADLINE: Duration = Duration::from_secs(20);
 }
 
 #[derive(Clone)]
@@ -72,7 +73,7 @@ async fn serve_head_then_stall(State(state): State<StallState>, headers: HeaderM
     state.gets.fetch_add(1, Ordering::SeqCst);
     let total = state.data.len();
     let start = range_start(&headers).min(total);
-    let head_end = Consts::HEAD.clamp(start, total);
+    let head_end = consts::HEAD.clamp(start, total);
     let head = Bytes::copy_from_slice(&state.data[start..head_end]);
 
     let body = Body::from_stream(stream::unfold(Some(head), |chunk| async move {
@@ -99,7 +100,7 @@ async fn serve_head_then_stall(State(state): State<StallState>, headers: HeaderM
 
 #[kithara::test(tokio, multi_thread, flash(false), timeout(Duration::from_secs(45)))]
 async fn zero_progress_resume_loop_fails_terminally() {
-    let data: Vec<u8> = (0..Consts::TOTAL)
+    let data: Vec<u8> = (0..consts::TOTAL)
         .map(|i| u8::try_from(i % 256).unwrap_or(0))
         .collect();
     let gets = Arc::new(AtomicUsize::new(0));
@@ -118,7 +119,7 @@ async fn zero_progress_resume_loop_fails_terminally() {
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::builder()
-                .inactivity_timeout(Consts::INACTIVITY)
+                .inactivity_timeout(consts::INACTIVITY)
                 .retry_policy(
                     RetryPolicy::builder()
                         .max_retries(1)
@@ -149,14 +150,14 @@ async fn zero_progress_resume_loop_fails_terminally() {
         )
         .pools(pools)
         .cancel(cancel)
-        .look_ahead_bytes(Consts::TOTAL as u64)
+        .look_ahead_bytes(consts::TOTAL as u64)
         .downloader(downloader)
         .build();
     let _stream = Stream::<File<TestPools>>::new(config)
         .await
         .expect("stream opens on the reachable head");
 
-    let terminal = kithara::platform::time::timeout(Consts::ERROR_DEADLINE, async {
+    let terminal = kithara::platform::time::timeout(consts::ERROR_DEADLINE, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
                 Ok(TestEvent::File(FileEvent::Error { .. })) => return true,
@@ -171,7 +172,7 @@ async fn zero_progress_resume_loop_fails_terminally() {
         matches!(terminal, Ok(true)),
         "zero-progress gap-resume must fail terminally within {:?} \
          (server saw {} fetches and the loop was still spinning)",
-        Consts::ERROR_DEADLINE,
+        consts::ERROR_DEADLINE,
         gets.load(Ordering::SeqCst),
     );
     assert!(

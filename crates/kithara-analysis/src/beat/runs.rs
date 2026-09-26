@@ -15,8 +15,10 @@ use crate::{
     slots::{Intake, Opens},
 };
 
-#[cfg(feature = "beat-backend")]
-pub(crate) const DETECTOR_AUDIO_TAG: &str = "detector_audio_seamless_v2";
+pub(crate) mod consts {
+    #[cfg(feature = "beat-backend")]
+    pub(crate) const DETECTOR_AUDIO_TAG: &str = "detector_audio_seamless_v2";
+}
 
 struct Run<B>
 where
@@ -521,11 +523,9 @@ mod tests {
 
     use super::{Intake, Opens, Runs};
     use crate::{
-        BeatAnalysisConfig,
+        BeatAnalysisConfig, consts,
         test_pools::{Pools, pools, pools_with},
     };
-
-    const SRC: u32 = 44_100;
 
     #[derive(derive_more::Deref, derive_more::DerefMut)]
     struct TestRuns {
@@ -603,11 +603,11 @@ mod tests {
     #[kithara::test]
     fn arrival_size_does_not_change_the_resampled_audio(run_ramp: Vec<f32>) {
         let source = ramp(&run_ramp, 88_200, 0);
-        let mut whole = runs(SRC);
+        let mut whole = runs(consts::SRC);
         whole.push(&source, 0, Opens::Run);
         whole.flush();
 
-        let mut piecemeal = runs(SRC);
+        let mut piecemeal = runs(consts::SRC);
         for (index, block) in source.chunks(2205).enumerate() {
             piecemeal.push(block, (index * 2205) as u64, Opens::Run);
         }
@@ -628,7 +628,7 @@ mod tests {
 
     #[kithara::test]
     fn adjacent_blocks_form_one_run(run_ramp: Vec<f32>) {
-        let mut set = runs(SRC);
+        let mut set = runs(consts::SRC);
         set.push(&ramp(&run_ramp, 4410, 0), 0, Opens::Run);
         set.push(&ramp(&run_ramp, 4410, 4410), 4410, Opens::Run);
         set.flush();
@@ -637,7 +637,7 @@ mod tests {
 
     #[kithara::test]
     fn a_gap_keeps_two_runs_until_it_is_filled(run_ramp: Vec<f32>) {
-        let mut set = runs(SRC);
+        let mut set = runs(consts::SRC);
         set.push(&ramp(&run_ramp, 4410, 0), 0, Opens::Run);
         set.push(&ramp(&run_ramp, 4410, 88_200), 88_200, Opens::Run);
         set.flush();
@@ -654,7 +654,7 @@ mod tests {
 
     #[kithara::test]
     fn a_block_before_a_run_extends_it_backwards(run_ramp: Vec<f32>) {
-        let mut set = runs(SRC);
+        let mut set = runs(consts::SRC);
         set.push(&ramp(&run_ramp, 4410, 4410), 4410, Opens::Run);
         set.push(&ramp(&run_ramp, 4410, 0), 0, Opens::Run);
         set.flush();
@@ -667,13 +667,13 @@ mod tests {
             .map(|i| (i * 4410, ramp(&run_ramp, 4410, i * 4410)))
             .collect();
 
-        let mut ascending = runs(SRC);
+        let mut ascending = runs(consts::SRC);
         for (at, pcm) in &blocks {
             ascending.push(pcm, *at, Opens::Run);
         }
         ascending.flush();
 
-        let mut shuffled = runs(SRC);
+        let mut shuffled = runs(consts::SRC);
         for index in [5usize, 0, 7, 2, 1, 6, 3, 4] {
             let Some((at, pcm)) = blocks.get(index) else {
                 continue;
@@ -701,7 +701,7 @@ mod tests {
     fn a_full_hold_turns_audio_down_instead_of_giving_it_up(run_ramp: Vec<f32>) {
         // Ten blocks of 4410 source frames are 22_050 at the detector rate,
         // well past a 10_000 frame hold.
-        let mut set = budgeted(SRC, 10_000, usize::MAX);
+        let mut set = budgeted(consts::SRC, 10_000, usize::MAX);
         let mut refused = 0;
         for block in 0..10u64 {
             if !set.push(
@@ -732,7 +732,7 @@ mod tests {
 
     #[kithara::test]
     fn audio_turned_down_is_taken_once_there_is_room(run_ramp: Vec<f32>) {
-        let mut set = budgeted(SRC, 10_000, usize::MAX);
+        let mut set = budgeted(consts::SRC, 10_000, usize::MAX);
         for block in 0..10u64 {
             set.push(
                 &ramp(&run_ramp, 4410, block * 4410),
@@ -757,7 +757,7 @@ mod tests {
 
     #[kithara::test]
     fn audio_the_pass_did_not_read_extends_a_run_without_opening_one(run_ramp: Vec<f32>) {
-        let mut set = budgeted(SRC, usize::MAX, usize::MAX);
+        let mut set = budgeted(consts::SRC, usize::MAX, usize::MAX);
         assert!(
             !set.push(&ramp(&run_ramp, 4410, 88_200), 88_200, Opens::Extends),
             "audio offered from elsewhere is backlog the pass did not plan for"
@@ -776,7 +776,7 @@ mod tests {
     fn a_run_cap_leaves_room_for_a_window_in_every_run(run_ramp: Vec<f32>) {
         // The cap keeps blocks far apart from filling the hold with runs too
         // short for the detector to read.
-        let mut set = budgeted(SRC, usize::MAX, 2);
+        let mut set = budgeted(consts::SRC, usize::MAX, 2);
         assert!(set.push(&ramp(&run_ramp, 4410, 0), 0, Opens::Run));
         assert!(set.push(&ramp(&run_ramp, 4410, 88_200), 88_200, Opens::Run));
         assert!(
@@ -922,7 +922,7 @@ mod tests {
             .get_with_len::<u8>(LOADER_BYTES)
             .expect("initial loader scratch must fit");
 
-        let mut set = budgeted_with_pools(SRC, usize::MAX, RUNS, pools.clone());
+        let mut set = budgeted_with_pools(consts::SRC, usize::MAX, RUNS, pools.clone());
         for fragment in 0..24u16 {
             set.push(
                 &fragments[usize::from(fragment)..usize::from(fragment) + 1],

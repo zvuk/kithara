@@ -16,13 +16,15 @@ use crate::{
     idioms::config::GuardCascadeConfig,
 };
 
-pub(crate) const ID: &str = "guard_cascade";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "guard_cascade";
+}
 
 pub(crate) struct GuardCascade;
 
 impl Check for GuardCascade {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -88,7 +90,7 @@ fn scan_block(cfg: &GuardCascadeConfig, rel: &str, b: &Block, out: &mut Vec<Viol
                  it inlines back to the same cascade. \
                  See xtask/src/idioms/checks/guard_cascade.rs module docs for examples."
             );
-            out.push(Violation::warn(ID, key, msg));
+            out.push(Violation::warn(consts::ID, key, msg));
         }
     }
 }

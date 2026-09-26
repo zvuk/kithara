@@ -6,18 +6,14 @@ use kithara_resampler::rubato::RubatoBackend;
 use kithara_test_utils::kithara;
 use rangemap::RangeSet;
 
-use super::{
-    AnalysisFile, AnalysisFileError, AnalysisFileSpec, AnalysisFileUpdate,
-    file::{HEADER_LEN, INDEX_ENTRY_LEN},
-};
+use super::{AnalysisFile, AnalysisFileError, AnalysisFileSpec, AnalysisFileUpdate};
 #[cfg(all(feature = "beat-nn", feature = "analysis-waveform"))]
 use crate::test_pools::pools;
 use crate::{
-    AnalysisFingerprint, AnalysisProgress, TrackAnalysis, blob::Writer, progress::AnalysisResume,
+    AnalysisFingerprint, AnalysisProgress, TrackAnalysis, blob::Writer, consts,
+    progress::AnalysisResume,
 };
 
-const EXTENT: u64 = 64;
-const CHUNK_FRAMES: u64 = 16;
 fn rate(value: u32) -> NonZeroU32 {
     NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
 }
@@ -33,8 +29,8 @@ fn fingerprint() -> AnalysisFingerprint {
 fn spec() -> AnalysisFileSpec {
     AnalysisFileSpec::new(
         rate(48_000),
-        EXTENT,
-        chunk_frames(CHUNK_FRAMES),
+        consts::ARCHIVE_EXTENT,
+        chunk_frames(consts::ARCHIVE_CHUNK_FRAMES),
         fingerprint(),
     )
     .expect("fixture spec is valid")
@@ -44,7 +40,7 @@ fn analysis(revision: u64, ranges: &[(u64, u64)], settled: bool) -> TrackAnalysi
     analysis_with(
         revision,
         rate(48_000),
-        Some(EXTENT),
+        Some(consts::ARCHIVE_EXTENT),
         fingerprint(),
         ranges,
         settled,
@@ -108,7 +104,7 @@ fn progress(analysis: TrackAnalysis, chunk_frames: NonZeroU64) -> AnalysisProgre
 }
 
 fn default_progress(analysis: TrackAnalysis) -> AnalysisProgress {
-    progress(analysis, chunk_frames(CHUNK_FRAMES))
+    progress(analysis, chunk_frames(consts::ARCHIVE_CHUNK_FRAMES))
 }
 
 fn apply(bytes: &mut Vec<u8>, update: &AnalysisFileUpdate) {
@@ -165,15 +161,15 @@ fn effective_application_fingerprint_fits_the_fixed_header() {
     let snapshot = analysis_with(
         1,
         rate(48_000),
-        Some(EXTENT),
+        Some(consts::ARCHIVE_EXTENT),
         fingerprint.clone(),
-        &[(0, EXTENT)],
+        &[(0, consts::ARCHIVE_EXTENT)],
         true,
     );
     let spec = AnalysisFileSpec::new(
         rate(48_000),
-        EXTENT,
-        chunk_frames(CHUNK_FRAMES),
+        consts::ARCHIVE_EXTENT,
+        chunk_frames(consts::ARCHIVE_CHUNK_FRAMES),
         fingerprint.clone(),
     )
     .expect("effective application fingerprint fits the header");
@@ -187,12 +183,15 @@ fn effective_application_fingerprint_fits_the_fixed_header() {
 
 #[kithara::test]
 fn partial_unsettled_snapshot_round_trips() {
-    let bytes = create_bytes(analysis(1, &[(0, CHUNK_FRAMES)], false));
+    let bytes = create_bytes(analysis(1, &[(0, consts::ARCHIVE_CHUNK_FRAMES)], false));
     let file = AnalysisFile::parse(&bytes, &fingerprint()).expect("file restores");
 
     assert_eq!(file.spec().source_sample_rate(), rate(48_000));
-    assert_eq!(file.spec().extent(), EXTENT);
-    assert_eq!(file.spec().chunk_frames(), chunk_frames(CHUNK_FRAMES));
+    assert_eq!(file.spec().extent(), consts::ARCHIVE_EXTENT);
+    assert_eq!(
+        file.spec().chunk_frames(),
+        chunk_frames(consts::ARCHIVE_CHUNK_FRAMES)
+    );
     assert_eq!(file.latest().analysis().revision(), 1);
     assert!(!file.latest().analysis().is_settled());
     assert!(file.latest().is_resumable());
@@ -202,9 +201,12 @@ fn partial_unsettled_snapshot_round_trips() {
             .coverage()
             .iter()
             .collect::<Vec<_>>(),
-        [&(0..CHUNK_FRAMES)]
+        [&(0..consts::ARCHIVE_CHUNK_FRAMES)]
     );
-    assert_eq!(&bytes[HEADER_LEN..HEADER_LEN + 4], &[1, 0, 0, 0]);
+    assert_eq!(
+        &bytes[consts::HEADER_LEN..consts::HEADER_LEN + 4],
+        &[1, 0, 0, 0]
+    );
 }
 
 #[kithara::test]
@@ -212,7 +214,7 @@ fn unknown_extent_cannot_size_the_fixed_index() {
     let snapshot = analysis_with(1, rate(48_000), None, fingerprint(), &[(0, 16)], false);
 
     assert!(matches!(
-        AnalysisFileSpec::for_analysis(&snapshot, chunk_frames(CHUNK_FRAMES)),
+        AnalysisFileSpec::for_analysis(&snapshot, chunk_frames(consts::ARCHIVE_CHUNK_FRAMES)),
         Err(AnalysisFileError::UnknownExtent)
     ));
 }
@@ -254,8 +256,9 @@ fn updates_replace_latest_snapshot_and_preserve_completed_index_entries() {
     let first = analysis(1, &[(0, 16), (32, 16)], false);
     let mut bytes = create_bytes(first);
     let first_len = bytes.len();
-    let payload_offset = HEADER_LEN + 4 * INDEX_ENTRY_LEN;
-    let first_entry = bytes[HEADER_LEN..HEADER_LEN + INDEX_ENTRY_LEN].to_vec();
+    let payload_offset = consts::HEADER_LEN + 4 * consts::INDEX_ENTRY_LEN;
+    let first_entry =
+        bytes[consts::HEADER_LEN..consts::HEADER_LEN + consts::INDEX_ENTRY_LEN].to_vec();
 
     let file = AnalysisFile::parse(&bytes, &fingerprint()).expect("first generation restores");
     let second_progress = default_progress(analysis(2, &[(0, 48)], false));
@@ -281,7 +284,7 @@ fn updates_replace_latest_snapshot_and_preserve_completed_index_entries() {
         .split_last()
         .expect("every generation ends with a header patch");
     assert_eq!(header_patch.offset(), 0);
-    let header_len = u64::try_from(HEADER_LEN).expect("header length fits u64");
+    let header_len = u64::try_from(consts::HEADER_LEN).expect("header length fits u64");
     assert!(
         index_patches
             .iter()
@@ -290,13 +293,14 @@ fn updates_replace_latest_snapshot_and_preserve_completed_index_entries() {
     apply(&mut bytes, &second);
 
     assert_eq!(
-        &bytes[HEADER_LEN..HEADER_LEN + INDEX_ENTRY_LEN],
+        &bytes[consts::HEADER_LEN..consts::HEADER_LEN + consts::INDEX_ENTRY_LEN],
         first_entry
     );
 
     let file = AnalysisFile::parse(&bytes, &fingerprint()).expect("second generation restores");
-    let first_two_entries = bytes[HEADER_LEN..HEADER_LEN + 2 * INDEX_ENTRY_LEN].to_vec();
-    let third_progress = default_progress(analysis(3, &[(0, EXTENT)], true));
+    let first_two_entries =
+        bytes[consts::HEADER_LEN..consts::HEADER_LEN + 2 * consts::INDEX_ENTRY_LEN].to_vec();
+    let third_progress = default_progress(analysis(3, &[(0, consts::ARCHIVE_EXTENT)], true));
     let third = file
         .update(&third_progress)
         .expect("third generation builds");
@@ -304,7 +308,7 @@ fn updates_replace_latest_snapshot_and_preserve_completed_index_entries() {
     apply(&mut bytes, &third);
 
     assert_eq!(
-        &bytes[HEADER_LEN..HEADER_LEN + 2 * INDEX_ENTRY_LEN],
+        &bytes[consts::HEADER_LEN..consts::HEADER_LEN + 2 * consts::INDEX_ENTRY_LEN],
         first_two_entries
     );
     let restored = AnalysisFile::parse(&bytes, &fingerprint()).expect("latest generation restores");
@@ -318,9 +322,12 @@ fn updates_replace_latest_snapshot_and_preserve_completed_index_entries() {
             .coverage()
             .iter()
             .collect::<Vec<_>>(),
-        [&(0..EXTENT)]
+        [&(0..consts::ARCHIVE_EXTENT)]
     );
-    assert_eq!(&bytes[HEADER_LEN..HEADER_LEN + 4], &[1, 1, 1, 1]);
+    assert_eq!(
+        &bytes[consts::HEADER_LEN..consts::HEADER_LEN + 4],
+        &[1, 1, 1, 1]
+    );
 }
 
 #[kithara::test]
@@ -363,7 +370,7 @@ fn parse_rejects_fingerprint_axis_extent_and_chunk_drift() {
 
     let mut wrong_extent = bytes.clone();
     wrong_extent[EXTENT_FIELD..EXTENT_FIELD + 8]
-        .copy_from_slice(&(EXTENT + CHUNK_FRAMES).to_le_bytes());
+        .copy_from_slice(&(consts::ARCHIVE_EXTENT + consts::ARCHIVE_CHUNK_FRAMES).to_le_bytes());
     assert!(matches!(
         AnalysisFile::parse(&wrong_extent, &fingerprint()),
         Err(AnalysisFileError::Corrupt)
@@ -386,7 +393,7 @@ fn update_rejects_axis_extent_and_fingerprint_drift() {
         analysis_with(
             2,
             rate(44_100),
-            Some(EXTENT),
+            Some(consts::ARCHIVE_EXTENT),
             fingerprint(),
             &[(0, 16)],
             false,
@@ -394,7 +401,7 @@ fn update_rejects_axis_extent_and_fingerprint_drift() {
         analysis_with(
             2,
             rate(48_000),
-            Some(EXTENT + 1),
+            Some(consts::ARCHIVE_EXTENT + 1),
             fingerprint(),
             &[(0, 16)],
             false,
@@ -402,7 +409,7 @@ fn update_rejects_axis_extent_and_fingerprint_drift() {
         analysis_with(
             2,
             rate(48_000),
-            Some(EXTENT),
+            Some(consts::ARCHIVE_EXTENT),
             AnalysisFingerprint::new(Some("beat:other"), Some("wave:other")),
             &[(0, 16)],
             false,
@@ -436,7 +443,7 @@ fn parser_rejects_truncation_corrupt_offsets_and_index_flags() {
     const LATEST_PAYLOAD_OFFSET_FIELD: usize = 72;
 
     let bytes = create_bytes(analysis(1, &[(0, 16)], false));
-    for cut in [0, HEADER_LEN - 1, bytes.len() - 1] {
+    for cut in [0, consts::HEADER_LEN - 1, bytes.len() - 1] {
         assert!(matches!(
             AnalysisFile::parse(&bytes[..cut], &fingerprint()),
             Err(AnalysisFileError::Corrupt)
@@ -452,7 +459,7 @@ fn parser_rejects_truncation_corrupt_offsets_and_index_flags() {
     ));
 
     let mut invalid_entry = bytes.clone();
-    invalid_entry[HEADER_LEN] = 2;
+    invalid_entry[consts::HEADER_LEN] = 2;
     assert!(matches!(
         AnalysisFile::parse(&invalid_entry, &fingerprint()),
         Err(AnalysisFileError::Corrupt)
@@ -471,7 +478,7 @@ fn parser_rejects_truncation_corrupt_offsets_and_index_flags() {
 #[kithara::test]
 fn parser_rejects_index_coverage_disagreement() {
     let mut bytes = create_bytes(analysis(1, &[(0, 16)], false));
-    bytes[HEADER_LEN..HEADER_LEN + INDEX_ENTRY_LEN].fill(0);
+    bytes[consts::HEADER_LEN..consts::HEADER_LEN + consts::INDEX_ENTRY_LEN].fill(0);
 
     assert!(matches!(
         AnalysisFile::parse(&bytes, &fingerprint()),

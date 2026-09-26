@@ -1,4 +1,4 @@
-use super::layout;
+use crate::consts;
 
 /// Where the running `xtask` came from, for the job's cache summary.
 ///
@@ -13,7 +13,7 @@ pub(crate) fn provenance() -> (&'static str, String) {
     let cached = binary.ancestors().any(|step| {
         step.file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name == layout::CACHE_DIRECTORY)
+            .is_some_and(|name| name == consts::CACHE_DIRECTORY)
     });
     if cached {
         ("reused", format!("ran the cached generation at {shown}"))

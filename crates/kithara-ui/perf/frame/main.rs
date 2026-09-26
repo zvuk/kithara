@@ -42,7 +42,7 @@ use crate::{
     fixture::{CensusReads, Fixture},
     immediate::{Immediate, laid_out_rect},
     retained::Retained,
-    scenarios::Consts,
+    scenarios::consts,
 };
 
 /// What a frame is asked to answer for. A drag also presses, so the classes are
@@ -297,7 +297,7 @@ fn missing_from_table() -> Vec<&'static str> {
         .iter()
         .copied()
         .filter(|kind| {
-            !Consts::SCENARIOS
+            !consts::SCENARIOS
                 .iter()
                 .any(|scenario| scenario.name == *kind)
         })
@@ -305,7 +305,7 @@ fn missing_from_table() -> Vec<&'static str> {
 }
 
 fn unnamed_by_the_document() -> Vec<&'static str> {
-    Consts::SCENARIOS
+    consts::SCENARIOS
         .iter()
         .map(|scenario| scenario.name)
         .filter(|name| !ControlSpec::KINDS.contains(name))
@@ -371,8 +371,8 @@ fn ui_frame_perf(#[case] label: &'static str, #[case] host: Host) {
 
 fn measure(backend: &Backend) -> Vec<Reading> {
     let geometry = backend.geometry();
-    let mut readings = Vec::with_capacity(Consts::SCENARIOS.len());
-    for scenario in Consts::SCENARIOS {
+    let mut readings = Vec::with_capacity(consts::SCENARIOS.len());
+    for scenario in consts::SCENARIOS {
         let fixture = Fixture::new(scenario.control);
         let reads = Rc::new(CensusReads::default());
         let rect = laid_out_rect(&fixture, &reads, &geometry);
@@ -469,8 +469,8 @@ fn miss(reading: &Reading) -> Option<String> {
     let viewport = Rect {
         x: 0.0,
         y: 0.0,
-        w: f32::from(Consts::WIDTH),
-        h: f32::from(Consts::HEIGHT),
+        w: f32::from(consts::WIDTH),
+        h: f32::from(consts::HEIGHT),
     };
     if ![rect.x, rect.y, rect.w, rect.h]
         .iter()
@@ -487,8 +487,8 @@ fn miss(reading: &Reading) -> Option<String> {
     if let Some(at) = reading.points.iter().find(|at| !contains(viewport, **at)) {
         return Some(format!(
             "{at:?} falls outside the {}x{} fixture",
-            Consts::WIDTH,
-            Consts::HEIGHT
+            consts::WIDTH,
+            consts::HEIGHT
         ));
     }
     // Geometry says the point is on the control. This says the host agrees: a

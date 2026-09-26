@@ -18,8 +18,9 @@ use kithara_platform::sync::Arc;
 use kithara_storage::AvailabilityObserver;
 use rangemap::RangeSet;
 
-use super::retire::{RETIRE_CAPACITY, Retired};
+use super::retire::Retired;
 use crate::{
+    consts,
     error::AssetsResult,
     index::persistence::{FlushHub, Flushable},
     layout::{ResourceKey, ResourceKeyKind},
@@ -90,9 +91,6 @@ pub(super) type Entry = Arc<ArcSwap<Availability>>;
 /// tree on the audio thread. Produce-core reads therefore park their
 /// snapshots in [`Retired`] and the write side pays the frees when it drains.
 pub(super) type AssetTree = HashMap<String, Arc<HashMap<String, Entry>>>;
-
-/// The asset root an absolute key is filed under.
-pub(crate) const ABSOLUTE_ROOT: &str = "__absolute__";
 
 pub(super) struct InnerIndex {
     /// Maps `asset_root` -> `RelativePath` -> `Availability`
@@ -325,7 +323,7 @@ impl AvailabilityIndex {
                 asset_root,
                 rel_path,
             } => (asset_root, rel_path),
-            ResourceKeyKind::Absolute(path) => (ABSOLUTE_ROOT, path.to_str().unwrap_or("")),
+            ResourceKeyKind::Absolute(path) => (consts::ABSOLUTE_ROOT, path.to_str().unwrap_or("")),
         }
     }
 
@@ -396,7 +394,7 @@ impl Default for AvailabilityIndex {
         Self {
             inner: Arc::new(InnerIndex {
                 assets: ArcSwap::from_pointee(AssetTree::new()),
-                retired: Retired::new(RETIRE_CAPACITY),
+                retired: Retired::new(consts::RETIRE_CAPACITY),
                 #[cfg(not(target_arch = "wasm32"))]
                 persist: OnceLock::new(),
                 hub: OnceLock::new(),

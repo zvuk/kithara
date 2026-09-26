@@ -49,3 +49,4 @@ pub use traits::{
     AudioRead, AudioReader, AudioSession, AudioSource, ChunkOutcome, DecodeError, DecodeResult,
     PendingReason, ReadOutcome, SeekBegin, SeekOutcome, SourceDiscontinuity,
 };
+mod consts;

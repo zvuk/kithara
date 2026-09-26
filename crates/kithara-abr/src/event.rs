@@ -5,9 +5,7 @@ use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use num_traits::AsPrimitive;
 
-/// Threshold separating Manual (below) from Auto (at or above) in the packed
-/// `usize` representation of [`AbrMode`].
-const ABR_MODE_AUTO_THRESHOLD: usize = usize::MAX / 2;
+use crate::consts;
 
 /// A validated position into a peer's variant list.
 ///
@@ -94,12 +92,18 @@ impl From<AbrMode> for usize {
     fn from(mode: AbrMode) -> Self {
         match mode {
             AbrMode::Manual(v) => {
-                debug_assert!(v.get() < ABR_MODE_AUTO_THRESHOLD, "variant index too large");
+                debug_assert!(
+                    v.get() < consts::ABR_MODE_AUTO_THRESHOLD,
+                    "variant index too large"
+                );
                 v.get()
             }
             AbrMode::Auto(None) => Self::MAX,
             AbrMode::Auto(Some(v)) => {
-                debug_assert!(v.get() < ABR_MODE_AUTO_THRESHOLD, "variant index too large");
+                debug_assert!(
+                    v.get() < consts::ABR_MODE_AUTO_THRESHOLD,
+                    "variant index too large"
+                );
                 Self::MAX - 1 - v.get()
             }
         }
@@ -110,7 +114,7 @@ impl From<usize> for AbrMode {
     fn from(val: usize) -> Self {
         if val == usize::MAX {
             Self::Auto(None)
-        } else if val >= ABR_MODE_AUTO_THRESHOLD {
+        } else if val >= consts::ABR_MODE_AUTO_THRESHOLD {
             Self::Auto(Some(VariantIndex::new(usize::MAX - 1 - val)))
         } else {
             Self::Manual(VariantIndex::new(val))

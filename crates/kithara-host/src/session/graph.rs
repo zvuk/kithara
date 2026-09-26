@@ -668,14 +668,13 @@ mod tests {
     use super::*;
     use crate::{
         api::{SessionTransportSnapshot, Tempo},
+        consts,
         session::{
             dispatch::{invalidate_audio_route, run_cmd},
             protocol::Cmd,
             tests::graph::{attach_player, state as test_state},
         },
     };
-
-    const BLOCK_FRAMES: usize = 128;
 
     /// The process-wide output device, held by whichever stream owns it.
     #[derive(Default)]
@@ -752,16 +751,16 @@ mod tests {
             let Some(processor) = dev.processor.as_mut() else {
                 return false;
             };
-            let mut output = [0.0_f32; BLOCK_FRAMES * 2];
+            let mut output = [0.0_f32; consts::GRAPH_BLOCK_FRAMES * 2];
             let input = InterleavedSlice::new(&[] as &[f32], 0, 0)
                 .expect("invariant: an empty input adapter is well formed");
-            let mut output = InterleavedSlice::new_mut(&mut output, 2, BLOCK_FRAMES)
+            let mut output = InterleavedSlice::new_mut(&mut output, 2, consts::GRAPH_BLOCK_FRAMES)
                 .expect("invariant: the fixture output block is stereo");
             processor.process(
                 &input,
                 &mut output,
                 BackendProcessInfo {
-                    frames: BLOCK_FRAMES,
+                    frames: consts::GRAPH_BLOCK_FRAMES,
                     // Firewheel stamps a block with its own clock type, so the
                     // platform clock cannot be handed over here.
                     process_timestamp: Some(bevy_platform::time::Instant::now()),

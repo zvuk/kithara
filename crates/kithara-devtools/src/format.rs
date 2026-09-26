@@ -11,13 +11,11 @@ use clap::{Args, ValueEnum};
 use crate::{
     Ctx,
     common::tools::ToolsConfig,
-    manifest,
+    consts, manifest,
     manifest::{DependencyOrderArgs, ManifestArgs, ManifestCommand},
     util::{check_tool, ensure_clean_tree, nightly_toolchain},
     verdict::ChildFailure,
 };
-
-const GIT_LISTING_ARGS: [&str; 4] = ["ls-files", "--cached", "--others", "--exclude-standard"];
 
 #[derive(Debug, Args)]
 pub struct FormatArgs {
@@ -445,18 +443,22 @@ fn collect_files(root: &Path, kind: FileKind) -> Result<Vec<PathBuf>> {
 fn git_listing(root: &Path) -> Result<Vec<PathBuf>> {
     let output = Command::new("git")
         .current_dir(root)
-        .args(GIT_LISTING_ARGS)
+        .args(consts::GIT_LISTING_ARGS)
         .output()
         .with_context(|| {
             format!(
                 "run `git {}` in {}",
-                GIT_LISTING_ARGS.join(" "),
+                consts::GIT_LISTING_ARGS.join(" "),
                 root.display()
             )
         })?;
     if !output.status.success() {
         return Err(ChildFailure::captured(
-            format!("`git {}` in {}", GIT_LISTING_ARGS.join(" "), root.display()),
+            format!(
+                "`git {}` in {}",
+                consts::GIT_LISTING_ARGS.join(" "),
+                root.display()
+            ),
             output.status.code(),
             String::from_utf8_lossy(&output.stderr).into_owned(),
         ));

@@ -4,15 +4,13 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use tracing::info;
 
-use super::{
-    config::{CiPins, PINS_PATH},
-    process::Process,
-};
+use super::{config::CiPins, process::Process};
+use crate::consts;
 
 #[derive(Debug, Args)]
 pub(crate) struct ImageArgs {
     /// Reviewed build pins tracked in the repository.
-    #[arg(long, env = "KITHARA_CI_PINS", default_value = PINS_PATH)]
+    #[arg(long, env = "KITHARA_CI_PINS", default_value = consts::PINS_PATH)]
     pins: PathBuf,
     /// Tag a disposable validation image without replacing the pinned fleet image.
     #[arg(long)]

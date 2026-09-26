@@ -5,21 +5,11 @@ use std::{
     process::{Child, Command, ExitStatus, Stdio},
     sync::mpsc::{self, RecvTimeoutError, SyncSender},
     thread::{self, ScopedJoinHandle},
-    time::Duration,
 };
 
 use anyhow::{Context, Error, Result, anyhow};
 
-struct Consts;
-
-impl Consts {
-    /// Caps queued output at 128 `KiB`; full queues apply backpressure to readers.
-    const CHANNEL_DEPTH: usize = 8;
-    /// Bounds reader-failure detection latency while the sibling stream is idle.
-    const READER_POLL_INTERVAL: Duration = Duration::from_millis(20);
-    /// Amortizes reads without accumulating a complete stress log in memory.
-    const READ_BUFFER_BYTES: usize = 16 * 1024;
-}
+use crate::consts;
 
 #[derive(Clone, Copy)]
 enum Stream {
@@ -117,7 +107,7 @@ pub(super) fn run(command: &mut Command, log_path: &Path) -> Result<ExitStatus> 
     };
 
     thread::scope(|scope| {
-        let (sender, receiver) = mpsc::sync_channel(Consts::CHANNEL_DEPTH);
+        let (sender, receiver) = mpsc::sync_channel(consts::CHANNEL_DEPTH);
         let stdout_sender = sender.clone();
         let mut stdout_reader =
             Some(scope.spawn(move || read_stream(stdout, Stream::Stdout, &stdout_sender)));
@@ -129,7 +119,7 @@ pub(super) fn run(command: &mut Command, log_path: &Path) -> Result<ExitStatus> 
         let mut stdout_available = true;
 
         loop {
-            match receiver.recv_timeout(Consts::READER_POLL_INTERVAL) {
+            match receiver.recv_timeout(consts::READER_POLL_INTERVAL) {
                 Ok(chunk) => {
                     if log_available && let Err(error) = writer.write_log(&chunk.bytes) {
                         log_available = false;
@@ -212,7 +202,7 @@ fn run_stderr_to(
             anyhow!("captured stress command has no stderr pipe"),
         );
     };
-    let mut buffer = [0_u8; Consts::READ_BUFFER_BYTES];
+    let mut buffer = [0_u8; consts::READ_BUFFER_BYTES];
     loop {
         let count = match stderr.read(&mut buffer).context("read child stderr") {
             Ok(count) => count,
@@ -261,7 +251,7 @@ fn create_log(path: &Path) -> Result<File> {
 }
 
 fn read_stream<R: Read>(mut reader: R, stream: Stream, sender: &SyncSender<Chunk>) -> Result<()> {
-    let mut buffer = [0_u8; Consts::READ_BUFFER_BYTES];
+    let mut buffer = [0_u8; consts::READ_BUFFER_BYTES];
     loop {
         let count = reader
             .read(&mut buffer)
@@ -353,14 +343,6 @@ mod tests {
 
     use super::*;
 
-    const CHILD_ENV: &str = "DEVTOOLS_STRESS_OUTPUT_CHILD";
-    const CHILD_COMPLETION_FILE: &str = "DEVTOOLS_STRESS_OUTPUT_COMPLETION_FILE";
-    const CHILD_ENV_VALUE: &str = "emit";
-    const BLOCK_CHILD_ENV_VALUE: &str = "emit-then-block";
-    const CHILD_EXIT_CODE: i32 = 23;
-    const STDERR_MARKER: &[u8] = b"stress-output-stderr-marker\n";
-    const STDOUT_MARKER: &[u8] = b"stress-output-stdout-marker\n";
-
     #[test]
     fn captures_both_streams_without_changing_exit_status() {
         let temp = tempdir().expect("tempdir");
@@ -372,14 +354,14 @@ mod tests {
                 module_path!(),
                 "emit_child_output",
             ))
-            .env(CHILD_ENV, CHILD_ENV_VALUE);
+            .env(consts::OUTPUT_CHILD_ENV, consts::CHILD_ENV_VALUE);
 
         let status = run(&mut command, &log_path).expect("capture child output");
 
-        assert_eq!(status.code(), Some(CHILD_EXIT_CODE));
+        assert_eq!(status.code(), Some(consts::OUTPUT_CHILD_EXIT_CODE));
         let log = fs::read(log_path).expect("read combined log");
-        assert!(contains(&log, STDOUT_MARKER));
-        assert!(contains(&log, STDERR_MARKER));
+        assert!(contains(&log, consts::OUTPUT_STDOUT_MARKER));
+        assert!(contains(&log, consts::OUTPUT_STDERR_MARKER));
     }
 
     #[test]
@@ -394,8 +376,8 @@ mod tests {
                 "emit_then_block",
             ))
             .stdin(Stdio::piped())
-            .env(CHILD_ENV, BLOCK_CHILD_ENV_VALUE)
-            .env(CHILD_COMPLETION_FILE, &completion);
+            .env(consts::OUTPUT_CHILD_ENV, consts::BLOCK_CHILD_ENV_VALUE)
+            .env(consts::CHILD_COMPLETION_FILE, &completion);
         let mut failing_log = FailingWriter;
         let mut destination = Vec::new();
 
@@ -414,31 +396,37 @@ mod tests {
     #[test]
     #[ignore = "subprocess entrypoint"]
     fn emit_child_output() {
-        assert_eq!(env::var(CHILD_ENV).as_deref(), Ok(CHILD_ENV_VALUE));
+        assert_eq!(
+            env::var(consts::OUTPUT_CHILD_ENV).as_deref(),
+            Ok(consts::CHILD_ENV_VALUE)
+        );
         {
             let mut stdout = io::stdout().lock();
             stdout
-                .write_all(STDOUT_MARKER)
+                .write_all(consts::OUTPUT_STDOUT_MARKER)
                 .expect("write stdout marker");
             stdout.flush().expect("flush stdout marker");
         }
         {
             let mut stderr = io::stderr().lock();
             stderr
-                .write_all(STDERR_MARKER)
+                .write_all(consts::OUTPUT_STDERR_MARKER)
                 .expect("write stderr marker");
             stderr.flush().expect("flush stderr marker");
         }
-        process::exit(CHILD_EXIT_CODE);
+        process::exit(consts::OUTPUT_CHILD_EXIT_CODE);
     }
 
     #[test]
     #[ignore = "subprocess entrypoint"]
     fn emit_then_block() {
-        assert_eq!(env::var(CHILD_ENV).as_deref(), Ok(BLOCK_CHILD_ENV_VALUE));
+        assert_eq!(
+            env::var(consts::OUTPUT_CHILD_ENV).as_deref(),
+            Ok(consts::BLOCK_CHILD_ENV_VALUE)
+        );
         let mut stderr = io::stderr().lock();
         stderr
-            .write_all(STDERR_MARKER)
+            .write_all(consts::OUTPUT_STDERR_MARKER)
             .expect("write stderr marker");
         stderr.flush().expect("flush stderr marker");
         drop(stderr);
@@ -447,7 +435,7 @@ mod tests {
             .read_to_end(&mut input)
             .expect("wait for parent pipe closure");
         fs::write(
-            env::var_os(CHILD_COMPLETION_FILE).expect("completion path"),
+            env::var_os(consts::CHILD_COMPLETION_FILE).expect("completion path"),
             b"completed\n",
         )
         .expect("write completion marker");

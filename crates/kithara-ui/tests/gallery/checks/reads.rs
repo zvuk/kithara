@@ -9,7 +9,7 @@ use kithara_ui::{
     render::{ControlAction, ReadValue, Reads as _, Zoom},
 };
 
-use crate::demo::{DemoReads, consts::Consts, data::CATALOG};
+use crate::demo::{DemoReads, consts, data::CATALOG};
 
 fn visible_tree_row_selected(reads: &DemoReads, label: &str) -> bool {
     let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
@@ -67,7 +67,7 @@ fn wave_scalar_write_updates_normalized_playback_position() {
     );
     assert_eq!(
         reads.get("deck.playback.position_secs"),
-        Some(ReadValue::Scalar(Consts::DURATION_SECS * 0.25))
+        Some(ReadValue::Scalar(consts::DURATION_SECS * 0.25))
     );
 }
 

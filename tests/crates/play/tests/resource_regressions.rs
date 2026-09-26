@@ -38,22 +38,23 @@ use tracing::info;
 
 use crate::{
     bufpool_ext::{Pools, TestPools, pools},
-    common::test_defaults::Consts as Shared,
+    common::test_defaults::consts as shared,
     continuity::{
         CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
         render_offline_window, render_until_audible,
     },
 };
 
-struct Consts;
-impl Consts {
-    const READ_TIMEOUT: Duration = Shared::READ_TIMEOUT;
-    const HLS_SEGMENT_COUNT: usize = 3;
-    const HLS_SEGMENT_SIZE: usize = Shared::SEGMENT_SIZE;
-    const HLS_SAMPLE_RATE: f64 = Shared::SAMPLE_RATE as f64;
-    const HLS_CHANNELS: f64 = Shared::CHANNELS as f64;
+mod consts {
+    use super::{Duration, shared};
+
+    pub(super) const READ_TIMEOUT: Duration = shared::READ_TIMEOUT;
+    pub(super) const HLS_SEGMENT_COUNT: usize = 3;
+    pub(super) const HLS_SEGMENT_SIZE: usize = shared::SEGMENT_SIZE;
+    pub(super) const HLS_SAMPLE_RATE: f64 = shared::SAMPLE_RATE as f64;
+    pub(super) const HLS_CHANNELS: f64 = shared::CHANNELS as f64;
     /// Expected duration of the generated `signal_mp3_track_sine440_187s` clip.
-    const EXPECTED_DURATION_SECS: f64 = Shared::TEST_MP3_DURATION_SECS;
+    pub(super) const EXPECTED_DURATION_SECS: f64 = shared::TEST_MP3_DURATION_SECS;
 }
 
 fn play_worker(pools: &Pools) -> PlayWorker<TestPools> {
@@ -260,12 +261,12 @@ fn read_hls_stream_bytes(
 #[kithara::fixture]
 async fn open_audio_hls_server(saw_segments: &'static [u8]) -> HlsTestServer {
     let segment_duration =
-        Consts::HLS_SEGMENT_SIZE as f64 / (Consts::HLS_SAMPLE_RATE * Consts::HLS_CHANNELS * 2.0);
+        consts::HLS_SEGMENT_SIZE as f64 / (consts::HLS_SAMPLE_RATE * consts::HLS_CHANNELS * 2.0);
     HlsTestServer::new(HlsTestServerConfig {
         custom_data: Some(Arc::new(saw_segments.to_vec())),
         segment_duration_secs: segment_duration,
-        segment_size: Consts::HLS_SEGMENT_SIZE,
-        segments_per_variant: Consts::HLS_SEGMENT_COUNT,
+        segment_size: consts::HLS_SEGMENT_SIZE,
+        segments_per_variant: consts::HLS_SEGMENT_COUNT,
         ..Default::default()
     })
     .await
@@ -310,7 +311,7 @@ async fn read_audio_some(
     audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
     stage: &str,
 ) -> usize {
-    let deadline = Instant::now() + Consts::READ_TIMEOUT;
+    let deadline = Instant::now() + consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
 
     loop {
@@ -332,11 +333,11 @@ async fn read_audio_some(
 }
 
 async fn read_some(resource: &mut Resource, stage: &str) -> usize {
-    let deadline = Instant::now() + Consts::READ_TIMEOUT;
+    let deadline = Instant::now() + consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
 
     loop {
-        timeout(Consts::READ_TIMEOUT, resource.preload())
+        timeout(consts::READ_TIMEOUT, resource.preload())
             .await
             .unwrap_or_else(|_| panic!("timed out waiting for preload at stage={stage}"))
             .unwrap_or_else(|err| panic!("preload failed at stage={stage}: {err}"));
@@ -550,7 +551,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     let region = pools();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
             .worker(play_worker(&region))
             .build(),
     );
@@ -938,7 +939,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     let decode_audio =
         open_packaged_hls_audio(&url, store, play_worker(&region), codec, backend).await;
     let mut resource = resource_from_reader(decode_audio);
-    time::timeout(Consts::READ_TIMEOUT, resource.preload())
+    time::timeout(consts::READ_TIMEOUT, resource.preload())
         .await
         .expect("packaged HLS preload must complete")
         .expect("packaged HLS preload must succeed");
@@ -1012,7 +1013,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     let region = pools();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
             .worker(play_worker(&region))
             .build(),
     );
@@ -1150,7 +1151,7 @@ async fn stress_offline_crossfade_no_gaps(
                 .build();
             let audio = w.open(audio_config).await.expect("HLS audio");
             let mut r = resource_from_reader(audio);
-            time::timeout(Consts::READ_TIMEOUT, r.preload())
+            time::timeout(consts::READ_TIMEOUT, r.preload())
                 .await
                 .expect("HLS preload")
                 .expect("HLS preload result");
@@ -1159,7 +1160,7 @@ async fn stress_offline_crossfade_no_gaps(
     };
 
     let mut mp3_1 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
-    time::timeout(Consts::READ_TIMEOUT, mp3_1.preload())
+    time::timeout(consts::READ_TIMEOUT, mp3_1.preload())
         .await
         .expect("mp3_1 preload deadline")
         .expect("mp3_1 preload");
@@ -1167,7 +1168,7 @@ async fn stress_offline_crossfade_no_gaps(
     let s1a = render_offline_window(&mut player, 40, "MP3 solo", BLOCK, SR).await;
 
     let mut hls_1 = make_hls(worker.clone(), store.clone(), master_cancel.child()).await;
-    time::timeout(Consts::READ_TIMEOUT, hls_1.preload())
+    time::timeout(consts::READ_TIMEOUT, hls_1.preload())
         .await
         .expect("hls_1 preload deadline")
         .expect("hls_1 preload");
@@ -1175,7 +1176,7 @@ async fn stress_offline_crossfade_no_gaps(
     let s1b = render_offline_window(&mut player, 80, "MP3→HLS fade", BLOCK, SR).await;
 
     let mut mp3_2 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
-    time::timeout(Consts::READ_TIMEOUT, mp3_2.preload())
+    time::timeout(consts::READ_TIMEOUT, mp3_2.preload())
         .await
         .expect("mp3_2 preload deadline")
         .expect("mp3_2 preload");
@@ -1183,7 +1184,7 @@ async fn stress_offline_crossfade_no_gaps(
     let s2 = render_offline_window(&mut player, 80, "HLS→MP3 fade", BLOCK, SR).await;
 
     let mut mp3_3 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
-    time::timeout(Consts::READ_TIMEOUT, mp3_3.preload())
+    time::timeout(consts::READ_TIMEOUT, mp3_3.preload())
         .await
         .expect("mp3_3 preload deadline")
         .expect("mp3_3 preload");
@@ -1257,15 +1258,15 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     );
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
-        (dur_secs - Consts::EXPECTED_DURATION_SECS).abs() < 2.0,
+        (dur_secs - consts::EXPECTED_DURATION_SECS).abs() < 2.0,
         "path={path}: expected ~{}s, got {dur_secs:.1}s",
-        Consts::EXPECTED_DURATION_SECS
+        consts::EXPECTED_DURATION_SECS
     );
 
     let (samples, position) = {
         let mut total = 0usize;
         let mut buf = [0.0f32; 4096];
-        let deadline = Instant::now() + Consts::READ_TIMEOUT;
+        let deadline = Instant::now() + consts::READ_TIMEOUT;
         let mut saw_eof = false;
         loop {
             match resource.read(&mut buf) {

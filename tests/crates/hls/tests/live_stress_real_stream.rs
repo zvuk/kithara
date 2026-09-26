@@ -46,48 +46,47 @@ use kithara_integration_tests::{
 use tracing::info;
 use url::Url;
 
-struct Consts;
-impl Consts {
-    const WARMUP_CHUNK_BUDGET: usize = 2048;
-    const RANDOM_SEEK_OPS: usize = 100;
-    const CHUNKS_PER_RANDOM_SEEK: usize = 2;
-    const FAST_SEEK_BURST: usize = 60;
-    const WASM_FAST_SEEK_BURST: usize = 48;
-    const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 40;
-    const WASM_SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 48;
-    const REVISIT_SEEKS: usize = 60;
-    const WASM_REVISIT_SEEKS: usize = 48;
-    const WASM_MAX_SEEK_SECS: f64 = 90.0;
-    const SMALL_CACHE_WARMUP_CHUNKS: usize = 20;
-    const WASM_SMALL_CACHE_WARMUP_CHUNKS: usize = 32;
-    const SMALL_CACHE_SEEKS: usize = 10;
-    const WASM_SMALL_CACHE_SEEKS: usize = 4;
-    const SMALL_CACHE_CHUNKS_PER_SEEK: usize = 10;
-    const WASM_SMALL_CACHE_CHUNKS_PER_SEEK: usize = 4;
-    const SMALL_CACHE_MAX_SEEK_SECS: f64 = 60.0;
+mod consts {
+    pub(super) const WARMUP_CHUNK_BUDGET: usize = 2048;
+    pub(super) const RANDOM_SEEK_OPS: usize = 100;
+    pub(super) const CHUNKS_PER_RANDOM_SEEK: usize = 2;
+    pub(super) const FAST_SEEK_BURST: usize = 60;
+    pub(super) const WASM_FAST_SEEK_BURST: usize = 48;
+    pub(super) const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 40;
+    pub(super) const WASM_SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 48;
+    pub(super) const REVISIT_SEEKS: usize = 60;
+    pub(super) const WASM_REVISIT_SEEKS: usize = 48;
+    pub(super) const WASM_MAX_SEEK_SECS: f64 = 90.0;
+    pub(super) const SMALL_CACHE_WARMUP_CHUNKS: usize = 20;
+    pub(super) const WASM_SMALL_CACHE_WARMUP_CHUNKS: usize = 32;
+    pub(super) const SMALL_CACHE_SEEKS: usize = 10;
+    pub(super) const WASM_SMALL_CACHE_SEEKS: usize = 4;
+    pub(super) const SMALL_CACHE_CHUNKS_PER_SEEK: usize = 10;
+    pub(super) const WASM_SMALL_CACHE_CHUNKS_PER_SEEK: usize = 4;
+    pub(super) const SMALL_CACHE_MAX_SEEK_SECS: f64 = 60.0;
+}
 
-    const fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
-        if cfg!(target_arch = "wasm32") {
-            Duration::from_secs(wasm_secs)
-        } else {
-            Duration::from_secs(native_secs)
-        }
+const fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
+    if cfg!(target_arch = "wasm32") {
+        Duration::from_secs(wasm_secs)
+    } else {
+        Duration::from_secs(native_secs)
     }
+}
 
-    const fn browser_usize(native: usize, wasm: usize) -> usize {
-        if cfg!(target_arch = "wasm32") {
-            wasm
-        } else {
-            native
-        }
+const fn browser_usize(native: usize, wasm: usize) -> usize {
+    if cfg!(target_arch = "wasm32") {
+        wasm
+    } else {
+        native
     }
+}
 
-    const fn capped_seek_secs(max_seek_secs: f64, wasm_cap: f64) -> f64 {
-        if cfg!(target_arch = "wasm32") {
-            max_seek_secs.min(wasm_cap)
-        } else {
-            max_seek_secs
-        }
+const fn capped_seek_secs(max_seek_secs: f64, wasm_cap: f64) -> f64 {
+    if cfg!(target_arch = "wasm32") {
+        max_seek_secs.min(wasm_cap)
+    } else {
+        max_seek_secs
     }
 }
 
@@ -205,7 +204,7 @@ fn warmup_until_variant_switch(
     stage_prefix: &str,
 ) {
     let stage = format!("{stage_prefix}_warmup");
-    for _ in 0..Consts::WARMUP_CHUNK_BUDGET {
+    for _ in 0..consts::WARMUP_CHUNK_BUDGET {
         if next_chunk(audio, &stage).is_none() {
             break;
         }
@@ -253,7 +252,7 @@ fn poll_chunk(audio: &mut LiveAudio, stage: &str) -> Poll<Option<AudioChunk>> {
     tokio,
     browser,
     serial,
-    timeout(Consts::browser_timeout(60, 75)),
+    timeout(browser_timeout(60, 75)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
@@ -329,7 +328,7 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
     timeout(if cfg!(target_os = "android") {
         Duration::from_secs(120)
     } else {
-        Consts::browser_timeout(30, 120)
+        browser_timeout(30, 120)
     }),
     hang_timeout_secs(3),
     tracing(
@@ -395,7 +394,7 @@ async fn live_ephemeral_revisit_sequence_regression(
 
         let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
         let max_seek_secs =
-            Consts::capped_seek_secs((duration_secs - 2.0).max(20.0), Consts::WASM_MAX_SEEK_SECS);
+            capped_seek_secs((duration_secs - 2.0).max(20.0), consts::WASM_MAX_SEEK_SECS);
         let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
         let mut seek_positions = Vec::with_capacity(64);
         for _ in 0..64 {
@@ -407,14 +406,14 @@ async fn live_ephemeral_revisit_sequence_regression(
                 .seek(Duration::from_secs_f64(pos_secs))
                 .unwrap_or_else(|_| panic!("{label} seek must not fail at idx={idx}"));
             let _ = audio.preload();
-            for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
+            for read_idx in 0..consts::CHUNKS_PER_RANDOM_SEEK {
                 let stage = format!("repro_random_seek_{idx}_chunk_{read_idx}");
                 let _ = next_chunk(&mut audio, &stage)
                     .unwrap_or_else(|| panic!("{label} random seek stopped early at idx={idx}"));
             }
         }
 
-        for _ in 0..Consts::FAST_SEEK_BURST {
+        for _ in 0..consts::FAST_SEEK_BURST {
             let pos_secs = rng.range_f64(1.0, max_seek_secs);
             audio
                 .seek(Duration::from_secs_f64(pos_secs))
@@ -428,7 +427,7 @@ async fn live_ephemeral_revisit_sequence_regression(
             .unwrap_or_else(|_| panic!("{label} final seek before sequential read must not fail"));
         let _ = audio.preload();
 
-        for idx in 0..Consts::SEQUENTIAL_CHUNKS_AFTER_BURST {
+        for idx in 0..consts::SEQUENTIAL_CHUNKS_AFTER_BURST {
             let stage = format!("repro_sequential_after_burst_{idx}");
             let _ = next_chunk(&mut audio, &stage)
                 .unwrap_or_else(|| panic!("{label} sequential read stopped early at chunk {idx}"));
@@ -449,7 +448,7 @@ async fn live_ephemeral_revisit_sequence_regression(
 
     #[cfg(target_arch = "wasm32")]
     {
-        for _ in 0..Consts::WARMUP_CHUNK_BUDGET {
+        for _ in 0..consts::WARMUP_CHUNK_BUDGET {
             if next_chunk(&mut audio, "repro_warmup").await.is_none() {
                 break;
             }
@@ -464,7 +463,7 @@ async fn live_ephemeral_revisit_sequence_regression(
 
         let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
         let max_seek_secs =
-            Consts::capped_seek_secs((duration_secs - 2.0).max(20.0), Consts::WASM_MAX_SEEK_SECS);
+            capped_seek_secs((duration_secs - 2.0).max(20.0), consts::WASM_MAX_SEEK_SECS);
         let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
         let mut seek_positions = Vec::with_capacity(64);
         for _ in 0..64 {
@@ -476,7 +475,7 @@ async fn live_ephemeral_revisit_sequence_regression(
                 .seek(Duration::from_secs_f64(pos_secs))
                 .unwrap_or_else(|_| panic!("{label} seek must not fail at idx={idx}"));
             let _ = audio.preload();
-            for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
+            for read_idx in 0..consts::CHUNKS_PER_RANDOM_SEEK {
                 let stage = format!("repro_random_seek_{idx}_chunk_{read_idx}");
                 let _ = next_chunk(&mut audio, &stage)
                     .await
@@ -484,7 +483,7 @@ async fn live_ephemeral_revisit_sequence_regression(
             }
         }
 
-        for _ in 0..Consts::FAST_SEEK_BURST {
+        for _ in 0..consts::FAST_SEEK_BURST {
             let pos_secs = rng.range_f64(1.0, max_seek_secs);
             audio
                 .seek(Duration::from_secs_f64(pos_secs))
@@ -498,7 +497,7 @@ async fn live_ephemeral_revisit_sequence_regression(
             .unwrap_or_else(|_| panic!("{label} final seek before sequential read must not fail"));
         let _ = audio.preload();
 
-        for idx in 0..Consts::SEQUENTIAL_CHUNKS_AFTER_BURST {
+        for idx in 0..consts::SEQUENTIAL_CHUNKS_AFTER_BURST {
             let stage = format!("repro_sequential_after_burst_{idx}");
             let _ = next_chunk(&mut audio, &stage)
                 .await
@@ -562,10 +561,8 @@ async fn live_real_stream_seek_regression(
             ),
             SeekRegression::RandomPrefix => {
                 let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-                let max_seek_secs = Consts::capped_seek_secs(
-                    (duration_secs - 2.0).max(20.0),
-                    Consts::WASM_MAX_SEEK_SECS,
-                );
+                let max_seek_secs =
+                    capped_seek_secs((duration_secs - 2.0).max(20.0), consts::WASM_MAX_SEEK_SECS);
                 let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
                 (
                     "rng_prefix",
@@ -580,7 +577,7 @@ async fn live_real_stream_seek_regression(
                 .seek(Duration::from_secs_f64(pos_secs))
                 .unwrap_or_else(|_| panic!("{label} {stage} seek must not fail at idx={idx}"));
             let _ = audio.preload();
-            for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
+            for read_idx in 0..consts::CHUNKS_PER_RANDOM_SEEK {
                 let read_stage = format!("{stage}_{idx}_chunk_{read_idx}");
                 let _ = next_chunk(&mut audio, &read_stage)
                     .unwrap_or_else(|| panic!("{label} {stage} read stopped early at idx={idx}"));
@@ -679,7 +676,7 @@ async fn live_real_stream_seek_resume_native(
     tokio,
     native,
     serial,
-    timeout(Consts::browser_timeout(60, 360)),
+    timeout(browser_timeout(60, 360)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
@@ -767,7 +764,7 @@ async fn live_stress_real_stream_seek_read_cache(
             (variant, segment as usize)
         };
         let mut playing = None;
-        for _ in 0..Consts::WARMUP_CHUNK_BUDGET {
+        for _ in 0..consts::WARMUP_CHUNK_BUDGET {
             let Some(chunk) = next_chunk(&mut audio, "warmup") else {
                 break;
             };
@@ -783,18 +780,18 @@ async fn live_stress_real_stream_seek_read_cache(
         );
 
         let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-        let max_seek_secs = Consts::capped_seek_secs(
+        let max_seek_secs = capped_seek_secs(
             (duration_secs - 2.0).max(20.0),
-            Consts::WASM_MAX_SEEK_SECS,
+            consts::WASM_MAX_SEEK_SECS,
         );
         let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
-        let seek_positions: Vec<f64> = (0..Consts::RANDOM_SEEK_OPS)
+        let seek_positions: Vec<f64> = (0..consts::RANDOM_SEEK_OPS)
             .map(|_| rng.range_f64(1.0, max_seek_secs))
             .collect();
 
         info!(
-            operations = Consts::RANDOM_SEEK_OPS,
-            chunks_per_seek = Consts::CHUNKS_PER_RANDOM_SEEK,
+            operations = consts::RANDOM_SEEK_OPS,
+            chunks_per_seek = consts::CHUNKS_PER_RANDOM_SEEK,
             "Phase 2: random seek/read stress"
         );
         let mut random_reads = HashSet::new();
@@ -804,7 +801,7 @@ async fn live_stress_real_stream_seek_read_cache(
                 .seek(Duration::from_secs_f64(pos_secs))
                 .expect("seek must not fail");
             let _ = audio.preload();
-            for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
+            for read_idx in 0..consts::CHUNKS_PER_RANDOM_SEEK {
                 let stage = format!("random_seek_{idx}_chunk_{read_idx}");
                 let Some(chunk) = next_chunk(&mut audio, &stage) else {
                     break;
@@ -813,8 +810,8 @@ async fn live_stress_real_stream_seek_read_cache(
                 random_reads.insert(key(&chunk));
             }
         }
-        let min_chunks_by_ops = Consts::RANDOM_SEEK_OPS
-            .saturating_mul(Consts::CHUNKS_PER_RANDOM_SEEK)
+        let min_chunks_by_ops = consts::RANDOM_SEEK_OPS
+            .saturating_mul(consts::CHUNKS_PER_RANDOM_SEEK)
             .saturating_mul(85)
             / 100;
         assert!(
@@ -823,7 +820,7 @@ async fn live_stress_real_stream_seek_read_cache(
         );
 
         let fast_seek_burst =
-            Consts::browser_usize(Consts::FAST_SEEK_BURST, Consts::WASM_FAST_SEEK_BURST);
+            browser_usize(consts::FAST_SEEK_BURST, consts::WASM_FAST_SEEK_BURST);
         info!(seeks = fast_seek_burst, "Phase 3: fast seek burst");
         for _ in 0..fast_seek_burst {
             let pos_secs = rng.range_f64(1.0, max_seek_secs);
@@ -840,9 +837,9 @@ async fn live_stress_real_stream_seek_read_cache(
             .expect("final seek before sequential read must not fail");
         let _ = audio.preload();
 
-        let sequential_chunks = Consts::browser_usize(
-            Consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
-            Consts::WASM_SEQUENTIAL_CHUNKS_AFTER_BURST,
+        let sequential_chunks = browser_usize(
+            consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
+            consts::WASM_SEQUENTIAL_CHUNKS_AFTER_BURST,
         );
         info!(sequential_chunks, "Phase 4: sequential read after fast seeks");
         let mut seq_epoch = None;
@@ -871,7 +868,7 @@ async fn live_stress_real_stream_seek_read_cache(
         }
 
         let revisit_limit =
-            Consts::browser_usize(Consts::REVISIT_SEEKS, Consts::WASM_REVISIT_SEEKS);
+            browser_usize(consts::REVISIT_SEEKS, consts::WASM_REVISIT_SEEKS);
         info!(seeks = revisit_limit, "Phase 5: revisit same positions");
         let gets_before: HashMap<(usize, usize), u64> = gets
             .iter()
@@ -888,7 +885,7 @@ async fn live_stress_real_stream_seek_read_cache(
                 .expect("revisit seek must not fail");
             let _ = audio.preload();
             let stage = format!("revisit_{idx}");
-            for _ in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
+            for _ in 0..consts::CHUNKS_PER_RANDOM_SEEK {
                 let Some(chunk) = next_chunk(&mut audio, &stage) else {
                     break;
                 };
@@ -939,7 +936,7 @@ async fn live_stress_real_stream_seek_read_cache(
     tokio,
     browser,
     serial,
-    timeout(Consts::browser_timeout(30, 120)),
+    timeout(browser_timeout(30, 120)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
@@ -1022,7 +1019,7 @@ async fn live_ephemeral_small_cache_playback(
     tokio,
     native,
     serial,
-    timeout(Consts::browser_timeout(30, 120)),
+    timeout(browser_timeout(30, 120)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
@@ -1073,9 +1070,9 @@ async fn live_ephemeral_small_cache_seek_stress(
         info!(label, "Warmup: reading initial chunks");
         spawn_blocking(move || {
             let _ = audio.preload();
-            for i in 0..Consts::browser_usize(
-                Consts::SMALL_CACHE_WARMUP_CHUNKS,
-                Consts::WASM_SMALL_CACHE_WARMUP_CHUNKS,
+            for i in 0..browser_usize(
+                consts::SMALL_CACHE_WARMUP_CHUNKS,
+                consts::WASM_SMALL_CACHE_WARMUP_CHUNKS,
             ) {
                 let stage = format!("warmup_{i}");
                 if next_chunk(&mut audio, &stage).is_none() {
@@ -1084,19 +1081,19 @@ async fn live_ephemeral_small_cache_seek_stress(
             }
 
             let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
-            let max_seek_secs = Consts::capped_seek_secs(
+            let max_seek_secs = capped_seek_secs(
                 (duration_secs - 2.0).max(10.0),
-                Consts::SMALL_CACHE_MAX_SEEK_SECS,
+                consts::SMALL_CACHE_MAX_SEEK_SECS,
             );
             let mut rng = Xorshift64::new(0xCA5E_5EE4_0001_0001);
             let mut total_chunks = 0usize;
             let mut seeks_done = 0usize;
 
             let small_cache_seeks =
-                Consts::browser_usize(Consts::SMALL_CACHE_SEEKS, Consts::WASM_SMALL_CACHE_SEEKS);
-            let chunks_per_seek = Consts::browser_usize(
-                Consts::SMALL_CACHE_CHUNKS_PER_SEEK,
-                Consts::WASM_SMALL_CACHE_CHUNKS_PER_SEEK,
+                browser_usize(consts::SMALL_CACHE_SEEKS, consts::WASM_SMALL_CACHE_SEEKS);
+            let chunks_per_seek = browser_usize(
+                consts::SMALL_CACHE_CHUNKS_PER_SEEK,
+                consts::WASM_SMALL_CACHE_CHUNKS_PER_SEEK,
             );
             info!(
                 small_cache_seeks,

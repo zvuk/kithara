@@ -6,17 +6,7 @@ use kithara_derive::Patch;
 use num_traits::ToPrimitive;
 
 use super::{ElasticError, ElasticRateEnvelope};
-use crate::StretchKind;
-
-struct Consts;
-
-impl Consts {
-    const CONTINUITY_TOLERANCE: f64 = 1.0e-6;
-    const MAX_CORRECTION_PER_BLOCK: f64 = 1.0;
-    const MAX_PHASE_ERROR: f64 = 1.0;
-    const MAX_SOURCE_FRAMES_PER_OUTPUT: f64 = 4.0;
-    const MIN_SOURCE_FRAMES_PER_OUTPUT: f64 = 0.05;
-}
+use crate::{StretchKind, consts};
 
 /// Signalsmith preparation geometry.
 ///
@@ -98,9 +88,9 @@ impl ElasticSpanConfig {
         finish_fn(vis = "pub")
     )]
     fn new(
-        #[builder(default = Consts::CONTINUITY_TOLERANCE)] continuity_tolerance: f64,
-        #[builder(default = Consts::MAX_PHASE_ERROR)] max_phase_error: f64,
-        #[builder(default = Consts::MAX_CORRECTION_PER_BLOCK)] max_correction_per_block: f64,
+        #[builder(default = consts::CONTINUITY_TOLERANCE)] continuity_tolerance: f64,
+        #[builder(default = consts::MAX_PHASE_ERROR)] max_phase_error: f64,
+        #[builder(default = consts::MAX_CORRECTION_PER_BLOCK)] max_correction_per_block: f64,
     ) -> Result<Self, ElasticError> {
         if let Some((field, value)) = [
             ("continuity_tolerance", continuity_tolerance),
@@ -159,8 +149,8 @@ impl<S> ElasticConfig<S> {
         max_source_frames: usize,
         max_output_frames: usize,
         #[builder(
-            default = Consts::MIN_SOURCE_FRAMES_PER_OUTPUT
-                ..=Consts::MAX_SOURCE_FRAMES_PER_OUTPUT
+            default = consts::MIN_SOURCE_FRAMES_PER_OUTPUT
+                ..=consts::MAX_SOURCE_FRAMES_PER_OUTPUT
         )]
         rate_envelope: RangeInclusive<f64>,
     ) -> Result<Self, ElasticError> {
@@ -242,11 +232,11 @@ impl ElasticShape {
             .ok_or(ElasticError::SourceFrameLimitOutOfRange(max_source_frames))?;
         let min_rate = configured_rate_envelope
             .min_source_frames_per_output()
-            .max(Consts::MIN_SOURCE_FRAMES_PER_OUTPUT)
+            .max(consts::MIN_SOURCE_FRAMES_PER_OUTPUT)
             .max(1.0 / max_output_frames_f64);
         let max_rate = configured_rate_envelope
             .max_source_frames_per_output()
-            .min(Consts::MAX_SOURCE_FRAMES_PER_OUTPUT)
+            .min(consts::MAX_SOURCE_FRAMES_PER_OUTPUT)
             .min(max_source_frames_f64);
         let rate_envelope = ElasticRateEnvelope::try_from(min_rate..=max_rate)?;
         if !rate_envelope.has_representable_request(max_source_frames, max_output_frames) {

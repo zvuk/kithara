@@ -470,20 +470,20 @@ mod tests {
         render::{ControlAction, UiEvent, control_event, fonts::SANS},
     };
 
-    struct Consts;
+    mod consts {
+        use super::{Rectangle, Size};
 
-    impl Consts {
-        const POPOVER: Rectangle = Rectangle {
+        pub(super) const POPOVER: Rectangle = Rectangle {
             x: 35.0,
             y: 36.0,
             width: 300.0,
             height: 404.0,
         };
-        const SURFACE: Size = Size {
+        pub(super) const SURFACE: Size = Size {
             width: 300.0,
             height: 404.0,
         };
-        const VIEWPORT: Size = Size {
+        pub(super) const VIEWPORT: Size = Size {
             width: 1280.0,
             height: 800.0,
         };
@@ -513,8 +513,8 @@ mod tests {
             place(
                 burger(36.0, 0.0),
                 None,
-                Consts::SURFACE,
-                Consts::VIEWPORT,
+                consts::SURFACE,
+                consts::VIEWPORT,
                 PopoverAlign::Start
             ),
             Rectangle {
@@ -533,8 +533,8 @@ mod tests {
             place(
                 burger(600.0, 0.0),
                 None,
-                Consts::SURFACE,
-                Consts::VIEWPORT,
+                consts::SURFACE,
+                consts::VIEWPORT,
                 PopoverAlign::End
             ),
             Rectangle {
@@ -553,8 +553,8 @@ mod tests {
             place(
                 burger(36.0, 700.0),
                 None,
-                Consts::SURFACE,
-                Consts::VIEWPORT,
+                consts::SURFACE,
+                consts::VIEWPORT,
                 PopoverAlign::Start
             ),
             Rectangle {
@@ -572,8 +572,8 @@ mod tests {
             place(
                 burger(0.0, 0.0),
                 None,
-                Consts::SURFACE,
-                Consts::VIEWPORT,
+                consts::SURFACE,
+                consts::VIEWPORT,
                 PopoverAlign::Start
             )
             .x,
@@ -587,8 +587,8 @@ mod tests {
             place(
                 burger(1260.0, 0.0),
                 None,
-                Consts::SURFACE,
-                Consts::VIEWPORT,
+                consts::SURFACE,
+                consts::VIEWPORT,
                 PopoverAlign::Start
             )
             .x,
@@ -604,7 +604,7 @@ mod tests {
                 burger(36.0, 0.0),
                 None,
                 tall,
-                Consts::VIEWPORT,
+                consts::VIEWPORT,
                 PopoverAlign::Start
             ),
             Rectangle {
@@ -623,8 +623,8 @@ mod tests {
             place(
                 row(0.0, 200.0),
                 Some(Point::new(420.0, 214.0)),
-                Consts::SURFACE,
-                Consts::VIEWPORT,
+                consts::SURFACE,
+                consts::VIEWPORT,
                 PopoverAlign::Start,
             ),
             Rectangle {
@@ -643,8 +643,8 @@ mod tests {
             place(
                 row(0.0, 200.0),
                 Some(Point::new(1270.0, 214.0)),
-                Consts::SURFACE,
-                Consts::VIEWPORT,
+                consts::SURFACE,
+                consts::VIEWPORT,
                 PopoverAlign::Start,
             )
             .x,
@@ -658,8 +658,8 @@ mod tests {
             place(
                 row(0.0, 700.0),
                 Some(Point::new(420.0, 714.0)),
-                Consts::SURFACE,
-                Consts::VIEWPORT,
+                consts::SURFACE,
+                consts::VIEWPORT,
                 PopoverAlign::Start,
             ),
             Rectangle {
@@ -781,17 +781,17 @@ mod tests {
     #[kithara::test]
     fn the_surface_claims_the_cursor_over_itself_and_nowhere_else() {
         assert_eq!(
-            claims(Interaction::None, Consts::POPOVER, at(100.0, 100.0)),
+            claims(Interaction::None, consts::POPOVER, at(100.0, 100.0)),
             Interaction::Idle,
             "an inert row still covers what the surface hides"
         );
         assert_eq!(
-            claims(Interaction::Pointer, Consts::POPOVER, at(100.0, 100.0)),
+            claims(Interaction::Pointer, consts::POPOVER, at(100.0, 100.0)),
             Interaction::Pointer,
             "the content keeps the stronger claim"
         );
         assert_eq!(
-            claims(Interaction::Pointer, Consts::POPOVER, at(600.0, 500.0)),
+            claims(Interaction::Pointer, consts::POPOVER, at(600.0, 500.0)),
             Interaction::None,
             "outside the surface the base tree keeps its cursor"
         );
@@ -800,13 +800,13 @@ mod tests {
     #[kithara::test]
     fn a_press_outside_the_popover_dismisses_it() {
         let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
-        assert!(dismisses(&press, Consts::POPOVER, at(600.0, 500.0)));
+        assert!(dismisses(&press, consts::POPOVER, at(600.0, 500.0)));
         assert!(
-            !dismisses(&press, Consts::POPOVER, at(100.0, 100.0)),
+            !dismisses(&press, consts::POPOVER, at(100.0, 100.0)),
             "a press on the surface belongs to the menu"
         );
         assert!(
-            !dismisses(&press, Consts::POPOVER, at(35.0, 36.0)),
+            !dismisses(&press, consts::POPOVER, at(35.0, 36.0)),
             "the frame is part of the surface"
         );
     }
@@ -814,13 +814,13 @@ mod tests {
     #[kithara::test]
     fn a_secondary_press_outside_the_popover_dismisses_it() {
         let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Right));
-        assert!(dismisses(&press, Consts::POPOVER, at(600.0, 500.0)));
+        assert!(dismisses(&press, consts::POPOVER, at(600.0, 500.0)));
     }
 
     #[kithara::test]
     fn escape_dismisses_wherever_the_cursor_is() {
-        assert!(dismisses(&escape(), Consts::POPOVER, at(100.0, 100.0)));
-        assert!(dismisses(&escape(), Consts::POPOVER, at(600.0, 500.0)));
+        assert!(dismisses(&escape(), consts::POPOVER, at(100.0, 100.0)));
+        assert!(dismisses(&escape(), consts::POPOVER, at(600.0, 500.0)));
     }
 
     #[kithara::test]
@@ -836,7 +836,7 @@ mod tests {
             }),
         ] {
             assert!(
-                !dismisses(&event, Consts::POPOVER, away),
+                !dismisses(&event, consts::POPOVER, away),
                 "the press that opens the menu releases over the fresh overlay: {event:?}"
             );
         }
@@ -853,7 +853,7 @@ mod tests {
         );
         assert_eq!(chrome.offset(), Vector::new(1.0, 3.0));
         assert_eq!(
-            chrome.cap(Consts::POPOVER),
+            chrome.cap(consts::POPOVER),
             Rectangle {
                 x: 36.0,
                 y: 37.0,
@@ -911,9 +911,9 @@ mod tests {
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
-            &Limits::new(Size::ZERO, Consts::VIEWPORT),
+            &Limits::new(Size::ZERO, consts::VIEWPORT),
         );
-        let viewport = Rectangle::with_size(Consts::VIEWPORT);
+        let viewport = Rectangle::with_size(consts::VIEWPORT);
         let mut overlay = element
             .as_widget_mut()
             .overlay(
@@ -924,7 +924,7 @@ mod tests {
                 Vector::new(36.0, 0.0),
             )
             .expect("an open Anchored widget must expose its popover overlay");
-        let overlay_node = overlay.as_overlay_mut().layout(&renderer, Consts::VIEWPORT);
+        let overlay_node = overlay.as_overlay_mut().layout(&renderer, consts::VIEWPORT);
         let surface = Layout::new(&overlay_node).children().next().map_or_else(
             || panic!("the Anchored overlay group must contain its popover surface"),
             |layout| layout.bounds(),
@@ -950,7 +950,7 @@ mod tests {
         let outside = Point::new(600.0, 500.0);
         let (surface, messages, captured) = dispatch_open_popover_press(outside);
 
-        assert_eq!(surface, Consts::POPOVER);
+        assert_eq!(surface, consts::POPOVER);
         assert!(!surface.contains(outside));
         assert_eq!(
             messages,
@@ -967,7 +967,7 @@ mod tests {
         let inside = Point::new(100.0, 100.0);
         let (surface, messages, captured) = dispatch_open_popover_press(inside);
 
-        assert_eq!(surface, Consts::POPOVER);
+        assert_eq!(surface, consts::POPOVER);
         assert!(surface.contains(inside));
         assert_eq!(messages, [UiEvent::OpenSettings]);
         assert!(captured, "the popover content owns the inside press");

@@ -8,29 +8,27 @@ use crate::{
     signal::{Pcm, Wave},
 };
 
-struct Consts;
-
-impl Consts {
-    const CHANNELS: u16 = 2;
-    const ONE_SECOND_FRAMES: usize = 44_100;
-    const SAMPLE_RATE: u32 = 44_100;
-    const SIX_SECOND_FRAMES: usize = 264_600;
-    const TONE_HZ: f64 = 440.0;
-    const TONE_PEAK: i16 = 16_000;
-    const TWO_SECOND_FRAMES: usize = 88_200;
+mod consts {
+    pub(super) const CHANNELS: u16 = 2;
+    pub(super) const ONE_SECOND_FRAMES: usize = 44_100;
+    pub(super) const SAMPLE_RATE: u32 = 44_100;
+    pub(super) const SIX_SECOND_FRAMES: usize = 264_600;
+    pub(super) const TONE_HZ: f64 = 440.0;
+    pub(super) const TONE_PEAK: i16 = 16_000;
+    pub(super) const TWO_SECOND_FRAMES: usize = 88_200;
 }
 
 /// 440 Hz tone encoded to MPEG audio.
 #[kithara::asset(ext = "mp3", content_type = "audio/mpeg")]
-#[case::a440_2s(Consts::TWO_SECOND_FRAMES, Consts::TONE_PEAK)]
+#[case::a440_2s(consts::TWO_SECOND_FRAMES, consts::TONE_PEAK)]
 fn sine_mp3(total_frames: usize, peak: i16) -> Vec<u8> {
     let pcm = Pcm::new(
-        Consts::SAMPLE_RATE,
-        Consts::CHANNELS,
+        consts::SAMPLE_RATE,
+        consts::CHANNELS,
         total_frames,
         Wave::Sine {
             peak,
-            hz: Consts::TONE_HZ,
+            hz: consts::TONE_HZ,
         },
     );
     EncoderFactory::encode_bytes(&BytesEncodeRequest {
@@ -80,12 +78,12 @@ fn rhythm_mp3(
 ///
 /// Embedded because the browser suite reads it and wasm has no store.
 #[kithara::asset(ext = "flac", content_type = "audio/flac", embed)]
-#[case::saw_1s(Consts::ONE_SECOND_FRAMES)]
-#[case::saw_6s(Consts::SIX_SECOND_FRAMES)]
+#[case::saw_1s(consts::ONE_SECOND_FRAMES)]
+#[case::saw_6s(consts::SIX_SECOND_FRAMES)]
 fn flac_unknown_length(total_frames: usize) -> Vec<u8> {
     let pcm = Pcm::new(
-        Consts::SAMPLE_RATE,
-        Consts::CHANNELS,
+        consts::SAMPLE_RATE,
+        consts::CHANNELS,
         total_frames,
         Wave::Sawtooth,
     );
@@ -101,11 +99,11 @@ fn flac_unknown_length(total_frames: usize) -> Vec<u8> {
 /// Silence encoded losslessly into an MP4 container: the standalone ALAC body
 /// the Apple `AudioFileServices` path must decode.
 #[kithara::asset(ext = "m4a", content_type = "audio/mp4")]
-#[case::silence_1s(Consts::ONE_SECOND_FRAMES)]
+#[case::silence_1s(consts::ONE_SECOND_FRAMES)]
 fn alac(total_frames: usize) -> Vec<u8> {
     let pcm = Pcm::new(
-        Consts::SAMPLE_RATE,
-        Consts::CHANNELS,
+        consts::SAMPLE_RATE,
+        consts::CHANNELS,
         total_frames,
         Wave::Silence,
     );

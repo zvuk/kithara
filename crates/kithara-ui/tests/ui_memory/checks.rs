@@ -20,7 +20,7 @@
 use kithara_test_utils::kithara;
 use kithara_ui::render::gpu;
 
-use crate::{capture::Shot, fixture::Consts};
+use crate::{capture::Shot, fixture::consts};
 
 /// How much graphics memory a settled page may hold, per host.
 ///
@@ -64,8 +64,8 @@ fn device_bytes() -> Option<u64> {
 /// pixel to the point, so the pool measured is the pool a window would build.
 fn physical() -> (u32, u32) {
     (
-        num_traits::cast::AsPrimitive::as_(Consts::WIDTH),
-        num_traits::cast::AsPrimitive::as_(Consts::HEIGHT),
+        num_traits::cast::AsPrimitive::as_(consts::WIDTH),
+        num_traits::cast::AsPrimitive::as_(consts::HEIGHT),
     )
 }
 

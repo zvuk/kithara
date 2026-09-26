@@ -5,8 +5,7 @@ use super::{
     style::{bold, bold_cyan, bold_red, bold_yellow, cyan, dim, green, red},
     violation::{Report, Severity, Violation},
 };
-
-const RULE_BAR: &str = "─────────────────────────────────────────────────────────────────────";
+use crate::consts;
 
 /// Map a severity word (`error|deny|warning|warn|info|hint|...`) to a
 /// short emoji + colourised tag pair used in block headers.
@@ -40,7 +39,7 @@ pub fn print_check_block<I, L>(
     L: AsRef<str>,
 {
     let (icon, color) = severity_glyphs(severity);
-    let bar_len = RULE_BAR.chars().count();
+    let bar_len = consts::RULE_BAR.chars().count();
     let visible_left = icon.chars().count().max(1) + 1 + name.chars().count();
     let pad = bar_len.saturating_sub(visible_left + summary.chars().count() + 2);
     let dots = ".".repeat(pad.max(2));
@@ -50,7 +49,7 @@ pub fn print_check_block<I, L>(
         dots = dim(&dots),
         sum = color(summary),
     );
-    println!("{}", dim(RULE_BAR));
+    println!("{}", dim(consts::RULE_BAR));
 
     if let Some(desc) = description {
         let trimmed = desc.trim_matches('\n');
@@ -140,7 +139,7 @@ pub fn print_grouped(report: &Report, diff: &RatchetDiff<'_>) {
     if !diff.improvements.is_empty() {
         println!();
         let n = diff.improvements.len();
-        let pad = RULE_BAR
+        let pad = consts::RULE_BAR
             .chars()
             .count()
             .saturating_sub(28 + format!("{n} entries").chars().count());
@@ -151,7 +150,7 @@ pub fn print_grouped(report: &Report, diff: &RatchetDiff<'_>) {
             dim(&dots),
             green(&format!("{n} entries")),
         );
-        println!("{}", dim(RULE_BAR));
+        println!("{}", dim(consts::RULE_BAR));
         for imp in &diff.improvements {
             println!(
                 "  {arrow} {check}/{key}: {from} → {to}",

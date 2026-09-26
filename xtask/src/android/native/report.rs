@@ -106,11 +106,11 @@ fn close(section: Option<(String, String)>, report: &mut Report) {
 
 #[cfg(test)]
 mod tests {
-    use fixture::{ANDROID, BATCH, INTERRUPTED, NATIVE_NOISE, SHOULD_PANIC};
+    use consts::{ANDROID, BATCH, INTERRUPTED, NATIVE_NOISE, SHOULD_PANIC};
 
     use super::*;
 
-    mod fixture {
+    mod consts {
         pub(super) const BATCH: &str = include_str!("../../../tests/fixtures/libtest-batch.txt");
         pub(super) const ANDROID: &str =
             include_str!("../../../tests/fixtures/libtest-android-batch.txt");

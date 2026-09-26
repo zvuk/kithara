@@ -1,10 +1,9 @@
 use crate::{
     AnalysisFingerprint, AnalysisProgress, TrackAnalysis,
     blob::{BlobError, Reader, Writer},
+    consts,
     progress::AnalysisResume,
 };
-
-const ANALYSIS_PROGRESS_BYTES_VERSION: u32 = 0x4b41_5001;
 
 impl AnalysisProgress {
     pub(crate) fn write_to(&self, out: &mut Vec<u8>) -> Result<(), BlobError> {
@@ -12,7 +11,7 @@ impl AnalysisProgress {
         self.analysis().write_to(&mut analysis)?;
 
         let mut writer = Writer::new(out);
-        writer.write_u32(ANALYSIS_PROGRESS_BYTES_VERSION);
+        writer.write_u32(consts::ANALYSIS_PROGRESS_BYTES_VERSION);
         writer.write_len(analysis.len());
         writer.write_bytes(&analysis);
         let resume = self.resume().map(AnalysisResume::bytes).unwrap_or_default();
@@ -28,10 +27,10 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for AnalysisProgress {
     fn try_from((bytes, fingerprint): (&[u8], &AnalysisFingerprint)) -> Result<Self, Self::Error> {
         let mut reader = Reader::new(bytes);
         let version = reader.read_u32()?;
-        if version != ANALYSIS_PROGRESS_BYTES_VERSION {
+        if version != consts::ANALYSIS_PROGRESS_BYTES_VERSION {
             return Err(BlobError::Version {
                 found: version,
-                expected: ANALYSIS_PROGRESS_BYTES_VERSION,
+                expected: consts::ANALYSIS_PROGRESS_BYTES_VERSION,
             });
         }
         let analysis = TrackAnalysis::try_from((reader.read_section()?, fingerprint))?;

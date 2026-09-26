@@ -22,17 +22,15 @@ use crate::shared::{Endpoints, collect_rows, renderer};
 
 /// The shape of the document below: the bars it hangs a menu on, the rows each
 /// menu is made of, and the windows the two hosts are compared at.
-struct Fixture;
-
-impl Fixture {
+mod consts {
     /// Every bar the document hangs a menu on.
-    const BARS: [&'static str; 2] = ["narrow", "wide"];
+    pub(super) const BARS: [&str; 2] = ["narrow", "wide"];
     /// A window short enough that only the narrow bar's band is reached and one
     /// tall enough that only the wide bar's is, each carrying the bar the room
     /// reaches there.
-    const CASES: [(u32, u32, &'static str); 2] = [(400, 240, "narrow"), (400, 480, "wide")];
+    pub(super) const CASES: [(u32, u32, &str); 2] = [(400, 240, "narrow"), (400, 480, "wide")];
     /// The rows the menu is made of, in the order the document holds them.
-    const ROWS: [&'static str; 2] = ["head", "item"];
+    pub(super) const ROWS: [&str; 2] = ["head", "item"];
 }
 
 /// A document that hangs one menu on two bars and reaches whichever the window
@@ -165,10 +163,10 @@ fn retained_menus(standing: &str, width: u32, height: u32) -> Vec<Vec<Rect>> {
     );
     ui.scene()
         .unwrap_or_else(|error| panic!("the retained host must draw the open menu: {error}"));
-    Fixture::BARS
+    consts::BARS
         .iter()
         .map(|bar| {
-            Fixture::ROWS
+            consts::ROWS
                 .iter()
                 .filter_map(|row| ui.rect_of(&format!("{bar}/{row}")))
                 .filter(|rect| rect.w > 0.0 && rect.h > 0.0)
@@ -249,7 +247,7 @@ fn fills(bounds: Rectangle, viewport: Size) -> bool {
 /// aside would open on the one flag they share.
 #[kithara::test]
 fn both_hosts_stand_the_same_number_of_menus() {
-    for (width, height, standing) in Fixture::CASES {
+    for (width, height, standing) in consts::CASES {
         assert_eq!(
             retained_menus(standing, width, height).len(),
             neutral_menus(width, height).len(),
@@ -261,7 +259,7 @@ fn both_hosts_stand_the_same_number_of_menus() {
 /// An opened menu lands in the same boxes on both hosts.
 #[kithara::test]
 fn both_hosts_lay_an_opened_menu_out_the_same_way() {
-    for (width, height, standing) in Fixture::CASES {
+    for (width, height, standing) in consts::CASES {
         assert_eq!(
             retained_menus(standing, width, height),
             neutral_menus(width, height),

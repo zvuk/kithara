@@ -10,8 +10,10 @@ use rand::{Rng as _, RngExt as _, distr::Alphanumeric};
 
 use super::schema::{Drm, DrmProvider, SeedAlphabet, SeedSpec};
 
-/// Header the key request generates per fetch; a document must not set it.
-const GENERATED_HEADER: &str = "X-Encrypted-Key";
+mod consts {
+    /// Header the key request generates per fetch; a document must not set it.
+    pub(super) const GENERATED_HEADER: &str = "X-Encrypted-Key";
+}
 
 /// A provider a document declared in a way no policy can honour.
 #[derive(Debug)]
@@ -32,11 +34,13 @@ impl fmt::Display for PolicyError {
         match self {
             Self::ReservedHeader { provider } => write!(
                 f,
-                "provider `{provider}` must not set `{GENERATED_HEADER}` -- it is generated per request from the cipher key"
+                "provider `{provider}` must not set `{GENERATED_HEADER}` -- it is generated per request from the cipher key",
+                GENERATED_HEADER = consts::GENERATED_HEADER
             ),
             Self::EmptySeed { provider } => write!(
                 f,
-                "provider `{provider}` seed.length must be greater than zero -- an empty salt sends `{GENERATED_HEADER}` blank and ciphers on the bare key"
+                "provider `{provider}` seed.length must be greater than zero -- an empty salt sends `{GENERATED_HEADER}` blank and ciphers on the bare key",
+                GENERATED_HEADER = consts::GENERATED_HEADER
             ),
             Self::OddHexSeed { provider, length } => write!(
                 f,
@@ -60,7 +64,7 @@ pub(crate) fn drm_policy(drm: &Drm) -> Result<DomainKeyPolicy, PolicyError> {
 }
 
 fn rule(provider: &DrmProvider) -> Result<DomainKeyRule, PolicyError> {
-    if provider.headers.contains_key(GENERATED_HEADER) {
+    if provider.headers.contains_key(consts::GENERATED_HEADER) {
         return Err(PolicyError::ReservedHeader {
             provider: provider.name.clone(),
         });
@@ -84,7 +88,7 @@ fn rule(provider: &DrmProvider) -> Result<DomainKeyRule, PolicyError> {
         let cipher = UniqueBinaryCipher::new(&format!("{cipher_key}{salt}"));
         let processor: KeyProcessor = Arc::new(move |key: Bytes| Ok(cipher.decrypt(&key)));
         KeyRequest::new(
-            HashMap::from([(GENERATED_HEADER.to_string(), salt)]),
+            HashMap::from([(consts::GENERATED_HEADER.to_string(), salt)]),
             processor,
         )
     });
@@ -130,12 +134,14 @@ mod tests {
         document::schema::{Document, Drm},
     };
 
-    const PROVIDER: &str = concat!(
-        "drm:\n  providers:\n    - name: example\n",
-        "      domains: [example.com, \"*.example.com\"]\n",
-        "      cipher_key: secret\n",
-        "      headers:\n        X-Auth-Token: token\n",
-    );
+    mod consts {
+        pub(super) const PROVIDER: &str = concat!(
+            "drm:\n  providers:\n    - name: example\n",
+            "      domains: [example.com, \"*.example.com\"]\n",
+            "      cipher_key: secret\n",
+            "      headers:\n        X-Auth-Token: token\n",
+        );
+    }
 
     fn policy(source: &str) -> DomainKeyPolicy {
         let document: Document = serde_yaml_ng::from_str(source).expect("valid document");
@@ -148,7 +154,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_declared_header_reaches_the_matching_resource() {
-        let policy = policy(PROVIDER);
+        let policy = policy(consts::PROVIDER);
 
         let headers = policy
             .resource_headers(&url("https://cdn.example.com/master.m3u8"))
@@ -164,7 +170,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_host_no_rule_names_gets_no_headers() {
-        let policy = policy(PROVIDER);
+        let policy = policy(consts::PROVIDER);
 
         assert!(
             policy
@@ -175,7 +181,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_hex_salt_is_lowercase_hex_of_the_declared_length() {
-        let policy = policy(PROVIDER);
+        let policy = policy(consts::PROVIDER);
 
         let prepared = policy
             .prepare(&url("https://example.com/keyserver/key"))
@@ -193,7 +199,8 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn an_alphanumeric_salt_takes_the_declared_alphabet_and_length() {
         let policy = policy(&format!(
-            "{PROVIDER}      seed:\n        length: 16\n        alphabet: alphanumeric\n"
+            "{PROVIDER}      seed:\n        length: 16\n        alphabet: alphanumeric\n",
+            PROVIDER = consts::PROVIDER
         ));
 
         let prepared = policy
@@ -207,7 +214,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn each_key_request_carries_a_fresh_salt() {
-        let policy = policy(PROVIDER);
+        let policy = policy(consts::PROVIDER);
         let key_url = url("https://example.com/keyserver/key");
 
         let first = policy.prepare(&key_url).expect("the exact rule matches");

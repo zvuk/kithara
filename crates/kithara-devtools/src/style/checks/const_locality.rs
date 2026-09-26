@@ -23,7 +23,9 @@ use crate::common::{
     walker::relative_to,
 };
 
-pub(crate) const ID: &str = "const_locality";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "const_locality";
+}
 
 pub(crate) struct ConstLocality;
 
@@ -57,7 +59,7 @@ impl Check for ConstLocality {
     }
 
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -114,7 +116,7 @@ impl Finding {
                 self.name
             ),
         };
-        Violation::warn(ID, self.key.clone(), msg)
+        Violation::warn(consts::ID, self.key.clone(), msg)
     }
 }
 

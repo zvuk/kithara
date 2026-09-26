@@ -12,13 +12,15 @@ use crate::common::{
     walker::{relative_to, workspace_rs_files_scoped},
 };
 
-pub(crate) const ID: &str = "module_fan_out";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "module_fan_out";
+}
 
 pub(crate) struct ModuleFanOut;
 
 impl Check for ModuleFanOut {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -54,7 +56,7 @@ impl Check for ModuleFanOut {
                     "{n} sibling-module imports from same crate (warn threshold {warn}); \
                      this file is acting as an orchestrator — split or push the wiring up"
                 );
-                violations.push(Violation::warn(ID, key, msg));
+                violations.push(Violation::warn(consts::ID, key, msg));
             }
         }
         Ok(violations)

@@ -8,27 +8,11 @@ use tracing::info;
 
 use super::{
     container::{Container, container},
-    profile::{LINUX_CONFIG_PATH, LinuxHost, LinuxRunner, RunnerFlavor},
+    profile::{LinuxHost, LinuxRunner, RunnerFlavor},
 };
-use crate::ci::{cache::client_environment, config::CiPins, image::floating_tag, process::Process};
-
-/// Where the services live and what they call.
-///
-/// The executable is copied out of the build tree: run from there it expects
-/// to find the repository around it, and a service starting from no particular
-/// directory would not.
-struct Layout {
-    systemd_root: &'static str,
-    executable: &'static str,
-    cleanup_unit: &'static str,
-    cleanup_timer: &'static str,
-}
-
-const LAYOUT: Layout = Layout {
-    systemd_root: "/etc/systemd/system",
-    executable: "/usr/local/bin/kithara-ci",
-    cleanup_unit: "kithara-ci-cleanup.service",
-    cleanup_timer: "kithara-ci-cleanup.timer",
+use crate::{
+    ci::{cache::client_environment, config::CiPins, image::floating_tag, process::Process},
+    consts,
 };
 
 /// Write one service per runner and hand them to systemd.
@@ -43,12 +27,12 @@ pub(super) fn install(
     executable: &str,
 ) -> Result<()> {
     require_pinned_images(process, host, pins)?;
-    if Path::new(executable) != Path::new(LAYOUT.executable) {
-        std::fs::copy(executable, LAYOUT.executable)
-            .with_context(|| format!("installing {}", LAYOUT.executable))?;
+    if Path::new(executable) != Path::new(consts::SERVICE_EXECUTABLE) {
+        std::fs::copy(executable, consts::SERVICE_EXECUTABLE)
+            .with_context(|| format!("installing {}", consts::SERVICE_EXECUTABLE))?;
     }
-    super::permissions::set_mode(Path::new(LAYOUT.executable), super::permissions::EXECUTABLE)
-        .with_context(|| format!("making {} executable", LAYOUT.executable))?;
+    super::permissions::set_mode(Path::new(consts::SERVICE_EXECUTABLE), consts::EXECUTABLE)
+        .with_context(|| format!("making {} executable", consts::SERVICE_EXECUTABLE))?;
 
     let cores = std::thread::available_parallelism()
         .context("reading this machine's core count")?
@@ -60,10 +44,13 @@ pub(super) fn install(
                 runner.name
             )
         })?;
-        let path = PathBuf::from(LAYOUT.systemd_root).join(runner.service());
+        let path = PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(runner.service());
         let cpuset = cpuset(index, runner.cpus, cores);
-        std::fs::write(&path, unit(host, runner, &cpuset, pins, LAYOUT.executable)?)
-            .with_context(|| format!("writing {}", path.display()))?;
+        std::fs::write(
+            &path,
+            unit(host, runner, &cpuset, pins, consts::SERVICE_EXECUTABLE)?,
+        )
+        .with_context(|| format!("writing {}", path.display()))?;
         info!(
             service = runner.service(),
             cpuset, "runner service installed"
@@ -80,7 +67,7 @@ pub(super) fn install(
     }
     process.run(
         "systemctl",
-        &["enable", "--now", LAYOUT.cleanup_timer],
+        &["enable", "--now", consts::SERVICE_CLEANUP_TIMER],
         "enable the cleanup timer",
     )?;
     Ok(())
@@ -180,8 +167,8 @@ fn cleanup_unit(keep: &[String]) -> String {
          [Service]\n\
          Type=oneshot\n\
          ExecStart={executable} ci host linux --config {config} cleanup{keep}\n",
-        executable = LAYOUT.executable,
-        config = LINUX_CONFIG_PATH,
+        executable = consts::SERVICE_EXECUTABLE,
+        config = consts::LINUX_CONFIG_PATH,
         keep = keep
             .iter()
             .map(|image| format!(" --keep {image}"))
@@ -211,10 +198,10 @@ fn cleanup_timer() -> &'static str {
 fn install_cleanup_timer(keep: &[String]) -> Result<()> {
     let service = cleanup_unit(keep);
     for (name, body) in [
-        (LAYOUT.cleanup_unit, service.as_str()),
-        (LAYOUT.cleanup_timer, cleanup_timer()),
+        (consts::SERVICE_CLEANUP_UNIT, service.as_str()),
+        (consts::SERVICE_CLEANUP_TIMER, cleanup_timer()),
     ] {
-        let path = PathBuf::from(LAYOUT.systemd_root).join(name);
+        let path = PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(name);
         std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
         info!(unit = name, "cleanup unit installed");
     }
@@ -279,7 +266,7 @@ fn unit(
          ExecStartPre={executable} ci host linux --config {config} configure --runner {name} \
          --env-file {env_file}\n",
         name = runner.name,
-        config = LINUX_CONFIG_PATH,
+        config = consts::LINUX_CONFIG_PATH,
         env_file = env_file(runner),
     )?;
 
@@ -519,8 +506,7 @@ mod tests {
             "SCCACHE_BUCKET=cache\nSCCACHE_S3_KEY_PREFIX=sccache\nSCCACHE_ENDPOINT=http://cache\nSCCACHE_REGION=us-east-1\nSCCACHE_S3_USE_SSL=false\nAWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\nAWS_EC2_METADATA_DISABLED=true\n",
         )
         .expect("write cache environment");
-        permissions::set_mode(&env_file, permissions::OWNER_ONLY)
-            .expect("restrict cache environment");
+        permissions::set_mode(&env_file, consts::OWNER_ONLY).expect("restrict cache environment");
 
         let mut host = host_fixture();
         host.runners[0].sccache_s3_env_file = env_file.clone();

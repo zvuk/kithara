@@ -13,7 +13,7 @@ use crate::{
     item::AudioPlayerItem,
     observer::PlayerObserver,
     types::FfiPlayerEvent,
-    web::{analysis::AnalysisRoute, observer::source::EVENT_CHANNEL},
+    web::{analysis::AnalysisRoute, observer::source::consts::EVENT_CHANNEL},
 };
 
 type QueueView = Vec<(TrackId, Arc<AudioPlayerItem>)>;

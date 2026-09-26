@@ -139,16 +139,7 @@ mod tests {
     use kithara_worker::{Worker, WorkerConfig};
 
     use super::{Segment, Segmenter};
-    use crate::{adts::AdtsPacker, config::BroadcastConfig, id3::TimestampTag};
-
-    struct Consts;
-
-    impl Consts {
-        const PAYLOAD: usize = 200;
-        const SAMPLE_RATE: u32 = 48_000;
-        const UNITS_PER_TARGET: usize = 188;
-        const UNIT_DURATION: u32 = 1_024;
-    }
+    use crate::{adts::AdtsPacker, config::BroadcastConfig, consts, id3::TimestampTag};
 
     fn config() -> BroadcastConfig<TestPools> {
         BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools()).build()
@@ -159,7 +150,7 @@ mod tests {
     }
 
     fn frame_bytes(units: usize) -> usize {
-        TimestampTag::LEN + units * (AdtsPacker::HEADER_LEN + Consts::PAYLOAD)
+        TimestampTag::LEN + units * (AdtsPacker::HEADER_LEN + consts::SEGMENT_PAYLOAD)
     }
 
     fn start_ts(segment: &Segment) -> u64 {
@@ -171,9 +162,9 @@ mod tests {
 
     fn unit() -> EncodedAccessUnit {
         EncodedAccessUnit {
-            bytes: vec![0x5A; Consts::PAYLOAD],
+            bytes: vec![0x5A; consts::SEGMENT_PAYLOAD],
             is_sync: true,
-            duration: Consts::UNIT_DURATION,
+            duration: consts::UNIT_DURATION,
             dts: 0,
             pts: 0,
         }
@@ -189,14 +180,14 @@ mod tests {
     fn the_unit_that_crosses_the_target_closes_the_segment() {
         let mut segmenter = segmenter();
 
-        let before = push_units(&mut segmenter, Consts::UNITS_PER_TARGET - 1);
+        let before = push_units(&mut segmenter, consts::UNITS_PER_TARGET - 1);
         let closing = push_units(&mut segmenter, 1);
 
         assert!(before.is_empty(), "the target is not reached yet");
         assert_eq!(closing.len(), 1);
         assert_eq!(
             closing[0].duration_ts,
-            Consts::UNIT_DURATION * u32::try_from(Consts::UNITS_PER_TARGET).expect("count fits")
+            consts::UNIT_DURATION * u32::try_from(consts::UNITS_PER_TARGET).expect("count fits")
         );
     }
 
@@ -204,13 +195,13 @@ mod tests {
     fn segments_carry_every_framed_access_unit_and_number_from_zero() {
         let mut segmenter = segmenter();
 
-        let segments = push_units(&mut segmenter, 3 * Consts::UNITS_PER_TARGET);
+        let segments = push_units(&mut segmenter, 3 * consts::UNITS_PER_TARGET);
 
         assert_eq!(segments.len(), 3);
         for (index, segment) in segments.iter().enumerate() {
             assert_eq!(segment.seq, u64::try_from(index).expect("index fits"));
             assert!(!segment.discontinuity);
-            assert_eq!(segment.bytes.len(), frame_bytes(Consts::UNITS_PER_TARGET));
+            assert_eq!(segment.bytes.len(), frame_bytes(consts::UNITS_PER_TARGET));
         }
     }
 
@@ -218,7 +209,7 @@ mod tests {
     fn a_segment_opens_with_the_timestamp_of_its_first_sample() {
         let mut segmenter = segmenter();
 
-        let segments = push_units(&mut segmenter, 3 * Consts::UNITS_PER_TARGET);
+        let segments = push_units(&mut segmenter, 3 * consts::UNITS_PER_TARGET);
 
         for pair in segments.windows(2) {
             assert!(pair[0].bytes.starts_with(b"ID3"));
@@ -227,7 +218,7 @@ mod tests {
                 start_ts(&pair[0])
                     + TimestampTag::mpeg_timestamp(
                         u64::from(pair[0].duration_ts),
-                        Consts::SAMPLE_RATE
+                        consts::ID3_SAMPLE_RATE
                     ),
                 "the next segment starts where the previous one ended"
             );
@@ -246,7 +237,7 @@ mod tests {
 
         assert_eq!(
             start_ts(&next),
-            TimestampTag::mpeg_timestamp(u64::from(closed.duration_ts), Consts::SAMPLE_RATE),
+            TimestampTag::mpeg_timestamp(u64::from(closed.duration_ts), consts::ID3_SAMPLE_RATE),
             "a gap in the intake does not move the encoded time base"
         );
     }
@@ -254,12 +245,12 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn segment_durations_sum_to_the_pushed_audio() {
         let mut segmenter = segmenter();
-        let units = 3 * Consts::UNITS_PER_TARGET + 7;
+        let units = 3 * consts::UNITS_PER_TARGET + 7;
 
         let mut segments = push_units(&mut segmenter, units);
         segments.extend(segmenter.flush());
 
-        let pushed = Consts::UNIT_DURATION * u32::try_from(units).expect("count fits");
+        let pushed = consts::UNIT_DURATION * u32::try_from(units).expect("count fits");
         let packaged: u32 = segments.iter().map(|segment| segment.duration_ts).sum();
         assert_eq!(packaged, pushed);
     }
@@ -275,7 +266,7 @@ mod tests {
 
         assert_eq!(closed.seq, 0);
         assert!(!closed.discontinuity);
-        assert_eq!(closed.duration_ts, Consts::UNIT_DURATION * 10);
+        assert_eq!(closed.duration_ts, consts::UNIT_DURATION * 10);
         assert_eq!(next.seq, 1);
         assert!(
             next.discontinuity,
@@ -319,7 +310,7 @@ mod tests {
 
         assert_eq!(
             segment.duration_ts,
-            Consts::UNIT_DURATION * 10,
+            consts::UNIT_DURATION * 10,
             "the rejected unit contributes no duration"
         );
         assert_eq!(segment.bytes.len(), frame_bytes(10));

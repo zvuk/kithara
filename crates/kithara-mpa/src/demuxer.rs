@@ -14,7 +14,6 @@ use symphonia_core::{
     formats::{
         prelude::*,
         probe::{ProbeFormatData, ProbeableFormat, Score, Scoreable},
-        well_known::{FORMAT_ID_MP1, FORMAT_ID_MP2, FORMAT_ID_MP3},
     },
     io::*,
     meta::{Metadata, MetadataLog},
@@ -25,29 +24,9 @@ use tracing::{debug, info, warn};
 
 use crate::{
     common::{FrameHeader, MpegLayer},
-    header::{self, MAX_MPEG_FRAME_SIZE, MPEG_HEADER_LEN},
+    consts, header,
     tags::{is_maybe_info_tag, is_maybe_vbri_tag, try_read_info_tag, try_read_vbri_tag},
 };
-
-struct FormatInfos;
-
-impl FormatInfos {
-    const MP1: FormatInfo = FormatInfo {
-        format: FORMAT_ID_MP1,
-        short_name: "mp1",
-        long_name: "MPEG Audio Layer 1 Native",
-    };
-    const MP2: FormatInfo = FormatInfo {
-        format: FORMAT_ID_MP2,
-        short_name: "mp2",
-        long_name: "MPEG Audio Layer 2 Native",
-    };
-    const MP3: FormatInfo = FormatInfo {
-        format: FORMAT_ID_MP3,
-        short_name: "mp3",
-        long_name: "MPEG Audio Layer 3 Native",
-    };
-}
 
 /// MPEG1 and MPEG2 audio elementary stream reader.
 ///
@@ -71,7 +50,7 @@ impl Scoreable for MpaReader<'_> {
         let sync1 = header::read_frame_header_word_no_sync(&mut src)?;
         let hdr1 = header::parse_frame_header(sync1)?;
 
-        if src.bytes_available() < (hdr1.frame_size + MPEG_HEADER_LEN) as u64 {
+        if src.bytes_available() < (hdr1.frame_size + consts::MPEG_HEADER_LEN) as u64 {
             return Ok(Score::Supported(PARTIAL_CONFIDENCE));
         }
 
@@ -93,7 +72,7 @@ impl ProbeableFormat<'_> for MpaReader<'_> {
     fn probe_data() -> &'static [ProbeFormatData] {
         &[
             support_format!(
-                FormatInfos::MP1,
+                consts::MP1,
                 &["mp1"],
                 &["audio/mpeg", "audio/mp1"],
                 &[
@@ -106,7 +85,7 @@ impl ProbeableFormat<'_> for MpaReader<'_> {
                 ]
             ),
             support_format!(
-                FormatInfos::MP2,
+                consts::MP2,
                 &["mp2"],
                 &["audio/mpeg", "audio/mp2"],
                 &[
@@ -119,7 +98,7 @@ impl ProbeableFormat<'_> for MpaReader<'_> {
                 ]
             ),
             support_format!(
-                FormatInfos::MP3,
+                consts::MP3,
                 &["mp3"],
                 &["audio/mpeg", "audio/mp3"],
                 &[
@@ -167,7 +146,7 @@ impl FormatReader for MpaReader<'_> {
     }
 
     fn next_packet(&mut self) -> Result<Option<Packet>> {
-        let mut scratch = [0; MAX_MPEG_FRAME_SIZE];
+        let mut scratch = [0; consts::MAX_MPEG_FRAME_SIZE];
         Ok(self.next_packet_ref(&mut scratch)?.map(|packet| {
             let mut owned = Packet::new(packet.track_id, packet.pts, packet.dur, packet.data);
             owned.dts = packet.dts;
@@ -178,7 +157,7 @@ impl FormatReader for MpaReader<'_> {
     }
 
     fn seek(&mut self, mode: SeekMode, to: SeekTo) -> Result<SeekedTo> {
-        let mut packet_buf = [0; MAX_MPEG_FRAME_SIZE];
+        let mut packet_buf = [0; consts::MAX_MPEG_FRAME_SIZE];
         self.seek_with_buffer(mode, &to, &mut packet_buf)
     }
 
@@ -202,7 +181,7 @@ impl<'s> MpaReader<'s> {
                 Err(err) => return Err(err),
             };
 
-            let data = &packet_buf[..MPEG_HEADER_LEN + header.frame_size];
+            let data = &packet_buf[..consts::MPEG_HEADER_LEN + header.frame_size];
             if is_maybe_info_tag(data, &header) {
                 if try_read_info_tag(data, &header).is_some() {
                     warn!("found an unexpected xing tag, discarding");
@@ -235,7 +214,7 @@ impl<'s> MpaReader<'s> {
                     .map(Duration::from)
                     .and_then(|dur| dur.timestamp_from(Timestamp::ZERO)),
             )
-            .data_by_ref(&packet_buf[..MPEG_HEADER_LEN + header.frame_size])
+            .data_by_ref(&packet_buf[..consts::MPEG_HEADER_LEN + header.frame_size])
             .build_packet_ref();
 
         Ok(Some(packet))
@@ -283,7 +262,7 @@ impl<'s> MpaReader<'s> {
             (u128::from(required_ts.abs_delta(min_ts).get()) * audio_byte_len) / total_dur;
 
         let seek_pos = (seek_pos_rel + u128::from(self.first_packet_pos))
-            .saturating_sub(MAX_MPEG_FRAME_SIZE as u128);
+            .saturating_sub(consts::MAX_MPEG_FRAME_SIZE as u128);
 
         self.reader.seek(SeekFrom::Start(
             seek_pos
@@ -323,7 +302,8 @@ impl<'s> MpaReader<'s> {
         let mut n_parsed = 0;
 
         loop {
-            self.reader.ensure_seekback_buffer(MAX_MPEG_FRAME_SIZE);
+            self.reader
+                .ensure_seekback_buffer(consts::MAX_MPEG_FRAME_SIZE);
             let checkpoint = self.reader.pos();
 
             let synced = header::sync_frame(&mut self.reader);
@@ -337,7 +317,7 @@ impl<'s> MpaReader<'s> {
 
             let header = header::parse_frame_header(sync)?;
 
-            let pos = self.reader.pos() - MPEG_HEADER_LEN as u64;
+            let pos = self.reader.pos() - consts::MPEG_HEADER_LEN as u64;
 
             let frame_dur = header.duration();
 
@@ -481,13 +461,13 @@ impl<'s> MpaReader<'s> {
     /// Returns a decode error when no MPEG frame can be synchronised, or the
     /// underlying I/O error when the source cannot be read.
     pub fn try_new(mut mss: MediaSourceStream<'s>, opts: FormatOptions) -> Result<Self> {
-        let mut packet = [0; MAX_MPEG_FRAME_SIZE];
+        let mut packet = [0; consts::MAX_MPEG_FRAME_SIZE];
         let header = read_mpeg_frame_strict_into(&mut mss, &mut packet)?;
-        let packet = &packet[..MPEG_HEADER_LEN + header.frame_size];
+        let packet = &packet[..consts::MPEG_HEADER_LEN + header.frame_size];
         let format_info = match header.layer {
-            MpegLayer::Layer1 => &FormatInfos::MP1,
-            MpegLayer::Layer2 => &FormatInfos::MP2,
-            MpegLayer::Layer3 => &FormatInfos::MP3,
+            MpegLayer::Layer1 => &consts::MP1,
+            MpegLayer::Layer2 => &consts::MP2,
+            MpegLayer::Layer3 => &consts::MP3,
         };
 
         let mut codec_params = AudioCodecParameters::new();
@@ -524,7 +504,7 @@ impl<'s> MpaReader<'s> {
 
             track.with_num_frames(num_frames);
         } else {
-            mss.seek_buffered_rev(MPEG_HEADER_LEN + header.frame_size);
+            mss.seek_buffered_rev(consts::MPEG_HEADER_LEN + header.frame_size);
 
             if mss.is_seekable() {
                 info!("estimating duration from bitrate, may be inaccurate for vbr files");
@@ -584,7 +564,7 @@ fn read_mpeg_frame_into(
     packet: &mut [u8],
 ) -> Result<FrameHeader> {
     let start = reader.pos();
-    reader.ensure_seekback_buffer(MAX_MPEG_FRAME_SIZE);
+    reader.ensure_seekback_buffer(consts::MAX_MPEG_FRAME_SIZE);
 
     let result = read_mpeg_frame_inner(reader, packet);
 
@@ -616,13 +596,13 @@ fn read_mpeg_frame_inner(
         warn!("invalid mpeg audio header");
     };
 
-    let packet_len = MPEG_HEADER_LEN + header.frame_size;
+    let packet_len = consts::MPEG_HEADER_LEN + header.frame_size;
     if packet_len > packet.len() {
         return decode_error("mpa: MPEG frame exceeds the format maximum");
     }
-    packet[0..MPEG_HEADER_LEN].copy_from_slice(&header_word.to_be_bytes());
+    packet[0..consts::MPEG_HEADER_LEN].copy_from_slice(&header_word.to_be_bytes());
 
-    let mut body = &mut packet[MPEG_HEADER_LEN..packet_len];
+    let mut body = &mut packet[consts::MPEG_HEADER_LEN..packet_len];
     while !body.is_empty() {
         let read = reader.read_buf(body)?;
         body = &mut body[read..];
@@ -641,7 +621,7 @@ fn read_mpeg_frame_strict_into(
 ) -> Result<FrameHeader> {
     loop {
         let header = read_mpeg_frame_into(reader, packet)?;
-        let packet_len = MPEG_HEADER_LEN + header.frame_size;
+        let packet_len = consts::MPEG_HEADER_LEN + header.frame_size;
 
         let pos = reader.pos();
 
@@ -651,7 +631,7 @@ fn read_mpeg_frame_strict_into(
         {
             warn!("skipping junk at {} bytes", pos - packet_len as u64);
 
-            reader.seek_buffered_rev(packet_len + MPEG_HEADER_LEN - 1);
+            reader.seek_buffered_rev(packet_len + consts::MPEG_HEADER_LEN - 1);
             continue;
         }
 
@@ -727,7 +707,7 @@ fn estimate_num_mpeg_frames(reader: &mut MediaSourceStream<'_>) -> Option<u64> {
 
         let header = break_on_err!(header::parse_frame_header(header_val));
 
-        total_frame_len += MPEG_HEADER_LEN + header.frame_size;
+        total_frame_len += consts::MPEG_HEADER_LEN + header.frame_size;
         total_frames += 1;
 
         break_on_err!(reader.ignore_bytes(header.frame_size as u64));

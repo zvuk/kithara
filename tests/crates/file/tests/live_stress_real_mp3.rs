@@ -25,15 +25,14 @@ use kithara_integration_tests::{
 use tracing::info;
 use url::Url;
 
-struct Consts;
-impl Consts {
-    const WARMUP_CHUNKS: usize = 4;
-    const RANDOM_SEEK_OPS_MAX: usize = 256;
-    const MIN_RANDOM_CHUNKS: usize = 384;
-    const CHUNKS_PER_RANDOM_SEEK: usize = 2;
-    const FAST_SEEK_BURST: usize = 64;
-    const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 48;
-    const REVISIT_SEEKS: usize = 64;
+mod consts {
+    pub(super) const WARMUP_CHUNKS: usize = 4;
+    pub(super) const RANDOM_SEEK_OPS_MAX: usize = 256;
+    pub(super) const MIN_RANDOM_CHUNKS: usize = 384;
+    pub(super) const CHUNKS_PER_RANDOM_SEEK: usize = 2;
+    pub(super) const FAST_SEEK_BURST: usize = 64;
+    pub(super) const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 48;
+    pub(super) const REVISIT_SEEKS: usize = 64;
 }
 
 type TestAudio = RegisteredAudio<Stream<File<TestPools>>, TestPools>;
@@ -101,7 +100,7 @@ struct RandomSeekResult {
 
 fn phase1_warmup(audio: &mut TestAudio, ephemeral: bool) {
     info!(ephemeral, "Phase 1: warmup");
-    for _ in 0..Consts::WARMUP_CHUNKS {
+    for _ in 0..consts::WARMUP_CHUNKS {
         if next_chunk(audio, "warmup").is_none() {
             break;
         }
@@ -113,14 +112,14 @@ fn phase2_random_seek_stress(
     rng: &mut Xorshift64,
     max_seek_secs: f64,
 ) -> RandomSeekResult {
-    let mut seek_positions = Vec::with_capacity(Consts::RANDOM_SEEK_OPS_MAX);
-    for _ in 0..Consts::RANDOM_SEEK_OPS_MAX {
+    let mut seek_positions = Vec::with_capacity(consts::RANDOM_SEEK_OPS_MAX);
+    for _ in 0..consts::RANDOM_SEEK_OPS_MAX {
         seek_positions.push(rng.range_f64(1.0, max_seek_secs));
     }
 
     info!(
-        operations_max = Consts::RANDOM_SEEK_OPS_MAX,
-        chunks_per_seek = Consts::CHUNKS_PER_RANDOM_SEEK,
+        operations_max = consts::RANDOM_SEEK_OPS_MAX,
+        chunks_per_seek = consts::CHUNKS_PER_RANDOM_SEEK,
         "Phase 2: random seek/read stress"
     );
     let mut random_ops_done = 0usize;
@@ -132,7 +131,7 @@ fn phase2_random_seek_stress(
         audio.preload().expect("preload must succeed");
         random_ops_done = random_ops_done.saturating_add(1);
 
-        for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
+        for read_idx in 0..consts::CHUNKS_PER_RANDOM_SEEK {
             let stage = format!("random_seek_{idx}_chunk_{read_idx}");
             let Some(_chunk) = next_chunk(audio, &stage) else {
                 break;
@@ -149,8 +148,8 @@ fn phase2_random_seek_stress(
 }
 
 fn phase3_fast_seek_burst(audio: &mut TestAudio, rng: &mut Xorshift64, max_seek_secs: f64) {
-    info!(seeks = Consts::FAST_SEEK_BURST, "Phase 3: fast seek burst");
-    for _ in 0..Consts::FAST_SEEK_BURST {
+    info!(seeks = consts::FAST_SEEK_BURST, "Phase 3: fast seek burst");
+    for _ in 0..consts::FAST_SEEK_BURST {
         let pos_secs = rng.range_f64(1.0, max_seek_secs);
         audio
             .seek(Duration::from_secs_f64(pos_secs))
@@ -168,12 +167,12 @@ fn phase3_fast_seek_burst(audio: &mut TestAudio, rng: &mut Xorshift64, max_seek_
 
 fn phase4_sequential_after_burst(audio: &mut TestAudio) {
     info!(
-        sequential_chunks = Consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
+        sequential_chunks = consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
         "Phase 4: sequential read after fast seeks"
     );
     let mut seq_epoch = None;
     let mut seq_end_frame = None;
-    for idx in 0..Consts::SEQUENTIAL_CHUNKS_AFTER_BURST {
+    for idx in 0..consts::SEQUENTIAL_CHUNKS_AFTER_BURST {
         let stage = format!("sequential_after_burst_{idx}");
         let chunk = next_chunk(audio, &stage)
             .unwrap_or_else(|| panic!("sequential read stopped early at chunk {idx}"));
@@ -199,10 +198,10 @@ fn phase4_sequential_after_burst(audio: &mut TestAudio) {
 
 fn phase5_revisit_seeks(audio: &mut TestAudio, seek_positions: &[f64], random_ops_done: usize) {
     info!(
-        seeks = Consts::REVISIT_SEEKS,
+        seeks = consts::REVISIT_SEEKS,
         "Phase 5: revisit same positions"
     );
-    let revisit_limit = Consts::REVISIT_SEEKS.min(random_ops_done);
+    let revisit_limit = consts::REVISIT_SEEKS.min(random_ops_done);
     assert!(
         revisit_limit > 0,
         "random phase completed without seek operations"
@@ -307,9 +306,9 @@ async fn live_stress_real_mp3_seek_read_cache(
         let mut rng = Xorshift64::new(0xA11C_5EED_0000_0101);
         let random_seek = phase2_random_seek_stress(&mut audio, &mut rng, max_seek_secs);
         assert!(
-            random_seek.chunks_read >= Consts::MIN_RANDOM_CHUNKS,
+            random_seek.chunks_read >= consts::MIN_RANDOM_CHUNKS,
             "stress read underflow: expected at least {} chunks, got {} (random_ops_done={})",
-            Consts::MIN_RANDOM_CHUNKS,
+            consts::MIN_RANDOM_CHUNKS,
             random_seek.chunks_read,
             random_seek.random_ops_done
         );

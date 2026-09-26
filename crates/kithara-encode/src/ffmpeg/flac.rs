@@ -15,7 +15,7 @@ use super::{
     bytes::encode_bytes_audio,
     collect_encoded_packets, ensure_ffmpeg_initialized,
     pcm::{
-        PCM_INPUT_FORMAT, drain_filtered_frames, flush_filter, pump_pcm_frames,
+        consts::PCM_INPUT_FORMAT, drain_filtered_frames, flush_filter, pump_pcm_frames,
         send_eof_to_encoder, send_frame_to_filter,
     },
 };

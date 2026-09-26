@@ -8,10 +8,10 @@ use kithara_stretch::StretchKind;
 use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 
-#[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use super::{Consts, chunk, dominant_bin, expected_bin, flush_serviced, render_serviced, renderer};
 use super::{StretchControls, WarpConfig, spec};
-use crate::test_pools::pools_with_budget as test_pools;
+#[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use super::{chunk, dominant_bin, expected_bin, flush_serviced, render_serviced, renderer};
+use crate::{consts, test_pools::pools_with_budget as test_pools};
 
 /// Swapping the backend mid-stream keeps the stream flowing and pitch-locked.
 #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
@@ -49,15 +49,15 @@ fn live_backend_swap_continues_and_keeps_pitch(
     }
     let mono: Vec<f32> = out
         .iter()
-        .step_by(usize::from(Consts::CH))
+        .step_by(usize::from(consts::CH))
         .copied()
         .collect();
     assert!(
-        mono.len() >= Consts::N,
+        mono.len() >= consts::N,
         "not enough output after swap for the FFT window"
     );
     assert!(
-        dominant_bin(&mono).abs_diff(expected_bin(Consts::F0)) <= 3,
+        dominant_bin(&mono).abs_diff(expected_bin(consts::F0)) <= 3,
         "pitch preserved after live backend swap"
     );
 }

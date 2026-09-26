@@ -124,31 +124,39 @@ mod host {
 
         use super::standing;
 
+        mod consts {
+            /// The pass a document would give the shipped artwork: long enough to
+            /// read.
+            pub(super) const PASS: f32 = 2.0;
+        }
+
         fn frame(name: &str, pass: f32, seconds: f32) -> f64 {
             standing(name, pass, seconds).frame
         }
 
-        /// The pass a document would give the shipped artwork: long enough to
-        /// read.
-        const PASS: f32 = 2.0;
-
         #[kithara::test]
         fn a_reading_partway_through_a_pass_stands_at_a_later_frame() {
-            assert!(frame("pulse", PASS, PASS / 2.0) > frame("pulse", PASS, 0.0));
+            assert!(
+                frame("pulse", consts::PASS, consts::PASS / 2.0)
+                    > frame("pulse", consts::PASS, 0.0)
+            );
         }
 
         /// The whole point of a pass: a clock that keeps running keeps playing,
         /// rather than stopping on the last frame it reached.
         #[kithara::test]
         fn a_reading_a_whole_pass_later_comes_back_to_the_same_frame() {
-            assert_eq!(frame("pulse", PASS, PASS), frame("pulse", PASS, 0.0));
+            assert_eq!(
+                frame("pulse", consts::PASS, consts::PASS),
+                frame("pulse", consts::PASS, 0.0)
+            );
         }
 
         /// An artwork the toolkit does not ship draws nothing, which is what an
         /// unbound control does everywhere else.
         #[kithara::test]
         fn an_artwork_the_toolkit_does_not_ship_stands_at_no_frame() {
-            assert_eq!(frame("nothing-of-the-sort", PASS, 1.0), 0.0);
+            assert_eq!(frame("nothing-of-the-sort", consts::PASS, 1.0), 0.0);
         }
     }
 }

@@ -13,8 +13,6 @@ use crate::{
     signal::{Pcm, Wave},
 };
 
-struct Consts;
-
 pool_schema! {
     pub(super) FixturePools {
         bytes: u8,
@@ -30,15 +28,15 @@ pub(super) fn pools() -> PoolRegion<FixturePools> {
         .unwrap_or_else(|error| panic!("kithara-test-fixtures: pool region failed: {error}"))
 }
 
-impl Consts {
-    const AAC_HE_BIT_RATE: u64 = 64_000;
-    const AAC_HE_V2_BIT_RATE: u64 = 32_000;
-    const CHANNELS: u16 = 2;
-    const ONE_SECOND_FRAMES: usize = 44_100;
-    const RHYTHM_BIT_RATE: u64 = 512_000;
-    const RHYTHM_FRAMES: usize = 576_000;
-    const RHYTHM_SAMPLE_RATE: u32 = 48_000;
-    const SAMPLE_RATE: u32 = 44_100;
+mod consts {
+    pub(super) const AAC_HE_BIT_RATE: u64 = 64_000;
+    pub(super) const AAC_HE_V2_BIT_RATE: u64 = 32_000;
+    pub(super) const CHANNELS: u16 = 2;
+    pub(super) const ONE_SECOND_FRAMES: usize = 44_100;
+    pub(super) const RHYTHM_BIT_RATE: u64 = 512_000;
+    pub(super) const RHYTHM_FRAMES: usize = 576_000;
+    pub(super) const RHYTHM_SAMPLE_RATE: u32 = 48_000;
+    pub(super) const SAMPLE_RATE: u32 = 44_100;
 }
 
 static RHYTHM_FMP4: [OnceLock<Fmp4Package>; 2] = [OnceLock::new(), OnceLock::new()];
@@ -49,10 +47,10 @@ fn rhythm_fmp4(index: usize, carrier_hz: f64) -> &'static Fmp4Package {
         let frame_samples = EncoderFactory::frame_samples(codec).unwrap_or_else(|error| {
             panic!("kithara-test-fixtures: FLAC frame size failed: {error}")
         });
-        let packets = Consts::RHYTHM_FRAMES.div_ceil(frame_samples);
+        let packets = consts::RHYTHM_FRAMES.div_ceil(frame_samples);
         let pcm = rhythm_pcm(
-            Consts::RHYTHM_SAMPLE_RATE,
-            Consts::CHANNELS,
+            consts::RHYTHM_SAMPLE_RATE,
+            consts::CHANNELS,
             packets * frame_samples,
             120.0,
             carrier_hz,
@@ -62,8 +60,8 @@ fn rhythm_fmp4(index: usize, carrier_hz: f64) -> &'static Fmp4Package {
         let media_info = MediaInfo::builder()
             .codec(codec)
             .container(ContainerFormat::Fmp4)
-            .sample_rate(Consts::RHYTHM_SAMPLE_RATE)
-            .channels(Consts::CHANNELS)
+            .sample_rate(consts::RHYTHM_SAMPLE_RATE)
+            .channels(consts::CHANNELS)
             .build();
         let pools = pools();
         let track = EncoderFactory::encode_packaged(
@@ -71,8 +69,8 @@ fn rhythm_fmp4(index: usize, carrier_hz: f64) -> &'static Fmp4Package {
             &PackagedEncodeRequest::builder()
                 .pcm(&pcm)
                 .media_info(media_info)
-                .timescale(Consts::RHYTHM_SAMPLE_RATE)
-                .bit_rate(Consts::RHYTHM_BIT_RATE)
+                .timescale(consts::RHYTHM_SAMPLE_RATE)
+                .bit_rate(consts::RHYTHM_BIT_RATE)
                 .packets_per_segment(packets)
                 .encoder_delay(0)
                 .trailing_delay(0)
@@ -123,18 +121,18 @@ fn aac_bytes(codec: AudioCodec, bit_rate: u64) -> Vec<u8> {
     let frame_samples = EncoderFactory::frame_samples(codec).unwrap_or_else(|error| {
         panic!("kithara-test-fixtures: {codec:?} has no packaged frame size: {error}")
     });
-    let packets = Consts::ONE_SECOND_FRAMES.div_ceil(frame_samples);
+    let packets = consts::ONE_SECOND_FRAMES.div_ceil(frame_samples);
     let pcm = Pcm::new(
-        Consts::SAMPLE_RATE,
-        Consts::CHANNELS,
+        consts::SAMPLE_RATE,
+        consts::CHANNELS,
         packets * frame_samples,
         Wave::Sawtooth,
     );
     let media_info = MediaInfo::builder()
         .codec(codec)
         .container(ContainerFormat::Fmp4)
-        .sample_rate(Consts::SAMPLE_RATE)
-        .channels(Consts::CHANNELS)
+        .sample_rate(consts::SAMPLE_RATE)
+        .channels(consts::CHANNELS)
         .build();
 
     let track = EncoderFactory::encode_packaged(
@@ -142,7 +140,7 @@ fn aac_bytes(codec: AudioCodec, bit_rate: u64) -> Vec<u8> {
         &PackagedEncodeRequest::builder()
             .pcm(&pcm)
             .media_info(media_info)
-            .timescale(Consts::SAMPLE_RATE)
+            .timescale(consts::SAMPLE_RATE)
             .bit_rate(bit_rate)
             .packets_per_segment(packets)
             .encoder_delay(0)
@@ -164,15 +162,15 @@ fn aac_bytes(codec: AudioCodec, bit_rate: u64) -> Vec<u8> {
 #[kithara::asset(ext = "mp4", content_type = "audio/mp4", embed)]
 #[case::lc()]
 fn aac() -> Vec<u8> {
-    aac_bytes(AudioCodec::AacLc, Consts::AAC_HE_BIT_RATE)
+    aac_bytes(AudioCodec::AacLc, consts::AAC_HE_BIT_RATE)
 }
 
 /// An HE-AAC saw packaged as one complete fMP4 body for browser tests.
 ///
 /// Embedded because wasm has no fixture store.
 #[kithara::asset(ext = "mp4", content_type = "audio/mp4", embed)]
-#[case::v1(AudioCodec::AacHe, Consts::AAC_HE_BIT_RATE)]
-#[case::v2(AudioCodec::AacHeV2, Consts::AAC_HE_V2_BIT_RATE)]
+#[case::v1(AudioCodec::AacHe, consts::AAC_HE_BIT_RATE)]
+#[case::v2(AudioCodec::AacHeV2, consts::AAC_HE_V2_BIT_RATE)]
 fn he_aac(codec: AudioCodec, bit_rate: u64) -> Vec<u8> {
     aac_bytes(codec, bit_rate)
 }

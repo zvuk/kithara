@@ -38,7 +38,7 @@ use kithara_integration_tests::{
     kithara,
     offline::QueueTicker,
     temp_dir,
-    test_defaults::Consts as Shared,
+    test_defaults::consts as shared,
     waits::wait_for_event,
 };
 use kithara_test_fixtures::fixtures::tone_mp3;
@@ -89,7 +89,7 @@ impl SessionDispatcher<TestPools> for StartGatedSession {
             }
             Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(
                 None,
-                Shared::NON_ZERO_SAMPLE_RATE.get(),
+                shared::NON_ZERO_SAMPLE_RATE.get(),
             )),
             Cmd::QueryStreamShape => Reply::StreamShape(None),
             _ => Reply::Ok,
@@ -145,11 +145,11 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools).build(),
             ))
-            .session(SessionBinding::new(session, Shared::NON_ZERO_SAMPLE_RATE))
+            .session(SessionBinding::new(session, shared::NON_ZERO_SAMPLE_RATE))
             .build(),
     );
     let queue = Arc::new(Queue::new(

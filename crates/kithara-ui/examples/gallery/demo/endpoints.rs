@@ -7,7 +7,7 @@ use kithara_ui::{
 };
 
 use super::{
-    consts::Consts,
+    consts,
     pages::{mixer, stress},
     reads::FONT_FAMILIES,
 };
@@ -503,7 +503,7 @@ fn insert_table_endpoints(registry: &mut DemoRegistry) {
         "gallery.table.preset",
         EndpointDesc::new(ValueKind::Scalar),
     );
-    for column in Consts::table_columns() {
+    for column in consts::table_columns() {
         registry.insert(
             EndpointCategory::Model,
             &format!("gallery.table.columns.{}", column.id()),

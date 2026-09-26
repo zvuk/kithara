@@ -7,10 +7,7 @@ use kithara_derive::Patch;
 use num_traits::cast::ToPrimitive;
 use thiserror::Error;
 
-use super::{
-    consts::{PeriodConsts, TempoConsts},
-    frames,
-};
+use super::{consts, frames};
 
 /// A tempo policy the periodicity stage cannot search.
 #[derive(Clone, Debug, Error, PartialEq)]
@@ -132,7 +129,7 @@ impl Tempo {
     pub(super) fn search_floor(&self) -> usize {
         self.lags()
             .start()
-            .saturating_sub(PeriodConsts::COMB_HARMONICS - 1)
+            .saturating_sub(consts::PERIOD_COMB_HARMONICS - 1)
     }
 
     /// How far consecutive beats may fall from the period, in seconds.
@@ -179,7 +176,7 @@ impl Tempo {
             return Err(TempoError::Drift { drift });
         }
         let lags = self.lags();
-        let scored = PeriodConsts::PERIOD_INDEX;
+        let scored = consts::COMB_PERIOD_INDEX;
         if !scored.contains(lags.start()) || !scored.contains(lags.end()) {
             return Err(TempoError::Unscored {
                 low,
@@ -195,11 +192,11 @@ impl Tempo {
 impl Default for Tempo {
     fn default() -> Self {
         Self {
-            low: TempoConsts::BAND_LOW_BPM,
-            high: TempoConsts::BAND_HIGH_BPM,
-            prior: TempoConsts::PRIOR_BPM,
-            tolerance: TempoConsts::TOLERANCE_SECONDS,
-            drift: PeriodConsts::TRANSITION_SIGMA / lags_per_drift(TempoConsts::PRIOR_BPM),
+            low: consts::TEMPO_BAND_LOW_BPM,
+            high: consts::TEMPO_BAND_HIGH_BPM,
+            prior: consts::TEMPO_PRIOR_BPM,
+            tolerance: consts::TEMPO_TOLERANCE_SECONDS,
+            drift: consts::PERIOD_TRANSITION_SIGMA / lags_per_drift(consts::TEMPO_PRIOR_BPM),
         }
     }
 }
@@ -219,7 +216,7 @@ fn lag(beats_per_minute: f32) -> f32 {
 /// Lags of period change per BPM per second of tempo change: the estimate
 /// spacing in seconds, times the period's sensitivity to tempo at the prior.
 fn lags_per_drift(prior: f32) -> f32 {
-    let step_seconds = PeriodConsts::ACF_STEP.to_f32().unwrap_or(1.0) * frames::frame_seconds();
+    let step_seconds = consts::PERIOD_ACF_STEP.to_f32().unwrap_or(1.0) * frames::frame_seconds();
     step_seconds * lag(prior).round() / prior
 }
 
@@ -301,13 +298,13 @@ mod tests {
         let tempo = Tempo::default();
         assert_eq!(
             tempo.transition_sigma(),
-            PeriodConsts::TRANSITION_SIGMA,
+            consts::PERIOD_TRANSITION_SIGMA,
             "the default drift is the calibrated lag spread, read as {} lags",
             tempo.transition_sigma()
         );
         assert_eq!(
             tempo.tolerance(),
-            TempoConsts::TOLERANCE_SECONDS,
+            consts::TEMPO_TOLERANCE_SECONDS,
             "the default tolerance is the calibrated one"
         );
     }

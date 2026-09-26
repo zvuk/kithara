@@ -4,10 +4,8 @@ use super::{
 };
 use crate::{
     AssetFrame, Beat, BeatEvidence, BeatsPerMinute, FrameUncertainty, MapAxis, MapPoint,
-    MapPosition, Meter, MeterFacts, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch,
+    MapPosition, Meter, MeterFacts, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, consts,
 };
-
-const SECONDS_PER_MINUTE: f64 = 60.0;
 
 /// Immutable mathematical view of a live session clock.
 #[derive(Debug)]
@@ -164,7 +162,7 @@ impl BeatGridView for SessionGridView {
         let MapPosition::Session(frame) = *position.value() else {
             return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
         };
-        let bpm = self.anchor.tempo_at(frame) * SECONDS_PER_MINUTE;
+        let bpm = self.anchor.tempo_at(frame) * consts::MODEL_SECONDS_PER_MINUTE;
         let Ok(tempo) = BeatsPerMinute::try_from(bpm) else {
             return BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry);
         };

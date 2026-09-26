@@ -590,7 +590,7 @@ mod tests {
         expand::{Binding, BindingKind, BlockSpec, ControlSpec, MeasureSpec},
         ids::{InternId, Interner, SourceUri},
         module::{PopoverAlign, PopoverAt},
-        size::{DEFAULTS, Snapshot},
+        size::{Snapshot, consts::DEFAULTS},
     };
 
     #[kithara::test]

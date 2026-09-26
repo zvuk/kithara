@@ -7,18 +7,7 @@ use kithara_derive::Patch;
 use kithara_platform::{CancelToken, tokio::runtime::Handle as RuntimeHandle};
 use kithara_play::{CrossfadeSettings, PlayerImpl};
 
-use crate::{ActionAtItemEnd, PlaybackOrder};
-
-/// Default parallelism cap for async track loads.
-pub(crate) const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
-    Some(n) => n,
-    None => unreachable!(),
-};
-
-/// Default prefetch lead time before EOF, in seconds.
-///
-/// Mirrors `kithara_play::PlayerConfig::prefetch_duration` default.
-pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
+use crate::{ActionAtItemEnd, PlaybackOrder, consts};
 
 /// Configuration for a [`Queue`](crate::Queue).
 ///
@@ -42,7 +31,7 @@ where
     pub crossfade_settings: CrossfadeSettings,
 
     /// Max concurrent background prefetch loads. Default: 3.
-    #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
+    #[builder(default = consts::DEFAULT_MAX_CONCURRENT_LOADS)]
     pub max_concurrent_loads: NonZeroUsize,
 
     /// Master cancel for the queue. `Some` threads the app master so the
@@ -88,7 +77,7 @@ where
     /// the value already reaches 10 setter and 14 read call sites as a bare
     /// `f32`, and converting the type would only churn those for a
     /// formatting preference.
-    #[builder(default = DEFAULT_PREFETCH_DURATION)]
+    #[builder(default = consts::DEFAULT_PREFETCH_DURATION)]
     pub prefetch_duration: f32,
 
     /// Entries the navigation history keeps. Only explicit selections and
@@ -104,16 +93,13 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{
-        queue::{TEST_SAMPLE_RATE, test_session},
-        test_pools::pools,
-    };
+    use crate::{queue::test_session, test_pools::pools};
 
     pub(super) fn config() -> QueueConfig<crate::test_pools::TestPools> {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .sample_rate(TEST_SAMPLE_RATE)
+                .sample_rate(consts::TEST_SAMPLE_RATE)
                 .worker(worker)
                 .session(test_session())
                 .build(),

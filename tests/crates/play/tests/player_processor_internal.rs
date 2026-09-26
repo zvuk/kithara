@@ -25,7 +25,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     audio_mock::{MockReader, TestPcmReader},
-    test_defaults::Consts,
+    test_defaults::consts,
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use ringbuf::traits::{Consumer, Producer};
@@ -52,7 +52,7 @@ fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
     let processor = PlayerNodeProcessor::new(
         inputs,
-        stream_shape(Consts::NON_ZERO_SAMPLE_RATE),
+        stream_shape(consts::NON_ZERO_SAMPLE_RATE),
         &pools(),
         kithara::play::DEFAULT_GATE_SMOOTHING,
     );
@@ -68,7 +68,7 @@ fn create_mock_player_resource_with_duration(
     src: &str,
     duration_secs: f64,
 ) -> Box<PlayerResource> {
-    let reader = TestPcmReader::from_pcm(Consts::AUDIO_SPEC, duration_secs, constant_half);
+    let reader = TestPcmReader::from_pcm(consts::AUDIO_SPEC, duration_secs, constant_half);
     let resource = Resource::from_reader(reader, None);
     Box::new(
         PlayerResource::new(resource, Arc::from(src), &pools())
@@ -78,7 +78,7 @@ fn create_mock_player_resource_with_duration(
 
 fn create_duration_player_resource(src: &str, duration: Duration) -> Box<PlayerResource> {
     let (reader, _recorded) =
-        MockReader::sample_rate_tracking_with_duration(Consts::AUDIO_SPEC, duration);
+        MockReader::sample_rate_tracking_with_duration(consts::AUDIO_SPEC, duration);
     let resource = Resource::from_reader(reader, None);
     Box::new(
         PlayerResource::new(resource, Arc::from(src), &pools())
@@ -100,7 +100,7 @@ fn create_tracking_player_resource(
 #[kithara::test(tokio)]
 async fn load_track_propagates_host_sample_rate() {
     let host_rate = 88_200u32;
-    let (reader, recorded) = MockReader::sample_rate_tracking(Consts::AUDIO_SPEC);
+    let (reader, recorded) = MockReader::sample_rate_tracking(consts::AUDIO_SPEC);
     let resource = Resource::from_reader(reader, None);
     let player_resource = Box::new(
         PlayerResource::new(resource, Arc::from("track.mp3"), &pools())
@@ -162,7 +162,7 @@ fn processor_set_paused_updates_playback() {
 
 #[kithara::test(tokio)]
 async fn processor_clear_unloads_tracks_and_resets_snapshot() {
-    let (reader, _recorded) = MockReader::sample_rate_tracking(Consts::AUDIO_SPEC);
+    let (reader, _recorded) = MockReader::sample_rate_tracking(consts::AUDIO_SPEC);
     let resource = Resource::from_reader(reader, None);
     let player_resource = Box::new(
         PlayerResource::new(resource, Arc::from("track.mp3"), &pools())

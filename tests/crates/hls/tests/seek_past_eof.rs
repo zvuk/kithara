@@ -15,24 +15,25 @@ use kithara_integration_tests::{
     rt_cancel, temp_dir,
 };
 
-use crate::common::test_defaults::Consts as Shared;
+use crate::common::test_defaults::consts as shared;
 
-struct Consts;
-impl Consts {
+mod consts {
+    use super::shared;
+
     /// Actual segment body size returned by GET.
-    const ACTUAL_SEGMENT_SIZE: usize = Shared::SEGMENT_SIZE;
+    pub(super) const ACTUAL_SEGMENT_SIZE: usize = shared::SEGMENT_SIZE;
 
     /// Content-Length reported by HEAD (smaller, simulating compressed size).
     /// ~800 bytes less per segment — matches real-world gzip/brotli overhead.
-    const HEAD_REPORTED_SIZE: usize = 199_200;
+    pub(super) const HEAD_REPORTED_SIZE: usize = 199_200;
 
-    const NUM_SEGMENTS: usize = 3;
+    pub(super) const NUM_SEGMENTS: usize = 3;
 
     /// HEAD-based total across all segments (no init segments in this test).
-    const HEAD_TOTAL: u64 = (Self::HEAD_REPORTED_SIZE * Self::NUM_SEGMENTS) as u64;
+    pub(super) const HEAD_TOTAL: u64 = (HEAD_REPORTED_SIZE * NUM_SEGMENTS) as u64;
 
     /// Actual total bytes that will be downloaded and cached.
-    const ACTUAL_TOTAL: u64 = (Self::ACTUAL_SEGMENT_SIZE * Self::NUM_SEGMENTS) as u64;
+    pub(super) const ACTUAL_TOTAL: u64 = (ACTUAL_SEGMENT_SIZE * NUM_SEGMENTS) as u64;
 }
 
 /// Seek to a position between HEAD-reported total and actual total must succeed.
@@ -51,9 +52,9 @@ impl Consts {
 async fn seek_beyond_head_total_within_actual_total(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
-        segments_per_variant: Consts::NUM_SEGMENTS,
-        segment_size: Consts::ACTUAL_SEGMENT_SIZE,
-        head_reported_segment_size: Some(Consts::HEAD_REPORTED_SIZE),
+        segments_per_variant: consts::NUM_SEGMENTS,
+        segment_size: consts::ACTUAL_SEGMENT_SIZE,
+        head_reported_segment_size: Some(consts::HEAD_REPORTED_SIZE),
         ..Default::default()
     })
     .await;
@@ -87,21 +88,21 @@ async fn seek_beyond_head_total_within_actual_total(temp_dir: TestTempDir, rt_ca
         }
 
         assert!(
-            all_data.len() as u64 > Consts::HEAD_TOTAL,
+            all_data.len() as u64 > consts::HEAD_TOTAL,
             "Read {} bytes, expected more than HEAD total {}",
             all_data.len(),
-            Consts::HEAD_TOTAL,
+            consts::HEAD_TOTAL,
         );
 
-        let seek_target = Consts::HEAD_TOTAL + 1;
+        let seek_target = consts::HEAD_TOTAL + 1;
         let result = stream.seek(SeekFrom::Start(seek_target));
 
         assert!(
             result.is_ok(),
             "Seek to {} should succeed (HEAD total={}, actual total={}): {:?}",
             seek_target,
-            Consts::HEAD_TOTAL,
-            Consts::ACTUAL_TOTAL,
+            consts::HEAD_TOTAL,
+            consts::ACTUAL_TOTAL,
             result.err(),
         );
 

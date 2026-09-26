@@ -121,12 +121,16 @@ mod host {
             skin::ColorRole,
         };
 
-        const BOUNDS: Rect = Rect {
-            h: 24.0,
-            w: 24.0,
-            x: 0.0,
-            y: 0.0,
-        };
+        mod consts {
+            use super::*;
+
+            pub(super) const BOUNDS: Rect = Rect {
+                h: 24.0,
+                w: 24.0,
+                x: 0.0,
+                y: 0.0,
+            };
+        }
 
         #[kithara::test]
         fn every_glyph_style_takes_its_own_skin_icon_size() {
@@ -216,7 +220,7 @@ mod host {
                         .mark()
                         .expect("the play icon must have a mark"),
                 },
-                BOUNDS,
+                consts::BOUNDS,
             );
             list.finish()
         }

@@ -98,12 +98,11 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-
-    const RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("48 kHz is non-zero");
+    use crate::consts;
 
     #[kithara::test]
     fn checked_shape_and_time_math() {
-        let spec = AudioSpec::new(2, RATE);
+        let spec = AudioSpec::new(2, consts::INTERLEAVED_RATE);
         let duration = Duration::from_millis(12);
 
         assert_eq!(
@@ -121,10 +120,10 @@ mod tests {
 
     #[kithara::test]
     fn invalid_shape_is_typed() {
-        let zero = AudioSpec::new(0, RATE);
+        let zero = AudioSpec::new(0, consts::INTERLEAVED_RATE);
         assert_eq!(zero.channel_count(), Err(SignalError::ChannelCountZero));
 
-        let stereo = AudioSpec::new(2, RATE);
+        let stereo = AudioSpec::new(2, consts::INTERLEAVED_RATE);
         assert_eq!(
             stereo.frame_count(SampleCount::new(3)),
             Err(SignalError::IncompleteFrame {
@@ -136,7 +135,7 @@ mod tests {
 
     #[kithara::test]
     fn count_and_time_overflow_is_typed() {
-        let stereo = AudioSpec::new(2, RATE);
+        let stereo = AudioSpec::new(2, consts::INTERLEAVED_RATE);
 
         assert_eq!(
             stereo.sample_count(FrameCount::new(usize::MAX)),

@@ -9,36 +9,9 @@ use super::{
     profile::{LinuxHost, WindowsGuest},
     registration,
 };
-use crate::ci::{config::CiPins, process::Process};
-
-/// What a guest is built from: two tracked files, one vendor download that
-/// cannot be pinned, and the tools the lane needs beyond the toolchain. All of
-/// it is here rather than pasted into a machine by hand.
-struct GuestSources {
-    /// How long to wait for the guest to start installing, in one-second
-    /// attempts, answering the boot prompt until it does.
-    prompt_attempts: u32,
-    /// How long to wait for an enrolled guest to report for work, in
-    /// ten-second attempts. A guest that has just been given its credentials
-    /// signs in, enrols, and starts the runner, which takes minutes.
-    enrolment_attempts: u32,
-    /// How long to watch for the power-off that ends the first install phase,
-    /// in thirty-second attempts.
-    first_phase_attempts: u32,
-    answer_file: &'static str,
-    provision_script: &'static str,
-    build_tools_url: &'static str,
-    cargo_tools: [&'static str; 2],
-}
-
-const GUEST: GuestSources = GuestSources {
-    prompt_attempts: 40,
-    enrolment_attempts: 60,
-    first_phase_attempts: 60,
-    answer_file: ".config/windows/autounattend.xml",
-    provision_script: ".config/windows/provision.ps1",
-    build_tools_url: "https://aka.ms/vs/17/release/vs_buildtools.exe",
-    cargo_tools: ["cargo-nextest", "just"],
+use crate::{
+    ci::{config::CiPins, process::Process},
+    consts,
 };
 
 /// What the guest needs to register itself, written to the volume it reads its
@@ -185,7 +158,7 @@ pub(super) fn install(
 /// stays there. Waiting for that one power-off and starting the guest again is
 /// enough: every later phase is covered by the setting, which is now live.
 fn resume_first_phase(process: &Process, guest: &str) -> Result<()> {
-    for _ in 0..GUEST.first_phase_attempts {
+    for _ in 0..consts::GUEST_FIRST_PHASE_ATTEMPTS {
         thread::sleep(Duration::from_secs(30));
         let state = process.capture("virsh", &["domstate", guest], "read the guest state")?;
         if state.trim() == "shut off" {
@@ -240,7 +213,7 @@ pub(super) fn enrol(process: &Process, host: &LinuxHost) -> Result<()> {
     let _ = process.run("virsh", &["destroy", &guest.name], "put the guest down");
     process.run("virsh", &["start", &guest.name], "start the guest")?;
 
-    for _ in 0..GUEST.enrolment_attempts {
+    for _ in 0..consts::GUEST_ENROLMENT_ATTEMPTS {
         thread::sleep(Duration::from_secs(10));
         if registration::is_online(host, guest)? {
             info!(guest = guest.name, "the guest is registered and waiting");
@@ -315,7 +288,7 @@ fn build_enrolment_media(
 /// Cancel button and asks whether to abandon the install.
 fn press_a_key(process: &Process, guest: &str) -> Result<()> {
     let idle = written_bytes(process, guest)?;
-    for _ in 0..GUEST.prompt_attempts {
+    for _ in 0..consts::GUEST_PROMPT_ATTEMPTS {
         thread::sleep(Duration::from_secs(1));
         if written_bytes(process, guest)? > idle {
             info!(guest, "the guest is installing");
@@ -362,7 +335,7 @@ fn build_answer_media(
     }
     fs::create_dir_all(&staging).with_context(|| format!("creating {}", staging.display()))?;
 
-    for source in [GUEST.answer_file, GUEST.provision_script] {
+    for source in [consts::GUEST_ANSWER_FILE, consts::GUEST_PROVISION_SCRIPT] {
         let name = Path::new(source)
             .file_name()
             .context("a tracked file with no name")?;
@@ -371,10 +344,9 @@ fn build_answer_media(
     }
 
     let settings = GuestSettings {
-        build_tools_url: GUEST.build_tools_url,
+        build_tools_url: consts::GUEST_BUILD_TOOLS_URL,
         build_tools_sha256: "",
-        cargo_tools: GUEST
-            .cargo_tools
+        cargo_tools: consts::GUEST_CARGO_TOOLS
             .iter()
             .map(|tool| Ok((*tool, pins.cargo_tool_version(tool)?)))
             .collect::<Result<_>>()?,
@@ -472,7 +444,7 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("the crate sits inside the workspace");
-        for source in [GUEST.answer_file, GUEST.provision_script] {
+        for source in [consts::GUEST_ANSWER_FILE, consts::GUEST_PROVISION_SCRIPT] {
             assert!(root.join(source).is_file(), "{source}");
         }
     }
@@ -481,10 +453,9 @@ mod tests {
     fn the_guest_is_told_versions_rather_than_left_to_choose() {
         let pins = &fixture().pins;
         let settings = GuestSettings {
-            build_tools_url: GUEST.build_tools_url,
+            build_tools_url: consts::GUEST_BUILD_TOOLS_URL,
             build_tools_sha256: "",
-            cargo_tools: GUEST
-                .cargo_tools
+            cargo_tools: consts::GUEST_CARGO_TOOLS
                 .iter()
                 .map(|tool| (*tool, pins.cargo_tool_version(tool).unwrap()))
                 .collect(),

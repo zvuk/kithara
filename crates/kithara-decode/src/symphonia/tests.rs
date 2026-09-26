@@ -14,10 +14,7 @@ use symphonia::core::{
     units::Timestamp,
 };
 
-const INTERRUPTED_MESSAGE: &str = "synthetic MPEG frame interruption";
-const MPEG_FRAME_LEN: usize = 417;
-const MPEG_FRAME_DUR: i64 = 1152;
-const MAX_SEEK_RETRIES: usize = 32;
+use crate::consts;
 
 struct SourceState {
     interrupt_at: Option<usize>,
@@ -77,7 +74,10 @@ impl Read for InterruptingSource {
 
         if state.interrupts_remaining > 0 && state.interrupt_at == Some(state.pos) {
             state.interrupts_remaining -= 1;
-            return Err(io::Error::new(ErrorKind::Interrupted, INTERRUPTED_MESSAGE));
+            return Err(io::Error::new(
+                ErrorKind::Interrupted,
+                consts::INTERRUPTED_MESSAGE,
+            ));
         }
 
         let start = state.pos;
@@ -147,7 +147,7 @@ fn assert_interrupted(reader: &mut MpaReader<'_>) {
     match reader.next_packet() {
         Err(SymphoniaError::IoError(error)) => {
             assert_eq!(error.kind(), ErrorKind::Interrupted);
-            assert_eq!(error.to_string(), INTERRUPTED_MESSAGE);
+            assert_eq!(error.to_string(), consts::INTERRUPTED_MESSAGE);
         }
         Ok(_) | Err(_) => panic!("packet read must return the original interruption"),
     }
@@ -173,18 +173,21 @@ fn seek_after_interruption(reader: &mut MpaReader<'_>, ts: i64) -> SeekedTo {
         Ok(_) => panic!("armed interruption must fire during the seek scan"),
         Err(error) => panic!("synthetic MPEG seek failed: {error}"),
     }
-    for _ in 0..MAX_SEEK_RETRIES {
+    for _ in 0..consts::MAX_SEEK_RETRIES {
         match reader.seek(SeekMode::Accurate, seek_to(ts)) {
             Ok(seeked) => return seeked,
             Err(SymphoniaError::IoError(error)) if error.kind() == ErrorKind::Interrupted => {}
             Err(error) => panic!("synthetic MPEG seek failed: {error}"),
         }
     }
-    panic!("synthetic MPEG seek did not settle after {MAX_SEEK_RETRIES} retries")
+    panic!(
+        "synthetic MPEG seek did not settle after {MAX_SEEK_RETRIES} retries",
+        MAX_SEEK_RETRIES = consts::MAX_SEEK_RETRIES
+    )
 }
 
 fn packet_at(reader: &mut MpaReader<'_>, ts: i64) -> Packet {
-    for _ in 0..MAX_SEEK_RETRIES {
+    for _ in 0..consts::MAX_SEEK_RETRIES {
         let packet = next_packet(reader);
         if packet.pts.get() == ts {
             return packet;
@@ -227,9 +230,9 @@ fn mpa_seek_retried_after_interruption_matches_uninterrupted_seek(mpeg_eight: &'
     // part-consumed that frame. A retried seek must resume from the same
     // frame boundary; resyncing to the next header would count the frame
     // it skipped and shift every later timestamp by one frame.
-    fault_control.arm_at(4 * MPEG_FRAME_LEN + MPEG_FRAME_LEN / 2, 1);
+    fault_control.arm_at(4 * consts::MPEG_FRAME_LEN + consts::MPEG_FRAME_LEN / 2, 1);
 
-    let target_ts = 6 * MPEG_FRAME_DUR;
+    let target_ts = 6 * consts::MPEG_FRAME_DUR;
     let fault_seeked = seek_after_interruption(&mut fault, target_ts);
     let control_seeked = seek_once(&mut control, target_ts);
 
@@ -248,9 +251,9 @@ fn mpa_seek_retry_interrupted_mid_header_matches_uninterrupted_seek(mpeg_eight: 
     // Interrupt right after the first header byte of frame 4, inside
     // `sync_frame`. Without a rollback the stranded 0xFF makes the retried
     // scan resync at frame 5 while carrying frame 4's timestamp.
-    fault_control.arm_at(4 * MPEG_FRAME_LEN + 1, 1);
+    fault_control.arm_at(4 * consts::MPEG_FRAME_LEN + 1, 1);
 
-    let target_ts = 6 * MPEG_FRAME_DUR;
+    let target_ts = 6 * consts::MPEG_FRAME_DUR;
     let fault_seeked = seek_after_interruption(&mut fault, target_ts);
     let control_seeked = seek_once(&mut control, target_ts);
 
@@ -270,9 +273,9 @@ fn mpa_seek_retry_interrupted_in_side_info_keeps_pts_aligned_with_data(mpeg_eigh
     // does not hold here. The pinned property is narrower: packet data must
     // stay aligned with pts — without a rollback the retry would deliver
     // frame 7's bytes under frame 6's timestamp.
-    fault_control.arm_at(6 * MPEG_FRAME_LEN + 5, 1);
+    fault_control.arm_at(6 * consts::MPEG_FRAME_LEN + 5, 1);
 
-    let target_ts = 6 * MPEG_FRAME_DUR;
+    let target_ts = 6 * consts::MPEG_FRAME_DUR;
     seek_after_interruption(&mut fault, target_ts);
 
     let packet = packet_at(&mut fault, target_ts);
@@ -321,7 +324,7 @@ fn mpa_seek_preserves_packet_position(mpeg_eight: &'static [u8]) {
     let (control_source, _) = InterruptingSource::new(mpeg_eight.to_vec());
     let mut control = mpa_reader(control_source);
     let mut packets = super::packets::Packets::new(Box::new(mpa_reader(source)));
-    let target = 6 * MPEG_FRAME_DUR;
+    let target = 6 * consts::MPEG_FRAME_DUR;
     let expected_seek = seek_once(&mut control, target);
     let actual_seek = packets
         .seek(SeekMode::Accurate, seek_to(target))

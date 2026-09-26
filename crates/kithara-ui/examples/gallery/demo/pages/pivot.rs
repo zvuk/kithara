@@ -5,10 +5,8 @@ use num_traits::cast::AsPrimitive;
 
 use crate::demo::data::CATALOG;
 
-struct PivotConsts;
-
-impl PivotConsts {
-    const LEAP: [(u16, u16); 9] = [
+mod consts {
+    pub(super) const LEAP: [(u16, u16); 9] = [
         (5, 7),
         (7, 9),
         (8, 11),
@@ -19,10 +17,10 @@ impl PivotConsts {
         (11, 15),
         (11, 16),
     ];
-    const RANGE_GAP: f32 = 8.0;
-    const RANGE_HIGH: f32 = 200.0;
-    const RANGE_LOW: f32 = 60.0;
-    const STEP: [(u16, u16); 9] = [
+    pub(super) const RANGE_GAP: f32 = 8.0;
+    pub(super) const RANGE_HIGH: f32 = 200.0;
+    pub(super) const RANGE_LOW: f32 = 60.0;
+    pub(super) const STEP: [(u16, u16); 9] = [
         (3, 4),
         (4, 5),
         (5, 6),
@@ -150,10 +148,8 @@ impl PivotState {
             }),
             "pivot.master.label" => ReadValue::Text(&self.master_label),
             "pivot.range" => ReadValue::Range(ScalarRange {
-                min: (self.min - PivotConsts::RANGE_LOW)
-                    / (PivotConsts::RANGE_HIGH - PivotConsts::RANGE_LOW),
-                max: (self.max - PivotConsts::RANGE_LOW)
-                    / (PivotConsts::RANGE_HIGH - PivotConsts::RANGE_LOW),
+                min: (self.min - consts::RANGE_LOW) / (consts::RANGE_HIGH - consts::RANGE_LOW),
+                max: (self.max - consts::RANGE_LOW) / (consts::RANGE_HIGH - consts::RANGE_LOW),
             }),
             "pivot.range.min_label" => ReadValue::Text(&self.min_label),
             "pivot.range.max_label" => ReadValue::Text(&self.max_label),
@@ -226,8 +222,8 @@ impl PivotState {
 
     fn rebuild(&mut self, selection: Selection) {
         let pairs = match self.family {
-            Family::Step => &PivotConsts::STEP,
-            Family::Leap => &PivotConsts::LEAP,
+            Family::Step => &consts::STEP,
+            Family::Leap => &consts::LEAP,
         };
         self.portals = pairs
             .iter()
@@ -323,12 +319,11 @@ impl PivotState {
             return false;
         }
         let norm: f32 = value.clamp(0.0, 1.0).as_();
-        let bpm =
-            PivotConsts::RANGE_LOW + norm * (PivotConsts::RANGE_HIGH - PivotConsts::RANGE_LOW);
+        let bpm = consts::RANGE_LOW + norm * (consts::RANGE_HIGH - consts::RANGE_LOW);
         let bpm = (bpm / 2.0).round() * 2.0;
         match path.rsplit('/').next() {
-            Some("min") => self.min = bpm.min(self.max - PivotConsts::RANGE_GAP),
-            Some("max") => self.max = bpm.max(self.min + PivotConsts::RANGE_GAP),
+            Some("min") => self.min = bpm.min(self.max - consts::RANGE_GAP),
+            Some("max") => self.max = bpm.max(self.min + consts::RANGE_GAP),
             _ => return false,
         }
         self.rebuild(Selection::Current);

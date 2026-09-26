@@ -1,12 +1,16 @@
 id: style.no-impl-only-consts
 message: |
-  Inherent `impl` block containing one or two constants and nothing else.
-  Constants belong in the same `impl` block as the methods that use them.
+  Inherent `impl` block containing constants and nothing else.
 
-  Grouping is fine: an `impl` that holds three or more constants and no
-  methods is a deliberate constant namespace, and the type it hangs off may
-  be named anything. The smell this rule catches is one or two constants
-  split away from the code that uses them.
+  A unit struct or empty enum that exists to hold associated consts is a
+  type used as a namespace. Move the constants into a `consts` module
+  instead (see `style.module-consts-in-crate-consts`: the crate's
+  `src/consts.rs`, or one inline `mod consts` per file when the module is
+  gated), used as `consts::A`.
+
+  On a real type, one or two constants split away from the methods that use
+  them belong in the same `impl` block as those methods. Three or more
+  constants and no methods on a real type are a deliberate group.
 severity: error
 language: Rust
 ignores:
@@ -21,6 +25,9 @@ rule:
     - not:
         pattern: "impl $TRAIT for $TYPE { $$$ }"
     - has:
+        field: type
+        pattern: $HOLDER
+    - has:
         kind: declaration_list
         has:
           any:
@@ -33,17 +40,13 @@ rule:
             any:
               - kind: function_item
               - kind: type_item
-    # Two ways to be a deliberate constant namespace rather than a split.
-    - not:
-        any:
-          # A type whose name ends in `Consts` says so outright, at any count.
-          - has:
-              kind: type_identifier
-              regex: "Consts$"
-          # Or three or more constants say so by weight. A middle constant —
-          # one that both follows and precedes another — proves there are at
-          # least three, without the rule having to count.
-          - has:
+    - any:
+        # One or two constants on any type. A middle constant — one that
+        # both follows and precedes another — proves there are at least
+        # three, without the rule having to count.
+        - kind: impl_item
+          not:
+            has:
               kind: declaration_list
               has:
                 all:
@@ -60,3 +63,39 @@ rule:
                         - kind: const_item
                         - kind: static_item
                       stopBy: end
+        # Any number of constants on a holder type declared beside the impl:
+        # a unit struct, or an enum without variants, that implements no
+        # trait there. A unit struct with a trait impl is a real type.
+        - all:
+            - any:
+                - follows: &holder
+                    stopBy: end
+                    any:
+                      - all:
+                          - kind: struct_item
+                          - has:
+                              field: name
+                              pattern: $HOLDER
+                          - not:
+                              has:
+                                field: body
+                                any:
+                                  - kind: field_declaration_list
+                                  - kind: ordered_field_declaration_list
+                      - all:
+                          - kind: enum_item
+                          - has:
+                              field: name
+                              pattern: $HOLDER
+                          - not:
+                              has:
+                                field: body
+                                has:
+                                  kind: enum_variant
+                - precedes: *holder
+            - not:
+                follows: &trait_impl
+                  stopBy: end
+                  pattern: "impl $IMPLEMENTED for $HOLDER { $$$ }"
+            - not:
+                precedes: *trait_impl

@@ -22,8 +22,10 @@ mod host {
         },
     };
 
-    /// The one placeholder that stands in for a tempo nobody measured.
-    const ELAPSED: &str = "time";
+    mod consts {
+        /// The one placeholder that stands in for a tempo nobody measured.
+        pub(super) const ELAPSED: &str = "time";
+    }
 
     impl Draws for Bpm {
         type Painter = Face;
@@ -36,7 +38,7 @@ mod host {
                 return Some(Beat::Bpm(bpm));
             }
             let placeholder = self.placeholder.map(|id| read.ctx.ui.resolve(id));
-            (placeholder == Some(ELAPSED)).then(|| Beat::Position(position(read)))
+            (placeholder == Some(consts::ELAPSED)).then(|| Beat::Position(position(read)))
         }
 
         fn painter(&self, skin: &Skin) -> Face {

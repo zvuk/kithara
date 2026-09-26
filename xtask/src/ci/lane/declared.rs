@@ -10,9 +10,8 @@ use crate::{
         cache::snapshot, config::CiPins, environment::CacheTrust, process::Process,
         run::PipelineKind,
     },
-    config::{
-        CiLaneConfig, CiLanePin, PIN_PREFIX, ROOT_PLACEHOLDER, SELF_PROGRAM, TARGET_PLACEHOLDER,
-    },
+    config::{CiLaneConfig, CiLanePin},
+    consts,
 };
 
 /// Run a lane the way `.config/xtask.toml` declares it: the pipeline kinds it
@@ -58,7 +57,7 @@ pub(crate) fn run(
     }
     for step in &lane.steps {
         let role = step.program.as_deref().unwrap_or(&lane.program);
-        let mut command = if role == SELF_PROGRAM {
+        let mut command = if role == consts::SELF_PROGRAM {
             process.command(&env::current_exe().context("locating the running xtask executable")?)
         } else {
             process.command(tools.program(role))
@@ -240,18 +239,24 @@ fn source_layer_access(process: &Process, tools: &ToolsConfig) -> Option<(PathBu
 /// holds.
 fn resolve(value: &str, process: &Process, pins: &CiPins) -> Result<String> {
     let mut filled = value
-        .replace(ROOT_PLACEHOLDER, &process.root().display().to_string())
         .replace(
-            TARGET_PLACEHOLDER,
+            consts::ROOT_PLACEHOLDER,
+            &process.root().display().to_string(),
+        )
+        .replace(
+            consts::TARGET_PLACEHOLDER,
             &process.target_dir().display().to_string(),
         );
-    while let Some(start) = filled.find(PIN_PREFIX) {
-        let tail = &filled[start + PIN_PREFIX.len()..];
-        let end = tail
-            .find('}')
-            .with_context(|| format!("{PIN_PREFIX} is unclosed in `{value}`"))?;
+    while let Some(start) = filled.find(consts::PIN_PREFIX) {
+        let tail = &filled[start + consts::PIN_PREFIX.len()..];
+        let end = tail.find('}').with_context(|| {
+            format!(
+                "{PIN_PREFIX} is unclosed in `{value}`",
+                PIN_PREFIX = consts::PIN_PREFIX
+            )
+        })?;
         let replacement = pin(pins, &tail[..end])?;
-        filled.replace_range(start..=start + PIN_PREFIX.len() + end, &replacement);
+        filled.replace_range(start..=start + consts::PIN_PREFIX.len() + end, &replacement);
     }
     Ok(filled)
 }

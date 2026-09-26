@@ -259,8 +259,8 @@ mod tests {
         );
     }
 
-    /// A grouping struct that only namespaces constants is not a bounded
-    /// value, and flagging it would land the lint with baseline entries.
+    /// A unit struct holds no value, so its associated constants never make
+    /// it a bounded newtype.
     #[test]
     fn a_constant_group_is_not_reported() {
         let findings = check_source(

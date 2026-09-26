@@ -9,11 +9,10 @@ use std::{
 
 use anyhow::{Result, ensure};
 
-use crate::common::project::{StressConfig, StressModeConfig};
-
-/// The environment variable every `cargo` invocation reads to decide where it
-/// builds, and the one a stress run cannot afford to inherit.
-const TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
+use crate::{
+    common::project::{StressConfig, StressModeConfig},
+    consts,
+};
 
 #[derive(Debug)]
 pub(super) struct RunEnvironment {
@@ -60,7 +59,7 @@ impl RunEnvironment {
             build_dir.display()
         );
         set.insert(
-            OsString::from(TARGET_DIR_ENV),
+            OsString::from(consts::TARGET_DIR_ENV),
             build_dir.to_path_buf().into_os_string(),
         );
         Ok(Self { set, remove })
@@ -137,13 +136,16 @@ mod tests {
         )
         .expect("environment");
 
-        assert_eq!(environment.value(TARGET_DIR_ENV), Some("/stress/build"));
+        assert_eq!(
+            environment.value(consts::TARGET_DIR_ENV),
+            Some("/stress/build")
+        );
     }
 
     #[test]
     fn a_lane_cannot_name_the_build_directory_away() {
         let mode = StressModeConfig {
-            set_env: BTreeMap::from([(TARGET_DIR_ENV.to_owned(), "/elsewhere".to_owned())]),
+            set_env: BTreeMap::from([(consts::TARGET_DIR_ENV.to_owned(), "/elsewhere".to_owned())]),
             ..StressModeConfig::default()
         };
 
@@ -155,7 +157,10 @@ mod tests {
         )
         .expect("environment");
 
-        assert_eq!(environment.value(TARGET_DIR_ENV), Some("/stress/build"));
+        assert_eq!(
+            environment.value(consts::TARGET_DIR_ENV),
+            Some("/stress/build")
+        );
     }
 
     #[test]

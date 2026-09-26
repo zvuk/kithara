@@ -266,14 +266,18 @@ mod tests {
 
     use super::*;
 
-    /// A box the solver put on a half pixel, which is where the two hosts drew
-    /// the same waveform on different rows.
-    const PLACED: Rectangle = Rectangle {
-        height: 120.5,
-        width: 262.5,
-        x: 197.5,
-        y: 182.25,
-    };
+    mod consts {
+        use super::*;
+
+        /// A box the solver put on a half pixel, which is where the two hosts drew
+        /// the same waveform on different rows.
+        pub(super) const PLACED: Rectangle = Rectangle {
+            height: 120.5,
+            width: 262.5,
+            x: 197.5,
+            y: 182.25,
+        };
+    }
 
     /// Where the painter's own origin ends up on the screen.
     fn origin(placed: Rectangle) -> (f32, f32) {
@@ -284,7 +288,7 @@ mod tests {
     #[kithara::test]
     fn a_canvas_placed_off_the_grid_draws_from_the_column_beside_it() {
         assert_eq!(
-            origin(PLACED).0,
+            origin(consts::PLACED).0,
             198.0,
             "the painter must start on the pixel column the retained host draws from"
         );
@@ -293,7 +297,7 @@ mod tests {
     #[kithara::test]
     fn a_canvas_placed_off_the_grid_draws_from_the_row_beside_it() {
         assert_eq!(
-            origin(PLACED).1,
+            origin(consts::PLACED).1,
             182.0,
             "the painter must start on the pixel row the retained host draws from"
         );
@@ -314,7 +318,7 @@ mod tests {
 
     #[kithara::test]
     fn the_painter_is_handed_the_size_the_snapped_box_covers() {
-        let local = local_bounds(&snapped(PLACED), PLACED);
+        let local = local_bounds(&snapped(consts::PLACED), consts::PLACED);
 
         assert_eq!((local.w, local.h), (262.0, 121.0));
     }

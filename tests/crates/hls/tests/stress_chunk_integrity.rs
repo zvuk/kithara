@@ -34,16 +34,17 @@ use tracing::{info, warn};
 
 use crate::common::test_defaults::SawWav;
 
-struct Consts;
-impl Consts {
-    const D: SawWav = SawWav::DEFAULT;
-    const SEGMENT_COUNT: usize = 50;
-    const SEEK_ITERATIONS: usize = 200;
-    const WARMUP_TIMEOUT_SECS: u64 = 30;
-    const POST_SWITCH_CHUNKS: usize = 50;
-    const CHUNKS_PER_SEEK: usize = 5;
-    const WARMUP_NEXT_CHUNK_TIMEOUT_MS: u64 = 5_000;
-    const NEXT_CHUNK_TIMEOUT_MS: u64 = 3_000;
+mod consts {
+    use super::SawWav;
+
+    pub(super) const D: SawWav = SawWav::DEFAULT;
+    pub(super) const SEGMENT_COUNT: usize = 50;
+    pub(super) const SEEK_ITERATIONS: usize = 200;
+    pub(super) const WARMUP_TIMEOUT_SECS: u64 = 30;
+    pub(super) const POST_SWITCH_CHUNKS: usize = 50;
+    pub(super) const CHUNKS_PER_SEEK: usize = 5;
+    pub(super) const WARMUP_NEXT_CHUNK_TIMEOUT_MS: u64 = 5_000;
+    pub(super) const NEXT_CHUNK_TIMEOUT_MS: u64 = 3_000;
 }
 
 fn detect_chunk_direction(chunk: &AudioChunk) -> Direction {
@@ -116,17 +117,17 @@ async fn audio_server(
         init_size = init_segment.len(),
         v0_size = v0_pcm.len(),
         v1_size = v1_pcm.len(),
-        segments = Consts::SEGMENT_COUNT,
+        segments = consts::SEGMENT_COUNT,
         "Generated WAV data for two variants"
     );
 
-    let segment_duration = Consts::D.segment_size as f64
-        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
+    let segment_duration = consts::D.segment_size as f64
+        / (f64::from(consts::D.sample_rate) * f64::from(consts::D.channels) * 2.0);
 
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
-        segments_per_variant: Consts::SEGMENT_COUNT,
-        segment_size: Consts::D.segment_size,
+        segments_per_variant: consts::SEGMENT_COUNT,
+        segment_size: consts::D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data_per_variant: Some(vec![Arc::clone(&v0_pcm), Arc::clone(&v1_pcm)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
@@ -174,7 +175,7 @@ async fn stress_chunk_integrity(
     let store = if ephemeral {
         AssetStore::builder(pools.clone())
             .backend(StorageBackend::Memory)
-            .cache_capacity(NonZeroUsize::new(Consts::SEGMENT_COUNT * 2 + 10).expect("nonzero"))
+            .cache_capacity(NonZeroUsize::new(consts::SEGMENT_COUNT * 2 + 10).expect("nonzero"))
             .build()
     } else {
         AssetStore::builder(pools.clone())
@@ -215,7 +216,7 @@ async fn stress_chunk_integrity(
     info!("Phase 1: waiting for ABR switch (ascending -> descending) via chunks...");
 
     let warmup_start = RealInstant::now();
-    let warmup_timeout = Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
+    let warmup_timeout = Duration::from_secs(consts::WARMUP_TIMEOUT_SECS);
     let mut warmup_ascending = 0u64;
     let mut warmup_unknown = 0u64;
 
@@ -223,7 +224,7 @@ async fn stress_chunk_integrity(
         if warmup_start.elapsed() > warmup_timeout {
             panic!(
                 "ABR switch not detected within {}s (ascending={}, unknown={})",
-                Consts::WARMUP_TIMEOUT_SECS,
+                consts::WARMUP_TIMEOUT_SECS,
                 warmup_ascending,
                 warmup_unknown
             );
@@ -231,7 +232,7 @@ async fn stress_chunk_integrity(
 
         let Some(chunk) = next_chunk_with_timeout(
             &mut audio,
-            Duration::from_millis(Consts::WARMUP_NEXT_CHUNK_TIMEOUT_MS),
+            Duration::from_millis(consts::WARMUP_NEXT_CHUNK_TIMEOUT_MS),
             "phase1_warmup",
         )
         .await
@@ -274,18 +275,18 @@ async fn stress_chunk_integrity(
 
     info!(
         "Phase 2: verifying {} post-switch chunks...",
-        Consts::POST_SWITCH_CHUNKS
+        consts::POST_SWITCH_CHUNKS
     );
 
     let mut prev_frame_offset: Option<u64> = None;
     let mut prev_frames: Option<usize> = None;
     let mut continuity_breaks = 0u64;
 
-    for chunk_idx in 0..Consts::POST_SWITCH_CHUNKS {
+    for chunk_idx in 0..consts::POST_SWITCH_CHUNKS {
         let stage = format!("phase2_post_switch_chunk_{chunk_idx}");
         let Some(chunk) = next_chunk_with_timeout(
             &mut audio,
-            Duration::from_millis(Consts::NEXT_CHUNK_TIMEOUT_MS),
+            Duration::from_millis(consts::NEXT_CHUNK_TIMEOUT_MS),
             &stage,
         )
         .await
@@ -349,18 +350,18 @@ async fn stress_chunk_integrity(
     info!(
         continuity_breaks,
         "Phase 2 complete: {} post-switch chunks verified",
-        Consts::POST_SWITCH_CHUNKS
+        consts::POST_SWITCH_CHUNKS
     );
 
     info!(
         "Phase 3: {} random seek + {} chunk reads...",
-        Consts::SEEK_ITERATIONS,
-        Consts::CHUNKS_PER_SEEK
+        consts::SEEK_ITERATIONS,
+        consts::CHUNKS_PER_SEEK
     );
 
     let total_duration = audio.duration();
     let total_secs = total_duration
-        .map_or(Consts::SEGMENT_COUNT as f64 * segment_duration * 0.9, |d| {
+        .map_or(consts::SEGMENT_COUNT as f64 * segment_duration * 0.9, |d| {
             d.as_secs_f64()
         });
     let max_seek_secs = (total_secs - 0.5).max(0.1);
@@ -372,7 +373,7 @@ async fn stress_chunk_integrity(
     let mut intra_breaks = 0u64;
     let mut direction_errors = 0u64;
 
-    for i in 0..Consts::SEEK_ITERATIONS {
+    for i in 0..consts::SEEK_ITERATIONS {
         let pos_secs = rng.range_f64(0.001, max_seek_secs);
         let position = Duration::from_secs_f64(pos_secs);
 
@@ -384,11 +385,11 @@ async fn stress_chunk_integrity(
         let mut prev_chunk_meta: Option<(AudioChunkInfo, usize)> = None;
         let mut prev_last_sample: Option<f32> = None;
 
-        for c in 0..Consts::CHUNKS_PER_SEEK {
+        for c in 0..consts::CHUNKS_PER_SEEK {
             let stage = format!("phase3_seek_{i}_chunk_{c}");
             let Some(chunk) = next_chunk_with_timeout(
                 &mut audio,
-                Duration::from_millis(Consts::NEXT_CHUNK_TIMEOUT_MS),
+                Duration::from_millis(consts::NEXT_CHUNK_TIMEOUT_MS),
                 &stage,
             )
             .await
@@ -520,7 +521,7 @@ async fn stress_chunk_integrity(
         intra_breaks,
         direction_errors,
         "Phase 3 complete: {} seek cycles",
-        Consts::SEEK_ITERATIONS
+        consts::SEEK_ITERATIONS
     );
 
     if intra_breaks > 0 {
@@ -559,7 +560,7 @@ async fn stress_chunk_integrity(
     loop {
         let Some(chunk) = next_chunk_with_timeout(
             &mut audio,
-            Duration::from_millis(Consts::NEXT_CHUNK_TIMEOUT_MS),
+            Duration::from_millis(consts::NEXT_CHUNK_TIMEOUT_MS),
             "phase4_tail_drain",
         )
         .await

@@ -18,7 +18,10 @@ use super::{
     time::TimeoutError,
     virtual_sleep, virtual_timeout, yield_now,
 };
-use crate::sync::{Arc, Notify};
+use crate::{
+    consts,
+    sync::{Arc, Notify},
+};
 
 /// Serialize the cases that drive the process-global `FLASH` engine (the
 /// primitive/TLS-path tests). The pure-scheduler tests run on LOCAL
@@ -32,9 +35,6 @@ fn guard() -> MutexGuard<'static, ()> {
     GUARD.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-const NANOS_PER_SEC: u64 = 1_000_000_000;
-#[cfg(feature = "no-block")]
-const NO_BLOCK_ENGINE_WAIT_MS: u64 = 30;
 /// Generous real-time bound: every engine test below must return in ~0 real
 /// time because nothing blocks on the wall clock. A bug that stops the engine
 /// advancing would hang; this only exists so a hung join surfaces as a slow
@@ -128,7 +128,7 @@ fn no_block_bridged_engine_wait_panics() {
         NO_BLOCK_BRIDGED_BUDGET_MS,
         participate(
             async {
-                crate::thread::park_timeout(Duration::from_millis(NO_BLOCK_ENGINE_WAIT_MS));
+                crate::thread::park_timeout(Duration::from_millis(consts::NO_BLOCK_ENGINE_WAIT_MS));
             },
             Location::caller(),
         ),
@@ -164,7 +164,7 @@ fn no_block_permit_poll_suppresses_bridged_wait_and_budget() {
         NO_BLOCK_TIGHT_BUDGET_MS,
         participate(
             crate::no_block::permit_poll(async {
-                crate::thread::park_timeout(Duration::from_millis(NO_BLOCK_ENGINE_WAIT_MS));
+                crate::thread::park_timeout(Duration::from_millis(consts::NO_BLOCK_ENGINE_WAIT_MS));
             }),
             Location::caller(),
         ),
@@ -524,12 +524,15 @@ fn quiescence_advances_to_max_deadline_fast() {
     assert_fast(real_start);
     assert_eq!(
         flash.clock.now_nanos(),
-        base + 10 * NANOS_PER_SEC,
+        base + 10 * consts::NANOS_PER_SEC,
         "clock lands on the max registered deadline"
     );
     assert_eq!(
         flash.advance_log(),
-        vec![base + 3 * NANOS_PER_SEC, base + 10 * NANOS_PER_SEC],
+        vec![
+            base + 3 * consts::NANOS_PER_SEC,
+            base + 10 * consts::NANOS_PER_SEC
+        ],
         "advance jumps to the min deadline first, then the next, regardless of start order"
     );
 }
@@ -545,10 +548,13 @@ fn equal_deadlines_wake_in_one_step() {
     assert_fast(real_start);
     assert_eq!(
         flash.advance_log(),
-        vec![base + 5 * NANOS_PER_SEC, base + 8 * NANOS_PER_SEC],
+        vec![
+            base + 5 * consts::NANOS_PER_SEC,
+            base + 8 * consts::NANOS_PER_SEC
+        ],
         "three waiters, two advance steps: the two equal deadlines wake in one batch"
     );
-    assert_eq!(flash.clock.now_nanos(), base + 8 * NANOS_PER_SEC);
+    assert_eq!(flash.clock.now_nanos(), base + 8 * consts::NANOS_PER_SEC);
 }
 
 #[kithara::test(native, flash(false))]
@@ -574,10 +580,10 @@ fn sequence_is_deterministic_across_runs() {
     assert_eq!(
         log_a,
         vec![
-            base_a + 2 * NANOS_PER_SEC,
-            base_a + 4 * NANOS_PER_SEC,
-            base_a + 7 * NANOS_PER_SEC,
-            base_a + 11 * NANOS_PER_SEC,
+            base_a + 2 * consts::NANOS_PER_SEC,
+            base_a + 4 * consts::NANOS_PER_SEC,
+            base_a + 7 * consts::NANOS_PER_SEC,
+            base_a + 11 * consts::NANOS_PER_SEC,
         ],
         "distinct deadlines advance in sorted order"
     );
@@ -604,10 +610,10 @@ fn first_park_bootstraps_and_self_advances() {
     assert_fast(real_start);
     assert_eq!(
         flash.clock.now_nanos(),
-        base + 4 * NANOS_PER_SEC,
+        base + 4 * consts::NANOS_PER_SEC,
         "first-park bootstrap self-advanced the lone waiter"
     );
-    assert_eq!(flash.advance_log(), vec![base + 4 * NANOS_PER_SEC]);
+    assert_eq!(flash.advance_log(), vec![base + 4 * consts::NANOS_PER_SEC]);
     assert_eq!(flash.active_count(), 0, "bootstrap balanced on exit");
 }
 
@@ -645,7 +651,7 @@ fn real_io_defers_advance_past_real_pace() {
     assert_fast(real_start);
     assert_eq!(
         flash.clock.now_nanos(),
-        t0 + 10 * NANOS_PER_SEC,
+        t0 + 10 * consts::NANOS_PER_SEC,
         "full-speed collapse resumes the instant the last real I/O op completes"
     );
 }
@@ -795,7 +801,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                 bracketed_on(&flash, || {
                     for _ in 0..SPIN_WAITS {
                         let cvid = flash.next_condvar_id();
-                        let deadline = flash.clock.now_nanos() + NANOS_PER_SEC;
+                        let deadline = flash.clock.now_nanos() + consts::NANOS_PER_SEC;
                         let (token, adv, wait) = flash.register_condvar_timed(deadline, cvid);
                         let racer = {
                             let flash = Arc::clone(&flash);
@@ -881,7 +887,7 @@ fn stress_mixed_waits_no_underflow_no_lost_wakeup() {
                         1 => {
                             // Timed condvar raced by a sibling signal.
                             let deadline =
-                                flash.clock.now_nanos() + (1 + (idx % 4)) * NANOS_PER_SEC;
+                                flash.clock.now_nanos() + (1 + (idx % 4)) * consts::NANOS_PER_SEC;
                             let (token, adv, wait) = flash.register_condvar_timed(deadline, cvid);
                             adv.fire();
                             let racer = {
@@ -978,7 +984,7 @@ fn stress_advance_log_is_deterministic_across_runs() {
                 thread::spawn(move || {
                     bracketed_on(&flash, || {
                         let cvid = flash.next_condvar_id();
-                        let deadline = flash.clock.now_nanos() + s * NANOS_PER_SEC;
+                        let deadline = flash.clock.now_nanos() + s * consts::NANOS_PER_SEC;
                         let (token, adv, wait) = flash.register_condvar_timed(deadline, cvid);
                         adv.fire();
                         token.wait();
@@ -1008,20 +1014,20 @@ fn stress_advance_log_is_deterministic_across_runs() {
     assert_eq!(
         log_a,
         vec![
-            base_a + NANOS_PER_SEC,
-            base_a + 2 * NANOS_PER_SEC,
-            base_a + 4 * NANOS_PER_SEC,
-            base_a + 6 * NANOS_PER_SEC,
-            base_a + 9 * NANOS_PER_SEC,
+            base_a + consts::NANOS_PER_SEC,
+            base_a + 2 * consts::NANOS_PER_SEC,
+            base_a + 4 * consts::NANOS_PER_SEC,
+            base_a + 6 * consts::NANOS_PER_SEC,
+            base_a + 9 * consts::NANOS_PER_SEC,
         ],
         "min-jump over the deadline multiset",
     );
     assert_eq!(
         end_a,
-        base_a + 9 * NANOS_PER_SEC,
+        base_a + 9 * consts::NANOS_PER_SEC,
         "clock lands on max deadline"
     );
-    assert_eq!(end_b, base_b + 9 * NANOS_PER_SEC);
+    assert_eq!(end_b, base_b + 9 * consts::NANOS_PER_SEC);
 }
 
 /// Regression for the flash(false) `yield_now` wedge (the `local_seek_middle_hang`

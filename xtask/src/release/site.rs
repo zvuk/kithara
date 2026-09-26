@@ -12,7 +12,7 @@ use super::{
     git::{Remote, committer, github_remote, output, token},
     tag::tag_of,
 };
-use crate::config::ReleaseConfig;
+use crate::{config::ReleaseConfig, consts};
 
 /// Where a documentation channel sits on the Pages site, as `DocC` needs it to
 /// rewrite its links: the site is served under the repository name.
@@ -105,7 +105,11 @@ fn move_entries(from: &Path, to: &Path) -> Result<()> {
 /// The player's page with the release section beside the player in its main
 /// layout and the section's style in its head.
 fn with_latest(player: &str, latest: &str) -> Result<String> {
-    let page = insert_before(player, "</head>", &format!("<style>{STYLE}</style>\n"))?;
+    let page = insert_before(
+        player,
+        "</head>",
+        &format!("<style>{STYLE}</style>\n", STYLE = consts::STYLE),
+    )?;
     insert_before(&page, "</main>", latest)
 }
 
@@ -246,31 +250,6 @@ fn escape(text: &str) -> String {
     out
 }
 
-/// The section's own layout; the panel, tabs, and palette are the player
-/// page's, so the section reads as part of the page it is added to.
-const STYLE: &str = "
-.release{flex:1 1 460px;min-width:0}
-.release a{color:var(--accent-strong);text-decoration:none}
-.release a:hover{text-decoration:underline}
-.release-version{color:var(--accent-strong);font:600 12px var(--font-mono)}
-.release-nav{display:flex;gap:14px;margin-left:auto;font-size:12px}
-.release-count{margin-left:6px;padding:0 5px;background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent-strong)}
-.release-docs{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px}
-.release-docs a{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border:1px solid var(--line);background:var(--bg-dark);color:var(--text-main);font-weight:600}
-.release-docs a:hover{border-color:var(--accent);color:var(--accent-strong);text-decoration:none}
-.release-docs span{color:var(--text-muted);font-size:11px;font-weight:400}
-.release-files,.release-crates{list-style:none}
-.release-files li{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 16px;padding:8px 0}
-.release-files li+li{border-top:1px solid var(--line)}
-.release-files a{overflow-wrap:anywhere;font:12px var(--font-mono)}
-.release-files code{grid-row:span 2;max-width:12ch;overflow:hidden;color:var(--text-muted);font:11px var(--font-mono);text-overflow:ellipsis;white-space:nowrap;user-select:all}
-.release-files span{color:var(--text-muted);font-size:12px}
-.release-crates{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:0 16px}
-.release-crates li{display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-size:11px}
-.release-crates span{flex:1;min-width:0;overflow:hidden;color:var(--text-main);font:12px var(--font-mono);text-overflow:ellipsis;white-space:nowrap}
-.release-foot{padding:8px 12px;border-top:1px solid var(--line);color:var(--text-muted);font-size:11px}
-";
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -358,7 +337,7 @@ mod tests {
         assert!(at < page.find("</main>").unwrap());
 
         let styled = |class: &str| {
-            [STYLE, player.as_str()].into_iter().any(|css| {
+            [consts::STYLE, player.as_str()].into_iter().any(|css| {
                 css.match_indices(&format!(".{class}")).any(|(at, found)| {
                     !css[at + found.len()..]
                         .starts_with(|next: char| next.is_ascii_alphanumeric() || next == '-')
@@ -383,7 +362,7 @@ mod tests {
             );
         }
 
-        for name in STYLE
+        for name in consts::STYLE
             .split("var(--")
             .skip(1)
             .filter_map(|rest| rest.split_once(')'))

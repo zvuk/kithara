@@ -12,13 +12,10 @@ use toml::Value;
 
 use crate::{
     common::project::{KnownFlake, TestCommandConfig},
+    consts,
     junit::{CaseTiming, parse_junit},
-    stress_report::{MAX_JUNIT_BYTES, read_bounded_utf8},
+    stress_report::read_bounded_utf8,
 };
-
-/// The profile nextest runs when a command names none, and the profile every
-/// other one inherits its unset keys from.
-const DEFAULT_PROFILE: &str = "default";
 
 /// What one nextest profile declares about hiding a failure.
 struct Declared {
@@ -66,7 +63,7 @@ pub(crate) fn verdict(
         "test lane `{lane_name}` ran nextest profile `{profile}`, which declares a JUnit report at {}: without it a retried pass is unjudgeable",
         report.display()
     );
-    let xml = read_bounded_utf8(&report, MAX_JUNIT_BYTES, "test lane JUnit")?;
+    let xml = read_bounded_utf8(&report, consts::MAX_JUNIT_BYTES, "test lane JUnit")?;
     let cases = parse_junit(&xml)
         .with_context(|| format!("parse test lane JUnit at {}", report.display()))?;
     let retried = unowned(&cases, &config.known_flakes);
@@ -106,7 +103,7 @@ fn nextest_profile(command: &Command) -> Option<String> {
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     let start = args.iter().position(|arg| arg == "nextest")?;
-    let mut profile = DEFAULT_PROFILE.to_owned();
+    let mut profile = consts::DEFAULT_PROFILE.to_owned();
     let mut awaiting_value = false;
     for arg in args.iter().skip(start.saturating_add(1)) {
         if awaiting_value {
@@ -141,7 +138,7 @@ fn declaration(config: &str, profile: &str) -> Result<Declared> {
             .and_then(|declared| declared.get(key))
             .or_else(|| {
                 profiles
-                    .get(DEFAULT_PROFILE)
+                    .get(consts::DEFAULT_PROFILE)
                     .and_then(|fallback| fallback.get(key))
             })
     };
@@ -200,30 +197,6 @@ mod tests {
 
     use super::*;
 
-    const RETRYING_PROFILE: &str = "\
-[profile.default]
-fail-fast = false
-
-[profile.ci]
-retries = 1
-
-[profile.ci.junit]
-path = \"junit.xml\"
-";
-
-    /// The shape nextest writes for a case it retried into a pass: the failing
-    /// attempt lives inside `flakyFailure`, and the run reports no failures.
-    const RETRIED_PASS: &str = "\
-<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<testsuites name=\"nextest-run\" tests=\"1\" failures=\"0\" errors=\"0\" uuid=\"1\" timestamp=\"t\" time=\"0.049\">
-    <testsuite name=\"kithara_queue\" tests=\"1\" disabled=\"0\" errors=\"0\" failures=\"0\">
-        <testcase name=\"delayed_target\" classname=\"kithara_queue\" time=\"0.019\">
-            <flakyFailure message=\"panicked at delayed.rs:9\" type=\"test failure with exit code 101\">assertion failed</flakyFailure>
-        </testcase>
-    </testsuite>
-</testsuites>
-";
-
     fn config(nextest_config: &str, known: &[(&str, &str)]) -> TestCommandConfig {
         TestCommandConfig {
             nextest_config: nextest_config.to_owned(),
@@ -257,7 +230,7 @@ path = \"junit.xml\"
 
     #[test]
     fn a_retried_pass_fails_the_lane_that_reported_it() {
-        let temp = lane(RETRYING_PROFILE, Some(RETRIED_PASS));
+        let temp = lane(consts::RETRYING_PROFILE, Some(consts::RETRIED_PASS));
 
         let error = verdict(
             "workspace",
@@ -276,7 +249,7 @@ path = \"junit.xml\"
 
     #[test]
     fn a_registry_entry_owns_the_retried_pass_it_names() {
-        let temp = lane(RETRYING_PROFILE, Some(RETRIED_PASS));
+        let temp = lane(consts::RETRYING_PROFILE, Some(consts::RETRIED_PASS));
 
         verdict(
             "workspace",
@@ -308,7 +281,7 @@ path = \"junit.xml\"
 
     #[test]
     fn a_declared_report_the_lane_did_not_leave_fails_it() {
-        let temp = lane(RETRYING_PROFILE, None);
+        let temp = lane(consts::RETRYING_PROFILE, None);
 
         let error = verdict(
             "workspace",
@@ -324,7 +297,7 @@ path = \"junit.xml\"
 
     #[test]
     fn a_profile_that_grants_no_retry_is_not_judged() {
-        let temp = lane(RETRYING_PROFILE, Some(RETRIED_PASS));
+        let temp = lane(consts::RETRYING_PROFILE, Some(consts::RETRIED_PASS));
 
         verdict(
             "workspace",
@@ -337,7 +310,7 @@ path = \"junit.xml\"
 
     #[test]
     fn a_lane_that_runs_no_nextest_is_not_judged() {
-        let temp = lane(RETRYING_PROFILE, Some(RETRIED_PASS));
+        let temp = lane(consts::RETRYING_PROFILE, Some(consts::RETRIED_PASS));
 
         verdict(
             "browser",

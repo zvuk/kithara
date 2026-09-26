@@ -23,16 +23,16 @@ use masonry::core::CursorIcon;
 use crate::{immediate::Immediate, shared::Endpoints};
 
 /// The window both hosts are given, and the hand the surface owes.
-struct Consts;
+mod consts {
+    use super::CursorShape;
 
-impl Consts {
     /// A window with room below the surface, so a drag can walk off it without
     /// walking off the window.
-    const CASE: (u32, u32) = (200, 120);
+    pub(super) const CASE: (u32, u32) = (200, 120);
     /// The hand a stepping surface asks for, on either host.
-    const HAND: CursorShape = CursorShape::ResizeV;
+    pub(super) const HAND: CursorShape = CursorShape::ResizeV;
     /// Well below the surface, which ends 40 down.
-    const OFF: f32 = 90.0;
+    pub(super) const OFF: f32 = 90.0;
 }
 
 /// A document whose top band is a row that names what it writes, with plain
@@ -93,7 +93,7 @@ fn mounted<'a>(endpoints: &'a Endpoints, resolver: &'a MemResolver) -> Ui<'a, Te
             .resolver(resolver)
             .text(builtin::text_doc())
             .build(),
-        Consts::CASE,
+        consts::CASE,
         1.0,
     )
     .unwrap_or_else(|error| panic!("the tempo fixture must mount: {error}"))
@@ -133,7 +133,7 @@ fn over_and_off() -> (Pt, Pt) {
         at,
         Pt {
             x: at.x,
-            y: Consts::OFF,
+            y: consts::OFF,
         },
     )
 }
@@ -159,7 +159,7 @@ fn retained_hand(steps: &[(PointerPhase, Pt)]) -> Option<CursorIcon> {
 fn immediate_hand(drag: bool) -> mouse::Interaction {
     let ui = compiled();
     let (at, off) = over_and_off();
-    let mut host = Immediate::mount(Tempo, &ui, builtin::skin(), Consts::CASE);
+    let mut host = Immediate::mount(Tempo, &ui, builtin::skin(), consts::CASE);
     if drag {
         host.press_at(at);
         host.hover_at(off);
@@ -179,7 +179,7 @@ fn the_retained_host_asks_for_the_stepping_hand_over_the_surface() {
 
     assert_eq!(
         hand,
-        Some(cursor_icon(Consts::HAND)),
+        Some(cursor_icon(consts::HAND)),
         "the retained host must read a stepping surface as one"
     );
 }
@@ -189,13 +189,13 @@ fn the_retained_host_asks_for_the_stepping_hand_over_the_surface() {
 fn the_immediate_host_asks_for_the_stepping_hand_over_the_surface() {
     let ui = compiled();
     let (at, _) = over_and_off();
-    let mut host = Immediate::mount(Tempo, &ui, builtin::skin(), Consts::CASE);
+    let mut host = Immediate::mount(Tempo, &ui, builtin::skin(), consts::CASE);
 
     host.hover_at(at);
 
     assert_eq!(
         host.hand(),
-        mouse::Interaction::from(Consts::HAND),
+        mouse::Interaction::from(consts::HAND),
         "the immediate host must read a stepping surface as one"
     );
 }
@@ -214,7 +214,7 @@ fn the_retained_host_keeps_the_stepping_hand_when_a_drag_leaves_the_surface() {
 
     assert_eq!(
         hand,
-        Some(cursor_icon(Consts::HAND)),
+        Some(cursor_icon(consts::HAND)),
         "a drag under way must go on reading as a step wherever the pointer has got to"
     );
 }
@@ -224,7 +224,7 @@ fn the_retained_host_keeps_the_stepping_hand_when_a_drag_leaves_the_surface() {
 fn the_immediate_host_keeps_the_stepping_hand_when_a_drag_leaves_the_surface() {
     assert_eq!(
         immediate_hand(true),
-        mouse::Interaction::from(Consts::HAND),
+        mouse::Interaction::from(consts::HAND),
         "a drag under way must go on reading as a step on the immediate host too"
     );
 }

@@ -3,14 +3,16 @@ use std::{panic, sync::Once};
 use js_sys::JsString;
 use web_sys::console;
 
-/// `String.fromCharCode` takes one argument per code unit.
-const CODE_UNITS_PER_CALL: usize = 1024;
+mod consts {
+    /// `String.fromCharCode` takes one argument per code unit.
+    pub(super) const CODE_UNITS_PER_CALL: usize = 1024;
+}
 
 /// Build a JS string from the code units of `msg`, which every scope can read.
 fn js_string(msg: &str) -> JsString {
     let mut units = msg.encode_utf16();
     let mut line = JsString::from_char_code(&[]);
-    let mut chunk = [0u16; CODE_UNITS_PER_CALL];
+    let mut chunk = [0u16; consts::CODE_UNITS_PER_CALL];
 
     loop {
         let mut filled = 0;

@@ -3,36 +3,6 @@ use std::path::Path;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-/// Paths that define the trusted `GitLab` judge. Pull-request product content is
-/// tested with these paths restored from the synchronized default branch.
-///
-/// Restoring them keeps a pull request from grading itself, and nothing else:
-/// keeping a branch in step with the host is the merge's job, not this one.
-/// That separation was learned the hard way — while the two were the same
-/// mechanism, exempting trusted authors from the first also took the second
-/// away, and their older branches died on the host profile before a test ran.
-/// A trusted author's pull request keeps its own control paths on top of the
-/// merged base, because a change to the judge has nowhere else to be tested.
-///
-/// Being listed here is not by itself a reason to reject a pull request. What a
-/// change does to the judge decides that, and `control::classify` is where it is
-/// decided: an entry added beside the existing ones promises nothing new about
-/// the old ones, while an edited or deleted entry can turn a run green without
-/// the code earning it.
-pub(super) const CONTROL_PATHS: &[&str] = &[
-    ".gitlab-ci.yml",
-    ".gitlab/",
-    ".config/ci-pins.toml",
-    ".config/just/",
-    ".config/mutation-suites.toml",
-    ".config/nextest.toml",
-    ".config/xtask.toml",
-    "ci/",
-    "docker/",
-    "justfile",
-    "xtask/",
-];
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Direction {
     Equal,

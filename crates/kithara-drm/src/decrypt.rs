@@ -10,10 +10,7 @@ use cbc::{
 };
 use tracing::trace;
 
-use crate::DecryptContext;
-
-/// AES block size in bytes.
-pub(crate) const AES_BLOCK_SIZE: usize = 16;
+use crate::{DecryptContext, consts};
 
 /// AES-128-CBC chunk decryption, driven per chunk by a `ChunkSink`.
 ///
@@ -35,17 +32,17 @@ pub fn aes128_cbc_process_chunk(
         return Ok(0);
     }
 
-    if !input.len().is_multiple_of(AES_BLOCK_SIZE) {
+    if !input.len().is_multiple_of(consts::AES_BLOCK_SIZE) {
         return Err(format!(
             "input length {} is not aligned to AES block size {}",
             input.len(),
-            AES_BLOCK_SIZE
+            consts::AES_BLOCK_SIZE
         ));
     }
 
-    let next_iv: [u8; AES_BLOCK_SIZE] = {
-        let mut iv = [0u8; AES_BLOCK_SIZE];
-        iv.copy_from_slice(&input[input.len() - AES_BLOCK_SIZE..]);
+    let next_iv: [u8; consts::AES_BLOCK_SIZE] = {
+        let mut iv = [0u8; consts::AES_BLOCK_SIZE];
+        iv.copy_from_slice(&input[input.len() - consts::AES_BLOCK_SIZE..]);
         iv
     };
 

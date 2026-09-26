@@ -8,10 +8,7 @@ use {
     kithara_worker::{DispatcherConfig, TaskConfig, WorkerConfig},
 };
 
-const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(sample_rate) => sample_rate,
-    None => unreachable!(),
-};
+use crate::consts;
 
 /// Configuration for the shared output session owned by `Host`.
 #[cfg_attr(not(feature = "offline"), derive_where::derive_where(Clone, Copy))]
@@ -62,7 +59,7 @@ impl<S> HostConfig<S> {
         start_fn(name = builder, vis = "pub")
     )]
     fn new(
-        #[builder(default = DEFAULT_SAMPLE_RATE)] sample_rate_hint: NonZeroU32,
+        #[builder(default = consts::DEFAULT_SAMPLE_RATE)] sample_rate_hint: NonZeroU32,
         output_block_frames: Option<NonZeroU32>,
         #[builder(default)] limiter: LimiterConfig,
     ) -> Self {

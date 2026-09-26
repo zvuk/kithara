@@ -9,13 +9,15 @@ use crate::common::{
     parse::parse_file, scope::packages_in_scope, violation::Violation, walker::walk_rs_files,
 };
 
-pub(crate) const ID: &str = "redundant_reexport";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "redundant_reexport";
+}
 
 pub(crate) struct RedundantReexport;
 
 impl Check for RedundantReexport {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -269,7 +271,7 @@ fn emit_r1(
              pick one canonical mountpoint",
             unique_files.len(),
         );
-        out.push(Violation::warn(ID, key, msg));
+        out.push(Violation::warn(consts::ID, key, msg));
     }
 }
 
@@ -314,7 +316,7 @@ fn emit_r2(
              keep one canonical path",
             rec.alias_ident, rec.impl_target, rec.assoc_name, rec.alias_ident,
         );
-        out.push(Violation::warn(ID, key, msg));
+        out.push(Violation::warn(consts::ID, key, msg));
     }
 }
 

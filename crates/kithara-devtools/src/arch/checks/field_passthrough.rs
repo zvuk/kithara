@@ -14,7 +14,9 @@ use crate::{
     },
 };
 
-pub(crate) const ID: &str = "field_passthrough";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "field_passthrough";
+}
 
 pub(crate) struct FieldPassthrough;
 
@@ -41,7 +43,7 @@ struct StructDecl {
 
 impl Check for FieldPassthrough {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -234,7 +236,7 @@ fn emit_violations(
                     continue;
                 }
                 let sup = suppressions.get(&outer.rel).unwrap_or(&empty);
-                if sup.is_suppressed(outer.line, ID) {
+                if sup.is_suppressed(outer.line, consts::ID) {
                     continue;
                 }
                 let key = format!(
@@ -242,7 +244,7 @@ fn emit_violations(
                     outer.rel, outer.line, outer.name, peer.sig.name
                 );
                 out.push(Violation::warn(
-                    ID,
+                    consts::ID,
                     key,
                     format!(
                         "`{outer_struct}.{peer}: {ty}` duplicates the same-shape field already \

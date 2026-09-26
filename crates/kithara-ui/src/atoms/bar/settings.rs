@@ -63,12 +63,16 @@ mod tests {
     use super::{DrawListBuilder, Rect, Settings, TextContext, VisualState};
     use crate::{builtin, draw::DrawCmd, module::IconName, render::Mark};
 
-    const BOUNDS: Rect = Rect {
-        h: 32.0,
-        w: 32.0,
-        x: 6.0,
-        y: 4.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOUNDS: Rect = Rect {
+            h: 32.0,
+            w: 32.0,
+            x: 6.0,
+            y: 4.0,
+        };
+    }
 
     fn gear() -> Mark {
         IconName::Gear
@@ -80,7 +84,7 @@ mod tests {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources());
         let mut list = DrawListBuilder::default();
-        Settings::new(skin).paint(&mut list, &mut text, gear(), BOUNDS, state);
+        Settings::new(skin).paint(&mut list, &mut text, gear(), consts::BOUNDS, state);
         list.finish()
             .commands()
             .first()
@@ -109,7 +113,13 @@ mod tests {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources());
         let mut list = DrawListBuilder::default();
-        Settings::new(skin).paint(&mut list, &mut text, gear(), BOUNDS, VisualState::Idle);
+        Settings::new(skin).paint(
+            &mut list,
+            &mut text,
+            gear(),
+            consts::BOUNDS,
+            VisualState::Idle,
+        );
         let list = list.finish();
 
         let placed = list
@@ -122,6 +132,6 @@ mod tests {
             .expect("the gear must be shaped and placed");
         let width = super::Marked::new(gear(), skin.global_bar.gear_size).width(&mut text);
 
-        assert!((placed - (BOUNDS.x + (BOUNDS.w - width) / 2.0)).abs() < 0.001);
+        assert!((placed - (consts::BOUNDS.x + (consts::BOUNDS.w - width) / 2.0)).abs() < 0.001);
     }
 }

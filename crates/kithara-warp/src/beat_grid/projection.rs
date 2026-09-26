@@ -278,29 +278,19 @@ mod tests {
         BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridSnapshot, BeatGridStamp,
         BeatGridState, BeatGridUnavailable, BeatGridView, BeatMarker, BeatOrdinal,
         FrameUncertainty, MapAxis, MapPoint, MapPosition, MapSegment, SegmentFacts, SegmentSet,
-        SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame,
+        SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame, consts,
     };
 
-    struct Consts;
-
-    impl Consts {
-        const BEATS: i64 = 400;
-        const HOST_BPM: f64 = 100.0;
-        const QUEUE_TEMPOS: [f64; 5] = [124.0, 96.0, 132.0, 74.0, 140.0];
-        const SAMPLE_RATE: u32 = 48_000;
-        const SECONDS_PER_MINUTE: f64 = 60.0;
-    }
-
     fn sample_rate() -> NonZeroU32 {
-        NonZeroU32::new(Consts::SAMPLE_RATE).expect("invariant: fixture sample rate is non-zero")
+        NonZeroU32::new(consts::SAMPLE_RATE).expect("invariant: fixture sample rate is non-zero")
     }
 
     fn beat_frames(bpm: f64) -> f64 {
-        f64::from(Consts::SAMPLE_RATE) * Consts::SECONDS_PER_MINUTE / bpm
+        f64::from(consts::SAMPLE_RATE) * consts::PROJECTION_SECONDS_PER_MINUTE / bpm
     }
 
     fn source(bpm: f64) -> BeatGridSnapshot {
-        let last = beat_frames(bpm) * Consts::BEATS.to_f64().unwrap_or_default();
+        let last = beat_frames(bpm) * consts::BEATS.to_f64().unwrap_or_default();
         let marker = |frame: f64, ordinal: i64| {
             BeatMarker::new(
                 MapPosition::Asset(
@@ -313,7 +303,7 @@ mod tests {
         };
         let segment = MapSegment::new(
             marker(0.0, 0),
-            marker(last, Consts::BEATS),
+            marker(last, consts::BEATS),
             SegmentFacts::new(BeatEvidence::Observed, FrameUncertainty::ZERO, None),
         )
         .expect("invariant: fixture markers form an increasing relation");
@@ -335,7 +325,7 @@ mod tests {
         let anchor = SessionAnchor::new(
             SessionFrame::new(0),
             SessionBeat::new(0.0).expect("invariant: fixture beat is finite"),
-            Consts::HOST_BPM / Consts::SECONDS_PER_MINUTE,
+            consts::HOST_BPM / consts::PROJECTION_SECONDS_PER_MINUTE,
             sample_rate(),
         )
         .expect("invariant: fixture tempo is invertible");
@@ -356,7 +346,7 @@ mod tests {
         cue: f64,
         activation: i64,
     ) -> BeatAlignment {
-        let host_beat = activation.to_f64().unwrap_or_default() / beat_frames(Consts::HOST_BPM);
+        let host_beat = activation.to_f64().unwrap_or_default() / beat_frames(consts::HOST_BPM);
         BeatAlignment::new(
             MapPoint::new(
                 source.stamp(),
@@ -387,12 +377,12 @@ mod tests {
     fn a_projection_holds_its_source_on_the_host_grid_beat_after_beat() {
         let cue = 8.0;
         let activation = 12_000;
-        let host_beat_frames = beat_frames(Consts::HOST_BPM);
+        let host_beat_frames = beat_frames(consts::HOST_BPM);
 
-        for bpm in Consts::QUEUE_TEMPOS {
+        for bpm in consts::QUEUE_TEMPOS {
             let projection = projection(bpm, cue, activation);
             let source_beat_frames = beat_frames(bpm);
-            for beat in 0..Consts::BEATS - cue.to_i64().unwrap_or_default() {
+            for beat in 0..consts::BEATS - cue.to_i64().unwrap_or_default() {
                 let beat = beat.to_f64().unwrap_or_default();
                 let frame = activation
                     + (host_beat_frames * beat)
@@ -415,18 +405,18 @@ mod tests {
 
     #[kithara::test]
     fn a_projection_answers_the_ratio_that_carries_its_source_onto_the_host() {
-        for bpm in Consts::QUEUE_TEMPOS {
+        for bpm in consts::QUEUE_TEMPOS {
             let projection = projection(bpm, 0.0, 0);
             let BeatGridQuery::Resolved(rate) = projection.rate_at(output(&projection, 96_000))
             else {
                 panic!("a projected {bpm} BPM source carries a ratio");
             };
-            let expected = Consts::HOST_BPM / bpm;
+            let expected = consts::HOST_BPM / bpm;
 
             assert!(
                 (rate - expected).abs() < 1e-12,
                 "a {bpm} BPM source on a {} BPM Host stretches by {rate}, expected {expected}",
-                Consts::HOST_BPM
+                consts::HOST_BPM
             );
         }
     }
@@ -440,7 +430,7 @@ mod tests {
         };
 
         assert!(
-            (f64::from(*tempo.value()) - Consts::HOST_BPM).abs() < 1e-9,
+            (f64::from(*tempo.value()) - consts::HOST_BPM).abs() < 1e-9,
             "a projected source sounds at the Host tempo, got {}",
             f64::from(*tempo.value())
         );
@@ -549,7 +539,7 @@ mod tests {
         let BeatGridRegion::Bounded(region) = region else {
             panic!("a bounded source segment stays bounded on the output axis");
         };
-        let host_span = beat_frames(Consts::HOST_BPM) * Consts::BEATS.to_f64().unwrap_or_default();
+        let host_span = beat_frames(consts::HOST_BPM) * consts::BEATS.to_f64().unwrap_or_default();
 
         assert_eq!(
             region.start(),
@@ -580,8 +570,8 @@ mod tests {
     #[kithara::test]
     fn a_projection_refuses_an_output_frame_past_the_end_of_its_source() {
         let projection = projection(124.0, 0.0, 0);
-        let past_the_end = (beat_frames(Consts::HOST_BPM)
-            * (Consts::BEATS + 1).to_f64().unwrap_or_default())
+        let past_the_end = (beat_frames(consts::HOST_BPM)
+            * (consts::BEATS + 1).to_f64().unwrap_or_default())
         .round()
         .to_i64()
         .unwrap_or_default();

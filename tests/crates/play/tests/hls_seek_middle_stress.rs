@@ -15,28 +15,29 @@ use kithara_integration_tests::{
 
 use crate::{
     bufpool_ext::{TestPools, pools},
-    common::test_defaults::Consts as Shared,
+    common::test_defaults::{blocks_for_seconds, consts as shared},
 };
 
-struct Consts;
-impl Consts {
-    const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
-    const BLOCK_FRAMES: usize = 512;
-    const PRE_SEEK_RENDER_SECS: f64 = 1.5;
-    const POST_SEEK_AUDIO_SECS: f64 = 1.5;
-    const MIN_POSITION_ADVANCE_POST_SEEK_SECS: f64 = 1.0;
-    const POST_SEEK_WALL_SLACK_MS: u64 = 4_000;
-    const MAX_FETCHES_PER_SEGMENT: u64 = 4;
+mod consts {
+    use super::shared;
+
+    pub(super) const SAMPLE_RATE: u32 = shared::SAMPLE_RATE;
+    pub(super) const BLOCK_FRAMES: usize = 512;
+    pub(super) const PRE_SEEK_RENDER_SECS: f64 = 1.5;
+    pub(super) const POST_SEEK_AUDIO_SECS: f64 = 1.5;
+    pub(super) const MIN_POSITION_ADVANCE_POST_SEEK_SECS: f64 = 1.0;
+    pub(super) const POST_SEEK_WALL_SLACK_MS: u64 = 4_000;
+    pub(super) const MAX_FETCHES_PER_SEGMENT: u64 = 4;
     /// Per-segment delay during stress — mirrors a "good 4G" link so
     /// each iteration has a tight but reproducible cold-fetch window.
     /// The flake the user reports happens at this kind of latency.
-    const STRESS_DELAY_MS: u64 = 500;
+    pub(super) const STRESS_DELAY_MS: u64 = 500;
     /// Seek targets cycled across iterations. Each lands inside a
     /// different segment, so each pass triggers a cold fetch and
     /// exercises a fresh `recover_from_decoder_seek_error` path:
     /// 9.0 → segment 2, 5.0 → segment 1, 7.5 → segment 1 mid, 11.0 →
     /// segment 2 late, 8.1 → segment 2 boundary.
-    const SEEK_TARGETS: [f64; 5] = [9.0, 5.0, 7.5, 11.0, 8.1];
+    pub(super) const SEEK_TARGETS: [f64; 5] = [9.0, 5.0, 7.5, 11.0, 8.1];
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
@@ -60,7 +61,7 @@ async fn hls_seek_middle_repeated_seeks_stress(
         variant: None,
         segment_eq: None,
         segment_gte: Some(1),
-        delay_ms: Consts::STRESS_DELAY_MS,
+        delay_ms: consts::STRESS_DELAY_MS,
     }])
     .await;
     let master = server.url("/master.m3u8");
@@ -88,48 +89,48 @@ async fn hls_seek_middle_repeated_seeks_stress(
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
-            .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+            .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"))
             .build(),
     )
     .await;
     player.load_and_fadein(resource).await;
 
-    let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
+    let warmup_target = player.position() + consts::PRE_SEEK_RENDER_SECS;
     render_until_position(
         &mut player,
-        Shared::blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS, Consts::BLOCK_FRAMES),
+        blocks_for_seconds(consts::PRE_SEEK_RENDER_SECS, consts::BLOCK_FRAMES),
         warmup_target,
-        Consts::BLOCK_FRAMES,
+        consts::BLOCK_FRAMES,
         1_500,
     )
     .await;
 
-    let post_seek_wall_ms = Consts::STRESS_DELAY_MS.saturating_mul(Consts::MAX_FETCHES_PER_SEGMENT)
-        + Consts::POST_SEEK_WALL_SLACK_MS;
+    let post_seek_wall_ms = consts::STRESS_DELAY_MS.saturating_mul(consts::MAX_FETCHES_PER_SEGMENT)
+        + consts::POST_SEEK_WALL_SLACK_MS;
 
     let mut hangs: Vec<String> = Vec::new();
 
     for iter in 0..iterations {
-        let target = Consts::SEEK_TARGETS[(iter as usize) % Consts::SEEK_TARGETS.len()];
+        let target = consts::SEEK_TARGETS[(iter as usize) % consts::SEEK_TARGETS.len()];
         let pos_before = player.position();
         player.seek(target, u64::from(1 + iter));
-        let post_target = target + Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS;
+        let post_target = target + consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS;
         render_until_position(
             &mut player,
-            Shared::blocks_for_seconds(Consts::POST_SEEK_AUDIO_SECS, Consts::BLOCK_FRAMES),
+            blocks_for_seconds(consts::POST_SEEK_AUDIO_SECS, consts::BLOCK_FRAMES),
             post_target,
-            Consts::BLOCK_FRAMES,
+            consts::BLOCK_FRAMES,
             post_seek_wall_ms,
         )
         .await;
         let pos_after = player.position();
         let advance = pos_after - target;
-        if advance < Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS {
+        if advance < consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS {
             hangs.push(format!(
                 "[iter {iter}] seek to {target:.2}s hung: \
                  pos_before={pos_before:.3}s post={pos_after:.3}s \
                  advance={advance:.3}s (expected >= {:.2}s)",
-                Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS,
+                consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS,
             ));
         }
     }

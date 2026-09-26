@@ -6,7 +6,7 @@ use smallvec::smallvec;
 
 use crate::nn::{
     api::BeatError,
-    consts::Consts,
+    consts,
     runtime::{RtenModel, Tensor},
 };
 
@@ -52,14 +52,14 @@ impl BeatPredictor {
     where
         S: HasPool<f32>,
     {
-        if mel.shape.len() != 3 || mel.shape[0] != 1 || mel.shape[2] != Consts::MEL_BINS {
+        if mel.shape.len() != 3 || mel.shape[0] != 1 || mel.shape[2] != consts::MEL_BINS {
             return Err(BeatError::Inference {
                 reason: format!("expected mel shape [1, T, 128], got {:?}", mel.shape),
             });
         }
 
         let full_time = mel.shape[1];
-        let border = as_usize(Consts::BORDER_SIZE);
+        let border = as_usize(consts::BORDER_SIZE);
 
         let mut beat_logits = pools.get_with_len::<f32>(full_time)?;
         beat_logits.fill(-1000.0);
@@ -78,7 +78,7 @@ impl BeatPredictor {
             let valid_beat = &beat.data[border..chunk_time - border];
             let valid_downbeat = &downbeat.data[border..chunk_time - border];
 
-            let write_start = as_usize(start + Consts::BORDER_SIZE);
+            let write_start = as_usize(start + consts::BORDER_SIZE);
             for (i, (&b, &d)) in valid_beat.iter().zip(valid_downbeat.iter()).enumerate() {
                 let dest = write_start + i;
                 if dest < full_time {
@@ -118,13 +118,13 @@ fn extract_output(
 /// to align with the spectrogram end (`avoid_short_end`).
 fn generate_starts(full_time: usize) -> impl DoubleEndedIterator<Item = i64> {
     let full_time_i = as_i64(full_time);
-    let stride = as_usize(Consts::STRIDE);
+    let stride = as_usize(consts::STRIDE);
     let count = full_time.div_ceil(stride);
     (0..count).map(move |index| {
-        if full_time_i > Consts::STRIDE && index + 1 == count {
-            full_time_i - (Consts::CHUNK_SIZE - Consts::BORDER_SIZE)
+        if full_time_i > consts::STRIDE && index + 1 == count {
+            full_time_i - (consts::CHUNK_SIZE - consts::BORDER_SIZE)
         } else {
-            -Consts::BORDER_SIZE + as_i64(index).saturating_mul(Consts::STRIDE)
+            -consts::BORDER_SIZE + as_i64(index).saturating_mul(consts::STRIDE)
         }
     })
 }
@@ -142,12 +142,12 @@ where
     let full_time_i = as_i64(full_time);
 
     let actual_start = as_usize(start.max(0));
-    let actual_end = as_usize((start + Consts::CHUNK_SIZE).min(full_time_i));
+    let actual_end = as_usize((start + consts::CHUNK_SIZE).min(full_time_i));
     let pad_left = as_usize((-start).max(0));
     let n_frames = actual_end - actual_start;
 
     let pad_right =
-        as_usize(0.max((start + Consts::CHUNK_SIZE - full_time_i).min(Consts::BORDER_SIZE)));
+        as_usize(0.max((start + consts::CHUNK_SIZE - full_time_i).min(consts::BORDER_SIZE)));
 
     let chunk_time = pad_left + n_frames + pad_right;
     let data_len = chunk_time
@@ -224,15 +224,15 @@ mod tests {
             let mut covered = vec![false; full_time];
             for &start in &starts {
                 let pad_left = (-start).max(0);
-                let actual_end = (start + Consts::CHUNK_SIZE).min(full_time_i);
+                let actual_end = (start + consts::CHUNK_SIZE).min(full_time_i);
                 let actual_start = start.max(0);
                 let n_frames = actual_end - actual_start;
                 let pad_right =
-                    0.max((start + Consts::CHUNK_SIZE - full_time_i).min(Consts::BORDER_SIZE));
+                    0.max((start + consts::CHUNK_SIZE - full_time_i).min(consts::BORDER_SIZE));
                 let chunk_time = pad_left + n_frames + pad_right;
-                let write_start = as_usize((start + Consts::BORDER_SIZE).max(0));
+                let write_start = as_usize((start + consts::BORDER_SIZE).max(0));
                 let write_end =
-                    as_usize((start + chunk_time - Consts::BORDER_SIZE).min(full_time_i));
+                    as_usize((start + chunk_time - consts::BORDER_SIZE).min(full_time_i));
                 for c in &mut covered[write_start..write_end] {
                     *c = true;
                 }
@@ -292,7 +292,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("extract chunk: {error}"));
         assert_eq!(
             chunk.shape.as_slice(),
-            [1, as_usize(Consts::CHUNK_SIZE), n_mels]
+            [1, as_usize(consts::CHUNK_SIZE), n_mels]
         );
 
         for t in 0..6 {
@@ -315,7 +315,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("extract chunk: {error}"));
         assert_eq!(
             chunk.shape.as_slice(),
-            [1, as_usize(Consts::CHUNK_SIZE), n_mels]
+            [1, as_usize(consts::CHUNK_SIZE), n_mels]
         );
         assert!(chunk.data.iter().all(|&v| v == 1.0));
     }

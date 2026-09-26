@@ -52,20 +52,16 @@ impl FrameCoverage for RangeSet<u64> {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-
     use kithara_test_utils::kithara;
 
     use super::{FrameCoverage, Range, RangeSet};
-    use crate::{AudioChunkInfo, AudioSpec};
-
-    const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("44.1 kHz is non-zero");
+    use crate::{AudioChunkInfo, AudioSpec, consts};
 
     fn meta(frame_offset: u64, frames: u32) -> AudioChunkInfo {
         AudioChunkInfo {
             spec: AudioSpec {
                 channels: 2,
-                sample_rate: RATE,
+                sample_rate: consts::FRAME_RATE,
             },
             frame_offset,
             frames,

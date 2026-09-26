@@ -193,19 +193,21 @@ mod tests {
 
     use super::*;
 
-    const FRAGMENT: &str = r#"
+    mod consts {
+        pub(super) const FRAGMENT: &str = r#"
 @fragment
 fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     return vec4<f32>(position.xy / kithara.viewport.xy, kithara.level.x, 1.0);
 }
 "#;
+    }
 
     #[kithara::test]
     fn valid_authored_fragment_is_joined_to_the_owned_contract() {
         let mut cache = ShaderCache::default();
         let spec = compile(
             &mut cache,
-            FRAGMENT,
+            consts::FRAGMENT,
             &SourceUri("shaders/meter.wgsl".to_owned()),
             "studio/meter",
             Vec::new(),
@@ -239,7 +241,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         let mut cache = ShaderCache::default();
         let error = compile(
             &mut cache,
-            FRAGMENT,
+            consts::FRAGMENT,
             &SourceUri("shaders/meter.wgsl".to_owned()),
             "studio/meter",
             Vec::new(),

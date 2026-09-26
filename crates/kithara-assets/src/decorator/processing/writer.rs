@@ -6,7 +6,10 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_storage::{StorageError, StorageResult};
 
 use super::{contract::ProcessCtx, gate::ReadinessGate, guard::GateGuard, reader::ProcessedReader};
-use crate::resource::{RawWriteHandle, ReadSide, WriteSide};
+use crate::{
+    consts,
+    resource::{RawWriteHandle, ReadSide, WriteSide},
+};
 
 fn run_process<W, S>(
     pools: &PoolRegion<S>,
@@ -64,16 +67,6 @@ where
     Ok(write_offset)
 }
 
-/// Default [`ProcessedWriter`] transform pass size. One pass over a 64 `KiB`
-/// window keeps the pooled input and output buffers page-sized while still
-/// committing most resources in a handful of passes.
-pub(super) const DEFAULT_CHUNK_SIZE: usize = 64 * 1024;
-
-/// Default backstop between [`ReadinessGate`] wakeups. The gate is woken by
-/// `notify_all` on every state change, so this only bounds how long a waiter
-/// sleeps before rechecking an abort it was not signalled for.
-pub(super) const DEFAULT_GATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
-
 /// Write handle that processes a resource atomically when it is committed.
 pub struct ProcessedWriter<W, S> {
     gate_poll_interval: Duration,
@@ -109,8 +102,8 @@ where
         inner: W,
         processor: Option<ProcessCtx>,
         pools: PoolRegion<S>,
-        #[builder(default = DEFAULT_CHUNK_SIZE)] chunk_size: usize,
-        #[builder(default = DEFAULT_GATE_POLL_INTERVAL)] gate_poll_interval: Duration,
+        #[builder(default = consts::DEFAULT_CHUNK_SIZE)] chunk_size: usize,
+        #[builder(default = consts::DEFAULT_GATE_POLL_INTERVAL)] gate_poll_interval: Duration,
     ) -> Self {
         let ready = processor.is_none();
         Self {

@@ -9,7 +9,9 @@ use crate::{
     types::{AcceptEncodingPolicy, Headers, RangeSpec},
 };
 
-pub(super) const HTTP_PARTIAL_CONTENT: u16 = 206;
+pub(in crate::backend::host) mod consts {
+    pub(in crate::backend::host) const HTTP_PARTIAL_CONTENT: u16 = 206;
+}
 
 impl From<HostMethod> for AcceptEncodingPolicy {
     fn from(method: HostMethod) -> Self {

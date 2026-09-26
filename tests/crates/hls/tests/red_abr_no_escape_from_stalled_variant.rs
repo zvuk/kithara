@@ -55,22 +55,23 @@ use kithara_integration_tests::{
 };
 use url::Url;
 
-struct Consts;
-impl Consts {
-    const VARIANT_COUNT: usize = 3;
-    const SEGMENTS_PER_VARIANT: usize = 8;
-    const SEGMENT_DURATION_S: f64 = 2.0;
+mod consts {
+    use super::Duration;
+
+    pub(super) const VARIANT_COUNT: usize = 3;
+    pub(super) const SEGMENTS_PER_VARIANT: usize = 8;
+    pub(super) const SEGMENT_DURATION_S: f64 = 2.0;
     /// Variant 0 cheapest so `auto(0)` starts there and even a modest
     /// throughput estimate justifies an up-switch off it.
-    const BANDWIDTHS: [u64; 3] = [48_000, 512_000, 2_048_000];
+    pub(super) const BANDWIDTHS: [u64; 3] = [48_000, 512_000, 2_048_000];
     /// Withhold variant 0 / segment 0 far longer than the whole test —
     /// effectively "this segment never arrives".
-    const STALL_MS: u64 = 600_000;
+    pub(super) const STALL_MS: u64 = 600_000;
     /// Chunks that prove real playback advanced past startup.
-    const MIN_CHUNKS: usize = 10;
+    pub(super) const MIN_CHUNKS: usize = 10;
     /// Drain budget. A healthy escape fills the ring in well under a second;
     /// the livelock spins on `Pending` for the whole window.
-    const DRAIN_BUDGET: Duration = Duration::from_secs(10);
+    pub(super) const DRAIN_BUDGET: Duration = Duration::from_secs(10);
 }
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(40)))]
@@ -122,9 +123,9 @@ async fn abr_escapes_stalled_initial_variant(
     // starts, but the new variant's bytes never land. The engine-aware park is
     // the canonical offline-consumer contract (pull, never sleep-poll).
     let drained = spawn_blocking(move || {
-        let deadline = kithara::platform::time::Instant::now() + Consts::DRAIN_BUDGET;
+        let deadline = kithara::platform::time::Instant::now() + consts::DRAIN_BUDGET;
         let mut chunks = 0usize;
-        while chunks < Consts::MIN_CHUNKS && kithara::platform::time::Instant::now() < deadline {
+        while chunks < consts::MIN_CHUNKS && kithara::platform::time::Instant::now() < deadline {
             match AudioRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => chunks += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,
@@ -142,13 +143,13 @@ async fn abr_escapes_stalled_initial_variant(
         .and_then(kithara::abr::AbrHandle::current_variant_index);
 
     assert!(
-        drained >= Consts::MIN_CHUNKS,
+        drained >= consts::MIN_CHUNKS,
         "variant 0 / segment 0 is withheld and the player could not switch to a \
          deliverable variant — decoded only {drained} chunks (expected >= {min}). \
          The buffer-too-low up-switch gate blocks every tick (buffer_ahead pinned \
          at 0 on the non-delivering variant) so no EscapeStalled decision is \
          produced. final_variant={final_variant:?}. backend={backend:?}.",
-        min = Consts::MIN_CHUNKS,
+        min = consts::MIN_CHUNKS,
     );
     assert!(
         final_variant.is_some_and(|v| v != 0),
@@ -163,15 +164,15 @@ async fn abr_escapes_stalled_initial_variant(
 async fn stalled_hls() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()
-        .variant_count(Consts::VARIANT_COUNT)
-        .segments_per_variant(Consts::SEGMENTS_PER_VARIANT)
-        .segment_duration_secs(Consts::SEGMENT_DURATION_S)
-        .variant_bandwidths(Consts::BANDWIDTHS.to_vec())
+        .variant_count(consts::VARIANT_COUNT)
+        .segments_per_variant(consts::SEGMENTS_PER_VARIANT)
+        .segment_duration_secs(consts::SEGMENT_DURATION_S)
+        .variant_bandwidths(consts::BANDWIDTHS.to_vec())
         .packaged_audio_aac_lc(44_100, 2)
         .push_delay_rule(DelayRule {
             variant: Some(0),
             segment_eq: Some(0),
-            delay_ms: Consts::STALL_MS,
+            delay_ms: consts::STALL_MS,
             ..Default::default()
         });
     let url = helper

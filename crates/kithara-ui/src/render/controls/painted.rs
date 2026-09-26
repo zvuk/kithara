@@ -854,11 +854,15 @@ mod tests {
         skin::ColorRole,
     };
 
-    const LEVELS: StereoLevels = StereoLevels {
-        l: 0.6,
-        r: 0.4,
-        volume: 0.8,
-    };
+    mod consts {
+        use super::StereoLevels;
+
+        pub(super) const LEVELS: StereoLevels = StereoLevels {
+            l: 0.6,
+            r: 0.4,
+            volume: 0.8,
+        };
+    }
 
     struct NoReads;
 
@@ -1036,14 +1040,14 @@ mod tests {
         for ticks in [false, true] {
             let iced = Paint::pooled(
                 VerticalVu::new(ticks, skin),
-                LEVELS,
+                consts::LEVELS,
                 skin,
                 &DrawBuffers::default(),
             )
             .draw_list(&PaintState::default(), bounds, VisualState::Idle);
             let mut masonry = Painted::pooled(
                 VerticalVu::new(ticks, skin),
-                LEVELS,
+                consts::LEVELS,
                 skin,
                 &DrawBuffers::default(),
             );
@@ -1490,14 +1494,14 @@ mod tests {
         };
         let iced = Paint::pooled(
             StereoMeter::new(skin),
-            LEVELS,
+            consts::LEVELS,
             skin,
             &DrawBuffers::default(),
         )
         .draw_list(&PaintState::default(), bounds, VisualState::Idle);
         let mut masonry = Painted::pooled(
             StereoMeter::new(skin),
-            LEVELS,
+            consts::LEVELS,
             skin,
             &DrawBuffers::default(),
         );
@@ -2121,7 +2125,9 @@ mod dragged {
         },
     };
 
-    const RANGE: f32 = 100.0;
+    mod consts {
+        pub(super) const RANGE: f32 = 100.0;
+    }
 
     /// One pin for every `Grip::Drag` control rather than one per control: the
     /// track a control names is what its travel is measured against, and the
@@ -2143,7 +2149,7 @@ mod dragged {
             Drag::builder()
                 .cursor(CursorShape::ResizeV)
                 .track(Track::RelativeVertical {
-                    range: RANGE,
+                    range: consts::RANGE,
                     value: 0.5,
                 })
                 .build(),
@@ -2186,7 +2192,7 @@ mod dragged {
             action.into_inner().0,
             Some(UiEvent::Control {
                 path: "mixer/gain".to_owned(),
-                action: ControlAction::SetScalar(f64::from(0.5 + 10.0 / RANGE)),
+                action: ControlAction::SetScalar(f64::from(0.5 + 10.0 / consts::RANGE)),
             })
         );
     }
@@ -2531,12 +2537,16 @@ mod cached {
         builtin,
     };
 
-    const BOX: Rect = Rect {
-        h: 40.0,
-        w: 120.0,
-        x: 0.0,
-        y: 0.0,
-    };
+    mod consts {
+        use super::Rect;
+
+        pub(super) const BOX: Rect = Rect {
+            h: 40.0,
+            w: 120.0,
+            x: 0.0,
+            y: 0.0,
+        };
+    }
 
     /// One frame of the immediate-mode host: the element is built afresh, and
     /// the canvas state is the one thing that survived the last frame.
@@ -2563,10 +2573,10 @@ mod cached {
     fn an_unchanged_control_is_not_drawn_again() {
         let skin = builtin::skin();
         let state = PaintState::default();
-        frame(&state, Meter::new(skin), 0.5, BOX);
+        frame(&state, Meter::new(skin), 0.5, consts::BOX);
 
         assert_eq!(
-            frame(&state, Meter::new(skin), 0.5, BOX),
+            frame(&state, Meter::new(skin), 0.5, consts::BOX),
             Marked::Kept,
             "an unchanged control must not be drawn from at all"
         );
@@ -2578,10 +2588,10 @@ mod cached {
     fn a_control_whose_value_moved_draws_again() {
         let skin = builtin::skin();
         let state = PaintState::default();
-        frame(&state, Meter::new(skin), 0.5, BOX);
+        frame(&state, Meter::new(skin), 0.5, consts::BOX);
 
         assert_eq!(
-            frame(&state, Meter::new(skin), 0.75, BOX),
+            frame(&state, Meter::new(skin), 0.75, consts::BOX),
             Marked::Changed,
             "a control must not be left showing the value it no longer holds"
         );
@@ -2593,10 +2603,10 @@ mod cached {
         let skin = builtin::skin();
         let state = PaintState::default();
         let wider = Rect {
-            w: BOX.w + 1.0,
-            ..BOX
+            w: consts::BOX.w + 1.0,
+            ..consts::BOX
         };
-        frame(&state, Meter::new(skin), 0.5, BOX);
+        frame(&state, Meter::new(skin), 0.5, consts::BOX);
 
         assert_eq!(frame(&state, Meter::new(skin), 0.5, wider), Marked::Changed);
     }
@@ -2610,10 +2620,10 @@ mod cached {
     fn a_control_replaced_by_another_does_not_keep_its_picture() {
         let skin = builtin::skin();
         let state = PaintState::default();
-        frame(&state, Binary::toggle(skin), false, BOX);
+        frame(&state, Binary::toggle(skin), false, consts::BOX);
 
         assert_eq!(
-            frame(&state, Binary::checkbox(skin), false, BOX),
+            frame(&state, Binary::checkbox(skin), false, consts::BOX),
             Marked::Changed,
             "a checkbox must not be left showing a switch"
         );

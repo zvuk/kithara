@@ -7,12 +7,9 @@ use std::{
 
 use anyhow::{Result, bail};
 
-use crate::child;
+use crate::{child, consts};
 
-/// The entry point the instrumentation calls to hand the host transport to Rust.
-const TRANSPORT_INSTALL: &str = "Java_com_kithara_net_NativeHttpTransport_install";
-
-/// Whether the Android loader binds [`TRANSPORT_INSTALL`] for an image loaded
+/// Whether the Android loader binds [`TRANSPORT_INSTALL`](consts::TRANSPORT_INSTALL) for an image loaded
 /// out of the staged library directory: the image or a staged library in its
 /// dependency tree defines it.
 pub(super) struct Binding<'a> {
@@ -64,7 +61,9 @@ impl<'a> Binding<'a> {
             &["--dynamic", "--defined-only", "--just-symbol-name"],
             library,
         )?;
-        let defined = listing.lines().any(|line| line == TRANSPORT_INSTALL);
+        let defined = listing
+            .lines()
+            .any(|line| line == consts::TRANSPORT_INSTALL);
         self.defined.insert(library.to_owned(), defined);
         Ok(defined)
     }

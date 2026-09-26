@@ -8,13 +8,15 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to},
 };
 
-pub(crate) const ID: &str = "pointwise_loop";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "pointwise_loop";
+}
 
 pub(crate) struct PointwiseLoop;
 
 impl Check for PointwiseLoop {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -49,10 +51,10 @@ fn analyze_file(rel: &str, file: &syn::File, sup: &Suppressions, out: &mut Vec<V
         fn visit_expr_for_loop(&mut self, fl: &'ast ExprForLoop) {
             if is_pointwise_loop(fl) {
                 let line = fl.for_token.span.start().line;
-                if !self.sup.is_suppressed(line, ID) {
+                if !self.sup.is_suppressed(line, consts::ID) {
                     let key = format!("{}:{}:pointwise_for", self.rel, line);
                     self.out.push(Violation::warn(
-                        ID,
+                        consts::ID,
                         key,
                         "for-loop is a pointwise binary op over zipped iterators; \
                          replace with `.for_each(|(a, &b)| *a OP= b)`. In hot paths \

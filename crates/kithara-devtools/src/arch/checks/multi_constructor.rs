@@ -14,13 +14,15 @@ use crate::{
     },
 };
 
-pub(crate) const ID: &str = "multi_constructor";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "multi_constructor";
+}
 
 pub(crate) struct MultiConstructor;
 
 impl Check for MultiConstructor {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -93,12 +95,12 @@ fn inspect_impl(
         return;
     }
     let line = im.impl_token.span.start().line;
-    if suppress.is_suppressed(line, ID) {
+    if suppress.is_suppressed(line, consts::ID) {
         return;
     }
     let key = format!("{rel}:{line}:{target}");
     out.push(Violation::warn(
-        ID,
+        consts::ID,
         key,
         format!(
             "`impl {target}` exposes {} constructors ({}); keep one canonical \

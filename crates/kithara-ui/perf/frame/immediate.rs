@@ -30,7 +30,7 @@ use kithara_ui::{
 use crate::{
     FrameHost, Step, acquisitions,
     fixture::{CensusReads, Fixture, census_kinds},
-    scenarios::Consts,
+    scenarios::consts,
     skin, theme,
 };
 
@@ -75,7 +75,7 @@ impl Immediate {
 
 impl FrameHost for Immediate {
     fn frame(&mut self) -> usize {
-        let bounds = Size::new(f32::from(Consts::WIDTH), f32::from(Consts::HEIGHT));
+        let bounds = Size::new(f32::from(consts::WIDTH), f32::from(consts::HEIGHT));
         let element = tree::render(
             &self.ui.root,
             &self.ui,
@@ -193,7 +193,7 @@ pub(crate) fn laid_out_rect(
         None,
     );
     let mut tree = Tree::new(element.as_widget());
-    let bounds = Size::new(f32::from(Consts::WIDTH), f32::from(Consts::HEIGHT));
+    let bounds = Size::new(f32::from(consts::WIDTH), f32::from(consts::HEIGHT));
     let node =
         element
             .as_widget_mut()

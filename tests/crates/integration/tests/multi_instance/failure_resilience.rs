@@ -24,12 +24,11 @@ use tracing::info;
 
 use crate::common::test_defaults::SawWav;
 
-struct Consts;
-impl Consts {
+mod consts {
     #[cfg(not(target_arch = "wasm32"))]
-    const SEGMENT_COUNT: usize = 10;
+    pub(super) const SEGMENT_COUNT: usize = 10;
     #[cfg(target_arch = "wasm32")]
-    const SEGMENT_COUNT: usize = 4;
+    pub(super) const SEGMENT_COUNT: usize = 4;
 }
 
 /// Outcome of one instance.
@@ -74,7 +73,7 @@ fn read_hls_best_effort(audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, Test
 /// Create a healthy HLS server (no delays).
 async fn create_server(wav_data: &Arc<Vec<u8>>) -> HlsTestServer {
     HlsTestServer::new(HlsTestServerConfig {
-        segments_per_variant: Consts::SEGMENT_COUNT,
+        segments_per_variant: consts::SEGMENT_COUNT,
         segment_size: SawWav::DEFAULT.segment_size,
         segment_duration_secs: SawWav::DEFAULT.segment_duration_secs(),
         custom_data: Some(Arc::clone(wav_data)),

@@ -333,7 +333,7 @@ where
         )
         .map_err(|error| RunError::Host(format!("vello renderer: {error}")))?;
         let shaders = ShaderPass::new(&handle.device);
-        let vis = VisPass::new(&handle.device, target::FORMAT);
+        let vis = VisPass::new(&handle.device, target::consts::FORMAT);
 
         let scale = window.scale_factor();
         let ui = Ui::new(app, self.config, (size.width, size.height), scale)?;

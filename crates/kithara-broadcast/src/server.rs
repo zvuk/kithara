@@ -36,32 +36,30 @@ pub(crate) fn start(
         .map_err(|source| BroadcastError::Bind { source, addr: bind })?;
 
     std::thread::Builder::new()
-        .name(Consts::THREAD.to_owned())
+        .name(consts::THREAD.to_owned())
         .spawn(move || serve(listener, origin, token))
         .map_err(|source| BroadcastError::Serve { addr, source })?;
     Ok(addr)
 }
 
 pub(crate) fn master_playlist(bit_rate: u64) -> String {
-    let bandwidth = bit_rate + bit_rate / Consts::BANDWIDTH_MARGIN;
+    let bandwidth = bit_rate + bit_rate / consts::BANDWIDTH_MARGIN;
     format!(
         "#EXTM3U\n\
          #EXT-X-VERSION:3\n\
          #EXT-X-STREAM-INF:BANDWIDTH={bandwidth},CODECS=\"mp4a.40.2\"\n\
          {}\n",
-        Consts::MEDIA_PLAYLIST
+        consts::MEDIA_PLAYLIST
     )
 }
 
-struct Consts;
-
-impl Consts {
-    const BANDWIDTH_MARGIN: u64 = 20;
-    const MEDIA_PLAYLIST: &'static str = "v/0/live.m3u8";
-    const PLAYLIST_TYPE: &'static str = "application/vnd.apple.mpegurl";
-    const SEGMENT_SUFFIX: &'static str = ".aac";
-    const SEGMENT_TYPE: &'static str = "audio/aac";
-    const THREAD: &'static str = "kithara-broadcast-origin";
+mod consts {
+    pub(super) const BANDWIDTH_MARGIN: u64 = 20;
+    pub(super) const MEDIA_PLAYLIST: &str = "v/0/live.m3u8";
+    pub(super) const PLAYLIST_TYPE: &str = "application/vnd.apple.mpegurl";
+    pub(super) const SEGMENT_SUFFIX: &str = ".aac";
+    pub(super) const SEGMENT_TYPE: &str = "audio/aac";
+    pub(super) const THREAD: &str = "kithara-broadcast-origin";
 }
 
 fn serve(listener: TcpListener, origin: Arc<Origin>, token: CancelToken) {
@@ -111,20 +109,20 @@ async fn live(State(origin): State<Arc<Origin>>) -> Response {
 
 async fn segment(State(origin): State<Arc<Origin>>, Path(name): Path<String>) -> Response {
     let seq = name
-        .strip_suffix(Consts::SEGMENT_SUFFIX)
+        .strip_suffix(consts::SEGMENT_SUFFIX)
         .and_then(|seq| seq.parse().ok());
     let bytes = seq.and_then(|seq| origin.snapshot.load().segment(seq));
 
     bytes.map_or_else(
         || StatusCode::NOT_FOUND.into_response(),
-        |bytes| ([(header::CONTENT_TYPE, Consts::SEGMENT_TYPE)], bytes).into_response(),
+        |bytes| ([(header::CONTENT_TYPE, consts::SEGMENT_TYPE)], bytes).into_response(),
     )
 }
 
 fn playlist(text: &str) -> Response {
     (
         [
-            (header::CONTENT_TYPE, Consts::PLAYLIST_TYPE),
+            (header::CONTENT_TYPE, consts::PLAYLIST_TYPE),
             (header::CACHE_CONTROL, "no-store"),
         ],
         text.to_owned(),

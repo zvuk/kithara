@@ -11,13 +11,15 @@ use syn::{Item, UseTree};
 use super::{Check, Context};
 use crate::common::{scope::packages_in_scope, violation::Violation, walker::walk_rs_files};
 
-pub(crate) const ID: &str = "module_layers";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "module_layers";
+}
 
 pub(crate) struct ModuleLayers;
 
 impl Check for ModuleLayers {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -94,7 +96,7 @@ impl Check for ModuleLayers {
                             "file in layer {from_idx} '{from_name}' depends on file in \
                              layer {to_idx} '{to_name}', which is higher"
                         );
-                        violations.push(Violation::deny(ID, key, msg));
+                        violations.push(Violation::deny(consts::ID, key, msg));
                     }
                 }
             }

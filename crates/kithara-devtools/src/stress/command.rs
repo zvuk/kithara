@@ -27,15 +27,12 @@ use crate::{
         ProjectConfig, StressArtifactConfig, StressConfig, StressEvidenceConfig, StressModeConfig,
         StressRenderBudgets,
     },
-    lease,
+    consts, lease,
     stress_report::{self, StressReportArgs},
     stress_run::{self, StressRunSpec},
     test::{ConfiguredLane, configured_lane},
     verdict::{ChildFailure, NotClean},
 };
-
-/// Hands the run's repeat count to a lane that performs its own repeats.
-const REPEATS_ENV: &str = "KITHARA_STRESS_REPEATS";
 
 #[derive(Debug, Subcommand)]
 #[non_exhaustive]
@@ -315,7 +312,7 @@ fn mark_attempt(log: &Path, attempt: usize) -> Result<()> {
         .append(true)
         .open(log)
         .with_context(|| format!("open stress log {}", log.display()))?;
-    writeln!(file, "{}{attempt}", stress_report::ATTEMPT_MARKER)
+    writeln!(file, "{}{attempt}", consts::ATTEMPT_MARKER)
         .with_context(|| format!("write stress log {}", log.display()))
 }
 
@@ -364,7 +361,7 @@ fn run_command_lane(
         command.args(arguments).current_dir(&ctx.root);
         environment.apply(&mut command);
         if mode.owns_repeats {
-            command.env(REPEATS_ENV, count.to_string());
+            command.env(consts::REPEATS_ENV, count.to_string());
         }
         let status = run_output(&mut command, &paths.log)?;
         let code = status.code().unwrap_or_else(|| i32::from(u8::MAX));
@@ -895,7 +892,7 @@ fn append_findings(
 ) {
     let text = match stress_report::read_bounded_utf8(
         log,
-        stress_report::MAX_LANE_LOG_BYTES,
+        consts::MAX_LANE_LOG_BYTES,
         "stress lane log",
     ) {
         Ok(text) => text,
@@ -1442,13 +1439,6 @@ mod tests {
         );
     }
 
-    const VIOLATION: &str = "\
-==2534==ERROR: RealtimeSanitizer: unsafe-library-call
-Intercepted call to real-time unsafe function `malloc` in real-time context!
-    #0 0x5628d3a1b2c0 in malloc (/opt/bin/suite_stress+0x1042c0)
-    #1 0x5628d3c11f30 in kithara_audio::renderer::mix crates/kithara-audio/src/renderer/mix.rs:214:23
-";
-
     fn command_lane(temp: &tempfile::TempDir, attempts: &str, log: &str) -> Paths {
         let paths = Paths::new(
             temp.path().to_path_buf(),
@@ -1492,7 +1482,11 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
     #[test]
     fn a_command_lane_names_the_violation_the_sanitizer_reported() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let log = format!("{}0\n{VIOLATION}", stress_report::ATTEMPT_MARKER);
+        let log = format!(
+            "{}0\n{VIOLATION}",
+            consts::ATTEMPT_MARKER,
+            VIOLATION = consts::VIOLATION
+        );
         let paths = command_lane(&temp, "[134,0]", &log);
 
         let report = command_lane_report(
@@ -1541,11 +1535,6 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
         );
     }
 
-    /// Where a launched lane records what repeat count it was handed.
-    const REPEATS_RECORD_ENV: &str = "DEVTOOLS_STRESS_REPEATS_RECORD";
-    const SUITE: &str = "kithara-integration-tests::rtsan";
-    const CASE: &str = "audio::mix_tap";
-
     /// Runs a lane whose command is this test binary, and reports what
     /// `KITHARA_STRESS_REPEATS` held on each launch.
     fn recorded_repeats(mode: &StressModeConfig, count: usize) -> Vec<String> {
@@ -1560,7 +1549,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
                 ))
                 .collect(),
             set_env: BTreeMap::from([(
-                REPEATS_RECORD_ENV.to_owned(),
+                consts::REPEATS_RECORD_ENV.to_owned(),
                 record.to_string_lossy().into_owned(),
             )]),
             ..mode.clone()
@@ -1570,7 +1559,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
         // whatever launched the run.
         let config = StressConfig {
             environment: StressEnvironmentConfig {
-                remove: vec![REPEATS_ENV.to_owned()],
+                remove: vec![consts::REPEATS_ENV.to_owned()],
             },
             ..StressConfig::default()
         };
@@ -1635,8 +1624,8 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
     #[test]
     #[ignore = "subprocess entrypoint"]
     fn record_repeats() {
-        let record = std::env::var_os(REPEATS_RECORD_ENV).expect("record path");
-        let value = std::env::var(REPEATS_ENV).unwrap_or_else(|_| "unset".to_owned());
+        let record = std::env::var_os(consts::REPEATS_RECORD_ENV).expect("record path");
+        let value = std::env::var(consts::REPEATS_ENV).unwrap_or_else(|_| "unset".to_owned());
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -1660,7 +1649,9 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
                 format!(
                     "  <testsuite name=\"{SUITE}@stress-{repeat}\">\n    <testcase \
                      name=\"{CASE}\" classname=\"{SUITE}\" time=\"0.1\">{failure}</testcase>\n  \
-                     </testsuite>\n"
+                     </testsuite>\n",
+                    CASE = consts::CASE,
+                    SUITE = consts::SUITE
                 )
             })
             .collect::<String>();
@@ -1679,7 +1670,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
     }
 
     fn measured_case() -> (String, String) {
-        (SUITE.to_owned(), CASE.to_owned())
+        (consts::SUITE.to_owned(), consts::CASE.to_owned())
     }
 
     /// A lane that repeats internally is measured per test, like the lanes the
@@ -1888,7 +1879,11 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
     #[test]
     fn a_self_repeating_lane_does_not_rate_its_findings_by_attempt() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let log = format!("{}0\n{VIOLATION}", stress_report::ATTEMPT_MARKER);
+        let log = format!(
+            "{}0\n{VIOLATION}",
+            consts::ATTEMPT_MARKER,
+            VIOLATION = consts::VIOLATION
+        );
         let paths = self_repeating_lane(&temp, &log, &[false, true, false]);
 
         let report = command_lane_report(
@@ -1909,7 +1904,11 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
     #[test]
     fn a_self_repeating_lane_still_names_the_violation_it_reported() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let log = format!("{}0\n{VIOLATION}", stress_report::ATTEMPT_MARKER);
+        let log = format!(
+            "{}0\n{VIOLATION}",
+            consts::ATTEMPT_MARKER,
+            VIOLATION = consts::VIOLATION
+        );
         let paths = self_repeating_lane(&temp, &log, &[false, true, false]);
 
         let report = command_lane_report(

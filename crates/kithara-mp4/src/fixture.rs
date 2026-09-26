@@ -11,26 +11,12 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::ReadAt;
-
-/// Media timescale of the synthetic track, in ticks per second.
-pub(crate) const TIMESCALE: u32 = 44_100;
-/// Ticks per synthetic sample, matching an AAC access unit.
-pub(crate) const SAMPLE_TICKS: u32 = 1024;
-/// Samples per fragment: one fragment is just under a second of audio.
-pub(crate) const SAMPLES_PER_FRAGMENT: u32 = 43;
-/// Payload bytes per sample. Sized so a fragment's payload is about a
-/// mebibyte, which makes a whole-file read unmistakable against the
-/// header-walk budget.
-pub(crate) const SAMPLE_BYTES: u32 = 24_384;
-pub(crate) const FRAGMENTS: u32 = 8;
-/// Bytes a header walk may pull. Box headers are 8 bytes and the
-/// `moov`/`moof` boxes are hundreds, so the read-ahead window dominates.
-pub(crate) const WALK_BUDGET_BYTES: u64 = 256 * 1024;
+use crate::{ReadAt, consts};
 
 /// Payload bytes of one fragment's `mdat`: every sample, back to back.
 pub(crate) fn mdat_bytes() -> usize {
-    usize::try_from(SAMPLES_PER_FRAGMENT * SAMPLE_BYTES).expect("test mdat fits usize")
+    usize::try_from(consts::SAMPLES_PER_FRAGMENT * consts::SAMPLE_BYTES)
+        .expect("test mdat fits usize")
 }
 
 fn mp4_box(name: &[u8; 4], payload: &[u8]) -> Vec<u8> {
@@ -63,7 +49,7 @@ fn init_segment() -> Vec<u8> {
     let mut mvhd = Vec::new();
     mvhd.extend_from_slice(&0u32.to_be_bytes());
     mvhd.extend_from_slice(&0u32.to_be_bytes());
-    mvhd.extend_from_slice(&TIMESCALE.to_be_bytes());
+    mvhd.extend_from_slice(&consts::TIMESCALE.to_be_bytes());
     mvhd.extend_from_slice(&0u32.to_be_bytes());
     mvhd.extend_from_slice(&0x0001_0000u32.to_be_bytes());
     mvhd.extend_from_slice(&0x0100u16.to_be_bytes());
@@ -75,7 +61,7 @@ fn init_segment() -> Vec<u8> {
     let mut tkhd = Vec::new();
     tkhd.extend_from_slice(&0u32.to_be_bytes());
     tkhd.extend_from_slice(&0u32.to_be_bytes());
-    tkhd.extend_from_slice(&TRACK_ID.to_be_bytes());
+    tkhd.extend_from_slice(&consts::TRACK_ID.to_be_bytes());
     tkhd.extend_from_slice(&[0u8; 4]);
     tkhd.extend_from_slice(&0u32.to_be_bytes());
     tkhd.extend_from_slice(&[0u8; 8]);
@@ -90,7 +76,7 @@ fn init_segment() -> Vec<u8> {
     let mut mdhd = Vec::new();
     mdhd.extend_from_slice(&0u32.to_be_bytes());
     mdhd.extend_from_slice(&0u32.to_be_bytes());
-    mdhd.extend_from_slice(&TIMESCALE.to_be_bytes());
+    mdhd.extend_from_slice(&consts::TIMESCALE.to_be_bytes());
     mdhd.extend_from_slice(&0u32.to_be_bytes());
     mdhd.extend_from_slice(&0x55c4u16.to_be_bytes());
     mdhd.extend_from_slice(&[0u8; 2]);
@@ -149,9 +135,6 @@ fn init_segment() -> Vec<u8> {
     bytes
 }
 
-/// Track the synthetic fragments address.
-pub(crate) const TRACK_ID: u32 = 1;
-
 fn moof_box(index: u32, data_offset: i32) -> Vec<u8> {
     /// `tfhd` flags: default sample duration and size, and base-is-moof so a
     /// `trun` offset counts from the `moof` header rather than the file.
@@ -163,16 +146,18 @@ fn moof_box(index: u32, data_offset: i32) -> Vec<u8> {
     let mfhd = full_box(b"mfhd", 0, 0, &(index + 1).to_be_bytes());
 
     let mut tfhd = Vec::new();
-    tfhd.extend_from_slice(&TRACK_ID.to_be_bytes());
-    tfhd.extend_from_slice(&SAMPLE_TICKS.to_be_bytes());
-    tfhd.extend_from_slice(&SAMPLE_BYTES.to_be_bytes());
+    tfhd.extend_from_slice(&consts::TRACK_ID.to_be_bytes());
+    tfhd.extend_from_slice(&consts::SAMPLE_TICKS.to_be_bytes());
+    tfhd.extend_from_slice(&consts::SAMPLE_BYTES.to_be_bytes());
     let tfhd = full_box(b"tfhd", 0, TFHD_FLAGS, &tfhd);
 
-    let decode_time = u64::from(index) * u64::from(SAMPLES_PER_FRAGMENT) * u64::from(SAMPLE_TICKS);
+    let decode_time = u64::from(index)
+        * u64::from(consts::SAMPLES_PER_FRAGMENT)
+        * u64::from(consts::SAMPLE_TICKS);
     let tfdt = full_box(b"tfdt", 1, 0, &decode_time.to_be_bytes());
 
     let mut trun = Vec::new();
-    trun.extend_from_slice(&SAMPLES_PER_FRAGMENT.to_be_bytes());
+    trun.extend_from_slice(&consts::SAMPLES_PER_FRAGMENT.to_be_bytes());
     trun.extend_from_slice(&data_offset.to_be_bytes());
     let trun = full_box(b"trun", 0, TRUN_FLAGS, &trun);
 
@@ -206,7 +191,7 @@ fn index_fill(index: u32) -> u8 {
 pub(crate) fn fragmented_mp4() -> (Vec<u8>, u64) {
     let mut bytes = init_segment();
     let first_moof = u64::try_from(bytes.len()).expect("test init fits u64");
-    for index in 0..FRAGMENTS {
+    for index in 0..consts::FRAGMENTS {
         bytes.extend_from_slice(&media_segment(index));
     }
     (bytes, first_moof)

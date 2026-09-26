@@ -6,14 +6,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 use super::input::HookInput;
-
-struct Consts;
-
-impl Consts {
-    const PATCH_BYTES: usize = 16 * 1024 * 1024;
-    const PATCH_OPERATIONS: usize = 4096;
-    const PATH_BYTES: usize = 4096;
-}
+use crate::consts;
 
 pub(super) fn run(input: &HookInput, root: &Path) -> Result<()> {
     let paths = match input.tool_name.as_str() {
@@ -35,10 +28,10 @@ pub(super) fn run(input: &HookInput, root: &Path) -> Result<()> {
 }
 
 fn patch_paths(patch: &str) -> Result<Vec<PathBuf>> {
-    if patch.len() > Consts::PATCH_BYTES {
+    if patch.len() > consts::PATCH_BYTES {
         bail!(
             "apply_patch input exceeds {} byte hook limit",
-            Consts::PATCH_BYTES
+            consts::PATCH_BYTES
         );
     }
 
@@ -121,13 +114,13 @@ struct PathCollector {
 impl PathCollector {
     fn validate(&mut self, raw: &str) -> Result<PathBuf> {
         self.operations += 1;
-        if self.operations > Consts::PATCH_OPERATIONS {
+        if self.operations > consts::PATCH_OPERATIONS {
             bail!(
                 "apply_patch input exceeds {} file operation hook limit",
-                Consts::PATCH_OPERATIONS
+                consts::PATCH_OPERATIONS
             );
         }
-        if raw.is_empty() || raw.len() > Consts::PATH_BYTES || raw.contains('\0') {
+        if raw.is_empty() || raw.len() > consts::PATH_BYTES || raw.contains('\0') {
             bail!("invalid apply_patch path");
         }
         let path = Path::new(raw);

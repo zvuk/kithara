@@ -15,7 +15,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::fixtures::tone_mp3;
 
-use crate::common::test_defaults::Consts;
+use crate::common::test_defaults::consts;
 
 #[kithara::test(tokio)]
 #[cfg_attr(
@@ -109,9 +109,9 @@ async fn audio_file_mp3_decodes_with_duration(
     );
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
-        (dur_secs - Consts::TEST_MP3_DURATION_SECS).abs() < 2.0,
+        (dur_secs - consts::TEST_MP3_DURATION_SECS).abs() < 2.0,
         "url={url} hint={hint:?}: expected ~{}s, got {dur_secs:.1}s",
-        Consts::TEST_MP3_DURATION_SECS
+        consts::TEST_MP3_DURATION_SECS
     );
 
     let (samples_read, position, eof) = spawn_blocking(move || {
@@ -249,10 +249,10 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
     );
     let reached = position.as_secs_f64();
     assert!(
-        (reached - Consts::TEST_MP3_DURATION_SECS).abs() <= END_TOLERANCE_SECS,
+        (reached - consts::TEST_MP3_DURATION_SECS).abs() <= END_TOLERANCE_SECS,
         "{backend:?}: the track must play to the length it was built to: \
          reached={reached:.3}s, built={}s +/- {END_TOLERANCE_SECS}s",
-        Consts::TEST_MP3_DURATION_SECS
+        consts::TEST_MP3_DURATION_SECS
     );
 }
 
@@ -303,9 +303,9 @@ async fn mp3_duration_correct_before_decode(tone_mp3: &'static [u8], #[case] hin
     );
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
-        (dur_secs - Consts::TEST_MP3_DURATION_SECS).abs() < 2.0,
+        (dur_secs - consts::TEST_MP3_DURATION_SECS).abs() < 2.0,
         "url={url} hint={hint:?}: expected ~{}s immediately, got {dur_secs:.1}s",
-        Consts::TEST_MP3_DURATION_SECS
+        consts::TEST_MP3_DURATION_SECS
     );
 }
 

@@ -30,3 +30,4 @@ pub use playlist::{
     VariantState, VariantStream, parse_master_playlist, parse_media_playlist,
 };
 pub use stream::Hls;
+mod consts;

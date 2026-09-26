@@ -33,17 +33,15 @@ use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 use num_traits::ToPrimitive;
 use tempfile::TempDir;
 
-struct Consts;
-
-impl Consts {
-    const CHANNELS: usize = 2;
-    const SAMPLE_RATE: u32 = 44_100;
-    const ANALYSIS_BUCKETS: usize = 2_000;
-    const ANALYSIS_CHUNK_SECONDS: u64 = 16;
-    const DECODE_READ_LIMIT: usize = 16_384;
-    const STRETCH_FRAMES: usize = 8_192;
-    const CONTROL_OUTPUT_FRAMES: usize = 4_096;
-    const CONTROL_SOURCE_FRAMES: usize = 4_800;
+mod consts {
+    pub(super) const CHANNELS: usize = 2;
+    pub(super) const SAMPLE_RATE: u32 = 44_100;
+    pub(super) const ANALYSIS_BUCKETS: usize = 2_000;
+    pub(super) const ANALYSIS_CHUNK_SECONDS: u64 = 16;
+    pub(super) const DECODE_READ_LIMIT: usize = 16_384;
+    pub(super) const STRETCH_FRAMES: usize = 8_192;
+    pub(super) const CONTROL_OUTPUT_FRAMES: usize = 4_096;
+    pub(super) const CONTROL_SOURCE_FRAMES: usize = 4_800;
 }
 
 struct PrimeFixture {
@@ -68,8 +66,8 @@ fn make_runtime() -> Runtime {
 
 fn make_pcm(frames: usize) -> Vec<f32> {
     let mut state = 0x5eed_1234_u32;
-    let mut pcm = Vec::with_capacity(frames * Consts::CHANNELS);
-    let sample_rate = Consts::SAMPLE_RATE
+    let mut pcm = Vec::with_capacity(frames * consts::CHANNELS);
+    let sample_rate = consts::SAMPLE_RATE
         .to_f32()
         .unwrap_or_else(|| panic!("bench sample rate exceeds f32"));
     let phase_step = 440.0 * std::f32::consts::TAU / sample_rate;
@@ -100,8 +98,8 @@ fn frame_throughput(frames: usize) -> Throughput {
 
 fn make_chunk(pools: &Pools, pcm: &[f32]) -> AudioChunk {
     let spec = AudioSpec::new(
-        u16::try_from(Consts::CHANNELS).unwrap_or_else(|_| panic!("bench channels")),
-        NonZeroU32::new(Consts::SAMPLE_RATE).unwrap_or_else(|| panic!("bench sample rate")),
+        u16::try_from(consts::CHANNELS).unwrap_or_else(|_| panic!("bench channels")),
+        NonZeroU32::new(consts::SAMPLE_RATE).unwrap_or_else(|| panic!("bench sample rate")),
     );
     let mut samples = pools
         .get_with_len::<f32>(pcm.len())
@@ -110,7 +108,7 @@ fn make_chunk(pools: &Pools, pcm: &[f32]) -> AudioChunk {
     AudioChunk::new(
         AudioChunkInfo {
             spec,
-            frames: u32::try_from(pcm.len() / Consts::CHANNELS)
+            frames: u32::try_from(pcm.len() / consts::CHANNELS)
                 .unwrap_or_else(|_| panic!("bench frame count")),
             ..AudioChunkInfo::default()
         },
@@ -122,10 +120,10 @@ fn stretch_config(backend: StretchKind, pools: &Pools) -> ElasticConfig<TestPool
     ElasticConfig::builder()
         .backend(backend)
         .pools(pools.clone())
-        .sample_rate(Consts::SAMPLE_RATE)
-        .channels(Consts::CHANNELS)
-        .max_source_frames(Consts::STRETCH_FRAMES)
-        .max_output_frames(Consts::STRETCH_FRAMES)
+        .sample_rate(consts::SAMPLE_RATE)
+        .channels(consts::CHANNELS)
+        .max_source_frames(consts::STRETCH_FRAMES)
+        .max_output_frames(consts::STRETCH_FRAMES)
         .build()
         .unwrap_or_else(|error| panic!("invalid stretch benchmark config: {error}"))
 }
@@ -140,7 +138,7 @@ fn prime_fixture(engine: &dyn ElasticEngine) -> PrimeFixture {
     let request = ElasticRequest::new(latency.output_frames(), latency.output_frames())
         .unwrap_or_else(|error| panic!("invalid {latency:?} benchmark prime request: {error}"));
     PrimeFixture {
-        discarded_output: vec![0.0; request.output_frames() * Consts::CHANNELS],
+        discarded_output: vec![0.0; request.output_frames() * consts::CHANNELS],
         request,
         source: make_pcm(request.source_frames()),
         source_history: make_pcm(latency.source_frames()),
@@ -196,7 +194,7 @@ fn bench_gapless_trim(c: &mut Criterion) {
                 let mut buf = [0.0_f32; 8_192];
                 let mut total = 0_usize;
                 let mut reached_eof = false;
-                for _ in 0..Consts::DECODE_READ_LIMIT {
+                for _ in 0..consts::DECODE_READ_LIMIT {
                     match audio.read(&mut buf) {
                         Ok(ReadOutcome::Frames { count, .. }) => total += count.get(),
                         Ok(ReadOutcome::Pending { .. }) => continue,
@@ -291,7 +289,7 @@ fn bench_analysis_worker(c: &mut Criterion) {
     let builder = AnalyzerBuilder::<PlaybackResamplerBackend, TestPools>::new(pools.clone())
         .with_beat_config(BeatAnalysisConfig::default())
         .with_beat()
-        .with_waveform(Consts::ANALYSIS_BUCKETS);
+        .with_waveform(consts::ANALYSIS_BUCKETS);
     let analysis_worker = AnalysisWorker::new(AnalysisWorkerConfig::for_builder(builder).build());
     let token = AnalysisToken::from("perf-audit-track");
 
@@ -330,7 +328,7 @@ fn bench_analysis_worker(c: &mut Criterion) {
     group.finish();
 
     let chunk_frames = NonZeroU64::new(
-        u64::from(warm.analysis().source_sample_rate().get()) * Consts::ANALYSIS_CHUNK_SECONDS,
+        u64::from(warm.analysis().source_sample_rate().get()) * consts::ANALYSIS_CHUNK_SECONDS,
     )
     .unwrap_or_else(|| panic!("analysis checkpoint chunk size is zero"));
     let file_spec = AnalysisFileSpec::for_analysis(warm.analysis(), chunk_frames)
@@ -383,16 +381,16 @@ fn bench_stretch_prepare(c: &mut Criterion) {
 
 fn bench_stretch_backends(c: &mut Criterion) {
     let pools = pools();
-    let steady_request = ElasticRequest::new(Consts::STRETCH_FRAMES, Consts::STRETCH_FRAMES)
+    let steady_request = ElasticRequest::new(consts::STRETCH_FRAMES, consts::STRETCH_FRAMES)
         .unwrap_or_else(|error| panic!("invalid steady stretch request: {error}"));
     let control_requests = [
-        ElasticRequest::new(Consts::CONTROL_OUTPUT_FRAMES, Consts::CONTROL_OUTPUT_FRAMES)
+        ElasticRequest::new(consts::CONTROL_OUTPUT_FRAMES, consts::CONTROL_OUTPUT_FRAMES)
             .unwrap_or_else(|error| panic!("invalid unity control request: {error}")),
-        ElasticRequest::new(Consts::CONTROL_SOURCE_FRAMES, Consts::CONTROL_OUTPUT_FRAMES)
+        ElasticRequest::new(consts::CONTROL_SOURCE_FRAMES, consts::CONTROL_OUTPUT_FRAMES)
             .unwrap_or_else(|error| panic!("invalid changed control request: {error}")),
     ];
     let steady_source = make_pcm(steady_request.source_frames());
-    let control_source = make_pcm(Consts::CONTROL_SOURCE_FRAMES);
+    let control_source = make_pcm(consts::CONTROL_SOURCE_FRAMES);
 
     let mut group = c.benchmark_group("audit_stretch");
     group.sampling_mode(SamplingMode::Flat);
@@ -424,7 +422,7 @@ fn bench_stretch_backends(c: &mut Criterion) {
         let mut steady_target = stretch_engine(backend, &pools);
         let mut steady_prime = prime_fixture(steady_target.as_ref());
         prime_engine(steady_target.as_mut(), &mut steady_prime);
-        let mut steady_output = vec![0.0; steady_request.output_frames() * Consts::CHANNELS];
+        let mut steady_output = vec![0.0; steady_request.output_frames() * consts::CHANNELS];
         group.throughput(frame_throughput(steady_request.output_frames()));
         group.bench_function(BenchmarkId::new("steady_process", backend), |b| {
             b.iter(|| {
@@ -444,10 +442,10 @@ fn bench_stretch_backends(c: &mut Criterion) {
         let mut control_target = stretch_engine(backend, &pools);
         let mut control_prime = prime_fixture(control_target.as_ref());
         prime_engine(control_target.as_mut(), &mut control_prime);
-        let mut control_output = vec![0.0; Consts::CONTROL_OUTPUT_FRAMES * Consts::CHANNELS];
+        let mut control_output = vec![0.0; consts::CONTROL_OUTPUT_FRAMES * consts::CHANNELS];
         let mut control_index = 0_usize;
         let pitch_scales = [1.0, 1.122_462_048_309_373];
-        group.throughput(frame_throughput(Consts::CONTROL_OUTPUT_FRAMES));
+        group.throughput(frame_throughput(consts::CONTROL_OUTPUT_FRAMES));
         group.bench_function(BenchmarkId::new("live_control_change", backend), |b| {
             b.iter(|| {
                 control_index ^= 1;
@@ -460,7 +458,7 @@ fn bench_stretch_backends(c: &mut Criterion) {
                 control_target
                     .process(
                         request,
-                        black_box(&control_source[..request.source_frames() * Consts::CHANNELS]),
+                        black_box(&control_source[..request.source_frames() * consts::CHANNELS]),
                         black_box(&mut control_output),
                     )
                     .unwrap_or_else(|error| {
@@ -474,17 +472,17 @@ fn bench_stretch_backends(c: &mut Criterion) {
 }
 
 fn bench_stretch_process(c: &mut Criterion) {
-    let pcm = make_pcm(Consts::STRETCH_FRAMES);
+    let pcm = make_pcm(consts::STRETCH_FRAMES);
     let pools = pools();
     let spec = AudioSpec::new(
-        u16::try_from(Consts::CHANNELS).unwrap_or_else(|_| panic!("bench channels")),
-        NonZeroU32::new(Consts::SAMPLE_RATE).unwrap_or_else(|| panic!("bench sample rate")),
+        u16::try_from(consts::CHANNELS).unwrap_or_else(|_| panic!("bench channels")),
+        NonZeroU32::new(consts::SAMPLE_RATE).unwrap_or_else(|| panic!("bench sample rate")),
     );
 
     let mut group = c.benchmark_group("audit_stretch_process");
     group.sample_size(20);
     group.measurement_time(Duration::from_secs(4));
-    group.throughput(frame_throughput(Consts::STRETCH_FRAMES));
+    group.throughput(frame_throughput(consts::STRETCH_FRAMES));
 
     for &backend in StretchKind::all() {
         let controls = StretchControls::new(0.8);

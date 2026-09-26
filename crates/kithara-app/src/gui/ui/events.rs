@@ -8,14 +8,14 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     cache::{DeckLayout, ViewCache, WindowEdge},
-    scope::{MICRO_DECK, deck_index, eq_band},
+    scope::{consts::MICRO_DECK, deck_index, eq_band},
 };
 use crate::{
     deck::{DeckId, EqMode, TempoPercent},
     engine::MixCmd,
     gui::{
         app::Kithara,
-        deck::{DeckMsg, TEMPO_STEP},
+        deck::{DeckMsg, consts::TEMPO_STEP},
         message::Message,
     },
 };

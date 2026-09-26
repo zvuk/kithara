@@ -1,29 +1,27 @@
 use kithara_test_macros as kithara;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
-struct Consts;
-
-impl Consts {
-    const CHANNELS: u16 = 2;
-    const FRAMES: usize = 4;
-    const POISON: [[f32; Self::FRAMES]; 2] = [
+mod consts {
+    pub(super) const CHANNELS: u16 = 2;
+    pub(super) const FRAMES: usize = 4;
+    pub(super) const POISON: [[f32; FRAMES]; 2] = [
         [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1e-40],
         [0.25, -0.25, 0.5, -0.5],
     ];
-    const SOURCE_RATE: u32 = 44_100;
-    const TEST_BURST_SECONDS: f32 = 0.01;
-    const TEST_DECAY: f32 = 400.0;
-    const WARP_BEATS: usize = 8;
-    const WARP_CLICK_OFFSET: usize = 8_192;
-    const WARP_NOMINAL_FRAMES: usize = 176_400;
-    const WARP_NOMINAL_PERIOD: usize = 22_050;
-    const WAV_BITS_PER_SAMPLE: u16 = 16;
-    const WAV_BYTES_PER_SAMPLE: u16 = Self::WAV_BITS_PER_SAMPLE / 8;
-    const WAV_DATA_OFFSET: u32 = 36;
-    const WAV_FLOAT_FORMAT: u16 = 3;
-    const WAV_FMT_CHUNK_SIZE: u32 = 16;
-    const WAV_HEADER_SIZE: usize = 44;
-    const WAV_PCM_FORMAT: u16 = 1;
+    pub(super) const SOURCE_RATE: u32 = 44_100;
+    pub(super) const TEST_BURST_SECONDS: f32 = 0.01;
+    pub(super) const TEST_DECAY: f32 = 400.0;
+    pub(super) const WARP_BEATS: usize = 8;
+    pub(super) const WARP_CLICK_OFFSET: usize = 8_192;
+    pub(super) const WARP_NOMINAL_FRAMES: usize = 176_400;
+    pub(super) const WARP_NOMINAL_PERIOD: usize = 22_050;
+    pub(super) const WAV_BITS_PER_SAMPLE: u16 = 16;
+    pub(super) const WAV_BYTES_PER_SAMPLE: u16 = WAV_BITS_PER_SAMPLE / 8;
+    pub(super) const WAV_DATA_OFFSET: u32 = 36;
+    pub(super) const WAV_FLOAT_FORMAT: u16 = 3;
+    pub(super) const WAV_FMT_CHUNK_SIZE: u32 = 16;
+    pub(super) const WAV_HEADER_SIZE: usize = 44;
+    pub(super) const WAV_PCM_FORMAT: u16 = 1;
 }
 
 #[kithara::asset(ext = "f32le", content_type = "application/octet-stream", embed)]
@@ -175,14 +173,14 @@ fn planar_signal(channels: usize, frames: usize, sample_rate: u32) -> Vec<f32> {
 #[case::seek(4096)]
 fn resampled_wav(frames: usize) -> Vec<u8> {
     let data_size = frames
-        .saturating_mul(usize::from(Consts::CHANNELS))
-        .saturating_mul(usize::from(Consts::WAV_BYTES_PER_SAMPLE));
+        .saturating_mul(usize::from(consts::CHANNELS))
+        .saturating_mul(usize::from(consts::WAV_BYTES_PER_SAMPLE));
     let mut wav = wav_header(
-        Consts::WAV_PCM_FORMAT,
-        Consts::WAV_BITS_PER_SAMPLE,
+        consts::WAV_PCM_FORMAT,
+        consts::WAV_BITS_PER_SAMPLE,
         data_size,
     );
-    wav.resize(Consts::WAV_HEADER_SIZE + data_size, 0);
+    wav.resize(consts::WAV_HEADER_SIZE + data_size, 0);
     wav
 }
 
@@ -192,12 +190,12 @@ fn poisoned_float_wav() -> Vec<u8> {
     const BYTES_PER_SAMPLE: u16 = 4;
     const BITS_PER_SAMPLE: u16 = BYTES_PER_SAMPLE * 8;
 
-    let data_size = Consts::FRAMES
-        .saturating_mul(usize::from(Consts::CHANNELS))
+    let data_size = consts::FRAMES
+        .saturating_mul(usize::from(consts::CHANNELS))
         .saturating_mul(usize::from(BYTES_PER_SAMPLE));
-    let mut wav = wav_header(Consts::WAV_FLOAT_FORMAT, BITS_PER_SAMPLE, data_size);
-    for frame in 0..Consts::FRAMES {
-        for channel in Consts::POISON {
+    let mut wav = wav_header(consts::WAV_FLOAT_FORMAT, BITS_PER_SAMPLE, data_size);
+    for frame in 0..consts::FRAMES {
+        for channel in consts::POISON {
             wav.extend_from_slice(&channel[frame].to_le_bytes());
         }
     }
@@ -207,20 +205,20 @@ fn poisoned_float_wav() -> Vec<u8> {
 fn wav_header(format: u16, bits_per_sample: u16, data_size: usize) -> Vec<u8> {
     let bytes_per_sample = bits_per_sample / 8;
     let data_size_u32 = u32::try_from(data_size).expect("test WAV data size fits u32");
-    let mut wav = Vec::with_capacity(Consts::WAV_HEADER_SIZE + data_size);
+    let mut wav = Vec::with_capacity(consts::WAV_HEADER_SIZE + data_size);
     wav.extend_from_slice(b"RIFF");
-    wav.extend_from_slice(&(Consts::WAV_DATA_OFFSET + data_size_u32).to_le_bytes());
+    wav.extend_from_slice(&(consts::WAV_DATA_OFFSET + data_size_u32).to_le_bytes());
     wav.extend_from_slice(b"WAVE");
     wav.extend_from_slice(b"fmt ");
-    wav.extend_from_slice(&Consts::WAV_FMT_CHUNK_SIZE.to_le_bytes());
+    wav.extend_from_slice(&consts::WAV_FMT_CHUNK_SIZE.to_le_bytes());
     wav.extend_from_slice(&format.to_le_bytes());
-    wav.extend_from_slice(&Consts::CHANNELS.to_le_bytes());
-    wav.extend_from_slice(&Consts::SOURCE_RATE.to_le_bytes());
+    wav.extend_from_slice(&consts::CHANNELS.to_le_bytes());
+    wav.extend_from_slice(&consts::SOURCE_RATE.to_le_bytes());
     wav.extend_from_slice(
-        &(Consts::SOURCE_RATE * u32::from(Consts::CHANNELS) * u32::from(bytes_per_sample))
+        &(consts::SOURCE_RATE * u32::from(consts::CHANNELS) * u32::from(bytes_per_sample))
             .to_le_bytes(),
     );
-    wav.extend_from_slice(&(Consts::CHANNELS * bytes_per_sample).to_le_bytes());
+    wav.extend_from_slice(&(consts::CHANNELS * bytes_per_sample).to_le_bytes());
     wav.extend_from_slice(&bits_per_sample.to_le_bytes());
     wav.extend_from_slice(b"data");
     wav.extend_from_slice(&data_size_u32.to_le_bytes());
@@ -238,14 +236,14 @@ fn click_samples(seconds: f32) -> usize {
 fn click_track(seconds: f32, period_seconds: f32) -> Vec<f32> {
     let mut pcm = click_silence(seconds);
     let step = click_samples(period_seconds);
-    let burst = click_samples(Consts::TEST_BURST_SECONDS);
+    let burst = click_samples(consts::TEST_BURST_SECONDS);
     for at in (0..pcm.len()).step_by(step.max(1)) {
         for (n, sample) in pcm[at..].iter_mut().take(burst).enumerate() {
             let t = n
                 .to_f32()
                 .expect("click burst index below 221 fits f32 exactly")
                 / 22_050.0;
-            *sample = (-Consts::TEST_DECAY * t).exp();
+            *sample = (-consts::TEST_DECAY * t).exp();
         }
     }
     pcm
@@ -317,11 +315,11 @@ fn warp_clicks() -> Vec<f32> {
 
 /// Eight clicks one nominal period apart: the grid the warp core declares.
 fn warp_nominal_clicks() -> Vec<f32> {
-    let mut out = warp_silence(Consts::WARP_NOMINAL_FRAMES);
-    for beat in 0..Consts::WARP_BEATS {
+    let mut out = warp_silence(consts::WARP_NOMINAL_FRAMES);
+    for beat in 0..consts::WARP_BEATS {
         warp_click(
             &mut out,
-            beat * Consts::WARP_NOMINAL_PERIOD + Consts::WARP_CLICK_OFFSET,
+            beat * consts::WARP_NOMINAL_PERIOD + consts::WARP_CLICK_OFFSET,
         );
     }
     out

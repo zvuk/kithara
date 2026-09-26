@@ -13,15 +13,16 @@ use crate::{
     hls_hydrate::{KeyPolicy, Options, hydrate},
 };
 
-enum Remote {}
+mod consts {
+    use super::Duration;
 
-impl Remote {
-    const AUTH_ENV: &str = "KITHARA_DRM_PROD_AUTH_TOKEN";
-    const CIPHER_ENV: &str = "KITHARA_DRM_PROD_KEY";
-    const MASTER: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/172833120_3/master.m3u8";
-    const SEED: &str = "aaaaaaaa";
-    const SP_ZV_ENV: &str = "KITHARA_DRM_PROD_SP_ZV_TOKEN";
-    const TIMEOUT: Duration = Duration::from_secs(20);
+    pub(super) const AUTH_ENV: &str = "KITHARA_DRM_PROD_AUTH_TOKEN";
+    pub(super) const CIPHER_ENV: &str = "KITHARA_DRM_PROD_KEY";
+    pub(super) const MASTER: &str =
+        "https://cdn-hls-slicer.zvuk.com/drm/track/172833120_3/master.m3u8";
+    pub(super) const SEED: &str = "aaaaaaaa";
+    pub(super) const SP_ZV_ENV: &str = "KITHARA_DRM_PROD_SP_ZV_TOKEN";
+    pub(super) const TIMEOUT: Duration = Duration::from_secs(20);
 }
 
 #[derive(Debug, Error)]
@@ -65,25 +66,25 @@ fn header(
 )]
 #[case::gapless_172833120_3()]
 fn remote_hls_bundle(context: &BuildContext<'_>) -> Result<Vec<u8>, RemoteError> {
-    let cipher_key = required(Remote::CIPHER_ENV)?;
+    let cipher_key = required(consts::CIPHER_ENV)?;
     let mut headers = HeaderMap::new();
-    header(&mut headers, "x-auth-token", Remote::AUTH_ENV)?;
-    header(&mut headers, "x-sp-zv", Remote::SP_ZV_ENV)?;
+    header(&mut headers, "x-auth-token", consts::AUTH_ENV)?;
+    header(&mut headers, "x-sp-zv", consts::SP_ZV_ENV)?;
     let mut key_headers = headers.clone();
-    key_headers.insert("x-encrypted-key", HeaderValue::from_static(Remote::SEED));
-    let cipher = UniqueBinaryCipher::new(&format!("{cipher_key}{}", Remote::SEED));
+    key_headers.insert("x-encrypted-key", HeaderValue::from_static(consts::SEED));
+    let cipher = UniqueBinaryCipher::new(&format!("{cipher_key}{}", consts::SEED));
     let processor =
         Box::new(move |bytes: Vec<u8>| Ok(cipher.decrypt(&Bytes::from(bytes)).to_vec()));
 
-    let master = Url::parse(Remote::MASTER)?;
+    let master = Url::parse(consts::MASTER)?;
     let options = Options {
         headers,
         key: Some(KeyPolicy {
             processor,
             headers: key_headers,
         }),
-        refresh: &[Remote::AUTH_ENV, Remote::SP_ZV_ENV],
-        timeout: Remote::TIMEOUT,
+        refresh: &[consts::AUTH_ENV, consts::SP_ZV_ENV],
+        timeout: consts::TIMEOUT,
     };
     Ok(hydrate(context, &master, &options)?)
 }

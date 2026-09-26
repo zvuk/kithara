@@ -8,9 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use super::manifest::{Profile, Tool};
-
-const CONFIG_REL: &str = ".config/quality-lab.toml";
-const SCHEMA_VERSION: u32 = 1;
+use crate::consts;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -79,7 +77,7 @@ pub(super) struct ToolConfig {
 
 impl QualityLabConfig {
     pub(super) fn load(workspace_root: &Path) -> Result<Self> {
-        let path = workspace_root.join(CONFIG_REL);
+        let path = workspace_root.join(consts::QUALITY_LAB_CONFIG_REL);
         let text = fs::read_to_string(&path)
             .with_context(|| format!("read Quality Lab config: {}", path.display()))?;
         let config: Self = toml::from_str(&text)
@@ -89,10 +87,11 @@ impl QualityLabConfig {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.schema_version != SCHEMA_VERSION {
+        if self.schema_version != consts::BASELINE_SCHEMA_VERSION {
             bail!(
                 "unsupported Quality Lab config schema {}; expected {SCHEMA_VERSION}",
-                self.schema_version
+                self.schema_version,
+                SCHEMA_VERSION = consts::BASELINE_SCHEMA_VERSION
             );
         }
         if self.output_dir.trim().is_empty() {
@@ -141,48 +140,15 @@ mod tests {
 
     use super::*;
 
-    const VALID_CONFIG: &str = r#"
-schema_version = 1
-output_dir = "target/quality-lab"
-
-[profiles.coverage]
-timeout_secs = 1800
-tools = ["cargo-crap"]
-
-[profiles.scheduled]
-timeout_secs = 900
-tools = ["cha", "rustqual", "cargo-dupes"]
-
-[profiles.manual]
-timeout_secs = 1800
-tools = ["cha", "rustqual", "cargo-dupes", "pmat"]
-
-[tools.cargo-crap]
-version = "0.3.1"
-timeout_secs = 300
-
-[tools.cha]
-version = "1.20.0"
-timeout_secs = 300
-
-[tools.rustqual]
-version = "1.8.1"
-timeout_secs = 300
-
-[tools.cargo-dupes]
-version = "0.2.1"
-timeout_secs = 300
-
-[tools.pmat]
-version = "3.24.2"
-timeout_secs = 1800
-"#;
-
     #[test]
     fn loads_valid_config() {
         let temp = tempdir().expect("tempdir");
         fs::create_dir(temp.path().join(".config")).expect("config dir");
-        fs::write(temp.path().join(CONFIG_REL), VALID_CONFIG).expect("config");
+        fs::write(
+            temp.path().join(consts::QUALITY_LAB_CONFIG_REL),
+            consts::VALID_CONFIG,
+        )
+        .expect("config");
 
         let config = QualityLabConfig::load(temp.path()).expect("valid config");
 
@@ -195,8 +161,9 @@ timeout_secs = 1800
         let temp = tempdir().expect("tempdir");
         fs::create_dir(temp.path().join(".config")).expect("config dir");
         fs::write(
-            temp.path().join(CONFIG_REL),
-            VALID_CONFIG.replace("schema_version = 1", "schema_version = 1\nmystery = true"),
+            temp.path().join(consts::QUALITY_LAB_CONFIG_REL),
+            consts::VALID_CONFIG
+                .replace("schema_version = 1", "schema_version = 1\nmystery = true"),
         )
         .expect("config");
 
@@ -210,8 +177,8 @@ timeout_secs = 1800
         let temp = tempdir().expect("tempdir");
         fs::create_dir(temp.path().join(".config")).expect("config dir");
         fs::write(
-            temp.path().join(CONFIG_REL),
-            VALID_CONFIG.replace(
+            temp.path().join(consts::QUALITY_LAB_CONFIG_REL),
+            consts::VALID_CONFIG.replace(
                 "tools = [\"cargo-crap\"]",
                 "tools = [\"cargo-crap\", \"cha\"]",
             ),

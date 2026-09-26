@@ -3,41 +3,10 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use super::profile::{LinuxHost, LinuxRunner, RunnerFlavor};
-use crate::ci::{LINUX_LINKER_ENV, SCCACHE_IDLE_TIMEOUT, config::CiPins, image::floating_tag};
-
-/// Where a job builds and what it reuses, before the linker entries are added.
-const CACHE_ENVIRONMENT: [&str; 7] = [
-    // Encoded audio fixtures. Their default home is the container's own temp
-    // directory, and a container serves one job and is thrown away — so every
-    // job re-encoded every fixture it touched, and a test that builds one
-    // inside its own deadline lost the race under load. Entries are
-    // content-addressed and namespaced by a build fingerprint, so sharing them
-    // across runners cannot serve one build's bytes to another.
-    "KITHARA_FIXTURE_CACHE=/cache/fixtures",
-    // Every runner mounts this one root, and a lane claims the directory named
-    // after it underneath: a lane that lands on a different runner than last
-    // time then still finds its own warm build. A runner-owned directory made
-    // that a full rebuild, which is most of what a lane spent its time on.
-    "KITHARA_CI_TARGET_ROOT=/cache/lanes",
-    // What a job builds into when it claims no lane directory. It stays one
-    // directory per runner, on a path of its own, so a checkout that predates
-    // the lane keying keeps exactly the cache it reused before instead of
-    // meeting every other job in one cargo lock.
-    "CARGO_TARGET_DIR=/cache/target",
-    "RUSTC_WRAPPER=sccache",
-    // Without this the wrapper is inert: sccache declines to cache an
-    // incremental compilation, and cargo leaves incremental on by default.
-    // Setting the wrapper and not this is how a cache gets installed, enabled,
-    // and still never hit.
-    "CARGO_INCREMENTAL=0",
-    // GitHub checks each job out under this stable container path. Without a
-    // base directory sccache hashes the host-specific checkout path, so two
-    // otherwise identical runners cannot reuse Rust objects.
-    "SCCACHE_BASEDIRS=/runner/_work/kithara/kithara",
-    // Well under the volume it lives on, and sccache evicts by least use
-    // rather than growing until the disk decides for it.
-    "SCCACHE_CACHE_SIZE=100G",
-];
+use crate::{
+    ci::{config::CiPins, image::floating_tag},
+    consts,
+};
 
 /// What one runner's container is, independent of who starts it.
 ///
@@ -147,22 +116,25 @@ impl Container<'_> {
     /// `sccache` keys on the inputs of a compilation instead, which is what
     /// makes sharing it across runners sound rather than merely concurrent.
     ///
-    /// The linker entries come from [`LINUX_LINKER_ENV`], which the GitLab lane
+    /// The linker entries come from [`LINUX_LINKER_ENV`](consts::LINUX_LINKER_ENV), which the GitLab lane
     /// executor reads too: one statement of what a Linux job links with rather
     /// than one per way of starting a job.
     pub(super) fn environment(runner: &LinuxRunner) -> Vec<String> {
-        let mut environment: Vec<String> = CACHE_ENVIRONMENT
+        let mut environment: Vec<String> = consts::CACHE_ENVIRONMENT
             .iter()
             .map(|entry| (*entry).to_owned())
             .collect();
-        environment.push(format!("SCCACHE_IDLE_TIMEOUT={SCCACHE_IDLE_TIMEOUT}"));
+        environment.push(format!(
+            "SCCACHE_IDLE_TIMEOUT={SCCACHE_IDLE_TIMEOUT}",
+            SCCACHE_IDLE_TIMEOUT = consts::SCCACHE_IDLE_TIMEOUT
+        ));
         // The S3 backend is shared, but each runner needs its own daemon
         // endpoint. An explicit socket lets the lane start that daemon before
         // Cargo's parallel compilers can race to start it.
         environment.push(format!("SCCACHE_DIR=/cache/sccache/{}", runner.name));
         environment.push(format!("SCCACHE_SERVER_UDS=/tmp/{}.sock", runner.name));
         environment.extend(
-            LINUX_LINKER_ENV
+            consts::LINUX_LINKER_ENV
                 .iter()
                 .map(|(name, value)| format!("{name}={value}")),
         );
@@ -208,7 +180,7 @@ mod tests {
         let runner = host.runner("kithara-ci-octocat").expect("runner");
         let environment = Container::environment(runner);
 
-        for (name, value) in LINUX_LINKER_ENV {
+        for (name, value) in consts::LINUX_LINKER_ENV {
             assert!(
                 environment.contains(&format!("{name}={value}")),
                 "{name} is missing from {environment:?}"
@@ -221,9 +193,9 @@ mod tests {
         let host = super::super::profile::tests::host_fixture();
         let runner = host.runner("kithara-ci-octocat").expect("runner");
 
-        assert!(
-            Container::environment(runner)
-                .contains(&format!("SCCACHE_IDLE_TIMEOUT={SCCACHE_IDLE_TIMEOUT}"))
-        );
+        assert!(Container::environment(runner).contains(&format!(
+            "SCCACHE_IDLE_TIMEOUT={SCCACHE_IDLE_TIMEOUT}",
+            SCCACHE_IDLE_TIMEOUT = consts::SCCACHE_IDLE_TIMEOUT
+        )));
     }
 }

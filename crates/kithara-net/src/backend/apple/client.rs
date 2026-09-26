@@ -10,7 +10,7 @@ use url::Url;
 
 use super::{
     request::{AppleRequest, Method},
-    response::{AppleDataResponse, HTTP_PARTIAL_CONTENT},
+    response::{AppleDataResponse, consts::HTTP_PARTIAL_CONTENT},
     session::AppleSession,
 };
 use crate::{

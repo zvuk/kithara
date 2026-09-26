@@ -98,9 +98,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::RenderContext;
-    use crate::SessionBeat;
-
-    const BLOCK_FRAMES: usize = 480;
+    use crate::{SessionBeat, consts};
 
     fn beat(value: f64) -> SessionBeat {
         SessionBeat::new(value).expect("invariant: fixture beat is finite")
@@ -112,7 +110,7 @@ mod tests {
 
     fn output(transport_revision: Option<TransportRevision>) -> OutputContext {
         OutputContext::new(
-            SessionFrame::new(0)..SessionFrame::new(BLOCK_FRAMES as i64),
+            SessionFrame::new(0)..SessionFrame::new(consts::BLOCK_FRAMES as i64),
             sample_rate(),
             SessionEpoch::new(7),
             transport_revision,
@@ -147,7 +145,7 @@ mod tests {
     #[kithara::test]
     fn derives_exact_beat_subrange() {
         let second_half = context()
-            .for_output_range(BLOCK_FRAMES / 2..BLOCK_FRAMES)
+            .for_output_range(consts::BLOCK_FRAMES / 2..consts::BLOCK_FRAMES)
             .expect("invariant: second half is inside the block");
 
         assert_eq!(
@@ -161,7 +159,7 @@ mod tests {
     fn rejects_output_range_outside_the_block() {
         assert!(
             context()
-                .for_output_range(BLOCK_FRAMES..BLOCK_FRAMES + 1)
+                .for_output_range(consts::BLOCK_FRAMES..consts::BLOCK_FRAMES + 1)
                 .is_none()
         );
     }
@@ -175,7 +173,7 @@ mod tests {
             .expect("fixture context is valid");
         for split in [1, 17, 128, 240, 479] {
             let suffix = context
-                .for_output_range(split..BLOCK_FRAMES)
+                .for_output_range(split..consts::BLOCK_FRAMES)
                 .expect("valid suffix");
             let endpoint = SessionFrame::new(i64::try_from(split).expect("small frame"));
             assert_eq!(

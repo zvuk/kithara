@@ -27,7 +27,10 @@ use masonry::vello::{
 };
 use num_traits::cast::AsPrimitive as _;
 
-use crate::{fixture::Consts, pages::Harness};
+use crate::{
+    fixture::consts::{HEIGHT, WIDTH},
+    pages::consts::IMMEDIATE_FORMAT,
+};
 
 /// A wgpu device with no window, plus iced's engine on it. Building one per page
 /// would measure device creation once per page.
@@ -51,7 +54,7 @@ impl ImmediateGpu {
             &adapter,
             device.clone(),
             queue.clone(),
-            Harness::IMMEDIATE_FORMAT,
+            IMMEDIATE_FORMAT,
             None,
             Shell::headless(),
         );
@@ -73,7 +76,7 @@ impl ImmediateGpu {
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: Harness::IMMEDIATE_FORMAT,
+            format: IMMEDIATE_FORMAT,
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
             view_formats: &[],
         })
@@ -239,11 +242,11 @@ fn drain_vello(device: &vello_wgpu::Device) {
 /// The page every run is laid out and rasterised at: the gallery's own window
 /// size at 1x, so a page measured here is the page the application shows.
 pub(crate) fn width() -> u32 {
-    Consts::WIDTH.as_()
+    WIDTH.as_()
 }
 
 pub(crate) fn height() -> u32 {
-    Consts::HEIGHT.as_()
+    HEIGHT.as_()
 }
 
 fn unpadded_row() -> u32 {

@@ -17,12 +17,10 @@ use kithara_test_fixtures::{assets::sine_wav_a440_full_scale_2s, fixtures::tone_
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use num_traits::AsPrimitive;
 
-struct Consts;
-
-impl Consts {
-    const WAV_CHANNELS: u16 = 2;
-    const WAV_FRAMES: usize = Self::WAV_SAMPLE_RATE as usize * 2;
-    const WAV_SAMPLE_RATE: u32 = 44_100;
+mod consts {
+    pub(super) const WAV_CHANNELS: u16 = 2;
+    pub(super) const WAV_FRAMES: usize = WAV_SAMPLE_RATE as usize * 2;
+    pub(super) const WAV_SAMPLE_RATE: u32 = 44_100;
 }
 
 /// Backend selector for cross-decoder comparison.
@@ -238,12 +236,12 @@ fn wav_pcm_round_trip_matches_signal_across_backends(protocol_wav: &'static [u8]
         let spec = dec.spec();
         assert_eq!(
             spec.sample_rate.get(),
-            Consts::WAV_SAMPLE_RATE,
+            consts::WAV_SAMPLE_RATE,
             "{backend:?}: sample rate mismatch"
         );
         assert_eq!(
             spec.channels,
-            Consts::WAV_CHANNELS,
+            consts::WAV_CHANNELS,
             "{backend:?}: channel count mismatch"
         );
 
@@ -251,9 +249,9 @@ fn wav_pcm_round_trip_matches_signal_across_backends(protocol_wav: &'static [u8]
         let channels = usize::from(spec.channels).max(1);
         let frames = samples.len() / channels;
 
-        let tol = Consts::WAV_FRAMES / 200;
-        let diff = Consts::WAV_FRAMES.abs_diff(frames);
-        let expected = Consts::WAV_FRAMES;
+        let tol = consts::WAV_FRAMES / 200;
+        let diff = consts::WAV_FRAMES.abs_diff(frames);
+        let expected = consts::WAV_FRAMES;
         assert!(
             diff <= tol,
             "{backend:?}: decoded {frames} frames, expected ~{expected} (tol {tol})"

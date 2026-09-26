@@ -21,7 +21,9 @@ use super::{
 };
 use crate::common::project::ArchitectureRenderBudgets;
 
-const SCHEMA_VERSION: u32 = 5;
+mod consts {
+    pub(super) const SCHEMA_VERSION: u32 = 5;
+}
 
 #[derive(Debug)]
 pub(crate) struct ArtifactSet {
@@ -122,7 +124,7 @@ pub(crate) fn write(request: &ArtifactRequest<'_>) -> Result<ArtifactSet> {
     write_text(&output.join("architecture.md"), &document)?;
 
     let snapshot = GraphSnapshot {
-        schema_version: SCHEMA_VERSION,
+        schema_version: consts::SCHEMA_VERSION,
         nodes: request.graph.nodes().collect(),
         edges: request.graph.edges().collect(),
     };
@@ -148,7 +150,7 @@ pub(crate) fn write(request: &ArtifactRequest<'_>) -> Result<ArtifactSet> {
     }
     let manifest = ArtifactManifest {
         files,
-        schema_version: SCHEMA_VERSION,
+        schema_version: consts::SCHEMA_VERSION,
         revision: request.revision,
         status: overall_status(request.semantic, request.runtime),
         view: request.args.view.as_str(),

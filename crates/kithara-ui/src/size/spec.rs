@@ -9,6 +9,13 @@ use crate::{
     skin::SkinDoc,
 };
 
+pub(crate) mod consts {
+    use super::{Dim, SizeSpec, Snapshot, Unanswered};
+
+    pub(crate) const DEFAULTS: &dyn Snapshot = &Unanswered;
+    pub(crate) const NOTHING: SizeSpec = SizeSpec::new(Dim::Fixed(0.0), Dim::Fixed(0.0));
+}
+
 /// One-axis size rule. `Fill` takes available space, `Shrink` takes exactly what
 /// the content measures; neither has an intrinsic size the document can compose.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
@@ -167,8 +174,6 @@ impl Snapshot for Unanswered {
         None
     }
 }
-
-pub(crate) const DEFAULTS: &dyn Snapshot = &Unanswered;
 
 pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
     match node {
@@ -407,7 +412,7 @@ pub(crate) fn compute_size(
 #[must_use]
 pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
     match node {
-        ExpandedNode::Control { .. } => needs(compute_size(node, skin, DEFAULTS)),
+        ExpandedNode::Control { .. } => needs(compute_size(node, skin, consts::DEFAULTS)),
         ExpandedNode::Scroll { size, child, .. } => {
             size.map_or_else(|| min_size(child, skin), needs)
         }
@@ -422,7 +427,7 @@ pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
             *size,
             children
                 .first()
-                .map_or(NOTHING, |first| min_size(first, skin)),
+                .map_or(consts::NOTHING, |first| min_size(first, skin)),
         ),
         ExpandedNode::Slot { size, children, .. } => at_least(
             *size,
@@ -434,14 +439,12 @@ pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
     }
 }
 
-pub(crate) const NOTHING: SizeSpec = SizeSpec::new(Dim::Fixed(0.0), Dim::Fixed(0.0));
-
 pub(crate) fn settled(
     node: &ExpandedNode,
     measure: Option<MeasureAxis>,
     skin: &SkinDoc,
 ) -> SizeSpec {
-    Cells::of(node, skin).map_or(NOTHING, |cells| cells.settled(measure))
+    Cells::of(node, skin).map_or(consts::NOTHING, |cells| cells.settled(measure))
 }
 
 #[must_use]

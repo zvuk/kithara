@@ -25,11 +25,9 @@ use crate::{
     server::{self, Origin},
 };
 
-struct Consts;
-
-impl Consts {
-    const CHANNELS: u16 = 2;
-    const STEREO: usize = 2;
+mod consts {
+    pub(super) const CHANNELS: u16 = 2;
+    pub(super) const STEREO: usize = 2;
 }
 
 #[derive(Clone, Copy)]
@@ -143,19 +141,19 @@ impl LiveOutput for BroadcastOutput {
         let writable = frames
             .min(left.len())
             .min(right.len())
-            .min(self.pcm.vacant_len() / Consts::STEREO);
+            .min(self.pcm.vacant_len() / consts::STEREO);
         let pushed = self.pcm.push_iter(
             left[..writable]
                 .iter()
                 .zip(&right[..writable])
                 .flat_map(|(&left, &right)| [left, right]),
         );
-        let requested = frames.saturating_mul(Consts::STEREO);
+        let requested = frames.saturating_mul(consts::STEREO);
         let dropped = requested.saturating_sub(pushed);
         if dropped > 0 {
             self.report_drop(dropped);
         }
-        let pushed_frames = pushed / Consts::STEREO;
+        let pushed_frames = pushed / consts::STEREO;
         self.written_frames = self
             .written_frames
             .saturating_add(u64::try_from(pushed_frames).unwrap_or(u64::MAX));
@@ -189,7 +187,7 @@ impl Broadcast {
         S: HasPool<f32> + Send + Sync + 'static,
     {
         config.validate()?;
-        if config.channels != Consts::CHANNELS {
+        if config.channels != consts::CHANNELS {
             return Err(BroadcastError::LiveChannelCount {
                 channels: config.channels,
             });
@@ -197,12 +195,12 @@ impl Broadcast {
         let buffer_samples = config
             .buffer_frames
             .get()
-            .checked_mul(Consts::STEREO)
+            .checked_mul(consts::STEREO)
             .ok_or(BroadcastError::CapacityOverflow)?;
         let tick_samples = config
             .tick_frames
             .get()
-            .checked_mul(Consts::STEREO)
+            .checked_mul(consts::STEREO)
             .ok_or(BroadcastError::CapacityOverflow)?;
         let scratch = config.pools.get_with_len::<f32>(tick_samples)?;
         let (pcm_tx, pcm_rx) = config.pools.ring::<f32>(buffer_samples)?;
@@ -363,7 +361,6 @@ impl Drop for BroadcastHandle {
 #[cfg(test)]
 mod tests {
     use kithara_output::LiveOutput;
-    use kithara_platform::time::Duration;
     use kithara_stream::{AudioCodec, ContainerFormat};
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
@@ -372,18 +369,11 @@ mod tests {
     use kithara_worker::{Worker, WorkerConfig};
 
     use super::*;
-
-    struct Consts;
-
-    impl Consts {
-        const AMPLITUDE: f32 = 0.25;
-        const SAMPLE_RATE: usize = 48_000;
-        const TARGET: Duration = Duration::from_millis(500);
-    }
+    use crate::consts;
 
     fn config() -> BroadcastConfig<TestPools> {
         BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools())
-            .segment_target(Consts::TARGET)
+            .segment_target(consts::TARGET)
             .build()
     }
 
@@ -412,8 +402,8 @@ mod tests {
     }
 
     fn write_second(output: &mut impl LiveOutput) {
-        let left = vec![Consts::AMPLITUDE; Consts::SAMPLE_RATE];
-        let right = vec![-Consts::AMPLITUDE; Consts::SAMPLE_RATE];
+        let left = vec![consts::AMPLITUDE; consts::BROADCAST_SAMPLE_RATE];
+        let right = vec![-consts::AMPLITUDE; consts::BROADCAST_SAMPLE_RATE];
         output.write_stereo(left.len(), &left, &right);
     }
 
@@ -444,7 +434,7 @@ mod tests {
     fn an_intake_gap_marks_the_next_segment_discontinuous() {
         let (mut output, handle) = start();
         write_second(&mut output);
-        output.write_stereo(Consts::SAMPLE_RATE, &[], &[]);
+        output.write_stereo(consts::BROADCAST_SAMPLE_RATE, &[], &[]);
         write_second(&mut output);
 
         handle.stop();
@@ -452,7 +442,7 @@ mod tests {
         assert!(playlist(&handle).contains("#EXT-X-DISCONTINUITY\n"));
         assert_eq!(
             handle.status().dropped_samples,
-            u64::try_from(Consts::SAMPLE_RATE * 2).expect("drop count fits")
+            u64::try_from(consts::BROADCAST_SAMPLE_RATE * 2).expect("drop count fits")
         );
     }
 

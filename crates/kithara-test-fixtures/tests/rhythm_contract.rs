@@ -22,19 +22,17 @@ const CONTROLS: [&str; 4] = [
     "missing_beat",
 ];
 
-struct Consts;
-
-impl Consts {
-    const ANALYSIS_FINGERPRINT: &str = "rhythm-fixture:v1";
-    const BEAT_MARKER: i16 = 22_000;
-    const DOWNBEAT_MARKER: i16 = 28_000;
-    const MARKER_MATCH_RATIO: f64 = 0.75;
-    const MARKER_TOLERANCE_BEATS: f64 = 0.12;
-    const SAMPLE_RATE: f64 = 48_000.0;
-    const SECONDS_PER_MINUTE: f64 = 60.0;
-    const TEMPO_TOLERANCE_RATIO: f64 = 0.04;
-    const TOTAL_FRAMES: u64 = 48_000 * 12;
-    const WAV_HEADER_BYTES: usize = 44;
+mod consts {
+    pub(super) const ANALYSIS_FINGERPRINT: &str = "rhythm-fixture:v1";
+    pub(super) const BEAT_MARKER: i16 = 22_000;
+    pub(super) const DOWNBEAT_MARKER: i16 = 28_000;
+    pub(super) const MARKER_MATCH_RATIO: f64 = 0.75;
+    pub(super) const MARKER_TOLERANCE_BEATS: f64 = 0.12;
+    pub(super) const SAMPLE_RATE: f64 = 48_000.0;
+    pub(super) const SECONDS_PER_MINUTE: f64 = 60.0;
+    pub(super) const TEMPO_TOLERANCE_RATIO: f64 = 0.04;
+    pub(super) const TOTAL_FRAMES: u64 = 48_000 * 12;
+    pub(super) const WAV_HEADER_BYTES: usize = 44;
 }
 
 fn artifact(style: &str, control: &str) -> BeatArtifact {
@@ -49,7 +47,7 @@ fn artifact_named(prefix: &str, style: &str, control: &str) -> BeatArtifact {
 fn artifact_by_name(name: &str) -> BeatArtifact {
     let asset = by_name(&name).unwrap_or_else(|| panic!("missing `{name}`"));
     assert_eq!(asset.entry().content_type, "application/x-kithara-analysis");
-    let fingerprint = AnalysisFingerprint::new(Some(Consts::ANALYSIS_FINGERPRINT), None);
+    let fingerprint = AnalysisFingerprint::new(Some(consts::ANALYSIS_FINGERPRINT), None);
     let file = AnalysisFile::parse(asset.bytes(), &fingerprint)
         .unwrap_or_else(|error| panic!("decode `{name}`: {error}"));
     file.latest()
@@ -185,14 +183,14 @@ fn production_analysis_agrees_with_independent_score_truth() {
             let analyzed = artifact_named("analysis_rhythm_wav", style, control);
             let tempo_error = (analyzed.bpm() - bpm).abs();
             assert!(
-                tempo_error <= bpm * Consts::TEMPO_TOLERANCE_RATIO,
+                tempo_error <= bpm * consts::TEMPO_TOLERANCE_RATIO,
                 "{style}/{control}: analyzed BPM {} differs from score {bpm}",
                 analyzed.bpm()
             );
 
             let tolerance = cast(
-                (Consts::SAMPLE_RATE * Consts::SECONDS_PER_MINUTE / bpm
-                    * Consts::MARKER_TOLERANCE_BEATS)
+                (consts::SAMPLE_RATE * consts::SECONDS_PER_MINUTE / bpm
+                    * consts::MARKER_TOLERANCE_BEATS)
                     .round(),
             )
             .expect("invariant: fixture marker tolerance fits u64");
@@ -216,8 +214,8 @@ fn production_analysis_tracks_score_downbeat_phase() {
             let expected = artifact(style, control);
             let analyzed = artifact_named("analysis_rhythm_wav", style, control);
             let tolerance = cast(
-                (Consts::SAMPLE_RATE * Consts::SECONDS_PER_MINUTE / bpm
-                    * Consts::MARKER_TOLERANCE_BEATS)
+                (consts::SAMPLE_RATE * consts::SECONDS_PER_MINUTE / bpm
+                    * consts::MARKER_TOLERANCE_BEATS)
                     .round(),
             )
             .expect("invariant: fixture marker tolerance fits u64");
@@ -254,7 +252,7 @@ fn assert_markers_agree(
     let total: f64 = cast(analyzed.len()).expect("invariant: fixture marker count fits f64");
     let ratio = matched / total;
     assert!(
-        ratio >= Consts::MARKER_MATCH_RATIO,
+        ratio >= consts::MARKER_MATCH_RATIO,
         "{style}/{control}: only {matched}/{} analyzed {kind}s match score within {tolerance} frames: expected={expected:?}, analyzed={analyzed:?}",
         analyzed.len()
     );
@@ -263,7 +261,7 @@ fn assert_markers_agree(
 fn stereo_side_ratio(wav: &[u8]) -> f64 {
     let mut side = 0.0;
     let mut mid = 0.0;
-    for frame in wav[Consts::WAV_HEADER_BYTES..].chunks_exact(4) {
+    for frame in wav[consts::WAV_HEADER_BYTES..].chunks_exact(4) {
         let left = f64::from(i16::from_le_bytes([frame[0], frame[1]]));
         let right = f64::from(i16::from_le_bytes([frame[2], frame[3]]));
         side += (left - right).powi(2);
@@ -286,7 +284,7 @@ fn exact_score_map(style: &str, control: &str) -> (Vec<u64>, Vec<u64>) {
     let downbeat_phase = usize::from(control == "one_beat_bar_late");
     let mut beats = Vec::new();
     let mut downbeats = Vec::new();
-    for (index, frame) in (first..Consts::TOTAL_FRAMES)
+    for (index, frame) in (first..consts::TOTAL_FRAMES)
         .step_by(usize::try_from(beat_frames).expect("beat period fits usize"))
         .enumerate()
     {
@@ -302,7 +300,7 @@ fn exact_score_map(style: &str, control: &str) -> (Vec<u64>, Vec<u64>) {
 }
 
 fn wav_markers(wav: &[u8], downbeats_only: bool) -> Vec<u64> {
-    wav[Consts::WAV_HEADER_BYTES..]
+    wav[consts::WAV_HEADER_BYTES..]
         .chunks_exact(4)
         .enumerate()
         .filter_map(|(frame, bytes)| {
@@ -310,9 +308,9 @@ fn wav_markers(wav: &[u8], downbeats_only: bool) -> Vec<u64> {
             let right = i16::from_le_bytes([bytes[2], bytes[3]]);
             let marker = left == right
                 && if downbeats_only {
-                    left == Consts::DOWNBEAT_MARKER
+                    left == consts::DOWNBEAT_MARKER
                 } else {
-                    matches!(left, Consts::BEAT_MARKER | Consts::DOWNBEAT_MARKER)
+                    matches!(left, consts::BEAT_MARKER | consts::DOWNBEAT_MARKER)
                 };
             marker.then(|| u64::try_from(frame).expect("fixture frame fits u64"))
         })
@@ -320,16 +318,16 @@ fn wav_markers(wav: &[u8], downbeats_only: bool) -> Vec<u64> {
 }
 
 fn wav_channel_markers(wav: &[u8], channel: usize, downbeats_only: bool) -> Vec<u64> {
-    wav[Consts::WAV_HEADER_BYTES..]
+    wav[consts::WAV_HEADER_BYTES..]
         .chunks_exact(4)
         .enumerate()
         .filter_map(|(frame, bytes)| {
             let offset = channel * size_of::<i16>();
             let sample = i16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
             let marker = if downbeats_only {
-                sample == Consts::DOWNBEAT_MARKER
+                sample == consts::DOWNBEAT_MARKER
             } else {
-                matches!(sample, Consts::BEAT_MARKER | Consts::DOWNBEAT_MARKER)
+                matches!(sample, consts::BEAT_MARKER | consts::DOWNBEAT_MARKER)
             };
             marker.then(|| u64::try_from(frame).expect("fixture frame fits u64"))
         })
@@ -337,7 +335,7 @@ fn wav_channel_markers(wav: &[u8], channel: usize, downbeats_only: bool) -> Vec<
 }
 
 fn wav_channel_is_zero(wav: &[u8], channel: usize) -> bool {
-    wav[Consts::WAV_HEADER_BYTES..]
+    wav[consts::WAV_HEADER_BYTES..]
         .chunks_exact(4)
         .all(|bytes| {
             let offset = channel * size_of::<i16>();
@@ -346,11 +344,11 @@ fn wav_channel_is_zero(wav: &[u8], channel: usize) -> bool {
 }
 
 fn wav_channel_has_rich_bed(wav: &[u8], channel: usize) -> bool {
-    wav[Consts::WAV_HEADER_BYTES..]
+    wav[consts::WAV_HEADER_BYTES..]
         .chunks_exact(4)
         .any(|bytes| {
             let offset = channel * size_of::<i16>();
             let sample = i16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
-            sample != 0 && !matches!(sample, Consts::BEAT_MARKER | Consts::DOWNBEAT_MARKER)
+            sample != 0 && !matches!(sample, consts::BEAT_MARKER | consts::DOWNBEAT_MARKER)
         })
 }

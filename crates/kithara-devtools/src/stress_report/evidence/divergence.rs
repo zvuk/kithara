@@ -304,6 +304,7 @@ fn normalize_template(text: &str, budgets: &StressRenderBudgets) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consts;
 
     fn case(name: &str, iteration: usize, failed: bool, output: &str) -> CaseTiming {
         CaseTiming {
@@ -332,9 +333,6 @@ mod tests {
             .join("\n")
     }
 
-    const STEADY: &str =
-        "2026-08-16T01:23:45.700000Z INFO kithara_play::session: playback completed frames=220500";
-
     /// The whole point of the section: a line every failure emits and no green
     /// does is the closest stored evidence to a cause, and the reader should
     /// not have to diff attempt outputs by hand to find it.
@@ -343,8 +341,8 @@ mod tests {
         let cases = vec![
             case("seek", 0, true, &spin(3, 1)),
             case("seek", 1, true, &spin(5, 2)),
-            case("seek", 2, false, STEADY),
-            case("seek", 3, false, STEADY),
+            case("seek", 2, false, consts::STEADY),
+            case("seek", 3, false, consts::STEADY),
         ];
         let mut out = String::new();
 
@@ -364,7 +362,7 @@ mod tests {
         let cases = vec![
             case("seek", 0, true, &spin(3, 1)),
             case("seek", 1, true, &spin(5, 2)),
-            case("seek", 2, false, STEADY),
+            case("seek", 2, false, consts::STEADY),
         ];
         let mut out = String::new();
 
@@ -377,7 +375,7 @@ mod tests {
     /// not dilute the section.
     #[test]
     fn a_line_both_outcomes_emit_is_not_divergent() {
-        let with_recover = format!("{STEADY}\n{}", spin(2, 1));
+        let with_recover = format!("{STEADY}\n{}", spin(2, 1), STEADY = consts::STEADY);
         let cases = vec![
             case("seek", 0, true, &with_recover),
             case("seek", 1, false, &with_recover),
@@ -393,7 +391,7 @@ mod tests {
     /// line, only the repetition gap can separate the outcomes.
     #[test]
     fn a_repetition_gap_is_reported_as_a_spin() {
-        let green = format!("{STEADY}\n{}", spin(2, 1));
+        let green = format!("{STEADY}\n{}", spin(2, 1), STEADY = consts::STEADY);
         let cases = vec![
             case("seek", 0, true, &spin(300, 1)),
             case("seek", 1, true, &spin(1700, 1)),
@@ -415,8 +413,8 @@ mod tests {
     fn a_line_every_green_emits_that_failures_never_reach_is_reported() {
         let cases = vec![
             case("seek", 0, true, "test failure: boom without runtime lines"),
-            case("seek", 1, false, STEADY),
-            case("seek", 2, false, STEADY),
+            case("seek", 1, false, consts::STEADY),
+            case("seek", 2, false, consts::STEADY),
         ];
         let mut out = String::new();
 

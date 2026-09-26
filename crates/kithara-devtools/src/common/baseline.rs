@@ -8,8 +8,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::violation::{Report, Severity, Violation};
-
-const SCHEMA_VERSION: u32 = 1;
+use crate::consts;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Baseline {
@@ -23,7 +22,7 @@ pub struct Baseline {
 }
 
 const fn default_schema_version() -> u32 {
-    SCHEMA_VERSION
+    consts::BASELINE_SCHEMA_VERSION
 }
 
 impl Baseline {
@@ -130,7 +129,7 @@ impl Baseline {
         }
         Self {
             checks,
-            schema_version: SCHEMA_VERSION,
+            schema_version: consts::BASELINE_SCHEMA_VERSION,
         }
     }
 
@@ -325,7 +324,7 @@ mod tests {
         let path = written.save(dir.path()).expect("save");
         assert!(path.exists());
         let loaded = Baseline::load(dir.path()).expect("load");
-        assert_eq!(loaded.schema_version, SCHEMA_VERSION);
+        assert_eq!(loaded.schema_version, consts::BASELINE_SCHEMA_VERSION);
         assert_eq!(loaded.checks, written.checks);
     }
 

@@ -23,7 +23,7 @@ use kithara::{
 use kithara_integration_tests::{
     audio_mock::{MockReader, TestPcmReader},
     event::TestEvent,
-    test_defaults::Consts,
+    test_defaults::consts,
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
 
@@ -44,7 +44,7 @@ enum RemoveAtScenario {
 
 fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
     Resource::from_reader(
-        TestPcmReader::from_pcm(Consts::AUDIO_SPEC, duration_secs, constant_half),
+        TestPcmReader::from_pcm(consts::AUDIO_SPEC, duration_secs, constant_half),
         Some(Arc::from(format!("test-resource-{duration_secs}"))),
     )
 }
@@ -57,7 +57,7 @@ fn make_tagged_resource(
     duration_secs: f64,
 ) -> Resource {
     Resource::from_reader(
-        TestPcmReader::from_pcm(Consts::AUDIO_SPEC, duration_secs, constant_half),
+        TestPcmReader::from_pcm(consts::AUDIO_SPEC, duration_secs, constant_half),
         Some(Arc::from(format!("memory://{label}"))),
     )
 }
@@ -95,7 +95,7 @@ impl SessionDispatcher<TestPools> for FixtureSession {
             }
             Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(
                 None,
-                Consts::NON_ZERO_SAMPLE_RATE.get(),
+                consts::NON_ZERO_SAMPLE_RATE.get(),
             )),
             _ => Reply::Ok,
         };
@@ -117,11 +117,11 @@ fn make_fixture_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<F
     let player_config = PlayerConfig::builder()
         .bus(bus)
         .crossfade_duration(crossfade_duration)
-        .sample_rate(Consts::NON_ZERO_SAMPLE_RATE)
+        .sample_rate(consts::NON_ZERO_SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .session(SessionBinding::new(
             Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>,
-            Consts::NON_ZERO_SAMPLE_RATE,
+            consts::NON_ZERO_SAMPLE_RATE,
         ))
         .build();
     let player = PlayerImpl::new(player_config);
@@ -149,11 +149,11 @@ fn prepared_player<const N: usize>(
 
 fn default_player_config() -> PlayerConfig<TestPools> {
     PlayerConfig::builder()
-        .sample_rate(Consts::NON_ZERO_SAMPLE_RATE)
+        .sample_rate(consts::NON_ZERO_SAMPLE_RATE)
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .session(SessionBinding::new(
             fixture_session(),
-            Consts::NON_ZERO_SAMPLE_RATE,
+            consts::NON_ZERO_SAMPLE_RATE,
         ))
         .build()
 }
@@ -316,7 +316,7 @@ fn replay_same_item_does_not_re_emit_current_item_changed(constant_half: &'stati
 #[kithara::test(tokio)]
 async fn an_inserted_resource_adopts_the_session_wake_mode() {
     let (player, _session) = make_fixture_player(0.0);
-    let (reader, recorded) = MockReader::wake_mode_tracking(Consts::AUDIO_SPEC);
+    let (reader, recorded) = MockReader::wake_mode_tracking(consts::AUDIO_SPEC);
 
     player.insert(
         Resource::from_reader(reader, None),

@@ -23,17 +23,18 @@ use thirtyfour::{
 };
 use tracing::warn;
 
-struct Consts;
-impl Consts {
+mod consts {
+    use super::{Duration, SignalAsset};
+
     /// Generated MPEG clip the playlist loads as its local file track.
-    const MP3: SignalAsset = SignalAsset::MP3_SINE880_48K_162S;
-    const CHECK_INTERVAL: Duration = Duration::from_millis(250);
-    const POLL_INTERVAL: Duration = Duration::from_millis(500);
-    const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
-    const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
+    pub(super) const MP3: SignalAsset = SignalAsset::MP3_SINE880_48K_162S;
+    pub(super) const CHECK_INTERVAL: Duration = Duration::from_millis(250);
+    pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(500);
+    pub(super) const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
+    pub(super) const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 
     /// The `script.RealmType` a Web Worker's realm reports.
-    const DEDICATED_WORKER_REALM: &'static str = "dedicated-worker";
+    pub(super) const DEDICATED_WORKER_REALM: &str = "dedicated-worker";
 
     /// Installed before the page's own scripts run (via CDP
     /// `Page.addScriptToEvaluateOnNewDocument` for Chrome, and again as a
@@ -44,7 +45,7 @@ impl Consts {
     /// (a failed dynamic `import()`, a rejected top-level `await`) still
     /// shows up: without this a stuck "Initializing WASM..." status reports
     /// only a bare timeout with no indication of what the browser saw.
-    const CONSOLE_CAPTURE_JS: &'static str = r#"
+    pub(super) const CONSOLE_CAPTURE_JS: &str = r#"
         if (!window.__consoleLogs) {
             window.__consoleLogs = [];
             const push = (msg) => {
@@ -130,14 +131,14 @@ impl SeleniumConfig {
             page_url_override: env::var("KITHARA_SELENIUM_PAGE_URL").ok(),
             startup_timeout: Duration::from_secs(env_u64(
                 "KITHARA_SELENIUM_STARTUP_TIMEOUT_SECS",
-                Consts::DEFAULT_STARTUP_TIMEOUT.as_secs(),
+                consts::DEFAULT_STARTUP_TIMEOUT.as_secs(),
             )),
             switch_wait_seconds: env_u64("KITHARA_SELENIUM_SWITCH_WAIT_SECS", 12),
             test_server_port: env_u16_opt("KITHARA_SELENIUM_TEST_SERVER_PORT"),
             trunk_port: env_u16_opt("KITHARA_SELENIUM_TRUNK_PORT"),
             wait_timeout: Duration::from_secs(env_u64(
                 "KITHARA_SELENIUM_WAIT_TIMEOUT_SECS",
-                Consts::DEFAULT_WAIT_TIMEOUT.as_secs(),
+                consts::DEFAULT_WAIT_TIMEOUT.as_secs(),
             )),
             webdriver_port: env_u16_opt("KITHARA_SELENIUM_WEBDRIVER_PORT"),
             webdriver_url_override: env::var("KITHARA_SELENIUM_WEBDRIVER_URL").ok(),
@@ -203,7 +204,7 @@ impl Endpoints {
     }
 
     fn mp3_url(&self) -> String {
-        format!("{}{}", self.test_server_base_url(), Consts::MP3.path())
+        format!("{}{}", self.test_server_base_url(), consts::MP3.path())
     }
 
     fn drm_url(&self) -> String {
@@ -584,7 +585,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             "player bootstrap",
             self.config.wait_timeout,
-            Consts::CHECK_INTERVAL,
+            consts::CHECK_INTERVAL,
             |snap| snap.playlist.len() >= 2 && snap.status.contains("Ready"),
         )
         .await
@@ -593,16 +594,16 @@ impl WasmPlayerSelenium {
 
     /// Best-effort same-origin install, run right after `goto()`. Covers
     /// browsers without CDP support (Firefox) and reinforces the CDP install
-    /// below; a no-op when the guard in [`Consts::CONSOLE_CAPTURE_JS`] shows
+    /// below; a no-op when the guard in [`consts::CONSOLE_CAPTURE_JS`] shows
     /// it is already installed for this document.
     async fn install_console_capture(&self) {
         let _ = self
             .driver
-            .execute(Consts::CONSOLE_CAPTURE_JS, Vec::<Value>::new())
+            .execute(consts::CONSOLE_CAPTURE_JS, Vec::<Value>::new())
             .await;
     }
 
-    /// Install [`Consts::CONSOLE_CAPTURE_JS`] via CDP
+    /// Install [`consts::CONSOLE_CAPTURE_JS`] via CDP
     /// `Page.addScriptToEvaluateOnNewDocument` so it runs before any of the
     /// page's own scripts, on every navigation in this session — including
     /// the very first one. Chrome-only (CDP); Firefox relies solely on the
@@ -615,7 +616,7 @@ impl WasmPlayerSelenium {
         let _ = dev_tools
             .send_raw(
                 "Page.addScriptToEvaluateOnNewDocument",
-                json!({ "source": Consts::CONSOLE_CAPTURE_JS }),
+                json!({ "source": consts::CONSOLE_CAPTURE_JS }),
             )
             .await;
     }
@@ -696,7 +697,7 @@ impl WasmPlayerSelenium {
         self.add_track(&self.endpoints.hls_url()).await?;
         self.add_track(&self.endpoints.drm_url()).await?;
 
-        let mp3 = self.find_track_index(Consts::MP3.name()).await?;
+        let mp3 = self.find_track_index(consts::MP3.name()).await?;
         let hls = self.find_track_index("hls/master.m3u8").await?;
         let drm = self.find_track_index("drm/master.m3u8").await?;
 
@@ -750,7 +751,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             "track added to playlist",
             self.config.wait_timeout,
-            Consts::CHECK_INTERVAL,
+            consts::CHECK_INTERVAL,
             |current| current.playlist.iter().any(|item| item.contains(url)),
         )
         .await
@@ -860,7 +861,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             &format!("track {label} selected"),
             self.config.wait_timeout,
-            Consts::CHECK_INTERVAL,
+            consts::CHECK_INTERVAL,
             |snap| snap.active_index == Some(index),
         )
         .await?;
@@ -870,7 +871,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             &format!("track {label} duration known"),
             self.config.wait_timeout,
-            Consts::CHECK_INTERVAL,
+            consts::CHECK_INTERVAL,
             |snap| snap.dur.unwrap_or(0.0) > 0.0,
         )
         .await?;
@@ -1014,7 +1015,7 @@ impl WasmPlayerSelenium {
             if (current - value).abs() <= 0.011 {
                 return Ok(());
             }
-            time::sleep(Consts::CHECK_INTERVAL).await;
+            time::sleep(consts::CHECK_INTERVAL).await;
         }
 
         Err(format!("volume did not reach {value} in time"))
@@ -1030,7 +1031,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             "position near start after seek",
             Duration::from_secs(10),
-            Consts::CHECK_INTERVAL,
+            consts::CHECK_INTERVAL,
             |snap| snap.pos.unwrap_or(0.0) <= 2500.0,
         )
         .await?;
@@ -1045,7 +1046,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             "stop state reflected",
             Duration::from_secs(10),
-            Consts::CHECK_INTERVAL,
+            consts::CHECK_INTERVAL,
             |snap| snap.status.contains("Stopped") && snap.pos.unwrap_or(0.0) <= 2500.0,
         )
         .await?;
@@ -1055,7 +1056,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             "play after stop starts from beginning",
             Duration::from_secs(10),
-            Consts::CHECK_INTERVAL,
+            consts::CHECK_INTERVAL,
             |snap| snap.pos.unwrap_or(0.0) <= 4000.0,
         )
         .await?;
@@ -1133,7 +1134,7 @@ impl WasmPlayerSelenium {
         let workers: Vec<String> = realms
             .realms
             .into_iter()
-            .filter(|realm| realm.realm_type == Consts::DEDICATED_WORKER_REALM)
+            .filter(|realm| realm.realm_type == consts::DEDICATED_WORKER_REALM)
             .map(|realm| realm.origin)
             .collect();
 
@@ -1165,7 +1166,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             "track selected",
             self.config.wait_timeout,
-            Consts::CHECK_INTERVAL,
+            consts::CHECK_INTERVAL,
             |snap| snap.active_index == Some(hls_idx),
         )
         .await?;
@@ -1174,7 +1175,7 @@ impl WasmPlayerSelenium {
         self.wait_for(
             "track duration known",
             self.config.wait_timeout,
-            Consts::CHECK_INTERVAL,
+            consts::CHECK_INTERVAL,
             |snap| snap.dur.unwrap_or(0.0) > 0.0,
         )
         .await?;
@@ -1290,7 +1291,7 @@ impl WasmPlayerSelenium {
 
         let mut seek_ok = false;
         while Instant::now() < deadline {
-            time::sleep(Consts::POLL_INTERVAL).await;
+            time::sleep(consts::POLL_INTERVAL).await;
             let pos = self.get_position_ms().await?;
             if (low..=high).contains(&pos) {
                 seek_ok = true;
@@ -1303,7 +1304,7 @@ impl WasmPlayerSelenium {
         }
 
         let (playback_ok, _) = self
-            .check_playback_advancing(Duration::from_secs(3), Consts::POLL_INTERVAL)
+            .check_playback_advancing(Duration::from_secs(3), consts::POLL_INTERVAL)
             .await?;
         Ok((true, playback_ok))
     }
@@ -1329,7 +1330,7 @@ impl WasmPlayerSelenium {
         let mut seek_ok = false;
         let mut position_samples = Vec::new();
         while Instant::now() < deadline {
-            time::sleep(Consts::POLL_INTERVAL).await;
+            time::sleep(consts::POLL_INTERVAL).await;
             let pos = self.get_position_ms().await?;
             position_samples.push(pos);
             if (low..=high).contains(&pos) {
@@ -1346,7 +1347,7 @@ impl WasmPlayerSelenium {
         let mut positions = Vec::new();
         let steps = 16;
         for _ in 0..steps {
-            time::sleep(Consts::POLL_INTERVAL).await;
+            time::sleep(consts::POLL_INTERVAL).await;
             let pos = self.get_position_ms().await?;
             positions.push(pos);
         }
@@ -1375,7 +1376,7 @@ impl WasmPlayerSelenium {
         self.select_track_and_wait(tracks.mp3, "MP3").await?;
 
         let (started, _) = self
-            .check_playback_advancing(Duration::from_secs(3), Consts::POLL_INTERVAL)
+            .check_playback_advancing(Duration::from_secs(3), consts::POLL_INTERVAL)
             .await?;
         if !started {
             return Err("playback did not start for MP3 seek scenario".to_string());
@@ -1434,7 +1435,7 @@ impl WasmPlayerSelenium {
         self.select_track_and_wait(tracks.hls, "HLS").await?;
 
         let (started, _) = self
-            .check_playback_advancing(Duration::from_secs(5), Consts::POLL_INTERVAL)
+            .check_playback_advancing(Duration::from_secs(5), consts::POLL_INTERVAL)
             .await?;
         if !started {
             return Err("hls playback did not start".to_string());
@@ -1466,7 +1467,7 @@ impl WasmPlayerSelenium {
         self.install_console_capture().await;
 
         let (started, _) = self
-            .check_playback_advancing(Duration::from_secs(8), Consts::POLL_INTERVAL)
+            .check_playback_advancing(Duration::from_secs(8), consts::POLL_INTERVAL)
             .await?;
         if !started {
             let snap = self.snapshot().await;
@@ -1524,7 +1525,7 @@ impl WasmPlayerSelenium {
         self.select_track_and_wait(tracks.hls, "HLS").await?;
 
         for _ in 0..40 {
-            time::sleep(Consts::POLL_INTERVAL).await;
+            time::sleep(consts::POLL_INTERVAL).await;
         }
 
         self.assert_motion(
@@ -1685,7 +1686,7 @@ async fn wait_url_ready(url: &str, timeout: Duration, kind: &str) -> Result<(), 
         if http_ok(url).await {
             return Ok(());
         }
-        time::sleep(Consts::CHECK_INTERVAL).await;
+        time::sleep(consts::CHECK_INTERVAL).await;
     }
 
     if kind.is_empty() {
@@ -1701,7 +1702,7 @@ async fn wait_test_server_port(receiver: Receiver<u16>, timeout: Duration) -> Re
     while Instant::now() < deadline {
         match receiver.try_recv() {
             Ok(port) => return Ok(port),
-            Err(TryRecvError::Empty) => time::sleep(Consts::CHECK_INTERVAL).await,
+            Err(TryRecvError::Empty) => time::sleep(consts::CHECK_INTERVAL).await,
             Err(TryRecvError::Disconnected) => {
                 return Err(
                     "test server stdout closed before reporting its listening port".to_string(),

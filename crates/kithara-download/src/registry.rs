@@ -24,7 +24,7 @@ use super::{
     downloader::{DownloaderInner, RegisteredPeerEntry},
     peer::{InternalCmd, Peer, ResponseTarget, SlotEntry},
 };
-use crate::{DownloaderEvent, RequestId, RequestPriority};
+use crate::{DownloaderEvent, RequestId, RequestPriority, consts};
 
 /// Push a fetch command onto its priority slot — the moment a request
 /// becomes eligible for dispatch. Wakes the urgent slot (`High`/`High`
@@ -32,7 +32,7 @@ use crate::{DownloaderEvent, RequestId, RequestPriority};
 /// next periodic poll, and fans the descriptor out to bus subscribers.
 #[kithara::probe(request_id, priority)]
 fn enqueue_request(
-    slots: &mut [VecDeque<SlotEntry>; SLOT_COUNT],
+    slots: &mut [VecDeque<SlotEntry>; consts::SLOT_COUNT],
     slot: usize,
     urgent_notify: &Notify,
     entry: SlotEntry,
@@ -58,8 +58,6 @@ fn enqueue_request(
         });
     }
 }
-
-const SLOT_COUNT: usize = 4;
 
 /// Observable forward motion of the fetch pipeline across one
 /// [`Registry::tick`]. Consumed by the hang watchdog in
@@ -130,7 +128,7 @@ struct PeerEntry {
 pub(super) struct Registry {
     urgent_notify: Arc<Notify>,
     peers: Arena<PeerEntry>,
-    slots: [VecDeque<SlotEntry>; SLOT_COUNT],
+    slots: [VecDeque<SlotEntry>; consts::SLOT_COUNT],
 }
 
 impl Registry {
@@ -285,7 +283,7 @@ impl Registry {
         let mut escalated: Vec<(usize, SlotEntry)> = Vec::new();
         let mut demoted: Vec<(usize, SlotEntry)> = Vec::new();
 
-        for slot_idx in 0..SLOT_COUNT {
+        for slot_idx in 0..consts::SLOT_COUNT {
             for slot_entry in take(&mut self.slots[slot_idx]) {
                 let cmd = &slot_entry.cmd;
                 let Some(peer_idx) = cmd.peer else {

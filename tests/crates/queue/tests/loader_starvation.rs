@@ -35,23 +35,24 @@ use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
 
-struct Consts;
-impl Consts {
+mod consts {
+    use super::Duration;
+
     /// Loader permits; equals `HUNG_TRACKS` so hung loads take them all.
-    const CAP: usize = 2;
-    const HUNG_TRACKS: usize = 2;
+    pub(super) const CAP: usize = 2;
+    pub(super) const HUNG_TRACKS: usize = 2;
     /// Above the probe buffer (1 `KiB`) so the probe waits for bytes, not EOF.
-    const HUNG_BODY_LEN: usize = 64 * 1024;
-    const HUNG_THROTTLE_CHUNK: usize = 1;
+    pub(super) const HUNG_BODY_LEN: usize = 64 * 1024;
+    pub(super) const HUNG_THROTTLE_CHUNK: usize = 1;
     /// Past the test window and the 30s net `inactivity_timeout`, so the
     /// load stays parked instead of failing.
-    const HUNG_THROTTLE_DELAY_MS: u64 = 600_000;
-    const FAST_SEGMENT_COUNT: usize = 1;
-    const FAST_SEGMENT_DURATION_S: f64 = 2.0;
-    const GATE_DEADLINE: Duration = Duration::from_secs(15);
+    pub(super) const HUNG_THROTTLE_DELAY_MS: u64 = 600_000;
+    pub(super) const FAST_SEGMENT_COUNT: usize = 1;
+    pub(super) const FAST_SEGMENT_DURATION_S: f64 = 2.0;
+    pub(super) const GATE_DEADLINE: Duration = Duration::from_secs(15);
     /// Short enough that a miss means starvation, not a slow load.
-    const FAST_DEADLINE: Duration = Duration::from_secs(8);
-    const POLL_INTERVAL: Duration = Duration::from_millis(50);
+    pub(super) const FAST_DEADLINE: Duration = Duration::from_secs(8);
+    pub(super) const POLL_INTERVAL: Duration = Duration::from_millis(50);
 }
 
 /// A throttled body that never delivers a byte in the test window, so the
@@ -61,12 +62,12 @@ fn register_hung(helper: &TestServerHelper) -> Url {
     helper
         .register_behavior(FixtureBehavior {
             content: Content::StaticBytes {
-                bytes: Arc::new(vec![0u8; Consts::HUNG_BODY_LEN]),
+                bytes: Arc::new(vec![0u8; consts::HUNG_BODY_LEN]),
                 content_type: Some("audio/mpeg"),
             },
             delivery: Delivery::Throttle {
-                chunk: Consts::HUNG_THROTTLE_CHUNK,
-                delay_ms: Consts::HUNG_THROTTLE_DELAY_MS,
+                chunk: consts::HUNG_THROTTLE_CHUNK,
+                delay_ms: consts::HUNG_THROTTLE_DELAY_MS,
             },
         })
         .url()
@@ -77,8 +78,8 @@ async fn build_fast_hls(helper: &TestServerHelper) -> Url {
         .create_hls(
             HlsFixtureBuilder::new()
                 .variant_count(1)
-                .segments_per_variant(Consts::FAST_SEGMENT_COUNT)
-                .segment_duration_secs(Consts::FAST_SEGMENT_DURATION_S)
+                .segments_per_variant(consts::FAST_SEGMENT_COUNT)
+                .segment_duration_secs(consts::FAST_SEGMENT_DURATION_S)
                 .packaged_audio_aac_lc(44_100, 2),
         )
         .await
@@ -156,7 +157,7 @@ async fn wait_until_loading(
                 queue.track(id).map(|e| e.status)
             ));
         }
-        sleep(Consts::POLL_INTERVAL).await;
+        sleep(consts::POLL_INTERVAL).await;
     }
 }
 
@@ -168,7 +169,7 @@ async fn hung_loads_must_not_starve_user_selected_track(
 
     let temp = temp_dir();
     let (queue, downloader, store, mut tick_handle) =
-        build_queue_with_tick(&temp, Consts::CAP).await;
+        build_queue_with_tick(&temp, consts::CAP).await;
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
@@ -194,7 +195,7 @@ async fn hung_loads_must_not_starve_user_selected_track(
 
     // Gate: select only after every hung track holds a permit (Loading).
     for &id in &hung_ids {
-        wait_until_loading(&queue, id, Consts::GATE_DEADLINE)
+        wait_until_loading(&queue, id, consts::GATE_DEADLINE)
             .await
             .unwrap_or_else(|e| panic!("hung track gate: {e}"));
     }
@@ -212,7 +213,7 @@ async fn hung_loads_must_not_starve_user_selected_track(
         .await
         .expect("select fast");
 
-    let load_result = wait_for_loader_done(&queue, fast_id, Consts::FAST_DEADLINE).await;
+    let load_result = wait_for_loader_done(&queue, fast_id, consts::FAST_DEADLINE).await;
 
     // Linchpin: hung tracks still hold permits, else it isn't starvation.
     let hung_still_loading: Vec<TrackId> = hung_ids
@@ -225,7 +226,7 @@ async fn hung_loads_must_not_starve_user_selected_track(
 
     assert_eq!(
         hung_still_loading.len(),
-        Consts::HUNG_TRACKS - 1,
+        consts::HUNG_TRACKS - 1,
         "the initial pending load is superseded while the other hung load still holds a permit; \
          statuses={:?}",
         hung_ids
@@ -237,7 +238,7 @@ async fn hung_loads_must_not_starve_user_selected_track(
     load_result.unwrap_or_else(|e| {
         panic!(
             "user-selected fast track starved by hung loads holding all {} permits: {e}",
-            Consts::CAP
+            consts::CAP
         )
     });
     queue.close().await;
@@ -246,7 +247,7 @@ async fn hung_loads_must_not_starve_user_selected_track(
 #[kithara::fixture]
 async fn lane_sources() -> (TestServerHelper, Vec<Url>, Url) {
     let helper = TestServerHelper::new().await;
-    let hung_urls: Vec<Url> = (0..Consts::HUNG_TRACKS)
+    let hung_urls: Vec<Url> = (0..consts::HUNG_TRACKS)
         .map(|_| register_hung(&helper))
         .collect();
     let fast_url = build_fast_hls(&helper).await;

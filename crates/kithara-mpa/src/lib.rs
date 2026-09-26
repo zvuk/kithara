@@ -13,3 +13,4 @@ mod header;
 mod tags;
 
 pub use demuxer::MpaReader;
+mod consts;

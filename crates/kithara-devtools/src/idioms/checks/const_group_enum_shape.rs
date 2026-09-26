@@ -15,7 +15,9 @@ use crate::{
     idioms::config::ConstGroupEnumShapeConfig,
 };
 
-pub(crate) const ID: &str = "const_group_enum_shape";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "const_group_enum_shape";
+}
 
 pub(crate) struct ConstGroupEnumShape;
 
@@ -36,7 +38,7 @@ enum Shape {
 
 impl Check for ConstGroupEnumShape {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -89,12 +91,12 @@ fn analyze_file(
             continue;
         };
         let line = group.first().map_or(0, |e| e.line);
-        if sup.is_suppressed(line, ID) {
+        if sup.is_suppressed(line, consts::ID) {
             continue;
         }
         let key = format!("{rel}:{line}:{prefix}{ty}");
         out.push(Violation::warn(
-            ID,
+            consts::ID,
             key,
             hint_for(&prefix, &ty, &group, shape),
         ));

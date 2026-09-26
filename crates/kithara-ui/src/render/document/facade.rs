@@ -19,35 +19,37 @@ use crate::{
     skin::{ColorRole, SkinDoc},
 };
 
-const HOSTED_MODULES: [&str; 27] = [
-    "app-bar",
-    "app-deck",
-    "app-library",
-    "app-menu",
-    "app-menu-module-cell",
-    "app-menu-window-row",
-    "app-select-row",
-    "app-strip",
-    "app-strip-eq-3-band",
-    "app-strip-eq-4-band",
-    "app-mixer",
-    "app-mixer-single",
-    "app-overview",
-    "app-overview-single",
-    "deck-overview-row",
-    "gallery-knobs",
-    "gallery-meters",
-    "gallery-toggles",
-    "gallery-chips",
-    "gallery-buttons-tab",
-    "gallery-cells-tab",
-    "gallery-faders-tab",
-    "gallery-library2-tab",
-    "gallery-table-tab",
-    "gallery-tree-tab",
-    "gallery-module-tabs",
-    "gallery-nav",
-];
+mod consts {
+    pub(super) const HOSTED_MODULES: [&str; 27] = [
+        "app-bar",
+        "app-deck",
+        "app-library",
+        "app-menu",
+        "app-menu-module-cell",
+        "app-menu-window-row",
+        "app-select-row",
+        "app-strip",
+        "app-strip-eq-3-band",
+        "app-strip-eq-4-band",
+        "app-mixer",
+        "app-mixer-single",
+        "app-overview",
+        "app-overview-single",
+        "deck-overview-row",
+        "gallery-knobs",
+        "gallery-meters",
+        "gallery-toggles",
+        "gallery-chips",
+        "gallery-buttons-tab",
+        "gallery-cells-tab",
+        "gallery-faders-tab",
+        "gallery-library2-tab",
+        "gallery-table-tab",
+        "gallery-tree-tab",
+        "gallery-module-tabs",
+        "gallery-nav",
+    ];
+}
 
 /// Produces a complete host output from a compiled document.
 ///
@@ -138,7 +140,7 @@ where
                     ReadValue::Text(text) => Some(text.to_owned()),
                     _ => None,
                 });
-            let content_hosted = HOSTED_MODULES.contains(&ctx.ui.resolve(*module));
+            let content_hosted = consts::HOSTED_MODULES.contains(&ctx.ui.resolve(*module));
             let chrome_hosted = *chrome == ChromeStyle::Full || drop.is_some();
             let content = (!collapsed).then(|| {
                 let child = expanded(
@@ -833,7 +835,7 @@ fn main_minimum(
 }
 
 fn hosts_engine(ui: &CompiledUi, owner: InternId, address: &Address<'_>) -> bool {
-    HOSTED_MODULES
+    consts::HOSTED_MODULES
         .iter()
         .any(|module| ui.includes_module(owner, address, module))
 }

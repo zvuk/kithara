@@ -4,40 +4,13 @@ use num_traits::AsPrimitive;
 use smallvec::SmallVec;
 
 use crate::{
-    ChunkRetire, GaplessInfo, GaplessTailCompensation, gapless::heuristic::SilenceTrimParams,
+    ChunkRetire, GaplessInfo, GaplessTailCompensation, consts,
+    gapless::heuristic::SilenceTrimParams,
 };
 
 /// Inline batch of chunks released by one `GaplessTrimmer` operation.
 pub type GaplessOutput = SmallVec<[AudioChunk; 2]>;
 type TailBuffer = SmallVec<[AudioChunk; 4]>;
-
-struct Consts;
-impl Consts {
-    /// Length of the click-suppression fade-in applied after every
-    /// heuristic trim (silence or codec-priming). 3 ms is short
-    /// enough to be inaudible as a transient but long enough to mask
-    /// the level discontinuity at the trim boundary.
-    const FADE_IN_DURATION_MS: u64 = 3;
-
-    /// Length of the click-suppression fade-out applied to the very
-    /// end of the buffered audio after a heuristic trailing-silence
-    /// trim. Mirror of `Consts::FADE_IN_DURATION_MS` for the trailing side;
-    /// same reasoning (mask any sub-sample boundary mismatch left by
-    /// the trim search).
-    const FADE_OUT_DURATION_MS: u64 = 3;
-
-    /// Window length (in milliseconds) used by the trailing silence
-    /// search. Per-sample threshold tests false-positive on zero-
-    /// crossings of any periodic signal — at 800 Hz a sine passes
-    /// below `1e-3` for ~3 frames every cycle, which the old
-    /// algorithm classified as silence and ate into audible content.
-    /// A 10 ms window contains many full cycles of typical audio and
-    /// integrates over them to get a stable energy estimate; it also
-    /// averages out lossy-codec quantisation noise floors (AAC
-    /// commonly sits around -50..-60 dB in quiet regions) so a real
-    /// silent suffix is recognised reliably.
-    const TRAILING_SILENCE_WINDOW_MS: u64 = 10;
-}
 
 /// Stateful PCM trimmer that applies one track's gapless contract.
 #[derive(Debug, Default, fieldwork::Fieldwork)]
@@ -67,7 +40,7 @@ enum GaplessMode {
     Disabled,
     Fixed {
         leading_remaining: u64,
-        /// Click-suppression fade applied to the first `Consts::FADE_IN_DURATION_MS`
+        /// Click-suppression fade applied to the first `consts::FADE_IN_DURATION_MS`
         /// of audio that survives the leading trim. `None` for
         /// metadata-driven trim — that boundary is sample-exact.
         fade_in: Option<FadeInState>,
@@ -157,7 +130,7 @@ impl FadeInState {
 
     fn for_sample_rate(sample_rate: u32) -> Self {
         let total_frames =
-            u64::from(sample_rate.max(1)).saturating_mul(Consts::FADE_IN_DURATION_MS) / 1000;
+            u64::from(sample_rate.max(1)).saturating_mul(consts::FADE_IN_DURATION_MS) / 1000;
         let total_frames = u16::try_from(total_frames.clamp(1, 65_535)).unwrap_or(u16::MAX);
         Self {
             total_frames,
@@ -436,7 +409,7 @@ fn flush_heuristic(ctx: &mut TrimCtx) -> GaplessOutput {
     ready
 }
 
-/// Apply a raised-cosine fade-out to the last `Consts::FADE_OUT_DURATION_MS`
+/// Apply a raised-cosine fade-out to the last `consts::FADE_OUT_DURATION_MS`
 /// of audio buffered in `tail_buffer`. Modifies samples in place; if
 /// fewer frames are buffered than the fade window, the entire tail is
 /// shaped (gain still goes from 1.0 down to ~0.0 across whatever is
@@ -446,7 +419,7 @@ fn apply_trailing_fade_out(tail_buffer: &mut TailBuffer, sample_rate: u32) {
         return;
     }
     let total_frames_u64 =
-        u64::from(sample_rate.max(1)).saturating_mul(Consts::FADE_OUT_DURATION_MS) / 1000;
+        u64::from(sample_rate.max(1)).saturating_mul(consts::FADE_OUT_DURATION_MS) / 1000;
     let total_frames = usize_from_u64_saturating(total_frames_u64).max(1);
     let denom = u32::try_from(total_frames.saturating_sub(1).max(1)).unwrap_or(u32::MAX);
     let denom = f32::from(u16::try_from(denom).unwrap_or(u16::MAX));
@@ -601,7 +574,7 @@ fn trim_tail_frames(
 }
 
 /// Walk frames from the end of `tail_buffer`, group them into
-/// `Consts::TRAILING_SILENCE_WINDOW_MS` windows, and count frames as silent
+/// `consts::TRAILING_SILENCE_WINDOW_MS` windows, and count frames as silent
 /// while window-mean-|sample| stays below `threshold_amp`. Returns the
 /// largest tail length whose energy is still below the floor.
 ///
@@ -626,7 +599,7 @@ fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
         .map_or(48_000, |chunk| chunk.spec().sample_rate.get())
         .max(1);
     let window_frames =
-        (u64::from(sample_rate).saturating_mul(Consts::TRAILING_SILENCE_WINDOW_MS) / 1000).max(1);
+        (u64::from(sample_rate).saturating_mul(consts::TRAILING_SILENCE_WINDOW_MS) / 1000).max(1);
     let threshold = f64::from(threshold_amp);
 
     let mut silent_frames = 0u64;

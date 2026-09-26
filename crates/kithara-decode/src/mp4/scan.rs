@@ -7,44 +7,7 @@ use kithara_bufpool::{ByteBuffer, HasPool, PoolError, PoolRegion};
 use smallvec::SmallVec;
 use thiserror::Error;
 
-use crate::traits::DecoderInput;
-
-struct Consts;
-impl Consts {
-    const BOX_DATA: [u8; 4] = *b"data";
-    const BOX_EDTS: [u8; 4] = *b"edts";
-    const BOX_ELST: [u8; 4] = *b"elst";
-    const BOX_FREEFORM: [u8; 4] = *b"----";
-    const BOX_ILST: [u8; 4] = *b"ilst";
-    const BOX_MDHD: [u8; 4] = *b"mdhd";
-    const BOX_MDIA: [u8; 4] = *b"mdia";
-    const BOX_MEAN: [u8; 4] = *b"mean";
-    const BOX_META: [u8; 4] = *b"meta";
-    const BOX_MINF: [u8; 4] = *b"minf";
-    const BOX_MOOF: [u8; 4] = *b"moof";
-    const BOX_MOOV: [u8; 4] = *b"moov";
-    const BOX_MVEX: [u8; 4] = *b"mvex";
-    const BOX_MVHD: [u8; 4] = *b"mvhd";
-    const BOX_NAME: [u8; 4] = *b"name";
-    const BOX_STBL: [u8; 4] = *b"stbl";
-    const BOX_STSD: [u8; 4] = *b"stsd";
-    const BOX_TRAK: [u8; 4] = *b"trak";
-    const BOX_UDTA: [u8; 4] = *b"udta";
-
-    /// Hard ceiling for `elst` entries to keep adversarial inputs
-    /// from forcing huge allocations. Real edit lists in audio files
-    /// are tiny.
-    const ELST_MAX_ENTRIES: usize = 4096;
-
-    /// Hard ceiling for the `----` payload we are willing to pull
-    /// into memory while looking for an iTunSMPB tag. Freeform tags
-    /// are kilobytes at most; this stops adversarial inputs from
-    /// forcing large allocations during a probe.
-    const FREEFORM_MAX_BYTES: usize = 64 * 1024;
-
-    const ITUNES_MEAN: &str = "com.apple.iTunes";
-    const ITUNSMPB_NAME: &str = "iTunSMPB";
-}
+use crate::{consts, traits::DecoderInput};
 
 /// Media-timing pair extracted from an `mdhd` box.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,7 +152,7 @@ where
     }
 
     fn parse_edts(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
-        self.walk_payload_child(end, Consts::BOX_ELST, "elst", |this, payload| {
+        self.walk_payload_child(end, consts::BOX_ELST, "elst", |this, payload| {
             let entries = parse_elst(payload)?;
             Ok(this.visitor.on_track_edit_list(&entries))
         })
@@ -202,7 +165,7 @@ where
         let start = self.reader.stream_position()?;
         let payload_len = end.saturating_sub(start);
         let too_big =
-            usize::try_from(payload_len).map_or(true, |len| len > Consts::FREEFORM_MAX_BYTES);
+            usize::try_from(payload_len).map_or(true, |len| len > consts::FREEFORM_MAX_BYTES);
         if payload_len == 0 || too_big {
             return Ok(ControlFlow::Continue(()));
         }
@@ -213,9 +176,9 @@ where
 
         let _ = self.walk_children(end, |this, header| {
             match header.kind {
-                Consts::BOX_MEAN => mean = this.read_text_fullbox_child(header, "mean")?,
-                Consts::BOX_NAME => name = this.read_text_fullbox_child(header, "name")?,
-                Consts::BOX_DATA => {
+                consts::BOX_MEAN => mean = this.read_text_fullbox_child(header, "mean")?,
+                consts::BOX_NAME => name = this.read_text_fullbox_child(header, "name")?,
+                consts::BOX_DATA => {
                     let pos = this.reader.stream_position()?;
                     data_range = Some((pos, header.end));
                 }
@@ -226,10 +189,10 @@ where
 
         let matches = mean
             .as_deref()
-            .is_some_and(|m| m == Consts::ITUNES_MEAN.as_bytes())
+            .is_some_and(|m| m == consts::ITUNES_MEAN.as_bytes())
             && name
                 .as_deref()
-                .is_some_and(|n| n == Consts::ITUNSMPB_NAME.as_bytes());
+                .is_some_and(|n| n == consts::ITUNSMPB_NAME.as_bytes());
         if !matches {
             return Ok(ControlFlow::Continue(()));
         }
@@ -254,21 +217,21 @@ where
     /// Standard items (`covr`, `aART`, `trkn`, …) are skipped without reading
     /// their `data` payloads — that is what keeps cover art out of memory.
     fn parse_ilst(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
-        self.walk_matching_child(end, Consts::BOX_FREEFORM, |this, header| {
+        self.walk_matching_child(end, consts::BOX_FREEFORM, |this, header| {
             this.parse_freeform_tag(header.end)
         })
     }
 
     fn parse_mdia(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
         self.walk_children(end, |this, header| match header.kind {
-            Consts::BOX_MDHD => {
+            consts::BOX_MDHD => {
                 let payload = read_payload(this.reader, header.end, "mdhd", this.pools)?;
                 if let Some(timing) = parse_mdhd(&payload) {
                     return Ok(this.visitor.on_track_media_timing(timing));
                 }
                 Ok(ControlFlow::Continue(()))
             }
-            Consts::BOX_MINF => this.parse_minf(header.end),
+            consts::BOX_MINF => this.parse_minf(header.end),
             _ => Ok(ControlFlow::Continue(())),
         })
     }
@@ -288,35 +251,35 @@ where
             }
         }
 
-        self.walk_matching_child(end, Consts::BOX_ILST, |this, header| {
+        self.walk_matching_child(end, consts::BOX_ILST, |this, header| {
             this.parse_ilst(header.end)
         })
     }
 
     fn parse_minf(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
-        self.walk_matching_child(end, Consts::BOX_STBL, |this, header| {
+        self.walk_matching_child(end, consts::BOX_STBL, |this, header| {
             this.parse_stbl(header.end)
         })
     }
 
     fn parse_moov(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
         self.walk_children(end, |this, header| match header.kind {
-            Consts::BOX_MVHD => {
+            consts::BOX_MVHD => {
                 let payload = read_payload(this.reader, header.end, "mvhd", this.pools)?;
                 if let Some(timescale) = parse_mvhd_timescale(&payload) {
                     return Ok(this.visitor.on_movie_timescale(timescale));
                 }
                 Ok(ControlFlow::Continue(()))
             }
-            Consts::BOX_TRAK => this.parse_trak(header.end),
-            Consts::BOX_META => this.parse_meta(header.end),
-            Consts::BOX_UDTA => this.parse_udta(header.end),
+            consts::BOX_TRAK => this.parse_trak(header.end),
+            consts::BOX_META => this.parse_meta(header.end),
+            consts::BOX_UDTA => this.parse_udta(header.end),
             _ => Ok(ControlFlow::Continue(())),
         })
     }
 
     fn parse_stbl(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
-        self.walk_payload_child(end, Consts::BOX_STSD, "stsd", |this, payload| {
+        self.walk_payload_child(end, consts::BOX_STSD, "stsd", |this, payload| {
             if let Some(fourcc) = parse_stsd_codec(payload)
                 && this.visitor.on_track_codec(fourcc).is_break()
             {
@@ -335,8 +298,8 @@ where
         }
 
         let walk = self.walk_children(end, |this, header| match header.kind {
-            Consts::BOX_MDIA => this.parse_mdia(header.end),
-            Consts::BOX_EDTS => this.parse_edts(header.end),
+            consts::BOX_MDIA => this.parse_mdia(header.end),
+            consts::BOX_EDTS => this.parse_edts(header.end),
             _ => Ok(ControlFlow::Continue(())),
         })?;
 
@@ -349,7 +312,7 @@ where
     }
 
     fn parse_udta(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
-        self.walk_matching_child(end, Consts::BOX_META, |this, header| {
+        self.walk_matching_child(end, consts::BOX_META, |this, header| {
             this.parse_meta(header.end)
         })
     }
@@ -365,7 +328,7 @@ where
 
     fn scan(mut self) -> Result<(), Mp4MetadataError> {
         while let Some(header) = next_box(self.reader, None)? {
-            if header.kind == Consts::BOX_MOOV {
+            if header.kind == consts::BOX_MOOV {
                 let _ = self.parse_moov(header.end)?;
                 return Ok(());
             }
@@ -488,8 +451,8 @@ pub(crate) fn sniff_mp4_fragmented(reader: &mut dyn DecoderInput) -> Option<bool
 fn scan_mp4_fragment_hint(reader: &mut dyn DecoderInput) -> Result<bool, Mp4MetadataError> {
     while let Some(header) = next_box(reader, None)? {
         match header.kind {
-            Consts::BOX_MOOF => return Ok(true),
-            Consts::BOX_MOOV if scan_moov_for_mvex(reader, header.end)? => return Ok(true),
+            consts::BOX_MOOF => return Ok(true),
+            consts::BOX_MOOV if scan_moov_for_mvex(reader, header.end)? => return Ok(true),
             _ => {}
         }
         reader.seek(SeekFrom::Start(header.end))?;
@@ -499,7 +462,7 @@ fn scan_mp4_fragment_hint(reader: &mut dyn DecoderInput) -> Result<bool, Mp4Meta
 
 fn scan_moov_for_mvex(reader: &mut dyn DecoderInput, end: u64) -> Result<bool, Mp4MetadataError> {
     while let Some(header) = next_box(reader, Some(end))? {
-        if header.kind == Consts::BOX_MVEX {
+        if header.kind == consts::BOX_MVEX {
             return Ok(true);
         }
         reader.seek(SeekFrom::Start(header.end))?;
@@ -522,7 +485,7 @@ fn parse_elst(payload: &[u8]) -> Result<SmallVec<[Mp4EditListEntry; 1]>, Mp4Meta
     let entry_count = read_be_u32(slice(payload, 4, 4, "elst entry count")?)
         .ok_or_else(|| invalid("elst entry count is truncated"))? as usize;
 
-    let entry_count = entry_count.min(Consts::ELST_MAX_ENTRIES);
+    let entry_count = entry_count.min(consts::ELST_MAX_ENTRIES);
     let mut offset = 8;
     let mut entries = SmallVec::with_capacity(entry_count);
 

@@ -5,12 +5,10 @@ use crate::{
     types::{Headers, RangeSpec},
 };
 
-struct HttpStatus;
-
-impl HttpStatus {
-    const OK: u16 = 200;
-    const PARTIAL_CONTENT: u16 = 206;
-    const SUCCESS_END: u16 = 300;
+mod consts {
+    pub(super) const OK: u16 = 200;
+    pub(super) const PARTIAL_CONTENT: u16 = 206;
+    pub(super) const SUCCESS_END: u16 = 300;
 }
 
 struct ContentRange {
@@ -20,8 +18,8 @@ struct ContentRange {
 }
 
 pub(crate) fn accepts_response_status(status: u16, accept_partial: bool) -> bool {
-    (HttpStatus::OK..HttpStatus::SUCCESS_END).contains(&status)
-        && (accept_partial || status != HttpStatus::PARTIAL_CONTENT)
+    (consts::OK..consts::SUCCESS_END).contains(&status)
+        && (accept_partial || status != consts::PARTIAL_CONTENT)
 }
 
 pub(crate) fn representation_total(partial: bool, headers: &Headers) -> Option<u64> {
@@ -52,11 +50,11 @@ pub(crate) fn validate_range_response(
     };
 
     match status {
-        HttpStatus::OK if headers.get("content-range").is_none() => Ok(()),
-        HttpStatus::OK => Err(NetError::Decode(format!(
+        consts::OK if headers.get("content-range").is_none() => Ok(()),
+        consts::OK => Err(NetError::Decode(format!(
             "full response for range {requested} at {url} included content-range"
         ))),
-        HttpStatus::PARTIAL_CONTENT => validate_partial_response(requested, headers, url),
+        consts::PARTIAL_CONTENT => validate_partial_response(requested, headers, url),
         _ => Err(NetError::Decode(format!(
             "range request {requested} for {url} returned HTTP {status}; expected 200 or 206"
         ))),

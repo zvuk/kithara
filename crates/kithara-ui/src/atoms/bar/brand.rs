@@ -6,11 +6,13 @@ use crate::{
     skin::{GlobalBarSkin, TextRoleSkin},
 };
 
-/// The wordmark at the head of the global bar, one letter at a time.
-///
-/// The letters are spaced by hand rather than shaped as a word: the gap
-/// between them is what makes it a wordmark instead of a caption.
-const LETTERS: [&str; 7] = ["K", "I", "T", "H", "A", "R", "A"];
+mod consts {
+    /// The wordmark at the head of the global bar, one letter at a time.
+    ///
+    /// The letters are spaced by hand rather than shaped as a word: the gap
+    /// between them is what makes it a wordmark instead of a caption.
+    pub(super) const LETTERS: [&str; 7] = ["K", "I", "T", "H", "A", "R", "A"];
+}
 
 #[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
 #[control_painter(
@@ -39,7 +41,7 @@ impl Brand {
     pub(crate) fn paint(&self, list: &mut DrawListBuilder, text: &mut TextContext, bounds: Rect) {
         list.fill_rect(bounds, self.panel);
         let mut x = bounds.x + self.metrics.brand_padding_x;
-        for letter in LETTERS {
+        for letter in consts::LETTERS {
             let run = text.shape(letter, self.role, None);
             list.text(
                 &run,
@@ -59,7 +61,7 @@ impl Brand {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{Brand, DrawListBuilder, LETTERS, Rect, TextContext};
+    use super::{Brand, DrawListBuilder, Rect, TextContext, consts::LETTERS};
     use crate::{builtin, draw::DrawCmd};
 
     /// Every letter is drawn, in order, each one clear of the last.

@@ -6,8 +6,10 @@ use crate::{
     skin::{SelectSkin, TextRoleSkin},
 };
 
-/// The chevron a select shows on its closing edge.
-const CHEVRON: &str = "\u{2304}";
+mod consts {
+    /// The chevron a select shows on its closing edge.
+    pub(super) const CHEVRON: &str = "\u{2304}";
+}
 
 /// A framed box with a word on one edge and a chevron on the other.
 #[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
@@ -67,10 +69,10 @@ impl Select {
             }),
             self.text,
         );
-        let chevron = text.shape(CHEVRON, self.chevron_role, None);
+        let chevron = text.shape(consts::CHEVRON, self.chevron_role, None);
         list.text(
             &chevron,
-            CHEVRON,
+            consts::CHEVRON,
             Transform::translate(Pt {
                 x: bounds.x + bounds.w - self.metrics.padding_x - chevron.width(),
                 y: center_y(bounds, &chevron),
@@ -84,15 +86,19 @@ impl Select {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{CHEVRON, DrawListBuilder, Rect, Select, TextContext};
+    use super::{DrawListBuilder, Rect, Select, TextContext, consts::CHEVRON};
     use crate::{builtin, draw::DrawCmd};
 
-    const BOUNDS: Rect = Rect {
-        h: 26.0,
-        w: 160.0,
-        x: 4.0,
-        y: 6.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOUNDS: Rect = Rect {
+            h: 26.0,
+            w: 160.0,
+            x: 4.0,
+            y: 6.0,
+        };
+    }
 
     /// The word starts inside the padding on the opening edge and the chevron
     /// ends inside it on the closing one, so a long word cannot push the
@@ -102,7 +108,7 @@ mod tests {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources());
         let mut list = DrawListBuilder::default();
-        Select::new(skin).paint(&mut list, &mut text, "PRESET", BOUNDS);
+        Select::new(skin).paint(&mut list, &mut text, "PRESET", consts::BOUNDS);
         let list = list.finish();
 
         let [_, _, word, chevron] = list.commands() else {
@@ -111,13 +117,13 @@ mod tests {
         assert!(matches!(
             word,
             DrawCmd::Text { content, transform, .. }
-                if content == "PRESET" && transform.dx == BOUNDS.x + skin.select.padding_x
+                if content == "PRESET" && transform.dx == consts::BOUNDS.x + skin.select.padding_x
         ));
         assert!(matches!(
             chevron,
             DrawCmd::Text { content, transform, .. }
                 if content == CHEVRON
-                    && transform.dx < BOUNDS.x + BOUNDS.w - skin.select.padding_x
+                    && transform.dx < consts::BOUNDS.x + consts::BOUNDS.w - skin.select.padding_x
         ));
     }
 }

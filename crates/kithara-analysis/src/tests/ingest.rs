@@ -4,12 +4,13 @@ use kithara_test_utils::kithara;
 
 use super::{
     super::analyzer::AnalyzerBuilder,
-    fixtures::{SR, beat_detector, chunk, sine_from, spec},
+    fixtures::{beat_detector, chunk, sine_from, spec},
 };
 use crate::{
     BeatAnalysisConfig,
     analyzer::{AnalysisDemand, Extent, Ingest},
     beat::GridParams,
+    consts,
     test_pools::{Pools, TestPools, pools},
 };
 
@@ -19,7 +20,7 @@ fn builder(pools: &Pools) -> AnalyzerBuilder<RubatoBackend, TestPools> {
         .with_beat_config(
             BeatAnalysisConfig::builder()
                 .resampler_backend(RubatoBackend::default())
-                .target_rate(SR / 10)
+                .target_rate(consts::FIXTURES_SR / 10)
                 .detector_window_seconds(1)
                 .detector_overlap_seconds(0)
                 .build(),
@@ -29,7 +30,7 @@ fn builder(pools: &Pools) -> AnalyzerBuilder<RubatoBackend, TestPools> {
 
 #[kithara::test]
 fn a_range_the_beat_pass_turned_down_is_told_apart_from_one_it_has(analysis_pcm: &'static [f32]) {
-    let second = usize::try_from(SR).unwrap_or(1);
+    let second = usize::try_from(consts::FIXTURES_SR).unwrap_or(1);
     let step = u64::try_from(second).unwrap_or(1);
     let pools = pools();
     let mut builder = builder(&pools);

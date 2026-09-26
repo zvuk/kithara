@@ -9,8 +9,10 @@ use crate::{
     skin::TextRoleSkin,
 };
 
-/// The chevron between the scope and the path it opens onto.
-const SEPARATOR: &str = "\u{203a}";
+mod consts {
+    /// The chevron between the scope and the path it opens onto.
+    pub(super) const SEPARATOR: &str = "\u{203a}";
+}
 
 /// The strip under the tree: what is in view, and — when the document offers
 /// more than one — which scope it is in view of.
@@ -145,7 +147,7 @@ impl Context {
             x += word(
                 list,
                 text,
-                SEPARATOR,
+                consts::SEPARATOR,
                 self.separator_role,
                 self.separator,
                 x,
@@ -210,15 +212,19 @@ fn word(
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{Context, DrawListBuilder, Rect, SEPARATOR, Scope, TextContext, Viewed};
+    use super::{Context, DrawListBuilder, Rect, Scope, TextContext, Viewed, consts::SEPARATOR};
     use crate::{builtin, draw::DrawCmd};
 
-    const BOUNDS: Rect = Rect {
-        h: 30.0,
-        w: 280.0,
-        x: 0.0,
-        y: 0.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOUNDS: Rect = Rect {
+            h: 30.0,
+            w: 280.0,
+            x: 0.0,
+            y: 0.0,
+        };
+    }
 
     fn drawn(scope: Option<Scope>) -> Vec<DrawCmd> {
         let skin = builtin::skin();
@@ -231,7 +237,7 @@ mod tests {
                 scope,
                 breadcrumb: "All Tracks".to_owned(),
             },
-            BOUNDS,
+            consts::BOUNDS,
         );
         list.finish().commands().to_vec()
     }
@@ -293,7 +299,7 @@ mod tests {
         assert!(matches!(
             commands.last(),
             Some(DrawCmd::Fill { geom: crate::draw::Geom::Rect(rect), .. })
-                if rect.y + rect.h == BOUNDS.y + skin.tree.context_height
+                if rect.y + rect.h == consts::BOUNDS.y + skin.tree.context_height
                     && rect.h == skin.tree.context_divider_width
         ));
     }

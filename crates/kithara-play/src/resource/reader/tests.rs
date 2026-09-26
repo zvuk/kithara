@@ -28,16 +28,10 @@ use ringbuf::traits::{Consumer, Producer};
 use super::*;
 use crate::{
     bridge::{PlayerCmd, PlayerNotification, SharedEq, TrackTransition, slot_channels},
+    consts,
     rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
     test_pools::{TestPools, pools},
 };
-
-struct Consts;
-
-impl Consts {
-    const BLOCK_FRAMES: usize = 512;
-    const SAMPLE_RATE: u32 = 44_100;
-}
 
 struct DropState;
 
@@ -80,7 +74,7 @@ impl Default for EofReader {
             meta: TrackMetadata::default(),
             spec: AudioSpec::new(
                 2,
-                NonZeroU32::new(Consts::SAMPLE_RATE).expect("static rate"),
+                NonZeroU32::new(consts::SAMPLE_RATE).expect("static rate"),
             ),
             position_frames: 0,
             total_frames: 0,
@@ -99,7 +93,7 @@ impl EofReader {
 
     fn position_duration(&self) -> Duration {
         let frames = u32::try_from(self.position_frames).expect("test frame count fits u32");
-        Duration::from_secs_f64(f64::from(frames) / f64::from(Consts::SAMPLE_RATE))
+        Duration::from_secs_f64(f64::from(frames) / f64::from(consts::SAMPLE_RATE))
     }
 
     fn take_frames(&mut self, capacity: usize) -> Option<NonZeroUsize> {
@@ -128,7 +122,7 @@ impl AudioSession for EofReader {
     fn duration(&self) -> Option<Duration> {
         let frames = u32::try_from(self.total_frames).expect("test frame count fits u32");
         Some(Duration::from_secs_f64(
-            f64::from(frames) / f64::from(Consts::SAMPLE_RATE),
+            f64::from(frames) / f64::from(consts::SAMPLE_RATE),
         ))
     }
     fn event_bus(&self) -> &EventBus {
@@ -206,8 +200,8 @@ fn warped_player_resource(
 
 fn process_block(processor: &mut PlayerNodeProcessor, extra: &mut ProcExtra) {
     let info = ProcInfo {
-        sample_rate: NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
-        frames: Consts::BLOCK_FRAMES,
+        sample_rate: NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"),
+        frames: consts::BLOCK_FRAMES,
         in_silence_mask: SilenceMask::default(),
         out_silence_mask: SilenceMask::default(),
         in_constant_mask: ConstantMask::default(),
@@ -218,15 +212,15 @@ fn process_block(processor: &mut PlayerNodeProcessor, extra: &mut ProcExtra) {
         process_to_playback_delay: None,
         did_just_unbypass: false,
         last_marker_instant: InstantSamples(0),
-        sample_rate_recip: f64::from(Consts::SAMPLE_RATE).recip(),
+        sample_rate_recip: f64::from(consts::SAMPLE_RATE).recip(),
         clock_samples: InstantSamples(0),
         duration_since_stream_start: Duration::ZERO,
         stream_status: StreamStatus::empty(),
         dropped_frames: 0,
     };
     let inputs: [&[f32]; 0] = [];
-    let mut left = [0.0; Consts::BLOCK_FRAMES];
-    let mut right = [0.0; Consts::BLOCK_FRAMES];
+    let mut left = [0.0; consts::BLOCK_FRAMES];
+    let mut right = [0.0; consts::BLOCK_FRAMES];
     let mut outputs = [&mut left[..], &mut right[..]];
     let buffers = ProcBuffers {
         inputs: &inputs,
@@ -279,9 +273,9 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
     let effective_rate = if supports_playback_rate() { 1.5 } else { 1.0 };
     let (inputs, mut control) = slot_channels(SharedEq::new(0));
     let shape = StreamShape {
-        sample_rate: NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+        sample_rate: NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"),
         max_block_frames: NonZeroU32::new(
-            u32::try_from(Consts::BLOCK_FRAMES).expect("block size fits u32"),
+            u32::try_from(consts::BLOCK_FRAMES).expect("block size fits u32"),
         )
         .expect("static block size"),
     };
@@ -292,7 +286,7 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
         logger,
         store: ProcStore::with_capacity(0),
         scratch_buffers: ConstSequentialBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(
-            Consts::BLOCK_FRAMES,
+            consts::BLOCK_FRAMES,
         ),
         declick_values: DeclickValues::new(NonZeroU32::new(16).expect("static declick length")),
     };
@@ -330,9 +324,9 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
         .expect("first track loaded")
         .position()
         - first_position;
-    let block_frames = u32::try_from(Consts::BLOCK_FRAMES).expect("block size fits u32");
+    let block_frames = u32::try_from(consts::BLOCK_FRAMES).expect("block size fits u32");
     let expected_advance =
-        f64::from(block_frames) * f64::from(effective_rate) / f64::from(Consts::SAMPLE_RATE);
+        f64::from(block_frames) * f64::from(effective_rate) / f64::from(consts::SAMPLE_RATE);
     assert!((first_advance - expected_advance).abs() < f64::EPSILON);
     assert_eq!(
         processor.playback().rate.load(Ordering::Relaxed),
@@ -456,7 +450,7 @@ fn seek_withdraws_the_resident_warp_context(half: Vec<f32>) {
     let mut resource = Resource::from_reader(EofReader::with_frames(half[..2].to_vec()), None);
     let output = OutputContext::new(
         SessionFrame::new(0)..SessionFrame::new(1),
-        NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+        NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"),
         SessionEpoch::new(1),
         None,
     )

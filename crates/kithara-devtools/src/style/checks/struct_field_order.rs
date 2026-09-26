@@ -17,7 +17,9 @@ use crate::{
     style::config::StructFieldOrderConfig,
 };
 
-pub(crate) const ID: &str = "struct_field_order";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "struct_field_order";
+}
 
 pub(crate) struct StructFieldOrder;
 
@@ -47,7 +49,7 @@ impl Check for StructFieldOrder {
     }
 
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -340,7 +342,7 @@ fn check_field_block(
         "{type_kind} `{type_name}` field order should be (visibility, type, name): \
          expected [{expected_summary}], found [{actual_summary}]"
     );
-    out.push(Violation::warn(ID, key, msg));
+    out.push(Violation::warn(consts::ID, key, msg));
 }
 
 #[derive(Debug, Clone)]

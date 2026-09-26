@@ -15,7 +15,7 @@ use tempfile::NamedTempFile;
 use tracing::info;
 
 use super::current_client_environment;
-use crate::ci::build_cache::TARGET_HEARTBEAT_FILE;
+use crate::consts;
 
 struct Snapshot;
 
@@ -360,7 +360,10 @@ fn publish(target: &Path, fingerprint: &str, mc: &Path) -> Result<()> {
             .args(["--create", "--zstd", "--file"])
             .arg(archive.path())
             .arg("--exclude=.kithara-ci-lease")
-            .arg(format!("--exclude={TARGET_HEARTBEAT_FILE}"))
+            .arg(format!(
+                "--exclude={TARGET_HEARTBEAT_FILE}",
+                TARGET_HEARTBEAT_FILE = consts::TARGET_HEARTBEAT_FILE
+            ))
             .arg("--directory")
             .arg(target)
             .arg("."),
@@ -425,7 +428,7 @@ fn require_target(target: &Path, may_create: bool) -> Result<()> {
                 };
                 matches!(
                     entry.file_name().to_str(),
-                    Some(name) if name == lease::FILE || name == TARGET_HEARTBEAT_FILE
+                    Some(name) if name == lease::FILE || name == consts::TARGET_HEARTBEAT_FILE
                 ) && entry.file_type().is_ok_and(|file_type| file_type.is_file())
             }),
             "target snapshot restore requires an empty private target directory except its live job markers"
@@ -862,7 +865,7 @@ mod tests {
         let target = directory.path().join("target");
         require_target(&target, true).unwrap();
         fs::write(target.join(lease::FILE), "held").unwrap();
-        fs::write(target.join(TARGET_HEARTBEAT_FILE), "alive").unwrap();
+        fs::write(target.join(consts::TARGET_HEARTBEAT_FILE), "alive").unwrap();
 
         assert!(require_target(&target, true).is_ok());
     }

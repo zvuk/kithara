@@ -27,16 +27,18 @@ use super::ring::{
     CountingNode, CountingProbe, DeterministicToneNode, ManualRingConfig, ManualRingSession,
     RingRenderError, RingSessionError, fixtures::install_stereo_source,
 };
-
-const SAMPLE_RATE: u32 = 48_000;
-const BLOCK_FRAMES: u32 = 512;
+use crate::consts;
 
 fn session_rate() -> NonZeroU32 {
-    NonZeroU32::new(SAMPLE_RATE).expect("test sample rate is non-zero")
+    NonZeroU32::new(consts::RING_ADMISSION_SAMPLE_RATE).expect("test sample rate is non-zero")
 }
 
 fn config(capacity_blocks: usize) -> ManualRingConfig {
-    ManualRingConfig::new(session_rate(), BLOCK_FRAMES, capacity_blocks)
+    ManualRingConfig::new(
+        session_rate(),
+        consts::RING_ADMISSION_BLOCK_FRAMES,
+        capacity_blocks,
+    )
 }
 
 fn tone_session(capacity_blocks: usize) -> ManualRingSession {
@@ -64,7 +66,7 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
             eq_layout: Vec::new(),
             gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
             pools: pools(),
-            sample_rate: SAMPLE_RATE,
+            sample_rate: consts::RING_ADMISSION_SAMPLE_RATE,
         })
         .expect("register player command")
     {
@@ -79,7 +81,7 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
                 master_volume: 1.0,
                 render_quantum_frames: None,
                 response_budget_frames: NonZeroUsize::new(448),
-                sample_rate: SAMPLE_RATE,
+                sample_rate: consts::RING_ADMISSION_SAMPLE_RATE,
             })
             .expect("start player command"),
     );
@@ -120,7 +122,7 @@ fn credit_partition_is_equivalent() {
     split.credit(1).expect("second split credit");
     combined.credit(2).expect("combined credits");
 
-    let total_frames = (BLOCK_FRAMES as usize) * 2;
+    let total_frames = (consts::RING_ADMISSION_BLOCK_FRAMES as usize) * 2;
     assert_eq!(
         split.drain(total_frames).expect("drain split session"),
         combined
@@ -141,7 +143,7 @@ fn commit_ledger_matches_firewheel_clock() {
 
     session.credit(CREDITS).expect("render credited blocks");
 
-    let expected = (CREDITS as u64) * u64::from(BLOCK_FRAMES);
+    let expected = (CREDITS as u64) * u64::from(consts::RING_ADMISSION_BLOCK_FRAMES);
     assert_eq!(
         session.committed_frames().expect("committed ledger"),
         expected
@@ -203,20 +205,23 @@ fn clock_is_monotone_across_pause_and_graph_edits() {
     session.credit(1).expect("credit playing block");
     assert_eq!(
         session.clock_samples().expect("playing clock"),
-        initial + u64::from(BLOCK_FRAMES)
+        initial + u64::from(consts::RING_ADMISSION_BLOCK_FRAMES)
     );
 
     player.pause();
     session.credit(1).expect("credit paused block");
     assert_eq!(
         session.clock_samples().expect("paused clock"),
-        initial + 2 * u64::from(BLOCK_FRAMES)
+        initial + 2 * u64::from(consts::RING_ADMISSION_BLOCK_FRAMES)
     );
 
     player.play();
     session.credit(1).expect("credit resumed block");
     let before_edit = session.clock_samples().expect("resumed clock");
-    assert_eq!(before_edit, initial + 3 * u64::from(BLOCK_FRAMES));
+    assert_eq!(
+        before_edit,
+        initial + 3 * u64::from(consts::RING_ADMISSION_BLOCK_FRAMES)
+    );
 
     let unrelated = register_started_player(&session);
     assert_eq!(
@@ -227,7 +232,10 @@ fn clock_is_monotone_across_pause_and_graph_edits() {
     let after_add = session
         .clock_samples()
         .expect("clock after added-node credit");
-    assert_eq!(after_add, before_edit + u64::from(BLOCK_FRAMES));
+    assert_eq!(
+        after_add,
+        before_edit + u64::from(consts::RING_ADMISSION_BLOCK_FRAMES)
+    );
     remove_player(&session, unrelated);
     assert_eq!(
         session.clock_samples().expect("clock after remove"),
@@ -238,7 +246,7 @@ fn clock_is_monotone_across_pause_and_graph_edits() {
         session
             .clock_samples()
             .expect("clock after removed-node credit"),
-        after_add + u64::from(BLOCK_FRAMES)
+        after_add + u64::from(consts::RING_ADMISSION_BLOCK_FRAMES)
     );
 }
 
@@ -247,7 +255,7 @@ fn graph_edits_compile_without_tick() {
     let session = tone_session(1);
     assert!(
         session
-            .drain(BLOCK_FRAMES as usize)
+            .drain(consts::RING_ADMISSION_BLOCK_FRAMES as usize)
             .expect("drain before first credit")
             .is_empty()
     );
@@ -257,7 +265,7 @@ fn graph_edits_compile_without_tick() {
         .expect("credit compiles pending tone graph");
 
     let rendered = session
-        .drain(BLOCK_FRAMES as usize)
+        .drain(consts::RING_ADMISSION_BLOCK_FRAMES as usize)
         .expect("drain compiled tone graph");
     assert!(rendered.iter().any(|sample| *sample != 0.0));
 }
@@ -274,7 +282,7 @@ fn render_before_arming_is_refused_typed() {
     assert_eq!(session.clock_samples().expect("pre-arm clock"), 0);
     assert!(
         session
-            .drain(BLOCK_FRAMES as usize)
+            .drain(consts::RING_ADMISSION_BLOCK_FRAMES as usize)
             .expect("pre-arm ring")
             .is_empty()
     );
@@ -302,13 +310,16 @@ fn full_ring_backpressures_typed() {
     );
 
     let drained = session
-        .drain(BLOCK_FRAMES as usize)
+        .drain(consts::RING_ADMISSION_BLOCK_FRAMES as usize)
         .expect("drain full ring");
-    assert_eq!(drained.len(), (BLOCK_FRAMES as usize) * 2);
+    assert_eq!(
+        drained.len(),
+        (consts::RING_ADMISSION_BLOCK_FRAMES as usize) * 2
+    );
     session.credit(1).expect("credit after draining ring");
     assert_eq!(
         session.clock_samples().expect("clock after retry"),
-        clock_at_full + u64::from(BLOCK_FRAMES)
+        clock_at_full + u64::from(consts::RING_ADMISSION_BLOCK_FRAMES)
     );
 }
 

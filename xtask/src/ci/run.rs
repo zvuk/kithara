@@ -16,7 +16,10 @@ use super::{
     process::{Process, Recording},
     verdict,
 };
-use crate::config::{CiLaneConfig, KitharaExt};
+use crate::{
+    config::{CiLaneConfig, KitharaExt},
+    consts,
+};
 
 /// One CI job. Lanes are deliberately narrow: a job that does one thing can be
 /// retried, skipped, or read on its own, and the step that failed is the job
@@ -183,36 +186,14 @@ pub(crate) struct RunArgs {
     dry_run: bool,
 }
 
-struct Consts;
-
-impl Consts {
-    const CONNECTION_REFUSED_CODE: Option<&str> = if cfg!(target_os = "macos") {
-        Some("(os error 61)")
-    } else if cfg!(target_os = "linux") {
-        Some("(os error 111)")
-    } else if cfg!(windows) {
-        Some("(os error 10061)")
-    } else {
-        None
-    };
-    const SCCACHE_COMMAND_ERROR: i32 = 2;
-    const SCCACHE_CONNECT_ERROR: &str = "sccache: error: couldn't connect to server";
-    const SCCACHE_MISSING_UDS_CODE: Option<&str> = if cfg!(unix) {
-        Some("(os error 2)")
-    } else {
-        None
-    };
-    const SCCACHE_STOP_MESSAGE: &str = "Stopping sccache server...";
-}
-
 fn sccache_server_is_stopped(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> bool {
     let stdout = String::from_utf8_lossy(stdout);
     let stderr = String::from_utf8_lossy(stderr);
-    code == Some(Consts::SCCACHE_COMMAND_ERROR)
-        && stdout.trim() == Consts::SCCACHE_STOP_MESSAGE
-        && stderr.contains(Consts::SCCACHE_CONNECT_ERROR)
-        && (Consts::CONNECTION_REFUSED_CODE.is_some_and(|code| stderr.contains(code))
-            || Consts::SCCACHE_MISSING_UDS_CODE.is_some_and(|code| stderr.contains(code)))
+    code == Some(consts::SCCACHE_COMMAND_ERROR)
+        && stdout.trim() == consts::SCCACHE_STOP_MESSAGE
+        && stderr.contains(consts::SCCACHE_CONNECT_ERROR)
+        && (consts::CONNECTION_REFUSED_CODE.is_some_and(|code| stderr.contains(code))
+            || consts::SCCACHE_MISSING_UDS_CODE.is_some_and(|code| stderr.contains(code)))
 }
 
 fn sccache_server_already_stopped(output: &Output) -> bool {
@@ -464,13 +445,13 @@ mod tests {
 
     use super::{
         super::{config::fixture, process::Recording},
-        CacheGroup, Consts, Lane, PipelineKind, command_lane, execute_lane,
-        sccache_server_is_stopped,
+        CacheGroup, Lane, PipelineKind, command_lane, execute_lane, sccache_server_is_stopped,
     };
     use crate::{
         Cli,
         ci::process::Process,
         config::{CiLaneConfig, KitharaExt},
+        consts,
     };
 
     /// The repository the lane declarations are read from, whatever checkout a
@@ -868,8 +849,8 @@ mod tests {
                 ),
             ]);
             if scenario == "already-stopped" {
-                let refused = Consts::SCCACHE_MISSING_UDS_CODE
-                    .or(Consts::CONNECTION_REFUSED_CODE)
+                let refused = consts::SCCACHE_MISSING_UDS_CODE
+                    .or(consts::CONNECTION_REFUSED_CODE)
                     .expect("this platform names an error code for a server that is not listening");
                 vars.insert(
                     OsString::from("KITHARA_TEST_STDOUT"),
@@ -1121,7 +1102,7 @@ mod tests {
 
     #[test]
     fn sccache_connection_refusal_is_an_already_stopped_state() {
-        let Some(os_error) = Consts::CONNECTION_REFUSED_CODE else {
+        let Some(os_error) = consts::CONNECTION_REFUSED_CODE else {
             return;
         };
         let stderr = format!(
@@ -1130,7 +1111,7 @@ mod tests {
         );
 
         assert!(sccache_server_is_stopped(
-            Some(Consts::SCCACHE_COMMAND_ERROR),
+            Some(consts::SCCACHE_COMMAND_ERROR),
             b"Stopping sccache server...\n",
             stderr.as_bytes(),
         ));
@@ -1140,7 +1121,7 @@ mod tests {
     #[test]
     fn a_missing_sccache_uds_is_an_already_stopped_state() {
         assert!(sccache_server_is_stopped(
-            Some(Consts::SCCACHE_COMMAND_ERROR),
+            Some(consts::SCCACHE_COMMAND_ERROR),
             b"Stopping sccache server...\n",
             b"sccache: error: couldn't connect to server\n\
               sccache: caused by: No such file or directory (os error 2)",
@@ -1149,7 +1130,7 @@ mod tests {
 
     #[test]
     fn sccache_rejects_another_platforms_connection_error() {
-        let Some(expected) = Consts::CONNECTION_REFUSED_CODE else {
+        let Some(expected) = consts::CONNECTION_REFUSED_CODE else {
             return;
         };
         for os_error in ["(os error 61)", "(os error 111)", "(os error 10061)"] {
@@ -1161,7 +1142,7 @@ mod tests {
                  sccache: caused by: connection failed {os_error}"
             );
             assert!(!sccache_server_is_stopped(
-                Some(Consts::SCCACHE_COMMAND_ERROR),
+                Some(consts::SCCACHE_COMMAND_ERROR),
                 b"Stopping sccache server...\n",
                 stderr.as_bytes(),
             ));
@@ -1171,7 +1152,7 @@ mod tests {
     #[test]
     fn sccache_does_not_hide_other_exit_two_failures() {
         const UNRELATED_EXIT_CODE: i32 = 7;
-        let Some(os_error) = Consts::CONNECTION_REFUSED_CODE else {
+        let Some(os_error) = consts::CONNECTION_REFUSED_CODE else {
             return;
         };
         let refusal = format!(
@@ -1185,18 +1166,18 @@ mod tests {
             refusal.as_bytes(),
         ));
         assert!(!sccache_server_is_stopped(
-            Some(Consts::SCCACHE_COMMAND_ERROR),
+            Some(consts::SCCACHE_COMMAND_ERROR),
             b"Unexpected command output\n",
             refusal.as_bytes(),
         ));
         let missing_header = format!("sccache: error: configuration is invalid {os_error}");
         assert!(!sccache_server_is_stopped(
-            Some(Consts::SCCACHE_COMMAND_ERROR),
+            Some(consts::SCCACHE_COMMAND_ERROR),
             b"Stopping sccache server...\n",
             missing_header.as_bytes(),
         ));
         assert!(!sccache_server_is_stopped(
-            Some(Consts::SCCACHE_COMMAND_ERROR),
+            Some(consts::SCCACHE_COMMAND_ERROR),
             b"Stopping sccache server...\n",
             b"sccache: error: couldn't connect to server\n\
               sccache: caused by: connection failed without an operating-system code",
@@ -1269,12 +1250,6 @@ mod tests {
         names
     }
 
-    /// Lanes no pipeline schedules and no fleet claims. Each one is reached by
-    /// name alone and says so with empty membership, which is a declaration
-    /// rather than an oversight - and naming them here is what keeps a lane
-    /// that merely forgot its membership from hiding among them.
-    const BY_NAME_ONLY: [&str; 1] = ["deep-ui"];
-
     #[test]
     fn a_pipeline_job_only_ever_runs_a_declared_lane() {
         let lanes = declared_lanes();
@@ -1313,7 +1288,7 @@ mod tests {
             assert!(
                 scheduled.contains(&name)
                     || !lane.kinds_github.is_empty()
-                    || BY_NAME_ONLY.contains(&name.as_str()),
+                    || consts::BY_NAME_ONLY.contains(&name.as_str()),
                 "nothing reaches the {name} lane: no pipeline job runs it, it claims no \
                  GitHub pipeline kind, and it is not named as reachable by name alone"
             );

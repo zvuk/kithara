@@ -27,9 +27,9 @@ use crate::{
     offline::OfflineQueue,
 };
 
-pub struct Consts;
+pub mod consts {
+    use super::{FilterKind, MIN_SETTLE_RATIO};
 
-impl Consts {
     pub const AUDIBLE_PEAK: f32 = 0.1;
     pub const BLOCK_FRAMES: usize = 480;
     pub const CHANNELS: usize = 2;
@@ -110,11 +110,11 @@ pub fn peak(pcm: &[f32]) -> f32 {
 /// exactly like a deck that never started.
 pub async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>, u64) {
     let pools = pools();
-    let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero");
+    let sample_rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero");
     let session = HostConfig::offline(pools.clone())
         .sample_rate(sample_rate)
         .max_block_frames(
-            NonZeroU32::new(Consts::BLOCK_FRAMES as u32).expect("block size is non-zero"),
+            NonZeroU32::new(consts::BLOCK_FRAMES as u32).expect("block size is non-zero"),
         )
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
@@ -148,9 +148,9 @@ pub async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>, u64) {
             deck.play();
         })
         .await;
-    observe(&harness, Consts::SETTLE_BLOCKS).await;
+    observe(&harness, consts::SETTLE_BLOCKS).await;
     let (_, audible) = observe_until(&harness, |block| {
-        last_block_peak(block) > Consts::AUDIBLE_PEAK
+        last_block_peak(block) > consts::AUDIBLE_PEAK
     })
     .await;
     assert!(audible, "sine must be audible before the parameter change");
@@ -167,14 +167,14 @@ pub async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>, u64) {
 /// boundary can only have come from DSP.
 pub async fn observe(harness: &OfflineQueue<TestPools>, blocks: usize) -> Vec<f32> {
     let block_budget =
-        Duration::from_secs_f64(Consts::BLOCK_FRAMES as f64 / f64::from(Consts::SAMPLE_RATE));
-    let mut pcm = Vec::with_capacity(blocks * Consts::BLOCK_FRAMES * Consts::CHANNELS);
+        Duration::from_secs_f64(consts::BLOCK_FRAMES as f64 / f64::from(consts::SAMPLE_RATE));
+    let mut pcm = Vec::with_capacity(blocks * consts::BLOCK_FRAMES * consts::CHANNELS);
     for _ in 0..blocks {
         harness
             .run(kithara::queue::QueueControl::tick)
             .await
             .expect("tick sine queue");
-        pcm.extend(harness.render(Consts::BLOCK_FRAMES).await);
+        pcm.extend(harness.render(consts::BLOCK_FRAMES).await);
         time::sleep(block_budget).await;
     }
     pcm
@@ -189,8 +189,8 @@ pub async fn observe_until(
     arrived: impl Fn(&[f32]) -> bool,
 ) -> (Vec<f32>, bool) {
     let mut pcm =
-        Vec::with_capacity(Consts::SETTLE_BLOCKS * Consts::BLOCK_FRAMES * Consts::CHANNELS);
-    for _ in 0..Consts::SETTLE_BLOCKS {
+        Vec::with_capacity(consts::SETTLE_BLOCKS * consts::BLOCK_FRAMES * consts::CHANNELS);
+    for _ in 0..consts::SETTLE_BLOCKS {
         let block = observe(harness, 1).await;
         let done = arrived(&block);
         pcm.extend(block);
@@ -202,14 +202,14 @@ pub async fn observe_until(
 }
 
 pub fn last_block_peak(pcm: &[f32]) -> f32 {
-    let block = Consts::BLOCK_FRAMES * Consts::CHANNELS;
+    let block = consts::BLOCK_FRAMES * consts::CHANNELS;
     peak(&pcm[pcm.len().saturating_sub(block)..])
 }
 
 /// The last frame of `before` followed by `after`: an unsmoothed step lands on
 /// the boundary between the two windows, not inside `after`.
 pub fn across(before: &[f32], after: &[f32]) -> Vec<f32> {
-    let frame = before.len().saturating_sub(Consts::CHANNELS);
+    let frame = before.len().saturating_sub(consts::CHANNELS);
     before[frame..].iter().chain(after).copied().collect()
 }
 
@@ -221,11 +221,11 @@ pub fn assert_step_is_ramped(
     smooth_seconds: f32,
     settle_ratio: f32,
 ) {
-    let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero");
-    let baseline = max_sample_jump(before, Consts::CHANNELS);
+    let sample_rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero");
+    let baseline = max_sample_jump(before, consts::CHANNELS);
     let bound = baseline * (1.0 + 2f32.powi(-8))
         + ramp_bound(amplitude_delta, smooth_seconds, settle_ratio, sample_rate);
-    let observed = max_sample_jump(&across(before, after), Consts::CHANNELS);
+    let observed = max_sample_jump(&across(before, after), consts::CHANNELS);
     assert!(
         observed <= bound,
         "{label}: a step reached DSP unsmoothed: max jump {observed} > bound {bound} (baseline \

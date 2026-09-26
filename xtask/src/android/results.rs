@@ -73,8 +73,7 @@ fn validate(xml: &str) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const RENDER: &str = "com.kithara.OfflineCaptureTest#rendersCleanWav";
+    use crate::consts;
 
     fn report(body: &str) -> String {
         format!("<testsuite>{body}</testsuite>")
@@ -88,7 +87,7 @@ mod tests {
 
     #[test]
     fn instrumentation_requires_reported_cases_to_pass() {
-        assert_eq!(validate(&report(&render(""))).unwrap(), [RENDER]);
+        assert_eq!(validate(&report(&render(""))).unwrap(), [consts::RENDER]);
         for outcome in ["<skipped/>", "<failure/>", "<error/>", "<flakyFailure/>"] {
             assert!(validate(&report(&render(outcome))).is_err(), "{outcome}");
         }

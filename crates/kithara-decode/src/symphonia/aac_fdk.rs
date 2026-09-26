@@ -21,21 +21,20 @@ use symphonia::core::{
 };
 use symphonia_core::{codec_profile, support_audio_codec};
 
-struct Consts;
-impl Consts {
+mod consts {
     /// ADTS sample-frequency-index table (ISO/IEC 13818-7).
-    const AAC_SAMPLE_RATES: [u32; 13] = [
+    pub(super) const AAC_SAMPLE_RATES: [u32; 13] = [
         96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025,
         8_000, 7_350,
     ];
 
     /// Pre-allocated per-frame PCM buffer. AAC frames are at most
     /// 2048 samples × 2 channels for HE-AAC v2.
-    const MAX_SAMPLES: usize = 8192;
+    pub(super) const MAX_SAMPLES: usize = 8192;
 }
 
 fn sample_rate_index(rate: u32) -> u8 {
-    Consts::AAC_SAMPLE_RATES
+    consts::AAC_SAMPLE_RATES
         .iter()
         .position(|r| *r == rate)
         .and_then(|i| u8::try_from(i).ok())
@@ -64,7 +63,7 @@ struct AacStreamConfig {
     channels: u8,
     /// MPEG-4 Audio Object Type (1=Main, 2=LC, 5=SBR, 29=PS, …).
     object_type: u8,
-    /// Index into [`Consts::AAC_SAMPLE_RATES`](Consts::AAC_SAMPLE_RATES).
+    /// Index into [`consts::AAC_SAMPLE_RATES`](consts::AAC_SAMPLE_RATES).
     sample_rate_index: u8,
 }
 
@@ -139,7 +138,7 @@ fn read_object_type(bs: &mut BitReaderLtr<'_>) -> Result<u8> {
 fn read_sample_rate(bs: &mut BitReaderLtr<'_>) -> Result<u32> {
     let idx = bs.read_bits_leq32(4)?;
     if idx < 15 {
-        Ok(Consts::AAC_SAMPLE_RATES
+        Ok(consts::AAC_SAMPLE_RATES
             .get(idx as usize)
             .copied()
             .unwrap_or_default())
@@ -189,7 +188,7 @@ pub(crate) struct AacDecoder {
     #[debug(skip)]
     reset_error: Option<Error>,
     #[debug(skip)]
-    pcm: [i16; Consts::MAX_SAMPLES],
+    pcm: [i16; consts::MAX_SAMPLES],
     /// First-decode-only refresh: rebuild [`Self::buf`] and capture
     /// `outputDelay` once the decoder reports authoritative metadata.
     metadata_validated: bool,
@@ -282,7 +281,7 @@ impl AacDecoder {
             config,
             buf,
             codec_params,
-            pcm: [0; Consts::MAX_SAMPLES],
+            pcm: [0; consts::MAX_SAMPLES],
             delay_remaining: 0,
             metadata_validated: false,
             reset_error: None,

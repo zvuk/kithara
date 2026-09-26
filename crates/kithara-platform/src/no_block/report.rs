@@ -5,13 +5,11 @@ use super::{
     watch::Tier,
 };
 
-struct Consts;
-
-impl Consts {
-    const MAX_ATTEMPT_ID_BYTES: usize = 1_024;
-    const MAX_CANONICAL_FIELD_BYTES: usize = 512;
-    const MAX_RUN_ID_BYTES: usize = 1_024;
-    const SPIN_CPU_FRACTION: f64 = 0.8;
+mod consts {
+    pub(super) const MAX_ATTEMPT_ID_BYTES: usize = 1_024;
+    pub(super) const MAX_CANONICAL_FIELD_BYTES: usize = 512;
+    pub(super) const MAX_RUN_ID_BYTES: usize = 1_024;
+    pub(super) const SPIN_CPU_FRACTION: f64 = 0.8;
 }
 
 enum OverBudgetAction {
@@ -162,31 +160,31 @@ fn nextest_prefix_from(
     if let Some(run_id) = run_id.filter(|value| !value.is_empty()) {
         fields.push(format!(
             "run_id={}",
-            encode_metadata(run_id, Consts::MAX_RUN_ID_BYTES)
+            encode_metadata(run_id, consts::MAX_RUN_ID_BYTES)
         ));
     }
     if let Some(attempt_id) = attempt_id.filter(|value| !value.is_empty()) {
         fields.push(format!(
             "attempt_id={}",
-            encode_metadata(attempt_id, Consts::MAX_ATTEMPT_ID_BYTES)
+            encode_metadata(attempt_id, consts::MAX_ATTEMPT_ID_BYTES)
         ));
     }
     if let Some(binary_id) = binary_id.filter(|value| !value.is_empty()) {
         fields.push(format!(
             "binary_id={}",
-            encode_metadata(binary_id, Consts::MAX_CANONICAL_FIELD_BYTES)
+            encode_metadata(binary_id, consts::MAX_CANONICAL_FIELD_BYTES)
         ));
     }
     if let Some(test_name) = test_name.filter(|value| !value.is_empty()) {
         fields.push(format!(
             "test_name={}",
-            encode_metadata(test_name, Consts::MAX_CANONICAL_FIELD_BYTES)
+            encode_metadata(test_name, consts::MAX_CANONICAL_FIELD_BYTES)
         ));
     }
     if let Some(stress_current) = stress_current.filter(|value| !value.is_empty()) {
         fields.push(format!(
             "stress_current={}",
-            encode_metadata(stress_current, Consts::MAX_CANONICAL_FIELD_BYTES)
+            encode_metadata(stress_current, consts::MAX_CANONICAL_FIELD_BYTES)
         ));
     }
 
@@ -228,7 +226,7 @@ fn encode_metadata(value: &str, max_bytes: usize) -> String {
 
 fn classify(wall: Duration, cpu: Option<Duration>) -> &'static str {
     match cpu {
-        Some(c) if c.as_secs_f64() >= wall.as_secs_f64() * Consts::SPIN_CPU_FRACTION => "CPU spin",
+        Some(c) if c.as_secs_f64() >= wall.as_secs_f64() * consts::SPIN_CPU_FRACTION => "CPU spin",
         Some(_) => "blocked wait (lock/sleep/IO)",
         None => "unclassified (no thread CPU clock)",
     }
@@ -239,17 +237,22 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-
-    const WALL: Duration = Duration::from_millis(50);
+    use crate::consts;
 
     #[kithara::test(native, flash(false))]
     fn classify_splits_cpu_spin_blocked_and_unclassified() {
-        assert_eq!(classify(WALL, Some(Duration::from_millis(49))), "CPU spin");
         assert_eq!(
-            classify(WALL, Some(Duration::from_millis(2))),
+            classify(consts::WALL, Some(Duration::from_millis(49))),
+            "CPU spin"
+        );
+        assert_eq!(
+            classify(consts::WALL, Some(Duration::from_millis(2))),
             "blocked wait (lock/sleep/IO)"
         );
-        assert_eq!(classify(WALL, None), "unclassified (no thread CPU clock)");
+        assert_eq!(
+            classify(consts::WALL, None),
+            "unclassified (no thread CPU clock)"
+        );
     }
 
     #[kithara::test(native, flash(false))]
@@ -297,22 +300,22 @@ mod tests {
             "[nextest run_id=run%0A:id%5D] "
         );
 
-        let oversized_run = "x".repeat(Consts::MAX_RUN_ID_BYTES + 1);
+        let oversized_run = "x".repeat(super::consts::MAX_RUN_ID_BYTES + 1);
         let prefix = nextest_prefix_from(Some(&oversized_run), None, None, None, None);
         let value = prefix
             .strip_prefix("[nextest run_id=")
             .and_then(|value| value.strip_suffix("] "))
             .expect("run prefix shape");
-        assert_eq!(value.len(), Consts::MAX_RUN_ID_BYTES);
+        assert_eq!(value.len(), super::consts::MAX_RUN_ID_BYTES);
         assert!(value.ends_with('~'));
 
-        let oversized = "x".repeat(Consts::MAX_ATTEMPT_ID_BYTES + 1);
+        let oversized = "x".repeat(super::consts::MAX_ATTEMPT_ID_BYTES + 1);
         let prefix = nextest_prefix_from(None, Some(&oversized), None, None, None);
         let value = prefix
             .strip_prefix("[nextest attempt_id=")
             .and_then(|value| value.strip_suffix("] "))
             .expect("attempt prefix shape");
-        assert_eq!(value.len(), Consts::MAX_ATTEMPT_ID_BYTES);
+        assert_eq!(value.len(), super::consts::MAX_ATTEMPT_ID_BYTES);
         assert!(value.ends_with('~'));
     }
 }

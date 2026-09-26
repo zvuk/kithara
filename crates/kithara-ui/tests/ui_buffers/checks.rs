@@ -18,7 +18,7 @@ use masonry::vello::{
 use crate::{
     capture::Shot,
     custom, demo,
-    fixture::{Consts, resolver},
+    fixture::{consts, resolver},
     host::{self, Gallery},
 };
 
@@ -169,7 +169,7 @@ fn every_page_leaves_the_renderer_room_to_spare() {
 /// pixel to the point, so the buffers measured are the buffers a window fills.
 fn physical() -> (u32, u32) {
     (
-        num_traits::cast::AsPrimitive::as_(Consts::WIDTH),
-        num_traits::cast::AsPrimitive::as_(Consts::HEIGHT),
+        num_traits::cast::AsPrimitive::as_(consts::WIDTH),
+        num_traits::cast::AsPrimitive::as_(consts::HEIGHT),
     )
 }

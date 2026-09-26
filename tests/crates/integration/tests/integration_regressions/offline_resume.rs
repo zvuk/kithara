@@ -22,7 +22,7 @@ use kithara_integration_tests::{
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
-    test_defaults::Consts as Shared,
+    test_defaults::consts as shared,
     test_server::NetworkMode,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
@@ -304,7 +304,7 @@ async fn resumes_after_outage(
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))

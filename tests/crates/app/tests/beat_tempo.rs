@@ -21,16 +21,14 @@ use num_traits::ToPrimitive;
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
 
-struct Consts;
-
-impl Consts {
+mod consts {
     // The envelope is incidental; beat analysis is the subject.
-    const BUCKETS: usize = 2_000;
+    pub(super) const BUCKETS: usize = 2_000;
     // Allows detector drift while rejecting the nearest wrong meter ratios.
-    const KNOWN_BPM_RATIO_TOLERANCE: f64 = 0.10;
+    pub(super) const KNOWN_BPM_RATIO_TOLERANCE: f64 = 0.10;
     // Allows detector quantization while requiring scalar-marker agreement.
-    const MARCH_RATIO_TOLERANCE: f64 = 0.02;
-    const SECONDS_PER_MINUTE: f64 = 60.0;
+    pub(super) const MARCH_RATIO_TOLERANCE: f64 = 0.02;
+    pub(super) const SECONDS_PER_MINUTE: f64 = 60.0;
 }
 
 #[kithara::fixture]
@@ -76,7 +74,7 @@ async fn analyse(path: &str) -> TrackAnalysis {
         &CancelToken::never(),
         None,
         CHUNK_SECONDS,
-        Consts::BUCKETS,
+        consts::BUCKETS,
         BeatAnalysisConfig::default(),
         pools,
     );
@@ -116,7 +114,7 @@ fn marker_tempo(grid: &BeatArtifact, rate: f64) -> Option<f64> {
     if !rate.is_finite() || rate <= 0.0 || !bpm.is_finite() || bpm <= 0.0 {
         return None;
     }
-    let beat_frames = Consts::SECONDS_PER_MINUTE * rate / bpm;
+    let beat_frames = consts::SECONDS_PER_MINUTE * rate / bpm;
     if !beat_frames.is_finite() || beat_frames <= 0.0 {
         return None;
     }
@@ -133,7 +131,7 @@ fn marker_tempo(grid: &BeatArtifact, rate: f64) -> Option<f64> {
         beat_span += beats_in_gap;
     }
 
-    let tempo = beat_span * Consts::SECONDS_PER_MINUTE * rate / frame_span;
+    let tempo = beat_span * consts::SECONDS_PER_MINUTE * rate / frame_span;
     tempo.is_finite().then_some(tempo)
 }
 
@@ -169,7 +167,7 @@ fn scalar_tempo_disagrees_with_retained_marker_ordinals() {
 
     let tempo = marker_tempo(&grid, 44_100.0).expect("markers name a tempo");
     assert!((tempo - 120.0).abs() < f64::EPSILON);
-    assert!(((grid.bpm() / tempo) - 1.0).abs() > Consts::MARCH_RATIO_TOLERANCE);
+    assert!(((grid.bpm() / tempo) - 1.0).abs() > consts::MARCH_RATIO_TOLERANCE);
 }
 
 #[ignore = "needs a music library named through KITHARA_TEMPO_RECORDS"]
@@ -183,7 +181,7 @@ async fn the_reported_tempo_matches_the_known_record(records: Vec<(String, f64)>
             grid.beats().len()
         );
         assert!(
-            ((grid.bpm() / known) - 1.0).abs() <= Consts::KNOWN_BPM_RATIO_TOLERANCE,
+            ((grid.bpm() / known) - 1.0).abs() <= consts::KNOWN_BPM_RATIO_TOLERANCE,
             "{path} reports {:.3} BPM for a {known:.2} BPM record",
             grid.bpm()
         );
@@ -202,7 +200,7 @@ async fn the_reported_tempo_is_the_tempo_the_markers_march_at(records: Vec<(Stri
             grid.bpm()
         );
         assert!(
-            ((grid.bpm() / marched) - 1.0).abs() <= Consts::MARCH_RATIO_TOLERANCE,
+            ((grid.bpm() / marched) - 1.0).abs() <= consts::MARCH_RATIO_TOLERANCE,
             "{path} reports {:.3} BPM while its {} markers march at {marched:.3} BPM",
             grid.bpm(),
             grid.beats().len()

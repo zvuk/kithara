@@ -6,13 +6,15 @@ use super::{
 };
 use crate::common::{suppress::Suppressions, violation::Violation, walker::compile_globs};
 
-pub(crate) const ID: &str = "args_wrapper_struct";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "args_wrapper_struct";
+}
 
 pub(crate) struct ArgsWrapperStruct;
 
 impl Check for ArgsWrapperStruct {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -60,12 +62,12 @@ fn emit(
             continue;
         }
         let sup = idx.suppressions.get(&info.rel).unwrap_or(&empty);
-        if sup.is_suppressed(info.line, ID) {
+        if sup.is_suppressed(info.line, consts::ID) {
             continue;
         }
         let key = format!("{}:{}:{}", info.rel, info.line, name);
         out.push(Violation::warn(
-            ID,
+            consts::ID,
             key,
             format!(
                 "`struct {name}` ({} fields) has no methods and is only built to be passed to \

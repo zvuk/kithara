@@ -1,9 +1,9 @@
 use kithara_test_utils::kithara;
 
 use super::Fmp4Layout;
-use crate::fixture::{
-    CountingSource, FRAGMENTS, SAMPLE_TICKS, SAMPLES_PER_FRAGMENT, TIMESCALE, WALK_BUDGET_BYTES,
-    fragmented_mp4,
+use crate::{
+    consts,
+    fixture::{CountingSource, fragmented_mp4},
 };
 
 #[kithara::test]
@@ -16,15 +16,15 @@ fn layout_walks_headers_without_reading_the_payload() {
 
     let delivered = source.delivered();
     assert!(
-        delivered < WALK_BUDGET_BYTES,
+        delivered < consts::WALK_BUDGET_BYTES,
         "layout walk pulled {delivered} bytes from a {total}-byte file; \
          the mdat payload must be seeked over, not read"
     );
     assert_eq!(layout.init_range(), 0..first_moof);
-    assert_eq!(layout.timescale(), TIMESCALE);
+    assert_eq!(layout.timescale(), consts::TIMESCALE);
     assert_eq!(
         u32::try_from(layout.fragments().len()).expect("fragment count fits u32"),
-        FRAGMENTS
+        consts::FRAGMENTS
     );
 }
 
@@ -36,7 +36,7 @@ fn fragments_carry_contiguous_ticks_and_byte_ranges() {
 
     let layout = Fmp4Layout::read(&source, total).expect("fragmented mp4 layout");
 
-    let fragment_ticks = u64::from(SAMPLES_PER_FRAGMENT) * u64::from(SAMPLE_TICKS);
+    let fragment_ticks = u64::from(consts::SAMPLES_PER_FRAGMENT) * u64::from(consts::SAMPLE_TICKS);
     let mut expected_start = first_moof;
     for (idx, fragment) in layout.fragments().iter().enumerate() {
         let index = u64::try_from(idx).expect("fragment index fits u64");

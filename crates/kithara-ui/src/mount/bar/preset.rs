@@ -1,6 +1,22 @@
 #[cfg(feature = "render")]
 use crate::{atoms::bar::preset::PresetItem, builtin};
 
+mod consts {
+    use super::*;
+
+    #[cfg(feature = "render")]
+    pub(super) const ITEMS: [PresetItem; 2] = [
+        PresetItem {
+            label: "MICRO",
+            name: builtin::MICRO_PRESET,
+        },
+        PresetItem {
+            label: "PLAYER",
+            name: builtin::PLAYER_PRESET,
+        },
+    ];
+}
+
 /// The global bar's preset picker.
 #[derive(kithara_derive::ViewControl, kithara_derive::Control)]
 #[control(size = skin.global_bar.preset_size)]
@@ -8,20 +24,8 @@ use crate::{atoms::bar::preset::PresetItem, builtin};
 pub(crate) struct Preset;
 
 #[cfg(feature = "render")]
-const ITEMS: [PresetItem; 2] = [
-    PresetItem {
-        label: "MICRO",
-        name: builtin::MICRO_PRESET,
-    },
-    PresetItem {
-        label: "PLAYER",
-        name: builtin::PLAYER_PRESET,
-    },
-];
-
-#[cfg(feature = "render")]
 mod host {
-    use super::{ITEMS, Preset};
+    use super::{Preset, consts::ITEMS};
     #[cfg(feature = "masonry")]
     use crate::render::controls::DataRefresh;
     use crate::{

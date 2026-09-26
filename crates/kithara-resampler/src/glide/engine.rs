@@ -11,6 +11,11 @@ use self::filter::Filter;
 use super::{GlideConfig, GlideInterpolation};
 use crate::{ResamplerBuildError, ResamplerError, ResamplerMode};
 
+mod consts {
+    pub(super) const FILTER_CUTOFF_TO_NYQUIST: f64 = 0.9;
+    pub(super) const FILTER_LOW_PASS_Q: f64 = std::f64::consts::FRAC_1_SQRT_2;
+}
+
 pub(in crate::glide) struct RenderRequest<'a, I, O> {
     pub(in crate::glide) input: &'a [I],
     pub(in crate::glide) output: &'a mut [O],
@@ -20,16 +25,6 @@ pub(in crate::glide) struct RenderRequest<'a, I, O> {
     pub(in crate::glide) filter_ratio: f64,
     pub(in crate::glide) produced: usize,
 }
-
-struct FilterParams {
-    cutoff_to_nyquist: f64,
-    low_pass_q: f64,
-}
-
-const FILTER_PARAMS: FilterParams = FilterParams {
-    cutoff_to_nyquist: 0.9,
-    low_pass_q: std::f64::consts::FRAC_1_SQRT_2,
-};
 
 #[derive(fieldwork::Fieldwork)]
 pub(in crate::glide) struct GlideEngine {
@@ -103,15 +98,15 @@ impl GlideEngine {
         }
         for filter in &mut self.filters {
             let ready = if let Some(filter) = filter {
-                filter.retune(sample_rate, cutoff, FILTER_PARAMS.low_pass_q)
+                filter.retune(sample_rate, cutoff, consts::FILTER_LOW_PASS_Q)
             } else {
-                *filter = Filter::low_pass(sample_rate, cutoff, FILTER_PARAMS.low_pass_q);
+                *filter = Filter::low_pass(sample_rate, cutoff, consts::FILTER_LOW_PASS_Q);
                 filter.is_some()
             };
             if !ready {
                 return Err(ResamplerError::Backend {
-                    op: filter::FILTER_OP,
-                    detail: filter::FILTER_ERROR.into(),
+                    op: filter::consts::FILTER_OP,
+                    detail: filter::consts::FILTER_ERROR.into(),
                 });
             }
         }
@@ -125,7 +120,7 @@ impl GlideEngine {
     ) -> Result<&mut [f32], ResamplerError> {
         if frames > self.max_output_frames {
             return Err(ResamplerError::Backend {
-                op: backend::POSITIONS_OP,
+                op: backend::consts::POSITIONS_OP,
                 detail: "output frame request exceeds preallocated position buffer".into(),
             });
         }
@@ -152,7 +147,7 @@ impl GlideEngine {
         let input_frames = input.first().map_or(0, |channel| channel.deref().len());
         if input_frames > self.max_input_frames {
             return Err(ResamplerError::Backend {
-                op: backend::INPUT_OP,
+                op: backend::consts::INPUT_OP,
                 detail: "input frame count exceeds preallocated source buffer".into(),
             });
         }
@@ -173,7 +168,7 @@ impl GlideEngine {
                     self.filters[channel_idx]
                         .as_mut()
                         .ok_or_else(|| ResamplerError::Backend {
-                            op: filter::FILTER_OP,
+                            op: filter::consts::FILTER_OP,
                             detail: "anti-alias filter was not initialized".into(),
                         })?;
                 filtered[0] = self.filtered_previous[channel_idx];
@@ -221,7 +216,7 @@ fn ensure_build_len(
 }
 
 fn low_pass_cutoff(sample_rate: f64, ratio: f64) -> f64 {
-    FILTER_PARAMS.cutoff_to_nyquist * sample_rate / (2.0 * ratio.max(1.0))
+    consts::FILTER_CUTOFF_TO_NYQUIST * sample_rate / (2.0 * ratio.max(1.0))
 }
 
 fn max_output_frames(input_frames: usize, max_ratio_adjustment: f64) -> usize {
@@ -250,8 +245,10 @@ mod backend {
 
     use super::GlideInterpolation;
 
-    pub(super) const INPUT_OP: &str = "glide accelerate input";
-    pub(super) const POSITIONS_OP: &str = "glide accelerate positions";
+    pub(in crate::glide::engine) mod consts {
+        pub(in crate::glide::engine) const INPUT_OP: &str = "glide accelerate input";
+        pub(in crate::glide::engine) const POSITIONS_OP: &str = "glide accelerate positions";
+    }
 
     pub(super) fn copy(source: &[f32], target: &mut [f32]) {
         copy_f32(source, target);
@@ -278,8 +275,11 @@ mod backend {
     use num_traits::cast::ToPrimitive;
 
     use super::GlideInterpolation;
-    pub(super) const INPUT_OP: &str = "glide scalar input";
-    pub(super) const POSITIONS_OP: &str = "glide scalar positions";
+
+    pub(in crate::glide::engine) mod consts {
+        pub(in crate::glide::engine) const INPUT_OP: &str = "glide scalar input";
+        pub(in crate::glide::engine) const POSITIONS_OP: &str = "glide scalar positions";
+    }
 
     pub(super) fn copy(source: &[f32], target: &mut [f32]) {
         target.copy_from_slice(source);
@@ -347,8 +347,10 @@ mod backend {
 mod filter {
     use num_traits::cast::ToPrimitive;
 
-    pub(super) const FILTER_OP: &str = "glide scalar filter";
-    pub(super) const FILTER_ERROR: &str = "failed to create low-pass filter";
+    pub(in crate::glide::engine) mod consts {
+        pub(in crate::glide::engine) const FILTER_OP: &str = "glide scalar filter";
+        pub(in crate::glide::engine) const FILTER_ERROR: &str = "failed to create low-pass filter";
+    }
 
     pub(super) struct Filter {
         coefficients: [f64; 5],

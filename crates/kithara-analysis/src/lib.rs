@@ -51,3 +51,4 @@ pub use producer::AnalysisProducer;
 pub use progress::AnalysisProgress;
 pub use rangemap::RangeSet;
 pub use worker::{AnalysisOpen, AnalysisPass, AnalysisWorker, AnalysisWorkerConfig};
+mod consts;

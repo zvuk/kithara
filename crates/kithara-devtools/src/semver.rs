@@ -4,12 +4,7 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use serde::Deserialize;
 
-use crate::{Ctx, util::check_tool, verdict::NotClean};
-
-struct Consts;
-impl Consts {
-    const INSTALL_HINT: &'static str = "cargo install cargo-semver-checks";
-}
+use crate::{Ctx, consts, util::check_tool, verdict::NotClean};
 
 #[derive(Debug, Args)]
 pub struct SemverArgs {
@@ -39,7 +34,7 @@ pub(crate) fn run(args: &SemverArgs, ctx: &Ctx) -> Result<()> {
         &["semver-checks", "--version"],
         ctx.config
             .tools
-            .install_hint("cargo-semver-checks", Consts::INSTALL_HINT),
+            .install_hint("cargo-semver-checks", consts::SEMVER_INSTALL_HINT),
     )?;
     let baseline_members = members_at(&args.baseline)?;
     let (packages, missing) =
@@ -145,29 +140,11 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{local_packages, packages_to_compare, semver_args};
-
-    const LOCK: &str = r#"
-version = 4
-
-[[package]]
-name = "anyhow"
-version = "1.0.100"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-
-[[package]]
-name = "kithara-decode"
-version = "0.0.1-alpha4"
-dependencies = ["anyhow"]
-
-[[package]]
-name = "firewheel-web-audio"
-version = "0.7.0"
-source = "git+https://github.com/example/firewheel#0000000"
-"#;
+    use crate::consts;
 
     #[test]
     fn local_packages_keeps_path_entries() -> anyhow::Result<()> {
-        let names = local_packages(LOCK)?;
+        let names = local_packages(consts::LOCK)?;
 
         assert!(names.contains("kithara-decode"));
         Ok(())
@@ -175,7 +152,7 @@ source = "git+https://github.com/example/firewheel#0000000"
 
     #[test]
     fn local_packages_drops_registry_entries() -> anyhow::Result<()> {
-        let names = local_packages(LOCK)?;
+        let names = local_packages(consts::LOCK)?;
 
         assert!(!names.contains("anyhow"));
         Ok(())
@@ -183,7 +160,7 @@ source = "git+https://github.com/example/firewheel#0000000"
 
     #[test]
     fn local_packages_drops_git_entries() -> anyhow::Result<()> {
-        let names = local_packages(LOCK)?;
+        let names = local_packages(consts::LOCK)?;
 
         assert!(!names.contains("firewheel-web-audio"));
         Ok(())

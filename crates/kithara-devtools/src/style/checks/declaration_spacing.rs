@@ -8,7 +8,9 @@ use syn::{
 use super::{Check, Context};
 use crate::common::{fix::FixOutcome, violation::Violation, walker::relative_to};
 
-pub(crate) const ID: &str = "declaration_spacing";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "declaration_spacing";
+}
 
 /// One-line `const`, `static` or `type` declarations of one kind, set apart
 /// by a blank line after every single one. A blank line between neighbours
@@ -36,7 +38,7 @@ impl Check for DeclarationSpacing {
     }
 
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -50,7 +52,7 @@ impl Check for DeclarationSpacing {
                 .replace('\\', "/");
             for run in spaced_runs(&src, &file) {
                 violations.push(Violation::deny(
-                    ID,
+                    consts::ID,
                     format!("{rel}:{}", run.first_line),
                     format!(
                         "{} one-line `{}` declarations each sit apart behind a blank line; \

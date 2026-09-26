@@ -11,15 +11,10 @@ use anyhow::{Context, Result, bail};
 use cargo_metadata::{DependencyKind, MetadataCommand};
 use kithara_devtools::{Ctx, util::check_tool};
 
-use crate::config::{KitharaExt, PublishConfig};
-
-struct Consts;
-
-impl Consts {
-    /// User-agent used for registry availability checks when the project
-    /// config leaves `publish.user_agent` empty.
-    const DEFAULT_USER_AGENT: &'static str = "xtask-publish";
-}
+use crate::{
+    config::{KitharaExt, PublishConfig},
+    consts,
+};
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct PublishArgs {
@@ -405,7 +400,7 @@ fn registry_has(
     let path = version.map_or_else(|| name.to_string(), |version| format!("{name}/{version}"));
     let url = format!("https://crates.io/api/v1/crates/{path}");
     let user_agent = if configured_agent.is_empty() {
-        Consts::DEFAULT_USER_AGENT
+        consts::DEFAULT_USER_AGENT
     } else {
         configured_agent
     };

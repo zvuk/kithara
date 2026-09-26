@@ -4,9 +4,10 @@ use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
 use kithara_test_utils::kithara;
 
 use super::rebuild::{
-    Consts, RouteFixture, produced_data, route_signal_source, route_signal_source_with_eof,
+    RouteFixture, produced_data, route_signal_source, route_signal_source_with_eof,
 };
 use crate::{
+    consts,
     pipeline::{
         seek::{ResumeState, SeekContext},
         track::{
@@ -39,7 +40,7 @@ fn park_playback_at_byte_eof(fixture: &mut RouteFixture) {
 /// the decode path may finalize natural EOF.
 #[kithara::test(tokio)]
 async fn byte_eof_resumes_decoding_while_the_decoder_still_produces(route_pcm: RoutePcm) {
-    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
+    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     park_playback_at_byte_eof(&mut fixture);
 
     assert!(
@@ -60,7 +61,7 @@ async fn byte_eof_resumes_decoding_while_the_decoder_still_produces(route_pcm: R
 /// shortcut (the first step resumes instead of reporting `Eof`).
 #[kithara::test(tokio)]
 async fn byte_eof_still_ends_a_drained_decoder_through_the_decode_path(route_pcm: RoutePcm) {
-    let mut fixture = route_signal_source_with_eof(&route_pcm, Consts::SAMPLE_RATE, 0).await;
+    let mut fixture = route_signal_source_with_eof(&route_pcm, consts::SAMPLE_RATE, 0).await;
     park_playback_at_byte_eof(&mut fixture);
 
     assert!(
@@ -87,7 +88,7 @@ async fn byte_eof_still_ends_a_drained_decoder_through_the_decode_path(route_pcm
 /// `AwaitingResume` and decode that tail, not end the track.
 #[kithara::test(tokio)]
 async fn byte_eof_resumes_a_post_seek_wait_into_the_tail(route_pcm: RoutePcm) {
-    let mut fixture = route_signal_source(&route_pcm, Consts::SAMPLE_RATE).await;
+    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     fixture.source.update_state(
         Track::<WaitingForSource>::new(WaitState {
             context: WaitContext::PostSeek(ResumeState {

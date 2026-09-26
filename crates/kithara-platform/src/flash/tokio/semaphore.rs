@@ -192,16 +192,10 @@ mod tests {
 
     use super::Semaphore;
     use crate::{
-        flash,
+        consts, flash,
         sync::Arc,
         tokio::task::{spawn, yield_now},
     };
-
-    struct Consts;
-    impl Consts {
-        const PERMITS: usize = 3;
-        const TASKS: usize = 16;
-    }
 
     /// Many tasks contend for a few permits; each acquires, yields (forcing the
     /// others to park on the engine waiter), then releases by dropping the
@@ -212,9 +206,9 @@ mod tests {
     #[kithara::test(tokio, multi_thread)]
     async fn contention_no_lost_wakeup() {
         flash::reset();
-        let sem = Arc::new(Semaphore::new(Consts::PERMITS));
+        let sem = Arc::new(Semaphore::new(consts::PERMITS));
         let done = Arc::new(AtomicUsize::new(0));
-        let handles: Vec<_> = (0..Consts::TASKS)
+        let handles: Vec<_> = (0..consts::TASKS)
             .map(|_| {
                 let sem = Arc::clone(&sem);
                 let done = Arc::clone(&done);
@@ -229,7 +223,7 @@ mod tests {
         for handle in handles {
             handle.await.expect("task joined");
         }
-        assert_eq!(done.load(Ordering::SeqCst), Consts::TASKS);
+        assert_eq!(done.load(Ordering::SeqCst), consts::TASKS);
     }
 
     /// A permit dropped while an acquirer is parked must wake it: hold the sole

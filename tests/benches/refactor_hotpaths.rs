@@ -44,13 +44,12 @@ use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 use tempfile::TempDir;
 use url::Url;
 
-struct Consts;
-impl Consts {
-    const HLS_SEGMENT_COUNT: usize = 6;
-    const HLS_SEGMENT_SIZE: usize = 96_000;
-    const AUDIO_READ_TARGET_SAMPLES: usize = 32_768;
-    const HLS_READ_TARGET_BYTES: usize = 196_608;
-    const HLS_SEEK_POSITIONS: [u64; 5] = [0, 32_000, 128_000, 256_000, 384_000];
+mod consts {
+    pub(super) const HLS_SEGMENT_COUNT: usize = 6;
+    pub(super) const HLS_SEGMENT_SIZE: usize = 96_000;
+    pub(super) const AUDIO_READ_TARGET_SAMPLES: usize = 32_768;
+    pub(super) const HLS_READ_TARGET_BYTES: usize = 196_608;
+    pub(super) const HLS_SEEK_POSITIONS: [u64; 5] = [0, 32_000, 128_000, 256_000, 384_000];
 }
 
 /// The generated full-length MPEG clip the benchmark server and decoders read.
@@ -210,7 +209,7 @@ fn hls_media_playlist(variant: usize) -> String {
     let mut lines = String::from(
         "#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n",
     );
-    for segment in 0..Consts::HLS_SEGMENT_COUNT {
+    for segment in 0..consts::HLS_SEGMENT_COUNT {
         lines.push_str("#EXTINF:4.0,\n");
         lines.push_str(&format!("seg/{variant}/{segment}.bin\n"));
     }
@@ -224,7 +223,7 @@ fn hls_segment_data(variant: usize, segment: usize) -> Vec<u8> {
         reason = "synthetic fixture byte pattern is intentionally 8-bit"
     )]
     let pattern = ((variant * 37 + segment * 11) % 256) as u8;
-    vec![pattern; Consts::HLS_SEGMENT_SIZE]
+    vec![pattern; consts::HLS_SEGMENT_SIZE]
 }
 
 async fn hls_master_endpoint() -> &'static str {
@@ -247,7 +246,7 @@ async fn hls_segment_endpoint(Path((variant, segment)): Path<(usize, String)>) -
         return StatusCode::NOT_FOUND.into_response();
     };
 
-    if variant > 1 || segment_index >= Consts::HLS_SEGMENT_COUNT {
+    if variant > 1 || segment_index >= consts::HLS_SEGMENT_COUNT {
         return StatusCode::NOT_FOUND.into_response();
     }
 
@@ -337,7 +336,7 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
 
                     let mut buf = [0.0_f32; 4_096];
                     let mut total = 0usize;
-                    while total < Consts::AUDIO_READ_TARGET_SAMPLES {
+                    while total < consts::AUDIO_READ_TARGET_SAMPLES {
                         match audio.read(&mut buf) {
                             Ok(kithara::audio::ReadOutcome::Frames { count, .. }) => {
                                 total += count.get();
@@ -405,7 +404,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
 
                     let mut buf = [0_u8; 8_192];
                     let mut total = 0usize;
-                    while total < Consts::HLS_READ_TARGET_BYTES {
+                    while total < consts::HLS_READ_TARGET_BYTES {
                         let n = stream
                             .read(&mut buf)
                             .unwrap_or_else(|e| panic!("stream read failed: {e}"));
@@ -415,7 +414,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                         total += n;
                     }
 
-                    for seek_pos in Consts::HLS_SEEK_POSITIONS {
+                    for seek_pos in consts::HLS_SEEK_POSITIONS {
                         if let Some(len) = stream.len()
                             && seek_pos > len
                         {

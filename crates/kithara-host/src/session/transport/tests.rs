@@ -29,13 +29,14 @@ use super::{
         process_transport, stage_transport_events,
     },
 };
-use crate::api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision};
-
-const BLOCK_FRAMES: usize = 480;
-const SAMPLE_RATE: u32 = 48_000;
+use crate::{
+    api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
+    consts,
+};
 
 fn sample_rate() -> NonZeroU32 {
-    NonZeroU32::new(SAMPLE_RATE).expect("invariant: static sample rate is non-zero")
+    NonZeroU32::new(consts::TRANSPORT_SAMPLE_RATE)
+        .expect("invariant: static sample rate is non-zero")
 }
 
 fn second_revision() -> TransportRevision {
@@ -55,7 +56,7 @@ fn commit(tempo: f64, playing: bool, revision: TransportRevision) -> SessionTran
 fn proc_info_at(clock_samples: i64) -> ProcInfo {
     ProcInfo {
         sample_rate: sample_rate(),
-        frames: BLOCK_FRAMES,
+        frames: consts::TRANSPORT_BLOCK_FRAMES,
         in_silence_mask: SilenceMask::default(),
         out_silence_mask: SilenceMask::default(),
         in_constant_mask: ConstantMask::default(),
@@ -66,7 +67,7 @@ fn proc_info_at(clock_samples: i64) -> ProcInfo {
         process_to_playback_delay: None,
         did_just_unbypass: false,
         last_marker_instant: InstantSamples(0),
-        sample_rate_recip: f64::from(SAMPLE_RATE).recip(),
+        sample_rate_recip: f64::from(consts::TRANSPORT_SAMPLE_RATE).recip(),
         clock_samples: InstantSamples(clock_samples),
         duration_since_stream_start: Duration::ZERO,
         stream_status: StreamStatus::empty(),
@@ -75,7 +76,8 @@ fn proc_info_at(clock_samples: i64) -> ProcInfo {
 }
 
 fn block_frame(blocks: usize) -> i64 {
-    i64::try_from(BLOCK_FRAMES * blocks).expect("invariant: test block frame fits i64")
+    i64::try_from(consts::TRANSPORT_BLOCK_FRAMES * blocks)
+        .expect("invariant: test block frame fits i64")
 }
 
 fn proc_extra() -> (ProcExtra, Output<TransportObservation>) {
@@ -101,7 +103,9 @@ fn proc_extra() -> (ProcExtra, Output<TransportObservation>) {
         ProcExtra {
             logger,
             store,
-            scratch_buffers: ConstSequentialBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(BLOCK_FRAMES),
+            scratch_buffers: ConstSequentialBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(
+                consts::TRANSPORT_BLOCK_FRAMES,
+            ),
             declick_values: DeclickValues::new(
                 NonZeroU32::new(16).expect("invariant: static fade is non-zero"),
             ),
@@ -876,8 +880,8 @@ fn discontinuous_block_start_is_rejected() {
 #[kithara::test]
 fn stage_for_another_sample_rate_is_rejected() {
     let (_processor, mut extra, mut output, active) = active_harness();
-    let foreign_rate =
-        NonZeroU32::new(SAMPLE_RATE * 2).expect("invariant: doubled sample rate is non-zero");
+    let foreign_rate = NonZeroU32::new(consts::TRANSPORT_SAMPLE_RATE * 2)
+        .expect("invariant: doubled sample rate is non-zero");
     let stamp = TransportCommitStamp::new(
         Some(active),
         commit(60.0, true, second_revision()),
@@ -921,8 +925,8 @@ fn apply_for_another_sample_rate_is_rejected() {
     );
 
     let mut foreign_block = proc_info_at(block_frame(2));
-    foreign_block.sample_rate =
-        NonZeroU32::new(SAMPLE_RATE * 2).expect("invariant: doubled sample rate is non-zero");
+    foreign_block.sample_rate = NonZeroU32::new(consts::TRANSPORT_SAMPLE_RATE * 2)
+        .expect("invariant: doubled sample rate is non-zero");
     assert_eq!(
         process_result(
             &foreign_block,

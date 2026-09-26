@@ -25,14 +25,14 @@ use num_traits::cast::AsPrimitive;
 use crate::{
     capture::Shot,
     custom, demo,
-    fixture::{Consts, resolver},
+    fixture::{consts, resolver},
     host::{self, Gallery},
 };
 
 #[kithara::test]
 fn every_page_paints_over_the_whole_window() {
-    let width: u32 = AsPrimitive::<u32>::as_(Consts::WIDTH);
-    let height: u32 = AsPrimitive::<u32>::as_(Consts::HEIGHT);
+    let width: u32 = AsPrimitive::<u32>::as_(consts::WIDTH);
+    let height: u32 = AsPrimitive::<u32>::as_(consts::HEIGHT);
     let endpoints = demo::registry();
     let resolver = resolver();
     let kinds = custom::kinds();

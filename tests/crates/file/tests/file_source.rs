@@ -19,9 +19,8 @@ use kithara_integration_tests::{
 };
 use url::Url;
 
-struct Consts;
-impl Consts {
-    const AUDIO_DATA: &'static [u8] = b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345";
+mod consts {
+    pub(super) const AUDIO_DATA: &[u8] = b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345";
 }
 
 /// Register the 27-byte audio fixture with optional MIME, served over
@@ -29,7 +28,7 @@ impl Consts {
 fn audio_behavior(helper: &TestServerHelper, content_type: Option<&'static str>) -> Url {
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(Consts::AUDIO_DATA.to_vec()),
+            bytes: Arc::new(consts::AUDIO_DATA.to_vec()),
             content_type,
         },
         delivery: Delivery::Range,

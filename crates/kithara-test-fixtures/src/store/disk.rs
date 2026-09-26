@@ -9,12 +9,14 @@ use fs4::FileExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+mod consts {
+    /// Leading digest bytes kept in an asset id. 128 bits: short enough to read in
+    /// a path, wide enough that the build script's collision check never fires.
+    pub(super) const ASSET_ID_BYTES: usize = 16;
+}
+
 /// Absolute store root, required at build time and optional as a runtime override.
 pub const STORE_ENV: &str = "KITHARA_FIXTURE_CACHE";
-
-/// Leading digest bytes kept in an asset id. 128 bits: short enough to read in
-/// a path, wide enough that the build script's collision check never fires.
-const ASSET_ID_BYTES: usize = 16;
 
 /// Explicit fixture cache revision, shared by build-time and integration assets.
 pub const CACHE_VERSION: &str = include_str!("../../cache-version");
@@ -96,7 +98,7 @@ pub fn asset_id(func: &str, case: &str) -> String {
     hasher.update(func.as_bytes());
     hasher.update([0u8]);
     hasher.update(case.as_bytes());
-    hex::encode(&hasher.finalize()[..ASSET_ID_BYTES])
+    hex::encode(&hasher.finalize()[..consts::ASSET_ID_BYTES])
 }
 
 /// Identity of a case stored in an output format:
@@ -113,7 +115,7 @@ pub fn formatted_asset_id(func: &str, case: &str, format: &[u8]) -> String {
     hasher.update(case.as_bytes());
     hasher.update([0u8]);
     hasher.update(format);
-    hex::encode(&hasher.finalize()[..ASSET_ID_BYTES])
+    hex::encode(&hasher.finalize()[..consts::ASSET_ID_BYTES])
 }
 
 /// Reads the explicitly configured persistent store root.
@@ -404,7 +406,7 @@ mod tests {
         assert_ne!(a, other_case);
         assert_ne!(a, other_func);
         assert_ne!(a, swapped, "the separator must keep the halves apart");
-        assert_eq!(a.len(), ASSET_ID_BYTES * 2);
+        assert_eq!(a.len(), consts::ASSET_ID_BYTES * 2);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
@@ -425,7 +427,7 @@ mod tests {
             plain,
             "an empty sample still separates from an unformatted id",
         );
-        assert_eq!(v7.len(), ASSET_ID_BYTES * 2);
+        assert_eq!(v7.len(), consts::ASSET_ID_BYTES * 2);
     }
 
     #[kithara::test(native, flash(false))]

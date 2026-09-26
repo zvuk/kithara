@@ -15,7 +15,7 @@ use kithara_platform::{sync::Arc, time::Instant};
 use url::Url;
 
 use crate::{
-    DrmEvent, HlsError, HlsEvent, HlsFailure, HlsResult, KeyFailureStage, KeySource,
+    DrmEvent, HlsError, HlsEvent, HlsFailure, HlsResult, KeyFailureStage, KeySource, consts,
     handle::KeyPeer,
     logging::{RedactedNetError, RedactedUrl},
 };
@@ -25,13 +25,6 @@ use crate::{
 /// Resolves optional provider processing through a [`KeyProcessorRegistry`].
 /// The registry supplies a fully prepared wire request; this type owns only
 /// cache coordination, fetching, validation, and processor execution.
-struct Consts;
-
-impl Consts {
-    const AES_KEY_LEN: usize = 16;
-    const IV_SEQUENCE_OFFSET: usize = 8;
-}
-
 #[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]
 pub struct KeyStore<S>
 where
@@ -253,7 +246,7 @@ where
     pub async fn get_raw_key(
         &self,
         url: &Url,
-        _iv: Option<[u8; Consts::AES_KEY_LEN]>,
+        _iv: Option<[u8; consts::AES_KEY_LEN]>,
     ) -> HlsResult<Bytes> {
         if let Some(cached) = self.keys.get(url).map(|entry| entry.value().clone()) {
             tracing::debug!(url = %RedactedUrl::new(url), "key: served from in-memory cache");
@@ -400,7 +393,7 @@ where
 }
 
 fn validate_aes128_key(bytes: &[u8]) -> HlsResult<()> {
-    if bytes.len() == Consts::AES_KEY_LEN {
+    if bytes.len() == consts::AES_KEY_LEN {
         return Ok(());
     }
     Err(invalid_key_length(bytes.len()))
@@ -414,19 +407,19 @@ fn validated_key_bytes(bytes: &[u8]) -> HlsResult<Bytes> {
 fn invalid_key_length(actual: usize) -> HlsError {
     HlsError::KeyProcessing(format!(
         "AES-128 key must be {} bytes, got {actual}",
-        Consts::AES_KEY_LEN
+        consts::AES_KEY_LEN
     ))
 }
 
 pub(crate) fn derive_iv(
     key_info: &crate::playlist::parse::KeyInfo,
     sequence: u64,
-) -> [u8; Consts::AES_KEY_LEN] {
+) -> [u8; consts::AES_KEY_LEN] {
     if let Some(iv) = key_info.iv {
         return iv;
     }
-    let mut iv = [0u8; Consts::AES_KEY_LEN];
-    iv[Consts::IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
+    let mut iv = [0u8; consts::AES_KEY_LEN];
+    iv[consts::IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
     iv
 }
 
@@ -452,7 +445,7 @@ where
 {
     let key_url = resolve_key_url(key_info, segment_url)?;
     let key_bytes = key_store.get_cached_key(&key_url)?;
-    let key: [u8; Consts::AES_KEY_LEN] = key_bytes.as_ref().try_into().map_err(|_| {
+    let key: [u8; consts::AES_KEY_LEN] = key_bytes.as_ref().try_into().map_err(|_| {
         publish_key_fetch_failed(
             &key_store.bus,
             &key_url,
@@ -642,8 +635,6 @@ mod tests {
     use super::*;
     use crate::playlist::parse::parse_media_playlist;
 
-    const VALID_KEY: &[u8] = b"0123456789abcdef";
-
     type TestAssetScope = AssetScope<crate::test_pools::TestPools>;
     type TestAssetStore = AssetStore<crate::test_pools::TestPools>;
     type TestKeyStore = KeyStore<crate::test_pools::TestPools>;
@@ -741,14 +732,19 @@ mod tests {
     }
 
     async fn spawn_key_server() -> Url {
-        spawn_key_server_with_body(Bytes::from_static(VALID_KEY))
+        spawn_key_server_with_body(Bytes::from_static(consts::VALID_KEY))
             .await
             .0
     }
 
     async fn spawn_domain_key_server() -> (Url, Url) {
-        let reversed = Bytes::from(VALID_KEY.iter().rev().copied().collect::<Vec<_>>());
-        let masked = Bytes::from(VALID_KEY.iter().map(|byte| byte ^ 0xaa).collect::<Vec<_>>());
+        let reversed = Bytes::from(consts::VALID_KEY.iter().rev().copied().collect::<Vec<_>>());
+        let masked = Bytes::from(
+            consts::VALID_KEY
+                .iter()
+                .map(|byte| byte ^ 0xaa)
+                .collect::<Vec<_>>(),
+        );
         let app = Router::new()
             .route(
                 "/reversed.key",
@@ -779,7 +775,7 @@ mod tests {
     async fn spawn_prepared_request_server() -> (Url, Url, Arc<AtomicUsize>) {
         let requests = Arc::new(AtomicUsize::new(0));
         let handler_requests = Arc::clone(&requests);
-        let reversed = Bytes::from(VALID_KEY.iter().rev().copied().collect::<Vec<_>>());
+        let reversed = Bytes::from(consts::VALID_KEY.iter().rev().copied().collect::<Vec<_>>());
         let app = Router::new().route(
             "/wire.key",
             get(
@@ -837,7 +833,7 @@ mod tests {
                     requests.fetch_add(1, Ordering::SeqCst);
                     seen.notify_one();
                     release.notified().await;
-                    Result::<_, Infallible>::Ok(Body::from(Bytes::from_static(VALID_KEY)))
+                    Result::<_, Infallible>::Ok(Body::from(Bytes::from_static(consts::VALID_KEY)))
                 }
             }),
         );
@@ -956,7 +952,7 @@ mod tests {
         assert!(contexts[0].is_some());
         assert_eq!(
             keys.get_cached_key(&url).expect("session key").as_ref(),
-            VALID_KEY
+            consts::VALID_KEY
         );
         assert_eq!(requests.load(Ordering::SeqCst), 1);
     }
@@ -973,7 +969,7 @@ mod tests {
             .get_raw_key(&url, None)
             .await
             .expect("key fetch succeeds");
-        assert_eq!(key.as_ref(), VALID_KEY);
+        assert_eq!(key.as_ref(), consts::VALID_KEY);
 
         let events = collect_events(&mut events);
         assert!(events.iter().any(|event| matches!(
@@ -1022,8 +1018,8 @@ mod tests {
             .await
             .expect("loopback key");
 
-        assert_eq!(localhost_key.as_ref(), VALID_KEY);
-        assert_eq!(loopback_key.as_ref(), VALID_KEY);
+        assert_eq!(localhost_key.as_ref(), consts::VALID_KEY);
+        assert_eq!(loopback_key.as_ref(), consts::VALID_KEY);
         assert_eq!(localhost_calls.load(Ordering::SeqCst), 1);
         assert_eq!(loopback_calls.load(Ordering::SeqCst), 1);
     }
@@ -1047,13 +1043,14 @@ mod tests {
             .await
             .expect("prepared request key");
 
-        assert_eq!(key.as_ref(), VALID_KEY);
+        assert_eq!(key.as_ref(), consts::VALID_KEY);
         assert_eq!(requests.load(Ordering::SeqCst), 1);
     }
 
     #[kithara::test(tokio)]
     async fn persisted_final_key_does_not_prepare_fresh_request() {
-        let (url, requests) = spawn_key_server_with_body(Bytes::from_static(VALID_KEY)).await;
+        let (url, requests) =
+            spawn_key_server_with_body(Bytes::from_static(consts::VALID_KEY)).await;
         let dir = tempdir().expect("tempdir");
         let assets = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
@@ -1080,7 +1077,7 @@ mod tests {
                 .await
                 .expect("network key")
                 .as_ref(),
-            VALID_KEY
+            consts::VALID_KEY
         );
         assert_eq!(first_prepares.load(Ordering::SeqCst), 1);
         assets.checkpoint().expect("persist final key");
@@ -1115,7 +1112,7 @@ mod tests {
                 .await
                 .expect("cached key")
                 .as_ref(),
-            VALID_KEY
+            consts::VALID_KEY
         );
         assert_eq!(requests.load(Ordering::SeqCst), 1);
         assert_eq!(reopened_prepares.load(Ordering::SeqCst), 0);
@@ -1185,7 +1182,7 @@ mod tests {
             .get_raw_key(&url, None)
             .await
             .expect("mem cache hit succeeds");
-        assert_eq!(key.as_ref(), VALID_KEY);
+        assert_eq!(key.as_ref(), consts::VALID_KEY);
         assert_eq!(prepares.load(Ordering::SeqCst), 1);
 
         let events = collect_events(&mut events);
@@ -1202,7 +1199,8 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn corrupt_persisted_plain_key_is_invalidated_and_refetched_once() {
-        let (url, requests) = spawn_key_server_with_body(Bytes::from_static(VALID_KEY)).await;
+        let (url, requests) =
+            spawn_key_server_with_body(Bytes::from_static(consts::VALID_KEY)).await;
         let dir = tempdir().expect("tempdir");
         let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
@@ -1226,7 +1224,7 @@ mod tests {
             .get_raw_key(&url, None)
             .await
             .expect("corrupt key must be repaired");
-        assert_eq!(key.as_ref(), VALID_KEY);
+        assert_eq!(key.as_ref(), consts::VALID_KEY);
         assert_eq!(keys.get_cached_key(&url).expect("memory key"), key);
         assert_eq!(requests.load(Ordering::SeqCst), 1);
         store.checkpoint().expect("persist repaired key");
@@ -1245,14 +1243,15 @@ mod tests {
                 .await
                 .expect("repaired key must persist")
                 .as_ref(),
-            VALID_KEY
+            consts::VALID_KEY
         );
         assert_eq!(requests.load(Ordering::SeqCst), 1);
     }
 
     #[kithara::test(tokio)]
     async fn processed_key_repair_is_serialized_across_key_stores() {
-        let (url, requests) = spawn_key_server_with_body(Bytes::from_static(VALID_KEY)).await;
+        let (url, requests) =
+            spawn_key_server_with_body(Bytes::from_static(consts::VALID_KEY)).await;
         let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
             .cancel(CancelToken::never())
@@ -1269,8 +1268,14 @@ mod tests {
             second.get_raw_key(&url, None)
         );
 
-        assert_eq!(first.expect("first repaired key").as_ref(), VALID_KEY);
-        assert_eq!(second.expect("second repaired key").as_ref(), VALID_KEY);
+        assert_eq!(
+            first.expect("first repaired key").as_ref(),
+            consts::VALID_KEY
+        );
+        assert_eq!(
+            second.expect("second repaired key").as_ref(),
+            consts::VALID_KEY
+        );
         assert_eq!(requests.load(Ordering::SeqCst), 1);
     }
 

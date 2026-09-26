@@ -9,7 +9,7 @@ use crate::{
     deck::{EqMode, TempoPercent},
     engine::DeckSnapshot,
     gui::{
-        deck::TEMPO_RANGE,
+        deck::consts::TEMPO_RANGE,
         ui::{cache::DeckCache, scope::deck_index},
     },
     state::AbrVariant,

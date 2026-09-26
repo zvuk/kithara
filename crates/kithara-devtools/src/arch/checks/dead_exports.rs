@@ -24,7 +24,9 @@ use crate::common::{
     violation::Violation,
 };
 
-pub(crate) const ID: &str = "dead_exports";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "dead_exports";
+}
 
 pub(crate) struct DeadExports;
 
@@ -34,7 +36,7 @@ impl Check for DeadExports {
     }
 
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -164,7 +166,7 @@ fn emit(
             "{} `{}` ({}) is exported but {}",
             def.kind, def.name, def.crate_name, status,
         );
-        violations.push(Violation::deny(ID, key, msg));
+        violations.push(Violation::deny(consts::ID, key, msg));
     }
     violations.sort_by(|a, b| a.key.cmp(&b.key));
     violations.dedup_by(|a, b| a.key == b.key);
@@ -1191,8 +1193,7 @@ mod tests {
     use syn::visit::Visit;
 
     use super::{RefCollector, Refs, mod_chain_gate};
-
-    const GATE: &str = "#[cfg(all(not(target_arch = \"wasm32\"), feature = \"flash\"))]";
+    use crate::consts;
 
     fn collect_refs(src: &str, qualified_only: bool) -> Refs {
         let file = syn::parse_file(src).unwrap();
@@ -1342,7 +1343,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         write(root, "lib.rs", "mod flash;");
-        write(root, "flash/mod.rs", &format!("{GATE}\nmod api;"));
+        write(
+            root,
+            "flash/mod.rs",
+            &format!("{GATE}\nmod api;", GATE = consts::GATE),
+        );
         write(root, "flash/api.rs", "pub fn dump_to_stderr() {}");
         assert!(
             gated(root, "flash/api.rs"),
@@ -1364,7 +1369,11 @@ mod tests {
     fn gate_on_ancestor_declaration_propagates_down() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        write(root, "lib.rs", &format!("{GATE}\nmod flash;"));
+        write(
+            root,
+            "lib.rs",
+            &format!("{GATE}\nmod flash;", GATE = consts::GATE),
+        );
         write(root, "flash/mod.rs", "mod api;");
         write(root, "flash/api.rs", "pub fn open() {}");
         assert!(
@@ -1378,7 +1387,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         write(root, "lib.rs", "mod flash;");
-        write(root, "flash.rs", &format!("{GATE}\nmod api;"));
+        write(
+            root,
+            "flash.rs",
+            &format!("{GATE}\nmod api;", GATE = consts::GATE),
+        );
         write(root, "flash/api.rs", "pub fn open() {}");
         assert!(
             gated(root, "flash/api.rs"),

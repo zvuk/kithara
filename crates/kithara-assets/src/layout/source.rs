@@ -9,18 +9,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use url::Url;
 
-struct Consts;
-
-impl Consts {
-    const HASH_BYTES: usize = 16;
-    /// Windows hashes a path as wide units under a domain of its own, so this
-    /// one names no platform there.
-    #[cfg(not(windows))]
-    const LOCAL_UNIX_DOMAIN: &[u8] = b"kithara.asset-root.local.unix.v1\0";
-    #[cfg(windows)]
-    const LOCAL_WINDOWS_DOMAIN: &[u8] = b"kithara.asset-root.local.windows.v1\0";
-    const REMOTE_DOMAIN: &[u8] = b"kithara.asset-root.remote.v1\0";
-}
+use crate::consts;
 
 /// Logical asset whose resources share one cache lifecycle and root.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -44,7 +33,7 @@ pub(crate) fn remote_root(url: &Url, discriminator: Option<&str>) -> String {
     let canonical = canonical_remote(url);
     let mut hasher = Sha256::new();
     if let Some(discriminator) = discriminator {
-        hasher.update(Consts::REMOTE_DOMAIN);
+        hasher.update(consts::REMOTE_DOMAIN);
         hash_field(&mut hasher, canonical.as_bytes());
         hash_field(&mut hasher, discriminator.as_bytes());
     } else {
@@ -58,14 +47,14 @@ pub(crate) fn local_root(path: &Path) -> String {
 
     #[cfg(unix)]
     {
-        hasher.update(Consts::LOCAL_UNIX_DOMAIN);
+        hasher.update(consts::LOCAL_UNIX_DOMAIN);
         hash_field(&mut hasher, path.as_os_str().as_bytes());
     }
 
     #[cfg(windows)]
     {
         let byte_len = path.as_os_str().encode_wide().count().saturating_mul(2);
-        hasher.update(Consts::LOCAL_WINDOWS_DOMAIN);
+        hasher.update(consts::LOCAL_WINDOWS_DOMAIN);
         hasher.update(u64::try_from(byte_len).unwrap_or(u64::MAX).to_be_bytes());
         for unit in path.as_os_str().encode_wide() {
             hasher.update(unit.to_le_bytes());
@@ -75,7 +64,7 @@ pub(crate) fn local_root(path: &Path) -> String {
     #[cfg(not(any(unix, windows)))]
     {
         let path = path.to_string_lossy();
-        hasher.update(Consts::LOCAL_UNIX_DOMAIN);
+        hasher.update(consts::LOCAL_UNIX_DOMAIN);
         hash_field(&mut hasher, path.as_bytes());
     }
 
@@ -96,5 +85,5 @@ fn hash_field(hasher: &mut Sha256, value: &[u8]) {
 
 fn finish_hash(hasher: Sha256) -> String {
     let hash = hasher.finalize();
-    hex::encode(&hash[..Consts::HASH_BYTES])
+    hex::encode(&hash[..consts::HASH_BYTES])
 }

@@ -43,3 +43,4 @@ pub use store::{
     AssetReader, AssetStore, AssetStoreBuilder, AssetStoreConfig, AssetStoreConfigPatch,
     AssetWriter, ResourceAcquisition, StorageBackend,
 };
+mod consts;

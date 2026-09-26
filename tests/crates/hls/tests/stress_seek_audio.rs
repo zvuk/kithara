@@ -24,24 +24,25 @@ use url::Url;
 
 use crate::common::test_defaults::SawWav;
 
-struct Consts;
-impl Consts {
-    const D: SawWav = SawWav::DEFAULT;
-    const VARIANT_COUNT: usize = 1;
-    const SEEK_ITERATIONS: usize = 1000;
+mod consts {
+    use super::SawWav;
 
-    /// Total fixture byte size for a given segment count.
-    const fn total_bytes(segment_count: usize) -> usize {
-        segment_count * Self::D.segment_size
-    }
+    pub(super) const D: SawWav = SawWav::DEFAULT;
+    pub(super) const VARIANT_COUNT: usize = 1;
+    pub(super) const SEEK_ITERATIONS: usize = 1000;
+}
 
-    /// Compute the expected duration in seconds for the generated WAV.
-    fn expected_duration_secs(segment_count: usize) -> f64 {
-        let header_size = 44usize;
-        let bytes_per_frame = Self::D.channels as usize * 2;
-        let frame_count = (Self::total_bytes(segment_count) - header_size) / bytes_per_frame;
-        frame_count as f64 / f64::from(Self::D.sample_rate)
-    }
+/// Total fixture byte size for a given segment count.
+const fn total_bytes(segment_count: usize) -> usize {
+    segment_count * consts::D.segment_size
+}
+
+/// Compute the expected duration in seconds for the generated WAV.
+fn expected_duration_secs(segment_count: usize) -> f64 {
+    let header_size = 44usize;
+    let bytes_per_frame = consts::D.channels as usize * 2;
+    let frame_count = (total_bytes(segment_count) - header_size) / bytes_per_frame;
+    frame_count as f64 / f64::from(consts::D.sample_rate)
 }
 
 /// Headroom over the segment count for full-cache open assertions: covers
@@ -302,7 +303,7 @@ fn assert_seek_churn_steady_state(warmup: ChurnSnapshot, end: ChurnSnapshot) {
         delta_rebuild_queue = d_rebuild,
         delta_reset_for_seek = d_reset,
         warmup_k = WARMUP_K,
-        steady_seeks = Consts::SEEK_ITERATIONS - WARMUP_K,
+        steady_seeks = consts::SEEK_ITERATIONS - WARMUP_K,
         "HLS startup vs steady-state layout/queue churn"
     );
     let worst = d_recompute.max(d_rebuild).max(d_reset);
@@ -313,7 +314,7 @@ fn assert_seek_churn_steady_state(warmup: ChurnSnapshot, end: ChurnSnapshot) {
          delta_recompute={d_recompute}, delta_rebuild_queue={d_rebuild}, \
          delta_reset_for_seek={d_reset} over the final {} seeks \
          (warmup_k={WARMUP_K}, steady slack={STEADY_STATE_SLACK})",
-        Consts::SEEK_ITERATIONS - WARMUP_K
+        consts::SEEK_ITERATIONS - WARMUP_K
     );
 }
 
@@ -333,8 +334,8 @@ async fn wav_forty_eight(hls_sized_wav_forty_eight: Vec<u8>) -> (Url, SizeProbeC
 async fn wav_seek(wav_data: Vec<u8>, segment_count: usize) -> (Url, SizeProbeCounter) {
     let server = HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: segment_count,
-        segment_size: Consts::D.segment_size,
-        segment_duration_secs: Consts::D.segment_duration_secs(),
+        segment_size: consts::D.segment_size,
+        segment_duration_secs: consts::D.segment_duration_secs(),
         custom_data: Some(Arc::new(wav_data)),
         ..Default::default()
     })
@@ -352,12 +353,12 @@ async fn flac_hundred() -> (Url, SizeProbeCounter) {
     let created = helper
         .create_hls(
             HlsFixtureBuilder::new()
-                .variant_count(Consts::VARIANT_COUNT)
+                .variant_count(consts::VARIANT_COUNT)
                 .segments_per_variant(100)
-                .segment_duration_secs(Consts::D.segment_duration_secs())
+                .segment_duration_secs(consts::D.segment_duration_secs())
                 .packaged_audio_per_variant_pcm_flac(
-                    Consts::D.sample_rate,
-                    Consts::D.channels,
+                    consts::D.sample_rate,
+                    consts::D.channels,
                     vec![PcmPattern::Ascending],
                 ),
         )
@@ -371,7 +372,7 @@ async fn flac_hundred() -> (Url, SizeProbeCounter) {
             helper,
             segments: 100,
             token,
-            variants: Consts::VARIANT_COUNT,
+            variants: consts::VARIANT_COUNT,
         },
     )
 }
@@ -502,7 +503,7 @@ async fn stress_seek_audio_hls(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
     let expected_dur = matches!(fixture, SeekAudioFixture::WavFileLike)
-        .then(|| Consts::expected_duration_secs(segment_count));
+        .then(|| expected_duration_secs(segment_count));
     let (url, counter) = prepared;
 
     info!(?fixture, %url, segments = segment_count, "HLS server ready");
@@ -591,7 +592,7 @@ async fn stress_seek_audio_hls(
         let max_seek_secs = total_secs - chunk_duration_secs;
         assert!(max_seek_secs > 0.0, "stream too short for chunk size");
 
-        let seek_positions: Vec<f64> = (0..Consts::SEEK_ITERATIONS)
+        let seek_positions: Vec<f64> = (0..consts::SEEK_ITERATIONS)
             .map(|_| rng.range_f64(0.001, max_seek_secs))
             .collect();
 
@@ -608,7 +609,7 @@ async fn stress_seek_audio_hls(
         let mut position_error_details: Vec<String> = Vec::new();
 
         let channels = spec.channels as usize;
-        let bytes_per_frame = usize::from(Consts::D.channels) * 2;
+        let bytes_per_frame = usize::from(consts::D.channels) * 2;
 
         for (i, &pos_secs) in seek_positions.iter().enumerate() {
             let position = Duration::from_secs_f64(pos_secs);
@@ -688,7 +689,7 @@ async fn stress_seek_audio_hls(
                 if position_error_details.len() < 10 {
                     let requested_byte = 44 + expected_frame_idx * bytes_per_frame;
                     let segment_index =
-                        (requested_byte / Consts::D.segment_size).min(segment_count - 1);
+                        (requested_byte / consts::D.segment_size).min(segment_count - 1);
                     position_error_details.push(format!(
                         "#{i}: requested={pos_secs:.6}s expected_frame={expected_frame_idx} \
                          expected_phase={expected_phase} actual_phase={actual_phase} \
@@ -734,10 +735,10 @@ async fn stress_seek_audio_hls(
             channel_mismatches,
             continuity_errors,
             position_errors,
-            "All {} seek+read iterations done", Consts::SEEK_ITERATIONS
+            "All {} seek+read iterations done", consts::SEEK_ITERATIONS
         );
 
-        assert_eq!(successful_reads, Consts::SEEK_ITERATIONS as u64);
+        assert_eq!(successful_reads, consts::SEEK_ITERATIONS as u64);
         assert_eq!(
             channel_mismatches, 0,
             "L/R channel data diverged {channel_mismatches} times - data corruption"

@@ -25,6 +25,7 @@ use crate::{
     BuildProfile, child,
     ci::process::Process,
     config::{AndroidConfig, KitharaExt},
+    consts,
     test_server::{Port, TestServer},
 };
 
@@ -198,12 +199,6 @@ fn recreate_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Rust targets the device build compiles, each with its Android ABI name.
-const RUST_TARGETS: &[(&str, &str)] = &[
-    ("aarch64-linux-android", "arm64-v8a"),
-    ("x86_64-linux-android", "x86_64"),
-];
-
 /// Features the FFI crate is compiled with on-device. Defaults stay off so
 /// `symphonia` is absent: `MediaCodec` is the sole decoder there.
 pub(super) fn device_features(profile: BuildProfile) -> String {
@@ -233,7 +228,7 @@ fn check_ndk_toolchain(tools: &ToolsConfig) -> Result<()> {
     )?;
     check_tool("rustup", &["--version"], "https://rustup.rs")?;
 
-    for (target, _) in RUST_TARGETS {
+    for (target, _) in consts::RUST_TARGETS {
         if !check_rust_target(target)? {
             bail!("Rust target '{target}' is not installed. Run: rustup target add {target}");
         }
@@ -247,7 +242,7 @@ fn cargo_ndk(api_level: &str) -> Result<Command> {
     let mut cmd = Command::new("cargo");
     cmd.env("ANDROID_NDK_HOME", ndk_root()?);
     cmd.arg("ndk").arg("-P").arg(api_level);
-    for (_, abi) in RUST_TARGETS {
+    for (_, abi) in consts::RUST_TARGETS {
         cmd.args(["-t", abi]);
     }
     Ok(cmd)
@@ -345,7 +340,7 @@ pub(crate) fn run_build(
         bail!("compiled library not found at {}", lib_path.display());
     }
 
-    copy_cxx_runtime(&jni_dir, RUST_TARGETS)?;
+    copy_cxx_runtime(&jni_dir, consts::RUST_TARGETS)?;
 
     println!("==> Generating Kotlin bindings");
 

@@ -58,32 +58,36 @@ mod tests {
     use super::fitted;
     use crate::draw::{Image, ImageId, Rect};
 
-    const BOX: Rect = Rect {
-        h: 40.0,
-        w: 100.0,
-        x: 10.0,
-        y: 20.0,
-    };
+    mod consts {
+        use super::*;
+
+        pub(super) const BOX: Rect = Rect {
+            h: 40.0,
+            w: 100.0,
+            x: 10.0,
+            y: 20.0,
+        };
+    }
 
     #[kithara::test]
     fn a_square_picture_in_a_wide_box_takes_the_height() {
-        assert_eq!(fitted(&square(), BOX).h, BOX.h);
+        assert_eq!(fitted(&square(), consts::BOX).h, consts::BOX.h);
     }
 
     #[kithara::test]
     fn a_square_picture_in_a_wide_box_stays_square() {
-        let placed = fitted(&square(), BOX);
+        let placed = fitted(&square(), consts::BOX);
 
         assert_eq!(placed.w, placed.h);
     }
 
     #[kithara::test]
     fn a_fitted_picture_is_centred_in_what_it_was_given() {
-        let placed = fitted(&square(), BOX);
+        let placed = fitted(&square(), consts::BOX);
 
         assert_eq!(
             placed.x + placed.w / 2.0,
-            BOX.x + BOX.w / 2.0,
+            consts::BOX.x + consts::BOX.w / 2.0,
             "the picture's centre is the box's centre"
         );
     }

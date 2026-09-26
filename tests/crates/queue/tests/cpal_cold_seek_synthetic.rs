@@ -16,7 +16,7 @@ use kithara_integration_tests::{
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     temp_dir,
-    test_defaults::Consts as Shared,
+    test_defaults::consts as shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
 };
 use url::Url;
@@ -46,7 +46,7 @@ async fn cold_seek_far_segment_hls_offline(
 
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
+            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build(),
     );

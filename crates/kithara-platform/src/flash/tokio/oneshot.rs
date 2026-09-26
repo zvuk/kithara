@@ -214,9 +214,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{RecvError, channel};
-    use crate::{flash, tokio::task::spawn};
-
-    const ROUNDS: usize = 256;
+    use crate::{consts, flash, tokio::task::spawn};
 
     /// The exact download-stack handoff: a spawned task does (here, trivial)
     /// work then `send`s the result on a oneshot; an awaiter parks on the
@@ -226,7 +224,7 @@ mod tests {
     #[kithara::test(tokio, multi_thread)]
     async fn round_trip_no_lost_wakeup() {
         flash::reset();
-        let futs = (0..ROUNDS).map(|r| async move {
+        let futs = (0..consts::ROUNDS).map(|r| async move {
             let (tx, rx) = channel::<usize>();
             drop(spawn(async move {
                 tx.send(r * 2).ok();
@@ -235,7 +233,7 @@ mod tests {
         });
         let got: Vec<usize> = join_all(futs).await;
         let sum: usize = got.iter().sum();
-        assert_eq!(sum, (0..ROUNDS).map(|r| r * 2).sum::<usize>());
+        assert_eq!(sum, (0..consts::ROUNDS).map(|r| r * 2).sum::<usize>());
     }
 
     /// A sender dropped without sending must resolve the receiver with

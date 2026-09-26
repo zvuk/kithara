@@ -1,10 +1,6 @@
 use std::io::{self, Error, Read, Seek, SeekFrom};
 
-/// Window the box walk reads through. Box headers are 8 or 16 bytes and the
-/// `moov`/`moof` boxes an index is made of are kilobytes, so one window
-/// absorbs a whole run of small reads. A `BufReader` cannot stand in here:
-/// every box read ends in an absolute seek, which would drop its buffer.
-const WALK_WINDOW_BYTES: usize = 16 * 1024;
+use crate::consts;
 
 /// Random-access byte source the index walk pulls box headers from.
 pub trait ReadAt {
@@ -24,7 +20,7 @@ pub trait ReadAt {
 pub(crate) struct ReadAtCursor<'a, R: ReadAt> {
     source: &'a R,
     /// Fixed-size scratch, refilled in place.
-    window: [u8; WALK_WINDOW_BYTES],
+    window: [u8; consts::WALK_WINDOW_BYTES],
     pos: u64,
     total: u64,
     window_start: u64,
@@ -38,7 +34,7 @@ impl<'a, R: ReadAt> ReadAtCursor<'a, R> {
             source,
             total,
             pos: 0,
-            window: [0; WALK_WINDOW_BYTES],
+            window: [0; consts::WALK_WINDOW_BYTES],
             window_len: 0,
             window_start: 0,
         }
@@ -53,8 +49,8 @@ impl<'a, R: ReadAt> ReadAtCursor<'a, R> {
             .filter(|offset| *offset < self.window_len);
         if hit.is_none() {
             let want = usize::try_from(self.total.saturating_sub(self.pos))
-                .unwrap_or(WALK_WINDOW_BYTES)
-                .min(WALK_WINDOW_BYTES);
+                .unwrap_or(consts::WALK_WINDOW_BYTES)
+                .min(consts::WALK_WINDOW_BYTES);
             self.window_len = self.source.read_at(self.pos, &mut self.window[..want])?;
             self.window_start = self.pos;
         }

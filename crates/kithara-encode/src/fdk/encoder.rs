@@ -8,12 +8,11 @@ use fdk_aac_sys as sys;
 
 use crate::error::{EncodeError, EncodeResult};
 
-struct Consts;
-impl Consts {
-    const CBR: u32 = 0;
-    const ENCODER_MODULES: u32 = 0;
-    const RAW_TRANSPORT: u32 = 0;
-    const SBR_ON: u32 = 1;
+mod consts {
+    pub(super) const CBR: u32 = 0;
+    pub(super) const ENCODER_MODULES: u32 = 0;
+    pub(super) const RAW_TRANSPORT: u32 = 0;
+    pub(super) const SBR_ON: u32 = 1;
 }
 
 pub(crate) struct Encoder {
@@ -46,7 +45,7 @@ impl Encoder {
         unsafe {
             check(sys::aacEncOpen(
                 &mut handle as *mut _,
-                Consts::ENCODER_MODULES,
+                consts::ENCODER_MODULES,
                 u32::from(params.channels),
             ))?;
         }
@@ -80,18 +79,18 @@ impl Encoder {
             check(sys::aacEncoder_SetParam(
                 handle,
                 sys::AACENC_PARAM_AACENC_BITRATEMODE,
-                Consts::CBR,
+                consts::CBR,
             ))?;
             check(sys::aacEncoder_SetParam(
                 handle,
                 sys::AACENC_PARAM_AACENC_TRANSMUX,
-                Consts::RAW_TRANSPORT,
+                consts::RAW_TRANSPORT,
             ))?;
             if params.sbr {
                 check(sys::aacEncoder_SetParam(
                     handle,
                     sys::AACENC_PARAM_AACENC_SBR_MODE,
-                    Consts::SBR_ON,
+                    consts::SBR_ON,
                 ))?;
             }
             check(sys::aacEncEncode(

@@ -12,23 +12,21 @@
 use std::{env, fs::OpenOptions, io::Write as _, path::Path, process::ExitCode};
 
 /// The environment this double reads its whole behaviour from.
-struct Consts;
-
-impl Consts {
+mod consts {
     /// File the arguments of each run are appended to, one line per run,
     /// joined by spaces. The whole line, not the first argument: `colima`
     /// reaches `fstrim` as its sixth argument, and `launchctl bootout
     /// <service>` is asserted in full today.
-    const TRACE: &str = "KITHARA_TEST_TRACE";
+    pub(super) const TRACE: &str = "KITHARA_TEST_TRACE";
     /// Scenario selector, read together with the role and the first argument.
-    const SCENARIO: &str = "KITHARA_TEST_SCENARIO";
+    pub(super) const SCENARIO: &str = "KITHARA_TEST_SCENARIO";
     /// `role:first-argument:scenario=exit_code` triples, separated by commas.
     /// The first matching triple decides the exit code; `*` matches anything.
-    const RULES: &str = "KITHARA_TEST_RULES";
+    pub(super) const RULES: &str = "KITHARA_TEST_RULES";
     /// Text printed to stdout before exiting, verbatim.
-    const STDOUT: &str = "KITHARA_TEST_STDOUT";
+    pub(super) const STDOUT: &str = "KITHARA_TEST_STDOUT";
     /// Text printed to stderr before exiting, verbatim.
-    const STDERR: &str = "KITHARA_TEST_STDERR";
+    pub(super) const STDERR: &str = "KITHARA_TEST_STDERR";
 }
 
 fn main() -> ExitCode {
@@ -42,9 +40,9 @@ fn main() -> ExitCode {
         .unwrap_or_default();
     let args: Vec<String> = env::args().skip(1).collect();
     let first = args.first().map_or("", String::as_str);
-    let scenario = env::var(Consts::SCENARIO).unwrap_or_default();
+    let scenario = env::var(consts::SCENARIO).unwrap_or_default();
 
-    if let Some(path) = env::var_os(Consts::TRACE) {
+    if let Some(path) = env::var_os(consts::TRACE) {
         let opened = OpenOptions::new().create(true).append(true).open(path);
         match opened {
             Ok(mut file) => {
@@ -55,14 +53,14 @@ fn main() -> ExitCode {
             Err(_) => return fail("opening the trace file"),
         }
     }
-    if let Some(text) = env::var_os(Consts::STDOUT) {
+    if let Some(text) = env::var_os(consts::STDOUT) {
         print!("{}", text.to_string_lossy());
     }
-    if let Some(text) = env::var_os(Consts::STDERR) {
+    if let Some(text) = env::var_os(consts::STDERR) {
         eprint!("{}", text.to_string_lossy());
     }
     ExitCode::from(exit_code(
-        &env::var(Consts::RULES).unwrap_or_default(),
+        &env::var(consts::RULES).unwrap_or_default(),
         &role,
         first,
         &scenario,

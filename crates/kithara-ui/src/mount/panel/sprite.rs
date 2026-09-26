@@ -117,23 +117,26 @@ mod host {
             draw::{Image, ImageId},
         };
 
-        /// The pass a document would give a spinner: long enough to read.
-        const PASS: f32 = 1.6;
+        mod consts {
+            /// The pass a document would give a spinner: long enough to read.
+            pub(super) const PASS: f32 = 1.6;
+        }
 
         fn at(seconds: f32) -> Option<ImageId> {
-            frame(builtin::skin().sheet("spinner"), PASS, seconds).map(|image| image.id().clone())
+            frame(builtin::skin().sheet("spinner"), consts::PASS, seconds)
+                .map(|image| image.id().clone())
         }
 
         #[kithara::test]
         fn a_reading_partway_through_a_pass_picks_a_later_frame() {
-            assert_ne!(at(0.0), at(PASS / 2.0));
+            assert_ne!(at(0.0), at(consts::PASS / 2.0));
         }
 
         /// The whole point of a sheet: a clock that keeps running keeps
         /// playing, rather than stopping on the last frame it reached.
         #[kithara::test]
         fn a_reading_a_whole_pass_later_comes_back_to_the_same_frame() {
-            assert_eq!(at(0.0), at(PASS));
+            assert_eq!(at(0.0), at(consts::PASS));
         }
 
         /// A document naming a picture the worn skin does not carry draws
@@ -141,7 +144,7 @@ mod host {
         #[kithara::test]
         fn a_picture_the_skin_does_not_carry_draws_nothing() {
             assert_eq!(
-                frame(builtin::skin().sheet("no-such-picture"), PASS, 0.0),
+                frame(builtin::skin().sheet("no-such-picture"), consts::PASS, 0.0),
                 None
             );
         }
@@ -151,7 +154,7 @@ mod host {
         #[kithara::test]
         fn the_frame_a_reading_picks_carries_its_pixels() {
             assert!(
-                frame(builtin::skin().sheet("spinner"), PASS, 0.0)
+                frame(builtin::skin().sheet("spinner"), consts::PASS, 0.0)
                     .as_ref()
                     .and_then(Image::rgba)
                     .is_some()

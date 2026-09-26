@@ -10,12 +10,11 @@ use crate::{
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest, PcmSource},
 };
 
-struct Consts;
-impl Consts {
-    const ACCESS_UNIT_CAPACITY: usize = 8 * 1024;
-    const CHANNELS: u16 = 2;
-    const FRAME_OUTPUT_SAMPLES: usize = 2048;
-    const MAX_FRAME_INPUT_SAMPLES: usize = Self::FRAME_OUTPUT_SAMPLES * Self::CHANNELS as usize;
+mod consts {
+    pub(super) const ACCESS_UNIT_CAPACITY: usize = 8 * 1024;
+    pub(super) const CHANNELS: u16 = 2;
+    pub(super) const FRAME_OUTPUT_SAMPLES: usize = 2048;
+    pub(super) const MAX_FRAME_INPUT_SAMPLES: usize = FRAME_OUTPUT_SAMPLES * CHANNELS as usize;
 }
 
 #[derive(Clone, Copy)]
@@ -62,11 +61,11 @@ impl AacHeEncoder {
 
         let sample_rate = request.pcm.sample_rate();
         let channels = request.pcm.channels();
-        if channels != Consts::CHANNELS {
+        if channels != consts::CHANNELS {
             return Err(EncodeError::InvalidInput(format!(
                 "{} requires stereo input (channels={})",
                 profile.name(),
-                Consts::CHANNELS
+                consts::CHANNELS
             )));
         }
 
@@ -80,17 +79,17 @@ impl AacHeEncoder {
             sbr: true,
         })?;
         let info = encoder.info()?;
-        let default_frame_input = Consts::FRAME_OUTPUT_SAMPLES * usize::from(channels);
+        let default_frame_input = consts::FRAME_OUTPUT_SAMPLES * usize::from(channels);
         let frame_input_samples = usize::try_from(info.frameLength)
             .ok()
             .map(|n| n * usize::from(channels))
             .filter(|n| *n > 0)
             .unwrap_or(default_frame_input);
-        if frame_input_samples > Consts::MAX_FRAME_INPUT_SAMPLES {
+        if frame_input_samples > consts::MAX_FRAME_INPUT_SAMPLES {
             return Err(EncodeError::backend_message(format!(
                 "{} requested {frame_input_samples} input samples, maximum is {}",
                 profile.name(),
-                Consts::MAX_FRAME_INPUT_SAMPLES
+                consts::MAX_FRAME_INPUT_SAMPLES
             )));
         }
 
@@ -109,7 +108,7 @@ impl AacHeEncoder {
         })?;
 
         pump_pcm_into_encoder(request.pcm, pools, frame_input_samples, |input| {
-            let mut output = [0u8; Consts::ACCESS_UNIT_CAPACITY];
+            let mut output = [0u8; consts::ACCESS_UNIT_CAPACITY];
             let encoded = encoder.encode(input, &mut output)?;
             if encoded.output_size > 0 {
                 units.push(EncodedAccessUnit {
@@ -126,7 +125,7 @@ impl AacHeEncoder {
 
         let empty: [i16; 0] = [];
         loop {
-            let mut output = [0u8; Consts::ACCESS_UNIT_CAPACITY];
+            let mut output = [0u8; consts::ACCESS_UNIT_CAPACITY];
             let encoded = encoder.encode(&empty, &mut output)?;
             if encoded.output_size == 0 {
                 break;
@@ -160,7 +159,7 @@ impl AacHeEncoder {
     }
 
     pub(crate) const fn frame_samples() -> usize {
-        Consts::FRAME_OUTPUT_SAMPLES
+        consts::FRAME_OUTPUT_SAMPLES
     }
 }
 
@@ -182,7 +181,7 @@ where
             EncodeError::backend_message("HE-AAC frame byte count overflow".to_owned())
         })?;
     let mut byte_offset: usize = 0;
-    let mut samples = [0_i16; Consts::MAX_FRAME_INPUT_SAMPLES];
+    let mut samples = [0_i16; consts::MAX_FRAME_INPUT_SAMPLES];
     let mut sample_count = 0;
     let mut raw = pools
         .get_with_len::<u8>(frame_bytes)

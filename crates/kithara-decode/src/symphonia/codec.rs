@@ -34,18 +34,16 @@ use crate::{
 };
 
 /// Module-scoped constants for [`SymphoniaCodec`].
-struct Consts;
-
-impl Consts {
+mod consts {
     /// LAME-convention decoder algorithmic delay for the `mpa` MP3 decoder (528
     /// polyphase synthesis filter convergence + 1 sync sample). See
     /// [`crate::codec::FrameCodec::decoder_algo_delay`].
-    const MP3_DECODER_DELAY: u64 = 528 + 1;
+    pub(super) const MP3_DECODER_DELAY: u64 = 528 + 1;
 
     /// Symphonia packets are unidimensional (single audio track) so
     /// we pin `track_id` = 0 — Symphonia uses the field for routing
     /// across multiplexed streams that we never produce.
-    const TRACK_ID: u32 = 0;
+    pub(super) const TRACK_ID: u32 = 0;
 }
 
 /// Frame codec backed by a symphonia codec registry decoder.
@@ -184,7 +182,7 @@ impl FrameCodec for SymphoniaCodec {
         let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate.get());
         let packet_pts = Timestamp::new(i64::try_from(pts_ticks).unwrap_or(i64::MAX));
         let packet_ref = PacketRef::new(
-            Consts::TRACK_ID,
+            consts::TRACK_ID,
             packet_pts,
             PktDuration::new(0),
             frame_data,
@@ -324,7 +322,7 @@ impl FrameCodec for SymphoniaCodec {
 
 const fn symphonia_decoder_algo_delay(codec: AudioCodec) -> u64 {
     match codec {
-        AudioCodec::Mp3 => Consts::MP3_DECODER_DELAY,
+        AudioCodec::Mp3 => consts::MP3_DECODER_DELAY,
         _ => 0,
     }
 }

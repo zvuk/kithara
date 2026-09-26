@@ -18,3 +18,4 @@ pub use segment::{Segment, Segmenter};
 #[cfg(not(target_arch = "wasm32"))]
 pub use service::{Broadcast, BroadcastHandle, BroadcastOutput, BroadcastStatus};
 pub use window::{LiveWindow, PlaylistSnapshot};
+mod consts;

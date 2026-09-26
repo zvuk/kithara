@@ -3,7 +3,7 @@ use ringbuf::{
     traits::{Consumer, Observer, Producer, Split},
 };
 
-const STEREO_CHANNELS: usize = 2;
+use crate::consts;
 
 pub(crate) struct MasterRing;
 
@@ -13,7 +13,7 @@ impl MasterRing {
         assert!(block_frames > 0, "invariant: ring block size is non-zero");
         assert!(capacity_blocks > 0, "invariant: ring capacity is non-zero");
         let block_samples = (block_frames as usize)
-            .checked_mul(STEREO_CHANNELS)
+            .checked_mul(consts::STEREO_CHANNELS)
             .unwrap_or_else(|| panic!("invariant: ring block sample count fits usize"));
         let capacity_samples = block_samples
             .checked_mul(capacity_blocks)
@@ -87,7 +87,7 @@ impl RingReader {
     #[must_use]
     pub(crate) fn drain(&mut self, frames: usize) -> Vec<f32> {
         let requested = frames
-            .checked_mul(STEREO_CHANNELS)
+            .checked_mul(consts::STEREO_CHANNELS)
             .unwrap_or_else(|| panic!("invariant: drain sample count fits usize"));
         let mut samples = vec![0.0; requested.min(self.consumer.occupied_len())];
         let drained = self.consumer.pop_slice(&mut samples);

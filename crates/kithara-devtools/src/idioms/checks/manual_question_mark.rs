@@ -13,9 +13,10 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to},
 };
 
-pub(crate) const ID: &str = "manual_question_mark";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "manual_question_mark";
 
-const EXPLANATION: &str = "\
+    pub(super) const EXPLANATION: &str = "\
 Detected a `match` expression that hand-rolls what the `?` operator (or \
 `Result::map_err` / `Option::map`) does in one character.
 
@@ -33,12 +34,13 @@ and they grow during refactoring.
 Suppress with `// xtask-lint-ignore: manual_question_mark` only when both \
 arms genuinely diverge in semantics (e.g. error-side does logging or \
 recovery before returning).";
+}
 
 pub(crate) struct ManualQuestionMark;
 
 impl Check for ManualQuestionMark {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -80,10 +82,11 @@ impl<'ast> Visit<'ast> for MatchVisitor<'_> {
     fn visit_expr_match(&mut self, m: &'ast ExprMatch) {
         if let Some(pattern) = classify(m) {
             let s = m.match_token.span().start();
-            if !self.suppress.is_suppressed(s.line, ID) {
+            if !self.suppress.is_suppressed(s.line, consts::ID) {
                 let key = format!("{}:{}:{}", self.rel, s.line, s.column);
                 self.out.push(
-                    Violation::warn(ID, key, pattern.message()).with_explanation(EXPLANATION),
+                    Violation::warn(consts::ID, key, pattern.message())
+                        .with_explanation(consts::EXPLANATION),
                 );
             }
         }

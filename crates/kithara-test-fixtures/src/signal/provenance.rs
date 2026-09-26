@@ -137,7 +137,9 @@ mod tests {
         ascending_pcm, ascending_wrap_pcm, descending_pcm, descending_wrap_pcm, provenance_silence,
     };
 
-    const WINDOW: usize = 64;
+    mod consts {
+        pub(super) const WINDOW: usize = 64;
+    }
 
     #[kithara::test(native, flash(false))]
     fn classify_windows_labels_pure_signals_including_wrap(
@@ -145,21 +147,21 @@ mod tests {
         descending_wrap_pcm: Vec<f32>,
         provenance_silence: Vec<f32>,
     ) {
-        let ascending = &ascending_wrap_pcm[..WINDOW];
+        let ascending = &ascending_wrap_pcm[..consts::WINDOW];
         assert_eq!(
-            classify_windows(ascending, WINDOW, 0.5),
+            classify_windows(ascending, consts::WINDOW, 0.5),
             vec![FrameClass::Ascending]
         );
 
         let descending = descending_wrap_pcm;
         assert_eq!(
-            classify_windows(&descending, WINDOW, 0.5),
+            classify_windows(&descending, consts::WINDOW, 0.5),
             vec![FrameClass::Descending]
         );
 
         let silence = provenance_silence;
         assert_eq!(
-            classify_windows(&silence, WINDOW, 0.5),
+            classify_windows(&silence, consts::WINDOW, 0.5),
             vec![FrameClass::Silence]
         );
     }
@@ -172,11 +174,11 @@ mod tests {
     fn a_splice_on_a_window_boundary_still_breaks_the_class(ascending_pcm: Vec<f32>) {
         const JUMP: usize = SAW_PERIOD / 2;
 
-        let mut left = ascending_pcm[..WINDOW * 2].to_vec();
-        left[WINDOW..].copy_from_slice(&ascending_pcm[JUMP..JUMP + WINDOW]);
+        let mut left = ascending_pcm[..consts::WINDOW * 2].to_vec();
+        left[consts::WINDOW..].copy_from_slice(&ascending_pcm[JUMP..JUMP + consts::WINDOW]);
 
         assert_eq!(
-            classify_windows(&left, WINDOW, 0.5),
+            classify_windows(&left, consts::WINDOW, 0.5),
             vec![FrameClass::Ascending, FrameClass::Unknown]
         );
     }

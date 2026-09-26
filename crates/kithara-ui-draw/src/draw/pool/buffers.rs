@@ -8,15 +8,17 @@ use super::{
 };
 use crate::DrawPoolLimits;
 
-const SHARDS: usize = 1;
+mod consts {
+    pub(super) const SHARDS: usize = 1;
+}
 
 enum CommandTag {}
 enum PathTag {}
 enum TextTag {}
 
-type CommandKey = PoolAlias<CommandTag, VecKey<DrawCmd, SHARDS>>;
-type PathKey = PoolAlias<PathTag, VecKey<Verb, SHARDS>>;
-type TextKey = PoolAlias<TextTag, StringKey<SHARDS>>;
+type CommandKey = PoolAlias<CommandTag, VecKey<DrawCmd, { consts::SHARDS }>>;
+type PathKey = PoolAlias<PathTag, VecKey<Verb, { consts::SHARDS }>>;
+type TextKey = PoolAlias<TextTag, StringKey<{ consts::SHARDS }>>;
 
 pool_schema! {
     pub(crate) DrawSchema {

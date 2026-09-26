@@ -13,23 +13,22 @@ use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
 use kithara_test_fixtures::fixtures::tone_mp3;
 
-struct Consts;
-impl Consts {
+mod consts {
     /// Fraction of the embedded MP3 handed to the "partial" decoder. Small
     /// enough to keep the target byte well beyond the slice; large enough
     /// that Symphonia's probe still succeeds.
-    const PARTIAL_FRACTION_NUM: usize = 6;
-    const PARTIAL_FRACTION_DEN: usize = 100;
+    pub(super) const PARTIAL_FRACTION_NUM: usize = 6;
+    pub(super) const PARTIAL_FRACTION_DEN: usize = 100;
 
     /// Fraction of the full duration used as the seek target. 80 % picks a
     /// position that reliably maps to a byte offset past the 6 % partial
     /// slice, yet stays well inside the true track duration.
-    const TARGET_FRACTION_NUM: u32 = 80;
-    const TARGET_FRACTION_DEN: u32 = 100;
+    pub(super) const TARGET_FRACTION_NUM: u32 = 80;
+    pub(super) const TARGET_FRACTION_DEN: u32 = 100;
 }
 
 fn partial_slice(full: &'static [u8]) -> &'static [u8] {
-    let cut = full.len() * Consts::PARTIAL_FRACTION_NUM / Consts::PARTIAL_FRACTION_DEN;
+    let cut = full.len() * consts::PARTIAL_FRACTION_NUM / consts::PARTIAL_FRACTION_DEN;
     &full[..cut]
 }
 
@@ -77,8 +76,8 @@ fn partial_decoder_seek_past_available_bytes_errors(tone_mp3: &'static [u8]) {
             .expect("partial mp3 decoder");
     let duration = decoder.duration().expect("duration known");
 
-    let target_nanos = duration.as_nanos() * u128::from(Consts::TARGET_FRACTION_NUM)
-        / u128::from(Consts::TARGET_FRACTION_DEN);
+    let target_nanos = duration.as_nanos() * u128::from(consts::TARGET_FRACTION_NUM)
+        / u128::from(consts::TARGET_FRACTION_DEN);
     let target = Duration::from_nanos(u64::try_from(target_nanos).expect("fits u64"));
 
     let result = decoder.seek(target);
@@ -89,7 +88,7 @@ fn partial_decoder_seek_past_available_bytes_errors(tone_mp3: &'static [u8]) {
          recreation path and the user-visible hang wouldn't exist",
         target,
         duration,
-        (Consts::PARTIAL_FRACTION_NUM as f64 / Consts::PARTIAL_FRACTION_DEN as f64) * 100.0,
+        (consts::PARTIAL_FRACTION_NUM as f64 / consts::PARTIAL_FRACTION_DEN as f64) * 100.0,
     );
 }
 
@@ -106,8 +105,8 @@ fn full_decoder_seeks_to_same_target_without_error(tone_mp3: &'static [u8]) {
             .expect("full mp3 decoder");
     let duration = decoder.duration().expect("duration known");
 
-    let target_nanos = duration.as_nanos() * u128::from(Consts::TARGET_FRACTION_NUM)
-        / u128::from(Consts::TARGET_FRACTION_DEN);
+    let target_nanos = duration.as_nanos() * u128::from(consts::TARGET_FRACTION_NUM)
+        / u128::from(consts::TARGET_FRACTION_DEN);
     let target = Duration::from_nanos(u64::try_from(target_nanos).expect("fits u64"));
 
     decoder

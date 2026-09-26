@@ -12,7 +12,7 @@ use crate::{
     FrameHost, Step,
     fixture::{CensusReads, Fixture},
     packet,
-    scenarios::Consts,
+    scenarios::consts,
 };
 
 /// The retained host: the tree stays mounted, input walks it, and a frame is a
@@ -31,7 +31,7 @@ impl<'fixture> Retained<'fixture> {
             published: Rc::clone(&published),
             reads: Rc::clone(&reads),
         };
-        let size = (u32::from(Consts::WIDTH), u32::from(Consts::HEIGHT));
+        let size = (u32::from(consts::WIDTH), u32::from(consts::HEIGHT));
         let ui = Ui::new(app, fixture.config(), size, 1.0)
             .unwrap_or_else(|error| panic!("the frame-perf fixture must mount: {error}"));
         Self {
@@ -88,7 +88,7 @@ struct CensusApp {
 
 impl App for CensusApp {
     fn document(&self) -> &str {
-        Consts::LAYOUT
+        consts::LAYOUT
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {

@@ -1,19 +1,7 @@
 use biquad::{Biquad, Coefficients, DirectForm1, Type};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 
-struct Consts;
-
-impl Consts {
-    const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
-    const NYQUIST_FACTOR: f32 = 2.0;
-    const PASSTHROUGH: Coefficients<f32> = Coefficients {
-        a1: 0.0,
-        a2: 0.0,
-        b0: 1.0,
-        b1: 0.0,
-        b2: 0.0,
-    };
-}
+use crate::consts;
 
 struct Section(DirectForm1<f32>);
 
@@ -149,9 +137,9 @@ impl CrossoverFilters {
 }
 
 fn biquad_coeffs(filter: Type<f32>, freq: f32, sample_rate: f32) -> Coefficients<f32> {
-    let normalized = Consts::NYQUIST_FACTOR * freq / sample_rate;
-    Coefficients::<f32>::from_normalized_params(filter, normalized, Consts::BUTTERWORTH_Q)
-        .unwrap_or(Consts::PASSTHROUGH)
+    let normalized = consts::NYQUIST_FACTOR * freq / sample_rate;
+    Coefficients::<f32>::from_normalized_params(filter, normalized, consts::BUTTERWORTH_Q)
+        .unwrap_or(consts::PASSTHROUGH)
 }
 
 #[cfg(test)]

@@ -8,7 +8,9 @@ use super::{
 };
 use crate::common::project::ArchitectureRenderBudgets;
 
-const LONG_CHAIN_THRESHOLD: usize = 6;
+mod consts {
+    pub(super) const LONG_CHAIN_THRESHOLD: usize = 6;
+}
 
 pub(crate) fn render_metrics(metrics: &ArchitectureMetrics) -> String {
     let confirmed = &metrics.confirmed;
@@ -425,7 +427,7 @@ fn analyze(model: &DiagramModel) -> Analysis {
         });
     }
     if let Some(chain) = longest_chain(&outgoing)
-        && chain.len() >= LONG_CHAIN_THRESHOLD
+        && chain.len() >= consts::LONG_CHAIN_THRESHOLD
     {
         findings.push(Finding {
             kind: "Long chain",
@@ -472,7 +474,7 @@ fn longest_from(
     if path.len() > longest.len() {
         longest.clone_from(path);
     }
-    if path.len() < LONG_CHAIN_THRESHOLD * 3
+    if path.len() < consts::LONG_CHAIN_THRESHOLD * 3
         && let Some(targets) = adjacency.get(node)
     {
         for target in targets {

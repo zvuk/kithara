@@ -5,7 +5,9 @@ use crate::{
     ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerMode, ResamplerSettings,
 };
 
-const BACKEND_APPLE: &str = "apple-audio-converter";
+mod consts {
+    pub(super) const BACKEND_APPLE: &str = "apple-audio-converter";
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AppleAudioConverterBackend;
@@ -34,7 +36,7 @@ impl ResamplerBackend for AppleAudioConverterBackend {
         } = settings.mode
         else {
             return Err(ResamplerBuildError::UnsupportedMode {
-                backend: BACKEND_APPLE,
+                backend: consts::BACKEND_APPLE,
                 mode: settings.mode.label(),
             });
         };
@@ -55,6 +57,6 @@ impl ResamplerBackend for AppleAudioConverterBackend {
     }
 
     fn name(&self) -> &'static str {
-        BACKEND_APPLE
+        consts::BACKEND_APPLE
     }
 }

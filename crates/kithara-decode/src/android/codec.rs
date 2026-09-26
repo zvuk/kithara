@@ -23,16 +23,14 @@ use crate::{
     types::DecoderTrackInfo,
 };
 
-struct Consts;
-
-impl Consts {
-    const DRAIN_DEQUEUE_TIMEOUT_US: i64 = 1_000_000;
-    const INPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
+mod consts {
+    pub(super) const DRAIN_DEQUEUE_TIMEOUT_US: i64 = 1_000_000;
+    pub(super) const INPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
     /// Wait for a free input buffer before the codec counts as stuck.
-    const INPUT_WAIT_BUDGET_US: i64 = 1_000_000;
-    const NO_WAIT_US: i64 = 0;
-    const OUTPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
-    const PCM16_SCALE: f32 = 32_768.0;
+    pub(super) const INPUT_WAIT_BUDGET_US: i64 = 1_000_000;
+    pub(super) const NO_WAIT_US: i64 = 0;
+    pub(super) const OUTPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
+    pub(super) const PCM16_SCALE: f32 = 32_768.0;
 }
 
 #[derive(Default)]
@@ -147,9 +145,9 @@ impl FrameCodec for AndroidCodec {
             }
         }
         let timeout = if matches!(self.drain, DrainState::Draining) {
-            Consts::DRAIN_DEQUEUE_TIMEOUT_US
+            consts::DRAIN_DEQUEUE_TIMEOUT_US
         } else {
-            Consts::OUTPUT_DEQUEUE_TIMEOUT_US
+            consts::OUTPUT_DEQUEUE_TIMEOUT_US
         };
         self.read_output(out, timeout)
     }
@@ -196,19 +194,19 @@ impl AndroidCodec {
         loop {
             if let Some(buf) = self
                 .codec
-                .dequeue_input_buffer(Consts::INPUT_DEQUEUE_TIMEOUT_US)?
+                .dequeue_input_buffer(consts::INPUT_DEQUEUE_TIMEOUT_US)?
             {
                 return Ok(buf);
             }
-            waited_us += Consts::INPUT_DEQUEUE_TIMEOUT_US;
-            if waited_us >= Consts::INPUT_WAIT_BUDGET_US {
+            waited_us += consts::INPUT_DEQUEUE_TIMEOUT_US;
+            if waited_us >= consts::INPUT_WAIT_BUDGET_US {
                 return Err(AndroidBackendError::operation(
                     "codec-input-backpressure",
                     "input packet was not consumed",
                 )
                 .into());
             }
-            self.read_output(out, Consts::NO_WAIT_US)?;
+            self.read_output(out, consts::NO_WAIT_US)?;
         }
     }
 
@@ -248,14 +246,14 @@ impl AndroidCodec {
                     if matches!(self.drain, DrainState::Finished) {
                         break;
                     }
-                    timeout = Consts::NO_WAIT_US;
+                    timeout = consts::NO_WAIT_US;
                 }
                 DequeueOutput::OutputFormatChanged(format) => {
                     self.spec = output_spec(&format)?;
                     self.pcm_encoding = format.pcm_encoding;
                 }
                 DequeueOutput::TryAgainLater => {
-                    if draining && timeout != Consts::NO_WAIT_US && out.is_empty() {
+                    if draining && timeout != consts::NO_WAIT_US && out.is_empty() {
                         return Err(AndroidBackendError::operation(
                             "codec-drain",
                             "timed out before end of output",
@@ -322,7 +320,7 @@ fn append_pcm16(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {
     out.ensure_len(end)?;
     for (dst, chunk) in out[start..end].iter_mut().zip(bytes.chunks_exact(2)) {
         let s = i16::from_le_bytes([chunk[0], chunk[1]]);
-        *dst = f32::from(s) / Consts::PCM16_SCALE;
+        *dst = f32::from(s) / consts::PCM16_SCALE;
     }
     out.truncate(end);
     Ok(())

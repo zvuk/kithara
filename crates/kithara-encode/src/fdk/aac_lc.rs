@@ -8,20 +8,21 @@ use crate::{
     types::EncodedAccessUnit,
 };
 
-struct Consts;
-impl Consts {
-    const ACCESS_UNIT_CAPACITY: usize = 8 * 1024;
-    const I16_SCALE: f32 = 32_768.0;
-    const MAX_CHANNELS: usize = 6;
-    const MAX_FRAME_INPUT_SAMPLES: usize = StreamEncoder::FRAME_SAMPLES * Self::MAX_CHANNELS;
-    const MAX_SAMPLE_RATE: u32 = 96_000;
-    const MIN_SAMPLE_RATE: u32 = 8_000;
+mod consts {
+    use super::StreamEncoder;
+
+    pub(super) const ACCESS_UNIT_CAPACITY: usize = 8 * 1024;
+    pub(super) const I16_SCALE: f32 = 32_768.0;
+    pub(super) const MAX_CHANNELS: usize = 6;
+    pub(super) const MAX_FRAME_INPUT_SAMPLES: usize = StreamEncoder::FRAME_SAMPLES * MAX_CHANNELS;
+    pub(super) const MAX_SAMPLE_RATE: u32 = 96_000;
+    pub(super) const MIN_SAMPLE_RATE: u32 = 8_000;
 }
 
 pub(crate) struct FdkStream {
     encoder: Encoder,
-    pending: [i16; Consts::MAX_FRAME_INPUT_SAMPLES],
-    output: [u8; Consts::ACCESS_UNIT_CAPACITY],
+    pending: [i16; consts::MAX_FRAME_INPUT_SAMPLES],
+    output: [u8; consts::ACCESS_UNIT_CAPACITY],
     sample_rate: u32,
     timescale: u32,
     emitted: u64,
@@ -79,16 +80,16 @@ impl FdkStream {
             bit_rate,
             timescale,
         } = *params;
-        if usize::from(channels) > Consts::MAX_CHANNELS {
+        if usize::from(channels) > consts::MAX_CHANNELS {
             return Err(EncodeError::InvalidInput(format!(
                 "fdk-aac carries no channel mode for {channels} channels"
             )));
         }
-        if !(Consts::MIN_SAMPLE_RATE..=Consts::MAX_SAMPLE_RATE).contains(&sample_rate) {
+        if !(consts::MIN_SAMPLE_RATE..=consts::MAX_SAMPLE_RATE).contains(&sample_rate) {
             return Err(EncodeError::InvalidInput(format!(
                 "fdk-aac encodes {} Hz to {} Hz audio, got {sample_rate}",
-                Consts::MIN_SAMPLE_RATE,
-                Consts::MAX_SAMPLE_RATE
+                consts::MIN_SAMPLE_RATE,
+                consts::MAX_SAMPLE_RATE
             )));
         }
 
@@ -117,9 +118,9 @@ impl FdkStream {
             frame_samples,
             sample_rate,
             timescale,
-            pending: [0; Consts::MAX_FRAME_INPUT_SAMPLES],
+            pending: [0; consts::MAX_FRAME_INPUT_SAMPLES],
             pending_len: 0,
-            output: [0; Consts::ACCESS_UNIT_CAPACITY],
+            output: [0; consts::ACCESS_UNIT_CAPACITY],
             emitted: 0,
         })
     }
@@ -177,7 +178,7 @@ impl FdkStream {
 }
 
 fn to_i16(sample: f32) -> i16 {
-    let scaled = (sample * Consts::I16_SCALE)
+    let scaled = (sample * consts::I16_SCALE)
         .round()
         .clamp(f32::from(i16::MIN), f32::from(i16::MAX));
     cast(scaled).unwrap_or(0)

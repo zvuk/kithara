@@ -23,18 +23,19 @@ use tracing::info;
 
 use crate::{
     bufpool_ext::{TestPools, pools},
-    common::test_defaults::Consts as Shared,
+    common::test_defaults::consts as shared,
     continuity::render_offline_window,
 };
 
-struct Consts;
-impl Consts {
-    const BLOCK: usize = 512;
+mod consts {
+    use super::{Duration, shared};
+
+    pub(super) const BLOCK: usize = 512;
     /// The bound `stress_offline_crossfade_no_gaps` holds a single crossfade to,
     /// on the same material and the same window length.
-    const MAX_SILENCE_BLOCKS: u32 = 2;
-    const READ_TIMEOUT: Duration = Shared::READ_TIMEOUT;
-    const SR: u32 = Shared::SAMPLE_RATE;
+    pub(super) const MAX_SILENCE_BLOCKS: u32 = 2;
+    pub(super) const READ_TIMEOUT: Duration = shared::READ_TIMEOUT;
+    pub(super) const SR: u32 = shared::SAMPLE_RATE;
 }
 
 #[kithara::fixture]
@@ -84,7 +85,7 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools.clone())
-            .sample_rate(NonZeroU32::new(Consts::SR).expect("sample rate is non-zero"))
+            .sample_rate(NonZeroU32::new(consts::SR).expect("sample rate is non-zero"))
             .build(),
     )
     .await;
@@ -124,7 +125,7 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
                 .build();
             let audio = w.open(audio_cfg).await.expect("create HLS audio");
             let mut r: Resource = resource_from_reader(audio);
-            time::timeout(Consts::READ_TIMEOUT, r.preload())
+            time::timeout(consts::READ_TIMEOUT, r.preload())
                 .await
                 .expect("HLS preload")
                 .expect("HLS preload result");
@@ -142,13 +143,13 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
             &mut player,
             40,
             &format!("HLS warmup #{iter}"),
-            Consts::BLOCK,
-            Consts::SR,
+            consts::BLOCK,
+            consts::SR,
         )
         .await;
 
         let mut mp3 = make_mp3(worker.clone()).await;
-        time::timeout(Consts::READ_TIMEOUT, mp3.preload())
+        time::timeout(consts::READ_TIMEOUT, mp3.preload())
             .await
             .expect("MP3 preload")
             .expect("MP3 preload result");
@@ -157,8 +158,8 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
             &mut player,
             60,
             &format!("HLS→MP3 #{iter}"),
-            Consts::BLOCK,
-            Consts::SR,
+            consts::BLOCK,
+            consts::SR,
         )
         .await;
         info!("iter {iter}: {fade_stats}");
@@ -170,7 +171,7 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
     }
 
     assert!(
-        worst_silence_run <= Consts::MAX_SILENCE_BLOCKS,
+        worst_silence_run <= consts::MAX_SILENCE_BLOCKS,
         "repeated HLS→MP3 crossfade ran out of PCM for {} blocks in a row \
          (worst label={worst_label}) — the incoming MP3 starved while the \
          shared worker was busy on HLS",

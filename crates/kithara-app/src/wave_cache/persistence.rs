@@ -516,11 +516,9 @@ mod tests {
     use super::*;
     use crate::pools::{self, AppResourceConfig};
 
-    struct Consts;
-
-    impl Consts {
-        const CHUNK_FRAMES: u64 = 16;
-        const EXTENT: u64 = 64;
+    mod consts {
+        pub(super) const CHUNK_FRAMES: u64 = 16;
+        pub(super) const EXTENT: u64 = 64;
     }
 
     fn analysis(revision: u64, ranges: &[(u64, u64)]) -> TrackAnalysis {
@@ -532,7 +530,7 @@ mod tests {
             .token("persistence-test".into())
             .revision(revision)
             .source_sample_rate(NonZeroU32::MIN)
-            .extent(Consts::EXTENT)
+            .extent(consts::EXTENT)
             .settled(true)
             .coverage(coverage)
             .fingerprint(AnalysisFingerprint::default())
@@ -555,7 +553,7 @@ mod tests {
             worker,
             pools.clone(),
             NonZeroUsize::MIN,
-            Duration::from_secs(Consts::CHUNK_FRAMES),
+            Duration::from_secs(consts::CHUNK_FRAMES),
             DispatcherConfig::builder()
                 .name("analysis-persistence-test")
                 .build(),
@@ -565,12 +563,12 @@ mod tests {
         let first = AnalysisProgress::try_from(analysis(
             1,
             &[
-                (0, Consts::CHUNK_FRAMES),
-                (2 * Consts::CHUNK_FRAMES, Consts::CHUNK_FRAMES),
+                (0, consts::CHUNK_FRAMES),
+                (2 * consts::CHUNK_FRAMES, consts::CHUNK_FRAMES),
             ],
         ))
         .expect("settled progress is persistable");
-        let second = AnalysisProgress::try_from(analysis(2, &[(0, 3 * Consts::CHUNK_FRAMES)]))
+        let second = AnalysisProgress::try_from(analysis(2, &[(0, 3 * consts::CHUNK_FRAMES)]))
             .expect("settled progress is persistable");
 
         persistence
@@ -598,7 +596,7 @@ mod tests {
         assert_eq!(file.latest().analysis().revision(), 2);
         assert_eq!(
             file.latest().analysis().coverage().frames(),
-            3 * Consts::CHUNK_FRAMES
+            3 * consts::CHUNK_FRAMES
         );
     }
 
@@ -646,7 +644,7 @@ mod tests {
                 worker,
                 pools.clone(),
                 NonZeroUsize::MIN,
-                Duration::from_secs(Consts::CHUNK_FRAMES),
+                Duration::from_secs(consts::CHUNK_FRAMES),
                 DispatcherConfig::builder()
                     .name("analysis-persistence-reuse-test")
                     .build(),
@@ -654,7 +652,7 @@ mod tests {
             ))
             .expect("persistence actor starts");
             let progress = |revision| {
-                AnalysisProgress::try_from(analysis(revision, &[(0, 3 * Consts::CHUNK_FRAMES)]))
+                AnalysisProgress::try_from(analysis(revision, &[(0, 3 * consts::CHUNK_FRAMES)]))
                     .expect("settled progress is persistable")
             };
 

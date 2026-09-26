@@ -1,14 +1,6 @@
 use kithara_bufpool::{Percent, PoolConfig};
 
-struct Consts;
-
-impl Consts {
-    const BYTE_MAX_BUFFERS: usize = 32;
-    const BYTE_MAX_RETAINED_CAPACITY: usize = 2 * 1024 * 1024;
-    const DEFAULT_OVERALL_BYTES: usize = 256 * 1024 * 1024;
-    const SAMPLE_MAX_BUFFERS: usize = 128;
-    const SAMPLE_MAX_RETAINED_CAPACITY: usize = 200_000;
-}
+use crate::consts;
 
 kithara_bufpool::pool_schema! {
     /// Byte and sample pools available to one isolated test harness.
@@ -41,7 +33,7 @@ pub type Pools = kithara_bufpool::PoolRegion<TestPools>;
 /// Build one application-shaped test pool facade.
 #[must_use]
 pub fn pools() -> Pools {
-    pools_with_budget(Consts::DEFAULT_OVERALL_BYTES)
+    pools_with_budget(consts::DEFAULT_OVERALL_BYTES)
 }
 
 /// Build one application-shaped test pool facade with a custom hard budget.
@@ -87,16 +79,16 @@ pub fn byte_buffer(pools: &Pools) -> kithara_bufpool::ByteBuffer {
 
 fn byte_config() -> PoolConfig {
     PoolConfig::builder()
-        .max_buffers(Consts::BYTE_MAX_BUFFERS)
-        .max_retained_capacity(Consts::BYTE_MAX_RETAINED_CAPACITY)
+        .max_buffers(consts::BYTE_MAX_BUFFERS)
+        .max_retained_capacity(consts::BYTE_MAX_RETAINED_CAPACITY)
         .max_share(Percent::MAX)
         .build()
 }
 
 fn sample_config() -> PoolConfig {
     PoolConfig::builder()
-        .max_buffers(Consts::SAMPLE_MAX_BUFFERS)
-        .max_retained_capacity(Consts::SAMPLE_MAX_RETAINED_CAPACITY)
+        .max_buffers(consts::SAMPLE_MAX_BUFFERS)
+        .max_retained_capacity(consts::SAMPLE_MAX_RETAINED_CAPACITY)
         .max_share(Percent::MAX)
         .build()
 }

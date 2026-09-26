@@ -40,18 +40,18 @@ use crate::{
 };
 
 /// The one fixture both backends are asked to paint.
-struct Fixture;
+mod consts {
+    use super::{Pt, Rect, Rgba};
 
-impl Fixture {
     /// A box whose four right angles the join shapes.
-    const CORNER: Rect = Rect {
+    pub(super) const CORNER: Rect = Rect {
         h: 40.0,
         w: 40.0,
         x: 24.0,
         y: 24.0,
     };
 
-    const HOLE: Rect = Rect {
+    pub(super) const HOLE: Rect = Rect {
         h: 16.0,
         w: 16.0,
         x: 24.0,
@@ -59,14 +59,14 @@ impl Fixture {
     };
 
     /// What the clip contains: white, so every channel is high.
-    const INK: Rgba = Rgba {
+    pub(super) const INK: Rgba = Rgba {
         a: 1.0,
         b: 1.0,
         g: 1.0,
         r: 1.0,
     };
 
-    const INSIDE: Rect = Rect {
+    pub(super) const INSIDE: Rect = Rect {
         h: 20.0,
         w: 20.0,
         x: 22.0,
@@ -75,15 +75,15 @@ impl Fixture {
 
     /// How wide the pen is when a test asks about its ends and corners. Wide
     /// enough that what a cap or a join adds is several pixels across.
-    const NIB: f32 = 12.0;
+    pub(super) const NIB: f32 = 12.0;
 
     /// Where the control sits on it. A widget almost never starts at the
     /// window's origin, and the defect this module exists for only appears when
     /// it does not.
-    const ORIGIN: (f32, f32) = (24.0, 24.0);
+    pub(super) const ORIGIN: (f32, f32) = (24.0, 24.0);
 
     /// The outer square of a ring, and the square that must be a hole in it.
-    const OUTER: Rect = Rect {
+    pub(super) const OUTER: Rect = Rect {
         h: 48.0,
         w: 48.0,
         x: 8.0,
@@ -91,7 +91,7 @@ impl Fixture {
     };
 
     /// The clip, and a rectangle wholly inside it.
-    const REGION: Rect = Rect {
+    pub(super) const REGION: Rect = Rect {
         h: 40.0,
         w: 40.0,
         x: 12.0,
@@ -99,15 +99,15 @@ impl Fixture {
     };
 
     /// A line whose free ends the cap shapes.
-    const RULE: (Pt, Pt) = (Pt { x: 20.0, y: 8.0 }, Pt { x: 40.0, y: 8.0 });
+    pub(super) const RULE: (Pt, Pt) = (Pt { x: 20.0, y: 8.0 }, Pt { x: 40.0, y: 8.0 });
 
     /// The surface they paint into. Narrow enough that every width the two
     /// rasterisers and the sampler ask for converts exactly.
-    const SURFACE: (u16, u16) = (96, 96);
+    pub(super) const SURFACE: (u16, u16) = (96, 96);
 
     /// What is drawn under it, outside any clip: red, so a single channel tells
     /// which of the two won.
-    const UNDER: Rgba = Rgba {
+    pub(super) const UNDER: Rgba = Rgba {
         a: 1.0,
         b: 0.0,
         g: 0.0,
@@ -119,10 +119,10 @@ impl Fixture {
 /// every real control uses, and the one a backend has to keep.
 fn clipped() -> DrawList {
     let mut list = DrawListBuilder::default();
-    list.fill_rect(Fixture::REGION, Fixture::UNDER);
+    list.fill_rect(consts::REGION, consts::UNDER);
     let mut inner = DrawListBuilder::default();
-    inner.fill_rect(Fixture::INSIDE, Fixture::INK);
-    list.clip(Fixture::REGION, inner.finish());
+    inner.fill_rect(consts::INSIDE, consts::INK);
+    list.clip(consts::REGION, inner.finish());
     list.finish()
 }
 
@@ -153,10 +153,10 @@ fn square(rect: Rect) -> [Verb; 5] {
 /// authored icon is exactly this shape, which is why the rule travels with the
 /// outline rather than being assumed by a backend.
 fn ring() -> DrawList {
-    let mut verbs = Vec::from(square(Fixture::OUTER));
-    verbs.extend(square(Fixture::HOLE));
+    let mut verbs = Vec::from(square(consts::OUTER));
+    verbs.extend(square(consts::HOLE));
     let mut list = DrawListBuilder::default();
-    list.fill_path(Path::new(FillRule::EvenOdd, verbs), Fixture::INK);
+    list.fill_path(Path::new(FillRule::EvenOdd, verbs), consts::INK);
     list.finish()
 }
 
@@ -164,11 +164,11 @@ fn ring() -> DrawList {
 fn stops() -> Stops {
     Stops::new(&[
         Stop {
-            color: Fixture::UNDER,
+            color: consts::UNDER,
             offset: 0.0,
         },
         Stop {
-            color: Fixture::INK,
+            color: consts::INK,
             offset: 1.0,
         },
     ])
@@ -181,16 +181,16 @@ fn stops() -> Stops {
 fn ramped() -> DrawList {
     let mut list = DrawListBuilder::default();
     list.fill_rect(
-        Fixture::OUTER,
+        consts::OUTER,
         Paint::Linear {
             from: Pt {
-                x: Fixture::OUTER.x,
-                y: Fixture::OUTER.y,
+                x: consts::OUTER.x,
+                y: consts::OUTER.y,
             },
             stops: stops(),
             to: Pt {
-                x: Fixture::OUTER.x + Fixture::OUTER.w,
-                y: Fixture::OUTER.y,
+                x: consts::OUTER.x + consts::OUTER.w,
+                y: consts::OUTER.y,
             },
         },
     );
@@ -204,15 +204,15 @@ fn ramped() -> DrawList {
 /// the list whole paints neither.
 fn radial() -> DrawList {
     let mut list = DrawListBuilder::default();
-    list.fill_rect(Fixture::REGION, Fixture::UNDER);
+    list.fill_rect(consts::REGION, consts::UNDER);
     list.fill_rect(
-        Fixture::OUTER,
+        consts::OUTER,
         Paint::Radial {
             center: Pt {
-                x: Fixture::OUTER.x + Fixture::OUTER.w / 2.0,
-                y: Fixture::OUTER.y + Fixture::OUTER.h / 2.0,
+                x: consts::OUTER.x + consts::OUTER.w / 2.0,
+                y: consts::OUTER.y + consts::OUTER.h / 2.0,
             },
-            radius: Fixture::OUTER.w / 2.0,
+            radius: consts::OUTER.w / 2.0,
             stops: stops(),
         },
     );
@@ -221,50 +221,50 @@ fn radial() -> DrawList {
 
 /// Dark at the ramp's start and light at its end, in the same shape.
 fn ramp_runs_across(rgba: &[u8]) -> bool {
-    let middle = Fixture::OUTER.y + Fixture::OUTER.h / 2.0;
-    let near = sample(rgba, Fixture::OUTER.x + 2.0, middle);
-    let far = sample(rgba, Fixture::OUTER.x + Fixture::OUTER.w - 2.0, middle);
+    let middle = consts::OUTER.y + consts::OUTER.h / 2.0;
+    let near = sample(rgba, consts::OUTER.x + 2.0, middle);
+    let far = sample(rgba, consts::OUTER.x + consts::OUTER.w - 2.0, middle);
     near < 64 && far > 192
 }
 
 /// A pen that keeps a stroke inside its geometry: ends cut flush, corners
 /// flattened.
 fn flush() -> Pen {
-    Pen::new(Fixture::NIB).with_join(LineJoin::Bevel)
+    Pen::new(consts::NIB).with_join(LineJoin::Bevel)
 }
 
 /// A pen that reaches past it: ends rounded off, corners carried to a point.
 fn reaching() -> Pen {
-    Pen::new(Fixture::NIB).with_cap(LineCap::Round)
+    Pen::new(consts::NIB).with_cap(LineCap::Round)
 }
 
 /// A line and a box, both stroked with the same pen. Nothing else separates one
 /// pen from another here: same geometry, same width, same colour.
 fn shaped(pen: Pen) -> DrawList {
     let mut list = DrawListBuilder::default();
-    list.stroke_line(Fixture::RULE.0, Fixture::RULE.1, Fixture::INK, pen);
-    list.stroke_rounded_rect(Fixture::CORNER, 0.0, Fixture::INK, pen);
+    list.stroke_line(consts::RULE.0, consts::RULE.1, consts::INK, pen);
+    list.stroke_rounded_rect(consts::CORNER, 0.0, consts::INK, pen);
     list.finish()
 }
 
 /// Ink past the line's last point — where only a round cap reaches.
 fn marks_past_its_end(rgba: &[u8]) -> bool {
-    let reach = Fixture::NIB / 3.0;
-    sample(rgba, Fixture::RULE.1.x + reach, Fixture::RULE.1.y) > 128
+    let reach = consts::NIB / 3.0;
+    sample(rgba, consts::RULE.1.x + reach, consts::RULE.1.y) > 128
 }
 
 /// Ink out at the box's outer corner — where only a mitred join reaches.
 fn marks_past_its_corner(rgba: &[u8]) -> bool {
-    let reach = Fixture::NIB / 3.0;
-    sample(rgba, Fixture::CORNER.x - reach, Fixture::CORNER.y - reach) > 128
+    let reach = consts::NIB / 3.0;
+    sample(rgba, consts::CORNER.x - reach, consts::CORNER.y - reach) > 128
 }
 
 /// Dark at the centre and light out at the rim, in the same shape.
 fn ramp_runs_outward(rgba: &[u8]) -> bool {
-    let center = Fixture::OUTER.x + Fixture::OUTER.w / 2.0;
-    let middle = Fixture::OUTER.y + Fixture::OUTER.h / 2.0;
+    let center = consts::OUTER.x + consts::OUTER.w / 2.0;
+    let middle = consts::OUTER.y + consts::OUTER.h / 2.0;
     sample(rgba, center, middle) < 64
-        && sample(rgba, center + Fixture::OUTER.w / 2.0 - 1.0, middle) > 192
+        && sample(rgba, center + consts::OUTER.w / 2.0 - 1.0, middle) > 192
 }
 
 /// Nothing at all reached the pixels.
@@ -275,9 +275,9 @@ fn surface_is_untouched(rgba: &[u8]) -> bool {
 
 /// The green channel where the surface was asked about, or zero off-surface.
 fn sample(rgba: &[u8], x: f32, y: f32) -> u8 {
-    let x = pixel_index(Fixture::ORIGIN.0 + x);
-    let y = pixel_index(Fixture::ORIGIN.1 + y);
-    rgba.get((y * usize::from(Fixture::SURFACE.0) + x) * 4 + 1)
+    let x = pixel_index(consts::ORIGIN.0 + x);
+    let y = pixel_index(consts::ORIGIN.1 + y);
+    rgba.get((y * usize::from(consts::SURFACE.0) + x) * 4 + 1)
         .copied()
         .unwrap_or_default()
 }
@@ -292,9 +292,9 @@ fn pixel_index(coordinate: f32) -> usize {
 
 /// Ink on the ring itself, and nothing in the hole.
 fn ring_has_a_hole(rgba: &[u8]) -> bool {
-    let middle = Fixture::HOLE.y + Fixture::HOLE.h / 2.0;
-    sample(rgba, Fixture::OUTER.x + 4.0, middle) > 128
-        && sample(rgba, Fixture::HOLE.x + Fixture::HOLE.w / 2.0, middle) < 128
+    let middle = consts::HOLE.y + consts::HOLE.h / 2.0;
+    sample(rgba, consts::OUTER.x + 4.0, middle) > 128
+        && sample(rgba, consts::HOLE.x + consts::HOLE.w / 2.0, middle) < 128
 }
 
 /// Whether the clip's contents won the centre pixel. The rectangle under it is
@@ -303,8 +303,8 @@ fn ring_has_a_hole(rgba: &[u8]) -> bool {
 fn clip_is_on_top(rgba: &[u8]) -> bool {
     sample(
         rgba,
-        Fixture::INSIDE.x + Fixture::INSIDE.w / 2.0,
-        Fixture::INSIDE.y + Fixture::INSIDE.h / 2.0,
+        consts::INSIDE.x + consts::INSIDE.w / 2.0,
+        consts::INSIDE.y + consts::INSIDE.h / 2.0,
     ) > 128
 }
 
@@ -315,8 +315,8 @@ fn through_vello(list: &DrawList) -> Vec<u8> {
     scene.append(
         &control,
         Some(Affine::translate((
-            f64::from(Fixture::ORIGIN.0),
-            f64::from(Fixture::ORIGIN.1),
+            f64::from(consts::ORIGIN.0),
+            f64::from(consts::ORIGIN.1),
         ))),
     );
     rasterise(&scene).unwrap_or_else(|error| panic!("vello must rasterise: {error}"))
@@ -454,18 +454,18 @@ fn through_iced(list: &DrawList) -> Vec<u8> {
     .expect("iced must give a wgpu renderer without a window");
     let mut frame = Frame::new(
         &renderer,
-        Size::new(f32::from(Fixture::SURFACE.0), f32::from(Fixture::SURFACE.1)),
+        Size::new(f32::from(consts::SURFACE.0), f32::from(consts::SURFACE.1)),
     );
     replay_ordered(list, &mut frame, skin.text_resources());
     let geometry = frame.into_geometry();
     renderer.with_translation(
-        Vector::new(Fixture::ORIGIN.0, Fixture::ORIGIN.1),
+        Vector::new(consts::ORIGIN.0, consts::ORIGIN.1),
         |renderer| {
             renderer.draw_geometry(geometry);
         },
     );
     renderer.screenshot(
-        Size::new(u32::from(Fixture::SURFACE.0), u32::from(Fixture::SURFACE.1)),
+        Size::new(u32::from(consts::SURFACE.0), u32::from(consts::SURFACE.1)),
         1.0,
         Color::from_rgb(0.0, 0.0, 0.0),
     )
@@ -475,7 +475,7 @@ fn through_iced(list: &DrawList) -> Vec<u8> {
 fn rasterise(scene: &Scene) -> Result<Vec<u8>, String> {
     rasterise_at(
         scene,
-        (u32::from(Fixture::SURFACE.0), u32::from(Fixture::SURFACE.1)),
+        (u32::from(consts::SURFACE.0), u32::from(consts::SURFACE.1)),
         BLACK,
     )
 }

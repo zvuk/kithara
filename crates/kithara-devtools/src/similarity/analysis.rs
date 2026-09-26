@@ -10,8 +10,7 @@ use super::{
     catalog::TypeCatalog,
     shape::{ComparisonCache, ShapeArena, ShapeId, TypeSubstitution},
 };
-
-const SCHEMA_VERSION: u32 = 1;
+use crate::consts;
 
 #[derive(Debug, Default, Serialize)]
 pub(super) struct AnalysisReport {
@@ -231,7 +230,7 @@ fn analyze_sources(
     });
     Ok(AnalysisReport {
         candidates,
-        schema_version: SCHEMA_VERSION,
+        schema_version: consts::BASELINE_SCHEMA_VERSION,
         scanned_files: sources.len(),
         abstractions: abstractions.len(),
         interned_shapes: arena.len(),

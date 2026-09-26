@@ -5,17 +5,7 @@ use kithara::{
     queue::{Queue, QueueControl, TrackSource},
 };
 
-struct Consts;
-
-impl Consts {
-    const BYTE_MAX_BUFFERS: usize = 32;
-    const BYTE_MAX_RETAINED_CAPACITY: usize = 2 * 1024 * 1024;
-    const INITIAL_SAMPLE_BUFFERS: usize = 16;
-    const INITIAL_SAMPLE_CAPACITY: usize = 9_216;
-    const OVERALL_BYTES: usize = 256 * 1024 * 1024;
-    const SAMPLE_MAX_BUFFERS: usize = 128;
-    const SAMPLE_MAX_RETAINED_CAPACITY: usize = 200_000;
-}
+use crate::consts;
 
 pool_schema! {
     /// Buffer pools owned by one FFI engine composition root.
@@ -44,21 +34,21 @@ pub(crate) type FfiTrackSource = TrackSource<FfiPools>;
 /// # Errors
 /// Returns an error when pool configuration or initial allocation fails.
 pub fn build() -> Result<Pools, PoolError> {
-    FfiPools::builder(OverallBudget(Consts::OVERALL_BYTES))
+    FfiPools::builder(OverallBudget(consts::OVERALL_BYTES))
         .bytes(
             PoolConfig::builder()
                 .initial_buffers(0)
-                .max_buffers(Consts::BYTE_MAX_BUFFERS)
-                .max_retained_capacity(Consts::BYTE_MAX_RETAINED_CAPACITY)
+                .max_buffers(consts::BYTE_MAX_BUFFERS)
+                .max_retained_capacity(consts::BYTE_MAX_RETAINED_CAPACITY)
                 .max_share(Percent::MAX)
                 .build(),
         )
         .samples(
             PoolConfig::builder()
-                .initial_buffers(Consts::INITIAL_SAMPLE_BUFFERS)
-                .initial_capacity(Consts::INITIAL_SAMPLE_CAPACITY)
-                .max_buffers(Consts::SAMPLE_MAX_BUFFERS)
-                .max_retained_capacity(Consts::SAMPLE_MAX_RETAINED_CAPACITY)
+                .initial_buffers(consts::INITIAL_SAMPLE_BUFFERS)
+                .initial_capacity(consts::INITIAL_SAMPLE_CAPACITY)
+                .max_buffers(consts::SAMPLE_MAX_BUFFERS)
+                .max_retained_capacity(consts::SAMPLE_MAX_RETAINED_CAPACITY)
                 .max_share(Percent::MAX)
                 .build(),
         )
@@ -80,16 +70,16 @@ mod tests {
         let worker_pools = pools.clone();
 
         let (all_ready, peak) = thread::spawn(move || {
-            let buffers = (0..Consts::INITIAL_SAMPLE_BUFFERS)
+            let buffers = (0..consts::INITIAL_SAMPLE_BUFFERS)
                 .map(|_| {
                     worker_pools
-                        .get_with_len::<f32>(Consts::INITIAL_SAMPLE_CAPACITY)
+                        .get_with_len::<f32>(consts::INITIAL_SAMPLE_CAPACITY)
                         .unwrap_or_else(|error| panic!("initial sample buffer: {error}"))
                 })
                 .collect::<Vec<_>>();
             let all_ready = buffers
                 .iter()
-                .all(|buffer| buffer.capacity() >= Consts::INITIAL_SAMPLE_CAPACITY);
+                .all(|buffer| buffer.capacity() >= consts::INITIAL_SAMPLE_CAPACITY);
             let peak = worker_pools.stats().peak_allocated_bytes;
             drop(buffers);
             (all_ready, peak)

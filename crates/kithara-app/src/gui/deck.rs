@@ -5,12 +5,16 @@ use crate::{
     engine::{DeckCmd, DeckSnapshot},
 };
 
-/// Tempo travel either way, in percent: tempo spans `-TEMPO_RANGE` to
-/// `+TEMPO_RANGE`.
-pub(crate) const TEMPO_RANGE: f32 = TempoPercent::MAX.0;
+pub(crate) mod consts {
+    use super::TempoPercent;
 
-/// What one wheel detent over the TEMPO block is worth, in percent.
-pub(crate) const TEMPO_STEP: f32 = 1.5;
+    /// Tempo travel either way, in percent: tempo spans `-TEMPO_RANGE` to
+    /// `+TEMPO_RANGE`.
+    pub(crate) const TEMPO_RANGE: f32 = TempoPercent::MAX.0;
+
+    /// What one wheel detent over the TEMPO block is worth, in percent.
+    pub(crate) const TEMPO_STEP: f32 = 1.5;
+}
 
 /// Everything a single deck can be told to do. Carries no deck identity: the
 /// composer that renders a deck maps this into `Message::Deck(id, msg)`.
@@ -51,7 +55,7 @@ pub(crate) fn command(shown: &DeckSnapshot, eq_mode: EqMode, msg: &DeckMsg) -> O
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{TEMPO_RANGE, TEMPO_STEP};
+    use super::consts::{TEMPO_RANGE, TEMPO_STEP};
 
     #[kithara::test]
     fn the_whole_travel_is_within_reach_of_a_few_detents() {

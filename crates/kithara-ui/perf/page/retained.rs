@@ -15,7 +15,7 @@ use crate::{
     Page, PageHost,
     app::PageApp,
     census::{Census, Natives, Pool, Scene},
-    fixture::Consts,
+    fixture::consts,
     gpu::{RetainedGpu, height, readback_vello, width},
 };
 
@@ -56,7 +56,7 @@ impl<'a> Retained<'a> {
         let before = self.ui.draw_pool_stats();
         measure_block!(
             "vello.frame",
-            self.ui.frame(Duration::from_millis(Consts::STRESS_TICK_MS))
+            self.ui.frame(Duration::from_millis(consts::STRESS_TICK_MS))
         );
         self.scheduled = self.ui.needs_frame();
         let frame = measure_block!(

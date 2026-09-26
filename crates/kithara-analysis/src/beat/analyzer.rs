@@ -487,15 +487,9 @@ mod tests {
     use crate::{
         BeatAnalysisConfig,
         beat::BeatPassConfig,
+        consts,
         test_pools::{TestPools, pools},
     };
-
-    struct Consts;
-
-    impl Consts {
-        const SRC: u32 = 44_100;
-        const TARGET: usize = 22_050;
-    }
 
     #[kithara::test(native, flash(false))]
     fn a_block_boundary_moves_a_mark_without_touching_its_confidence() {
@@ -631,7 +625,7 @@ mod tests {
         // A 440 Hz sine at 22 050 Hz moves at most 0.063 between neighbouring
         // samples; anything larger is a seam an onset detector reads as a beat.
         let pcm = sine_440;
-        let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
+        let mut analyzer = analyzer(consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let detector = detector(|mono| {
             let worst = mono
                 .windows(2)
@@ -661,11 +655,11 @@ mod tests {
         // 2.0 s at 22 050 Hz, with real signal all the way to the end —
         // the resampler tail must be flushed, not dropped.
         let pcm = sine_440;
-        let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
+        let mut analyzer = analyzer(consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(|mono| {
             assert_eq!(
                 mono.len(),
-                2 * Consts::TARGET,
+                2 * consts::TARGET,
                 "every input frame must reach the detector at 22 050 Hz"
             );
             let whole = rms(mono);
@@ -691,14 +685,14 @@ mod tests {
         // 1 s silence then 1 s of DC 0.5: the step must sit at output
         // sample ~22050. An untrimmed resampler delay shifts it late.
         let pcm = step;
-        let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
+        let mut analyzer = analyzer(consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(|mono| {
-            assert_eq!(mono.len(), 2 * Consts::TARGET);
+            assert_eq!(mono.len(), 2 * consts::TARGET);
             let crossing = mono
                 .iter()
                 .position(|s| s.abs() > 0.25)
                 .expect("the step must appear in the output");
-            let expected = Consts::TARGET;
+            let expected = consts::TARGET;
             assert!(
                 crossing.abs_diff(expected) <= 64,
                 "step must stay at its source position: got {crossing}, want ~{expected}"
@@ -715,9 +709,9 @@ mod tests {
     fn downmix_is_channel_mean(cancelling: Vec<f32>) {
         // L = +0.8, R = -0.8 cancels to mono silence.
         let pcm = cancelling;
-        let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
+        let mut analyzer = analyzer(consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector = detector(|mono| {
-            assert_eq!(mono.len(), Consts::TARGET);
+            assert_eq!(mono.len(), consts::TARGET);
             let peak = mono.iter().fold(0.0_f32, |a, s| a.max(s.abs()));
             assert!(peak < 0.05, "cancelling stereo must downmix to ~0: {peak}");
             empty_raw()
@@ -747,10 +741,10 @@ mod tests {
     fn custom_detector_rate_controls_passthrough_domain(quarter_4096: Vec<f32>) {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
-            .target_rate(Consts::SRC)
+            .target_rate(consts::SRC)
             .build();
         let pcm = quarter_4096;
-        let mut analyzer = analyzer(Consts::SRC, config);
+        let mut analyzer = analyzer(consts::SRC, config);
         let mut detector = detector(|mono| {
             assert_eq!(mono, vec![0.25_f32; 4096].as_slice());
             empty_raw()
@@ -765,7 +759,7 @@ mod tests {
     fn detector_input_is_bounded_by_configured_window(quarter_132300: Vec<f32>) {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
-            .target_rate(Consts::SRC)
+            .target_rate(consts::SRC)
             .detector_window_seconds(1)
             .detector_overlap_seconds(0)
             .build();
@@ -774,10 +768,10 @@ mod tests {
         let seen_for_detector = Arc::clone(&seen);
         let mut detector = detector(move |mono| {
             seen_for_detector.lock().push(mono.len());
-            assert!(mono.len() <= usize::try_from(Consts::SRC).unwrap_or(0));
+            assert!(mono.len() <= usize::try_from(consts::SRC).unwrap_or(0));
             empty_raw()
         });
-        let mut analyzer = analyzer(Consts::SRC, config);
+        let mut analyzer = analyzer(consts::SRC, config);
 
         push_chunked(&mut analyzer, &pcm, 2048, &mut detector);
         analyzer
@@ -792,7 +786,7 @@ mod tests {
     fn a_run_at_the_minimum_is_detected_before_the_flush(quarter_88200: Vec<f32>) {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
-            .target_rate(Consts::SRC)
+            .target_rate(consts::SRC)
             .detector_window_seconds(2)
             .detector_overlap_seconds(1)
             .build();
@@ -803,7 +797,7 @@ mod tests {
             seen_for_detector.lock().push(mono.len());
             empty_raw()
         });
-        let mut analyzer = analyzer(Consts::SRC, config);
+        let mut analyzer = analyzer(consts::SRC, config);
 
         analyzer.push_interleaved(&pcm, 2, 0, Opens::Run, &mut detector);
         assert_eq!(
@@ -827,12 +821,12 @@ mod tests {
     fn a_short_run_yields_a_grid_and_is_refined_when_it_fills(quarter_529200: Vec<f32>) {
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
-            .target_rate(Consts::SRC)
+            .target_rate(consts::SRC)
             .detector_window_seconds(8)
             .detector_overlap_seconds(1)
             .detector_min_window_seconds(2)
             .build();
-        let second = usize::try_from(Consts::SRC).unwrap_or(1);
+        let second = usize::try_from(consts::SRC).unwrap_or(1);
         let pcm = quarter_529200;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_for_detector = Arc::clone(&seen);
@@ -840,7 +834,7 @@ mod tests {
             seen_for_detector.lock().push(mono.len());
             RawBeats::new(vec![BeatMark::new(0.5, 0.9)], vec![BeatMark::new(0.5, 0.9)])
         });
-        let mut analyzer = analyzer(Consts::SRC, config);
+        let mut analyzer = analyzer(consts::SRC, config);
 
         // Three seconds: past the minimum, far short of a window.
         analyzer.push_interleaved(&pcm[..3 * second * 2], 2, 0, Opens::Run, &mut detector);
@@ -920,13 +914,13 @@ mod tests {
         // keeps pace, so what waits is one window however long the track is.
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
-            .target_rate(Consts::SRC)
+            .target_rate(consts::SRC)
             .detector_window_seconds(2)
             .detector_overlap_seconds(1)
             .build();
-        let second = usize::try_from(Consts::SRC).unwrap_or(1);
+        let second = usize::try_from(consts::SRC).unwrap_or(1);
         let pcm = quarter_2646000;
-        let mut analyzer = analyzer(Consts::SRC, config);
+        let mut analyzer = analyzer(consts::SRC, config);
         let mut detector = detector(|_| empty_raw());
 
         let mut worst = 0;
@@ -955,12 +949,12 @@ mod tests {
         // too short for any window; the second is a whole one.
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
-            .target_rate(Consts::SRC)
+            .target_rate(consts::SRC)
             .detector_window_seconds(2)
             .detector_overlap_seconds(0)
             .build();
-        let second = usize::try_from(Consts::SRC).unwrap_or(1);
-        let mut analyzer = analyzer(Consts::SRC, config);
+        let second = usize::try_from(consts::SRC).unwrap_or(1);
+        let mut analyzer = analyzer(consts::SRC, config);
         let mut detector = detector(|_| empty_raw());
 
         let at = u64::try_from(second / 2).unwrap_or(0);
@@ -989,14 +983,14 @@ mod tests {
         // second again once room appears, the pass takes the whole track.
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
-            .target_rate(Consts::SRC)
+            .target_rate(consts::SRC)
             .detector_window_seconds(2)
             .detector_overlap_seconds(1)
             .build();
-        let second = usize::try_from(Consts::SRC).unwrap_or(1);
+        let second = usize::try_from(consts::SRC).unwrap_or(1);
         let seconds = 60;
         let pcm = quarter_2646000;
-        let mut analyzer = analyzer(Consts::SRC, config);
+        let mut analyzer = analyzer(consts::SRC, config);
         let mut detector = detector(|_| empty_raw());
 
         let mut taken = 0;
@@ -1037,7 +1031,7 @@ mod tests {
 
     #[kithara::test]
     fn detector_failure_propagates(tenth_4096: Vec<f32>) {
-        let mut analyzer = analyzer(Consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
+        let mut analyzer = analyzer(consts::SRC, BeatAnalysisConfig::<RubatoBackend>::default());
         let mut detector =
             Unimock::new(BeatDetectorMock.next_call(matching!(_)).answers(&|_, _| {
                 Err(BeatDetectError::Detect {
@@ -1072,7 +1066,7 @@ mod tests {
             )
         };
 
-        let block = usize::try_from(Consts::SRC).unwrap_or(1) * 2;
+        let block = usize::try_from(consts::SRC).unwrap_or(1) * 2;
         let blocks: Vec<(u64, &[f32])> = pcm
             .chunks(block)
             .enumerate()
@@ -1080,7 +1074,7 @@ mod tests {
             .collect();
 
         let run = |order: &[usize]| {
-            let mut analyzer = analyzer(Consts::SRC, config.clone());
+            let mut analyzer = analyzer(consts::SRC, config.clone());
             let mut detector = detector(beats);
             for index in order {
                 let Some((at, part)) = blocks.get(*index) else {
@@ -1124,15 +1118,15 @@ mod tests {
         // nothing to read.
         let config = BeatAnalysisConfig::builder()
             .resampler_backend(RubatoBackend::default())
-            .target_rate(Consts::SRC)
+            .target_rate(consts::SRC)
             .detector_window_seconds(3)
             .detector_overlap_seconds(1)
             .detector_min_window_seconds(1)
             .build();
-        let mut analyzer = analyzer(Consts::SRC, config);
+        let mut analyzer = analyzer(consts::SRC, config);
         let mut detector = detector(|_| empty_raw());
         for run in 0..4u64 {
-            let at = (1 + 10 * run) * u64::from(Consts::SRC);
+            let at = (1 + 10 * run) * u64::from(consts::SRC);
             let took = analyzer.push_interleaved(&quarter_176400, 2, at, Opens::Run, &mut detector);
             assert!(took, "a run of its own is taken while there is room");
         }
@@ -1145,7 +1139,7 @@ mod tests {
         let took = analyzer.push_interleaved(
             &quarter_44100,
             2,
-            15 * u64::from(Consts::SRC),
+            15 * u64::from(consts::SRC),
             Opens::Extends,
             &mut detector,
         );

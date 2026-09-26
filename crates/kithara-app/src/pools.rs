@@ -10,16 +10,14 @@ use kithara::{
 };
 use serde::Deserialize;
 
-struct Consts;
-
-impl Consts {
-    const BYTE_MAX_BUFFERS: usize = 32;
-    const BYTE_MAX_RETAINED_CAPACITY: usize = 2 * 1024 * 1024;
-    const INITIAL_SAMPLE_BUFFERS: usize = 16;
-    const INITIAL_SAMPLE_CAPACITY: usize = 9_216;
-    const OVERALL_BYTES: usize = 256 * 1024 * 1024;
-    const SAMPLE_MAX_BUFFERS: usize = 128;
-    const SAMPLE_MAX_RETAINED_CAPACITY: usize = 200_000;
+mod consts {
+    pub(super) const BYTE_MAX_BUFFERS: usize = 32;
+    pub(super) const BYTE_MAX_RETAINED_CAPACITY: usize = 2 * 1024 * 1024;
+    pub(super) const INITIAL_SAMPLE_BUFFERS: usize = 16;
+    pub(super) const INITIAL_SAMPLE_CAPACITY: usize = 9_216;
+    pub(super) const OVERALL_BYTES: usize = 256 * 1024 * 1024;
+    pub(super) const SAMPLE_MAX_BUFFERS: usize = 128;
+    pub(super) const SAMPLE_MAX_RETAINED_CAPACITY: usize = 200_000;
 }
 
 pool_schema! {
@@ -73,7 +71,7 @@ pub struct PoolsSection {
 /// Returns an error when pool configuration or initial allocation fails.
 pub fn build(section: &PoolsSection) -> Result<Pools, PoolError> {
     AppPools::builder(OverallBudget(
-        section.budget_bytes.unwrap_or(Consts::OVERALL_BYTES),
+        section.budget_bytes.unwrap_or(consts::OVERALL_BYTES),
     ))
     .bytes(bytes_config(&section.bytes))
     .samples(samples_config(&section.samples))
@@ -83,8 +81,8 @@ pub fn build(section: &PoolsSection) -> Result<Pools, PoolError> {
 fn bytes_config(patch: &PoolConfigPatch) -> PoolConfig {
     let mut config = PoolConfig::builder()
         .initial_buffers(0)
-        .max_buffers(Consts::BYTE_MAX_BUFFERS)
-        .max_retained_capacity(Consts::BYTE_MAX_RETAINED_CAPACITY)
+        .max_buffers(consts::BYTE_MAX_BUFFERS)
+        .max_retained_capacity(consts::BYTE_MAX_RETAINED_CAPACITY)
         .max_share(Percent::MAX)
         .build();
     config.apply(patch.clone());
@@ -93,10 +91,10 @@ fn bytes_config(patch: &PoolConfigPatch) -> PoolConfig {
 
 fn samples_config(patch: &PoolConfigPatch) -> PoolConfig {
     let mut config = PoolConfig::builder()
-        .initial_buffers(Consts::INITIAL_SAMPLE_BUFFERS)
-        .initial_capacity(Consts::INITIAL_SAMPLE_CAPACITY)
-        .max_buffers(Consts::SAMPLE_MAX_BUFFERS)
-        .max_retained_capacity(Consts::SAMPLE_MAX_RETAINED_CAPACITY)
+        .initial_buffers(consts::INITIAL_SAMPLE_BUFFERS)
+        .initial_capacity(consts::INITIAL_SAMPLE_CAPACITY)
+        .max_buffers(consts::SAMPLE_MAX_BUFFERS)
+        .max_retained_capacity(consts::SAMPLE_MAX_RETAINED_CAPACITY)
         .max_share(Percent::MAX)
         .build();
     config.apply(patch.clone());
@@ -130,16 +128,16 @@ pub(crate) mod tests {
         let worker_pools = pools.clone();
 
         let (all_ready, peak) = thread::spawn(move || {
-            let buffers = (0..Consts::INITIAL_SAMPLE_BUFFERS)
+            let buffers = (0..consts::INITIAL_SAMPLE_BUFFERS)
                 .map(|_| {
                     worker_pools
-                        .get_with_len::<f32>(Consts::INITIAL_SAMPLE_CAPACITY)
+                        .get_with_len::<f32>(consts::INITIAL_SAMPLE_CAPACITY)
                         .unwrap_or_else(|error| panic!("initial sample buffer: {error}"))
                 })
                 .collect::<Vec<_>>();
             let all_ready = buffers
                 .iter()
-                .all(|buffer| buffer.capacity() >= Consts::INITIAL_SAMPLE_CAPACITY);
+                .all(|buffer| buffer.capacity() >= consts::INITIAL_SAMPLE_CAPACITY);
             let peak = worker_pools.stats().peak_allocated_bytes;
             drop(buffers);
             (all_ready, peak)

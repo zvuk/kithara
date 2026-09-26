@@ -13,9 +13,10 @@ use crate::common::{
     walker::{compile_globs, matches_any, relative_to},
 };
 
-pub(crate) const ID: &str = "loop_allocation";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "loop_allocation";
 
-const EXPLANATION: &str = "\
+    pub(super) const EXPLANATION: &str = "\
 Detected a heap-allocating expression inside a loop body that runs once \
 per iteration.
 
@@ -41,12 +42,13 @@ Suppress with `// xtask-lint-ignore: loop_allocation` when the allocation \
 is unavoidable (each iteration produces a distinct owned output that \
 escapes the loop) or when the loop is cold and the allocation isn't a \
 performance concern (initialization, error formatting).";
+}
 
 pub(crate) struct LoopAllocation;
 
 impl Check for LoopAllocation {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -96,12 +98,12 @@ struct LoopVisitor<'a> {
 
 impl LoopVisitor<'_> {
     fn report(&mut self, span_line: usize, span_col: usize, msg: &'static str) {
-        if self.suppress.is_suppressed(span_line, ID) {
+        if self.suppress.is_suppressed(span_line, consts::ID) {
             return;
         }
         let key = format!("{}:{}:{}", self.rel, span_line, span_col);
         self.out
-            .push(Violation::warn(ID, key, msg).with_explanation(EXPLANATION));
+            .push(Violation::warn(consts::ID, key, msg).with_explanation(consts::EXPLANATION));
     }
 }
 

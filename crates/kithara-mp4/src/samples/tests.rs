@@ -1,9 +1,9 @@
 use kithara_test_utils::kithara;
 
 use super::read_samples;
-use crate::fixture::{
-    CountingSource, SAMPLE_BYTES, SAMPLE_TICKS, SAMPLES_PER_FRAGMENT, TRACK_ID, WALK_BUDGET_BYTES,
-    mdat_bytes, media_segment,
+use crate::{
+    consts,
+    fixture::{CountingSource, mdat_bytes, media_segment},
 };
 
 /// A media segment carries no `moov`, so this is the walk a whole-file
@@ -13,11 +13,11 @@ fn samples_of_a_media_segment_tile_the_mdat_payload() {
     let source = CountingSource::new(media_segment(0));
     let total = source.total();
 
-    let samples = read_samples(&source, total, TRACK_ID).expect("media segment samples");
+    let samples = read_samples(&source, total, consts::TRACK_ID).expect("media segment samples");
 
     assert_eq!(
         u32::try_from(samples.len()).expect("sample count fits u32"),
-        SAMPLES_PER_FRAGMENT
+        consts::SAMPLES_PER_FRAGMENT
     );
 
     // The first sample starts where the `mdat` payload does: everything
@@ -29,10 +29,10 @@ fn samples_of_a_media_segment_tile_the_mdat_payload() {
         assert_eq!(sample.byte_range.start, expected_start);
         assert_eq!(
             sample.byte_range.end - sample.byte_range.start,
-            u64::from(SAMPLE_BYTES)
+            u64::from(consts::SAMPLE_BYTES)
         );
-        assert_eq!(sample.decode_ticks, index * u64::from(SAMPLE_TICKS));
-        assert_eq!(sample.duration_ticks, SAMPLE_TICKS);
+        assert_eq!(sample.decode_ticks, index * u64::from(consts::SAMPLE_TICKS));
+        assert_eq!(sample.duration_ticks, consts::SAMPLE_TICKS);
         expected_start = sample.byte_range.end;
     }
     assert_eq!(
@@ -50,12 +50,14 @@ fn a_later_segment_keeps_its_absolute_decode_time() {
     let source = CountingSource::new(media_segment(INDEX));
     let total = source.total();
 
-    let samples = read_samples(&source, total, TRACK_ID).expect("media segment samples");
+    let samples = read_samples(&source, total, consts::TRACK_ID).expect("media segment samples");
     let first = samples.first().expect("segment has samples");
 
     assert_eq!(
         first.decode_ticks,
-        u64::from(INDEX) * u64::from(SAMPLES_PER_FRAGMENT) * u64::from(SAMPLE_TICKS)
+        u64::from(INDEX)
+            * u64::from(consts::SAMPLES_PER_FRAGMENT)
+            * u64::from(consts::SAMPLE_TICKS)
     );
 }
 
@@ -66,11 +68,11 @@ fn the_sample_walk_does_not_read_the_payload() {
     let source = CountingSource::new(media_segment(0));
     let total = source.total();
 
-    read_samples(&source, total, TRACK_ID).expect("media segment samples");
+    read_samples(&source, total, consts::TRACK_ID).expect("media segment samples");
 
     let delivered = source.delivered();
     assert!(
-        delivered < WALK_BUDGET_BYTES,
+        delivered < consts::WALK_BUDGET_BYTES,
         "sample walk pulled {delivered} bytes from a {total}-byte segment; \
          the mdat payload must be seeked over, not read"
     );
@@ -83,10 +85,11 @@ fn an_unknown_track_falls_back_to_the_only_traf() {
     let source = CountingSource::new(media_segment(0));
     let total = source.total();
 
-    let samples = read_samples(&source, total, TRACK_ID + 99).expect("media segment samples");
+    let samples =
+        read_samples(&source, total, consts::TRACK_ID + 99).expect("media segment samples");
 
     assert_eq!(
         u32::try_from(samples.len()).expect("sample count fits u32"),
-        SAMPLES_PER_FRAGMENT
+        consts::SAMPLES_PER_FRAGMENT
     );
 }

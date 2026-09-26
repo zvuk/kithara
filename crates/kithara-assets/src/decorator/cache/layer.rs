@@ -659,11 +659,10 @@ mod tests {
     use super::*;
     use crate::{
         backend::{DiskAssetStore, MemAssetStore},
+        consts,
         decorator::Capabilities,
         resource::{BaseReader, BaseWriter},
     };
-
-    const ROOT: &str = "test_asset";
 
     /// Stream `data` through a Pending writer and commit it.
     fn commit_writer<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8]) {
@@ -788,7 +787,7 @@ mod tests {
         let cached = make_cached(dir.path(), cap);
 
         let keys: Vec<ResourceKey> = (0..4)
-            .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
+            .map(|i| ResourceKey::relative(consts::LAYER_ROOT, format!("seg_{i}.m4s")))
             .collect();
 
         for key in &keys {
@@ -825,7 +824,7 @@ mod tests {
         let cached = CachedAssets::new(disk, NonZeroUsize::new(2).unwrap(), Some(cb), false);
 
         let keys: Vec<ResourceKey> = (0..3)
-            .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
+            .map(|i| ResourceKey::relative(consts::LAYER_ROOT, format!("seg_{i}.m4s")))
             .collect();
         for key in &keys {
             commit_writer(cached.acquire_resource(key, None).unwrap(), b"data");
@@ -859,7 +858,7 @@ mod tests {
         let cached = CachedAssets::new(mem, NonZeroUsize::new(2).unwrap(), Some(cb), true);
 
         let keys: Vec<ResourceKey> = (0..3)
-            .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
+            .map(|i| ResourceKey::relative(consts::LAYER_ROOT, format!("seg_{i}.m4s")))
             .collect();
         for key in &keys {
             commit_writer(cached.acquire_resource(key, None).unwrap(), b"data");
@@ -890,7 +889,7 @@ mod tests {
             true,
             Some(3),
         );
-        let key = ResourceKey::relative(ROOT, "retained.mp3");
+        let key = ResourceKey::relative(consts::LAYER_ROOT, "retained.mp3");
         let writer = pending(cached.acquire_resource(&key, None).unwrap()).retain();
         writer.write_at(0, b"data").unwrap();
 
@@ -911,7 +910,7 @@ mod tests {
         let cached = make_cached(dir.path(), cap);
 
         let keys: Vec<ResourceKey> = (0..5)
-            .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
+            .map(|i| ResourceKey::relative(consts::LAYER_ROOT, format!("seg_{i}.m4s")))
             .collect();
 
         let first = pending(cached.acquire_resource(&keys[0], None).unwrap()).retain();
@@ -939,7 +938,7 @@ mod tests {
         let cached = make_cached(dir.path(), cap);
 
         let keys: Vec<ResourceKey> = (0..5)
-            .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
+            .map(|i| ResourceKey::relative(consts::LAYER_ROOT, format!("seg_{i}.m4s")))
             .collect();
 
         let first = pending(cached.acquire_resource(&keys[0], None).unwrap()).retain();
@@ -967,7 +966,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(5).unwrap();
         let cached = make_cached(dir.path(), cap);
-        let key = ResourceKey::relative(ROOT, "audio.mp3");
+        let key = ResourceKey::relative(consts::LAYER_ROOT, "audio.mp3");
 
         let res1 = pending(cached.acquire_resource(&key, None).unwrap());
         let res2 = pending(cached.acquire_resource(&key, None).unwrap());
@@ -980,7 +979,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(5).unwrap();
         let cached = make_cached(dir.path(), cap);
-        let key = ResourceKey::relative(ROOT, "audio.mp3");
+        let key = ResourceKey::relative(consts::LAYER_ROOT, "audio.mp3");
 
         commit_writer(cached.acquire_resource(&key, None).unwrap(), b"hello");
 
@@ -996,12 +995,12 @@ mod tests {
         let cap = NonZeroUsize::new(5).unwrap();
         let cached = make_cached(dir.path(), cap);
 
-        let key = ResourceKey::relative(ROOT, "delete_me.mp3");
+        let key = ResourceKey::relative(consts::LAYER_ROOT, "delete_me.mp3");
         let _res = pending(cached.acquire_resource(&key, None).unwrap());
 
         assert!(!cached.cache.lock().is_empty());
 
-        cached.delete_asset(ROOT).unwrap();
+        cached.delete_asset(consts::LAYER_ROOT).unwrap();
 
         assert_eq!(cached.cache.lock().len(), 0);
     }
@@ -1012,7 +1011,7 @@ mod tests {
         let cap = NonZeroUsize::new(5).unwrap();
         let cached = make_cached(dir.path(), cap);
 
-        let key = ResourceKey::relative(ROOT, "remove_me.mp3");
+        let key = ResourceKey::relative(consts::LAYER_ROOT, "remove_me.mp3");
         commit_writer(cached.acquire_resource(&key, None).unwrap(), b"data");
 
         assert!(matches!(
@@ -1031,7 +1030,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(3).unwrap();
         let cached = make_cached(dir.path(), cap);
-        let key = ResourceKey::relative(ROOT, "committed.m4s");
+        let key = ResourceKey::relative(consts::LAYER_ROOT, "committed.m4s");
 
         commit_writer(cached.acquire_resource(&key, None).unwrap(), b"hello");
 
@@ -1076,16 +1075,16 @@ mod tests {
         let cap = NonZeroUsize::new(2).unwrap();
         let cached = make_cached(dir.path(), cap);
 
-        let key_a = ResourceKey::relative(ROOT, "a.m4s");
+        let key_a = ResourceKey::relative(consts::LAYER_ROOT, "a.m4s");
         commit_writer(cached.acquire_resource(&key_a, None).unwrap(), b"aaaa");
 
-        let key_b = ResourceKey::relative(ROOT, "b.m4s");
+        let key_b = ResourceKey::relative(consts::LAYER_ROOT, "b.m4s");
         commit_writer(cached.acquire_resource(&key_b, None).unwrap(), b"bbbb");
 
-        let key_c = ResourceKey::relative(ROOT, "c.m4s");
+        let key_c = ResourceKey::relative(consts::LAYER_ROOT, "c.m4s");
         commit_writer(cached.acquire_resource(&key_c, None).unwrap(), b"cccc");
 
-        let a_path = dir.path().join(ROOT).join("a.m4s");
+        let a_path = dir.path().join(consts::LAYER_ROOT).join("a.m4s");
         assert!(a_path.exists(), "committed data must remain on disk");
         assert_eq!(fs::read(&a_path).unwrap(), b"aaaa");
     }
@@ -1115,7 +1114,7 @@ mod tests {
         let cap = NonZeroUsize::new(5).unwrap();
         let cached = Arc::new(make_cached(dir.path(), cap));
 
-        let key = ResourceKey::relative(ROOT, "concurrent.m4s");
+        let key = ResourceKey::relative(consts::LAYER_ROOT, "concurrent.m4s");
         let key2 = key.clone();
         let cached2 = Arc::clone(&cached);
 

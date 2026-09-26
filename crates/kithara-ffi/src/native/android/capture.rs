@@ -45,17 +45,18 @@ impl CaptureError {
     }
 }
 
-struct Consts;
-impl Consts {
-    const BITS_PER_SAMPLE: u16 = 32;
-    const CHANNELS: u16 = 2;
-    const SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+mod consts {
+    use super::NonZeroU32;
+
+    pub(super) const BITS_PER_SAMPLE: u16 = 32;
+    pub(super) const CHANNELS: u16 = 2;
+    pub(super) const SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
         Some(rate) => rate,
         None => unreachable!(),
     };
-    const WAV_FMT_CHUNK_SIZE: u32 = 16;
-    const WAV_FORMAT_IEEE_FLOAT: u16 = 3;
-    const WAV_HEADER_BYTES: u32 = 36;
+    pub(super) const WAV_FMT_CHUNK_SIZE: u32 = 16;
+    pub(super) const WAV_FORMAT_IEEE_FLOAT: u16 = 3;
+    pub(super) const WAV_HEADER_BYTES: u32 = 36;
 }
 
 pub(super) fn run(
@@ -95,13 +96,13 @@ fn render(
     let worker = FfiWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let mut host = FfiHost::new(
         HostConfig::offline(pools)
-            .sample_rate(Consts::SAMPLE_RATE)
+            .sample_rate(consts::SAMPLE_RATE)
             .build(),
     )
     .map_err(|err| CaptureError::step("offline-host", err))?;
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(Consts::SAMPLE_RATE)
+            .sample_rate(consts::SAMPLE_RATE)
             .worker(worker)
             .block_on_underrun(true)
             .crossfade_duration(0.0)
@@ -135,9 +136,9 @@ fn render(
     let mut file = File::create(output)
         .map_err(|err| CaptureError::step("output-open", format!("{}: {err}", output.display())))?;
     write_wav_header(&mut file, 0).map_err(|err| CaptureError::step("header-write", err))?;
-    let target_frames = u64::from(seconds) * u64::from(Consts::SAMPLE_RATE.get());
+    let target_frames = u64::from(seconds) * u64::from(consts::SAMPLE_RATE.get());
     let request = OfflineRenderRequest::builder()
-        .spec(AudioSpec::new(Consts::CHANNELS, Consts::SAMPLE_RATE))
+        .spec(AudioSpec::new(consts::CHANNELS, consts::SAMPLE_RATE))
         .frames(0..target_frames)
         .build();
     let cancel = CancelScope::new(None);
@@ -150,7 +151,7 @@ fn render(
         .render(&request, &cancel.token(), &mut sink)
         .map_err(|err| CaptureError::step("render", err))?;
     if report.frames != target_frames
-        || sink.samples as u64 != target_frames * u64::from(Consts::CHANNELS)
+        || sink.samples as u64 != target_frames * u64::from(consts::CHANNELS)
     {
         return Err(CaptureError::step(
             "render",
@@ -196,17 +197,17 @@ impl RenderSink for WavSink {
 }
 
 fn write_wav_header(file: &mut File, total_samples: usize) -> std::io::Result<()> {
-    let bytes_per_sample = u32::from(Consts::BITS_PER_SAMPLE) / 8;
-    let channels = u32::from(Consts::CHANNELS);
+    let bytes_per_sample = u32::from(consts::BITS_PER_SAMPLE) / 8;
+    let channels = u32::from(consts::CHANNELS);
     let data_size = u32::try_from(total_samples)
         .unwrap_or(u32::MAX)
         .saturating_mul(bytes_per_sample);
-    let riff_size = Consts::WAV_HEADER_BYTES.saturating_add(data_size);
-    let byte_rate = Consts::SAMPLE_RATE
+    let riff_size = consts::WAV_HEADER_BYTES.saturating_add(data_size);
+    let byte_rate = consts::SAMPLE_RATE
         .get()
         .saturating_mul(channels)
         .saturating_mul(bytes_per_sample);
-    let block_align = (Consts::CHANNELS * Consts::BITS_PER_SAMPLE) / 8;
+    let block_align = (consts::CHANNELS * consts::BITS_PER_SAMPLE) / 8;
 
     file.seek(SeekFrom::Start(0))?;
     file.write_all(b"RIFF")?;
@@ -214,13 +215,13 @@ fn write_wav_header(file: &mut File, total_samples: usize) -> std::io::Result<()
     file.write_all(b"WAVE")?;
 
     file.write_all(b"fmt ")?;
-    file.write_all(&Consts::WAV_FMT_CHUNK_SIZE.to_le_bytes())?;
-    file.write_all(&Consts::WAV_FORMAT_IEEE_FLOAT.to_le_bytes())?;
-    file.write_all(&Consts::CHANNELS.to_le_bytes())?;
-    file.write_all(&Consts::SAMPLE_RATE.get().to_le_bytes())?;
+    file.write_all(&consts::WAV_FMT_CHUNK_SIZE.to_le_bytes())?;
+    file.write_all(&consts::WAV_FORMAT_IEEE_FLOAT.to_le_bytes())?;
+    file.write_all(&consts::CHANNELS.to_le_bytes())?;
+    file.write_all(&consts::SAMPLE_RATE.get().to_le_bytes())?;
     file.write_all(&byte_rate.to_le_bytes())?;
     file.write_all(&block_align.to_le_bytes())?;
-    file.write_all(&Consts::BITS_PER_SAMPLE.to_le_bytes())?;
+    file.write_all(&consts::BITS_PER_SAMPLE.to_le_bytes())?;
 
     file.write_all(b"data")?;
     file.write_all(&data_size.to_le_bytes())?;

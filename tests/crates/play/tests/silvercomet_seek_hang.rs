@@ -18,33 +18,34 @@ use kithara::{
 use kithara_integration_tests::{
     offline::{OfflinePlayer, WindowStats, rms},
     temp_dir,
-    test_defaults::Consts as Shared,
+    test_defaults::{blocks_for_seconds, consts as shared},
 };
 
 use crate::bufpool_ext::{TestPools, pools};
 
-struct Consts;
-impl Consts {
-    const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
-    const CHANNELS: u16 = Shared::CHANNELS;
-    const BLOCK_FRAMES: usize = 512;
-    const PLAY_WINDOW_SECS: f64 = 3.0;
+mod consts {
+    use super::shared;
+
+    pub(super) const SAMPLE_RATE: u32 = shared::SAMPLE_RATE;
+    pub(super) const CHANNELS: u16 = shared::CHANNELS;
+    pub(super) const BLOCK_FRAMES: usize = 512;
+    pub(super) const PLAY_WINDOW_SECS: f64 = 3.0;
     /// Render warmup burned before the first measurement window so
     /// decoder startup silence (the few hundred ms between `load_and_fadein`
     /// and the first produced PCM chunk under HLS segment fetch latency)
     /// doesn't get miscounted as a hang.
-    const WARMUP_SECS: f64 = 2.0;
+    pub(super) const WARMUP_SECS: f64 = 2.0;
     /// Fraction of a window allowed to be silent. A real "playing" window
     /// keeps this well below 20%; a phantom-playback hang (decoder emits
     /// chunks full of zeros, or occasional clicks between long silent runs)
     /// pushes it above.
-    const MAX_SILENCE_FRACTION: f32 = 0.20;
+    pub(super) const MAX_SILENCE_FRACTION: f32 = 0.20;
     /// Per-window RMS floor. Real music against a full window sits at
     /// ~0.1-0.3; isolated clicks between long silences produce <0.02.
     /// 0.03 cleanly separates "music is playing" from "decoder only
     /// emitted a couple of click-frames".
-    const MIN_WINDOW_RMS: f32 = 0.03;
-    const ITERATIONS: usize = 10;
+    pub(super) const MIN_WINDOW_RMS: f32 = 0.03;
+    pub(super) const ITERATIONS: usize = 10;
 }
 
 const SILVERCOMET_URLS: &[&str] = &["https://stream.silvercomet.top/hls/master.m3u8"];
@@ -58,14 +59,14 @@ async fn render_and_collect(
 ) -> WindowStats {
     const ACTIVE_THRESHOLD: f32 = 0.001;
     let block_budget =
-        Duration::from_secs_f64(Consts::BLOCK_FRAMES as f64 / f64::from(Consts::SAMPLE_RATE));
+        Duration::from_secs_f64(consts::BLOCK_FRAMES as f64 / f64::from(consts::SAMPLE_RATE));
 
     let window_start_sample = samples_out.len();
     let mut silent_blocks = 0u32;
 
     for _ in 0..blocks {
         let started = Instant::now();
-        let out = player.render(Consts::BLOCK_FRAMES).await;
+        let out = player.render(consts::BLOCK_FRAMES).await;
         let elapsed = started.elapsed();
 
         if !out.iter().any(|s| s.abs() > ACTIVE_THRESHOLD) {
@@ -219,11 +220,11 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
         .with_ansi(false)
         .try_init();
 
-    let window_blocks = Shared::blocks_for_seconds(Consts::PLAY_WINDOW_SECS, Consts::BLOCK_FRAMES);
-    let warmup_blocks = Shared::blocks_for_seconds(Consts::WARMUP_SECS, Consts::BLOCK_FRAMES);
+    let window_blocks = blocks_for_seconds(consts::PLAY_WINDOW_SECS, consts::BLOCK_FRAMES);
+    let warmup_blocks = blocks_for_seconds(consts::WARMUP_SECS, consts::BLOCK_FRAMES);
     let mut next_seek_epoch = 1u64;
 
-    for iter in 0..Consts::ITERATIONS {
+    for iter in 0..consts::ITERATIONS {
         let iter_label = format!("iter-{iter}");
         let temp = temp_dir();
         let store = kithara_integration_tests::disk_asset_store(temp.path());
@@ -231,7 +232,7 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
 
         let mut player = OfflinePlayer::new(
             HostConfig::offline(pools())
-                .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+                .sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate is non-zero"))
                 .build(),
         )
         .await;
@@ -271,17 +272,17 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             );
 
             assert!(
-                initial_silence_fraction <= Consts::MAX_SILENCE_FRACTION,
+                initial_silence_fraction <= consts::MAX_SILENCE_FRACTION,
                 "[iter {iter}] {url}: initial-play silent fraction = {:.1}% \
                  (max {:.0}% allowed) — track produced mostly silence before seek",
                 initial_silence_fraction * 100.0,
-                Consts::MAX_SILENCE_FRACTION * 100.0,
+                consts::MAX_SILENCE_FRACTION * 100.0,
             );
             assert!(
-                initial_rms >= Consts::MIN_WINDOW_RMS,
+                initial_rms >= consts::MIN_WINDOW_RMS,
                 "[iter {iter}] {url}: initial-play window RMS = {initial_rms:.4} \
                  (min {:.4} required) — no real audio in the pre-seek window",
-                Consts::MIN_WINDOW_RMS,
+                consts::MIN_WINDOW_RMS,
             );
 
             let seek_target = player.position() + 30.0;
@@ -306,19 +307,19 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             );
 
             assert!(
-                after_silence_fraction <= Consts::MAX_SILENCE_FRACTION,
+                after_silence_fraction <= consts::MAX_SILENCE_FRACTION,
                 "[iter {iter}] {url} after seek→{seek_target:.1}s: silent fraction = \
                  {:.1}% (max {:.0}% allowed) — HANG: decoder produced mostly \
                  silence after seek",
                 after_silence_fraction * 100.0,
-                Consts::MAX_SILENCE_FRACTION * 100.0,
+                consts::MAX_SILENCE_FRACTION * 100.0,
             );
             assert!(
-                after_rms >= Consts::MIN_WINDOW_RMS,
+                after_rms >= consts::MIN_WINDOW_RMS,
                 "[iter {iter}] {url} after seek→{seek_target:.1}s: window RMS = \
                  {after_rms:.4} (min {:.4} required) — HANG: post-seek window \
                  has no real audio, only silence or isolated clicks",
-                Consts::MIN_WINDOW_RMS,
+                consts::MIN_WINDOW_RMS,
             );
         }
 
@@ -331,14 +332,14 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
         write_wav_f32(
             &wav_path,
             &iteration_samples,
-            Consts::SAMPLE_RATE,
-            Consts::CHANNELS,
+            consts::SAMPLE_RATE,
+            consts::CHANNELS,
         );
         eprintln!(
             "[iter {iter}] wrote {} samples ({:.1}s stereo) to {}",
             iteration_samples.len(),
             iteration_samples.len() as f64
-                / (f64::from(Consts::SAMPLE_RATE) * f64::from(Consts::CHANNELS)),
+                / (f64::from(consts::SAMPLE_RATE) * f64::from(consts::CHANNELS)),
             wav_path.display(),
         );
 
@@ -369,7 +370,7 @@ mod unit_tests {
 
     #[kithara::test(native, flash(false))]
     fn blocks_for_three_seconds_matches_expected() {
-        let blocks = Shared::blocks_for_seconds(3.0, Consts::BLOCK_FRAMES);
+        let blocks = blocks_for_seconds(3.0, consts::BLOCK_FRAMES);
         assert_eq!(blocks, 259);
     }
 }

@@ -1,11 +1,7 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 
-use super::{
-    buffer::collected,
-    consts::{DecodeConsts, PeriodConsts},
-    tempo::Tempo,
-};
+use super::{buffer::collected, consts, tempo::Tempo};
 
 /// Beat positions in frames, by Viterbi over a hidden Markov model whose
 /// state counts the frames since the last beat. State 0 is the beat.
@@ -39,7 +35,7 @@ where
     else {
         return Ok((pools.get::<f32>(), f32::NEG_INFINITY));
     };
-    let states = (longest + DecodeConsts::STATE_MARGIN * tempo.tolerance_frames())
+    let states = (longest + consts::DECODE_STATE_MARGIN * tempo.tolerance_frames())
         .floor()
         .to_usize()
         .unwrap_or(0);
@@ -100,7 +96,7 @@ where
         .filter(|period| *period > 0.0)
         .max_by(f32::total_cmp)
         .unwrap_or(0.0);
-    let states = (longest + DecodeConsts::STATE_MARGIN * tempo.tolerance_frames())
+    let states = (longest + consts::DECODE_STATE_MARGIN * tempo.tolerance_frames())
         .floor()
         .to_usize()
         .unwrap_or(0);
@@ -114,7 +110,7 @@ where
 /// The estimate measured over the window opening at step `k` applies during
 /// step `k + 1`.
 pub(super) fn estimate_for(frame: usize, estimates: usize) -> usize {
-    (frame / PeriodConsts::ACF_STEP)
+    (frame / consts::PERIOD_ACF_STEP)
         .saturating_sub(1)
         .min(estimates - 1)
 }
@@ -158,14 +154,14 @@ where
     let peak = curve.iter().copied().fold(0.0f32, f32::max);
     if peak <= 0.0 {
         let mut flat = pools.get_with_len::<f32>(curve.len())?;
-        flat.fill(DecodeConsts::EPSILON);
+        flat.fill(consts::DECODE_EPSILON);
         return Ok(flat);
     }
     collected(
         pools,
         curve.len(),
         curve.iter().map(|value| {
-            (DecodeConsts::OBSERVED_CEILING * value / peak).max(DecodeConsts::EPSILON)
+            (consts::DECODE_OBSERVED_CEILING * value / peak).max(consts::DECODE_EPSILON)
         }),
     )
 }
@@ -206,12 +202,12 @@ where
 {
     if period <= 0.0 {
         let mut flat = pools.get_with_len::<f32>(states)?;
-        flat.fill(DecodeConsts::EPSILON);
+        flat.fill(consts::DECODE_EPSILON);
         return Ok(flat);
     }
     let sigma = tempo.tolerance_frames();
-    let support = (DecodeConsts::SUPPORT * sigma).ceil();
-    let peak = DecodeConsts::DENSITY_SCALE / (tempo.tolerance() * std::f32::consts::TAU.sqrt());
+    let support = (consts::DECODE_SUPPORT * sigma).ceil();
+    let peak = consts::DECODE_DENSITY_SCALE / (tempo.tolerance() * std::f32::consts::TAU.sqrt());
     let interval = collected(
         pools,
         states,

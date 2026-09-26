@@ -646,9 +646,7 @@ mod native {
     use kithara_test_utils::hang::default_timeout;
 
     use super::*;
-
-    /// Long enough to tell a park apart from a return, short enough to pay for.
-    const PARK_BUDGET: Duration = Duration::from_millis(50);
+    use crate::consts;
 
     fn backpressured_report(backpressured_tasks: usize) -> PassReport {
         let mut report = pass_report(PassOutcome::Backpressured);
@@ -775,7 +773,7 @@ mod native {
         let wake = Wake::default();
         let mut configured = budgets();
         configured.backpressure_poll_interval = Duration::ZERO;
-        configured.wait_timeout = PARK_BUDGET;
+        configured.wait_timeout = consts::PARK_BUDGET;
         let mut streak = 0;
         let started = Instant::now();
 
@@ -787,7 +785,7 @@ mod native {
         );
 
         assert!(
-            started.elapsed() >= PARK_BUDGET,
+            started.elapsed() >= consts::PARK_BUDGET,
             "a wait no task is backpressured on parks on the wait budget, not on the poll loop"
         );
     }
@@ -797,14 +795,14 @@ mod native {
         let wake = Wake::default();
         let mut configured = budgets();
         configured.backpressure_poll_interval = Duration::ZERO;
-        configured.wait_timeout = PARK_BUDGET;
+        configured.wait_timeout = consts::PARK_BUDGET;
         let mut streak = 0;
         let started = Instant::now();
 
         park_after_outcome(&wake, configured, backpressured_report(1), &mut streak);
 
         assert!(
-            started.elapsed() < PARK_BUDGET,
+            started.elapsed() < consts::PARK_BUDGET,
             "a poll interval of zero has no edge to poll for, so the wait returns at once"
         );
     }
@@ -814,15 +812,15 @@ mod native {
     fn a_backpressure_wait_parks_for_the_whole_wait_budget() {
         let wake = Wake::default();
         let mut configured = budgets();
-        configured.backpressure_poll_interval = PARK_BUDGET / 5;
-        configured.wait_timeout = PARK_BUDGET;
+        configured.backpressure_poll_interval = consts::PARK_BUDGET / 5;
+        configured.wait_timeout = consts::PARK_BUDGET;
         let mut streak = 0;
         let started = Instant::now();
 
         park_after_outcome(&wake, configured, backpressured_report(1), &mut streak);
 
         assert!(
-            started.elapsed() >= PARK_BUDGET,
+            started.elapsed() >= consts::PARK_BUDGET,
             "a backpressure wait no edge woke parks on the wait budget, not on one poll interval"
         );
     }
@@ -911,7 +909,8 @@ mod native {
         assert!(
             observed <= ceiling,
             "backpressured task ran {observed} times in {window:?} despite a {PARK_BUDGET:?} \
-             park budget, above the {ceiling} that window allows"
+             park budget, above the {ceiling} that window allows",
+            PARK_BUDGET = consts::PARK_BUDGET
         );
     }
 

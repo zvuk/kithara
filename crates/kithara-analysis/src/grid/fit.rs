@@ -3,14 +3,12 @@ use num_traits::cast::{AsPrimitive, ToPrimitive};
 use super::core::GridParams;
 use crate::artifact::FitRegion;
 
-struct Consts;
-
-impl Consts {
+mod consts {
     /// A least-squares line needs two trusted points.
-    const MIN_FIT_POINTS: usize = 2;
-    const MS_PER_SEC: f64 = 1000.0;
+    pub(super) const MIN_FIT_POINTS: usize = 2;
+    pub(super) const MS_PER_SEC: f64 = 1000.0;
     /// A split has to leave two leaves of at least `min_leaf_bars`.
-    const SPLIT_HALVES: usize = 2;
+    pub(super) const SPLIT_HALVES: usize = 2;
 }
 
 pub(super) struct GridFitCtx<'a> {
@@ -61,7 +59,7 @@ fn fit_segment(ctx: &GridFitCtx<'_>, segment: Segment) -> (f64, f64, f64) {
                 let x: f64 = index.as_();
                 (count + 1, sum_x + x, sum_y + f64::from(ctx.db[index]))
             });
-    if count < Consts::MIN_FIT_POINTS {
+    if count < consts::MIN_FIT_POINTS {
         let span: f64 = (end - start).max(1).as_();
         return (
             f64::from(ctx.db[start]),
@@ -125,9 +123,9 @@ fn bisect_segment(ctx: &GridFitCtx<'_>, segment: Segment, visit: &mut impl FnMut
         return;
     }
     let (_, _, max_resid) = fit_segment(ctx, segment);
-    let resid_ms = max_resid * Consts::MS_PER_SEC;
+    let resid_ms = max_resid * consts::MS_PER_SEC;
     if resid_ms < ctx.params.residual_ms
-        || (end - start) < Consts::SPLIT_HALVES * ctx.params.min_leaf_bars
+        || (end - start) < consts::SPLIT_HALVES * ctx.params.min_leaf_bars
     {
         visit(segment);
         return;

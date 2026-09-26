@@ -29,10 +29,11 @@ use tracing::info;
 
 use crate::common::test_defaults::SawWav;
 
-struct Consts;
-impl Consts {
-    const D: SawWav = SawWav::DEFAULT;
-    const SEGMENT_COUNT: usize = 30;
+mod consts {
+    use super::SawWav;
+
+    pub(super) const D: SawWav = SawWav::DEFAULT;
+    pub(super) const SEGMENT_COUNT: usize = 30;
 }
 
 /// ABR must switch variant at least once during HLS playback.
@@ -48,13 +49,13 @@ async fn audio_server(hls_header_thirty: Vec<u8>, hls_pcm_thirty: Vec<u8>) -> Hl
     let init_segment = Arc::new(hls_header_thirty);
     let pcm_data = Arc::new(hls_pcm_thirty);
 
-    let segment_duration = Consts::D.segment_size as f64
-        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
+    let segment_duration = consts::D.segment_size as f64
+        / (f64::from(consts::D.sample_rate) * f64::from(consts::D.channels) * 2.0);
 
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 2,
-        segments_per_variant: Consts::SEGMENT_COUNT,
-        segment_size: Consts::D.segment_size,
+        segments_per_variant: consts::SEGMENT_COUNT,
+        segment_size: consts::D.segment_size,
         segment_duration_secs: segment_duration,
         custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),

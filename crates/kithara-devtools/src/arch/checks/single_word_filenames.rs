@@ -9,13 +9,15 @@ use crate::{
     },
 };
 
-pub(crate) const ID: &str = "single_word_filenames";
+pub(crate) mod consts {
+    pub(crate) const ID: &str = "single_word_filenames";
+}
 
 pub(crate) struct SingleWordFilenames;
 
 impl Check for SingleWordFilenames {
     fn id(&self) -> &'static str {
-        ID
+        consts::ID
     }
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -63,8 +65,8 @@ fn word_count(filename: &str) -> usize {
 
 fn emit(sev: AccessorSeverity, key: String, message: String) -> Violation {
     match sev {
-        AccessorSeverity::Deny => Violation::deny(ID, key, message),
-        AccessorSeverity::Warn => Violation::warn(ID, key, message),
+        AccessorSeverity::Deny => Violation::deny(consts::ID, key, message),
+        AccessorSeverity::Warn => Violation::warn(consts::ID, key, message),
         AccessorSeverity::Off => unreachable!("off severity is short-circuited above"),
     }
 }

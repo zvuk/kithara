@@ -11,7 +11,10 @@ use serde_json::json;
 use tracing::info;
 
 use super::required;
-use crate::ci::host::mac::{read_secret, write_secure};
+use crate::{
+    ci::host::mac::{read_secret, write_secure},
+    consts,
+};
 
 fn secret(path: &Path) -> Result<String> {
     let mut bytes = [0; 32];
@@ -161,16 +164,6 @@ fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Resul
     Ok(())
 }
 
-/// Where sccache keeps its objects inside a scope's bucket.
-///
-/// They used to sit at the bucket root with no common prefix, which is why
-/// retention had to be a single unfiltered rule expiring everything after a
-/// day. That rule also governed the snapshot layers, so a multi-gigabyte
-/// source layer would have been republished daily. Naming the compiler cache
-/// makes retention expressible per layer. The cost is paid once: existing
-/// compiler-cache objects sit at the old keys and are not read again.
-pub(crate) const SCCACHE_PREFIX: &str = "sccache";
-
 /// How long each layer in a scope's bucket lives.
 ///
 /// The compiler cache keeps its day: it is large, churns with every commit,
@@ -185,7 +178,7 @@ fn retention() -> serde_json::Value {
         "Rules": [
             {
                 "ID": "compiler-cache", "Status": "Enabled",
-                "Filter": {"Prefix": format!("{SCCACHE_PREFIX}/")},
+                "Filter": {"Prefix": format!("{SCCACHE_PREFIX}/", SCCACHE_PREFIX = consts::SCCACHE_PREFIX)},
                 "Expiration": {"Days": 1}
             },
             {
@@ -247,7 +240,7 @@ fn write_environment(
     let mut file = tempfile::NamedTempFile::new_in(directory)?;
     for (name, value) in [
         ("SCCACHE_BUCKET", bucket),
-        ("SCCACHE_S3_KEY_PREFIX", SCCACHE_PREFIX),
+        ("SCCACHE_S3_KEY_PREFIX", consts::SCCACHE_PREFIX),
         ("SCCACHE_ENDPOINT", endpoint),
         ("SCCACHE_REGION", "us-east-1"),
         (
@@ -285,7 +278,7 @@ mod tests {
 
         assert_eq!(
             environment.get("SCCACHE_S3_KEY_PREFIX").map(String::as_str),
-            Some(SCCACHE_PREFIX)
+            Some(consts::SCCACHE_PREFIX)
         );
     }
 
@@ -387,7 +380,7 @@ mod retention_tests {
             );
         }
 
-        let compiler = days[&format!("{SCCACHE_PREFIX}/")];
+        let compiler = days[&format!("{SCCACHE_PREFIX}/", SCCACHE_PREFIX = consts::SCCACHE_PREFIX)];
         assert!(
             days["source-snapshots/"] > compiler && days["target-snapshots/"] > compiler,
             "a content-keyed snapshot must outlive the compiler cache: {days:?}"

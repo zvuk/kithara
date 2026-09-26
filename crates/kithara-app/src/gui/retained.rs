@@ -14,7 +14,7 @@ use super::{
     frontend::Boot,
     message::Message,
     reads::ReadRoot,
-    ui::{self, window::WINDOW_SIZE},
+    ui::{self, window::consts::WINDOW_SIZE},
     update,
 };
 use crate::gui::ui::endpoints::Registry;
