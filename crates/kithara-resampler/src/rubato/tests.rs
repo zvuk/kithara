@@ -49,7 +49,7 @@ fn rubato_resamples_borrowed_planar_slices(rubato_stereo: Vec<f32>) {
     let input = rubato_stereo.chunks_exact(256).collect::<Vec<_>>();
     let mut output: [Vec<f32>; 2] =
         std::array::from_fn(|_| vec![0.0; resampler.output_frames_next()]);
-    let input_refs = [&input[0][..], &input[1][..]];
+    let input_refs = [input[0], input[1]];
     let mut output_refs = output.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>();
 
     let process = resampler

@@ -2,7 +2,7 @@
 
 //! A `<segment>.tmp` left behind by a dead writer must not brick the segment.
 //!
-//! Field incident (2026-08-20): four 1 MiB `.tmp` orphans from the previous
+//! Field incident (2026-08-20): four 1 `MiB` `.tmp` orphans from the previous
 //! day sat next to the committed segments of one variant. Playback crossed the
 //! three committed segments and died at the first orphaned one, permanently,
 //! across app restarts — no error, no event, no EOF, just silence mid-track.

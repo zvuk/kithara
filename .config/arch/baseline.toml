@@ -1,7 +1,6 @@
 schema_version = 1
 
 [arc_clone_hotspots]
-"crates/kithara-ffi/src/native/bridge/event_bridge.rs::EventBridge::spawn" = 1
 "crates/kithara-file/src/session/peer/downloader.rs::FilePeer::build_fetch_cmd" = 1
 "crates/kithara-hls/src/stream/hls.rs::Hls::create" = 1
 "crates/kithara-download/src/downloader.rs::Downloader::register" = 1
@@ -24,9 +23,6 @@ schema_version = 1
 "crates/kithara/src/lib.rs" = 1
 
 [field_passthrough]
-"crates/kithara-decode/src/gapless/trimmer/core.rs:HeuristicState::trim_trailing" = 1
-"crates/kithara-file/src/session/source.rs:FileSource::coord" = 1
-"crates/kithara-download/src/peer.rs:PeerInner::bus" = 1
 
 [file_density]
 "crates/kithara-ffi/src/web/surface.rs" = 1
@@ -66,11 +62,6 @@ schema_version = 1
 
 [fn_arg_count]
 "crates/kithara-decode/src/gapless/mp4.rs::tests::track_with_elst" = 1
-"crates/kithara-ffi/src/native/bridge/event_bridge.rs::EventBridge::spawn" = 1
-"crates/kithara-ffi/src/native/bridge/event_bridge.rs::EventBridge::spawn_event_task" = 1
-"crates/kithara-ffi/src/native/bridge/item_bridge.rs::ItemEventBridge::dispatch" = 1
-"crates/kithara-ffi/src/native/bridge/item_bridge.rs::ItemEventBridge::spawn" = 1
-"crates/kithara-ffi/src/native/bridge/item_bridge.rs::ItemEventBridge::spawn_event_task" = 1
 "crates/kithara-hls/src/stream/coord.rs::HlsCoord::new" = 1
 "crates/kithara-net/src/types.rs::tests::test_retry_policy_delay_for_attempt_custom" = 1
 "crates/kithara-queue/src/queue/playback.rs::tests::should_arm_crossfade_cases" = 1
@@ -111,8 +102,8 @@ schema_version = 1
 [module_fan_out]
 "crates/kithara-abr/src/controller/core.rs" = 1
 "crates/kithara-abr/src/controller/tick.rs" = 1
-"crates/kithara-decode/src/android/media_extractor_demuxer.rs" = 1
-"crates/kithara-decode/src/apple/audio_file_demuxer.rs" = 1
+"crates/kithara-decode/src/android/demuxer.rs" = 1
+"crates/kithara-decode/src/apple/demuxer.rs" = 1
 "crates/kithara-decode/src/apple/codec.rs" = 1
 "crates/kithara-decode/src/composed.rs" = 1
 "crates/kithara-decode/src/factory/inner.rs" = 1
@@ -127,12 +118,6 @@ schema_version = 1
 "crates/kithara-download/src/batch.rs" = 1
 
 [multi_constructor]
-"crates/kithara-decode/src/error.rs:DecodeError" = 1
-"crates/kithara-decode/src/gapless/trimmer/core.rs:GaplessTrimmer" = 1
-"crates/kithara-abr/src/event.rs:VariantIndex" = 1
-"crates/kithara-play/src/api/event.rs:MediaTime" = 1
-"crates/kithara-file/src/session/source.rs:FileSource" = 1
-"crates/kithara-download/src/response.rs:BodyStream" = 1
 
 [no_lib_statics]
 "crates/kithara-events/src/scope.rs::static BUS_ID_COUNTER" = 1
@@ -174,14 +159,11 @@ schema_version = 1
 "crates/kithara-stream/src/source.rs::SourceSeekAnchor" = 1
 
 [shared_state]
-"crates/kithara-ffi/src/native/bridge/event_bridge.rs" = 1
-"crates/kithara-ffi/src/native/bridge/item_bridge.rs" = 1
 "crates/kithara-queue/src/queue/state.rs" = 1
 
 [single_impl_size]
 "crates/kithara-abr/src/state/core.rs::impl AbrState" = 1
 "crates/kithara-decode/src/mp4/scan.rs::impl Mp4Scanner" = 1
-"crates/kithara-ffi/src/native/bridge/event_bridge.rs::impl EventBridge" = 1
 "crates/kithara-ffi/src/native/inner.rs::impl NativeInner" = 1
 "crates/kithara-ffi/src/player/facade.rs::impl AudioPlayer" = 1
 "crates/kithara-ffi/src/web/inner.rs::impl WasmInner" = 1
@@ -190,19 +172,6 @@ schema_version = 1
 "crates/kithara-storage/src/backend/mmap/io.rs::impl DriverIo for MmapDriver" = 1
 "crates/kithara-storage/src/decorator/chunked/core.rs::impl AtomicChunked" = 1
 "crates/kithara-download/src/registry.rs::impl Registry" = 1
-
-[single_word_filenames]
-"crates/kithara-app/src/tracing_init.rs" = 1
-"crates/kithara-decode/src/android/media_extractor.rs" = 1
-"crates/kithara-decode/src/android/media_extractor_demuxer.rs" = 1
-"crates/kithara-decode/src/apple/audio_file.rs" = 1
-"crates/kithara-decode/src/apple/audio_file_demuxer.rs" = 1
-"crates/kithara-decode/src/fmp4/source_io.rs" = 1
-"crates/kithara-decode/src/symphonia/aac_fdk.rs" = 1
-"crates/kithara-ffi/src/native/bridge/event_bridge.rs" = 1
-"crates/kithara-ffi/src/native/bridge/item_bridge.rs" = 1
-"crates/kithara-ffi/src/uniffi_bindgen.rs" = 1
-"crates/kithara-ffi/src/web/key_processor_bridge.rs" = 1
 
 [trait_impl_count]
 "crates/kithara-play/src/api/event.rs::MediaTime" = 1

@@ -19,7 +19,7 @@ pub(crate) fn get_codecs() -> &'static CodecRegistry {
         let mut registry = CodecRegistry::new();
         register_enabled_codecs(&mut registry);
         #[cfg(feature = "fdk-aac")]
-        registry.register_audio_decoder::<crate::symphonia::aac_fdk::AacDecoder>();
+        registry.register_audio_decoder::<crate::symphonia::fdk::AacDecoder>();
         registry
     })
 }

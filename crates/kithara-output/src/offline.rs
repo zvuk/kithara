@@ -207,7 +207,7 @@ mod tests {
     #[kithara::test]
     fn reversed_range_is_rejected() {
         assert!(matches!(
-            request(42..17).frame_count(),
+            request(Range { start: 42, end: 17 }).frame_count(),
             Err(OfflineRenderError::InvalidRange { start: 42, end: 17 })
         ));
     }

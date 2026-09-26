@@ -240,7 +240,7 @@ fn observe_reference_seek_event(
             ..
         }) => *request_epoch = Some(seek_epoch),
         TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) => {
-            *completion = Some(seek_epoch)
+            *completion = Some(seek_epoch);
         }
         TestEvent::Audio(AudioEvent::SeekRejected { epoch, target }) => {
             return Err(format!(

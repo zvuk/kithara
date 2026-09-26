@@ -41,7 +41,7 @@ const CHANNELS: u16 = 2;
 const SEGMENT_SIZE: usize = 32_768;
 const SEGMENT_COUNT: usize = 8;
 /// The segment whose body is withheld; forward playback parks at its start.
-/// Past the first 128 KiB of PCM: Android's `AMediaExtractor` reads that far
+/// Past the first 128 `KiB` of PCM: Android's `AMediaExtractor` reads that far
 /// while it opens the WAV, and a gate inside that window parks the open
 /// itself, before any playback can reach the boundary.
 const GATED_SEGMENT: usize = 5;

@@ -3,7 +3,7 @@ use url::Url;
 
 use super::transport::HostMethod;
 use crate::{
-    backend::common::status_error,
+    backend::common::{non_identity_content_encoding, status_error},
     error::NetError,
     range_response::accepts_response_status,
     types::{AcceptEncodingPolicy, Headers, RangeSpec},
@@ -72,17 +72,6 @@ pub(super) fn check_status(
         return Ok(status);
     }
     Err(status_error(url.clone(), status, body))
-}
-
-fn non_identity_content_encoding(pairs: &[(String, String)]) -> Option<&str> {
-    pairs.iter().find_map(|(name, value)| {
-        (name.eq_ignore_ascii_case("content-encoding")
-            && value
-                .split(',')
-                .map(str::trim)
-                .any(|coding| !coding.eq_ignore_ascii_case("identity")))
-        .then_some(value.as_str())
-    })
 }
 
 #[cfg(test)]

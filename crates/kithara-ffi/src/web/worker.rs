@@ -25,7 +25,7 @@ use crate::{
         FfiPools, FfiQueue, FfiQueueControl, FfiResourceConfig, FfiStore, FfiTrackSource,
         FfiWorker, Pools,
     },
-    web::{analysis::AnalysisRuns, commands::WorkerCmd, key_processor_bridge},
+    web::{analysis::AnalysisRuns, commands::WorkerCmd, keys},
 };
 
 struct Consts;
@@ -350,7 +350,7 @@ struct SetupHlsAesArgs {
 /// Fold a DRM rule into the worker's [`BuildState`]. Builds the
 /// cross-thread [`KeyRequestFactory`] (the real JS callback lives on the
 /// main thread; the worker-side processor routes each decrypt through
-/// [`key_processor_bridge`]) and writes the salt / static headers into the
+/// [`keys`]) and writes the salt / static headers into the
 /// player-wide header map. Mirrors
 /// [`NativeInner::setup_hls_aes_with_rule`](crate::native::inner::NativeInner).
 fn register_key_rule(state: &mut BuildState, args: SetupHlsAesArgs) {
@@ -375,10 +375,7 @@ fn register_key_rule(state: &mut BuildState, args: SetupHlsAesArgs) {
         Arc::new(move || {
             let mut req_headers = HashMap::new();
             req_headers.insert(SALT_HEADER.to_string(), salt.clone());
-            KeyRequest::new(
-                req_headers,
-                key_processor_bridge::worker_key_processor(salt.clone()),
-            )
+            KeyRequest::new(req_headers, keys::worker_key_processor(salt.clone()))
         })
     };
     let rule = DomainKeyRule::for_domains(&domains, factory)

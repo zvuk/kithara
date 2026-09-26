@@ -18,7 +18,7 @@ and integration regressions.
 flash and timeout tests. ABR contracts live in `abr`; platform loom models live
 in `platform`. Fuzz targets remain in `tests/fuzz`.
 
- Binaries: `test_server` serves
+Binaries: `test_server` serves
 `/assets/*` (checked-in regression files), `/signal/*` (procedural encoded audio)
 and `/stream/*` (synthetic HLS); `wasm_test_runner` is the `wasm32` runner in
 `.cargo/config.toml` that starts it.

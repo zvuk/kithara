@@ -6,9 +6,10 @@ use kithara::{
 use kithara_app::{
     config::AppConfig,
     document::Config,
-    gui, memory,
+    gui,
+    logging::init_tracing,
+    memory,
     pools::{self, AppHost},
-    tracing_init::init_tracing,
 };
 
 /// Kithara - audio player application.

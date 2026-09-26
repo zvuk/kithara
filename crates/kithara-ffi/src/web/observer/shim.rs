@@ -77,7 +77,7 @@ impl SeekCallback for SeekCallbackJs {
 /// Bridges a JS callback into the [`FfiKeyProcessor`] trait. The JS side
 /// is `process_key(key: Uint8Array, salt: string) -> Uint8Array`, invoked
 /// synchronously on the main thread by the
-/// [`key_processor_bridge`](crate::web::key_processor_bridge) pump. A
+/// [`keys`](crate::web::keys) pump. A
 /// non-`Uint8Array` return (or a throwing callback) yields an empty key,
 /// so the decrypt fails loudly downstream rather than silently using the
 /// raw bytes.

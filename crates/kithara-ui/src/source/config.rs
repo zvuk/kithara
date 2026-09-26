@@ -186,7 +186,7 @@ mod document_tests {
     /// `command_capacity`, `path_capacity` and `text_capacity` are its only
     /// declared fields, and `cushion` is neither a substring of any of them
     /// nor contains one. `max_bytes` also names an unrelated `Limits` field
-    /// with a 256 KiB default rather than this struct's 64 MiB one --
+    /// with a 256 `KiB` default rather than this struct's 64 `MiB` one --
     /// picking it here would prove nothing about which struct refused.
     #[kithara::test(native, flash(false))]
     fn an_unknown_draw_pool_field_is_rejected_and_named() {
@@ -198,8 +198,8 @@ mod document_tests {
 
     /// The path this task exists for: a `DrawPoolLimits` a document names
     /// reaches the `DrawBuffers` a `UiConfig` is built with. `max_buffers`
-    /// names `DrawPoolLimits`, not `Limits.max_bytes` (256 KiB default) --
-    /// this struct's own `max_bytes` default is 64 MiB.
+    /// names `DrawPoolLimits`, not `Limits.max_bytes` (256 `KiB` default) --
+    /// this struct's own `max_bytes` default is 64 `MiB`.
     #[cfg(any(feature = "render", feature = "vello"))]
     #[kithara::test(native, flash(false))]
     fn a_draw_pool_limits_document_reaches_the_draw_buffers_a_ui_config_is_built_with() {

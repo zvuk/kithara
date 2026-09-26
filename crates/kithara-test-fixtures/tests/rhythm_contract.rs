@@ -47,7 +47,7 @@ fn artifact_named(prefix: &str, style: &str, control: &str) -> BeatArtifact {
 }
 
 fn artifact_by_name(name: &str) -> BeatArtifact {
-    let asset = by_name(&name).unwrap_or_else(|| panic!("missing `{name}`"));
+    let asset = by_name(name).unwrap_or_else(|| panic!("missing `{name}`"));
     assert_eq!(asset.entry().content_type, "application/x-kithara-analysis");
     let fingerprint = AnalysisFingerprint::new(Some(Consts::ANALYSIS_FINGERPRINT), None);
     let file = AnalysisFile::parse(asset.bytes(), &fingerprint)

@@ -85,7 +85,7 @@ mod native_detector_tests {
         assert_eq!(parse_timeout_secs("7"), Some(Duration::from_secs(7)));
     }
 
-    /// Real-clock contract test (see detector_tests above).
+    /// Real-clock contract test (see `detector_tests` above).
     #[kithara::test(native, flash(false))]
     fn tick_with_stores_context_for_dump() {
         #[derive(serde::Serialize)]
@@ -134,7 +134,7 @@ mod native_detector_tests {
     }
 
     /// The whole point of the watchdog upgrade: a fired panic names the exact
-    /// `hang_tick!` call site (its file:line), not the detector internals. Real
+    /// `hang_tick!` call site (its <file:line>), not the detector internals. Real
     /// clock so the 1ms timeout and the detector's `Instant` read the same clock.
     #[kithara::test(native, flash(false))]
     fn panic_reports_hang_tick_call_site_not_detector_internals() {

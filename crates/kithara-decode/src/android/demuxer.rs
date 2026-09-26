@@ -6,7 +6,7 @@ use kithara_android::media::OwnedFormat;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{AudioCodec, ByteMap, PrerollHint, SegmentDescriptor};
 
-use super::media_extractor::{AndroidMediaExtractor, TrackFormatInfo};
+use super::extractor::{AndroidMediaExtractor, TrackFormatInfo};
 use crate::{
     codec::CodecPriming,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},

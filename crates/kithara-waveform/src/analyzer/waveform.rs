@@ -703,13 +703,13 @@ mod tests {
 
         // Above the window count: native resolution, never fabricated.
         assert_eq!(
-            Pass::new(flat!()).whole(&pcm, 1, 100_000).len(),
+            Pass::new(flat!()).whole(pcm, 1, 100_000).len(),
             10,
             "large = native count"
         );
         // Below it: still decimates (long-track cap).
         assert_eq!(
-            Pass::new(flat!()).whole(&pcm, 1, 4).len(),
+            Pass::new(flat!()).whole(pcm, 1, 4).len(),
             4,
             "small request decimates"
         );

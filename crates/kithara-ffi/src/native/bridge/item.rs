@@ -14,14 +14,19 @@ use crate::{
     core::event_set::ItemBusEvent,
     item::{ItemView, settle_failed},
     observer::ItemObserver,
-    types::{FfiError, FfiItemEvent},
+    types::{FfiError, FfiItemEvent, FfiVariant},
 };
 
-pub(crate) struct ItemEventBridge {
-    cancel: CancelToken,
+/// Per-item state the event task owns: where events go, the item view they
+/// settle, and what the bus has reported so far.
+pub(crate) struct ItemTracker {
+    duration_seconds: Option<f64>,
+    observer: Arc<dyn ItemObserver>,
+    state: Arc<Mutex<ItemView>>,
+    variants: Vec<FfiVariant>,
 }
 
-impl ItemEventBridge {
+impl ItemTracker {
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
@@ -34,54 +39,52 @@ impl ItemEventBridge {
     /// Threshold for suppressing redundant duration/buffered updates (seconds).
     const UPDATE_THRESHOLD: f64 = 0.01;
 
-    /// Same contract as `AudioPlayerItem::deliver`: state settles before
-    /// observers see the event.
-    fn deliver(observer: &Arc<dyn ItemObserver>, state: &Mutex<ItemView>, event: FfiItemEvent) {
-        state.lock().absorb(&event);
-        observer.on_event(event);
+    pub(crate) fn new(observer: Arc<dyn ItemObserver>, state: Arc<Mutex<ItemView>>) -> Self {
+        Self {
+            duration_seconds: None,
+            observer,
+            state,
+            variants: Vec::new(),
+        }
     }
 
-    fn dispatch(
-        observer: &Arc<dyn ItemObserver>,
-        event: &ItemBusEvent,
-        duration_seconds: &mut Option<f64>,
-        variants: &mut Vec<crate::types::FfiVariant>,
-        state: &Arc<Mutex<ItemView>>,
-    ) {
+    /// Same contract as `AudioPlayerItem::deliver`: state settles before
+    /// observers see the event.
+    fn deliver(&self, event: FfiItemEvent) {
+        self.state.lock().absorb(&event);
+        self.observer.on_event(event);
+    }
+
+    fn dispatch(&mut self, event: &ItemBusEvent) {
         if let Some(duration) = Self::duration_from_event(event)
-            && duration_seconds
+            && self
+                .duration_seconds
                 .is_none_or(|current| (current - duration).abs() > Self::UPDATE_THRESHOLD)
         {
-            *duration_seconds = Some(duration);
-            Self::deliver(
-                observer,
-                state,
-                FfiItemEvent::DurationChanged { seconds: duration },
-            );
+            self.duration_seconds = Some(duration);
+            self.deliver(FfiItemEvent::DurationChanged { seconds: duration });
         }
 
-        Self::dispatch_variant_events(observer, event, variants);
+        self.dispatch_variant_events(event);
 
         if let Ok(event) = FfiItemEvent::try_from(event) {
-            Self::deliver(observer, state, event);
+            self.deliver(event);
         }
 
         if let Ok(error) = FfiError::try_from(event) {
-            settle_failed(state, observer.as_ref(), &error.to_string());
+            settle_failed(&self.state, self.observer.as_ref(), &error.to_string());
         }
     }
 
-    fn dispatch_variant_events(
-        observer: &Arc<dyn ItemObserver>,
-        event: &ItemBusEvent,
-        variants: &mut Vec<crate::types::FfiVariant>,
-    ) {
+    fn dispatch_variant_events(&mut self, event: &ItemBusEvent) {
+        let observer = &self.observer;
+        let variants = &mut self.variants;
         match event {
             ItemBusEvent::Abr(AbrEvent::VariantsRegistered {
                 variants: v,
                 initial,
             }) => {
-                let ffi_variants: Vec<crate::types::FfiVariant> = v
+                let ffi_variants: Vec<FfiVariant> = v
                     .iter()
                     .filter_map(|vi| {
                         let Ok(index) = u32::try_from(vi.variant_index.get()) else {
@@ -91,7 +94,7 @@ impl ItemEventBridge {
                             );
                             return None;
                         };
-                        Some(crate::types::FfiVariant {
+                        Some(FfiVariant {
                             index,
                             bandwidth_bps: vi.bandwidth_bps.unwrap_or(0),
                             name: vi.name.clone(),
@@ -129,7 +132,7 @@ impl ItemEventBridge {
                     .iter()
                     .find(|v| v.index == idx_u32)
                     .cloned()
-                    .unwrap_or(crate::types::FfiVariant {
+                    .unwrap_or(FfiVariant {
                         index: idx_u32,
                         bandwidth_bps: 0,
                         name: None,
@@ -148,7 +151,7 @@ impl ItemEventBridge {
                     .iter()
                     .find(|v| v.index == idx_u32)
                     .cloned()
-                    .unwrap_or(crate::types::FfiVariant {
+                    .unwrap_or(FfiVariant {
                         index: idx_u32,
                         bandwidth_bps: 0,
                         name: None,
@@ -169,48 +172,34 @@ impl ItemEventBridge {
         }
     }
 
+    fn u64_to_f64(value: u64) -> Option<f64> {
+        let hi = u32::try_from(value >> Self::U64_HIGH_SHIFT).ok()?;
+        let lo = u32::try_from(value & u64::from(u32::MAX)).ok()?;
+        Some(f64::from(hi).mul_add(Self::U32_MAX_PLUS_ONE, f64::from(lo)))
+    }
+}
+
+pub(crate) struct ItemEventBridge {
+    cancel: CancelToken,
+}
+
+impl ItemEventBridge {
     /// Spawn a task that translates resource events into item callbacks
     /// and refreshes the shared [`ItemView`] cache backing the item's
     /// synchronous getters (`duration_sec`, `is_live_stream`, …).
     pub(crate) fn spawn(
-        rx: EventReceiver<ItemBusEvent>,
-        observer: Arc<dyn ItemObserver>,
-        duration_seconds: Option<f64>,
-        state: Arc<Mutex<ItemView>>,
+        mut rx: EventReceiver<ItemBusEvent>,
+        mut tracker: ItemTracker,
         cancel: CancelToken,
     ) -> Self {
-        if let Some(duration) = duration_seconds {
-            Self::deliver(
-                &observer,
-                &state,
-                FfiItemEvent::DurationChanged { seconds: duration },
-            );
-        }
-        Self::spawn_event_task(rx, observer, duration_seconds, state, cancel.clone());
-        Self { cancel }
-    }
-
-    fn spawn_event_task(
-        mut rx: EventReceiver<ItemBusEvent>,
-        observer: Arc<dyn ItemObserver>,
-        mut duration_seconds: Option<f64>,
-        state: Arc<Mutex<ItemView>>,
-        cancel: CancelToken,
-    ) {
+        let task_cancel = cancel.clone();
         crate::FFI_RUNTIME.spawn(async move {
-            let mut variants: Vec<crate::types::FfiVariant> = Vec::new();
             loop {
                 tokio::select! {
-                    () = cancel.cancelled() => break,
+                    () = task_cancel.cancelled() => break,
                     event = rx.recv() => {
                         match event {
-                            Ok(Envelope { event, .. }) => Self::dispatch(
-                                &observer,
-                                &event,
-                                &mut duration_seconds,
-                                &mut variants,
-                                &state,
-                            ),
+                            Ok(Envelope { event, .. }) => tracker.dispatch(&event),
                             Err(broadcast::error::RecvError::Lagged(_)) => continue,
                             Err(broadcast::error::RecvError::Closed) => break,
                         }
@@ -218,12 +207,7 @@ impl ItemEventBridge {
                 }
             }
         });
-    }
-
-    fn u64_to_f64(value: u64) -> Option<f64> {
-        let hi = u32::try_from(value >> Self::U64_HIGH_SHIFT).ok()?;
-        let lo = u32::try_from(value & u64::from(u32::MAX)).ok()?;
-        Some(f64::from(hi).mul_add(Self::U32_MAX_PLUS_ONE, f64::from(lo)))
+        Self { cancel }
     }
 }
 
@@ -241,7 +225,7 @@ mod tests {
     };
     use kithara_file::{FileError, FileEvent};
 
-    use super::ItemEventBridge;
+    use super::ItemTracker;
     use crate::{
         core::event_set::ItemBusEvent,
         item::{AudioPlayerItem, ItemView},
@@ -283,15 +267,11 @@ mod tests {
     }
 
     fn dispatch_file_error(observer: &Arc<dyn ItemObserver>, state: &Arc<Mutex<ItemView>>) {
-        ItemEventBridge::dispatch(
-            observer,
-            &ItemBusEvent::File(FileEvent::Error {
+        ItemTracker::new(Arc::clone(observer), Arc::clone(state)).dispatch(&ItemBusEvent::File(
+            FileEvent::Error {
                 error: FileError::Io("boom".into()),
-            }),
-            &mut None,
-            &mut Vec::new(),
-            state,
-        );
+            },
+        ));
     }
 
     fn variant(index: usize, bandwidth_bps: Option<u64>, name: Option<&str>) -> VariantInfo {
@@ -310,7 +290,10 @@ mod tests {
         event: AbrEvent,
         variants: &mut Vec<FfiVariant>,
     ) {
-        ItemEventBridge::dispatch_variant_events(observer, &ItemBusEvent::Abr(event), variants);
+        let mut tracker = ItemTracker::new(Arc::clone(observer), item_state());
+        tracker.variants = std::mem::take(variants);
+        tracker.dispatch_variant_events(&ItemBusEvent::Abr(event));
+        *variants = tracker.variants;
     }
 
     #[kithara::test]

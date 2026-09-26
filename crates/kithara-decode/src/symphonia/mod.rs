@@ -2,8 +2,6 @@
 //! Android uses the in-tree MPEG demuxer with `MediaCodec`; codec registration
 //! and general container probing require the `symphonia` software backend.
 
-#[cfg(feature = "fdk-aac")]
-pub(crate) mod aac_fdk;
 pub(crate) mod adapter;
 #[cfg(feature = "symphonia")]
 pub(crate) mod codec;
@@ -11,6 +9,8 @@ pub(crate) mod codec;
 pub(crate) mod config;
 pub(crate) mod demuxer;
 pub(crate) mod echain;
+#[cfg(feature = "fdk-aac")]
+pub(crate) mod fdk;
 #[cfg(all(test, feature = "symphonia"))]
 mod mp4_tests;
 #[cfg(feature = "symphonia")]

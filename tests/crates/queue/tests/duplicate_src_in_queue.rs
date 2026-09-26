@@ -38,7 +38,7 @@ async fn render_loop(
     block_budget: usize,
 ) {
     for _ in 0..block_budget {
-        let _ = harness.run(queue, |q| q.tick()).await;
+        let _ = harness.run(queue, kithara::queue::QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
     }
 }

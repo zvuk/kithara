@@ -1029,9 +1029,11 @@ kithara-test-dylib = { path = \"../dylib\", features = [
                     "{name} publishes naming {dep}, which is published after it"
                 );
             }
-            for missing in features_naming_absent_deps(&table) {
-                panic!("{name} publishes a feature naming {missing}, which it does not depend on");
-            }
+            let missing = features_naming_absent_deps(&table);
+            assert!(
+                missing.is_empty(),
+                "{name} publishes features naming {missing:?}, which it does not depend on"
+            );
         }
     }
 

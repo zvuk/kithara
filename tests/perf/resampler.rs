@@ -37,8 +37,8 @@ fn create_planar(frames: usize, source: &[Vec<f32>; 2]) -> [Vec<f32>; 2] {
 
 fn create_output(resampler: &dyn Resampler) -> [Vec<f32>; 2] {
     [
-        vec![0.0; resampler.output_frames_next()],
-        vec![0.0; resampler.output_frames_next()],
+        vec![0.0; resampler.output_frames_max()],
+        vec![0.0; resampler.output_frames_max()],
     ]
 }
 

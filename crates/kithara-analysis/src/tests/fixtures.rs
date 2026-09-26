@@ -125,7 +125,7 @@ pub(super) const CH: u16 = 2;
 pub(super) fn spec() -> AudioSpec {
     AudioSpec {
         channels: CH,
-        sample_rate: NonZeroU32::new(SR).unwrap(),
+        sample_rate: NonZeroU32::new(SR).expect("test sample rate"),
     }
 }
 

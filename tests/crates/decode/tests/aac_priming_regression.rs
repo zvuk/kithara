@@ -74,7 +74,7 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk(
         "AAC chunk 0 max |sample| = {max_abs:.6} (expected > 0.01). \
          fdk-aac algorithmic delay (`outputDelay`) not stripped — \
          chunk 0 is full of decoder lookahead zeros. See \
-         crates/kithara-decode/src/symphonia/aac_fdk.rs.",
+         crates/kithara-decode/src/symphonia/fdk.rs.",
     );
 }
 

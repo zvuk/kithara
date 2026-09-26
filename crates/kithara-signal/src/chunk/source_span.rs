@@ -159,7 +159,11 @@ mod tests {
             u64::MAX
         );
         assert!(standing.for_output_range(0..129).is_none());
-        assert!(standing.for_output_range(2..1).is_none());
+        assert!(
+            standing
+                .for_output_range(Range { start: 2, end: 1 })
+                .is_none()
+        );
         let full = SourceSpan::new(0, u64::MAX, rate, u64::MAX).expect("full source");
         assert_eq!(full.end(), u64::MAX);
         assert_eq!(

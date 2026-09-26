@@ -10,7 +10,7 @@ use kithara_signal::{AudioSpec, FrameCount};
 use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, PrerollHint};
 use num_traits::ToPrimitive;
 
-use super::{audio_file::AppleAudioFile, consts::Consts, flac::StreamInfo};
+use super::{consts::Consts, file::AppleAudioFile, flac::StreamInfo};
 use crate::{
     GaplessInfo,
     codec::CodecPriming,

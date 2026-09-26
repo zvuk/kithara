@@ -56,7 +56,7 @@ mod tests {
         assert!(remainder.is_empty());
         let add = |a: [f32; 3], b: [f32; 3]| [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
         // 3 values into 1 bucket -> the whole range folds together.
-        let out = bucketize(&raw, 1, [0.0; 3], add);
+        let out = bucketize(raw, 1, [0.0; 3], add);
         assert_eq!(out, vec![[1.0, 2.0, 3.0]]);
     }
 
@@ -64,7 +64,7 @@ mod tests {
     fn normalized_mapping_splits_evenly(pcm_ramp: Vec<f32>) {
         // 4 values, 2 buckets -> [0,2) and [2,4): first half vs second half.
         let raw = &pcm_ramp[..4];
-        let out = bucketize(&raw, 2, 0.0, f32::max);
+        let out = bucketize(raw, 2, 0.0, f32::max);
         assert_eq!(out, vec![2.0, 4.0]);
     }
 

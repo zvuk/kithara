@@ -110,7 +110,7 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays(
         )
         .expect("the analysis pass opens");
     queue.attach_observer(id, producer);
-    queue.run(move |q| q.play()).await;
+    queue.run(kithara::queue::QueueControl::play).await;
 
     let covered = || {
         analysis

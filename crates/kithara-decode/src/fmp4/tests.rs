@@ -433,7 +433,7 @@ type AacFrameHarness = (SymphoniaCodec, Vec<u8>, Vec<(usize, usize)>);
 #[cfg(feature = "symphonia")]
 fn aac_codec_and_frames(aac_init: &[u8], aac_segment: &[u8]) -> AacFrameHarness {
     let init_bytes = aac_init;
-    let init = parse_init(&init_bytes, &pools()).expect("BUG: parse AAC init");
+    let init = parse_init(init_bytes, &pools()).expect("BUG: parse AAC init");
     let extra_data = init.config.as_ref().to_vec();
     let track = TrackInfo {
         extra_data,

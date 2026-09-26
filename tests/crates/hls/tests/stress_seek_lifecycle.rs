@@ -114,7 +114,7 @@ async fn audio_server(
         "Test data generated"
     );
 
-    let server = HlsTestServer::new(HlsTestServerConfig {
+    HlsTestServer::new(HlsTestServerConfig {
         variant_count: Consts::VARIANT_COUNT,
         segments_per_variant: Consts::SEGMENT_COUNT,
         segment_size: Consts::D.segment_size,
@@ -138,9 +138,7 @@ async fn audio_server(
         }],
         ..Default::default()
     })
-    .await;
-
-    server
+    .await
 }
 
 #[kithara::test(

@@ -27,18 +27,18 @@ struct Budget;
 impl Budget {
     /// The pool region preallocates `INITIAL_SAMPLE_BUFFERS` sample buffers,
     /// and is the only subsystem here that costs anything at construction.
-    /// Measured at 603 KiB.
+    /// Measured at 603 `KiB`.
     const POOLS_KIB: usize = 1_024;
     /// The asset store on its in-memory backend, with no assets yet.
-    /// Measured at 84 KiB.
+    /// Measured at 84 `KiB`.
     const STORE_KIB: usize = 256;
-    /// One playback worker and the threads it owns. Measured at 3 KiB: a
+    /// One playback worker and the threads it owns. Measured at 3 `KiB`: a
     /// thread's stack is not heap, and the worker's buffers are the pool's.
     const WORKER_KIB: usize = 256;
-    /// One HTTP client and the downloader in front of it. Measured at 15 KiB
+    /// One HTTP client and the downloader in front of it. Measured at 15 `KiB`
     /// — the TLS stack is built on first use, not here.
     const DOWNLOADER_KIB: usize = 256;
-    /// Everything above, standing at once. Measured at 707 KiB.
+    /// Everything above, standing at once. Measured at 707 `KiB`.
     const TOTAL_KIB: usize = 1_536;
 }
 

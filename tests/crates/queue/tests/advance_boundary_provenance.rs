@@ -81,7 +81,7 @@ fn assert_provenance_headroom(rendered: &[f32], label: &str) {
     let left = deinterleave_left(rendered, usize::from(CHANNELS));
     let peak = max_abs(&left);
     assert!(
-        peak >= PROVENANCE_LEVEL * 0.9 && peak < LINEAR_PATH_MAX_PEAK,
+        (PROVENANCE_LEVEL * 0.9..LINEAR_PATH_MAX_PEAK).contains(&peak),
         "{label} must stay audible and below the session limiter; peak={peak}"
     );
 }
@@ -1330,7 +1330,7 @@ async fn render_until_b_with_postroll(
     let mut expected_a_frames: Option<usize> = None;
 
     for _ in 0..BLOCK_BUDGET {
-        let _ = harness.run(queue, |q| q.tick()).await;
+        let _ = harness.run(queue, kithara::queue::QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, class_tolerance, Some(0));
 
@@ -1367,7 +1367,7 @@ async fn render_until_b_with_late_variant_switch(
     let mut committed_variant: Option<usize> = None;
 
     for _ in 0..BLOCK_BUDGET {
-        let _ = harness.run(queue, |q| q.tick()).await;
+        let _ = harness.run(queue, kithara::queue::QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, ASCENDING_TOL, Some(0));
 
@@ -1438,7 +1438,7 @@ async fn render_crossfade_until_b_with_postroll(
     let mut expected_a_end_frame: Option<usize> = None;
 
     for _ in 0..CROSSFADE_BLOCK_BUDGET {
-        let _ = harness.run(queue, |q| q.tick()).await;
+        let _ = harness.run(queue, kithara::queue::QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, ASCENDING_TOL, Some(0));
 
@@ -1491,7 +1491,7 @@ async fn render_app_layer_crossfade_until_b_with_postroll_config(
     let mut auto_advanced_index: Option<usize> = None;
 
     for _ in 0..block_budget {
-        let _ = harness.run(queue, |q| q.tick()).await;
+        let _ = harness.run(queue, kithara::queue::QueueControl::tick).await;
         drive_app_layer_crossfade_advance(harness, queue, &mut auto_advanced_index).await;
 
         let block = harness.render(BLOCK_FRAMES).await;
@@ -1572,7 +1572,7 @@ async fn render_seek_near_end_until_b_with_postroll(
     let mut seek_duration: Option<f64> = None;
 
     for _ in 0..BLOCK_BUDGET {
-        let _ = harness.run(queue, |q| q.tick()).await;
+        let _ = harness.run(queue, kithara::queue::QueueControl::tick).await;
 
         loop {
             match events.try_recv().map(|envelope| envelope.event) {
@@ -1627,7 +1627,7 @@ async fn render_until_tone_b_with_postroll(
     let mut track_duration: Option<f64> = None;
 
     for _ in 0..BLOCK_BUDGET {
-        let _ = harness.run(queue, |q| q.tick()).await;
+        let _ = harness.run(queue, kithara::queue::QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, render_sample_rate);
 

@@ -200,8 +200,7 @@ fn warped_player_resource(
     let resource = Resource::from_reader(EofReader::with_frames(samples), None)
         .with_playback_rate(PlaybackRate::for_warp(Arc::clone(controls)));
     PlayerResource::new(resource, Arc::from(src), pools)
-        .map(Box::new)
-        .unwrap_or_else(|error| panic!("test player resource: {error}"))
+        .map_or_else(|error| panic!("test player resource: {error}"), Box::new)
 }
 
 fn process_block(processor: &mut PlayerNodeProcessor, extra: &mut ProcExtra) {

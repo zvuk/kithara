@@ -825,8 +825,8 @@ mod tests {
 
     fn capped_with_a_released_front(run_ramp: &[f32]) -> TestRuns {
         let mut set = budgeted(48_000, usize::MAX, 2);
-        set.push(&ramp(&run_ramp, 9600, 100_000), 100_000, Opens::Run);
-        set.push(&ramp(&run_ramp, 4800, 300_000), 300_000, Opens::Run);
+        set.push(&ramp(run_ramp, 9600, 100_000), 100_000, Opens::Run);
+        set.push(&ramp(run_ramp, 4800, 300_000), 300_000, Opens::Run);
         set.flush();
         let advance = set.offset_in_run(100_000, 104_000);
         set.release(|base| base + advance);

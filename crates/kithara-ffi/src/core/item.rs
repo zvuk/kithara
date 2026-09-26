@@ -10,7 +10,7 @@ use kithara::{
 use uuid::Uuid;
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::native::item_bridge::ItemEventBridge;
+use crate::native::{ItemEventBridge, ItemTracker};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::FfiAbrMode;
 use crate::{
@@ -428,9 +428,7 @@ impl AudioPlayerItem {
         };
         let bridge = ItemEventBridge::spawn(
             bus.subscribe(),
-            self.observer(),
-            None,
-            Arc::clone(&self.state),
+            ItemTracker::new(self.observer(), Arc::clone(&self.state)),
             CancelToken::never(),
         );
         *self.event_bridge.lock() = Some(bridge);

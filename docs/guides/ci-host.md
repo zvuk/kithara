@@ -232,10 +232,11 @@ docker inspect kithara-ci-cache \
 ```
 
 On 2026-09-23 it answered `/mnt/sdb1/kithara-ci/worktrees/pr362-proof-44320e421`
+
 - a checkout a pull request had left behind, two weeks stale - so refreshing the
-deployment copy had been changing nothing the server ran. The stack was
-recreated from the deployment copy with its image rebuilt, and the environment
-it is started with now lives beside it as `linux.env`.
+  deployment copy had been changing nothing the server ran. The stack was
+  recreated from the deployment copy with its image rebuilt, and the environment
+  it is started with now lives beside it as `linux.env`.
 
 A policy added in the repository therefore does not reach the server by being
 merged. `source-snapshots/` was added to the non-trusted statement on
@@ -331,11 +332,11 @@ Pipeline rules read `$CI_DEFAULT_BRANCH`, so the repository needs no edit; what
 follows the name is outside it, and the order matters:
 
 1. Create the branch, then move the default-branch setting — until it moves, a
-   push to the new branch dispatches as the `branch` kind, not the `main`
-   kind.
-2. Protect it before deleting the old one: protected variables reach protected
-   branches only, so release jobs fail on a missing secret instead.
-3. Repoint the schedules; a schedule keeps the branch it was created with.
-4. Retarget open merge requests, which GitLab closes with their target branch.
-5. Set `gitlab_branch` on the host, then `ci host mac activate-bridge`.
-6. Delete the old branch last.
+  push to the new branch dispatches as the `branch` kind, not the `main`
+  kind.
+1. Protect it before deleting the old one: protected variables reach protected
+  branches only, so release jobs fail on a missing secret instead.
+1. Repoint the schedules; a schedule keeps the branch it was created with.
+1. Retarget open merge requests, which GitLab closes with their target branch.
+1. Set `gitlab_branch` on the host, then `ci host mac activate-bridge`.
+1. Delete the old branch last.

@@ -277,7 +277,7 @@ fn a_source_that_ends_before_its_claimed_length_is_complete(analysis_silence: Ve
 
 fn claiming(analysis_silence: &[f32], pools: Pools) -> Track {
     Track::claiming(
-        &analysis_silence,
+        analysis_silence,
         pools,
         spec(),
         Consts::CHUNK_FRAMES,

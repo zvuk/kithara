@@ -17,135 +17,68 @@ use crate::{
     observer::PlayerObserver,
     pools::FfiQueueControl,
     registry::ItemRegistry,
-    types::{
-        FfiActionAtItemEnd, FfiAdvanceReason, FfiCrossfadeSettings, FfiItemEvent, FfiPlaybackOrder,
-        FfiPlayerEvent, FfiRepeatMode, FfiTimeRange, FfiTrackStatus,
-    },
+    types::{FfiItemEvent, FfiPlayerEvent, FfiTimeRange, FfiTrackStatus},
 };
 
-pub(crate) struct EventBridge {
-    cancel: CancelToken,
-    time_thread: Option<JoinHandle<()>>,
+/// Where queue and player signals go: the player observer, the item
+/// registry, and the identity of the item that is current right now.
+///
+/// The event task and the time thread share one router, so both read the
+/// same current identity.
+pub(crate) struct Router {
+    current: Mutex<Option<TrackId>>,
+    items: Arc<Mutex<ItemRegistry>>,
+    observer: Arc<dyn PlayerObserver>,
 }
 
-impl EventBridge {
+impl Router {
     /// Failure reason recorded when the player reports an item failure
     /// without one.
     const ITEM_DID_FAIL: &'static str = "item did fail";
 
-    /// Polling interval for time/duration updates (~10 Hz).
-    const TIME_POLL_INTERVAL_MS: u64 = 100;
-
     /// Threshold for suppressing redundant time/duration updates (seconds).
     const TIME_UPDATE_THRESHOLD: f64 = 0.01;
 
-    fn dispatch(
-        observer: &Arc<dyn PlayerObserver>,
-        items: &Arc<Mutex<ItemRegistry>>,
-        last_current: &Mutex<Option<TrackId>>,
-        event: &QueueBusEvent,
-    ) {
-        if let QueueBusEvent::Player(pe) = event {
-            if let PlayerEvent::CurrentItemChanged { item } = pe {
-                *last_current.lock() = *item;
-            }
-            Self::route_player_event_to_item(items, last_current, pe);
-            let Some(ffi_event) = FfiPlayerEvent::try_from(pe).ok() else {
-                return;
-            };
-            observer.on_event(ffi_event);
-            return;
-        }
-        if let QueueBusEvent::Queue(qe) = event {
-            Self::dispatch_queue_event(observer, items, qe);
-            return;
-        }
-        if let Ok(ffi_event) = FfiPlayerEvent::try_from(event) {
-            observer.on_event(ffi_event);
+    pub(crate) fn new(observer: Arc<dyn PlayerObserver>, items: Arc<Mutex<ItemRegistry>>) -> Self {
+        Self {
+            current: Mutex::new(None),
+            items,
+            observer,
         }
     }
 
-    fn dispatch_queue_event(
-        observer: &Arc<dyn PlayerObserver>,
-        items: &Arc<Mutex<ItemRegistry>>,
-        event: &QueueEvent,
-    ) {
-        match event {
-            QueueEvent::TrackAdded { id, index } => {
-                observer.on_event(FfiPlayerEvent::TrackAdded {
-                    item_id: *id,
-                    index: *index as u64,
-                });
+    fn dispatch(&self, event: &QueueBusEvent) {
+        if let QueueBusEvent::Player(pe) = event {
+            if let PlayerEvent::CurrentItemChanged { item } = pe {
+                *self.current.lock() = *item;
             }
-            QueueEvent::TrackRemoved { id } => {
-                observer.on_event(FfiPlayerEvent::TrackRemoved { item_id: *id });
-            }
-            QueueEvent::CurrentTrackChanged { id } => {
-                let item_id = *id;
-                observer.on_event(FfiPlayerEvent::CurrentItemChanged { item_id });
-            }
-            QueueEvent::CurrentTrackAdvance { id, reason } => {
-                observer.on_event(FfiPlayerEvent::CurrentItemAdvanced {
-                    item_id: *id,
-                    reason: FfiAdvanceReason::from(*reason),
-                });
-            }
-            QueueEvent::TrackStatusChanged { id, status } => {
-                let Some(item) = items.lock().get(id).cloned() else {
-                    return;
-                };
-                let status = FfiTrackStatus::from(status.clone());
-                item.apply_track_status(&status);
-                observer.on_event(FfiPlayerEvent::TrackStatusChanged {
-                    status,
-                    item_id: *id,
-                });
-            }
-            QueueEvent::QueueEnded => {
-                observer.on_event(FfiPlayerEvent::QueueEnded);
-            }
-            QueueEvent::TrackLoadFailed {
-                id,
-                reason,
-                auto_skipped,
-            } => {
-                observer.on_event(FfiPlayerEvent::TrackLoadFailed {
-                    item_id: *id,
-                    reason: reason.clone(),
-                    auto_skipped: *auto_skipped,
-                });
-            }
-            QueueEvent::CrossfadeStarted { settings } => {
-                observer.on_event(FfiPlayerEvent::CrossfadeStarted {
-                    settings: FfiCrossfadeSettings::from(*settings),
-                });
-            }
-            QueueEvent::CrossfadeSettingsChanged { settings } => {
-                observer.on_event(FfiPlayerEvent::CrossfadeSettingsChanged {
-                    settings: FfiCrossfadeSettings::from(*settings),
-                });
-            }
-            QueueEvent::PlaybackOrderChanged { order } => {
-                observer.on_event(FfiPlayerEvent::PlaybackOrderChanged {
-                    order: FfiPlaybackOrder::from(*order),
-                });
-            }
-            QueueEvent::ActionAtItemEndChanged { action } => {
-                observer.on_event(FfiPlayerEvent::ActionAtItemEndChanged {
-                    action: FfiActionAtItemEnd::from(*action),
-                });
-            }
-            QueueEvent::RepeatModeChanged { mode } => {
-                observer.on_event(FfiPlayerEvent::RepeatModeChanged {
-                    mode: FfiRepeatMode::from(*mode),
-                });
-            }
-            QueueEvent::NextTrackReady { id, index } => {
-                observer.on_event(FfiPlayerEvent::NextTrackReady {
-                    item_id: *id,
-                    index: *index as u64,
-                });
-            }
+            self.route_player_event_to_item(pe);
+            let Some(ffi_event) = FfiPlayerEvent::try_from(pe).ok() else {
+                return;
+            };
+            self.observer.on_event(ffi_event);
+            return;
+        }
+        if let QueueBusEvent::Queue(qe) = event {
+            self.dispatch_queue_event(qe);
+            return;
+        }
+        if let Ok(ffi_event) = FfiPlayerEvent::try_from(event) {
+            self.observer.on_event(ffi_event);
+        }
+    }
+
+    /// Forward a queue event to the player observer. A status change is
+    /// applied to its item first, and is dropped when the item is gone.
+    fn dispatch_queue_event(&self, event: &QueueEvent) {
+        if let QueueEvent::TrackStatusChanged { id, status } = event {
+            let Some(item) = self.items.lock().get(id).cloned() else {
+                return;
+            };
+            item.apply_track_status(&FfiTrackStatus::from(status.clone()));
+        }
+        if let Ok(ffi_event) = FfiPlayerEvent::try_from(event) {
+            self.observer.on_event(ffi_event);
         }
     }
 
@@ -153,14 +86,14 @@ impl EventBridge {
     /// than [`Self::TIME_UPDATE_THRESHOLD`], tracking the last emitted
     /// value (and clearing it when the source goes empty).
     fn emit_if_changed(
-        observer: &Arc<dyn PlayerObserver>,
+        &self,
         value: Option<f64>,
         last: &mut Option<f64>,
         make_event: impl FnOnce(f64) -> FfiPlayerEvent,
     ) {
         match value {
             Some(v) if last.is_none_or(|prev| (prev - v).abs() > Self::TIME_UPDATE_THRESHOLD) => {
-                observer.on_event(make_event(v));
+                self.observer.on_event(make_event(v));
                 *last = Some(v);
             }
             None if last.is_some() => *last = None,
@@ -174,12 +107,7 @@ impl EventBridge {
     /// "available without more network", which is the cached span, while the
     /// frontier stays a floor so the reported window never falls behind the
     /// playhead and pushes the host into a buffering deadlock.
-    fn emit_loaded_ranges(
-        items: &Arc<Mutex<ItemRegistry>>,
-        last_current: &Mutex<Option<TrackId>>,
-        available: Option<f64>,
-        last: &mut Option<f64>,
-    ) {
+    fn emit_loaded_ranges(&self, available: Option<f64>, last: &mut Option<f64>) {
         let Some(available) = available else {
             *last = None;
             return;
@@ -187,10 +115,10 @@ impl EventBridge {
         if last.is_some_and(|prev| (prev - available).abs() <= Self::TIME_UPDATE_THRESHOLD) {
             return;
         }
-        let Some(track_id) = *last_current.lock() else {
+        let Some(track_id) = *self.current.lock() else {
             return;
         };
-        let Some(item) = items.lock().get(&track_id).cloned() else {
+        let Some(item) = self.items.lock().get(&track_id).cloned() else {
             return;
         };
         *last = Some(available);
@@ -219,11 +147,7 @@ impl EventBridge {
     /// item-level observer, mapping them onto
     /// [`FfiItemEvent::DidReachEnd`] / [`FfiItemEvent::DidFail`] /
     /// [`FfiItemEvent::DidStall`].
-    fn route_player_event_to_item(
-        items: &Arc<Mutex<ItemRegistry>>,
-        last_current: &Mutex<Option<TrackId>>,
-        event: &PlayerEvent,
-    ) {
+    fn route_player_event_to_item(&self, event: &PlayerEvent) {
         let target = match event {
             PlayerEvent::ItemDidPlayToEnd { item } | PlayerEvent::ItemDidFail { item, .. } => {
                 Some(item.id())
@@ -231,7 +155,7 @@ impl EventBridge {
             PlayerEvent::TimeControlStatusChanged {
                 status: TimeControlStatus::WaitingToPlay,
                 ..
-            } => *last_current.lock(),
+            } => *self.current.lock(),
             PlayerEvent::TimeControlStatusChanged {
                 status: TimeControlStatus::Paused | TimeControlStatus::Playing,
                 ..
@@ -247,7 +171,7 @@ impl EventBridge {
             | PlayerEvent::HandoverRequested { .. } => return,
         };
         let Some(track_id) = target else { return };
-        let Some(item) = items.lock().get(&track_id).cloned() else {
+        let Some(item) = self.items.lock().get(&track_id).cloned() else {
             return;
         };
         let ffi_event = match event {
@@ -269,32 +193,29 @@ impl EventBridge {
         };
         item.deliver(ffi_event);
     }
+}
+
+pub(crate) struct EventBridge {
+    cancel: CancelToken,
+    time_thread: Option<JoinHandle<()>>,
+}
+
+impl EventBridge {
+    /// Polling interval for time/duration updates (~10 Hz).
+    const TIME_POLL_INTERVAL_MS: u64 = 100;
 
     /// Spawn background tasks that translate queue/player events into
     /// observer callbacks. Returns a bridge handle; dropping it cancels
     /// the tasks.
     pub(crate) fn spawn(
         rx: EventReceiver<QueueBusEvent>,
-        observer: Arc<dyn PlayerObserver>,
+        router: Router,
         queue: FfiQueueControl,
-        items: &Arc<Mutex<ItemRegistry>>,
         cancel: CancelToken,
     ) -> Self {
-        let last_current = Arc::new(Mutex::new(None));
-        Self::spawn_event_task(
-            rx,
-            Arc::clone(&observer),
-            Arc::clone(items),
-            Arc::clone(&last_current),
-            cancel.clone(),
-        );
-        let time_thread = Self::spawn_time_thread(
-            queue,
-            observer,
-            Arc::clone(items),
-            last_current,
-            cancel.clone(),
-        );
+        let router = Arc::new(router);
+        Self::spawn_event_task(rx, Arc::clone(&router), cancel.clone());
+        let time_thread = Self::spawn_time_thread(queue, router, cancel.clone());
         Self {
             cancel,
             time_thread: Some(time_thread),
@@ -304,9 +225,7 @@ impl EventBridge {
     /// Task that listens for queue events on the unified bus.
     fn spawn_event_task(
         mut rx: EventReceiver<QueueBusEvent>,
-        observer: Arc<dyn PlayerObserver>,
-        items: Arc<Mutex<ItemRegistry>>,
-        last_current: Arc<Mutex<Option<TrackId>>>,
+        router: Arc<Router>,
         cancel: CancelToken,
     ) {
         crate::FFI_RUNTIME.spawn(async move {
@@ -315,12 +234,7 @@ impl EventBridge {
                     () = cancel.cancelled() => break,
                     event = rx.recv() => {
                         match event {
-                            Ok(Envelope { event: ev, .. }) => Self::dispatch(
-                                &observer,
-                                &items,
-                                &last_current,
-                                &ev,
-                            ),
+                            Ok(Envelope { event: ev, .. }) => router.dispatch(&ev),
                             Err(broadcast::error::RecvError::Lagged(_)) => continue,
                             Err(broadcast::error::RecvError::Closed) => break,
                         }
@@ -336,9 +250,7 @@ impl EventBridge {
     /// tokio runtime with sync locks held inside the engine.
     fn spawn_time_thread(
         queue: FfiQueueControl,
-        observer: Arc<dyn PlayerObserver>,
-        items: Arc<Mutex<ItemRegistry>>,
-        last_current: Arc<Mutex<Option<TrackId>>>,
+        router: Arc<Router>,
         cancel: CancelToken,
     ) -> JoinHandle<()> {
         spawn(move || {
@@ -352,13 +264,13 @@ impl EventBridge {
                 let _ = queue.tick();
                 queue.process_notifications();
                 let view = queue.playback_view();
-                Self::emit_if_changed(&observer, view.position, &mut last_time, |seconds| {
+                router.emit_if_changed(view.position, &mut last_time, |seconds| {
                     FfiPlayerEvent::TimeChanged { seconds }
                 });
-                Self::emit_if_changed(&observer, view.duration, &mut last_duration, |seconds| {
+                router.emit_if_changed(view.duration, &mut last_duration, |seconds| {
                     FfiPlayerEvent::DurationChanged { seconds }
                 });
-                Self::emit_loaded_ranges(&items, &last_current, view.buffered, &mut last_buffered);
+                router.emit_loaded_ranges(view.buffered, &mut last_buffered);
             }
         })
     }
@@ -398,7 +310,10 @@ mod tests {
         observer::ItemObserver,
         pools,
         pools::{FfiQueue, FfiWorker},
-        types::{FfiItemConfig, FfiItemEvent, FfiItemStatus},
+        types::{
+            FfiAdvanceReason, FfiCrossfadeSettings, FfiItemConfig, FfiItemEvent, FfiItemStatus,
+            FfiRepeatMode,
+        },
     };
 
     type QueueEventCase = (QueueEvent, fn(&FfiPlayerEvent) -> bool);
@@ -460,6 +375,13 @@ mod tests {
 
     fn assert_send<T: Send>() {}
 
+    fn routed_to(items: &Arc<Mutex<ItemRegistry>>, current: Option<TrackId>) -> Router {
+        let observer: Arc<dyn PlayerObserver> = Arc::new(CollectingPlayerObserver::default());
+        let router = Router::new(observer, Arc::clone(items));
+        *router.current.lock() = current;
+        router
+    }
+
     fn item_config() -> FfiItemConfig {
         FfiItemConfig::for_test("https://example.com/quiet-intro.flac")
     }
@@ -482,9 +404,7 @@ mod tests {
         let player_observer: Arc<dyn PlayerObserver> =
             Arc::new(CollectingPlayerObserver::default());
 
-        EventBridge::dispatch_queue_event(
-            &player_observer,
-            &items,
+        Router::new(Arc::clone(&player_observer), Arc::clone(&items)).dispatch_queue_event(
             &QueueEvent::TrackStatusChanged {
                 id: item.track_id(),
                 status: TrackStatus::Failed("storage refused".to_string()),
@@ -520,9 +440,7 @@ mod tests {
 
         scoped.publish(event);
         item_observer_impl.wait_for_events(2);
-        EventBridge::dispatch_queue_event(
-            &player_observer,
-            &items,
+        Router::new(Arc::clone(&player_observer), Arc::clone(&items)).dispatch_queue_event(
             &QueueEvent::TrackStatusChanged {
                 id: item.track_id(),
                 status: TrackStatus::Failed("queue load failed".to_string()),
@@ -599,9 +517,7 @@ mod tests {
         let player_observer: Arc<dyn PlayerObserver> =
             Arc::new(CollectingPlayerObserver::default());
 
-        EventBridge::dispatch_queue_event(
-            &player_observer,
-            &items,
+        Router::new(Arc::clone(&player_observer), Arc::clone(&items)).dispatch_queue_event(
             &QueueEvent::TrackStatusChanged {
                 id: item.track_id(),
                 status: TrackStatus::Failed("decoder refused the stream".to_string()),
@@ -626,19 +542,15 @@ mod tests {
         let (current, current_observer) = register_observed_item(&items);
         assert_ne!(delayed.track_id(), current.track_id());
 
-        let last_current = Mutex::new(Some(current.track_id()));
+        let router = routed_to(&items, Some(current.track_id()));
         let shared_src: Arc<str> = Arc::from("https://example.com/quiet-intro.flac");
-        EventBridge::route_player_event_to_item(
-            &items,
-            &last_current,
-            &PlayerEvent::ItemDidPlayToEnd {
-                item: ItemRole::Background(TrackRef::new(
-                    delayed.track_id(),
-                    SlotId::new(1),
-                    Arc::clone(&shared_src),
-                )),
-            },
-        );
+        router.route_player_event_to_item(&PlayerEvent::ItemDidPlayToEnd {
+            item: ItemRole::Background(TrackRef::new(
+                delayed.track_id(),
+                SlotId::new(1),
+                Arc::clone(&shared_src),
+            )),
+        });
 
         assert!(matches!(
             delayed_observer.take_events().as_slice(),
@@ -649,18 +561,14 @@ mod tests {
             "a delayed background EOF must not be delivered to the current item"
         );
 
-        EventBridge::route_player_event_to_item(
-            &items,
-            &last_current,
-            &PlayerEvent::ItemDidFail {
-                item: ItemRole::Outgoing(TrackRef::new(
-                    delayed.track_id(),
-                    SlotId::new(0),
-                    shared_src,
-                )),
-                fault: PlaybackFault::Decode(DecodeErrorKind::InvalidData),
-            },
-        );
+        router.route_player_event_to_item(&PlayerEvent::ItemDidFail {
+            item: ItemRole::Outgoing(TrackRef::new(
+                delayed.track_id(),
+                SlotId::new(0),
+                shared_src,
+            )),
+            fault: PlaybackFault::Decode(DecodeErrorKind::InvalidData),
+        });
 
         assert!(matches!(
             delayed_observer.take_events().as_slice(),
@@ -674,7 +582,7 @@ mod tests {
         ));
         assert_eq!(
             delayed.state().error.as_deref(),
-            Some(EventBridge::ITEM_DID_FAIL)
+            Some(Router::ITEM_DID_FAIL)
         );
         assert!(
             current_observer.take_events().is_empty(),
@@ -685,24 +593,17 @@ mod tests {
     #[kithara::test]
     fn a_current_item_event_updates_the_last_current_identity() {
         let items = Arc::new(Mutex::new(ItemRegistry::default()));
-        let observer: Arc<dyn PlayerObserver> = Arc::new(CollectingPlayerObserver::default());
-        let last_current = Mutex::new(None);
+        let router = routed_to(&items, None);
         let id = TrackId::from(11_u64);
 
-        EventBridge::dispatch(
-            &observer,
-            &items,
-            &last_current,
-            &QueueBusEvent::Player(PlayerEvent::CurrentItemChanged { item: Some(id) }),
-        );
-        assert_eq!(*last_current.lock(), Some(id));
-        EventBridge::dispatch(
-            &observer,
-            &items,
-            &last_current,
-            &QueueBusEvent::Queue(QueueEvent::CurrentTrackChanged { id: None }),
-        );
-        assert_eq!(*last_current.lock(), Some(id));
+        router.dispatch(&QueueBusEvent::Player(PlayerEvent::CurrentItemChanged {
+            item: Some(id),
+        }));
+        assert_eq!(*router.current.lock(), Some(id));
+        router.dispatch(&QueueBusEvent::Queue(QueueEvent::CurrentTrackChanged {
+            id: None,
+        }));
+        assert_eq!(*router.current.lock(), Some(id));
     }
 
     #[kithara::test]
@@ -710,16 +611,12 @@ mod tests {
         let items = Arc::new(Mutex::new(ItemRegistry::default()));
         let (_previous, previous_observer) = register_observed_item(&items);
         let (current, current_observer) = register_observed_item(&items);
-        let last_current = Mutex::new(Some(current.track_id()));
+        let router = routed_to(&items, Some(current.track_id()));
 
-        EventBridge::route_player_event_to_item(
-            &items,
-            &last_current,
-            &PlayerEvent::TimeControlStatusChanged {
-                status: TimeControlStatus::WaitingToPlay,
-                reason: None,
-            },
-        );
+        router.route_player_event_to_item(&PlayerEvent::TimeControlStatusChanged {
+            status: TimeControlStatus::WaitingToPlay,
+            reason: None,
+        });
 
         assert!(previous_observer.take_events().is_empty());
         assert!(matches!(
@@ -747,9 +644,10 @@ mod tests {
             status: TrackStatus::Failed("decoder refused the stream".to_string()),
         };
 
-        EventBridge::dispatch_queue_event(&player_observer, &items, &failed);
+        let router = Router::new(player_observer, items);
+        router.dispatch_queue_event(&failed);
         let _first_pair = item_observer_impl.take_events();
-        EventBridge::dispatch_queue_event(&player_observer, &items, &failed);
+        router.dispatch_queue_event(&failed);
 
         assert!(
             item_observer_impl.take_events().is_empty(),
@@ -764,7 +662,7 @@ mod tests {
     #[kithara::test]
     fn loaded_ranges_cover_playhead() {
         let item = AudioPlayerItem::new(item_config());
-        let ranges = EventBridge::loaded_ranges(4.0);
+        let ranges = Router::loaded_ranges(4.0);
         assert!(item.is_playable(0.917, ranges));
     }
 
@@ -772,14 +670,14 @@ mod tests {
     /// running a few seconds ahead of the playhead has produced.
     #[kithara::test]
     fn loaded_ranges_cover_the_cached_span() {
-        let ranges = EventBridge::loaded_ranges(120.0);
+        let ranges = Router::loaded_ranges(120.0);
         assert_eq!(ranges.len(), 1);
         assert!((ranges[0].duration_seconds - 120.0).abs() < f64::EPSILON);
     }
 
     #[kithara::test]
     fn loaded_ranges_empty_when_nothing_is_available() {
-        assert!(EventBridge::loaded_ranges(0.0).is_empty());
+        assert!(Router::loaded_ranges(0.0).is_empty());
     }
 
     #[kithara::test]
@@ -789,9 +687,7 @@ mod tests {
         let items = Arc::new(Mutex::new(ItemRegistry::default()));
         let item_id = TrackId::from(7_u64);
 
-        EventBridge::dispatch_queue_event(
-            &observer,
-            &items,
+        Router::new(Arc::clone(&observer), Arc::clone(&items)).dispatch_queue_event(
             &QueueEvent::CurrentTrackAdvance {
                 id: Some(item_id),
                 reason: AdvanceReason::UserNext,
@@ -820,9 +716,7 @@ mod tests {
         let observer: Arc<dyn PlayerObserver> = observer_impl.clone();
         let items = Arc::new(Mutex::new(ItemRegistry::default()));
 
-        EventBridge::dispatch_queue_event(
-            &observer,
-            &items,
+        Router::new(Arc::clone(&observer), Arc::clone(&items)).dispatch_queue_event(
             &QueueEvent::RepeatModeChanged {
                 mode: QueueRepeatMode::All,
             },
@@ -843,9 +737,7 @@ mod tests {
         let items = Arc::new(Mutex::new(ItemRegistry::default()));
         let item_id = TrackId::from(11_u64);
 
-        EventBridge::dispatch_queue_event(
-            &observer,
-            &items,
+        Router::new(Arc::clone(&observer), Arc::clone(&items)).dispatch_queue_event(
             &QueueEvent::TrackLoadFailed {
                 id: item_id,
                 reason: "network timeout".to_string(),
@@ -930,7 +822,7 @@ mod tests {
         let items = Arc::new(Mutex::new(ItemRegistry::default()));
 
         for (source, preserves_contract) in &cases {
-            EventBridge::dispatch_queue_event(&observer, &items, source);
+            Router::new(Arc::clone(&observer), Arc::clone(&items)).dispatch_queue_event(source);
             let events = observer_impl.take_events();
             let [event] = events.as_slice() else {
                 panic!("expected one forwarded event for {source:?}, received {events:?}");
@@ -1096,9 +988,10 @@ mod tests {
         let observer: Arc<dyn PlayerObserver> = Arc::new(CollectingPlayerObserver::default());
         let thread = EventBridge::spawn_time_thread(
             queue.clone(),
-            observer,
-            Arc::new(Mutex::new(ItemRegistry::default())),
-            Arc::new(Mutex::new(None)),
+            Arc::new(Router::new(
+                observer,
+                Arc::new(Mutex::new(ItemRegistry::default())),
+            )),
             cancel.clone(),
         );
 

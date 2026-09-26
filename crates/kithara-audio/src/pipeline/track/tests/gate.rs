@@ -35,7 +35,7 @@ async fn shared_with_phase(
 /// source: dispatch budgets cover only ranges the source knows a reader
 /// waits on (`Source::wait_range`), so the owed window never reaches the
 /// polled segments and the fetch queue head sits one past the cap forever
-/// (the phase_continuity livelock). The filing itself runs off the produce
+/// (the `phase_continuity` livelock). The filing itself runs off the produce
 /// core: `Source::wait_range` takes source-side locks (`DemandState` on
 /// file, reader-runtime state on HLS), so the poll arms a wait-free cell
 /// and the scheduler shell delivers it.
@@ -85,7 +85,7 @@ async fn repeated_parked_polls_coalesce_into_one_probe() {
 /// The real off-RT holder is a construction reader parked inside
 /// `Stream::read` → `Source::wait_range(range, None)` with the mutex held;
 /// a gate poll that touched that mutex would block the forbid-blocking
-/// produce core behind the park (RTSan: `sched_yield` in `parking_lot`'s
+/// produce core behind the park (`RTSan`: `sched_yield` in `parking_lot`'s
 /// contended acquire). The regression mode is this test hanging on the
 /// poll until the harness watchdog fires.
 #[kithara::test(tokio)]

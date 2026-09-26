@@ -1090,12 +1090,12 @@ mod test_eof_drain_codec {
         ) -> DecodeResult<u32> {
             let frames = if bytes.is_empty() {
                 self.empty_decode_calls.fetch_add(1, Ordering::SeqCst);
-                self.tail_pending
-                    .then(|| {
-                        self.tail_pending = false;
-                        self.tail_frames
-                    })
-                    .unwrap_or(0)
+                if self.tail_pending {
+                    self.tail_pending = false;
+                    self.tail_frames
+                } else {
+                    0
+                }
             } else {
                 self.frames_per_call
             };

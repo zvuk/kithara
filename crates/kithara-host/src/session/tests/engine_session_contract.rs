@@ -1,5 +1,5 @@
 //! The engine lifecycle contract is the same whatever session drives the graph.
-//! The caller supplies an EngineImpl; each fixture decides which session and
+//! The caller supplies an `EngineImpl`; each fixture decides which session and
 //! backend it uses, and therefore which suite owns the test.
 use kithara_play::{EngineImpl, PlayError};
 use kithara_test_utils::bufpool::TestPools;

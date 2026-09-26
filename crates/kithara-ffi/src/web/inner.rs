@@ -438,7 +438,7 @@ impl WasmInner {
     }
 
     pub(crate) fn setup_hls_aes_with_rule(&self, rule: FfiKeyRule) {
-        crate::web::key_processor_bridge::install_main_processor(Arc::clone(&rule.processor));
+        crate::web::keys::install_main_processor(Arc::clone(&rule.processor));
         let salt = rule.salt.unwrap_or_else(crate::web::interop::generate_salt);
         self.send(WorkerCmd::SetupHlsAes {
             salt,

@@ -366,7 +366,7 @@ b",
 mod retention_tests {
     use super::*;
 
-    /// MinIO applies the earliest matching expiry, so an unfiltered rule would
+    /// `MinIO` applies the earliest matching expiry, so an unfiltered rule would
     /// silently govern the snapshot prefixes too - which is what expired a
     /// content-keyed source layer after a day and would have made a
     /// multi-gigabyte object a daily republish.

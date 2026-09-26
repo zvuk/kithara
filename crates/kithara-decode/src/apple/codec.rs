@@ -358,7 +358,7 @@ impl FrameCodec for AppleCodec {
 
     fn prepare_output(&self, out: &mut SampleBuffer) -> DecodeResult<()> {
         let input_frames = if let Some(packets) =
-            super::audio_file_demuxer::AppleAudioFileDemuxer::CBR_BATCH_TARGET_BYTES
+            super::demuxer::AppleAudioFileDemuxer::CBR_BATCH_TARGET_BYTES
                 .checked_div(self.input_bytes_per_packet)
         {
             packets
@@ -877,7 +877,7 @@ mod output_rate_tests {
 
     fn aac_lc_track(aac_init: &[u8]) -> TrackInfo {
         let init_bytes = aac_init;
-        let init = parse_init(&init_bytes, &pools()).expect("BUG: parse AAC init");
+        let init = parse_init(init_bytes, &pools()).expect("BUG: parse AAC init");
         let extra_data = init.config.as_ref().to_vec();
         TrackInfo {
             extra_data,

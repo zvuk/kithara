@@ -229,7 +229,7 @@ impl AacDecoder {
         self.delay_remaining = info.outputDelay;
         self.metadata_validated = true;
         tracing::debug!(
-            target: "kithara_decode::symphonia::aac_fdk",
+            target: "kithara_decode::symphonia::fdk",
             core_rate,
             output_rate,
             channels,
@@ -320,7 +320,7 @@ impl AudioDecoder for AacDecoder {
             Ok(()) => {}
             Err(e) if e == DecoderError::TRANSPORT_SYNC_ERROR => {
                 tracing::warn!(
-                    target: "kithara_decode::symphonia::aac_fdk",
+                    target: "kithara_decode::symphonia::fdk",
                     "aac transport sync error: {}",
                     e.message()
                 );

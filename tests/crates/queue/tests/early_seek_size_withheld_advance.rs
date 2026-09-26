@@ -298,13 +298,17 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
         .run(&queue, move |q| q.select(id0, Transition::None))
         .await
         .expect("select track 0");
-    harness.run(&queue, move |q| q.play()).await;
+    harness
+        .run(&queue, kithara::queue::QueueControl::play)
+        .await;
     assert_eq!(queue.current_index(), Some(0), "starts on track 0");
 
     // Warm up: render some blocks so segment 0 decodes and the track is
     // genuinely playing before the seek arrives.
     for _ in 0..WARMUP_BLOCKS {
-        let _ = harness.run(&queue, |q| q.tick()).await;
+        let _ = harness
+            .run(&queue, kithara::queue::QueueControl::tick)
+            .await;
         let _ = harness.render(BLOCK_FRAMES).await;
     }
     assert_eq!(
@@ -323,7 +327,9 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
     let mut trigger = Trigger::NoTerminal;
     let mut outcome = Outcome::HeldOnTrack;
     for _ in 0..OBSERVE_BLOCKS {
-        let _ = harness.run(&queue, |q| q.tick()).await;
+        let _ = harness
+            .run(&queue, kithara::queue::QueueControl::tick)
+            .await;
         let _ = harness.render(BLOCK_FRAMES).await;
         while let Ok(ev) = rx.try_recv().map(|env| env.event) {
             if let TestEvent::Player(pe) = ev {
@@ -380,7 +386,9 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
             // *in-withheld-window* contract only.)
         }
         Outcome::AutoAdvanced { new_index, trigger } => {
-            harness.run(&queue, |q| q.clear()).await;
+            harness
+                .run(&queue, kithara::queue::QueueControl::clear)
+                .await;
             drop(queue);
             drop(server);
             panic!(
@@ -394,7 +402,9 @@ async fn run_case(gated_source: (PackagedTestServer, SegmentGateHandle), mode: G
         }
     }
 
-    harness.run(&queue, |q| q.clear()).await;
+    harness
+        .run(&queue, kithara::queue::QueueControl::clear)
+        .await;
     drop(queue);
     drop(server);
     harness.close().await;

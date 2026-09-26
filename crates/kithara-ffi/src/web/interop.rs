@@ -5,17 +5,7 @@ use num_traits::cast;
 use wasm_bindgen::prelude::*;
 use web_sys::BroadcastChannel;
 
-fn set_str(obj: &Object, key: &str, val: &str) {
-    let _ = Reflect::set(obj, &JsValue::from_str(key), &JsValue::from_str(val));
-}
-
-fn set_f64(obj: &Object, key: &str, val: f64) {
-    let _ = Reflect::set(obj, &JsValue::from_str(key), &JsValue::from_f64(val));
-}
-
-fn set_bool(obj: &Object, key: &str, val: bool) {
-    let _ = Reflect::set(obj, &JsValue::from_str(key), &JsValue::from_bool(val));
-}
+use crate::web::observer::marshal::{set_bool, set_f64, set_str};
 
 pub(crate) fn next_request_id() -> u32 {
     static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);

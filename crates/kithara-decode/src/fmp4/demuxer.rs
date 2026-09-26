@@ -5,7 +5,7 @@ use kithara_test_utils::kithara;
 
 use super::{
     parsing::{Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
-    source_io::{FillStatus, LiveRange, SegmentReadState, fill_segment_buffer},
+    reader::{FillStatus, LiveRange, SegmentReadState, fill_segment_buffer},
 };
 use crate::{
     codec::{CodecPriming, access_unit_frames, seek_warmup_access_units},

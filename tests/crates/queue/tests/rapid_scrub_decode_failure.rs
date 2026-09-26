@@ -241,7 +241,7 @@ impl Harness {
             .run(move |q| q.select(id, Transition::None))
             .await
             .expect("select");
-        queue.run(move |q| q.play()).await;
+        queue.run(kithara::queue::QueueControl::play).await;
 
         Self {
             queue,

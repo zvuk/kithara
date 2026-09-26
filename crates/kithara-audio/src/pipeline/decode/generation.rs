@@ -16,6 +16,7 @@ use kithara_test_utils::kithara;
 use tracing::warn;
 
 use crate::pipeline::{
+    decode::core::panic_message,
     gapless::GaplessStage,
     seek::{ResumeState, SeekContext},
 };
@@ -426,16 +427,6 @@ fn stage_failure(chunk: AudioChunk, detail: &'static str) -> StageFailure {
     }
 }
 
-fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
-    match payload.downcast::<String>() {
-        Ok(message) => *message,
-        Err(payload) => payload.downcast::<&'static str>().map_or_else(
-            |_| "unknown panic payload".to_string(),
-            |message| (*message).to_string(),
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, num::NonZeroU32};
@@ -733,7 +724,7 @@ mod tests {
         let slots = old_capacity.checked_add(1).expect("test slot limit");
         let join_frames = u64::try_from(slots - 1).expect("test join frame count");
 
-        assert!(generation.staged.len() > 0);
+        assert!(!generation.staged.is_empty());
         assert!(generation.staged.len() < old_capacity);
         assert!(old_capacity < slots);
 

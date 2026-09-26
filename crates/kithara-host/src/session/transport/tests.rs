@@ -146,7 +146,7 @@ fn process_node(
         outputs: &mut outputs,
     };
     with_events(first, second, |events| {
-        processor.events(info, events, extra)
+        processor.events(info, events, extra);
     });
     let status = processor.process(info, buffers, extra);
     assert_eq!(status, ProcessStatus::ClearAllOutputs);

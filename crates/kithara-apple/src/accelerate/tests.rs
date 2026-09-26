@@ -3,7 +3,7 @@ use kithara_test_fixtures::unit_fixtures::{
 };
 use kithara_test_utils::kithara;
 
-use super::{BiquadFilter, clear_f32, copy_f32, linear_interpolate_f32, ramp_f32};
+use super::{clear_f32, copy_f32, linear_interpolate_f32, ramp_f32};
 
 #[kithara::test(native, flash(false))]
 fn copy_f32_matches_slice_copy(accelerate_copy: Vec<f32>) {
@@ -61,17 +61,4 @@ fn quadratic_interpolation_matches_scalar_positions(accelerate_wave: Vec<f32>) {
     for (actual, expected) in target.iter().zip(expected) {
         assert!((actual - expected).abs() < 0.000_001);
     }
-}
-
-#[kithara::test(native, flash(false))]
-fn biquad_low_pass_processes_requested_frames(accelerate_wave: Vec<f32>) {
-    let Some(mut filter) =
-        BiquadFilter::low_pass(44_100.0, 12_000.0, std::f64::consts::FRAC_1_SQRT_2)
-    else {
-        panic!("valid low pass filter");
-    };
-    let source = accelerate_wave;
-    let mut target = [0.0; 5];
-    assert_eq!(filter.process(&source, &mut target), source.len());
-    assert!(target.iter().all(|sample| f32::is_finite(*sample)));
 }

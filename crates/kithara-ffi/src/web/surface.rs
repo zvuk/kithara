@@ -505,7 +505,7 @@ impl AudioPlayer {
     #[wasm_bindgen(js_name = tick)]
     pub fn tick_js(&self) {
         crate::web::bridge::tick_and_poll();
-        crate::web::key_processor_bridge::pump();
+        crate::web::keys::pump();
     }
 
     /// Cap ABR variant selection by per-network peak bitrate (bits/sec).

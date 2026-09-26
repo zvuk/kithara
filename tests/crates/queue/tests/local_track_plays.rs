@@ -543,7 +543,7 @@ async fn local_queue_playlist_behavior(
         (during_pause - before_pause).abs() < 0.5,
         "position drifted during pause: {before_pause:.2} → {during_pause:.2}"
     );
-    queue.run(move |q| q.play()).await;
+    queue.run(kithara::queue::QueueControl::play).await;
     let after_resume = wait_for_position_event(
         &mut rx,
         &queue,

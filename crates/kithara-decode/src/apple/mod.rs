@@ -6,16 +6,16 @@
 //! - Standalone MP3: frames parsed by the `kithara-mpa` demuxer, decoded by
 //!   [`AppleCodec`].
 //! - Standalone WAV / FLAC / AAC / ALAC: container parsed via
-//!   `AudioFileServices` ([`audio_file::AppleAudioFile`]), frames decoded by
+//!   `AudioFileServices` ([`file::AppleAudioFile`]), frames decoded by
 //!   [`AppleCodec`].
 
-pub(crate) mod audio_file;
-pub(crate) mod audio_file_demuxer;
 pub(crate) mod codec;
 pub(crate) mod consts;
 pub(crate) mod converter;
+pub(crate) mod demuxer;
+pub(crate) mod file;
 pub(crate) mod flac;
 
-pub(crate) use audio_file_demuxer::{AppleAudioFileDemuxer, SourceOpenMode};
 pub(crate) use codec::AppleCodec;
 pub(crate) use converter::embedded_target_output_rate;
+pub(crate) use demuxer::{AppleAudioFileDemuxer, SourceOpenMode};

@@ -61,13 +61,13 @@ fn offering_a_decoded_range_neither_blocks_nor_allocates(quarter: Vec<f32>) {
     let foreign = spec(NonZeroU32::new(48_000).expect("test rate is non-zero"));
 
     assert_eq!(
-        offer_under_rt(&mut producer, &pcm, spec(rate), 0),
+        offer_under_rt(&mut producer, pcm, spec(rate), 0),
         Ok(()),
         "the heaviest path: a range on the pass axis is taken, one downmix and one \
          copy into the transport the pass allocated when it opened"
     );
     assert_eq!(
-        offer_under_rt(&mut producer, &pcm, foreign, 0),
+        offer_under_rt(&mut producer, pcm, foreign, 0),
         Err(AudioObserveError::UnsupportedSampleRate {
             expected: rate,
             actual: foreign.sample_rate,

@@ -145,11 +145,11 @@ async fn observe_playback(
                     stats.progress_events += 1;
                     last_progress = now;
                 }
-                TestEvent::Player(PlayerEvent::RateChanged { rate }) => {
-                    if (rate - last_rate).abs() > f32::EPSILON {
-                        stats.effective_rate_changes += 1;
-                        last_rate = rate;
-                    }
+                TestEvent::Player(PlayerEvent::RateChanged { rate })
+                    if (rate - last_rate).abs() > f32::EPSILON =>
+                {
+                    stats.effective_rate_changes += 1;
+                    last_rate = rate;
                 }
                 _ => {}
             },
@@ -468,7 +468,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(
         .run(move |q| q.select(hls_id, Transition::None))
         .await
         .expect("loaded HLS track must select");
-    queue.run(move |q| q.play()).await;
+    queue.run(kithara::queue::QueueControl::play).await;
 
     let _ = wait_for_position_event(&mut rx, &queue, 0.75, Duration::from_secs(15))
         .await

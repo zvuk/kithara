@@ -4,9 +4,9 @@
 
 mod backend;
 pub(crate) mod codec;
-pub(crate) mod media_extractor;
-pub(crate) mod media_extractor_demuxer;
+pub(crate) mod demuxer;
+pub(crate) mod extractor;
 
 pub(crate) use backend::output_spec;
 pub(crate) use codec::AndroidCodec;
-pub(crate) use media_extractor_demuxer::AndroidMediaExtractorDemuxer;
+pub(crate) use demuxer::AndroidMediaExtractorDemuxer;

@@ -12,6 +12,9 @@ pub mod salt;
 pub(crate) mod session;
 mod storage;
 
-pub(crate) use bridge::{event_bridge, item_bridge};
+pub(crate) use bridge::{
+    event::{EventBridge, Router},
+    item::{ItemEventBridge, ItemTracker},
+};
 pub(crate) use inner::Inner;
 pub(crate) use runtime::FFI_RUNTIME;

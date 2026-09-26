@@ -28,8 +28,7 @@ build produces it again: no format version bump and no `cache-version` change.
 Every `.analysis` asset is keyed this way by `analysis_format`, one analysis
 file written with the current `kithara-analysis`.
 
-With the `rhythm` family on, every whole audio track (`content_type =
-"audio/*"`) carries a build-time analysis beside it, `analysis_{accessor}`: the
+With the `rhythm` family on, every whole audio track (`content_type = "audio/*"`) carries a build-time analysis beside it, `analysis_{accessor}`: the
 production beat pass over the decoded track. Its key also carries the beat
 pass's cache tag (`analysed_format`), so a new detector or grid re-analyses
 every track instead of serving an older grid. Audio bytes that are no whole
@@ -114,7 +113,6 @@ use `#[future(awt)]` to receive those resources after preparation.
 - `store::read_entry` / `store::write_entry` — a hit-or-miss read and an atomic
   write; an empty file counts as a miss.
 - `store::lock_entry` — the exclusive producer lock for one entry.
-
 - `signal::Wave` — the waveform vocabulary.
 - `signal::Pcm` — interleaved 16-bit PCM in memory.
 - `signal::wav` / `signal::header` — the RIFF writer.

@@ -36,9 +36,9 @@ fn player_timestretch() -> Arc<StretchControls> {
 }
 
 use crate::{
+    EventBridge, Router,
     asset::FfiAssetStore,
     config::FfiPlayerConfig,
-    event_bridge::EventBridge,
     item::AudioPlayerItem,
     observer::{AUTH_TOKEN_HEADER, FfiKeyProcessor, PlayerObserver, SALT_HEADER, SeekCallback},
     pools::{FfiQueue, FfiQueueControl, FfiResourceConfig, FfiTrackSource, FfiWorker},
@@ -515,9 +515,8 @@ impl NativeInner {
 
         let bridge = EventBridge::spawn(
             rx,
-            Arc::clone(&observer),
+            Router::new(Arc::clone(&observer), Arc::clone(&self.items)),
             self.queue.clone(),
-            &self.items,
             CancelToken::never(),
         );
 

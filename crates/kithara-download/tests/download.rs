@@ -1545,7 +1545,7 @@ async fn run_one_batch(dl: &Downloader, gate: &Arc<CompletionGate>, batch: Vec<F
 /// when the reader then parks on its bytes, the live demand probe must
 /// walk it past urgent work stamped after it — otherwise the audible
 /// track starves behind an entire construction window (the
-/// UrgentDownSwitch hang: v0's demanded bytes queued behind all of v1).
+/// `UrgentDownSwitch` hang: v0's demanded bytes queued behind all of v1).
 #[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn a_demanded_prefetch_overtakes_later_stamped_urgent_work() {
     let (dl, url) = one_slot_downloader().await;
