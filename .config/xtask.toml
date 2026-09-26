@@ -1213,11 +1213,12 @@ default_flash = true
 # The detector these tests were failing under. Declared here so two schedulers
 # cannot run the same lane under different rules.
 default_no_block = true
-# `broadcast::state` runs in the gate against stand-in packagers; only
-# `broadcast::engine` needs the feature.
+# `broadcast::state` runs in the gate against stand-in packagers; the live
+# packager in `broadcast::engine` and the on-air shutdown in `engine::owner`
+# need the feature.
 suffix_args = [
   "-E",
-  "binary(broadcast) + (package(kithara-app) & test(/^broadcast::engine::/))",
+  "binary(broadcast) + (package(kithara-app) & (test(/^broadcast::engine::/) | test(/^engine::owner::/)))",
 ]
 
 # Integration regression tests are red by design and stay outside the main gate.
@@ -3079,10 +3080,6 @@ demo_activity = "com.kithara.example.MainActivity"
 api_level = "26"
 boot_wait_attempts = 120
 boot_poll_interval_secs = 1
-
-[ext.wasm]
-# wasm-bindgen JS artifact patched by the trunk post-build hook.
-js_artifact = "kithara-ffi.js"
 
 [quality]
 # Trait directory whose every `pub trait` must carry `#[unimock]`.

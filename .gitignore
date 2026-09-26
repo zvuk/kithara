@@ -75,6 +75,7 @@ ui-*-perf.txt
 log*.txt
 crates/kithara-wasm/dist
 crates/kithara-ffi/dist
+crates/kithara-app/dist
 
 # Local Claude artifacts
 /artifacts/

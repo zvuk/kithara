@@ -5,4 +5,4 @@ mod state;
 #[cfg_attr(not(feature = "broadcast"), path = "off.rs")]
 mod engine;
 
-pub(crate) use bound::{BroadcastStop, Broadcaster};
+pub(crate) use bound::Broadcaster;
