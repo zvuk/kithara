@@ -34,8 +34,16 @@ default = ["uniffi", "symphonia", "standard", "client-reqwest", "tls-rustls"]
 uniffi = ["dep:uniffi"]
 uniffi-bindgen-cli = ["uniffi", "uniffi/cli", "uniffi/cargo-metadata"]
 standard = ["stretch-signalsmith"]
-apple = ["kithara/apple-fused-src", "kithara/apple-net", "stretch-signalsmith"]
-android = ["kithara/android", "stretch-signalsmith"]
+# A device reads analysis artifacts and talks to the analysis server, so the
+# analysis contracts ship; no beat detector (`beat-dsp`, `beat-nn`) runs there.
+apple = [
+    "kithara/apple-fused-src",
+    "kithara/apple-net",
+    "stretch-signalsmith",
+    "stretch-glide",
+    "analysis-beat",
+]
+android = ["kithara/android", "stretch-signalsmith", "stretch-glide", "analysis-beat"]
 analysis = ["analysis-waveform", "beat-dsp"]
 analysis-beat = ["kithara/analysis-beat"]
 analysis-waveform = ["kithara/analysis-waveform"]
