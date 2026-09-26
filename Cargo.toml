@@ -13,6 +13,7 @@ members = [
     "crates/kithara-blob",
     "crates/kithara-broadcast",
     "crates/kithara-bufpool",
+    "crates/kithara-config",
     "crates/kithara-decode",
     "crates/kithara-derive",
     "crates/kithara-devtools",
@@ -44,6 +45,11 @@ members = [
     "crates/kithara-test-macros",
     "crates/kithara-test-utils",
     "crates/kithara-ui",
+    "crates/kithara-ui-capture",
+    "crates/kithara-ui-draw",
+    "crates/kithara-ui-input",
+    "crates/kithara-ui-lottie",
+    "crates/kithara-ui-shaping",
     "crates/kithara-warp",
     "crates/kithara-waveform",
     "crates/kithara-worker",
@@ -88,6 +94,7 @@ default-members = [
     "crates/kithara-broadcast",
     "crates/kithara-blob",
     "crates/kithara-bufpool",
+    "crates/kithara-config",
     "crates/kithara-decode",
     "crates/kithara-drm",
     "crates/kithara-effects",
@@ -116,6 +123,11 @@ default-members = [
     "crates/kithara-test-macros",
     "crates/kithara-test-utils",
     "crates/kithara-ui",
+    "crates/kithara-ui-capture",
+    "crates/kithara-ui-draw",
+    "crates/kithara-ui-input",
+    "crates/kithara-ui-lottie",
+    "crates/kithara-ui-shaping",
     "crates/kithara-warp",
     "crates/kithara-waveform",
     "crates/kithara-worker",
@@ -278,6 +290,7 @@ kithara-beat = { path = "crates/kithara-beat", version = "0.0.1-alpha5" }
 kithara-blob = { path = "crates/kithara-blob", version = "0.0.1-alpha5" }
 kithara-broadcast = { path = "crates/kithara-broadcast", version = "0.0.1-alpha5", default-features = false }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha5" }
+kithara-config = { path = "crates/kithara-config", version = "0.0.1-alpha5" }
 kithara-core-test-fixtures = { path = "tests/crates/core" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha5", default-features = false }
 kithara-derive = { path = "crates/kithara-derive", version = "0.0.1-alpha5", default-features = false }
@@ -312,6 +325,11 @@ kithara-test-fixtures = { path = "crates/kithara-test-fixtures", version = "0.0.
 kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha5" }
 kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha5", default-features = false }
 kithara-ui = { path = "crates/kithara-ui", version = "0.0.1-alpha5", default-features = false }
+kithara-ui-capture = { path = "crates/kithara-ui-capture", version = "0.0.1-alpha5" }
+kithara-ui-draw = { path = "crates/kithara-ui-draw", version = "0.0.1-alpha5", default-features = false }
+kithara-ui-input = { path = "crates/kithara-ui-input", version = "0.0.1-alpha5" }
+kithara-ui-lottie = { path = "crates/kithara-ui-lottie", version = "0.0.1-alpha5" }
+kithara-ui-shaping = { path = "crates/kithara-ui-shaping", version = "0.0.1-alpha5", default-features = false }
 kithara-warp = { path = "crates/kithara-warp", version = "0.0.1-alpha5", default-features = false }
 kithara-waveform = { path = "crates/kithara-waveform", version = "0.0.1-alpha5", default-features = false }
 kithara-worker = { path = "crates/kithara-worker", version = "0.0.1-alpha5" }

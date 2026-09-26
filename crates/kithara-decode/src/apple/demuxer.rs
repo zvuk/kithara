@@ -28,13 +28,13 @@ fn sample_rate_from_asbd(rate: f64) -> Option<u32> {
 }
 
 /// [`Demuxer`] over [`AppleAudioFile`] for standalone (non-fMP4)
-/// container formats. Currently wires WAV/PCM, MP3, ALAC-in-M4A and
-/// ALAC-in-CAF; extends via additional file-type hints.
+/// container formats. Currently wires WAV/PCM, FLAC, AAC (M4A/ADTS) and
+/// ALAC (M4A/CAF); extends via additional file-type hints.
 ///
 /// The [`AppleAudioFile`] packet descriptor (a `#[repr(C)]` POD) is
 /// serialized into `last_packet_desc_blob` and exposed to the codec
 /// layer through `Frame::packet_desc`. CBR codecs ignore it; VBR
-/// codecs (MP3, ALAC) reinterpret the bytes back into
+/// codecs reinterpret the bytes back into
 /// [`AudioStreamPacketDescription`].
 pub(crate) struct AppleAudioFileDemuxer {
     file: AppleAudioFile,
@@ -44,12 +44,12 @@ pub(crate) struct AppleAudioFileDemuxer {
     /// cursor tracks where the decoder resumes: a size-less open is the one
     /// case where `AudioFile` refuses to map packet→byte itself
     /// (`kAudioFileInvalidPacketOffsetError`), and without an answer a
-    /// size-less MP3 seek leaves the stream position stale and the reopen read
+    /// size-less seek leaves the stream position stale and the reopen read
     /// mis-classifies as EOF. `None` / `0` when the total is unknown.
     byte_len: Option<Arc<AtomicU64>>,
     /// `Some(packets_per_call)` for CBR (`LinearPCM`) — every `next_frame`
     /// issues one batched `audio_file_read_packet_data` for that many
-    /// packets. `None` for VBR (MP3, ALAC) — one packet per call so
+    /// packets. `None` for VBR: one packet per call so
     /// each `Frame` carries its own `AudioStreamPacketDescription`.
     cbr_batch_packets: Option<u32>,
     prepared: Option<PreparedPacket>,
@@ -110,7 +110,6 @@ impl AppleAudioFileDemuxer {
     const fn file_type_id(codec: AudioCodec, container: ContainerFormat) -> Option<u32> {
         Some(match (codec, container) {
             (AudioCodec::Pcm, ContainerFormat::Wav) => Consts::FILE_WAVE_TYPE,
-            (AudioCodec::Mp3, ContainerFormat::MpegAudio) => Consts::FILE_MP3_TYPE,
             (AudioCodec::Flac, ContainerFormat::Flac) => Consts::FILE_FLAC_TYPE,
             (AudioCodec::Alac, ContainerFormat::Mp4) => Consts::FILE_M4A_TYPE,
             (AudioCodec::Alac, ContainerFormat::Caf) => Consts::FILE_CAF_TYPE,
@@ -125,15 +124,13 @@ impl AppleAudioFileDemuxer {
         })
     }
 
-    /// Streaming opens skip the packet-count scan MP3 and FLAC would need, taking duration and
-    /// buffer size from header metadata instead; FLAC also needs the real file size for correct EOF
-    /// and seek behavior.
+    /// A streaming FLAC open skips the packet-count scan, taking duration and buffer size from
+    /// STREAMINFO instead, and keeps the real file size for correct EOF and seek behavior.
     fn open<S>(
         source: BoxedSource,
         hint: Option<u32>,
         codec: AudioCodec,
         open_mode: SourceOpenMode,
-        duration_hint: Option<Duration>,
         pools: &PoolRegion<S>,
     ) -> DecodeResult<Self>
     where
@@ -142,9 +139,6 @@ impl AppleAudioFileDemuxer {
         let file = match (open_mode, codec) {
             (SourceOpenMode::Streaming, AudioCodec::Flac) => {
                 AppleAudioFile::open_sized_streaming(source, hint)?
-            }
-            (SourceOpenMode::Streaming, AudioCodec::Mp3) => {
-                AppleAudioFile::open_streaming(source, hint, None)?
             }
             _ => AppleAudioFile::open(source, hint)?,
         };
@@ -191,8 +185,7 @@ impl AppleAudioFileDemuxer {
                 spec.duration_for(frames)
                     .unwrap_or(Duration::from_nanos(u64::MAX))
             })
-            .or(flac_duration)
-            .or(duration_hint);
+            .or(flac_duration);
 
         let track_info = TrackInfo {
             codec,
@@ -244,17 +237,9 @@ impl AppleAudioFileDemuxer {
         codec: AudioCodec,
         container: Option<ContainerFormat>,
         open_mode: SourceOpenMode,
-        duration_hint: Option<Duration>,
     ) -> DecodeResult<Self> {
         let pools = crate::test_pools::pools();
-        Self::open_for_with_mode_and_pool(
-            source,
-            codec,
-            container,
-            open_mode,
-            duration_hint,
-            &pools,
-        )
+        Self::open_for_with_mode_and_pool(source, codec, container, open_mode, &pools)
     }
 
     pub(crate) fn open_for_with_mode_and_pool<S>(
@@ -262,7 +247,6 @@ impl AppleAudioFileDemuxer {
         codec: AudioCodec,
         container: Option<ContainerFormat>,
         open_mode: SourceOpenMode,
-        duration_hint: Option<Duration>,
         pools: &PoolRegion<S>,
     ) -> DecodeResult<Self>
     where
@@ -271,7 +255,7 @@ impl AppleAudioFileDemuxer {
         let hint = container
             .and_then(|c| Self::file_type_id(codec, c))
             .ok_or(DecodeError::UnsupportedCodec { codec })?;
-        Self::open(source, Some(hint), codec, open_mode, duration_hint, pools)
+        Self::open(source, Some(hint), codec, open_mode, pools)
     }
 
     /// Attach the shared live byte-length handle so a size-less seek can
@@ -282,8 +266,8 @@ impl AppleAudioFileDemuxer {
     }
 
     /// Inject encoder priming/padding metadata probed by the factory
-    /// layer (e.g. Xing/Info+LAME for MP3, `iTunSMPB`/`elst` for AAC).
-    /// `AudioFileServices` does not expose Xing/LAME or MP4 edit lists,
+    /// layer (e.g. `iTunSMPB`/`elst` for AAC).
+    /// `AudioFileServices` does not expose MP4 edit lists,
     /// so the factory probes the source separately and pipes the
     /// captured trim counts through here.
     pub(crate) const fn set_gapless(&mut self, gapless: Option<GaplessInfo>) {
@@ -335,8 +319,8 @@ impl Demuxer for AppleAudioFileDemuxer {
     }
 
     /// Apple's own packet-to-byte mapping is preferred so `landed_byte` matches the offset its
-    /// packet read seeks to; a size-less open rejects it, so the streamed MP3 path falls back to a
-    /// linear estimate.
+    /// packet read seeks to; a size-less open rejects it, so that open falls back to a linear
+    /// estimate.
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
         self.prepared = None;
         let spec = self.audio_spec()?;
@@ -493,26 +477,20 @@ impl AppleAudioFileDemuxer {
 mod tests {
     use std::{
         io::{self, Cursor, Error, ErrorKind, Read, Seek, SeekFrom},
-        sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
     use kithara_platform::sync::Arc;
     use kithara_stream::{
         AudioCodec, ContainerFormat, NotReadyCause, PendingReason, SourcePhase, StreamPending,
     };
-    use kithara_test_fixtures::{
-        fixtures::{tone_mp3, tone_wav},
-        unit_fixtures::flac_saw,
-    };
+    use kithara_test_fixtures::{fixtures::tone_wav, unit_fixtures::flac_saw};
     use kithara_test_utils::kithara;
 
     use super::{AppleAudioFileDemuxer, Duration, SourceOpenMode};
     use crate::{
-        apple::codec::AppleCodec,
         codec::CodecPriming,
-        composed::{ComposedDecoder, DecoderRuntime},
-        demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
-        traits::{Decoder, DecoderChunkOutcome},
+        demuxer::{DemuxOutcome, Demuxer},
     };
 
     #[kithara::test]
@@ -523,7 +501,6 @@ mod tests {
             AudioCodec::Pcm,
             Some(ContainerFormat::Wav),
             SourceOpenMode::Complete,
-            None,
         )
         .expect("open_for(Pcm, Wav) must succeed");
 
@@ -548,7 +525,7 @@ mod tests {
     /// through the segment-aware path, not this standalone one.
     #[kithara::test]
     #[case(AudioCodec::Pcm, Some(ContainerFormat::Wav), true)]
-    #[case(AudioCodec::Mp3, Some(ContainerFormat::MpegAudio), true)]
+    #[case(AudioCodec::Mp3, Some(ContainerFormat::MpegAudio), false)]
     #[case(AudioCodec::Flac, Some(ContainerFormat::Flac), true)]
     #[case(AudioCodec::Alac, Some(ContainerFormat::Mp4), true)]
     #[case(AudioCodec::AacLc, Some(ContainerFormat::Mp4), true)]
@@ -573,38 +550,6 @@ mod tests {
         inner: Cursor<Vec<u8>>,
         notify_not_ready: Option<Arc<AtomicBool>>,
         ready: u64,
-    }
-
-    struct TailLoopGuard {
-        tripped: Arc<AtomicBool>,
-        inner: Cursor<Vec<u8>>,
-        last_short_read: Option<(u64, usize, usize)>,
-    }
-
-    impl Read for TailLoopGuard {
-        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            let start = self.inner.position();
-            let read = self.inner.read(buf)?;
-            if read > 0 && read < buf.len() {
-                let span = (start, buf.len(), read);
-                if self.last_short_read == Some(span) {
-                    self.tripped.store(true, Ordering::Release);
-                    return Err(Error::other("repeated short tail read"));
-                }
-                self.last_short_read = Some(span);
-            } else {
-                self.last_short_read = None;
-            }
-            Ok(read)
-        }
-    }
-
-    impl Seek for TailLoopGuard {
-        delegate::delegate! {
-            to self.inner {
-                fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
-            }
-        }
     }
 
     impl NotReadySource {
@@ -676,7 +621,6 @@ mod tests {
             AudioCodec::Pcm,
             Some(ContainerFormat::Wav),
             SourceOpenMode::Complete,
-            None,
         )
         .expect("open_for must succeed with the header prefix available");
 
@@ -690,228 +634,11 @@ mod tests {
         }
     }
 
-    #[kithara::test]
-    fn open_mp3_demuxer_does_not_require_tail_bytes(tone_mp3: &'static [u8]) {
-        let bytes = tone_mp3.to_vec();
-        let ready = 16_u64 * 1024;
-        let tail_read_attempted = Arc::new(AtomicBool::new(false));
-        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
-            Box::new(NotReadySource::new(
-                bytes,
-                ready,
-                Some(Arc::clone(&tail_read_attempted)),
-            )),
-            AudioCodec::Mp3,
-            Some(ContainerFormat::MpegAudio),
-            SourceOpenMode::Streaming,
-            Some(Duration::from_secs(2)),
-        )
-        .expect("MP3 streaming open must not require tail bytes");
-        assert!(
-            !tail_read_attempted.load(Ordering::Acquire),
-            "MP3 streaming open must not probe bytes beyond the startup prefix"
-        );
-        assert_eq!(
-            dx.duration(),
-            Some(Duration::from_secs(2)),
-            "MP3 streaming open must use the caller's prefix duration hint"
-        );
-
-        match dx
-            .next_frame()
-            .expect("first MP3 frame read returns a status")
-        {
-            DemuxOutcome::Frame(frame) => assert!(!frame.data.is_empty()),
-            DemuxOutcome::Pending(PendingReason::NotReady(_)) => {}
-            other => panic!("unexpected first MP3 outcome: {other:?}"),
-        }
-    }
-
-    /// Demuxes `bytes` to EOF in size-less streaming mode and returns how many
-    /// packets came out, failing if `AudioFileServices` repeats a short tail
-    /// read.
-    fn packets_to_eof(bytes: Vec<u8>) -> u64 {
-        let byte_len = u64::try_from(bytes.len()).expect("fixture length fits u64");
-        let tripped = Arc::new(AtomicBool::new(false));
-        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
-            Box::new(TailLoopGuard {
-                inner: Cursor::new(bytes),
-                last_short_read: None,
-                tripped: Arc::clone(&tripped),
-            }),
-            AudioCodec::Mp3,
-            Some(ContainerFormat::MpegAudio),
-            SourceOpenMode::Streaming,
-            Some(Duration::from_secs(188)),
-        )
-        .expect("streaming MP3 open");
-        dx.set_byte_len_handle(Some(Arc::new(AtomicU64::new(byte_len))));
-
-        let mut packets = 0_u64;
-        loop {
-            match dx.next_frame() {
-                Ok(DemuxOutcome::Frame(_)) => {
-                    packets += 1;
-                    // A packet costs at least one byte, so this cannot be
-                    // reached by a run that is making progress.
-                    assert!(
-                        packets <= byte_len,
-                        "demuxer produced more packets than bytes"
-                    );
-                }
-                Ok(DemuxOutcome::Eof) => break,
-                Ok(DemuxOutcome::Pending(reason)) => {
-                    panic!("complete fixture must not become pending: {reason:?}")
-                }
-                Err(error) => panic!("complete fixture must reach EOF: {error}"),
-            }
-        }
-
-        assert!(
-            !tripped.load(Ordering::Acquire),
-            "AudioFileServices repeated the same short tail read"
-        );
-        packets
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn size_less_mp3_with_id3v1_tail_reaches_eof(tone_mp3: &'static [u8]) {
-        let plain = tone_mp3.to_vec();
-        let mut tagged = plain.clone();
-        let mut id3v1 = [0_u8; 128];
-        id3v1[..3].copy_from_slice(b"TAG");
-        tagged.extend_from_slice(&id3v1);
-
-        let plain_packets = packets_to_eof(plain);
-        // The fixture is a 187 s 44.1 kHz clip and MPEG Layer III carries 1152
-        // frames per packet, so a run that reached EOF cannot come back with
-        // less than that budget.
-        assert!(
-            plain_packets >= 187 * 44_100 / 1_152,
-            "a complete pass must cover the fixture's own frame budget, got {plain_packets}"
-        );
-        assert_eq!(
-            packets_to_eof(tagged),
-            plain_packets,
-            "the ID3v1 tail must not cost the final MPEG packet"
-        );
-    }
-
-    /// Seeks `dx` to three seconds and returns the reported `landed_byte`.
-    fn landed_byte_at_3s(dx: &mut AppleAudioFileDemuxer) -> Option<u64> {
-        match dx
-            .seek(Duration::from_secs(3), CodecPriming::default())
-            .expect("seek returns an outcome")
-        {
-            DemuxSeekOutcome::Landed { landed_byte, .. } => landed_byte,
-            other => panic!("unexpected seek outcome: {other:?}"),
-        }
-    }
-
-    /// Opens the generated full-length MP3 clip in `mode`, returning the
-    /// demuxer and the fixture's total byte length.
-    fn open_mp3(tone_mp3: &[u8], mode: SourceOpenMode) -> (AppleAudioFileDemuxer, u64) {
-        let bytes = tone_mp3.to_vec();
-        let total = u64::try_from(bytes.len()).expect("fixture length fits in u64");
-        let dx = AppleAudioFileDemuxer::open_for_with_mode(
-            Box::new(Cursor::new(bytes)),
-            AudioCodec::Mp3,
-            Some(ContainerFormat::MpegAudio),
-            mode,
-            Some(Duration::from_secs(180)),
-        )
-        .expect("MP3 open");
-        (dx, total)
-    }
-
-    #[kithara::test]
-    fn apple_mp3_pcm_has_no_internal_frame_gap(tone_mp3: &'static [u8]) {
-        let (demuxer, _) = open_mp3(tone_mp3, SourceOpenMode::Complete);
-        let codec = AppleCodec::open_with_config(demuxer.track_info(), false, None)
-            .expect("Apple MP3 codec");
-        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
-        for seek in [None, Some(Duration::ZERO), Some(Duration::from_millis(250))] {
-            if let Some(position) = seek {
-                decoder.seek(position).expect("seek MP3");
-            }
-            let mut end = None;
-            for _ in 0..4 {
-                let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("decode MP3")
-                else {
-                    panic!("expected initial MP3 PCM");
-                };
-                if let Some(end) = end {
-                    assert_eq!(
-                        chunk.meta.frame_offset, end,
-                        "PCM must remain contiguous: {:?}",
-                        chunk.meta
-                    );
-                }
-                end = Some(chunk.meta.frame_offset + u64::from(chunk.meta.frames));
-            }
-        }
-    }
-
-    /// Regression (reopen false-EOF): a size-less MP3 seek must report a
-    /// `landed_byte` so the pipeline realigns the stream's byte cursor with
-    /// where the decoder resumes (`seek::emit` calls `stream.set_position`).
-    /// Before the fix an Apple MP3 seek returned `landed_byte: None`, the
-    /// stream position stayed at the pre-seek offset, and a reopened track
-    /// mis-classified the post-seek read as EOF. Mirrors the symphonia MP3
-    /// contract asserted in `composed.rs`.
-    ///
-    /// This is the degraded path: a size-less open makes Apple's own mapping
-    /// answer `kAudioFileInvalidPacketOffsetError`, so the live byte-length
-    /// handle carries the answer. Pinned separately from the exact path in
-    /// [`sized_mp3_seek_reports_landed_byte_without_a_length_handle`].
-    #[kithara::test]
-    fn size_less_mp3_seek_reports_landed_byte_from_the_length_handle(tone_mp3: &'static [u8]) {
-        let (mut dx, total) = open_mp3(tone_mp3, SourceOpenMode::Streaming);
-        dx.set_byte_len_handle(Some(Arc::new(AtomicU64::new(total))));
-
-        let byte =
-            landed_byte_at_3s(&mut dx).expect("size-less MP3 seek must expose a landed_byte");
-
-        assert!(byte > 0, "landed_byte must leave the start of the file");
-    }
-
-    /// The same size-less seek must land inside the file: a `landed_byte` past
-    /// the end would move the stream cursor to a false EOF — the very failure
-    /// the reported offset exists to prevent.
-    #[kithara::test]
-    fn size_less_mp3_landed_byte_stays_inside_the_file(tone_mp3: &'static [u8]) {
-        let (mut dx, total) = open_mp3(tone_mp3, SourceOpenMode::Streaming);
-        dx.set_byte_len_handle(Some(Arc::new(AtomicU64::new(total))));
-
-        let byte =
-            landed_byte_at_3s(&mut dx).expect("size-less MP3 seek must expose a landed_byte");
-
-        assert!(
-            byte < total,
-            "landed_byte {byte} must precede EOF ({total})"
-        );
-    }
-
-    /// The exact path: with a known size `AudioFile` answers
-    /// `kAudioFilePropertyPacketToByte` itself, so the seek reports a
-    /// `landed_byte` with NO byte-length handle attached — the estimate cannot
-    /// contribute here, which is what makes this a pin on Apple's own mapping
-    /// rather than on the degraded fallback.
-    #[kithara::test]
-    fn sized_mp3_seek_reports_landed_byte_without_a_length_handle(tone_mp3: &'static [u8]) {
-        let (mut dx, _total) = open_mp3(tone_mp3, SourceOpenMode::Complete);
-
-        let byte = landed_byte_at_3s(&mut dx)
-            .expect("a sized open must map packet→byte through AudioFile itself");
-
-        assert!(byte > 0, "landed_byte must leave the start of the file");
-    }
-
     /// Regression (#device-flac-slow-load): a streamed FLAC must open
     /// without `AudioFileServices` scanning the whole file to build a packet
     /// table (the `packet_count()` query a complete open issues). The scan
     /// reads to EOF — 3–37 s of startup latency on device and a full
-    /// download wait on a streamed source. Mirrors the MP3 contract above.
+    /// download wait on a streamed source.
     #[kithara::test]
     fn open_flac_demuxer_does_not_require_tail_bytes(flac_saw: &'static [u8]) {
         let bytes = flac_saw.to_vec();
@@ -933,7 +660,6 @@ mod tests {
             AudioCodec::Flac,
             Some(ContainerFormat::Flac),
             SourceOpenMode::Streaming,
-            None,
         )
         .expect("FLAC streaming open must not require tail bytes");
         assert!(
@@ -949,27 +675,6 @@ mod tests {
             DemuxOutcome::Pending(PendingReason::NotReady(_)) => {}
             other => panic!("unexpected first FLAC outcome: {other:?}"),
         }
-    }
-
-    #[kithara::test]
-    fn open_mp3_demuxer_complete_source_reports_duration(tone_mp3: &'static [u8]) {
-        let bytes = tone_mp3.to_vec();
-        let dx = AppleAudioFileDemuxer::open_for_with_mode(
-            Box::new(Cursor::new(bytes)),
-            AudioCodec::Mp3,
-            Some(ContainerFormat::MpegAudio),
-            SourceOpenMode::Complete,
-            None,
-        )
-        .expect("MP3 complete open must succeed");
-
-        let duration = dx
-            .duration()
-            .expect("complete MP3 open must report packet-count duration");
-        assert!(
-            duration.as_secs_f64() > 1.0,
-            "complete MP3 duration is suspiciously short: {duration:?}"
-        );
     }
 
     /// Streaming FLAC regression (#device-flac-stall): when a read crosses
@@ -991,55 +696,8 @@ mod tests {
             AudioCodec::Flac,
             Some(ContainerFormat::Flac),
             SourceOpenMode::Streaming,
-            None,
         )
         .expect("streaming FLAC open");
-
-        let mut produced = 0usize;
-        loop {
-            match dx.next_frame() {
-                Ok(DemuxOutcome::Frame(_)) => {
-                    produced += 1;
-                    assert!(
-                        produced < 5000,
-                        "drained the whole fixture without reaching the not-ready boundary"
-                    );
-                }
-                Ok(DemuxOutcome::Pending(PendingReason::NotReady(_))) => break,
-                Ok(DemuxOutcome::Eof) => panic!(
-                    "not-ready boundary surfaced as EOF after {produced} frames — \
-                     the track would end mid-stream"
-                ),
-                other => panic!("unexpected outcome at the not-ready boundary: {other:?}"),
-            }
-        }
-        assert!(
-            produced > 0,
-            "should decode the ready prefix before parking"
-        );
-    }
-
-    /// The MP3 half of the pair the streaming open splits.
-    ///
-    /// `open_for_with_mode` hands `AudioFile` a real size for streaming FLAC
-    /// and nothing for streaming MP3, so only FLAC can tell "no data yet"
-    /// from "no data ever". A size-less MP3 reading past the download
-    /// boundary must still park: ending the track there is the mid-stream
-    /// stop the FLAC regression above was written for. The ready prefix
-    /// carries the header and several frames; everything past it is the
-    /// part that has not been downloaded.
-    #[kithara::test]
-    fn mp3_streaming_not_ready_surfaces_pending_not_eof(tone_mp3: &'static [u8]) {
-        let bytes = tone_mp3.to_vec();
-        let ready = 64_u64 * 1024;
-        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
-            Box::new(NotReadySource::new(bytes, ready, None)),
-            AudioCodec::Mp3,
-            Some(ContainerFormat::MpegAudio),
-            SourceOpenMode::Streaming,
-            None,
-        )
-        .expect("streaming MP3 open");
 
         let mut produced = 0usize;
         loop {
@@ -1104,7 +762,6 @@ mod tests {
             AudioCodec::Pcm,
             Some(ContainerFormat::Wav),
             SourceOpenMode::Complete,
-            None,
         )
         .expect("open prepared WAV");
         let mut direct = AppleAudioFileDemuxer::open_for_with_mode(
@@ -1112,7 +769,6 @@ mod tests {
             AudioCodec::Pcm,
             Some(ContainerFormat::Wav),
             SourceOpenMode::Complete,
-            None,
         )
         .expect("open reference WAV");
         for target in [Duration::ZERO, Duration::from_secs(1), Duration::ZERO] {
@@ -1162,7 +818,6 @@ mod tests {
             AudioCodec::Flac,
             Some(ContainerFormat::Flac),
             SourceOpenMode::Streaming,
-            None,
         )
         .expect("streaming FLAC open");
 

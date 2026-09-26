@@ -11,6 +11,9 @@ pub mod config;
 pub mod crossfade;
 pub mod deck;
 pub mod document;
+#[cfg(feature = "gui")]
+mod engine;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod logging;
 pub mod memory;
 pub mod mix;
@@ -23,6 +26,8 @@ pub mod theme;
 #[cfg(feature = "gui")]
 mod wave_cache;
 pub mod waveform;
+#[cfg(all(target_arch = "wasm32", feature = "gui"))]
+pub mod web;
 
 pub use baked::secret;
 

@@ -1,5 +1,6 @@
 use std::{cell::Cell, marker::PhantomData, rc::Rc};
 
+use kithara_test_macros as kithara;
 use masonry::{
     core::{NewWidget, Widget, WidgetId, WidgetPod},
     kurbo::Rect as MasonryRect,
@@ -188,8 +189,6 @@ pub struct MasonryNode<Action> {
     watched: Vec<Watched>,
     native: Vec<WidgetId>,
     window: Option<WindowTracker>,
-    #[cfg(test)]
-    document_ids: Vec<WidgetId>,
 }
 
 impl<Action> MasonryNode<Action> {
@@ -227,31 +226,10 @@ impl<Action> MasonryNode<Action> {
         });
     }
 
-    /// The module shell's own bars, and whatever they hold.
-    ///
-    /// Chrome is furniture that holds furniture: it names no document path, so
-    /// it must not answer as a document node when a test counts them.
-    pub(super) fn chrome(
+    fn assemble(
         layout: NodeLayout,
         declared: solve::Size<solve::Length>,
         children: Vec<Self>,
-        background: Option<Rgba>,
-        frame: Option<(FrameSides, Rgba, f32)>,
-    ) -> Self {
-        let node = Self::document(layout, declared, children, false, background, frame);
-        #[cfg(test)]
-        let node = Self {
-            document_ids: Vec::new(),
-            ..node
-        };
-        node
-    }
-
-    pub(super) fn document(
-        layout: NodeLayout,
-        declared: solve::Size<solve::Length>,
-        children: Vec<Self>,
-        _expose_children: bool,
         background: Option<Rgba>,
         frame: Option<(FrameSides, Rgba, f32)>,
     ) -> Self {
@@ -265,8 +243,6 @@ impl<Action> MasonryNode<Action> {
         let mut watched: Vec<Watched> = Vec::new();
         let mut native: Vec<WidgetId> = Vec::new();
         let mut window = None;
-        #[cfg(test)]
-        let mut child_ids: Vec<WidgetId> = Vec::new();
         for child in children {
             layers.extend(child.layers);
             popovers.extend(child.popovers);
@@ -277,10 +253,6 @@ impl<Action> MasonryNode<Action> {
             watched.extend(child.watched);
             native.extend(child.native);
             window = merge_window(window, child.window);
-            #[cfg(test)]
-            if _expose_children {
-                child_ids.extend(child.document_ids);
-            }
             child_widgets.push(child.widget.to_pod());
         }
         let widget = NewWidget::new(Node::new(
@@ -293,13 +265,6 @@ impl<Action> MasonryNode<Action> {
         if widget.widget.is_native() {
             native.push(widget.id());
         }
-        #[cfg(test)]
-        let document_ids = {
-            let mut ids: Vec<WidgetId> = Vec::with_capacity(child_ids.len() + 1);
-            ids.push(widget.id());
-            ids.extend(child_ids);
-            ids
-        };
         Self {
             widget,
             declared,
@@ -312,16 +277,45 @@ impl<Action> MasonryNode<Action> {
             watched,
             native,
             window,
-            #[cfg(test)]
-            document_ids,
             action: PhantomData,
             geometry: None,
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn document_ids(&self) -> &[WidgetId] {
-        &self.document_ids
+    /// The module shell's own bars, and whatever they hold.
+    ///
+    /// Chrome is furniture that holds furniture: it names no document path, so
+    /// it is not announced as a document node, and neither is anything it holds.
+    pub(super) fn chrome(
+        layout: NodeLayout,
+        declared: solve::Size<solve::Length>,
+        children: Vec<Self>,
+        background: Option<Rgba>,
+        frame: Option<(FrameSides, Rgba, f32)>,
+    ) -> Self {
+        Self::assemble(layout, declared, children, background, frame)
+    }
+
+    /// A node standing for one node of the document.
+    ///
+    /// Announced as it is built, with whether the nodes it holds stand for
+    /// document nodes of their own: a wrapper that only places, presses or
+    /// scrolls its child speaks for the whole subtree it holds.
+    pub(super) fn document(
+        layout: NodeLayout,
+        declared: solve::Size<solve::Length>,
+        children: Vec<Self>,
+        exposes_children: bool,
+        background: Option<Rgba>,
+        frame: Option<(FrameSides, Rgba, f32)>,
+    ) -> Self {
+        let node = Self::assemble(layout, declared, children, background, frame);
+        kithara::probe_event!(
+            masonry_document_node,
+            exposes_children,
+            widget = node.widget.id().to_raw()
+        );
+        node
     }
 
     pub(super) fn furniture(
@@ -344,8 +338,6 @@ impl<Action> MasonryNode<Action> {
             watched: Vec::new(),
             native: Vec::new(),
             window: None,
-            #[cfg(test)]
-            document_ids: Vec::new(),
         }
     }
 
@@ -487,7 +479,7 @@ impl<Action> MasonryNode<Action> {
         });
     }
 
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
     pub(crate) fn widget_id(&self) -> WidgetId {
         self.widget.id()
     }

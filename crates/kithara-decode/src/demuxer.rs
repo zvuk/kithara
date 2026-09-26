@@ -153,22 +153,14 @@ pub(crate) enum DemuxSeekOutcome {
 }
 
 /// Timing and pending state for a packet retained in its demuxer's buffer.
-#[cfg(any(
-    feature = "symphonia",
-    all(feature = "android", target_os = "android"),
-    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
-))]
+#[cfg(symphonia_demuxer)]
 pub(crate) enum PreparedPacket {
     Frame { pts: Duration, duration: Duration },
     Pending(PendingReason),
     Eof,
 }
 
-#[cfg(any(
-    feature = "symphonia",
-    all(feature = "android", target_os = "android"),
-    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
-))]
+#[cfg(symphonia_demuxer)]
 impl From<DemuxOutcome<'_>> for PreparedPacket {
     fn from(outcome: DemuxOutcome<'_>) -> Self {
         match outcome {

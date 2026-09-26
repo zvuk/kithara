@@ -960,35 +960,3 @@ impl LayoutPreviewSkin {
         super::patch::patch_field(&mut self.module_inset, patch.module_inset);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-    use crate::builtin;
-
-    #[kithara::test]
-    fn pop_holds_exactly_the_declared_chrome() {
-        assert_eq!(
-            builtin::skin_doc().pop,
-            PopSkin {
-                background: ColorRole::BgFooter,
-                frame: FrameSkin {
-                    radius: 0.0,
-                    border_width: 1.0,
-                    border: ColorRole::LineHi,
-                },
-                cap_height: 2.0,
-                cap_color: ColorRole::Accent,
-                shadow: ShadowSkin {
-                    color: ColorRole::Shadow,
-                    alpha: 0.6,
-                    offset_x: 0.0,
-                    offset_y: 16.0,
-                    blur: 40.0,
-                },
-            }
-        );
-    }
-}

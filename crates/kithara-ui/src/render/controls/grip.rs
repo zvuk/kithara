@@ -1,5 +1,3 @@
-#[cfg(all(test, feature = "masonry"))]
-use crate::interact::Gestures;
 #[cfg(feature = "masonry")]
 use crate::interact::recognizers::Edge;
 use crate::{
@@ -109,13 +107,6 @@ impl Drag {
             wheel: self.wheel.map(|wheel| WheelStep { value, ..wheel }),
             ..self
         }
-    }
-
-    #[cfg(all(test, feature = "masonry"))]
-    pub(crate) const fn gestures(self) -> Gestures {
-        Gestures::DRAG
-            .with(Gestures::DOUBLE_CLICK, self.reset.is_some())
-            .with(Gestures::WHEEL, self.wheel.is_some())
     }
 
     /// What this drag publishes for a value the recognizer produced.

@@ -5,7 +5,7 @@ use num_traits::cast::AsPrimitive;
 use crate::{
     atoms::{button::VisualState, painter::ControlPainter},
     draw::{DrawListBuilder, Rect, Transform},
-    lottie::{Artwork, emit::emit},
+    lottie::{Artwork, emit},
     shaping::TextContext,
 };
 

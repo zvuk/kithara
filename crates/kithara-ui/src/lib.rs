@@ -8,24 +8,15 @@ pub mod backends;
 pub mod builtin;
 pub mod capture;
 pub mod compile;
-#[cfg(any(feature = "render", feature = "vello"))]
-pub mod draw;
 #[cfg(feature = "render")]
 pub(crate) mod engine;
 pub mod error;
 pub mod expand;
-pub mod geom;
 pub mod ids;
-#[cfg(feature = "render")]
-pub mod interact;
-#[cfg(feature = "render")]
-pub mod lottie;
 pub(crate) mod mount;
 pub mod registry;
 #[cfg(feature = "render")]
 pub mod render;
-#[cfg(any(feature = "render", feature = "vello"))]
-pub mod shaping;
 pub mod size;
 #[cfg(feature = "render")]
 pub(crate) mod solve;
@@ -33,6 +24,15 @@ pub mod source;
 pub mod view;
 
 pub use doc::{envelope, layout, module, package, param, skin, text};
+#[cfg(feature = "render")]
+pub use kithara_ui_draw as draw;
+pub use kithara_ui_draw::geom;
+#[cfg(feature = "render")]
+pub use kithara_ui_input as interact;
+#[cfg(feature = "render")]
+pub use kithara_ui_lottie as lottie;
+#[cfg(feature = "render")]
+pub use kithara_ui_shaping as shaping;
 
 mod doc;
 mod require;

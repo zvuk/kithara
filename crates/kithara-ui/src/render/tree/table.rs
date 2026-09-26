@@ -10,13 +10,6 @@ use crate::{
     interact::Hit,
     render::Skin,
 };
-#[cfg(test)]
-use crate::{
-    atoms::table::{minimum_table_width, table_content_height},
-    engine::{Descriptor, ScrollConfig},
-    interact::ScrollAxis,
-};
-
 pub(super) struct TableHost {
     skin: Skin,
     horizontal_path: String,
@@ -48,38 +41,6 @@ impl TableHost {
             path: path.to_owned(),
             row_target: format!("{path}/rows"),
             skin: skin.clone(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
-        descriptors.push(Descriptor::scroll(
-            self.horizontal_path.clone(),
-            ScrollConfig::plain(ScrollAxis::Horizontal, minimum_table_width(&self.columns)),
-        ));
-        descriptors.push(Descriptor::scroll(
-            self.path.clone(),
-            ScrollConfig::plain(
-                ScrollAxis::Vertical,
-                table_content_height(self.row_count, &self.skin),
-            ),
-        ));
-        descriptors.push(Descriptor::item(
-            self.row_target.clone(),
-            self.path.clone(),
-            self.row_count,
-        ));
-        let resizable = self
-            .columns
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| column_resizable(&self.columns, *index));
-        for (divider_path, (_, column)) in self.divider_paths.iter().zip(resizable) {
-            descriptors.push(Descriptor::column_divider(
-                divider_path.clone(),
-                column.width,
-                self.skin.table.min_column_width,
-            ));
         }
     }
 
@@ -178,12 +139,29 @@ mod tests {
     use crate::{
         builtin,
         draw::Pt,
+        engine::Descriptor,
         interact::{Input, PointerPhase, mouse as mouse_input},
         module::{TableColumn, TableColumnStyle},
     };
 
     fn pointer_input(phase: PointerPhase, at: Option<Pt>) -> Input<'static> {
         Input::Pointer(mouse_input(phase, at))
+    }
+
+    /// The engine state the table publishes for its resizable dividers.
+    fn divider_descriptors(columns: &[ColumnLayout]) -> Vec<Descriptor> {
+        columns
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| column_resizable(columns, *index))
+            .map(|(_, column)| {
+                Descriptor::column_divider(
+                    format!("library/tracks/width/{}", column.column.id()),
+                    column.width,
+                    builtin::skin().table.min_column_width,
+                )
+            })
+            .collect()
     }
 
     fn divider_columns(index_width: f32) -> Vec<ColumnLayout> {
@@ -245,9 +223,7 @@ mod tests {
         let node = Node::new(Size::new(100.0, 120.0));
         let host = TableHost::new("library/tracks", divider_columns(98.0), 8, builtin::skin());
         let mut engine = Engine::default();
-        let mut descriptors = Vec::new();
-        host.append_descriptors(&mut descriptors);
-        engine.reconcile(descriptors);
+        engine.reconcile(divider_descriptors(&divider_columns(98.0)));
         let mut targets = Vec::new();
         host.append_targets(
             Layout::new(&node),
@@ -266,9 +242,7 @@ mod tests {
         assert!(moved.is_some(), "the resize must publish its wider value");
 
         let resized = TableHost::new("library/tracks", divider_columns(300.0), 8, builtin::skin());
-        let mut descriptors = Vec::new();
-        resized.append_descriptors(&mut descriptors);
-        engine.reconcile(descriptors);
+        engine.reconcile(divider_descriptors(&divider_columns(300.0)));
         let mut release_targets = Vec::new();
         resized.append_targets(
             Layout::new(&node),

@@ -15,8 +15,6 @@ mod layer;
 pub mod masonry;
 pub mod model;
 mod owner;
-#[cfg(all(test, feature = "masonry", feature = "iced"))]
-mod parity;
 mod picker;
 pub mod picture;
 #[cfg(feature = "iced")]

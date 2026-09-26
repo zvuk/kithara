@@ -20,13 +20,6 @@ pub struct VisDeclaration {
 }
 
 impl VisDeclaration {
-    /// Values read for this leaf in the current frame.
-    #[must_use]
-    #[cfg(test)]
-    pub(crate) const fn frame(self) -> VisFrame {
-        self.frame
-    }
-
     pub(crate) fn logical(frame: VisFrame, rect: [f64; 4]) -> Option<Self> {
         if rect.iter().any(|value| !value.is_finite()) || rect[2] <= rect[0] || rect[3] <= rect[1] {
             return None;
@@ -77,13 +70,6 @@ impl VisDeclaration {
             uniforms: Uniforms::new(self.frame, origin, resolution),
             scissor: [x0, y0, width, height],
         })
-    }
-
-    /// Unclipped logical rectangle as left, top, right, and bottom.
-    #[must_use]
-    #[cfg(test)]
-    pub(crate) const fn rect(self) -> [f64; 4] {
-        self.rect
     }
 }
 
@@ -263,11 +249,12 @@ mod declaration_tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::render::vis::fixture;
 
     fn declaration(rect: [f64; 4]) -> VisDeclaration {
         VisDeclaration {
             rect,
-            frame: VisFrame::new(0.75, 1.25, 2),
+            frame: fixture::frame(0.75, 1.25, 2),
         }
     }
 
@@ -280,7 +267,7 @@ mod declaration_tests {
 
         assert_eq!(
             draw.uniforms.bytes(),
-            Uniforms::new(declaration.frame(), [1.6, 2.6], [5.8, 5.8]).bytes()
+            Uniforms::new(declaration.frame, [1.6, 2.6], [5.8, 5.8]).bytes()
         );
         assert_eq!(draw.scissor, [2, 3, 5, 5]);
     }
@@ -294,7 +281,7 @@ mod declaration_tests {
 
         assert_eq!(
             draw.uniforms.bytes(),
-            Uniforms::new(declaration.frame(), [-2.5, 1.6], [9.9, 8.4]).bytes()
+            Uniforms::new(declaration.frame, [-2.5, 1.6], [9.9, 8.4]).bytes()
         );
         assert_eq!(draw.scissor, [0, 2, 6, 6]);
     }
@@ -352,6 +339,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::render::vis::fixture;
 
     #[kithara::test]
     fn retained_pass_changes_only_pixels_inside_the_leaf_scissor() {
@@ -407,7 +395,7 @@ mod tests {
             &queue,
             &view,
             &[
-                VisDeclaration::logical(VisFrame::new(1.0, 0.5, 0), [16.0, 16.0, 48.0, 48.0])
+                VisDeclaration::logical(fixture::frame(1.0, 0.5, 0), [16.0, 16.0, 48.0, 48.0])
                     .expect("the test rectangle must be valid"),
             ],
             1.0,

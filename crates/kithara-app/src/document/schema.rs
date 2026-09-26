@@ -224,8 +224,11 @@ mod tests {
             .expect("a valid document");
 
         assert_eq!(
-            document.assets_store.cache_capacity.map(NonZeroUsize::get),
-            Some(32)
+            document
+                .assets_store
+                .cache_capacity
+                .map(|value| value.map(NonZeroUsize::get)),
+            Some(Some(32))
         );
         assert!(
             document.assets_store.max_bytes.is_none(),

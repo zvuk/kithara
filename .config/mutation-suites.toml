@@ -113,7 +113,7 @@ timeout_seconds = 180
 name = "ui-size"
 group = "ui"
 package = "kithara-ui"
-files = ["crates/kithara-ui/src/size.rs"]
+files = ["crates/kithara-ui/src/size/spec.rs"]
 test_filters = ["test(/size::tests::/)"]
 timeout_seconds = 180
 

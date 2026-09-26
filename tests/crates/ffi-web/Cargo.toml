@@ -23,7 +23,7 @@ selenium = []
 [dependencies]
 kithara = { workspace = true, features = ["usdt", "full", "symphonia", "resample-rubato"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "subscriber"] }
 
 fieldwork = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "stream"] }

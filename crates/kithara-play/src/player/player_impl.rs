@@ -54,7 +54,7 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
         if config.response_budget_frames.is_some() && config.warp.render_quantum_frames().is_none()
         {
             let mut patch = WarpConfigPatch::default();
-            patch.render_quantum_frames = NonZeroUsize::new(32);
+            patch.render_quantum_frames = Some(NonZeroUsize::new(32));
             config.warp.apply(patch);
         }
         let pools = config.worker.pools().clone();

@@ -1,6 +1,6 @@
 use kithara::{
     prelude::ResourceSrc,
-    queue::{QueueError, Transition},
+    queue::{QueueError, TrackEntry, Transition},
 };
 
 use crate::{config::AppConfig, pools::AppQueueControl, sources::build_source};
@@ -65,33 +65,31 @@ impl Catalog {
     }
 }
 
-/// Put `entry` on `queue` and make it current. A track already on this deck is
-/// selected rather than appended, so loading twice is a no-op plus a select.
+/// Put the track at `url` on `queue` and make it current. A track already on
+/// this deck is selected rather than appended, so loading twice is a no-op plus
+/// a select.
 ///
 /// # Errors
 /// Returns [`QueueError`] when the queue rejects the selection.
-pub fn load_onto(
-    queue: &AppQueueControl,
-    entry: &CatalogEntry,
-    config: &AppConfig,
-) -> Result<(), QueueError> {
+pub fn load_onto(queue: &AppQueueControl, url: &str, config: &AppConfig) -> Result<(), QueueError> {
+    let source = canonical_source(url);
     let existing = queue
         .tracks()
         .into_iter()
-        .find(|track| track.url.as_deref() == Some(entry.source.as_str()))
+        .find(|track| track.url.as_deref() == Some(source.as_str()))
         .map(|track| track.id);
     let id = match existing {
         Some(id) => id,
-        None => queue.append(build_source(&entry.url, config))?,
+        None => queue.append(build_source(url, config))?,
     };
     queue.select(id, Transition::None)
 }
 
-/// Whether this deck already holds the track — the library's per-deck marker.
+/// Whether a deck holding `tracks` already holds the track — the library's
+/// per-deck marker.
 #[must_use]
-pub fn is_loaded(queue: &AppQueueControl, entry: &CatalogEntry) -> bool {
-    queue
-        .tracks()
+pub fn is_loaded(tracks: &[TrackEntry], entry: &CatalogEntry) -> bool {
+    tracks
         .iter()
         .any(|track| track.url.as_deref() == Some(entry.source.as_str()))
 }

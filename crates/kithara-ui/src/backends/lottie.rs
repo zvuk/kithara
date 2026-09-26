@@ -14,13 +14,13 @@ use vello::{Scene, kurbo::Affine, peniko::color::palette::css::BLACK};
 use super::{VelloBackend, conformance::rasterise_at};
 use crate::{
     draw::{DrawListBuilder, replay},
-    lottie::emit::emit,
+    lottie::emit,
 };
 
 /// One artwork with a merged pair of contours under one fill, a stroked
 /// open contour, a ramp, a turned layer and a layer opacity — one of each
 /// thing the pairing rule and the alpha fold decide.
-const PROBE: &str = include_str!("../../assets/lottie/probe.json");
+const PROBE: &str = include_str!("../../../kithara-ui-lottie/tests/lottie/probe.json");
 
 fn artwork() -> Composition {
     Composition::from_slice(PROBE.as_bytes())

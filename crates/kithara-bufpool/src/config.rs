@@ -4,24 +4,26 @@ use kithara_derive::Patch;
 use crate::Percent;
 
 /// Policy for one physical buffer pool in a region.
+#[kithara_config::config(builder = false)]
 #[derive(Builder, Clone, Copy, Debug, PartialEq, Eq, Patch)]
 pub struct PoolConfig {
     /// Maximum share of the region budget this pool may hold.
-    #[builder(default)]
+    #[config(value, builder(default))]
     pub(crate) max_share: Percent,
     /// Number of reusable payloads allocated during region construction.
-    #[builder(default)]
+    #[config(value, builder(default))]
     pub(crate) initial_buffers: usize,
     /// Element capacity of each initially allocated payload.
-    #[builder(default)]
+    #[config(value, builder(default))]
     pub(crate) initial_capacity: usize,
     /// Maximum number of retained buffers across all shards.
+    #[config(value)]
     pub(crate) max_buffers: usize,
     /// Drop returned buffers above this capacity. Zero disables the ceiling.
-    #[builder(default)]
+    #[config(value, builder(default))]
     pub(crate) max_retained_capacity: usize,
     /// Capacity retained when an oversized buffer returns to the pool.
-    #[builder(default)]
+    #[config(value, builder(default))]
     pub(crate) trim_capacity: usize,
 }
 

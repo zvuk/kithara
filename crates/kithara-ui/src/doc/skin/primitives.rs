@@ -1,9 +1,7 @@
+use kithara_ui_shaping::{FontFamily, FontWeight, TextStyle};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    document::{FontFamily, FontWeight},
-    palette::ColorRole,
-};
+use super::palette::ColorRole;
 use crate::module::{Tone, WindowControlsStyle};
 
 /// One of the two looks a control switches between: what it paints under
@@ -52,10 +50,12 @@ pub(crate) const fn tone_color(tone: Tone, tones: ToneColors) -> ColorRole {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, kithara_derive::Mirror)]
+#[mirror(into = TextStyle)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct TextRoleSkin {
+    #[mirror(skip)]
     pub color: ColorRole,
     pub font: FontFamily,
     pub weight: FontWeight,
