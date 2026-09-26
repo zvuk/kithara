@@ -135,6 +135,7 @@ lockbud_exclude = [
   "kithara-bufpool-tests",
   "kithara-decode-tests",
   "kithara-devtools",
+  "kithara-dsp-tests",
   "kithara-effects-tests",
   "kithara-encode-tests",
   "kithara-events-tests",
@@ -798,12 +799,14 @@ prefix_args = [
 [test.lanes.dsp]
 program = "cargo"
 default_backend = "none"
-owns = ["crates/kithara-dsp/"]
+owns = ["crates/kithara-dsp/", "tests/crates/dsp/"]
 prefix_args = [
   "nextest",
   "run",
   "-p",
   "kithara-dsp",
+  "-p",
+  "kithara-dsp-tests",
   "--cargo-profile",
   "test-release",
 ]

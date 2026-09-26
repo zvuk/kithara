@@ -1,0 +1,24 @@
+[package]
+name = "kithara-dsp-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[package.metadata.cargo-machete]
+# `kithara-test-utils` is named only by the `#[kithara::test]` expansion.
+ignored = ["kithara-test-utils"]
+
+[dependencies]
+kithara-dsp = { workspace = true }
+kithara-signal = { workspace = true }
+kithara-test-utils = { workspace = true }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "dsp"
+path = "tests/suite.rs"

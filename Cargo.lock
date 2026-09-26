@@ -4962,6 +4962,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-dsp-tests"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara-dsp",
+ "kithara-signal",
+ "kithara-test-utils",
+]
+
+[[package]]
 name = "kithara-effects"
 version = "0.0.1-alpha5"
 dependencies = [

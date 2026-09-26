@@ -24,6 +24,9 @@ pub trait Backend: sealed::Sealed {
     /// Writes `[l0, r0, l1, r1, …]` into `output`.
     fn interleave_pair(&self, left: &[f32], right: &[f32], output: &mut [f32]) -> usize;
 
+    /// Replaces `NaN`, ±infinity, subnormals and −0.0 with `+0.0` in place.
+    fn sanitize(&self, samples: &mut [f32]);
+
     /// Writes `plane` into every `stride`-th slot of `output` from slot 0; the
     /// last frame may be partial (`output.len().div_ceil(stride)` frames fit).
     fn scatter(&self, plane: &[f32], output: &mut [f32], stride: NonZeroUsize) -> usize;

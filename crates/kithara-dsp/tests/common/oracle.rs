@@ -43,3 +43,11 @@ pub(crate) fn gather(input: &[f32], stride: NonZeroUsize, plane: &mut [f32]) -> 
     }
     frames
 }
+
+pub(crate) fn sanitize(samples: &mut [f32]) {
+    for sample in samples {
+        if !sample.is_finite() || sample.abs() < f32::MIN_POSITIVE {
+            *sample = 0.0;
+        }
+    }
+}

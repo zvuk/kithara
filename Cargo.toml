@@ -59,6 +59,7 @@ members = [
     "tests/crates/bufpool",
     "tests/crates/core",
     "tests/crates/decode",
+    "tests/crates/dsp",
     "tests/crates/effects",
     "tests/crates/encode",
     "tests/crates/events",
@@ -131,6 +132,7 @@ default-members = [
     "tests/crates/bufpool",
     "tests/crates/core",
     "tests/crates/decode",
+    "tests/crates/dsp",
     "tests/crates/effects",
     "tests/crates/encode",
     "tests/crates/events",
@@ -567,6 +569,8 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.kithara-decode]
 opt-level = 2
+[profile.dev.package.kithara-dsp]
+opt-level = 2
 [profile.dev.package.kithara-workspace-hack]
 opt-level = 2
 # Time-stretch DSP (FFT/phase-vocoder + C++) is ~10× slower in debug.
@@ -656,6 +660,9 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-decode-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-dsp-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-effects-tests]

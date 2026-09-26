@@ -169,6 +169,27 @@ fn check_strided<B: Backend>(name: &str, backend: &B) {
 }
 
 #[kithara::test]
+fn sanitize_matches_the_oracle() {
+    for_each_backend!(check_sanitize);
+}
+
+fn check_sanitize<B: Backend>(name: &str, backend: &B) {
+    for size in SIZES {
+        for offset in OFFSETS {
+            let mut want = signal(size + offset, SINE);
+            let mut got = want.clone();
+            oracle::sanitize(&mut want[offset..]);
+            backend.sanitize(&mut got[offset..]);
+            assert_eq!(
+                bits(&got),
+                bits(&want),
+                "{name}: size {size}, offset {offset}"
+            );
+        }
+    }
+}
+
+#[kithara::test]
 fn a_short_side_bounds_every_layout_kernel() {
     for_each_backend!(check_common_prefix);
 }

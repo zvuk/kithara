@@ -27,6 +27,7 @@ fn run_every_kernel<B: Backend>(backend: &B) {
         backend.deinterleave_pair(&pair, &mut out_left, &mut out_right);
         backend.scatter(&left, &mut six[1..], SIX);
         backend.gather(&six[1..], SIX, &mut plane);
+        backend.sanitize(&mut plane);
     });
 }
 

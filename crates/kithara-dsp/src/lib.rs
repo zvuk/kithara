@@ -5,6 +5,11 @@
 //! Kernels process the common prefix of their slices, return the frame count
 //! they handled, never allocate and never sanitize implicitly.
 #![forbid(unsafe_code)]
+#![deny(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::panic
+)]
 
 mod backend;
 

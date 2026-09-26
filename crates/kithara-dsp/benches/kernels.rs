@@ -60,6 +60,10 @@ fn layout<B: Backend>(c: &mut Criterion, name: &str, backend: &B) {
                 });
             },
         );
+        let mut noisy = vec![f32::from_bits(1); frames];
+        group.bench_with_input(BenchmarkId::new("sanitize", frames), &frames, |b, _| {
+            b.iter(|| backend.sanitize(black_box(&mut noisy)));
+        });
     }
     group.finish();
 }
