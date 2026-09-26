@@ -1,0 +1,70 @@
+[package]
+name = "kithara-ui-draw"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Toolkit-neutral geometry, draw lists, their pools, and the backend contract for kithara-ui."
+keywords = ["ui", "draw", "vector", "geometry", "render"]
+categories = ["gui", "graphics"]
+autotests = false
+
+[package.metadata.cargo-machete]
+# `serde` is reached only through `#[derive(Patch)]`, whose expansion names
+# `::serde::Deserialize`; no source line in this crate spells the crate out.
+ignored = ["kithara-workspace-hack", "serde"]
+
+[features]
+default = ["list"]
+# The draw list, its pools and the backend contract. Off, the crate carries
+# only the geometry and the pool limits a document names, which a build that
+# parses documents without drawing them still needs.
+list = [
+    "dep:derive-where",
+    "dep:derive_more",
+    "dep:fieldwork",
+    "dep:kithara-bufpool",
+    "dep:kithara-platform",
+    "dep:kithara-ui-shaping",
+    "dep:kurbo",
+    "dep:roxmltree",
+    "dep:thiserror",
+    "dep:tracing",
+]
+# Conversions to and from iced's colour, point and rectangle.
+iced = ["dep:iced", "kithara-derive/mirror"]
+
+[dependencies]
+kithara-bufpool = { workspace = true, optional = true }
+kithara-derive = { workspace = true, features = ["built-default", "patch"] }
+kithara-platform = { workspace = true, optional = true }
+kithara-ui-shaping = { workspace = true, optional = true, features = ["shape"] }
+
+bon = { workspace = true }
+derive-where = { workspace = true, optional = true }
+derive_more = { workspace = true, optional = true }
+fieldwork = { workspace = true, optional = true }
+iced = { workspace = true, optional = true }
+kurbo = { workspace = true, optional = true }
+num-traits = { workspace = true }
+roxmltree = { workspace = true, optional = true }
+serde = { workspace = true }
+thiserror = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+
+# The same desktop-only gate `kithara-ui` carries.
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+kithara-platform = { workspace = true }
+kithara-test-utils = { workspace = true }
+
+[[test]]
+name = "draw"
+path = "tests/draw/main.rs"
+required-features = ["list"]
+
+[lints]
+workspace = true

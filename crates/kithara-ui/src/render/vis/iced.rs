@@ -199,6 +199,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::render::vis::fixture;
 
     fn render(uniforms: Uniforms) -> Vec<u8> {
         const SIDE: u32 = 64;
@@ -307,7 +308,7 @@ mod tests {
     }
 
     fn uniforms(level: f32, preset: u32) -> Uniforms {
-        Uniforms::new(VisFrame::new(level, 0.5, preset), [0.0, 0.0], [64.0, 64.0])
+        Uniforms::new(fixture::frame(level, 0.5, preset), [0.0, 0.0], [64.0, 64.0])
     }
 
     #[kithara::test]

@@ -18,4 +18,4 @@ pub(crate) use image::VelloImageBackend;
 #[cfg(all(feature = "masonry", any(test, feature = "capture")))]
 pub(crate) use readback::read_back;
 #[cfg(feature = "vello")]
-pub use vello::VelloBackend;
+pub use vello::{VelloBackend, paint_color};

@@ -551,6 +551,10 @@ prefix_args = [
   "--exclude",
   "kithara-ui",
   "--exclude",
+  "kithara-ui-input",
+  "--exclude",
+  "kithara-ui-shaping",
+  "--exclude",
   "kithara-devtools",
   "--exclude",
   "xtask",
@@ -930,7 +934,10 @@ prefix_args = [
 #
 # `kithara-ui` is the one exclusion that is product: it needs a GPU adapter and
 # two toolkit features this lane does not turn on, so `test.lanes.ui` below runs
-# it against both hosts instead.
+# it against both hosts instead. `kithara-ui-shaping` goes with it: its system
+# font policy is only answered on the runner that owns the machine's fonts. So
+# does `kithara-ui-input`: its toolkit adapters are tested only under the iced
+# and masonry features that lane turns on through `kithara-ui`.
 #
 # The remaining support targets live inside product crates and cannot be dropped
 # here without taking product tests along; `default-filter` in
@@ -1047,7 +1054,12 @@ prefix_args = [
 
 [test.lanes.ui]
 program = "cargo"
-owns = ["crates/kithara-ui/", "crates/kithara-app/src/gui/"]
+owns = [
+  "crates/kithara-ui/",
+  "crates/kithara-ui-input/",
+  "crates/kithara-ui-shaping/",
+  "crates/kithara-app/src/gui/",
+]
 default_features = [
   "kithara-app/backend-cpal",
   "kithara-ui/capture",
@@ -1065,6 +1077,10 @@ prefix_args = [
   "-p",
   "kithara-ui",
   "-p",
+  "kithara-ui-input",
+  "-p",
+  "kithara-ui-shaping",
+  "-p",
   "kithara-app",
   "--cargo-profile",
   "test-release",
@@ -1072,7 +1088,7 @@ prefix_args = [
 ]
 suffix_args = [
   "-E",
-  "package(kithara-ui) | (package(kithara-app) & test(/^gui::/))",
+  "package(kithara-ui) | package(kithara-ui-input) | package(kithara-ui-shaping) | (package(kithara-app) & test(/^gui::/))",
 ]
 
 [test.lanes.ui-perf]

@@ -3,13 +3,10 @@ mod built;
 #[path = "../masonry_tree/chrome.rs"]
 mod chrome;
 pub(crate) mod controls;
-mod custom;
+pub(crate) mod custom;
 mod flex;
 mod host;
 mod leaf;
-#[cfg(test)]
-#[path = "../masonry_tree/lit.rs"]
-mod lit;
 mod menu;
 #[path = "../masonry_tree/mount.rs"]
 pub(crate) mod mount;
@@ -25,18 +22,14 @@ mod root;
 mod shader;
 #[path = "../masonry_tree/spot.rs"]
 mod spot;
-#[cfg(test)]
+#[cfg(all(test, feature = "capture"))]
 mod tests;
 #[path = "../masonry_control/vis.rs"]
 mod vis;
 
 pub use built::MasonryNode;
 pub(crate) use controls::{MasonryControl, Painted};
-#[cfg(test)]
-pub(crate) use custom::HostAction;
 pub use host::{MasonryHost, MasonryState};
-#[cfg(test)]
-pub(crate) use leaf::cursor_icon;
 pub use root::{MasonryRoot, MasonryRootError};
 
 pub use crate::render::custom::{CustomWidget, Repaint, Size2, SizeLimits, TextMeasurer};

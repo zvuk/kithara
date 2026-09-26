@@ -305,7 +305,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        super::zoom_math::{MAX_ZOOM, norm_to_x, window_bounds, x_to_norm},
+        super::zoom_math::{Zoom, norm_to_x, window_bounds, x_to_norm},
         *,
     };
     use crate::{
@@ -548,7 +548,7 @@ mod tests {
     fn the_deck_and_the_overview_mark_the_same_track_positions() {
         const WIDTH: f32 = 400.0;
         let hole = [0.25, 0.5];
-        let window = window_bounds(0.375, MAX_ZOOM);
+        let window = window_bounds(0.375, f32::from(Zoom::MAX));
 
         let deck = marked(coverage_spans(
             &[hole],
@@ -560,7 +560,7 @@ mod tests {
         assert_within(
             deck.map(|x| x_to_norm(x, &window, WIDTH).expect("a positive width")),
             hole,
-            MAX_ZOOM / WIDTH,
+            f32::from(Zoom::MAX) / WIDTH,
         );
         assert_within(overview.map(|x| x / WIDTH), hole, 1.0 / WIDTH);
     }

@@ -3,7 +3,7 @@ message: |
   Declaring or constructing a typed buffer-pool region outside its composition
   owner creates a second owner and bypasses the shared hard budget. Only
   `crates/kithara-app/src/pools.rs`, `crates/kithara-ffi/src/pools.rs`, and the
-  `kithara-ui` draw-buffer facade own production schemas and region
+  `kithara-ui-draw` draw-buffer facade own production schemas and region
   construction. Components receive the existing facade and acquire registered
   buffers with `get::<K>()` or `get_with_len::<K>()`. Schema builders are
   private to their declaring module; manual `HasPool` implementations are
@@ -18,7 +18,7 @@ ignores:
   # The draw buffer family's own home, the same exemption `kithara-bufpool` has:
   # `DrawBuffers` is the facade a UI host injects through `UiConfig`, so its
   # constructor is the owner site, not a component reaching for storage.
-  - crates/kithara-ui/src/draw/pool/**
+  - crates/kithara-ui-draw/src/draw/pool/**
   - crates/kithara-devtools/**
   - crates/kithara-test-fixtures/**
   - crates/kithara-test-macros/**

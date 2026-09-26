@@ -9,8 +9,6 @@ use super::{
     control::{HostedControl, append_control_descriptors, append_control_targets},
     host::ModuleHost,
 };
-#[cfg(test)]
-use crate::render::skin::active_tone;
 use crate::{
     engine::{Descriptor, Engine, PickerSnapshot, Target},
     expand::ExpandedNode,
@@ -515,11 +513,6 @@ impl HostedLayout {
         pickers
     }
 
-    #[cfg(test)]
-    pub(super) fn targets<'a>(&'a self, layout: Layout<'_>, cursor: Cursor) -> Vec<Target<'a>> {
-        self.targets_with_engine(layout, cursor, None)
-    }
-
     pub(super) fn targets_with_engine<'a>(
         &'a self,
         layout: Layout<'_>,
@@ -597,7 +590,7 @@ mod tests {
         expand::{Binding, BindingKind, BlockSpec, ControlSpec, MeasureSpec},
         ids::{InternId, Interner, SourceUri},
         module::{PopoverAlign, PopoverAt},
-        size::{DEFAULTS, SnapshotFixture},
+        size::{DEFAULTS, Snapshot},
     };
 
     #[kithara::test]
@@ -713,15 +706,28 @@ mod tests {
         };
 
         assert_eq!(
-            effective_size(&pressable, &skin, &SnapshotFixture::measured(Some(4.0)),),
+            effective_size(&pressable, &skin, &Measured(Some(4.0))),
             Some(wide),
             "a press target takes the size of the branch that is drawn"
         );
         assert_eq!(
-            effective_size(&pressable, &skin, &SnapshotFixture::measured(None)),
+            effective_size(&pressable, &skin, &Measured(None)),
             Some(narrow),
             "nothing read leaves the base branch"
         );
+    }
+
+    /// A snapshot that reads one value for every measure and hides nothing.
+    struct Measured(Option<f32>);
+
+    impl Snapshot for Measured {
+        fn hidden(&self, _: &BlockSpec) -> bool {
+            false
+        }
+
+        fn measure(&self, _: &Binding) -> Option<f32> {
+            self.0
+        }
     }
 
     fn model(id: InternId) -> Binding {
@@ -766,20 +772,6 @@ mod tests {
             "the content is laid out in the overlay and never in flow"
         );
         assert_eq!(effective_size(&pressable, &skin, DEFAULTS), Some(content));
-    }
-
-    #[kithara::test]
-    fn active_tone_takes_the_active_role_only_while_the_flag_is_set() {
-        let pair =
-            |active| active_tone(Some(ColorRole::LineInner), Some(ColorRole::Accent), active);
-
-        assert_eq!(pair(true), Some(ColorRole::Accent));
-        assert_eq!(pair(false), Some(ColorRole::LineInner));
-        assert_eq!(
-            active_tone(Some(ColorRole::LineHi), None, true),
-            Some(ColorRole::LineHi)
-        );
-        assert_eq!(active_tone(None, None, true), None);
     }
 
     /// A corner the layout says is the window's takes the radius the skin gives

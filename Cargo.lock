@@ -5957,22 +5957,25 @@ dependencies = [
  "iced_tiny_skia",
  "iced_wgpu",
  "kithara-apple",
- "kithara-bufpool",
  "kithara-derive",
  "kithara-platform",
  "kithara-test-macros",
  "kithara-test-utils",
+ "kithara-ui",
+ "kithara-ui-capture",
+ "kithara-ui-draw",
+ "kithara-ui-input",
+ "kithara-ui-lottie",
+ "kithara-ui-shaping",
  "kithara-workspace-hack",
  "kurbo 0.12.0",
  "lucide-icons",
  "masonry",
  "naga 26.0.0",
  "num-traits",
- "parley",
  "png 0.17.16",
  "pollster",
  "ron",
- "roxmltree",
  "serde",
  "serde_yaml_ng",
  "skrifa 0.37.0",
@@ -5983,6 +5986,89 @@ dependencies = [
  "velato",
  "vello",
  "winit",
+]
+
+[[package]]
+name = "kithara-ui-capture"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "kurbo 0.12.0",
+ "num-traits",
+ "png 0.17.16",
+ "tempfile",
+]
+
+[[package]]
+name = "kithara-ui-draw"
+version = "0.0.1-alpha5"
+dependencies = [
+ "bon",
+ "derive-where",
+ "derive_more",
+ "fieldwork",
+ "iced",
+ "kithara-bufpool",
+ "kithara-derive",
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-ui-shaping",
+ "kithara-workspace-hack",
+ "kurbo 0.12.0",
+ "num-traits",
+ "roxmltree",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "kithara-ui-input"
+version = "0.0.1-alpha5"
+dependencies = [
+ "bon",
+ "fieldwork",
+ "iced",
+ "kithara-derive",
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-ui-draw",
+ "kithara-workspace-hack",
+ "masonry",
+ "num-traits",
+]
+
+[[package]]
+name = "kithara-ui-lottie"
+version = "0.0.1-alpha5"
+dependencies = [
+ "fieldwork",
+ "kithara-test-utils",
+ "kithara-ui-draw",
+ "kithara-workspace-hack",
+ "num-traits",
+ "thiserror 2.0.18",
+ "tracing",
+ "velato",
+]
+
+[[package]]
+name = "kithara-ui-shaping"
+version = "0.0.1-alpha5"
+dependencies = [
+ "derive_more",
+ "fieldwork",
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "lucide-icons",
+ "num-traits",
+ "parley",
+ "serde",
+ "skrifa 0.37.0",
+ "thiserror 2.0.18",
+ "unicode-segmentation",
 ]
 
 [[package]]

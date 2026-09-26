@@ -5,7 +5,7 @@ use std::{
 };
 
 use masonry::core::NewWidget;
-#[cfg(any(test, feature = "capture"))]
+#[cfg(feature = "capture")]
 use masonry::core::WidgetId;
 
 use super::{
@@ -66,7 +66,7 @@ pub struct MasonryHost<'a, Action = UiEvent> {
 /// Retained host state shared across Masonry document rebuilds.
 #[derive(Clone, Default)]
 pub struct MasonryState {
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
     paths: Rc<RefCell<BTreeMap<String, WidgetId>>>,
     popovers: Rc<RefCell<BTreeMap<String, Rc<PopoverState>>>>,
     windows: Rc<RefCell<Windows>>,
@@ -74,7 +74,7 @@ pub struct MasonryState {
 }
 
 impl MasonryState {
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
     pub(crate) fn clear_paths(&self) {
         self.paths.borrow_mut().clear();
     }
@@ -90,12 +90,12 @@ impl MasonryState {
         state
     }
 
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
     pub(crate) fn tag_path(&self, path: &str, id: WidgetId) {
         self.paths.borrow_mut().insert(path.to_owned(), id);
     }
 
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
     pub(crate) fn widget_id(&self, path: &str) -> Option<WidgetId> {
         self.paths.borrow().get(path).copied()
     }
@@ -555,7 +555,7 @@ where
         if self.ctx.ui.driven {
             output.watch_placement(path_id);
         }
-        #[cfg(any(test, feature = "capture"))]
+        #[cfg(feature = "capture")]
         self.state.tag_path(path, output.widget_id());
         if custom_installed {
             return output;

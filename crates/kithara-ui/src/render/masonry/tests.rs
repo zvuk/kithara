@@ -6,10 +6,15 @@ use std::{
 };
 
 use kithara_platform::time::Duration;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    kithara,
+    test::usdt::{self, ProbeEvent},
+};
 use masonry::{
     app::{RenderRoot, RenderRootOptions, RenderRootSignal, WindowSizePolicy},
-    core::{CursorIcon, Handled, Ime, PointerEvent, TextEvent, WindowEvent},
+    core::{
+        CursorIcon, Handled, Ime, PointerEvent, TextEvent, Widget, WidgetId, WidgetRef, WindowEvent,
+    },
     dpi::{PhysicalPosition, PhysicalSize},
     kurbo::{Point, Size as MasonrySize},
     theme::default_property_set,
@@ -26,14 +31,13 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     CustomWidget, MasonryHost, MasonryNode, MasonryRoot, MasonryState, Repaint, Size2, SizeLimits,
-    TextMeasurer, built::RootParts, leaf::DragProgram, node::Node,
+    TextMeasurer, built::RootParts, leaf::DragProgram,
 };
 use crate::{
     atoms::bar::context::Context,
     builtin,
     compile::{CompiledUi, compile},
     draw::{DrawListBuilder, Pt, Rect, Rgba},
-    geom::Transform,
     ids::{EndpointId, SourceUri},
     interact::{Hit, Input, Key as NeutralKey, Outcome, PointerOwnership, PointerPhase, Scroll},
     module::IconName,
@@ -46,9 +50,9 @@ use crate::{
         document,
         document::{Clock, Ctx},
         picker_hits,
+        vis::{VisDeclaration, VisFrame},
     },
     shaping::{FontPolicy, TextContext},
-    skin::parse_skin_over,
     source::{MemResolver, UiConfig},
     view,
 };
@@ -679,25 +683,13 @@ fn masonry_layout_rects_equal_snapped_neutral_rects() {
         .unwrap_or_else(|error| panic!("builtin layout must compile: {error}"));
         for (width, height) in [(1280, 720), (960, 600), (320, 240)] {
             let expected = fixture_section(fixture, preset, width, height);
-            let output = document::render(
-                &ui.root,
-                ctx(&ui, &reads),
-                MasonryHost::new(ctx(&ui, &reads), &skin),
-            );
-            let ids = output.document_ids().to_vec();
-            assert_eq!(
-                ids.len(),
-                expected.len(),
-                "{preset} @ {width}x{height} did not retain exactly one real Masonry node per fixture path"
-            );
-            let mut raw_ids = ids.iter().map(|id| id.to_raw()).collect::<Vec<_>>();
-            raw_ids.sort_unstable();
-            raw_ids.dedup();
-            assert_eq!(
-                raw_ids.len(),
-                ids.len(),
-                "{preset} @ {width}x{height} reused a Masonry WidgetId"
-            );
+            let (output, built) = DocumentNodes::built(|| {
+                document::render(
+                    &ui.root,
+                    ctx(&ui, &reads),
+                    MasonryHost::new(ctx(&ui, &reads), &skin),
+                )
+            });
             let root = MasonryRoot::new(
                 output,
                 RenderRootOptions {
@@ -711,6 +703,12 @@ fn masonry_layout_rects_equal_snapped_neutral_rects() {
             )
             .unwrap_or_else(|error| panic!("Masonry root must retain typed actions: {error}"));
             let root = root.root();
+            let ids = built.in_tree(root);
+            assert_eq!(
+                ids.len(),
+                expected.len(),
+                "{preset} @ {width}x{height} did not retain exactly one real Masonry node per fixture path"
+            );
 
             for (id, expected) in ids.into_iter().zip(expected) {
                 let widget = root.get_widget(id).unwrap_or_else(|| {
@@ -769,16 +767,15 @@ fn revealed_cell_is_hidden(width: u32) -> bool {
     let registry = fixture_registry();
     let reads = FixtureReads;
     let ui = fixture_ui("revealing-bar", REVEALING_BAR, &registry);
-    let output = document::render(
-        &ui.root,
-        ctx(&ui, &reads),
-        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
-    );
-    let wide = *output
-        .document_ids()
-        .last()
-        .unwrap_or_else(|| panic!("the fixture must retain the revealed cell"));
+    let (output, built) = DocumentNodes::built(|| {
+        document::render(
+            &ui.root,
+            ctx(&ui, &reads),
+            MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+        )
+    });
     let mut root = masonry_root(output, width, 60);
+    let wide = built.last_in(root.root());
     root.redraw()
         .unwrap_or_else(|error| panic!("the revealing bar must compose: {error}"));
     root.root()
@@ -810,16 +807,15 @@ fn a_cell_comes_back_when_the_room_grows_to_reach_it() {
     let registry = fixture_registry();
     let reads = FixtureReads;
     let ui = fixture_ui("revealing-bar-resized", REVEALING_BAR, &registry);
-    let output = document::render(
-        &ui.root,
-        ctx(&ui, &reads),
-        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
-    );
-    let wide = *output
-        .document_ids()
-        .last()
-        .unwrap_or_else(|| panic!("the fixture must retain the revealed cell"));
+    let (output, built) = DocumentNodes::built(|| {
+        document::render(
+            &ui.root,
+            ctx(&ui, &reads),
+            MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+        )
+    });
     let mut root = masonry_root(output, 120, 60);
+    let wide = built.last_in(root.root());
     root.redraw()
         .unwrap_or_else(|error| panic!("the narrow bar must compose: {error}"));
     root.handle_window_event(WindowEvent::Resize(PhysicalSize::new(240, 60)))
@@ -2019,12 +2015,10 @@ fn picker_portal_honours_engine_and_leaf_owners_beneath_the_root_window_layer() 
         );
         let host =
             MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
-        let output = document::render(&ui.root, ctx(&ui, &reads), host);
-        let control_id = *output
-            .document_ids()
-            .last()
-            .unwrap_or_else(|| panic!("{module_id} picker must have a real control node"));
+        let (output, built) =
+            DocumentNodes::built(|| document::render(&ui.root, ctx(&ui, &reads), host));
         let mut root = masonry_root(output, 200, 120);
+        let control_id = built.last_in(root.root());
         root.redraw()
             .unwrap_or_else(|error| panic!("{module_id} picker must compose: {error}"));
 
@@ -2212,12 +2206,10 @@ fn scope_strip_root() -> (MasonryRoot<TestAction>, (f32, f32)) {
     let reads = FixtureReads;
     let ui = fixture_ui("leaf-fixture", SCOPE_STRIP, &registry);
     let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
-    let output = document::render(&ui.root, ctx(&ui, &reads), host);
-    let control_id = *output
-        .document_ids()
-        .last()
-        .unwrap_or_else(|| panic!("the scope strip must have a real control node"));
+    let (output, built) =
+        DocumentNodes::built(|| document::render(&ui.root, ctx(&ui, &reads), host));
     let mut root = masonry_root(output, 200, 120);
+    let control_id = built.last_in(root.root());
     root.redraw()
         .unwrap_or_else(|error| panic!("the scope strip must compose: {error}"));
     let bounds = root
@@ -2415,287 +2407,17 @@ fn assert_scalar_value(actions: &[TestAction], path: &str, expected: f32) {
     assert_eq!(*value, f64::from(expected));
 }
 
-/// Whether this host has a painter for a control, or still mounts it as a
-/// correctly-sized empty box.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Paints {
-    Yes,
-    /// A native pass draws this control after the Vello scene.
-    Native,
-    /// There is no picture to draw. A window-drag region is a place the hand
-    /// grabs the window by, and the immediate host draws nothing for it either,
-    /// so an empty scene here is the control working rather than a gap. That
-    /// claim is checked on both hosts rather than taken on trust, by
-    /// `the_retained_window_drag_region_carries_the_drag_and_draws_nothing` here
-    /// and `a_drag_surface_carries_the_window_and_draws_nothing` in
-    /// `render::window::surface`.
-    Nothing,
-}
-
-/// Every control the shared base draws, and whether Masonry draws it today.
-///
-/// Native output is counted separately from Vello output, so an intentionally
-/// empty Vello scene cannot make a working second-pass control look undrawn.
-///
-/// Every `ControlSpec` variant has a row. A census that covered only the
-/// controls someone remembered to add left the rest invisible: not drawn, and
-/// not reported as undrawn either.
-const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
-    ("Brand", Paints::Yes, r#"Brand(id: "control")"#),
-    ("Spacer", Paints::Yes, r#"Spacer(id: "control")"#),
-    ("Divider", Paints::Yes, r#"Divider(id: "control")"#),
-    (
-        "PresetSelector",
-        Paints::Yes,
-        r#"PresetSelector(id: "control")"#,
-    ),
-    (
-        "SettingsButton",
-        Paints::Yes,
-        r#"SettingsButton(id: "control")"#,
-    ),
-    ("DeckSummary", Paints::Yes, r#"DeckSummary(id: "control")"#),
-    (
-        "WindowDrag",
-        Paints::Nothing,
-        r#"WindowDrag(id: "control")"#,
-    ),
-    (
-        "TitleBar",
-        Paints::Yes,
-        r#"TitleBar(id: "control", label: "KITHARA")"#,
-    ),
-    (
-        "WindowControls",
-        Paints::Yes,
-        r#"WindowControls(id: "control")"#,
-    ),
-    (
-        // The placeholder names which stand-in a deck shows when no tempo was
-        // measured, not a word to display; `time` is the one the shipped decks
-        // ask for.
-        "Bpm",
-        Paints::Yes,
-        r#"Bpm(id: "control", placeholder: Some("time"))"#,
-    ),
-    (
-        "Time",
-        Paints::Yes,
-        r#"Time(id: "control", read: Model(id: "deck.view.zoom"))"#,
-    ),
-    (
-        "Scalar",
-        Paints::Yes,
-        r#"Scalar(id: "control", read: Model(id: "deck.view.zoom"))"#,
-    ),
-    (
-        "Wave",
-        Paints::Yes,
-        r#"Wave(id: "control", read: Model(id: "demo.wave"))"#,
-    ),
-    (
-        "Vis",
-        Paints::Native,
-        r#"Vis(id: "control", read: Model(id: "vis.preset"))"#,
-    ),
-    (
-        "Sprite",
-        Paints::Yes,
-        r#"Sprite(id: "control", sheet: "spinner", seconds: 1.6, read: Model(id: "ui.clock.seconds"))"#,
-    ),
-    (
-        "Lottie",
-        Paints::Yes,
-        r#"Lottie(id: "control", artwork: "pulse", seconds: 1.6, read: Model(id: "ui.clock.seconds"))"#,
-    ),
-    (
-        // Unlike `Vis`, a shader is not a second pass beside the scene: the
-        // retained host encodes the image draw into the Vello scene itself, and
-        // the GPU pass fills the very image that draw points at.
-        "Shader",
-        Paints::Yes,
-        r#"Shader(id: "control", source: "census.wgsl", uniforms: { "level": Model(id: "deck.view.zoom") })"#,
-    ),
-    (
-        // What it draws is the application's, so this says only that the host
-        // reached the registered widget and replayed what it drew.
-        "Custom",
-        Paints::Yes,
-        r#"Custom(id: "control", kind: "census-extension")"#,
-    ),
-    (
-        "Table",
-        Paints::Yes,
-        r#"Table(id: "control", read: Model(id: "library.visible_tracks"), columns: [(id: "title", label: "TITLE", style: Primary, width: 180.0)])"#,
-    ),
-    (
-        "Tree",
-        Paints::Yes,
-        r#"Tree(id: "control", read: Model(id: "library.tree"), query: Model(id: "library.query"))"#,
-    ),
-    (
-        // The path in view is the strip's own reading, and the fixture never
-        // bound one: a strip with no path names nothing, so it drew nothing
-        // for a reason that had nothing to do with this host.
-        "ContextBar",
-        Paints::Yes,
-        r#"ContextBar(id: "control", read: Model(id: "library.breadcrumb"), scope_items: ["ALL", "MINE"], scope: Model(id: "library.scope"), write: Model(id: "library.scope"))"#,
-    ),
-    (
-        "Text",
-        Paints::Yes,
-        r#"Text(id: "control", label: Some("HELLO"))"#,
-    ),
-    (
-        "Knob",
-        Paints::Yes,
-        r#"Knob(id: "control", read: Parameter(id: "player.output.volume"), write: Parameter(id: "player.output.volume"))"#,
-    ),
-    (
-        "Chip",
-        Paints::Yes,
-        r#"Chip(id: "control", label: "A", read: Model(id: "ui.menu.open"))"#,
-    ),
-    (
-        "NavItem",
-        Paints::Yes,
-        r#"NavItem(id: "control", label: "LIBRARY", icon: Playlist, read: Model(id: "ui.menu.open"))"#,
-    ),
-    (
-        "Button",
-        Paints::Yes,
-        r#"Button(id: "control", label: "PLAY", read: Model(id: "ui.menu.open"))"#,
-    ),
-    (
-        "Glyph",
-        Paints::Yes,
-        r#"Glyph(id: "control", icon: Playlist)"#,
-    ),
-    (
-        "TabLarge",
-        Paints::Yes,
-        r#"TabLarge(id: "control", label: "MIXER", read: Model(id: "ui.menu.open"))"#,
-    ),
-    (
-        "Toggle",
-        Paints::Yes,
-        r#"Toggle(id: "control", read: Model(id: "ui.menu.open"))"#,
-    ),
-    (
-        "Checkbox",
-        Paints::Yes,
-        r#"Checkbox(id: "control", read: Model(id: "ui.menu.open"))"#,
-    ),
-    (
-        "Segmented",
-        Paints::Yes,
-        r#"Segmented(id: "control", items: ["A", "B"], read: Model(id: "library.scope"))"#,
-    ),
-    (
-        "Select",
-        Paints::Yes,
-        r#"Select(id: "control", label: "QUALITY")"#,
-    ),
-    (
-        "StatusDot",
-        Paints::Yes,
-        r#"StatusDot(id: "control", label: "LIVE")"#,
-    ),
-    (
-        "Swatch",
-        Paints::Yes,
-        r#"Swatch(id: "control", role: Accent, label: "ACCENT")"#,
-    ),
-    (
-        "Cell",
-        Paints::Yes,
-        r#"Cell(id: "control", label: Some("A1"))"#,
-    ),
-    (
-        "Readout",
-        Paints::Yes,
-        r#"Readout(id: "control", label: Some("BPM"), read: Model(id: "library.breadcrumb"))"#,
-    ),
-    (
-        "Meter",
-        Paints::Yes,
-        r#"Meter(id: "control", read: Model(id: "deck.view.zoom"))"#,
-    ),
-    (
-        "VuVertical",
-        Paints::Yes,
-        r#"VuVertical(id: "control", read: Telemetry(id: "player.output.levels"))"#,
-    ),
-    (
-        "VuStereo",
-        Paints::Yes,
-        r#"VuStereo(id: "control", read: Telemetry(id: "player.output.levels"))"#,
-    ),
-    (
-        "Fader",
-        Paints::Yes,
-        r#"Fader(id: "control", read: Parameter(id: "player.output.volume"), write: Parameter(id: "player.output.volume"))"#,
-    ),
-    (
-        "Crossfader",
-        Paints::Yes,
-        r#"Crossfader(id: "control", read: Parameter(id: "player.output.volume"), write: Parameter(id: "player.output.volume"))"#,
-    ),
-    (
-        "PortalMap",
-        Paints::Yes,
-        r#"PortalMap(id: "control", read: Model(id: "pivot.map"))"#,
-    ),
-    (
-        "Range",
-        Paints::Yes,
-        r#"Range(id: "control", read: Model(id: "pivot.range"), write: Parameter(id: "pivot.range"))"#,
-    ),
-];
-
-/// The kind the census document names, registered below so the `Custom` row
-/// draws the extension it stands for rather than the empty box a host falls to
-/// when the registry it was handed does not hold the name.
-const CENSUS_KIND: &str = "census-extension";
+/// The kind the input fixture names. The paint census registers a kind of its
+/// own, so a row of it cannot start answering pointers to keep a test green.
+const PRESS_KIND: &str = "press-extension";
 
 /// Opaque, so an empty Vello scene cannot be mistaken for ink nothing can see.
-const CENSUS_INK: Rgba = Rgba {
+const PRESS_INK: Rgba = Rgba {
     a: 1.0,
     b: 1.0,
     g: 1.0,
     r: 1.0,
 };
-
-/// A registered extension that paints, so the `Custom` row answers for the
-/// mount path rather than for a widget that chose to draw nothing.
-struct CensusExtension;
-
-impl CustomWidget for CensusExtension {
-    type Action = ();
-
-    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
-        Size2::new(40.0, 40.0)
-    }
-
-    fn paint(
-        &mut self,
-        list: &mut DrawListBuilder,
-        _text: &mut TextMeasurer<'_>,
-        bounds: Rect,
-        skin: &CustomSkin,
-    ) {
-        list.fill_rect(bounds, skin.color("ink").unwrap_or(CENSUS_INK));
-    }
-}
-
-fn census_kinds() -> CustomKinds {
-    CustomKinds::default().with(CENSUS_KIND, || CensusExtension, |()| UiEvent::OpenSettings)
-}
-
-/// The kind the input fixture names. Registered apart from the census one so a
-/// row of the paint census cannot start answering pointers to keep a test
-/// green.
-const PRESS_KIND: &str = "press-extension";
 
 /// An extension that claims a press and answers it with its own action.
 struct PressExtension;
@@ -2724,1137 +2446,12 @@ impl CustomWidget for PressExtension {
         bounds: Rect,
         _skin: &CustomSkin,
     ) {
-        list.fill_rect(bounds, CENSUS_INK);
+        list.fill_rect(bounds, PRESS_INK);
     }
 }
 
 fn press_kinds() -> CustomKinds {
     CustomKinds::default().with(PRESS_KIND, || PressExtension, |()| UiEvent::OpenSettings)
-}
-
-/// The sources the census table names beside the controls themselves. Only the
-/// shader row needs one; an entry nobody asks for costs the other rows nothing.
-const CENSUS_SOURCES: &[(&str, &str)] = &[(
-    "census.wgsl",
-    r"
-@fragment
-fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    return vec4<f32>(kithara.level.x, position.x / kithara.viewport.x, 0.0, 1.0);
-}
-",
-)];
-
-/// Mounts one control on its own and asks Masonry to draw it. A document that
-/// holds nothing else has nothing else to contribute, so an empty scene means
-/// that control drew nothing.
-#[kithara::test]
-fn masonry_draws_every_control_the_census_claims_it_draws() {
-    let mut registry = fixture_registry();
-    registry.insert(
-        EndpointCategory::Model,
-        "ui.menu.open",
-        EndpointDesc::new(ValueKind::Bool),
-    );
-    let reads = FixtureReads;
-    let skin = Skin::resolve_with_font_policy(
-        builtin::skin_doc().clone(),
-        builtin::text_doc(),
-        &SourceUri("fixture:masonry-control-census".to_owned()),
-        &builtin::resolver(),
-        FontPolicy::Embedded,
-    )
-    .unwrap_or_else(|error| panic!("the census skin must resolve: {error}"));
-    let kinds = census_kinds();
-    let observed = CONTROL_CENSUS
-        .iter()
-        .map(|(name, _, control)| {
-            let ui = fixture_ui_with_sources(
-                "census",
-                &format!(
-                    r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [{control}])"#
-                ),
-                &registry,
-                CENSUS_SOURCES,
-            );
-            let frame = ctx(&ui, &reads).with_kinds(&kinds);
-            let output = document::render(&ui.root, frame, MasonryHost::new(frame, &skin));
-            let mut root = masonry_root(output, 240, 120);
-            let (scene, _) = root.redraw().unwrap_or_else(|error| {
-                panic!("`{name}` must reach a Masonry paint pass: {error}")
-            });
-            let encoding = scene.encoding();
-            let paints = if !(encoding.is_empty() && encoding.resources.glyphs.is_empty()) {
-                Paints::Yes
-            } else if !root.vis_declarations().is_empty() {
-                Paints::Native
-            } else {
-                Paints::Nothing
-            };
-            (*name, paints)
-        })
-        .collect::<Vec<_>>();
-    let expected = CONTROL_CENSUS
-        .iter()
-        .map(|(name, paints, _)| (*name, *paints))
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        observed, expected,
-        "the census is stale — move a row when its painter lands, and never leave the census \
-         describing a host it no longer matches"
-    );
-}
-
-/// A skin dressing the census extension in one named colour, so what an
-/// extension is drawn in can be changed without changing the extension.
-fn dressed(ink: &str) -> Skin {
-    let origin = SourceUri("fixture:masonry-dressed-extension".to_owned());
-    let text = format!(
-        r#"(schema: "kithara.skin", version: 1, id: "dressed",
-            custom: {{ "{CENSUS_KIND}": {{ "ink": Color("{ink}") }} }})"#
-    );
-    let document = parse_skin_over(builtin::skin_doc(), &text, &origin)
-        .unwrap_or_else(|error| panic!("the dressing patch must parse: {error}"));
-    Skin::resolve_with_font_policy(
-        document,
-        builtin::text_doc(),
-        &origin,
-        &builtin::resolver(),
-        FontPolicy::Embedded,
-    )
-    .unwrap_or_else(|error| panic!("the dressed skin must resolve: {error}"))
-}
-
-/// What this host draws for a mounted extension under one skin.
-fn extension_paint(skin: &Skin) -> Vec<u32> {
-    let registry = fixture_registry();
-    let reads = FixtureReads;
-    let kinds = census_kinds();
-    let ui = fixture_ui(
-        "dressed",
-        &format!(
-            r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
-                Custom(id: "drawn", kind: "{CENSUS_KIND}")])"#
-        ),
-        &registry,
-    );
-    let frame = ctx(&ui, &reads).with_kinds(&kinds);
-    let output = document::render(&ui.root, frame, MasonryHost::new(frame, skin));
-    let mut root = masonry_root(output, 240, 120);
-    let (scene, _) = root
-        .redraw()
-        .unwrap_or_else(|error| panic!("the dressed extension must be drawn: {error}"));
-    scene.encoding().draw_data.clone()
-}
-
-/// The dressing is taken from the skin the leaf was mounted under, so two
-/// skins draw one extension two ways without the extension knowing either.
-#[kithara::test]
-fn a_mounted_extension_is_drawn_in_what_the_skin_dresses_its_kind_in() {
-    assert_ne!(
-        extension_paint(&dressed("#ff0000")),
-        extension_paint(&dressed("#0000ff")),
-        "the two skins dress this kind in two colours, so an extension painting the same under \
-         both is reading neither"
-    );
-}
-
-/// The mounted input contract, observed from both leaf adapters and the engine
-/// plan they share. Keeping this beside the paint census makes a new
-/// `ControlSpec` incomplete until it names both its picture and its gestures.
-///
-/// It enumerates kinds of control, so what a group declares over itself is
-/// outside it by construction: a stepping surface has no row here and cannot
-/// get one. Those are pinned as a gesture played to both hosts, in
-/// `render::parity::hand`.
-mod gesture_census {
-    use std::rc::Rc;
-
-    use kithara_test_utils::kithara;
-    use num_traits::cast::AsPrimitive;
-
-    use super::{
-        super::controls::Retained, CENSUS_SOURCES, CONTROL_CENSUS, FixtureReads, FixtureRegistry,
-        Handled, LATE_TABLE_ROWS, MasonryHost, MasonryRoot, MasonryState, PointerEvent, Pt,
-        ScrollDelta, fixture_registry, fixture_ui_with_sources, masonry_root, pointer_down,
-        pointer_move, pointer_scroll, pointer_up,
-    };
-    use crate::{
-        app::App,
-        builtin,
-        compile::{CompiledNode, CompiledUi},
-        draw::Rect,
-        expand::{Binding, ControlSpec, ExpandedNode},
-        ids::{InternId, SourceUri},
-        interact::Gestures,
-        mount,
-        registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
-        render::{
-            Clock, ReadValue, Reads, Skin, UiEvent,
-            controls::{Draws, Gesture, Paint, Reading},
-            document::{self, Ctx},
-            hosted::hosted_control_plan,
-            masonry::{HostAction, Painted},
-            parity::{
-                immediate::Immediate,
-                shared::{renderer, snapped},
-            },
-            tree,
-        },
-        shaping::FontPolicy,
-        view,
-    };
-
-    #[derive(Clone, Copy)]
-    struct Row {
-        name: &'static str,
-        gestures: Gestures,
-    }
-
-    const ROWS: &[Row] = &[
-        Row {
-            name: "Brand",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Spacer",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Divider",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "PresetSelector",
-            gestures: Gestures::PRESS,
-        },
-        Row {
-            name: "SettingsButton",
-            gestures: Gestures::PRESS,
-        },
-        Row {
-            name: "DeckSummary",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "WindowDrag",
-            gestures: Gestures::DRAG,
-        },
-        Row {
-            name: "TitleBar",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "WindowControls",
-            gestures: Gestures::PRESS,
-        },
-        Row {
-            name: "Bpm",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Time",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Scalar",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Wave",
-            gestures: Gestures::PRESS,
-        },
-        Row {
-            name: "Vis",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Sprite",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Lottie",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Shader",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            // The document binds a custom control to nothing, so the toolkit
-            // recognises nothing over it: whatever it answers, it answers for
-            // itself, through the registry it was mounted from.
-            name: "Custom",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Table",
-            gestures: Gestures::DRAG.union(Gestures::WHEEL),
-        },
-        Row {
-            name: "Tree",
-            gestures: Gestures::DRAG
-                .union(Gestures::KEYBOARD)
-                .union(Gestures::WHEEL),
-        },
-        Row {
-            name: "ContextBar",
-            gestures: Gestures::PRESS.union(Gestures::KEYBOARD),
-        },
-        Row {
-            name: "Text",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Knob",
-            gestures: Gestures::DRAG
-                .union(Gestures::DOUBLE_CLICK)
-                .union(Gestures::WHEEL),
-        },
-        Row {
-            name: "Chip",
-            gestures: Gestures::PRESS,
-        },
-        Row {
-            name: "NavItem",
-            gestures: Gestures::PRESS,
-        },
-        Row {
-            name: "Button",
-            gestures: Gestures::PRESS,
-        },
-        Row {
-            name: "Glyph",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "TabLarge",
-            gestures: Gestures::PRESS,
-        },
-        Row {
-            name: "Toggle",
-            gestures: Gestures::PRESS,
-        },
-        Row {
-            name: "Checkbox",
-            gestures: Gestures::PRESS,
-        },
-        Row {
-            name: "Segmented",
-            gestures: Gestures::PRESS,
-        },
-        Row {
-            name: "Select",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "StatusDot",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Swatch",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Cell",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Readout",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Meter",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "VuVertical",
-            gestures: Gestures::DRAG,
-        },
-        Row {
-            name: "VuStereo",
-            gestures: Gestures::DRAG,
-        },
-        Row {
-            name: "Fader",
-            gestures: Gestures::DRAG,
-        },
-        Row {
-            name: "Crossfader",
-            gestures: Gestures::DRAG,
-        },
-        Row {
-            name: "PortalMap",
-            gestures: Gestures::empty(),
-        },
-        Row {
-            name: "Range",
-            gestures: Gestures::DRAG,
-        },
-    ];
-
-    #[derive(Clone, Copy, Default)]
-    struct Observed {
-        immediate: Gestures,
-        retained: Gestures,
-        special: Gestures,
-    }
-
-    struct Probe<'a> {
-        skin: &'a Skin,
-        reading: Reading<'a>,
-    }
-
-    trait ProbeControl {
-        fn observe(&self, probe: Probe<'_>) -> Observed;
-    }
-
-    impl<Control> ProbeControl for Control
-    where
-        Control: Draws,
-        Control::Painter: Retained + 'static,
-    {
-        fn observe(&self, probe: Probe<'_>) -> Observed {
-            let immediate = self.data(probe.reading).map_or(Gestures::empty(), |data| {
-                let grip = self.grip(probe.skin, &data);
-                Gesture::with_grip(
-                    "control",
-                    Paint::new(self.painter(probe.skin), data, probe.skin),
-                    grip,
-                    self.index_event(),
-                )
-                .map_or_else(|_| Gestures::empty(), |gesture| gesture.gestures())
-            });
-            let retained = self.data(probe.reading).map_or(Gestures::empty(), |data| {
-                let grip = self.grip(probe.skin, &data);
-                Painted::new(self.painter(probe.skin), data, probe.skin)
-                    .interactive(
-                        grip,
-                        "control".to_owned(),
-                        Rc::new(HostAction::new),
-                        self.index_event(),
-                    )
-                    .gestures()
-            });
-            Observed {
-                immediate,
-                retained,
-                special: Gestures::empty(),
-            }
-        }
-    }
-
-    macro_rules! passive {
-        ($($control:ty),+ $(,)?) => {
-            $(impl ProbeControl for $control {
-                fn observe(&self, _probe: Probe<'_>) -> Observed {
-                    Observed::default()
-                }
-            })+
-        };
-    }
-
-    passive!(
-        mount::TitleBar,
-        mount::Text<'_>,
-        mount::Custom,
-        mount::Shader<'_>,
-        mount::Vis,
-        mount::Table<'_>,
-        mount::Tree<'_>,
-    );
-
-    impl ProbeControl for mount::Drag {
-        fn observe(&self, _probe: Probe<'_>) -> Observed {
-            Observed {
-                special: Gestures::DRAG,
-                ..Observed::default()
-            }
-        }
-    }
-
-    impl ProbeControl for mount::Controls {
-        fn observe(&self, _probe: Probe<'_>) -> Observed {
-            Observed {
-                special: Gestures::PRESS,
-                ..Observed::default()
-            }
-        }
-    }
-
-    struct Apply<'a> {
-        probe: Probe<'a>,
-    }
-
-    impl Apply<'_> {
-        fn apply<Control: ProbeControl>(self, control: &Control) -> Observed {
-            control.observe(self.probe)
-        }
-    }
-
-    fn mounted(
-        path: InternId,
-        spec: &ControlSpec,
-        read: Option<&Binding>,
-        ctx: Ctx<'_, '_>,
-        skin: &Skin,
-    ) -> (Gestures, Gestures) {
-        let value = read.and_then(|binding| ctx.read(binding));
-        let leaf = mount::controls!(
-            spec,
-            Apply {
-                probe: Probe {
-                    reading: Reading {
-                        ctx,
-                        scope: ctx.scope(read),
-                        skin,
-                        value: value.as_ref(),
-                    },
-                    skin,
-                },
-            }
-        );
-        let engine = hosted_control_plan(path, spec, read, ctx, skin)
-            .map_or(Gestures::empty(), |plan| plan.gestures());
-        (
-            leaf.immediate.union(engine).union(leaf.special),
-            leaf.retained.union(engine).union(leaf.special),
-        )
-    }
-
-    fn find_control(node: &ExpandedNode) -> Option<(InternId, &ControlSpec, Option<&Binding>)> {
-        match node {
-            ExpandedNode::Control {
-                path, spec, read, ..
-            } => Some((*path, spec, read.as_ref())),
-            ExpandedNode::Object { child, .. }
-            | ExpandedNode::Optional { child, .. }
-            | ExpandedNode::Placed { child, .. }
-            | ExpandedNode::Pressable { child, .. }
-            | ExpandedNode::Reveal { child, .. }
-            | ExpandedNode::Scroll { child, .. } => find_control(child),
-            ExpandedNode::Adaptive { base, steps, .. } => find_control(base)
-                .or_else(|| steps.iter().find_map(|(_, branch)| find_control(branch))),
-            ExpandedNode::Row { children, .. }
-            | ExpandedNode::Column { children, .. }
-            | ExpandedNode::Slot { children, .. }
-            | ExpandedNode::Stage { children, .. } => children.iter().find_map(find_control),
-            ExpandedNode::Popover {
-                anchor, content, ..
-            } => find_control(anchor).or_else(|| find_control(content)),
-        }
-    }
-
-    fn compiled_control(ui: &CompiledUi) -> (InternId, &ControlSpec, Option<&Binding>) {
-        let root = match &ui.root {
-            CompiledNode::Module { root, .. } => root,
-            CompiledNode::Optional { child, .. } => {
-                let CompiledNode::Module { root, .. } = child.as_ref() else {
-                    panic!("the census fixture must compile to one module");
-                };
-                root
-            }
-            CompiledNode::Adaptive { .. } | CompiledNode::Split { .. } => {
-                panic!("the census fixture must contain one module")
-            }
-        };
-        find_control(root).unwrap_or_else(|| panic!("the census fixture must contain a control"))
-    }
-
-    /// A census short by a control agrees with the other census, which is short
-    /// by the same one, and neither reports a gap. Only the document contract
-    /// can say what the full set is.
-    #[kithara::test]
-    fn the_census_covers_every_control_the_document_can_name() {
-        let mut censused = CONTROL_CENSUS
-            .iter()
-            .map(|(name, _, _)| *name)
-            .collect::<Vec<_>>();
-        let mut declared = ControlSpec::KINDS.to_vec();
-        censused.sort_unstable();
-        declared.sort_unstable();
-
-        assert_eq!(
-            censused, declared,
-            "every `ControlSpec` variant needs a census row saying what it draws"
-        );
-    }
-
-    #[kithara::test]
-    fn every_control_names_the_same_mounted_gestures_in_both_hosts() {
-        let painted = CONTROL_CENSUS
-            .iter()
-            .map(|(name, _, _)| *name)
-            .collect::<Vec<_>>();
-        let gestured = ROWS.iter().map(|row| row.name).collect::<Vec<_>>();
-        assert_eq!(
-            gestured, painted,
-            "the paint and gesture censuses must cover the same controls in the same order"
-        );
-
-        let registry = census_registry();
-        let reads = FixtureReads;
-        let skin = census_skin();
-
-        for (row, (_, _, control)) in ROWS.iter().zip(CONTROL_CENSUS) {
-            let ui = fixture_ui_with_sources(
-                "gesture-census",
-                &format!(
-                    r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [{control}])"#
-                ),
-                &registry,
-                CENSUS_SOURCES,
-            );
-            let (path, spec, read) = compiled_control(&ui);
-            assert_eq!(
-                spec.kind(),
-                row.name,
-                "the census row for {} mounts a different control than it names",
-                row.name
-            );
-            let (immediate, retained) = mounted(path, spec, read, super::ctx(&ui, &reads), &skin);
-            assert_eq!(
-                immediate, row.gestures,
-                "{} changed its iced gesture contract",
-                row.name
-            );
-            assert_eq!(
-                retained, row.gestures,
-                "{} changed its Masonry gesture contract",
-                row.name
-            );
-        }
-    }
-
-    fn census_registry() -> FixtureRegistry {
-        let mut registry = fixture_registry();
-        registry.insert(
-            EndpointCategory::Model,
-            "ui.menu.open",
-            EndpointDesc::new(ValueKind::Bool),
-        );
-        registry
-    }
-
-    fn census_skin() -> Skin {
-        Skin::resolve_with_font_policy(
-            builtin::skin_doc().clone(),
-            builtin::text_doc(),
-            &SourceUri("fixture:gesture-census".to_owned()),
-            &builtin::resolver(),
-            FontPolicy::Embedded,
-        )
-        .unwrap_or_else(|error| panic!("the census skin must resolve: {error}"))
-    }
-
-    const DRIVEN_WIDTH: u32 = 240;
-    const DRIVEN_HEIGHT: u32 = 120;
-
-    /// The readings a driven control needs to have anything under the hand.
-    ///
-    /// A table with no rows takes no press for a reason that has nothing to do
-    /// with the host, so the driven census binds the rows the rest of the
-    /// fixture leaves out.
-    struct DrivenReads;
-
-    impl Reads for DrivenReads {
-        fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-            let id = endpoint.split_once('@').map_or(endpoint, |(id, _scope)| id);
-            if id == "library.visible_tracks" {
-                return Some(ReadValue::Table(&LATE_TABLE_ROWS));
-            }
-            FixtureReads.get(endpoint)
-        }
-    }
-
-    /// The single promise one driven sequence measures.
-    ///
-    /// A control that names a drag also names a press, and the two are
-    /// separate promises: measuring them together lets one cover for the
-    /// other. Each is driven on its own root by the event that carries it.
-    ///
-    /// A drag takes two moves, not one: `ItemDrag` spends the first fixing the
-    /// point the travel is measured from, so a single move is below every
-    /// threshold by construction and would measure the sequence, not the host.
-    #[derive(Clone, Copy, Debug)]
-    enum Named {
-        Press,
-        Drag,
-        Wheel,
-    }
-
-    impl Named {
-        fn declared_by(self, gestures: Gestures) -> bool {
-            match self {
-                Self::Press => gestures.contains(Gestures::PRESS),
-                Self::Drag => gestures.contains(Gestures::DRAG),
-                Self::Wheel => gestures.contains(Gestures::WHEEL),
-            }
-        }
-    }
-
-    /// What the retained host did with the event carrying the promise.
-    ///
-    /// Neither observable is sound alone: a control can take an event and
-    /// change only its own state, and the root answers `Handled::No` for a
-    /// path that emitted nothing at all.
-    #[derive(Clone, Copy, Debug, Default)]
-    struct Answer {
-        acted: bool,
-        handled: bool,
-    }
-
-    impl Answer {
-        fn or(self, other: Self) -> Self {
-            Self {
-                acted: self.acted || other.acted,
-                handled: self.handled || other.handled,
-            }
-        }
-
-        fn silent(self) -> bool {
-            !self.acted && !self.handled
-        }
-    }
-
-    fn take(root: &mut MasonryRoot<UiEvent>, event: PointerEvent) -> Answer {
-        let handled = root
-            .handle_pointer_event(event)
-            .unwrap_or_else(|error| panic!("driven input must stay typed: {error}"));
-        Answer {
-            acted: !root.take_actions().is_empty(),
-            handled: handled == Handled::Yes,
-        }
-    }
-
-    /// The middle of the box the control was actually laid out into.
-    ///
-    /// Window chrome answers before the tree and has no document leaf to
-    /// address; the middle of the root is on it, because it is the only thing
-    /// mounted.
-    fn aim(
-        root: &MasonryRoot<UiEvent>,
-        state: &MasonryState,
-        across: f64,
-        down: f64,
-    ) -> (f64, f64) {
-        state
-            .widget_id("demo/control")
-            .and_then(|id| root.root().get_widget(id))
-            .map_or_else(
-                || {
-                    (
-                        f64::from(DRIVEN_WIDTH) * across,
-                        f64::from(DRIVEN_HEIGHT) * down,
-                    )
-                },
-                |widget| {
-                    let origin = widget.ctx().window_origin();
-                    let size = widget.ctx().size();
-                    (
-                        origin.x + size.width * across,
-                        origin.y + size.height * down,
-                    )
-                },
-            )
-    }
-
-    /// Whether the press alone keeps this promise.
-    ///
-    /// `HostLayer::handle` answers `Down` and nothing else, because
-    /// `WindowCommand::Drag` gives the gesture to the window manager: no move
-    /// ever comes back for the toolkit to answer. Both hosts share that layer,
-    /// so this is the contract rather than a retained-host gap. It is named
-    /// here instead of skipped, so the census fails the day a handover starts
-    /// answering moves.
-    fn handed_over(name: &str, named: Named) -> bool {
-        name == "WindowDrag" && matches!(named, Named::Drag)
-    }
-
-    /// The document a census row is driven in: the control alone, filling the
-    /// window.
-    fn driven_document(control: &str, registry: &dyn EndpointRegistry) -> CompiledUi {
-        fixture_ui_with_sources(
-            "gesture-drive",
-            &format!(r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [{control}])"#),
-            registry,
-            CENSUS_SOURCES,
-        )
-    }
-
-    /// The retained host with the document mounted and laid out, beside the
-    /// state that says where each path was put.
-    fn driven_root(ui: &CompiledUi, skin: &Skin) -> (MasonryRoot<UiEvent>, MasonryState) {
-        let reads = DrivenReads;
-        let state = MasonryState::default();
-        let host = MasonryHost::new(super::ctx(ui, &reads), skin).with_state(state.clone());
-        let output = document::render(&ui.root, super::ctx(ui, &reads), host);
-        let mut root = masonry_root(output, DRIVEN_WIDTH, DRIVEN_HEIGHT);
-        root.redraw()
-            .unwrap_or_else(|error| panic!("the driven control must lay out: {error}"));
-        (root, state)
-    }
-
-    fn driven(named: Named, control: &str, registry: &dyn EndpointRegistry, skin: &Skin) -> Answer {
-        /// The interior of a box, in fractions of its own width and height.
-        ///
-        /// A control is not uniformly live: a strip answers on its crumbs and not
-        /// in the gap between them, and a table answers on a row. Aiming at one
-        /// point measures where the aim landed, not what the control takes, so
-        /// every point gets its own root and the control answers if any does.
-        const AIMS: &[f64] = &[0.25, 0.5, 0.75];
-
-        let ui = driven_document(control, registry);
-        let mut answer = Answer::default();
-        for across in AIMS {
-            for down in AIMS {
-                let (mut root, state) = driven_root(&ui, skin);
-                let (x, y) = aim(&root, &state, *across, *down);
-                answer = answer.or(at(named, &mut root, x, y));
-            }
-        }
-        answer
-    }
-
-    fn at(named: Named, root: &mut MasonryRoot<UiEvent>, x: f64, y: f64) -> Answer {
-        match named {
-            Named::Press => {
-                let down = take(root, pointer_down(x, y));
-                let up = take(root, pointer_up(x, y));
-                down.or(up)
-            }
-            Named::Drag => {
-                let _down = take(root, pointer_down(x, y));
-                let first = take(root, pointer_move(x + 2.0, y));
-                first.or(take(root, pointer_move(x + 24.0, y)))
-            }
-            Named::Wheel => take(
-                root,
-                pointer_scroll(x, y, ScrollDelta::LineDelta(0.0, -2.0)),
-            ),
-        }
-    }
-
-    /// An application standing in for the one a driven row has none of.
-    ///
-    /// The immediate host keeps nothing between frames, so what a control did
-    /// with a gesture shows only in what the document published and in whether
-    /// the tree took the event. This keeps the first; the driver answers the
-    /// second.
-    struct Driven<'a> {
-        skin: &'a Skin,
-        published: Vec<UiEvent>,
-    }
-
-    impl Reads for Driven<'_> {
-        fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-            DrivenReads.get(endpoint)
-        }
-    }
-
-    impl App for Driven<'_> {
-        fn document(&self) -> &str {
-            "fixture.klayout.ron"
-        }
-
-        fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
-            with(self)
-        }
-
-        fn skin(&self) -> &Skin {
-            self.skin
-        }
-
-        fn update(&mut self, event: UiEvent) {
-            self.published.push(event);
-        }
-    }
-
-    /// Plays one gesture at one point and says what the document did with it.
-    ///
-    /// A drag is measured by its travel, not by the press that starts it: a
-    /// control that answers the press and drops every move would otherwise
-    /// pass as a control that drags. The retained twin discards the same press
-    /// for the same reason.
-    ///
-    /// The travel is two moves rather than one because a recognizer may spend
-    /// the first fixing what the rest are measured from, and a drag played as
-    /// a single move is then below every threshold by construction.
-    fn played(named: Named, host: &mut Immediate<'_, Driven<'_>>, at: Pt) -> Answer {
-        match named {
-            Named::Press => {
-                let handled = host.click_at(at);
-                Answer {
-                    handled,
-                    acted: !host.app().published.is_empty(),
-                }
-            }
-            Named::Drag => {
-                host.press_at(at);
-                let started = host.app().published.len();
-                let first = host.hover_at(Pt {
-                    x: at.x + 2.0,
-                    y: at.y,
-                });
-                let second = host.hover_at(Pt {
-                    x: at.x + 24.0,
-                    y: at.y,
-                });
-                Answer {
-                    acted: host.app().published.len() > started,
-                    handled: first || second,
-                }
-            }
-            Named::Wheel => {
-                let handled = host.wheel_at(at, -2.0);
-                Answer {
-                    handled,
-                    acted: !host.app().published.is_empty(),
-                }
-            }
-        }
-    }
-
-    /// Drives the same gesture over the whole window on the immediate host.
-    ///
-    /// The retained twin aims at the box it laid the control into, because it
-    /// keeps a tree that can be asked. This host keeps none, and borrowing the
-    /// other host's box would make a control that answers on both look silent
-    /// here the moment the two lay it out differently - a question about
-    /// geometry, answered as if it were one about gestures. So this sweeps the
-    /// window instead, and the control answers if any point of it does.
-    fn driven_immediate(
-        named: Named,
-        control: &str,
-        registry: &dyn EndpointRegistry,
-        skin: &Skin,
-    ) -> Answer {
-        /// How far apart the points the immediate census drives are.
-        ///
-        /// Four pixels is under the smallest box any control in the census was
-        /// laid out into, so a control that answers anywhere is reached.
-        const SWEEP: f32 = 4.0;
-
-        let ui = driven_document(control, registry);
-        let (width, height): (f32, f32) = (DRIVEN_WIDTH.as_(), DRIVEN_HEIGHT.as_());
-        let mut y = SWEEP / 2.0;
-        while y < height {
-            let mut x = SWEEP / 2.0;
-            while x < width {
-                let app = Driven {
-                    skin,
-                    published: Vec::new(),
-                };
-                let mut host = Immediate::mount(app, &ui, skin, (DRIVEN_WIDTH, DRIVEN_HEIGHT));
-                let answer = played(named, &mut host, Pt { x, y });
-                if !answer.silent() {
-                    return answer;
-                }
-                x += SWEEP;
-            }
-            y += SWEEP;
-        }
-        Answer::default()
-    }
-
-    /// Drives, on the retained host, the pointer gesture each control names.
-    ///
-    /// The census beside this one compares the two hosts' declarations. Saying
-    /// a gesture is not answering it: a control declared a drag both hosts
-    /// agreed on while the retained one dropped every move, and no test could
-    /// see it, because the words matched. This mounts each control alone,
-    /// finds the box it was laid out into, and pushes real input at it.
-    #[kithara::test]
-    fn every_control_answers_the_pointer_gesture_it_names_on_the_retained_host() {
-        let registry = census_registry();
-        let skin = census_skin();
-
-        let mut observed = Vec::new();
-        let mut expected = Vec::new();
-        for (row, (_, _, control)) in ROWS.iter().zip(CONTROL_CENSUS) {
-            for named in [Named::Press, Named::Drag, Named::Wheel] {
-                if !named.declared_by(row.gestures) {
-                    continue;
-                }
-                let answers = !driven(named, control, &registry, &skin).silent();
-                observed.push(format!("{} {named:?}: {answers}", row.name));
-                expected.push(format!(
-                    "{} {named:?}: {}",
-                    row.name,
-                    !handed_over(row.name, named)
-                ));
-            }
-        }
-
-        assert_eq!(
-            observed, expected,
-            "the retained host answers a different set of pointer gestures than the controls name"
-        );
-    }
-
-    /// Drives, on the immediate host, the pointer gesture each control names.
-    ///
-    /// The twin of the census above. The two hosts route a pointer through
-    /// machinery with nothing in common - one against boxes read out of a tree
-    /// it keeps, the other by letting iced walk a tree it rebuilt - and a
-    /// control that answers on one and not the other draws exactly the same
-    /// picture. Driving both against the one table each declared its gestures
-    /// in is what makes that visible.
-    #[kithara::test]
-    fn every_control_answers_the_pointer_gesture_it_names_on_the_immediate_host() {
-        let registry = census_registry();
-        let skin = census_skin();
-
-        let mut observed = Vec::new();
-        let mut expected = Vec::new();
-        for (row, (_, _, control)) in ROWS.iter().zip(CONTROL_CENSUS) {
-            for named in [Named::Press, Named::Drag, Named::Wheel] {
-                if !named.declared_by(row.gestures) {
-                    continue;
-                }
-                let answers = !driven_immediate(named, control, &registry, &skin).silent();
-                observed.push(format!("{} {named:?}: {answers}", row.name));
-                expected.push(format!(
-                    "{} {named:?}: {}",
-                    row.name,
-                    !handed_over(row.name, named)
-                ));
-            }
-        }
-
-        assert_eq!(
-            observed, expected,
-            "the immediate host answers a different set of pointer gestures than the controls name"
-        );
-    }
-
-    /// The box the retained host laid a control into.
-    fn retained_box(control: &str, registry: &dyn EndpointRegistry, skin: &Skin) -> Rect {
-        let ui = driven_document(control, registry);
-        let (root, state) = driven_root(&ui, skin);
-        let widget = state
-            .widget_id("demo/control")
-            .and_then(|id| root.root().get_widget(id))
-            .unwrap_or_else(|| panic!("the retained host must mount {control} as a leaf"));
-        let origin = widget.ctx().window_origin();
-        let size = widget.ctx().size();
-        Rect {
-            x: origin.x.as_(),
-            y: origin.y.as_(),
-            w: size.width.as_(),
-            h: size.height.as_(),
-        }
-    }
-
-    /// The box the immediate host laid the same control into.
-    ///
-    /// The hosts disagree on how many nodes a control is: the retained one
-    /// mounts a single widget carrying the resolved size, and the immediate one
-    /// wraps the control's own element in a container of that size. Descending
-    /// through every node that stands alone reaches the surface both hosts
-    /// paint, and stopping at the first node that splits keeps a control that
-    /// lays out children - only `Tree` does - measured as the surface they are
-    /// painted on.
-    fn immediate_box(control: &str, registry: &dyn EndpointRegistry, skin: &Skin) -> Rect {
-        use iced::{
-            Size,
-            advanced::{
-                layout::{Layout, Limits},
-                widget::Tree,
-            },
-        };
-
-        let ui = driven_document(control, registry);
-        let reads = DrivenReads;
-        let mut element = tree::render(
-            &ui.root,
-            &ui,
-            &reads,
-            &view::EMPTY,
-            skin,
-            Clock::default(),
-            None,
-        );
-        let mut state = Tree::new(element.as_widget());
-        let node = element.as_widget_mut().layout(
-            &mut state,
-            &renderer(),
-            &Limits::new(
-                Size::ZERO,
-                Size::new(DRIVEN_WIDTH.as_(), DRIVEN_HEIGHT.as_()),
-            ),
-        );
-        let mut layout = Layout::new(&node);
-        loop {
-            let mut children = layout.children();
-            let Some(only) = children.next() else { break };
-            if children.next().is_some() {
-                break;
-            }
-            layout = only;
-        }
-        let bounds = layout.bounds();
-        Rect {
-            x: bounds.x,
-            y: bounds.y,
-            w: bounds.width,
-            h: bounds.height,
-        }
-    }
-
-    /// A button given a box paints all of it, on both hosts.
-    ///
-    /// Every `Button` a shipped document names declares a size, and the census
-    /// above cannot see that shape: it drives each control as the document
-    /// leaves it. The retained host mounts one widget of the declared box; the
-    /// immediate host wraps the button's own element in a container of that box
-    /// and lets the element ask for a width of its own, so a button that asks
-    /// for the width of its word is painted narrower than the box the document
-    /// gave it.
-    #[kithara::test]
-    fn a_button_given_a_box_paints_all_of_it_on_both_hosts() {
-        let registry = census_registry();
-        let skin = census_skin();
-        let control = r#"Button(id: "control", label: "PLAY", size: (w: Fixed(72.0), h: Fixed(28.0)), read: Model(id: "ui.menu.open"))"#;
-
-        assert_eq!(
-            snapped(immediate_box(control, &registry, &skin)),
-            snapped(retained_box(control, &registry, &skin)),
-            "the two hosts paint a button given the same box differently"
-        );
-    }
-
-    /// Both hosts lay the same control into the same box.
-    ///
-    /// A declared size reaches the two hosts through separate tables -
-    /// `length_for` on the immediate one, `control_length` on the retained one
-    /// - and a control whose painter measures its own width is where the two
-    /// can part: one gives the parent the painter's box and the other replaces
-    /// it with the skin's. No shipped document names such a size, so only a
-    /// census over every control keeps the two tables answering alike.
-    #[kithara::test]
-    fn every_control_is_laid_out_into_the_same_box_on_both_hosts() {
-        let registry = census_registry();
-        let skin = census_skin();
-
-        let mut retained = Vec::new();
-        let mut immediate = Vec::new();
-        for (name, _, control) in CONTROL_CENSUS {
-            retained.push(format!(
-                "{name}: {:?}",
-                snapped(retained_box(control, &registry, &skin))
-            ));
-            immediate.push(format!(
-                "{name}: {:?}",
-                snapped(immediate_box(control, &registry, &skin))
-            ));
-        }
-
-        assert_eq!(
-            retained, immediate,
-            "the two hosts lay the same control into different boxes"
-        );
-    }
 }
 
 #[kithara::test]
@@ -3899,19 +2496,22 @@ fn retained_vis_declares_exact_logical_frames_and_continuous_repaint() {
             .any(|signal| matches!(signal, RenderRootSignal::RequestAnimFrame)),
         "a retained Vis leaf must request continuous animation frames"
     );
-    let declarations = root.vis_declarations();
-    assert_eq!(declarations.len(), 2);
+    let first = VisFrame::read(reads.get("vis.first"), &reads).expect("a valid first preset");
+    let second = VisFrame::read(reads.get("vis.second"), &reads).expect("a valid second preset");
+    assert_eq!((first.preset(), second.preset()), (0, 2));
+    assert!((first.level() - 0.6).abs() < f32::EPSILON);
+    assert_eq!(first.time(), 1.25);
     assert_eq!(
-        declarations
-            .iter()
-            .map(|vis| vis.rect())
-            .collect::<Vec<_>>(),
-        vec![[0.0, 0.0, 40.0, 20.0], [40.0, 0.0, 80.0, 20.0]]
+        root.vis_declarations(),
+        [
+            VisDeclaration::logical(first, [0.0, 0.0, 40.0, 20.0]),
+            VisDeclaration::logical(second, [40.0, 0.0, 80.0, 20.0]),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>(),
+        "each leaf declares its own box and the frame its reads project to"
     );
-    assert_eq!(declarations[0].frame().preset(), 0);
-    assert_eq!(declarations[1].frame().preset(), 2);
-    assert!((declarations[0].frame().level() - 0.6).abs() < f32::EPSILON);
-    assert_eq!(declarations[0].frame().time(), 1.25);
     assert_eq!(
         root.handle_pointer_event(pointer_down(20.0, 10.0))
             .unwrap_or_else(|error| panic!("Vis pointer routing must remain typed: {error}")),
@@ -3927,11 +2527,22 @@ fn retained_vis_declares_exact_logical_frames_and_continuous_repaint() {
     root.refresh(ctx(&ui, &reads));
     root.redraw()
         .unwrap_or_else(|error| panic!("Vis refresh must not remount the tree: {error}"));
-    let refreshed = root.vis_declarations();
-    assert_eq!(refreshed.len(), 2);
-    assert_eq!(refreshed[0].frame().preset(), 1);
-    assert!((refreshed[0].frame().level() - 0.25).abs() < f32::EPSILON);
-    assert_eq!(refreshed[0].frame().time(), 9.0);
+    let first = VisFrame::read(reads.get("vis.first"), &reads).expect("a valid first preset");
+    let second = VisFrame::read(reads.get("vis.second"), &reads).expect("a valid second preset");
+    assert_eq!(first.preset(), 1);
+    assert!((first.level() - 0.25).abs() < f32::EPSILON);
+    assert_eq!(first.time(), 9.0);
+    assert_eq!(
+        root.vis_declarations(),
+        [
+            VisDeclaration::logical(first, [0.0, 0.0, 40.0, 20.0]),
+            VisDeclaration::logical(second, [40.0, 0.0, 80.0, 20.0]),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>(),
+        "a refresh re-reads both frames without remounting"
+    );
 
     reads.first.set(f64::NAN);
     root.refresh(ctx(&ui, &reads));
@@ -3948,48 +2559,49 @@ fn retained_vis_declares_exact_logical_frames_and_continuous_repaint() {
     );
 }
 
+/// A continuous Vis in a cell the flow stashes once the window is too narrow
+/// to reach it.
 #[kithara::test]
 fn stashed_continuous_vis_stops_and_unstashing_restarts_animation_frames() {
     let registry = fixture_registry();
     let reads = FixtureReads;
     let ui = fixture_ui(
         "vis-stashing-fixture",
-        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
-            Vis(id: "continuous", read: Model(id: "vis.preset")),
+        r#"Row(id: "bar", measure: Width, size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Reveal(from: 200.0, child: Vis(id: "continuous", read: Model(id: "vis.preset"))),
         ])"#,
         &registry,
     );
-    let output = document::render(
-        &ui.root,
-        ctx(&ui, &reads),
-        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
-    );
-    let [_, parent, vis] = output.document_ids() else {
-        panic!("the fixture must retain exactly the document root, one parent, and one Vis leaf")
-    };
-    let parent = *parent;
-    let vis = *vis;
+    let (output, built) = DocumentNodes::built(|| {
+        document::render(
+            &ui.root,
+            ctx(&ui, &reads),
+            MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+        )
+    });
     let (base, _, _, _, _, _, _, _, _): RootParts = output.into();
     let signals = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&signals);
     let mut root = RenderRoot::new(
         base,
         move |signal| sink.borrow_mut().push(signal),
-        render_root_options(80, 20),
+        render_root_options(240, 20),
     );
+    let vis = built.last_in(&root);
+    let resize = |root: &mut RenderRoot, width| {
+        root.handle_window_event(WindowEvent::Resize(PhysicalSize::new(width, 20)));
+        root.redraw();
+    };
 
     assert!(
         take_animation_request(&signals),
         "WidgetAdded must start a continuous Vis"
     );
-    root.edit_widget(parent, |mut widget| {
-        let mut node = widget.downcast::<Node>();
-        Node::set_child_stashed(&mut node, 0, true);
-    });
+    resize(&mut root, 120);
     assert!(
         root.get_widget(vis)
             .is_some_and(|widget| widget.ctx().is_stashed()),
-        "the test must exercise Masonry's real stashed state"
+        "a window too narrow for the cell must stash the Vis leaf"
     );
     signals.borrow_mut().clear();
 
@@ -3999,10 +2611,7 @@ fn stashed_continuous_vis_stops_and_unstashing_restarts_animation_frames() {
         "the already-requested callback for a stashed continuous Vis must not request another frame"
     );
 
-    root.edit_widget(parent, |mut widget| {
-        let mut node = widget.downcast::<Node>();
-        Node::set_child_stashed(&mut node, 0, false);
-    });
+    resize(&mut root, 240);
     assert!(
         root.get_widget(vis)
             .is_some_and(|widget| !widget.ctx().is_stashed()),
@@ -4100,16 +2709,15 @@ fn retained_refresh_changes_the_active_preset_without_remounting_the_leaf() {
         ])"#,
         &registry,
     );
-    let output = document::render(
-        &ui.root,
-        ctx(&ui, &reads),
-        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
-    );
-    let id = *output
-        .document_ids()
-        .last()
-        .unwrap_or_else(|| panic!("PresetSelector must retain one leaf"));
+    let (output, built) = DocumentNodes::built(|| {
+        document::render(
+            &ui.root,
+            ctx(&ui, &reads),
+            MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+        )
+    });
     let mut root = masonry_root(output, 126, 42);
+    let id = built.last_in(root.root());
     let (micro, _) = root
         .redraw()
         .unwrap_or_else(|error| panic!("MICRO PresetSelector must draw: {error}"));
@@ -4156,16 +2764,22 @@ fn driven_root(
     (ui, state, root)
 }
 
-fn placed_at(root: &MasonryRoot<UiEvent>, state: &MasonryState, path: &str) -> Transform {
+/// Whether a refresh of `root` moved the object mounted at `path`.
+fn refresh_moves(
+    root: &mut MasonryRoot<UiEvent>,
+    state: &MasonryState,
+    path: &str,
+    refresh: impl FnOnce(&mut MasonryRoot<UiEvent>),
+) -> bool {
     let id = state
         .widget_id(path)
         .unwrap_or_else(|| panic!("`{path}` must stay addressable"));
-    root.root()
-        .get_widget(id)
-        .unwrap_or_else(|| panic!("`{path}` must stay mounted"))
-        .downcast::<Node>()
-        .unwrap_or_else(|| panic!("`{path}` must be a document node"))
-        .transform()
+    let _trace = usdt::scope();
+    let before = usdt::events_of("masonry_object_moved").len();
+    refresh(root);
+    usdt::events_of("masonry_object_moved")[before..]
+        .iter()
+        .any(|moved| moved.field("widget") == Some(id.to_raw()))
 }
 
 const DRIVEN: &str = r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
@@ -4190,12 +2804,11 @@ fn a_driven_object_moves_when_the_retained_host_refreshes() {
         along: Cell::new(0.0),
     };
     let (ui, state, mut root) = driven_root(DRIVEN, &reads);
-    let start = placed_at(&root, &state, "demo/carried");
 
     reads.along.set(1.0);
-    root.refresh(ctx(&ui, &reads));
-
-    assert_ne!(placed_at(&root, &state, "demo/carried"), start);
+    assert!(refresh_moves(&mut root, &state, "demo/carried", |root| {
+        root.refresh(ctx(&ui, &reads));
+    }));
 }
 
 /// And an object nobody drives holds still across the same refresh, which is
@@ -4215,12 +2828,11 @@ fn an_object_nobody_drives_keeps_its_pose_across_a_refresh() {
         along: Cell::new(0.0),
     };
     let (ui, state, mut root) = driven_root(STILL, &reads);
-    let start = placed_at(&root, &state, "demo/carried");
 
     reads.along.set(1.0);
-    root.refresh(ctx(&ui, &reads));
-
-    assert_eq!(placed_at(&root, &state, "demo/carried"), start);
+    assert!(!refresh_moves(&mut root, &state, "demo/carried", |root| {
+        root.refresh(ctx(&ui, &reads));
+    }));
 }
 
 #[kithara::test]
@@ -4376,21 +2988,21 @@ fn a_mounted_tree_refreshes_rows_and_query_independently() {
         MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
     );
     let mut root = masonry_root(output, 240, 160);
+    let _trace = usdt::scope();
+    let refreshed = || {
+        usdt::last("masonry_tree_refreshed")
+            .map(|tree| (tree.field("rows"), tree.field("query_chars")))
+    };
     let (before, _) = root
         .redraw()
         .unwrap_or_else(|error| panic!("empty Tree must draw its frame: {error}"));
     let before_draw_data = before.encoding().draw_data.clone();
-    assert_eq!(
-        root.tree_picture("demo/browser"),
-        Some((0, String::new())),
-        "the mounted Tree must retain the initially empty rows and query"
-    );
 
     reads.rows_loaded.set(true);
     root.refresh(ctx(&ui, &reads));
     assert_eq!(
-        root.tree_picture("demo/browser"),
-        Some((TREE_ROWS.len(), String::new())),
+        refreshed(),
+        Some((Some(TREE_ROWS.len().as_()), Some(0))),
         "row refresh must not change the independently empty query"
     );
     let (with_rows, _) = root
@@ -4405,8 +3017,11 @@ fn a_mounted_tree_refreshes_rows_and_query_independently() {
     reads.query_loaded.set(true);
     root.refresh(ctx(&ui, &reads));
     assert_eq!(
-        root.tree_picture("demo/browser"),
-        Some((TREE_ROWS.len(), "Late".to_owned())),
+        refreshed(),
+        Some((
+            Some(TREE_ROWS.len().as_()),
+            Some("Late".chars().count().as_())
+        )),
         "query refresh must retain the independently loaded rows"
     );
     let (with_query, _) = root
@@ -4624,7 +3239,7 @@ fn the_retained_window_drag_region_carries_the_drag_and_draws_nothing() {
 }
 
 fn fixture_ui(module_id: &str, root: &str, registry: &dyn EndpointRegistry) -> CompiledUi {
-    fixture_ui_with_options(module_id, root, registry, false, &[])
+    fixture_ui_with_options(module_id, root, registry, false)
 }
 
 fn fixture_ui_with_resize(
@@ -4632,19 +3247,7 @@ fn fixture_ui_with_resize(
     root: &str,
     registry: &dyn EndpointRegistry,
 ) -> CompiledUi {
-    fixture_ui_with_options(module_id, root, registry, true, &[])
-}
-
-/// A fixture whose document names sources of its own. A shader is a file the
-/// resolver has to answer rather than a node written inline, so a census row
-/// that mounts one needs its module beside the layout.
-fn fixture_ui_with_sources(
-    module_id: &str,
-    root: &str,
-    registry: &dyn EndpointRegistry,
-    sources: &[(&str, &str)],
-) -> CompiledUi {
-    fixture_ui_with_options(module_id, root, registry, false, sources)
+    fixture_ui_with_options(module_id, root, registry, true)
 }
 
 fn fixture_ui_with_options(
@@ -4652,7 +3255,6 @@ fn fixture_ui_with_options(
     root: &str,
     registry: &dyn EndpointRegistry,
     resize_edges: bool,
-    sources: &[(&str, &str)],
 ) -> CompiledUi {
     let mut resolver = MemResolver::default();
     let resize_edges = if resize_edges {
@@ -4681,9 +3283,6 @@ fn fixture_ui_with_options(
     ]
     .concat();
     resolver.insert("fixture.kmodule.ron", &module);
-    for (name, body) in sources {
-        resolver.insert(name, body);
-    }
     compile(
         "fixture.klayout.ron",
         &resolver,
@@ -4691,15 +3290,59 @@ fn fixture_ui_with_options(
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::builder()
-            .custom_kinds(
-                [CENSUS_KIND.to_owned(), PRESS_KIND.to_owned()]
-                    .into_iter()
-                    .collect(),
-            )
+            .custom_kinds([PRESS_KIND.to_owned()].into_iter().collect())
             .build(),
         &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("Masonry contract fixture must compile: {error}"))
+}
+
+/// The Masonry nodes one render announced as document nodes.
+///
+/// The host announces each node that stands for a document node as it builds
+/// it, with whether the nodes it holds stand for document nodes of their own.
+/// Walking the retained tree down from its root through the nodes that do gives
+/// them in document order.
+struct DocumentNodes(Vec<ProbeEvent>);
+
+impl DocumentNodes {
+    const PROBE: &str = "masonry_document_node";
+
+    /// The output `render` builds, with the document nodes it announced.
+    fn built<Action>(render: impl FnOnce() -> MasonryNode<Action>) -> (MasonryNode<Action>, Self) {
+        let _trace = usdt::scope();
+        let before = usdt::events_of(Self::PROBE).len();
+        let output = render();
+        let mut announced = usdt::events_of(Self::PROBE);
+        (output, Self(announced.split_off(before)))
+    }
+
+    /// Every announced node in `root`'s tree, in document order.
+    fn in_tree(&self, root: &RenderRoot) -> Vec<WidgetId> {
+        let mut ids = Vec::new();
+        self.collect(root.get_layer_root(0), &mut ids);
+        ids
+    }
+
+    /// The document's last node, where a fixture's one control stands.
+    fn last_in(&self, root: &RenderRoot) -> WidgetId {
+        self.in_tree(root)
+            .pop()
+            .unwrap_or_else(|| panic!("the fixture must retain a document node"))
+    }
+
+    fn collect(&self, widget: WidgetRef<'_, dyn Widget>, ids: &mut Vec<WidgetId>) {
+        let raw = widget.id().to_raw();
+        let Some(node) = self.0.iter().find(|node| node.field("widget") == Some(raw)) else {
+            return;
+        };
+        ids.push(widget.id());
+        if node.field("exposes_children") == Some(1) {
+            for child in widget.children() {
+                self.collect(child, ids);
+            }
+        }
+    }
 }
 
 fn masonry_root<Action>(output: MasonryNode<Action>, width: u32, height: u32) -> MasonryRoot<Action>

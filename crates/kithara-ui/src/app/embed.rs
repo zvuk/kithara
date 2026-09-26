@@ -14,14 +14,14 @@ use masonry::{
     },
     vello::Scene,
 };
-#[cfg(any(test, feature = "capture"))]
+#[cfg(feature = "capture")]
 use num_traits::cast::AsPrimitive;
 
 use super::{
     frame::Frame,
     neutral::{App, Config, RunError},
 };
-#[cfg(any(test, feature = "capture"))]
+#[cfg(feature = "capture")]
 use crate::draw::Rect;
 use crate::{
     compile::{CompiledUi, compile},
@@ -176,7 +176,7 @@ where
     /// What a flag lights is a value the document reads rather than a shape it
     /// stands in, so a harness reads it back the same way it reads a rect: by
     /// the path the document gave the control.
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
     pub fn ink_of(&self, path: &str) -> Option<Rgba> {
         self.root.ink_of(self.state.widget_id(path)?)
     }
@@ -266,7 +266,7 @@ where
     /// A harness names a control by its path and acts at the rect this
     /// returns instead of computing a pixel by hand: a scenario clicks it,
     /// and a capture photographs it.
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
     pub fn rect_of(&self, path: &str) -> Option<Rect> {
         let id = self.state.widget_id(path)?;
         let bounds = self.root.root().get_widget(id)?.ctx().bounding_rect();
@@ -606,7 +606,7 @@ fn mount<Application>(
 where
     Application: App,
 {
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
     state.clear_paths();
     let skin = app.skin();
     let node = app.reads(|reads| {

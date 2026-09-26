@@ -593,6 +593,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use num_traits::cast::AsPrimitive;
 
+    use self::hosting::{hosted_child, render_compiled};
     use super::*;
     use crate::{
         builtin,
@@ -618,6 +619,149 @@ mod tests {
         source::{MemResolver, UiConfig},
         view,
     };
+
+    /// The document as the application renders it, with one hosted engine
+    /// child taken out before the host wraps it.
+    mod hosting {
+        use std::ptr;
+
+        use iced::widget::Space;
+
+        use crate::{
+            compile::CompiledNode,
+            draw::Transform,
+            expand::{Binding, ControlSpec, ExpandedNode},
+            ids::InternId,
+            layout::Axis,
+            module::MeasureAxis,
+            render::{
+                InputOwner, Skin, UiEvent,
+                document::{
+                    Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover,
+                    SplitMount, render,
+                },
+                tree::node::IcedHost,
+            },
+            size::SizeSpec,
+        };
+
+        type Output<'a> = iced::Element<'a, UiEvent>;
+
+        /// Renders a whole document the way the application does.
+        pub(super) fn render_compiled<'a>(
+            node: &CompiledNode,
+            ctx: Ctx<'a, '_>,
+            skin: &'a Skin,
+        ) -> Output<'a> {
+            render(node, ctx, IcedHost::new(ctx, skin))
+        }
+
+        /// Renders `document` the way the application does and returns the
+        /// engine child the document hosts at `target`.
+        pub(super) fn hosted_child<'a>(
+            document: &CompiledNode,
+            target: &ExpandedNode,
+            ctx: Ctx<'a, '_>,
+            skin: &'a Skin,
+        ) -> Output<'a> {
+            let mut child = None;
+            drop(render(
+                document,
+                ctx,
+                Hosting {
+                    target,
+                    child: &mut child,
+                    inner: IcedHost::new(ctx, skin),
+                },
+            ));
+            child.expect("the document must host the target node")
+        }
+
+        struct Hosting<'a, 'r, 'c> {
+            target: &'c ExpandedNode,
+            child: &'c mut Option<Output<'a>>,
+            inner: IcedHost<'a, 'r>,
+        }
+
+        impl<'a> Host for Hosting<'a, '_, '_> {
+            type Output = Output<'a>;
+
+            const MOUNTS_HIDDEN: bool = <IcedHost<'a, '_> as Host>::MOUNTS_HIDDEN;
+
+            fn hosted(&mut self, node: &ExpandedNode, child: Self::Output) -> Self::Output {
+                if ptr::eq(node, self.target) {
+                    *self.child = Some(child);
+                    Space::new().into()
+                } else {
+                    self.inner.hosted(node, child)
+                }
+            }
+
+            fn popover(
+                &mut self,
+                popover: Popover<'_>,
+                anchor: Self::Output,
+                content: &mut dyn FnMut(&mut Self) -> Self::Output,
+            ) -> Self::Output {
+                let mut built = Some(content(self));
+                self.inner.popover(popover, anchor, &mut |_| {
+                    built.take().expect("a popover builds its content once")
+                })
+            }
+
+            delegate::delegate! {
+                to self.inner {
+                    fn control(
+                        &mut self,
+                        path: InternId,
+                        spec: &ControlSpec,
+                        read: Option<&Binding>,
+                        owner: InputOwner,
+                        size: Option<SizeSpec>,
+                        transform: Transform,
+                    ) -> Self::Output;
+                    fn group(
+                        &mut self,
+                        group: Group<'_>,
+                        children: Vec<GroupMount<Self::Output>>,
+                    ) -> Self::Output;
+                    fn measured(&mut self, plan: Measured, branches: Vec<Self::Output>) -> Self::Output;
+                    fn module(&mut self, module: Module<'_>, content: Option<Self::Output>) -> Self::Output;
+                    fn placed(&mut self, placement: PlacedMount<'_>, child: Self::Output) -> Self::Output;
+                    fn pressable(
+                        &mut self,
+                        path: InternId,
+                        child: Self::Output,
+                        size: Option<SizeSpec>,
+                    ) -> Self::Output;
+                    fn scroll(
+                        &mut self,
+                        id: InternId,
+                        child: Self::Output,
+                        size: Option<SizeSpec>,
+                    ) -> Self::Output;
+                    fn slot(
+                        &mut self,
+                        children: Vec<GroupMount<Self::Output>>,
+                        size: Option<SizeSpec>,
+                    ) -> Self::Output;
+                    fn split(
+                        &mut self,
+                        axis: Axis,
+                        measure: Option<MeasureAxis>,
+                        children: Vec<SplitMount<Self::Output>>,
+                    ) -> Self::Output;
+                    fn stage(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output;
+                    fn window(
+                        &mut self,
+                        content: Self::Output,
+                        carried: Option<&Binding>,
+                        resize_edges: bool,
+                    ) -> Self::Output;
+                }
+            }
+        }
+    }
 
     fn redraw_event() -> Event {
         Event::Window(window::Event::RedrawRequested(IcedInstant::now()))
@@ -825,9 +969,10 @@ mod tests {
                     Some(&self.boolean)
                 }
                 (EndpointCategory::Model, "demo.wave") => Some(&self.waveform),
-                (EndpointCategory::Model, "gallery.table.preset" | "library.scope") => {
-                    Some(&self.scalar)
-                }
+                (
+                    EndpointCategory::Model,
+                    "gallery.table.preset" | "library.scope" | "deck.view.zoom",
+                ) => Some(&self.scalar),
                 (EndpointCategory::Model, "library.breadcrumb" | "library.query") => {
                     Some(&self.text)
                 }
@@ -936,6 +1081,7 @@ mod tests {
                 "deck.playback.position_normalized@deck=a" => {
                     Some(ReadValue::Scalar(self.progress))
                 }
+                "deck.view.zoom" => Some(ReadValue::Scalar(0.25)),
                 _ => None,
             }
         }
@@ -1305,6 +1451,8 @@ mod tests {
     /// the rows are past the fold: the window shows blank where their layout
     /// still puts them, which is what makes a press there answerable by exactly
     /// one thing — the cut, or the row the box hid.
+    /// Four rows in a box one row tall, in a module the document mounts on the
+    /// engine host.
     fn compiled_clipped_scroll() -> CompiledUi {
         let mut resolver = MemResolver::default();
         resolver.insert(
@@ -1314,7 +1462,7 @@ mod tests {
         );
         resolver.insert(
             "clipped-scroll.kmodule.ron",
-            r#"(schema: "kithara.module", version: 1, id: "clipped-scroll",
+            r#"(schema: "kithara.module", version: 1, id: "gallery-nav",
                 root: Column(children: [
                     Scroll(
                         id: "rows",
@@ -1350,7 +1498,8 @@ mod tests {
     /// travelled, so it is the control a cut can silence mid-drag: it reads the
     /// position out of the hit it is handed, and a cut hit carries none. Where
     /// the pointer ends up there is the knob, which must stay silent while the
-    /// meter owns the gesture.
+    /// meter owns the gesture. The module is one the document mounts on the
+    /// engine host.
     fn compiled_clipped_drag() -> CompiledUi {
         let mut resolver = MemResolver::default();
         resolver.insert(
@@ -1360,7 +1509,7 @@ mod tests {
         );
         resolver.insert(
             "clipped-drag.kmodule.ron",
-            r#"(schema: "kithara.module", version: 1, id: "clipped-drag",
+            r#"(schema: "kithara.module", version: 1, id: "gallery-knobs",
                 root: Column(gap: 0.0, children: [
                     Scroll(
                         id: "rows",
@@ -1388,6 +1537,37 @@ mod tests {
             &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("the clipped drag fixture must compile: {error}"))
+    }
+
+    /// A deck whose whole module is one hero wave reading its zoom.
+    fn compiled_hero_wave() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "layout.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "hero-host",
+                root: Module(instance: "deck-a", source: "hero.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "hero.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "hero",
+                root: Wave(
+                    id: "wave",
+                    style: Hero,
+                    read: Model(id: "demo.wave", with: { "deck": "a" }),
+                    write: Command(id: "demo.seek", with: { "deck": "a" }),
+                    zoom: Model(id: "deck.view.zoom"),
+                ))"#,
+        );
+        compile(
+            "layout.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            builtin::text_doc(),
+            &UiConfig::default(),
+            &view::EMPTY,
+        )
+        .unwrap_or_else(|error| panic!("hero wave fixture must compile: {error}"))
     }
 
     fn compiled_overview_row() -> CompiledUi {
@@ -1625,7 +1805,7 @@ mod tests {
             &Limits::new(Size::ZERO, viewport),
         );
         let hosted = HostedLayout::module(spec);
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         assert_eq!(
             targets.iter().map(|target| target.path).collect::<Vec<_>>(),
             ["deck-a/drop"],
@@ -1753,7 +1933,7 @@ mod tests {
             descriptors.as_slice(),
             [Descriptor::Crossing { .. }, Descriptor::Activation { .. }]
         ));
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         assert_eq!(
             targets.iter().map(|target| target.path).collect::<Vec<_>>(),
             ["deck-a/drop", "deck-a/header"]
@@ -1919,24 +2099,12 @@ mod tests {
     fn tree_boundary_passes_downward_wheel_to_the_iced_surface_but_keeps_upward_wheel() {
         let ui = compiled_tree_surface();
         let reads = FixtureReads::default();
-        let CompiledNode::Module {
-            instance,
-            module,
-            root,
-            ..
-        } = &ui.root
-        else {
+        let CompiledNode::Module { module, root, .. } = &ui.root else {
             panic!("tree surface fixture root must be a module");
         };
         assert_eq!(ui.resolve(*module), "gallery-tree-tab");
 
-        let child = super::super::node::render_engine_node(
-            root,
-            &Address::Root,
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
         let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let renderer = headless_renderer();
         let viewport = Size::new(232.0, 120.0);
@@ -1972,7 +2140,7 @@ mod tests {
                     6.0,
                 )
         ));
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         let [search, target] = targets.as_slice() else {
             panic!("the tree document must expose its search input and scroll viewport");
         };
@@ -2101,8 +2269,7 @@ mod tests {
     fn compiled_tree_surface_installs_the_retained_host() {
         let ui = compiled_tree_surface();
         let reads = FixtureReads::default();
-        let element =
-            super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let element = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let tree = Tree::new(element.as_widget());
 
         fn retained_hosts(tree: &Tree) -> usize {
@@ -2258,13 +2425,7 @@ mod tests {
     fn gallery_faders_host_their_exact_input_surfaces() {
         let ui = compiled_gallery_faders();
         let reads = FixtureReads::default();
-        let CompiledNode::Module {
-            instance,
-            module,
-            root,
-            ..
-        } = &ui.root
-        else {
+        let CompiledNode::Module { module, root, .. } = &ui.root else {
             panic!("gallery faders fixture root must be a module");
         };
 
@@ -2273,19 +2434,13 @@ mod tests {
         claimed_components(root, &mut components);
         assert_eq!(components, ["fader", "fader", "vertical-vu"]);
 
-        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(host_count(&full_tree), 1, "the faders page owns one engine");
 
         let renderer = headless_renderer();
         let viewport = Size::new(320.0, 500.0);
-        let child = super::super::node::render_engine_node(
-            root,
-            &Address::Root,
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
         let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
@@ -2316,7 +2471,7 @@ mod tests {
         assert_eq!(*default_step, Some(builtin::skin().fader.step));
         assert_eq!(*volume_step, None);
 
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         assert_eq!(
             targets.iter().map(|target| target.path).collect::<Vec<_>>(),
             ["faders/default", "faders/volume", "faders/vertical"]
@@ -2404,7 +2559,7 @@ mod tests {
         claimed_components(meters, &mut components);
         assert_eq!(components, ["stereo-meter", "vertical-vu", "vertical-vu"]);
 
-        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(
             host_count(&full_tree),
@@ -2414,13 +2569,7 @@ mod tests {
 
         let renderer = headless_renderer();
         let viewport = Size::new(160.0, 180.0);
-        let child = super::super::node::render_engine_node(
-            meters,
-            &Address::Root.child(1),
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, meters, ctx(&ui, &reads), builtin::skin());
         let mut element = host(child, meters, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
@@ -2429,7 +2578,7 @@ mod tests {
             &Limits::new(Size::ZERO, viewport),
         );
         let hosted = HostedLayout::new(meters, ctx(&ui, &reads), builtin::skin());
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         assert_eq!(
             targets.iter().map(|target| target.path).collect::<Vec<_>>(),
             [
@@ -2487,7 +2636,7 @@ mod tests {
         claimed_components(toggles, &mut components);
         assert_eq!(components, ["activation"; 4]);
 
-        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(
             host_count(&full_tree),
@@ -2497,13 +2646,7 @@ mod tests {
 
         let renderer = headless_renderer();
         let viewport = Size::new(200.0, 100.0);
-        let child = super::super::node::render_engine_node(
-            toggles,
-            &Address::Root.child(1),
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, toggles, ctx(&ui, &reads), builtin::skin());
         let mut element = host(child, toggles, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
@@ -2512,7 +2655,7 @@ mod tests {
             &Limits::new(Size::ZERO, viewport),
         );
         let hosted = HostedLayout::new(toggles, ctx(&ui, &reads), builtin::skin());
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         let mut clipboard = clipboard::Null;
         let mut messages = Vec::new();
 
@@ -2573,7 +2716,7 @@ mod tests {
         claimed_components(chips, &mut components);
         assert_eq!(components, ["activation"; 2]);
 
-        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(
             host_count(&full_tree),
@@ -2583,13 +2726,7 @@ mod tests {
 
         let renderer = headless_renderer();
         let viewport = Size::new(100.0, 80.0);
-        let child = super::super::node::render_engine_node(
-            chips,
-            &Address::Root.child(1),
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, chips, ctx(&ui, &reads), builtin::skin());
         let mut element = host(child, chips, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
@@ -2609,7 +2746,7 @@ mod tests {
                 .all(|descriptor| matches!(descriptor, Descriptor::Activation { .. }))
         );
 
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         assert_eq!(
             targets.iter().map(|target| target.path).collect::<Vec<_>>(),
             ["atoms/chips/active", "atoms/chips/inactive"]
@@ -2660,13 +2797,7 @@ mod tests {
     fn gallery_buttons_share_the_host_activation_component() {
         let ui = compiled_gallery_buttons();
         let reads = FixtureReads::default();
-        let CompiledNode::Module {
-            instance,
-            module,
-            root,
-            ..
-        } = &ui.root
-        else {
+        let CompiledNode::Module { module, root, .. } = &ui.root else {
             panic!("gallery buttons fixture root must be a module");
         };
 
@@ -2675,7 +2806,7 @@ mod tests {
         claimed_components(root, &mut components);
         assert_eq!(components, ["activation"; 6]);
 
-        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(
             host_count(&full_tree),
@@ -2685,13 +2816,7 @@ mod tests {
 
         let renderer = headless_renderer();
         let viewport = Size::new(320.0, 160.0);
-        let child = super::super::node::render_engine_node(
-            root,
-            &Address::Root,
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
         let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
@@ -2718,7 +2843,7 @@ mod tests {
                 .all(|descriptor| matches!(descriptor, Descriptor::Activation { .. }))
         );
 
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         let mut clipboard = clipboard::Null;
         let mut messages = Vec::new();
         let center = |path: &str| {
@@ -2797,13 +2922,7 @@ mod tests {
     fn gallery_cells_hosts_its_exact_engine_control_inventory() {
         let ui = compiled_gallery_cells();
         let reads = FixtureReads::default();
-        let CompiledNode::Module {
-            instance,
-            module,
-            root,
-            ..
-        } = &ui.root
-        else {
+        let CompiledNode::Module { module, root, .. } = &ui.root else {
             panic!("gallery cells fixture root must be a module");
         };
 
@@ -2827,19 +2946,13 @@ mod tests {
             ]
         );
 
-        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(host_count(&full_tree), 1, "the cells page owns one engine");
 
         let renderer = headless_renderer();
         let viewport = Size::new(1_000.0, 400.0);
-        let child = super::super::node::render_engine_node(
-            root,
-            &Address::Root,
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
         let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
@@ -2882,7 +2995,7 @@ mod tests {
             ]
         ));
 
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         let target = targets
             .iter()
             .find(|target| target.path == "cells/beat")
@@ -2919,13 +3032,7 @@ mod tests {
     fn gallery_table_hosts_its_exact_conditional_inventory() {
         let ui = compiled_gallery_table();
         let reads = FixtureReads::default();
-        let CompiledNode::Module {
-            instance,
-            module,
-            root,
-            ..
-        } = &ui.root
-        else {
+        let CompiledNode::Module { module, root, .. } = &ui.root else {
             panic!("gallery track-list fixture root must be a module");
         };
 
@@ -2950,7 +3057,7 @@ mod tests {
             ]
         );
 
-        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(
             host_count(&full_tree),
@@ -2960,13 +3067,7 @@ mod tests {
 
         let renderer = headless_renderer();
         let narrow = Size::new(1_000.0, 640.0);
-        let child = super::super::node::render_engine_node(
-            root,
-            &Address::Root,
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
         let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node =
@@ -2974,7 +3075,7 @@ mod tests {
                 .as_widget_mut()
                 .layout(&mut tree, &renderer, &Limits::new(Size::ZERO, narrow));
         let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         assert_eq!(
             targets
                 .iter()
@@ -3070,20 +3171,15 @@ mod tests {
         }));
 
         let wide = Size::new(1_200.0, 640.0);
-        let mut child = super::super::node::render_engine_node(
-            root,
-            &Address::Root,
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let mut child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
         let mut child_tree = Tree::new(child.as_widget());
         let wide_node = child.as_widget_mut().layout(
             &mut child_tree,
             &renderer,
             &Limits::new(Size::ZERO, wide),
         );
-        let wide_targets = hosted.targets(Layout::new(&wide_node), Cursor::Unavailable);
+        let wide_targets =
+            hosted.targets_with_engine(Layout::new(&wide_node), Cursor::Unavailable, None);
         assert_eq!(
             wide_targets
                 .iter()
@@ -3118,13 +3214,7 @@ mod tests {
     fn gallery_library_hosts_the_picker_and_its_exact_descriptor_inventory() {
         let ui = compiled_gallery_library();
         let reads = FixtureReads::default();
-        let CompiledNode::Module {
-            instance,
-            module,
-            root,
-            ..
-        } = &ui.root
-        else {
+        let CompiledNode::Module { module, root, .. } = &ui.root else {
             panic!("gallery library fixture root must be a module");
         };
 
@@ -3133,7 +3223,7 @@ mod tests {
         claimed_components(root, &mut components);
         assert_eq!(components, ["text-input", "scroll", "picker", "track-list"]);
 
-        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(
             host_count(&full_tree),
@@ -3143,13 +3233,7 @@ mod tests {
 
         let renderer = headless_renderer();
         let viewport = Size::new(900.0, 600.0);
-        let child = super::super::node::render_engine_node(
-            root,
-            &Address::Root,
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
         let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
@@ -3183,7 +3267,7 @@ mod tests {
             } if path == "library2/context"
         ));
 
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         assert_eq!(
             targets.iter().map(|target| target.path).collect::<Vec<_>>(),
             [
@@ -3519,19 +3603,13 @@ mod tests {
     fn an_engine_picker_popup_captures_before_an_overlapping_window_layer() {
         let ui = compiled_gallery_library();
         let reads = FixtureReads::default();
-        let CompiledNode::Module { instance, root, .. } = &ui.root else {
+        let CompiledNode::Module { root, .. } = &ui.root else {
             panic!("gallery library fixture root must be a module");
         };
         let renderer = headless_renderer();
         let viewport = Size::new(900.0, 600.0);
         let hosted_layout = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
-        let child = super::super::node::render_engine_node(
-            root,
-            &Address::Root,
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
         let hosted = host(child, root, ctx(&ui, &reads), builtin::skin());
         let area = Rc::new(Cell::new(Rect {
             h: 0.0,
@@ -3554,12 +3632,13 @@ mod tests {
         );
 
         let picker_area = hosted_layout
-            .targets(
+            .targets_with_engine(
                 Layout::new(&node)
                     .children()
                     .next()
                     .expect("the stack must retain the hosted document"),
                 Cursor::Unavailable,
+                None,
             )
             .into_iter()
             .find(|target| target.path == "library2/context")
@@ -3636,19 +3715,13 @@ mod tests {
             query: "ab".to_owned(),
             ..FixtureReads::default()
         };
-        let CompiledNode::Module { instance, root, .. } = &ui.root else {
+        let CompiledNode::Module { root, .. } = &ui.root else {
             panic!("gallery library fixture root must be a module");
         };
         let renderer = headless_renderer();
         let viewport = Size::new(900.0, 600.0);
         let viewport_bounds = Rectangle::with_size(viewport);
-        let child = super::super::node::render_engine_node(
-            root,
-            &Address::Root,
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
         let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
@@ -3657,7 +3730,7 @@ mod tests {
             &Limits::new(Size::ZERO, viewport),
         );
         let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         let search = targets
             .iter()
             .find(|target| target.path == "library2/browser/search")
@@ -3860,7 +3933,7 @@ mod tests {
             query: "ab".to_owned(),
             ..FixtureReads::default()
         };
-        let CompiledNode::Module { instance, root, .. } = &ui.root else {
+        let CompiledNode::Module { root, .. } = &ui.root else {
             panic!("gallery library fixture root must be a module");
         };
         let renderer = headless_renderer();
@@ -3872,13 +3945,7 @@ mod tests {
             (Named::Delete, Code::Delete),
             (Named::Backspace, Code::Backspace),
         ] {
-            let child = super::super::node::render_engine_node(
-                root,
-                &Address::Root,
-                *instance,
-                ctx(&ui, &reads),
-                builtin::skin(),
-            );
+            let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
             let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
             let mut tree = Tree::new(element.as_widget());
             let node = element.as_widget_mut().layout(
@@ -3887,7 +3954,7 @@ mod tests {
                 &Limits::new(Size::ZERO, viewport),
             );
             let search = hosted
-                .targets(Layout::new(&node), Cursor::Unavailable)
+                .targets_with_engine(Layout::new(&node), Cursor::Unavailable, None)
                 .into_iter()
                 .find(|target| target.path == "library2/browser/search")
                 .map_or_else(
@@ -3954,13 +4021,7 @@ mod tests {
     fn gallery_module_tabs_share_the_host_activation_component() {
         let ui = compiled_gallery_tabs();
         let reads = FixtureReads::default();
-        let CompiledNode::Module {
-            instance,
-            module,
-            root,
-            ..
-        } = &ui.root
-        else {
+        let CompiledNode::Module { module, root, .. } = &ui.root else {
             panic!("gallery module tabs fixture root must be a module");
         };
 
@@ -3969,19 +4030,13 @@ mod tests {
         claimed_components(root, &mut components);
         assert_eq!(components, ["activation"; 5]);
 
-        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(host_count(&full_tree), 1, "the tabs own one engine");
 
         let renderer = headless_renderer();
         let viewport = Size::new(500.0, 80.0);
-        let child = super::super::node::render_engine_node(
-            root,
-            &Address::Root,
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
         let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
@@ -4007,7 +4062,7 @@ mod tests {
                 .all(|descriptor| matches!(descriptor, Descriptor::Activation { .. }))
         );
 
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         let target = targets
             .iter()
             .find(|target| target.path == "modules-tabs/deck-micro")
@@ -4045,13 +4100,7 @@ mod tests {
     fn gallery_nav_shares_the_host_activation_component() {
         let ui = compiled_gallery_nav();
         let reads = FixtureReads::default();
-        let CompiledNode::Module {
-            instance,
-            module,
-            root,
-            ..
-        } = &ui.root
-        else {
+        let CompiledNode::Module { module, root, .. } = &ui.root else {
             panic!("gallery nav fixture root must be a module");
         };
 
@@ -4060,19 +4109,13 @@ mod tests {
         claimed_components(root, &mut components);
         assert_eq!(components, ["activation"; 30]);
 
-        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(host_count(&full_tree), 1, "the nav owns one engine");
 
         let renderer = headless_renderer();
         let viewport = Size::new(198.0, 620.0);
-        let child = super::super::node::render_engine_node(
-            root,
-            &Address::Root,
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
         let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
@@ -4123,7 +4166,7 @@ mod tests {
                 .all(|descriptor| matches!(descriptor, Descriptor::Activation { .. }))
         );
 
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         let target = targets
             .iter()
             .find(|target| target.path == "gallery/buttons/item")
@@ -4168,8 +4211,7 @@ mod tests {
         let reads = FixtureReads::default();
         let renderer = headless_renderer();
         let viewport = Size::new(198.0, 30.0);
-        let mut element =
-            super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let mut element = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         assert_eq!(host_count(&tree), 0, "a leaf nav item owns no engine");
 
@@ -4219,17 +4261,11 @@ mod tests {
         ) -> T,
     ) -> T {
         let reads = FixtureReads::default();
-        let CompiledNode::Module { instance, root, .. } = &ui.root else {
+        let CompiledNode::Module { root, .. } = &ui.root else {
             panic!("the fixture root must be a module");
         };
         let renderer = headless_renderer();
-        let child = super::super::node::render_engine_node(
-            root,
-            &Address::Root,
-            *instance,
-            ctx(ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, root, ctx(ui, &reads), builtin::skin());
         let mut element = host(child, root, ctx(ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
@@ -4273,7 +4309,8 @@ mod tests {
             &compiled_clipped_scroll(),
             clipped_window(),
             |element, tree, node, renderer, viewport, hosted| {
-                let targets = hosted.targets(Layout::new(node), Cursor::Unavailable);
+                let targets =
+                    hosted.targets_with_engine(Layout::new(node), Cursor::Unavailable, None);
                 let at = centre_of(&targets, "nav/fourth");
                 let (messages, _) = dispatch_press(element, tree, node, renderer, viewport, at);
                 (messages, at)
@@ -4301,7 +4338,8 @@ mod tests {
             &compiled_clipped_scroll(),
             clipped_window(),
             |element, tree, node, renderer, viewport, hosted| {
-                let targets = hosted.targets(Layout::new(node), Cursor::Unavailable);
+                let targets =
+                    hosted.targets_with_engine(Layout::new(node), Cursor::Unavailable, None);
                 let at = centre_of(&targets, "nav/first");
                 let (messages, _) = dispatch_press(element, tree, node, renderer, viewport, at);
                 (messages, at)
@@ -4344,7 +4382,8 @@ mod tests {
             &compiled_clipped_drag(),
             clipped_window(),
             |element, tree, node, renderer, viewport, hosted| {
-                let targets = hosted.targets(Layout::new(node), Cursor::Unavailable);
+                let targets =
+                    hosted.targets_with_engine(Layout::new(node), Cursor::Unavailable, None);
                 let held = box_of(&targets, "nav/held");
                 // The box shows the top half of the meter, so a quarter of the
                 // way down the meter is the middle of what is on screen.
@@ -4472,7 +4511,7 @@ mod tests {
         claimed_components(row, &mut components);
         assert_eq!(components, ["wave"]);
 
-        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(
             host_count(&full_tree),
@@ -4482,21 +4521,15 @@ mod tests {
 
         let renderer = headless_renderer();
         let viewport = Size::new(200.0, 40.0);
-        let child = super::super::node::render_engine_node(
-            row,
-            &Address::Root.child(0),
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
-        let mut element = host(child, row, ctx(&ui, &reads), builtin::skin());
+        let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
+        let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted = HostedLayout::new(row, ctx(&ui, &reads), builtin::skin());
+        let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let descriptors = hosted.descriptors();
         assert_eq!(descriptors.len(), 1);
         let Descriptor::Wave { path } = &descriptors[0] else {
@@ -4504,7 +4537,7 @@ mod tests {
         };
         assert_eq!(path, "overview/a/wave");
 
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         assert_eq!(
             targets.iter().map(|target| target.path).collect::<Vec<_>>(),
             ["overview/a/wave"]
@@ -4557,16 +4590,18 @@ mod tests {
     #[kithara::test]
     fn hosted_hero_wave_keeps_grip_outside_bounds() {
         let path = "deck-a/wave";
+        let ui = compiled_hero_wave();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module { root, .. } = &ui.root else {
+            panic!("hero wave fixture root must be a module");
+        };
         let child = container(Space::new().width(Length::Fill).height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
         let mut element = Element::new(Host {
             child,
-            layout: HostedLayout::Control(Some(HostedControl::mounted(
-                crate::render::HostedControlPlan::hero_wave_at(path, 0.75, 0.25),
-                builtin::skin(),
-            ))),
+            layout: HostedLayout::new(root, ctx(&ui, &reads), builtin::skin()),
         });
         let renderer = headless_renderer();
         let viewport = Size::new(100.0, 40.0);
@@ -4706,17 +4741,11 @@ mod tests {
 
         let renderer = headless_renderer();
         let viewport = Size::new(224.0, 420.0);
-        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(host_count(&full_tree), 1, "the whole mixer owns one engine");
 
-        let child = super::super::node::render_engine_node(
-            root,
-            &Address::Root,
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
+        let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
         let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
@@ -4726,7 +4755,7 @@ mod tests {
         );
         let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let descriptors = hosted.descriptors();
-        let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
+        let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         let expected_paths = [
             "mixer/a/high",
             "mixer/a/mid",
@@ -4857,38 +4886,22 @@ mod tests {
     fn the_host_retains_an_armed_component_across_fresh_descriptors() {
         let ui = compiled_fixture();
         let reads = FixtureReads::default();
-        let CompiledNode::Module { instance, root, .. } = &ui.root else {
+        let CompiledNode::Module { root, .. } = &ui.root else {
             panic!("fixture root must be the mixer module");
         };
-        let ExpandedNode::Column { children, .. } = root.as_ref() else {
-            panic!("mixer root must be a column");
-        };
-        let ExpandedNode::Row {
-            children: strips, ..
-        } = &children[0]
-        else {
-            panic!("mixer strips must be a row");
-        };
-        let strip = &strips[0];
         let renderer = headless_renderer();
-        let viewport = Size::new(112.0, 420.0);
-        let child = super::super::node::render_engine_node(
-            strip,
-            &Address::Root.child(0).child(0),
-            *instance,
-            ctx(&ui, &reads),
-            builtin::skin(),
-        );
-        let mut element = host(child, strip, ctx(&ui, &reads), builtin::skin());
+        let viewport = Size::new(224.0, 420.0);
+        let child = hosted_child(&ui.root, root, ctx(&ui, &reads), builtin::skin());
+        let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let layout = HostedLayout::new(strip, ctx(&ui, &reads), builtin::skin());
+        let layout = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let high = layout
-            .targets(Layout::new(&node), Cursor::Unavailable)
+            .targets_with_engine(Layout::new(&node), Cursor::Unavailable, None)
             .into_iter()
             .find(|target| target.path == "mixer/a/high")
             .expect("strip A high target must exist");
@@ -4916,16 +4929,10 @@ mod tests {
             gain: 0.9,
             ..FixtureReads::default()
         };
-        let next_child = super::super::node::render_engine_node(
-            strip,
-            &Address::Root.child(0).child(0),
-            *instance,
-            ctx(&ui, &refreshed_reads),
-            builtin::skin(),
-        );
+        let next_child = hosted_child(&ui.root, root, ctx(&ui, &refreshed_reads), builtin::skin());
         let mut next = host(
             next_child,
-            strip,
+            root,
             ctx(&ui, &refreshed_reads),
             builtin::skin(),
         );

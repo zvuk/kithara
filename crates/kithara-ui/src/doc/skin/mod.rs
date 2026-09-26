@@ -11,6 +11,8 @@ mod patch;
 mod pictures;
 mod primitives;
 
+pub use kithara_ui_shaping::{FontFamily, FontWeight};
+
 pub use self::{
     blanket::{FramePatch, TextRolePatch},
     controls::*,

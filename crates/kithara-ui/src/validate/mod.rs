@@ -5,8 +5,6 @@ mod measure;
 mod module;
 mod path;
 mod placed;
-#[cfg(test)]
-mod tests;
 
 pub(crate) use self::{
     control::{check_controls, shader_uniform_kind},

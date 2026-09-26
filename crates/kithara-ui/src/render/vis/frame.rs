@@ -16,15 +16,6 @@ impl VisFrame {
     const MASTER_LEVEL: &'static str = "player.output.levels";
     const PRESET_COUNT: u32 = 3;
 
-    #[cfg(all(test, any(feature = "gpu", feature = "masonry")))]
-    pub(crate) const fn new(level: f32, time: f32, preset: u32) -> Self {
-        Self {
-            level,
-            time,
-            preset,
-        }
-    }
-
     /// Master reaction level after volume and range projection.
     #[must_use]
     pub(crate) const fn level(self) -> f32 {
