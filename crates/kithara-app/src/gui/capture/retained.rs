@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use kithara::ui::{
     app::{Config, Ui},
+    backends::paint_color,
     capture::{Geometry, Offscreen, Stage},
 };
 
@@ -58,7 +59,7 @@ impl Stage for Retained<'_> {
         let frame = ui
             .render()
             .map_err(|error| format!("draw {page}: {error}"))?;
-        let background = ui.background().into();
+        let background = paint_color(ui.background());
         let first = ui.draw_pool_stats();
         drop(
             ui.render()

@@ -1,19 +1,12 @@
-use kithara::{
-    abr::AbrMode,
-    effects::GainDb,
-    platform::sync::Arc,
-    queue::{TrackId, Transition},
-};
-use kithara_derive::Ranged;
-use tracing::{debug, error};
+use kithara::effects::GainDb;
 
 use crate::{
-    deck::DeckId,
-    state::{StateController, UiState},
+    deck::{EqMode, TempoPercent},
+    engine::{DeckCmd, DeckSnapshot},
 };
 
 pub(crate) mod consts {
-    use super::*;
+    use super::TempoPercent;
 
     /// Tempo travel either way, in percent: tempo spans `-TEMPO_RANGE` to
     /// `+TEMPO_RANGE`.
@@ -23,55 +16,11 @@ pub(crate) mod consts {
     pub(crate) const TEMPO_STEP: f32 = 1.5;
 }
 
-/// One deck as the GUI sees it: the shared model behind it, the snapshot the
-/// current frame renders from, and the view-local state that belongs to no
-/// one else.
-pub(crate) struct DeckUi {
-    pub(crate) controller: Arc<StateController>,
-    pub(crate) id: DeckId,
-    pub(crate) view: DeckView,
-    pub(crate) ui: UiState,
-}
-
-impl DeckUi {
-    pub(crate) fn new(id: DeckId, controller: Arc<StateController>) -> Self {
-        let ui = controller.snapshot();
-        Self {
-            id,
-            controller,
-            ui,
-            view: DeckView::default(),
-        }
-    }
-}
-
-/// View-local deck state that has no business in the shared model.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct DeckView {
-    pub(crate) timestretch: TimestretchState,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct TimestretchState {
-    pub(crate) tempo: TempoPercent,
-}
-
-impl TimestretchState {
-    pub(crate) fn speed(self) -> f32 {
-        1.0 + f32::from(self.tempo) / 100.0
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Ranged)]
-#[ranged(min = -50.0, max = 50.0, default = 0.0, clamp)]
-pub(crate) struct TempoPercent(pub(crate) f32);
-
 /// Everything a single deck can be told to do. Carries no deck identity: the
 /// composer that renders a deck maps this into `Message::Deck(id, msg)`.
 #[derive(Debug, Clone)]
 pub(crate) enum DeckMsg {
     TogglePlayPause,
-    Pause,
     Next,
     Prev,
     SeekTo(f64),
@@ -81,123 +30,32 @@ pub(crate) enum DeckMsg {
     SetQuality(Option<usize>),
 }
 
-/// Apply a deck message to its own deck. Nothing here reaches another deck.
-pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
-    match *msg {
-        DeckMsg::TogglePlayPause => toggle_play_pause(deck),
-        DeckMsg::Pause => deck.controller.queue().pause(),
-        DeckMsg::Next => {
-            if let Err(error) = deck.controller.queue().next(Transition::Crossfade) {
-                error!(%error, "advance to next track failed");
-            }
+pub(crate) fn command(shown: &DeckSnapshot, eq_mode: EqMode, msg: &DeckMsg) -> Option<DeckCmd> {
+    Some(match *msg {
+        DeckMsg::TogglePlayPause if shown.playing => DeckCmd::Pause,
+        DeckMsg::TogglePlayPause => DeckCmd::Play,
+        DeckMsg::Next => DeckCmd::Next,
+        DeckMsg::Prev => DeckCmd::Prev,
+        DeckMsg::SeekTo(fraction) => DeckCmd::SeekFraction(fraction),
+        DeckMsg::EqBandChanged(band, gain) => DeckCmd::SetEqGain {
+            band,
+            gain,
+            layout: eq_mode,
+        },
+        DeckMsg::DeleteTrack => {
+            let current = shown.current_track_index?;
+            DeckCmd::RemoveTrack(shown.tracks.get(current)?.id)
         }
-        DeckMsg::Prev => {
-            if let Err(error) = deck.controller.queue().previous(Transition::Crossfade) {
-                error!(%error, "return to previous track failed");
-            }
-        }
-        DeckMsg::SeekTo(pos) => seek_to(deck, pos),
-        DeckMsg::EqBandChanged(band, db) => eq_band_changed(deck, band, db),
-        DeckMsg::DeleteTrack => delete_track(deck),
-        DeckMsg::SetTempo(tempo) => set_tempo(deck, tempo),
-        DeckMsg::SetQuality(variant) => set_quality(deck, variant),
-    }
-}
-
-fn set_quality(deck: &DeckUi, variant: Option<usize>) {
-    if let Some(handle) = deck.controller.queue().current_abr_handle() {
-        let mode = variant.map_or(AbrMode::Auto(None), AbrMode::manual);
-        if let Err(error) = handle.set_mode(mode) {
-            error!("abr mode failed: {error:?}");
-            return;
-        }
-    }
-    deck.controller.mutate(|st| {
-        st.abr_mode_is_auto = variant.is_none();
-        st.selected_variant = variant;
-    });
-}
-
-fn toggle_play_pause(deck: &DeckUi) {
-    if deck.ui.playing {
-        deck.controller.queue().pause();
-    } else {
-        deck.controller.queue().play();
-    }
-}
-
-fn seek_to(deck: &DeckUi, pos: f64) {
-    deck.controller.mutate(|st| {
-        st.is_seeking = false;
-        st.seek_position = pos;
-    });
-    seek(deck, pos);
-}
-
-fn seek(deck: &DeckUi, target: f64) {
-    if let Err(e) = deck.controller.queue().seek(target) {
-        error!("seek failed: {e:?}");
-    }
-}
-
-fn eq_band_changed(deck: &DeckUi, band: usize, db: GainDb) {
-    let known = deck.controller.mutate(|st| {
-        let Some(slot) = st.eq_bands.get_mut(band) else {
-            return false;
-        };
-        *slot = db;
-        true
-    });
-    if !known {
-        return;
-    }
-    if let Err(e) = deck.controller.queue().set_eq_gain(band, f32::from(db)) {
-        debug!(band, db = f32::from(db), error = ?e, "set EQ gain deferred");
-    }
-}
-
-fn track_id_at(deck: &DeckUi, index: usize) -> Option<TrackId> {
-    deck.ui.tracks.get(index).map(|e| e.id)
-}
-
-fn delete_track(deck: &mut DeckUi) {
-    if let Some(idx) = deck.ui.current_track_index
-        && let Some(id) = track_id_at(deck, idx)
-        && let Err(e) = deck.controller.queue().remove(id)
-    {
-        error!(index = idx, error = %e, "remove failed");
-    }
-}
-
-/// Live tempo: clamp to the travel and mirror the speed to this deck's queue.
-fn set_tempo(deck: &mut DeckUi, tempo: TempoPercent) {
-    let timestretch = &mut deck.view.timestretch;
-    timestretch.tempo = tempo;
-    deck.controller.queue().set_rate(timestretch.speed());
+        DeckMsg::SetTempo(tempo) => DeckCmd::SetTempo(tempo),
+        DeckMsg::SetQuality(variant) => DeckCmd::SetQuality(variant),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{
-        TempoPercent, TimestretchState,
-        consts::{TEMPO_RANGE, TEMPO_STEP},
-    };
-
-    #[kithara::test]
-    fn speed_is_one_percent_per_tempo_point() {
-        let speed = |tempo| {
-            TimestretchState {
-                tempo: TempoPercent::from(tempo),
-            }
-            .speed()
-        };
-
-        assert!((speed(0.0) - 1.0).abs() < f32::EPSILON);
-        assert!((speed(TEMPO_RANGE) - 1.5).abs() < 1e-6);
-        assert!((speed(-TEMPO_RANGE) - 0.5).abs() < 1e-6);
-    }
+    use super::consts::{TEMPO_RANGE, TEMPO_STEP};
 
     #[kithara::test]
     fn the_whole_travel_is_within_reach_of_a_few_detents() {
@@ -208,13 +66,5 @@ mod tests {
             detents <= REACH,
             "one end of the travel takes {detents} detents"
         );
-    }
-
-    #[kithara::test]
-    fn tempo_percent_clamps_controls_and_rejects_non_finite_documents() {
-        assert_eq!(TempoPercent::from(-80.0), TempoPercent::MIN);
-        assert_eq!(TempoPercent::from(80.0), TempoPercent::MAX);
-        assert_eq!(TempoPercent::from(f32::NAN), TempoPercent::DEFAULT);
-        assert!(TempoPercent::checked(f32::INFINITY).is_none());
     }
 }

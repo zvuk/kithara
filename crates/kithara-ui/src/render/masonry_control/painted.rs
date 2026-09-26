@@ -7,8 +7,6 @@ use super::{
     controls::{MasonryControl, Retained},
     custom::{HostAction, Repaint},
 };
-#[cfg(test)]
-use crate::interact::Gestures;
 use crate::{
     draw::{DrawBuffers, DrawList, DrawListBuilder, Rect, Transform},
     interact::{
@@ -156,37 +154,6 @@ impl<Painter> Painted<Painter>
 where
     Painter: Retained,
 {
-    #[cfg(test)]
-    pub(crate) fn new(painter: Painter, data: Painter::Data, skin: &Skin) -> Self {
-        Self {
-            data,
-            painter,
-            interaction: None,
-            index: IndexPress::default(),
-            pools: None,
-            press: Press::default(),
-            refresh: None,
-            repaint: false,
-            text: TextContext::from(skin.text_resources()),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn gestures(&self) -> Gestures {
-        match self
-            .interaction
-            .as_ref()
-            .map(|interaction| &interaction.recognize)
-        {
-            None => Gestures::empty(),
-            Some(Recognize::Press | Recognize::Command(_) | Recognize::Index { .. }) => {
-                Gestures::PRESS
-            }
-            Some(Recognize::Drag(drag)) => drag.spec.gestures(),
-            Some(Recognize::Span(_)) => Gestures::DRAG,
-        }
-    }
-
     /// The gesture is measured against the part of the box the painter says the
     /// pointer works, which for most controls is all of it.
     fn gripped(&self, hit: &Hit) -> Hit {
@@ -521,7 +488,13 @@ mod indexed {
     }
 
     fn preset(skin: &Skin, map: Option<IndexEvent<PresetData>>) -> Painted<Preset> {
-        Painted::new(Preset::new(skin), preset_data(), skin).interactive(
+        Painted::pooled(
+            Preset::new(skin),
+            preset_data(),
+            skin,
+            &DrawBuffers::default(),
+        )
+        .interactive(
             Grip::Index { count: 2 },
             "bar/presets".to_owned(),
             Rc::new(HostAction::new),
@@ -552,13 +525,14 @@ mod indexed {
     #[kithara::test]
     fn an_ordinary_retained_index_keeps_its_path_addressed_select_index() {
         let skin = builtin::skin();
-        let mut control = Painted::new(
+        let mut control = Painted::pooled(
             Segmented::new(skin),
             SegmentedData {
                 active: None,
                 items: vec!["A".to_owned(), "B".to_owned()],
             },
             skin,
+            &DrawBuffers::default(),
         )
         .interactive(
             Grip::Index { count: 2 },
@@ -725,13 +699,14 @@ mod indexed {
         );
 
         let skin = builtin::skin();
-        let mut out_of_range = Painted::new(
+        let mut out_of_range = Painted::pooled(
             Segmented::new(skin),
             SegmentedData {
                 active: None,
                 items: vec!["A".to_owned(), "B".to_owned()],
             },
             skin,
+            &DrawBuffers::default(),
         )
         .interactive(
             Grip::Index { count: 3 },

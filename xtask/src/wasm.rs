@@ -9,18 +9,52 @@ use kithara_devtools::{
 };
 use regex::Regex;
 
-use crate::{
-    config::{KitharaExt, WasmConfig},
-    consts,
-};
+use crate::{config::KitharaExt, consts};
+
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+pub(crate) enum WebPackage {
+    /// The player's web build and its demo page.
+    #[default]
+    KitharaFfi,
+    /// The DJ application.
+    KitharaApp,
+}
+
+impl WebPackage {
+    const APP_BUILD_STD: &'static str = "std,panic_abort";
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::KitharaFfi => "kithara-ffi",
+            Self::KitharaApp => "kithara-app",
+        }
+    }
+
+    fn features(self) -> Option<String> {
+        match self {
+            Self::KitharaFfi => {
+                let selected = env::var("KITHARA_FFI_FEATURES").unwrap_or_default();
+                Some(if selected.trim().is_empty() {
+                    "wasm".to_owned()
+                } else {
+                    format!("wasm,{}", selected.trim())
+                })
+            }
+            Self::KitharaApp => None,
+        }
+    }
+}
 
 #[derive(Debug, clap::Subcommand)]
 pub(crate) enum WasmCommand {
-    /// Build WASM demo app via Trunk.
+    /// Build a web package via Trunk.
     Build {
         /// Build profile.
         #[arg(long, default_value_t = crate::BuildProfile::Release)]
         profile: crate::BuildProfile,
+        /// The package whose web shell Trunk builds.
+        #[arg(long, value_enum, default_value_t)]
+        package: WebPackage,
     },
     /// Build the bundle and weigh it against the budget it declares.
     SizeCheck {
@@ -36,6 +70,9 @@ pub(crate) enum WasmCommand {
         /// Trunk staging directory (defaults to `TRUNK_STAGING_DIR` env).
         #[arg(long, env = "TRUNK_STAGING_DIR")]
         staging_dir: String,
+        /// The package whose bundle is staged; its name is the bundle's stem.
+        #[arg(long, value_enum)]
+        package: WebPackage,
     },
 }
 
@@ -43,10 +80,13 @@ pub(crate) fn run(cmd: WasmCommand, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     let tools = &ctx.config.tools;
     match cmd {
-        WasmCommand::Build { profile } => run_build(profile, tools),
+        WasmCommand::Build { profile, package } => run_build(profile, package, tools),
         WasmCommand::SizeCheck { profile } => run_size_check(profile, tools),
         WasmCommand::Doc => render_docs(&ctx.root.join(&ext.release.docs_channel("web")?.archive)),
-        WasmCommand::Postbuild { staging_dir } => run_postbuild(&staging_dir, &ext.wasm),
+        WasmCommand::Postbuild {
+            staging_dir,
+            package,
+        } => run_postbuild(&staging_dir, package),
     }
 }
 
@@ -82,7 +122,7 @@ fn check_rust_component_nightly(component: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_build(profile: crate::BuildProfile, tools: &ToolsConfig) -> Result<()> {
+fn run_build(profile: crate::BuildProfile, package: WebPackage, tools: &ToolsConfig) -> Result<()> {
     let program = tools.program("trunk");
     check_tool(
         program,
@@ -105,20 +145,19 @@ fn run_build(profile: crate::BuildProfile, tools: &ToolsConfig) -> Result<()> {
 
     let metadata = MetadataCommand::new().exec().context("cargo metadata")?;
     let root = metadata.workspace_root.as_std_path();
-    let wasm_dir = root.join("crates/kithara-ffi");
+    let wasm_dir = root.join("crates").join(package.name());
 
-    println!("==> Building kithara-ffi (wasm32)");
+    println!("==> Building {} (wasm32)", package.name());
     let mut cmd = Command::new(program);
     cmd.args(["build", "--config", "Trunk.toml"]);
-    let selected = env::var("KITHARA_FFI_FEATURES").unwrap_or_default();
-    let features = if selected.trim().is_empty() {
-        "wasm".to_owned()
-    } else {
-        format!("wasm,{}", selected.trim())
-    };
-    cmd.args(["--no-default-features", "--features", &features]);
+    if let Some(features) = package.features() {
+        cmd.args(["--no-default-features", "--features", &features]);
+    }
     if matches!(profile, crate::BuildProfile::Release) {
         cmd.arg("--release");
+    }
+    if matches!(package, WebPackage::KitharaApp) {
+        cmd.env("CARGO_UNSTABLE_BUILD_STD", WebPackage::APP_BUILD_STD);
     }
     cmd.env("RUSTUP_TOOLCHAIN", &toolchain);
     cmd.current_dir(&wasm_dir);
@@ -207,7 +246,7 @@ struct SlimConfig {
 /// right selection in `index.html`, so the check builds what ships and weighs
 /// that.
 fn run_size_check(profile: crate::BuildProfile, tools: &ToolsConfig) -> Result<()> {
-    run_build(profile, tools)?;
+    run_build(profile, WebPackage::KitharaFfi, tools)?;
 
     let metadata = MetadataCommand::new().exec().context("cargo metadata")?;
     let root = metadata.workspace_root.as_std_path();
@@ -285,12 +324,15 @@ fn strip_html_attrs(content: &str) -> String {
         .into_owned()
 }
 
-fn rewrite_paths(content: &str) -> String {
+fn rewrite_paths(content: &str, stem: &str) -> String {
     content
-        .replace("from '/kithara-ffi.js'", "from './kithara-ffi.js'")
         .replace(
-            "module_or_path: '/kithara-ffi_bg.wasm'",
-            "module_or_path: './kithara-ffi_bg.wasm'",
+            &format!("from '/{stem}.js'"),
+            &format!("from './{stem}.js'"),
+        )
+        .replace(
+            &format!("module_or_path: '/{stem}_bg.wasm'"),
+            &format!("module_or_path: './{stem}_bg.wasm'"),
         )
 }
 
@@ -325,26 +367,29 @@ fn apply_inline_patches(content: &str) -> String {
         )
 }
 
-fn run_postbuild(staging_dir: &str, wasm: &WasmConfig) -> Result<()> {
+fn run_postbuild(staging_dir: &str, package: WebPackage) -> Result<()> {
     let dir = Path::new(staging_dir);
     anyhow::ensure!(dir.is_dir(), "staging dir does not exist: {staging_dir}");
 
-    let js_name = &wasm.js_artifact;
+    let stem = package.name();
+    let js_name = format!("{stem}.js");
 
     let index = dir.join("index.html");
     let content = fs::read_to_string(&index).context("read index.html")?;
     let content = strip_html_attrs(&content);
-    let content = rewrite_paths(&content);
+    let content = rewrite_paths(&content, stem);
     fs::write(&index, content).context("write index.html")?;
 
-    let js = dir.join(js_name);
-    if js.exists() {
-        let content = fs::read_to_string(&js).with_context(|| format!("read {js_name}"))?;
-        let content = apply_text_decoder_polyfill(&content);
-        let content = content + consts::CHECK_RUNTIME_JS;
-        fs::write(&js, content).with_context(|| format!("write {js_name}"))?;
-        println!("post-build: {js_name} patched");
-    }
+    let js = dir.join(&js_name);
+    anyhow::ensure!(
+        js.is_file(),
+        "the bundle has no {js_name}; Trunk output a stem other than `{stem}`"
+    );
+    let content = fs::read_to_string(&js).with_context(|| format!("read {js_name}"))?;
+    let content = apply_text_decoder_polyfill(&content);
+    let content = content + consts::CHECK_RUNTIME_JS;
+    fs::write(&js, content).with_context(|| format!("write {js_name}"))?;
+    println!("post-build: {js_name} patched");
 
     let pattern = format!("{}/snippets/wasm_safe_thread-*/inline0.js", dir.display());
     for entry in glob::glob(&pattern).context("glob inline0.js")? {
@@ -380,11 +425,27 @@ mod tests {
     #[test]
     fn rewrite_absolute_to_relative_paths() {
         let input = "from '/kithara-ffi.js'\nmodule_or_path: '/kithara-ffi_bg.wasm'";
-        let result = rewrite_paths(input);
+        let result = rewrite_paths(input, WebPackage::KitharaFfi.name());
         assert_eq!(
             result,
             "from './kithara-ffi.js'\nmodule_or_path: './kithara-ffi_bg.wasm'"
         );
+    }
+
+    #[test]
+    fn rewrite_the_app_bundle_to_relative_paths() {
+        let input = "from '/kithara-app.js'\nmodule_or_path: '/kithara-app_bg.wasm'";
+        let result = rewrite_paths(input, WebPackage::KitharaApp.name());
+        assert_eq!(
+            result,
+            "from './kithara-app.js'\nmodule_or_path: './kithara-app_bg.wasm'"
+        );
+    }
+
+    #[test]
+    fn rewrite_leaves_another_package_bundle_alone() {
+        let input = "from '/kithara-ffi.js'";
+        assert_eq!(rewrite_paths(input, WebPackage::KitharaApp.name()), input);
     }
 
     #[test]

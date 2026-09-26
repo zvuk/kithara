@@ -9,8 +9,6 @@ use super::{
     host,
     measure::{Flex, Measured},
 };
-#[cfg(test)]
-use crate::compile::{Address, CompiledNode};
 use crate::{
     compile::CompiledUi,
     draw::Transform,
@@ -407,32 +405,6 @@ const fn column_alignment(align: TextAlign) -> Alignment {
         TextAlign::Center => Alignment::Center,
         TextAlign::End => Alignment::End,
     }
-}
-
-#[cfg(test)]
-pub(super) fn render_compiled<'a>(
-    node: &CompiledNode,
-    ctx: Ctx<'a, '_>,
-    skin: &'a Skin,
-) -> Element<'a, UiEvent> {
-    crate::render::document::render(node, ctx, IcedHost::new(ctx, skin))
-}
-
-#[cfg(test)]
-pub(super) fn render_engine_node<'a>(
-    node: &ExpandedNode,
-    address: &Address<'_>,
-    owner: InternId,
-    ctx: Ctx<'a, '_>,
-    skin: &'a Skin,
-) -> Element<'a, UiEvent> {
-    crate::render::document::render_engine_subtree(
-        node,
-        address,
-        owner,
-        ctx,
-        IcedHost::new(ctx, skin),
-    )
 }
 
 #[cfg(test)]

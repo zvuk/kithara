@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kithara</title>
+    <link data-trunk rel="rust" data-target-name="kithara" data-cargo-no-default-features data-cargo-features="gui,analysis-waveform,beat-dsp" data-wasm-opt-params="--enable-threads --enable-bulk-memory --enable-bulk-memory-opt --enable-mutable-globals --enable-nontrapping-float-to-int" />
+    <link data-trunk rel="copy-file" href="../kithara-ffi/_headers" />
+    <link data-trunk rel="copy-file" href="../kithara-ffi/coi-serviceworker.js" />
+    <style>
+        html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a2e; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body>
+    <div id="kithara"></div>
+    <script src="./coi-serviceworker.js"></script>
+</body>
+</html>

@@ -6,7 +6,6 @@ mod measure;
 pub(crate) mod mount;
 mod node;
 mod panel;
-mod size;
 mod table;
 mod window;
 

@@ -13,7 +13,6 @@ use crate::consts;
 #[serde(default)]
 pub(crate) struct KitharaExt {
     pub(crate) android: AndroidConfig,
-    pub(crate) wasm: WasmConfig,
     pub(crate) apple: AppleConfig,
     pub(crate) ci: CiProjectConfig,
     pub(crate) release: ReleaseConfig,
@@ -555,13 +554,6 @@ pub(crate) struct AndroidConfig {
     pub(crate) boot_wait_attempts: Option<u32>,
     /// Seconds between Android boot-completion polls.
     pub(crate) boot_poll_interval_secs: Option<u64>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct WasmConfig {
-    /// wasm-bindgen JS artifact patched by the trunk post-build hook.
-    pub(crate) js_artifact: String,
 }
 
 #[derive(Debug, Default, Deserialize)]

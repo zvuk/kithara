@@ -1,21 +1,23 @@
 use std::rc::Rc;
 
-use iced::window::Id;
+use iced::{Size, window::Id};
 use kithara::ui::{
     app,
     app::{App, Config, RunError},
     render::{Reads, Skin, UiEvent, Walk},
+    source::UiConfig,
 };
+use num_traits::cast::AsPrimitive;
 
 use super::{
-    app::{Decks, Kithara},
-    frontend::{window_min, window_size},
+    app::Kithara,
+    frontend::Boot,
     message::Message,
     reads::ReadRoot,
-    ui::{self, AppUi},
+    ui::{self, window::consts::WINDOW_SIZE},
     update,
 };
-use crate::{catalog::Catalog, config::AppConfig, deck::DeckSet, gui::ui::endpoints::Registry};
+use crate::gui::ui::endpoints::Registry;
 
 /// The studio driven by the retained host.
 ///
@@ -24,27 +26,14 @@ use crate::{catalog::Catalog, config::AppConfig, deck::DeckSet, gui::ui::endpoin
 /// published. Only the shell differs.
 pub(crate) struct Studio {
     state: Kithara,
+    settings: UiConfig,
 }
 
 impl Studio {
-    pub(crate) fn new(
-        session: DeckSet,
-        decks: Decks,
-        catalog: Catalog,
-        config: AppConfig,
-        studio: AppUi,
-        broadcast: crate::broadcast::Broadcaster,
-    ) -> Self {
+    pub(crate) fn new(boot: Boot) -> Self {
         Self {
-            state: Kithara::mounted(
-                session,
-                decks,
-                catalog,
-                config,
-                studio,
-                broadcast,
-                Id::unique(),
-            ),
+            settings: boot.settings.clone(),
+            state: Kithara::mounted(boot, Id::unique()),
         }
     }
 }
@@ -88,7 +77,7 @@ pub(crate) fn run(app: Studio) -> Result<(), RunError> {
     let package = Rc::clone(&app.state.ui.package);
     let endpoints = Registry::default();
     let (size, min_size) = (window_size(), window_min(app.state.ui.window_min()));
-    let settings = app.state.config.ui.clone();
+    let settings = app.settings.clone();
     app::run(
         app,
         Config::builder()
@@ -102,6 +91,18 @@ pub(crate) fn run(app: Studio) -> Result<(), RunError> {
             .build(),
         size,
     )
+}
+
+pub(crate) fn window_size() -> (u32, u32) {
+    (whole(WINDOW_SIZE.width), whole(WINDOW_SIZE.height))
+}
+
+fn window_min(min: Size) -> (u32, u32) {
+    (whole(min.width), whole(min.height))
+}
+
+fn whole(value: f32) -> u32 {
+    value.as_()
 }
 
 #[cfg(test)]

@@ -1,70 +1,22 @@
-use iced::window::Id;
+use arc_swap::ArcSwap;
 use kithara::{
     assets::StorageBackend,
     download::{Downloader, DownloaderConfig},
-    host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc},
+    platform::{CancelToken, sync::Arc, tokio::sync::mpsc::UnboundedSender},
     play::{PlayWorkerConfig, policy::DomainKeyPolicy},
 };
 
-use super::{
-    app::{Decks, Kithara},
-    ui::{AppUi, package::Package},
-};
+use super::frontend::Boot;
 use crate::{
-    broadcast::Broadcaster,
-    catalog::Catalog,
-    config::{AppBroadcastConfig, AppConfig, AppDrm},
-    deck::{Deck, DeckId, DeckSet},
-    pools::{self, AppHost, AppStore, AppWorker},
-    state::test_fixture::controller,
+    config::{AppConfig, AppDrm},
+    engine::{EngineSnapshot, Envelope},
+    pools::{self, AppStore, AppWorker, PoolsSection},
 };
 
-pub(super) fn state() -> Kithara {
-    let config = config();
-    let mut host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
-        .expect("test host");
-    let decks: Vec<Deck> = (0..2)
-        .map(|index| {
-            Deck::build(DeckId(index), &config, &mut host).expect("host accepts the test deck")
-        })
-        .collect();
-    let controllers = decks
-        .iter()
-        .map(|deck| {
-            (
-                deck.id,
-                controller(
-                    deck.queue.control().clone(),
-                    Arc::clone(&deck.timestretch),
-                    deck.cancel_child(),
-                ),
-            )
-        })
-        .collect();
-    let session = DeckSet::new(host, decks);
-    let decks = Decks::new(controllers).expect("fixture has decks");
-    let catalog = Catalog::new(vec![
-        "/music/local.flac".to_string(),
-        "https://example.test/stream.m3u8".to_string(),
-    ]);
-    let ui = AppUi::new(Package::load(None).expect("shipped UI package"), &config.ui)
-        .expect("shipped UI compiles");
-    Kithara::mounted(
-        session,
-        decks,
-        catalog,
-        config,
-        ui,
-        Broadcaster::new(AppBroadcastConfig::default()),
-        Id::unique(),
-    )
-}
-
-fn config() -> AppConfig {
+pub(super) fn config() -> AppConfig {
     let shutdown = CancelToken::root();
-    let pools = pools::build(&pools::PoolsSection::default()).expect("valid app pool policy");
+    let pools = pools::build(&PoolsSection::default()).expect("valid app pool policy");
     let worker = AppWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
@@ -84,4 +36,22 @@ fn config() -> AppConfig {
         .worker(worker)
         .store(store)
         .build()
+}
+
+pub(super) fn boot(
+    config: &AppConfig,
+    snapshots: Arc<ArcSwap<EngineSnapshot>>,
+    commands: UnboundedSender<Envelope>,
+) -> Boot {
+    Boot::builder()
+        .settings(&config.ui)
+        .tracks(vec![
+            "/music/local.flac".to_string(),
+            "https://example.test/stream.m3u8".to_string(),
+        ])
+        .palette(config.palette)
+        .snapshots(snapshots)
+        .commands(commands)
+        .build()
+        .expect("shipped UI compiles")
 }

@@ -45,6 +45,11 @@ workspace-members = [
   "kithara-ffi",
   "kithara-test-utils",
   "kithara-ui",
+  "kithara-ui-capture",
+  "kithara-ui-draw",
+  "kithara-ui-input",
+  "kithara-ui-lottie",
+  "kithara-ui-shaping",
   "xtask",
 ]
 third-party = [

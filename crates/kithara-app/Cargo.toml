@@ -7,7 +7,7 @@ publish = false
 
 [[bin]]
 name = "kithara"
-path = "src/main.rs"
+path = "src/bin/kithara/main.rs"
 
 [features]
 default = ["gui", "analysis-waveform", "beat-nn-small", "stretch-signalsmith"]
@@ -85,9 +85,21 @@ kithara-events = { workspace = true }
 kithara-record = { workspace = true }
 kithara-test-utils = { workspace = true }
 
+arc-swap = { workspace = true }
+bon = { workspace = true }
+bytes = { workspace = true }
 delegate = { workspace = true }
+derive_more = { workspace = true }
 
 fieldwork = { workspace = true }
+num-traits = { workspace = true }
+obfstr = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_yaml_ng = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
 
 # Desktop binary deps. Gated off iOS as well as wasm: kithara-app is a
 # desktop-only binary (GUI, no iOS audio backend), so none of these —
@@ -98,22 +110,11 @@ fieldwork = { workspace = true }
 kithara = { workspace = true, default-features = false, features = ["download", "signal", "backend-cpal"] }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
-bon = { workspace = true }
-bytes = { workspace = true }
 clap = { workspace = true }
 crabtime = { workspace = true }
-derive_more = { workspace = true }
 iced = { workspace = true, optional = true, features = ["tiny-skia"] }
-num-traits = { workspace = true }
-obfstr = { workspace = true }
-rand = { workspace = true }
-serde = { workspace = true }
-serde_yaml_ng = { workspace = true }
 sha2 = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-url = { workspace = true }
 
 # Desktop (non-Apple, non-Android, native) — fall back to symphonia
 # software decoding. workspace.dependencies now disables kithara's
@@ -128,6 +129,14 @@ kithara = { workspace = true, default-features = false, features = ["download", 
 # so that one target decodes AAC through symphonia alone.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"), not(all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
 kithara = { workspace = true, default-features = false, features = ["download", "fdk-aac"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+kithara = { workspace = true, default-features = false, features = ["symphonia", "webcodecs", "client-reqwest", "tls-rustls"] }
+
+getrandom = { workspace = true, features = ["wasm_js"] }
+iced = { workspace = true, optional = true }
+tracing-log = { workspace = true }
+tracing-wasm = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 kithara = { workspace = true, default-features = false, features = ["download", "apple", "client-wreq"] }

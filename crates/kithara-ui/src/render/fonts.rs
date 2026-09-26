@@ -42,15 +42,3 @@ pub const fn mono(weight: FontWeight) -> Font {
 pub const fn display(weight: FontWeight) -> Font {
     font(FontFamily::Display, weight)
 }
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::FONT_BYTES;
-
-    #[kithara::test]
-    fn font_catalog_contains_embedded_bytes() {
-        assert!(FONT_BYTES.iter().all(|bytes| !bytes.is_empty()));
-    }
-}

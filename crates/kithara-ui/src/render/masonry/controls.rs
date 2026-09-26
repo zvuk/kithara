@@ -84,13 +84,26 @@ mod table_projection {
 
     use super::{MasonryControl, TableLeaf};
     use crate::{
-        atoms::table::{ColumnLayout, face::Drawn},
+        atoms::table::face::Drawn,
         builtin,
         draw::{Rect, Transform},
         engine::Engine,
-        module::TableColumn,
-        render::hosted::{TablePlan, TableProjection},
+        expand::ControlSpec,
+        module::{TableColumn, TableColumnStyle},
+        render::{
+            ReadValue, Reads,
+            document::probe,
+            hosted::{HostedControlPlan, Resolving, TablePlan, TableProjection},
+        },
     };
+
+    struct Silent;
+
+    impl Reads for Silent {
+        fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+            None
+        }
+    }
 
     struct MissingEngineProjection {
         engine: Engine,
@@ -114,33 +127,23 @@ mod table_projection {
             x: 0.0,
             y: 0.0,
         };
-        let plan = TablePlan::fixture(
-            "library/tracks",
-            Vec::new(),
-            vec![
-                ColumnLayout {
-                    column: TableColumn::new(
-                        "index",
-                        "#",
-                        crate::module::TableColumnStyle::Index,
-                        48.0,
-                        false,
-                    ),
-                    width: 48.0,
-                },
-                ColumnLayout {
-                    column: TableColumn::new(
-                        "name",
-                        "NAME",
-                        crate::module::TableColumnStyle::Primary,
-                        192.0,
-                        true,
-                    ),
-                    width: 192.0,
-                },
+        let spec = ControlSpec::Table {
+            columns: vec![
+                TableColumn::new("index", "#", TableColumnStyle::Index, 48.0, false),
+                TableColumn::new("name", "NAME", TableColumnStyle::Primary, 192.0, true),
             ],
+            columns_state: None,
+        };
+        let cx = Resolving {
             skin,
-        );
+            ctx: probe(&Silent),
+        };
+        let Some(HostedControlPlan::Table(plan)) =
+            HostedControlPlan::resolved("library/tracks", &spec, None, None, "", cx)
+        else {
+            panic!("a table spec must resolve to a table plan");
+        };
+        let plan = *plan;
         let projection: Rc<dyn TableProjection> = Rc::new(MissingEngineProjection {
             bounds,
             engine: Engine::default(),
@@ -170,7 +173,7 @@ mod flags {
             tab::TabLarge,
         },
         builtin,
-        draw::{Rect, Transform},
+        draw::{DrawBuffers, Rect, Transform},
         module::{ButtonStyle, ChipStyle},
         render::{Mark, ReadValue, Skin},
     };
@@ -198,15 +201,16 @@ mod flags {
         let mounted: [(&str, Box<dyn MasonryControl>); 4] = [
             (
                 "Chip",
-                Box::new(Painted::new(
+                Box::new(Painted::pooled(
                     Chip::new(ChipStyle::Deck, skin),
                     labelled(),
                     skin,
+                    &DrawBuffers::default(),
                 )),
             ),
             (
                 "NavItem",
-                Box::new(Painted::new(
+                Box::new(Painted::pooled(
                     NavItem::new(skin),
                     NavData {
                         mark,
@@ -214,11 +218,17 @@ mod flags {
                         label: "MIXER".to_owned(),
                     },
                     skin,
+                    &DrawBuffers::default(),
                 )),
             ),
             (
                 "TabLarge",
-                Box::new(Painted::new(TabLarge::new(skin), labelled(), skin)),
+                Box::new(Painted::pooled(
+                    TabLarge::new(skin),
+                    labelled(),
+                    skin,
+                    &DrawBuffers::default(),
+                )),
             ),
             ("Button", Box::new(button(skin))),
         ];
@@ -239,7 +249,7 @@ mod flags {
     }
 
     fn button(skin: &Skin) -> Painted<Button> {
-        Painted::new(
+        Painted::pooled(
             Button::new(
                 ButtonConfig::builder()
                     .style(ButtonStyle::TransportPrimary)
@@ -255,6 +265,7 @@ mod flags {
                 },
             },
             skin,
+            &DrawBuffers::default(),
         )
     }
 }
@@ -268,7 +279,7 @@ mod analysed {
     use crate::{
         atoms::wave::face::{Drawn, Wave},
         builtin,
-        draw::{Rect, Transform},
+        draw::{DrawBuffers, Rect, Transform},
         module::WaveStyle,
         render::{ReadValue, Reads, WaveBucket, WaveformView},
     };
@@ -293,10 +304,11 @@ mod analysed {
             x: 0.0,
             y: 0.0,
         };
-        let mut wave = Painted::new(
+        let mut wave = Painted::pooled(
             Wave::new(WaveStyle::Default, skin),
             Drawn::read(WaveStyle::Default, 1.0, None, None, &NoReads, ""),
             skin,
+            &DrawBuffers::default(),
         );
         let empty = wave.draw_list(bounds, Transform::IDENTITY);
         let buckets = [
@@ -344,7 +356,7 @@ mod dragged {
     use crate::{
         atoms::{knob::Knob, painter::Captioned},
         builtin,
-        draw::{Pt, Rect},
+        draw::{DrawBuffers, Pt, Rect},
         interact::{Hit, Input, PointerPhase, mouse},
         mount,
         render::{ControlAction, ReadValue, UiEvent, controls::Draws},
@@ -407,7 +419,7 @@ mod dragged {
         let control = mount::Knob::builder().build();
         let data = Captioned { value, label: None };
         let grip = control.grip(skin, &data);
-        Painted::new(control.painter(skin), data, skin).interactive(
+        Painted::pooled(control.painter(skin), data, skin, &DrawBuffers::default()).interactive(
             grip,
             "mixer/gain".to_owned(),
             Rc::new(HostAction::new),

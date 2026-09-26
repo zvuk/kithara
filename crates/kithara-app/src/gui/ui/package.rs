@@ -7,7 +7,7 @@ use kithara::ui::{
     package::{PackageDoc, load_package},
     render::Skin,
     skin::load_skin,
-    source::{FileResolver, Limits, MemResolver, OverlayResolver, SourceResolver},
+    source::{Limits, MemResolver, SourceResolver},
     text::{TextDoc, parse_text},
 };
 
@@ -71,17 +71,7 @@ impl Package {
     /// that stops the package being read - a permission, a broken manifest -
     /// is an error rather than a quiet return to the built-in documents.
     pub(crate) fn load(root: Option<&Path>) -> Result<Rc<Self>, UiDocError> {
-        match root.filter(|root| root.exists()) {
-            Some(root) => {
-                let files = FileResolver::new(root).map_err(|error| UiDocError::Unreadable {
-                    origin: SourceUri(root.display().to_string()),
-                    rel: String::new(),
-                    source: error,
-                })?;
-                Self::read(Box::new(OverlayResolver::new(files, embedded())))
-            }
-            None => Self::read(Box::new(embedded())),
-        }
+        root.map_or_else(|| Self::read(Box::new(embedded())), Self::read_folder)
     }
 
     fn read(resolver: Box<dyn SourceResolver>) -> Result<Rc<Self>, UiDocError> {
@@ -95,6 +85,32 @@ impl Package {
             skin,
             text,
         }))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_folder(root: &Path) -> Result<Rc<Self>, UiDocError> {
+        use kithara::ui::source::{FileResolver, OverlayResolver};
+
+        if !root.exists() {
+            return Self::read(Box::new(embedded()));
+        }
+        let files = FileResolver::new(root).map_err(|error| UiDocError::Unreadable {
+            origin: SourceUri(root.display().to_string()),
+            rel: String::new(),
+            source: error,
+        })?;
+        Self::read(Box::new(OverlayResolver::new(files, embedded())))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn read_folder(root: &Path) -> Result<Rc<Self>, UiDocError> {
+        use std::io::ErrorKind;
+
+        Err(UiDocError::Unreadable {
+            origin: SourceUri(root.display().to_string()),
+            rel: String::new(),
+            source: ErrorKind::Unsupported.into(),
+        })
     }
 
     pub(in crate::gui) fn resolver(&self) -> &dyn SourceResolver {
@@ -205,5 +221,18 @@ mod tests {
             .collect();
 
         assert_eq!(replaced, consts::REPLACED);
+    }
+
+    #[kithara::test]
+    fn no_folder_reads_the_documents_this_build_carries() {
+        let package = Package::load(None).expect("the embedded package must load");
+
+        for (path, text) in DOCS {
+            let loaded = package
+                .resolver()
+                .load(None, path)
+                .unwrap_or_else(|error| panic!("`{path}` must be readable: {error}"));
+            assert_eq!(loaded.text, *text, "`{path}` must be the embedded copy");
+        }
     }
 }

@@ -27,7 +27,7 @@ mod gapless;
 mod mp4;
 mod resampled;
 mod retire;
-#[cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
+#[cfg(symphonia_demuxer)]
 mod symphonia;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
@@ -39,9 +39,9 @@ mod webcodecs;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
-#[cfg(all(feature = "android", target_os = "android"))]
+#[cfg(android_backend)]
 mod android;
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[cfg(apple_backend)]
 mod apple;
 
 pub use codec::CodecPriming;

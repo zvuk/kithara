@@ -106,11 +106,11 @@ fn the_document_reaches_the_stretch_backend_geometry() {
     let backends = config.player().warp.backends;
     assert_eq!(
         backends.signalsmith.block_frames,
-        std::num::NonZeroUsize::new(512)
+        Some(std::num::NonZeroUsize::new(512))
     );
     assert_eq!(
         backends.signalsmith.interval_frames,
-        std::num::NonZeroUsize::new(16)
+        Some(std::num::NonZeroUsize::new(16))
     );
     assert_eq!(backends.bungee.log2_synthesis_hop_adjust, Some(-2));
 }

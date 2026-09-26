@@ -19,8 +19,6 @@ use iced::{
 use kithara_platform::time::Instant;
 use kithara_test_macros as kithara;
 
-#[cfg(all(test, feature = "masonry"))]
-use crate::interact::Gestures;
 use crate::{
     atoms::{
         button::VisualState,
@@ -204,17 +202,6 @@ where
     Painter: ControlPainter + 'static,
     Painter::Data: 'static,
 {
-    #[cfg(test)]
-    pub(crate) fn new(painter: Painter, data: Painter::Data, skin: &'skin Skin) -> Self {
-        Self {
-            data,
-            painter,
-            pools: None,
-            text_resources: skin.text_resources(),
-            transform: Transform::IDENTITY,
-        }
-    }
-
     fn build_draw_list(
         &self,
         state: &PaintState<ControlKey<Painter>>,
@@ -591,15 +578,6 @@ where
         }
     }
 
-    #[cfg(all(test, feature = "masonry"))]
-    pub(crate) fn gestures(&self) -> Gestures {
-        match &self.recognize {
-            Recognize::Press | Recognize::Command(_) | Recognize::Index { .. } => Gestures::PRESS,
-            Recognize::Drag(drag) => drag.spec.gestures(),
-            Recognize::Span(_) => Gestures::DRAG,
-        }
-    }
-
     /// The gesture is measured against the part of the box the painter says the
     /// pointer works, which for most controls is all of it.
     fn gripped(&self, hit: Hit) -> Hit {
@@ -871,13 +849,13 @@ mod tests {
             ReadValue, Reads, StereoLevels,
             controls::{Draws, Grip},
             document::probe,
-            masonry::{HostAction, MasonryControl, Painted},
+            masonry::{MasonryControl, Painted, custom::HostAction},
         },
         skin::ColorRole,
     };
 
     mod consts {
-        use super::*;
+        use super::StereoLevels;
 
         pub(super) const LEVELS: StereoLevels = StereoLevels {
             l: 0.6,
@@ -921,18 +899,28 @@ mod tests {
         for active in [None, Some(0), Some(1)] {
             let immediate = Gesture::index(
                 "bar/presets",
-                Paint::new(Preset::new(skin), preset_data(active), skin),
+                Paint::pooled(
+                    Preset::new(skin),
+                    preset_data(active),
+                    skin,
+                    &DrawBuffers::default(),
+                ),
                 2,
                 map,
             );
             let iced_state = GestureState::default();
-            let mut masonry = Painted::new(Preset::new(skin), preset_data(active), skin)
-                .interactive(
-                    Grip::Index { count: 2 },
-                    "bar/presets".to_owned(),
-                    Rc::new(HostAction::new),
-                    map,
-                );
+            let mut masonry = Painted::pooled(
+                Preset::new(skin),
+                preset_data(active),
+                skin,
+                &DrawBuffers::default(),
+            )
+            .interactive(
+                Grip::Index { count: 2 },
+                "bar/presets".to_owned(),
+                Rc::new(HostAction::new),
+                map,
+            );
             assert_eq!(
                 immediate.paint.indexed_draw_list(
                     &iced_state.paint,
@@ -943,7 +931,13 @@ mod tests {
             );
         }
 
-        let mut masonry = Painted::new(Preset::new(skin), preset_data(Some(0)), skin).interactive(
+        let mut masonry = Painted::pooled(
+            Preset::new(skin),
+            preset_data(Some(0)),
+            skin,
+            &DrawBuffers::default(),
+        )
+        .interactive(
             Grip::Index { count: 2 },
             "bar/presets".to_owned(),
             Rc::new(HostAction::new),
@@ -951,7 +945,12 @@ mod tests {
         );
         let immediate = Gesture::index(
             "bar/presets",
-            Paint::new(Preset::new(skin), preset_data(Some(0)), skin),
+            Paint::pooled(
+                Preset::new(skin),
+                preset_data(Some(0)),
+                skin,
+                &DrawBuffers::default(),
+            ),
             2,
             map,
         );
@@ -1039,12 +1038,19 @@ mod tests {
             y: 0.0,
         };
         for ticks in [false, true] {
-            let iced = Paint::new(VerticalVu::new(ticks, skin), consts::LEVELS, skin).draw_list(
-                &PaintState::default(),
-                bounds,
-                VisualState::Idle,
+            let iced = Paint::pooled(
+                VerticalVu::new(ticks, skin),
+                consts::LEVELS,
+                skin,
+                &DrawBuffers::default(),
+            )
+            .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+            let mut masonry = Painted::pooled(
+                VerticalVu::new(ticks, skin),
+                consts::LEVELS,
+                skin,
+                &DrawBuffers::default(),
             );
-            let mut masonry = Painted::new(VerticalVu::new(ticks, skin), consts::LEVELS, skin);
 
             assert_eq!(
                 iced,
@@ -1082,12 +1088,10 @@ mod tests {
             ),
         ] {
             for active in [false, true] {
-                let iced = Paint::new(painter(skin), active, skin).draw_list(
-                    &PaintState::default(),
-                    bounds,
-                    VisualState::Idle,
-                );
-                let mut masonry = Painted::new(painter(skin), active, skin);
+                let iced = Paint::pooled(painter(skin), active, skin, &DrawBuffers::default())
+                    .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+                let mut masonry =
+                    Painted::pooled(painter(skin), active, skin, &DrawBuffers::default());
 
                 assert_eq!(
                     iced,
@@ -1110,12 +1114,10 @@ mod tests {
             y: 0.0,
         };
         for level in [0.0, 0.5, 1.0] {
-            let iced = Paint::new(Meter::new(skin), level, skin).draw_list(
-                &PaintState::default(),
-                bounds,
-                VisualState::Idle,
-            );
-            let mut masonry = Painted::new(Meter::new(skin), level, skin);
+            let iced = Paint::pooled(Meter::new(skin), level, skin, &DrawBuffers::default())
+                .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+            let mut masonry =
+                Painted::pooled(Meter::new(skin), level, skin, &DrawBuffers::default());
 
             assert_eq!(
                 iced,
@@ -1139,12 +1141,10 @@ mod tests {
                     highlighted,
                     label: label.clone(),
                 };
-                let iced = Paint::new(Cell::new(skin), data(), skin).draw_list(
-                    &PaintState::default(),
-                    bounds,
-                    VisualState::Idle,
-                );
-                let mut masonry = Painted::new(Cell::new(skin), data(), skin);
+                let iced = Paint::pooled(Cell::new(skin), data(), skin, &DrawBuffers::default())
+                    .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+                let mut masonry =
+                    Painted::pooled(Cell::new(skin), data(), skin, &DrawBuffers::default());
 
                 assert_eq!(
                     iced,
@@ -1164,12 +1164,19 @@ mod tests {
             y: 0.0,
         };
         for role in [ColorRole::Accent, ColorRole::BgInset] {
-            let iced = Paint::new(Swatch::new(role, skin), "ACCENT".to_owned(), skin).draw_list(
-                &PaintState::default(),
-                bounds,
-                VisualState::Idle,
+            let iced = Paint::pooled(
+                Swatch::new(role, skin),
+                "ACCENT".to_owned(),
+                skin,
+                &DrawBuffers::default(),
+            )
+            .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+            let mut masonry = Painted::pooled(
+                Swatch::new(role, skin),
+                "ACCENT".to_owned(),
+                skin,
+                &DrawBuffers::default(),
             );
-            let mut masonry = Painted::new(Swatch::new(role, skin), "ACCENT".to_owned(), skin);
 
             assert_eq!(
                 iced,
@@ -1192,19 +1199,21 @@ mod tests {
                 active: false,
                 label: "LIVE".to_owned(),
             };
-            let iced = Paint::new(
+            let iced = Paint::pooled(
                 StatusDot::with_active_tone(tone, None, None, skin),
                 data,
                 skin,
+                &DrawBuffers::default(),
             )
             .draw_list(&PaintState::default(), bounds, VisualState::Idle);
-            let mut masonry = Painted::new(
+            let mut masonry = Painted::pooled(
                 StatusDot::with_active_tone(tone, None, None, skin),
                 StatusDotData {
                     active: false,
                     label: "LIVE".to_owned(),
                 },
                 skin,
+                &DrawBuffers::default(),
             );
 
             assert_eq!(
@@ -1236,12 +1245,10 @@ mod tests {
                     mark,
                     label: "BUTTONS".to_owned(),
                 };
-                let iced = Paint::new(NavItem::new(skin), data(), skin).draw_list(
-                    &PaintState::default(),
-                    bounds,
-                    VisualState::Idle,
-                );
-                let mut masonry = Painted::new(NavItem::new(skin), data(), skin);
+                let iced = Paint::pooled(NavItem::new(skin), data(), skin, &DrawBuffers::default())
+                    .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+                let mut masonry =
+                    Painted::pooled(NavItem::new(skin), data(), skin, &DrawBuffers::default());
 
                 assert_eq!(
                     iced,
@@ -1293,12 +1300,9 @@ mod tests {
                         label: "PLAY".to_owned(),
                     },
                 };
-                let iced = Paint::new(painter(), data(), skin).draw_list(
-                    &PaintState::default(),
-                    bounds,
-                    VisualState::Idle,
-                );
-                let mut masonry = Painted::new(painter(), data(), skin);
+                let iced = Paint::pooled(painter(), data(), skin, &DrawBuffers::default())
+                    .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+                let mut masonry = Painted::pooled(painter(), data(), skin, &DrawBuffers::default());
 
                 assert_eq!(
                     iced,
@@ -1323,12 +1327,10 @@ mod tests {
                 active,
                 label: "DECK MICRO".to_owned(),
             };
-            let iced = Paint::new(TabLarge::new(skin), data(), skin).draw_list(
-                &PaintState::default(),
-                bounds,
-                VisualState::Idle,
-            );
-            let mut masonry = Painted::new(TabLarge::new(skin), data(), skin);
+            let iced = Paint::pooled(TabLarge::new(skin), data(), skin, &DrawBuffers::default())
+                .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+            let mut masonry =
+                Painted::pooled(TabLarge::new(skin), data(), skin, &DrawBuffers::default());
 
             assert_eq!(
                 iced,
@@ -1366,12 +1368,9 @@ mod tests {
                     mark,
                     active_mark: None,
                 };
-                let iced = Paint::new(painter(), data(), skin).draw_list(
-                    &PaintState::default(),
-                    bounds,
-                    VisualState::Idle,
-                );
-                let mut masonry = Painted::new(painter(), data(), skin);
+                let iced = Paint::pooled(painter(), data(), skin, &DrawBuffers::default())
+                    .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+                let mut masonry = Painted::pooled(painter(), data(), skin, &DrawBuffers::default());
 
                 assert_eq!(
                     iced,
@@ -1402,12 +1401,19 @@ mod tests {
                 label: label.clone(),
                 value: 0.5,
             };
-            let iced = Paint::new(Fader::new(style, skin), data(), skin).draw_list(
-                &PaintState::default(),
-                bounds,
-                VisualState::Idle,
+            let iced = Paint::pooled(
+                Fader::new(style, skin),
+                data(),
+                skin,
+                &DrawBuffers::default(),
+            )
+            .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+            let mut masonry = Painted::pooled(
+                Fader::new(style, skin),
+                data(),
+                skin,
+                &DrawBuffers::default(),
             );
-            let mut masonry = Painted::new(Fader::new(style, skin), data(), skin);
 
             assert_eq!(
                 iced,
@@ -1427,12 +1433,19 @@ mod tests {
             y: 0.0,
         };
         for ticks in [false, true] {
-            let iced = Paint::new(Crossfader::new(ticks, skin), 0.8_f32, skin).draw_list(
-                &PaintState::default(),
-                bounds,
-                VisualState::Idle,
+            let iced = Paint::pooled(
+                Crossfader::new(ticks, skin),
+                0.8_f32,
+                skin,
+                &DrawBuffers::default(),
+            )
+            .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+            let mut masonry = Painted::pooled(
+                Crossfader::new(ticks, skin),
+                0.8_f32,
+                skin,
+                &DrawBuffers::default(),
             );
-            let mut masonry = Painted::new(Crossfader::new(ticks, skin), 0.8_f32, skin);
 
             assert_eq!(
                 iced,
@@ -1458,12 +1471,10 @@ mod tests {
                 label: label.clone(),
                 value: 0.25,
             };
-            let iced = Paint::new(Knob::new(skin), data(), skin).draw_list(
-                &PaintState::default(),
-                bounds,
-                VisualState::Idle,
-            );
-            let mut masonry = Painted::new(Knob::new(skin), data(), skin);
+            let iced = Paint::pooled(Knob::new(skin), data(), skin, &DrawBuffers::default())
+                .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+            let mut masonry =
+                Painted::pooled(Knob::new(skin), data(), skin, &DrawBuffers::default());
 
             assert_eq!(
                 iced,
@@ -1481,12 +1492,19 @@ mod tests {
             x: 0.0,
             y: 0.0,
         };
-        let iced = Paint::new(StereoMeter::new(skin), consts::LEVELS, skin).draw_list(
-            &PaintState::default(),
-            bounds,
-            VisualState::Idle,
+        let iced = Paint::pooled(
+            StereoMeter::new(skin),
+            consts::LEVELS,
+            skin,
+            &DrawBuffers::default(),
+        )
+        .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+        let mut masonry = Painted::pooled(
+            StereoMeter::new(skin),
+            consts::LEVELS,
+            skin,
+            &DrawBuffers::default(),
         );
-        let mut masonry = Painted::new(StereoMeter::new(skin), consts::LEVELS, skin);
 
         assert_eq!(
             iced,
@@ -1570,7 +1588,12 @@ mod indexed {
     fn preset(skin: &Skin, map: Option<IndexEvent<PresetData>>) -> Gesture<'_, Preset> {
         Gesture::index(
             "bar/presets",
-            Paint::new(Preset::new(skin), preset_data(), skin),
+            Paint::pooled(
+                Preset::new(skin),
+                preset_data(),
+                skin,
+                &DrawBuffers::default(),
+            ),
             2,
             map,
         )
@@ -1604,13 +1627,14 @@ mod indexed {
         let skin = builtin::skin();
         let gesture = Gesture::index(
             "gallery/segments",
-            Paint::new(
+            Paint::pooled(
                 Segmented::new(skin),
                 SegmentedData {
                     active: None,
                     items: vec!["A".to_owned(), "B".to_owned()],
                 },
                 skin,
+                &DrawBuffers::default(),
             ),
             2,
             None,
@@ -1870,13 +1894,14 @@ mod indexed {
         let skin = builtin::skin();
         let out_of_range = Gesture::index(
             "gallery/segments",
-            Paint::new(
+            Paint::pooled(
                 Segmented::new(skin),
                 SegmentedData {
                     active: None,
                     items: vec!["A".to_owned(), "B".to_owned()],
                 },
                 skin,
+                &DrawBuffers::default(),
             ),
             3,
             Some(bounded_segment_event),
@@ -1927,7 +1952,7 @@ mod pressed {
         let mark = IconName::Play
             .mark()
             .expect("the play icon must have a mark");
-        let paint = Paint::new(
+        let paint = Paint::pooled(
             NavItem::new(skin),
             NavData {
                 mark,
@@ -1935,6 +1960,7 @@ mod pressed {
                 label: "BUTTONS".to_owned(),
             },
             skin,
+            &DrawBuffers::default(),
         );
         let gesture = Gesture::press("gallery/buttons/item", paint);
         let bounds = Rectangle {
@@ -1975,7 +2001,7 @@ mod pressed {
             .expect("the gear icon must have a mark");
         let gesture = Gesture::command(
             "bar/settings",
-            Paint::new(Settings::new(skin), mark, skin),
+            Paint::pooled(Settings::new(skin), mark, skin, &DrawBuffers::default()),
             || UiEvent::OpenSettings,
         );
         let bounds = Rectangle {
@@ -2059,7 +2085,7 @@ mod pressed {
     }
 
     fn button_paint(skin: &Skin, active: bool) -> Paint<'_, Button> {
-        Paint::new(
+        Paint::pooled(
             Button::new(
                 ButtonConfig::builder()
                     .style(ButtonStyle::TransportPrimary)
@@ -2075,6 +2101,7 @@ mod pressed {
                 },
             },
             skin,
+            &DrawBuffers::default(),
         )
     }
 }
@@ -2110,13 +2137,14 @@ mod dragged {
         let skin = builtin::skin();
         let gesture = Gesture::drag(
             "mixer/gain",
-            Paint::new(
+            Paint::pooled(
                 Knob::new(skin),
                 Captioned {
                     label: None,
                     value: 0.5,
                 },
                 skin,
+                &DrawBuffers::default(),
             ),
             Drag::builder()
                 .cursor(CursorShape::ResizeV)
@@ -2221,7 +2249,7 @@ mod dragged {
         let rail = control.painter(skin).rail(bounds.into(), true);
         let gesture = Gesture::drag(
             "mixer/vol",
-            Paint::new(control.painter(skin), data(), skin),
+            Paint::pooled(control.painter(skin), data(), skin, &DrawBuffers::default()),
             drag,
         );
         let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
@@ -2258,7 +2286,7 @@ mod dragged {
         };
         let gesture = Gesture::drag(
             "mixer/xfade",
-            Paint::new(control.painter(skin), value, skin),
+            Paint::pooled(control.painter(skin), value, skin, &DrawBuffers::default()),
             drag,
         );
         let bounds = Rectangle {
@@ -2328,7 +2356,7 @@ mod lengths {
     }
 
     fn paint(style: ButtonStyle, skin: &Skin) -> Paint<'_, Button> {
-        Paint::new(
+        Paint::pooled(
             Button::new(ButtonConfig::builder().style(style).build(), None, skin),
             ButtonData {
                 active: false,
@@ -2338,6 +2366,7 @@ mod lengths {
                 },
             },
             skin,
+            &DrawBuffers::default(),
         )
     }
 
@@ -2392,13 +2421,14 @@ mod lengths {
     fn a_tab_is_as_wide_as_its_word() {
         let skin = builtin::skin();
         let renderer = headless_renderer();
-        let mut element = Paint::new(
+        let mut element = Paint::pooled(
             TabLarge::new(skin),
             Labelled {
                 active: true,
                 label: "DECK MICRO".to_owned(),
             },
             skin,
+            &DrawBuffers::default(),
         )
         .view();
         let mut tree = Tree::new(element.as_widget());
@@ -2508,7 +2538,7 @@ mod cached {
     };
 
     mod consts {
-        use super::*;
+        use super::Rect;
 
         pub(super) const BOX: Rect = Rect {
             h: 40.0,
@@ -2530,7 +2560,7 @@ mod cached {
         Painter: ControlPainter + 'static,
         Painter::Data: 'static,
     {
-        let paint = Paint::new(painter, data, builtin::skin());
+        let paint = Paint::pooled(painter, data, builtin::skin(), &DrawBuffers::default());
         state.mark(paint.key(bounds, Visual::Whole(VisualState::Idle)), || {
             paint.draw_list(state, bounds, VisualState::Idle)
         })

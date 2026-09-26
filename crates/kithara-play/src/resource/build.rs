@@ -201,7 +201,7 @@ mod tests {
     #[kithara::test]
     fn a_document_extension_stands_when_nothing_more_specific_names_one() {
         let mut config = config("https://example.com/track/stream");
-        config.file.extension = Some("wav".to_owned());
+        config.file.extension = Some(Some("wav".to_owned()));
 
         let built = config.build_file_config(&worker(), None);
 
@@ -216,7 +216,7 @@ mod tests {
     fn the_per_call_hint_outranks_a_document_extension() {
         let mut config = config("https://example.com/track/stream");
         config.hint = Some("flac".to_owned());
-        config.file.extension = Some("wav".to_owned());
+        config.file.extension = Some(Some("wav".to_owned()));
 
         let built = config.build_file_config(&worker(), None);
 

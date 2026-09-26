@@ -12,10 +12,11 @@ use super::{
     wave::HeroWaveComponent,
 };
 use crate::{
+    draw::Rect,
     engine::model::{Descriptor, EngineEvent, Identity, Kind},
     interact::{
         CursorShape, Hit, Hover, Input, InputMethodRequest, Outcome, PointerOwnership,
-        PointerPhase, Rect,
+        PointerPhase,
         recognizers::{Scalar, Track, WheelStep},
     },
 };

@@ -65,31 +65,6 @@ where
     host.window(content, ctx.ui.dragged.as_ref(), ctx.ui.resize_edges)
 }
 
-#[cfg(test)]
-pub(crate) fn render_engine_subtree<H>(
-    node: &ExpandedNode,
-    address: &Address<'_>,
-    owner: InternId,
-    ctx: Ctx<'_, '_>,
-    mut host: H,
-) -> H::Output
-where
-    H: Host,
-{
-    expanded(
-        node,
-        address,
-        Branch {
-            owner,
-            input_owner: InputOwner::Engine,
-            round: FrameCorners::EMPTY,
-            transform: Transform::IDENTITY,
-        },
-        ctx,
-        &mut host,
-    )
-}
-
 fn compiled<H>(node: &CompiledNode, ctx: Ctx<'_, '_>, host: &mut H) -> H::Output
 where
     H: Host,

@@ -21,40 +21,6 @@ pub(crate) const REQUIRED_INPUT: ReaderInput = ReaderInput::InitOnly;
 pub(crate) const FLAC_STREAMINFO_BYTES: usize = 34;
 pub(crate) const FOURCC_FLAC: u32 = 0x664c_6143;
 
-#[cfg(any(
-    test,
-    feature = "symphonia",
-    all(feature = "android", target_os = "android"),
-    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
-))]
-pub(crate) const MPEG_HEADER_LEN: usize = 4;
-
-#[cfg(any(
-    test,
-    feature = "symphonia",
-    all(feature = "android", target_os = "android"),
-    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
-))]
-pub(crate) const SYNC_MASK: u32 = 0xFFE0_0000;
-
-#[cfg(any(
-    test,
-    feature = "symphonia",
-    all(feature = "android", target_os = "android"),
-    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
-))]
-pub(crate) const SYNC_VALUE: u32 = 0xFFE0_0000;
-
-/// Frames whose shared bitrate is accepted as proof the stream is CBR.
-///
-/// A 16 `KiB` probe window holds ~39 frames at 128 kbps and ~15 at 320 kbps, so
-/// this stays well inside the window for every MPEG-1 bitrate.
-#[cfg(any(
-    test,
-    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
-))]
-pub(crate) const CBR_EVIDENCE_FRAMES: u32 = 8;
-
 /// Length of the click-suppression fade-in applied after every
 /// heuristic trim (silence or codec-priming). 3 ms is short
 /// enough to be inaudible as a transient but long enough to mask

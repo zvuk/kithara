@@ -90,8 +90,7 @@ pub enum LoadError {
 }
 
 impl Config {
-    /// Knobs the document sets on the built [`AppConfig`]. Fields the document
-    /// never names stay `None`, leaving what the builder produced in place.
+    /// Knobs the document's `app:` section sets on the built [`AppConfig`].
     ///
     /// [`AppConfig`]: crate::config::AppConfig
     #[must_use]
@@ -113,7 +112,9 @@ impl Config {
     #[must_use]
     pub fn assets_store(&self) -> AssetStoreConfigPatch {
         let mut store = self.document.assets_store.clone();
-        store.backend.get_or_insert_with(StorageBackend::default);
+        store
+            .backend
+            .get_or_insert_with(|| Some(StorageBackend::default()));
         store
     }
 
@@ -382,20 +383,28 @@ fn schema_detail(source: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, num::NonZeroUsize, path::PathBuf};
+    use std::{
+        fs,
+        num::{NonZeroU32, NonZeroUsize},
+        path::PathBuf,
+    };
 
     use kithara::{
         assets::FlushPolicy,
         hls::SizeProbeMethod,
         host::HostConfig,
         net::{Compression, NetOptions},
-        platform::time::Duration,
+        platform::{CancelToken, time::Duration, tokio::runtime::Handle},
         worker::ComputePool,
     };
     use tempfile::TempDir;
 
     use super::{Config, LoadError, StorageBackend, consts::BAKED_PATH};
-    use crate::pools::AppPools;
+    use crate::{
+        config::AppConfig,
+        pools::{self, AppPools},
+        theme::{Palette, Rgb},
+    };
 
     fn tempdir() -> TempDir {
         tempfile::tempdir().expect("a temporary directory")
@@ -439,6 +448,34 @@ mod tests {
             (crossfade - 5.0).abs() < f32::EPSILON,
             "the shipped document pins the 5-second crossfade against the crate default of 1.0"
         );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn the_browser_overlay_leaves_no_provider_and_four_streams() {
+        let overlay = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/app.web.yaml"));
+
+        let config = Config::load_with(Some(&overlay), None, &|_| None)
+            .expect("the browser document resolves no reference");
+
+        assert!(config.document.drm.providers.is_empty());
+        assert_eq!(
+            config.tracks(),
+            [
+                "https://stream.silvercomet.top/track.mp3",
+                "https://stream.silvercomet.top/hls/master.m3u8",
+                "https://stream.silvercomet.top/drm/master.m3u8",
+                "https://stream.silvercomet.top/tones/master.m3u8",
+            ]
+        );
+        let store = config.assets_store();
+        assert_eq!(store.backend, Some(Some(StorageBackend::Memory)));
+        assert_eq!(
+            store
+                .cache_capacity
+                .map(|value| value.map(NonZeroUsize::get)),
+            Some(Some(128))
+        );
+        assert_eq!(store.max_bytes, Some(Some(128 * 1024 * 1024)));
     }
 
     #[kithara::test(native, flash(false))]
@@ -724,7 +761,12 @@ mod tests {
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
         let settings = config.assets_store();
 
-        assert_eq!(settings.cache_capacity.map(NonZeroUsize::get), Some(32));
+        assert_eq!(
+            settings
+                .cache_capacity
+                .map(|value| value.map(NonZeroUsize::get)),
+            Some(Some(32))
+        );
         assert!(
             settings.max_bytes.is_none(),
             "a knob the document does not name reaches the app empty"
@@ -740,7 +782,7 @@ mod tests {
 
         assert_eq!(
             config.assets_store().backend,
-            Some(StorageBackend::default()),
+            Some(Some(StorageBackend::default())),
             "an unnamed backend must resolve to the stable default root, not \
              to the fresh per-launch temp directory `AssetStore::open` falls \
              back to on its own"
@@ -758,7 +800,10 @@ mod tests {
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
-        assert_eq!(config.assets_store().backend, Some(StorageBackend::Memory));
+        assert_eq!(
+            config.assets_store().backend,
+            Some(Some(StorageBackend::Memory))
+        );
     }
 
     /// The Host owns the output rate -- it refuses a player whose rate
@@ -776,10 +821,54 @@ mod tests {
 
         let document = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
         let host = HostConfig::<AppPools>::builder()
-            .maybe_sample_rate_hint(document.app().sample_rate)
+            .maybe_sample_rate_hint(document.app().sample_rate.flatten())
             .build();
 
         assert_eq!(host.sample_rate().get(), 48_000);
+    }
+
+    fn assembled(dir: &TempDir, name: &str, app: &str, shutdown: &CancelToken) -> AppConfig {
+        let path = write(
+            dir,
+            name,
+            &format!("assets_store:\n  backend:\n    kind: memory\n{app}"),
+        );
+        let document = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+        AppConfig::assemble()
+            .document(&document)
+            .pools(pools::build(&document.pools()).expect("valid app pool policy"))
+            .shutdown(shutdown.child())
+            .runtime(Handle::current())
+            .ui_package(PathBuf::from("/shipped/ui"))
+            .call()
+            .expect("the document assembles")
+    }
+
+    #[kithara::test(native, tokio, flash(false))]
+    async fn the_app_section_lands_on_the_assembled_configuration() {
+        let dir = tempdir();
+        let shutdown = CancelToken::root();
+
+        let named = assembled(
+            &dir,
+            "named",
+            concat!(
+                "app:\n  ui_package: /document/ui\n  sample_rate: 48000\n",
+                "  palette:\n    accent: [10, 20, 30]\n",
+            ),
+            &shutdown,
+        );
+        assert_eq!(named.ui_package, Some(PathBuf::from("/document/ui")));
+        assert_eq!(named.palette.accent, Rgb(10, 20, 30));
+        assert_eq!(named.palette.bg, Palette::default().bg);
+        assert_eq!(named.sample_rate, NonZeroU32::new(48_000));
+
+        let silent = assembled(&dir, "silent", "", &shutdown);
+        assert_eq!(silent.ui_package, Some(PathBuf::from("/shipped/ui")));
+        assert_eq!(silent.palette.accent, Palette::default().accent);
+        assert_eq!(silent.sample_rate, None);
+
+        shutdown.cancel();
     }
 
     /// The proof the section is gone rather than merely unread: `network` no

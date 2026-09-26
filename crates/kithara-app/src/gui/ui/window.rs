@@ -22,6 +22,8 @@ pub(in crate::gui) struct WindowState {
     caption: String,
     #[field(get, vis = "pub(in crate::gui)")]
     title: String,
+    #[field(get, vis = "pub(in crate::gui)")]
+    chrome_hidden: bool,
 }
 
 impl WindowState {
@@ -35,6 +37,10 @@ impl WindowState {
         );
     }
 
+    pub(in crate::gui) const fn set_chrome_hidden(&mut self, hidden: bool) {
+        self.chrome_hidden = hidden;
+    }
+
     pub(in crate::gui) const fn set_size(&mut self, size: Size) {
         self.size = size;
     }
@@ -46,6 +52,7 @@ impl Default for WindowState {
             size: consts::WINDOW_SIZE,
             title: String::new(),
             caption: String::new(),
+            chrome_hidden: false,
         };
         state.refresh(DeckLayout::default(), &Modules::default());
         state

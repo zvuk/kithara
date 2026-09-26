@@ -1,3 +1,4 @@
+use kithara_test_macros as kithara;
 use masonry::core::WidgetId;
 
 use super::{MasonryRoot, Node, Watched, WindowLayer};
@@ -73,7 +74,7 @@ where
             let Some(transform) = placed.get(path).copied() else {
                 continue;
             };
-            moved |= self.root.edit_widget(*id, |mut widget| {
+            let placed = self.root.edit_widget(*id, |mut widget| {
                 let mut node = widget.downcast::<Node>();
                 let moved = node.widget.place(transform);
                 if moved {
@@ -81,6 +82,10 @@ where
                 }
                 moved
             });
+            if placed {
+                kithara::probe_event!(masonry_object_moved, widget = id.to_raw());
+            }
+            moved |= placed;
         }
         moved
     }

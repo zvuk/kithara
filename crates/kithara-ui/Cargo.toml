@@ -20,9 +20,17 @@ gpu = ["iced", "dep:pollster"]
 # Photographing a page with no window, and comparing two sets of photographs.
 # A debug harness rather than something a shipped build carries, so it is off
 # by default and lives behind this flag.
-capture = ["iced", "dep:futures-lite", "dep:iced_renderer", "dep:iced_runtime", "dep:iced_wgpu"]
-masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "vello"]
+capture = [
+    "iced",
+    "dep:futures-lite",
+    "dep:iced_renderer",
+    "dep:iced_runtime",
+    "dep:iced_wgpu",
+    "dep:kithara-ui-capture",
+]
+masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "kithara-ui-input/masonry", "vello"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
+usdt = ["dep:kithara-test-utils", "kithara-test-utils/usdt"]
 # Hand the no-block gate the platform layer the toolkit draws through, so a
 # lane that runs this package under the gate detects a blocking call made
 # from a paint pass.
@@ -31,25 +39,31 @@ no-block = ["kithara-platform/no-block"]
 # which controls a document may name is a contract of the toolkit, not of the
 # host's feature set, so a build that draws at all draws every control.
 render = [
-    "dep:kithara-bufpool",
+    "dep:kithara-ui-input",
+    "dep:kithara-ui-lottie",
     "dep:lucide-icons",
     "dep:naga",
     "dep:num-traits",
-    "dep:parley",
     "dep:png",
     "dep:skrifa",
     "dep:tracing",
     "dep:unicode-segmentation",
-    "dep:velato",
+    "kithara-ui-draw/list",
+    "kithara-ui-shaping/shape",
 ]
-iced = ["render", "dep:iced", "iced/advanced"]
-vello = ["render", "dep:lucide-icons", "dep:num-traits", "dep:parley", "dep:tracing", "dep:vello"]
+iced = ["render", "dep:iced", "iced/advanced", "kithara-ui-draw/iced", "kithara-ui-input/iced"]
+vello = ["render", "dep:lucide-icons", "dep:num-traits", "dep:tracing", "dep:vello"]
 
 [dependencies]
-kithara-bufpool = { workspace = true, optional = true }
 kithara-derive = { workspace = true, features = ["built-default", "control", "control-painter", "enum-str", "mirror", "node-control", "patch", "ranged", "retained", "skin-walk", "variants", "view-control"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true, optional = true }
+kithara-ui-capture = { workspace = true, optional = true }
+kithara-ui-draw = { workspace = true }
+kithara-ui-input = { workspace = true, optional = true }
+kithara-ui-lottie = { workspace = true, optional = true }
+kithara-ui-shaping = { workspace = true }
 
 bon = { workspace = true }
 delegate = { workspace = true }
@@ -66,18 +80,15 @@ lucide-icons = { workspace = true, optional = true }
 masonry = { workspace = true, optional = true }
 naga = { workspace = true, optional = true }
 num-traits = { workspace = true, optional = true }
-parley = { workspace = true, optional = true }
 png = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 ron = { workspace = true }
-roxmltree = { workspace = true }
 serde = { workspace = true }
 skrifa = { workspace = true, optional = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true, optional = true }
-velato = { workspace = true, optional = true }
 vello = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
 
@@ -103,6 +114,7 @@ kithara-test-utils = { path = "../kithara-test-utils", features = [
     "client-reqwest",
     "tls-rustls",
 ] }
+kithara-ui = { path = ".", default-features = false, features = ["usdt"] }
 
 bitflags = { workspace = true }
 clap = { workspace = true }
@@ -115,6 +127,8 @@ iced_wgpu = { workspace = true }
 png = { workspace = true }
 ron = { workspace = true }
 serde_yaml_ng = { workspace = true }
+# The emitter is measured against the renderer it was written from.
+velato = { workspace = true }
 # The budget guard reads the renderer's bump allocators back, which vello only
 # does when this is on. A dev-dependency so a shipped build keeps the fast path
 # rather than a readback on every frame.
@@ -155,12 +169,12 @@ required-features = ["capture", "masonry"]
 
 [[test]]
 name = "frame_perf"
-path = "tests/frame_perf.rs"
+path = "perf/frame/main.rs"
 required-features = ["perf", "iced", "masonry"]
 
 [[test]]
 name = "page_perf"
-path = "tests/page_perf.rs"
+path = "perf/page/main.rs"
 required-features = ["perf", "iced", "masonry"]
 
 [[bench]]

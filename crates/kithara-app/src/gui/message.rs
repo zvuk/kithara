@@ -1,9 +1,9 @@
-use kithara::{
-    platform::time::Duration,
-    ui::render::{UiEvent, WindowCommand},
-};
+use kithara::ui::render::{UiEvent, WindowCommand};
 
-use crate::deck::{DeckId, EqMode};
+use crate::{
+    deck::{DeckId, EqMode},
+    engine::MixCmd,
+};
 
 /// All GUI events flow through this enum.
 ///
@@ -12,7 +12,6 @@ use crate::deck::{DeckId, EqMode};
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
     BroadcastToggle,
-    BroadcastStopped(Option<Duration>),
     /// Raw event from the compiled UI; translated by
     /// [`super::ui::translate`].
     Ui(UiEvent),
@@ -21,7 +20,7 @@ pub(crate) enum Message {
     /// Replace the EQ topology of every deck.
     SetEqMode(EqMode),
     /// Session-mix edit (crossfader, trim).
-    Mix(super::mix::MixMsg),
+    Mix(MixCmd),
     /// Delete the current track of the focused deck (keyboard shortcut;
     /// the subscription has no access to the focus).
     DeleteFocusedTrack,

@@ -6,16 +6,13 @@ use num_traits::cast::AsPrimitive;
 
 use super::value::{Value, impl_child_node};
 use crate::{
-    deck::EqMode,
+    deck::{EqMode, TempoPercent},
+    engine::DeckSnapshot,
     gui::{
-        deck::{DeckView, TimestretchState, consts::TEMPO_RANGE},
-        ui::{
-            cache::{DeckCache, analysis_bpm},
-            scope::deck_index,
-        },
-        view::playhead,
+        deck::consts::TEMPO_RANGE,
+        ui::{cache::DeckCache, scope::deck_index},
     },
-    state::{AbrVariant, UiState},
+    state::AbrVariant,
 };
 
 #[derive(Clone, Copy)]
@@ -42,24 +39,21 @@ impl<'a> Node<'a> for DecksNode<'a> {
 #[derive(Clone, Copy)]
 pub(super) struct DeckNode<'a> {
     cache: &'a DeckCache,
-    ui: &'a UiState,
-    view: DeckView,
+    shown: &'a DeckSnapshot,
     eq_mode: EqMode,
     focused: bool,
 }
 
 impl<'a> DeckNode<'a> {
     pub(super) const fn new(
-        ui: &'a UiState,
-        view: DeckView,
+        shown: &'a DeckSnapshot,
         cache: &'a DeckCache,
         eq_mode: EqMode,
         focused: bool,
     ) -> Self {
         Self {
             cache,
-            ui,
-            view,
+            shown,
             eq_mode,
             focused,
         }
@@ -69,23 +63,23 @@ impl<'a> DeckNode<'a> {
 impl_child_node!(DeckNode<'a>, |this, segment, _scope| {
     let node: Box<dyn Node<'a> + 'a> = match segment {
         "playback" => Box::new(PlaybackNode {
-            ui: this.ui,
+            shown: this.shown,
             cache: this.cache,
         }),
         "track" => Box::new(TrackNode {
-            ui: this.ui,
+            shown: this.shown,
             cache: this.cache,
         }),
         "tempo" => Box::new(TempoNode {
-            timestretch: this.view.timestretch,
+            tempo: this.shown.tempo,
         }),
         "eq" => Box::new(EqNode {
-            ui: this.ui,
+            shown: this.shown,
             cache: this.cache,
             mode: this.eq_mode,
         }),
         "stream" => Box::new(StreamNode {
-            ui: this.ui,
+            shown: this.shown,
             cache: this.cache,
         }),
         "view" => Box::new(ViewNode { cache: this.cache }),
@@ -98,14 +92,14 @@ impl_child_node!(DeckNode<'a>, |this, segment, _scope| {
 #[derive(Clone, Copy)]
 struct PlaybackNode<'a> {
     cache: &'a DeckCache,
-    ui: &'a UiState,
+    shown: &'a DeckSnapshot,
 }
 
 impl PlaybackNode<'_> {
     fn normalized(self) -> f64 {
-        let duration = self.ui.duration.max(0.0);
+        let duration = self.shown.duration.max(0.0);
         if duration > 0.0 {
-            (playhead(self.ui) / duration).clamp(0.0, 1.0)
+            (self.shown.position / duration).clamp(0.0, 1.0)
         } else {
             0.0
         }
@@ -117,16 +111,16 @@ impl_child_node!(PlaybackNode<'a>, |this, segment, _scope| {
         "waveform" => ReadValue::Waveform(WaveformView {
             buckets: &this.cache.wave,
             revision: this.cache.wave_revision,
-            beats: &this.ui.beat_marks,
-            downbeats: &this.ui.downbeat_marks,
-            unready: &this.ui.unready_ranges,
-            bpm: analysis_bpm(this.ui),
+            beats: &this.shown.analysis.beats,
+            downbeats: &this.shown.analysis.downbeats,
+            unready: &this.shown.analysis.unready,
+            bpm: this.shown.analysis.bpm,
             r#loop: None,
             cues: &[],
         }),
-        "playing" => ReadValue::Bool(this.ui.playing),
-        "position_secs" => ReadValue::Scalar(playhead(this.ui).max(0.0)),
-        "duration_secs" => ReadValue::Scalar(this.ui.duration.max(0.0)),
+        "playing" => ReadValue::Bool(this.shown.playing),
+        "position_secs" => ReadValue::Scalar(this.shown.position.max(0.0)),
+        "duration_secs" => ReadValue::Scalar(this.shown.duration.max(0.0)),
         "position_normalized" => ReadValue::Scalar(this.normalized()),
         "tempo" => ReadValue::Text(&this.cache.tempo),
         "bpm" => ReadValue::Text(&this.cache.bpm),
@@ -139,13 +133,13 @@ impl_child_node!(PlaybackNode<'a>, |this, segment, _scope| {
 #[derive(Clone, Copy)]
 struct TrackNode<'a> {
     cache: &'a DeckCache,
-    ui: &'a UiState,
+    shown: &'a DeckSnapshot,
 }
 
 impl<'a> Node<'a> for TrackNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let value = match segment {
-            "title" => ReadValue::Text(title(self.ui)?),
+            "title" => ReadValue::Text(title(self.shown)?),
             "source_kind" => ReadValue::Text(&self.cache.subtitle),
             _ => return None,
         };
@@ -155,16 +149,14 @@ impl<'a> Node<'a> for TrackNode<'a> {
 
 #[derive(Clone, Copy)]
 struct TempoNode {
-    timestretch: TimestretchState,
+    tempo: TempoPercent,
 }
 
 impl<'a> Node<'a> for TempoNode {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let range = f64::from(TEMPO_RANGE);
         let value = match segment {
-            "rate" => ReadValue::Scalar(
-                (f64::from(f32::from(self.timestretch.tempo)) + range) / (range * 2.0),
-            ),
+            "rate" => ReadValue::Scalar((f64::from(f32::from(self.tempo)) + range) / (range * 2.0)),
             _ => return None,
         };
         Some(Box::new(Value(value)))
@@ -174,7 +166,7 @@ impl<'a> Node<'a> for TempoNode {
 #[derive(Clone, Copy)]
 struct StreamNode<'a> {
     cache: &'a DeckCache,
-    ui: &'a UiState,
+    shown: &'a DeckSnapshot,
 }
 
 impl<'a> StreamNode<'a> {
@@ -182,17 +174,17 @@ impl<'a> StreamNode<'a> {
 
     fn active(self, slot: &str) -> bool {
         if slot == Self::AUTO_SLOT {
-            return self.ui.abr_mode_is_auto;
+            return self.shown.stream.is_auto;
         }
-        let picked = self.ui.selected_variant;
-        !self.ui.abr_mode_is_auto
+        let picked = self.shown.stream.selected;
+        !self.shown.stream.is_auto
             && self
                 .rung(slot)
                 .is_some_and(|rung| picked == Some(rung.index))
     }
 
     fn rung(self, slot: &str) -> Option<&'a AbrVariant> {
-        self.ui.abr_variants.get(slot.parse::<usize>().ok()?)
+        self.shown.stream.variants.get(slot.parse::<usize>().ok()?)
     }
 }
 
@@ -201,7 +193,7 @@ impl_child_node!(StreamNode<'a>, |this, segment, scope| {
     let value = match segment {
         "quality" => ReadValue::Text(&stream.cache.quality),
         "quality_menu" => ReadValue::Bool(stream.cache.view.quality_menu),
-        "quality_hidden" => ReadValue::Bool(stream.ui.abr_variants.is_empty()),
+        "quality_hidden" => ReadValue::Bool(stream.shown.stream.variants.is_empty()),
         "variant_active" => ReadValue::Bool(stream.active(scope.get("variant")?)),
         "variant_hidden" => ReadValue::Bool(stream.rung(scope.get("variant")?).is_none()),
         "variant_label" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.label),
@@ -214,7 +206,7 @@ impl_child_node!(StreamNode<'a>, |this, segment, scope| {
 #[derive(Clone, Copy)]
 struct EqNode<'a> {
     cache: &'a DeckCache,
-    ui: &'a UiState,
+    shown: &'a DeckSnapshot,
     mode: EqMode,
 }
 
@@ -224,7 +216,7 @@ impl<'a> Node<'a> for EqNode<'a> {
             "menu_open" => ReadValue::Bool(self.cache.view.eq_menu_open),
             "bands" => ReadValue::Scalar(self.mode.bands().len().as_()),
             "selected" => ReadValue::Bool(self.drawn(scope.get("bands")?)),
-            band => eq_value(self.ui.eq_bands.get(self.mode.band(band)?))?,
+            band => eq_value(self.shown.eq_bands.get(self.mode.band(band)?))?,
         };
         Some(Box::new(Value(value)))
     }
@@ -260,7 +252,7 @@ impl EngineNode {
     pub(super) fn new(decks: &[DeckNode<'_>]) -> Self {
         let load = decks
             .iter()
-            .map(|deck| deck.ui.engine_load.load())
+            .map(|deck| deck.shown.engine_load.load())
             .fold(0.0, f32::max);
         Self { load }
     }
@@ -276,8 +268,8 @@ impl<'a> Node<'a> for EngineNode {
     }
 }
 
-fn title(ui: &UiState) -> Option<&str> {
-    (!ui.track_name.trim().is_empty()).then_some(ui.track_name.as_str())
+fn title(ui: &DeckSnapshot) -> Option<&str> {
+    (!ui.track_name.trim().is_empty()).then_some(&ui.track_name)
 }
 
 fn eq_value(db: Option<&GainDb>) -> Option<ReadValue<'static>> {

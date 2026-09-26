@@ -26,7 +26,7 @@ use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
     interact::{
         CursorShape, Hit, Input, MOUSE, Outcome, PointerInput, PointerOwnership, PointerPhase,
-        masonry::pointer_button,
+        masonry::{cursor_icon, pointer_button},
     },
     module::TextAlign,
     render::{
@@ -151,7 +151,7 @@ impl Leaf {
     }
 
     /// The colour this leaf writes its text in right now, where it writes any.
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
     pub(crate) const fn ink(&self) -> Option<Rgba> {
         match self {
             Self::Text { color, .. } => Some(*color),
@@ -567,20 +567,6 @@ impl WindowLayerProgram for DragProgram {
     }
 }
 
-pub(crate) const fn cursor_icon(shape: CursorShape) -> CursorIcon {
-    match shape {
-        CursorShape::None => CursorIcon::Default,
-        CursorShape::Grab => CursorIcon::Grab,
-        CursorShape::Grabbing => CursorIcon::Grabbing,
-        CursorShape::Pointer => CursorIcon::Pointer,
-        CursorShape::ResizeDiagonalDown => CursorIcon::NwseResize,
-        CursorShape::ResizeDiagonalUp => CursorIcon::NeswResize,
-        CursorShape::ResizeH => CursorIcon::EwResize,
-        CursorShape::ResizeV => CursorIcon::NsResize,
-        CursorShape::Text => CursorIcon::Text,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
@@ -589,7 +575,7 @@ mod tests {
     use crate::{
         atoms::{painter::Labelled, tab::TabLarge, toggle::Binary},
         builtin,
-        draw::Rect,
+        draw::{DrawBuffers, Rect},
         module::TextAlign,
         render::masonry::Painted,
         solve::{Limits, Size},
@@ -617,13 +603,14 @@ mod tests {
     #[kithara::test]
     fn a_mounted_tab_measures_its_own_word() {
         let skin = builtin::skin();
-        let mut leaf = Leaf::Control(Box::new(Painted::new(
+        let mut leaf = Leaf::Control(Box::new(Painted::pooled(
             TabLarge::new(skin),
             Labelled {
                 active: true,
                 label: "DECK MICRO".to_owned(),
             },
             skin,
+            &DrawBuffers::default(),
         )));
 
         let measured = leaf.measure(Limits::new(Size::ZERO, Size::new(320.0, 80.0)));
@@ -641,7 +628,12 @@ mod tests {
     #[kithara::test]
     fn a_painter_that_does_not_measure_leaves_the_box_to_the_row() {
         let skin = builtin::skin();
-        let mut leaf = Leaf::Control(Box::new(Painted::new(Binary::toggle(skin), false, skin)));
+        let mut leaf = Leaf::Control(Box::new(Painted::pooled(
+            Binary::toggle(skin),
+            false,
+            skin,
+            &DrawBuffers::default(),
+        )));
 
         assert_eq!(
             leaf.measure(Limits::new(Size::ZERO, Size::new(320.0, 80.0))),
