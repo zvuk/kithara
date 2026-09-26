@@ -296,7 +296,6 @@ envelope_marker = "[kithara_hang_detector]"
 envelope_text_field = "flash"
 envelope_suffix_markers = [" payload=", " \u2014 "]
 line_marker = "[no_block]"
-dump_marker = "[flash hang dump]"
 primitive_marker = "created_at="
 holder_marker = "held by"
 wait_marker = "WAITING:"

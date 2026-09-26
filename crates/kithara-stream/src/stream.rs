@@ -548,6 +548,12 @@ impl<T: StreamType> Stream<T> {
             Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {
                 Err(IoError::other(VariantChangeError))
             }
+            // No peer wake: the session that owned this read is gone, so
+            // there is nothing left to plan against it. The caller rebuilds
+            // and the new owner arms its own peer.
+            Ok(StreamReadOutcome::Pending(reason @ PendingReason::SessionRetired)) => {
+                Err(IoError::new(ErrorKind::Interrupted, reason))
+            }
             Err(StreamReadError::Source(e)) => Err(e),
         }
     }
@@ -654,6 +660,11 @@ impl<T: StreamType> Read for Stream<T> {
                 }
                 Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {
                     return Err(IoError::other(VariantChangeError));
+                }
+                // Retirement never resolves by waiting: looping here would
+                // block on a session nobody owns any more.
+                Ok(StreamReadOutcome::Pending(reason @ PendingReason::SessionRetired)) => {
+                    return Err(IoError::new(ErrorKind::Interrupted, reason));
                 }
                 Err(StreamReadError::Source(e)) => return Err(e),
             }

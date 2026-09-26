@@ -77,13 +77,15 @@ where
 /// The parent's ambient snapshot is also re-established on the blocking thread
 /// for the closure's lifetime (thread-locals do not cross the pool), so a
 /// blocking computation spawned from a flash test stays flash-eligible.
+#[track_caller]
 pub fn spawn_blocking<F, R>(f: F) -> JoinHandle<R>
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
+    let origin = Location::caller();
     let ambient = crate::flash::ambient_snapshot();
-    let slot = ambient.then(DedicatedSlot::reserve);
+    let slot = ambient.then(|| DedicatedSlot::reserve(origin));
     native_task::spawn_blocking(move || {
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
         credit::reset_credit();
@@ -98,6 +100,7 @@ where
 }
 
 /// Spawn synchronous work without blocking an async runtime worker.
+#[track_caller]
 pub fn spawn_sync<F, R>(f: F) -> JoinHandle<R>
 where
     F: FnOnce() -> R + MaybeSend + 'static,
@@ -113,13 +116,15 @@ where
 ///
 /// Reserves the `active` slot before the pool queues the closure, covering the queue wait; the
 /// slot's `Drop` returns the reservation if the pool never runs it.
+#[track_caller]
 pub fn spawn_blocking_on<F, R>(handle: &Handle, f: F) -> JoinHandle<R>
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
+    let origin = Location::caller();
     let ambient = crate::flash::ambient_snapshot();
-    let slot = ambient.then(DedicatedSlot::reserve);
+    let slot = ambient.then(|| DedicatedSlot::reserve(origin));
     handle.spawn_blocking(move || {
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
         credit::reset_credit();

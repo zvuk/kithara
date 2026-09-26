@@ -263,6 +263,7 @@ impl Core {
     pub(super) fn try_advance(&mut self, clock: &Clock) -> WakeBatch {
         let paced = self.sched.real_io != 0 && self.sched.pace_anchor.is_some();
         if self.registry.active != 0 || (!paced && self.registry.pinning_async() != 0) {
+            self.sched.advance_counts.blocked += 1;
             return WakeBatch(Vec::new());
         }
         if !self.sched.yielders.is_empty()
@@ -275,10 +276,12 @@ impl Core {
             let woken: Vec<Wake> = std::mem::take(&mut self.sched.yielders)
                 .into_values()
                 .collect();
+            self.sched.advance_counts.yield_releases += 1;
             self.registry.account_woken(&woken);
             return WakeBatch(woken);
         }
         let Some((&(earliest, _), _)) = self.sched.timed.iter().next() else {
+            self.sched.advance_counts.no_deadline += 1;
             return WakeBatch(Vec::new());
         };
         let min = if paced {
@@ -297,6 +300,7 @@ impl Core {
                 {
                     t.unpark();
                 }
+                self.sched.advance_counts.paced_wait += 1;
                 return WakeBatch(Vec::new());
             }
         }
@@ -305,6 +309,7 @@ impl Core {
             "virtual clock must not move backward"
         );
         clock.store(min);
+        self.sched.advance_counts.advances += 1;
         #[cfg(test)]
         self.sched.advance_log.push(min);
         let mut woken: Vec<Wake> = Vec::new();

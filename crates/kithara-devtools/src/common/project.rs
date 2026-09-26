@@ -733,7 +733,6 @@ pub struct StressModeConfig {
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
 pub struct StressEvidenceConfig {
-    pub dump_marker: Option<String>,
     pub envelope_marker: Option<String>,
     pub envelope_schema: Option<String>,
     pub envelope_text_field: Option<String>,
@@ -932,7 +931,6 @@ impl StressConfig {
             ),
         }
         for (name, marker) in [
-            ("dump_marker", self.evidence.dump_marker.as_deref()),
             (
                 "primitive_marker",
                 self.evidence.primitive_marker.as_deref(),

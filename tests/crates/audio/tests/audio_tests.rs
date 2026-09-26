@@ -11,7 +11,10 @@ use kithara::{
     decode::{GaplessMode, SilenceTrimParams},
     events::{EventBus, EventReceiver},
     file::{FileConfig, FileSrc},
-    platform::time::{self, Duration, Instant},
+    platform::{
+        thread,
+        time::{self, Duration, Instant},
+    },
     play::{PlayWorker, PlayWorkerConfig},
     signal::AudioSpec,
     stream::{ContainerFormat, MediaInfo, SeekEpoch},
@@ -415,7 +418,7 @@ async fn test_seek_complete_emitted_only_after_output_commit(
             loop {
                 match audio.next_chunk() {
                     Ok(ChunkOutcome::Chunk(chunk)) => break chunk.frames() > 0,
-                    Ok(ChunkOutcome::Pending { .. }) => std::thread::yield_now(),
+                    Ok(ChunkOutcome::Pending { .. }) => thread::yield_now(),
                     Ok(ChunkOutcome::Eof { .. }) => break false,
                     Err(error) => panic!("decode error while waiting for post-seek chunk: {error}"),
                 }

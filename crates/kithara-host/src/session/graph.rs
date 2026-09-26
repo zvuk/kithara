@@ -261,12 +261,18 @@ pub(super) mod lifecycle {
     /// app that has stopped playing must not keep the platform's output
     /// engaged; the next `start_player` builds a fresh context.
     ///
-    /// Reserves a successor before stopping, since backends may defer processor drop after
-    /// `stop_stream` and teardown must not depend on the RT `stream_stopped` callback reaching this
-    /// handle.
+    /// A session that set [`SessionState::retains_output`] is the exception:
+    /// its device cannot be rebuilt, so this call does nothing.
+    ///
+    /// Reserves a successor before stopping, since backends may defer processor
+    /// drop after `stop_stream` and teardown must not depend on the RT
+    /// `stream_stopped` callback reaching this handle.
     pub(in crate::session) fn shutdown_if_idle<T, S>(
         state: &mut SessionState<T, S>,
     ) -> Result<(), SessionError> {
+        if state.retains_output {
+            return Ok(());
+        }
         let idle = state.graph.decks().all(|deck| !deck.started);
         if idle {
             debug!("[KITHARA-ROUTE] shutting down idle session stream");
@@ -874,6 +880,28 @@ mod tests {
         stop(&mut state, player_id);
 
         assert!(state.ctx.is_none());
+    }
+
+    /// The browser hands its output over once, on a user gesture, and a closed
+    /// `AudioContext` can never be resumed: releasing it on idle leaves every
+    /// later context suspended, so the player reports playback over silence.
+    /// The exception belongs to the session that declared it, not to the
+    /// target it happens to be compiled for — a mock backend on the same
+    /// target still releases its device above.
+    #[kithara::test]
+    fn a_session_that_retains_its_output_keeps_it_when_the_last_player_stops() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = test_state(start_test_stream);
+        state.retains_output = true;
+        let player_id = register(&mut state);
+        start(&mut state, player_id);
+
+        stop(&mut state, player_id);
+
+        assert!(
+            state.ctx.is_some(),
+            "a session whose device cannot be rebuilt must hold it while idle"
+        );
     }
 
     #[kithara::test]

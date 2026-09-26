@@ -19,6 +19,7 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
+        thread,
         time::{Duration, Instant},
         tokio,
         tokio::task::spawn_blocking,
@@ -210,7 +211,7 @@ async fn forward_into_withheld_segment_waits_and_resumes(
         while frames_after < 4_096 {
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => frames_after += count.get() as u64,
-                Ok(ReadOutcome::Pending { .. }) => std::thread::yield_now(),
+                Ok(ReadOutcome::Pending { .. }) => thread::yield_now(),
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("read error after release: {e}"),
             }

@@ -146,6 +146,14 @@ pub enum PendingReason {
     /// touched — the boundary surfaces BEFORE any data is read.
     #[display("variant change: decoder recreation required")]
     VariantChange,
+    /// The session this read went through was retired: ownership moved
+    /// to another session (a variant promotion committing, a prepared
+    /// transition being discarded) or the stream itself was torn down.
+    /// The bytes are not gone — this reader is. Caller must rebuild
+    /// against whichever session the stream now owns; a teardown then
+    /// surfaces as a cancelled source, not as a decode failure.
+    #[display("session retired, rebuild against the current owner")]
+    SessionRetired,
     /// Resource was evicted between [`Source::wait_range`] (metadata
     /// ready) and [`Source::read_at`] (actual I/O). Caller should
     /// retry from `wait_range`, not from the same byte offset.

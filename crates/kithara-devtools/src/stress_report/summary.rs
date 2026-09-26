@@ -11,7 +11,10 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use serde::Deserialize;
 
-use super::evidence;
+use super::{
+    blocker::{Blocker, blocker},
+    evidence,
+};
 use crate::{
     common::project::{StressEvidenceConfig, StressRenderBudgets},
     junit::{CaseTiming, parse_junit_report},
@@ -40,6 +43,11 @@ pub(crate) struct StressReportArgs {
     #[arg(long)]
     #[field(with = with_pressure, option_set_some, vis = "pub(crate)")]
     pub(super) pressure_log: Option<PathBuf>,
+    /// Optional log of the command that produced this lane, read only when its
+    /// evidence cannot be, to name what stopped it.
+    #[arg(long)]
+    #[field(with = with_optional_command_log, vis = "pub(crate)")]
+    pub(super) command_log: Option<PathBuf>,
     /// Machine-readable output from `cargo nextest list` for the same selection.
     #[arg(long)]
     inventory: PathBuf,
@@ -80,6 +88,7 @@ impl StressReportArgs {
             line_log: None,
             envelope_dir: None,
             pressure_log: None,
+            command_log: None,
             allow_missing: false,
             evidence: StressEvidenceConfig::default(),
             render: StressRenderBudgets::default(),
@@ -240,14 +249,22 @@ pub(crate) struct LaneRate {
 /// fifty times report as clean.
 pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
     validate_expected_count(args.expected_count)?;
-    let unreadable = |markdown: String| {
+    let blocked = lane_blocker(args);
+    let unreadable = |mut markdown: String| {
+        let incomplete = blocked.as_ref().map_or_else(
+            || "the lane produced no readable evidence".to_owned(),
+            |found| {
+                append_blocker(&mut markdown, found, &args.render);
+                format!("the lane produced no readable evidence: {}", found.reason)
+            },
+        );
         Ok(LaneReport {
             markdown,
             rates: BTreeMap::new(),
             attempts: None,
             verdict: Err(NotClean::reported("stress evidence")),
             readable: false,
-            incomplete: Some("the lane produced no readable evidence".to_owned()),
+            incomplete: Some(incomplete),
         })
     };
     let inventory = match read_inventory(&args.inventory) {
@@ -467,6 +484,28 @@ fn render_missing(
         "# Stress evidence\n\n- Result: **NO JUNIT**\n- Requested iterations: `{expected_count}`\n- JUnit path: `{}`\n\n{explanation}\n",
         markdown_cell(&junit.display().to_string(), budgets),
     )
+}
+
+/// Reads what stopped a lane whose evidence could not be read.
+///
+/// Only that lane: a readable lane's log says nothing its evidence does not,
+/// and reading it would cost a bounded pass over the largest artifact the run
+/// collects for every lane that had nothing wrong with it.
+fn lane_blocker(args: &StressReportArgs) -> Option<Blocker> {
+    let log = args.command_log.as_ref()?;
+    let text = read_bounded_utf8(log, MAX_LANE_LOG_BYTES, "stress lane log").ok()?;
+    blocker(&text, &args.render)
+}
+
+/// States the cause beside the parser complaint that stands in for it.
+///
+/// The complaint stays: it is what the report could not do, and dropping it
+/// would leave a reader who finds no diagnostic in the log with nothing at all.
+fn append_blocker(markdown: &mut String, found: &Blocker, budgets: &StressRenderBudgets) {
+    markdown.push_str("\nWhat stopped the lane, from its own log:\n\n");
+    for line in &found.lines {
+        let _ = writeln!(markdown, "- `{}`", markdown_cell(line, budgets));
+    }
 }
 
 fn render_invalid_artifact(
@@ -2128,6 +2167,7 @@ seek landed short of the requested frame
                 line_log: None,
                 envelope_dir: None,
                 pressure_log: None,
+                command_log: None,
                 output: output.clone(),
                 expected_count: 2,
                 allow_missing: true,
@@ -2141,6 +2181,51 @@ seek landed short of the requested frame
             assert!(error.downcast_ref::<NotClean>().is_some(), "{error:?}");
             assert!(markdown.contains(marker), "{markdown}");
         }
+    }
+
+    /// A lane that never compiled writes an empty inventory, and the report
+    /// used to state the parser's complaint about it and stop — while the
+    /// diagnostic that stopped the build sat in the log beside it.
+    #[test]
+    fn an_unreadable_lane_names_what_its_own_log_says_stopped_it() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let inventory = temp.path().join("inventory.json");
+        let junit = temp.path().join("junit.xml");
+        let output = temp.path().join("report.md");
+        let log = temp.path().join("nextest.log");
+        fs::write(&inventory, "").expect("write an inventory the lane never filled");
+        fs::write(
+            &log,
+            "   Compiling kithara-app v0.0.1-alpha4\nerror[E0599]: no method named `send_modify`\nerror: command `cargo test --no-run` exited with code 101\n",
+        )
+        .expect("write log");
+
+        let args = StressReportArgs::new(junit, inventory, output, 50)
+            .with_optional_command_log(Some(log));
+        let lane = lane_report(&args).expect("a lane report is rendered, not an error");
+
+        assert!(!lane.readable);
+        assert!(
+            lane.markdown
+                .contains("error[E0599]: no method named 'send_modify'"),
+            "{}",
+            lane.markdown
+        );
+        assert!(
+            lane.markdown.contains("exited with code 101"),
+            "{}",
+            lane.markdown
+        );
+        assert!(
+            lane.markdown.contains("parse stress inventory JSON"),
+            "the complaint the report could not get past stays: {}",
+            lane.markdown
+        );
+        let incomplete = lane.incomplete.expect("an unreadable lane is incomplete");
+        assert!(
+            incomplete.contains("error[E0599]"),
+            "the run summary states the cause, not the artifact: {incomplete}"
+        );
     }
 
     #[test]
@@ -2181,6 +2266,7 @@ seek landed short of the requested frame
             line_log: None,
             envelope_dir: None,
             pressure_log: None,
+            command_log: None,
             output: output.clone(),
             expected_count: 2,
             allow_missing: false,
@@ -2236,6 +2322,7 @@ seek landed short of the requested frame
             line_log: Some(temp.path().join("census-that-was-never-written.log")),
             envelope_dir: None,
             pressure_log: None,
+            command_log: None,
             output: temp.path().join("report.md"),
             expected_count: 1,
             allow_missing: false,

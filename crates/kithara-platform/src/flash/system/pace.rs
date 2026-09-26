@@ -142,7 +142,7 @@ mod tests {
     fn bracketed_on<F: FnOnce()>(flash: &FlashInner, body: F) {
         credit::reset_credit();
         flash.pre_count_dedicated();
-        credit::mark_dedicated();
+        credit::mark_dedicated(std::panic::Location::caller());
         body();
         flash.on_participant_exit();
     }

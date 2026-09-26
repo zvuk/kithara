@@ -63,7 +63,7 @@ fn bracketed_on<F: FnOnce()>(flash: &FlashInner, body: F) {
     // slot on the parent BEFORE the child runs, and `mark_dedicated()` claims it
     // `Running` on the child. The test has no spawn bracket, so it does both here.
     flash.pre_count_dedicated();
-    credit::mark_dedicated();
+    credit::mark_dedicated(Location::caller());
     body();
     flash.on_participant_exit();
 }
@@ -304,6 +304,82 @@ fn a_pinning_task_reports_the_polls_it_entered() {
 
     let dump = forward::dump();
     assert!(dump.contains("polls=1"), "{dump}");
+}
+
+/// The stress report reads a wedge from these five names: it masks their
+/// values as per-attempt noise so hangs cluster by shape, and what is left is
+/// the shape itself. A rename here would silently shatter every hang into its
+/// own cluster, so the header's vocabulary is pinned on this side of the
+/// crate boundary.
+#[kithara::test(native, flash(false))]
+fn the_dump_header_names_every_way_an_advance_can_end() {
+    let _g = guard();
+    reset();
+
+    let dump = forward::dump();
+    for key in [
+        "advances=",
+        "advance_blocked=",
+        "advance_no_deadline=",
+        "advance_yield_releases=",
+        "advance_paced_wait=",
+    ] {
+        assert!(dump.contains(key), "missing {key} in {dump}");
+    }
+}
+
+/// The holder line is the dump's only lead on a wedged engine, and a spawned
+/// job claims its credit on the CHILD thread: a `#[track_caller]` claim there
+/// names the platform shim, so every blocking job in the process reads the
+/// same and the dump cannot tell a decoder rebuild from a probe. The site is
+/// therefore taken on the PARENT at spawn and carried in the reservation.
+#[cfg(not(feature = "loom"))]
+#[kithara::test(native, flash(false))]
+fn a_spawned_holder_is_named_by_its_spawn_site_not_the_platform_shim() {
+    let _g = guard();
+    reset();
+
+    let (claimed_tx, claimed_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let holder = crate::thread::spawn_named("dump-holder", move || {
+        claimed_tx.send(()).expect("announce the claim");
+        release_rx.recv().expect("await release");
+    });
+    claimed_rx.recv().expect("the holder must claim its credit");
+
+    let dump = forward::dump();
+    release_tx.send(()).expect("release the holder");
+    holder.join().expect("holder panicked");
+
+    assert!(
+        dump.contains(&format!("resumed_from={}:", file!())),
+        "the holder must be named by its spawn site, not by the shim\n{dump}"
+    );
+}
+
+/// The holder line's age is the dump's only measure of how long the engine has
+/// been pinned, and it used to be read off the VIRTUAL clock — the clock that
+/// holder is stopping. It therefore printed 0 in exactly the case it exists
+/// for: every wedge dump of the 2026-09-26 stress run said the pin was 0 ns
+/// old after minutes of real time. It is aged on the real clock instead.
+#[cfg(not(feature = "loom"))]
+#[kithara::test(native, flash(false))]
+fn a_pinning_holder_is_aged_on_the_real_clock_not_the_virtual_one_it_stops() {
+    let flash = FlashInner::new_arc();
+    flash.sync_holder_running(Location::caller());
+    flash.clock.advance(5 * NANOS_PER_SEC);
+
+    let dump = flash.to_string();
+    let age: u64 = dump
+        .split("held_for_real_ns=")
+        .nth(1)
+        .and_then(|tail| tail.split_whitespace().next())
+        .and_then(|value| value.parse().ok())
+        .expect("the dump must age its active holder");
+    assert!(
+        age < NANOS_PER_SEC,
+        "the pin's age must not follow the virtual clock it stops: {age} ns\n{dump}"
+    );
 }
 
 /// A dump lists EVERY parked waiter and says nothing about which one the clock

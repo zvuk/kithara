@@ -654,15 +654,16 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        AnalysisEvent, BpmInfo, EngineEvent, Envelope, EventReceiver, MEDIA_TIMESCALE, MediaTime,
-        NonZeroU32, RangeSet, StretchControls, UiState, bpm_info_from_grid, codec_label, covered,
-        frames_to_fractions, listen, unready_ranges,
+        BpmInfo, EventReceiver, MEDIA_TIMESCALE, MediaTime, NonZeroU32, RangeSet, StretchControls,
+        UiState, bpm_info_from_grid, codec_label, covered, frames_to_fractions, listen,
+        unready_ranges,
     };
     use crate::{
         analysis::{
             AnalysisHandle, Request, TrackArtifacts,
             fixtures::{
-                answer_subscribe, next_subscribe, queue_off, tone_mp3, track, wait_for_revision,
+                answer_subscribe, next_subscribe, queue_off, serve_subscribe, tone_mp3, track,
+                wait_for_asks, wait_for_revision,
             },
         },
         pools::AppQueueControl,
@@ -958,6 +959,37 @@ mod tests {
             .collect()
     }
 
+    /// A deck that asks for its track again still mirrors what that track's
+    /// pass publishes.
+    ///
+    /// The deck lets go of its receiver before every fresh ask, and it asks
+    /// again on its own - when its event stream lags, when its engine starts,
+    /// when the route changes. A publication issued after such an ask must
+    /// still reach the deck; when it does not, the pass finds no receiver left
+    /// and the deck stops at the revision it already held.
+    #[kithara::test(native, tokio, flash(false))]
+    async fn a_deck_that_asks_again_still_mirrors_its_track() {
+        let (host, queue) = queue_off().await;
+        let (state, requests, cancel) = deck(&queue);
+        let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
+        let (tx, mut asks) = serve_subscribe(requests, track_id).await;
+
+        tx.send(Some(progress(1))).expect("the pass publishes");
+        wait_for_revision(&state, 1).await;
+
+        queue
+            .bus()
+            .publish(QueueEvent::CurrentTrackChanged { id: Some(track_id) });
+        wait_for_asks(&mut asks, 2).await;
+
+        tx.send(Some(progress(2)))
+            .expect("the pass publishes past the deck's fresh ask");
+        wait_for_revision(&state, 2).await;
+
+        cancel.cancel();
+        host.close().await;
+    }
+
     /// End to end over the deck's own plumbing: what a pass publishes reaches
     /// the listener, the listener puts it in the deck's state, and the deck
     /// announces the tempo and the beats from the grid that publication
@@ -965,23 +997,9 @@ mod tests {
     #[kithara::test(native, tokio, flash(false))]
     async fn the_deck_follows_the_grid_each_publication_states(tone_mp3: String) {
         let (host, queue) = queue_off().await;
-        let mut loading: EventReceiver<AnalysisEvent> = queue.subscribe();
+        let (state, requests, cancel) = deck(&queue);
         let (track_id, _source) = track(&host, 1, &tone_mp3).await;
-        // The tone loads for real and starts the engine, which the deck follows
-        // with a fresh subscription; the deck starts on the loaded track so the
-        // pass it subscribes to is the one publishing both revisions.
-        loop {
-            match loading.recv().await {
-                Ok(Envelope {
-                    event: AnalysisEvent::Engine(EngineEvent::Started),
-                    ..
-                }) => break,
-                Ok(_) => {}
-                Err(error) => panic!("the queue loads the tone: {error}"),
-            }
-        }
-        let (state, mut requests, cancel) = deck(&queue);
-        let tx = answer_subscribe(&mut requests, track_id).await;
+        let (tx, _asks) = serve_subscribe(requests, track_id).await;
         let controller = controller_on(
             queue.clone(),
             StretchControls::new(1.0),

@@ -176,10 +176,12 @@ pub(in crate::flash) struct SyncHolder {
     pub(super) resumed_from: &'static Location<'static>,
     /// The OS thread name, if it was named (`spawn_named` pacers always are).
     pub(super) name: Option<String>,
-    /// Virtual time at that resume. Against `virtual_now` it gives how long
-    /// the pin has lasted, which separates "busy right now" from "stuck since
-    /// the clock last moved".
-    pub(super) resumed_at_ns: u64,
+    /// REAL time at that resume. Deliberately not the virtual clock: a holder
+    /// that pins quiescence is exactly a holder the virtual clock cannot move
+    /// past, so a virtual age reads 0 in the one case the dump exists for. The
+    /// real age is what separates "claimed microseconds before the dump" from
+    /// "has held the engine for ten minutes".
+    pub(super) resumed_at_real_ns: u64,
 }
 
 /// Provenance of one engine-backed primitive, keyed by its [`CvId`] in
@@ -234,6 +236,10 @@ pub(in crate::flash) struct Scheduler {
     /// Pacer thread handle published by `pace_run` before its first park.
     /// Scheduler defer edges use it for lock-free wakeups from under `core`.
     pub(super) pacer_wake: Option<Thread>,
+    /// Why each [`Core::try_advance`] call ended, for the hang dump. The
+    /// variants partition every call, so their sum is the number of attempts
+    /// the engine made to move the clock.
+    pub(super) advance_counts: AdvanceCounts,
     /// Test-only count of pacer park returns. It proves event-driven pacing does
     /// not poll at a fixed interval while real I/O is in flight.
     #[cfg(test)]
@@ -245,6 +251,48 @@ pub(in crate::flash) struct Scheduler {
     /// present in non-test builds.
     #[cfg(test)]
     pub(super) advance_log: Vec<u64>,
+}
+
+/// How [`Core::try_advance`] calls ended, counted for the hang dump. A wedge
+/// under the simulated clock is one of these shapes, and the raw counts tell
+/// them apart without a rerun: the clock never got the chance (`blocked`), it
+/// had nothing to move to (`no_deadline`), it spent its rounds releasing
+/// cooperative yielders (`yield_releases`), real transit held it back
+/// (`paced_wait`), or it did move and the run simply needs more rounds
+/// (`advances`).
+#[derive(derive_more::Display)]
+#[display(
+    "advances={} advance_blocked={} advance_no_deadline={} advance_yield_releases={} \
+     advance_paced_wait={}",
+    advances,
+    blocked,
+    no_deadline,
+    yield_releases,
+    paced_wait
+)]
+pub(in crate::flash) struct AdvanceCounts {
+    /// A participant was still running, so quiescence was never reached.
+    pub(super) blocked: u64,
+    /// Everyone was parked but no timed waiter existed: nothing to move to.
+    pub(super) no_deadline: u64,
+    /// Cooperative yielders were released instead of moving the clock.
+    pub(super) yield_releases: u64,
+    /// A paced op still owed real transit, so the jump was refused.
+    pub(super) paced_wait: u64,
+    /// The clock moved.
+    pub(super) advances: u64,
+}
+
+impl AdvanceCounts {
+    const fn new() -> Self {
+        Self {
+            blocked: 0,
+            no_deadline: 0,
+            yield_releases: 0,
+            paced_wait: 0,
+            advances: 0,
+        }
+    }
 }
 
 /// The engine's lock-protected state. ALL fields mutate only under the ONE
@@ -282,6 +330,7 @@ impl Core {
                 real_io: 0,
                 pace_anchor: None,
                 pacer_wake: None,
+                advance_counts: AdvanceCounts::new(),
                 #[cfg(test)]
                 pacer_wake_count: 0,
                 #[cfg(test)]

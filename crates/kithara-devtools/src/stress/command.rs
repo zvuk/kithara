@@ -566,7 +566,8 @@ fn render_raw_report(paths: &Paths, count: usize, config: &StressConfig) -> Resu
             .filter(|path| path.is_dir())
             .cloned(),
     )
-    .with_optional_lines(paths.lines.clone());
+    .with_optional_lines(paths.lines.clone())
+    .with_optional_command_log(Some(paths.log.clone()));
     stress_report::run(&args)
 }
 
@@ -623,7 +624,8 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
                 .filter(|path| path.is_dir())
                 .cloned(),
         )
-        .with_optional_lines(paths.lines.clone());
+        .with_optional_lines(paths.lines.clone())
+        .with_optional_command_log(Some(paths.log.clone()));
         let lane = if mode.command.is_empty() {
             stress_report::lane_report(&report_args)?
         } else {
@@ -723,7 +725,11 @@ fn exclusion_reason(trusted: bool, lane: &stress_report::LaneReport) -> Option<S
         return Some("failed provenance against its expected identity".to_owned());
     }
     if !lane.readable {
-        return Some("evidence artifact missing or invalid".to_owned());
+        return Some(
+            lane.incomplete
+                .clone()
+                .unwrap_or_else(|| "evidence artifact missing or invalid".to_owned()),
+        );
     }
     if let Some(reason) = &lane.incomplete {
         return Some(format!("incomplete evidence: {reason}"));

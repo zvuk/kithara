@@ -1,5 +1,6 @@
 //! Builds a bounded Markdown summary from a nextest stress `JUnit` report.
 
+mod blocker;
 mod evidence;
 mod sanitizer;
 mod summary;

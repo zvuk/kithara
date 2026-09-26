@@ -458,7 +458,6 @@ mod tests {
         StressEvidenceConfig {
             envelope_schema: Some("demo.hang.v1".to_owned()),
             envelope_text_field: Some("wait_graph".to_owned()),
-            dump_marker: Some("[wait dump]".to_owned()),
             primitive_marker: Some("created_at=".to_owned()),
             holder_marker: Some("held by".to_owned()),
             wait_marker: Some("WAITING:".to_owned()),

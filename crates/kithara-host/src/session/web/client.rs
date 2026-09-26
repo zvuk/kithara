@@ -129,7 +129,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
         }
         Ok(())
     })?;
-    let state = Arc::new(Mutex::new(Some(SessionState::new(
+    let mut session = SessionState::new(
         root,
         root_view.clone(),
         sample_rate,
@@ -137,7 +137,13 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
         None,
         limiter,
         start_stream_web_audio,
-    ))));
+    );
+    // A browser unlocks its output through a user gesture and can never resume
+    // a closed `AudioContext`: releasing the device on idle is irreversible, so
+    // every later context stays suspended and the render callback never runs
+    // again. This session holds its device for as long as it lives.
+    session.retains_output = true;
+    let state = Arc::new(Mutex::new(Some(session)));
     init_bridge_state();
     let client = Arc::new(SessionClient {
         root_view,

@@ -71,7 +71,8 @@ impl fmt::Display for FlashInner {
         };
         writeln!(
             f,
-            "virtual_now_ns={now} active={} active_async={} real_io={} pace_anchor={} yielders={}",
+            "virtual_now_ns={now} active={} active_async={} real_io={} pace_anchor={} \
+             yielders={} {}",
             s.registry.active,
             s.registry.active_async,
             s.sched.real_io,
@@ -81,6 +82,7 @@ impl fmt::Display for FlashInner {
                 "none"
             },
             s.sched.yielders.len(),
+            s.sched.advance_counts,
         )?;
         for (id, loc) in &s.registry.active_async_holders {
             write!(f, "  active_async holder task={id} spawned_at={loc}")?;
@@ -95,9 +97,11 @@ impl fmt::Display for FlashInner {
         for (key, holder) in &s.registry.active_sync_holders {
             writeln!(
                 f,
-                "  active holder thread={key:?} name={} running_for_ns={} resumed_from={}",
+                "  active holder thread={key:?} name={} held_for_real_ns={} resumed_from={}",
                 holder.name.as_deref().unwrap_or("<unnamed>"),
-                now.saturating_sub(holder.resumed_at_ns),
+                self.clock
+                    .real_now_nanos()
+                    .saturating_sub(holder.resumed_at_real_ns),
                 holder.resumed_from,
             )?;
         }

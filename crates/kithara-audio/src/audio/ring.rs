@@ -198,6 +198,13 @@ impl RingConsumer {
             {
                 return RecvOutcome::Item(fetch);
             }
+            // An empty ring is the consumer's demand for the next chunk. The
+            // producer parks itself as soon as it reports backpressure and is
+            // released by this wake or by a poll timer; under a simulated clock
+            // that timer needs global quiescence, so the wake is the only
+            // release that costs nothing. The blocking path states the demand
+            // before it parks, and a non-blocking poll has no park to carry it.
+            wake_worker(ctx.worker, self.consumer_wake_mode);
             return RecvOutcome::Empty;
         }
         self.recv_outcome_blocking(ctx)
@@ -423,7 +430,7 @@ fn wake_worker(worker: Option<&dyn WorkerWake>, mode: ConsumerWakeMode) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_signal::{AudioChunk, AudioChunkInfo};
@@ -501,6 +508,46 @@ mod tests {
             worker: None,
             abr: None,
         }
+    }
+
+    /// Counts every statement of demand the ring makes, whichever wake mode
+    /// carries it.
+    #[derive(Default)]
+    struct DemandCounter {
+        stated: AtomicU64,
+    }
+
+    impl WorkerWake for DemandCounter {
+        fn defer(&self) {
+            self.stated.fetch_add(1, Ordering::Release);
+        }
+
+        fn wake(&self) {
+            self.stated.fetch_add(1, Ordering::Release);
+        }
+    }
+
+    #[kithara::test]
+    fn a_nonblocking_poll_of_an_empty_ring_states_its_demand() {
+        let mut fixture = RingFixture::new(true);
+        let worker = DemandCounter::default();
+
+        let outcome = fixture.ring.recv_outcome(
+            RecvCtx {
+                cancel: None,
+                worker: Some(&worker),
+                abr: None,
+            },
+            Wait::ForProducer,
+        );
+
+        assert!(matches!(outcome, RecvOutcome::Empty));
+        assert_eq!(
+            worker.stated.load(Ordering::Acquire),
+            1,
+            "the producer parks once it reports backpressure, so an empty poll \
+             that states no demand leaves nobody to fill the ring"
+        );
     }
 
     #[kithara::test]

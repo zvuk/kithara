@@ -728,7 +728,10 @@ async fn autoplay_queue(harness: &OfflinePlayerHarness) -> QueueControl<TestPool
 ///
 /// Track A is quiet and served whole after a delay, track B is loud and local,
 /// so B is loaded first; if B preempted A the early window would carry B's level.
-#[kithara::test(tokio)]
+#[kithara::test(
+    tokio,
+    tracing("kithara_queue=debug,kithara_file=debug,kithara_storage=debug")
+)]
 async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
     const TRACK_SECS: f64 = 0.4;
 

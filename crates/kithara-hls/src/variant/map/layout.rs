@@ -54,19 +54,26 @@ where
         self.sizes_complete() || self.segment_aware_seek_tail_complete()
     }
 
-    /// Reader-facing lookup in **virtual** byte space — delegates to the
-    /// [`Layout`], which subtracts `byte_shift`, runs the natural-space
-    /// search, and gates against `[served_from..served_until)` under one
-    /// lock. Returns `None` when the byte falls outside the served range so
-    /// cross-variant lookups in [`HlsCoord::find_at_offset`] fall through to
-    /// the previous variant.
+    /// Reader-facing lookup in **virtual** byte space. A live seek alias
+    /// answers first; otherwise the [`Layout`] subtracts `byte_shift`, runs
+    /// the natural-space search and gates against `[served_from..served_until)`,
+    /// returning `None` outside the served range so cross-variant lookups fall
+    /// through to the previous variant.
+    ///
+    /// The probe mirrors the body rather than re-running the table arm alone:
+    /// a byte an alias answers resolves elsewhere in the table, so the table's
+    /// answer would name a segment this call never returned. `is_aliased` says
+    /// which arm answered, and `served_from` names the table's frame — a
+    /// re-mint between a fetch plan and a later wait moves every byte.
     #[kithara::probe(
         variant = self.variant as u64,
         byte_offset,
         found_seg = self
-            .layout
-            .find_at_offset(byte_offset, &self.segments)
-            .map_or(u64::MAX, |(i, _, _)| u64::from(i))
+            .seek_alias_at(byte_offset)
+            .or_else(|| self.layout.find_at_offset(byte_offset, &self.segments))
+            .map_or(u64::MAX, |(i, _, _)| u64::from(i)),
+        is_aliased = self.seek_alias_at(byte_offset).is_some(),
+        served_from = u64::from(self.served_from())
     )]
     pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
         self.seek_alias_at(byte_offset)

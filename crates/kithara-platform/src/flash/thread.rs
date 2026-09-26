@@ -1,3 +1,5 @@
+use std::panic::Location;
+
 use crate::flash::ids::ThreadKey;
 pub use crate::{
     backend::thread::{
@@ -65,14 +67,14 @@ pub(crate) fn gate_instant(backend: &GateBackend) -> crate::flash::Instant {
     }
 }
 
-fn propagated<F, T>(f: F) -> impl FnOnce() -> T + Send + 'static
+fn propagated<F, T>(f: F, origin: &'static Location<'static>) -> impl FnOnce() -> T + Send + 'static
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
     let ambient = crate::flash::ambient_snapshot();
     let active = crate::flash::flash_enabled();
-    let slot = ambient.then(crate::flash::system::credit::DedicatedSlot::reserve);
+    let slot = ambient.then(|| crate::flash::system::credit::DedicatedSlot::reserve(origin));
     move || {
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
         let _flash = crate::flash::enter_dynamic(active);
@@ -81,12 +83,13 @@ where
     }
 }
 
+#[track_caller]
 pub fn spawn<F, T>(f: F) -> JoinHandle<T>
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    crate::backend::thread::spawn(propagated(f))
+    crate::backend::thread::spawn(propagated(f, Location::caller()))
 }
 
 /// Under `flash`, a cooperative yield must relinquish the quiescence engine:
@@ -114,13 +117,13 @@ pub fn yield_now() {
 /// `Running` pacer's `active` slot (wedging the engine). This makes
 /// participant accounting intrinsic to the platform spawn — no consumer
 /// registers anything. Off the sim path the credit half does not exist.
-fn counted<F, T>(f: F) -> impl FnOnce() -> T + Send + 'static
+fn counted<F, T>(f: F, origin: &'static Location<'static>) -> impl FnOnce() -> T + Send + 'static
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
     let ambient = crate::flash::ambient_snapshot();
-    let slot = crate::flash::system::credit::DedicatedSlot::reserve_named();
+    let slot = crate::flash::system::credit::DedicatedSlot::reserve_named(origin);
     move || {
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
         let _flash = crate::flash::enter_dynamic(true);
@@ -138,12 +141,13 @@ where
 /// # Panics
 ///
 /// Panics if the OS refuses to create the thread.
+#[track_caller]
 pub fn spawn_named<F, T, N: Into<String>>(name: N, f: F) -> JoinHandle<T>
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    crate::backend::thread::spawn_named_uncounted(name, counted(f))
+    crate::backend::thread::spawn_named_uncounted(name, counted(f, Location::caller()))
 }
 
 /// Under `flash`, a sleep registers a pure timed waiter on the quiescence

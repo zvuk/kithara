@@ -598,7 +598,6 @@ fn validate_policy(policy: &PolicySnapshot) -> Result<()> {
             policy.evidence.envelope_text_field.as_deref(),
         ),
         ("line_marker", policy.evidence.line_marker.as_deref()),
-        ("dump_marker", policy.evidence.dump_marker.as_deref()),
         (
             "primitive_marker",
             policy.evidence.primitive_marker.as_deref(),

@@ -39,11 +39,15 @@ fn in_async_poll() -> bool {
 
 /// Mark the current thread as a dedicated virtual-time pacer.
 /// Dedicated threads hold active credit while working between wrapped waits.
-#[track_caller]
-pub(crate) fn mark_dedicated() {
+///
+/// `origin` is a parameter rather than `#[track_caller]` because a spawned
+/// child claims on its OWN thread: the caller here is always the spawn shim,
+/// which reads the same for every consumer and so tells two blocking jobs
+/// apart in the hang dump. The shim passes the site it was called from.
+pub(crate) fn mark_dedicated(origin: &'static Location<'static>) {
     ctx::set_dedicated(true);
     ctx::set_credit(Credit::Running);
-    FLASH.sync_holder_running();
+    FLASH.sync_holder_running(origin);
 }
 
 /// A DEDICATED pacer's reservation, minted on the PARENT thread BEFORE the
@@ -66,6 +70,9 @@ pub(crate) struct DedicatedSlot {
     /// `ACTIVE_NAMED_THREADS` increment alongside the `active` reservation.
     /// The `spawn_blocking` variant owns only the credit.
     named: bool,
+    /// The spawn site, captured on the parent and moved into the child with
+    /// the reservation, so the claim can name WHO is holding the engine.
+    origin: &'static Location<'static>,
 }
 
 impl DedicatedSlot {
@@ -75,8 +82,9 @@ impl DedicatedSlot {
     pub(crate) fn claim_dedicated(self) -> Participant {
         debug_assert!(self.named, "claim_dedicated on a spawn_blocking slot");
         let named = self.named;
+        let origin = self.origin;
         mem::forget(self);
-        mark_dedicated();
+        mark_dedicated(origin);
         Participant {
             named,
             _not_send: PhantomData,
@@ -92,9 +100,10 @@ impl DedicatedSlot {
     /// unrelated tasks.
     pub(crate) fn claim_pooled(self) -> PoolParticipant {
         debug_assert!(!self.named, "claim_pooled on a spawn_named slot");
+        let origin = self.origin;
         mem::forget(self);
         let prev = ctx::dedicated();
-        mark_dedicated();
+        mark_dedicated(origin);
         PoolParticipant {
             prev_dedicated: prev,
             _not_send: PhantomData,
@@ -104,8 +113,9 @@ impl DedicatedSlot {
     /// Claim an unnamed platform thread's reservation.
     pub(crate) fn claim_thread(self) -> Participant {
         debug_assert!(!self.named, "claim_thread on a named slot");
+        let origin = self.origin;
         mem::forget(self);
-        mark_dedicated();
+        mark_dedicated(origin);
         Participant {
             named: false,
             _not_send: PhantomData,
@@ -114,17 +124,26 @@ impl DedicatedSlot {
 
     /// Reserve an unnamed platform thread or ambient blocking closure: the
     /// `active` slot only (the named-thread count is not this path's resource).
-    pub(crate) fn reserve() -> Self {
+    ///
+    /// `origin` is the spawn site; the spawning shim passes its own
+    /// `Location::caller()` so the dump names the consumer, not the shim.
+    pub(crate) fn reserve(origin: &'static Location<'static>) -> Self {
         FLASH.pre_count_dedicated();
-        Self { named: false }
+        Self {
+            named: false,
+            origin,
+        }
     }
 
     /// Reserve for a `spawn_named` pacer thread: the `active` slot AND the
     /// named-thread count, both returned by Drop if the slot is never claimed.
-    pub(crate) fn reserve_named() -> Self {
+    pub(crate) fn reserve_named(origin: &'static Location<'static>) -> Self {
         ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
         FLASH.pre_count_dedicated();
-        Self { named: true }
+        Self {
+            named: true,
+            origin,
+        }
     }
 }
 
@@ -415,26 +434,26 @@ impl FlashInner {
             return;
         }
         ctx::set_credit(Credit::Running);
-        self.sync_holder_running();
+        self.sync_holder_running(Location::caller());
     }
 
     /// Record (or refresh) the calling dedicated pacer thread as a `Running`
     /// sync `active` holder in the diagnostic dump map. Called when it claims its
-    /// slot ([`mark_dedicated`]) and each time it resumes `Running` from a wait
-    /// (dedicated [`resume_after_wait`](FlashInner::resume_after_wait)). Keyed by
-    /// the thread; named by it. Diagnostic only — it does not touch `active`.
-    #[track_caller]
-    pub(in crate::flash) fn sync_holder_running(&self) {
+    /// slot ([`mark_dedicated`], which passes the spawn site) and each time it
+    /// resumes `Running` from a wait (dedicated
+    /// [`resume_after_wait`](FlashInner::resume_after_wait), which passes the
+    /// wait site). Keyed by the thread; named by it. Diagnostic only — it does
+    /// not touch `active`.
+    pub(in crate::flash) fn sync_holder_running(&self, resumed_from: &'static Location<'static>) {
         let key = current_thread_key();
         let name = current_thread_name();
-        let resumed_from = Location::caller();
-        let resumed_at_ns = self.clock.now_nanos();
+        let resumed_at_real_ns = self.clock.real_now_nanos();
         self.core.lock().registry.active_sync_holders.insert(
             key,
             SyncHolder {
                 resumed_from,
                 name,
-                resumed_at_ns,
+                resumed_at_real_ns,
             },
         );
     }

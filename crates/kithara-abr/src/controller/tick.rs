@@ -164,6 +164,7 @@ impl AbrController {
             estimate_bps,
             mode = ?state.mode(),
             pending_target_after = ?state.pending_target(),
+            is_locked = state.is_locked(),
             "ABR: tick"
         );
     }

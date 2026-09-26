@@ -374,14 +374,22 @@ async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) 
         .max()
         .expect("at least one seek epoch");
 
+    /// One park's wait. Deliberately a step and not the loop's remaining
+    /// budget: a park is one engine round, so a far deadline lets the virtual
+    /// clock jump the whole budget at once and the loop exits with a single
+    /// read behind it. A step bounds that jump, so every turn is a real read.
+    const EVENT_STEP: Duration = Duration::from_millis(50);
+
     let mut buf = [0.0f32; 256];
-    let deadline = Instant::now() + Duration::from_secs(8);
     let mut last_complete: Option<SeekEpoch> = None;
-    while Instant::now() < deadline {
-        // Read each tick so the consumer keeps committing post-seek output and
-        // emitting `SeekComplete` for the highest requested epoch. The
-        // ownership roundtrip keeps a possible read park off the runtime;
-        // `events.recv()` then yields on the virtual clock for the next chunk.
+    let mut committed: Vec<SeekEpoch> = Vec::new();
+    let mut turns = 0usize;
+    // Read each turn so the consumer keeps committing post-seek output and
+    // emitting `SeekComplete` for the highest requested epoch. The ownership
+    // roundtrip keeps a possible read park off the runtime. The loop waits on
+    // that epoch, never on a budget; the test's own `timeout(...)` is the only
+    // backstop, as the read-pump contract states.
+    loop {
         let (next_audio, (next_buf, outcome)) = blocking_audio(audio, move |audio| {
             let outcome = audio.read(&mut buf);
             (buf, outcome)
@@ -389,14 +397,14 @@ async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) 
         .await;
         audio = next_audio;
         buf = next_buf;
+        turns += 1;
         match outcome {
             Ok(ReadOutcome::Frames { .. })
             | Ok(ReadOutcome::Eof { .. })
             | Ok(ReadOutcome::Pending { .. }) => {}
             Err(error) => panic!("decode error while draining seek completions: {error}"),
         }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match time::timeout(remaining, events.recv())
+        match time::timeout(EVENT_STEP, events.recv())
             .await
             .map(|r| r.map(|env| env.event))
         {
@@ -406,22 +414,33 @@ async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) 
                     break;
                 }
             }
-            Ok(_) => {}
-            Err(_) => break,
+            Ok(Ok(TestEvent::Audio(AudioEvent::SeekLifecycle {
+                stage: SeekLifecycleStage::OutputCommitted,
+                seek_epoch,
+                ..
+            }))) => committed.push(seek_epoch),
+            Ok(Ok(_)) | Err(_) => {}
+            Ok(Err(_)) => break,
         }
     }
-    // Paced blocking reads can exhaust the virtual-clock budget before the
-    // loop drains its own subscriber queue; events already delivered before
-    // the deadline still count toward the contract.
     while let Ok(envelope) = events.try_recv() {
-        if let TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) = envelope.event {
-            last_complete = Some(seek_epoch);
+        match envelope.event {
+            TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) => {
+                last_complete = Some(seek_epoch);
+            }
+            TestEvent::Audio(AudioEvent::SeekLifecycle {
+                stage: SeekLifecycleStage::OutputCommitted,
+                seek_epoch,
+                ..
+            }) => committed.push(seek_epoch),
+            _ => {}
         }
     }
     assert_eq!(
         last_complete,
         Some(highest_expected),
-        "last observed SeekComplete must match the highest requested epoch"
+        "last observed SeekComplete must match the highest requested epoch; \
+         requested {expected_epochs:?}, output-committed {committed:?}, {turns} read turn(s)"
     );
 }
 

@@ -561,8 +561,56 @@ pub(super) fn unsupported_pending_claim() -> StreamError {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
+
+    use kithara_stream::PendingReason;
+
     use super::*;
-    use crate::stream::coord::tests::{incremental_profile, prepare_incoming, switch_coord};
+    use crate::stream::{
+        coord::tests::{incremental_profile, prepare_incoming, switch_coord},
+        session::HlsSessionReader,
+    };
+
+    /// The typed cause a pending read carries, if any. Reading it back here
+    /// is the whole point of the contract: the decoder classifies on the
+    /// type, never on the message.
+    fn pending_reason(error: &IoError) -> Option<PendingReason> {
+        error.get_ref()?.downcast_ref::<PendingReason>().copied()
+    }
+
+    #[kithara::test]
+    fn a_retired_session_reads_as_an_interrupt_carrying_its_reason() {
+        let (coord, _bus, _ctx, _abr) = switch_coord();
+        let session = coord.active_session();
+        let mut reader = HlsSessionReader::new(Arc::clone(&session));
+        let mut buf = [0_u8; 8];
+
+        // A live session stalls for transient reasons of its own; pinning that
+        // none of them is retirement keeps the assertion below from holding
+        // for whatever error this fixture happens to produce.
+        let live = reader.read(&mut buf).err();
+        assert_ne!(
+            live.as_ref().and_then(pending_reason),
+            Some(PendingReason::SessionRetired),
+            "a live session never reports itself retired"
+        );
+
+        session.abort();
+
+        let error = reader
+            .read(&mut buf)
+            .expect_err("a retired session cannot serve a read");
+        assert_eq!(
+            error.kind(),
+            ErrorKind::Interrupted,
+            "retirement asks the caller to rebuild; anything else fails the track instead"
+        );
+        assert_eq!(
+            pending_reason(&error),
+            Some(PendingReason::SessionRetired),
+            "the cause travels as a type the decoder can classify, not as a message"
+        );
+    }
 
     #[kithara::test]
     fn demand_probe_does_not_take_transition_lock() {

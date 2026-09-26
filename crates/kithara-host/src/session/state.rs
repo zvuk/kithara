@@ -230,6 +230,9 @@ pub(crate) struct SessionState<T, S> {
     pub(super) session_ducking: SessionDuckingMode,
     pub(super) transport: SessionTransportState,
     pub(super) start_stream_fn: StartStreamFn<T>,
+    /// Set when the output device is acquired once and cannot be rebuilt, so
+    /// an idle session must keep it rather than release it.
+    pub(super) retains_output: bool,
     pub(super) stream_needs_restart: bool,
     pub(super) sample_rate_hint: u32,
 }
@@ -285,6 +288,7 @@ impl<T, S> SessionState<T, S> {
             session_output_memo: None,
             session_output_node_id: None,
             session_limiter_node_id: None,
+            retains_output: false,
             stream_needs_restart: false,
             transport: SessionTransportState::default(),
             reserved_session_grid: Some(generation),

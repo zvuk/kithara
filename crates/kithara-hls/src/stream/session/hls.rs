@@ -108,7 +108,7 @@ where
 
     pub(super) fn check_live(&self) -> io::Result<()> {
         if self.cancel.root.is_cancelled() {
-            return Err(Error::other("HLS reader session cancelled"));
+            return Err(pending(PendingReason::SessionRetired));
         }
         if !self.active.load(Ordering::Acquire)
             && self
