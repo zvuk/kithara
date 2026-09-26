@@ -59,6 +59,7 @@ bench MODE="build":
     #!/usr/bin/env bash
     set -euo pipefail
     targets=(
+      "kithara-dsp:kernels:"
       "kithara-integration-tests:abr_estimator:"
       "kithara-integration-tests:bufpool:"
       "kithara-integration-tests:perf_audit:"

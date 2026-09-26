@@ -2543,6 +2543,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fearless_simd"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3772b63c40606beea8fe1f7b06a60de27ceb9bfc2d9dad3427368ca41dc7e62"
+
+[[package]]
 name = "fenestra-anim"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4942,6 +4948,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-dsp"
+version = "0.0.1-alpha5"
+dependencies = [
+ "assert_no_alloc",
+ "criterion",
+ "fearless_simd",
+ "kithara-apple",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "kithara-effects"
 version = "0.0.1-alpha5"
 dependencies = [
@@ -6111,6 +6131,7 @@ dependencies = [
  "indexmap",
  "itertools 0.13.0",
  "jni",
+ "js-sys",
  "libc",
  "linux-raw-sys 0.12.1",
  "log",
@@ -6121,6 +6142,7 @@ dependencies = [
  "num-complex",
  "num-traits",
  "objc2-foundation 0.3.2",
+ "once_cell",
  "percent-encoding",
  "portable-atomic",
  "ppv-lite86",
@@ -6160,6 +6182,8 @@ dependencies = [
  "tracing-core",
  "tracing-subscriber",
  "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "winnow 1.0.3",
  "zerocopy",
