@@ -3,6 +3,7 @@
 use std::{mem, thread};
 
 use hotpath::HotpathGuardBuilder;
+use kithara::platform::time::Instant;
 use kithara_integration_tests::bufpool_ext::{Pools, pools};
 
 #[hotpath::measure]

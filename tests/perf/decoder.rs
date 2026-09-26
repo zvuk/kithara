@@ -5,6 +5,7 @@ use std::io::Cursor;
 use hotpath::HotpathGuardBuilder;
 use kithara::{
     decode::{Decoder, DecoderConfig, DecoderFactory},
+    platform::time::Instant,
     resampler::NoResamplerBackend,
     signal::AudioChunk,
 };
