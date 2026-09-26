@@ -254,200 +254,168 @@ mod tests {
         );
     }
 
+    /// Each hosted gallery page claims exactly the engine descriptors its
+    /// controls need: a missing or extra claim leaves a control unbacked.
     #[kithara::test]
-    fn the_hosted_meters_keep_their_descriptor_backed_controls() {
-        assert_hosted_page_claims(
-            "atoms",
-            "meters",
-            |path| path.contains("/meters/"),
-            &[
-                ("atoms/meters/stereo", "stereo-meter"),
-                ("atoms/meters/vertical-120", "vertical-vu"),
-                ("atoms/meters/vertical-64", "vertical-vu"),
-            ],
-        );
-    }
-
-    #[kithara::test]
-    fn the_hosted_knobs_keep_their_descriptor_backed_controls() {
-        assert_hosted_page_claims(
-            "atoms",
-            "knobs",
-            |path| path.contains("/knobs/"),
-            &[
-                ("atoms/knobs/size-26", "knob"),
-                ("atoms/knobs/size-28", "knob"),
-                ("atoms/knobs/size-34", "knob"),
-                ("atoms/knobs/size-38", "knob"),
-            ],
-        );
-    }
-
-    #[kithara::test]
-    fn the_hosted_toggles_keep_their_descriptor_backed_controls() {
-        assert_hosted_page_claims(
-            "atoms",
-            "toggles",
-            |path| path.contains("/toggles/"),
-            &[
-                ("atoms/toggles/checkbox-off", "activation"),
-                ("atoms/toggles/checkbox-on", "activation"),
-                ("atoms/toggles/toggle-off", "activation"),
-                ("atoms/toggles/toggle-on", "activation"),
-            ],
-        );
-    }
-
-    #[kithara::test]
-    fn the_hosted_chips_keep_their_descriptor_backed_controls() {
-        assert_hosted_page_claims(
-            "atoms",
-            "chips",
-            |path| path.contains("/chips/"),
-            &[
-                ("atoms/chips/active", "activation"),
-                ("atoms/chips/inactive", "activation"),
-            ],
-        );
-    }
-
-    #[kithara::test]
-    fn the_hosted_buttons_keep_their_descriptor_backed_controls() {
-        assert_hosted_page_claims(
-            "buttons",
-            "buttons",
-            |path| path.starts_with("buttons/"),
-            &[
-                ("buttons/cue", "activation"),
-                ("buttons/default", "activation"),
-                ("buttons/micro", "activation"),
-                ("buttons/play", "activation"),
-                ("buttons/primary", "activation"),
-                ("buttons/sync", "activation"),
-            ],
-        );
-    }
-
-    #[kithara::test]
-    fn the_hosted_faders_keep_their_descriptor_backed_controls() {
-        assert_hosted_page_claims(
-            "faders",
-            "faders",
-            |path| path.starts_with("faders/"),
-            &[
-                ("faders/default", "fader"),
-                ("faders/vertical", "vertical-vu"),
-                ("faders/volume", "fader"),
-            ],
-        );
-    }
-
-    #[kithara::test]
-    fn the_hosted_tree_keeps_its_exact_descriptor_inventory() {
-        assert_hosted_page_claims(
-            "tree",
-            "tree",
-            |path| path.starts_with("tree/"),
-            &[
-                ("tree/browser", "scroll"),
-                ("tree/browser/search", "text-input"),
-            ],
-        );
-    }
-
-    #[kithara::test]
-    fn the_hosted_library_keeps_its_exact_descriptor_inventory() {
-        assert_hosted_page_claims(
-            "library2",
-            "library",
-            |path| path.starts_with("library2/"),
-            &[
-                ("library2/browser", "scroll"),
-                ("library2/browser/search", "text-input"),
-                ("library2/context", "picker"),
-                ("library2/table", "track-list"),
-            ],
-        );
-    }
-
-    #[kithara::test]
-    fn the_hosted_table_keeps_its_descriptor_backed_controls() {
-        assert_hosted_page_claims(
-            "table",
-            "track-list",
-            |path| path.starts_with("table/"),
-            &[
-                ("table/column-artist", "activation"),
-                ("table/column-bpm", "activation"),
-                ("table/column-deck", "activation"),
-                ("table/column-energy", "activation"),
-                ("table/column-index", "activation"),
-                ("table/column-key", "activation"),
-                ("table/column-preset", "segmented"),
-                ("table/column-time", "activation"),
-                ("table/column-title", "activation"),
-                ("table/column-transition", "activation"),
-                ("table/reset-columns", "activation"),
-                ("table/table", "track-list"),
-            ],
-        );
-    }
-
-    #[kithara::test]
-    fn the_hosted_module_tabs_keep_their_descriptor_backed_controls() {
-        assert_hosted_page_claims(
-            "modules",
-            "module tabs",
-            |path| path.starts_with("modules-tabs/"),
-            &[
-                ("modules-tabs/deck", "activation"),
-                ("modules-tabs/deck-micro", "activation"),
-                ("modules-tabs/global-bar", "activation"),
-                ("modules-tabs/layout", "activation"),
-                ("modules-tabs/telemetry", "activation"),
-            ],
-        );
-    }
-
-    #[kithara::test]
-    fn the_hosted_nav_keeps_its_descriptor_backed_controls() {
-        assert_hosted_page_claims(
-            "atoms",
-            "nav",
-            |path| path.starts_with("gallery/"),
-            &[
-                ("gallery/assets/item", "activation"),
-                ("gallery/atoms/item", "activation"),
-                ("gallery/buttons/item", "activation"),
-                ("gallery/cells/item", "activation"),
-                ("gallery/chrome/item", "activation"),
-                ("gallery/clock/item", "activation"),
-                ("gallery/custom/item", "activation"),
-                ("gallery/faders/item", "activation"),
-                ("gallery/library2/item", "activation"),
-                ("gallery/lottie/item", "activation"),
-                ("gallery/menu/item", "activation"),
-                ("gallery/micro/item", "activation"),
-                ("gallery/mixer/item", "activation"),
-                ("gallery/modules/item", "activation"),
-                ("gallery/motion/item", "activation"),
-                ("gallery/objects/item", "activation"),
-                ("gallery/pivot/item", "activation"),
-                ("gallery/scene/item", "activation"),
-                ("gallery/shader/item", "activation"),
-                ("gallery/sprites/item", "activation"),
-                ("gallery/sizes/item", "activation"),
-                ("gallery/skins/item", "activation"),
-                ("gallery/stress/item", "activation"),
-                ("gallery/titlebars/item", "activation"),
-                ("gallery/tokens/item", "activation"),
-                ("gallery/table/item", "activation"),
-                ("gallery/table-long/item", "activation"),
-                ("gallery/tree/item", "activation"),
-                ("gallery/typography/item", "activation"),
-                ("gallery/vis/item", "activation"),
-            ],
-        );
+    #[case::meters(
+        "atoms",
+        "meters",
+        |path| path.contains("/meters/"),
+        &[
+            ("atoms/meters/stereo", "stereo-meter"),
+            ("atoms/meters/vertical-120", "vertical-vu"),
+            ("atoms/meters/vertical-64", "vertical-vu"),
+        ],
+    )]
+    #[case::knobs(
+        "atoms",
+        "knobs",
+        |path| path.contains("/knobs/"),
+        &[
+            ("atoms/knobs/size-26", "knob"),
+            ("atoms/knobs/size-28", "knob"),
+            ("atoms/knobs/size-34", "knob"),
+            ("atoms/knobs/size-38", "knob"),
+        ],
+    )]
+    #[case::toggles(
+        "atoms",
+        "toggles",
+        |path| path.contains("/toggles/"),
+        &[
+            ("atoms/toggles/checkbox-off", "activation"),
+            ("atoms/toggles/checkbox-on", "activation"),
+            ("atoms/toggles/toggle-off", "activation"),
+            ("atoms/toggles/toggle-on", "activation"),
+        ],
+    )]
+    #[case::chips(
+        "atoms",
+        "chips",
+        |path| path.contains("/chips/"),
+        &[
+            ("atoms/chips/active", "activation"),
+            ("atoms/chips/inactive", "activation"),
+        ],
+    )]
+    #[case::buttons(
+        "buttons",
+        "buttons",
+        |path| path.starts_with("buttons/"),
+        &[
+            ("buttons/cue", "activation"),
+            ("buttons/default", "activation"),
+            ("buttons/micro", "activation"),
+            ("buttons/play", "activation"),
+            ("buttons/primary", "activation"),
+            ("buttons/sync", "activation"),
+        ],
+    )]
+    #[case::faders(
+        "faders",
+        "faders",
+        |path| path.starts_with("faders/"),
+        &[
+            ("faders/default", "fader"),
+            ("faders/vertical", "vertical-vu"),
+            ("faders/volume", "fader"),
+        ],
+    )]
+    #[case::tree(
+        "tree",
+        "tree",
+        |path| path.starts_with("tree/"),
+        &[
+            ("tree/browser", "scroll"),
+            ("tree/browser/search", "text-input"),
+        ],
+    )]
+    #[case::library(
+        "library2",
+        "library",
+        |path| path.starts_with("library2/"),
+        &[
+            ("library2/browser", "scroll"),
+            ("library2/browser/search", "text-input"),
+            ("library2/context", "picker"),
+            ("library2/table", "track-list"),
+        ],
+    )]
+    #[case::table(
+        "table",
+        "track-list",
+        |path| path.starts_with("table/"),
+        &[
+            ("table/column-artist", "activation"),
+            ("table/column-bpm", "activation"),
+            ("table/column-deck", "activation"),
+            ("table/column-energy", "activation"),
+            ("table/column-index", "activation"),
+            ("table/column-key", "activation"),
+            ("table/column-preset", "segmented"),
+            ("table/column-time", "activation"),
+            ("table/column-title", "activation"),
+            ("table/column-transition", "activation"),
+            ("table/reset-columns", "activation"),
+            ("table/table", "track-list"),
+        ],
+    )]
+    #[case::module_tabs(
+        "modules",
+        "module tabs",
+        |path| path.starts_with("modules-tabs/"),
+        &[
+            ("modules-tabs/deck", "activation"),
+            ("modules-tabs/deck-micro", "activation"),
+            ("modules-tabs/global-bar", "activation"),
+            ("modules-tabs/layout", "activation"),
+            ("modules-tabs/telemetry", "activation"),
+        ],
+    )]
+    #[case::nav(
+        "atoms",
+        "nav",
+        |path| path.starts_with("gallery/"),
+        &[
+            ("gallery/assets/item", "activation"),
+            ("gallery/atoms/item", "activation"),
+            ("gallery/buttons/item", "activation"),
+            ("gallery/cells/item", "activation"),
+            ("gallery/chrome/item", "activation"),
+            ("gallery/clock/item", "activation"),
+            ("gallery/custom/item", "activation"),
+            ("gallery/faders/item", "activation"),
+            ("gallery/library2/item", "activation"),
+            ("gallery/lottie/item", "activation"),
+            ("gallery/menu/item", "activation"),
+            ("gallery/micro/item", "activation"),
+            ("gallery/mixer/item", "activation"),
+            ("gallery/modules/item", "activation"),
+            ("gallery/motion/item", "activation"),
+            ("gallery/objects/item", "activation"),
+            ("gallery/pivot/item", "activation"),
+            ("gallery/scene/item", "activation"),
+            ("gallery/shader/item", "activation"),
+            ("gallery/sprites/item", "activation"),
+            ("gallery/sizes/item", "activation"),
+            ("gallery/skins/item", "activation"),
+            ("gallery/stress/item", "activation"),
+            ("gallery/titlebars/item", "activation"),
+            ("gallery/tokens/item", "activation"),
+            ("gallery/table/item", "activation"),
+            ("gallery/table-long/item", "activation"),
+            ("gallery/tree/item", "activation"),
+            ("gallery/typography/item", "activation"),
+            ("gallery/vis/item", "activation"),
+        ],
+    )]
+    fn hosted_page_claims(
+        #[case] tab: Page,
+        #[case] section: &str,
+        #[case] belongs: fn(&str) -> bool,
+        #[case] expected: &[(&str, &str)],
+    ) {
+        assert_hosted_page_claims(tab, section, belongs, expected);
     }
 
     fn engine_descriptor_kinds(spec: &ControlSpec) -> &'static [&'static str] {
@@ -1434,25 +1402,16 @@ mod tests {
     /// mounted under, so an application listening under another name hears
     /// nothing and the fader is a control the page only claims to have.
     #[kithara::test]
-    fn the_scrub_fader_moves_the_artwork_beside_it() {
-        let path = only_fader_path(&page("lottie"));
+    #[case::artwork("lottie", "gallery.lottie.scrub")]
+    #[case::sprite("sprites", "gallery.sprite.scrub")]
+    fn the_scrub_fader_moves_its_neighbour(#[case] tab: Page, #[case] endpoint: &str) {
+        let path = only_fader_path(&page(tab));
         let mut reads = DemoReads::default();
-        let before = scalar(&reads, "gallery.lottie.scrub");
+        let before = scalar(&reads, endpoint);
 
         reads.apply(&path, &ControlAction::SetScalar(0.9));
 
-        assert_ne!(scalar(&reads, "gallery.lottie.scrub"), before);
-    }
-
-    #[kithara::test]
-    fn the_scrub_fader_moves_the_sprite_beside_it() {
-        let path = only_fader_path(&page("sprites"));
-        let mut reads = DemoReads::default();
-        let before = scalar(&reads, "gallery.sprite.scrub");
-
-        reads.apply(&path, &ControlAction::SetScalar(0.9));
-
-        assert_ne!(scalar(&reads, "gallery.sprite.scrub"), before);
+        assert_ne!(scalar(&reads, endpoint), before);
     }
 
     #[kithara::test]

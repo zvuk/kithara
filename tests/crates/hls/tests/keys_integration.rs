@@ -9,7 +9,7 @@ use kithara::{
     platform::{sync::Arc, time::Duration},
     play::policy::{DomainKeyPolicy, DomainKeyRule},
 };
-use kithara_integration_tests::{hls_fixture::*, hls_server::*};
+use kithara_integration_tests::{CreatedHls, TestServerHelper, hls_fixture::*, hls_server::*};
 use url::Url;
 
 fn registry_for_host(host: &str, processor: kithara::hls::KeyProcessor) -> KeyProcessorRegistry {
@@ -40,14 +40,14 @@ fn sentinel_key(_key: Bytes) -> Result<Bytes, DrmError> {
 #[case::reverse(reverse_key, true, b"fedcba9876543210")]
 #[case::unmatched(sentinel_key, false, b"0123456789abcdef")]
 async fn key_processor_cases(
-    #[future] test_server: TestServer,
+    #[future] aes128_hls: CreatedHls,
     assets_fixture: TestAssets,
     #[case] process: fn(Bytes) -> Result<Bytes, DrmError>,
     #[case] matches_host: bool,
     #[case] expected: &[u8],
 ) -> HlsResult<()> {
-    let server = test_server.await;
-    let key_url = server.url("/aes/key.bin");
+    let hls = aes128_hls.await;
+    let key_url = hls.key_url();
     let host = if matches_host {
         key_url.host_str().expect("host")
     } else {
@@ -77,12 +77,12 @@ async fn key_store_error_handling(assets_fixture: TestAssets) -> HlsResult<()> {
 
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn key_store_caching_behavior(
-    #[future] test_server: TestServer,
+    #[future] aes128_hls: CreatedHls,
     assets_fixture: TestAssets,
 ) -> HlsResult<()> {
-    let server = test_server.await;
+    let hls = aes128_hls.await;
     let key_store = test_key_store(&assets_fixture, None);
-    let key_url = server.url("/aes/key.bin");
+    let key_url = hls.key_url();
 
     let key1: Bytes = key_store.get_raw_key(&key_url, None).await?;
     let key2 = key_store.get_raw_key(&key_url, None).await?;
@@ -95,16 +95,16 @@ async fn key_store_caching_behavior(
 
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn aes128_key_decrypts_ciphertext(
-    #[future] test_server: TestServer,
+    #[future] aes128_hls: CreatedHls,
     assets_fixture: TestAssets,
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
-    let server = test_server.await;
+    let hls = aes128_hls.await;
     let net = net_fixture;
     let key_store = test_key_store(&assets_fixture, None);
 
-    let key_url = server.url("/aes/key.bin");
-    let cipher_url = server.url("/aes/seg0.bin");
+    let key_url = hls.key_url();
+    let cipher_url = hls.segment_url(0, 0);
     let iv = aes128_iv();
 
     let key_bytes = key_store.get_raw_key(&key_url, Some(iv)).await?;
@@ -120,4 +120,13 @@ async fn aes128_key_decrypts_ciphertext(
     assert!(output[..written].starts_with(aes128_plaintext_segment().as_slice()));
 
     Ok(())
+}
+
+#[kithara::fixture]
+async fn aes128_hls() -> CreatedHls {
+    TestServerHelper::new()
+        .await
+        .create_hls(aes128_segment())
+        .await
+        .expect("create AES-128 segment")
 }

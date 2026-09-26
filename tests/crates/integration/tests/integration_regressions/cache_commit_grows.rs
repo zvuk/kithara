@@ -12,15 +12,15 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, RENDER_PACE},
-    temp_dir,
     test_defaults::Consts as Shared,
 };
 use kithara_test_fixtures::fixtures::tone_mp3;
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 #[derive(Default)]
 struct Transfer {

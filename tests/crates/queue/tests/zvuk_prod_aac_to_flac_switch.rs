@@ -22,8 +22,11 @@ use kithara_app::{
     pools::{PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
-    TestTempDir, bufpool_ext::pools as test_pools, kithara, offline::OfflinePlayer,
+    bufpool_ext::pools as test_pools,
+    kithara,
+    offline::{OfflinePlayer, app_disk_asset_store, app_track_source},
 };
+use kithara_test_utils::TestTempDir;
 use tracing::info;
 
 /// Production zvuk DRM master from the on-device AAC->FLAC recreate trace.
@@ -160,10 +163,10 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         .build();
     let temp = TestTempDir::new();
 
-    let TrackSource::Config(cfg) = super::source_helper::app_track_source(
+    let TrackSource::Config(cfg) = app_track_source(
         PROD_TRACK,
         &config,
-        super::source_helper::app_disk_asset_store(&config, temp.path()),
+        app_disk_asset_store(&config, temp.path()),
         backend,
         AbrMode::manual(START_VARIANT),
         Some(TRACK_NAME),

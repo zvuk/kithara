@@ -1,8 +1,8 @@
+use kithara::platform::sync::Arc;
 use kithara_test_fixtures::SignalAsset;
 use url::Url;
 
 use crate::{
-    hls_url::HlsSpec,
     server_url::join_server_url,
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, post_token},
     token_store::TokenRequest,
@@ -38,17 +38,12 @@ impl TestServerHelper {
         &self,
         builder: HlsFixtureBuilder,
     ) -> Result<CreatedHls, CreateHlsError> {
-        let spec = builder.into_inline_spec();
-        self.create_hls_from_spec(spec).await
-    }
-
-    pub(crate) async fn create_hls_from_spec(
-        &self,
-        spec: HlsSpec,
-    ) -> Result<CreatedHls, CreateHlsError> {
-        let request = TokenRequest { hls_spec: spec };
+        let fixture = Arc::new(builder.clone());
+        let request = TokenRequest {
+            hls_spec: builder.into_inline_spec(),
+        };
         let token = post_token(&self.base_url, &request).await?;
-        Ok(CreatedHls::new(self.base_url.clone(), token))
+        Ok(CreatedHls::new(self.base_url.clone(), token, fixture))
     }
 
     /// URL of one build-time generated signal body.

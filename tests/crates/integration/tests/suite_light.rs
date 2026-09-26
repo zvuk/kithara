@@ -13,3 +13,4 @@
 use kithara_test_dylib as _;
 
 mod thread_budget;
+mod waveform_shared_download;

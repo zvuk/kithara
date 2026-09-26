@@ -4,4 +4,6 @@
 
 pub use kithara_integration_tests::bufpool_ext;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod no_sync_passthrough;
 mod rate_response;

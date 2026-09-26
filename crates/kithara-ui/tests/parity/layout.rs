@@ -1152,20 +1152,21 @@ fn scene_placement(reads: &FixtureReads) -> (f32, f32) {
 
 /// A placement moves the box its child is laid out in, so the immediate host
 /// puts the child where the document says rather than drawing it there and
-/// leaving the box that answers the pointer behind.
+/// leaving the box that answers the pointer behind. The point is the
+/// application's: the same compiled document lays the child out where the
+/// endpoint now answers.
 #[kithara::test]
-fn a_placement_lays_its_child_out_at_the_point_the_document_wrote() {
-    assert_eq!(scene_placement(&FixtureReads::default()), (40.0, 24.0));
-}
-
-/// And the point is the application's: the same compiled document lays the
-/// child out where the endpoint now answers.
-#[kithara::test]
-fn a_placement_lays_its_child_out_at_the_point_its_endpoint_answers() {
-    let reads = FixtureReads {
+#[case::the_document_wrote(FixtureReads::default(), (40.0, 24.0))]
+#[case::its_endpoint_answers(
+    FixtureReads {
         placed: Some(Pt { x: 120.0, y: 60.0 }),
         ..FixtureReads::default()
-    };
-
-    assert_eq!(scene_placement(&reads), (120.0, 60.0));
+    },
+    (120.0, 60.0)
+)]
+fn a_placement_lays_its_child_out_at_the_point(
+    #[case] reads: FixtureReads,
+    #[case] point: (f32, f32),
+) {
+    assert_eq!(scene_placement(&reads), point);
 }

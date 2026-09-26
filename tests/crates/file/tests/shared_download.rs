@@ -29,10 +29,8 @@ use kithara::{
     },
     stream::Stream,
 };
-use kithara_integration_tests::{
-    TestHttpServer,
-    bufpool_ext::{TestPools, pools},
-};
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_test_utils::TestHttpServer;
 
 const BODY: &[u8] = b"0123456789abcdefghijABCDEFGHIJ0123456789abcdefghijABCDEFGHIJ";
 

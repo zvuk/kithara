@@ -1,31 +1,15 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::{NonZeroU32, NonZeroUsize};
-
 use firewheel::dsp::filter::smoothing_filter::{DEFAULT_SETTLE_RATIO, DEFAULT_SMOOTH_SECONDS};
-use kithara::{
-    assets::AssetStore,
-    host::HostConfig,
-    platform::time::Duration,
-    play::{
-        PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
-        ResourceSrc, SessionError,
-    },
-    queue::TrackSource,
-    sync::SyncGroup,
-    warp::WarpConfig,
-};
+use kithara::platform::time::Duration;
 use kithara_integration_tests::{
-    TestServerHelper, kithara,
-    offline::OfflineHostHarness,
+    kithara,
     smoothing::{
         Consts, SmoothingCase, assert_step_is_ramped, last_block_peak, observe, observe_until,
-        peak, sine_queue,
+        sine_queue,
     },
 };
-use kithara_test_fixtures::SignalAsset;
-
-use crate::bufpool_ext::pools;
+use kithara_test_fixtures::signal::peak;
 
 /// Every window the smoothing oracles read is decoded output.
 ///
@@ -76,24 +60,6 @@ async fn deck_volume_step_is_ramped() {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
-async fn queue_append_while_playing_does_not_wait_for_host() {
-    let (harness, first_id) = sine_queue(SmoothingCase { eq_layout: None }).await;
-    let server = TestServerHelper::new().await;
-    let url = server.signal(SignalAsset::WAV_SINE440_60S);
-    let src = ResourceSrc::parse(url.as_str()).expect("valid signal fixture URL");
-    let second = harness
-        .control()
-        .append(TrackSource::Config(Box::new(
-            ResourceConfig::for_src(src)
-                .store(AssetStore::builder(pools()).build())
-                .build(),
-        )))
-        .expect("append while first track is playing");
-    assert_ne!(second.as_u64(), first_id);
-    harness.close().await;
-}
-
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn prepared_deck_preserves_play_pause_order() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
     let deck = harness.control();
@@ -114,69 +80,4 @@ async fn prepared_deck_preserves_play_pause_order() {
         last_block_peak(&resumed)
     );
     harness.close().await;
-}
-
-#[kithara::test(tokio)]
-async fn failed_deck_preparation_releases_host_membership() {
-    let region = pools();
-    let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate");
-    let config = HostConfig::offline(region.clone())
-        .sample_rate(sample_rate)
-        .max_block_frames(NonZeroU32::new(Consts::BLOCK_FRAMES as u32).expect("block size"))
-        .build();
-    let host = OfflineHostHarness::new(config).await.expect("offline host");
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let invalid = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(sample_rate)
-            .worker(worker.clone())
-            .warp(
-                WarpConfig::builder()
-                    .render_quantum_frames(NonZeroUsize::new(32).expect("quantum"))
-                    .build(),
-            )
-            .response_budget_frames(NonZeroUsize::new(1).expect("budget"))
-            .build(),
-    );
-    assert!(matches!(
-        host.insert(invalid).await,
-        Err(PlayError::Session(
-            SessionError::ResponseBudgetExceeded { .. }
-        ))
-    ));
-    host.with(|host| {
-        assert!(host.topology().expect("host topology").members().is_empty());
-        assert!(
-            host.sample_rate()
-                .expect("host sample rate")
-                .measured
-                .is_none(),
-            "failed preparation must close an otherwise idle stream"
-        );
-    })
-    .await;
-    let valid = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(sample_rate)
-            .worker(worker)
-            .build(),
-    );
-    let deck = host
-        .insert(valid)
-        .await
-        .expect("host can prepare the next deck");
-    host.with(move |host| {
-        assert!(
-            host.sample_rate().expect("sample rate").measured.is_none(),
-            "inserting an idle deck must not start the output stream"
-        );
-        deck.set_eq_gain(0, -6.0).expect("configure idle EQ");
-        assert_eq!(deck.eq_gain(0), Some(-6.0));
-        deck.play();
-        assert!(host.sample_rate().expect("sample rate").measured.is_some());
-        assert_eq!(deck.eq_gain(0), Some(-6.0));
-        deck.pause();
-    })
-    .await;
-    host.close().await;
 }

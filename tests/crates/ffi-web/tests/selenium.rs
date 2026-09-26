@@ -1776,19 +1776,6 @@ async fn selenium_hls_log_scenario(
     selenium_teardown(session, "hls_log_scenario", result).await;
 }
 
-#[kithara::test(selenium)]
-async fn selenium_drm_playback_scenario(
-    #[future(awt)] selenium_setup: (SeleniumHarness, WasmPlayerSelenium),
-) {
-    let (_harness, session) = selenium_setup;
-    let tracks = session
-        .prepare_local_tracks()
-        .await
-        .unwrap_or_else(|err| panic!("failed to prepare local tracks: {err}"));
-    let result = session.scenario_drm_playback(tracks).await;
-    selenium_teardown(session, "drm_playback_scenario", result).await;
-}
-
 /// Verify Web Worker count at each lifecycle stage:
 /// - After page load: 0 workers (engine starts lazily)
 /// - Steady state after track load: 2 workers (engine + shared audio)

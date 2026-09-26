@@ -25,8 +25,9 @@ kithara = { workspace = true, features = ["usdt", "mock", "offline", "resample-r
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "packaged", "wav"] }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "temp-dir"] }
 
+derive_more = { workspace = true }
 futures = { workspace = true }
 num-traits = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "stream"] }

@@ -21,9 +21,10 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     hls_fixture::create_test_downloader,
-    offline::{OfflinePlayer, WindowStats, rms},
-    temp_dir,
+    offline::{OfflinePlayer, WindowStats},
 };
+use kithara_test_fixtures::signal::rms;
+use kithara_test_utils::temp_dir;
 use url::Url;
 
 use crate::{
@@ -273,7 +274,6 @@ async fn local_seek_middle_hang_iters(
     let (_helper, master) = seek_source;
 
     let window_blocks = Shared::blocks_for_seconds(Consts::PLAY_WINDOW_SECS, Consts::BLOCK_FRAMES);
-    let mut next_seek_epoch = 1u64;
 
     for iter in 0..Consts::ITERATIONS {
         let iter_label = format!("iter-{iter}");
@@ -345,9 +345,7 @@ async fn local_seek_middle_hang_iters(
         );
 
         let seek_target = player.position() + 30.0;
-        let seek_epoch = next_seek_epoch;
-        next_seek_epoch += 1;
-        player.seek(seek_target, seek_epoch);
+        player.seek(seek_target);
 
         // Wait for the seek to land in produced audio before measuring: the
         // post-seek render pull emits `PlaybackProgress` past the target once

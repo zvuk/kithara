@@ -18,5 +18,3 @@ mod resume_stall_budget;
 mod seek_issues_range_request;
 #[path = "shared_download.rs"]
 mod shared_download;
-#[path = "waveform_shared_download.rs"]
-mod waveform_shared_download;

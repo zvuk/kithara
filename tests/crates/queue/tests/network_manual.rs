@@ -8,9 +8,6 @@
 pub use kithara_integration_tests::bufpool_ext;
 use kithara_test_dylib as _;
 
-#[path = "source_helper.rs"]
-mod source_helper;
-
 #[path = "cold_seek_cpal.rs"]
 mod cold_seek_cpal;
 #[path = "zvuk_drm_trace.rs"]

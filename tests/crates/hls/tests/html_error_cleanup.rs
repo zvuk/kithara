@@ -9,11 +9,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
-    temp_dir,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 /// Walk `root` recursively and collect every file that is not inside the

@@ -13,10 +13,10 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, Stream},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    temp_dir,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 struct Consts;

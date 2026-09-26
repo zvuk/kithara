@@ -1,0 +1,64 @@
+id: arch.test-modules-use-shared-primitives
+message: |
+  A `#[cfg(test)]` module re-implements a shared test primitive. It is the
+  inline counterpart of `arch.tests-use-shared-primitives`, which covers test
+  directories and test files: under `src` only a test module is test code.
+
+  `docs/guides/test-harness.md` maps each task to its primitive. If the
+  shared one lacks a knob, extend it there instead of copying it.
+severity: error
+language: Rust
+files:
+  - crates/*/src/**/*.rs
+ignores:
+  # The owners of the shared primitives.
+  - crates/kithara-test-utils/**
+  - crates/kithara-test-fixtures/**
+  - crates/kithara-test-macros/**
+  # Lint fixtures and the lint engine's own tests.
+  - crates/kithara-devtools/**
+  # Beneath `kithara-test-utils`: its unit tests reach the primitives through a
+  # second copy of the crate, not the one under test.
+  - crates/kithara-platform/**
+rule:
+  all:
+    # Same matcher as `arch.tests-use-shared-primitives`.
+    - any:
+        - all:
+            - kind: call_expression
+            - has:
+                field: function
+                regex: 'TcpListener::bind$'
+            - has:
+                field: arguments
+                regex: '"127\.0\.0\.1:0"'
+        - all:
+            - kind: call_expression
+            - has:
+                field: function
+                regex: '^(?:::)?tracing_subscriber::(?:fmt|registry)$'
+        - all:
+            - kind: function_item
+            - has:
+                field: name
+                regex: '^(?:wait_until|virtual_pace|temp_dir|temp_path|cancel_token)$'
+        - all:
+            - kind: struct_item
+            - has:
+                field: name
+                regex: '^(?:TestHttpServer|TestTempDir|Xorshift64|TestServerHelper|OfflinePlayer|OfflineHostHarness|DiskQueue)$'
+    # Inside a module gated on `test` by the attributes directly above it.
+    - inside:
+        kind: mod_item
+        follows:
+          kind: attribute_item
+          regex: '(?s)^#\[cfg\(.*\btest\b'
+          not:
+            regex: 'not\(\s*test\b'
+          stopBy:
+            not:
+              any:
+                - kind: attribute_item
+                - kind: line_comment
+                - kind: block_comment
+        stopBy: end

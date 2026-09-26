@@ -9,11 +9,10 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir,
+    HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    hls_server::{HlsTestServer, HlsTestServerConfig},
-    rt_cancel, temp_dir,
 };
+use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -48,17 +47,23 @@ impl Consts {
     hang_timeout_secs(1),
     tracing("kithara_hls=debug,kithara_stream=debug,kithara_decode=debug")
 )]
-async fn seek_beyond_head_total_within_actual_total(temp_dir: TestTempDir, rt_cancel: CancelToken) {
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: 2,
-        segments_per_variant: Consts::NUM_SEGMENTS,
-        segment_size: Consts::ACTUAL_SEGMENT_SIZE,
-        head_reported_segment_size: Some(Consts::HEAD_REPORTED_SIZE),
-        ..Default::default()
-    })
-    .await;
+async fn seek_beyond_head_total_within_actual_total(
+    temp_dir: TestTempDir,
+    cancel_token: CancelToken,
+) {
+    let server = TestServerHelper::new()
+        .await
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(2)
+                .segments_per_variant(Consts::NUM_SEGMENTS)
+                .segment_size(Consts::ACTUAL_SEGMENT_SIZE)
+                .head_reported_segment_size(Consts::HEAD_REPORTED_SIZE),
+        )
+        .await
+        .expect("create HLS fixture");
 
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
 
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
@@ -69,7 +74,7 @@ async fn seek_beyond_head_total_within_actual_total(temp_dir: TestTempDir, rt_ca
     let config = HlsConfig::for_url(url)
         .store(store)
         .pools(pools)
-        .cancel(rt_cancel)
+        .cancel(cancel_token)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 

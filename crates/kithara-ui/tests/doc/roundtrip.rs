@@ -4,7 +4,8 @@ use kithara_ui::{
     ids::SourceUri,
     layout::{FrameSides, LayoutNode, parse_layout},
     module::{
-        ChipStyle, ControlNode, GlyphStyle, IconName, PopoverAt, TextStyle, Tone, parse_module,
+        ChipStyle, ControlNode, GlyphStyle, IconName, ModuleDoc, PopoverAt, TextStyle, Tone,
+        parse_module,
     },
     param::Param,
     size::{Dim, SizeSpec},
@@ -52,15 +53,6 @@ fn to_ron_pretty<T: serde::Serialize>(value: &T) -> String {
         .with_default_extension(Extensions::IMPLICIT_SOME)
         .to_string_pretty(value, ron::ser::PrettyConfig::new())
         .expect("RON test serialization should succeed")
-}
-
-#[kithara::test]
-fn layout_roundtrip_is_semantically_stable() {
-    let doc = parse_layout(TWO_MODULE_SPLIT, &origin()).unwrap();
-    let printed = to_ron_pretty(&doc);
-    let reparsed = parse_layout(&printed, &origin()).unwrap();
-    assert_eq!(doc, reparsed);
-    assert_eq!(printed, to_ron_pretty(&reparsed));
 }
 
 #[kithara::test]
@@ -185,6 +177,36 @@ fn module_origin() -> SourceUri {
     SourceUri("deck.kmodule.ron".into())
 }
 
+/// Parses a module, prints it and parses the print again: the document and
+/// its print must both come back unchanged.
+fn module_roundtrip(text: &str) -> ModuleDoc {
+    let doc = parse_module(text, &module_origin()).unwrap();
+    let printed = to_ron_pretty(&doc);
+    let reparsed = parse_module(&printed, &module_origin()).unwrap();
+    assert_eq!(doc, reparsed);
+    assert_eq!(printed, to_ron_pretty(&reparsed));
+    doc
+}
+
+#[kithara::test]
+#[case::two_module_split(TWO_MODULE_SPLIT)]
+#[case::optional_block(OPTIONAL_LAYOUT)]
+fn a_layout_roundtrips(#[case] text: &str) {
+    let doc = parse_layout(text, &origin()).unwrap();
+    let printed = to_ron_pretty(&doc);
+    let reparsed = parse_layout(&printed, &origin()).unwrap();
+    assert_eq!(doc, reparsed);
+    assert_eq!(printed, to_ron_pretty(&reparsed));
+}
+
+#[kithara::test]
+#[case::buttons(ROUNDTRIP_MODULE)]
+#[case::optional_block(OPTIONAL_MODULE)]
+#[case::pressable_popover(POPOVER_MODULE)]
+fn a_module_roundtrips(#[case] text: &str) {
+    module_roundtrip(text);
+}
+
 #[kithara::test]
 fn module_parses_with_implicit_some_bindings() {
     let doc = parse_module(DECK_MODULE, &module_origin()).unwrap();
@@ -199,86 +221,77 @@ fn module_parses_with_implicit_some_bindings() {
     assert!(read.is_some());
 }
 
-#[kithara::test]
-fn module_roundtrip_is_semantically_stable() {
-    const ROUNDTRIP_MODULE: &str = r##"(
-    schema: "kithara.module",
-    version: 1,
-    id: "roundtrip",
-    parameters: ["deck"],
-    root: Column(
-        id: "root",
-        children: [
-            Row(
-                children: [
-                    Button(
-                        id: "play",
-                        label: "PLAY",
-                        active_label: Some("PAUSE"),
-                        style: TransportPrimary,
-                        read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
-                        write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
-                        size: Some((w: Fixed(96.0), h: Fixed(32.0))),
-                    ),
-                    Scalar(
-                        id: "load",
-                        read: Telemetry(id: "deck.playback.position_normalized", with: { "deck": "$deck" }),
-                        size: Some((w: Shrink, h: Fill)),
-                        format: Percent,
-                        framed: false,
-                    ),
-                    Fader(
-                        id: "volume",
-                        style: Volume,
-                        read: Parameter(id: "player.output.volume"),
-                        write: Parameter(id: "player.output.volume"),
-                        size: Some((w: Fixed(120.0), h: Fill)),
-                    ),
-                    Table(
-                        id: "tracks",
-                        read: Model(id: "library.visible_tracks"),
-                        columns: [
-                            (id: "index", label: "#", style: Index, width: 28.0),
-                            (id: "deck", label: "DECK", style: Badge, width: 64.0),
-                            (id: "title", label: "TITLE", style: Primary, width: 180.0, flexible: true),
-                            (id: "artist", label: "ARTIST", style: Secondary, width: 200.0),
-                            (id: "bpm", label: "BPM", style: Metric, width: 70.0),
-                            (id: "key", label: "KEY", style: Mono, width: 56.0),
-                            (id: "time", label: "TIME", style: Time, width: 70.0),
-                            (id: "energy", label: "ENERGY", style: Meter, width: 110.0),
-                            (id: "transition", label: "TRANSITION", style: Transition, width: 130.0),
-                        ],
-                        columns_state: Some(Model(id: "ui.table.columns")),
-                        size: Some((w: Fill, h: Fixed(160.0))),
-                    ),
-                ],
-            ),
-            Include(
-                id: "transport",
-                source: "deck/transport.kmodule.ron",
-                with: { "deck": "$deck" },
-            ),
-            Slot(
-                id: "extra",
-                default: [
-                    Column(
-                        id: "nested",
-                        children: [
-                            Text(id: "status"),
-                        ],
-                    ),
-                ],
-            ),
-        ],
-    ),
+const ROUNDTRIP_MODULE: &str = r##"(
+schema: "kithara.module",
+version: 1,
+id: "roundtrip",
+parameters: ["deck"],
+root: Column(
+    id: "root",
+    children: [
+        Row(
+            children: [
+                Button(
+                    id: "play",
+                    label: "PLAY",
+                    active_label: Some("PAUSE"),
+                    style: TransportPrimary,
+                    read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
+                    write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
+                    size: Some((w: Fixed(96.0), h: Fixed(32.0))),
+                ),
+                Scalar(
+                    id: "load",
+                    read: Telemetry(id: "deck.playback.position_normalized", with: { "deck": "$deck" }),
+                    size: Some((w: Shrink, h: Fill)),
+                    format: Percent,
+                    framed: false,
+                ),
+                Fader(
+                    id: "volume",
+                    style: Volume,
+                    read: Parameter(id: "player.output.volume"),
+                    write: Parameter(id: "player.output.volume"),
+                    size: Some((w: Fixed(120.0), h: Fill)),
+                ),
+                Table(
+                    id: "tracks",
+                    read: Model(id: "library.visible_tracks"),
+                    columns: [
+                        (id: "index", label: "#", style: Index, width: 28.0),
+                        (id: "deck", label: "DECK", style: Badge, width: 64.0),
+                        (id: "title", label: "TITLE", style: Primary, width: 180.0, flexible: true),
+                        (id: "artist", label: "ARTIST", style: Secondary, width: 200.0),
+                        (id: "bpm", label: "BPM", style: Metric, width: 70.0),
+                        (id: "key", label: "KEY", style: Mono, width: 56.0),
+                        (id: "time", label: "TIME", style: Time, width: 70.0),
+                        (id: "energy", label: "ENERGY", style: Meter, width: 110.0),
+                        (id: "transition", label: "TRANSITION", style: Transition, width: 130.0),
+                    ],
+                    columns_state: Some(Model(id: "ui.table.columns")),
+                    size: Some((w: Fill, h: Fixed(160.0))),
+                ),
+            ],
+        ),
+        Include(
+            id: "transport",
+            source: "deck/transport.kmodule.ron",
+            with: { "deck": "$deck" },
+        ),
+        Slot(
+            id: "extra",
+            default: [
+                Column(
+                    id: "nested",
+                    children: [
+                        Text(id: "status"),
+                    ],
+                ),
+            ],
+        ),
+    ],
+),
 )"##;
-
-    let doc = parse_module(ROUNDTRIP_MODULE, &module_origin()).unwrap();
-    let printed = to_ron_pretty(&doc);
-    let reparsed = parse_module(&printed, &module_origin()).unwrap();
-    assert_eq!(doc, reparsed);
-    assert_eq!(printed, to_ron_pretty(&reparsed));
-}
 
 #[kithara::test]
 fn include_arguments_are_preserved() {
@@ -316,10 +329,7 @@ fn navigation_controls_roundtrip_with_typed_icons() {
         ]),
     )"#;
 
-    let doc = parse_module(text, &module_origin()).unwrap();
-    let printed = to_ron_pretty(&doc);
-    let reparsed = parse_module(&printed, &module_origin()).unwrap();
-    assert_eq!(doc, reparsed);
+    let doc = module_roundtrip(text);
 
     let ControlNode::Column { children, .. } = &doc.root else {
         panic!("expected column root");
@@ -359,10 +369,7 @@ fn design_system_controls_and_text_roles_roundtrip() {
         ]),
     )"#;
 
-    let doc = parse_module(text, &module_origin()).unwrap();
-    let printed = to_ron_pretty(&doc);
-    let reparsed = parse_module(&printed, &module_origin()).unwrap();
-    assert_eq!(doc, reparsed);
+    let doc = module_roundtrip(text);
 
     let ControlNode::Column { children, .. } = &doc.root else {
         panic!("expected column root");
@@ -447,42 +454,22 @@ const OPTIONAL_MODULE: &str = r#"(
     ),
 )"#;
 
-#[kithara::test]
-fn an_optional_layout_block_roundtrips() {
-    const OPTIONAL_LAYOUT: &str = r#"(
-    schema: "kithara.layout",
-    version: 1,
-    id: "optional",
-    root: Split(
-        axis: Horizontal,
-        children: [
-            (node: Optional(
-                id: "library",
-                hidden: Model(id: "ui.block.hidden"),
-                node: Module(instance: "library", source: "modules/library.kmodule.ron"),
-            )),
-            (node: Module(instance: "deck-a", source: "modules/deck.kmodule.ron", with: { "deck": "a" })),
-        ],
-    ),
+const OPTIONAL_LAYOUT: &str = r#"(
+schema: "kithara.layout",
+version: 1,
+id: "optional",
+root: Split(
+    axis: Horizontal,
+    children: [
+        (node: Optional(
+            id: "library",
+            hidden: Model(id: "ui.block.hidden"),
+            node: Module(instance: "library", source: "modules/library.kmodule.ron"),
+        )),
+        (node: Module(instance: "deck-a", source: "modules/deck.kmodule.ron", with: { "deck": "a" })),
+    ],
+),
 )"#;
-
-    let doc = parse_layout(OPTIONAL_LAYOUT, &origin()).unwrap();
-    let printed = to_ron_pretty(&doc);
-    let reparsed = parse_layout(&printed, &origin()).unwrap();
-
-    assert_eq!(doc, reparsed);
-    assert_eq!(printed, to_ron_pretty(&reparsed));
-}
-
-#[kithara::test]
-fn an_optional_module_block_roundtrips() {
-    let doc = parse_module(OPTIONAL_MODULE, &module_origin()).unwrap();
-    let printed = to_ron_pretty(&doc);
-    let reparsed = parse_module(&printed, &module_origin()).unwrap();
-
-    assert_eq!(doc, reparsed);
-    assert_eq!(printed, to_ron_pretty(&reparsed));
-}
 
 #[kithara::test]
 fn an_optional_block_wraps_exactly_one_child() {
@@ -568,16 +555,6 @@ const POPOVER_MODULE: &str = r#"(
 )"#;
 
 #[kithara::test]
-fn a_popover_with_a_pressable_anchor_roundtrips() {
-    let doc = parse_module(POPOVER_MODULE, &module_origin()).unwrap();
-    let printed = to_ron_pretty(&doc);
-    let reparsed = parse_module(&printed, &module_origin()).unwrap();
-
-    assert_eq!(doc, reparsed);
-    assert_eq!(printed, to_ron_pretty(&reparsed));
-}
-
-#[kithara::test]
 fn a_popover_opening_at_the_pointer_roundtrips() {
     const POINTER_POPOVER_MODULE: &str = r#"(
     schema: "kithara.module",
@@ -606,12 +583,7 @@ fn a_popover_opening_at_the_pointer_roundtrips() {
     ),
 )"#;
 
-    let doc = parse_module(POINTER_POPOVER_MODULE, &module_origin()).unwrap();
-    let printed = to_ron_pretty(&doc);
-    let reparsed = parse_module(&printed, &module_origin()).unwrap();
-
-    assert_eq!(doc, reparsed);
-    assert_eq!(printed, to_ron_pretty(&reparsed));
+    let doc = module_roundtrip(POINTER_POPOVER_MODULE);
 
     let ControlNode::Column { children, .. } = &doc.root else {
         panic!("expected column root");

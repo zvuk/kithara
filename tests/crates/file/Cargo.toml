@@ -23,9 +23,8 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 kithara = { workspace = true, features = ["usdt", "download", "mock", "offline", "resample-rubato", "signal", "tokio-net", "tokio-rt-multi-thread"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
-kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "temp-dir", "http-server"] }
 
 axum = { workspace = true }
 bytes = { workspace = true }
@@ -44,7 +43,3 @@ workspace = true
 [[test]]
 name = "file"
 path = "tests/light.rs"
-
-[[test]]
-name = "file_heavy"
-path = "tests/heavy.rs"

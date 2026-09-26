@@ -1,8 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::fmt::Write;
-
 use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
@@ -16,12 +14,12 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
-    fixture_protocol::EncryptionRequest,
+    hls_server::aes128_encryption,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
+use kithara_test_utils::temp_dir;
 use url::Url;
 
 use super::{
@@ -31,21 +29,7 @@ use super::{
 };
 use crate::bufpool_ext::pools;
 
-/// AES-128 key+IV pair shared across the integration suite. Mirrors
-/// `track_replay_after_switch.rs::Consts::AES_KEY` and the
-/// `local_track_plays.rs` encrypted fixtures.
-const AES_KEY: &[u8] = b"0123456789abcdef";
-const AES_IV: [u8; 16] = [0u8; 16];
-
 const WARMUP: Duration = Duration::from_millis(500);
-
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        write!(&mut s, "{b:02x}").expect("hex write");
-    }
-    s
-}
 
 /// Matrix of track kinds the user-simulation harness exercises. Each
 /// case lights up a different path through the player. Multi-variant
@@ -119,10 +103,7 @@ async fn build_hls_abr(helper: &TestServerHelper, drm: bool, mixed_codec: bool) 
         .variant_bandwidths(vec![1_280_000, 2_560_000, 5_120_000, 8_000_000])
         .packaged_audio_aac_lc(44_100, 2);
     if drm {
-        builder = builder.encryption(EncryptionRequest {
-            key_hex: hex_encode(AES_KEY),
-            iv_hex: Some(hex_encode(&AES_IV)),
-        });
+        builder = builder.encryption(aes128_encryption());
     }
     if mixed_codec {
         builder = builder.override_variant_codec(3, AudioCodec::Flac);

@@ -9,15 +9,12 @@ use kithara::{
     play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
-    offline::{
-        OfflinePlayerHarness, OfflinePlayerOptions, TimedPlayerEvent, deinterleave_left,
-        max_silence_run,
-    },
-    temp_dir,
+    offline::{OfflinePlayer, OfflinePlayerOptions, TimedPlayerEvent},
 };
-use kithara_test_fixtures::signal::goertzel_magnitude;
+use kithara_test_fixtures::signal::{deinterleave_left, goertzel_magnitude, max_silence_run};
+use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 use crate::{
@@ -71,7 +68,7 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(
         .crossfade_duration(0.0)
         .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
         .build();
-    let harness = OfflinePlayerHarness::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE).await;
+    let harness = OfflinePlayer::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE).await;
     let first = create_gapless_hls_resource(harness.player(), &first_url, temp_dir.path()).await;
     let second = create_gapless_hls_resource(harness.player(), &second_url, temp_dir.path()).await;
 
@@ -145,7 +142,7 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(
         .crossfade_duration(1.0)
         .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
         .build();
-    let harness = OfflinePlayerHarness::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE).await;
+    let harness = OfflinePlayer::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE).await;
     let first = create_gapless_hls_resource(harness.player(), &first_url, temp_dir.path()).await;
     let second = create_gapless_hls_resource(harness.player(), &second_url, temp_dir.path()).await;
 
@@ -261,7 +258,7 @@ async fn create_gapless_hls_resource(
     resource
 }
 
-async fn load_queue<const N: usize>(harness: &OfflinePlayerHarness, items: [Resource; N]) {
+async fn load_queue<const N: usize>(harness: &OfflinePlayer, items: [Resource; N]) {
     harness
         .with_player(move |player| {
             player.reserve_slots(items.len());
@@ -278,7 +275,7 @@ async fn load_queue<const N: usize>(harness: &OfflinePlayerHarness, items: [Reso
 }
 
 async fn render_until_second_item_end(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
 ) -> (Vec<f32>, Vec<TimedPlayerEvent>) {
     let deadline = Instant::now() + Duration::from_secs(10);
     // Pace each rendered block at its real audio duration so the decode worker

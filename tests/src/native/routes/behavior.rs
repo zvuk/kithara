@@ -154,8 +154,10 @@ fn html_response(body: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::TestHttpServer;
+
     use super::*;
-    use crate::{http_server::TestHttpServer, kithara, test_server_state::*};
+    use crate::{kithara, test_server_state::*};
 
     #[kithara::test(tokio)]
     async fn static_bytes_range_serves_partial_and_counts() {

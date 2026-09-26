@@ -406,22 +406,6 @@ fn perf_resampler(cosine: bool, samples: usize) -> Vec<u8> {
         .collect()
 }
 
-#[kithara::asset(ext = "f32le", content_type = "application/octet-stream", embed)]
-#[case::silence(false)]
-#[case::unit(true)]
-fn rms_signal(unit: bool) -> Vec<u8> {
-    (0..1_024)
-        .map(|index| {
-            if unit {
-                if index % 2 == 0 { 1.0_f32 } else { -1.0 }
-            } else {
-                0.0
-            }
-        })
-        .flat_map(f32::to_le_bytes)
-        .collect()
-}
-
 #[kithara::asset(ext = "f32le", content_type = "application/octet-stream")]
 #[case::default()]
 fn benchmark_half() -> Vec<u8> {

@@ -7,10 +7,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir, Xorshift64,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    hls_server::{EncryptionConfig, HlsTestServer, HlsTestServerConfig},
+    hls_server::aes128_encryption,
 };
+use kithara_test_utils::{TestTempDir, Xorshift64};
 use tracing::info;
 
 #[derive(Default)]
@@ -22,7 +23,7 @@ struct SeekStats {
 
 fn run_seek_iterations(
     stream: &mut Stream<Hls<TestPools>>,
-    server: &HlsTestServer,
+    server: &CreatedHls,
     seek_positions: &[u64],
     buf: &mut [u8],
     total_bytes: u64,
@@ -78,7 +79,7 @@ fn run_seek_iterations(
 
 fn read_final_tail(
     stream: &mut Stream<Hls<TestPools>>,
-    server: &HlsTestServer,
+    server: &CreatedHls,
     buf: &mut [u8],
     final_seek: u64,
 ) -> u64 {
@@ -167,34 +168,27 @@ async fn stress_random_seek_read_hls(
         seek_iterations
     };
 
-    let init_data_per_variant = if with_init {
-        let init_size = 1024;
+    let mut ladder = HlsFixtureBuilder::new()
+        .segments_per_variant(segment_count)
+        .segment_size(segment_size);
+    if with_init {
         let mut init = b"V0-INIT:".to_vec();
-        init.resize(init_size, 0xFF);
-        Some(vec![Arc::new(init)])
-    } else {
-        None
-    };
+        init.resize(1024, 0xFF);
+        ladder = ladder.init_data_per_variant(vec![Arc::new(init)]);
+    }
+    if with_encryption {
+        ladder = ladder
+            .encryption(aes128_encryption())
+            .head_reported_segment_size(segment_size);
+    }
 
-    let encryption = if with_encryption {
-        Some(EncryptionConfig {
-            key: *b"0123456789abcdef",
-            iv: Some([0u8; 16]),
-        })
-    } else {
-        None
-    };
+    let server = TestServerHelper::new()
+        .await
+        .create_hls(ladder)
+        .await
+        .expect("create HLS fixture");
 
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        segments_per_variant: segment_count,
-        segment_size,
-        init_data_per_variant,
-        encryption,
-        ..Default::default()
-    })
-    .await;
-
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     let total_bytes = server.total_bytes();
     let init_len = server.init_len();
     info!(

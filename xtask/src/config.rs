@@ -1005,6 +1005,22 @@ publishes_sources = true
         }
     }
 
+    /// Every CI role renders its lanes through this validation before any lane
+    /// starts, so a shipped config it refuses fails the whole run with no lane
+    /// reporting a verdict.
+    #[test]
+    fn the_shipped_ci_config_validates() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask sits beside the workspace root")
+            .to_path_buf();
+        KitharaExt::load(&root)
+            .expect("parse the shipped kithara extension")
+            .ci
+            .validate()
+            .unwrap_or_else(|error| panic!("the shipped [ext.ci] is refused: {error:#}"));
+    }
+
     #[test]
     fn a_lane_may_name_every_operating_system_it_runs_on() {
         let ctx = ctx_from_config(

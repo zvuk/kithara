@@ -13,17 +13,17 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueEvent, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, PrivateTestServer, TestTempDir,
+    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, PrivateTestServer,
     bufpool_ext::pools,
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
     test_defaults::Consts as Shared,
     test_server::NetworkMode,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
 use kithara_test_fixtures::fixtures::tone_mp3;
+use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 fn hls_look_ahead(bytes: u64) -> HlsConfigPatch {

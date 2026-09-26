@@ -14,10 +14,11 @@ use kithara::{
     stream::{SourcePhase, Stream},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, auto,
+    TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
-    mixed_encrypted, mixed_plain, temp_dir,
+    mixed_encrypted, mixed_plain,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 use tracing::{debug, error, info, warn};
 use url::Url;
 

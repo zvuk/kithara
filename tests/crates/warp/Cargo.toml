@@ -10,7 +10,13 @@ autotests = false
 [features]
 default = ["playback", "stretch-signalsmith", "usdt"]
 client-wreq = ["kithara?/client-wreq", "kithara-integration-tests?/client-wreq"]
-playback = ["dep:kithara", "dep:kithara-integration-tests", "dep:serde_json"]
+playback = [
+    "dep:kithara",
+    "dep:kithara-derive",
+    "dep:kithara-integration-tests",
+    "dep:serde",
+    "dep:serde_json",
+]
 stretch-signalsmith = ["kithara-warp/stretch-signalsmith", "kithara-stretch/stretch-signalsmith"]
 stretch-glide = ["kithara-warp/stretch-glide", "kithara-stretch/stretch-glide", "kithara?/stretch-glide"]
 flash = [
@@ -35,13 +41,15 @@ usdt = [
 [dependencies]
 kithara = { workspace = true, optional = true, features = ["offline", "queue", "stretch-signalsmith", "tokio-rt-multi-thread"] }
 kithara-beat = { workspace = true }
+kithara-derive = { workspace = true, optional = true }
 kithara-integration-tests = { workspace = true, optional = true, features = ["all", "analysis"] }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-stretch = { workspace = true, default-features = false, features = ["stretch-glide"] }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["temp-dir"] }
 kithara-warp = { workspace = true, features = ["render", "stretch-glide"] }
 num-traits = { workspace = true }
+serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]

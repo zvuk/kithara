@@ -22,10 +22,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
 };
+use kithara_test_utils::TestTempDir;
 
 struct Consts;
 impl Consts {

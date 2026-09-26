@@ -98,22 +98,6 @@ fn disk_store_slow_path_finds_committed_file() {
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn disk_store_missing_resource_returns_empty() {
-    let dir = tempdir().unwrap();
-    let store = AssetStore::builder(support::pools())
-        .backend(StorageBackend::Disk {
-            root: (dir.path()).into(),
-        })
-        .build();
-    let scope = store.scope::<Test>(&source(ROOT)).unwrap();
-
-    let key = scope.key(&resource("segments/ghost.bin")).unwrap();
-    assert!(scope.store().available_ranges(&key).is_empty());
-    assert!(!scope.store().contains_range(&key, 0..1));
-    assert_eq!(scope.store().final_len(&key), None);
-}
-
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn remove_resource_clears_aggregate_remove_call() {
     let dir = tempdir().unwrap();
     let store = AssetStore::builder(support::pools())

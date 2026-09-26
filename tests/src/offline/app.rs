@@ -1,20 +1,30 @@
+use std::path::PathBuf;
+
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
+    audio::{AudioDecoderConfig, DecoderResamplerSettings},
+    decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
+    hls::{AbrMode, KeyOptions},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration, tokio},
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, PlayerConfig, PlayerImpl,
+        ResourceSrc,
+    },
     queue::{Queue, QueueConfig},
 };
 use kithara_app::{
     config::{AppConfig, AppDrm},
     document::Config,
-    pools::{AppPools, PoolsSection, build as app_pools},
+    pools::{
+        AppPools, AppResourceConfig, AppStore, AppTrackSource, PoolsSection, build as app_pools,
+    },
 };
+use kithara_test_utils::TestTempDir;
 
 use super::{OfflineQueue, QueueTicker, RENDER_PACE};
-use crate::TestTempDir;
 
 #[non_exhaustive]
 pub struct AppQueueFixture {
@@ -113,4 +123,64 @@ pub async fn app_queue(document: Config) -> AppQueueFixture {
         cache: TestTempDir::new(),
         ticker,
     }
+}
+
+/// A disk-backed asset store under `root`, built from the app pools.
+pub fn app_disk_asset_store(config: &AppConfig, root: impl Into<PathBuf>) -> AppStore {
+    AssetStore::builder(config.worker.pools().clone())
+        .backend(StorageBackend::Disk { root: root.into() })
+        .build()
+}
+
+/// A track source configured the way the app configures one: its DRM keys and
+/// headers, downloader, worker, decoder and store.
+pub fn app_track_source(
+    url: &str,
+    config: &AppConfig,
+    store: AppStore,
+    backend: DecoderBackend,
+    abr: AbrMode,
+    discriminator: Option<&str>,
+) -> AppTrackSource {
+    let Ok(src) = ResourceSrc::parse(url) else {
+        return AppTrackSource::Uri(url.to_string());
+    };
+    let builder = AppResourceConfig::for_src(src);
+    let registry = config.drm.registry();
+    let keys = if registry.is_empty() {
+        KeyOptions::default()
+    } else {
+        KeyOptions::builder().key_registry(registry.clone()).build()
+    };
+    let headers = url::Url::parse(url)
+        .ok()
+        .and_then(|parsed| config.drm.resource_headers(&parsed));
+    let decoder_defaults = AudioDecoderConfig::builder()
+        .resampler(
+            DecoderResamplerSettings::builder()
+                .backend(PlaybackResamplerBackend::default())
+                .build(),
+        )
+        .build();
+    let decoder = AudioDecoderConfig::builder()
+        .backend(backend)
+        .gapless_mode(decoder_defaults.gapless_mode())
+        .maybe_resampler(decoder_defaults.resampler().cloned())
+        .build();
+    let builder = builder
+        .downloader(config.downloader.clone())
+        .worker(config.worker.clone())
+        .keys(keys)
+        .maybe_headers(headers)
+        .audio(config.audio.clone())
+        .hls(config.hls.clone())
+        .file(config.file.clone())
+        .store(store)
+        .decoder(decoder)
+        .initial_abr_mode(abr);
+    let config = match discriminator {
+        Some(discriminator) => builder.discriminator(discriminator).build(),
+        None => builder.build(),
+    };
+    AppTrackSource::Config(Box::new(config))
 }

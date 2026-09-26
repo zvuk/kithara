@@ -4,8 +4,8 @@ use kithara::{
     self,
     platform::{time::Duration, tokio::task::spawn_blocking},
 };
-use kithara_integration_tests::waits::wait_until;
 use kithara_test_fixtures::integration_fixtures::origin_tone;
+use kithara_test_utils::wait_until;
 
 use super::origin::{
     GRACE, Origin, Playlist, SAMPLE_RATE, SEGMENT_FRAMES, TONE_HZ, WINDOW, assert_carries_the_tone,

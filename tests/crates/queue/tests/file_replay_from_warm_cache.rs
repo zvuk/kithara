@@ -15,13 +15,13 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
+    HlsFixtureBuilder, TestServerHelper, kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
 };
 use kithara_test_fixtures::SignalAsset;
+use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};

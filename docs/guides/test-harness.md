@@ -37,8 +37,31 @@ validation scope.
 
 ## Harness Shape
 
-- Use shared helpers from `kithara-test-utils` and `tests/src` for temp dirs,
-  servers, waits, fixtures, flash pacing, and spawned work.
+Each testing task has one primitive. Reach for it before writing a local
+helper; if it lacks a knob, extend it in its owner.
+
+| Task | Primitive | Owner |
+| --- | --- | --- |
+| Local HTTP server for an `axum::Router` | `TestHttpServer::new(router)`, `.url(path)` (feature `http-server`) | `kithara-test-utils` |
+| HLS stream from a spec | `TestServerHelper`, `HlsFixtureBuilder` | `tests/src` |
+| Offline player or host render | `OfflinePlayer`, `OfflineHostHarness` | `tests/src::offline` |
+| Disk-backed queue | `DiskQueue` | `tests/src::offline` |
+| Wait on a predicate | `wait_until` | `kithara-test-utils` |
+| Wait on playback position, events, loader | `waits::*`, `render_until_position` | `tests/src::waits` |
+| Temp dir or path | `temp_dir`, `temp_path`, `TestTempDir` (feature `temp-dir`) | `kithara-test-utils` |
+| Cancel token | `cancel_token`, `cancel_token_cancelled` | `kithara-test-utils` |
+| Flash-aware pacing | `virtual_pace` | `kithara-test-utils` |
+| Seeded randomness | `Xorshift64` | `kithara-test-utils` |
+| Log capture | `#[kithara::test(tracing("<filter>"))]` | `kithara-test-macros` |
+| Buffer pools | `bufpool::{pools, pools_with_budget, TestPools}` | `kithara-test-utils` |
+| Signal level, tone, phase | `signal::{rms, peak, goertzel_magnitude, ...}` | `kithara-test-fixtures` |
+| Phase and output continuity oracles | `phase_continuity`, `output_continuity` | `tests/src` |
+
+`arch.tests-use-shared-primitives` rejects local copies in test directories and
+test files, and `arch.test-modules-use-shared-primitives` in `#[cfg(test)]`
+modules under `src`: raw `TcpListener::bind("127.0.0.1:0")`, direct
+`tracing_subscriber` setup, and items named like the primitives above.
+
 - Do not hard-code ports or random global paths.
 - Wait for observable conditions, events, or bounded predicates. Do not sleep
   arbitrary wall-clock windows unless the test is explicitly real-time.

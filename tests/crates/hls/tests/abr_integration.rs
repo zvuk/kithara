@@ -85,24 +85,6 @@ fn test_abr_controller_no_selector(
 }
 
 #[kithara::test]
-#[case(0.0, 0.0)]
-#[case(1.0, 0.0)]
-#[case(5.0, 0.0)]
-#[case(0.0, 2.0)]
-#[case(3.0, 5.0)]
-fn test_abr_decision_with_different_conditions(
-    #[case] _buffer_secs: f64,
-    #[case] _time_since_last_switch_secs: f64,
-    variants_from_parsed_playlist: Vec<VariantInfo>,
-) {
-    let controller = AbrController::new(AbrSettings::default());
-    // Default settings seed an initial throughput hint — see
-    // `test_abr_controller_no_selector` for the rationale.
-    assert!(controller.settings().initial_throughput_bps.is_some());
-    assert_eq!(variants_from_parsed_playlist.len(), 3);
-}
-
-#[kithara::test]
 fn test_variants_from_master_structure(parsed_master_playlist: ParsedMaster) {
     let variants = variants_from_master(&parsed_master_playlist);
 
@@ -115,14 +97,4 @@ fn test_variants_from_master_structure(parsed_master_playlist: ParsedMaster) {
     assert_eq!(variants[0].variant_index.get(), 0);
     assert_eq!(variants[1].variant_index.get(), 1);
     assert_eq!(variants[2].variant_index.get(), 2);
-}
-
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-fn test_abr_controller_async_usage() {
-    let controller = AbrController::new(AbrSettings::default());
-    // Default settings seed an initial throughput estimate (see
-    // `test_abr_controller_no_selector`) — `is_some()` keeps the
-    // assertion stable against the exact seed value.
-    assert!(controller.settings().initial_throughput_bps.is_some());
-    let _ = AbrMode::manual(0);
 }

@@ -3,49 +3,35 @@
 
 use kithara::{
     abr::AbrMode,
-    assets::AssetStore,
     audio::AudioEvent,
     decode::DecoderBackend,
-    download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId},
-    host::HostConfig,
-    net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
         time::{Duration, timeout},
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
+    play::{ResourceConfig, ResourceSrc},
+    queue::{QueueControl, QueueEvent, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
+    HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
-    fixture_protocol::EncryptionRequest,
+    hls_server::aes128_encryption,
     kithara,
-    offline::{OfflineQueue, QueueTicker, assert_playhead_tracks_renderer, audio_clock_pace},
-    temp_dir,
+    offline::{DiskQueue, RenderPacing, assert_playhead_tracks_renderer},
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
 use kithara_test_fixtures::SignalAsset;
+use kithara_test_utils::{Xorshift64, temp_dir};
 use url::Url;
 
-use crate::bufpool_ext::{TestPools, pools};
+use crate::bufpool_ext::TestPools;
 
 #[derive(Clone, Copy, Debug)]
 enum LocalSource {
     Mp3,
     HlsAac,
     HlsAacAes128,
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        use std::fmt::Write;
-        write!(&mut s, "{b:02x}").expect("hex write");
-    }
-    s
 }
 
 async fn build_fixture_url(kind: LocalSource, helper: &TestServerHelper) -> Url {
@@ -64,17 +50,12 @@ async fn build_fixture_url(kind: LocalSource, helper: &TestServerHelper) -> Url 
                 .master_url()
         }
         LocalSource::HlsAacAes128 => {
-            let key: &[u8] = b"0123456789abcdef";
-            let iv: [u8; 16] = [0u8; 16];
             let builder = HlsFixtureBuilder::new()
                 .variant_count(1)
                 .segments_per_variant(16)
                 .segment_duration_secs(4.0)
                 .packaged_audio_aac_lc(44_100, 2)
-                .encryption(EncryptionRequest {
-                    key_hex: hex_encode(key),
-                    iv_hex: Some(hex_encode(&iv)),
-                });
+                .encryption(aes128_encryption());
             helper
                 .create_hls(builder)
                 .await
@@ -182,51 +163,6 @@ fn assert_monotonic_nondecreasing(samples: &[f64], label: &str) {
     }
 }
 
-async fn build_queue_with_tick(
-    temp_dir: &TestTempDir,
-) -> (
-    OfflineQueue<TestPools>,
-    Downloader,
-    AssetStore<TestPools>,
-    QueueTicker,
-) {
-    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let pools = pools();
-    let session = HostConfig::offline(pools.clone()).build();
-    let render_pace = audio_clock_pace(&session);
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.sample_rate())
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build(),
-    );
-    let queue = OfflineQueue::paced(
-        session,
-        Queue::new(
-            QueueConfig::builder()
-                .player(player)
-                .store(store.clone())
-                .build(),
-        ),
-        render_pace,
-    )
-    .await
-    .expect("create product offline queue");
-    let queue_for_tick = queue.control();
-    let tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools,
-            CancelToken::never(),
-        ))
-        .build(),
-    );
-    (queue, downloader, store, tick_handle)
-}
-
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[cfg_attr(not(target_os = "android"), case::mp3_symphonia(local_mp3().await, 42, DecoderBackend::Symphonia, AbrMode::Auto(None)))]
 #[cfg_attr(
@@ -288,7 +224,16 @@ async fn local_track_plays_end_to_end(
     let label = format!("{kind:?}/{backend:?}");
 
     let temp = temp_dir();
-    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
+    let DiskQueue {
+        queue,
+        downloader,
+        store,
+        ticker: mut tick_handle,
+        ..
+    } = DiskQueue::builder(temp.path())
+        .pacing(RenderPacing::AudioClock)
+        .open()
+        .await;
 
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader.clone())
@@ -484,7 +429,16 @@ async fn local_queue_playlist_behavior(
     let (_server, urls) = local_playlist;
 
     let temp = temp_dir();
-    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
+    let DiskQueue {
+        queue,
+        downloader,
+        store,
+        ticker: mut tick_handle,
+        ..
+    } = DiskQueue::builder(temp.path())
+        .pacing(RenderPacing::AudioClock)
+        .open()
+        .await;
 
     queue
         .set_crossfade_settings(kithara::play::CrossfadeSettings {

@@ -11,16 +11,16 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event},
 };
 use kithara_test_fixtures::fixtures::tone_mp3;
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 /// `PlaybackView::buffered` is the surface a progress bar reads: once the whole
 /// body is cached it must say so, not report only what the decoder has produced

@@ -79,30 +79,12 @@ fn seed_clean_state_then(dir: &Path, mangle: impl FnOnce(&Path, &TestAssetScope,
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn truncated_pins_bin_is_treated_as_empty() {
+#[case::truncated(b"")]
+#[case::garbage(b"NOT-RKYV-PAYLOAD-AT-ALL")]
+fn a_corrupt_pins_bin_is_treated_as_empty(#[case] payload: &[u8]) {
     let dir = tempdir().unwrap();
     seed_clean_state_then(dir.path(), |root, _, _| {
-        fs::write(pins_bin(root), b"").unwrap();
-    });
-
-    let store = AssetStore::builder(support::pools())
-        .backend(StorageBackend::Disk {
-            root: (dir.path()).into(),
-        })
-        .build();
-
-    let scope = store.scope::<Test>(&source(Consts::ASSET_ROOT)).unwrap();
-    let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
-    let _res = store
-        .acquire_resource(&key, None)
-        .expect("rebuild over zero-byte pins.bin must still acquire");
-}
-
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn garbage_pins_bin_is_treated_as_empty() {
-    let dir = tempdir().unwrap();
-    seed_clean_state_then(dir.path(), |root, _, _| {
-        fs::write(pins_bin(root), b"NOT-RKYV-PAYLOAD-AT-ALL").unwrap();
+        fs::write(pins_bin(root), payload).unwrap();
     });
 
     let store = AssetStore::builder(support::pools())
@@ -114,7 +96,7 @@ fn garbage_pins_bin_is_treated_as_empty() {
     let key = scope.key(&resource(Consts::KEY_NAME)).unwrap();
     let _res = store
         .acquire_resource(&key, None)
-        .expect("garbage pins.bin must not block rebuild");
+        .expect("a corrupt pins.bin must not block rebuild");
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]

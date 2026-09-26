@@ -14,17 +14,17 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    hls_server::{HlsTestServer, HlsTestServerConfig},
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
     offline::{OfflinePlayer, resource_from_reader},
-    temp_dir,
+    output_continuity::render_offline_window,
 };
 use kithara_test_fixtures::{fixtures::tone_mp3, integration_fixtures::saw_segments};
+use kithara_test_utils::temp_dir;
 use tracing::info;
 
 use crate::{
     bufpool_ext::{TestPools, pools},
     common::test_defaults::Consts as Shared,
-    continuity::render_offline_window,
 };
 
 struct Consts;
@@ -38,21 +38,24 @@ impl Consts {
 }
 
 #[kithara::fixture]
-async fn hls_server(saw_segments: &'static [u8]) -> HlsTestServer {
+async fn hls_server(saw_segments: &'static [u8]) -> CreatedHls {
     const HLS_SEGMENT_COUNT: usize = 3;
     const HLS_SEGMENT_SIZE: usize = 200_000;
     const HLS_SAMPLE_RATE: f64 = 44_100.0;
     const HLS_CHANNELS: f64 = 2.0;
 
     let segment_duration = HLS_SEGMENT_SIZE as f64 / (HLS_SAMPLE_RATE * HLS_CHANNELS * 2.0);
-    HlsTestServer::new(HlsTestServerConfig {
-        custom_data: Some(Arc::new(saw_segments.to_vec())),
-        segment_duration_secs: segment_duration,
-        segment_size: HLS_SEGMENT_SIZE,
-        segments_per_variant: HLS_SEGMENT_COUNT,
-        ..Default::default()
-    })
-    .await
+    TestServerHelper::new()
+        .await
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .custom_data(Arc::new(saw_segments.to_vec()))
+                .segment_duration_secs(segment_duration)
+                .segment_size(HLS_SEGMENT_SIZE)
+                .segments_per_variant(HLS_SEGMENT_COUNT),
+        )
+        .await
+        .expect("create HLS fixture")
 }
 
 /// Ten HLS→MP3 crossfades in a row leave no silence gap.
@@ -71,7 +74,7 @@ async fn hls_server(saw_segments: &'static [u8]) -> HlsTestServer {
 )]
 async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
     tone_mp3: &'static [u8],
-    #[future(awt)] hls_server: HlsTestServer,
+    #[future(awt)] hls_server: CreatedHls,
 ) {
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
@@ -79,7 +82,7 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
         .cache_capacity(std::num::NonZeroUsize::new(4).expect("nonzero"))
         .max_assets(8)
         .build();
-    let hls_url = hls_server.url("/master.m3u8");
+    let hls_url = hls_server.master_url();
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let mut player = OfflinePlayer::new(

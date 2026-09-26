@@ -3,7 +3,7 @@
 use kithara::{decode::DecoderBackend, hls::AbrMode, platform::time::Duration, queue::Transition};
 use kithara_integration_tests::{
     kithara,
-    offline::LazyAppQueueFixture,
+    offline::{LazyAppQueueFixture, app_disk_asset_store, app_track_source},
     waits::{wait_for_loader_done_event, wait_for_position_at_least},
 };
 
@@ -36,10 +36,10 @@ static CTX: LazyAppQueueFixture = LazyAppQueueFixture::const_new();
 #[case::symphonia(DecoderBackend::Symphonia)]
 async fn zvuk_stage_drm_track_plays(#[case] backend: DecoderBackend) {
     let ctx = CTX.get().await;
-    let source = super::source_helper::app_track_source(
+    let source = app_track_source(
         STAGE_TRACK,
         &ctx.config,
-        super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+        app_disk_asset_store(&ctx.config, ctx.cache.path()),
         backend,
         AbrMode::Auto(None),
         None,

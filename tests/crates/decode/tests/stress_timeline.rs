@@ -4,11 +4,9 @@ use kithara::{
     decode::{DecoderConfig, DecoderFactory},
     platform::time::Duration,
 };
-use kithara_integration_tests::{
-    Xorshift64,
-    bufpool_ext::{TestPools, pools},
-};
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 use kithara_test_fixtures::fixtures::stress_wav;
+use kithara_test_utils::Xorshift64;
 
 use crate::common::test_defaults::SawWav;
 

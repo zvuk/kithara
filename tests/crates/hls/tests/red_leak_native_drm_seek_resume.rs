@@ -15,8 +15,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{Pools, TestPools, pools},
-    fixture_protocol::EncryptionRequest,
-    hls_fixture::{aes128_iv, aes128_key_bytes},
+    hls_server::aes128_encryption,
     waits::wait_thread_count_quiesced,
 };
 use tracing::info;
@@ -131,10 +130,7 @@ async fn encrypted_ladder() -> (TestServerHelper, Url) {
                 .segments_per_variant(Consts::SEGMENTS)
                 .segment_duration_secs(Consts::SEGMENT_SECS)
                 .packaged_audio_aac_lc(44_100, 2)
-                .encryption(EncryptionRequest {
-                    key_hex: hex::encode(aes128_key_bytes()),
-                    iv_hex: Some(hex::encode(aes128_iv())),
-                }),
+                .encryption(aes128_encryption()),
         )
         .await
         .expect("create the encrypted ladder");

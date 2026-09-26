@@ -12,7 +12,7 @@ use kithara_app::pools::AppPools;
 use kithara_integration_tests::{
     event::TestEvent,
     kithara,
-    offline::{AppQueueFixture, insecure_app_queue},
+    offline::{AppQueueFixture, app_disk_asset_store, app_track_source, insecure_app_queue},
     usdt_trace::{Scope, scope},
     waits::wait_for_loader_done_event,
 };
@@ -300,10 +300,10 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
     let _before_id = ctx
         .queue
         .run({
-            let source = super::source_helper::app_track_source(
+            let source = app_track_source(
                 SENTINEL_BEFORE,
                 &ctx.config,
-                super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+                app_disk_asset_store(&ctx.config, ctx.cache.path()),
                 backend,
                 AbrMode::Auto(None),
                 None,
@@ -315,10 +315,10 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
     let target_id = ctx
         .queue
         .run({
-            let source = super::source_helper::app_track_source(
+            let source = app_track_source(
                 TARGET_TRACK,
                 &ctx.config,
-                super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+                app_disk_asset_store(&ctx.config, ctx.cache.path()),
                 backend,
                 AbrMode::Auto(None),
                 None,
@@ -330,10 +330,10 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
     let _after_id = ctx
         .queue
         .run({
-            let source = super::source_helper::app_track_source(
+            let source = app_track_source(
                 SENTINEL_AFTER,
                 &ctx.config,
-                super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+                app_disk_asset_store(&ctx.config, ctx.cache.path()),
                 backend,
                 AbrMode::Auto(None),
                 None,

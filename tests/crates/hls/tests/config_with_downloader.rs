@@ -9,26 +9,24 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir,
+    TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    hls_server::abr::{AbrTestServer, master_playlist},
-    temp_dir,
+    hls_server::abr_binary_ladder,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 #[kithara::test(tokio, native, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_dir: TestTempDir) {
-    let server_a = AbrTestServer::new(
-        master_playlist(256_000, 512_000, 1_024_000),
-        false,
-        Duration::from_millis(10),
-    )
-    .await;
-    let server_b = AbrTestServer::new(
-        master_playlist(256_000, 512_000, 1_024_000),
-        false,
-        Duration::from_millis(10),
-    )
-    .await;
+    let hls_a = TestServerHelper::new()
+        .await
+        .create_hls(abr_binary_ladder(false, Duration::from_millis(10)))
+        .await
+        .expect("create ABR ladder");
+    let hls_b = TestServerHelper::new()
+        .await
+        .create_hls(abr_binary_ladder(false, Duration::from_millis(10)))
+        .await
+        .expect("create ABR ladder");
 
     let cancel = CancelToken::never();
     let pools = pools();
@@ -51,14 +49,14 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
         .backend(StorageBackend::Disk { root: temp_b })
         .build();
 
-    let config_a = HlsConfig::for_url(server_a.url("/master.m3u8"))
+    let config_a = HlsConfig::for_url(hls_a.master_url())
         .cancel(cancel.clone())
         .store(store_a)
         .pools(pools.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .downloader(downloader.clone())
         .build();
-    let config_b = HlsConfig::for_url(server_b.url("/master.m3u8"))
+    let config_b = HlsConfig::for_url(hls_b.master_url())
         .cancel(cancel.clone())
         .store(store_b)
         .pools(pools.clone())

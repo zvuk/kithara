@@ -12,6 +12,10 @@ categories = ["development-tools::testing"]
 default = ["hang"]
 flash = ["kithara-platform/flash"]
 hang = ["dep:serde", "dep:serde_json"]
+# Local axum HTTP server for tests (native only).
+http-server = ["dep:axum", "kithara-platform/tokio-net"]
+# Temporary-directory fixtures.
+temp-dir = ["dep:tempfile"]
 mock = ["dep:unimock"]
 no-block = ["kithara-platform/no-block"]
 # The test log subscriber on wasm32, where `test::setup_tracing*` exist only
@@ -40,7 +44,9 @@ unimock = { workspace = true, optional = true }
 url = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+axum = { workspace = true, optional = true }
 serial_test = { workspace = true }
+tempfile = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [target.'cfg(rtsan)'.dependencies]

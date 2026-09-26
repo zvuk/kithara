@@ -32,11 +32,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestHttpServer, TestTempDir,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     kithara,
 };
+use kithara_test_utils::{TestHttpServer, TestTempDir};
 
 struct Consts;
 impl Consts {

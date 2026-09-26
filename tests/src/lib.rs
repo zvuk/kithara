@@ -30,8 +30,6 @@ pub mod apple_warmup;
 pub mod architecture_trace;
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod artifact_timeline;
-#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
-pub mod asset_fixture;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod assets_ext;
 #[cfg(all(
@@ -40,16 +38,12 @@ pub mod assets_ext;
     not(target_os = "android")
 ))]
 pub mod audio_artifact;
-#[cfg(feature = "all")]
-pub mod audio_mock;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub use kithara_test_utils::bufpool as bufpool_ext;
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod cochlea;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod consts;
-#[cfg(feature = "all")]
-pub mod decode_ext;
 #[cfg(all(
     any(feature = "all", feature = "audio", feature = "wasm"),
     not(target_arch = "wasm32")
@@ -57,14 +51,10 @@ pub mod decode_ext;
 pub mod decode_mock;
 #[cfg(feature = "all")]
 pub mod e2e;
-#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
-pub mod encode_ext;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod fixture_protocol;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod fixtures;
-#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
-pub mod flash_pace;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod gapless;
 #[cfg(all(feature = "analysis", not(target_arch = "wasm32")))]
@@ -90,26 +80,24 @@ pub mod memory_source;
     not(target_arch = "wasm32")
 ))]
 mod native;
-#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
-pub mod net_fixture;
 #[cfg(any(feature = "all", feature = "wasm"))]
 pub mod offline;
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+pub mod output_continuity;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod packed_audio;
 #[cfg(all(any(feature = "all", feature = "audio"), not(target_arch = "wasm32")))]
 pub mod pcm_oracle;
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+pub mod phase_continuity;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod reads;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod rfc6381;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
-pub mod rng;
-#[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub mod server_url;
 #[cfg(all(any(feature = "all", feature = "wasm"), not(target_arch = "wasm32")))]
 pub mod smoothing;
-#[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
-pub mod storage_ext;
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub mod swallow_detector;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
@@ -145,11 +133,9 @@ pub use assets_ext::memory_asset_store;
 pub use fixtures::*;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub use hls_server::{
-    AbrTestServer, EncryptionConfig, HlsTestServer, HlsTestServerConfig, PackagedTestServer,
-    TestServer, abr, compat, master_playlist, mixed_codec_ladder, mixed_codec_ladder_encrypted,
-    mixed_codec_ladder_url, packaged, packaged_test_server, test_master_playlist,
-    test_master_playlist_encrypted, test_master_playlist_with_init, test_media_playlist_encrypted,
-    test_segment_data, test_server,
+    abr_binary_ladder, aes128_encryption, aes128_segment, mixed_codec_ladder,
+    mixed_codec_ladder_encrypted, mixed_codec_ladder_url, packaged_hls, packaged_ladder,
+    packaged_ladder_encrypted, test_pattern_hls, test_pattern_ladder,
 };
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub use hls_url::{
@@ -166,7 +152,6 @@ pub use log_filter::rust_log_filter;
 ))]
 pub use native::*;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
-pub use rng::*;
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub use server_url::join_server_url;
 #[cfg(all(

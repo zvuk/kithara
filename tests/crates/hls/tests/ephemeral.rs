@@ -20,14 +20,14 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_integration_tests::TestTempDir;
-#[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::bufpool_ext::TestPools;
 use kithara_integration_tests::bufpool_ext::pools;
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_integration_tests::hls_server::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::{CreatedHls, HlsFixtureBuilder, TestServerHelper};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::hls_sized_wav_three;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_test_utils::TestTempDir;
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
 use url::Url;
@@ -103,7 +103,7 @@ fn count_files(dir: &Path) -> usize {
 }
 
 #[kithara::fixture]
-async fn audio_server(hls_sized_wav_three: Vec<u8>) -> HlsTestServer {
+async fn audio_server(hls_sized_wav_three: Vec<u8>) -> CreatedHls {
     /// Keep within default LRU cache capacity (5) to avoid auto-eviction of
     /// `MemResources` which would make `wait_range()` block forever.
     const SEGMENT_COUNT: usize = 3;
@@ -114,14 +114,17 @@ async fn audio_server(hls_sized_wav_three: Vec<u8>) -> HlsTestServer {
 
     let segment_duration = SawWav::DEFAULT.segment_size as f64
         / (f64::from(SawWav::DEFAULT.sample_rate) * f64::from(SawWav::DEFAULT.channels) * 2.0);
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        segments_per_variant: SEGMENT_COUNT,
-        segment_size: SawWav::DEFAULT.segment_size,
-        segment_duration_secs: segment_duration,
-        custom_data: Some(Arc::new(wav_data)),
-        ..Default::default()
-    })
-    .await;
+    let server = TestServerHelper::new()
+        .await
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .segments_per_variant(SEGMENT_COUNT)
+                .segment_size(SawWav::DEFAULT.segment_size)
+                .segment_duration_secs(segment_duration)
+                .custom_data(Arc::new(wav_data)),
+        )
+        .await
+        .expect("create HLS fixture");
 
     server
 }
@@ -134,9 +137,9 @@ async fn audio_server(hls_sized_wav_three: Vec<u8>) -> HlsTestServer {
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
 )]
-async fn ephemeral_pipeline_no_disk_writes(#[future(awt)] audio_server: HlsTestServer) {
+async fn ephemeral_pipeline_no_disk_writes(#[future(awt)] audio_server: CreatedHls) {
     let server = audio_server;
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();

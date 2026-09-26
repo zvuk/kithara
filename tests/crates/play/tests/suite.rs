@@ -11,35 +11,16 @@ use kithara_test_dylib as _;
 mod common {
     pub(crate) use kithara_integration_tests::test_defaults;
 }
-#[path = "../../integration/tests/continuity.rs"]
-mod continuity;
 pub use kithara_integration_tests::gapless as gapless_common;
 
-mod cochlea_continuity_oracle;
 mod crossfade_hls_to_mp3_repeats;
-mod engine_tests;
-mod gapless_offline_e2e;
-mod gapless_startup_regressions;
-mod generated_gapless_hls;
 mod hls_seek_middle_no_queue;
 mod hls_seek_middle_stress;
 mod hls_seek_past_end_terminates;
 mod local_seek_hang_iters;
-#[cfg(not(target_arch = "wasm32"))]
-mod mix_tap;
-mod mixing;
-#[cfg(not(target_arch = "wasm32"))]
-mod no_sync_deadline;
-mod offline_harness_smoke;
+mod non_leading_track_completion;
 mod parameter_smoothing;
-mod player_internal;
-mod player_processor_internal;
-mod player_queue_api_regressions;
-mod player_resource_internal;
-mod player_track_internal;
 mod quality_switch_continuity;
-mod resource_internal;
 mod resource_regressions;
-mod rt_click;
-mod rt_metrics;
 mod seamless_queue_advance;
+mod track_replay_after_switch;

@@ -1,9 +1,10 @@
 use std::{sync::OnceLock, thread};
 
 use kithara::platform::{sync::Arc, tokio::runtime::Builder as RuntimeBuilder};
+use kithara_test_utils::TestHttpServer;
 use url::Url;
 
-use crate::{native::http_server::router_base_url_on_runtime, test_server_state::TestServerState};
+use crate::test_server_state::TestServerState;
 
 /// Process-global test server. Lives on a dedicated runtime thread so it
 /// outlives any individual `#[tokio::test]` runtime within the process.
@@ -70,4 +71,15 @@ mod tests {
         assert_eq!(resp.status(), reqwest::StatusCode::OK);
         assert_eq!(resp.text().await.unwrap(), "ok");
     }
+}
+
+/// Bind the unified router on `127.0.0.1:0` on the current runtime and return
+/// its base URL. The serve task is detached (no shutdown handle) — intended for
+/// the process-global shared server that must serve for the whole run.
+async fn router_base_url_on_runtime(state: Arc<TestServerState>) -> Url {
+    let router = crate::test_server::router(state);
+    let server = TestHttpServer::new(router).await;
+    let url = server.base_url().clone();
+    std::mem::forget(server);
+    url
 }

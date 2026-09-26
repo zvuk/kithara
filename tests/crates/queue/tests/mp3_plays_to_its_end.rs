@@ -23,13 +23,13 @@ use kithara::{
     },
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    Content, Delivery, FixtureBehavior, TestServerHelper,
     event::TestEvent,
     kithara,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    temp_dir,
+    offline::{OfflinePlayer, OfflinePlayerOptions},
 };
 use kithara_test_fixtures::assets;
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 use crate::bufpool_ext::TestPools;
 
@@ -98,7 +98,7 @@ async fn play_queue(
     temp_dir: &TestTempDir,
     sources: Vec<ResourceSrc>,
 ) -> (QueueLog, TrackId) {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(crossfade)
             .block_on_underrun(true)
@@ -214,26 +214,16 @@ async fn mp3_track_ends_rather_than_fails(
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(30)
 )]
-async fn a_streamed_mp3_ends_its_track_without_a_crossfade(
+#[case::without_a_crossfade(NO_CROSSFADE_SECS, 0)]
+#[case::with_a_crossfade(CROSSFADE_SECS, 1)]
+async fn a_streamed_mp3_ends_its_track(
     temp_dir: TestTempDir,
     #[future(awt)] mp3_sources: (TestServerHelper, Vec<ResourceSrc>),
+    #[case] crossfade: f32,
+    #[case] expected_crossfades: usize,
 ) {
     let (_server, sources) = mp3_sources;
-    mp3_track_ends_rather_than_fails(NO_CROSSFADE_SECS, 0, &temp_dir, sources).await;
-}
-
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(180)),
-    hang_timeout_secs(30)
-)]
-async fn a_streamed_mp3_ends_its_track_with_a_crossfade(
-    temp_dir: TestTempDir,
-    #[future(awt)] mp3_sources: (TestServerHelper, Vec<ResourceSrc>),
-) {
-    let (_server, sources) = mp3_sources;
-    mp3_track_ends_rather_than_fails(CROSSFADE_SECS, 1, &temp_dir, sources).await;
+    mp3_track_ends_rather_than_fails(crossfade, expected_crossfades, &temp_dir, sources).await;
 }
 
 #[kithara::fixture]

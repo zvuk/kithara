@@ -4,11 +4,8 @@ use axum::{Router, routing::get};
 use kithara_beat::{BeatGridModel, BeatGridState, GridBeat, Meter, RawBeatGrid, SCHEMA_VERSION};
 use kithara_download::{Downloader, DownloaderConfig};
 use kithara_net::{Headers, HttpClient, NetOptions};
-use kithara_platform::{
-    CancelToken,
-    tokio::{net::TcpListener, task::spawn},
-};
-use kithara_test_utils::{bufpool::pools as test_pools, kithara};
+use kithara_platform::CancelToken;
+use kithara_test_utils::{TestHttpServer, bufpool::pools as test_pools, kithara};
 use kithara_waveform::{Bucket, Waveform};
 use url::Url;
 
@@ -64,14 +61,9 @@ fn audio() -> ResourceSrc {
     ResourceSrc::Url(Url::parse("https://audio.example/track.mp3").expect("BUG: valid URL"))
 }
 
-async fn serve(body: Vec<u8>) -> Url {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("BUG: bind");
-    let addr = listener.local_addr().expect("BUG: local addr");
-    let app = Router::new().route("/artifact", get(move || async move { body }));
-    spawn(async move {
-        axum::serve(listener, app).await.expect("BUG: serve");
-    });
-    Url::parse(&format!("http://{addr}/artifact")).expect("BUG: valid URL")
+/// Serves `body` at `/artifact` for as long as the returned server lives.
+async fn serve(body: Vec<u8>) -> TestHttpServer {
+    TestHttpServer::new(Router::new().route("/artifact", get(move || async move { body }))).await
 }
 
 #[kithara::test(tokio)]
@@ -109,7 +101,8 @@ async fn a_path_yields_the_document_it_holds() {
 async fn a_url_yields_the_document_it_serves() {
     let mut bytes = Vec::new();
     waveform().write_to(&mut bytes);
-    let url = serve(bytes).await;
+    let server = serve(bytes).await;
+    let url = server.url("/artifact");
     let audio = audio();
     let downloader = downloader();
     let fetch = ArtifactFetch::new(&audio, Some(&downloader), None, None);
@@ -192,7 +185,8 @@ async fn audio_credentials_do_not_follow_an_artifact_to_another_host() {
     headers.insert("Authorization", "Bearer audio-token");
     let mut bytes = Vec::new();
     waveform().write_to(&mut bytes);
-    let url = serve(bytes).await;
+    let server = serve(bytes).await;
+    let url = server.url("/artifact");
     let audio = audio();
     let downloader = downloader();
     let fetch = ArtifactFetch::new(&audio, Some(&downloader), Some(&headers), None);
@@ -213,7 +207,8 @@ async fn audio_credentials_do_not_follow_an_artifact_to_another_host() {
 async fn a_cancelled_load_reports_itself_cancelled() {
     let mut bytes = Vec::new();
     waveform().write_to(&mut bytes);
-    let url = serve(bytes).await;
+    let server = serve(bytes).await;
+    let url = server.url("/artifact");
     let audio = audio();
     // The load epoch this artifact belonged to is over before it starts: a
     // removed or reloaded resource must not still read its artifact.

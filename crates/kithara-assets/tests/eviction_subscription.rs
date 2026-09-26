@@ -106,71 +106,39 @@ fn dropping_guard_deregisters() {
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
-fn dropping_first_subscriber_preserves_second() {
+#[case::first(0)]
+#[case::second(1)]
+fn dropping_one_subscriber_preserves_the_other(#[case] dropped: usize) {
     let store = ephemeral_store(2);
     let scope = store.scope::<Test>(&source(ROOT_A)).unwrap();
 
-    let (first_tx, mut first_rx) = mpsc::unbounded_channel::<ResourceKey>();
-    let first_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), first_tx);
-    let (second_tx, mut second_rx) = mpsc::unbounded_channel::<ResourceKey>();
-    let _second_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), second_tx);
+    let (mut guards, mut receivers): (Vec<_>, Vec<_>) = (0..2)
+        .map(|_| {
+            let (tx, rx) = mpsc::unbounded_channel::<ResourceKey>();
+            (
+                store.subscribe_eviction(Arc::from(scope.asset_root()), tx),
+                rx,
+            )
+        })
+        .unzip();
 
     let keys = fill_scope(&store, &scope, 3);
-    assert_eq!(
-        first_rx.try_recv().expect("first subscriber must receive"),
-        keys[0]
-    );
-    assert_eq!(
-        second_rx
-            .try_recv()
-            .expect("second subscriber must receive"),
-        keys[0]
-    );
+    for rx in &mut receivers {
+        assert_eq!(
+            rx.try_recv().expect("every subscriber must receive"),
+            keys[0]
+        );
+    }
 
-    drop(first_guard);
-    let next = scope.key(&resource("after_first_drop.m4s")).unwrap();
+    drop(guards.remove(dropped));
+    let next = scope.key(&resource("after_drop.m4s")).unwrap();
     write_commit(&store, &next, b"data");
 
-    assert!(first_rx.try_recv().is_err());
+    assert!(receivers[dropped].try_recv().is_err());
     assert_eq!(
-        second_rx
+        receivers[1 - dropped]
             .try_recv()
-            .expect("second subscriber must survive first guard drop"),
+            .expect("the other subscriber must survive the dropped guard"),
         keys[1]
     );
-}
-
-#[kithara::test(timeout(Duration::from_secs(5)))]
-fn dropping_second_subscriber_preserves_first() {
-    let store = ephemeral_store(2);
-    let scope = store.scope::<Test>(&source(ROOT_A)).unwrap();
-
-    let (first_tx, mut first_rx) = mpsc::unbounded_channel::<ResourceKey>();
-    let _first_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), first_tx);
-    let (second_tx, mut second_rx) = mpsc::unbounded_channel::<ResourceKey>();
-    let second_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), second_tx);
-
-    let keys = fill_scope(&store, &scope, 3);
-    assert_eq!(
-        first_rx.try_recv().expect("first subscriber must receive"),
-        keys[0]
-    );
-    assert_eq!(
-        second_rx
-            .try_recv()
-            .expect("second subscriber must receive"),
-        keys[0]
-    );
-
-    drop(second_guard);
-    let next = scope.key(&resource("after_second_drop.m4s")).unwrap();
-    write_commit(&store, &next, b"data");
-
-    assert_eq!(
-        first_rx
-            .try_recv()
-            .expect("first subscriber must survive second guard drop"),
-        keys[1]
-    );
-    assert!(second_rx.try_recv().is_err());
 }

@@ -1,0 +1,144 @@
+#![cfg(not(target_arch = "wasm32"))]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    reason = "test fixture values are small positive integers/floats"
+)]
+
+use kithara_audio::{AudioEvent, ReadOutcome, mock::TestPcmReader};
+use kithara_events::EventBus;
+use kithara_platform::time::Duration;
+use kithara_play::Resource;
+use kithara_test_fixtures::integration_fixtures::default_pcm;
+use kithara_test_utils::kithara;
+
+use crate::support::AUDIO_SPEC;
+
+#[kithara::fixture]
+fn make_resource(default_pcm: Vec<f32>) -> Resource {
+    Resource::from_reader(TestPcmReader::with_samples(AUDIO_SPEC, default_pcm), None)
+}
+
+#[kithara::fixture]
+fn make_resource_with_bus(default_pcm: Vec<f32>) -> (Resource, EventBus) {
+    let reader = TestPcmReader::with_samples(AUDIO_SPEC, default_pcm);
+    let bus = reader.event_bus().clone();
+    let resource = Resource::from_reader(reader, None);
+    (resource, bus)
+}
+
+#[derive(Clone, Copy)]
+enum ReadMode {
+    Interleaved,
+    Planar,
+}
+
+#[kithara::test(tokio)]
+#[case(ReadMode::Interleaved)]
+#[case(ReadMode::Planar)]
+async fn test_resource_from_reader_read_variants(make_resource: Resource, #[case] mode: ReadMode) {
+    let mut resource = make_resource;
+    match mode {
+        ReadMode::Interleaved => {
+            let mut buf = [0.0f32; 64];
+            let outcome = resource.read(&mut buf).expect("BUG: read");
+            let ReadOutcome::Frames { count, .. } = outcome else {
+                panic!("expected Frames, got {outcome:?}");
+            };
+            assert_eq!(count.get(), 64);
+            for sample in &buf[..count.get()] {
+                assert!((sample - 0.5).abs() < f32::EPSILON);
+            }
+        }
+        ReadMode::Planar => {
+            let mut ch0 = [0.0f32; 32];
+            let mut ch1 = [0.0f32; 32];
+            let mut output: Vec<&mut [f32]> = vec![&mut ch0, &mut ch1];
+            let outcome = resource.read_planar(&mut output).expect("BUG: read_planar");
+            let ReadOutcome::Frames { count, .. } = outcome else {
+                panic!("expected Frames, got {outcome:?}");
+            };
+            assert_eq!(count.get(), 32);
+            for &s in &ch0[..count.get()] {
+                assert!((s - 0.5).abs() < f32::EPSILON);
+            }
+            for &s in &ch1[..count.get()] {
+                assert!((s - 0.5).abs() < f32::EPSILON);
+            }
+        }
+    }
+}
+
+#[kithara::test(tokio)]
+async fn test_resource_from_reader_spec(make_resource: Resource) {
+    let resource = make_resource;
+    let spec = resource.spec();
+    assert_eq!(spec.sample_rate.get(), 44100);
+    assert_eq!(spec.channels, 2);
+}
+
+#[kithara::test(tokio)]
+async fn test_resource_from_reader_position_and_duration(make_resource: Resource) {
+    let resource = make_resource;
+    assert_eq!(resource.position(), Duration::ZERO);
+    let dur = resource.duration().unwrap();
+    assert!((dur.as_secs_f64() - 1.0).abs() < 0.001);
+}
+
+#[kithara::test(tokio)]
+async fn test_resource_from_reader_seek(make_resource: Resource) {
+    let mut resource = make_resource;
+    assert_eq!(resource.position(), Duration::ZERO);
+
+    let outcome = resource
+        .seek(Duration::from_millis(500))
+        .expect("BUG: seek");
+    assert!(matches!(outcome, kithara_audio::SeekOutcome::Landed { .. }));
+    let pos = resource.position();
+    assert!((pos.as_secs_f64() - 0.5).abs() < 0.001);
+}
+
+#[kithara::test(tokio)]
+async fn test_resource_from_reader_reads_until_eof(make_resource: Resource) {
+    let mut resource = make_resource;
+
+    let mut buf = [0.0f32; 4096];
+    let saw_eof = loop {
+        match resource.read(&mut buf).expect("BUG: read") {
+            ReadOutcome::Pending { .. } => break false,
+            ReadOutcome::Frames { .. } => continue,
+            ReadOutcome::Eof { .. } => break true,
+        }
+    };
+    assert!(
+        saw_eof,
+        "reader must reach natural EOF after consuming all samples"
+    );
+}
+
+#[kithara::test(tokio)]
+async fn test_resource_subscribe_receives_events(make_resource_with_bus: (Resource, EventBus)) {
+    let (resource, bus) = make_resource_with_bus;
+    let mut rx = resource.subscribe::<AudioEvent>();
+
+    let spec = AUDIO_SPEC;
+    bus.publish(AudioEvent::FormatDetected { spec });
+
+    let event = time::timeout(Duration::from_millis(200), rx.recv())
+        .await
+        .map(|r| r.map(|env| env.event))
+        .unwrap()
+        .unwrap();
+
+    assert!(matches!(event, AudioEvent::FormatDetected { spec: s } if s == spec));
+}
+
+#[kithara::test(tokio)]
+async fn test_resource_metadata(make_resource: Resource) {
+    let resource = make_resource;
+    let meta = resource.metadata();
+    assert_eq!(meta.title.as_deref(), Some("Mock"));
+    assert!(meta.artwork.is_none());
+}

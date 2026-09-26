@@ -18,8 +18,9 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
+    CreatedHls,
     bufpool_ext::{TestPools, pools},
-    hls_server::{TestServer, test_server},
+    hls_server::test_pattern_hls,
 };
 
 use crate::common::test_defaults::Consts as Shared;
@@ -64,11 +65,8 @@ impl Consts {
     const WARMUP_STABLE_SAMPLES: usize = 2;
 }
 
-async fn build_small_cache_stream(
-    server: &TestServer,
-    cancel: CancelToken,
-) -> Stream<Hls<TestPools>> {
-    let url = server.url("/master.m3u8");
+async fn build_small_cache_stream(hls: &CreatedHls, cancel: CancelToken) -> Stream<Hls<TestPools>> {
+    let url = hls.master_url();
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
@@ -102,9 +100,9 @@ fn exercise_stream_blocking(mut stream: Stream<Hls<TestPools>>) {
     drop(stream);
 }
 
-async fn run_small_cache_seek_cycle(server: &TestServer) -> usize {
+async fn run_small_cache_seek_cycle(hls: &CreatedHls) -> usize {
     let cancel = CancelToken::never();
-    let stream = build_small_cache_stream(server, cancel.clone()).await;
+    let stream = build_small_cache_stream(hls, cancel.clone()).await;
     spawn_blocking(move || exercise_stream_blocking(stream))
         .await
         .expect("blocking join");
@@ -112,12 +110,12 @@ async fn run_small_cache_seek_cycle(server: &TestServer) -> usize {
     wait_thread_count_quiesced(4, Duration::from_secs(5)).await
 }
 
-async fn stable_live_thread_baseline(server: &TestServer) -> usize {
+async fn stable_live_thread_baseline(hls: &CreatedHls) -> usize {
     let mut last = None;
     let mut stable = 0usize;
 
     for _ in 0..Consts::WARMUP_MAX_STREAMS {
-        run_small_cache_seek_cycle(server).await;
+        run_small_cache_seek_cycle(hls).await;
         let now = live_thread_count();
         if Some(now) == last {
             stable += 1;
@@ -135,16 +133,16 @@ async fn stable_live_thread_baseline(server: &TestServer) -> usize {
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(5))]
 async fn red_small_cache_seek_stress_does_not_leak_threads(
-    #[future(awt)] test_server: TestServer,
+    #[future(awt)] test_pattern_hls: CreatedHls,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
-    let server = test_server;
+    let hls = test_pattern_hls;
 
-    let threads_baseline = stable_live_thread_baseline(&server).await;
+    let threads_baseline = stable_live_thread_baseline(&hls).await;
 
     for i in 0..Consts::STREAM_ITERATIONS {
         // Wait until this iteration's per-stream tasks are reaped (thread count
         // stops dropping) before logging — not a fixed pacing delay.
-        let threads = run_small_cache_seek_cycle(&server).await;
+        let threads = run_small_cache_seek_cycle(&hls).await;
         tracing::info!(iter = i, threads, "post-drop");
     }
 

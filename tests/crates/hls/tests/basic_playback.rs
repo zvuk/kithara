@@ -16,13 +16,14 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir,
+    CreatedHls, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
+    fixture_protocol::InitMode,
     hls_fixture::HlsStreamBuilder,
-    hls_server::{TestServer, test_server},
-    rt_cancel, temp_dir,
+    hls_server::{test_pattern_hls, test_pattern_ladder},
 };
+use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tracing::info;
 use url::Url;
 
@@ -41,12 +42,12 @@ use url::Url;
     tracing("kithara_hls=info,kithara_stream=info,warn")
 )]
 async fn test_basic_hls_playback(
-    #[future(awt)] test_server: TestServer,
+    #[future(awt)] test_pattern_hls: CreatedHls,
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = test_server;
-    let test_stream_url = server.url("/master.m3u8");
+    let hls = test_pattern_hls;
+    let test_stream_url = hls.master_url();
     info!("Starting HLS playback test with URL: {}", test_stream_url);
 
     let bus = EventBus::new(32);
@@ -63,7 +64,7 @@ async fn test_basic_hls_playback(
     let config = HlsConfig::for_url(test_stream_url.clone())
         .store(store)
         .pools(pools)
-        .cancel(rt_cancel)
+        .cancel(cancel_token)
         .events(bus)
         .build();
 
@@ -111,14 +112,14 @@ enum StreamOptions {
 #[case::never_cancel(StreamOptions::NeverCancel)]
 #[case::limited_cache(StreamOptions::LimitedCache)]
 async fn hls_stream_options_open(
-    #[future(awt)] test_server: TestServer,
+    #[future(awt)] test_pattern_hls: CreatedHls,
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
     #[case] options: StreamOptions,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = test_server;
+    let hls = test_pattern_hls;
     let (builder, cancel) = match options {
-        StreamOptions::Init => (HlsStreamBuilder::new().with_init(), rt_cancel),
+        StreamOptions::Init => (HlsStreamBuilder::new(), cancel_token),
         StreamOptions::NeverCancel => (HlsStreamBuilder::new(), CancelToken::never()),
         StreamOptions::LimitedCache => (
             HlsStreamBuilder::new().max_assets(1).max_bytes(1024),
@@ -126,7 +127,11 @@ async fn hls_stream_options_open(
         ),
     };
 
-    let _stream = builder.build(&server, temp_dir.path(), cancel).await;
+    let url = match options {
+        StreamOptions::Init => test_pattern_hls_with_init().await.master_url(),
+        StreamOptions::NeverCancel | StreamOptions::LimitedCache => hls.master_url(),
+    };
+    let _stream = builder.build(url, temp_dir.path(), cancel).await;
     Ok(())
 }
 
@@ -138,7 +143,7 @@ async fn hls_stream_options_open(
 async fn test_hls_invalid_url_handling(
     #[case] invalid_url: &str,
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let url_result = Url::parse(invalid_url);
 
@@ -152,7 +157,7 @@ async fn test_hls_invalid_url_handling(
         let config = HlsConfig::for_url(url)
             .store(store)
             .pools(pools)
-            .cancel(rt_cancel)
+            .cancel(cancel_token)
             .build();
 
         let result = Stream::<Hls<TestPools>>::new(config).await;
@@ -171,16 +176,14 @@ async fn test_hls_invalid_url_handling(
 /// This is critical for fMP4 HLS where decoder needs moov box before mdat.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_init_segment_at_stream_start(
-    #[future(awt)] test_server: TestServer,
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = test_server;
+    let hls = test_pattern_hls_with_init().await;
     info!("Testing INIT segment at stream start");
 
     let mut stream = HlsStreamBuilder::new()
-        .with_init()
-        .build(&server, temp_dir.path(), rt_cancel)
+        .build(hls.master_url(), temp_dir.path(), cancel_token)
         .await;
 
     let mut buf = [0u8; 32];
@@ -209,4 +212,12 @@ async fn test_init_segment_at_stream_start(
 
     info!("INIT segment correctly at stream start");
     Ok(())
+}
+
+async fn test_pattern_hls_with_init() -> CreatedHls {
+    TestServerHelper::new()
+        .await
+        .create_hls(test_pattern_ladder().init_mode(InitMode::TestInit))
+        .await
+        .expect("create the test-pattern ladder with init segments")
 }

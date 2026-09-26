@@ -10,17 +10,17 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueEvent, TrackSource},
 };
 use kithara_integration_tests::{
-    PrivateTestServer, TestTempDir,
+    PrivateTestServer,
     bufpool_ext::pools,
     disk_asset_store,
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker},
-    temp_dir,
     test_defaults::Consts as Shared,
     test_server::NetworkMode,
     waits::{wait_for_event, wait_for_position_event},
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 /// Wide enough that the first segments are wanted immediately, so the outage is
 /// observed on the very first fetches rather than after a cached prefix.

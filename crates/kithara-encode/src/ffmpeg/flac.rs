@@ -271,3 +271,19 @@ fn parse_flac_metadata_block(raw: &[u8]) -> Option<&[u8]> {
             ..FlacFFmpegEncoder::FLAC_METADATA_HEADER_LEN + block_len],
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_fixtures::integration_fixtures::flac_config;
+    use kithara_test_utils::kithara;
+
+    use super::normalize_flac_codec_config;
+
+    #[kithara::test]
+    fn normalize_flac_codec_config_accepts_mp4_metadata_block(flac_config: &'static [u8]) {
+        let normalized = normalize_flac_codec_config(flac_config)
+            .expect("BUG: hard-coded dfLa payload normalises successfully");
+        assert_eq!(normalized.len(), 34);
+        assert_eq!(&normalized[..4], &[0x12, 0x00, 0x12, 0x00]);
+    }
+}

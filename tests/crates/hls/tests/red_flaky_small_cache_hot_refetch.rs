@@ -12,8 +12,8 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
-    flash_pace::virtual_pace,
 };
+use kithara_test_utils::virtual_pace;
 use tracing::info;
 use url::Url;
 

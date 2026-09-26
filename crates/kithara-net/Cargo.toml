@@ -27,6 +27,8 @@ client-host = []
 tls-rustls = ["reqwest?/rustls"]
 tls-native = ["reqwest?/native-tls"]
 mock = ["dep:unimock"]
+flash = ["kithara-platform/flash"]
+no-block = ["kithara-platform/no-block"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
@@ -90,7 +92,7 @@ gloo-timers = { workspace = true }
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
-kithara-net = { path = ".", default-features = false }
+kithara-net = { path = ".", default-features = false, features = ["mock"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 
 futures = { workspace = true }
@@ -99,10 +101,14 @@ unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara-platform = { workspace = true, features = ["tokio-net", "tokio-rt-multi-thread"] }
+kithara-platform = { workspace = true, features = ["tokio-rt-multi-thread"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["http-server"] }
 
 axum = { workspace = true }
 serde_yaml_ng = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
 
 [lints]
 workspace = true

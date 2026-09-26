@@ -91,15 +91,3 @@ pub fn cochlea_control() -> Vec<f32> {
 pub fn cochlea_loudness() -> Vec<f32> {
     samples(&assets::cochlea_signal_loudness())
 }
-
-#[kithara::fixture]
-#[must_use]
-pub fn rms_silence() -> Vec<f32> {
-    samples(&assets::rms_signal_silence())
-}
-
-#[kithara::fixture]
-#[must_use]
-pub fn rms_unit() -> Vec<f32> {
-    samples(&assets::rms_signal_unit())
-}

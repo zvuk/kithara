@@ -28,9 +28,8 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    auto,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{Pools, TestPools, pools},
-    hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 use kithara_test_fixtures::hls_fixtures::{hls_header_boundary, hls_pcm_boundary};
 use tracing::info;
@@ -41,24 +40,22 @@ const SEGMENT_SIZE: usize = 32_768;
 const SEGMENT_COUNT: usize = 8;
 
 #[kithara::fixture]
-fn fixture_config(hls_header_boundary: Vec<u8>, hls_pcm_boundary: Vec<u8>) -> HlsTestServerConfig {
+fn fixture_config(hls_header_boundary: Vec<u8>, hls_pcm_boundary: Vec<u8>) -> HlsFixtureBuilder {
     let mut media = hls_header_boundary;
     media.extend_from_slice(&hls_pcm_boundary);
     let segment_duration = SEGMENT_SIZE as f64
         / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);
-    HlsTestServerConfig {
-        variant_count: 1,
-        segments_per_variant: SEGMENT_COUNT,
-        segment_size: SEGMENT_SIZE,
-        segment_duration_secs: segment_duration,
-        custom_data_per_variant: Some(vec![Arc::new(media)]),
-        variant_bandwidths: Some(vec![1_000_000]),
-        ..Default::default()
-    }
+    HlsFixtureBuilder::new()
+        .variant_count(1)
+        .segments_per_variant(SEGMENT_COUNT)
+        .segment_size(SEGMENT_SIZE)
+        .segment_duration_secs(segment_duration)
+        .custom_data_per_variant(vec![Arc::new(media)])
+        .variant_bandwidths(vec![1_000_000])
 }
 
 fn audio_config(
-    server: &HlsTestServer,
+    server: &CreatedHls,
     pools: &Pools,
     cancel: &CancelToken,
 ) -> AudioConfig<Hls<TestPools>> {
@@ -77,7 +74,7 @@ fn audio_config(
                 .build(),
         )
         .build();
-    let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
+    let hls_config = HlsConfig::for_url(server.master_url())
         .store(store)
         .pools(pools.clone())
         .cancel(cancel.clone())
@@ -100,8 +97,13 @@ fn audio_config(
     timeout(Duration::from_secs(30)),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
-async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsTestServerConfig) {
-    let (server, _gate) = HlsTestServer::with_segment_gate(fixture_config, 0, 0).await;
+async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsFixtureBuilder) {
+    let helper = TestServerHelper::new().await;
+    let server = helper
+        .create_hls(fixture_config)
+        .await
+        .expect("create HLS fixture");
+    let _gate = helper.register_segment_gate(server.token(), 0, 0);
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -141,9 +143,14 @@ async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsTes
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
 async fn audio_new_succeeds_when_first_segment_released_during_probe(
-    fixture_config: HlsTestServerConfig,
+    fixture_config: HlsFixtureBuilder,
 ) {
-    let (server, gate) = HlsTestServer::with_segment_gate(fixture_config, 0, 0).await;
+    let helper = TestServerHelper::new().await;
+    let server = helper
+        .create_hls(fixture_config)
+        .await
+        .expect("create HLS fixture");
+    let gate = helper.register_segment_gate(server.token(), 0, 0);
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(

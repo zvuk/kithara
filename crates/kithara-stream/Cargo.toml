@@ -17,6 +17,8 @@ default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 usdt = ["kithara-test-utils/usdt"]
 mock = ["dep:unimock", "kithara-test-utils/mock"]
+flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
+no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = ["kithara-net/client-reqwest", "kithara-abr/client-reqwest"]
 client-wreq = ["kithara-net/client-wreq", "kithara-abr/client-wreq"]
@@ -56,6 +58,9 @@ wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-platform = { workspace = true, features = ["tokio-net"] }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
 
 [lints]
 workspace = true

@@ -110,8 +110,14 @@ fn reverse_quantization_keeps_a_descending_cursor_inside_the_rate_envelope() {
 }
 
 #[kithara::test]
-fn reverse_phase_error_converges_without_a_source_jump() {
-    let (residuals, _) = phase_residuals(source_cursor(360.0), [359.25, 239.25, 119.25], -120.0);
+#[case::reverse(360.0, [359.25, 239.25, 119.25], -120.0)]
+#[case::forward(0.75, [0.0, 120.0, 240.0], 120.0)]
+fn a_negative_phase_error_converges_without_a_source_jump(
+    #[case] cursor: f64,
+    #[case] starts: [f64; 3],
+    #[case] source_delta: f64,
+) {
+    let (residuals, _) = phase_residuals(source_cursor(cursor), starts, source_delta);
 
     assert_eq!(residuals, vec![-0.75, -0.5, -0.25, 0.0]);
 }
@@ -127,13 +133,6 @@ fn small_phase_error_converges_without_a_source_jump_and_is_partition_independen
     assert_eq!(whole.segments()[0].source_start(), 0);
     assert_close(whole.cursor().continuous(), cursor.continuous());
     assert_eq!(whole.cursor().integer(), cursor.integer());
-}
-
-#[kithara::test]
-fn negative_phase_error_converges_without_overshoot() {
-    let (residuals, _) = phase_residuals(source_cursor(0.75), [0.0, 120.0, 240.0], 120.0);
-
-    assert_eq!(residuals, vec![-0.75, -0.5, -0.25, 0.0]);
 }
 
 #[kithara::test]

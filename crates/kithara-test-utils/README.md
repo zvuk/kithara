@@ -100,7 +100,7 @@ Consumed by every crate's `[dev-dependencies]`. The macros it re-exports work on
 
 ### Integration tests live elsewhere
 
-The integration-test domain (synthetic HLS servers, `TestHttpServer`, `TestServerHelper`, `HlsFixtureBuilder`, `PackagedTestServer`, …) lives in `kithara-integration-tests` (`tests/`), over the waveforms and encoded assets `kithara-test-fixtures` produces. To use it from another crate's tests, depend on `kithara-integration-tests` (it is `publish = false`) rather than re-implementing fixtures here.
+The integration-test domain (synthetic HLS servers, `TestHttpServer`, `TestServerHelper`, `HlsFixtureBuilder`, the `hls_server` presets, …) lives in `kithara-integration-tests` (`tests/`), over the waveforms and encoded assets `kithara-test-fixtures` produces. To use it from another crate's tests, depend on `kithara-integration-tests` (it is `publish = false`) rather than re-implementing fixtures here.
 
 See `tests/README.md` for the integration-test suite layout, the standalone `test_server` binary, the WASM flow, and the available fixture builders.
 

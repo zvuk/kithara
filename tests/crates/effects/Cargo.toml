@@ -24,6 +24,7 @@ usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
 [dependencies]
 kithara = { workspace = true, features = ["usdt", "backend-cpal", "download", "effects", "mock", "offline", "queue", "resample-rubato", "signal", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
+kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]

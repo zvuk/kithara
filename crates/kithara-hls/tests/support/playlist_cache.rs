@@ -13,12 +13,9 @@ use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Notify},
-    tokio::{
-        net::TcpListener,
-        task::{spawn, yield_now},
-    },
+    tokio::task::{spawn, yield_now},
 };
-use kithara_test_utils::kithara;
+use kithara_test_utils::{TestHttpServer, kithara};
 use tempfile::tempdir;
 
 use super::*;
@@ -40,7 +37,7 @@ impl kithara_abr::Abr for MockPeer {
 }
 impl Peer for MockPeer {}
 
-async fn playlist_server(body: Bytes) -> (Url, Arc<AtomicUsize>) {
+async fn playlist_server(body: Bytes) -> (TestHttpServer, Arc<AtomicUsize>) {
     let requests = Arc::new(AtomicUsize::new(0));
     let handler_requests = Arc::clone(&requests);
     let app = Router::new().route(
@@ -54,16 +51,12 @@ async fn playlist_server(body: Bytes) -> (Url, Arc<AtomicUsize>) {
             }
         }),
     );
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("local addr");
-    spawn(async move {
-        axum::serve(listener, app).await.expect("serve");
-    });
-    let url = Url::parse(&format!("http://{addr}/master.m3u8")).expect("url");
-    (url, requests)
+    (TestHttpServer::new(app).await, requests)
 }
 
-async fn gated_playlist_server(body: Bytes) -> (Url, Arc<AtomicUsize>, Arc<Notify>, Arc<Notify>) {
+async fn gated_playlist_server(
+    body: Bytes,
+) -> (TestHttpServer, Arc<AtomicUsize>, Arc<Notify>, Arc<Notify>) {
     let requests = Arc::new(AtomicUsize::new(0));
     let first_seen = Arc::new(Notify::default());
     let release = Arc::new(Notify::default());
@@ -86,13 +79,12 @@ async fn gated_playlist_server(body: Bytes) -> (Url, Arc<AtomicUsize>, Arc<Notif
             }
         }),
     );
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("local addr");
-    spawn(async move {
-        axum::serve(listener, app).await.expect("serve");
-    });
-    let url = Url::parse(&format!("http://{addr}/master.m3u8")).expect("url");
-    (url, requests, first_seen, release)
+    (
+        TestHttpServer::new(app).await,
+        requests,
+        first_seen,
+        release,
+    )
 }
 
 fn test_cache(scope: TestAssetScope) -> TestPlaylistCache {
@@ -131,7 +123,8 @@ fn commit(scope: &TestAssetScope, key: &ResourceKey, bytes: &[u8]) {
 
 #[kithara::test(tokio)]
 async fn corrupt_persisted_playlist_is_invalidated_and_refetched_once() {
-    let (url, requests) = playlist_server(Bytes::from_static(VALID_MASTER)).await;
+    let (server, requests) = playlist_server(Bytes::from_static(VALID_MASTER)).await;
+    let url = server.url("/master.m3u8");
     let dir = tempdir().expect("tempdir");
     let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Disk {
@@ -186,7 +179,8 @@ async fn corrupt_persisted_playlist_is_invalidated_and_refetched_once() {
 
 #[kithara::test(tokio)]
 async fn empty_persisted_playlist_is_invalidated_and_refetched_once() {
-    let (url, requests) = playlist_server(Bytes::from_static(VALID_MASTER)).await;
+    let (server, requests) = playlist_server(Bytes::from_static(VALID_MASTER)).await;
+    let url = server.url("/master.m3u8");
     let dir = tempdir().expect("tempdir");
     let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Disk {
@@ -236,8 +230,9 @@ async fn empty_persisted_playlist_is_invalidated_and_refetched_once() {
 
 #[kithara::test(tokio)]
 async fn concurrent_caches_share_one_playlist_repair() {
-    let (url, requests, first_seen, release) =
+    let (server, requests, first_seen, release) =
         gated_playlist_server(Bytes::from_static(VALID_MASTER)).await;
+    let url = server.url("/master.m3u8");
     let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
@@ -276,7 +271,8 @@ async fn concurrent_caches_share_one_playlist_repair() {
 #[kithara::test(tokio)]
 async fn failed_refetch_does_not_resurrect_poisoned_index() {
     let invalid = Bytes::from_static(b"\x1b\xbf\x01\x00network brotli bytes");
-    let (url, requests) = playlist_server(invalid).await;
+    let (server, requests) = playlist_server(invalid).await;
+    let url = server.url("/master.m3u8");
     let dir = tempdir().expect("tempdir");
     let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Disk {
@@ -332,7 +328,8 @@ async fn failed_refetch_does_not_resurrect_poisoned_index() {
 #[kithara::test(tokio)]
 async fn invalid_network_playlist_is_not_cached() {
     let invalid = Bytes::from_static(b"\x1b\xbf\x01\x00brotli bytes");
-    let (url, requests) = playlist_server(invalid).await;
+    let (server, requests) = playlist_server(invalid).await;
+    let url = server.url("/master.m3u8");
     let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())

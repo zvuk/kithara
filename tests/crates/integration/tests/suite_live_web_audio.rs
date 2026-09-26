@@ -37,9 +37,11 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    offline::{deinterleave_left, rms},
 };
-use kithara_test_fixtures::SignalAsset;
+use kithara_test_fixtures::{
+    SignalAsset,
+    signal::{deinterleave_left, rms},
+};
 use ringbuf::{
     HeapCons, HeapRb,
     traits::{Consumer, Split},

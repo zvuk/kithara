@@ -19,9 +19,13 @@ use kithara_app::{
     pools::{PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
-    TestTempDir, bufpool_ext::pools as test_pools, kithara, offline::OfflinePlayer,
-    swallow_detector::assert_no_committed_swallow, usdt_trace,
+    bufpool_ext::pools as test_pools,
+    kithara,
+    offline::{OfflinePlayer, app_disk_asset_store, app_track_source},
+    swallow_detector::assert_no_committed_swallow,
+    usdt_trace,
 };
+use kithara_test_utils::TestTempDir;
 use tracing::info;
 
 /// Production zvuk DRM track with a FLAC lossless top variant (a zvuk
@@ -116,10 +120,10 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
         .build();
     let temp = TestTempDir::new();
 
-    let TrackSource::Config(cfg) = super::app_track_source(
+    let TrackSource::Config(cfg) = app_track_source(
         PROD_TRACK,
         &config,
-        super::app_disk_asset_store(&config, temp.path()),
+        app_disk_asset_store(&config, temp.path()),
         backend,
         AbrMode::Auto(None),
         Some("t0"),

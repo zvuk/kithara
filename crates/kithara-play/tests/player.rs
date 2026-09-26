@@ -451,19 +451,6 @@ fn seek_seconds_without_slot_holds_the_start_position() {
     assert_eq!(player.position_seconds(), Some(12.0));
 }
 
-/// A seek the player answered `Landed` must read back where the host draws
-/// its progress from. Holding the target in a private field and still
-/// reporting no position is what leaves a restored podcast at the head of
-/// its track and makes every further scrub look dead.
-#[kithara::test]
-fn a_held_start_position_is_readable_at_the_position_readout() {
-    let player = player();
-
-    player.seek_seconds(12.0).expect("must accept");
-
-    assert_eq!(player.position_seconds(), Some(12.0));
-}
-
 /// The held target is the latest one handed over, not the first: a host
 /// resets to zero before it restores a stored position.
 #[kithara::test]

@@ -15,10 +15,10 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, auto,
+    TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
-    temp_dir,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 #[cfg(not(target_os = "linux"))]
 use memory_stats::memory_stats;
 use tracing::info;

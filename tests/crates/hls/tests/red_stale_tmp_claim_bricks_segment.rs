@@ -36,10 +36,10 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    hls_server::{HlsTestServer, HlsTestServerConfig},
 };
+use kithara_test_utils::TestTempDir;
 
 struct Consts;
 impl Consts {
@@ -109,7 +109,7 @@ async fn a_segment_that_can_never_be_acquired_fails_the_read() {
 
 /// Server, store, and the on-disk path of [`Consts::STALE_SEGMENT`].
 struct Fixture {
-    server: HlsTestServer,
+    server: CreatedHls,
     /// The path the store commits the stale segment to. Derived through the
     /// store's own scope and key so a test cannot plant its tmp somewhere the
     /// store never looks.
@@ -121,14 +121,17 @@ struct Fixture {
 impl Fixture {
     async fn new() -> Self {
         let temp_dir = TestTempDir::new();
-        let server = HlsTestServer::new(HlsTestServerConfig {
-            segment_size: Consts::SEGMENT_SIZE,
-            segments_per_variant: Consts::SEGMENT_COUNT,
-            ..Default::default()
-        })
-        .await;
-        let master_url = server.url("/master.m3u8");
-        let stale_url = server.url(&format!("/seg/v0_{}.bin", Consts::STALE_SEGMENT));
+        let server = TestServerHelper::new()
+            .await
+            .create_hls(
+                HlsFixtureBuilder::new()
+                    .segment_size(Consts::SEGMENT_SIZE)
+                    .segments_per_variant(Consts::SEGMENT_COUNT),
+            )
+            .await
+            .expect("create HLS fixture");
+        let master_url = server.master_url();
+        let stale_url = server.segment_url(0, Consts::STALE_SEGMENT);
 
         let root = temp_dir.path().to_path_buf();
         let pools = pools();

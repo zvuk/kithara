@@ -63,9 +63,10 @@ own.
 
 ## Fixtures
 
-Native tests take in-process URLs from `TestServerHelper` and `hls_server`:
-`TestServer` (fixed 3-variant HLS), `HlsTestServer` (variants, segments, delays,
-encryption, HEAD mismatch), `AbrTestServer` (bitrate switching). WASM tests hit
+Native tests take in-process URLs from `TestServerHelper::create_hls`, which
+serves any `HlsFixtureBuilder`; `hls_server` names the presets suites share
+(test-pattern, AES-128, ABR binary, packaged and mixed-codec ladders), and the
+returned `CreatedHls` hands out typed URLs and the expected-byte oracle. WASM tests hit
 the same binary on `http://127.0.0.1:3444`, which `TEST_SERVER_URL` overrides.
 Complex `/signal` and `/stream` specs register through `POST /token`; helpers
 hand back ordinary `Url`s, so a test never sees the token.

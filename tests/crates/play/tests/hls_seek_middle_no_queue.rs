@@ -12,9 +12,10 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, SegmentGateHandle, fixture_protocol::DelayRule,
-    hls_fixture::create_test_downloader, offline::OfflinePlayer, temp_dir,
+    SegmentGateHandle, TestServerHelper, fixture_protocol::DelayRule,
+    hls_fixture::create_test_downloader, hls_server::packaged_ladder, offline::OfflinePlayer,
 };
+use kithara_test_utils::temp_dir;
 
 use crate::{
     bufpool_ext::{TestPools, pools},
@@ -162,28 +163,26 @@ async fn render_until_gate_requested(
     hold_ticks: 16,
 })]
 async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario: SeekScenario) {
-    let (server, gate) = match scenario {
-        SeekScenario::NoDelay => (PackagedTestServer::new().await, None),
-        SeekScenario::RealDelay { delay_ms } => (
-            PackagedTestServer::with_delay_rules(vec![DelayRule {
-                variant: None,
-                segment_eq: None,
-                segment_gte: Some(Consts::GATED_SEGMENT),
-                delay_ms,
-            }])
-            .await,
-            None,
-        ),
-        SeekScenario::Gated { .. } => {
-            let (server, gate) =
-                PackagedTestServer::with_segment_gate(Consts::GATED_VARIANT, Consts::GATED_SEGMENT)
-                    .await;
-            (server, Some(gate))
-        }
+    let helper = TestServerHelper::new().await;
+    let ladder = match scenario {
+        SeekScenario::RealDelay { delay_ms } => packaged_ladder().delay_rules(vec![DelayRule {
+            variant: None,
+            segment_eq: None,
+            segment_gte: Some(Consts::GATED_SEGMENT),
+            delay_ms,
+        }]),
+        SeekScenario::NoDelay | SeekScenario::Gated { .. } => packaged_ladder(),
     };
+    let hls = helper
+        .create_hls(ladder)
+        .await
+        .expect("create packaged ladder");
+    let gate = matches!(scenario, SeekScenario::Gated { .. }).then(|| {
+        helper.register_segment_gate(hls.token(), Consts::GATED_VARIANT, Consts::GATED_SEGMENT)
+    });
     let delay_ms = scenario.nominal_delay_ms();
     let label = scenario.label();
-    let master = server.url("/master.m3u8");
+    let master = hls.master_url();
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
@@ -234,7 +233,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
          (pos={pos_before_seek:.3}s, delay_ms={delay_ms})"
     );
 
-    player.seek(Consts::SEEK_TARGET_SECS, 1);
+    player.seek(Consts::SEEK_TARGET_SECS);
     eprintln!(
         "[{label} delay_ms={delay_ms}] seek issued target={:.1}s epoch=1",
         Consts::SEEK_TARGET_SECS

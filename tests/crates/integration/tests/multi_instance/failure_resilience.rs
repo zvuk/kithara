@@ -15,11 +15,11 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    TestTempDir,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 use kithara_test_fixtures::integration_fixtures::concurrent_wav;
+use kithara_test_utils::TestTempDir;
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -72,24 +72,27 @@ fn read_hls_best_effort(audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, Test
 }
 
 /// Create a healthy HLS server (no delays).
-async fn create_server(wav_data: &Arc<Vec<u8>>) -> HlsTestServer {
-    HlsTestServer::new(HlsTestServerConfig {
-        segments_per_variant: Consts::SEGMENT_COUNT,
-        segment_size: SawWav::DEFAULT.segment_size,
-        segment_duration_secs: SawWav::DEFAULT.segment_duration_secs(),
-        custom_data: Some(Arc::clone(wav_data)),
-        ..Default::default()
-    })
-    .await
+async fn create_server(wav_data: &Arc<Vec<u8>>) -> CreatedHls {
+    TestServerHelper::new()
+        .await
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .segments_per_variant(Consts::SEGMENT_COUNT)
+                .segment_size(SawWav::DEFAULT.segment_size)
+                .segment_duration_secs(SawWav::DEFAULT.segment_duration_secs())
+                .custom_data(Arc::clone(wav_data)),
+        )
+        .await
+        .expect("create HLS fixture")
 }
 
 /// Create an `Audio<Stream<Hls>>` instance.
 async fn create_hls_audio(
-    server: &HlsTestServer,
+    server: &CreatedHls,
     cache_dir: &Path,
     cancel: CancelToken,
 ) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)

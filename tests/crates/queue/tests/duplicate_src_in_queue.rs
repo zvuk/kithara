@@ -17,14 +17,11 @@ use kithara::{
 use kithara_integration_tests::{
     event::TestEvent,
     kithara,
-    offline::{OfflinePlayerHarness, offline_queue_fixture},
+    offline::{OfflinePlayer, append_source_loaded, asset_source, offline_queue_fixture},
 };
 use kithara_test_fixtures::{asset::Asset, assets};
 
-use crate::{
-    bufpool_ext::TestPools,
-    loader_fixture::{append_source_loaded, source},
-};
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -34,7 +31,7 @@ const EOF_BLOCK_BUDGET: usize = 128;
 
 async fn render_loop(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     block_budget: usize,
 ) {
     for _ in 0..block_budget {
@@ -52,7 +49,7 @@ fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> TrackStatus {
 
 /// Two entries appended from one file, with the second one selected.
 struct SecondCopyPlaying {
-    harness: OfflinePlayerHarness,
+    harness: OfflinePlayer,
     queue: QueueControl<TestPools>,
     source: String,
     first: TrackId,
@@ -61,7 +58,7 @@ struct SecondCopyPlaying {
 
 async fn fixture_playing_the_second_copy(track: &Asset) -> SecondCopyPlaying {
     let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
-    let source = source(track);
+    let source = asset_source(track);
     let first = append_source_loaded(&harness, &queue, source.clone()).await;
     let playing = append_source_loaded(&harness, &queue, source.clone()).await;
 

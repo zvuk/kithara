@@ -10,13 +10,25 @@ use crate::{sccache, verdict::ChildFailure};
 /// few: see [`sccache::clippy_cleared`] for why a workstation and a CI job want
 /// opposite halves of a trade they cannot both have.
 ///
+/// On macOS the gate also lints the Apple product features.
+///
 /// # Errors
 ///
 /// Returns an error when Clippy cannot be started, or the child's own exit code
 /// when it reports a lint.
 pub(crate) fn run() -> Result<()> {
+    /// The Apple product build: the `NSURLSession` transport and the fused
+    /// decoder. No workspace member enables either by default, so a plain
+    /// workspace lint leaves both configured out even on the only host that can
+    /// compile them.
+    const APPLE_FEATURES: &str = "kithara-ffi/apple";
+
     let mut cmd = Command::new("cargo");
-    cmd.args(["clippy", "--workspace", "--", "-D", "warnings"]);
+    cmd.args(["clippy", "--workspace"]);
+    if cfg!(target_os = "macos") {
+        cmd.args(["--features", APPLE_FEATURES]);
+    }
+    cmd.args(["--", "-D", "warnings"]);
     for name in sccache::clippy_cleared() {
         cmd.env_remove(name);
     }

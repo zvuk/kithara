@@ -16,10 +16,11 @@ use kithara_integration_tests::{
     TestServerHelper, architecture_trace, disk_asset_store,
     hls_fixture::create_test_downloader,
     kithara,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    served_mp3, temp_dir, usdt_trace,
+    offline::{OfflinePlayer, OfflinePlayerOptions},
+    served_mp3, usdt_trace,
     waits::wait_for_loader_done_event,
 };
+use kithara_test_utils::temp_dir;
 use serial_test::serial;
 use url::Url;
 
@@ -38,7 +39,7 @@ async fn queue_playback_architecture(#[future(awt)] served_mp3: (TestServerHelpe
     let (_helper, url) = served_mp3;
     let temp = temp_dir();
     let store = disk_asset_store(temp.path());
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),

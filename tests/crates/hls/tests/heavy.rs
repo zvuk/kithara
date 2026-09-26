@@ -10,10 +10,10 @@ mod common {
     pub(crate) use kithara_integration_tests::test_defaults;
 }
 
-#[path = "deferred_abr_debug.rs"]
-mod deferred_abr_debug;
 #[path = "drm_stream_integrity.rs"]
 mod drm_stream_integrity;
+#[path = "hls_abr_variant_switch.rs"]
+mod hls_abr_variant_switch;
 #[path = "stress_chunk_integrity.rs"]
 mod stress_chunk_integrity;
 #[path = "stress_seek_random.rs"]

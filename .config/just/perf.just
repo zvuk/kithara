@@ -101,10 +101,10 @@ bench MODE="build":
 
 memory:
     @echo "=== Tier 1: Pool-native budget tests ==="
-    cargo test -p kithara-bufpool-tests --test bufpool memory_budget
+    cargo test -p kithara-bufpool --test bufpool memory_budget
     @echo ""
     @echo "=== Tier 2: Allocation regression tests ==="
-    cargo test -p kithara-bufpool-tests --test bufpool alloc_regression -- --test-threads=1
+    cargo test -p kithara-bufpool --test bufpool alloc_regression -- --test-threads=1
     @echo ""
     @echo "=== Tier 3: Audio hot path zero-alloc ==="
     cargo test -p kithara-audio-tests --test audio_heavy alloc_free_hotpath -- --test-threads=1

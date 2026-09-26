@@ -3,24 +3,27 @@ mod kithara {
 }
 
 use std::{
-    future::Future,
-    net::SocketAddr,
+    io,
     sync::atomic::{AtomicU32, AtomicUsize, Ordering},
 };
 
+use axum::{
+    Router,
+    body::Body,
+    handler::Handler,
+    http::{HeaderMap, StatusCode, response::Builder},
+    response::Response,
+    routing::any,
+};
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{StreamExt, stream};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
     time::Duration,
-    tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::{TcpListener, TcpStream},
-        task::spawn,
-    },
+    tokio::task::spawn,
 };
-use url::Url;
+use kithara_test_utils::TestHttpServer;
 
 use super::client::AppleNet;
 use crate::{
@@ -29,6 +32,7 @@ use crate::{
     types::{Compression, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
 
+const PROBE: &str = "/probe";
 const PLAYLIST: &[u8] = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\na.m3u8\n";
 const GZIP_PLAYLIST: &[u8] = &[
     0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x53, 0x76, 0x8d, 0x08, 0xf1, 0x35,
@@ -37,56 +41,51 @@ const GZIP_PLAYLIST: &[u8] = &[
     0x7a, 0xb9, 0xc6, 0xa5, 0x16, 0x5c, 0x00, 0xf1, 0x51, 0x3e, 0xd3, 0x2d, 0x00, 0x00, 0x00,
 ];
 
-async fn spawn_server<F, Fut>(handler: F) -> Url
+/// Serves `handler` for every method on [`PROBE`].
+async fn serve<H, T>(handler: H) -> TestHttpServer
 where
-    F: Fn(TcpStream, String) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = ()> + Send + 'static,
+    H: Handler<T, ()>,
+    T: 'static,
 {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr: SocketAddr = listener.local_addr().expect("local_addr");
-    let handler = Arc::new(handler);
-    spawn(async move {
-        loop {
-            let (mut socket, _) = listener.accept().await.expect("accept");
-            let handler = Arc::clone(&handler);
-            spawn(async move {
-                let request = read_request(&mut socket).await;
-                handler(socket, request).await;
-            });
-        }
+    TestHttpServer::new(Router::new().route(PROBE, any(handler))).await
+}
+
+fn respond(status: StatusCode, headers: &[(&str, &str)], body: impl Into<Body>) -> Response {
+    headers
+        .iter()
+        .fold(
+            Response::builder().status(status),
+            |builder, (key, value)| builder.header(*key, *value),
+        )
+        .body(body.into())
+        .expect("test response")
+}
+
+/// A body of unknown length: chunked on a GET, and on a HEAD a response that
+/// carries no `Content-Length` at all.
+fn unsized_body(chunks: &'static [&'static [u8]]) -> Body {
+    Body::from_stream(stream::iter(
+        chunks
+            .iter()
+            .map(|chunk| Ok::<_, io::Error>(Bytes::from_static(chunk))),
+    ))
+}
+
+/// Sends `sent`, holds the connection for `linger`, then drops it mid-body.
+fn truncated(head: Builder, sent: Bytes, linger: Duration) -> Response {
+    let dropped = stream::once(async move {
+        kithara_platform::time::sleep(linger).await;
+        Err::<Bytes, _>(io::Error::other("connection dropped mid-body"))
     });
-    Url::parse(&format!("http://{addr}/probe")).expect("url")
+    head.body(Body::from_stream(stream::iter([Ok(sent)]).chain(dropped)))
+        .expect("truncated response")
 }
 
-async fn read_request(socket: &mut TcpStream) -> String {
-    let mut buf = [0; 4096];
-    let n = socket.read(&mut buf).await.expect("read request");
-    String::from_utf8_lossy(&buf[..n]).into_owned()
-}
-
-async fn write_response(
-    mut socket: TcpStream,
-    status: &str,
-    headers: &[(&str, &str)],
-    body: &[u8],
-) {
-    let mut head = format!(
-        "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n",
-        body.len()
-    );
-    for (key, value) in headers {
-        head.push_str(key);
-        head.push_str(": ");
-        head.push_str(value);
-        head.push_str("\r\n");
-    }
-    head.push_str("\r\n");
-    socket.write_all(head.as_bytes()).await.expect("write head");
-    socket.write_all(body).await.expect("write body");
-}
-
-async fn write_raw(mut socket: TcpStream, response: &'static [u8]) {
-    socket.write_all(response).await.expect("write response");
+/// Sends the head and never a byte of the body.
+fn stalled_head() -> Response {
+    Response::new(Body::from_stream(
+        stream::pending::<Result<Bytes, io::Error>>(),
+    ))
 }
 
 fn fast_options(max_retries: u32) -> NetOptions {
@@ -111,18 +110,15 @@ fn stream_options(inactivity_ms: u64) -> NetOptions {
         .build()
 }
 
-fn range_start(request: &str) -> Option<usize> {
-    request_header(request, "range")
+fn range_start(headers: &HeaderMap) -> Option<usize> {
+    request_header(headers, "range")
         .and_then(|range| range.strip_prefix("bytes="))
         .and_then(|range| range.split_once('-').map(|(start, _)| start))
         .and_then(|start| start.parse().ok())
 }
 
-fn request_header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
-    request.lines().find_map(|line| {
-        let (key, value) = line.split_once(':')?;
-        key.eq_ignore_ascii_case(name).then(|| value.trim())
-    })
+fn request_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name).and_then(|value| value.to_str().ok())
 }
 
 fn overriding_accept_encoding() -> Headers {
@@ -143,18 +139,19 @@ async fn collect(mut stream: crate::ByteStream) -> Result<Bytes, NetError> {
 async fn apple_get_bytes_retries_503_until_ok() {
     let counter = Arc::new(AtomicU32::new(0));
     let seen = Arc::clone(&counter);
-    let url = spawn_server(move |socket, _request| {
+    let server = serve(move || {
         let seen = Arc::clone(&seen);
         async move {
             let attempt = seen.fetch_add(1, Ordering::SeqCst);
             if attempt < 2 {
-                write_response(socket, "503 Service Unavailable", &[], b"busy").await;
+                respond(StatusCode::SERVICE_UNAVAILABLE, &[], "busy")
             } else {
-                write_response(socket, "200 OK", &[], b"ok").await;
+                respond(StatusCode::OK, &[], "ok")
             }
         }
     })
     .await;
+    let url = server.url(PROBE);
 
     let client = AppleNet::new(fast_options(3), pools(), CancelToken::never());
     let body = client
@@ -170,25 +167,18 @@ async fn apple_get_bytes_retries_503_until_ok() {
 async fn apple_accept_encoding_policy_is_authoritative_per_request() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let handler_seen = Arc::clone(&seen);
-    let url = spawn_server(move |socket, request| {
+    let server = serve(move |headers: HeaderMap| {
         let seen = Arc::clone(&handler_seen);
         async move {
-            let accept_encoding = request_header(&request, "accept-encoding")
+            let accept_encoding = request_header(&headers, "accept-encoding")
                 .unwrap_or_default()
                 .to_string();
             seen.lock().push(accept_encoding);
-            if request.starts_with("HEAD ") {
-                write_raw(
-                    socket,
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n",
-                )
-                .await;
-            } else {
-                write_response(socket, "200 OK", &[], b"ok").await;
-            }
+            respond(StatusCode::OK, &[], "ok")
         }
     })
     .await;
+    let url = server.url(PROBE);
 
     let options = NetOptions::builder()
         .compression(Compression::GZIP | Compression::DEFLATE)
@@ -245,17 +235,16 @@ async fn apple_accept_encoding_policy_is_authoritative_per_request() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_whole_body_preserves_configured_auto_decode() {
-    let url = spawn_server(|socket, request| async move {
-        assert_eq!(request_header(&request, "accept-encoding"), Some("gzip"));
-        write_response(
-            socket,
-            "200 OK",
+    let server = serve(|headers: HeaderMap| async move {
+        assert_eq!(request_header(&headers, "accept-encoding"), Some("gzip"));
+        respond(
+            StatusCode::OK,
             &[("Content-Encoding", "gzip")],
             GZIP_PLAYLIST,
         )
-        .await;
     })
     .await;
+    let url = server.url(PROBE);
     let options = NetOptions::builder().compression(Compression::GZIP).build();
     let client = AppleNet::new(options, pools(), CancelToken::never());
 
@@ -269,16 +258,15 @@ async fn apple_whole_body_preserves_configured_auto_decode() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_identity_stream_rejects_nonidentity_content_encoding() {
-    let url = spawn_server(|socket, _request| async move {
-        write_response(
-            socket,
-            "200 OK",
+    let server = serve(|| async {
+        respond(
+            StatusCode::OK,
             &[("CoNtEnT-EnCoDiNg", "gzip")],
             GZIP_PLAYLIST,
         )
-        .await;
     })
     .await;
+    let url = server.url(PROBE);
     let client = AppleNet::new(fast_options(0), pools(), CancelToken::never());
 
     let Err(error) = client.stream(url.clone(), None).await else {
@@ -292,27 +280,25 @@ async fn apple_identity_stream_rejects_nonidentity_content_encoding() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_head_backfills_content_length_from_content_range() {
-    let url = spawn_server(|socket, _request| async move {
-            write_raw(
-                socket,
-                b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/1234\r\nConnection: close\r\n\r\n",
-            )
-            .await;
-        })
-        .await;
+    let server = serve(|| async {
+        respond(
+            StatusCode::PARTIAL_CONTENT,
+            &[("Content-Range", "bytes 0-0/1234")],
+            unsized_body(&[]),
+        )
+    })
+    .await;
 
     let client = AppleNet::new(fast_options(0), pools(), CancelToken::never());
-    let headers = client.head(url, None).await.expect("head");
+    let headers = client.head(server.url(PROBE), None).await.expect("head");
 
     assert_eq!(headers.get("content-length"), Some("1234"));
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_range_rejects_partial_without_content_range() {
-    let url = spawn_server(|socket, _request| async move {
-        write_response(socket, "206 Partial Content", &[], b"part").await;
-    })
-    .await;
+    let server = serve(|| async { respond(StatusCode::PARTIAL_CONTENT, &[], "part") }).await;
+    let url = server.url(PROBE);
     let client = AppleNet::new(fast_options(0), pools(), CancelToken::never());
 
     let Err(error) = client
@@ -327,14 +313,15 @@ async fn apple_range_rejects_partial_without_content_range() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_range_rejects_partial_without_content_length() {
-    let url = spawn_server(|socket, _request| async move {
-        write_raw(
-            socket,
-            b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-3/8\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n8\r\nabcdefgh\r\n0\r\n\r\n",
+    let server = serve(|| async {
+        respond(
+            StatusCode::PARTIAL_CONTENT,
+            &[("Content-Range", "bytes 0-3/8")],
+            unsized_body(&[b"abcdefgh"]),
         )
-        .await;
     })
     .await;
+    let url = server.url(PROBE);
     let client = AppleNet::new(fast_options(0), pools(), CancelToken::never());
 
     let Err(error) = client
@@ -352,41 +339,36 @@ async fn apple_resume_rejects_a_different_content_range() {
     const BODY_LEN: usize = 2 * 1024 * 1024;
     const FIRST_WRITE_LEN: usize = 1024 * 1024;
 
-    let body = Arc::new(vec![0x5a; BODY_LEN]);
+    let body = Bytes::from(vec![0x5a; BODY_LEN]);
     let requests = Arc::new(AtomicU32::new(0));
     let seen = Arc::clone(&requests);
-    let served_body = Arc::clone(&body);
-    let url = spawn_server(move |mut socket, request| {
+    let server = serve(move |headers: HeaderMap| {
         let seen = Arc::clone(&seen);
-        let body = Arc::clone(&served_body);
+        let body = body.clone();
         async move {
             seen.fetch_add(1, Ordering::SeqCst);
-            if range_start(&request).is_some() {
+            if range_start(&headers).is_some() {
                 let content_range = format!("bytes 0-0/{}", body.len());
-                write_response(
-                    socket,
-                    "206 Partial Content",
+                respond(
+                    StatusCode::PARTIAL_CONTENT,
                     &[("Content-Range", &content_range)],
-                    b"x",
+                    "x",
                 )
-                .await;
             } else {
-                let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                socket.write_all(head.as_bytes()).await.expect("write head");
-                socket
-                    .write_all(&body[..FIRST_WRITE_LEN])
-                    .await
-                    .expect("write short body");
-                kithara_platform::time::sleep(Duration::from_millis(20)).await;
+                truncated(
+                    Response::builder().header("Content-Length", body.len()),
+                    body.slice(..FIRST_WRITE_LEN),
+                    Duration::from_millis(20),
+                )
             }
         }
     })
     .await;
     let client = AppleNet::new(fast_options(1), pools(), CancelToken::never());
-    let stream = client.stream(url, None).await.expect("initial stream");
+    let stream = client
+        .stream(server.url(PROBE), None)
+        .await
+        .expect("initial stream");
 
     let error = collect(stream)
         .await
@@ -403,43 +385,41 @@ async fn apple_resume_rejects_a_conflicting_representation_total() {
     const BODY_LEN: usize = 2 * 1024 * 1024;
     const FIRST_WRITE_LEN: usize = 1024 * 1024;
 
-    let body = Arc::new(vec![0x5a; BODY_LEN]);
+    let body = Bytes::from(vec![0x5a; BODY_LEN]);
     let requests = Arc::new(AtomicU32::new(0));
     let seen = Arc::clone(&requests);
-    let served_body = Arc::clone(&body);
-    let url = spawn_server(move |mut socket, request| {
+    let server = serve(move |headers: HeaderMap| {
         let seen = Arc::clone(&seen);
-        let body = Arc::clone(&served_body);
+        let body = body.clone();
         async move {
             seen.fetch_add(1, Ordering::SeqCst);
-            if let Some(start) = range_start(&request) {
-                let end = body.len().saturating_sub(1);
-                let conflicting_total = body.len().saturating_add(1);
-                let content_range = format!("bytes {start}-{end}/{conflicting_total}");
-                write_response(
-                    socket,
-                    "206 Partial Content",
-                    &[("Content-Range", &content_range)],
-                    &body[start..],
-                )
-                .await;
-            } else {
-                let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                socket.write_all(head.as_bytes()).await.expect("write head");
-                socket
-                    .write_all(&body[..FIRST_WRITE_LEN])
-                    .await
-                    .expect("write short body");
-                kithara_platform::time::sleep(Duration::from_millis(20)).await;
-            }
+            range_start(&headers).map_or_else(
+                || {
+                    truncated(
+                        Response::builder().header("Content-Length", body.len()),
+                        body.slice(..FIRST_WRITE_LEN),
+                        Duration::from_millis(20),
+                    )
+                },
+                |start| {
+                    let end = body.len().saturating_sub(1);
+                    let conflicting_total = body.len().saturating_add(1);
+                    let content_range = format!("bytes {start}-{end}/{conflicting_total}");
+                    respond(
+                        StatusCode::PARTIAL_CONTENT,
+                        &[("Content-Range", &content_range)],
+                        body.slice(start..),
+                    )
+                },
+            )
         }
     })
     .await;
     let client = AppleNet::new(fast_options(1), pools(), CancelToken::never());
-    let stream = client.stream(url, None).await.expect("initial stream");
+    let stream = client
+        .stream(server.url(PROBE), None)
+        .await
+        .expect("initial stream");
 
     let error = collect(stream)
         .await
@@ -458,50 +438,42 @@ async fn apple_ignored_range_resume_continues_after_discovering_total() {
     const FIRST_WRITE_LEN: usize = 1024 * 1024;
     const REQUEST_END: u64 = 1023;
 
-    let body = Arc::new(vec![BODY_BYTE; BODY_LEN]);
+    let body = Bytes::from(vec![BODY_BYTE; BODY_LEN]);
     let requests = Arc::new(AtomicU32::new(0));
     let seen = Arc::clone(&requests);
-    let served_body = Arc::clone(&body);
-    let url = spawn_server(move |mut socket, request| {
-        let body = Arc::clone(&served_body);
+    let server = serve(move |headers: HeaderMap| {
+        let body = body.clone();
         let attempt = seen.fetch_add(1, Ordering::SeqCst);
         async move {
             if attempt > 0 {
-                let start = range_start(&request).expect("resumed range start");
-                let range = request_header(&request, "range").expect("range header");
+                let start = range_start(&headers).expect("resumed range start");
+                let range = request_header(&headers, "range").expect("range header");
                 assert_eq!(range, format!("bytes={start}-"));
                 let end_exclusive = BODY_LEN;
                 let end = end_exclusive.saturating_sub(1);
                 let content_range = format!("bytes {start}-{end}/{BODY_LEN}");
-                write_response(
-                    socket,
-                    "206 Partial Content",
+                respond(
+                    StatusCode::PARTIAL_CONTENT,
                     &[("Content-Range", &content_range)],
-                    &body[start..end_exclusive],
+                    body.slice(start..end_exclusive),
                 )
-                .await;
             } else {
-                socket
-                    .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
-                    .await
-                    .expect("write head");
-                socket
-                    .write_all(format!("{FIRST_WRITE_LEN:x}\r\n").as_bytes())
-                    .await
-                    .expect("write chunk head");
-                socket
-                    .write_all(&body[..FIRST_WRITE_LEN])
-                    .await
-                    .expect("write stalled chunk");
-                socket.write_all(b"\r\n").await.expect("write chunk tail");
-                kithara_platform::time::sleep(Duration::from_millis(60)).await;
+                truncated(
+                    Response::builder(),
+                    body.slice(..FIRST_WRITE_LEN),
+                    Duration::from_millis(60),
+                )
             }
         }
     })
     .await;
     let client = AppleNet::new(fast_options(2), pools(), CancelToken::never());
     let stream = client
-        .get_range(url, RangeSpec::new(0, Some(REQUEST_END)), None)
+        .get_range(
+            server.url(PROBE),
+            RangeSpec::new(0, Some(REQUEST_END)),
+            None,
+        )
         .await
         .expect("initial stream");
 
@@ -516,17 +488,14 @@ async fn apple_ignored_range_resume_continues_after_discovering_total() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_open_ended_stream_delivers_chunks() {
-    let url = spawn_server(|socket, _request| async move {
-            write_raw(
-                socket,
-                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\n3\r\ndef\r\n0\r\n\r\n",
-            )
-            .await;
-        })
-        .await;
+    let server =
+        serve(|| async { respond(StatusCode::OK, &[], unsized_body(&[b"abc", b"def"])) }).await;
 
     let client = AppleNet::new(fast_options(0), pools(), CancelToken::never());
-    let stream = client.stream(url, None).await.expect("stream");
+    let stream = client
+        .stream(server.url(PROBE), None)
+        .await
+        .expect("stream");
 
     assert_eq!(&collect(stream).await.expect("body")[..], b"abcdef");
 }
@@ -536,59 +505,56 @@ async fn apple_short_body_yields_before_premature_eof_under_flash() {
     const BODY_LEN: usize = 2 * 1024 * 1024;
     const FIRST_WRITE_LEN: usize = 1024 * 1024;
 
-    let body = Arc::new(
+    let body = Bytes::from(
         (0..BODY_LEN)
             .map(|i| u8::try_from(i % 251).expect("modulo value fits in u8"))
             .collect::<Vec<_>>(),
     );
     let resume_offset = Arc::new(AtomicUsize::new(usize::MAX));
     let accept_encodings = Arc::new(Mutex::new(Vec::new()));
-    let served_body = Arc::clone(&body);
+    let served_body = body.clone();
     let seen_resume = Arc::clone(&resume_offset);
     let seen_accept_encodings = Arc::clone(&accept_encodings);
-    let url = spawn_server(move |mut socket, request| {
-        let body = Arc::clone(&served_body);
+    let server = serve(move |headers: HeaderMap| {
+        let body = served_body.clone();
         let resume_offset = Arc::clone(&seen_resume);
         let accept_encodings = Arc::clone(&seen_accept_encodings);
         async move {
             accept_encodings.lock().push(
-                request_header(&request, "accept-encoding")
+                request_header(&headers, "accept-encoding")
                     .unwrap_or_default()
                     .to_string(),
             );
-            if let Some(offset) = range_start(&request) {
-                resume_offset.store(offset, Ordering::SeqCst);
-                let tail = &body[offset.min(body.len())..];
-                let head = format!(
-                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nConnection: close\r\n\r\n",
-                    tail.len(),
-                    offset,
-                    body.len() - 1,
-                    body.len()
-                );
-                socket
-                    .write_all(head.as_bytes())
-                    .await
-                    .expect("write range head");
-                socket.write_all(tail).await.expect("write range body");
-            } else {
-                let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                socket.write_all(head.as_bytes()).await.expect("write head");
-                socket
-                    .write_all(&body[..FIRST_WRITE_LEN])
-                    .await
-                    .expect("write short body");
-                kithara_platform::time::sleep(Duration::from_millis(20)).await;
-            }
+            range_start(&headers).map_or_else(
+                || {
+                    truncated(
+                        Response::builder()
+                            .header("Content-Length", body.len())
+                            .header("Accept-Ranges", "bytes"),
+                        body.slice(..FIRST_WRITE_LEN),
+                        Duration::from_millis(20),
+                    )
+                },
+                |offset| {
+                    resume_offset.store(offset, Ordering::SeqCst);
+                    let content_range =
+                        format!("bytes {}-{}/{}", offset, body.len() - 1, body.len());
+                    respond(
+                        StatusCode::PARTIAL_CONTENT,
+                        &[("Content-Range", &content_range)],
+                        body.slice(offset.min(body.len())..),
+                    )
+                },
+            )
         }
     })
     .await;
 
     let client = AppleNet::new(fast_options(1), pools(), CancelToken::never());
-    let stream = client.stream(url, None).await.expect("stream");
+    let stream = client
+        .stream(server.url(PROBE), None)
+        .await
+        .expect("stream");
     let body_out = collect(stream).await.expect("body");
 
     let actual_resume = resume_offset.load(Ordering::SeqCst);
@@ -611,14 +577,8 @@ async fn apple_short_body_yields_before_premature_eof_under_flash() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_stream_head_stall_times_out() {
-    let url = spawn_server(|mut socket, _request| async move {
-        socket
-            .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
-            .await
-            .expect("write head");
-        kithara_platform::time::sleep(Duration::from_secs(2)).await;
-    })
-    .await;
+    let server = serve(|| async { stalled_head() }).await;
+    let url = server.url(PROBE);
 
     let client = AppleNet::new(stream_options(300), pools(), CancelToken::never());
     let result = client.stream(url, None).await;
@@ -631,14 +591,8 @@ async fn apple_stream_head_stall_times_out() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn apple_stream_observes_cancellation() {
-    let url = spawn_server(|mut socket, _request| async move {
-        socket
-            .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
-            .await
-            .expect("write head");
-        kithara_platform::time::sleep(Duration::from_secs(3)).await;
-    })
-    .await;
+    let server = serve(|| async { stalled_head() }).await;
+    let url = server.url(PROBE);
 
     let cancel = CancelToken::root();
     let client = AppleNet::new(stream_options(5000), pools(), cancel.clone());

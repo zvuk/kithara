@@ -142,19 +142,10 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn beat_outside_window_lowers_f() {
-        let reference = vec![1.0, 2.0, 3.0];
-        let estimated = vec![1.0, 2.0, 3.2];
-        let s = f_measure(&reference, &estimated, 0.070);
-        assert_eq!(s.matched, 2);
-        assert!(s.f_measure < 1.0);
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn extra_estimate_lowers_precision() {
-        let reference = vec![1.0, 2.0];
-        let estimated = vec![1.0, 2.0, 5.0];
-        let s = f_measure(&reference, &estimated, 0.070);
+    #[case::beat_outside_window(&[1.0, 2.0, 3.0], &[1.0, 2.0, 3.2])]
+    #[case::extra_estimate(&[1.0, 2.0], &[1.0, 2.0, 5.0])]
+    fn an_unmatched_beat_lowers_f(#[case] reference: &[f32], #[case] estimated: &[f32]) {
+        let s = f_measure(reference, estimated, 0.070);
         assert_eq!(s.matched, 2);
         assert!(s.f_measure < 1.0);
     }

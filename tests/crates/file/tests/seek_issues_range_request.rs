@@ -29,10 +29,8 @@ use kithara::{
     },
     stream::Stream,
 };
-use kithara_integration_tests::{
-    TestHttpServer,
-    bufpool_ext::{TestPools, pools},
-};
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_test_utils::TestHttpServer;
 
 const TOTAL: usize = 4096;
 /// Bytes the stalled head fetch delivers before it goes quiet forever.

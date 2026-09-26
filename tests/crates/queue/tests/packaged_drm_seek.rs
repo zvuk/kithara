@@ -21,25 +21,15 @@ use kithara_app::{
     pools::{AppPools, PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, Xorshift64,
+    TestServerHelper,
     event::TestEvent,
     fixture_protocol::DelayRule,
     kithara, mixed_codec_ladder_encrypted,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE, app_disk_asset_store, app_track_source},
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
+use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
 use url::Url;
-
-fn install_tracing() {
-    use tracing_subscriber::{EnvFilter, fmt};
-    let _ = fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("kithara_queue=debug,kithara_hls=debug,kithara_audio=debug")
-        }))
-        .with_test_writer()
-        .try_init();
-}
 
 async fn wait_for_status(
     rx: &mut EventReceiver<TestEvent>,
@@ -164,10 +154,10 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     .expect("create product offline queue");
     let mut tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
 
-    let source = super::app_track_source(
+    let source = app_track_source(
         url.as_str(),
         &config,
-        super::app_disk_asset_store(&config, temp.path()),
+        app_disk_asset_store(&config, temp.path()),
         backend,
         abr,
         None,
@@ -223,7 +213,10 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     queue.close().await;
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(
+    tracing("kithara_queue=debug,kithara_hls=debug,kithara_audio=debug"),
+    tokio
+)]
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
 #[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
@@ -246,13 +239,16 @@ async fn drm_seek_resumes(
     temp_dir: TestTempDir,
 ) {
     let (_helper, url) = drm_track;
-    install_tracing();
     run_seek_scenario(&url, backend, abr, temp_dir).await;
 }
 
 // flash(false): the e2e this mirrors runs real-clock; the stall window is
 // timing-dependent, so the real-clock lane is the one expected to catch it.
-#[kithara::test(tokio, flash(false))]
+#[kithara::test(
+    tracing("kithara_queue=debug,kithara_hls=debug,kithara_audio=debug"),
+    tokio,
+    flash(false)
+)]
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
 #[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
@@ -275,11 +271,13 @@ async fn drm_seek_resumes_realtime(
     temp_dir: TestTempDir,
 ) {
     let (_helper, url) = drm_track;
-    install_tracing();
     run_seek_scenario(&url, backend, abr, temp_dir).await;
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(
+    tracing("kithara_queue=debug,kithara_hls=debug,kithara_audio=debug"),
+    tokio
+)]
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
 #[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
@@ -302,6 +300,5 @@ async fn drm_seek_resumes_delayed_cdn(
     temp_dir: TestTempDir,
 ) {
     let (_helper, url) = delayed_drm_track;
-    install_tracing();
     run_seek_scenario(&url, backend, abr, temp_dir).await;
 }

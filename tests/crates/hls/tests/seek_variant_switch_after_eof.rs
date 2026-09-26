@@ -9,12 +9,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir,
+    HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    hls_server::{HlsTestServer, HlsTestServerConfig},
     hls_test_helpers::pin_abr_variant,
-    rt_cancel, temp_dir,
 };
+use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tracing::info;
 
 /// Seek after ABR variant switch at EOF must not deadlock.
@@ -32,17 +31,20 @@ use tracing::info;
 )]
 async fn seek_after_variant_switch_at_eof_must_not_deadlock(
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
 ) {
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: 3,
-        segments_per_variant: 3,
-        segment_size: 200_000,
-        ..Default::default()
-    })
-    .await;
+    let server = TestServerHelper::new()
+        .await
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(3)
+                .segments_per_variant(3)
+                .segment_size(200_000),
+        )
+        .await
+        .expect("create HLS fixture");
 
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
 
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
@@ -53,7 +55,7 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
     let config = HlsConfig::for_url(url)
         .store(store)
         .pools(pools)
-        .cancel(rt_cancel)
+        .cancel(cancel_token)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 

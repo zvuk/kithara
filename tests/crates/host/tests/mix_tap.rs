@@ -1,0 +1,227 @@
+#![cfg(not(target_arch = "wasm32"))]
+
+use std::num::NonZeroU32;
+
+use kithara::{
+    self,
+    events::TrackId,
+    play::{PlayError, Resource, SessionError},
+    signal::AudioSpec,
+};
+use kithara_integration_tests::offline::{
+    OfflinePlayer, OfflinePlayerOptions, resource_from_reader,
+};
+use kithara_test_fixtures::integration_fixtures::constant_half;
+
+const SAMPLE_RATE: u32 = 44_100;
+const BLOCK_FRAMES: usize = 512;
+const TRACK_SECS: f64 = 0.1;
+const BLOCKS: usize = 20;
+const ROOMY_CAPACITY: usize = 65_536;
+
+fn make_resource(constant_half: &'static [u8]) -> Resource {
+    let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
+    resource_from_reader(kithara::audio::mock::TestPcmReader::with_pcm(
+        spec,
+        TRACK_SECS,
+        constant_half,
+    ))
+}
+
+async fn playing_harness(constant_half: &'static [u8]) -> OfflinePlayer {
+    let harness =
+        OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
+    harness
+        .with_player(move |player| {
+            player.insert(make_resource(constant_half), TrackId::allocate(), None);
+            player
+                .select_item(0, kithara::play::SelectionPlayback::Play)
+                .expect("select first queue item");
+        })
+        .await;
+    harness.render(BLOCK_FRAMES).await;
+    let _ = harness.tick_and_drain().await;
+    harness
+}
+
+async fn render_blocks(harness: &OfflinePlayer, blocks: usize) -> Vec<f32> {
+    let mut rendered = Vec::with_capacity(blocks * BLOCK_FRAMES * 2);
+    for _ in 0..blocks {
+        rendered.extend_from_slice(&harness.render(BLOCK_FRAMES).await);
+        let _ = harness.tick_and_drain().await;
+    }
+    rendered
+}
+
+async fn render_with_tap(constant_half: &'static [u8]) -> (Vec<f32>, Vec<f32>, u64) {
+    let harness = playing_harness(constant_half).await;
+    let mut tap = harness
+        .host()
+        .enable_mix_tap(ROOMY_CAPACITY)
+        .await
+        .expect("enable mix tap");
+    let rendered = render_blocks(&harness, BLOCKS).await;
+    let tapped = tap.drain();
+    let drops = tap.drops();
+    harness.close().await;
+    (rendered, tapped, drops)
+}
+
+#[kithara::test(tokio)]
+async fn zero_output_sink_is_processed_beside_graph_out(constant_half: &'static [u8]) {
+    let (rendered, tapped, drops) = render_with_tap(constant_half).await;
+
+    assert_eq!(
+        rendered.len(),
+        BLOCKS * BLOCK_FRAMES * 2,
+        "graph_out keeps producing while the sink is attached"
+    );
+    assert_eq!(
+        tapped.len(),
+        rendered.len(),
+        "the zero-output sink must process every block"
+    );
+    assert_eq!(drops, 0);
+}
+
+#[kithara::test(tokio)]
+async fn mix_tap_matches_graph_out_bit_exactly(constant_half: &'static [u8]) {
+    let (rendered, tapped, _) = render_with_tap(constant_half).await;
+
+    assert!(
+        rendered.iter().any(|sample| sample.abs() > 0.0),
+        "the fixture must render audible signal"
+    );
+    assert!(
+        rendered.iter().rev().take(BLOCK_FRAMES).all(|s| *s == 0.0),
+        "the render must reach past the track into silence"
+    );
+    assert_eq!(tapped, rendered, "mix tap must be bit-exact with graph_out");
+}
+
+#[kithara::test(tokio)]
+async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for(constant_half: &'static [u8]) {
+    let harness =
+        OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
+    let mut tap = harness
+        .host()
+        .enable_mix_tap(ROOMY_CAPACITY)
+        .await
+        .expect("arm the mix tap before a session output exists");
+    assert!(tap.drain().is_empty(), "an idle session feeds nothing");
+
+    harness
+        .with_player(move |player| {
+            player.insert(make_resource(constant_half), TrackId::allocate(), None);
+            player
+                .select_item(0, kithara::play::SelectionPlayback::Play)
+                .expect("select first queue item");
+        })
+        .await;
+
+    let rendered = render_blocks(&harness, BLOCKS).await;
+    assert_eq!(
+        tap.drain(),
+        rendered,
+        "the waiting tap catches the mix from the first block the graph renders"
+    );
+    harness.close().await;
+}
+
+#[kithara::test(tokio)]
+async fn the_tap_keeps_feeding_across_a_device_route_restart(constant_half: &'static [u8]) {
+    let harness = playing_harness(constant_half).await;
+    let mut tap = harness
+        .host()
+        .enable_mix_tap(ROOMY_CAPACITY)
+        .await
+        .expect("enable mix tap");
+    render_blocks(&harness, 2).await;
+    assert!(!tap.drain().is_empty(), "the feed runs before the restart");
+
+    harness
+        .host()
+        .invalidate_audio_route("mix tap route restart")
+        .await
+        .expect("invalidate the audio route");
+
+    let rendered = render_blocks(&harness, 4).await;
+    assert!(
+        tap.writer_alive(),
+        "a stream restart at the same rate keeps the producer"
+    );
+    assert_eq!(
+        tap.drain(),
+        rendered,
+        "the same producer carries the mix rendered after the restart"
+    );
+    harness.close().await;
+}
+
+#[kithara::test(tokio)]
+async fn mix_tap_overflow_drops_exactly_the_capacity_deficit(constant_half: &'static [u8]) {
+    const TIGHT_CAPACITY: usize = 2_048;
+
+    let harness = playing_harness(constant_half).await;
+    let mut tap = harness
+        .host()
+        .enable_mix_tap(TIGHT_CAPACITY)
+        .await
+        .expect("enable mix tap");
+
+    let rendered = render_blocks(&harness, BLOCKS).await;
+    let tapped = tap.drain();
+
+    assert_eq!(tapped.len(), TIGHT_CAPACITY, "the ring fills to capacity");
+    assert_eq!(
+        tapped,
+        rendered[..TIGHT_CAPACITY],
+        "what the ring holds is a contiguous prefix of the mix"
+    );
+    assert_eq!(
+        tap.drops(),
+        (rendered.len() - TIGHT_CAPACITY) as u64,
+        "every sample the ring had no room for is counted"
+    );
+    harness.close().await;
+}
+
+#[kithara::test(tokio)]
+async fn second_enable_is_rejected_and_disable_releases_the_writer(constant_half: &'static [u8]) {
+    let harness = playing_harness(constant_half).await;
+    let tap = harness
+        .host()
+        .enable_mix_tap(ROOMY_CAPACITY)
+        .await
+        .expect("enable mix tap");
+
+    match harness
+        .host()
+        .enable_mix_tap(ROOMY_CAPACITY)
+        .await
+        .map(|_| ())
+    {
+        Err(PlayError::Session(SessionError::MixTapActive)) => {}
+        other => panic!("a second consumer must be rejected, got {other:?}"),
+    }
+    assert!(tap.writer_alive());
+
+    harness
+        .host()
+        .disable_mix_tap()
+        .await
+        .expect("disable mix tap");
+    render_blocks(&harness, 2).await;
+    assert!(
+        !tap.writer_alive(),
+        "disabling the tap must drop the producer so the consumer sees the feed end"
+    );
+
+    let re_enabled = harness
+        .host()
+        .enable_mix_tap(ROOMY_CAPACITY)
+        .await
+        .expect("re-enable mix tap after disable");
+    assert!(re_enabled.writer_alive());
+    harness.close().await;
+}

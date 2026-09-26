@@ -36,12 +36,12 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    CreatedHls, HlsFixtureBuilder, InitGateHandle, TestServerHelper, TestTempDir,
+    CreatedHls, HlsFixtureBuilder, InitGateHandle, TestServerHelper,
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};

@@ -37,10 +37,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestHttpServer, auto,
+    auto,
     bufpool_ext::{TestPools, pools},
 };
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+use kithara_test_utils::TestHttpServer;
 use tempfile::TempDir;
 use url::Url;
 

@@ -9,11 +9,9 @@ use kithara::{
     signal::AudioSpec,
     stream::Stream,
 };
-use kithara_integration_tests::{
-    TestTempDir, Xorshift64,
-    bufpool_ext::{TestPools, pools},
-};
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 use kithara_test_fixtures::fixtures::stress_wav;
+use kithara_test_utils::{TestTempDir, Xorshift64};
 use tempfile::NamedTempFile;
 use tracing::info;
 

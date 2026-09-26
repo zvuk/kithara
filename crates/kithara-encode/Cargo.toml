@@ -24,6 +24,8 @@ client-reqwest = ["kithara-stream/client-reqwest"]
 client-wreq = ["kithara-stream/client-wreq"]
 tls-native = ["kithara-stream/tls-native"]
 tls-rustls = ["kithara-stream/tls-rustls"]
+flash = ["kithara-stream/flash"]
+no-block = ["kithara-stream/no-block"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
@@ -50,10 +52,12 @@ ffmpeg-next = { workspace = true, optional = true, features = ["static"] }
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["usdt"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara-test-fixtures = { workspace = true, default-features = false, features = ["packaged"] }
+kithara-decode = { workspace = true, features = ["fdk-aac"] }
+kithara-resampler = { workspace = true }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "packaged"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = { workspace = true }

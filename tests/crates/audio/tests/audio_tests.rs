@@ -8,22 +8,21 @@ use kithara::{
         AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, ChunkOutcome,
         DecoderBackend, DecoderChangeCause, DecoderEvent, ReadOutcome, SeekLifecycleStage,
     },
-    decode::{GaplessMode, SilenceTrimParams},
     events::{EventBus, EventReceiver},
     file::{FileConfig, FileSrc},
     platform::time::{self, Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig},
     signal::AudioSpec,
-    stream::{ContainerFormat, MediaInfo, SeekEpoch},
+    stream::SeekEpoch,
 };
 use kithara_integration_tests::{
-    TestTempDir,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     kithara,
     reads::blocking_audio,
 };
 use kithara_test_fixtures::{asset::Asset, assets};
+use kithara_test_utils::TestTempDir;
 use tempfile::NamedTempFile;
 
 /// Polls `audio.read()` until it returns `Frames`, an unrelated `Eof`,
@@ -170,62 +169,6 @@ fn a_shared_receiver_prefers_its_earlier_declared_topic() {
         decoder.try_recv().map(|env| env.event),
         Ok(DecoderEvent::TransitionHold { .. })
     ));
-}
-
-#[kithara::test]
-fn test_audio_config_with_media_info() {
-    let info = MediaInfo::builder()
-        .container(ContainerFormat::Wav)
-        .sample_rate(44100)
-        .build();
-
-    let pools = pools();
-    let file_config = FileConfig::for_src(FileSrc::Local("/tmp/test.mp3".into()))
-        .store(
-            AssetStore::builder(pools.clone())
-                .backend(StorageBackend::Memory)
-                .build(),
-        )
-        .pools(pools)
-        .build();
-    let config = AudioConfig::<kithara::file::File<TestPools>>::for_stream(file_config)
-        .media_info(info.clone())
-        .build();
-
-    assert!(config.media_info().is_some());
-    assert_eq!(
-        config.media_info().unwrap().container,
-        Some(ContainerFormat::Wav)
-    );
-}
-
-#[kithara::test]
-#[case::codec_priming(GaplessMode::CodecPriming)]
-#[case::silence_trim(GaplessMode::SilenceTrim(SilenceTrimParams {
-    threshold_db: 50.0,
-    min_trim_frames: 128,
-    scan_window_frames: 2_048,
-    trim_trailing: true,
-}))]
-fn test_audio_config_with_gapless_mode(#[case] mode: GaplessMode) {
-    let pools = pools();
-    let file_config = FileConfig::for_src(FileSrc::Local("/tmp/test.mp3".into()))
-        .store(
-            AssetStore::builder(pools.clone())
-                .backend(StorageBackend::Memory)
-                .build(),
-        )
-        .pools(pools)
-        .build();
-    let config = AudioConfig::<kithara::file::File<TestPools>>::for_stream(file_config)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .gapless_mode(mode)
-                .build(),
-        )
-        .build();
-
-    assert_eq!(config.decoder().gapless_mode(), mode);
 }
 
 #[kithara::test(tokio)]

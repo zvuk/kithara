@@ -1,0 +1,249 @@
+#![forbid(unsafe_code)]
+
+use kithara_assets::{ReadSide, WriteSide};
+use kithara_platform::{thread, time::Duration};
+use kithara_test_utils::{kithara, temp_dir};
+
+use super::support::{asset_scope, pending, read_bytes, resource};
+
+#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[case(1024, 512, 0)]
+#[case(4096, 2048, 8192)]
+#[case(16384, 8192, 32768)]
+#[case(65536, 32768, 131072)]
+fn streaming_resource_complex_write_patterns(
+    #[case] total_size: usize,
+    #[case] chunk_size: usize,
+    #[case] initial_offset: u64,
+    temp_dir: kithara_test_utils::TestTempDir,
+) {
+    let scope = asset_scope(&temp_dir, "streaming-complex");
+
+    let key = scope.key(&resource("data.bin")).unwrap();
+
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+    let reader = writer.reader();
+
+    let total_chunks = total_size / chunk_size;
+    for i in 0..total_chunks {
+        let offset = initial_offset + u64::try_from(i * chunk_size).unwrap_or(u64::MAX);
+        let data: Vec<u8> = (0..chunk_size)
+            .map(|j| u8::try_from((i + j) % 256).unwrap_or(0))
+            .collect();
+
+        writer.write_at(offset, &data).unwrap();
+        reader
+            .wait_range(offset..(offset + chunk_size as u64))
+            .unwrap();
+
+        let read_back = read_bytes(&reader, offset, chunk_size);
+        assert_eq!(read_back, data);
+    }
+
+    writer.commit(None).unwrap();
+}
+
+#[kithara::test(native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[case(1, 100)]
+#[case(2, 50)]
+fn streaming_resource_concurrent_writes(
+    #[case] write_count: usize,
+    #[case] chunk_size: usize,
+    temp_dir: kithara_test_utils::TestTempDir,
+) {
+    let scope = asset_scope(&temp_dir, "streaming-concurrent");
+
+    let key = scope.key(&resource("concurrent.bin")).unwrap();
+
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+
+    let mut handles = Vec::new();
+    for i in 0..write_count {
+        let handle = thread::spawn({
+            move || {
+                let offset = u64::try_from(i * chunk_size).unwrap_or(u64::MAX);
+                let data: Vec<u8> = (0..chunk_size)
+                    .map(|j| u8::try_from((i * chunk_size + j) % 256).unwrap_or(0))
+                    .collect();
+
+                (offset, data)
+            }
+        });
+
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        let (offset, _data) = handle.join().unwrap();
+        println!("Task for offset {} completed", offset);
+    }
+
+    writer.commit(None).unwrap();
+}
+
+#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[case(0, 1024)]
+#[case(2048, 1024)]
+#[case(4096, 512)]
+#[case(8192, 100)]
+fn streaming_resource_edge_case_reads(
+    #[case] offset: u64,
+    #[case] read_size: usize,
+    temp_dir: kithara_test_utils::TestTempDir,
+) {
+    let scope = asset_scope(&temp_dir, "streaming-edge-reads");
+
+    let key = scope.key(&resource("edge.bin")).unwrap();
+
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+    let reader = writer.reader();
+
+    let data_size = 6144;
+    let initial_data: Vec<u8> = (0..data_size)
+        .map(|i| u8::try_from(i % 256).unwrap_or(0))
+        .collect();
+    writer.write_at(0, &initial_data).unwrap();
+    reader.wait_range(0..data_size as u64).unwrap();
+
+    if offset < data_size as u64 {
+        let offset_usize = usize::try_from(offset).unwrap_or(usize::MAX);
+        let expected_size = read_size.min(data_size - offset_usize);
+        let read_back = read_bytes(&reader, offset, read_size);
+
+        assert_eq!(read_back.len(), expected_size);
+
+        if expected_size > 0 {
+            let expected_data = &initial_data[offset_usize..offset_usize + expected_size];
+            assert_eq!(read_back, expected_data);
+        }
+    }
+
+    writer.commit(None).unwrap();
+}
+
+#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[case(vec![(0, 1024), (2048, 1024)])]
+#[case(vec![(0, 512), (1024, 512)])]
+fn streaming_resource_multiple_range_operations(
+    #[case] write_ranges: Vec<(usize, usize)>,
+    temp_dir: kithara_test_utils::TestTempDir,
+) {
+    let scope = asset_scope(&temp_dir, "streaming-multi-range");
+
+    let key = scope.key(&resource("multi.bin")).unwrap();
+
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+    let reader = writer.reader();
+
+    for (i, (offset, size)) in write_ranges.iter().enumerate() {
+        let data: Vec<u8> = (0..*size)
+            .map(|j| u8::try_from((i * 1000 + j) % 256).unwrap_or(0))
+            .collect();
+        let offset_u64 = *offset as u64;
+
+        writer.write_at(offset_u64, &data).unwrap();
+        reader
+            .wait_range(offset_u64..(offset_u64 + *size as u64))
+            .unwrap();
+
+        let read_back = read_bytes(&reader, offset_u64, *size);
+        assert_eq!(read_back, data);
+    }
+
+    for (i, (offset, size)) in write_ranges.iter().enumerate() {
+        let expected_data: Vec<u8> = (0..*size)
+            .map(|j| u8::try_from((i * 1000 + j) % 256).unwrap_or(0))
+            .collect();
+        let read_back = read_bytes(&reader, *offset as u64, *size);
+        assert_eq!(read_back, expected_data);
+    }
+
+    writer.commit(None).unwrap();
+}
+
+#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[case(false)]
+#[case(true)]
+fn streaming_resource_commit_behavior(
+    #[case] explicit_commit: bool,
+    temp_dir: kithara_test_utils::TestTempDir,
+) {
+    let scope = asset_scope(&temp_dir, "streaming-commit");
+
+    let key = scope.key(&resource("commit.bin")).unwrap();
+
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+    let reader = writer.reader();
+
+    let data = vec![0xAB; 4096];
+    writer.write_at(0, &data).unwrap();
+    reader.wait_range(0..(data.len() as u64)).unwrap();
+
+    let read_back = read_bytes(&reader, 0, data.len());
+    assert_eq!(read_back, data);
+
+    if explicit_commit {
+        let committed = writer.commit(None).unwrap();
+
+        let read_back_again = read_bytes(&committed, 0, data.len());
+        assert_eq!(read_back_again, data);
+
+        drop(reader);
+        drop(committed);
+    } else {
+        let read_back_again = read_bytes(&reader, 0, data.len());
+        assert_eq!(read_back_again, data);
+
+        drop(reader);
+        drop(writer);
+    }
+
+    if explicit_commit {
+        let res_reopened = scope.store().open_resource(&key, None).unwrap();
+        let final_read = read_bytes(&res_reopened, 0, data.len());
+        assert_eq!(final_read, data);
+    } else {
+        let err = scope
+            .store()
+            .open_resource(&key, None)
+            .expect_err("drop without commit must not leave a ghost resource");
+        assert!(
+            err.to_string().contains("No such file")
+                || err.to_string().contains("not found")
+                || err.to_string().contains("missing"),
+            "uncommitted drop should report missing resource, got: {err}"
+        );
+    }
+}
+
+#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[case(1024)]
+#[case(4096)]
+#[case(16384)]
+fn streaming_resource_zero_length_operations(
+    #[case] base_offset: u64,
+    temp_dir: kithara_test_utils::TestTempDir,
+) {
+    let scope = asset_scope(&temp_dir, "streaming-zero-length");
+
+    let key = scope.key(&resource("zero.bin")).unwrap();
+
+    let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
+    let reader = writer.reader();
+
+    let data = vec![0xCC; 2048];
+    writer.write_at(base_offset, &data).unwrap();
+    reader
+        .wait_range(base_offset..(base_offset + data.len() as u64))
+        .unwrap();
+
+    let zero_read = read_bytes(&reader, base_offset, 0);
+    assert!(zero_read.is_empty());
+
+    writer.write_at(base_offset + 100, &[]).unwrap();
+
+    let read_back = read_bytes(&reader, base_offset, data.len());
+    assert_eq!(read_back, data);
+
+    writer.commit(None).unwrap();
+}

@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     cochlea::percentile_f32,
     event::TestEvent,
     fixture_protocol::DelayRule,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    offline::{OfflinePlayer, OfflinePlayerOptions},
 };
 
 use super::*;
@@ -41,7 +41,7 @@ struct Lifecycle {
 
 struct DesktopPrepared {
     _temp: TestTempDir,
-    harness: OfflinePlayerHarness,
+    harness: OfflinePlayer,
     abr: AbrHandle,
     events: EventReceiver<TestEvent>,
     capture_frame: i64,
@@ -173,7 +173,7 @@ fn host_frame(position: f64, label: &str) -> i64 {
 /// modelled playback clock on the same virtual clock as the fixture delays and
 /// the decode worker.
 #[kithara::flash(true)]
-async fn render_paced(harness: &OfflinePlayerHarness, frames: usize) -> Vec<f32> {
+async fn render_paced(harness: &OfflinePlayer, frames: usize) -> Vec<f32> {
     let block = harness.render(frames).await;
     let _ = harness.tick_and_drain().await;
     sleep(Duration::from_secs_f64(
@@ -188,7 +188,7 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
 
     let timestretch = StretchControls::new(1.0);
     timestretch.set_backend(StretchKind::Signalsmith);
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .warp(
                 WarpConfig::builder()

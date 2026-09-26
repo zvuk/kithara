@@ -21,7 +21,7 @@
 //! swallowed frames.
 //!
 //! Determinism: no `sleep`, no real-time pacing, no ABR (single variant,
-//! manual mode). The `HlsTestServer` segment gate withholds segment N+1's
+//! manual mode). The `CreatedHls` segment gate withholds segment N+1's
 //! BODY while its size (HEAD) stays known, so the decoder reaches the
 //! boundary and blocks on the withheld body. The decode loop runs
 //! synchronously on a blocking thread; a release task observes the parked
@@ -43,14 +43,14 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    SegmentGateHandle, TestTempDir,
+    CreatedHls, HlsFixtureBuilder, SegmentGateHandle, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 use kithara_test_fixtures::{
     hls_fixtures::{hls_header_boundary, hls_pcm_boundary},
     signal,
 };
+use kithara_test_utils::TestTempDir;
 use tracing::info;
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -78,27 +78,28 @@ fn segment_first_frame(segment: usize) -> u64 {
 async fn gated_audio(
     hls_header_boundary: Vec<u8>,
     hls_pcm_boundary: Vec<u8>,
-) -> (HlsTestServer, SegmentGateHandle) {
+) -> (CreatedHls, SegmentGateHandle) {
     let init_segment = Arc::new(hls_header_boundary);
     let pcm = Arc::new(hls_pcm_boundary);
 
     let segment_duration = SEGMENT_SIZE as f64
         / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);
 
-    let config = HlsTestServerConfig {
-        variant_count: 1,
-        segments_per_variant: SEGMENT_COUNT,
-        segment_size: SEGMENT_SIZE,
-        segment_duration_secs: segment_duration,
-        custom_data_per_variant: Some(vec![Arc::clone(&pcm)]),
-        init_data_per_variant: Some(vec![Arc::clone(&init_segment)]),
-        variant_bandwidths: Some(vec![1_000_000]),
-        ..Default::default()
-    };
+    let config = HlsFixtureBuilder::new()
+        .variant_count(1)
+        .segments_per_variant(SEGMENT_COUNT)
+        .segment_size(SEGMENT_SIZE)
+        .segment_duration_secs(segment_duration)
+        .custom_data_per_variant(vec![Arc::clone(&pcm)])
+        .init_data_per_variant(vec![Arc::clone(&init_segment)])
+        .variant_bandwidths(vec![1_000_000]);
 
     // Withhold the BODY of segment GATED_SEGMENT; its HEAD (size) stays
     // unblocked so up-front size estimation still learns the layout.
-    HlsTestServer::with_segment_gate(config, 0, GATED_SEGMENT).await
+    let helper = TestServerHelper::new().await;
+    let hls = helper.create_hls(config).await.expect("create HLS fixture");
+    let gate = helper.register_segment_gate(hls.token(), 0, GATED_SEGMENT);
+    (hls, gate)
 }
 
 #[kithara::test(
@@ -108,11 +109,11 @@ async fn gated_audio(
     tracing("kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
 )]
 async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous(
-    #[future(awt)] gated_audio: (HlsTestServer, SegmentGateHandle),
+    #[future(awt)] gated_audio: (CreatedHls, SegmentGateHandle),
 ) {
     let (server, gate) = gated_audio;
 
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     info!(%url, gated_segment = GATED_SEGMENT, "WAV-over-HLS fixture with one withheld segment body");
 
     let temp_dir = TestTempDir::new();

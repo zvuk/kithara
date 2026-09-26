@@ -13,6 +13,7 @@ pub use kithara_integration_tests::gapless as gapless_common;
 
 mod audio_tests;
 mod file_ephemeral_mp3;
+mod forward_withheld_segment_busy_spin;
 #[cfg(not(target_arch = "wasm32"))]
 mod gapless_crossfade;
 #[cfg(not(target_arch = "wasm32"))]

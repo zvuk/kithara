@@ -8,12 +8,13 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
-    PackagedTestServer,
+    TestServerHelper,
     hls_fixture::create_test_downloader,
+    hls_server::packaged_ladder,
     offline::{NotificationKind, OfflinePlayer},
-    temp_dir,
     waits::render_until_position,
 };
+use kithara_test_utils::temp_dir;
 
 use crate::{
     bufpool_ext::{TestPools, pools},
@@ -52,8 +53,12 @@ async fn render_burst(player: &mut OfflinePlayer, blocks: u32) {
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(30)))]
 async fn hls_seek_past_end_terminates_in_bounded_time() {
-    let server = PackagedTestServer::new().await;
-    let master = server.url("/master.m3u8");
+    let master = TestServerHelper::new()
+        .await
+        .create_hls(packaged_ladder())
+        .await
+        .expect("create packaged ladder")
+        .master_url();
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
@@ -99,7 +104,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     );
     let _ = player.take_notification_kinds();
 
-    player.seek(Consts::SEEK_TARGET_SECS, 1);
+    player.seek(Consts::SEEK_TARGET_SECS);
     eprintln!(
         "[red] seek issued target={:.1}s (past 12 s fixture duration)",
         Consts::SEEK_TARGET_SECS

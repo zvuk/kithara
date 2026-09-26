@@ -15,6 +15,8 @@ ignored = ["unimock"]
 [features]
 default = ["client-reqwest", "tls-rustls"]
 mock = ["dep:unimock"]
+flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
+no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 # HTTP backend forwarding. kithara-storage reaches the single kithara-net
 # package only through kithara-test-utils -> kithara-events (downloader event
@@ -64,10 +66,13 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 kithara-storage = { path = ".", default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "temp-dir"] }
 tempfile = { workspace = true }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
 
 [lints]
 workspace = true

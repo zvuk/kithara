@@ -32,16 +32,15 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueEvent, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    TestTempDir,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     kithara,
     offline::QueueTicker,
-    temp_dir,
     test_defaults::Consts as Shared,
     waits::wait_for_event,
 };
 use kithara_test_fixtures::fixtures::tone_mp3;
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 const TRACK_COUNT: usize = 2;
 

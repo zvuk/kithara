@@ -21,35 +21,12 @@ use kithara_integration_tests::{
     fixture_protocol::DataMode,
 };
 use kithara_test_fixtures::signal;
+use kithara_test_utils::Xorshift64;
 use tracing::{info, warn};
 use url::Url;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::MessageChannel;
-
-/// Minimal xorshift64 PRNG for deterministic seek positions.
-struct Xorshift64(u64);
-
-impl Xorshift64 {
-    fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-
-    fn next_f64(&mut self) -> f64 {
-        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
-    }
-
-    fn range_f64(&mut self, min: f64, max: f64) -> f64 {
-        min + (max - min) * self.next_f64()
-    }
-}
 
 async fn create_stress_source(jitter: bool) -> (TestServerHelper, Url) {
     kithara::platform::logging::install_panic_hook();

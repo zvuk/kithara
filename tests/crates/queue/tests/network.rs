@@ -8,10 +8,6 @@
 pub use kithara_integration_tests::bufpool_ext;
 use kithara_test_dylib as _;
 
-#[path = "source_helper.rs"]
-mod source_helper;
-pub(crate) use source_helper::{app_disk_asset_store, app_track_source};
-
 #[path = "false_eof_rapid_scrub.rs"]
 mod false_eof_rapid_scrub;
 #[path = "real_playlist.rs"]

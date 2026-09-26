@@ -9,11 +9,11 @@ use kithara::{
     play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
-    TestTempDir, kithara,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    temp_dir,
+    kithara,
+    offline::{OfflinePlayer, OfflinePlayerOptions},
 };
 use kithara_test_fixtures::{fixtures::tone_mp3, integration_fixtures::drain_tone};
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -29,7 +29,7 @@ const DRAIN_BLOCK_BUDGET: usize = 4_000;
 const DRAIN_SHARE_NUM: usize = 3;
 const DRAIN_SHARE_DEN: usize = 4;
 
-async fn file_resource(harness: &OfflinePlayerHarness, path: &Path, store_dir: &Path) -> Resource {
+async fn file_resource(harness: &OfflinePlayer, path: &Path, store_dir: &Path) -> Resource {
     let pools = harness.worker().pools().clone();
     let config: ResourceConfig<_> = ResourceConfig::for_src(
         ResourceSrc::parse(path.to_str().expect("utf-8 fixture path"))
@@ -50,7 +50,7 @@ async fn file_resource(harness: &OfflinePlayerHarness, path: &Path, store_dir: &
     Resource::new(config).await.expect("open local resource")
 }
 
-async fn render_blocks(harness: &OfflinePlayerHarness, blocks: usize) {
+async fn render_blocks(harness: &OfflinePlayer, blocks: usize) {
     for _ in 0..blocks {
         let _ = harness.render(BLOCK_FRAMES).await;
         let _ = harness.tick_and_drain().await;
@@ -58,14 +58,14 @@ async fn render_blocks(harness: &OfflinePlayerHarness, blocks: usize) {
     }
 }
 
-async fn media_advance(harness: &OfflinePlayerHarness, blocks: usize) -> f64 {
+async fn media_advance(harness: &OfflinePlayer, blocks: usize) -> f64 {
     let start = harness.player().position_seconds().unwrap_or(0.0);
     render_blocks(harness, blocks).await;
     harness.player().position_seconds().unwrap_or(0.0) - start
 }
 
 async fn blocks_until_end(drain_tone: &'static [u8], temp_dir: &TestTempDir, rate: f32) -> usize {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
@@ -116,7 +116,7 @@ async fn blocks_until_end(drain_tone: &'static [u8], temp_dir: &TestTempDir, rat
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn media_time_advances_with_the_playing_rate(tone_mp3: &'static [u8], temp_dir: TestTempDir) {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),

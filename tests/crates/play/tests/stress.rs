@@ -7,10 +7,5 @@
 pub use kithara_integration_tests::bufpool_ext;
 use kithara_test_dylib as _;
 
-#[path = "../../integration/tests/phase_continuity/mod.rs"]
-mod phase_continuity;
-
 #[path = "flac_realtime_player_continuity.rs"]
 mod flac_realtime_player_continuity;
-#[path = "hls_seek_middle_stress_long.rs"]
-mod hls_seek_middle_stress_long;

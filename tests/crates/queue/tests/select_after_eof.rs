@@ -11,11 +11,11 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
-    offline::{OfflinePlayerHarness, mean_abs, offline_queue_fixture},
+    offline::{OfflinePlayer, append_loaded, offline_queue_fixture},
 };
-use kithara_test_fixtures::assets;
+use kithara_test_fixtures::{assets, signal::mean_abs};
 
-use crate::{bufpool_ext::TestPools, loader_fixture::append_loaded};
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -60,7 +60,7 @@ fn first_onset_frame(pcm: &[f32], threshold: f32) -> Option<usize> {
 
 async fn render_loop(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     block_budget: usize,
 ) -> Vec<f32> {
     let mut pcm = Vec::with_capacity(block_budget * BLOCK_FRAMES * usize::from(CHANNELS));

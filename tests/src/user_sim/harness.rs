@@ -2,32 +2,24 @@ use std::path::Path;
 
 use kithara::{
     abr::{AbrHandle, AbrMode},
-    assets::{AssetStore, StorageBackend},
     audio::{AudioEvent, SeekLifecycleStage},
     bufpool::HasPool,
     decode::DecoderBackend,
-    download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId},
-    host::HostConfig,
-    net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
         time::{Duration, timeout},
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
-    play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc,
-        SeekOutcome,
-    },
-    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
+    play::{ResourceConfig, ResourceSrc, SeekOutcome},
+    queue::{QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use url::Url;
 
 use crate::{
-    bufpool_ext::{TestPools, pools},
+    bufpool_ext::TestPools,
     event::TestEvent,
     kithara,
-    offline::{OfflineQueue, QueueTicker},
+    offline::{DiskQueue, RenderPacing},
     user_sim::actions::Action,
 };
 
@@ -63,10 +55,7 @@ const STAGNATION_TURNS: u32 = 16;
 /// harness asserts the per-action invariants from the plan.
 pub struct SimHarness {
     queue: QueueControl<TestPools>,
-    queue_owner: OfflineQueue<TestPools>,
-    tick: QueueTicker,
-    _downloader: Downloader,
-    _store: AssetStore<TestPools>,
+    rig: DiskQueue,
     track_ids: Vec<TrackId>,
     /// Captured codec of the currently-playing variant. Updated by
     /// `enter_track` and on each successful quality switch; the
@@ -113,52 +102,20 @@ impl SimHarness {
     /// every track in `specs`. Does **not** call `select` — that's left
     /// to the scenario via `enter_track`.
     pub async fn new(cache_path: &Path, specs: &[TrackSpec]) -> Self {
-        let pools = pools();
-        let store = AssetStore::builder(pools.clone())
-            .backend(StorageBackend::Disk {
-                root: cache_path.into(),
-            })
-            .build();
-        let session_config = HostConfig::offline(pools.clone()).build();
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(session_config.sample_rate())
-                .worker(worker)
-                .block_on_underrun(true)
-                .build(),
-        );
-        let queue_owner = OfflineQueue::new(
-            session_config,
-            Queue::new(
-                QueueConfig::builder()
-                    .player(player)
-                    .store(store.clone())
-                    .build(),
-            ),
-        )
-        .await
-        .expect("create product offline queue");
-        let queue = queue_owner.control();
-        let queue_for_tick = queue.clone();
-        let tick = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
-
-        let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(
-                NetOptions::default(),
-                pools,
-                CancelToken::never(),
-            ))
-            .build(),
-        );
+        let rig = DiskQueue::builder(cache_path)
+            .pacing(RenderPacing::Unpaced)
+            .block_on_underrun(true)
+            .open()
+            .await;
+        let queue = rig.queue.control();
 
         let mut track_ids = Vec::with_capacity(specs.len());
         for spec in specs {
             let cfg = ResourceConfig::for_src(
                 ResourceSrc::parse(spec.url.as_str()).expect("valid track URL"),
             )
-            .downloader(downloader.clone())
-            .store(store.clone())
+            .downloader(rig.downloader.clone())
+            .store(rig.store.clone())
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
                     .backend(spec.backend)
@@ -167,7 +124,8 @@ impl SimHarness {
             .initial_abr_mode(spec.abr_mode)
             .build();
             let control = queue.clone();
-            let id = queue_owner
+            let id = rig
+                .queue
                 .host()
                 .run(move || control.append(TrackSource::Config(Box::new(cfg))))
                 .await
@@ -177,10 +135,7 @@ impl SimHarness {
 
         Self {
             queue,
-            queue_owner,
-            tick,
-            _downloader: downloader,
-            _store: store,
+            rig,
             track_ids,
             last_known_codec: None,
         }
@@ -196,7 +151,7 @@ impl SimHarness {
         R: Send + 'static,
     {
         let queue = self.queue.clone();
-        self.queue_owner.host().run(move || f(&queue)).await
+        self.rig.queue.host().run(move || f(&queue)).await
     }
 
     /// One turn of the app update loop: render a batch through the product
@@ -204,9 +159,9 @@ impl SimHarness {
     /// reflects what the sink consumed. Returns the frames the renderer
     /// advanced by — the queue's cached position only moves inside `tick`.
     async fn render_step(&self) -> u64 {
-        let batch = u64::from(self.queue_owner.host().max_block_frames().get())
+        let batch = u64::from(self.rig.queue.host().max_block_frames().get())
             .saturating_mul(RENDER_BATCH_BLOCKS);
-        let rendered = self.queue_owner.host().render_forward(batch).await;
+        let rendered = self.rig.queue.host().render_forward(batch).await;
         let _ = self.run(QueueControl::tick).await;
         rendered
     }
@@ -294,17 +249,20 @@ impl SimHarness {
     pub async fn close(self) {
         let Self {
             queue,
-            queue_owner,
-            mut tick,
-            _downloader,
-            _store,
+            rig:
+                DiskQueue {
+                    queue: queue_owner,
+                    downloader,
+                    store,
+                    mut ticker,
+                },
             ..
         } = self;
-        tick.stop().await;
+        ticker.stop().await;
         drop(queue);
         queue_owner.close().await;
-        drop(_downloader);
-        drop(_store);
+        drop(downloader);
+        drop(store);
     }
 
     fn current_codec(&self) -> Option<String> {
@@ -623,7 +581,8 @@ impl SimHarness {
     async fn do_render_for(&mut self, at_least: Duration) {
         let target = at_least.as_secs_f64();
         let budget = self
-            .queue_owner
+            .rig
+            .queue
             .host()
             .spec()
             .await

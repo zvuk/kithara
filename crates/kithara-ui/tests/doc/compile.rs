@@ -1282,61 +1282,43 @@ fn an_adaptive_measure_must_read_a_scalar() {
 }
 
 #[kithara::test]
-fn a_duplicate_block_id_is_rejected() {
-    let resolver = block_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "mixer",
-            root: Column(children: [
-                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
-                    child: Knob(id: "low")),
-                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
-                    child: Knob(id: "high")),
-            ]))"#,
-    );
+#[case::two_blocks(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Column(children: [
+            Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                child: Knob(id: "low")),
+            Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                child: Knob(id: "high")),
+        ]))"#,
+    "eq"
+)]
+#[case::block_and_control(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Column(children: [
+            Optional(id: "low", hidden: Model(id: "ui.block.hidden"),
+                child: Knob(id: "high")),
+            Knob(id: "low"),
+        ]))"#,
+    "low"
+)]
+#[case::controls_under_a_block(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Column(children: [
+            Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                child: Row(children: [
+                    Knob(id: "low"),
+                    Knob(id: "low"),
+                ])),
+        ]))"#,
+    "low"
+)]
+fn a_duplicate_id_in_a_module_is_rejected(#[case] module: &str, #[case] rejected: &str) {
+    let resolver = block_resolver(module);
 
     let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
 
     assert!(
-        matches!(&error, UiDocError::DuplicateId { id, .. } if id == "eq"),
-        "{error:?}"
-    );
-}
-
-#[kithara::test]
-fn a_block_id_collides_with_a_control_id_in_the_same_module() {
-    let resolver = block_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "mixer",
-            root: Column(children: [
-                Optional(id: "low", hidden: Model(id: "ui.block.hidden"),
-                    child: Knob(id: "high")),
-                Knob(id: "low"),
-            ]))"#,
-    );
-
-    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
-
-    assert!(
-        matches!(&error, UiDocError::DuplicateId { id, .. } if id == "low"),
-        "{error:?}"
-    );
-}
-
-#[kithara::test]
-fn a_control_under_a_block_keeps_its_id_checked() {
-    let resolver = block_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "mixer",
-            root: Column(children: [
-                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
-                    child: Row(children: [
-                        Knob(id: "low"),
-                        Knob(id: "low"),
-                    ])),
-            ]))"#,
-    );
-
-    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
-
-    assert!(
-        matches!(&error, UiDocError::DuplicateId { id, .. } if id == "low"),
+        matches!(&error, UiDocError::DuplicateId { id, .. } if id == rejected),
         "{error:?}"
     );
 }
@@ -1552,36 +1534,28 @@ fn an_optional_at_a_layout_root_is_rejected() {
 }
 
 #[kithara::test]
-fn an_optional_at_a_module_root_is_rejected() {
-    let resolver = block_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "mixer",
-            root: Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
-                child: Knob(id: "low")))"#,
-    );
+#[case::at_the_module_root(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+            child: Knob(id: "low")))"#,
+    "eq"
+)]
+#[case::directly_under_an_optional(
+    r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Column(children: [
+            Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
+                child: Optional(id: "low", hidden: Model(id: "ui.block.hidden"),
+                    child: Knob(id: "gain"))),
+        ]))"#,
+    "low"
+)]
+fn an_optional_is_rejected(#[case] module: &str, #[case] rejected: &str) {
+    let resolver = block_resolver(module);
 
     let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
 
     assert!(
-        matches!(&error, UiDocError::RootBlock { id, .. } if id == "eq"),
-        "{error:?}"
-    );
-}
-
-#[kithara::test]
-fn an_optional_directly_under_an_optional_is_rejected() {
-    let resolver = block_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "mixer",
-            root: Column(children: [
-                Optional(id: "eq", hidden: Model(id: "ui.block.hidden"),
-                    child: Optional(id: "low", hidden: Model(id: "ui.block.hidden"),
-                        child: Knob(id: "gain"))),
-            ]))"#,
-    );
-
-    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
-
-    assert!(
-        matches!(&error, UiDocError::RootBlock { id, .. } if id == "low"),
+        matches!(&error, UiDocError::RootBlock { id, .. } if id == rejected),
         "{error:?}"
     );
 }
@@ -2453,19 +2427,17 @@ fn stacked_round(index: usize) -> FrameCorners {
     *round
 }
 
+/// A module of a stacked split takes the window corners at its end of the
+/// stack, and a module between the ends stands at none.
 #[kithara::test]
-fn the_module_at_the_top_of_the_window_takes_the_top_corners() {
-    assert_eq!(stacked_round(0), FrameCorners::ALL.top());
-}
-
-#[kithara::test]
-fn the_module_at_the_bottom_of_the_window_takes_the_bottom_corners() {
-    assert_eq!(stacked_round(2), FrameCorners::ALL.bottom());
-}
-
-#[kithara::test]
-fn a_module_between_the_ends_of_a_split_stands_at_no_window_corner() {
-    assert_eq!(stacked_round(1), FrameCorners::EMPTY);
+#[case::top(0, FrameCorners::ALL.top())]
+#[case::middle(1, FrameCorners::EMPTY)]
+#[case::bottom(2, FrameCorners::ALL.bottom())]
+fn a_stacked_module_takes_the_window_corners_at_its_end(
+    #[case] index: usize,
+    #[case] corners: FrameCorners,
+) {
+    assert_eq!(stacked_round(index), corners);
 }
 
 #[kithara::test]

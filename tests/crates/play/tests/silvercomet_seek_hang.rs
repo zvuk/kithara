@@ -16,10 +16,11 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
-    offline::{OfflinePlayer, WindowStats, rms},
-    temp_dir,
+    offline::{OfflinePlayer, WindowStats},
     test_defaults::Consts as Shared,
 };
+use kithara_test_fixtures::signal::rms;
+use kithara_test_utils::temp_dir;
 
 use crate::bufpool_ext::{TestPools, pools};
 
@@ -157,7 +158,12 @@ fn write_wav_f32(path: &Path, interleaved: &[f32], sample_rate: u32, channels: u
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
+#[kithara::test(
+    tokio,
+    multi_thread,
+    timeout(Duration::from_secs(600)),
+    tracing("kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
+)]
 #[cfg_attr(
     not(target_os = "android"),
     case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))
@@ -201,27 +207,8 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let trace_log = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open("/tmp/silvercomet-trace.log")
-        .expect("open trace log");
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new(
-                    "kithara_audio=debug,kithara_hls=debug,kithara_stream=debug",
-                )
-            }),
-        )
-        .with_writer(std::sync::Mutex::new(trace_log))
-        .with_ansi(false)
-        .try_init();
-
     let window_blocks = Shared::blocks_for_seconds(Consts::PLAY_WINDOW_SECS, Consts::BLOCK_FRAMES);
     let warmup_blocks = Shared::blocks_for_seconds(Consts::WARMUP_SECS, Consts::BLOCK_FRAMES);
-    let mut next_seek_epoch = 1u64;
 
     for iter in 0..Consts::ITERATIONS {
         let iter_label = format!("iter-{iter}");
@@ -285,10 +272,8 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             );
 
             let seek_target = player.position() + 30.0;
-            let seek_epoch = next_seek_epoch;
-            next_seek_epoch += 1;
-            eprintln!("[iter {iter}][t{track_idx}] seek to {seek_target:.2}s epoch={seek_epoch}");
-            player.seek(seek_target, seek_epoch);
+            eprintln!("[iter {iter}][t{track_idx}] seek to {seek_target:.2}s");
+            player.seek(seek_target);
 
             let after =
                 render_and_collect(&mut player, window_blocks, &mut iteration_samples).await;
@@ -351,21 +336,7 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
 
 #[cfg(test)]
 mod unit_tests {
-    use kithara_test_fixtures::integration_fixtures::{rms_silence, rms_unit};
-
     use super::*;
-
-    #[kithara::test(native, flash(false))]
-    fn rms_of_silence_is_zero(rms_silence: Vec<f32>) {
-        let silence = rms_silence;
-        assert!(rms(&silence).abs() < f32::EPSILON);
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn rms_of_unit_signal_is_one(rms_unit: Vec<f32>) {
-        let signal = rms_unit;
-        assert!((rms(&signal) - 1.0).abs() < 1e-4);
-    }
 
     #[kithara::test(native, flash(false))]
     fn blocks_for_three_seconds_matches_expected() {

@@ -50,7 +50,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-download = { path = ".", default-features = false, features = ["usdt"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "http-server"] }
 
 serde_yaml_ng = { workspace = true }
 wasm-bindgen-test = { workspace = true }

@@ -13,16 +13,16 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event},
 };
 use kithara_test_fixtures::fixtures::tone_mp3;
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 const TRACK_COUNT: usize = 3;
 const STORM_ROUNDS: usize = 12;

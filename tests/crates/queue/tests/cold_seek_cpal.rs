@@ -16,22 +16,10 @@ use kithara::{
     },
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
-use kithara_integration_tests::{event::TestEvent, kithara, offline::QueueTicker, temp_dir};
-use kithara_test_utils::off_thread::OffThread;
+use kithara_integration_tests::{event::TestEvent, kithara, offline::QueueTicker};
+use kithara_test_utils::{off_thread::OffThread, temp_dir};
 
 use crate::bufpool_ext::{TestPools, pools};
-
-fn install_tracing() {
-    use tracing_subscriber::{EnvFilter, fmt};
-    let _ = fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new(
-                "kithara_queue=info,kithara_audio=info,kithara_hls=debug,kithara_stream=info",
-            )
-        }))
-        .with_test_writer()
-        .try_init();
-}
 
 async fn wait_for_status(
     rx: &mut EventReceiver<TestEvent>,
@@ -92,12 +80,17 @@ async fn wait_for_position_at_least(
 /// pipeline (cpal backend, shared Downloader, cold cache dir) with
 /// only the iced window stripped off.
 ///
-/// This is the test that actually matters: all synthetic `PackagedTestServer`
+/// This is the test that actually matters: all synthetic packaged-ladder
 /// scenarios pass cleanly, but the user reports a hang on silvercomet.
 /// If this test reproduces, we have a live repro that points at
 /// silvercomet-specific HTTP / format behaviour rather than anything in
 /// the kithara pipeline abstract.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(360)))]
+#[kithara::test(
+    tracing("kithara_queue=info,kithara_audio=info,kithara_hls=debug,kithara_stream=info"),
+    tokio,
+    multi_thread,
+    timeout(Duration::from_secs(360))
+)]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -107,8 +100,6 @@ async fn wait_for_position_at_least(
 async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
-
-    install_tracing();
 
     const URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
 

@@ -9,8 +9,6 @@ use kithara_test_dylib as _;
 mod common {
     pub(crate) use kithara_integration_tests::test_defaults;
 }
-#[path = "../../integration/tests/continuity.rs"]
-mod continuity;
 
 #[path = "abr_auto_switch.rs"]
 mod abr_auto_switch;
@@ -22,6 +20,8 @@ mod abr_switch_playback;
 mod idle_behavior;
 #[path = "live_stress_real_stream.rs"]
 mod live_stress_real_stream;
+#[path = "phase_continuity.rs"]
+mod phase_continuity;
 #[path = "red_flaky_small_cache_hot_refetch.rs"]
 mod red_flaky_small_cache_hot_refetch;
 #[path = "red_leak_native_drm_seek_resume.rs"]

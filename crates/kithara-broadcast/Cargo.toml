@@ -22,6 +22,8 @@ client-reqwest = ["kithara-encode/client-reqwest"]
 client-wreq = ["kithara-encode/client-wreq"]
 tls-native = ["kithara-encode/tls-native"]
 tls-rustls = ["kithara-encode/tls-rustls"]
+flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
+no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
@@ -58,6 +60,14 @@ kithara-test-utils = { workspace = true }
 
 hls_m3u8 = { workspace = true }
 serde_yaml_ng = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-decode = { workspace = true, features = ["fdk-aac"] }
+kithara-resampler = { workspace = true }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded"] }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
 
 [lints]
 workspace = true

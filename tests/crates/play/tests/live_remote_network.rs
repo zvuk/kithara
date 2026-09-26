@@ -27,7 +27,7 @@ use kithara::{
         ResourceSrc, SelectTransition,
     },
 };
-use kithara_integration_tests::{TestTempDir, temp_dir};
+use kithara_test_utils::{TestTempDir, temp_dir};
 use tracing::debug;
 
 use crate::bufpool_ext::{Pools, TestPools, pools};

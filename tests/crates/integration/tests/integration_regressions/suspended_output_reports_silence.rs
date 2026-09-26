@@ -8,7 +8,7 @@ use kithara::{
     signal::AudioSpec,
 };
 use kithara_integration_tests::offline::{
-    OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader,
+    OfflinePlayer, OfflinePlayerOptions, resource_from_reader,
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
 
@@ -67,22 +67,17 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
     harness.close().await;
 }
 
-async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayerHarness {
-    let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder().build(),
-        SAMPLE_RATE,
-    )
-    .await;
+async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayer {
+    let harness =
+        OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
     harness
         .with_player(move |player| {
             player.insert(
-                resource_from_reader(
-                    kithara_integration_tests::audio_mock::TestPcmReader::from_pcm(
-                        AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
-                        1.0,
-                        constant_half,
-                    ),
-                ),
+                resource_from_reader(kithara::audio::mock::TestPcmReader::with_pcm(
+                    AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
+                    1.0,
+                    constant_half,
+                )),
                 TrackId::allocate(),
                 None,
             );

@@ -40,11 +40,22 @@ impl From<HlsSpecError> for CreateHlsError {
 pub struct CreatedHls {
     token: String,
     base_url: Url,
+    pub(super) fixture: Arc<HlsFixtureBuilder>,
 }
 
 impl CreatedHls {
-    pub(crate) const fn new(base_url: Url, token: String) -> Self {
-        Self { token, base_url }
+    pub(crate) const fn new(base_url: Url, token: String, fixture: Arc<HlsFixtureBuilder>) -> Self {
+        Self {
+            token,
+            base_url,
+            fixture,
+        }
+    }
+
+    /// The spec this fixture was created from.
+    #[must_use]
+    pub fn spec(&self) -> &HlsSpec {
+        &self.fixture.spec
     }
 
     #[must_use]
@@ -90,20 +101,20 @@ impl CreatedHls {
 
 #[derive(Debug, Clone)]
 pub struct HlsFixtureBuilder {
-    data: HlsFixtureData,
-    init: HlsFixtureInit,
+    pub(super) data: HlsFixtureData,
+    pub(super) init: HlsFixtureInit,
     spec: HlsSpec,
 }
 
 #[derive(Debug, Clone)]
-enum HlsFixtureData {
+pub(super) enum HlsFixtureData {
     Spec(DataMode),
     SharedBytes(Arc<Vec<u8>>),
     PerVariantBytes(Vec<Arc<Vec<u8>>>),
 }
 
 #[derive(Debug, Clone)]
-enum HlsFixtureInit {
+pub(super) enum HlsFixtureInit {
     Spec(InitMode),
     PerVariantBytes(Vec<Arc<Vec<u8>>>),
 }

@@ -169,13 +169,10 @@ fn degara_parity(beat_pcm: Vec<f32>) {
 }
 
 #[kithara::test(native, flash(false))]
-fn degara_parity_holds_the_metrical_level(track_pcm: Vec<f32>) {
-    parity(&track_pcm, "golden_degara_track_windowed.json", 0);
-}
-
-#[kithara::test(native, flash(false))]
-fn degara_parity_holds_at_another_alignment(track_pcm: Vec<f32>) {
-    parity(&track_pcm, "golden_degara_track_windowed_from7.json", 7);
+#[case::the_metrical_level("golden_degara_track_windowed.json", 0)]
+#[case::at_another_alignment("golden_degara_track_windowed_from7.json", 7)]
+fn degara_parity_holds(track_pcm: Vec<f32>, #[case] golden: &str, #[case] from_seconds: usize) {
+    parity(&track_pcm, golden, from_seconds);
 }
 
 #[kithara::fixture]

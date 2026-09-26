@@ -14,15 +14,14 @@ use kithara::{
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
-    TestTempDir,
     audio_artifact::write_audio_artifact,
     disk_asset_store, kithara,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    temp_dir,
+    offline::{OfflinePlayer, OfflinePlayerOptions},
     usdt_trace::{self, ProbeEvent, Scope},
     waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::{assets::signal_mp3_sine880_30s, signal::goertzel_magnitude};
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 #[kithara::fixture]
 fn response_source() -> PathBuf {
@@ -159,7 +158,7 @@ fn first_target_onset(samples: &[f32], command_frame: usize, target: usize) -> O
 }
 
 async fn capture_frames(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     frames: usize,
     callback_frames: usize,
 ) -> Vec<f32> {
@@ -175,7 +174,7 @@ async fn capture_frames(
 }
 
 async fn capture_command_boundary(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     trace: &Scope,
     target: usize,
     callback_frames: usize,
@@ -224,7 +223,7 @@ async fn capture_command_boundary(
 }
 
 async fn capture_until_applied(
-    harness: &OfflinePlayerHarness,
+    harness: &OfflinePlayer,
     trace: &Scope,
     case: ResponseCase,
 ) -> (Vec<f32>, u64, Vec<ProbeEvent>) {
@@ -294,7 +293,7 @@ async fn playing_queue(
     backends: ElasticBackendConfig,
     case: ResponseCase,
     response_source: PathBuf,
-) -> (OfflinePlayerHarness, HostOwned<Queue<TestPools>>) {
+) -> (OfflinePlayer, HostOwned<Queue<TestPools>>) {
     let stretch = StretchControls::new(1.0);
     stretch.set_backend(backend);
     let warp = WarpConfig::builder()
@@ -308,7 +307,7 @@ async fn playing_queue(
         )
         .maybe_render_quantum_frames(case.render_quantum_frames)
         .build();
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .block_on_underrun(true)

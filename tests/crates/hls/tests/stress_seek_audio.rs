@@ -10,17 +10,16 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::PcmPattern,
-    hls_server::{HlsTestServer, HlsTestServerConfig},
     usdt_trace::{self, ProbeEvent},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{hls_sized_wav_forty_eight, hls_sized_wav_hundred};
 use kithara_test_fixtures::signal;
+use kithara_test_utils::{TestTempDir, Xorshift64};
 use tracing::info;
-use url::Url;
 
 use crate::common::test_defaults::SawWav;
 
@@ -69,55 +68,10 @@ impl SeekAudioFixture {
     }
 }
 
-enum SizeProbeCounter {
-    HlsServer(HlsTestServer),
-    Helper {
-        helper: TestServerHelper,
-        segments: usize,
-        token: String,
-        variants: usize,
-    },
-}
-
-impl SizeProbeCounter {
-    fn size_probe_count(&self, variant: usize, segment: usize) -> u64 {
-        match self {
-            Self::HlsServer(server) => server.size_probe_count(variant, segment),
-            Self::Helper { helper, token, .. } => helper.size_probe_count(token, variant, segment),
-        }
-    }
-
-    const fn variant_count(&self) -> usize {
-        match self {
-            Self::HlsServer(server) => server.config().variant_count,
-            Self::Helper { variants, .. } => *variants,
-        }
-    }
-
-    const fn segment_count(&self) -> usize {
-        match self {
-            Self::HlsServer(server) => server.config().segments_per_variant,
-            Self::Helper { segments, .. } => *segments,
-        }
-    }
-
-    fn variant_size_probe_count(&self, variant: usize) -> u64 {
-        (0..self.segment_count())
-            .map(|segment| self.size_probe_count(variant, segment))
-            .sum()
-    }
-
-    fn total_size_probe_count(&self) -> u64 {
-        (0..self.variant_count())
-            .map(|variant| self.variant_size_probe_count(variant))
-            .sum()
-    }
-}
-
-fn assert_seek_size_probes(fixture: SeekAudioFixture, counter: &SizeProbeCounter) {
-    let total = counter.total_size_probe_count();
-    let per_variant: Vec<u64> = (0..counter.variant_count())
-        .map(|variant| counter.variant_size_probe_count(variant))
+fn assert_seek_size_probes(fixture: SeekAudioFixture, helper: &TestServerHelper, hls: &CreatedHls) {
+    let total = helper.total_size_probe_count(hls);
+    let per_variant: Vec<u64> = (0..hls.spec().variant_count)
+        .map(|variant| helper.variant_size_probe_count(hls, variant))
         .collect();
     info!(
         ?fixture,
@@ -127,7 +81,8 @@ fn assert_seek_size_probes(fixture: SeekAudioFixture, counter: &SizeProbeCounter
     );
     match fixture {
         SeekAudioFixture::WavFileLike => {
-            let bound = u64::try_from(counter.segment_count()).expect("segment count fits u64");
+            let bound =
+                u64::try_from(hls.spec().segments_per_variant).expect("segment count fits u64");
             assert!(
                 total > 0,
                 "WAV cold seeks must resolve exact byte sizes on demand; saw zero size-probes"
@@ -319,35 +274,35 @@ fn assert_seek_churn_steady_state(warmup: ChurnSnapshot, end: ChurnSnapshot) {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
-async fn wav_hundred(hls_sized_wav_hundred: Vec<u8>) -> (Url, SizeProbeCounter) {
+async fn wav_hundred(hls_sized_wav_hundred: Vec<u8>) -> (TestServerHelper, CreatedHls) {
     wav_seek(hls_sized_wav_hundred, 100).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
-async fn wav_forty_eight(hls_sized_wav_forty_eight: Vec<u8>) -> (Url, SizeProbeCounter) {
+async fn wav_forty_eight(hls_sized_wav_forty_eight: Vec<u8>) -> (TestServerHelper, CreatedHls) {
     wav_seek(hls_sized_wav_forty_eight, 48).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn wav_seek(wav_data: Vec<u8>, segment_count: usize) -> (Url, SizeProbeCounter) {
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        segments_per_variant: segment_count,
-        segment_size: Consts::D.segment_size,
-        segment_duration_secs: Consts::D.segment_duration_secs(),
-        custom_data: Some(Arc::new(wav_data)),
-        ..Default::default()
-    })
-    .await;
-    (
-        server.url("/master.m3u8"),
-        SizeProbeCounter::HlsServer(server),
-    )
+async fn wav_seek(wav_data: Vec<u8>, segment_count: usize) -> (TestServerHelper, CreatedHls) {
+    let helper = TestServerHelper::new().await;
+    let server = helper
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .segments_per_variant(segment_count)
+                .segment_size(Consts::D.segment_size)
+                .segment_duration_secs(Consts::D.segment_duration_secs())
+                .custom_data(Arc::new(wav_data)),
+        )
+        .await
+        .expect("create HLS fixture");
+    (helper, server)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
-async fn flac_hundred() -> (Url, SizeProbeCounter) {
+async fn flac_hundred() -> (TestServerHelper, CreatedHls) {
     let helper = TestServerHelper::new().await;
     let created = helper
         .create_hls(
@@ -363,17 +318,7 @@ async fn flac_hundred() -> (Url, SizeProbeCounter) {
         )
         .await
         .expect("create FLAC/fMP4 HLS fixture");
-    let url = created.master_url();
-    let token = created.token().to_owned();
-    (
-        url,
-        SizeProbeCounter::Helper {
-            helper,
-            segments: 100,
-            token,
-            variants: Consts::VARIANT_COUNT,
-        },
-    )
+    (helper, created)
 }
 
 /// Random seek+read cycles with PCM verification on `Audio<Stream<Hls>>`.
@@ -497,13 +442,14 @@ async fn stress_seek_audio_hls(
     #[case] fixture: SeekAudioFixture,
     #[case] segment_count: usize,
     #[case] cache_capacity_override: Option<usize>,
-    #[case] prepared: (Url, SizeProbeCounter),
+    #[case] prepared: (TestServerHelper, CreatedHls),
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
     let expected_dur = matches!(fixture, SeekAudioFixture::WavFileLike)
         .then(|| Consts::expected_duration_secs(segment_count));
-    let (url, counter) = prepared;
+    let (helper, hls) = prepared;
+    let url = hls.master_url();
 
     info!(?fixture, %url, segments = segment_count, "HLS server ready");
 
@@ -824,7 +770,7 @@ async fn stress_seek_audio_hls(
 
     match result {
         Ok((warmup_churn, end_churn)) => {
-            assert_seek_size_probes(fixture, &counter);
+            assert_seek_size_probes(fixture, &helper, &hls);
             assert_backend_open_count(
                 fixture,
                 segment_count,

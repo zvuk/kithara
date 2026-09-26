@@ -15,7 +15,7 @@ use kithara::{
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestTempDir,
+    HlsFixtureBuilder,
     event::TestEvent,
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedAudioVariantOverride,
@@ -23,6 +23,7 @@ use kithara_integration_tests::{
     },
     offline::OfflinePlayer,
 };
+use kithara_test_utils::TestTempDir;
 use num_traits::ToPrimitive;
 
 use crate::bufpool_ext::{TestPools, pools};

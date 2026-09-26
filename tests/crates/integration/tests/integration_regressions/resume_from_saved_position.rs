@@ -12,15 +12,16 @@ use kithara::{
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir,
+    TestServerHelper,
     bufpool_ext::{Pools, TestPools, pools},
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    served_short_mp3, temp_dir,
+    served_short_mp3,
     test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 const SAVE_AFTER_SECS: f64 = 4.0;

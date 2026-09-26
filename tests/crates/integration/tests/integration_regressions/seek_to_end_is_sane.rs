@@ -11,14 +11,14 @@ use kithara::{
     queue::{PlaybackView, Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    CreatedHls, HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     kithara,
     offline::OfflineQueue,
-    temp_dir,
     waits::wait_for_loader_done_event,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;

@@ -7,18 +7,17 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64, auto,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::{DelayRule, PcmPattern},
-    hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{
     hls_header_fifty, hls_pcm_fifty, hls_pcm_fifty_descending,
 };
 use kithara_test_fixtures::signal::{self, SignalDirection as Direction, detect_direction};
+use kithara_test_utils::{TestTempDir, Xorshift64};
 use tracing::info;
-use url::Url;
 
 use crate::common::test_defaults::SawWav;
 
@@ -52,65 +51,10 @@ impl AbrAudioFixture {
     }
 }
 
-enum SizeProbeCounter {
-    HlsServer(HlsTestServer),
-    Helper {
-        helper: TestServerHelper,
-        segments: usize,
-        token: String,
-        variants: usize,
-    },
-}
-
-impl SizeProbeCounter {
-    fn size_probe_count(&self, variant: usize, segment: usize) -> u64 {
-        match self {
-            Self::HlsServer(server) => server.size_probe_count(variant, segment),
-            Self::Helper { helper, token, .. } => helper.size_probe_count(token, variant, segment),
-        }
-    }
-
-    const fn variant_count(&self) -> usize {
-        match self {
-            Self::HlsServer(server) => server.config().variant_count,
-            Self::Helper { variants, .. } => *variants,
-        }
-    }
-
-    const fn segment_count(&self) -> usize {
-        match self {
-            Self::HlsServer(server) => server.config().segments_per_variant,
-            Self::Helper { segments, .. } => *segments,
-        }
-    }
-
-    fn variant_size_probe_count(&self, variant: usize) -> u64 {
-        (0..self.segment_count())
-            .map(|segment| self.size_probe_count(variant, segment))
-            .sum()
-    }
-
-    fn total_size_probe_count(&self) -> u64 {
-        (0..self.variant_count())
-            .map(|variant| self.variant_size_probe_count(variant))
-            .sum()
-    }
-}
-
-/// Bound the size-probes a whole ABR stress run was allowed to issue.
-///
-/// Only an upper bound is a property. A probe is what the machine issues
-/// when it does not know a byte length, so a run whose warm-up committed
-/// every body arrives at the seeks with nothing left to ask and probes
-/// nothing at all — a lower bound here would assert that the downloader
-/// lost a race. That the demand is raised, covers exactly the seek prefix,
-/// and dies once the sizes are known is pinned deterministically at the
-/// construction site by `an_exact_seek_probes_the_unknown_prefix_and_nothing_else`
-/// in `kithara-hls`.
-fn assert_abr_size_probes(fixture: AbrAudioFixture, counter: &SizeProbeCounter) {
-    let total = counter.total_size_probe_count();
-    let per_variant: Vec<u64> = (0..counter.variant_count())
-        .map(|variant| counter.variant_size_probe_count(variant))
+fn assert_abr_size_probes(fixture: AbrAudioFixture, helper: &TestServerHelper, hls: &CreatedHls) {
+    let total = helper.total_size_probe_count(hls);
+    let per_variant: Vec<u64> = (0..hls.spec().variant_count)
+        .map(|variant| helper.variant_size_probe_count(hls, variant))
         .collect();
     info!(
         ?fixture,
@@ -121,7 +65,7 @@ fn assert_abr_size_probes(fixture: AbrAudioFixture, counter: &SizeProbeCounter) 
     match fixture {
         AbrAudioFixture::WavFileLike => {
             let all_variant_bound =
-                u64::try_from(counter.variant_count() * counter.segment_count())
+                u64::try_from(hls.spec().variant_count * hls.spec().segments_per_variant)
                     .expect("small fixture size");
             assert!(
                 total < all_variant_bound,
@@ -143,7 +87,7 @@ async fn wav_abr(
     hls_header_fifty: Vec<u8>,
     hls_pcm_fifty: Vec<u8>,
     hls_pcm_fifty_descending: Vec<u8>,
-) -> (Url, SizeProbeCounter) {
+) -> (TestServerHelper, CreatedHls) {
     let segment_duration = Consts::D.segment_size as f64
         / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
     let delay_rules = vec![DelayRule {
@@ -164,26 +108,26 @@ async fn wav_abr(
         "Generated WAV data for two variants"
     );
 
-    let server = HlsTestServer::new(HlsTestServerConfig {
-        variant_count: Consts::VARIANT_COUNT,
-        segments_per_variant: Consts::SEGMENT_COUNT,
-        segment_size: Consts::D.segment_size,
-        segment_duration_secs: segment_duration,
-        custom_data_per_variant: Some(vec![Arc::clone(&v0_pcm), Arc::clone(&v1_pcm)]),
-        init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-        delay_rules: delay_rules.clone(),
-        ..Default::default()
-    })
-    .await;
-    (
-        server.url("/master.m3u8"),
-        SizeProbeCounter::HlsServer(server),
-    )
+    let helper = TestServerHelper::new().await;
+    let server = helper
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(Consts::VARIANT_COUNT)
+                .segments_per_variant(Consts::SEGMENT_COUNT)
+                .segment_size(Consts::D.segment_size)
+                .segment_duration_secs(segment_duration)
+                .custom_data_per_variant(vec![Arc::clone(&v0_pcm), Arc::clone(&v1_pcm)])
+                .init_data_per_variant(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)])
+                .variant_bandwidths(vec![5_000_000, 1_000_000])
+                .delay_rules(delay_rules.clone()),
+        )
+        .await
+        .expect("create HLS fixture");
+    (helper, server)
 }
 
 #[kithara::fixture]
-async fn flac_abr() -> (Url, SizeProbeCounter) {
+async fn flac_abr() -> (TestServerHelper, CreatedHls) {
     let segment_duration = Consts::D.segment_size as f64
         / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
     let delay_rules = vec![DelayRule {
@@ -209,17 +153,7 @@ async fn flac_abr() -> (Url, SizeProbeCounter) {
         )
         .await
         .expect("create FLAC/fMP4 ABR fixture");
-    let url = created.master_url();
-    let token = created.token().to_owned();
-    (
-        url,
-        SizeProbeCounter::Helper {
-            helper,
-            segments: Consts::SEGMENT_COUNT,
-            token,
-            variants: Consts::VARIANT_COUNT,
-        },
-    )
+    (helper, created)
 }
 
 /// ABR variant switch stress test with ascending/descending saw-tooth verification.
@@ -241,9 +175,10 @@ async fn flac_abr() -> (Url, SizeProbeCounter) {
 #[case::flac_fmp4(AbrAudioFixture::FlacFmp4, flac_abr().await)]
 async fn stress_seek_abr_audio(
     #[case] fixture: AbrAudioFixture,
-    #[case] prepared: (Url, SizeProbeCounter),
+    #[case] prepared: (TestServerHelper, CreatedHls),
 ) {
-    let (url, counter) = prepared;
+    let (helper, hls) = prepared;
+    let url = hls.master_url();
 
     info!(?fixture, %url, "HLS server ready with 2 variants");
 
@@ -610,7 +545,7 @@ async fn stress_seek_abr_audio(
 
     match result {
         Ok(()) => {
-            assert_abr_size_probes(fixture, &counter);
+            assert_abr_size_probes(fixture, &helper, &hls);
             info!(?fixture, "ABR stress test passed");
         }
         Err(e) => panic!("spawn_blocking failed: {e}"),

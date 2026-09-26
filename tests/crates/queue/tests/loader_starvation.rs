@@ -12,28 +12,22 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     abr::AbrMode,
-    assets::AssetStore,
-    download::{Downloader, DownloaderConfig},
     events::TrackId,
-    host::HostConfig,
-    net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
         sync::Arc,
         time::{Duration, sleep},
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, TrackStatus, Transition},
+    play::{ResourceConfig, ResourceSrc},
+    queue::{QueueControl, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
-    waits::wait_for_loader_done,
+    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, kithara,
+    offline::DiskQueue, waits::wait_for_loader_done,
 };
+use kithara_test_utils::temp_dir;
 use url::Url;
 
-use crate::bufpool_ext::{TestPools, pools};
+use crate::bufpool_ext::TestPools;
 
 struct Consts;
 impl Consts {
@@ -86,53 +80,6 @@ async fn build_fast_hls(helper: &TestServerHelper) -> Url {
         .master_url()
 }
 
-async fn build_queue_with_tick(
-    temp_dir: &TestTempDir,
-    cap: usize,
-) -> (
-    OfflineQueue<TestPools>,
-    Downloader,
-    AssetStore<TestPools>,
-    QueueTicker,
-) {
-    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let pools = pools();
-    let session = HostConfig::offline(pools.clone()).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.sample_rate())
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build(),
-    );
-    let cap = NonZeroUsize::new(cap).expect("BUG: cap must be > 0");
-    let queue = OfflineQueue::paced(
-        session,
-        Queue::new(
-            QueueConfig::builder()
-                .max_concurrent_loads(cap)
-                .store(store.clone())
-                .player(player)
-                .build(),
-        ),
-        RENDER_PACE,
-    )
-    .await
-    .expect("create product offline queue");
-    let queue_for_tick = queue.control();
-    let tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools,
-            CancelToken::never(),
-        ))
-        .build(),
-    );
-    (queue, downloader, store, tick_handle)
-}
-
 fn is_loading(queue: &QueueControl<TestPools>, id: TrackId) -> bool {
     matches!(
         queue.track(id).map(|e| e.status),
@@ -167,8 +114,16 @@ async fn hung_loads_must_not_starve_user_selected_track(
     let (_server, hung_urls, fast_url) = lane_sources;
 
     let temp = temp_dir();
-    let (queue, downloader, store, mut tick_handle) =
-        build_queue_with_tick(&temp, Consts::CAP).await;
+    let DiskQueue {
+        queue,
+        downloader,
+        store,
+        ticker: mut tick_handle,
+        ..
+    } = DiskQueue::builder(temp.path())
+        .max_concurrent_loads(NonZeroUsize::new(Consts::CAP).expect("loader cap is non-zero"))
+        .open()
+        .await;
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))

@@ -22,7 +22,8 @@ use kithara::{
     play::{Resource, ResourceConfig},
     stream::AudioCodec,
 };
-use kithara_integration_tests::{HlsFixtureBuilder, TestTempDir, offline::OfflinePlayer};
+use kithara_integration_tests::{HlsFixtureBuilder, offline::OfflinePlayer};
+use kithara_test_utils::TestTempDir;
 use num_traits::ToPrimitive;
 use switch::{
     AAC_HIGH, AAC_LOW, ACTIVE_SAMPLE_THRESHOLD, BLOCK_FRAMES, CHANNELS, COCHLEA_WINDOW_MS,

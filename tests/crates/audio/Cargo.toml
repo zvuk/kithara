@@ -24,11 +24,13 @@ kithara = { workspace = true, default-features = false, features = ["usdt", "ass
 kithara-integration-tests = { workspace = true, default-features = false, features = ["audio"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["wav"] }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "temp-dir"] }
 
 assert_no_alloc = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
 
 # `bungee-sys` fails through `cmake`/MSVC and its build script refuses Android
 # by target triple. Android stretches through Signalsmith, the backend

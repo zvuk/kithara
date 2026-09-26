@@ -55,28 +55,21 @@ members = [
     "crates/kithara-worker",
     "crates/kithara-workspace-hack",
     "tests",
-    "tests/crates/abr",
     "tests/crates/analysis",
     "tests/crates/app",
-    "tests/crates/assets",
     "tests/crates/audio",
     "tests/crates/broadcast",
-    "tests/crates/bufpool",
     "tests/crates/core",
     "tests/crates/decode",
     "tests/crates/effects",
-    "tests/crates/encode",
-    "tests/crates/events",
     "tests/crates/ffi-web",
     "tests/crates/ffi-web-analysis",
     "tests/crates/file",
     "tests/crates/harness",
     "tests/crates/hls",
-    "tests/crates/net",
-    "tests/crates/platform",
+    "tests/crates/host",
     "tests/crates/play",
     "tests/crates/queue",
-    "tests/crates/storage",
     "tests/crates/stream",
     "tests/crates/sync",
     "tests/crates/warp",
@@ -132,28 +125,21 @@ default-members = [
     "crates/kithara-waveform",
     "crates/kithara-worker",
     "tests",
-    "tests/crates/abr",
     "tests/crates/analysis",
     "tests/crates/app",
-    "tests/crates/assets",
     "tests/crates/audio",
     "tests/crates/broadcast",
-    "tests/crates/bufpool",
     "tests/crates/core",
     "tests/crates/decode",
     "tests/crates/effects",
-    "tests/crates/encode",
-    "tests/crates/events",
     "tests/crates/ffi-web",
     "tests/crates/ffi-web-analysis",
     "tests/crates/file",
     "tests/crates/harness",
     "tests/crates/hls",
-    "tests/crates/net",
-    "tests/crates/platform",
+    "tests/crates/host",
     "tests/crates/play",
     "tests/crates/queue",
-    "tests/crates/storage",
     "tests/crates/stream",
     "tests/crates/sync",
     "tests/crates/warp",
@@ -645,25 +631,16 @@ strip = "none"
 # Product dependencies stay optimized; test packages spend their build in LLVM
 # and do not contain the runtime being measured. Cargo profile overrides require
 # exact workspace package names, so each test package is listed here.
-[profile.test-release.package.kithara-abr-tests]
-opt-level = 1
-
 [profile.test-release.package.kithara-analysis-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-app-tests]
 opt-level = 1
 
-[profile.test-release.package.kithara-assets-tests]
-opt-level = 1
-
 [profile.test-release.package.kithara-audio-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-broadcast-tests]
-opt-level = 1
-
-[profile.test-release.package.kithara-bufpool-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-core-test-fixtures]
@@ -673,12 +650,6 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-effects-tests]
-opt-level = 1
-
-[profile.test-release.package.kithara-encode-tests]
-opt-level = 1
-
-[profile.test-release.package.kithara-events-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-ffi-web-analysis-tests]
@@ -699,19 +670,13 @@ opt-level = 1
 [profile.test-release.package.kithara-integration-tests]
 opt-level = 1
 
-[profile.test-release.package.kithara-net-tests]
-opt-level = 1
-
-[profile.test-release.package.kithara-platform-tests]
+[profile.test-release.package.kithara-host-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-play-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-queue-tests]
-opt-level = 1
-
-[profile.test-release.package.kithara-storage-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-stream-tests]

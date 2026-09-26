@@ -20,41 +20,14 @@ use kithara::{
     },
     queue::{QueueControl, QueueEvent, TrackStatus},
 };
+use kithara_test_utils::{wait::POLL_TICK, wait_until};
 
 use crate::{event::TestEvent, offline::OfflinePlayer};
-
-/// Poll cadence for [`wait_until`] and the queue-polling waits. This is the only
-/// timer `sleep` in the suite: a virtual tick that advances the flash clock so
-/// the engine runs between predicate checks.
-const POLL_TICK: Duration = Duration::from_millis(20);
 
 /// Settle window for [`wait_thread_count_quiesced`]: the named-thread counter
 /// must hold steady across this many consecutive virtual ticks before it is
 /// treated as quiesced.
 const QUIESCE_TICKS: usize = 3;
-
-/// The one poll primitive. Re-checks `cond` after every virtual tick until it is
-/// true, or returns `Err` when `deadline` (virtual time) elapses without
-/// progress. Callers `.expect()` the result, so a genuinely wedged pipeline
-/// panics with `label` instead of silently letting a later assertion pass.
-#[kithara::flash(true)]
-pub async fn wait_until<F>(deadline: Duration, label: &str, mut cond: F) -> Result<(), String>
-where
-    F: FnMut() -> bool,
-{
-    let start = Instant::now();
-    loop {
-        if cond() {
-            return Ok(());
-        }
-        if start.elapsed() >= deadline {
-            return Err(format!(
-                "wait_until({label}) exceeded {deadline:?} without reaching the target state"
-            ));
-        }
-        sleep(POLL_TICK).await;
-    }
-}
 
 async fn wait_for_queue_position<S>(
     queue: &QueueControl<S>,

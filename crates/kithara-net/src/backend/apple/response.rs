@@ -3,7 +3,6 @@ use kithara_apple::foundation::{
     ns::{NSData, NSError, NSInteger, NSURLResponse},
     urlsession::{self, DataCompletion, ResponseParts},
 };
-use kithara_bufpool::PoolError;
 use kithara_platform::{sync::Mutex, tokio::sync::oneshot};
 use url::Url;
 
@@ -67,13 +66,11 @@ pub(super) fn copy_data(data: &NSData, buffers: &ByteBuffers) -> Result<Bytes, N
         return Ok(Bytes::new());
     }
 
-    let mut bytes = buffers.get_with_len(len).map_err(pool_error)?;
+    let mut bytes = buffers
+        .get_with_len(len)
+        .map_err(|error| NetError::Network(error.to_string()))?;
     bytes.copy_from_slice(urlsession::data_bytes(data));
     Ok(pooled_bytes(bytes))
-}
-
-fn pool_error(error: PoolError) -> NetError {
-    NetError::Network(error.to_string())
 }
 
 pub(super) fn error_from_nserror(error: &NSError) -> NetError {

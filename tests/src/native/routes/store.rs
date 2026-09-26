@@ -51,9 +51,10 @@ mod tests {
     use axum::http::StatusCode;
     use kithara::platform::sync::Arc;
     use kithara_test_fixtures::assets;
+    use kithara_test_utils::TestHttpServer;
 
     use super::router;
-    use crate::{http_server::TestHttpServer, kithara, test_server_state::TestServerState};
+    use crate::{kithara, test_server_state::TestServerState};
 
     #[kithara::test(tokio)]
     async fn store_route_serves_a_generated_record() {

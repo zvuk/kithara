@@ -4,11 +4,9 @@ use std::io::{Read, Seek, SeekFrom};
 
 use kithara::platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
 use kithara_integration_tests::{
-    TestTempDir,
-    hls_fixture::HlsStreamBuilder,
-    hls_server::{TestServer, test_server},
-    rt_cancel, temp_dir,
+    CreatedHls, hls_fixture::HlsStreamBuilder, hls_server::test_pattern_hls,
 };
+use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 
 #[derive(Clone, Copy)]
 enum SeekScenario {
@@ -75,14 +73,14 @@ fn run_seek_scenario(mut stream: impl Read + Seek, scenario: SeekScenario) {
 #[case::read_all_then_back(SeekScenario::ReadAllThenBack)]
 #[case::across_all(SeekScenario::AcrossAll)]
 async fn hls_stream_seek(
-    #[future(awt)] test_server: TestServer,
+    #[future(awt)] test_pattern_hls: CreatedHls,
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
     #[case] scenario: SeekScenario,
 ) {
-    let server = test_server;
+    let hls = test_pattern_hls;
     let stream = HlsStreamBuilder::new()
-        .build(&server, temp_dir.path(), rt_cancel)
+        .build(hls.master_url(), temp_dir.path(), cancel_token)
         .await;
 
     spawn_blocking(move || run_seek_scenario(stream, scenario))
@@ -92,14 +90,14 @@ async fn hls_stream_seek(
 
 #[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn hls_with_manual_abr_uses_fixed_variant(
-    #[future(awt)] test_server: TestServer,
+    #[future(awt)] test_pattern_hls: CreatedHls,
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
 ) {
-    let server = test_server;
+    let hls = test_pattern_hls;
     let mut stream = HlsStreamBuilder::new()
         .variant(1)
-        .build(&server, temp_dir.path(), rt_cancel)
+        .build(hls.master_url(), temp_dir.path(), cancel_token)
         .await;
 
     spawn_blocking(move || {
@@ -115,22 +113,22 @@ async fn hls_with_manual_abr_uses_fixed_variant(
 /// which is the foundation for ABR switch + seek correctness.
 #[kithara::test(tokio, native, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
 async fn hls_seek_different_variants_return_different_data(
-    #[future(awt)] test_server: TestServer,
+    #[future(awt)] test_pattern_hls: CreatedHls,
     temp_dir: TestTempDir,
-    rt_cancel: CancelToken,
+    cancel_token: CancelToken,
 ) {
-    let server = test_server;
+    let hls = test_pattern_hls;
 
     let mut stream_v0 = HlsStreamBuilder::new()
         .variant(0)
         .store_subdir("v0")
-        .build(&server, temp_dir.path(), rt_cancel.clone())
+        .build(hls.master_url(), temp_dir.path(), cancel_token.clone())
         .await;
 
     let mut stream_v1 = HlsStreamBuilder::new()
         .variant(1)
         .store_subdir("v1")
-        .build(&server, temp_dir.path(), rt_cancel)
+        .build(hls.master_url(), temp_dir.path(), cancel_token)
         .await;
 
     spawn_blocking(move || {

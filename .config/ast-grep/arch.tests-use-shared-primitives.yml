@@ -1,0 +1,59 @@
+id: arch.tests-use-shared-primitives
+message: |
+  A test re-implements a shared test primitive. Each testing task has one
+  owner, so a fix to it reaches every suite:
+
+  - a local HTTP server: `kithara_test_utils::TestHttpServer`;
+  - log capture: the harness `tracing("<filter>")` attribute;
+  - waits, temp dirs, cancel tokens, pacing and seeded randomness:
+    `kithara_test_utils`;
+  - HLS servers and offline players or hosts: `kithara_integration_tests`.
+
+  `docs/guides/test-harness.md` maps each task to its primitive. If the
+  shared one lacks a knob, extend it there instead of copying it.
+severity: error
+language: Rust
+files:
+  - tests/**/*.rs
+  - crates/*/tests/**/*.rs
+  # Test files a `#[cfg(test)] mod` declaration pulls in under `src`; inline
+  # test modules are `arch.test-modules-use-shared-primitives`.
+  - crates/*/src/**/tests.rs
+  - crates/*/src/**/*_tests.rs
+  - crates/*/src/**/tests/**/*.rs
+ignores:
+  # The owners of the shared primitives.
+  - tests/src/**
+  - crates/kithara-test-utils/**
+  - crates/kithara-test-fixtures/**
+  - crates/kithara-test-macros/**
+  # Lint fixtures and the lint engine's own tests.
+  - crates/kithara-devtools/**
+  # Beneath `kithara-test-utils`: its unit tests reach the primitives through a
+  # second copy of the crate, not the one under test.
+  - crates/kithara-platform/src/**
+rule:
+  any:
+    - all:
+        - kind: call_expression
+        - has:
+            field: function
+            regex: 'TcpListener::bind$'
+        - has:
+            field: arguments
+            regex: '"127\.0\.0\.1:0"'
+    - all:
+        - kind: call_expression
+        - has:
+            field: function
+            regex: '^(?:::)?tracing_subscriber::(?:fmt|registry)$'
+    - all:
+        - kind: function_item
+        - has:
+            field: name
+            regex: '^(?:wait_until|virtual_pace|temp_dir|temp_path|cancel_token)$'
+    - all:
+        - kind: struct_item
+        - has:
+            field: name
+            regex: '^(?:TestHttpServer|TestTempDir|Xorshift64|TestServerHelper|OfflinePlayer|OfflineHostHarness|DiskQueue)$'

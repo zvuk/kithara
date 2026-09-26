@@ -3,12 +3,11 @@ use std::env;
 use axum::{Router, middleware, routing::get};
 use kithara::platform::sync::Arc;
 use kithara_test_fixtures::{Mp3Shape, SignalAsset, assets::by_name};
+use kithara_test_utils::TestHttpServer;
 use tower_http::cors::CorsLayer;
 use url::Url;
 
 use crate::{
-    hls_url::HlsSpec,
-    http_server::TestHttpServer,
     routes::{assets, behavior, control, signal, store, stream},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
     test_server_state::{
@@ -67,17 +66,11 @@ impl TestServerHelper {
         &self,
         builder: HlsFixtureBuilder,
     ) -> Result<CreatedHls, CreateHlsError> {
+        let fixture = Arc::new(builder.clone());
         let spec =
             builder.into_spec_with_blob_registrar(|bytes| self.state.register_hls_blob(bytes));
-        self.create_hls_from_spec(spec).await
-    }
-
-    pub(crate) async fn create_hls_from_spec(
-        &self,
-        spec: HlsSpec,
-    ) -> Result<CreatedHls, CreateHlsError> {
         let token = self.state.insert_hls_spec(spec)?;
-        Ok(CreatedHls::new(self.base_url().clone(), token))
+        Ok(CreatedHls::new(self.base_url().clone(), token, fixture))
     }
 
     /// URL of one build-time generated signal body.
@@ -152,6 +145,22 @@ impl TestServerHelper {
     #[must_use]
     pub fn size_probe_count(&self, hls_token: &str, variant: usize, segment: usize) -> u64 {
         self.state.size_probe_count(hls_token, variant, segment)
+    }
+
+    /// Size-probes served across every segment of one variant of `hls`.
+    #[must_use]
+    pub fn variant_size_probe_count(&self, hls: &CreatedHls, variant: usize) -> u64 {
+        (0..hls.spec().segments_per_variant)
+            .map(|segment| self.size_probe_count(hls.token(), variant, segment))
+            .sum()
+    }
+
+    /// Size-probes served across every segment of every variant of `hls`.
+    #[must_use]
+    pub fn total_size_probe_count(&self, hls: &CreatedHls) -> u64 {
+        (0..hls.spec().variant_count)
+            .map(|variant| self.variant_size_probe_count(hls, variant))
+            .sum()
     }
 
     /// Register a withhold gate for the init (`EXT-X-MAP`) segment of one

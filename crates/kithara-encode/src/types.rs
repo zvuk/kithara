@@ -157,3 +157,35 @@ pub struct EncodedTrack {
     pub bit_rate: u64,
     pub packets_per_segment: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use kithara_stream::{AudioCodec, ContainerFormat};
+    use kithara_test_utils::kithara;
+
+    use super::BytesEncodeTarget;
+
+    #[kithara::test]
+    fn bytes_target_maps_to_expected_media_info() {
+        let info = BytesEncodeTarget::M4a.media_info(44_100, 2);
+        assert_eq!(info.codec, Some(AudioCodec::AacLc));
+        assert_eq!(info.container, Some(ContainerFormat::Mp4));
+        assert_eq!(info.sample_rate, Some(44_100));
+        assert_eq!(info.channels, Some(2));
+    }
+
+    #[kithara::test]
+    #[case::mp3(BytesEncodeTarget::Mp3, "mp3", Some(128_000))]
+    #[case::flac(BytesEncodeTarget::Flac, "flac", None)]
+    #[case::aac(BytesEncodeTarget::Aac, "aac", Some(128_000))]
+    #[case::m4a(BytesEncodeTarget::M4a, "m4a", Some(128_000))]
+    #[case::alac(BytesEncodeTarget::Alac, "m4a", None)]
+    fn bytes_target_defaults_match_route_contract(
+        #[case] target: BytesEncodeTarget,
+        #[case] ext: &str,
+        #[case] bit_rate: Option<u64>,
+    ) {
+        assert_eq!(target.extension(), ext);
+        assert_eq!(target.default_bit_rate(), bit_rate);
+    }
+}

@@ -18,18 +18,39 @@ pub use serial_test;
 pub use tracing;
 
 pub mod bufpool;
+pub mod cancel;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod flight;
 pub mod hang;
+#[cfg(all(feature = "http-server", not(target_arch = "wasm32")))]
+pub mod http_server;
 pub mod memory;
 #[cfg(feature = "mock")]
 pub mod mock;
 pub mod no_block;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod off_thread;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod pace;
 pub mod probe;
+pub mod rng;
 pub mod rtsan;
+#[cfg(feature = "temp-dir")]
+pub mod temp_dir;
 pub mod test;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod wait;
+
+pub use cancel::{cancel_token, cancel_token_cancelled};
+#[cfg(all(feature = "http-server", not(target_arch = "wasm32")))]
+pub use http_server::TestHttpServer;
+#[cfg(not(target_arch = "wasm32"))]
+pub use pace::virtual_pace;
+pub use rng::Xorshift64;
+#[cfg(feature = "temp-dir")]
+pub use temp_dir::{TestTempDir, temp_dir, temp_path};
+#[cfg(not(target_arch = "wasm32"))]
+pub use wait::wait_until;
 
 pub mod kithara {
     pub use kithara_test_macros::{

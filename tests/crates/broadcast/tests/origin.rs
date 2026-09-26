@@ -10,11 +10,9 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
     worker::{Worker, WorkerConfig},
 };
-use kithara_integration_tests::{
-    bufpool_ext::{TestPools, pools},
-    waits::wait_until,
-};
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 use kithara_test_fixtures::signal::goertzel_magnitude;
+use kithara_test_utils::wait_until;
 use url::Url;
 
 pub(super) const CHANNELS: u16 = 2;

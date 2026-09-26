@@ -10,9 +10,12 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    offline::{OfflinePlayer, OfflineWorker, max_silence_run, peak, rms},
+    offline::{OfflinePlayer, OfflineWorker},
 };
-use kithara_test_fixtures::SignalAsset;
+use kithara_test_fixtures::{
+    SignalAsset,
+    signal::{max_silence_run, peak, rms},
+};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: usize = 2;

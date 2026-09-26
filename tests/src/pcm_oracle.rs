@@ -82,8 +82,9 @@ async fn serve(body: axum::body::Bytes) -> axum::response::Response {
 
 #[cfg(all(test, not(target_os = "android")))]
 mod tests {
+    use kithara_test_utils::TestHttpServer;
+
     use super::*;
-    use crate::TestHttpServer;
 
     #[kithara::test(tokio)]
     async fn remote_oracle_decodes_submitted_media_and_rejects_invalid_input() {

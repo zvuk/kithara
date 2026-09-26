@@ -7,26 +7,22 @@ use kithara::{
     platform::CancelToken,
     stream::Stream,
 };
+use url::Url;
 
-use crate::{
-    bufpool_ext::{TestPools, pools},
-    hls_server::TestServer,
-};
+use crate::bufpool_ext::{TestPools, pools};
 
 /// Builder for creating `Stream<Hls>` in integration tests.
 ///
-/// Defaults to `Manual(0)` ABR and `/master.m3u8` master playlist.
+/// Defaults to `Manual(0)` ABR.
 ///
 /// # Examples
 ///
 /// ```rust,ignore
-/// let server = TestServer::new().await;
 /// let mut stream = HlsStreamBuilder::new()
-///     .build(&server, temp_dir.path(), cancel_token)
+///     .build(hls.master_url(), temp_dir.path(), cancel_token)
 ///     .await;
 /// ```
 pub struct HlsStreamBuilder {
-    master_path: &'static str,
     initial_abr_mode: AbrMode,
     store_subdir: Option<&'static str>,
     max_assets: Option<usize>,
@@ -36,7 +32,6 @@ pub struct HlsStreamBuilder {
 impl HlsStreamBuilder {
     pub const fn new() -> Self {
         Self {
-            master_path: "/master.m3u8",
             initial_abr_mode: AbrMode::Manual(VariantIndex::new(0)),
             store_subdir: None,
             max_assets: None,
@@ -53,18 +48,6 @@ impl HlsStreamBuilder {
     /// Override the initial ABR mode entirely.
     pub const fn abr_mode(mut self, mode: AbrMode) -> Self {
         self.initial_abr_mode = mode;
-        self
-    }
-
-    /// Use master playlist with init segments (`/master-init.m3u8`).
-    pub const fn with_init(mut self) -> Self {
-        self.master_path = "/master-init.m3u8";
-        self
-    }
-
-    /// Use encrypted master playlist (`/master-encrypted.m3u8`).
-    pub const fn with_encrypted(mut self) -> Self {
-        self.master_path = "/master-encrypted.m3u8";
         self
     }
 
@@ -89,11 +72,10 @@ impl HlsStreamBuilder {
     /// Build the `Stream<Hls>` from the configured options.
     pub async fn build(
         self,
-        server: &TestServer,
+        master_url: Url,
         temp_path: &Path,
         cancel: CancelToken,
     ) -> Stream<Hls<TestPools>> {
-        let url = server.url(self.master_path);
         let pools = pools();
 
         let store_path = match self.store_subdir {
@@ -107,7 +89,7 @@ impl HlsStreamBuilder {
             .maybe_max_bytes(self.max_bytes)
             .build();
 
-        let config = HlsConfig::for_url(url)
+        let config = HlsConfig::for_url(master_url)
             .store(store_opts)
             .pools(pools)
             .cancel(cancel)

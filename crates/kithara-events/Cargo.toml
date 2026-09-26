@@ -9,6 +9,10 @@ description = "Hierarchical event bus for the audio pipeline."
 keywords = ["events", "audio", "observer", "pubsub"]
 categories = ["asynchronous"]
 
+[features]
+flash = ["kithara-platform/flash"]
+no-block = ["kithara-platform/no-block"]
+
 [dependencies]
 kithara-derive = { workspace = true, features = ["event"] }
 kithara-platform = { workspace = true }
@@ -25,6 +29,9 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 [dev-dependencies]
 kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
 
 [lints]
 workspace = true

@@ -23,6 +23,13 @@ kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara = { workspace = true, features = ["mock", "offline", "signal"] }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
+
+cochlea-features = { workspace = true }
+reqwest = { workspace = true, features = ["rustls"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
 wasm-bindgen = { workspace = true }

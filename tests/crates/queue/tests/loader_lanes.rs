@@ -8,27 +8,22 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara::{
     assets::AssetStore,
-    download::{Downloader, DownloaderConfig},
+    download::Downloader,
     events::TrackId,
-    host::HostConfig,
-    net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        time::{Duration, Instant, sleep},
-    },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, TrackSource, TrackStatus, Transition},
+    platform::time::{Duration, Instant, sleep},
+    play::{ResourceConfig, ResourceSrc},
+    queue::{QueueControl, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, kithara,
+    offline::DiskQueue,
     waits::{wait_for_loader_done, wait_for_position_at_least, wait_for_position_event},
 };
 use kithara_test_fixtures::fixtures::tone_mp3;
+use kithara_test_utils::temp_dir;
 use url::Url;
 
-use crate::bufpool_ext::{TestPools, pools};
+use crate::bufpool_ext::TestPools;
 
 struct Consts;
 impl Consts {
@@ -80,52 +75,6 @@ fn fast_url(handle: &BehaviorHandle) -> Url {
     handle.child_url("track.mp3")
 }
 
-async fn build_queue_with_tick(
-    temp_dir: &TestTempDir,
-    cap: usize,
-) -> (
-    OfflineQueue<TestPools>,
-    Downloader,
-    AssetStore<TestPools>,
-    QueueTicker,
-) {
-    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let pools = pools();
-    let session = HostConfig::offline(pools.clone()).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.sample_rate())
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build(),
-    );
-    let cap = NonZeroUsize::new(cap).expect("BUG: cap must be > 0");
-    let queue = OfflineQueue::paced(
-        session,
-        Queue::new(
-            QueueConfig::builder()
-                .max_concurrent_loads(cap)
-                .store(store.clone())
-                .player(player)
-                .build(),
-        ),
-        RENDER_PACE,
-    )
-    .await
-    .expect("create product offline queue");
-    let tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools,
-            CancelToken::never(),
-        ))
-        .build(),
-    );
-    (queue, downloader, store, tick_handle)
-}
-
 fn mk_cfg(
     url: &Url,
     downloader: &Downloader,
@@ -173,8 +122,16 @@ async fn select_pending_track_parked_behind_hung_load_promotes(tone_mp3: &'stati
     let (hung, fast) = register_sources(&helper, tone_mp3);
 
     let temp = temp_dir();
-    let (queue, downloader, store, mut tick_handle) =
-        build_queue_with_tick(&temp, Consts::BG_CAP).await;
+    let DiskQueue {
+        queue,
+        downloader,
+        store,
+        ticker: mut tick_handle,
+        ..
+    } = DiskQueue::builder(temp.path())
+        .max_concurrent_loads(NonZeroUsize::new(Consts::BG_CAP).expect("loader cap is non-zero"))
+        .open()
+        .await;
 
     let hung_id = queue
         .run({
@@ -233,8 +190,16 @@ async fn superseded_hung_selection_frees_lane_for_next_select(tone_mp3: &'static
     let (hung, fast) = register_sources(&helper, tone_mp3);
 
     let temp = temp_dir();
-    let (queue, downloader, store, mut tick_handle) =
-        build_queue_with_tick(&temp, Consts::BG_CAP).await;
+    let DiskQueue {
+        queue,
+        downloader,
+        store,
+        ticker: mut tick_handle,
+        ..
+    } = DiskQueue::builder(temp.path())
+        .max_concurrent_loads(NonZeroUsize::new(Consts::BG_CAP).expect("loader cap is non-zero"))
+        .open()
+        .await;
     let mut events = queue.subscribe();
 
     let hung_id = queue

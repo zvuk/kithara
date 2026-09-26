@@ -6,8 +6,11 @@ use kithara::{
     queue::{QueueControl, QueueEvent, TrackStatus},
 };
 use kithara_app::{pools::AppPools, sources::build_source};
-use kithara_integration_tests::{event::TestEvent, kithara, offline::LazyAppQueueFixture};
-use tracing_subscriber::EnvFilter;
+use kithara_integration_tests::{
+    event::TestEvent,
+    kithara,
+    offline::{LazyAppQueueFixture, app_disk_asset_store},
+};
 
 /// Real-network DRM trace harness. Loads a single zvq.me DRM master
 /// playlist and dumps every HLS / stream / net tracing event, so the
@@ -17,15 +20,18 @@ use tracing_subscriber::EnvFilter;
 /// Lives in `suite_network` — it talks to a real VPN-gated host and is
 /// pointless without `KITHARA_DRM_KEY` + `KITHARA_DRM_AUTH_TOKEN`
 /// baked at build time (`option_env!`).
-#[kithara::test(tokio)]
+#[kithara::test(
+    tracing(
+        "kithara_app=debug,kithara_hls=trace,kithara_stream=debug,kithara_net=debug,kithara_queue=debug,kithara_drm=trace"
+    ),
+    tokio
+)]
 async fn zvuk_drm_master_playlist_trace() {
-    install_tracing();
-
     let ctx = CTX.get().await;
     let url = "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8";
 
     let mut config = ctx.config.clone();
-    config.store = super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path());
+    config.store = app_disk_asset_store(&ctx.config, ctx.cache.path());
     let source = build_source(url, &config);
 
     let mut rx = ctx.queue.subscribe();
@@ -43,20 +49,6 @@ async fn zvuk_drm_master_playlist_trace() {
 }
 
 static CTX: LazyAppQueueFixture = LazyAppQueueFixture::const_new();
-
-fn install_tracing() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new(
-            "kithara_app=debug,kithara_hls=trace,kithara_stream=debug,kithara_net=debug,\
-             kithara_queue=debug,kithara_drm=trace",
-        )
-    });
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_test_writer()
-        .with_target(true)
-        .try_init();
-}
 
 async fn wait_for_terminal(
     rx: &mut EventReceiver<TestEvent>,

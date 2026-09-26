@@ -576,9 +576,9 @@ mod tests {
     use super::*;
     use crate::{
         fixture_protocol::{
-            DataMode, EncryptionRequest, GaplessEncoding, PackagedAudioRequest,
-            PackagedAudioSource, PackagedSignal,
+            DataMode, GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
         },
+        hls_server::aes128_encryption,
         hls_spec::parse_hls_spec_with,
         hls_url::{HlsSpec, encode_hls_spec},
         kithara,
@@ -609,10 +609,7 @@ mod tests {
                 segments_per_variant: 1,
                 segment_size: 32,
                 data_mode: DataMode::TestPattern,
-                encryption: Some(EncryptionRequest {
-                    key_hex: "30313233343536373839616263646566".to_string(),
-                    iv_hex: Some("00000000000000000000000000000000".to_string()),
-                }),
+                encryption: Some(aes128_encryption()),
                 ..HlsSpec::default()
             }),
             |_| unreachable!(),

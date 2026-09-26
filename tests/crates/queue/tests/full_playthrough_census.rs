@@ -32,14 +32,14 @@ use kithara::{
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper,
     cochlea::CochleaReport,
     event::TestEvent,
     fixture_protocol::PcmPattern,
-    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    temp_dir,
+    offline::{LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions},
     test_defaults::packaged_content_frames,
     usdt_trace::{self, ProbeEvent},
+    waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::{
     asset::Asset,
@@ -47,7 +47,7 @@ use kithara_test_fixtures::{
     hls_fixtures::frame_samples,
     signal::{FrameClass, classify_windows},
 };
-use kithara_test_utils::probe::IntoProbeArg;
+use kithara_test_utils::{TestTempDir, probe::IntoProbeArg, temp_dir};
 
 use crate::bufpool_ext::TestPools;
 
@@ -262,7 +262,7 @@ async fn track_src(
 }
 
 struct Census {
-    harness: OfflinePlayerHarness,
+    harness: OfflinePlayer,
     queue: QueueControl<TestPools>,
     tracks: Vec<TrackId>,
 }
@@ -281,7 +281,7 @@ impl Census {
 }
 
 async fn build_queue(sources: Vec<ResourceSrc>, seam: Seam) -> Census {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(seam.crossfade_seconds())
             .block_on_underrun(true)
@@ -306,7 +306,9 @@ async fn build_queue(sources: Vec<ResourceSrc>, seam: Seam) -> Census {
             .run(&queue, move |control| control.append(source.to_string()))
             .await
             .expect("append census track through the production loader");
-        crate::wait_loaded(&mut events, id).await;
+        wait_for_loader_done_event(&mut events, &queue, id, LOCAL_LOAD_DEADLINE)
+            .await
+            .expect("the census track loads");
         tracks.push(id);
     }
     harness
@@ -691,159 +693,50 @@ async fn run_census(prepared: PreparedTracks, seam: Seam, temp_dir: &TestTempDir
     census_acoustics(&take);
 }
 
-/// Gapless: no output frame may be claimed by two tracks at once. A premature
-/// switch shows up here as an overlap the configuration never asked for.
+/// Every track of a queue plays to its last frame across each seam. Gapless:
+/// no output frame may be claimed by two tracks at once, so a premature switch
+/// shows up as an overlap the configuration never asked for. Crossfade: the
+/// overlap must be exactly the configured one, at the boundary and nowhere
+/// else. The queues cover segmented streams, whole local files, whole bodies
+/// on a server, and neighbours that never share a reader; only the transport
+/// differs, so every assertion applies unchanged.
 #[kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-async fn gapless_hls_queue_plays_every_track_end_to_end(
-    #[future(awt)] hls_tracks: PreparedTracks,
+#[case::gapless_hls(HLS_QUEUE, Seam::Gapless)]
+#[case::crossfaded_hls(HLS_QUEUE, Seam::Crossfade)]
+#[case::gapless_local(LOCAL_QUEUE, Seam::Gapless)]
+#[case::crossfaded_local(LOCAL_QUEUE, Seam::Crossfade)]
+#[case::gapless_network(NETWORK_QUEUE, Seam::Gapless)]
+#[case::crossfaded_network(NETWORK_QUEUE, Seam::Crossfade)]
+#[case::gapless_mixed(MIXED_QUEUE, Seam::Gapless)]
+#[case::crossfaded_mixed(MIXED_QUEUE, Seam::Crossfade)]
+async fn a_queue_plays_every_track_end_to_end(
+    #[case] origins: [Origin; 3],
+    #[case] seam: Seam,
     temp_dir: TestTempDir,
 ) {
-    run_census(hls_tracks, Seam::Gapless, &temp_dir).await;
-}
-
-/// Crossfade: the overlap must be exactly the configured one, at the boundary
-/// and nowhere else.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(180)),
-    hang_timeout_secs(20)
-)]
-async fn crossfaded_hls_queue_plays_every_track_end_to_end(
-    #[future(awt)] hls_tracks: PreparedTracks,
-    temp_dir: TestTempDir,
-) {
-    run_census(hls_tracks, Seam::Crossfade, &temp_dir).await;
-}
-
-/// The same gapless census over local files: a track that arrives whole rather
-/// than segment by segment must still be played to its last frame.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(180)),
-    hang_timeout_secs(20)
-)]
-async fn gapless_local_queue_plays_every_track_end_to_end(
-    #[future(awt)] local_tracks: PreparedTracks,
-    temp_dir: TestTempDir,
-) {
-    run_census(local_tracks, Seam::Gapless, &temp_dir).await;
-}
-
-/// The same crossfade census over local files.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(180)),
-    hang_timeout_secs(20)
-)]
-async fn crossfaded_local_queue_plays_every_track_end_to_end(
-    #[future(awt)] local_tracks: PreparedTracks,
-    temp_dir: TestTempDir,
-) {
-    run_census(local_tracks, Seam::Crossfade, &temp_dir).await;
-}
-
-/// The seam a playlist crosses when it leaves a segmented stream for a whole
-/// body on a server, and crosses back. Every assertion the other legs carry
-/// applies unchanged, because only the transport differs: the same ramp, the
-/// same built length, the same provenance.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(180)),
-    hang_timeout_secs(20)
-)]
-async fn gapless_network_queue_plays_every_track_end_to_end(
-    #[future(awt)] network_tracks: PreparedTracks,
-    temp_dir: TestTempDir,
-) {
-    run_census(network_tracks, Seam::Gapless, &temp_dir).await;
-}
-
-/// The same seam with a crossfade: the overlap must be exactly the configured
-/// one, which is the shape a track cut short breaks first.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(180)),
-    hang_timeout_secs(20)
-)]
-async fn crossfaded_network_queue_plays_every_track_end_to_end(
-    #[future(awt)] network_tracks: PreparedTracks,
-    temp_dir: TestTempDir,
-) {
-    run_census(network_tracks, Seam::Crossfade, &temp_dir).await;
-}
-
-/// A queue whose neighbours never share a reader: each seam hands over from a
-/// segmented stream to a file, or back, and must still land on the frame.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(180)),
-    hang_timeout_secs(20)
-)]
-async fn gapless_mixed_queue_plays_every_track_end_to_end(
-    #[future(awt)] mixed_tracks: PreparedTracks,
-    temp_dir: TestTempDir,
-) {
-    run_census(mixed_tracks, Seam::Gapless, &temp_dir).await;
-}
-
-/// The same mixed queue with the crossfade: the overlap is the configured one
-/// at a seam whose two sides are read differently.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(180)),
-    hang_timeout_secs(20)
-)]
-async fn crossfaded_mixed_queue_plays_every_track_end_to_end(
-    #[future(awt)] mixed_tracks: PreparedTracks,
-    temp_dir: TestTempDir,
-) {
-    run_census(mixed_tracks, Seam::Crossfade, &temp_dir).await;
+    run_census(prepare_tracks(origins).await, seam, &temp_dir).await;
 }
 
 /// The reported premature switch was seen where an HLS stream hands over to a
-/// whole MPEG body on a server. The provenance half runs alone here: a lossy
+/// whole MPEG body on a server. Only the provenance half runs: a lossy
 /// container carries neither a readable ramp direction nor a peak the fade
-/// oracle can read, so what is left is the attribution - each track serves the
-/// length it was built to, and the seam overlaps by nothing at all.
+/// oracle can read, so each track must serve the length it was built to, and
+/// the seam must overlap by exactly what the queue announced.
 #[kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(180)),
     hang_timeout_secs(20)
 )]
-async fn gapless_mpeg_queue_serves_every_track_whole(
-    #[future(awt)] mpeg_tracks: PreparedTracks,
-    temp_dir: TestTempDir,
-) {
-    let _ = census_provenance(mpeg_tracks, Seam::Gapless, &temp_dir).await;
-}
-
-/// The same seam with the crossfade the reported defect was heard as: the
-/// overlap must be exactly the configured one, and a track cut short shows up
-/// as an overlap wider than the queue announced.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(180)),
-    hang_timeout_secs(20)
-)]
-async fn crossfaded_mpeg_queue_serves_every_track_whole(
-    #[future(awt)] mpeg_tracks: PreparedTracks,
-    temp_dir: TestTempDir,
-) {
-    let _ = census_provenance(mpeg_tracks, Seam::Crossfade, &temp_dir).await;
+#[case::gapless(Seam::Gapless)]
+#[case::crossfaded(Seam::Crossfade)]
+async fn an_mpeg_queue_serves_every_track_whole(#[case] seam: Seam, temp_dir: TestTempDir) {
+    let _ = census_provenance(prepare_tracks(MPEG_QUEUE).await, seam, &temp_dir).await;
 }
 
 struct PreparedTracks {
@@ -872,29 +765,4 @@ async fn prepare_tracks(origins: [Origin; 3]) -> PreparedTracks {
         origins,
         sources,
     }
-}
-
-#[kithara::fixture]
-async fn hls_tracks() -> PreparedTracks {
-    prepare_tracks(HLS_QUEUE).await
-}
-
-#[kithara::fixture]
-async fn local_tracks() -> PreparedTracks {
-    prepare_tracks(LOCAL_QUEUE).await
-}
-
-#[kithara::fixture]
-async fn network_tracks() -> PreparedTracks {
-    prepare_tracks(NETWORK_QUEUE).await
-}
-
-#[kithara::fixture]
-async fn mixed_tracks() -> PreparedTracks {
-    prepare_tracks(MIXED_QUEUE).await
-}
-
-#[kithara::fixture]
-async fn mpeg_tracks() -> PreparedTracks {
-    prepare_tracks(MPEG_QUEUE).await
 }

@@ -22,11 +22,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir,
+    CreatedHls,
     bufpool_ext::{TestPools, pools},
-    hls_server::{TestServer, test_server},
-    temp_dir,
+    hls_server::test_pattern_hls,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 /// Settle window / hang budget for [`wait_thread_count_quiesced`].
 const SETTLE_WINDOW: usize = 4;
@@ -148,13 +148,13 @@ async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn Std
 /// grow proportionally.
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)), hang_timeout_secs(10))]
 async fn red_hls_source_drop_leaks_peer(
-    #[future(awt)] test_server: TestServer,
+    #[future(awt)] test_pattern_hls: CreatedHls,
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
     const ITERATIONS: usize = 10;
 
-    let server = test_server;
-    let url = server.url("/master.m3u8");
+    let hls = test_pattern_hls;
+    let url = hls.master_url();
     let pools = pools();
 
     let downloader = Downloader::new(

@@ -598,10 +598,7 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use std::{
-        net::SocketAddr,
-        sync::atomic::{AtomicU32, Ordering},
-    };
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     use axum::{
         Router,
@@ -611,20 +608,17 @@ mod tests {
         routing::{any, get, post},
     };
     use futures::{StreamExt, stream};
-    use kithara_platform::{
-        sync::Arc,
-        time::Duration,
-        tokio::{net::TcpListener, task::spawn},
-    };
+    use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_test_utils::TestHttpServer;
 
     use super::*;
     use crate::types::RetryPolicy;
 
     /// Spawn an axum server that returns 503 for the first
     /// `fail_count` requests against `/probe`, then 200 `"ok"` for
-    /// every subsequent request. Returns the bound URL and a counter
-    /// shared with the handler.
-    async fn server_failing_first_n(fail_count: u32) -> (Url, Arc<AtomicU32>) {
+    /// every subsequent request. Returns the server and a counter shared
+    /// with the handler.
+    async fn server_failing_first_n(fail_count: u32) -> (TestHttpServer, Arc<AtomicU32>) {
         let counter = Arc::new(AtomicU32::new(0));
         let counter_c = Arc::clone(&counter);
         let app = Router::new().route(
@@ -641,12 +635,12 @@ mod tests {
                 }
             }),
         );
-        (serve_test_app(app, "/probe").await, counter)
+        (TestHttpServer::new(app).await, counter)
     }
 
     /// Spawn an axum server whose `/echo` POST route returns 503 for the
     /// first `fail_count` requests, then echoes the request body with 200.
-    async fn server_post_echo_failing_first_n(fail_count: u32) -> (Url, Arc<AtomicU32>) {
+    async fn server_post_echo_failing_first_n(fail_count: u32) -> (TestHttpServer, Arc<AtomicU32>) {
         let counter = Arc::new(AtomicU32::new(0));
         let counter_c = Arc::clone(&counter);
         let app = Router::new().route(
@@ -663,18 +657,7 @@ mod tests {
                 }
             }),
         );
-        (serve_test_app(app, "/echo").await, counter)
-    }
-
-    async fn serve_test_app(app: Router, path: &str) -> Url {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr: SocketAddr = listener.local_addr().expect("local_addr");
-        spawn(async move {
-            axum::serve(listener, app.into_make_service())
-                .await
-                .expect("serve");
-        });
-        Url::parse(&format!("http://{addr}{path}")).expect("url")
+        (TestHttpServer::new(app).await, counter)
     }
 
     fn fast_options(max_retries: u32) -> NetOptions {
@@ -690,7 +673,7 @@ mod tests {
     /// Spawn an axum server whose `/stall` routes send `200 OK` with headers
     /// and one body chunk, then never deliver the rest of the body — the
     /// throttling-CDN shape that must surface as a timeout, not a hang.
-    async fn server_stalling_body() -> Url {
+    async fn server_stalling_body() -> TestHttpServer {
         use axum::{body::Body, response::Response as HttpResponse};
         use futures::{StreamExt, stream};
 
@@ -703,14 +686,7 @@ mod tests {
         let app = Router::new()
             .route("/stall", get(|| async { stalled() }))
             .route("/stall", post(|_body: Bytes| async { stalled() }));
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr: SocketAddr = listener.local_addr().expect("local_addr");
-        spawn(async move {
-            axum::serve(listener, app.into_make_service())
-                .await
-                .expect("serve");
-        });
-        Url::parse(&format!("http://{addr}/stall")).expect("url")
+        TestHttpServer::new(app).await
     }
 
     fn stall_options() -> NetOptions {
@@ -740,7 +716,8 @@ mod tests {
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn get_bytes_aborts_when_body_stalls() {
-        let url = server_stalling_body().await;
+        let server = server_stalling_body().await;
+        let url = server.url("/stall");
         let client = HttpClient::new(
             stall_options(),
             crate::test_pools::pools(),
@@ -755,7 +732,8 @@ mod tests {
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn post_bytes_aborts_when_body_stalls() {
-        let url = server_stalling_body().await;
+        let server = server_stalling_body().await;
+        let url = server.url("/stall");
         let client = HttpClient::new(
             stall_options(),
             crate::test_pools::pools(),
@@ -820,12 +798,8 @@ mod tests {
                 }
             }),
         );
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("local addr");
-        spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
-        let url = Url::parse(&format!("http://{addr}/master.m3u8")).expect("url");
+        let server = TestHttpServer::new(app).await;
+        let url = server.url("/master.m3u8");
         let options = NetOptions::builder()
             .compression(crate::Compression::GZIP | crate::Compression::DEFLATE)
             .build();
@@ -883,12 +857,8 @@ mod tests {
                     .expect("encoded response")
             }),
         );
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("local addr");
-        spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
-        let url = Url::parse(&format!("http://{addr}/encoded")).expect("url");
+        let server = TestHttpServer::new(app).await;
+        let url = server.url("/encoded");
         let options = NetOptions::builder()
             .compression(crate::Compression::GZIP | crate::Compression::DEFLATE)
             .build();
@@ -913,12 +883,8 @@ mod tests {
                     .expect("partial response")
             }),
         );
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("local addr");
-        spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
-        let url = Url::parse(&format!("http://{addr}/range")).expect("url");
+        let server = TestHttpServer::new(app).await;
+        let url = server.url("/range");
         let client = HttpClient::new(
             NetOptions::default(),
             crate::test_pools::pools(),
@@ -949,12 +915,8 @@ mod tests {
                     .expect("chunked partial response")
             }),
         );
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("local addr");
-        spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
-        let url = Url::parse(&format!("http://{addr}/range")).expect("url");
+        let server = TestHttpServer::new(app).await;
+        let url = server.url("/range");
         let client = HttpClient::new(
             NetOptions::default(),
             crate::test_pools::pools(),
@@ -1000,12 +962,8 @@ mod tests {
                 }
             }),
         );
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("local addr");
-        spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
-        let url = Url::parse(&format!("http://{addr}/resume")).expect("url");
+        let server = TestHttpServer::new(app).await;
+        let url = server.url("/resume");
         let client = HttpClient::new(
             stall_options(),
             crate::test_pools::pools(),
@@ -1055,12 +1013,8 @@ mod tests {
                 }
             }),
         );
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("local addr");
-        spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
-        let url = Url::parse(&format!("http://{addr}/resume")).expect("url");
+        let server = TestHttpServer::new(app).await;
+        let url = server.url("/resume");
         let client = HttpClient::new(
             stall_options(),
             crate::test_pools::pools(),
@@ -1114,12 +1068,8 @@ mod tests {
                 }
             }),
         );
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("local addr");
-        spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
-        let url = Url::parse(&format!("http://{addr}/resume")).expect("url");
+        let server = TestHttpServer::new(app).await;
+        let url = server.url("/resume");
         let client = HttpClient::new(
             stall_options_with_retries(2),
             crate::test_pools::pools(),
@@ -1140,7 +1090,8 @@ mod tests {
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_retries_503_until_ok() {
-        let (url, counter) = server_failing_first_n(2).await;
+        let (server, counter) = server_failing_first_n(2).await;
+        let url = server.url("/probe");
         let client = HttpClient::new(
             fast_options(3),
             crate::test_pools::pools(),
@@ -1160,7 +1111,8 @@ mod tests {
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_no_retry_propagates_5xx() {
-        let (url, counter) = server_failing_first_n(2).await;
+        let (server, counter) = server_failing_first_n(2).await;
+        let url = server.url("/probe");
         let client = HttpClient::new(
             fast_options(0),
             crate::test_pools::pools(),
@@ -1183,7 +1135,8 @@ mod tests {
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_head_retries_503_until_ok() {
-        let (url, counter) = server_failing_first_n(1).await;
+        let (server, counter) = server_failing_first_n(1).await;
+        let url = server.url("/probe");
         let client = HttpClient::new(
             fast_options(2),
             crate::test_pools::pools(),
@@ -1195,7 +1148,8 @@ mod tests {
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_post_retries_then_echoes_body() {
-        let (url, counter) = server_post_echo_failing_first_n(1).await;
+        let (server, counter) = server_post_echo_failing_first_n(1).await;
+        let url = server.url("/echo");
         let client = HttpClient::new(
             fast_options(2),
             crate::test_pools::pools(),

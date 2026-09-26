@@ -15,7 +15,7 @@ pub struct OfflineWorker {
 
 /// One operation applied to the offline player wherever it lives. The future
 /// runs on the thread that made it, so it is not `Send`.
-type Command = Box<dyn for<'a> FnOnce(&'a mut OfflinePlayer) -> LocalBoxFuture<'a, ()> + Send>;
+type Command = Box<dyn for<'a> FnOnce(&'a OfflinePlayer) -> LocalBoxFuture<'a, ()> + Send>;
 
 impl OfflineWorker {
     /// Build the offline player on a Web Worker that then serves commands until
@@ -28,9 +28,9 @@ impl OfflineWorker {
         spawn_named("offline-harness", move || {
             keep_worker_alive();
             task::spawn(async move {
-                let mut player = build().await;
+                let player = build().await;
                 while let Ok(command) = rx.recv_async().await {
-                    command(&mut player).await;
+                    command(&player).await;
                 }
             });
         });
@@ -45,7 +45,7 @@ impl OfflineWorker {
     /// Panics if the harness Worker is gone.
     pub async fn call<F, R>(&self, f: F) -> R
     where
-        F: AsyncFnOnce(&mut OfflinePlayer) -> R + Send + 'static,
+        F: AsyncFnOnce(&OfflinePlayer) -> R + Send + 'static,
         R: Send + 'static,
     {
         let (reply_tx, reply_rx) = channel::<R>();

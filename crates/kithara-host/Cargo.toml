@@ -20,7 +20,8 @@ default = [
 ]
 backend-cpal = ["firewheel/cpal"]
 offline = ["dep:kithara-worker"]
-no-block = ["kithara-platform/no-block"]
+flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
+no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 client-reqwest = ["kithara-play/client-reqwest"]
 client-wreq = ["kithara-play/client-wreq"]
 tls-rustls = ["kithara-play/tls-rustls"]
@@ -82,6 +83,9 @@ kithara-audio = { workspace = true, features = ["usdt", "mock"] }
 kithara-bufpool = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "subscriber"] }
 wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
 
 [lints]
 workspace = true

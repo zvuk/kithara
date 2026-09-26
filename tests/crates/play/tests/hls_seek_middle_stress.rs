@@ -9,9 +9,10 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, fixture_protocol::DelayRule, hls_fixture::create_test_downloader,
-    offline::OfflinePlayer, temp_dir, waits::render_until_position,
+    TestServerHelper, fixture_protocol::DelayRule, hls_fixture::create_test_downloader,
+    hls_server::packaged_ladder, offline::OfflinePlayer, waits::render_until_position,
 };
+use kithara_test_utils::temp_dir;
 
 use crate::{
     bufpool_ext::{TestPools, pools},
@@ -56,14 +57,17 @@ async fn hls_seek_middle_repeated_seeks_stress(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let server = PackagedTestServer::with_delay_rules(vec![DelayRule {
-        variant: None,
-        segment_eq: None,
-        segment_gte: Some(1),
-        delay_ms: Consts::STRESS_DELAY_MS,
-    }])
-    .await;
-    let master = server.url("/master.m3u8");
+    let master = TestServerHelper::new()
+        .await
+        .create_hls(packaged_ladder().delay_rules(vec![DelayRule {
+            variant: None,
+            segment_eq: None,
+            segment_gte: Some(1),
+            delay_ms: Consts::STRESS_DELAY_MS,
+        }]))
+        .await
+        .expect("create delayed packaged ladder")
+        .master_url();
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
@@ -112,7 +116,7 @@ async fn hls_seek_middle_repeated_seeks_stress(
     for iter in 0..iterations {
         let target = Consts::SEEK_TARGETS[(iter as usize) % Consts::SEEK_TARGETS.len()];
         let pos_before = player.position();
-        player.seek(target, u64::from(1 + iter));
+        player.seek(target);
         let post_target = target + Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS;
         render_until_position(
             &mut player,

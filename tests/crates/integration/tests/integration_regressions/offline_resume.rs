@@ -16,17 +16,17 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir,
+    Content, Delivery, FixtureBehavior, PrivateTestServer,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
     test_defaults::Consts as Shared,
     test_server::NetworkMode,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
 use kithara_test_fixtures::hls::long_plain;
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 fn hls_look_ahead(bytes: u64) -> HlsConfigPatch {
     let mut patch = HlsConfigPatch::default();

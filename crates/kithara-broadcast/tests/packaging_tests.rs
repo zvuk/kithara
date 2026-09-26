@@ -1,0 +1,153 @@
+#![cfg(not(target_arch = "wasm32"))]
+
+use std::io::Cursor;
+
+use kithara_broadcast::{BroadcastConfig, LiveWindow, PlaylistSnapshot, Segmenter};
+use kithara_decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory};
+use kithara_encode::{StreamBackend, StreamEncoder};
+use kithara_platform::time::Duration;
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+#[cfg(target_os = "android")]
+use kithara_test_dylib as _;
+use kithara_test_fixtures::{integration_fixtures::packaging_tone, signal::goertzel_magnitude};
+use kithara_test_utils::{
+    bufpool::{TestPools, pools},
+    kithara,
+};
+use kithara_worker::{Worker, WorkerConfig};
+
+const SAMPLE_RATE: u32 = 48_000;
+const CHANNELS: u16 = 2;
+const TONE_HZ: f64 = 440.0;
+const BIT_RATE: u64 = 128_000;
+const FRAMES: usize = 2 * SAMPLE_RATE as usize;
+const PUSH_FRAMES: usize = 1_500;
+const TARGET: Duration = Duration::from_millis(500);
+const PRIMING_SKIP_FRAMES: usize = 4_800;
+const SEGMENT_PRIMING_SKIP_FRAMES: usize = 2_048;
+const TONE_MARGIN: f64 = 50.0;
+
+fn broadcast(samples: &[f32]) -> PlaylistSnapshot {
+    let config = BroadcastConfig::builder(Worker::new(WorkerConfig::new()), pools())
+        .sample_rate(SAMPLE_RATE)
+        .channels(CHANNELS)
+        .bit_rate(BIT_RATE)
+        .segment_target(TARGET)
+        .build();
+    let mut encoder = StreamEncoder::builder()
+        .backend(StreamBackend::Fdk)
+        .sample_rate(SAMPLE_RATE)
+        .channels(CHANNELS)
+        .bit_rate(BIT_RATE)
+        .timescale(SAMPLE_RATE)
+        .build()
+        .expect("open the streaming AAC-LC encoder");
+    let mut segmenter = Segmenter::new(&config).expect("open the segmenter");
+    let mut window = LiveWindow::new(&config).expect("open the window");
+
+    let mut units = Vec::new();
+    for chunk in samples.chunks(PUSH_FRAMES * usize::from(CHANNELS)) {
+        units.extend(encoder.push(chunk).expect("push interleaved f32"));
+    }
+    units.extend(encoder.finish().expect("finish the stream"));
+
+    for unit in &units {
+        if let Some(segment) = segmenter.push(unit).expect("package the access unit") {
+            window.push(segment);
+        }
+    }
+    if let Some(segment) = segmenter.flush() {
+        window.push(segment);
+    }
+    window.finish();
+
+    window.snapshot()
+}
+
+fn decode_left_channel(bytes: Vec<u8>) -> Vec<f32> {
+    let mut decoder = DecoderFactory::create_from_media_info(
+        Cursor::new(bytes),
+        &MediaInfo::builder()
+            .codec(AudioCodec::AacLc)
+            .container(ContainerFormat::Adts)
+            .build(),
+        DecoderConfig::<kithara_resampler::NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
+            .build(),
+    )
+    .expect("create the ADTS AAC-LC decoder");
+
+    let mut left = Vec::new();
+    while let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("decode chunk") {
+        let channels = usize::from(chunk.spec().channels);
+        left.extend(chunk.samples.iter().step_by(channels));
+    }
+    left
+}
+
+fn assert_carries_the_tone(pcm: &[f32], label: &str) {
+    let tone = goertzel_magnitude(pcm, TONE_HZ, SAMPLE_RATE);
+    let off_tone = goertzel_magnitude(pcm, TONE_HZ * 3.0, SAMPLE_RATE);
+
+    assert!(
+        tone > off_tone * TONE_MARGIN,
+        "{label}: expected a {TONE_HZ} Hz tone over {} frames: |tone| = {tone:.1}, \
+         |off tone| = {off_tone:.1}",
+        pcm.len()
+    );
+}
+
+#[kithara::test]
+fn the_packaged_segments_decode_back_to_the_source_tone(packaging_tone: Vec<f32>) {
+    let snapshot = broadcast(&packaging_tone);
+
+    assert!(
+        snapshot.segments.len() >= 3,
+        "expected several segments, packaged {}",
+        snapshot.segments.len()
+    );
+    assert!(snapshot.is_finished);
+    assert!(snapshot.playlist.contains("#EXT-X-ENDLIST"));
+
+    let mut stream = Vec::new();
+    for segment in snapshot.segments.iter() {
+        stream.extend_from_slice(&segment.bytes);
+    }
+
+    let decoded = decode_left_channel(stream);
+    let priming_slack = 2 * StreamEncoder::FRAME_SAMPLES;
+    assert!(
+        decoded.len() >= FRAMES - priming_slack && decoded.len() <= FRAMES + priming_slack,
+        "decoded {} frames, expected {FRAMES} within {priming_slack} frames of priming",
+        decoded.len()
+    );
+
+    assert_carries_the_tone(&decoded[PRIMING_SKIP_FRAMES..], "concatenated stream");
+}
+
+#[kithara::test]
+fn a_late_joiner_decodes_one_segment_on_its_own(packaging_tone: Vec<f32>) {
+    let snapshot = broadcast(&packaging_tone);
+
+    let joined = snapshot
+        .segments
+        .iter()
+        .rev()
+        .nth(1)
+        .expect("a full segment before the tail");
+    let decoded = decode_left_channel(joined.bytes.to_vec());
+
+    let declared = usize::try_from(joined.duration_ts).expect("duration fits usize");
+    let priming_slack = 2 * StreamEncoder::FRAME_SAMPLES;
+    assert!(
+        decoded.len().abs_diff(declared) <= priming_slack,
+        "segment {} declares {declared} frames of audio and decoded to {}, past the \
+         {priming_slack} frames a standalone segment loses to decoder priming",
+        joined.seq,
+        decoded.len()
+    );
+    assert_carries_the_tone(
+        &decoded[SEGMENT_PRIMING_SKIP_FRAMES..],
+        &format!("segment {}", joined.seq),
+    );
+}

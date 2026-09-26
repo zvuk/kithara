@@ -9,11 +9,12 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    PackagedTestServer, TestTempDir,
+    CreatedHls, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::{HlsRouteKind, HttpErrorRule},
-    temp_dir,
+    hls_server::packaged_ladder_encrypted,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 #[kithara::test(
     tokio,
@@ -23,10 +24,9 @@ use kithara_integration_tests::{
 )]
 async fn prefetch_403_returns_err_quickly(
     temp_dir: TestTempDir,
-    #[future(awt)] denied_key: PackagedTestServer,
+    #[future(awt)] denied_key: CreatedHls,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let server = denied_key;
-    let url = server.url("/master-encrypted.m3u8");
+    let url = denied_key.master_url();
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
@@ -66,12 +66,15 @@ async fn prefetch_403_returns_err_quickly(
 }
 
 #[kithara::fixture]
-async fn denied_key() -> PackagedTestServer {
-    PackagedTestServer::with_error_rules(vec![HttpErrorRule {
-        kind: HlsRouteKind::Key,
-        status: 403,
-        body: Some("{\"detail\":\"User not registered\"}".to_string()),
-        ..Default::default()
-    }])
-    .await
+async fn denied_key() -> CreatedHls {
+    TestServerHelper::new()
+        .await
+        .create_hls(packaged_ladder_encrypted().error_rules(vec![HttpErrorRule {
+            kind: HlsRouteKind::Key,
+            status: 403,
+            body: Some("{\"detail\":\"User not registered\"}".to_string()),
+            ..Default::default()
+        }]))
+        .await
+        .expect("create the encrypted packaged ladder")
 }

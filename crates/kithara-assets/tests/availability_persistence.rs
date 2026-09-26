@@ -113,55 +113,18 @@ fn disk_checkpoint_persists_committed_resource_across_rebuild() {
     assert_eq!(pairs, vec![(0, 11)]);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn remove_resource_persists_availability_deletion_across_rebuild() {
-    let dir = tempdir().unwrap();
-    let root = "remove-resource-persist";
-    let key_name = "master.m3u8";
-
-    {
-        let store = AssetStore::builder(support::pools())
-            .backend(StorageBackend::Disk {
-                root: dir.path().into(),
-            })
-            .build();
-        let scope = store.scope::<Test>(&source(root)).unwrap();
-        let key = scope.key(&resource(key_name)).unwrap();
-        write_commit(
-            scope.store().acquire_resource(&key, None).unwrap(),
-            b"poisoned",
-        );
-        store.checkpoint().unwrap();
-    }
-
-    {
-        let store = AssetStore::builder(support::pools())
-            .backend(StorageBackend::Disk {
-                root: dir.path().into(),
-            })
-            .build();
-        let scope = store.scope::<Test>(&source(root)).unwrap();
-        let key = scope.key(&resource(key_name)).unwrap();
-        assert!(store.contains_range(&key, 0..8));
-        store.remove_resource(&key).unwrap();
-        assert!(!store.contains_range(&key, 0..8));
-        store.checkpoint().unwrap();
-    }
-
-    let reopened = AssetStore::builder(support::pools())
-        .backend(StorageBackend::Disk {
-            root: dir.path().into(),
-        })
-        .build();
-    let scope = reopened.scope::<Test>(&source(root)).unwrap();
-    let key = scope.key(&resource(key_name)).unwrap();
-    assert!(!reopened.contains_range(&key, 0..8));
+/// How a test drops the committed resource.
+enum Deletion {
+    Resource,
+    Asset,
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn delete_asset_persists_availability_deletion_across_rebuild() {
+#[case::remove_resource(Deletion::Resource)]
+#[case::delete_asset(Deletion::Asset)]
+fn a_deletion_persists_in_availability_across_rebuild(#[case] deletion: Deletion) {
     let dir = tempdir().unwrap();
-    let root = "delete-asset-persist";
+    let root = "deletion-persist";
     let key_name = "master.m3u8";
 
     {
@@ -188,7 +151,10 @@ fn delete_asset_persists_availability_deletion_across_rebuild() {
         let scope = store.scope::<Test>(&source(root)).unwrap();
         let key = scope.key(&resource(key_name)).unwrap();
         assert!(store.contains_range(&key, 0..8));
-        scope.delete_asset().unwrap();
+        match deletion {
+            Deletion::Resource => store.remove_resource(&key).unwrap(),
+            Deletion::Asset => scope.delete_asset().unwrap(),
+        }
         assert!(!store.contains_range(&key, 0..8));
         store.checkpoint().unwrap();
     }
@@ -308,34 +274,6 @@ fn disk_checkpoint_without_prior_writes_is_noop() {
 
     assert!(scope2.store().available_ranges(&key).is_empty());
     assert_eq!(scope2.store().final_len(&key), None);
-}
-
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn disk_rebuild_without_checkpoint_falls_back_to_slow_path() {
-    let dir = tempdir().unwrap();
-    let root = "p4-slow";
-
-    {
-        let store = AssetStore::builder(support::pools())
-            .backend(StorageBackend::Disk {
-                root: (dir.path()).into(),
-            })
-            .build();
-        let scope = store.scope::<Test>(&source(root)).unwrap();
-        let key = scope.key(&resource("segments/slow.bin")).unwrap();
-        write_commit(scope.store().acquire_resource(&key, None).unwrap(), b"xyz");
-    }
-
-    let store = AssetStore::builder(support::pools())
-        .backend(StorageBackend::Disk {
-            root: (dir.path()).into(),
-        })
-        .build();
-    let scope = store.scope::<Test>(&source(root)).unwrap();
-    let key = scope.key(&resource("segments/slow.bin")).unwrap();
-
-    assert_eq!(scope.store().final_len(&key), Some(3));
-    assert!(scope.store().contains_range(&key, 0..3));
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]

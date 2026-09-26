@@ -12,11 +12,11 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
-    temp_dir,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 const CAPTIVE_PORTAL_HTML: &str = "<html><body>VPN required to access this resource</body></html>";
 

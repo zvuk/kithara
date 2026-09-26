@@ -12,9 +12,10 @@ use kithara_integration_tests::{
     hls_fixture::create_test_downloader,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    served_mp3, temp_dir,
+    served_mp3,
     waits::wait_for_position_event,
 };
+use kithara_test_utils::temp_dir;
 use url::Url;
 
 use crate::bufpool_ext::pools;

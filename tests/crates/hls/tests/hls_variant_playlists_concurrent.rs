@@ -5,29 +5,25 @@ use std::collections::HashSet;
 
 use kithara::{
     abr::AbrMode,
-    assets::AssetStore,
     decode::DecoderBackend,
-    download::{Downloader, DownloaderConfig, DownloaderEvent},
+    download::DownloaderEvent,
     events::{EventReceiver, TrackId},
-    host::HostConfig,
-    net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
         time::{Duration, timeout},
         tokio::sync::broadcast::error::RecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
+    play::{ResourceConfig, ResourceSrc},
+    queue::{QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir,
-    bufpool_ext::{TestPools, pools},
+    HlsFixtureBuilder, TestServerHelper,
+    bufpool_ext::TestPools,
     event::TestEvent,
     kithara,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    temp_dir,
+    offline::DiskQueue,
     usdt_trace::{self, ProbeEvent},
 };
+use kithara_test_utils::temp_dir;
 use url::Url;
 
 struct Consts;
@@ -50,50 +46,6 @@ async fn build_hls(helper: &TestServerHelper) -> Url {
         .await
         .expect("create HLS fixture")
         .master_url()
-}
-
-async fn build_queue_with_tick(
-    temp_dir: &TestTempDir,
-) -> (
-    OfflineQueue<TestPools>,
-    Downloader,
-    AssetStore<TestPools>,
-    QueueTicker,
-) {
-    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let pools = pools();
-    let session = HostConfig::offline(pools.clone()).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.sample_rate())
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build(),
-    );
-    let queue = OfflineQueue::paced(
-        session,
-        Queue::new(
-            QueueConfig::builder()
-                .player(player)
-                .store(store.clone())
-                .build(),
-        ),
-        RENDER_PACE,
-    )
-    .await
-    .expect("create product offline queue");
-    let tick_handle = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools,
-            CancelToken::never(),
-        ))
-        .max_concurrent(Consts::MAX_CONCURRENT)
-        .build(),
-    );
-    (queue, downloader, store, tick_handle)
 }
 
 fn is_variant_media_playlist(url: &Url, master_url: &Url) -> bool {
@@ -218,7 +170,16 @@ async fn variant_media_playlists_load_concurrently(
     let (_server, url) = prepared_hls;
 
     let temp = temp_dir();
-    let (queue, downloader, store, mut tick_handle) = build_queue_with_tick(&temp).await;
+    let DiskQueue {
+        queue,
+        downloader,
+        store,
+        ticker: mut tick_handle,
+        ..
+    } = DiskQueue::builder(temp.path())
+        .max_concurrent_downloads(Consts::MAX_CONCURRENT)
+        .open()
+        .await;
 
     let mut rx = queue.subscribe();
 

@@ -29,10 +29,11 @@ use kithara_app::{
     pools::{AppPools, PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
-    TestTempDir, kithara,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
+    kithara,
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE, app_disk_asset_store, app_track_source},
     user_sim::{actions::Action, scenarios},
 };
+use kithara_test_utils::TestTempDir;
 
 /// Production zvuk DRM track URL — same one `zvuk_prod_drm_e2e.rs`
 /// runs end-to-end. HE-AAC v2 fragments behind AES-128 + per-segment
@@ -48,10 +49,10 @@ const PROD_DRM_TRACK_ALT: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/5807
 /// the binary uses. The resolver picks up baked credentials and the
 /// `zvuk-prod` keyserver provider.
 fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource<AppPools> {
-    crate::app_track_source(
+    app_track_source(
         url,
         &ctx.config,
-        crate::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+        app_disk_asset_store(&ctx.config, ctx.cache.path()),
         DecoderBackend::Symphonia,
         AbrMode::Auto(None),
         None,
@@ -221,139 +222,65 @@ async fn apply_action_to_queue(queue: &OfflineQueue<AppPools>, action: &Action) 
     }
 }
 
-/// PROD DRM scripted scenario: same `forward → backward → middle`
-/// dance the user runs manually with `cargo run -p kithara-app`.
+/// PROD DRM user scenarios on real HE-AAC v2 fragments behind the
+/// keyserver-signed flow: the scripted `forward → backward → middle` dance,
+/// a backward seek after long play (on two tracks, so the bug surfaces
+/// independently of one byte layout), the near-end seek of Bug #7, a forward
+/// seek into the unbuffered tail (Bug #5), a seek storm that makes the loader
+/// cancel and restart fetches, and a backward seek after natural EOF (the
+/// silent-hang variant of Bug #6). Each seek must land without a hang, a
+/// false EOF or a spurious auto-advance.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
-async fn user_sim_prod_drm_scripted() {
-    run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::scripted_forward_back_end()).await;
+#[case::scripted(PROD_DRM_TRACK, scenarios::scripted_forward_back_end())]
+#[case::seek_after_long_play(PROD_DRM_TRACK, scenarios::seek_backward_after_long_play_repro())]
+#[case::seek_after_long_play_alt_track(
+    PROD_DRM_TRACK_ALT,
+    scenarios::seek_backward_after_long_play_repro()
+)]
+#[case::seek_near_end(PROD_DRM_TRACK, scenarios::seek_near_end_repro())]
+#[case::long_play_then_seek_backward(PROD_DRM_TRACK, scenarios::long_play_then_seek_backward())]
+#[case::long_play_then_seek_forward(PROD_DRM_TRACK, scenarios::long_play_then_seek_forward())]
+#[case::seek_storm(PROD_DRM_TRACK, scenarios::seek_storm())]
+#[case::seek_backward_after_natural_eof(
+    PROD_DRM_TRACK,
+    scenarios::seek_backward_after_natural_eof_repro()
+)]
+async fn user_sim_prod_drm(#[case] url: &str, #[case] actions: Vec<Action>) {
+    run_prod_drm_scenario(url, actions).await;
 }
 
-/// PROD DRM "seek after long play" — directly reproduces the user's
-/// manual observation: long playback on a prod DRM track, then drag
-/// the playhead back, expect a hang or false-EOF.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
-async fn user_sim_prod_drm_seek_after_long_play() {
-    run_prod_drm_scenario(
-        PROD_DRM_TRACK,
-        scenarios::seek_backward_after_long_play_repro(),
-    )
-    .await;
-}
-
-/// Same scenario on a second prod DRM track so the bug surfaces
-/// independently of one track's particular byte layout.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
-async fn user_sim_prod_drm_seek_after_long_play_alt_track() {
-    run_prod_drm_scenario(
-        PROD_DRM_TRACK_ALT,
-        scenarios::seek_backward_after_long_play_repro(),
-    )
-    .await;
-}
-
-/// PROD DRM near-end seek pin for Bug #7 on real HE-AAC v2 fragments.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
-async fn user_sim_prod_drm_seek_near_end() {
-    run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::seek_near_end_repro()).await;
-}
-
-/// PROD DRM seeded fuzz, seed 42. The random trajectory is exactly
-/// what surfaces Bug #6 on the local fixtures; running it against
-/// the real prod URL pins that we'd catch the same on production
-/// when creds are available.
+/// PROD DRM seeded fuzz. The random trajectory is what surfaces Bug #6 on
+/// the local fixtures; a second seed catches trajectory-specific bugs the
+/// first one misses.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
-async fn user_sim_prod_drm_random_seed_42() {
-    run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::random_seed(42, 10)).await;
+#[case::seed_42(42, 10)]
+#[case::seed_1337(1337, 12)]
+async fn user_sim_prod_drm_random(#[case] seed: u64, #[case] len: usize) {
+    run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::random_seed(seed, len)).await;
 }
 
-/// PROD DRM long play (30 s) then backward seek — mirrors the user's
-/// manual GUI procedure: settle into the track for a real stretch,
-/// then drag the slider back. Symptom user reports: position hangs
-/// or false-EOF auto-advance.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
-async fn user_sim_prod_drm_long_play_then_seek_backward() {
-    run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::long_play_then_seek_backward()).await;
-}
-
-/// PROD DRM long play (30 s) then forward seek into unbuffered tail.
-/// Bug #5 path with substantial accumulated state.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
-async fn user_sim_prod_drm_long_play_then_seek_forward() {
-    run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::long_play_then_seek_forward()).await;
-}
-
-/// PROD DRM seek storm — aggressive successive seeks, mimicking a
-/// user dragging the slider repeatedly. Loader has to cancel and
-/// restart fetches under the keyserver-signed flow.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
-async fn user_sim_prod_drm_seek_storm() {
-    run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::seek_storm()).await;
-}
-
-/// PROD DRM seek backward after natural EOF — pin for Bug #6 silent
-/// hang variant. Walks the track to natural end, then jumps back.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
-async fn user_sim_prod_drm_seek_backward_after_natural_eof() {
-    run_prod_drm_scenario(
-        PROD_DRM_TRACK,
-        scenarios::seek_backward_after_natural_eof_repro(),
-    )
-    .await;
-}
-
-/// PROD DRM seeded fuzz, seed 1337 — second seed to surface
-/// trajectory-specific bugs that seed 42 might miss.
+/// PROD DRM Auto-ABR up-switch + seek burst, the user's manual repro: the
+/// bug only happens with Auto ABR. Plays 15 s so the throughput estimator
+/// commits an `UpSwitch`, then bursts 4 seeks across the track; each
+/// post-switch seek must neither reach a false EOF nor hang. The second
+/// track pins that the bug is not content-specific.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
-async fn user_sim_prod_drm_random_seed_1337() {
-    run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::random_seed(1337, 12)).await;
+#[case::main(PROD_DRM_TRACK)]
+#[case::alt(PROD_DRM_TRACK_ALT)]
+async fn user_sim_prod_drm_auto_abr_upswitch_then_seek_burst(#[case] url: &str) {
+    run_prod_drm_scenario(url, scenarios::auto_abr_upswitch_then_seek_burst()).await;
 }
 
-/// PROD DRM — Auto-ABR up-switch + seek burst. **THE** scenario for
-/// the user's manual repro: bug only happens with Auto ABR enabled,
-/// Manual works fine. Plays 15 s so the ABR throughput estimator
-/// commits an `UpSwitch`, then bursts 4 seeks across the track. Per
-/// the user's report each post-switch seek either reaches false-EOF
-/// or hangs. Harness panics on either symptom.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
-async fn user_sim_prod_drm_auto_abr_upswitch_then_seek_burst() {
-    run_prod_drm_scenario(
-        PROD_DRM_TRACK,
-        scenarios::auto_abr_upswitch_then_seek_burst(),
-    )
-    .await;
-}
-
-/// Same scenario but on a second prod DRM track. Pins that the bug
-/// is not content-specific — same Auto ABR up-switch + seek pattern,
-/// different segments + different mvhd metadata.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
-async fn user_sim_prod_drm_auto_abr_upswitch_then_seek_burst_alt() {
-    run_prod_drm_scenario(
-        PROD_DRM_TRACK_ALT,
-        scenarios::auto_abr_upswitch_then_seek_burst(),
-    )
-    .await;
-}
-
-/// PROD DRM — race repro: seek IMMEDIATELY after Loaded, without
-/// waiting for the demuxer to actually start producing samples.
-/// Mirrors the user's UI flow: click track in list, drag slider
-/// before audio kicks in. Every `seek anchor path: SeekOutOfRange`
-/// in `app.log` has `epoch=1` (fresh track, first seek) so the
-/// race must fire on the very first seek attempt.
+/// PROD DRM race repro: seek immediately after `Loaded`, before the demuxer
+/// produces samples, as a user who clicks a track and drags the slider before
+/// audio starts. Every `seek anchor path: SeekOutOfRange` in `app.log` has
+/// `epoch=1` (fresh track, first seek), so the race fires on the first seek.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn user_sim_prod_drm_seek_immediately_after_loaded() {
-    run_prod_drm_scenario_no_warmup(PROD_DRM_TRACK, 0.95).await;
-}
-
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn user_sim_prod_drm_seek_immediately_after_loaded_mid() {
-    run_prod_drm_scenario_no_warmup(PROD_DRM_TRACK, 0.50).await;
-}
-
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn user_sim_prod_drm_seek_immediately_after_loaded_low() {
-    run_prod_drm_scenario_no_warmup(PROD_DRM_TRACK, 0.20).await;
+#[case::high(0.95)]
+#[case::mid(0.50)]
+#[case::low(0.20)]
+async fn user_sim_prod_drm_seek_immediately_after_loaded(#[case] ratio: f64) {
+    run_prod_drm_scenario_no_warmup(PROD_DRM_TRACK, ratio).await;
 }
 
 /// PROD DRM — the bare contract test the user actually performs in

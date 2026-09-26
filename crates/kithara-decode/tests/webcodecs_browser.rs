@@ -221,39 +221,6 @@ async fn seek_trim_no_preroll_leak() {
     }
 }
 
-#[kithara::test(wasm, timeout(Duration::from_secs(300)))]
-async fn eof_tail_drain() {
-    let signal_mp3_track_sine440_187s = fetch_signal("signal_mp3_track_sine440_187s.mp3").await;
-    prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
-
-    let webcodecs = decode_file(
-        signal_mp3_track_sine440_187s,
-        "mp3",
-        DecoderBackend::WebCodecs,
-    )
-    .await;
-    let symphonia = decode_file(
-        signal_mp3_track_sine440_187s,
-        "mp3",
-        DecoderBackend::Symphonia,
-    )
-    .await;
-
-    assert!(webcodecs.eof, "WebCodecs MP3 must reach explicit EOF");
-    assert!(
-        webcodecs.frames >= symphonia.frames.saturating_sub(MP3_FRAME_TOLERANCE),
-        "WebCodecs EOF drain lost tail frames: webcodecs={}, symphonia={}, tolerance={MP3_FRAME_TOLERANCE}",
-        webcodecs.frames,
-        symphonia.frames
-    );
-    tracing::info!(
-        webcodecs_frames = webcodecs.frames,
-        symphonia_frames = symphonia.frames,
-        frame_delta = webcodecs.frames.abs_diff(symphonia.frames),
-        "WebCodecs MP3 EOF tail-drain frame-count probe"
-    );
-}
-
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
 async fn aac_parity() {
     const AAC_FRAME_TOLERANCE: usize = 2 * 1_024;

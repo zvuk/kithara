@@ -38,6 +38,8 @@ kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 kithara-test-utils = { workspace = true, features = ["usdt"] }
 
+url = { workspace = true }
+
 [lints]
 workspace = true
 

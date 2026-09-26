@@ -292,7 +292,7 @@ pub enum HlsRouteKind {
     Key,
 }
 
-/// Declarative HTTP error rule for [`HlsTestServerBuilder`].
+/// Declarative HTTP error rule for [`crate::HlsFixtureBuilder`].
 ///
 /// Matches the request route kind plus optional variant/segment filters and
 /// makes the server respond with the configured status. Used to exercise

@@ -27,6 +27,18 @@ fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
     w
 }
 
+/// A reader opened elsewhere must not see the pending write: the open either
+/// finds no resource or reads nothing.
+fn assert_write_unseen<R: ReadSide, E>(opened: Result<R, E>, why: &str) {
+    if let Ok(reader) = opened {
+        let mut buf = [0u8; 5];
+        assert!(
+            reader.read_at(0, &mut buf).map_or(true, |n| n == 0),
+            "{why}"
+        );
+    }
+}
+
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn one_store_same_url_same_identity_shares_inner() {
     let store = AssetStore::builder(support::pools())
@@ -64,18 +76,10 @@ fn one_store_same_url_different_identity_yields_different_inner() {
     let w = pending(scope.store().acquire_resource(&key, Some(&id1)).unwrap());
     w.write_at(0, b"hello").unwrap();
 
-    // A distinct identity has no shared inner: opening it must not surface the
-    // first identity's write (missing resource, or an empty read).
-    match scope.store().open_resource(&key, Some(&id2)) {
-        Err(_) => {}
-        Ok(r2) => {
-            let mut buf = [0u8; 5];
-            assert!(
-                r2.read_at(0, &mut buf).map_or(true, |n| n == 0),
-                "second identity must not observe writes from first identity"
-            );
-        }
-    }
+    assert_write_unseen(
+        scope.store().open_resource(&key, Some(&id2)),
+        "second identity must not observe writes from first identity",
+    );
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -92,16 +96,10 @@ fn one_store_two_asset_roots_isolated() {
     let w_a = pending(store.acquire_resource(&key_a, Some(&id)).unwrap());
     w_a.write_at(0, b"hello").unwrap();
 
-    match store.open_resource(&key_b, Some(&id)) {
-        Err(_) => {}
-        Ok(r_b) => {
-            let mut buf = [0u8; 5];
-            assert!(
-                r_b.read_at(0, &mut buf).map_or(true, |n| n == 0),
-                "different asset_root within one store must remain isolated"
-            );
-        }
-    }
+    assert_write_unseen(
+        store.open_resource(&key_b, Some(&id)),
+        "different asset_root within one store must remain isolated",
+    );
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -121,16 +119,10 @@ fn two_stores_isolated_even_with_same_identity() {
     let w_a = pending(store_a.acquire_resource(&key_a, Some(&id)).unwrap());
     w_a.write_at(0, b"hello").unwrap();
 
-    match store_b.open_resource(&key_b, Some(&id)) {
-        Err(_) => {}
-        Ok(r_b) => {
-            let mut buf = [0u8; 5];
-            assert!(
-                r_b.read_at(0, &mut buf).map_or(true, |n| n == 0),
-                "distinct AssetStore instances must be fully isolated"
-            );
-        }
-    }
+    assert_write_unseen(
+        store_b.open_resource(&key_b, Some(&id)),
+        "distinct AssetStore instances must be fully isolated",
+    );
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]

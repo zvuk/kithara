@@ -158,11 +158,11 @@ audio-artifacts OUTPUT:
       exit 2
     fi
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
-      just test run -p kithara-integration-tests --test suite_heavy \
+      just test run -p kithara-warp-tests --test warp_playback \
         --run-ignored=only \
         -E 'test(/no_sync_passthrough::record_no_sync_(unity_playback|active_keylock)_artifacts/)'
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
-      just test run -p kithara-play-tests --test play_heavy \
+      just test run -p kithara-host-tests --test host \
         --run-ignored=only \
         -E 'test(=no_sync_real_media::matrix::record_no_sync_real_media_artifacts)'
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
@@ -494,8 +494,8 @@ rtsan-async FILTER="no_block": (_rtsan "-p kithara-harness-tests --test suite_li
 # and the on-core seek re-base. `mix_tap` drives the post-limiter PCM sink.
 # `analysis_offer_is_realtime_safe` puts the analysis offer where a decode tick
 # makes it.
-rtsan FILTER="offline_harness rt_metrics mix_tap analysis_offer_is_realtime_safe": (_rtsan "-p kithara-play-tests -p kithara-analysis-tests --test play --test analysis" "kithara-play-tests/apple-fused-src" FILTER)
+rtsan FILTER="offline_harness rt_metrics mix_tap analysis_offer_is_realtime_safe": (_rtsan "-p kithara-play -p kithara-harness-tests -p kithara-host-tests -p kithara-analysis-tests --test play --test suite_light --test host --test analysis" "kithara-play/apple-fused-src,kithara-host-tests/apple-fused-src" FILTER)
 
-rtsan-file FILTER="phase_continuity::file": (_rtsan "-p kithara-integration-tests --test suite_stress" "apple-fused-src" FILTER)
+rtsan-file FILTER="phase_continuity": (_rtsan "-p kithara-decode-tests --test decode_heavy" "apple-fused-src" FILTER)
 
-rtsan-hls FILTER="phase_continuity::hls": (_rtsan "-p kithara-integration-tests --test suite_stress" "apple-fused-src" FILTER)
+rtsan-hls FILTER="phase_continuity": (_rtsan "-p kithara-hls-tests --test hls_stress" "apple-fused-src" FILTER)

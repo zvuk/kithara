@@ -7,22 +7,21 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestTempDir,
+    TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    hls_server::abr::{AbrTestServer, master_playlist},
-    temp_dir,
+    hls_server::abr_binary_ladder,
 };
+use kithara_test_utils::{TestTempDir, temp_dir};
 
 #[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
-    let server = AbrTestServer::new(
-        master_playlist(256_000, 512_000, 1_024_000),
-        false,
-        Duration::from_millis(10),
-    )
-    .await;
+    let hls = TestServerHelper::new()
+        .await
+        .create_hls(abr_binary_ladder(false, Duration::from_millis(10)))
+        .await
+        .expect("create ABR ladder");
 
-    let url = server.url("/master.m3u8");
+    let url = hls.master_url();
     let cancel_token = CancelToken::never();
     let pools = pools();
     let store = AssetStore::builder(pools.clone())

@@ -26,19 +26,19 @@ use kithara::{
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::SegmentGateHandle;
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, auto,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     fixture_protocol::DelayRule,
-    hls_server::{HlsTestServer, HlsTestServerConfig},
     mixed_plain,
     reads::{read_to_eof, read_until_samples},
-    waits::{wait_for_event, wait_until},
+    waits::wait_for_event,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{
     hls_saw_6, hls_saw_8, hls_saw_15, hls_saw_20, hls_saw_30,
 };
+use kithara_test_utils::{TestTempDir, wait_until};
 use tracing::info;
 use url::Url;
 
@@ -51,80 +51,89 @@ fn segment_duration_secs() -> f64 {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn wav_config(data: (Vec<u8>, Vec<u8>), bandwidths: Vec<u64>) -> HlsTestServerConfig {
+fn wav_ladder(data: (Vec<u8>, Vec<u8>), bandwidths: Vec<u64>) -> HlsFixtureBuilder {
     let (init, pcm) = data;
     let variant_count = bandwidths.len();
-    HlsTestServerConfig {
-        variant_count,
-        segments_per_variant: pcm.len() / D.segment_size,
-        segment_size: D.segment_size,
-        segment_duration_secs: segment_duration_secs(),
-        custom_data_per_variant: Some(vec![Arc::new(pcm); variant_count]),
-        init_data_per_variant: Some(vec![Arc::new(init); variant_count]),
-        variant_bandwidths: Some(bandwidths),
-        ..Default::default()
-    }
+    HlsFixtureBuilder::new()
+        .variant_count(variant_count)
+        .segments_per_variant(pcm.len() / D.segment_size)
+        .segment_size(D.segment_size)
+        .segment_duration_secs(segment_duration_secs())
+        .custom_data_per_variant(vec![Arc::new(pcm); variant_count])
+        .init_data_per_variant(vec![Arc::new(init); variant_count])
+        .variant_bandwidths(bandwidths)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn delayed_server(data: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
-    let mut config = wav_config(data, vec![5_000_000, 1_000_000]);
-    config.codecs = Some("wav".to_string());
-    config.delay_rules = vec![DelayRule {
-        variant: Some(0),
-        segment_gte: Some(5),
-        delay_ms: 500,
-        ..Default::default()
-    }];
-    HlsTestServer::new(config).await
+async fn serve(ladder: HlsFixtureBuilder) -> CreatedHls {
+    TestServerHelper::new()
+        .await
+        .create_hls(ladder)
+        .await
+        .expect("create HLS fixture")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn delayed_server(data: (Vec<u8>, Vec<u8>)) -> CreatedHls {
+    serve(
+        wav_ladder(data, vec![5_000_000, 1_000_000])
+            .codecs("wav".to_string())
+            .delay_rules(vec![DelayRule {
+                variant: Some(0),
+                segment_gte: Some(5),
+                delay_ms: 500,
+                ..Default::default()
+            }]),
+    )
+    .await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
-async fn delayed_thirty(hls_saw_30: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
+async fn delayed_thirty(hls_saw_30: (Vec<u8>, Vec<u8>)) -> CreatedHls {
     delayed_server(hls_saw_30).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
-async fn delayed_twenty(hls_saw_20: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
+async fn delayed_twenty(hls_saw_20: (Vec<u8>, Vec<u8>)) -> CreatedHls {
     delayed_server(hls_saw_20).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
-async fn stalled_boundary(hls_saw_30: (Vec<u8>, Vec<u8>)) -> (HlsTestServer, SegmentGateHandle) {
-    let mut config = wav_config(hls_saw_30, vec![1_000_000, 5_000_000]);
-    config.codecs = Some("wav".to_string());
-    HlsTestServer::with_segment_gate(config, 0, 5).await
+async fn stalled_boundary(hls_saw_30: (Vec<u8>, Vec<u8>)) -> (CreatedHls, SegmentGateHandle) {
+    let helper = TestServerHelper::new().await;
+    let hls = helper
+        .create_hls(wav_ladder(hls_saw_30, vec![1_000_000, 5_000_000]).codecs("wav".to_string()))
+        .await
+        .expect("create HLS fixture");
+    let gate = helper.register_segment_gate(hls.token(), 0, 5);
+    (hls, gate)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
-async fn shared_tracks(hls_saw_15: (Vec<u8>, Vec<u8>)) -> (HlsTestServer, HlsTestServer) {
+async fn shared_tracks(hls_saw_15: (Vec<u8>, Vec<u8>)) -> (CreatedHls, CreatedHls) {
     let (init, pcm) = hls_saw_15;
     let segments = pcm.len() / D.segment_size;
     let init = Arc::new(init);
     let pcm = Arc::new(pcm);
-    let make_server = || {
-        HlsTestServer::new(HlsTestServerConfig {
-            variant_count: 2,
-            segments_per_variant: segments,
-            segment_size: D.segment_size,
-            segment_duration_secs: segment_duration_secs(),
-            custom_data_per_variant: Some(vec![Arc::clone(&pcm); 2]),
-            init_data_per_variant: Some(vec![Arc::clone(&init); 2]),
-            variant_bandwidths: Some(vec![1_000_000, 3_000_000]),
-            ..Default::default()
-        })
-    };
-    (make_server().await, make_server().await)
+    let ladder = HlsFixtureBuilder::new()
+        .variant_count(2)
+        .segments_per_variant(segments)
+        .segment_size(D.segment_size)
+        .segment_duration_secs(segment_duration_secs())
+        .custom_data_per_variant(vec![Arc::clone(&pcm); 2])
+        .init_data_per_variant(vec![Arc::clone(&init); 2])
+        .variant_bandwidths(vec![1_000_000, 3_000_000]);
+    (serve(ladder.clone()).await, serve(ladder).await)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
-async fn manual_ladder(hls_saw_30: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
-    HlsTestServer::new(wav_config(
+async fn manual_ladder(hls_saw_30: (Vec<u8>, Vec<u8>)) -> CreatedHls {
+    serve(wav_ladder(
         hls_saw_30,
         vec![5_000_000, 1_000_000, 2_000_000],
     ))
@@ -133,23 +142,21 @@ async fn manual_ladder(hls_saw_30: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
-async fn manual_six(hls_saw_6: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
-    HlsTestServer::new(wav_config(hls_saw_6, vec![5_000_000, 1_000_000])).await
+async fn manual_six(hls_saw_6: (Vec<u8>, Vec<u8>)) -> CreatedHls {
+    serve(wav_ladder(hls_saw_6, vec![5_000_000, 1_000_000])).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
-async fn manual_eight(hls_saw_8: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
-    HlsTestServer::new(wav_config(hls_saw_8, vec![5_000_000, 1_000_000])).await
+async fn manual_eight(hls_saw_8: (Vec<u8>, Vec<u8>)) -> CreatedHls {
+    serve(wav_ladder(hls_saw_8, vec![5_000_000, 1_000_000])).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
-async fn first_boundary(hls_saw_6: (Vec<u8>, Vec<u8>)) -> HlsTestServer {
+async fn first_boundary(hls_saw_6: (Vec<u8>, Vec<u8>)) -> CreatedHls {
     // This case needs six-second playlist durations to cross the default ABR buffer gate.
-    let mut config = wav_config(hls_saw_6, vec![256_000, 512_000, 1_024_000]);
-    config.segment_duration_secs = 6.0;
-    HlsTestServer::new(config).await
+    serve(wav_ladder(hls_saw_6, vec![256_000, 512_000, 1_024_000]).segment_duration_secs(6.0)).await
 }
 
 /// Record of a segment-level event.
@@ -630,11 +637,11 @@ async fn wait_v0_fully_cached(collector: &EventCollector, segment_count: usize) 
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn vod_manual_switch_affects_future_segments(#[future(awt)] delayed_thirty: HlsTestServer) {
+async fn vod_manual_switch_affects_future_segments(#[future(awt)] delayed_thirty: CreatedHls) {
     let segment_count = 30;
     let server = delayed_thirty;
 
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
@@ -764,7 +771,7 @@ async fn vod_manual_switch_affects_future_segments(#[future(awt)] delayed_thirty
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
-    #[future(awt)] stalled_boundary: (HlsTestServer, SegmentGateHandle),
+    #[future(awt)] stalled_boundary: (CreatedHls, SegmentGateHandle),
 ) {
     const STALLED_VARIANT: usize = 0;
     const RESCUE_VARIANT: usize = 1;
@@ -773,7 +780,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
     let segment_count = 30;
     let (server, gate) = stalled_boundary;
 
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
@@ -924,13 +931,11 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn multi_track_shared_abr_with_cache(
-    #[future(awt)] shared_tracks: (HlsTestServer, HlsTestServer),
-) {
+async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (CreatedHls, CreatedHls)) {
     let (server1, server2) = shared_tracks;
 
-    let url1 = server1.url("/master.m3u8");
-    let url2 = server2.url("/master.m3u8");
+    let url1 = server1.master_url();
+    let url2 = server2.master_url();
 
     let temp_dir = TestTempDir::new();
     let pools = pools();
@@ -1088,12 +1093,12 @@ async fn multi_track_shared_abr_with_cache(
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn abr_switch_must_not_redownload_covered_segments(
-    #[future(awt)] delayed_twenty: HlsTestServer,
+    #[future(awt)] delayed_twenty: CreatedHls,
 ) {
     let segment_count = 20;
     let server = delayed_twenty;
 
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
@@ -1176,11 +1181,11 @@ async fn abr_switch_must_not_redownload_covered_segments(
     )
 )]
 async fn runtime_manual_switch_via_handle_changes_playing_variant(
-    #[future(awt)] manual_ladder: HlsTestServer,
+    #[future(awt)] manual_ladder: CreatedHls,
 ) {
     let server = manual_ladder;
 
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
@@ -1328,7 +1333,7 @@ async fn runtime_cross_codec_manual_switch_no_hang(
             .build(),
     );
     let bus = EventBus::new(8192);
-    // EventCollector's segment URL parser is HlsTestServer-specific; for
+    // EventCollector's segment URL parser is CreatedHls-specific; for
     // real-asset URLs we capture VariantApplied targets directly.
     let collector = EventCollector::new(&bus);
 
@@ -1432,12 +1437,12 @@ async fn runtime_cross_codec_manual_switch_no_hang(
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn runtime_manual_switch_works_when_all_segments_cached(
-    #[future(awt)] manual_six: HlsTestServer,
+    #[future(awt)] manual_six: CreatedHls,
 ) {
     let segment_count: usize = 6;
     let server = manual_six;
 
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
@@ -1565,12 +1570,14 @@ async fn runtime_manual_switch_works_when_all_segments_cached(
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: HlsTestServer) {
+async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: CreatedHls) {
     let segment_count: usize = 6;
     let server = manual_six;
-    let init_gate = server.init_gate(1);
+    let init_gate = TestServerHelper::new()
+        .await
+        .register_init_gate(server.token(), 1);
 
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
@@ -1695,13 +1702,11 @@ async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: 
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn runtime_manual_switch_works_after_cache_and_seek(
-    #[future(awt)] manual_eight: HlsTestServer,
-) {
+async fn runtime_manual_switch_works_after_cache_and_seek(#[future(awt)] manual_eight: CreatedHls) {
     let segment_count: usize = 8;
     let server = manual_eight;
 
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
@@ -1853,7 +1858,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek(
 /// `abr_fast` fixtures stay green — this one specifically uses
 /// **default** `AbrSettings` to lock down production defaults.
 ///
-/// Deterministic fixture: 3 same-codec AAC variants on `HlsTestServer`,
+/// Deterministic fixture: 3 same-codec AAC variants on `CreatedHls`,
 /// no delay rules → fastest possible fetch path. Without the buffer
 /// gate an aggressive up-switch would land at segment 1; with it the
 /// first boundary stays neutral.
@@ -1866,11 +1871,11 @@ async fn runtime_manual_switch_works_after_cache_and_seek(
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn auto_does_not_up_switch_on_first_boundary_with_defaults(
-    #[future(awt)] first_boundary: HlsTestServer,
+    #[future(awt)] first_boundary: CreatedHls,
 ) {
     let server = first_boundary;
 
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();

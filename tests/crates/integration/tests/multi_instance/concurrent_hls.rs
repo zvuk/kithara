@@ -9,12 +9,12 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    TestTempDir, auto,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
-    hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::{ReadLimit, read_for_concurrency_check},
 };
 use kithara_test_fixtures::integration_fixtures::concurrent_wav;
+use kithara_test_utils::TestTempDir;
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -28,26 +28,32 @@ impl Consts {
 }
 
 /// Create an HLS server; `abr_variants == 1` → single variant, otherwise ABR.
-async fn create_hls_server(wav_data: Arc<Vec<u8>>, abr_variants: usize) -> HlsTestServer {
-    let config = HlsTestServerConfig {
-        variant_count: abr_variants,
-        segments_per_variant: Consts::SEGMENT_COUNT,
-        segment_size: SawWav::DEFAULT.segment_size,
-        segment_duration_secs: SawWav::DEFAULT.segment_duration_secs(),
-        custom_data: Some(wav_data),
-        variant_bandwidths: (abr_variants > 1).then(|| vec![5_000_000, 1_000_000]),
-        ..Default::default()
+async fn create_hls_server(wav_data: Arc<Vec<u8>>, abr_variants: usize) -> CreatedHls {
+    let ladder = HlsFixtureBuilder::new()
+        .variant_count(abr_variants)
+        .segments_per_variant(Consts::SEGMENT_COUNT)
+        .segment_size(SawWav::DEFAULT.segment_size)
+        .segment_duration_secs(SawWav::DEFAULT.segment_duration_secs())
+        .custom_data(wav_data);
+    let ladder = if abr_variants > 1 {
+        ladder.variant_bandwidths(vec![5_000_000, 1_000_000])
+    } else {
+        ladder
     };
-    HlsTestServer::new(config).await
+    TestServerHelper::new()
+        .await
+        .create_hls(ladder)
+        .await
+        .expect("create HLS fixture")
 }
 
 /// Create an `Audio<Stream<Hls>>` for `abr` mode (Manual(0) or Auto(Some(0))).
 async fn create_hls_audio(
-    server: &HlsTestServer,
+    server: &CreatedHls,
     cache_dir: &Path,
     abr: AbrMode,
 ) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
-    let url = server.url("/master.m3u8");
+    let url = server.master_url();
     let cancel = CancelToken::never();
     let pools = pools();
 

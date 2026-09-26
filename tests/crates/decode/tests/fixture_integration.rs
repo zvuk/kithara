@@ -1,15 +1,14 @@
 use std::io::Cursor;
 
 use kithara::{
-    decode::{DecoderBackend, DecoderConfig, DecoderFactory},
+    decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     platform::time::Duration,
     signal::AudioChunk,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, PackagedTestServer, TestServerHelper,
+    HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    decode_ext::DecoderChunkOutcomeTestExt,
     fixture_protocol::PackagedSignal,
 };
 use kithara_test_fixtures::{
@@ -18,64 +17,6 @@ use kithara_test_fixtures::{
     signal::{SignalDirection, detect_direction},
 };
 use reqwest::Client;
-
-#[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_test_server_helper_serves_audio_fixture_urls(
-    #[future(awt)] server: TestServerHelper,
-) {
-    let wav_url = server.signal(SignalAsset::WAV_SAW_1S);
-    let mp3_url = server.signal(SignalAsset::MP3_TRACK_SINE440_187S);
-
-    assert!(wav_url.as_str().starts_with("http://127.0.0.1:"));
-    assert!(mp3_url.as_str().starts_with("http://127.0.0.1:"));
-    assert!(wav_url.path().starts_with("/signal/"));
-    assert!(wav_url.path().ends_with(".wav"));
-    assert!(mp3_url.path().starts_with("/signal/"));
-    assert!(mp3_url.path().ends_with(".mp3"));
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-#[case("wav", "audio/wav", "WAV file")]
-#[case("mp3", "audio/mpeg", "MP3 file")]
-async fn test_test_server_helper_serves_format(
-    #[case] format: &str,
-    #[case] content_type: &str,
-    #[case] desc: &str,
-    #[future(awt)] server: TestServerHelper,
-) {
-    let client = Client::new();
-
-    let url = match format {
-        "wav" => server.signal(SignalAsset::WAV_SAW_1S),
-        "mp3" => server.signal(SignalAsset::MP3_TRACK_SINE440_187S),
-        _ => panic!("Unknown format: {}", format),
-    };
-
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .unwrap_or_else(|e| panic!("Failed to fetch {}: {}", desc, e));
-
-    assert_eq!(response.status(), 200, "{}: status", desc);
-    assert_eq!(
-        response.headers().get("content-type").unwrap(),
-        content_type,
-        "{}: content-type",
-        desc
-    );
-
-    let content_length: usize = response
-        .headers()
-        .get("content-length")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .parse()
-        .unwrap();
-
-    assert!(content_length > 0, "{}: content length should be > 0", desc);
-}
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[case(SignalAsset::MP3_SAW_1S, "audio/mpeg")]
@@ -184,82 +125,6 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
         ascending_chunks > 0,
         "{name} round-trip should preserve the sawtooth direction"
     );
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_create_packaged_hls_returns_stable_typed_urls(
-    #[future(awt)] server: TestServerHelper,
-) {
-    let created = server
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(1)
-                .segments_per_variant(4)
-                .segment_duration_secs(1.0)
-                .packaged_audio_aac_lc(44_100, 2),
-        )
-        .await
-        .expect("create HLS fixture");
-
-    let master_url = created.master_url();
-    let media_url = created.media_url(0);
-    let init_url = created.init_url(0);
-    let segment_url = created.segment_url(0, 0);
-    let token = created.token().to_string();
-
-    assert!(master_url.path().contains(&token));
-    assert!(media_url.path().contains(&token));
-    assert!(init_url.path().contains(&token));
-    assert!(segment_url.path().contains(&token));
-
-    let client = Client::new();
-    let master = client.get(master_url).send().await.unwrap();
-    let init = client.get(init_url).send().await.unwrap();
-    let segment = client.get(segment_url).send().await.unwrap();
-
-    assert_eq!(master.status(), 200);
-    assert_eq!(
-        master.headers().get("content-type").unwrap(),
-        "application/vnd.apple.mpegurl"
-    );
-    assert_eq!(init.status(), 200);
-    assert_eq!(init.headers().get("content-type").unwrap(), "audio/mp4");
-    assert_eq!(segment.status(), 200);
-    assert_eq!(segment.headers().get("content-type").unwrap(), "audio/mp4");
-    assert!(!init.bytes().await.unwrap().is_empty());
-    assert!(!segment.bytes().await.unwrap().is_empty());
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
-async fn test_packaged_test_server_serves_audio_mp4_resources(
-    #[future(awt)] packaged_server: PackagedTestServer,
-) {
-    let server = packaged_server;
-    let client = Client::new();
-
-    let master = client.get(server.url("/master.m3u8")).send().await.unwrap();
-    let media = client.get(server.url("/v0.m3u8")).send().await.unwrap();
-    let init = client.get(server.url("/init/v0.mp4")).send().await.unwrap();
-    let segment = client
-        .get(server.url("/seg/v0_0.m4s"))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(master.status(), 200);
-    assert_eq!(
-        master.headers().get("content-type").unwrap(),
-        "application/vnd.apple.mpegurl"
-    );
-    assert_eq!(media.status(), 200);
-    assert_eq!(
-        media.headers().get("content-type").unwrap(),
-        "application/vnd.apple.mpegurl"
-    );
-    assert_eq!(init.status(), 200);
-    assert_eq!(init.headers().get("content-type").unwrap(), "audio/mp4");
-    assert_eq!(segment.status(), 200);
-    assert_eq!(segment.headers().get("content-type").unwrap(), "audio/mp4");
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
@@ -508,7 +373,7 @@ fn run_packaged_fmp4_decoder_check(
         .unwrap_or_else(|error| panic!("decode first probe chunk for packaged {label}: {error}"));
 
     let chunk = AudioChunk::try_from(direct_chunk).unwrap_or_else(|_| {
-        if probe_chunk.is_chunk() {
+        if matches!(probe_chunk, DecoderChunkOutcome::Chunk(_)) {
             panic!(
                 "packaged {label} direct fmp4 decoder returned EOF, but probe-based decoder produced PCM; total_len={}, boxes={box_summaries:?}",
                 total_len
@@ -600,11 +465,6 @@ fn scan_top_level_box_summaries(bytes: &[u8]) -> Vec<BoxSummary> {
 #[kithara::fixture]
 async fn server() -> TestServerHelper {
     TestServerHelper::new().await
-}
-
-#[kithara::fixture]
-async fn packaged_server() -> PackagedTestServer {
-    PackagedTestServer::new().await
 }
 
 #[kithara::fixture]

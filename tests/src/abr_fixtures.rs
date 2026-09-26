@@ -1,6 +1,6 @@
 use kithara::{
     self,
-    abr::{AbrMode, AbrSettings, AbrState, VariantIndex},
+    abr::{AbrMode, AbrSettings, VariantIndex},
     platform::time::Duration,
 };
 
@@ -11,12 +11,6 @@ use kithara::{
 #[must_use]
 pub const fn auto(idx: usize) -> AbrMode {
     AbrMode::Auto(Some(VariantIndex::new(idx)))
-}
-
-/// ABR state seeded with initial variant `idx`.
-#[must_use]
-pub fn state(idx: usize) -> AbrState {
-    AbrState::new(auto(idx))
 }
 
 fn settings(
