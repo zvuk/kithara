@@ -681,9 +681,9 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        BpmInfo, EventReceiver, MEDIA_TIMESCALE, MediaTime, NonZeroU32, RangeSet, StretchControls,
-        UiState, bpm_info_from_grid, codec_label, covered, frames_to_fractions, listen,
-        unready_ranges,
+        AnalysisEvent, BpmInfo, EngineEvent, Envelope, EventReceiver, MEDIA_TIMESCALE, MediaTime,
+        NonZeroU32, RangeSet, StretchControls, UiState, bpm_info_from_grid, codec_label, covered,
+        frames_to_fractions, listen, unready_ranges,
     };
     use crate::{
         analysis::{
@@ -979,8 +979,22 @@ mod tests {
     #[kithara::test(native, tokio, flash(false))]
     async fn the_deck_follows_the_grid_each_publication_states(tone_mp3: String) {
         let (host, queue) = queue_off().await;
-        let (state, mut requests, cancel) = deck(&queue);
+        let mut loading: EventReceiver<AnalysisEvent> = queue.subscribe();
         let (track_id, _source) = track(&host, 1, &tone_mp3).await;
+        // The tone loads for real and starts the engine, which the deck follows
+        // with a fresh subscription; the deck starts on the loaded track so the
+        // pass it subscribes to is the one publishing both revisions.
+        loop {
+            match loading.recv().await {
+                Ok(Envelope {
+                    event: AnalysisEvent::Engine(EngineEvent::Started),
+                    ..
+                }) => break,
+                Ok(_) => {}
+                Err(error) => panic!("the queue loads the tone: {error}"),
+            }
+        }
+        let (state, mut requests, cancel) = deck(&queue);
         let tx = answer_subscribe(&mut requests, track_id).await;
         let controller = controller_on(
             queue.clone(),

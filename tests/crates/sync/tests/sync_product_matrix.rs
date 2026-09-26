@@ -1,11 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::{NonZeroU32, NonZeroUsize};
 #[cfg(not(target_os = "android"))]
 use std::{env, io};
-use std::{
-    num::{NonZeroU32, NonZeroUsize},
-    ops::Range,
-};
 
 #[cfg(not(target_os = "android"))]
 use kithara::{
@@ -32,16 +29,12 @@ use kithara::{
     queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
     signal::SessionFrame,
     sync::{AlignmentSource, LoadGeneration, SyncGroup, SyncIntent, SyncOperation},
-    warp::{
-        AssetFrame, Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition,
-        PresentationFrontier,
-    },
+    warp::{AssetFrame, PresentationFrontier},
 };
 #[cfg(not(target_os = "android"))]
 use kithara_app::recording::AssetPartSink;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
-    audio_artifact::{AudioArtifactTap, artifact_label},
     bufpool_ext::{TestPools, pools},
     cochlea::{marked_synchronization_failures, synchronization_failures},
     fixture_protocol::EncryptionRequest,
@@ -504,51 +497,6 @@ impl Provider {
     }
 }
 
-/// Marks every beat the Host session grid places inside `frames` on the
-/// artifact's metronome. Output frames are session frames: the harness
-/// renders its session from frame 0.
-fn mark_host_beats(tap: &mut AudioArtifactTap, grid: &BeatGridSnapshot, frames: Range<u64>) {
-    let at = |frame: u64| {
-        grid.beat_at(MapPoint::new(
-            grid.stamp(),
-            MapPosition::Session(SessionFrame::new(i64::try_from(frame).unwrap_or(i64::MAX))),
-        ))
-    };
-    let (BeatGridQuery::Resolved(first), BeatGridQuery::Resolved(last)) =
-        (at(frames.start), at(frames.end))
-    else {
-        return;
-    };
-    let first = f64::from(*first.value().value()).ceil() as i64;
-    let last = f64::from(*last.value().value()).floor() as i64;
-    for ordinal in first..=last {
-        let Ok(beat) = Beat::try_from(BeatOrdinal::new(ordinal)) else {
-            continue;
-        };
-        let BeatGridQuery::Resolved(position) = grid.position_at(MapPoint::new(grid.stamp(), beat))
-        else {
-            continue;
-        };
-        let MapPosition::Session(frame) = *position.value().value() else {
-            continue;
-        };
-        let Ok(frame) = u64::try_from(i64::from(frame)) else {
-            continue;
-        };
-        if !frames.contains(&frame) {
-            continue;
-        }
-        let downbeat = matches!(
-            grid.meter_at(MapPoint::new(grid.stamp(), beat)),
-            BeatGridQuery::Resolved(meter)
-                if (ordinal - i64::from(meter.value().downbeat()))
-                    .rem_euclid(i64::from(meter.value().beats_per_bar()))
-                    == 0
-        );
-        tap.host_beat(frame, downbeat);
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub(super) enum HlsProtection {
     Plain,
@@ -568,7 +516,8 @@ pub(super) struct ProductHarness {
     /// The second each deck's start opens it at, before its stagger.
     cues: Vec<f64>,
     /// Every rendered block with the Host metronome, when artifacts are on.
-    tap: Option<AudioArtifactTap>,
+    #[cfg(not(target_os = "android"))]
+    tap: Option<kithara_integration_tests::audio_artifact::AudioArtifactTap>,
 }
 
 #[cfg(not(target_os = "android"))]
@@ -663,6 +612,7 @@ impl Audible {
         }
     }
 
+    #[cfg(not(target_os = "android"))]
     fn label(self) -> String {
         match self {
             Self::Deck(deck) => format!("deck-{deck}"),
@@ -671,20 +621,92 @@ impl Audible {
     }
 }
 
-/// The artifact of one harness run, named by the running test, the case and
-/// the decks it hears.
-fn open_tap(case: SyncCase, provider: Provider, audible: Audible) -> Option<AudioArtifactTap> {
-    let mut tap = AudioArtifactTap::from_env(
-        &format!("{}-{}-{}", artifact_label(), case.id, audible.label()),
-        case.sample_rate,
-        CHANNELS,
-    )
-    .unwrap_or_else(|error| panic!("{}: open the listening artifact: {error}", case.id))?;
-    tap.evidence(
-        "provider",
-        serde_json::Value::String(format!("{provider:?}")),
-    );
-    Some(tap)
+/// Listening artifacts: an opt-in desktop recording of each harness run with
+/// the Host metronome. They encode through the app's recording stack, which no
+/// device build carries.
+#[cfg(not(target_os = "android"))]
+mod artifact {
+    use std::ops::Range;
+
+    use kithara_integration_tests::audio_artifact::{AudioArtifactTap, artifact_label};
+
+    use super::{
+        Audible, CHANNELS, Provider, SyncCase,
+        kithara::{
+            signal::SessionFrame,
+            warp::{Beat, BeatGridQuery, BeatGridSnapshot, BeatOrdinal, MapPoint, MapPosition},
+        },
+    };
+
+    /// The artifact of one harness run, named by the running test, the case and
+    /// the decks it hears.
+    pub(super) fn open_tap(
+        case: SyncCase,
+        provider: Provider,
+        audible: Audible,
+    ) -> Option<AudioArtifactTap> {
+        let mut tap = AudioArtifactTap::from_env(
+            &format!("{}-{}-{}", artifact_label(), case.id, audible.label()),
+            case.sample_rate,
+            CHANNELS,
+        )
+        .unwrap_or_else(|error| panic!("{}: open the listening artifact: {error}", case.id))?;
+        tap.evidence(
+            "provider",
+            serde_json::Value::String(format!("{provider:?}")),
+        );
+        Some(tap)
+    }
+
+    /// Marks every beat the Host session grid places inside `frames` on the
+    /// artifact's metronome. Output frames are session frames: the harness
+    /// renders its session from frame 0.
+    pub(super) fn mark_host_beats(
+        tap: &mut AudioArtifactTap,
+        grid: &BeatGridSnapshot,
+        frames: Range<u64>,
+    ) {
+        let at = |frame: u64| {
+            grid.beat_at(MapPoint::new(
+                grid.stamp(),
+                MapPosition::Session(SessionFrame::new(i64::try_from(frame).unwrap_or(i64::MAX))),
+            ))
+        };
+        let (BeatGridQuery::Resolved(first), BeatGridQuery::Resolved(last)) =
+            (at(frames.start), at(frames.end))
+        else {
+            return;
+        };
+        let first = f64::from(*first.value().value()).ceil() as i64;
+        let last = f64::from(*last.value().value()).floor() as i64;
+        for ordinal in first..=last {
+            let Ok(beat) = Beat::try_from(BeatOrdinal::new(ordinal)) else {
+                continue;
+            };
+            let BeatGridQuery::Resolved(position) =
+                grid.position_at(MapPoint::new(grid.stamp(), beat))
+            else {
+                continue;
+            };
+            let MapPosition::Session(frame) = *position.value().value() else {
+                continue;
+            };
+            let Ok(frame) = u64::try_from(i64::from(frame)) else {
+                continue;
+            };
+            if !frames.contains(&frame) {
+                continue;
+            }
+            let downbeat = matches!(
+                grid.meter_at(MapPoint::new(grid.stamp(), beat)),
+                BeatGridQuery::Resolved(meter)
+                    if (ordinal - i64::from(meter.value().downbeat()))
+                        .rem_euclid(i64::from(meter.value().beats_per_bar()))
+                        == 0
+            );
+            tap.host_beat(frame, downbeat);
+        }
+    }
 }
 
 impl ProductHarness {
@@ -788,7 +810,8 @@ impl ProductHarness {
             cues: (0..case.decks)
                 .map(|deck| provider.start_seconds(deck, start))
                 .collect(),
-            tap: open_tap(case, provider, audible),
+            #[cfg(not(target_os = "android"))]
+            tap: artifact::open_tap(case, provider, audible),
             _trace: trace,
         };
         harness.wait_loaded(case, &ids).await;
@@ -884,9 +907,10 @@ impl ProductHarness {
         assert_eq!(self.host.position(), end);
         self.tick_all(case).await;
         self.output_frames = end;
+        #[cfg(not(target_os = "android"))]
         if let Some(tap) = self.tap.as_mut() {
             let grid = self.host.session_grid().await;
-            mark_host_beats(tap, &grid, start..end);
+            artifact::mark_host_beats(tap, &grid, start..end);
             tap.push(&samples);
         }
         let delay = if self.paced {
@@ -900,6 +924,7 @@ impl ProductHarness {
     }
 
     /// Stamps a control marker on the artifact, when artifacts are on.
+    #[cfg(not(target_os = "android"))]
     pub(super) fn mark(&mut self, label: &str) {
         if let Some(tap) = self.tap.as_mut() {
             tap.mark(label);
@@ -987,6 +1012,7 @@ impl ProductHarness {
     }
 
     pub(super) async fn request_sync_intent(&mut self, case: SyncCase, intent: SyncIntent) {
+        #[cfg(not(target_os = "android"))]
         self.mark(&format!("sync {intent:?}"));
         let transport = self.transport_revision(case).await;
         for index in 0..self.decks.len() {

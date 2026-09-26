@@ -509,12 +509,13 @@ kithara-stream v0.0.1 (/workspace/crates/kithara-stream)\n";
 
         assert!(names.contains("kithara-stream"));
         assert!(names.contains("kithara-stream-tests"));
-        // The player reads a prepared grid, so the beat crate's types ship with
-        // the product even though no detector runs on the device.
+        // The player reads prepared analysis artifacts, so the analysis and beat
+        // contracts ship with the product even though no detector runs on the
+        // device.
         assert!(names.contains("kithara-beat"));
+        assert!(names.contains("kithara-analysis"));
         assert!(!names.contains("kithara-app"));
         assert!(!names.contains("kithara-app-tests"));
-        assert!(!names.contains("kithara-analysis"));
         assert!(!names.contains("kithara-encode-tests"));
     }
 
