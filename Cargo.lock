@@ -5387,6 +5387,7 @@ dependencies = [
 name = "kithara-mpa"
 version = "0.0.1-alpha5"
 dependencies = [
+ "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
  "symphonia-core",

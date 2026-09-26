@@ -82,6 +82,7 @@ pub(crate) struct FrameHeader {
     pub(crate) layer: MpegLayer,
     pub(crate) version: MpegVersion,
     pub(crate) has_crc: bool,
+    pub(crate) bitrate: u32,
     pub(crate) sample_rate: u32,
     pub(crate) frame_size: usize,
 }
