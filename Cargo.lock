@@ -4967,6 +4967,8 @@ name = "kithara-dsp-tests"
 version = "0.0.1-alpha5"
 dependencies = [
  "kithara-dsp",
+ "kithara-host",
+ "kithara-play",
  "kithara-signal",
  "kithara-test-utils",
 ]

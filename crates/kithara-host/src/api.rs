@@ -1,5 +1,4 @@
-use core::f32::consts::PI;
-
+use kithara_dsp::fade::FadeCurve;
 pub use kithara_play::{
     SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo, TempoError,
     TransportRevision,
@@ -46,28 +45,12 @@ pub fn crossfader_gain(bus: CrossfaderBus, position: f32) -> Result<f32, PlayErr
     if !position.is_finite() || !(0.0..=1.0).contains(&position) {
         return Err(PlayError::MixPosition { position });
     }
-    let gain = match bus {
+    let (a, b) = FadeCurve::EqualPower3dB.compute_gains_0_to_1(position);
+    Ok(match bus {
         CrossfaderBus::Bypass => 1.0,
-        CrossfaderBus::A => {
-            if position == 0.0 {
-                1.0
-            } else if position == 1.0 {
-                0.0
-            } else {
-                (position * PI / 2.0).cos()
-            }
-        }
-        CrossfaderBus::B => {
-            if position == 0.0 {
-                0.0
-            } else if position == 1.0 {
-                1.0
-            } else {
-                (position * PI / 2.0).sin()
-            }
-        }
-    };
-    Ok(gain)
+        CrossfaderBus::A => a,
+        CrossfaderBus::B => b,
+    })
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

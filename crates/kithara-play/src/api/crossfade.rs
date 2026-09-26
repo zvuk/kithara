@@ -1,4 +1,4 @@
-use std::f32::consts::FRAC_PI_2;
+use kithara_dsp::fade::FadeCurve;
 
 use crate::PlayError;
 
@@ -70,14 +70,8 @@ impl CrossfadeSettings {
         } else {
             0.5 + (x - self.position) / (2.0 * (1.0 - self.position))
         };
-        let linear = (1.0 - u, u);
-        let selected = match self.curve {
-            CrossfadeCurve::Linear => linear,
-            CrossfadeCurve::EqualPower => {
-                let angle = FRAC_PI_2 * u;
-                (angle.cos(), angle.sin())
-            }
-        };
+        let linear = FadeCurve::Linear.compute_gains_0_to_1(u);
+        let selected = FadeCurve::from(self.curve).compute_gains_0_to_1(u);
         (
             self.depth.mul_add(selected.0 - linear.0, linear.0),
             self.depth.mul_add(selected.1 - linear.1, linear.1),
@@ -104,6 +98,15 @@ impl CrossfadeSettings {
             });
         }
         Ok(self)
+    }
+}
+
+impl From<CrossfadeCurve> for FadeCurve {
+    fn from(curve: CrossfadeCurve) -> Self {
+        match curve {
+            CrossfadeCurve::Linear => Self::Linear,
+            CrossfadeCurve::EqualPower => Self::EqualPower3dB,
+        }
     }
 }
 
