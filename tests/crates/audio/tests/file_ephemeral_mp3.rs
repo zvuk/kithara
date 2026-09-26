@@ -3,7 +3,7 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioRead, AudioSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     decode::DecoderBackend,
     file::{File, FileConfig},
     platform::{sync::Arc, thread, time::Duration, tokio::task::spawn_blocking},
@@ -13,7 +13,7 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
 };
-use kithara_test_fixtures::fixtures::tone_mp3;
+use kithara_test_fixtures::{assets, fixtures::tone_mp3, headerless_bitrate_change};
 
 use crate::common::test_defaults::Consts;
 
@@ -253,6 +253,97 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
         "{backend:?}: the track must play to the length it was built to: \
          reached={reached:.3}s, built={}s +/- {END_TOLERANCE_SECS}s",
         Consts::TEST_MP3_DURATION_SECS
+    );
+}
+
+/// A headerless MP3 carries no frame count, so its length can only be
+/// extrapolated from the frames read at open, and only while they share one
+/// bitrate. Here eight 320 kbps frames lead a minute at 128 kbps: averaging
+/// them ends the track near 35 s, and a seek to 45 s would land on that false
+/// end instead of the audio the file holds.
+#[kithara::test(tokio, multi_thread, flash(false), timeout(Duration::from_secs(30)))]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
+async fn headerless_mp3_whose_bitrate_changes_plays_past_its_opening_estimate(
+    #[case] backend: DecoderBackend,
+) {
+    /// Leading 320 kbps frames: fewer than the estimate inspects.
+    const HEAD_FRAMES: usize = 8;
+    const SEEK: Duration = Duration::from_secs(45);
+    /// How far playback may resume from the seek target: a few MPEG frames.
+    const LANDING_TOLERANCE_SECS: f64 = 0.25;
+    /// Waits the reader may spend on the range request a seek issues before
+    /// the source is declared stuck rather than slow.
+    const MAX_PENDING_WAITS: usize = 2_000;
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
+    let bytes = headerless_bitrate_change(
+        assets::signal_mp3_saw_2s_320k().bytes(),
+        HEAD_FRAMES,
+        assets::signal_mp3_sine440_60s_128k().bytes(),
+    );
+    let helper = TestServerHelper::new().await;
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(bytes),
+            content_type: Some("audio/mpeg"),
+        },
+        delivery: Delivery::Range,
+    });
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let file_config = FileConfig::for_src(handle.child_url("track.mp3").into())
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Memory)
+                .build(),
+        )
+        .pools(pools)
+        .build();
+    let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
+        .build();
+    let mut audio = worker
+        .open(config)
+        .await
+        .expect("open the headerless track");
+
+    let duration = audio.duration();
+    assert!(
+        duration.is_none_or(|duration| duration > SEEK),
+        "{backend:?}: a published length must not end before audio the file holds, got {duration:?}"
+    );
+
+    let outcome = spawn_blocking(move || {
+        audio.seek(SEEK).expect("seek inside the track");
+        let mut buf = [0.0f32; 4096];
+        for _ in 0..MAX_PENDING_WAITS {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => thread::sleep(Duration::from_millis(5)),
+                Ok(outcome) => return outcome,
+                Err(e) => panic!("decode error after the seek: {e}"),
+            }
+        }
+        panic!("the source stopped delivering the range the seek requested")
+    })
+    .await
+    .expect("the decode thread must not panic");
+
+    let ReadOutcome::Frames { position, .. } = outcome else {
+        panic!("{backend:?}: a seek to {SEEK:?} must play on, got {outcome:?}");
+    };
+    assert!(
+        (position.as_secs_f64() - SEEK.as_secs_f64()).abs() <= LANDING_TOLERANCE_SECS,
+        "{backend:?}: playback must resume at the seek target, got {position:?}"
     );
 }
 

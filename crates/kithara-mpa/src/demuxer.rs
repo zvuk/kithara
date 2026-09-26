@@ -698,7 +698,9 @@ fn read_main_data_begin<B: ReadBytes>(reader: &mut B, header: &FrameHeader) -> R
     Ok(main_data_begin)
 }
 
-/// Estimates the total number of MPEG frames in the media source stream.
+/// Estimates the total number of MPEG frames in the media source stream from the average length
+/// of the frames at its start. Returns `None` when their bitrates differ: extrapolating a variable
+/// bitrate publishes an end that can fall well before the last frame.
 fn estimate_num_mpeg_frames(reader: &mut MediaSourceStream<'_>) -> Option<u64> {
     const MAX_FRAMES: u32 = 16;
     const MAX_LEN: usize = 16 * 1024;
@@ -716,6 +718,7 @@ fn estimate_num_mpeg_frames(reader: &mut MediaSourceStream<'_>) -> Option<u64> {
 
     let mut total_frame_len = 0;
     let mut total_frames = 0;
+    let mut bitrate = None;
 
     let total_len = match reader.byte_len() {
         Some(len) => len - start_pos,
@@ -726,6 +729,10 @@ fn estimate_num_mpeg_frames(reader: &mut MediaSourceStream<'_>) -> Option<u64> {
         let header_val = break_on_err!(reader.read_be_u32());
 
         let header = break_on_err!(header::parse_frame_header(header_val));
+
+        if *bitrate.get_or_insert(header.bitrate) != header.bitrate {
+            break None;
+        }
 
         total_frame_len += MPEG_HEADER_LEN + header.frame_size;
         total_frames += 1;
