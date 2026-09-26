@@ -166,10 +166,11 @@ where
         Self::open(config, None).await
     }
 
-    /// Like [`Self::new`], plus one render block per `interval` the owner
-    /// thread spends idle. This is the audio-device tick an offline session
-    /// has no device to receive: it lets a test wait on playback state the way
-    /// an app does, instead of pulling every block itself.
+    /// Like [`Self::new`], plus one render block per `interval` of the clock,
+    /// however long a render or a call takes. This is the audio-device tick
+    /// an offline session has no device to receive: it lets a test wait on
+    /// playback state the way an app does, instead of pulling every block
+    /// itself.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn paced(config: HostConfig<S>, interval: Duration) -> Result<Self, PlayError> {
         Self::open(config, Some(interval)).await

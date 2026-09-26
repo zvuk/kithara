@@ -1,7 +1,7 @@
 use std::{
     future::Future,
     marker::PhantomData,
-    ops::{Add, Sub},
+    ops::{Add, AddAssign, Sub},
     pin::Pin,
     sync::atomic::{AtomicBool, Ordering},
     task::{Context, Poll},
@@ -454,7 +454,7 @@ pub fn dynamic<F: Future>(on: bool, fut: F) -> FlashDynamic<F> {
 
 /// Drop-in for `web_time::Instant` backed by the virtual clock. Exposes exactly
 /// the API surface the workspace uses on instants (`now`, `elapsed`,
-/// `duration_since`, `saturating_duration_since`, `+`/`-`, ordering); all
+/// `duration_since`, `saturating_duration_since`, `+`/`+=`/`-`, ordering); all
 /// arithmetic saturates so misuse never panics or wraps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Instant(u64);
@@ -526,6 +526,13 @@ impl Add<Duration> for Instant {
     #[inline]
     fn add(self, rhs: Duration) -> Self {
         Self(self.0.saturating_add(duration_to_nanos(rhs)))
+    }
+}
+
+impl AddAssign<Duration> for Instant {
+    #[inline]
+    fn add_assign(&mut self, rhs: Duration) {
+        *self = *self + rhs;
     }
 }
 

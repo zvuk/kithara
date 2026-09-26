@@ -356,32 +356,47 @@ where
         let out_l = &mut out_l_slice[..info.frames];
         let out_r = &mut out_r_slice[..info.frames];
 
-        let Some((active_l, active_r)) = self.active.as_mut() else {
+        let Some(active) = self.active.as_mut() else {
             return ProcessStatus::Bypass;
         };
-        for frame in 0..info.frames {
-            let mut left = [active_l.process_sample(in_l[frame])];
-            let mut right = [active_r.process_sample(in_r[frame])];
-            if !self.crossover.has_settled() {
-                let (dry_l, dry_r) = match self.retiring.as_mut() {
-                    Some((retiring_l, retiring_r)) => (
-                        retiring_l.process_sample(in_l[frame]),
-                        retiring_r.process_sample(in_r[frame]),
-                    ),
-                    None => (in_l[frame], in_r[frame]),
-                };
-                self.crossover.mix_dry_into_wet_stereo(
-                    &[dry_l],
-                    &[dry_r],
-                    &mut left,
-                    &mut right,
-                    1,
-                );
-            }
-            out_l[frame] = left[0];
-            out_r[frame] = right[0];
-        }
+        render_stereo(
+            active,
+            self.retiring.as_mut(),
+            &mut self.crossover,
+            [in_l, in_r],
+            [out_l, out_r],
+        );
 
         ProcessStatus::OutputsModified
+    }
+}
+
+/// Run one block through the active pair, crossfading from the retiring pair
+/// while a layout change settles.
+///
+/// Free of the processor's pool parameter, so the per-sample loop is compiled
+/// once, here, rather than in every crate that instantiates the processor.
+fn render_stereo(
+    (active_l, active_r): &mut (IsolatorEq, IsolatorEq),
+    mut retiring: Option<&mut (IsolatorEq, IsolatorEq)>,
+    crossover: &mut MixDSP,
+    [in_l, in_r]: [&[f32]; 2],
+    [out_l, out_r]: [&mut [f32]; 2],
+) {
+    for frame in 0..in_l.len() {
+        let mut left = [active_l.process_sample(in_l[frame])];
+        let mut right = [active_r.process_sample(in_r[frame])];
+        if !crossover.has_settled() {
+            let (dry_l, dry_r) = match retiring.as_deref_mut() {
+                Some((retiring_l, retiring_r)) => (
+                    retiring_l.process_sample(in_l[frame]),
+                    retiring_r.process_sample(in_r[frame]),
+                ),
+                None => (in_l[frame], in_r[frame]),
+            };
+            crossover.mix_dry_into_wet_stereo(&[dry_l], &[dry_r], &mut left, &mut right, 1);
+        }
+        out_l[frame] = left[0];
+        out_r[frame] = right[0];
     }
 }

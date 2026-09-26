@@ -2,8 +2,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
-#[cfg(test)]
-use kithara_play::PlaybackShared;
 pub use kithara_play::player::PlaybackView;
 use kithara_play::{CrossfadeSettings, ResourceSrc, SelectionPlayback};
 
@@ -295,8 +293,6 @@ fn name_from_raw(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
-
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -364,35 +360,6 @@ mod tests {
             CachedPosition::known(f64::NAN),
             CachedPosition::Unknown
         ));
-    }
-
-    fn view_of(frontier: f64, cached: f64) -> PlaybackView {
-        let shared = PlaybackShared::default();
-        shared.duration.store(200.0, Ordering::Relaxed);
-        shared.frontier.store(frontier, Ordering::Relaxed);
-        shared.cached.store(cached, Ordering::Relaxed);
-        PlaybackView::from(shared.snapshot())
-    }
-
-    /// A fully downloaded track must report its cached span, not the sliver
-    /// the decoder has produced — that span is what a host progress bar and
-    /// `loadedTimeRanges` mean by "available without more network".
-    #[kithara::test]
-    fn buffered_covers_the_cached_span() {
-        assert_eq!(view_of(4.0, 120.0).buffered, Some(120.0));
-    }
-
-    /// The frontier is a floor, not a value the cached span replaces: a
-    /// reported window that falls behind the playhead makes the host pause
-    /// into a buffering deadlock.
-    #[kithara::test]
-    fn buffered_never_falls_behind_the_decoded_frontier() {
-        assert_eq!(view_of(90.0, 12.0).buffered, Some(90.0));
-    }
-
-    #[kithara::test]
-    fn buffered_is_zero_when_nothing_is_available() {
-        assert_eq!(view_of(0.0, 0.0).buffered, Some(0.0));
     }
 
     #[kithara::test]

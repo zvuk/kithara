@@ -55,13 +55,13 @@ pub struct PlaybackShared {
     /// Whether playback is active.
     pub playing: AtomicBool,
     /// Cached span in seconds: how much of the source is on disk.
-    pub cached: AtomicF64,
+    pub(crate) cached: AtomicF64,
     /// Total media duration in seconds; `0.0` when unknown.
-    pub duration: AtomicF64,
+    pub(crate) duration: AtomicF64,
     /// Decoded-ahead frontier in seconds.
-    pub frontier: AtomicF64,
+    pub(crate) frontier: AtomicF64,
     /// Playback position in seconds.
-    pub position: AtomicF64,
+    pub(crate) position: AtomicF64,
     /// Current output sample rate.
     pub sample_rate: AtomicU32,
     /// Number of audio-thread process calls.
@@ -70,6 +70,13 @@ pub struct PlaybackShared {
     pub seek_epoch: AtomicU64,
     /// Effective media seconds consumed per output second; `0.0` while paused.
     pub(crate) rate: AtomicF32,
+    /// Epoch of the last item the control side made leading.
+    leading_epoch: AtomicU64,
+    /// Duration the control side declared for that item.
+    leading_duration: AtomicF64,
+    /// Epoch of the leading item the audio thread has taken on; `position` and `duration`
+    /// describe that item.
+    adopted_epoch: AtomicU64,
     metrics: RtMetrics,
 }
 
@@ -86,20 +93,53 @@ impl PlaybackShared {
             .wrapping_add(1)
     }
 
+    /// Make a new item leading, ahead of the `FadeIn` that carries the returned epoch to the
+    /// audio thread.
+    ///
+    /// Until the audio thread adopts that epoch, a snapshot describes the new item at its head
+    /// with `duration`: the blocks rendered meanwhile still publish the item they were leading.
+    pub(crate) fn lead(&self, duration: f64) -> u64 {
+        self.leading_duration
+            .store(duration.max(0.0), Ordering::Relaxed);
+        self.leading_epoch
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1)
+    }
+
+    /// Audio thread: take on the item `epoch` made leading, publishing its playhead with it.
+    pub(crate) fn adopt(&self, epoch: u64, position: f64, duration: f64) {
+        self.position.store(position, Ordering::Relaxed);
+        self.duration.store(duration, Ordering::Relaxed);
+        self.adopted_epoch.store(epoch, Ordering::Release);
+    }
+
     /// Read every live playback scalar once. See [`PlaybackSnapshot`] for what the fields do and do
     /// not guarantee about each other.
     #[must_use]
     pub fn snapshot(&self) -> PlaybackSnapshot {
+        let leading = self.leading_epoch.load(Ordering::Acquire);
+        let rate = self.rate.load(Ordering::Relaxed);
+        let sample_rate = self.sample_rate.load(Ordering::Relaxed);
+        let playing = self.playing.load(Ordering::Relaxed);
+        if self.adopted_epoch.load(Ordering::Acquire) != leading {
+            return PlaybackSnapshot {
+                playing,
+                rate,
+                sample_rate,
+                duration: self.leading_duration.load(Ordering::Relaxed),
+                ..PlaybackSnapshot::default()
+            };
+        }
         let position = self.position.load(Ordering::Relaxed);
         let frontier = self.frontier.load(Ordering::Relaxed).max(position);
         PlaybackSnapshot {
             position,
             frontier,
+            playing,
+            rate,
+            sample_rate,
             cached: self.cached.load(Ordering::Relaxed),
             duration: self.duration.load(Ordering::Relaxed),
-            rate: self.rate.load(Ordering::Relaxed),
-            sample_rate: self.sample_rate.load(Ordering::Relaxed),
-            playing: self.playing.load(Ordering::Relaxed),
         }
     }
 

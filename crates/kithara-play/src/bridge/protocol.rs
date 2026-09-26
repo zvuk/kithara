@@ -94,6 +94,8 @@ pub enum TrackTransition {
     FadeIn {
         item_id: TrackId,
         settings: crate::CrossfadeSettings,
+        /// Leading epoch the control side published for this item.
+        epoch: u64,
     },
     /// Start fading out the track with the given queue-item identity.
     FadeOut {

@@ -70,8 +70,7 @@ where
         let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index)? else {
             return Ok(false);
         };
-        self.publish_current_track_snapshot(duration_seconds);
-        self.start_playback(item_id);
+        self.start_playback(item_id, duration_seconds);
         self.apply_start_position();
         Ok(true)
     }
@@ -81,8 +80,7 @@ where
         let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index)? else {
             return Ok(false);
         };
-        self.publish_current_track_snapshot(duration_seconds);
-        self.start_playback_with(item_id, crossfade);
+        self.start_playback_with(item_id, duration_seconds, crossfade);
         self.apply_start_position();
         Ok(true)
     }
@@ -266,9 +264,10 @@ where
         Ok(())
     }
 
-    pub(crate) fn start_playback(&self, item_id: TrackId) {
+    pub(crate) fn start_playback(&self, item_id: TrackId, duration_seconds: f64) {
         self.start_playback_with(
             item_id,
+            duration_seconds,
             CrossfadeSettings {
                 duration: self.crossfade_duration(),
                 ..CrossfadeSettings::default()
@@ -276,10 +275,25 @@ where
         );
     }
 
-    fn start_playback_with(&self, item_id: TrackId, settings: CrossfadeSettings) {
+    /// Make `item_id` leading: the playhead reads describe it from here on, not only once the
+    /// audio thread has taken it on.
+    fn start_playback_with(
+        &self,
+        item_id: TrackId,
+        duration_seconds: f64,
+        settings: CrossfadeSettings,
+    ) {
+        let Some(playback) = self
+            .slot()
+            .and_then(|slot_id| self.core.engine.slot_playback(slot_id))
+        else {
+            return;
+        };
+        let epoch = playback.lead(duration_seconds);
         let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id,
             settings,
+            epoch,
         }));
     }
 }

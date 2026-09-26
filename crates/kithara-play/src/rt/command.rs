@@ -113,7 +113,10 @@ impl PlayerNodeProcessor {
     fn handle_transition(&mut self, transition: TrackTransition) {
         let mut leading_changed = false;
 
-        if let TrackTransition::FadeIn { item_id, settings } = &transition {
+        if let TrackTransition::FadeIn {
+            item_id, settings, ..
+        } = &transition
+        {
             self.tracks_transitions.clear();
 
             let maybe_old = self
@@ -142,14 +145,15 @@ impl PlayerNodeProcessor {
             };
             if let Some(track) = self.tracks.get_mut(item_id) {
                 match transition {
-                    TrackTransition::FadeIn { settings, .. } => {
+                    TrackTransition::FadeIn {
+                        settings, epoch, ..
+                    } => {
                         changed_src = Some(Arc::clone(track.src()));
                         if track.position() > Self::FADE_IN_SEEK_THRESHOLD {
                             track.seek(0.0);
                         }
                         track.fade_in(*settings);
-                        playback.position.store(track.position(), Ordering::Relaxed);
-                        playback.duration.store(track.duration(), Ordering::Relaxed);
+                        playback.adopt(*epoch, track.position(), track.duration());
                     }
                     TrackTransition::FadeOut { settings, .. } => {
                         track.fade_out(*settings);

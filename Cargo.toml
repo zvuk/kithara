@@ -568,6 +568,12 @@ opt-level = 2
 # Time-stretch DSP (FFT/phase-vocoder + C++) is ~10× slower in debug.
 [profile.dev.package.signalsmith-stretch]
 opt-level = 3
+# The mixer's per-block effects chain (limiter, isolator EQ, crossover) is
+# over half of a render block at opt-0, which leaves a debug render of 512
+# frames slower than the 11.6 ms of audio it produces: an offline session
+# ticked on the audio clock then plays slower than real time.
+[profile.dev.package.kithara-effects]
+opt-level = 2
 # Cochlea's YIN pitch track is ~14× slower at opt-0 (4.2s vs 0.3s per 3s
 # buffer); tests that segment a dozen renders burn their whole nextest
 # budget inside the analyzer instead of the pipeline under test.

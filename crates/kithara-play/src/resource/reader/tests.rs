@@ -310,6 +310,7 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id: first_id,
             settings: crate::CrossfadeSettings::default(),
+            epoch: 0,
         }))
         .expect("fade in first track");
     control
@@ -359,6 +360,7 @@ fn loading_next_warp_resource_preserves_shared_target_and_effective_capability(h
         .try_push(PlayerCmd::Transition(TrackTransition::FadeIn {
             item_id: next_id,
             settings: crate::CrossfadeSettings::default(),
+            epoch: 0,
         }))
         .expect("fade in next track");
     assert_eq!(controls.speed(), 1.5);

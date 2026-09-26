@@ -62,7 +62,7 @@ pub(crate) fn bridge_position_secs() -> f64 {
     BRIDGE_PLAYBACK.with(|cell| {
         cell.borrow()
             .as_ref()
-            .map_or(0.0, |s| s.position.load(Ordering::Relaxed))
+            .map_or(0.0, |s| s.snapshot().position())
     })
 }
 
@@ -70,7 +70,7 @@ pub(crate) fn bridge_duration_secs() -> f64 {
     BRIDGE_PLAYBACK.with(|cell| {
         cell.borrow()
             .as_ref()
-            .map_or(0.0, |s| s.duration.load(Ordering::Relaxed))
+            .map_or(0.0, |s| s.snapshot().duration())
     })
 }
 

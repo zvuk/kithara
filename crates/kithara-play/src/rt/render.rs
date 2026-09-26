@@ -217,13 +217,16 @@ impl RenderPass {
                             continue;
                         };
                         next_track.play();
-                        next_track.render(
+                        let outcome = next_track.render(
                             context,
                             &mut read_bufs,
                             &mut bus_bufs,
                             offset..frames,
                             &mut sink,
                         );
+                        if let Some(snapshot) = outcome_position_duration(&outcome) {
+                            leading_outcome_pos_dur = Some(snapshot);
+                        }
                         break;
                     }
                 }

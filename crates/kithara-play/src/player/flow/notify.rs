@@ -93,7 +93,6 @@ where
             return;
         }
         let index = pending.index;
-        self.publish_current_track_snapshot(pending.duration_seconds);
         self.core.items.set_current(index);
         self.announce_current_item(index);
     }
@@ -220,19 +219,6 @@ where
             }
         }
     }
-
-    fn publish_current_track_snapshot(&self, duration_seconds: f64) {
-        let Some(slot_id) = self.slot() else {
-            return;
-        };
-        let Some(playback) = self.core.engine.slot_playback(slot_id) else {
-            return;
-        };
-        playback.position.store(0.0, Ordering::Relaxed);
-        playback
-            .duration
-            .store(duration_seconds.max(0.0), Ordering::Relaxed);
-    }
 }
 
 impl<S> PlayerRuntime<S>
@@ -241,10 +227,6 @@ where
 {
     pub fn process_notifications(&self) {
         Notifier::new(self).process_notifications();
-    }
-
-    pub(crate) fn publish_current_track_snapshot(&self, duration_seconds: f64) {
-        Notifier::new(self).publish_current_track_snapshot(duration_seconds);
     }
 }
 

@@ -129,10 +129,12 @@ impl<T: 'static> OffThread<T> {
         .await
     }
 
-    /// Like [`Self::spawn`], plus `tick` on every `interval` the owner spends
-    /// idle — the shape a device-free session uses to advance itself when no
-    /// command is pending. `tick` is serialized with the calls, so it never
-    /// observes a half-applied one.
+    /// Like [`Self::spawn`], plus `tick` once per `interval` of the clock —
+    /// the audio-device callback a device-free session has no device to
+    /// receive. Like a device clock, the schedule does not wait on the owner:
+    /// a call or a slow tick delays the ticks due meanwhile, which then run
+    /// back to back, so the tick count keeps pace with the clock. `tick` is
+    /// serialized with the calls, so it never observes a half-applied one.
     ///
     /// # Errors
     ///
@@ -153,10 +155,14 @@ impl<T: 'static> OffThread<T> {
         P: FnMut(&mut T) + Send + 'static,
     {
         Self::serving(name, init, move |receiver, value| {
+            let mut due = Instant::now() + interval;
             loop {
-                match receiver.recv_timeout(Instant::now() + interval) {
+                match receiver.recv_timeout(due) {
                     Ok(job) => job(value),
-                    Err(RecvTimeoutError::Timeout) => tick(value),
+                    Err(RecvTimeoutError::Timeout) => {
+                        tick(value);
+                        due += interval;
+                    }
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
             }
@@ -173,7 +179,7 @@ mod tests {
         sync::atomic::{AtomicBool, Ordering},
     };
 
-    use kithara_platform::sync::Arc;
+    use kithara_platform::{sync::Arc, thread, time::Duration, tokio::sync::oneshot};
     use kithara_test_utils::kithara;
 
     use super::OffThread;
@@ -243,6 +249,47 @@ mod tests {
         owner.close().await;
 
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    /// A paced owner stands in for an audio device, whose clock does not wait
+    /// for the callback: a tick that spends half its interval working must
+    /// still leave the owner ticking once per interval of the clock.
+    #[kithara::test(tokio)]
+    async fn paced_ticks_keep_pace_with_the_clock_however_long_a_tick_takes() {
+        const INTERVAL: Duration = Duration::from_millis(10);
+        const TICKS: u32 = 50;
+
+        let (reached, reached_receiver) = oneshot::channel();
+        let mut reached = Some(reached);
+        let started = Instant::now();
+        let owner = OffThread::spawn_paced(
+            "off-thread-paced",
+            || Ok::<_, ()>(0_u32),
+            INTERVAL,
+            move |ticks| {
+                thread::sleep(INTERVAL / 2);
+                *ticks += 1;
+                if *ticks == TICKS
+                    && let Some(reached) = reached.take()
+                {
+                    let _ = reached.send(started.elapsed());
+                }
+            },
+        )
+        .await
+        .expect("owner initialization must succeed");
+
+        let elapsed = reached_receiver
+            .await
+            .expect("the owner must reach the tick count");
+        owner.close().await;
+
+        // Ticking only after an idle interval would take 1.5x; a quarter of
+        // slack still separates that from keeping pace under a loaded host.
+        assert!(
+            elapsed < INTERVAL * TICKS * 5 / 4,
+            "{TICKS} ticks of {INTERVAL:?} took {elapsed:?}: the owner fell behind the clock"
+        );
     }
 
     #[kithara::test]
