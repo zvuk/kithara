@@ -5,6 +5,12 @@ edition.workspace = true
 license = "MIT OR Apache-2.0"
 publish = false
 
+[package.metadata.cargo-machete]
+# `obfstr` is reached only through the table `build.rs` generates, which
+# writes `::obfstr::obfstr!`; no source line in this crate spells the crate
+# out.
+ignored = ["obfstr"]
+
 [[bin]]
 name = "kithara"
 path = "src/bin/kithara/main.rs"
