@@ -4764,6 +4764,7 @@ dependencies = [
  "derive-where",
  "derive_more",
  "hotpath",
+ "kithara-config",
  "kithara-core-test-fixtures",
  "kithara-derive",
  "kithara-platform",
@@ -4787,6 +4788,17 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-utils",
  "serial_test",
+]
+
+[[package]]
+name = "kithara-config"
+version = "0.0.1-alpha5"
+dependencies = [
+ "bon",
+ "fieldwork",
+ "kithara-derive",
+ "kithara-test-utils",
+ "serde",
 ]
 
 [[package]]
@@ -4861,6 +4873,7 @@ dependencies = [
 name = "kithara-derive"
 version = "0.0.1-alpha5"
 dependencies = [
+ "humantime-serde",
  "kithara-test-dylib",
  "kithara-test-utils",
  "kithara-workspace-hack",

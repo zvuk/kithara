@@ -1,0 +1,21 @@
+[package]
+name = "kithara-config"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Retained configuration values and composed configuration macros."
+
+[dependencies]
+kithara-derive = { workspace = true, features = ["config", "built-default", "patch"] }
+
+bon = { workspace = true }
+fieldwork = { workspace = true }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[lints]
+workspace = true

@@ -145,8 +145,8 @@ mod tests {
             )
             .build();
         let mut patch = WarpConfigPatch::default();
-        patch.backends.signalsmith.block_frames = NonZeroUsize::new(512);
-        patch.backends.signalsmith.interval_frames = NonZeroUsize::new(16);
+        patch.backends.signalsmith.block_frames = Some(NonZeroUsize::new(512));
+        patch.backends.signalsmith.interval_frames = Some(NonZeroUsize::new(16));
 
         config.apply(patch);
 

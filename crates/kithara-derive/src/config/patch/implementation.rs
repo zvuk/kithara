@@ -9,6 +9,8 @@ use syn::{
     spanned::Spanned,
 };
 
+use super::attribute;
+
 pub(crate) fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match derive(&input) {
@@ -24,10 +26,6 @@ enum Merge {
     /// A nested configuration that judges itself refuses through its own
     /// patch error, which this one carries under the key that reached it.
     Nested { fallible: bool },
-    /// The source field is already an `Option`, so the patch carries it
-    /// unwrapped. A document names the value bare, and an absent key is the
-    /// only way to leave the caller's value standing.
-    Optional,
     /// The field holds something a document cannot spell -- a live handle, a
     /// variant carrying one -- and a separate wire type is what a document
     /// says instead. The key carries the wire type and the merge converts.
@@ -39,6 +37,7 @@ enum Merge {
 /// One source field as it reaches the generated patch.
 struct DocumentField<'a> {
     ident: &'a Ident,
+    deserialize: Option<Path>,
     merge: Merge,
     /// The field's own type, before the patch wraps or renames it.
     source: Type,
@@ -102,7 +101,7 @@ impl DocumentField<'_> {
     /// A patch key is exactly as reachable as the patch that holds it: the
     /// source field's own visibility describes who may write the
     /// configuration, not who may read what a document said.
-    fn declaration(&self, visibility: &Visibility) -> TokenStream2 {
+    fn declaration(&self, visibility: &Visibility, patch: &Ident) -> TokenStream2 {
         let Self {
             ident,
             forwarded,
@@ -110,10 +109,48 @@ impl DocumentField<'_> {
             ty,
             ..
         } = self;
+        let deserialize = if matches!(self.merge, Merge::Nested { .. }) {
+            quote! {}
+        } else {
+            let method = format_ident!("__deserialize_{}", ident);
+            let path = format!("{patch}::{method}");
+            quote! { #[serde(deserialize_with = #path)] }
+        };
         quote! {
             #(#forwarded)*
             #( #[#added] )*
+            #deserialize
             #visibility #ident: #ty,
+        }
+    }
+
+    fn deserializer(&self) -> TokenStream2 {
+        if matches!(self.merge, Merge::Nested { .. }) {
+            return quote! {};
+        }
+        let method = format_ident!("__deserialize_{}", self.ident);
+        let ty = &self.ty;
+        let gates = self.cfgs();
+        let default = parse_quote!(::serde::Deserialize::deserialize);
+        let deserialize = self.deserialize.as_ref().unwrap_or(&default);
+        let read = if is_option(&self.source) {
+            quote! { #deserialize(deserializer).map(::core::option::Option::Some) }
+        } else {
+            quote! {
+                let value: #ty = #deserialize(deserializer)?;
+                value.map(::core::option::Option::Some).ok_or_else(|| {
+                    ::serde::de::Error::custom("null is not valid for a required configuration field")
+                })
+            }
+        };
+        quote! {
+            #(#gates)*
+            fn #method<'de, D>(deserializer: D) -> ::core::result::Result<#ty, D::Error>
+            where
+                D: ::serde::Deserializer<'de>,
+            {
+                #read
+            }
         }
     }
 
@@ -135,11 +172,6 @@ impl DocumentField<'_> {
                 let variant = variant_ident(ident);
                 quote! { #target.#ident.apply(patch.#ident).map_err(#error::#variant)?; }
             }
-            Merge::Optional => quote! {
-                if patch.#ident.is_some() {
-                    #target.#ident = patch.#ident;
-                }
-            },
             Merge::Wire { ref from } => quote! {
                 if let Some(value) = patch.#ident {
                     #target.#ident = #from(value);
@@ -180,7 +212,10 @@ fn derive(input: &DeriveInput) -> Result<TokenStream2> {
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     let subject = format!(" What a configuration document may say about [`{name}`].");
 
-    let declarations = document.iter().map(|field| field.declaration(visibility));
+    let declarations = document
+        .iter()
+        .map(|field| field.declaration(visibility, &patch));
+    let deserializers = document.iter().map(DocumentField::deserializer);
     let refusals = refusals(&document, refusal.as_ref(), &error, visibility)?;
     let apply = apply(&document, refusal.as_ref(), &patch, &error, visibility);
 
@@ -189,6 +224,7 @@ fn derive(input: &DeriveInput) -> Result<TokenStream2> {
         #[doc = ""]
         #[doc = " `Deserialize` only, never `Serialize`: by the time a patch is typed"]
         #[doc = " its references are resolved, so it holds secrets in the clear."]
+        #[doc = " Missing keys preserve values. Null clears optional values and is rejected for required values."]
         #[derive(
             ::core::clone::Clone,
             ::core::fmt::Debug,
@@ -199,6 +235,11 @@ fn derive(input: &DeriveInput) -> Result<TokenStream2> {
         #[non_exhaustive]
         #visibility struct #patch {
             #(#declarations)*
+        }
+
+        #[automatically_derived]
+        impl #patch {
+            #(#deserializers)*
         }
 
         #refusals
@@ -418,11 +459,22 @@ fn named_fields(input: &DeriveInput) -> Result<&Punctuated<Field, Token![,]>> {
 /// so a gated fallible field is simply absent here, and inferring the
 /// signature from what is left would move it from build to build.
 fn refusal(input: &DeriveInput) -> Result<Option<Refusal>> {
+    refusal_from_attributes(&input.attrs, input.ident.span())
+}
+
+pub(crate) fn is_fallible(attributes: &[Attribute], span: proc_macro2::Span) -> Result<bool> {
+    refusal_from_attributes(attributes, span).map(|refusal| refusal.is_some())
+}
+
+fn refusal_from_attributes(
+    attributes: &[Attribute],
+    span: proc_macro2::Span,
+) -> Result<Option<Refusal>> {
     let mut fallible = false;
     let mut with: Option<Path> = None;
     let mut error: Option<Type> = None;
 
-    for attribute in input.attrs.iter().filter(|a| a.path().is_ident("patch")) {
+    for attribute in attributes.iter().filter(|a| a.path().is_ident("patch")) {
         attribute.parse_nested_meta(|meta| {
             if meta.path.is_ident("fallible") {
                 fallible = true;
@@ -446,11 +498,11 @@ fn refusal(input: &DeriveInput) -> Result<Option<Refusal>> {
         (None, None) if fallible => Ok(Some(Refusal { validate: None })),
         (None, None) => Ok(None),
         (Some(_), None) => Err(Error::new(
-            input.ident.span(),
+            span,
             "`validate` needs `error = <type>`: the generated patch error carries what the check refused with",
         )),
         (None, Some(_)) => Err(Error::new(
-            input.ident.span(),
+            span,
             "`error` needs `validate = <path>`: without a check nothing in the merge can refuse",
         )),
     }
@@ -458,6 +510,7 @@ fn refusal(input: &DeriveInput) -> Result<Option<Refusal>> {
 
 fn classify(field: &Field) -> Result<Classified<'_>> {
     let mut skip = false;
+    let mut deserialize = None;
     let mut nested = false;
     let mut fallible = false;
     let mut wire: Option<Type> = None;
@@ -479,9 +532,12 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
             } else if meta.path.is_ident("attribute") {
                 let content;
                 parenthesized!(content in meta.input);
-                added.push(content.parse()?);
+                attribute::collect(&content.parse()?, &mut added, &mut deserialize)?;
             } else if meta.path.is_ident("humantime") {
-                added.push(quote! { serde(with = "humantime_serde::option") });
+                attribute::set(
+                    &mut deserialize,
+                    parse_quote!(::humantime_serde::deserialize),
+                )?;
             } else {
                 return Err(meta.error(
                     "expected `skip`, `nested`, `fallible`, `wire = <type>`, `from = <path>`, \
@@ -510,6 +566,12 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
         ));
     }
 
+    if deserialize.is_some() && nested {
+        return Err(Error::new(
+            field.span(),
+            "a custom field deserializer cannot replace a nested patch",
+        ));
+    }
     let wired = wire_of(field, wire, from)?;
 
     if wired.is_some() && nested {
@@ -535,8 +597,6 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
                 "`nested` needs a named configuration type",
             )?,
         )
-    } else if is_option(&source) {
-        (Merge::Optional, source.clone())
     } else {
         (Merge::Value, parse_quote!(::core::option::Option<#source>))
     };
@@ -544,6 +604,7 @@ fn classify(field: &Field) -> Result<Classified<'_>> {
     Ok(Classified::Key(Box::new(DocumentField {
         ident,
         added,
+        deserialize,
         merge,
         source,
         ty,
@@ -629,7 +690,8 @@ mod tests {
 
         let expanded = expansion(&input);
 
-        assert!(expanded.contains("pub struct HlsConfigPatch { pub download_batch_size"));
+        assert!(expanded.contains("pub struct HlsConfigPatch {"));
+        assert!(expanded.contains("pub download_batch_size :"));
         assert!(
             !expanded.contains("HlsConfigPatch <"),
             "the patch must not repeat the configuration's generics"
@@ -641,7 +703,7 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn an_already_optional_field_is_wrapped_once() {
+    fn optional_fields_keep_presence_separate_from_their_value() {
         let input: DeriveInput = parse_quote! {
             struct Config {
                 look_ahead_bytes: Option<u64>,
@@ -651,7 +713,9 @@ mod tests {
 
         let expanded = expansion(&input);
 
-        assert!(expanded.contains("look_ahead_bytes : Option < u64 >"));
+        assert!(
+            expanded.contains("look_ahead_bytes : :: core :: option :: Option < Option < u64 > >")
+        );
         assert!(expanded.contains("batch : :: core :: option :: Option < usize >"));
     }
 
@@ -683,8 +747,8 @@ mod tests {
 
         assert_eq!(
             expanded.matches("cfg (feature = \"beat-nn\")").count(),
-            2,
-            "the patch field and the merge statement both carry the gate"
+            3,
+            "the patch field, its deserializer and the merge carry the gate"
         );
     }
 
@@ -709,6 +773,22 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
+    fn conflicting_field_deserializers_are_rejected() {
+        let input: DeriveInput = parse_quote! {
+            struct Config {
+                #[patch(humantime, attribute(serde(with = "custom_time")))]
+                timeout: Duration,
+            }
+        };
+        let error = derive(&input).expect_err("two field codecs cannot both own deserialization");
+        assert!(
+            error
+                .to_string()
+                .contains("select one patch field deserializer")
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
     fn humantime_is_the_supported_duration_shorthand() {
         let input: DeriveInput = parse_quote! {
             struct Config {
@@ -718,7 +798,7 @@ mod tests {
         };
 
         let expanded = expansion(&input);
-        assert!(expanded.contains("serde (with = \"humantime_serde::option\")"));
+        assert!(expanded.contains(":: humantime_serde :: deserialize (deserializer)"));
     }
 
     #[kithara::test(native, flash(false))]
