@@ -2242,9 +2242,10 @@ timeout_minutes = 180
 
 # `just test` runs neither the build tooling nor the harness the product tests
 # are written with, so a product change can break them from the other side and
-# no push notices. A push that touches their own sources runs them straight
-# away through `linux-support`; these three are the unattended sweep. GitLab
-# schedules none of them - its lane stage carries the product lanes only.
+# no branch push notices. These three run them whole on every `main` push and
+# every night; a branch push that touches their own sources runs them through
+# `linux-support`. GitLab declares them weekly behind its Linux platform gate,
+# which no schedule opens.
 [ext.ci.lanes.linux-tooling]
 cache_group = "linux"
 label = "Linux"
@@ -2326,6 +2327,29 @@ role = "deep"
 kinds = ["weekly"]
 kinds_github = ["nightly"]
 timeout_minutes = 180
+
+# A full run carries `kithara-net`'s own tests on the Linux host under its
+# `client-host` backend only here. A branch push that touches that backend
+# runs them through the `--touched` step of `linux-test-simulated-clock`, so
+# this lane has no `branch` kind; Android runs the backend with a real
+# transport.
+[ext.ci.lanes.linux-net-host]
+cache_group = "linux"
+label = "Linux"
+freshness = "checksum"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=net-host",
+  ], label = "Linux net-host lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+role = "gate"
+kinds_github = ["main"]
+timeout_minutes = 60
 
 [ext.ci.lanes.linux-integration-regressions]
 cache_group = "linux"
@@ -2490,7 +2514,9 @@ kinds_github = ["main", "branch"]
 timeout_minutes = 120
 
 # `just test` no longer carries the build tooling or the harness it is written
-# with; three lanes do. A change to their own sources must not wait a night.
+# with. A `main` push and the nightly run get them whole from `linux-tooling`,
+# `linux-harness` and `linux-fixtures`; a branch push runs here the ones it
+# touched, so a change to their own sources does not wait for `main`.
 [ext.ci.lanes.linux-support]
 cache_group = "linux"
 label = "Linux"
@@ -2510,7 +2536,7 @@ steps = [
   ], label = "support suites this push touches" },
 ]
 role = "gate"
-kinds_github = ["main", "branch"]
+kinds_github = ["branch"]
 timeout_minutes = 60
 
 [ext.ci.lanes.linux-usdt]

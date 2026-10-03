@@ -129,7 +129,9 @@ jobs:
   # disagree with what GitLab runs.
   #
   # A push to the default branch is a `main` pipeline and any other push is a
-  # `branch` one; a lane says which of the two schedules it.
+  # `branch` one. A branch push runs the lanes that name `branch` among their
+  # kinds. A `main` push asks for `all`, a full run: every lane that some full
+  # kind (main, nightly, weekly, release, platforms) schedules.
   lanes:
     name: Gate
     needs: gate

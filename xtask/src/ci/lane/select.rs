@@ -27,8 +27,9 @@ pub(crate) struct LanesArgs {
     pub(crate) role: String,
     #[arg(long, value_enum)]
     pub(crate) kind: PipelineKind,
-    /// Render only these lanes, whatever their kinds say. This is how a single
-    /// subtask is run on its own. A lane with no kinds belongs to a dedicated
+    /// Render only these named lanes, whatever their kinds say. This is how a
+    /// single subtask is run on its own. `all` renders a full run: every lane
+    /// some full kind schedules. A lane with no kinds belongs to a dedicated
     /// workflow and leaves this fan-out empty.
     #[arg(long, value_delimiter = ' ')]
     pub(crate) only: Vec<String>,
@@ -95,7 +96,9 @@ fn reachable(lane: &CiLaneConfig, fleet: Fleet) -> bool {
 }
 
 /// A lane with the asked-for role that this pipeline kind schedules, or that
-/// `--only` named directly. A lane with no membership belongs to a dedicated
+/// `--only` named directly. `--only all` stands for a full run and leaves out
+/// a lane only narrowing pipelines schedule: its share of a suite is one the
+/// full lanes run whole. A lane with no membership belongs to a dedicated
 /// workflow and never enters this fleet's fan-out, even by name.
 fn is_asked_for(lane: &CiLaneConfig, name: &str, kind: &str, args: &LanesArgs) -> bool {
     if lane.role != args.role || !reachable(lane, args.fleet) {
@@ -108,8 +111,18 @@ fn is_asked_for(lane: &CiLaneConfig, name: &str, kind: &str, args: &LanesArgs) -
     if args.only.is_empty() {
         membership.iter().any(|entry| entry == kind)
     } else {
-        args.only.iter().any(|only| only == "all" || only == name)
+        args.only
+            .iter()
+            .any(|only| only == name || (only == "all" && a_full_run_schedules(membership)))
     }
+}
+
+/// Whether some full pipeline kind schedules a lane with this membership.
+fn a_full_run_schedules(membership: &[String]) -> bool {
+    PipelineKind::value_variants()
+        .iter()
+        .filter(|kind| kind.is_full())
+        .any(|kind| membership.iter().any(|entry| entry == kind.name()))
 }
 
 pub(crate) fn render(
@@ -395,13 +408,13 @@ mod tests {
     }
 
     #[test]
-    fn all_selects_every_reachable_lane_the_role_owns() {
+    fn all_selects_every_reachable_lane_a_full_kind_schedules() {
         let mut lanes = catalog();
         lanes.insert("linux-extra".to_owned(), lane("gate", &["weekly"], &[]));
         lanes.insert("deep-extra".to_owned(), lane("deep", &["weekly"], &[]));
 
         let selection = render(&lanes, &args("gate", PipelineKind::Branch, &["all"]))
-            .expect("all gate lanes render regardless of kind");
+            .expect("every gate lane a full kind schedules renders");
         let names: Vec<&str> = selection
             .matrix
             .iter()
@@ -574,5 +587,100 @@ mod tests {
             gitlab.matrix.iter().any(|entry| entry.lane == "deep-rtsan"),
             "GitLab has the machine and still schedules the lane"
         );
+    }
+
+    /// `--only all` stands for a full run. A lane only narrowing pipelines
+    /// schedule gives a branch push its share of suites the full lanes run
+    /// whole, so a full run leaves it out, whatever kind asks; naming it still
+    /// runs it.
+    #[test]
+    fn all_leaves_out_a_lane_only_a_narrowing_pipeline_schedules() {
+        let mut lanes = catalog();
+        lanes.insert("linux-branch".to_owned(), lane("gate", &["branch"], &[]));
+
+        for kind in [PipelineKind::Main, PipelineKind::Branch] {
+            let full = render(&lanes, &args("gate", kind, &["all"])).expect("a full run renders");
+            let names: Vec<&str> = full
+                .matrix
+                .iter()
+                .map(|entry| entry.lane.as_str())
+                .collect();
+            assert_eq!(names, ["linux-lint"]);
+        }
+        let named = render(&lanes, &args("gate", PipelineKind::Main, &["linux-branch"]))
+            .expect("a lane renders by name");
+        let names: Vec<&str> = named
+            .matrix
+            .iter()
+            .map(|entry| entry.lane.as_str())
+            .collect();
+        assert_eq!(names, ["linux-branch"]);
+    }
+
+    /// A `main` push renders these four roles with `--only all` and runs each
+    /// `--lane` a GitHub lane names exactly once: a test lane two of its lanes
+    /// run is built twice for nothing, and one only a narrowing pipeline runs
+    /// is never judged whole before a release.
+    #[test]
+    fn a_main_push_runs_every_test_lane_a_github_lane_names_once() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let ext = KitharaExt::load(root).expect("the project config parses");
+        let mut carriers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for role in ["gate", "deep", "platforms", "quality"] {
+            let selection = render(&ext.ci.lanes, &args(role, PipelineKind::Main, &["all"]))
+                .expect("a main push renders every role");
+            let selected = selection
+                .matrix
+                .iter()
+                .map(|entry| entry.lane.as_str())
+                .chain(selection.dependent.iter().map(|entry| entry.lane.as_str()));
+            for (name, lane) in selected.filter_map(|name| ext.ci.lanes.get_key_value(name)) {
+                for step in &lane.steps {
+                    let step_args = step
+                        .args_by_kind
+                        .get(PipelineKind::Main.name())
+                        .unwrap_or(&step.args);
+                    for test_lane in step_args
+                        .iter()
+                        .filter_map(|arg| arg.strip_prefix("--lane="))
+                    {
+                        carriers.entry(test_lane).or_default().push(name.as_str());
+                    }
+                }
+            }
+        }
+        let repeated: Vec<String> = carriers
+            .iter()
+            .filter(|(_, lanes)| lanes.len() > 1)
+            .map(|(test_lane, lanes)| format!("{test_lane}: {}", lanes.join(", ")))
+            .collect();
+        assert!(
+            repeated.is_empty(),
+            "main runs a test lane twice: {repeated:?}"
+        );
+        let named: BTreeSet<&str> = ext
+            .ci
+            .lanes
+            .values()
+            .filter(|lane| {
+                reachable(lane, Fleet::Github) && !membership(lane, Fleet::Github).is_empty()
+            })
+            .flat_map(|lane| &lane.steps)
+            .flat_map(|step| step.args.iter().chain(step.args_by_kind.values().flatten()))
+            .filter_map(|arg| arg.strip_prefix("--lane="))
+            .collect();
+        let unrun: Vec<&str> = named
+            .into_iter()
+            .filter(|test_lane| !carriers.contains_key(test_lane))
+            .collect();
+        assert!(unrun.is_empty(), "main runs no lane that carries {unrun:?}");
+        for test_lane in ["tooling", "harness", "fixtures", "broadcast", "net-host"] {
+            assert!(
+                carriers.contains_key(test_lane),
+                "main runs no `--lane={test_lane}`"
+            );
+        }
     }
 }

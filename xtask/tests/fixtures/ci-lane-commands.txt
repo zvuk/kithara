@@ -1857,6 +1857,62 @@
   <require tools> cargo just
   just check
     RUSTUP_TOOLCHAIN=1.95.0
+# linux-net-host / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=net-host
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# linux-net-host / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=net-host
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# linux-net-host / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=net-host
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# linux-net-host / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=net-host
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# linux-net-host / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=net-host
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# linux-net-host / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=net-host
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# linux-net-host / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=net-host
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
+# linux-net-host / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=net-host
+    CARGO_BUILD_JOBS=2
+    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-perf-memory / branch
   <require os> linux
   <require tools> cargo just

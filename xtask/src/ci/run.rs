@@ -160,6 +160,16 @@ impl PipelineKind {
             Self::Release => "release",
         }
     }
+
+    /// Whether this kind is a full run rather than one narrowed to a change:
+    /// a branch, merge-request or quarantine pipeline is there for what one
+    /// change can affect.
+    pub(crate) const fn is_full(self) -> bool {
+        matches!(
+            self,
+            Self::Platforms | Self::Main | Self::Nightly | Self::Weekly | Self::Release
+        )
+    }
 }
 
 #[derive(Debug, Args)]

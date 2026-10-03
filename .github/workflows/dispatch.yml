@@ -29,7 +29,8 @@ on:
       only:
         description: >-
           Space-separated lane names to run instead of a role's whole
-          selection. This is how one subtask is started on its own.
+          selection. This is how one subtask is started on its own. `all`
+          asks for a full run: every lane that some full kind schedules.
         type: string
         default: ''
       mutants:

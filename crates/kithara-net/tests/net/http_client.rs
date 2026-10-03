@@ -1,4 +1,10 @@
-#![cfg(not(target_arch = "wasm32"))]
+//! Requests to a real local server. The `client-host` backend reaches a server
+//! only through the transport a host installs, which only the Android runner
+//! does for this binary.
+#![cfg(not(any(
+    target_arch = "wasm32",
+    all(feature = "client-host", not(target_os = "android"))
+)))]
 
 use std::{
     collections::HashMap,

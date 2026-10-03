@@ -32,10 +32,12 @@ on:
       only:
         description: >-
           Space-separated lane names to run instead of the role's whole
-          selection. This is how one subtask is run on its own. A name this
-          role owns that selects nothing fails the render rather than running
-          an empty matrix; a name another role owns leaves this one with
-          nothing to do, because the dispatcher hands the same list to each.
+          selection. This is how one subtask is run on its own. `all` asks for
+          a full run: every lane of the role that some full kind schedules. A
+          name this role owns that selects nothing fails the render rather than
+          running an empty matrix; a name another role owns leaves this one
+          with nothing to do, because the dispatcher hands the same list to
+          each.
         default: ''
         type: string
 
