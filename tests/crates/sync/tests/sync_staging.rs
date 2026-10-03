@@ -297,18 +297,23 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
     #[case] superseding: Start,
 ) {
     let case = STAGED_BESIDE_PLAYBACK;
-    let control = {
+    let (control_opened, control) = {
         let control = STAGED_BESIDE_PLAYBACK_CONTROL;
         let mut harness =
             ProductHarness::new_for_block(control, &sources, cue, Audible::Deck(0), BLOCK_FRAMES)
                 .await;
-        render_frames(&mut harness, control, LISTEN_FRAMES).await
+        let opened = window_opened(&harness);
+        (
+            opened,
+            render_frames(&mut harness, control, LISTEN_FRAMES).await,
+        )
     };
     let mut harness =
         ProductHarness::new_for_block(case, &sources, cue, Audible::Deck(0), BLOCK_FRAMES).await;
     harness.mark("staged cue, then a superseding cue");
     let superseded = prepare_cue(&mut harness, case, rate, cue).await;
     let successor = prepare_cue(&mut harness, case, rate, superseding).await;
+    let candidate_opened = window_opened(&harness);
     let candidate = render_frames(&mut harness, case, LISTEN_FRAMES).await;
     let receipts = render_until(&mut harness, case, successor, INSTALLED).await;
     assert!(
@@ -325,13 +330,35 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
         case.id()
     );
 
-    assert_eq!(candidate.len(), control.len());
+    assert_eq!(
+        candidate.len(),
+        control.len(),
+        "{}: the two renders must cover the same window",
+        case.id(),
+    );
     assert_eq!(
         divergence(&candidate, &control),
         None,
-        "{}: staging beside the sounding lane changed what it plays",
+        "{}: staging beside the sounding lane changed what it plays; \
+         the window opened on {candidate_opened}, the control on {control_opened}",
         case.id(),
     );
+}
+
+/// Where the sounding deck stood when a measured window opened.
+///
+/// Two harnesses compared sample by sample have to open their window at the
+/// same point in the deck's own timeline. A divergence that starts at frame 0
+/// while both levels agree reads as that timeline being shifted, and nothing
+/// in the PCM says which side moved - the deck's own position when the window
+/// opened does.
+fn window_opened(harness: &ProductHarness) -> String {
+    let playback = harness.decks[0].playback_view();
+    format!(
+        "deck 0 at {:.6}s, playing {}",
+        playback.position.unwrap_or(f64::NAN),
+        playback.playing
+    )
 }
 
 /// What separates two renders of the same lane, beyond where it starts.

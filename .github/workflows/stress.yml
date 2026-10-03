@@ -209,6 +209,18 @@ jobs:
         with:
           tool: just
 
+      # The reporting boundary is a GitHub-hosted runner on purpose, and that
+      # image carries no audio headers. The renderer reaches the workspace
+      # feature-unification crate through `kithara-derive`, which turns on
+      # firewheel's `cpal` feature, so building it links ALSA on Linux even
+      # though rendering a report never touches audio. Without this the job
+      # fails in `alsa-sys` before it reads a single result file.
+      - name: Install the audio headers the renderer links
+        if: always()
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes libasound2-dev
+
       - name: Verify and render the stress evidence
         if: always()
         working-directory: controller

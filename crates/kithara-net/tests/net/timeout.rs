@@ -14,13 +14,22 @@ fn mock_error() -> NetError {
     NetError::Network("mock error".to_string())
 }
 
+/// Every branch names the value it rejected: a bare `is_ok`/`matches!` reports
+/// only that the shape was wrong, and the error the decorator produced is the
+/// one fact that says why.
 fn assert_bytes_or_timeout(result: Result<Bytes, NetError>, should_succeed: bool) {
-    if should_succeed {
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
-    } else {
-        assert!(result.is_err());
-        assert!(matches!(result.err().unwrap(), NetError::Timeout));
+    match (should_succeed, result) {
+        (true, Ok(bytes)) => assert_eq!(bytes, Bytes::from_static(b"success")),
+        (true, Err(error)) => {
+            panic!("the guarded call was expected to succeed, it failed: {error}")
+        }
+        (false, Err(NetError::Timeout)) => {}
+        (false, Err(error)) => {
+            panic!("the deadline was expected to fire, the call failed on: {error}")
+        }
+        (false, Ok(bytes)) => {
+            panic!("the deadline was expected to fire, the call returned {bytes:?}")
+        }
     }
 }
 
@@ -103,24 +112,23 @@ async fn test_timeout_scenarios(
     assert_bytes_or_timeout(result, should_succeed);
 }
 
+/// The delay is below the deadline, so the inner failure is what has to travel:
+/// the decorator must not restate it as its own timeout.
 #[kithara::test(tokio)]
 async fn test_timeout_with_error() {
-    let delay = Duration::from_millis(100);
-    let timeout = Duration::from_millis(200);
-    let mock_net = DelayedNet::new(make_timeout_mock(false), delay);
-    let timeout_net = mock_net.with_timeout(timeout);
+    let mock_net = DelayedNet::new(make_timeout_mock(false), Duration::from_millis(100));
+    let timeout_net = mock_net.with_timeout(Duration::from_millis(200));
 
     let url = test_url();
-    let result = timeout_net.get_bytes(url, None).await;
+    let error = timeout_net
+        .get_bytes(url, None)
+        .await
+        .expect_err("the mock answers every call with an error");
 
-    assert!(result.is_err());
-    let error = result.err().unwrap();
-
-    if delay < timeout {
-        assert!(matches!(error, NetError::Network(_)));
-    } else {
-        assert!(matches!(error, NetError::Timeout));
-    }
+    assert!(
+        matches!(error, NetError::Network(_)),
+        "the decorator replaced the failure the call produced: {error}"
+    );
 }
 
 #[kithara::test(tokio)]
@@ -139,11 +147,17 @@ async fn test_timeout_preserves_error(#[case] delay: Duration) {
     let timeout_net = mock_net.with_timeout(Duration::from_secs(1));
 
     let url = test_url();
-    let result = timeout_net.get_bytes(url, None).await;
+    let error = timeout_net
+        .get_bytes(url, None)
+        .await
+        .expect_err("the mock answers every call with an error");
 
-    assert!(result.is_err());
-    let error = result.err().unwrap();
-
-    assert!(matches!(error, NetError::Network(_)));
-    assert!(error.to_string().contains("mock error"));
+    assert!(
+        matches!(error, NetError::Network(_)),
+        "the decorator replaced the failure the call produced: {error}"
+    );
+    assert!(
+        error.to_string().contains("mock error"),
+        "the message the mock wrote did not survive the decorator: {error}"
+    );
 }

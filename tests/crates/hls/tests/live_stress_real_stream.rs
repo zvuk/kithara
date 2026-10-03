@@ -185,7 +185,13 @@ fn next_chunk(audio: &mut LiveAudio, stage: &str) -> Option<AudioChunk> {
         if let Poll::Ready(chunk) = poll_chunk(audio, stage) {
             return chunk;
         }
-        thread::sleep(Duration::from_millis(50));
+        // Yields to the fetch and decode workers instead of sleeping on
+        // them. Under flash a sleep here would carry the virtual clock
+        // forward by its own interval, and the clock is what the ABR
+        // estimator divides a segment's bytes by: enough of these waits
+        // inside one fetch and the ladder reads as a slow link, so the
+        // warmup below never leaves the bottom variant.
+        thread::paced_backoff(Duration::from_millis(50));
     }
 }
 

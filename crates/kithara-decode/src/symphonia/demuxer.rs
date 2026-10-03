@@ -573,6 +573,28 @@ fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
             tracing::debug!(error = ?io_err, "demuxer seek interrupted");
             DecodeError::Interrupted
         }
+        // Symphonia already states these in a static string, so the one it
+        // wrote travels on instead of being replaced by a generic one.
+        SymphoniaError::DecodeError(detail)
+        | SymphoniaError::Unsupported(detail)
+        | SymphoniaError::LimitError(detail) => DecodeError::SeekFailed { detail },
+        SymphoniaError::SeekError(SeekErrorKind::ForwardOnly) => DecodeError::SeekFailed {
+            detail: "a forward-only source refused a backward seek",
+        },
+        SymphoniaError::SeekError(SeekErrorKind::Unseekable) => DecodeError::SeekFailed {
+            detail: "the source cannot seek",
+        },
+        SymphoniaError::SeekError(SeekErrorKind::InvalidTrack) => DecodeError::SeekFailed {
+            detail: "the seek named a track the source does not carry",
+        },
+        SymphoniaError::ResetRequired => DecodeError::SeekFailed {
+            detail: "the seek left the reader needing a reset",
+        },
+        SymphoniaError::IoError(_) => DecodeError::SeekFailed {
+            detail: "the seek failed on an i/o error",
+        },
+        // `Error` is non-exhaustive, so a symphonia release can add a shape
+        // this match has never seen.
         _ => DecodeError::SeekFailed {
             detail: "symphonia seek failed",
         },

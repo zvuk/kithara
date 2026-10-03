@@ -496,7 +496,11 @@ mod tests {
     use std::{
         collections::HashMap,
         io::{Read, Write},
-        net::{TcpListener, TcpStream},
+        net::{SocketAddr, TcpListener, TcpStream},
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
         thread::{self, JoinHandle},
     };
 
@@ -558,32 +562,15 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn remote_file_resumes_a_stalled_transfer_from_the_byte_it_reached() {
         let digest = "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721";
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
-        let url = Url::parse(&format!(
-            "http://{}/track",
-            listener.local_addr().expect("server address")
-        ))
-        .expect("fixture URL");
-        let server = thread::spawn(move || {
-            let (mut stalled, _) = listener.accept().expect("first request");
-            request_head(&mut stalled);
-            stalled
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc")
-                .expect("first half");
-            let (mut resumed, _) = listener.accept().expect("resumed request");
-            let head = request_head(&mut resumed);
-            resumed
-                .write_all(
-                    b"HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\n\
-                      Content-Range: bytes 3-5/6\r\n\r\ndef",
-                )
-                .expect("second half");
-            drop(stalled);
-            head
-        });
+        let server = StallingServer::new(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc".as_slice(),
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\n\
+              Content-Range: bytes 3-5/6\r\n\r\ndef"
+                .as_slice(),
+        );
 
         let bytes = fetch_verified(
-            &url,
+            &server.url,
             digest,
             6,
             Duration::from_secs(10),
@@ -592,8 +579,13 @@ mod tests {
         .expect("resumed bytes");
 
         assert_eq!(bytes, b"abcdef");
-        let head = server.join().expect("server thread").to_ascii_lowercase();
-        assert!(head.contains("range: bytes=3-"), "{head}");
+        let asked_again = server.finish();
+        assert!(
+            asked_again
+                .first()
+                .is_some_and(|head| head.contains("range: bytes=3-")),
+            "{asked_again:?}"
+        );
     }
 
     /// An edge can also stay silent before it answers at all: the download
@@ -601,26 +593,13 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn remote_file_asks_again_when_a_request_goes_unanswered() {
         let digest = "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721";
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
-        let url = Url::parse(&format!(
-            "http://{}/track",
-            listener.local_addr().expect("server address")
-        ))
-        .expect("fixture URL");
-        let server = thread::spawn(move || {
-            let (mut silent, _) = listener.accept().expect("first request");
-            request_head(&mut silent);
-            let (mut answered, _) = listener.accept().expect("second request");
-            let head = request_head(&mut answered);
-            answered
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabcdef")
-                .expect("whole body");
-            drop(silent);
-            head
-        });
+        let server = StallingServer::new(
+            b"".as_slice(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabcdef".as_slice(),
+        );
 
         let bytes = fetch_verified(
-            &url,
+            &server.url,
             digest,
             6,
             Duration::from_secs(10),
@@ -629,18 +608,115 @@ mod tests {
         .expect("answered bytes");
 
         assert_eq!(bytes, b"abcdef");
-        let head = server.join().expect("server thread").to_ascii_lowercase();
-        assert!(!head.contains("range:"), "{head}");
+        let asked_again = server.finish();
+        assert!(
+            asked_again
+                .first()
+                .is_some_and(|head| !head.contains("range:")),
+            "{asked_again:?}"
+        );
     }
 
-    fn request_head(stream: &mut TcpStream) -> String {
+    /// A loopback edge that answers the first request with `first` and every
+    /// later one with `rest`, and remembers what those later ones asked for.
+    ///
+    /// An empty `first` leaves the request unanswered; a `first` that promises
+    /// more body than it carries stalls the transfer part-way. Either way the
+    /// download decides for itself how often to ask again, so the stub serves
+    /// whatever arrives rather than a fixed number of connections: one that
+    /// expected a connection the download never opened would wait with no end,
+    /// and the test behind it would hang rather than fail.
+    struct StallingServer {
+        handle: Option<JoinHandle<Vec<String>>>,
+        stop: Arc<AtomicBool>,
+        address: SocketAddr,
+        url: Url,
+    }
+
+    impl StallingServer {
+        fn new(first: &'static [u8], rest: &'static [u8]) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+            let address = listener.local_addr().expect("server address");
+            let url = Url::parse(&format!("http://{address}/track")).expect("fixture URL");
+            let stop = Arc::new(AtomicBool::new(false));
+            let signal = Arc::clone(&stop);
+            let handle = thread::spawn(move || {
+                let mut asked_again = Vec::new();
+                // Served connections stay open: closing one reads as an edge
+                // that hung up, and a hang-up is not the silence under test.
+                let mut open = Vec::new();
+                let mut served = 0usize;
+                while let Ok((mut stream, _)) = listener.accept() {
+                    if signal.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let Some(head) = request_head(&mut stream) else {
+                        // A request the download opened and then gave up on.
+                        continue;
+                    };
+                    let asks_again = served > 0;
+                    let reply = if asks_again { rest } else { first };
+                    served = served.saturating_add(1);
+                    // A download that has already moved on leaves nothing to
+                    // write to; it asks again, and that request is the one the
+                    // transcript needs.
+                    if stream.write_all(reply).is_ok() && asks_again {
+                        asked_again.push(head.to_ascii_lowercase());
+                    }
+                    open.push(stream);
+                }
+                asked_again
+            });
+            Self {
+                handle: Some(handle),
+                stop,
+                address,
+                url,
+            }
+        }
+
+        /// Stops the edge and returns the head of every request the download
+        /// sent after the first.
+        fn finish(mut self) -> Vec<String> {
+            self.close()
+        }
+
+        fn close(&mut self) -> Vec<String> {
+            let Some(handle) = self.handle.take() else {
+                return Vec::new();
+            };
+            self.stop.store(true, Ordering::Release);
+            // Wakes the blocking accept; this connection carries no request.
+            drop(TcpStream::connect(self.address));
+            handle.join().expect("server thread")
+        }
+    }
+
+    impl Drop for StallingServer {
+        fn drop(&mut self) {
+            let _ = self.close();
+        }
+    }
+
+    /// Reads one request head, or `None` when the connection carries none: a
+    /// download can abandon a request it has given up on, and the knock that
+    /// stops the edge carries nothing at all.
+    fn request_head(stream: &mut TcpStream) -> Option<String> {
+        // Bounds the wait on one head. A loopback client sends a head in one
+        // write, so this only ends a wait on a connection the download opened
+        // and then abandoned, which would otherwise never end.
+        const HEAD_WAIT: Duration = Duration::from_secs(10);
+
+        stream
+            .set_read_timeout(Some(HEAD_WAIT))
+            .expect("bound the wait on a request head");
         let mut head = Vec::new();
         let mut byte = [0; 1];
         while !head.ends_with(b"\r\n\r\n") {
-            stream.read_exact(&mut byte).expect("request head");
+            stream.read_exact(&mut byte).ok()?;
             head.push(byte[0]);
         }
-        String::from_utf8(head).expect("ASCII request head")
+        String::from_utf8(head).ok()
     }
 
     struct TestServer {
