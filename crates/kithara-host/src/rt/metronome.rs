@@ -66,77 +66,78 @@ mod consts {
 /// a shallower duck, or none, lets a loud mix plus the click pass it.
 ///
 /// The builder takes any values; the Host checks them when it starts and
-/// refuses a config out of the bounds each field names.
+/// refuses a config out of the bounds each field names with
+/// [`PlayError::InvalidParameter`], naming `metronome_level`,
+/// `metronome_duck`, `metronome_decay`, `metronome_hold` or
+/// `metronome_release`.
 #[derive(Clone, Copy, Debug, PartialEq, Config)]
-#[config(default, update, builder(state_mod(vis = "pub")), patch(validate = Self::validated, error = PlayError), fields(value, get(copy)))]
+#[config(
+    default,
+    builder(state_mod(vis = "pub")),
+    check(error = PlayError),
+    fields(value, get(copy))
+)]
 #[non_exhaustive]
 pub struct MetronomeConfig {
     /// Peak of a downbeat click as a share of the limiter ceiling, above
     /// zero and at most one; a beat click peaks at five eighths of it.
-    #[config(update, builder(default = consts::DEFAULT_LEVEL))]
+    #[config(live, check = Self::level_bounds, builder(default = consts::DEFAULT_LEVEL))]
     level: f32,
     /// Share of the mix the duck takes away while the click sounds, from
     /// zero to one: one mutes the mix, zero leaves it whole.
-    #[config(builder(default = consts::DEFAULT_DUCK))]
+    #[config(check = Self::duck_bounds, builder(default = consts::DEFAULT_DUCK))]
     duck: f32,
     /// Fall of a click from its peak back to silence, 8 to 50 ms.
-    #[config(builder(default = consts::DEFAULT_DECAY))]
+    #[config(check = Self::decay_bounds, builder(default = consts::DEFAULT_DECAY))]
     decay: Duration,
     /// How long the duck keeps the mix down after the click has fallen, at
     /// most 1 s.
-    #[config(builder(default = consts::DEFAULT_HOLD))]
+    #[config(check = Self::hold_bounds, builder(default = consts::DEFAULT_HOLD))]
     hold: Duration,
     /// How long the duck takes to return the mix after its hold, 8 ms to 1 s.
-    #[config(builder(default = consts::DEFAULT_RELEASE))]
+    #[config(check = Self::release_bounds, builder(default = consts::DEFAULT_RELEASE))]
     release: Duration,
 }
 
 impl MetronomeConfig {
-    /// This config if every field sits within its bounds: the one check a
-    /// Host start and a runtime update both pass through.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PlayError::InvalidParameter`] naming `metronome_level`,
-    /// `metronome_duck`, `metronome_decay`, `metronome_hold` or
-    /// `metronome_release` for the first field out of its bounds.
-    pub(crate) fn validated(self) -> Result<Self, PlayError> {
-        let check = |valid: bool, name: &str, value: f32| {
-            if valid {
-                Ok(())
-            } else {
-                Err(PlayError::InvalidParameter {
-                    name: name.to_owned(),
-                    value,
-                })
-            }
-        };
-        check(
-            self.level > 0.0 && self.level <= 1.0,
-            "metronome_level",
-            self.level,
-        )?;
-        check(
-            (0.0..=1.0).contains(&self.duck),
-            "metronome_duck",
-            self.duck,
-        )?;
-        check(
-            (consts::MIN_DECAY..=consts::MAX_DECAY).contains(&self.decay),
-            "metronome_decay",
-            self.decay.as_secs_f32(),
-        )?;
-        check(
-            self.hold <= consts::MAX_HOLD,
+    fn level_bounds(level: f32) -> Result<f32, PlayError> {
+        bounded(level > 0.0 && level <= 1.0, "metronome_level", level, level)
+    }
+
+    fn duck_bounds(duck: f32) -> Result<f32, PlayError> {
+        bounded((0.0..=1.0).contains(&duck), "metronome_duck", duck, duck)
+    }
+
+    fn decay_bounds(decay: Duration) -> Result<Duration, PlayError> {
+        let valid = (consts::MIN_DECAY..=consts::MAX_DECAY).contains(&decay);
+        bounded(valid, "metronome_decay", decay.as_secs_f32(), decay)
+    }
+
+    fn hold_bounds(hold: Duration) -> Result<Duration, PlayError> {
+        bounded(
+            hold <= consts::MAX_HOLD,
             "metronome_hold",
-            self.hold.as_secs_f32(),
-        )?;
-        check(
-            (consts::MIN_RELEASE..=consts::MAX_RELEASE).contains(&self.release),
-            "metronome_release",
-            self.release.as_secs_f32(),
-        )?;
-        Ok(self)
+            hold.as_secs_f32(),
+            hold,
+        )
+    }
+
+    fn release_bounds(release: Duration) -> Result<Duration, PlayError> {
+        let valid = (consts::MIN_RELEASE..=consts::MAX_RELEASE).contains(&release);
+        bounded(valid, "metronome_release", release.as_secs_f32(), release)
+    }
+}
+
+/// `field` if it is `valid`, or the refusal naming the parameter and its
+/// value.
+fn bounded<T>(valid: bool, name: &str, value: f32, field: T) -> Result<T, PlayError> {
+    if valid {
+        Ok(field)
+    } else {
+        Err(PlayError::InvalidParameter {
+            name: name.to_owned(),
+            value,
+        })
     }
 }
 
@@ -504,6 +505,7 @@ impl AudioNodeProcessor for MetronomeProcessor {
 mod tests {
     use core::f32::consts::PI;
 
+    use kithara_config::{CheckedConfig, LiveConfig};
     use kithara_effects::{LimiterConfig, mock::reconstructed_peak};
 
     use super::*;
@@ -847,15 +849,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_metronome_level_update_commits_only_a_level_in_its_bounds() {
+    fn a_metronome_level_change_passes_only_a_level_in_its_bounds() {
         let base = config(0.5, 0.5);
-        let set = |level| MetronomeConfigUpdate {
-            level: MetronomeConfigLevelUpdate::Set { value: level },
-            ..MetronomeConfigUpdate::default()
-        };
         for level in [f32::NAN, 0.0, 1.01] {
-            let mut updated = base;
-            let refused = updated.apply_update(set(level));
+            let refused = MetronomeConfig::check(MetronomeConfigChange::Level(level));
             assert!(
                 matches!(
                     &refused,
@@ -863,13 +860,12 @@ mod tests {
                 ),
                 "a level of {level} is refused: {refused:?}"
             );
-            assert_eq!(updated, base, "a refused level keeps the last config");
         }
         for level in [0.25, 0.5, 1.0] {
             let mut updated = base;
-            updated
-                .apply_update(set(level))
+            let change = MetronomeConfig::check(MetronomeConfigChange::Level(level))
                 .expect("a level in its bounds");
+            updated.apply_change(change);
             assert_eq!(
                 updated,
                 MetronomeConfig { level, ..base },

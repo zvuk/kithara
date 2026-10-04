@@ -5,8 +5,8 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
     Attribute, Data, DeriveInput, Error, Field, Fields, Ident, Meta, Path, PathArguments, Result,
-    Token, Type, Visibility, parenthesized, parse_macro_input, parse_quote, punctuated::Punctuated,
-    spanned::Spanned,
+    Token, Type, Visibility, parenthesized, parse::ParseStream, parse_macro_input, parse_quote,
+    punctuated::Punctuated, spanned::Spanned,
 };
 
 use super::attribute;
@@ -468,8 +468,9 @@ fn refusal(input: &DeriveInput) -> Result<Option<Refusal>> {
     refusal_from_attributes(&input.attrs, input.ident.span())
 }
 
-/// The check `#[patch(validate = ..., error = ...)]` declares for document
-/// merges, runtime updates, and builders that opt into `validate_builder`.
+/// The check document merges and builders that opt into `validate_builder`
+/// pass: the field checks of `check(error = ...)`, or the whole-struct check
+/// `patch(validate = ..., error = ...)` declares.
 #[cfg(feature = "config")]
 pub(crate) fn validation(
     attributes: &[Attribute],
@@ -541,10 +542,45 @@ fn patch_attributes(attributes: &[Attribute], defaults: bool) -> Result<Vec<Attr
     Ok(native)
 }
 
+/// The error type `#[config(check(error = ...))]` declares for field checks.
+pub(crate) fn declared_check(attributes: &[Attribute]) -> Result<Option<Type>> {
+    let mut declared = None;
+    for attribute in attributes
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("config"))
+    {
+        let Meta::List(list) = &attribute.meta else {
+            continue;
+        };
+        for option in list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)? {
+            if !option.path().is_ident("check") {
+                continue;
+            }
+            let Meta::List(group) = &option else {
+                return Err(Error::new_spanned(option, "expected check(error = <type>)"));
+            };
+            declared = Some(group.parse_args_with(|input: ParseStream<'_>| {
+                let key: Ident = input.parse()?;
+                if key != "error" {
+                    return Err(Error::new(key.span(), "expected check(error = <type>)"));
+                }
+                input.parse::<Token![=]>()?;
+                let error: Type = input.parse()?;
+                if !input.is_empty() {
+                    return Err(input.error("expected check(error = <type>)"));
+                }
+                Ok(error)
+            })?);
+        }
+    }
+    Ok(declared)
+}
+
 fn refusal_from_attributes(
     attributes: &[Attribute],
     span: proc_macro2::Span,
 ) -> Result<Option<Refusal>> {
+    let declared = declared_check(attributes)?;
     let mut fallible = false;
     let mut with: Option<Path> = None;
     let mut error: Option<Type> = None;
@@ -566,6 +602,20 @@ fn refusal_from_attributes(
         })?;
     }
 
+    if let Some(declared) = declared {
+        if with.is_some() || error.is_some() {
+            return Err(Error::new(
+                span,
+                "check(error = ...) and patch(validate = ..., error = ...) exclude each other",
+            ));
+        }
+        return Ok(Some(Refusal {
+            validate: Some(Check {
+                with: parse_quote!(::kithara_config::CheckedConfig::validated),
+                error: declared,
+            }),
+        }));
+    }
     match (with, error) {
         (Some(with), Some(error)) => Ok(Some(Refusal {
             validate: Some(Check { with, error }),
@@ -1085,11 +1135,11 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_configuration_keeps_its_patch_options_in_its_config_groups() {
         let input: DeriveInput = parse_quote! {
-            #[config(default, update, patch(validate = Self::validated, error = TempoError))]
+            #[config(default, patch(validate = Self::validated, error = TempoError))]
             pub struct Tempo {
                 #[config(value, patch(skip))]
                 backend: Backend,
-                #[config(value, update, builder(default = 2))]
+                #[config(value, builder(default = 2))]
                 low: f32,
             }
         };
@@ -1105,6 +1155,27 @@ mod tests {
             "a field's config group skips it like a native attribute"
         );
         assert!(expanded.contains("staged . low = value"));
+    }
+
+    #[kithara::test(native)]
+    fn a_configuration_checked_field_by_field_gates_the_merge_with_its_field_checks() {
+        let input: DeriveInput = parse_quote! {
+            #[config(default, check(error = TempoError))]
+            pub struct Tempo {
+                #[config(value, check = Self::low_bounds)]
+                low: f32,
+            }
+        };
+
+        let expanded = expansion(&input);
+
+        assert!(
+            expanded.contains(
+                "* self = :: kithara_config :: CheckedConfig :: validated (staged) . map_err (TempoPatchError :: Invalid) ?"
+            ),
+            "{expanded}"
+        );
+        assert!(expanded.contains("Invalid (TempoError)"));
     }
 
     #[kithara::test(native, flash(false))]

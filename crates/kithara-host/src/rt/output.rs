@@ -1,8 +1,9 @@
+use kithara_config::{CheckedConfig, LiveConfig};
 use kithara_effects::LimiterConfig;
 
 use super::{
     LimiterNode, MetronomeNode,
-    metronome::{MetronomeConfig, MetronomeConfigLevelUpdate, MetronomeConfigUpdate},
+    metronome::{MetronomeConfig, MetronomeConfigChange},
 };
 use crate::PlayError;
 
@@ -41,9 +42,8 @@ impl SessionOutput {
 
     /// Keeps `level` for every metronome node built from here on.
     pub(crate) fn set_metronome_level(&mut self, level: f32) -> Result<(), PlayError> {
-        self.metronome.apply_update(MetronomeConfigUpdate {
-            level: MetronomeConfigLevelUpdate::Set { value: level },
-            ..MetronomeConfigUpdate::default()
-        })
+        let change = MetronomeConfig::check(MetronomeConfigChange::Level(level))?;
+        self.metronome.apply_change(change);
+        Ok(())
     }
 }

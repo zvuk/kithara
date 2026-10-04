@@ -1,23 +1,23 @@
 use std::io::Error;
 
-use kithara_config::{Config, ConfigOwner, ConfigOwnerMut, Patch, UpdatableConfig};
+use kithara_config::{Config, ConfigOwner, Patch};
 use kithara_test_utils::kithara;
 
 #[derive(Clone, Patch, Config)]
-#[config(default, debug, update)]
+#[config(default, debug)]
 struct Levels {
-    #[config(value, update, builder(default = 2), get(copy))]
+    #[config(value, builder(default = 2), get(copy))]
     level: u32,
-    #[config(value, update, builder(required, default = Some(4)))]
+    #[config(value, builder(required, default = Some(4)))]
     limit: Option<u32>,
 }
 
 #[derive(Clone, Patch, Config)]
-#[config(default, update, owner_access, validate_builder, patch(validate = Self::validated, error = Error))]
+#[config(validate_builder, patch(validate = Self::validated, error = Error))]
 struct Bounded {
-    #[config(value, update, builder(default = 2), get(copy))]
+    #[config(value, builder(default = 2), get(copy))]
     level: u32,
-    #[config(value, update, builder(required, default = Some(4)))]
+    #[config(value, builder(required, default = Some(4)))]
     limit: Option<u32>,
 }
 
@@ -31,61 +31,13 @@ impl Bounded {
 }
 
 #[kithara::test]
-fn a_judged_update_commits_whole_or_not_at_all() {
-    let mut bounded = Bounded::default();
-    fn commit<C: UpdatableConfig>(config: &mut C, update: C::Update) -> Result<(), C::Error> {
-        UpdatableConfig::apply_update(config, update)
-    }
-    assert!(
-        commit(
-            &mut bounded,
-            BoundedUpdate {
-                level: BoundedLevelUpdate::Set { value: 7 },
-                ..BoundedUpdate::default()
-            },
-        )
-        .is_err()
-    );
-    assert_eq!(bounded.level(), 2);
-    assert_eq!(bounded.values().limit, Some(4));
-
-    bounded
-        .apply_update(BoundedUpdate {
-            level: BoundedLevelUpdate::Set { value: 7 },
-            limit: BoundedLimitUpdate::Clear,
-        })
-        .expect("a cleared limit admits any level");
-    assert_eq!(bounded.level(), 7);
-    assert_eq!(bounded.values().limit, None);
-}
-
-#[kithara::test]
-fn a_judged_builder_uses_the_same_check_as_updates() {
+fn a_judged_builder_refuses_what_its_check_refuses() {
     assert!(Bounded::builder().level(5).build().is_err());
-    let mut bounded = Bounded::builder()
+    let bounded = Bounded::builder()
         .level(4)
         .build()
         .expect("boundary value is valid");
-    bounded
-        .apply_update(BoundedUpdate {
-            level: BoundedLevelUpdate::Reset,
-            ..BoundedUpdate::default()
-        })
-        .expect("declared default is valid");
-    assert_eq!(bounded.level(), 2);
-}
-
-#[derive(ConfigOwner)]
-#[config_owner(config)]
-#[config_owner_mut]
-struct Owner {
-    config: Bounded,
-}
-
-#[derive(ConfigOwner)]
-#[config_owner(Bounded, inner.config)]
-struct NestedOwner {
-    inner: std::sync::Arc<Owner>,
+    assert_eq!(bounded.level(), 4);
 }
 
 #[derive(Config)]
@@ -177,37 +129,6 @@ fn nested_field_defaults_preserve_value_overrides_and_borrowed_getters() {
 }
 
 #[kithara::test]
-fn derived_owners_borrow_the_same_updated_config_through_nested_fields() {
-    let mut owner = Owner {
-        config: Bounded::default(),
-    };
-    owner
-        .apply_config_update(BoundedUpdate {
-            level: BoundedLevelUpdate::Set { value: 3 },
-            ..BoundedUpdate::default()
-        })
-        .expect("level stays within the limit");
-    assert!(std::ptr::eq(owner.config(), &owner.config));
-    assert_eq!(owner.level(), 3);
-    assert!(
-        owner
-            .apply_config_update(BoundedUpdate {
-                level: BoundedLevelUpdate::Set { value: 7 },
-                ..BoundedUpdate::default()
-            })
-            .is_err()
-    );
-    assert_eq!(owner.level(), 3);
-
-    let nested = NestedOwner {
-        inner: std::sync::Arc::new(owner),
-    };
-    assert!(std::ptr::eq(nested.config(), &nested.inner.config));
-    assert_eq!(nested.level(), 3);
-    assert_eq!(nested.config().values().level, 3);
-}
-
-#[kithara::test]
 fn generic_owner_access_borrows_the_original_resource() {
     let owner = GenericOwner {
         inner: Box::new(GenericInner {
@@ -252,59 +173,35 @@ struct WrappedConfig {
 #[config(
     default,
     debug,
-    update,
-    fields(
-        value,
-        get(copy),
-        builder(default = 2),
-        update,
-        patch(skip),
-        debug(skip)
-    )
+    fields(value, get(copy), builder(default = 2), patch(skip), debug(skip))
 )]
 struct SharedOptions {
     first: u32,
     #[config(builder(default = 3), patch(attribute(serde(rename = "level"))))]
     second: u32,
-    #[config(
-        skip = "owned runtime resource",
-        get(skip),
-        builder(default),
-        update(false)
-    )]
+    #[config(skip = "owned runtime resource", get(skip), builder(default))]
     resource: String,
 }
 
 #[kithara::test]
-fn shared_field_options_keep_builders_updates_and_patch_exclusions_independent() {
+fn shared_field_options_keep_builders_and_patch_exclusions_independent() {
     let mut config = SharedOptions::default();
     assert_eq!(config.first(), 2);
     assert_eq!(config.second(), 3);
     assert_eq!(format!("{config:?}"), "SharedOptions { .. }");
     config.apply(SharedOptionsPatch { second: Some(9) });
     assert_eq!(config.second(), 9);
-    config.apply_update(SharedOptionsUpdate {
-        first: SharedOptionsFirstUpdate::Set { value: 8 },
-        ..SharedOptionsUpdate::default()
-    });
-    assert_eq!(config.first(), 8);
-    config.apply_update(SharedOptionsUpdate {
-        first: SharedOptionsFirstUpdate::Reset,
-        second: SharedOptionsSecondUpdate::Reset,
-    });
     assert_eq!(config.first(), 2);
-    assert_eq!(config.second(), 3);
     assert!(config.resource.is_empty());
 }
 
 #[kithara::test]
 fn retained_values_are_owned_and_resources_stay_private() {
-    let mut levels = Levels::default();
-    assert_eq!(levels.level(), 2);
-    levels.apply_update(LevelsUpdate {
-        level: LevelsLevelUpdate::Set { value: 7 },
-        limit: LevelsLimitUpdate::Clear,
-    });
+    assert_eq!(Levels::default().level(), 2);
+    let levels = Levels {
+        level: 7,
+        limit: None,
+    };
     let session = Session::builder()
         .resource("injected")
         .levels(levels)

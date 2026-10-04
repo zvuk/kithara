@@ -1,7 +1,8 @@
 macro_rules! config_derives {
     () => {
-        /// `#[derive(Config)]` — the builder, accessors, retained snapshot and runtime
-        /// updates of a configuration struct, all declared through `#[config(...)]`.
+        /// `#[derive(Config)]` — the builder, accessors, retained snapshot, field checks
+        /// and live field changes of a configuration struct, all declared through
+        /// `#[config(...)]`.
         #[proc_macro_derive(Config, attributes(config))]
         pub fn config(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             config::retained::expand(input.into())

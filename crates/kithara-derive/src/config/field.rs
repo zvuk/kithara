@@ -20,6 +20,14 @@ pub(super) struct Wrap {
     pub(super) with: Path,
 }
 
+/// How a live field's change is executed: on the shared path of its owner's
+/// executor, or by a method of the owner named after the field.
+#[derive(Clone, Copy)]
+pub(super) enum Live {
+    Shared,
+    Owner,
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum Accessor {
     Ref,
@@ -31,7 +39,9 @@ pub(super) enum Accessor {
 #[derive(Clone, Default)]
 pub(super) struct Declaration {
     pub(super) role: Option<Role>,
-    pub(super) update: Option<bool>,
+    pub(super) live: Option<Live>,
+    /// `fn(T) -> Result<T, E>` the field's value passes.
+    pub(super) check: Option<Path>,
     pub(super) sdk: bool,
     pub(super) builder: Option<TokenStream>,
     pub(super) accessor: Option<Accessor>,
@@ -60,7 +70,8 @@ impl Declaration {
 
     pub(super) fn inherit(mut self, defaults: &Self) -> Self {
         self.role = self.role.or_else(|| defaults.role.clone());
-        self.update = self.update.or(defaults.update);
+        self.live = self.live.or(defaults.live);
+        self.check = self.check.or_else(|| defaults.check.clone());
         self.sdk |= defaults.sdk;
         let construction_override = self.builder.is_some() || self.wrap.is_some();
         if !construction_override {
@@ -120,13 +131,22 @@ impl Declaration {
                     return Err(meta.error("duplicate config field wrap"));
                 }
             }
-            "update" => {
-                let enabled = if meta.input.peek(syn::token::Paren) {
-                    syn::parse2::<syn::LitBool>(group(meta)?)?.value
+            "live" => {
+                let live = if meta.input.peek(syn::token::Paren) {
+                    let mode: Path = syn::parse2(group(meta)?)?;
+                    if !mode.is_ident("owner") {
+                        return Err(meta.error("expected live or live(owner)"));
+                    }
+                    Live::Owner
                 } else {
-                    true
+                    Live::Shared
                 };
-                if self.update.replace(enabled).is_some() {
+                if self.live.replace(live).is_some() {
+                    return Err(meta.error("duplicate config field option"));
+                }
+            }
+            "check" => {
+                if self.check.replace(meta.value()?.parse()?).is_some() {
                     return Err(meta.error("duplicate config field option"));
                 }
             }
@@ -201,7 +221,7 @@ fn parse_role(meta: &ParseNestedMeta<'_>) -> Result<Role> {
         }
         Ok(Role::Skip)
     } else {
-        Err(meta.error("expected value, value(Type, expression), nested, skip = reason, or update"))
+        Err(meta.error("expected value, value(Type, expression), nested, or skip = reason"))
     }
 }
 

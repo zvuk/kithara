@@ -92,6 +92,8 @@ assert_eq!(sender.receipts().next().map(|receipt| receipt.seq()), Some(seq));
 
 <tr><td><code>Receipt</code></td><td>What became of a batch, carrying the batch back to the sender</td></tr>
 
+<tr><td><code>Live</code></td><td>A live configuration as its executor confirmed it, with copies of the changes in flight</td></tr>
+
 </table>
 
 ## Integration
@@ -100,5 +102,15 @@ The real-time Host, the lane dispatcher, and each lane own one `Inbox` each
 and speak their own `Protocol`; the owner that computes commands holds the
 matching `Sender`. The crate carries no audio domain: frames, targets, and
 commands are the executor's types.
+
+### Live configuration
+
+`Live<C, P>` keeps a `LiveConfig` on the sender's side of an executor. `send`
+checks a field change and hands it over as one batch with an empty basis and
+the single command `wrap` makes of it; the configuration changes only when
+`settle` meets the batch's receipt as applied, so getters read what the
+executor confirmed. `apply` changes a field at once when no executor receives
+it, and `abandon` folds the copies still in flight in `(When, Seq)` order when
+the queue goes away unanswered.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-command) for detailed contracts, invariants, and internals.

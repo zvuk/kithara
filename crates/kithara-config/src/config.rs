@@ -1,3 +1,5 @@
+use crate::live::{CheckedConfig, LiveConfig};
+
 /// Retained configuration that exposes an owned control-thread snapshot.
 ///
 /// Snapshotting may clone or allocate and does not imply realtime safety.
@@ -39,37 +41,19 @@ pub trait ConfigOwnerMut: ConfigOwner {
     /// The same configuration returned by [`ConfigOwner::config`].
     fn config_mut(&mut self) -> &mut Self::Config;
 
-    /// Apply a typed change through the configuration's validation contract.
+    /// Assigns one live field once its field check accepts the value.
     ///
     /// # Errors
-    /// Returns the configuration's validation error without changing accepted values.
-    fn apply_config_update(
+    /// Returns the field check's refusal without changing the configuration.
+    fn apply_config_change(
         &mut self,
-        update: <Self::Config as UpdatableConfig>::Update,
-    ) -> Result<(), <Self::Config as UpdatableConfig>::Error>
+        change: <Self::Config as LiveConfig>::Change,
+    ) -> Result<(), <Self::Config as CheckedConfig>::Error>
     where
-        Self::Config: UpdatableConfig,
+        Self::Config: LiveConfig,
     {
-        self.config_mut().apply_update(update)
+        let change = <Self::Config as LiveConfig>::check(change)?;
+        self.config_mut().apply_change(change);
+        Ok(())
     }
-}
-
-/// A configuration with typed, validated live changes.
-///
-/// Domain preparation and publication still happen at the owner's boundary.
-pub trait UpdatableConfig: Config {
-    /// A requested change.
-    type Update;
-    /// Domain validation error, or [`core::convert::Infallible`].
-    type Error;
-
-    /// Commits an accepted change to this configuration.
-    ///
-    /// On error, the configuration keeps its previous accepted values.
-    ///
-    /// # Errors
-    ///
-    /// Returns the configuration's domain validation error when the requested
-    /// values are invalid.
-    fn apply_update(&mut self, update: Self::Update) -> Result<(), Self::Error>;
 }

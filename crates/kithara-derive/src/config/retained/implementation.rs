@@ -1,11 +1,14 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Attribute, Data, DeriveInput, Fields, Ident, Result, Visibility};
+use syn::{Attribute, Data, DeriveInput, Fields, Ident, Result, Visibility, ext::IdentExt as _};
 
-use super::field::{self, Construction, Member};
+use super::{
+    field::{self, Construction, Member},
+    live,
+};
 use crate::config::{
     field::{Declaration, group},
-    patch::{Check, validation},
+    patch::{Check, declared_check, validation},
 };
 
 /// What `#[config(...)]` on the type itself declares.
@@ -14,7 +17,8 @@ struct Options {
     built_default: bool,
     construction: bool,
     fields: Declaration,
-    runtime_update: bool,
+    /// `check(error = ...)`: the struct checks its fields.
+    checked: bool,
     owner_access: bool,
     sdk: bool,
     debug: bool,
@@ -48,7 +52,11 @@ impl Options {
                 match name.as_str() {
                     "default" => options.built_default = true,
                     "construction" => options.construction = true,
-                    "update" => options.runtime_update = true,
+                    "check" => {
+                        // `declared_check` reads the error type.
+                        group(&meta)?;
+                        options.checked = true;
+                    }
                     "owner_access" => options.owner_access = true,
                     "validate_builder" => options.validate_builder = true,
                     "sdk" => options.sdk = true,
@@ -63,7 +71,7 @@ impl Options {
                         }
                     }
                     "patch" => {
-                        // `Patch` reads this group; the update gate below reads its check.
+                        // `Patch` reads this group; the builder gate below reads its check.
                         group(&meta)?;
                     }
                     "values_vis" => {
@@ -72,7 +80,7 @@ impl Options {
                     }
                     _ => {
                         return Err(meta.error(
-                            "expected construction, default, fields(...), update, validate_builder, sdk, debug, builder(...), \
+                            "expected construction, default, fields(...), check(...), validate_builder, sdk, debug, builder(...), \
                              owner_access, patch(...), or values_vis",
                         ));
                     }
@@ -82,14 +90,14 @@ impl Options {
         }
         if options.construction
             && (options.built_default
-                || options.runtime_update
+                || options.checked
                 || options.owner_access
                 || options.sdk
                 || options.values_vis.is_some())
         {
             return Err(syn::Error::new_spanned(
                 &item.ident,
-                "construction inputs cannot declare retained defaults, updates, owner access, SDK records, or values visibility",
+                "construction inputs cannot declare retained defaults, checks, owner access, SDK records, or values visibility",
             ));
         }
         if (options.existing_builder || options.no_builder) && options.validate_builder {
@@ -137,6 +145,16 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
             "owner_access requires a get(ref) or get(copy) accessor",
         ));
     }
+    if options.owner_access
+        && let Some(member) = members
+            .iter()
+            .find(|member| member.owner_accessor.is_some() && member.name.unraw() == "config")
+    {
+        return Err(syn::Error::new_spanned(
+            member.name,
+            "owner_access cannot generate a getter named config, which ConfigOwner declares",
+        ));
+    }
     if !options.debug
         && let Some(member) = members.iter().find(|member| !member.debugged)
     {
@@ -146,11 +164,13 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
         ));
     }
     let check = validation(&item.attrs, item.ident.span())?;
+    let error = declared_check(&item.attrs)?;
+    validate_live(&item, &members, error.is_some(), check.is_some())?;
     let fallible = options.validate_builder;
     if fallible && check.is_none() {
         return Err(syn::Error::new_spanned(
             &item.ident,
-            "validate_builder requires patch(validate = ..., error = ...)",
+            "validate_builder requires check(error = ...) or patch(validate = ..., error = ...)",
         ));
     }
     let builder = if options.existing_builder || options.no_builder {
@@ -172,10 +192,82 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
         .built_default
         .then(|| built_default(&item, fallible));
     let debug = options.debug.then(|| debug(&item, &members));
-    let snapshot = (!options.construction)
-        .then(|| snapshot(&item, &options, &members))
-        .transpose()?;
-    Ok(quote! { #builder #accessors #owner_accessors #default #debug #snapshot })
+    let snapshot = (!options.construction).then(|| snapshot(&item, &options, &members));
+    let live = live::expand(&item, &members, error.as_ref())?;
+    Ok(quote! { #builder #accessors #owner_accessors #default #debug #snapshot #live })
+}
+
+/// Field checks need the struct's error type and live fields a struct whose
+/// fields alone it checks: a whole-struct check would be skipped by a change
+/// of one field.
+fn validate_live(
+    item: &DeriveInput,
+    members: &[Member<'_>],
+    declared: bool,
+    whole: bool,
+) -> Result<()> {
+    if !declared && let Some(member) = members.iter().find(|member| member.check.is_some()) {
+        return Err(syn::Error::new_spanned(
+            member.name,
+            "check = ... requires check(error = ...) on the struct",
+        ));
+    }
+    if members.iter().all(|member| member.live.is_none()) {
+        return Ok(());
+    }
+    if whole && !declared {
+        return Err(syn::Error::new_spanned(
+            &item.ident,
+            "live fields require check(error = ...) instead of patch(validate = ...)",
+        ));
+    }
+    if let Some(member) = members
+        .iter()
+        .find(|member| member.name.unraw() == "settings" || member.name.unraw() == "configure")
+    {
+        return Err(syn::Error::new_spanned(
+            member.name,
+            "a live configuration cannot name a field settings or configure",
+        ));
+    }
+    if !item.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &item.generics,
+            "live fields require a configuration without generics",
+        ));
+    }
+    distinct_changes(members)
+}
+
+/// Each live field names its own change variant, and nested live fields have
+/// distinct types, because the parent's change converts from the nested one.
+fn distinct_changes(members: &[Member<'_>]) -> Result<()> {
+    let live: Vec<(&Member<'_>, &Ident)> = members
+        .iter()
+        .filter_map(|member| member.live.as_ref().map(|live| (member, &live.variant)))
+        .collect();
+    for (index, (member, variant)) in live.iter().enumerate() {
+        let earlier = &live[..index];
+        if let Some((first, _)) = earlier.iter().find(|(_, other)| other == variant) {
+            let message = format!(
+                "live fields `{}` and `{}` name the same change variant `{variant}`",
+                first.name, member.name,
+            );
+            return Err(syn::Error::new_spanned(member.name, message));
+        }
+        if member.nested
+            && let Some((first, _)) = earlier
+                .iter()
+                .find(|(other, _)| other.nested && other.ty == member.ty)
+        {
+            let message = format!(
+                "nested live fields `{}` and `{}` share a type, so its change cannot name the field",
+                first.name, member.name,
+            );
+            return Err(syn::Error::new_spanned(member.name, message));
+        }
+    }
+    Ok(())
 }
 
 /// A bon function builder over `new`, which bon keeps private and hidden:
@@ -343,80 +435,17 @@ fn debug(item: &DeriveInput, members: &[Member<'_>]) -> TokenStream {
     }
 }
 
-fn snapshot(item: &DeriveInput, options: &Options, members: &[Member<'_>]) -> Result<TokenStream> {
+fn snapshot(item: &DeriveInput, options: &Options, members: &[Member<'_>]) -> TokenStream {
     let name = &item.ident;
-    let mut value_fields: Vec<&TokenStream> = Vec::new();
-    let mut reads: Vec<&TokenStream> = Vec::new();
-    let mut update_declarations: Vec<&TokenStream> = Vec::new();
-    let mut update_fields: Vec<&TokenStream> = Vec::new();
-    let mut update_lowers: Vec<&TokenStream> = Vec::new();
-    for retained in members.iter().filter_map(|member| member.retained.as_ref()) {
-        value_fields.push(&retained.declaration);
-        reads.push(&retained.read);
-        if let Some(update) = &retained.update {
-            update_declarations.push(&update.declaration);
-            update_fields.push(&update.field);
-            update_lowers.push(&update.lower);
-        }
-    }
-    if !options.runtime_update && !update_fields.is_empty() {
-        return Err(syn::Error::new_spanned(
-            name,
-            "field runtime updates require `#[config(update)]` on the struct",
-        ));
-    }
-    if options.runtime_update && update_fields.is_empty() {
-        return Err(syn::Error::new_spanned(
-            name,
-            "`#[config(update)]` requires at least one `#[config(value, update)]` field",
-        ));
-    }
+    let (value_fields, reads): (Vec<&TokenStream>, Vec<&TokenStream>) = members
+        .iter()
+        .filter_map(|member| member.retained.as_ref())
+        .map(|retained| (&retained.declaration, &retained.read))
+        .unzip();
     let values = format_ident!("{name}Values");
     let visibility = options.values_vis.as_ref().unwrap_or(&item.vis);
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
-    let runtime = if options.runtime_update {
-        let update = format_ident!("{name}Update");
-        let apply = apply_update(item, visibility, &update, &update_lowers)?;
-        let (error, apply_trait) =
-            if let Some(Check { error, .. }) = validation(&item.attrs, item.ident.span())? {
-                (quote!(#error), quote!(Self::apply_update(self, update)))
-            } else {
-                (
-                    quote!(::core::convert::Infallible),
-                    quote! {
-                        Self::apply_update(self, update);
-                        ::core::result::Result::Ok(())
-                    },
-                )
-            };
-        quote! {
-            #(#update_declarations)*
-            #[derive(::core::default::Default)]
-            #[non_exhaustive]
-            #visibility struct #update {
-                #(#update_fields,)*
-            }
-            #[automatically_derived]
-            impl #impl_generics #name #ty_generics #where_clause {
-                #apply
-            }
-            #[automatically_derived]
-            impl #impl_generics ::kithara_config::UpdatableConfig for #name #ty_generics #where_clause {
-                type Update = #update;
-                type Error = #error;
-
-                fn apply_update(
-                    &mut self,
-                    update: Self::Update,
-                ) -> ::core::result::Result<(), Self::Error> {
-                    #apply_trait
-                }
-            }
-        }
-    } else {
-        TokenStream::new()
-    };
-    Ok(quote! {
+    quote! {
         #[doc = concat!("Owned readable values of `", stringify!(#name), "`. Resource inputs are excluded.")]
         #visibility struct #values {
             #(#value_fields,)*
@@ -428,53 +457,7 @@ fn snapshot(item: &DeriveInput, options: &Options, members: &[Member<'_>]) -> Re
                 #values { #(#reads,)* }
             }
         }
-        #runtime
-    })
-}
-
-/// Every update lowers onto `target`. A configuration that judges itself
-/// stages the change and commits only what its declared check accepts, the
-/// same gate a document merge holds; any other takes the change in place.
-#[cfg(feature = "patch")]
-fn apply_update(
-    item: &DeriveInput,
-    visibility: &Visibility,
-    update: &Ident,
-    lowers: &[&TokenStream],
-) -> Result<TokenStream> {
-    let Some(Check { with, error }) = validation(&item.attrs, item.ident.span())? else {
-        return Ok(quote! {
-            #visibility fn apply_update(&mut self, update: #update) {
-                let target = self;
-                #(#lowers)*
-            }
-        });
-    };
-    Ok(quote! {
-        #visibility fn apply_update(
-            &mut self,
-            update: #update,
-        ) -> ::core::result::Result<(), #error> {
-            let mut staged = ::core::clone::Clone::clone(&*self);
-            let target = &mut staged;
-            #(#lowers)*
-            *self = #with(staged)?;
-            ::core::result::Result::Ok(())
-        }
-    })
-}
-
-#[cfg(not(feature = "patch"))]
-fn apply_update(
-    item: &DeriveInput,
-    _: &Visibility,
-    _: &Ident,
-    _: &[&TokenStream],
-) -> Result<TokenStream> {
-    Err(syn::Error::new_spanned(
-        &item.ident,
-        "runtime updates require the kithara-derive `patch` feature",
-    ))
+    }
 }
 
 #[cfg(test)]
@@ -581,19 +564,22 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn field_overrides_disable_inherited_getters_and_updates() {
+    fn field_overrides_disable_inherited_getters() {
         let expanded = expansion(quote! {
-            #[config(update, owner_access, fields(value, get(copy), update))]
+            #[config(owner_access, fields(value, get(copy), live))]
             struct Settings {
                 threshold: u32,
-                #[config(skip = "owned resource", get(skip), update(false))]
-                resource: String,
+                #[config(get(skip))]
+                ratio: u32,
             }
         });
         assert!(expanded.contains("fn threshold (& self) -> u32"));
-        assert!(expanded.contains("SettingsThresholdUpdate"));
-        assert!(!expanded.contains("fn resource"));
-        assert!(!expanded.contains("SettingsResourceUpdate"));
+        assert!(expanded.contains("Threshold (u32)"));
+        assert!(
+            expanded.contains("Ratio (u32)"),
+            "the inherited live role stays"
+        );
+        assert!(!expanded.contains("fn ratio"));
         assert_eq!(
             refusal(quote! {
                 #[config(owner_access, fields(value, get(skip)))]
@@ -603,13 +589,34 @@ mod tests {
         );
     }
 
+    #[kithara::test(native)]
+    fn owner_access_refuses_a_getter_named_like_the_owners_own() {
+        for input in [
+            quote! {
+                #[config(owner_access, fields(value, get(copy)))]
+                struct Settings { config: u32 }
+            },
+            quote! {
+                #[config(owner_access, fields(value, get(copy)))]
+                struct Settings { level: u32, r#config: u32 }
+            },
+        ] {
+            assert_eq!(
+                refusal(input),
+                "owner_access cannot generate a getter named config, which ConfigOwner declares"
+            );
+        }
+    }
+
     #[kithara::test(native, flash(false))]
     fn shared_field_grammar_rejects_conflicts_at_both_scopes() {
         for options in [
             quote!(value, nested),
             quote!(value, get(ref), get(copy)),
             quote!(value, get(clone)),
-            quote!(value, update, update(false)),
+            quote!(value, live, live),
+            quote!(value, live, live(owner)),
+            quote!(value, check = first, check = second),
             quote!(value, builder(default), builder(required)),
             quote!(value, patch(skip), patch(nested)),
             quote!(value, debug(skip), debug(skip)),
@@ -695,7 +702,7 @@ mod tests {
     fn construction_inputs_reject_retained_only_options() {
         for options in [
             quote!(construction, default),
-            quote!(construction, update),
+            quote!(construction, check(error = Error)),
             quote!(construction, sdk),
             quote!(construction, values_vis = "pub"),
         ] {
@@ -723,7 +730,18 @@ mod tests {
                     limit: usize,
                 }
             }),
-            "validate_builder requires patch(validate = ..., error = ...)"
+            "validate_builder requires check(error = ...) or patch(validate = ..., error = ...)"
+        );
+        assert!(
+            expansion(quote! {
+                #[config(validate_builder, check(error = Error))]
+                struct Settings {
+                    #[config(value, check = Self::bounded)]
+                    limit: usize,
+                }
+            })
+            .contains("-> :: core :: result :: Result < Self , Error > { :: kithara_config :: CheckedConfig :: validated (Self { limit }) }"),
+            "the field checks gate the builder"
         );
         assert_eq!(
             refusal(quote! {
@@ -795,54 +813,281 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, flash(false))]
-    #[cfg(feature = "patch")]
-    fn optional_updates_emit_clear_and_only_declared_defaults_emit_reset() {
-        let expanded = expansion(quote! {
-            #[config(default, update)]
-            struct Settings {
-                #[config(value, update, builder(default = Some(3)))]
-                width: Option<usize>,
-                #[config(value, update, patch(skip))]
-                required: usize,
-            }
-        });
-
-        assert!(expanded.contains("enum SettingsWidthUpdate"));
-        assert!(expanded.contains("enum SettingsRequiredUpdate"));
+    #[kithara::test(native)]
+    fn field_checks_need_the_struct_error_and_a_value_field() {
         assert_eq!(
-            expanded.matches("Reset").count(),
-            2,
-            "one variant and one lowering arm"
+            refusal(quote! {
+                struct Settings {
+                    #[config(value, check = Self::bounded)]
+                    level: u32,
+                }
+            }),
+            "check = ... requires check(error = ...) on the struct"
         );
+        for field in [
+            quote!(#[config(nested, check = Self::bounded)] inner: Inner),
+            quote!(#[config(skip = "resource", check = Self::bounded)] inner: Inner),
+            quote!(#[config(value(u32, self.inner.get()), check = Self::bounded)] inner: Inner),
+        ] {
+            assert_eq!(
+                refusal(quote!(#[config(check(error = Error))] struct Settings { #field })),
+                "check requires a value field",
+                "{field}"
+            );
+        }
         assert_eq!(
-            expanded.matches("Clear").count(),
-            2,
-            "one variant and one lowering arm"
+            refusal(quote! {
+                #[config(check(error = Error), patch(validate = Self::validated, error = Error))]
+                struct Settings {
+                    #[config(value)]
+                    level: u32,
+                }
+            }),
+            "check(error = ...) and patch(validate = ..., error = ...) exclude each other"
         );
     }
 
-    #[kithara::test(native, flash(false))]
-    #[cfg(feature = "patch")]
-    fn update_rejects_non_value_roles_and_missing_struct_opt_in() {
-        assert_eq!(
-            refusal(quote! {
-                #[config(update)]
-                struct Settings {
-                    #[config(nested, update)]
-                    nested: Nested,
+    #[kithara::test(native)]
+    fn live_fields_are_value_or_nested_fields_of_a_field_checked_struct() {
+        for (input, message) in [
+            (
+                quote!(
+                    struct S {
+                        #[config(skip = "resource", live)]
+                        handle: Handle,
+                    }
+                ),
+                "live requires a value or nested field",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(value(u32, self.handle.get()), live)]
+                        handle: Handle,
+                    }
+                ),
+                "live requires a value or nested field",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(nested, live(owner))]
+                        inner: Inner,
+                    }
+                ),
+                "live(owner) requires a value field",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(value, live(shared))]
+                        level: u32,
+                    }
+                ),
+                "expected live or live(owner)",
+            ),
+            (
+                quote! {
+                    #[config(patch(validate = Self::validated, error = Error))]
+                    struct S { #[config(value, live)] level: u32 }
+                },
+                "live fields require check(error = ...) instead of patch(validate = ...)",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(value, live)]
+                        settings: u32,
+                    }
+                ),
+                "a live configuration cannot name a field settings or configure",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(value, live)]
+                        level: u32,
+                        #[config(value)]
+                        configure: u32,
+                    }
+                ),
+                "a live configuration cannot name a field settings or configure",
+            ),
+            (
+                quote!(
+                    struct S<T> {
+                        #[config(value, live)]
+                        level: u32,
+                        #[config(skip = "resource")]
+                        handle: T,
+                    }
+                ),
+                "live fields require a configuration without generics",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(value, live)]
+                        _1: u32,
+                    }
+                ),
+                "a live field needs a name that forms a change variant",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(value, live)]
+                        foo_bar: u32,
+                        #[config(value, live)]
+                        foo__bar: u32,
+                    }
+                ),
+                "live fields `foo_bar` and `foo__bar` name the same change variant `FooBar`",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(nested, live)]
+                        left: Pan,
+                        #[config(nested, live)]
+                        right: Pan,
+                    }
+                ),
+                "nested live fields `left` and `right` share a type, so its change cannot name the field",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(value, live)]
+                        gain: u32,
+                        #[config(value, get(copy))]
+                        set_gain: u32,
+                    }
+                ),
+                "fields `gain` and `set_gain` both generate the method `set_gain`",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(value, live(owner))]
+                        live: u32,
+                        #[config(value, live)]
+                        beat: u32,
+                    }
+                ),
+                "fields `live` and `beat` both generate the method `exec_live`",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(value, live)]
+                        r#settings: u32,
+                    }
+                ),
+                "a live configuration cannot name a field settings or configure",
+            ),
+            (
+                quote!(
+                    struct S {
+                        #[config(value, live)]
+                        level: u32,
+                        #[config(value, get(copy))]
+                        r#configure: u32,
+                    }
+                ),
+                "a live configuration cannot name a field settings or configure",
+            ),
+            (
+                quote!(
+                    #[config(construction)]
+                    struct S {
+                        #[config(value, live)]
+                        level: u32,
+                    }
+                ),
+                "construction inputs cannot declare live fields or checks",
+            ),
+        ] {
+            assert_eq!(refusal(input), message);
+        }
+    }
+
+    #[kithara::test(native)]
+    fn a_field_checked_struct_validates_fields_in_order_and_nested_configs_whole() {
+        let expanded = expansion(quote! {
+            #[config(check(error = Error), fields(value))]
+            pub struct Rig {
+                #[config(check = Self::level_bounds)]
+                level: u8,
+                #[config(nested)]
+                gauge: Gauge,
+                #[config(check = Self::limit_bounds)]
+                limit: u8,
+            }
+        });
+        assert!(expanded.contains(
+            "impl :: kithara_config :: CheckedConfig for Rig { type Error = Error ; \
+             fn validated (mut self) -> :: core :: result :: Result < Self , Self :: Error > { \
+             self . level = Self :: level_bounds (self . level) ? ; \
+             self . gauge = :: kithara_config :: CheckedConfig :: validated (self . gauge) ? ; \
+             self . limit = Self :: limit_bounds (self . limit) ? ; \
+             :: core :: result :: Result :: Ok (self) } }"
+        ));
+        assert!(!expanded.contains("LiveConfig"), "no live field, no change");
+        assert!(
+            !expansion(quote!(
+                struct Plain {
+                    #[config(value)]
+                    level: u8,
                 }
-            }),
-            "runtime update currently requires a retained value field"
+            ))
+            .contains("CheckedConfig")
         );
-        assert_eq!(
-            refusal(quote! {
-                struct Settings {
-                    #[config(value, update)]
-                    value: usize,
-                }
-            }),
-            "field runtime updates require `#[config(update)]` on the struct"
+    }
+
+    #[kithara::test(native)]
+    fn a_live_field_is_one_variant_its_check_guards_and_its_assignment_applies() {
+        let expanded = expansion(quote! {
+            #[config(check(error = Error), fields(value))]
+            pub struct Rig {
+                #[config(live, check = Self::level_bounds)]
+                level: u8,
+                #[config(nested, live)]
+                gauge: Gauge,
+                #[config(live(owner))]
+                rate: u32,
+                limit: u8,
+            }
+        });
+        assert!(expanded.contains(
+            "pub enum RigChange { Level (u8) , \
+             Gauge (< Gauge as :: kithara_config :: LiveConfig > :: Change) , Rate (u32) , }"
+        ));
+        assert!(expanded.contains(
+            "impl :: core :: convert :: From < < Gauge as :: kithara_config :: LiveConfig > :: Change > for RigChange"
+        ));
+        assert!(expanded.contains(
+            "const _ : () = :: core :: assert ! (! < Gauge as :: kithara_config :: LiveConfig > :: OWNER_FIELDS"
+        ));
+        assert!(expanded.contains("const OWNER_FIELDS : bool = true ;"));
+        assert!(expanded.contains(
+            "RigChange :: Level (__kithara_value) => :: core :: result :: Result :: Ok (RigChange :: Level (Self :: level_bounds (__kithara_value) ?))"
+        ));
+        assert!(expanded.contains(
+            "RigChange :: Gauge (__kithara_value) => :: core :: result :: Result :: Ok (RigChange :: Gauge (\
+             < Gauge as :: kithara_config :: LiveConfig > :: check (__kithara_value) ?))"
+        ));
+        assert!(expanded.contains("RigChange :: Rate (__kithara_value) => :: core :: result :: Result :: Ok (RigChange :: Rate (__kithara_value))"));
+        assert!(
+            expanded
+                .contains("RigChange :: Level (__kithara_value) => self . level = __kithara_value")
+        );
+        assert!(expanded.contains(
+            "RigChange :: Gauge (__kithara_value) => :: kithara_config :: LiveConfig :: apply_change (& mut self . gauge , __kithara_value)"
+        ));
+        assert!(
+            !expanded.contains("Limit ("),
+            "a field without live has no variant"
         );
     }
 }

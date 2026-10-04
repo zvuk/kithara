@@ -1,18 +1,47 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
-    Data, DeriveInput, Ident, Token, Type,
+    Data, DeriveInput, Ident, Token, Type, parenthesized,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
+    token,
 };
 
+/// Where the owner's configuration lives: stored at a field path, or owned by
+/// the one field it delegates to.
 struct OwnerSpec {
     config: Option<Type>,
     path: Punctuated<Ident, Token![.]>,
+    delegate: bool,
 }
 
 impl Parse for OwnerSpec {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(Ident) && input.peek2(token::Paren) {
+            let keyword: Ident = input.parse()?;
+            if keyword != "delegate" {
+                return Err(syn::Error::new_spanned(
+                    keyword,
+                    "expected `delegate(field)`",
+                ));
+            }
+            let content;
+            parenthesized!(content in input);
+            let field: Ident = content.parse()?;
+            if !content.is_empty() || !input.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "`delegate` takes exactly one field",
+                ));
+            }
+            let mut path = Punctuated::new();
+            path.push_value(field);
+            return Ok(Self {
+                path,
+                config: None,
+                delegate: true,
+            });
+        }
         let config: Type = input.parse()?;
         let (config, path) = if input.is_empty() {
             let Type::Path(path) = config else {
@@ -31,7 +60,11 @@ impl Parse for OwnerSpec {
         if !input.is_empty() {
             return Err(input.error("expected a field path after the configuration type"));
         }
-        Ok(Self { config, path })
+        Ok(Self {
+            config,
+            path,
+            delegate: false,
+        })
     }
 }
 
@@ -50,7 +83,7 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     else {
         return Err(syn::Error::new_spanned(
             &input.ident,
-            "expected #[config_owner(field)] or #[config_owner(ConfigType, field.path)]",
+            "expected #[config_owner(field)], #[config_owner(ConfigType, field.path)] or #[config_owner(delegate(field))]",
         ));
     };
     let spec: OwnerSpec = spec_attr.parse_args()?;
@@ -77,8 +110,22 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
         ));
     };
     let name = &input.ident;
-    let config = spec.config.as_ref().unwrap_or(&field.ty);
-    let path = spec.path.iter();
+    let ty = &field.ty;
+    let (config, read, write) = if spec.delegate {
+        (
+            quote!(<#ty as ::kithara_config::ConfigOwner>::Config),
+            quote!(::kithara_config::ConfigOwner::config(&self.#first)),
+            quote!(::kithara_config::ConfigOwnerMut::config_mut(&mut self.#first)),
+        )
+    } else {
+        let config = spec.config.as_ref().unwrap_or(ty);
+        let (read, write) = (spec.path.iter(), spec.path.iter());
+        (
+            quote!(#config),
+            quote!(&self.#(#read).*),
+            quote!(&mut self.#(#write).*),
+        )
+    };
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     let mutable: Vec<_> = input
         .attrs
@@ -98,11 +145,10 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                 "config_owner_mut takes no arguments",
             ));
         }
-        let path = spec.path.iter();
         Ok(quote! {
             impl #impl_generics ::kithara_config::ConfigOwnerMut for #name #ty_generics #where_clause {
                 fn config_mut(&mut self) -> &mut Self::Config {
-                    &mut self.#(#path).*
+                    #write
                 }
             }
         })
@@ -112,9 +158,39 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
             type Config = #config;
 
             fn config(&self) -> &Self::Config {
-                &self.#(#path).*
+                #read
             }
         }
         #mutable_impl
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+    use quote::quote;
+
+    use super::expand;
+
+    #[kithara::test(native)]
+    fn delegate_names_exactly_one_field_of_the_struct() {
+        for (attribute, message) in [
+            (
+                quote!(#[config_owner(delegated(inner))]),
+                "expected `delegate(field)`",
+            ),
+            (
+                quote!(#[config_owner(delegate(inner, other))]),
+                "`delegate` takes exactly one field",
+            ),
+            (
+                quote!(#[config_owner(delegate(missing))]),
+                "configuration path must start with a field of this struct",
+            ),
+        ] {
+            let input = quote!(#attribute struct Owner { inner: Inner, other: Inner });
+            let refusal = expand(input).expect_err("the owner is refused");
+            assert_eq!(refusal.to_string(), message);
+        }
+    }
 }
