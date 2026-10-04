@@ -17,7 +17,7 @@ use kithara_platform::{
     sync::{Arc, Weak},
 };
 use kithara_storage::ResourceStatus;
-use kithara_stream::{AudioCodec, MediaInfo, WorkerWake};
+use kithara_stream::{MediaInfo, WorkerWake, id3v2_tag_len};
 use url::Url;
 
 use super::segments::FileSegmentIndex;
@@ -233,9 +233,9 @@ where
             self.source.coord.set_download_pos(total_bytes);
         }
         if self.content_type_info.get().is_none()
-            && let Some(codec) = sniff_codec(&self.asset.reader)
+            && let Some(info) = sniff_media_info(&self.asset.reader)
         {
-            let _ = self.content_type_info.set(MediaInfo::from(codec));
+            let _ = self.content_type_info.set(info);
         }
         self.publish_opened(
             total_bytes,
@@ -359,11 +359,20 @@ where
     }
 }
 
-pub(crate) fn sniff_codec<S>(reader: &AssetReader<S>) -> Option<AudioCodec>
+pub(crate) fn sniff_media_info<S>(reader: &AssetReader<S>) -> Option<MediaInfo>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     let mut buf = [0u8; consts::CODEC_SNIFF_BYTES];
-    let read = reader.read_at(0, &mut buf).ok()?;
-    AudioCodec::try_from(&buf[..read]).ok()
+    let mut offset = 0;
+    loop {
+        let read = reader.read_at(offset, &mut buf).ok()?;
+        if !buf[..read].starts_with(b"ID3") {
+            return MediaInfo::try_from(&buf[..read]).ok();
+        }
+        offset = offset.checked_add(id3v2_tag_len(&buf[..read])?)?;
+        if reader.len().is_some_and(|len| offset >= len) {
+            return None;
+        }
+    }
 }

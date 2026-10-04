@@ -11,6 +11,7 @@ use kithara::{
 use tracing::{debug, warn};
 
 use super::service::Owner;
+use crate::wave_cache::AnalysisTarget;
 
 /// One artifact, as its external source answered for it.
 pub(super) enum Loaded {
@@ -33,13 +34,13 @@ impl Loaded {
         self,
         tx: &mpsc::Sender<LoadReply>,
         epoch: u64,
-        index: usize,
+        target: AnalysisTarget,
         track_id: TrackId,
     ) -> bool {
         debug!(?track_id, kind = self.kind(), "analysis: artifact read");
         tx.send(LoadReply {
             epoch,
-            index,
+            target,
             loaded: self,
         })
         .await
@@ -63,7 +64,7 @@ impl Loaded {
 pub(super) struct LoadReply {
     pub(super) loaded: Loaded,
     pub(super) epoch: u64,
-    pub(super) index: usize,
+    pub(super) target: AnalysisTarget,
 }
 
 impl Owner {
@@ -93,19 +94,20 @@ impl Owner {
             return;
         }
         let track_id = entry.track_id();
+        let target = entry.target().clone();
         let tx = self.loads.clone();
         task::spawn(async move {
             let fetch = config.artifact_fetch();
             if let Some(source) = beat_grid
                 && !Loaded::BeatGrid(source.load(&fetch).await)
-                    .hand(&tx, epoch, index, track_id)
+                    .hand(&tx, epoch, target.clone(), track_id)
                     .await
             {
                 return;
             }
             if let Some(source) = waveform {
                 Loaded::Waveform(source.load(&fetch).await)
-                    .hand(&tx, epoch, index, track_id)
+                    .hand(&tx, epoch, target, track_id)
                     .await;
             }
         });
@@ -115,10 +117,14 @@ impl Owner {
     pub(super) fn take_load(&mut self, reply: LoadReply) {
         let LoadReply {
             epoch,
-            index,
+            target,
             loaded,
         } = reply;
-        let Some(entry) = self.entries.get_mut(index) else {
+        let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.target().is_same(&target))
+        else {
             return;
         };
         if entry.epoch() != epoch {

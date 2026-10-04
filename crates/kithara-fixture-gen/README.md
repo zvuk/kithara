@@ -65,3 +65,10 @@ only the synthetic PCM they all build on.
 
 `kithara-test-fixtures` names this crate in `[build-dependencies]` only and
 forwards each of its families to the family of the same name here.
+
+Signal fixtures use `kithara-encode::EncoderFactory` to encode synthetic PCM.
+APE encoding uses the Monkey's Audio SDK through the `monkeys-audio` feature;
+the other formats use FFmpeg bindings. The SDK version is pinned in
+`.config/ci-pins.toml` and provisioned by CI. On macOS, install the `mac`
+Homebrew formula; elsewhere, set `MONKEYS_AUDIO_DIR` to the SDK install prefix
+when it is outside system library paths. No encoded APE is checked in.

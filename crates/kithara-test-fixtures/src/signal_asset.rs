@@ -17,8 +17,107 @@ impl SignalAsset {
     pub const AAC_SINE440_60S_192K: Self = Self::new("signal_aac_sine440_60s_192k", "aac");
     pub const AAC_SINE440_60S_256K: Self = Self::new("signal_aac_sine440_60s_256k", "aac");
     pub const AAC_SINE440_60S_320K: Self = Self::new("signal_aac_sine440_60s_320k", "aac");
+    pub const PROFILE_FLAC_FLAC_192000_2CH_16BIT: Self =
+        Self::new("signal_profile_flac_flac_192000_2ch_16bit", "flac");
+    pub const PROFILE_FLAC_FLAC_192000_2CH_24BIT: Self =
+        Self::new("signal_profile_flac_flac_192000_2ch_24bit", "flac");
+    pub const PROFILE_FLAC_FLAC_22050_1CH_16BIT: Self =
+        Self::new("signal_profile_flac_flac_22050_1ch_16bit", "flac");
+    pub const PROFILE_FLAC_FLAC_22050_2CH_16BIT: Self =
+        Self::new("signal_profile_flac_flac_22050_2ch_16bit", "flac");
+    pub const PROFILE_FLAC_FLAC_44100_2CH_16BIT: Self =
+        Self::new("signal_profile_flac_flac_44100_2ch_16bit", "flac");
+    pub const PROFILE_FLAC_FLAC_44100_2CH_24BIT: Self =
+        Self::new("signal_profile_flac_flac_44100_2ch_24bit", "flac");
+    pub const PROFILE_FLAC_FLAC_48000_2CH_16BIT: Self =
+        Self::new("signal_profile_flac_flac_48000_2ch_16bit", "flac");
+    pub const PROFILE_FLAC_FLAC_48000_2CH_24BIT: Self =
+        Self::new("signal_profile_flac_flac_48000_2ch_24bit", "flac");
+    pub const PROFILE_FLAC_FLAC_88200_2CH_24BIT: Self =
+        Self::new("signal_profile_flac_flac_88200_2ch_24bit", "flac");
+    pub const PROFILE_FLAC_FLAC_96000_2CH_16BIT: Self =
+        Self::new("signal_profile_flac_flac_96000_2ch_16bit", "flac");
+    pub const PROFILE_FLAC_FLAC_96000_2CH_24BIT: Self =
+        Self::new("signal_profile_flac_flac_96000_2ch_24bit", "flac");
+    pub const PROFILE_MP3_LIBMP3LAME_11025_1CH: Self =
+        Self::new("signal_profile_mp3_libmp3lame_11025_1ch", "mp3");
+    pub const PROFILE_MP3_LIBMP3LAME_22050_1CH: Self =
+        Self::new("signal_profile_mp3_libmp3lame_22050_1ch", "mp3");
+    pub const PROFILE_MP3_LIBMP3LAME_32000_2CH: Self =
+        Self::new("signal_profile_mp3_libmp3lame_32000_2ch", "mp3");
+    pub const PROFILE_MP3_LIBMP3LAME_44100_1CH: Self =
+        Self::new("signal_profile_mp3_libmp3lame_44100_1ch", "mp3");
+    pub const PROFILE_MP3_LIBMP3LAME_44100_2CH: Self =
+        Self::new("signal_profile_mp3_libmp3lame_44100_2ch", "mp3");
+    pub const PROFILE_MP3_LIBMP3LAME_48000_1CH: Self =
+        Self::new("signal_profile_mp3_libmp3lame_48000_1ch", "mp3");
+    pub const PROFILE_MP3_LIBMP3LAME_48000_2CH: Self =
+        Self::new("signal_profile_mp3_libmp3lame_48000_2ch", "mp3");
+    pub const PROFILE_M4A_AAC_44100_2CH: Self =
+        Self::new("signal_profile_m4a_aac_44100_2ch", "m4a");
+    pub const PROFILE_M4A_ALAC_44100_2CH_16BIT: Self =
+        Self::new("signal_profile_m4a_alac_44100_2ch_16bit", "m4a");
+    pub const PROFILE_OGG_VORBIS_44100_2CH: Self =
+        Self::new("signal_profile_ogg_vorbis_44100_2ch", "ogg");
+    pub const PROFILE_OPUS_LIBOPUS_48000_2CH: Self =
+        Self::new("signal_profile_opus_libopus_48000_2ch", "opus");
+    pub const PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT: Self =
+        Self::new("signal_profile_aiff_pcm_s16be_44100_2ch_16bit", "aiff");
+    pub const PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT: Self =
+        Self::new("signal_profile_wav_pcm_f32le_192000_2ch_32bit", "wav");
+    pub const PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT: Self =
+        Self::new("signal_profile_wav_pcm_s16le_192000_2ch_16bit", "wav");
+    pub const PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT: Self =
+        Self::new("signal_profile_wav_pcm_s16le_44100_2ch_16bit", "wav");
+    pub const PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT: Self =
+        Self::new("signal_profile_wav_pcm_s24le_44100_2ch_24bit", "wav");
+    pub const PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT: Self =
+        Self::new("signal_profile_wav_pcm_s32le_192000_2ch_32bit", "wav");
+    pub const PROFILE_APE_MULTIFRAME_44100_2CH_16BIT: Self =
+        Self::new("signal_profile_ape_multiframe_44100_2ch_16bit", "ape");
+    pub const PROFILE_TAGGED_FLAC_ID3: Self =
+        Self::new("signal_profile_tagged_flac_id3_44100_2ch_16bit", "flac");
+    pub const PROFILE_TAGGED_MP3_ID3: Self =
+        Self::new("signal_profile_tagged_mp3_id3_44100_2ch", "mp3");
+    pub const PROFILE_TAGGED_WAVE_MP3_ID3: Self =
+        Self::new("signal_profile_tagged_mp3_id3_wave_mp3_44100_2ch", "mp3");
+    pub const PROFILE_ALAC_SILENCE_TAIL: Self =
+        Self::new("signal_profile_alac_silence_tail_44100_2ch_16bit", "m4a");
     /// Every asset the `/signal` route can serve.
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 75] = [
+        Self::PROFILE_FLAC_FLAC_192000_2CH_16BIT,
+        Self::PROFILE_FLAC_FLAC_192000_2CH_24BIT,
+        Self::PROFILE_FLAC_FLAC_22050_1CH_16BIT,
+        Self::PROFILE_FLAC_FLAC_22050_2CH_16BIT,
+        Self::PROFILE_FLAC_FLAC_44100_2CH_16BIT,
+        Self::PROFILE_FLAC_FLAC_44100_2CH_24BIT,
+        Self::PROFILE_FLAC_FLAC_48000_2CH_16BIT,
+        Self::PROFILE_FLAC_FLAC_48000_2CH_24BIT,
+        Self::PROFILE_FLAC_FLAC_88200_2CH_24BIT,
+        Self::PROFILE_FLAC_FLAC_96000_2CH_16BIT,
+        Self::PROFILE_FLAC_FLAC_96000_2CH_24BIT,
+        Self::PROFILE_MP3_LIBMP3LAME_11025_1CH,
+        Self::PROFILE_MP3_LIBMP3LAME_22050_1CH,
+        Self::PROFILE_MP3_LIBMP3LAME_32000_2CH,
+        Self::PROFILE_MP3_LIBMP3LAME_44100_1CH,
+        Self::PROFILE_MP3_LIBMP3LAME_44100_2CH,
+        Self::PROFILE_MP3_LIBMP3LAME_48000_1CH,
+        Self::PROFILE_MP3_LIBMP3LAME_48000_2CH,
+        Self::PROFILE_M4A_AAC_44100_2CH,
+        Self::PROFILE_M4A_ALAC_44100_2CH_16BIT,
+        Self::PROFILE_OGG_VORBIS_44100_2CH,
+        Self::PROFILE_OPUS_LIBOPUS_48000_2CH,
+        Self::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT,
+        Self::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT,
+        Self::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT,
+        Self::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT,
+        Self::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT,
+        Self::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT,
+        Self::PROFILE_APE_MULTIFRAME_44100_2CH_16BIT,
+        Self::PROFILE_TAGGED_FLAC_ID3,
+        Self::PROFILE_TAGGED_MP3_ID3,
+        Self::PROFILE_TAGGED_WAVE_MP3_ID3,
+        Self::PROFILE_ALAC_SILENCE_TAIL,
         Self::WAV_SAW_1S,
         Self::WAV_SILENCE_1S,
         Self::WAV_SINE440_120MS,

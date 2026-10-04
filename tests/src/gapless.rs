@@ -7,9 +7,12 @@ pub const AAC_FRAME_SAMPLES: usize = 1_024;
 pub const AAC_GAPLESS_ENCODER_DELAY: u32 = 2_112;
 pub const AAC_GAPLESS_TRAILING_DELAY: u32 = 960;
 
-// MediaCodec compensates its algorithmic delay when draining; the host FDK
-// adapter removes 1744 leading frames without restoring them at EOF.
-const AAC_DECODER_HEAD_STRIP: usize = if cfg!(target_os = "android") {
+// Native decoders preserve packet lengths; FDK removes 1744 leading frames.
+const AAC_DECODER_HEAD_STRIP: usize = if cfg!(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios"
+)) {
     0
 } else {
     1_744

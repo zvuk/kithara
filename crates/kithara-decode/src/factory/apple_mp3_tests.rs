@@ -29,6 +29,111 @@ mod consts {
     pub(super) const SEEK: Duration = Duration::from_secs(8);
 }
 
+#[kithara::test]
+#[case(false)]
+#[case(true)]
+fn mp3_in_wave_matches_elementary_audio_and_seeks_in_file_coordinates(#[case] tagged: bool) {
+    let audio = rhythm_mp3_deck_a_120bpm_48k().bytes();
+    let mut wave = Vec::new();
+    if tagged {
+        let len = audio.len();
+        wave.extend_from_slice(&[
+            b'I',
+            b'D',
+            b'3',
+            4,
+            0,
+            0,
+            ((len >> 21) & 127) as u8,
+            ((len >> 14) & 127) as u8,
+            ((len >> 7) & 127) as u8,
+            (len & 127) as u8,
+        ]);
+        wave.extend_from_slice(audio);
+    }
+    let metadata_prefix = wave.clone();
+    let origin = wave.len();
+    wave.extend_from_slice(b"RIFF");
+    wave.extend_from_slice(
+        &u32::try_from(audio.len() + 36)
+            .expect("RIFF length")
+            .to_le_bytes(),
+    );
+    wave.extend_from_slice(b"WAVEfmt ");
+    wave.extend_from_slice(&16u32.to_le_bytes());
+    wave.extend_from_slice(&0x55u16.to_le_bytes());
+    wave.extend_from_slice(&2u16.to_le_bytes());
+    wave.extend_from_slice(&48_000u32.to_le_bytes());
+    wave.extend_from_slice(&16_000u32.to_le_bytes());
+    wave.extend_from_slice(&1u16.to_le_bytes());
+    wave.extend_from_slice(&0u16.to_le_bytes());
+    wave.extend_from_slice(b"data");
+    wave.extend_from_slice(
+        &u32::try_from(audio.len())
+            .expect("payload length")
+            .to_le_bytes(),
+    );
+    wave.extend_from_slice(audio);
+    let config = || {
+        DecoderConfig::<kithara_resampler::NoResamplerBackend, TestPools>::builder()
+            .backend(DecoderBackend::Apple)
+            .pools(pools())
+            .build()
+    };
+    let mut plain =
+        DecoderFactory::create_with_probe(Cursor::new(audio.to_vec()), Some("mp3"), config())
+            .expect("elementary MP3");
+    let mut wrapped = DecoderFactory::create_from_media_info(
+        Cursor::new(wave),
+        &MediaInfo::builder().container(ContainerFormat::Wav).build(),
+        config(),
+    )
+    .expect("MP3 in WAV");
+    let drain = |decoder: &mut dyn Decoder| {
+        let mut pcm = Vec::new();
+        loop {
+            match decoder.next_chunk().expect("decode PCM") {
+                DecoderChunkOutcome::Chunk(chunk) => pcm.extend_from_slice(&chunk.samples),
+                DecoderChunkOutcome::Pending(_) => panic!("complete fixture must not stall"),
+                DecoderChunkOutcome::Eof => return pcm,
+            }
+        }
+    };
+    let reference = drain(&mut *plain);
+    assert_eq!(
+        reference,
+        drain(&mut *wrapped),
+        "the carrier and its metadata do not alter audio"
+    );
+    if tagged {
+        let mut elementary = metadata_prefix;
+        elementary.extend_from_slice(audio);
+        let mut tagged_decoder =
+            DecoderFactory::create_with_probe(Cursor::new(elementary), Some("mp3"), config())
+                .expect("MP3 with audio-looking metadata");
+        assert_eq!(
+            reference,
+            drain(&mut *tagged_decoder),
+            "metadata bytes are never MPEG frames"
+        );
+    }
+    let outcome = wrapped
+        .seek(Duration::from_secs(2))
+        .expect("seek in WAV payload");
+    let DecoderSeekOutcome::Landed {
+        landed_byte: Some(byte),
+        ..
+    } = outcome
+    else {
+        panic!("seek must expose a source byte position");
+    };
+    assert!(byte >= u64::try_from(origin + 44).expect("payload starts after RIFF headers"));
+    assert!(
+        !drain(&mut *wrapped).is_empty(),
+        "seek resumes decoding the payload"
+    );
+}
+
 /// Bytes past `ready` answer the way a streamed source answers a range that is still downloading.
 struct Download {
     inner: Cursor<Vec<u8>>,

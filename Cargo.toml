@@ -345,6 +345,9 @@ aes = "0.9.1"
 # xtask tooling
 anyhow = "1"
 
+# FFI
+ape-decoder = "0.3.2"
+
 # fuzzing
 arbitrary = { version = "1", features = ["derive"] }
 
@@ -432,8 +435,6 @@ iced_wgpu = "0.14.0"
 # Link-time registry. The kithara-test-fixtures build script enumerates what its
 # `#[kithara::asset]` definitions submit; nothing links it into a product build.
 inventory = "0.3"
-
-# FFI
 jni = "0.22"
 js-sys = "0.3"
 # Curve geometry and the SVG path grammar (kithara-ui reads authored icons
@@ -455,6 +456,7 @@ num-traits = { version = "0.2", default-features = false }
 obfstr = "0.4.5"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false }
+opus = "0.4.0"
 parking_lot = "0.12"
 parking_lot_core = "0.9"
 parley = { version = "0.6", default-features = false, features = ["std", "system"] }

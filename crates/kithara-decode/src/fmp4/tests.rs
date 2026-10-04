@@ -21,6 +21,8 @@ use kithara_test_utils::kithara;
 use super::test_layout::{FakeSegmented, aac_five, aac_one, aac_three, flac_three};
 #[cfg(all(android_backend, not(feature = "symphonia")))]
 use crate::android::AndroidCodec as TestCodec;
+#[cfg(all(apple_backend, not(feature = "symphonia")))]
+use crate::apple::AppleCodec as TestCodec;
 #[cfg(feature = "symphonia")]
 use crate::symphonia::SymphoniaCodec as TestCodec;
 use crate::{
@@ -116,6 +118,9 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
         .expect("BUG: open codec");
     #[cfg(all(android_backend, not(feature = "symphonia")))]
     let codec = TestCodec::open_with_config(demuxer.track_info()).expect("open Android codec");
+    #[cfg(all(apple_backend, not(feature = "symphonia")))]
+    let codec =
+        TestCodec::open_with_config(demuxer.track_info(), false, None).expect("open Apple codec");
     let decoder = ComposedDecoder::new(
         demuxer,
         codec,

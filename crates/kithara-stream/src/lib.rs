@@ -28,7 +28,7 @@ pub mod mock;
 pub use error::{SourceError, StreamError, StreamResult};
 pub use hooks::{BoxedEventSink, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 pub use kithara_storage::WaitOutcome;
-pub use media::{AudioCodec, ContainerFormat, MediaInfo, needs_exact_byte_sizes};
+pub use media::{AudioCodec, ContainerFormat, MediaInfo, id3v2_tag_len, needs_exact_byte_sizes};
 pub use playhead::{ChunkPosition, PlayheadRead, PlayheadState, PlayheadWrite};
 pub use preroll::PrerollHint;
 pub use profile::{ReaderInput, ReaderProfile, ReaderWarmup};

@@ -20,6 +20,8 @@ pub(crate) fn get_codecs() -> &'static CodecRegistry {
         register_enabled_codecs(&mut registry);
         #[cfg(feature = "fdk-aac")]
         registry.register_audio_decoder::<crate::symphonia::fdk::AacDecoder>();
+        #[cfg(feature = "opus")]
+        registry.register_audio_decoder::<super::opus::OpusDecoder>();
         registry
     })
 }

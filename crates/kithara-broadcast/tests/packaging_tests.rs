@@ -3,7 +3,9 @@
 use std::io::Cursor;
 
 use kithara_broadcast::{BroadcastConfig, LiveWindow, PlaylistSnapshot, Segmenter};
-use kithara_decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory};
+use kithara_decode::{
+    DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory, GaplessInfo, GaplessTrimmer,
+};
 use kithara_encode::{StreamBackend, StreamEncoder};
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
@@ -64,7 +66,11 @@ fn broadcast(samples: &[f32]) -> PlaylistSnapshot {
     window.snapshot()
 }
 
-fn decode_left_channel(bytes: Vec<u8>) -> Vec<f32> {
+fn decode_left_channel(
+    bytes: Vec<u8>,
+    backend: DecoderBackend,
+    starts_at_encoder_head: bool,
+) -> Vec<f32> {
     let mut decoder = DecoderFactory::create_from_media_info(
         Cursor::new(bytes),
         &MediaInfo::builder()
@@ -73,12 +79,30 @@ fn decode_left_channel(bytes: Vec<u8>) -> Vec<f32> {
             .build(),
         DecoderConfig::<kithara_resampler::NoResamplerBackend, TestPools>::builder()
             .pools(pools())
+            .backend(backend)
             .build(),
     )
     .expect("create the ADTS AAC-LC decoder");
 
+    let priming = if starts_at_encoder_head {
+        decoder.default_priming_frames(AudioCodec::AacLc)
+    } else {
+        0
+    };
+    let mut trimmer = GaplessTrimmer::from(
+        decoder
+            .track_info()
+            .gapless
+            .unwrap_or(GaplessInfo::new(priming, 0)),
+    );
     let mut left = Vec::new();
     while let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("decode chunk") {
+        for chunk in trimmer.push(chunk) {
+            let channels = usize::from(chunk.spec().channels);
+            left.extend(chunk.samples.iter().step_by(channels));
+        }
+    }
+    for chunk in trimmer.flush() {
         let channels = usize::from(chunk.spec().channels);
         left.extend(chunk.samples.iter().step_by(channels));
     }
@@ -98,7 +122,12 @@ fn assert_carries_the_tone(pcm: &[f32], label: &str) {
 }
 
 #[kithara::test]
-fn the_packaged_segments_decode_back_to_the_source_tone(packaging_tone: Vec<f32>) {
+#[case::platform_default(DecoderBackend::default())]
+#[case::symphonia(DecoderBackend::Symphonia)]
+fn the_packaged_segments_decode_back_to_the_source_tone(
+    packaging_tone: Vec<f32>,
+    #[case] backend: DecoderBackend,
+) {
     let snapshot = broadcast(&packaging_tone);
 
     assert!(
@@ -114,7 +143,7 @@ fn the_packaged_segments_decode_back_to_the_source_tone(packaging_tone: Vec<f32>
         stream.extend_from_slice(&segment.bytes);
     }
 
-    let decoded = decode_left_channel(stream);
+    let decoded = decode_left_channel(stream, backend, true);
     let priming_slack = 2 * StreamEncoder::FRAME_SAMPLES;
     assert!(
         decoded.len() >= FRAMES - priming_slack && decoded.len() <= FRAMES + priming_slack,
@@ -126,7 +155,12 @@ fn the_packaged_segments_decode_back_to_the_source_tone(packaging_tone: Vec<f32>
 }
 
 #[kithara::test]
-fn a_late_joiner_decodes_one_segment_on_its_own(packaging_tone: Vec<f32>) {
+#[case::platform_default(DecoderBackend::default())]
+#[case::symphonia(DecoderBackend::Symphonia)]
+fn a_late_joiner_decodes_one_segment_on_its_own(
+    packaging_tone: Vec<f32>,
+    #[case] backend: DecoderBackend,
+) {
     let snapshot = broadcast(&packaging_tone);
 
     let joined = snapshot
@@ -135,7 +169,7 @@ fn a_late_joiner_decodes_one_segment_on_its_own(packaging_tone: Vec<f32>) {
         .rev()
         .nth(1)
         .expect("a full segment before the tail");
-    let decoded = decode_left_channel(joined.bytes.to_vec());
+    let decoded = decode_left_channel(joined.bytes.to_vec(), backend, false);
 
     let declared = usize::try_from(joined.duration_ts).expect("duration fits usize");
     let priming_slack = 2 * StreamEncoder::FRAME_SAMPLES;

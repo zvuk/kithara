@@ -23,6 +23,7 @@ struct State<T> {
     value: T,
     wakers: Vec<Waker>,
     closed: bool,
+    receivers: usize,
     version: u64,
 }
 
@@ -56,6 +57,7 @@ pub fn channel<T>(init: T) -> (Sender<T>, Receiver<T>) {
             value: init,
             version: 0,
             closed: false,
+            receivers: 1,
             wakers: Vec::new(),
         }),
         senders: Mutex::new(1),
@@ -120,11 +122,18 @@ impl<T> Sender<T> {
         }
     }
 
-    /// Live receivers: every handle on the shared state that is not a sender.
+    /// Wait until every receiver has dropped.
+    pub fn closed(&self) -> impl Future<Output = ()> + '_ {
+        Closed {
+            sender: self,
+            pending: None,
+        }
+    }
+
+    /// Number of live receiving handles.
     #[must_use]
     pub fn receiver_count(&self) -> usize {
-        let senders = *self.shared.senders.lock();
-        Arc::strong_count(&self.shared).saturating_sub(senders)
+        self.shared.state.lock().receivers
     }
 
     /// Replace the watched value and wake every receiver.
@@ -159,7 +168,8 @@ impl<T> Sender<T> {
     /// Create a new receiver that starts from the sender's current value.
     #[must_use]
     pub fn subscribe(&self) -> Receiver<T> {
-        let state = self.shared.state.lock();
+        let mut state = self.shared.state.lock();
+        state.receivers += 1;
         let seen = state.version;
         drop(state);
         Receiver {
@@ -179,11 +189,68 @@ pub struct Receiver<T> {
 
 impl<T> Clone for Receiver<T> {
     fn clone(&self) -> Self {
+        self.shared.state.lock().receivers += 1;
         Self {
             shared: Arc::clone(&self.shared),
             seen: self.seen,
             pending: None,
         }
+    }
+}
+
+impl<T> Drop for Receiver<T> {
+    fn drop(&mut self) {
+        cancel_pending(self);
+        let mut state = self.shared.state.lock();
+        state.receivers -= 1;
+        if state.receivers == 0 {
+            let drained = std::mem::take(&mut state.wakers);
+            drop(state);
+            self.shared.signal(drained);
+        }
+    }
+}
+
+struct Closed<'a, T> {
+    sender: &'a Sender<T>,
+    pending: Option<Parked>,
+}
+
+impl<T> Future for Closed<'_, T> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let this = self.get_mut();
+        if let Some(Parked::Engine(handle)) = this.pending.as_ref()
+            && !handle.granted()
+        {
+            return Poll::Pending;
+        }
+        cancel_wait(&this.sender.shared, &mut this.pending);
+        let mut state = this.sender.shared.state.lock();
+        if state.receivers == 0 {
+            return Poll::Ready(());
+        }
+        match this.sender.shared.backend {
+            Backend::Engine(cvid) => {
+                let (handle, adv) = system::register_channel_async(cvid, cx.waker().clone());
+                this.pending = Some(Parked::Engine(handle));
+                drop(state);
+                adv.fire();
+            }
+            Backend::Native => {
+                let waker = cx.waker().clone();
+                state.wakers.push(waker.clone());
+                this.pending = Some(Parked::Real(waker));
+            }
+        }
+        Poll::Pending
+    }
+}
+
+impl<T> Drop for Closed<'_, T> {
+    fn drop(&mut self) {
+        cancel_wait(&self.sender.shared, &mut self.pending);
     }
 }
 
@@ -387,13 +454,12 @@ impl<T> Drop for Changed<'_, T> {
 /// Removes only its own waker, so a signal cannot wake an already-dropped future; mirrors the same
 /// guard in `broadcast` and `mpsc`.
 fn cancel_pending<T>(rx: &mut Receiver<T>) {
-    match rx.pending.take() {
-        Some(Parked::Real(waker)) => rx
-            .shared
-            .state
-            .lock()
-            .wakers
-            .retain(|w| !w.will_wake(&waker)),
+    cancel_wait(&rx.shared, &mut rx.pending);
+}
+
+fn cancel_wait<T>(shared: &Shared<T>, pending: &mut Option<Parked>) {
+    match pending.take() {
+        Some(Parked::Real(waker)) => shared.state.lock().wakers.retain(|w| !w.will_wake(&waker)),
         Some(Parked::Engine(handle)) => system::cancel_async_wait(&handle),
         None => {}
     }
@@ -467,9 +533,14 @@ mod tests {
         let second = tx.subscribe();
         let another_sender = tx.clone();
         assert_eq!(tx.receiver_count(), 2, "a sender clone is not a receiver");
+        let waiter = spawn(async move {
+            another_sender.closed().await;
+        });
         drop(rx);
+        assert_eq!(tx.receiver_count(), 1);
         drop(second);
-        assert_eq!(another_sender.receiver_count(), 0);
+        assert_eq!(tx.receiver_count(), 0);
+        waiter.await.expect("last receiver wakes sender closed");
     }
 
     #[kithara::test(tokio, multi_thread)]

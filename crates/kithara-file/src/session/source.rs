@@ -8,10 +8,9 @@ use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{ResourceStatus, StorageError, WaitOutcome};
 use kithara_stream::{
-    Activity, AudioCodec, ByteMap, MediaInfo, NotReadyCause, PendingReason, PlayheadRead,
-    PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor,
-    SourceError as StreamSourceError, SourcePhase, SourceProbe, StreamError, StreamResult,
-    WorkerWake,
+    Activity, ByteMap, MediaInfo, NotReadyCause, PendingReason, PlayheadRead, PlayheadWrite,
+    ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor, SourceError as StreamSourceError,
+    SourcePhase, SourceProbe, StreamError, StreamResult, WorkerWake,
 };
 use kithara_test_utils::kithara;
 use tracing::trace;
@@ -43,7 +42,7 @@ where
     #[config(skip = "transferred to the file source")]
     bus: EventBus,
     #[config(skip = "consumed by the codec probe")]
-    cached_codec: Option<AudioCodec>,
+    cached_media_info: Option<MediaInfo>,
 }
 
 /// Sync `Source` impl over a shared [`FileInner`].
@@ -115,7 +114,7 @@ where
             coord,
             bus,
             cancel,
-            cached_codec,
+            cached_media_info,
         } = config;
         let inner = Arc::new(FileInner::new(
             stream_config,
@@ -128,8 +127,8 @@ where
             true,
             None,
         ));
-        if let Some(codec) = cached_codec {
-            let _ = inner.content_type_info.set(MediaInfo::from(codec));
+        if let Some(info) = cached_media_info {
+            let _ = inner.content_type_info.set(info);
         }
         let total_bytes = inner.asset.reader.len();
         inner.publish_opened(

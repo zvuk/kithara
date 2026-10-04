@@ -580,6 +580,7 @@ pub enum FfiAudioCodecKind {
     Alac,
     Pcm,
     Adpcm,
+    Ape,
     #[mirror(skip)]
     Unknown,
 }
@@ -598,6 +599,8 @@ pub enum FfiContainerKind {
     Ogg,
     Caf,
     Mkv,
+    Aiff,
+    Ape,
     #[mirror(skip)]
     Unknown,
 }
@@ -1123,6 +1126,7 @@ mod tests {
             (AudioCodec::Alac, FfiAudioCodecKind::Alac),
             (AudioCodec::Pcm, FfiAudioCodecKind::Pcm),
             (AudioCodec::Adpcm, FfiAudioCodecKind::Adpcm),
+            (AudioCodec::Ape, FfiAudioCodecKind::Ape),
         ] {
             assert_eq!(FfiAudioCodecKind::from(source), expected);
         }
@@ -1141,6 +1145,8 @@ mod tests {
             (ContainerFormat::Ogg, FfiContainerKind::Ogg),
             (ContainerFormat::Caf, FfiContainerKind::Caf),
             (ContainerFormat::Mkv, FfiContainerKind::Mkv),
+            (ContainerFormat::Aiff, FfiContainerKind::Aiff),
+            (ContainerFormat::Ape, FfiContainerKind::Ape),
         ] {
             assert_eq!(FfiContainerKind::from(source), expected);
         }

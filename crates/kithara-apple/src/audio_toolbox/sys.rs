@@ -27,10 +27,13 @@ pub const AUDIO_FILE_FLAC_TYPE: AudioFileTypeID = 0x666c_6163;
 pub const AUDIO_FILE_M4A_TYPE: AudioFileTypeID = 0x6d34_6166;
 pub const AUDIO_FILE_MP3_TYPE: AudioFileTypeID = 0x4d50_4733;
 pub const AUDIO_FILE_WAVE_TYPE: AudioFileTypeID = 0x5741_5645;
+pub const AUDIO_FILE_AIFF_TYPE: AudioFileTypeID = 0x4149_4646;
 pub const AUDIO_FILE_PROPERTY_AUDIO_DATA_PACKET_COUNT: AudioFilePropertyID = 0x7063_6e74;
 pub const AUDIO_FILE_PROPERTY_DATA_FORMAT: AudioFilePropertyID = 0x6466_6d74;
+pub const AUDIO_FILE_PROPERTY_DATA_OFFSET: AudioFilePropertyID = 0x646f_6666;
 pub const AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA: AudioFilePropertyID = 0x6d67_6963;
 pub const AUDIO_FILE_PROPERTY_MAXIMUM_PACKET_SIZE: AudioFilePropertyID = 0x7073_7a65;
+pub const AUDIO_FILE_PROPERTY_PACKET_TABLE_INFO: AudioFilePropertyID = 0x706e_666f;
 pub const AUDIO_FILE_PROPERTY_PACKET_TO_BYTE: AudioFilePropertyID = 0x706b_6279;
 pub const AUDIO_FORMAT_APPLE_LOSSLESS: AudioFormatID = 0x616c_6163;
 pub const AUDIO_FORMAT_FLAC: AudioFormatID = 0x666c_6163;
@@ -43,8 +46,18 @@ pub const FLOAT32_PLANAR_FLAGS: AudioFormatFlags =
     AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PACKED | AUDIO_FORMAT_FLAG_IS_NON_INTERLEAVED;
 pub const AUDIO_FORMAT_LINEAR_PCM: AudioFormatID = 0x6c70_636d;
 pub const AUDIO_FORMAT_MPEG4_AAC: AudioFormatID = 0x6161_6320;
+pub const AUDIO_FORMAT_MPEG4_AAC_HE: AudioFormatID = 0x6161_6368;
+pub const AUDIO_FORMAT_MPEG4_AAC_HE_V2: AudioFormatID = 0x6161_6370;
 pub const AUDIO_FORMAT_MPEG_LAYER3: AudioFormatID = 0x2e6d_7033;
 pub const AUDIO_FORMAT_PROPERTY_FORMAT_LIST: AudioFormatPropertyID = 0x666c_7374;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AudioFilePacketTableInfo {
+    pub number_valid_frames: SInt64,
+    pub priming_frames: i32,
+    pub remainder_frames: i32,
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]

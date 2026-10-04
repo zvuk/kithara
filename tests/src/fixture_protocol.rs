@@ -52,6 +52,7 @@ serde_wire_enum!(serde_audio_codec, AudioCodec, "audio codec", {
     Alac => "alac",
     Pcm => "pcm",
     Adpcm => "adpcm",
+    Ape => "ape",
 });
 
 serde_wire_enum!(

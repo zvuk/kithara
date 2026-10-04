@@ -1,5 +1,5 @@
 use std::{
-    io::{Read, Seek},
+    io::{Read, Seek, SeekFrom},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -9,10 +9,10 @@ use kithara_stream::ContainerFormat;
 use symphonia::{
     core::{
         formats::{FormatOptions, FormatReader, probe::Hint},
-        io::{MediaSourceStream, MediaSourceStreamOptions},
+        io::{MediaSourceStream, MediaSourceStreamOptions, ReadBytes},
         meta::MetadataOptions,
     },
-    default::formats::{AdtsReader, FlacReader, IsoMp4Reader, OggReader, WavReader},
+    default::formats::{AdtsReader, AiffReader, FlacReader, IsoMp4Reader, OggReader, WavReader},
 };
 
 use super::{adapter::ReadSeekAdapter, config::SymphoniaConfig, registry::get_probe};
@@ -32,7 +32,8 @@ pub(crate) struct ReaderBootstrap {
 /// don't stall an HLS source. Seek is re-enabled unconditionally once
 /// the reader is built so subsequent decode/seek operations work.
 ///
-/// Standard MP4 is the exception: its `moov` atom lives at the tail of
+/// MP4 and Ogg require seek during construction: Ogg reads the terminal
+/// granule position to establish the track duration. MP4's `moov` atom lives at the tail of
 /// the file, so the reader must seek to it during construction. This is
 /// safe because standard-MP4 consumers pass a fully materialised source.
 pub(crate) fn new_direct<R>(
@@ -44,7 +45,10 @@ pub(crate) fn new_direct<R>(
 where
     R: Read + Seek + Send + Sync + 'static,
 {
-    let seek_enabled = matches!(container, ContainerFormat::Mp4);
+    let seek_enabled = matches!(container, ContainerFormat::Mp4 | ContainerFormat::Ogg);
+    let mut source: crate::traits::BoxedSource = Box::new(source);
+    let audio_start = crate::factory::skip_id3_tags(&mut source)?;
+    source.seek(SeekFrom::Start(0))?;
     let adapter = ReadSeekAdapter::new(
         source,
         config.byte_len_handle.as_ref().map(Arc::clone),
@@ -55,7 +59,9 @@ where
     let seek_enabled_handle = adapter.seek_enabled_handle();
     let byte_pos_handle = adapter.byte_pos_handle();
 
-    let mss = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
+    let mut mss = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
+    mss.ignore_bytes(audio_start)
+        .map_err(DecodeError::backend)?;
 
     tracing::debug!(?container, "Creating format reader directly (no probe)");
     let format_reader = create_reader_for_container(mss, container, format_opts)?;
@@ -156,11 +162,17 @@ fn create_reader_for_container(
             let reader = WavReader::try_new(mss, format_opts).map_err(DecodeError::backend)?;
             Ok(Box::new(reader))
         }
+        ContainerFormat::Aiff => {
+            let reader = AiffReader::try_new(mss, format_opts).map_err(DecodeError::backend)?;
+            Ok(Box::new(reader))
+        }
         ContainerFormat::Ogg => {
             let reader = OggReader::try_new(mss, format_opts).map_err(DecodeError::backend)?;
             Ok(Box::new(reader))
         }
-        ContainerFormat::MpegTs => Err(DecodeError::UnsupportedContainer { container }),
+        ContainerFormat::MpegTs | ContainerFormat::Ape => {
+            Err(DecodeError::UnsupportedContainer { container })
+        }
         ContainerFormat::Caf => {
             tracing::warn!("CAF container - falling back to probe");
             Err(DecodeError::UnsupportedContainer { container })

@@ -38,14 +38,14 @@ rhythm = [
     "dep:kithara-signal",
     "dep:kithara-test-utils",
 ]
-signal = []
+signal = ["kithara-encode/monkeys-audio"]
 wav = []
 
 [dependencies]
 kithara-analysis = { workspace = true, default-features = false, features = ["analysis-beat", "analysis-waveform", "beat-nn-small", "client-reqwest", "symphonia", "tls-rustls"], optional = true }
 kithara-audio = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"], optional = true }
 kithara-bufpool = { workspace = true, optional = true }
-kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "fdk-aac", "tls-rustls"], optional = true }
+kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "fdk-aac", "opus", "ape", "tls-rustls"], optional = true }
 kithara-drm = { workspace = true, optional = true }
 kithara-encode = { workspace = true, features = ["client-reqwest", "fdk-aac", "ffmpeg", "tls-rustls"] }
 kithara-events = { workspace = true, optional = true }

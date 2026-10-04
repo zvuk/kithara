@@ -20,6 +20,15 @@ pub enum BytesEncodeTarget {
     Aac,
     M4a,
     Alac,
+    Flac24,
+    Vorbis,
+    Opus,
+    Ape,
+    Wav16,
+    Wav24,
+    Wav32,
+    WavFloat32,
+    Aiff16,
 }
 
 impl BytesEncodeTarget {
@@ -27,9 +36,15 @@ impl BytesEncodeTarget {
     pub const fn codec(self) -> AudioCodec {
         match self {
             Self::Mp3 => AudioCodec::Mp3,
-            Self::Flac => AudioCodec::Flac,
+            Self::Flac | Self::Flac24 => AudioCodec::Flac,
             Self::Aac | Self::M4a => AudioCodec::AacLc,
             Self::Alac => AudioCodec::Alac,
+            Self::Vorbis => AudioCodec::Vorbis,
+            Self::Opus => AudioCodec::Opus,
+            Self::Ape => AudioCodec::Ape,
+            Self::Wav16 | Self::Wav24 | Self::Wav32 | Self::WavFloat32 | Self::Aiff16 => {
+                AudioCodec::Pcm
+            }
         }
     }
 
@@ -37,9 +52,13 @@ impl BytesEncodeTarget {
     pub const fn container(self) -> ContainerFormat {
         match self {
             Self::Mp3 => ContainerFormat::MpegAudio,
-            Self::Flac => ContainerFormat::Flac,
+            Self::Flac | Self::Flac24 => ContainerFormat::Flac,
             Self::Aac => ContainerFormat::Adts,
             Self::M4a | Self::Alac => ContainerFormat::Mp4,
+            Self::Vorbis | Self::Opus => ContainerFormat::Ogg,
+            Self::Ape => ContainerFormat::Ape,
+            Self::Wav16 | Self::Wav24 | Self::Wav32 | Self::WavFloat32 => ContainerFormat::Wav,
+            Self::Aiff16 => ContainerFormat::Aiff,
         }
     }
 
@@ -47,8 +66,18 @@ impl BytesEncodeTarget {
     pub const fn default_bit_rate(self) -> Option<u64> {
         const DEFAULT_LOSSY_BIT_RATE: u64 = 128_000;
         match self {
-            Self::Mp3 | Self::Aac | Self::M4a => Some(DEFAULT_LOSSY_BIT_RATE),
-            Self::Flac | Self::Alac => None,
+            Self::Mp3 | Self::Aac | Self::M4a | Self::Vorbis | Self::Opus => {
+                Some(DEFAULT_LOSSY_BIT_RATE)
+            }
+            Self::Flac
+            | Self::Flac24
+            | Self::Alac
+            | Self::Ape
+            | Self::Wav16
+            | Self::Wav24
+            | Self::Wav32
+            | Self::WavFloat32
+            | Self::Aiff16 => None,
         }
     }
 
@@ -56,9 +85,14 @@ impl BytesEncodeTarget {
     pub const fn extension(self) -> &'static str {
         match self {
             Self::Mp3 => "mp3",
-            Self::Flac => "flac",
+            Self::Flac | Self::Flac24 => "flac",
             Self::Aac => "aac",
             Self::M4a | Self::Alac => "m4a",
+            Self::Vorbis => "ogg",
+            Self::Opus => "opus",
+            Self::Ape => "ape",
+            Self::Wav16 | Self::Wav24 | Self::Wav32 | Self::WavFloat32 => "wav",
+            Self::Aiff16 => "aiff",
         }
     }
 

@@ -35,6 +35,8 @@ struct GuestSettings<'a> {
     cargo_tools: BTreeMap<&'a str, &'a str>,
     cmake_sha256: &'a str,
     cmake_url: String,
+    monkeys_audio_source_url: &'a str,
+    monkeys_audio_source_sha256: &'a str,
     git_sha256: &'a str,
     git_url: String,
     runner_sha256: &'a str,
@@ -350,6 +352,8 @@ fn build_answer_media(
             .iter()
             .map(|tool| Ok((*tool, pins.cargo_tool_version(tool)?)))
             .collect::<Result<_>>()?,
+        monkeys_audio_source_url: &pins.monkeys_audio_source_url,
+        monkeys_audio_source_sha256: &pins.monkeys_audio_source_sha256,
         cmake_sha256: &pins.cmake_windows_amd64_sha256,
         cmake_url: format!(
             "https://github.com/Kitware/CMake/releases/download/v{version}/cmake-{version}-windows-x86_64.zip",
@@ -459,6 +463,8 @@ mod tests {
                 .iter()
                 .map(|tool| (*tool, pins.cargo_tool_version(tool).unwrap()))
                 .collect(),
+            monkeys_audio_source_url: &pins.monkeys_audio_source_url,
+            monkeys_audio_source_sha256: &pins.monkeys_audio_source_sha256,
             cmake_sha256: &pins.cmake_windows_amd64_sha256,
             cmake_url: String::new(),
             git_sha256: &pins.git_windows_sha256,

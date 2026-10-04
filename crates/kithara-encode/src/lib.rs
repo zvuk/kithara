@@ -14,6 +14,8 @@
 //! })?;
 //! ```
 
+#[cfg(all(not(target_arch = "wasm32"), feature = "monkeys-audio"))]
+mod ape;
 mod config;
 mod error;
 mod factory;

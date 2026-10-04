@@ -177,13 +177,13 @@ async fn stream_file_seek_reads_expected_bytes(
 /// fails to load. Production stream URL: `cdn-edge.zvq.me/track/streamhq?id=…`
 /// served as `audio/mpeg`.
 #[kithara::test(tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-#[case("audio/mpeg", AudioCodec::Mp3, ContainerFormat::MpegAudio)]
-#[case("audio/flac", AudioCodec::Flac, ContainerFormat::Flac)]
-#[case("audio/wav", AudioCodec::Pcm, ContainerFormat::Wav)]
+#[case("audio/mpeg", Some(AudioCodec::Mp3), ContainerFormat::MpegAudio)]
+#[case("audio/flac", Some(AudioCodec::Flac), ContainerFormat::Flac)]
+#[case("audio/wav", None, ContainerFormat::Wav)]
 async fn stream_media_info_carries_container_from_content_type(
     temp_dir: TestTempDir,
     #[case] mime: &'static str,
-    #[case] expected_codec: AudioCodec,
+    #[case] expected_codec: Option<AudioCodec>,
     #[case] expected_container: ContainerFormat,
 ) {
     let helper = TestServerHelper::new().await;
@@ -202,9 +202,8 @@ async fn stream_media_info_carries_container_from_content_type(
 
     let info = info.expect("media_info must be available once Content-Type arrived");
     assert_eq!(
-        info.codec,
-        Some(expected_codec),
-        "{mime}: codec lost; got {:?}",
+        info.codec, expected_codec,
+        "{mime}: codec hint differs; got {:?}",
         info.codec
     );
     assert_eq!(

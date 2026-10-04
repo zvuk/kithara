@@ -22,7 +22,8 @@ use crate::{
     coord::FileCoord,
     error::SourceError,
     session::{
-        FileAssetCtx, FileInner, FileLocalConfig, FilePeer, FileSource, FileSourceCtx, sniff_codec,
+        FileAssetCtx, FileInner, FileLocalConfig, FilePeer, FileSource, FileSourceCtx,
+        sniff_media_info,
     },
 };
 
@@ -81,14 +82,14 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     let coord = completed_coord(reader.len());
-    let cached_codec = sniff_codec(&reader);
+    let cached_media_info = sniff_media_info(&reader);
     FileSource::local(
         FileLocalConfig::builder()
             .reader(reader)
             .coord(coord)
             .bus(bus)
             .cancel(cancel)
-            .maybe_cached_codec(cached_codec)
+            .maybe_cached_media_info(cached_media_info)
             .build(),
         config,
     )

@@ -17,6 +17,10 @@ pub enum ContainerFormat {
     Flac,
     /// RIFF WAVE
     Wav,
+    /// Audio Interchange File Format, including AIFF-C.
+    Aiff,
+    /// Monkey's Audio stream.
+    Ape,
     /// Ogg container
     Ogg,
     /// CAF (Core Audio Format)
@@ -48,9 +52,28 @@ pub enum AudioCodec {
     Pcm,
     /// ADPCM
     Adpcm,
+    /// Monkey's Audio lossless codec.
+    Ape,
 }
 
 impl ContainerFormat {
+    /// The container named by an HTTP content type.
+    #[must_use]
+    pub fn parse_mime(mime: &str) -> Option<Self> {
+        match mime.to_ascii_lowercase().as_str() {
+            "audio/mp4" | "audio/x-m4a" => Some(Self::Mp4),
+            "audio/ogg" => Some(Self::Ogg),
+            "audio/aac" | "audio/aacp" => Some(Self::Adts),
+            "audio/mpeg" | "audio/mp3" => Some(Self::MpegAudio),
+            "audio/flac" => Some(Self::Flac),
+            "audio/wav" | "audio/wave" | "audio/x-wav" => Some(Self::Wav),
+            "audio/x-caf" => Some(Self::Caf),
+            "audio/aiff" | "audio/x-aiff" => Some(Self::Aiff),
+            "audio/ape" | "audio/x-ape" => Some(Self::Ape),
+            _ => None,
+        }
+    }
+
     /// The container a file extension names, matched case-insensitively.
     #[must_use]
     pub fn parse_extension(ext: &str) -> Option<Self> {
@@ -62,8 +85,13 @@ impl ContainerFormat {
             ("flac", ContainerFormat::Flac),
             ("ogg", ContainerFormat::Ogg),
             ("oga", ContainerFormat::Ogg),
+            ("opus", ContainerFormat::Ogg),
             ("wav", ContainerFormat::Wav),
             ("wave", ContainerFormat::Wav),
+            ("aiff", ContainerFormat::Aiff),
+            ("aif", ContainerFormat::Aiff),
+            ("aifc", ContainerFormat::Aiff),
+            ("ape", ContainerFormat::Ape),
             ("caf", ContainerFormat::Caf),
         ];
         NAMED
@@ -98,6 +126,67 @@ pub struct MediaInfo {
     pub variant_index: Option<u32>,
 }
 
+impl TryFrom<&[u8]> for MediaInfo {
+    type Error = CodecMagicError;
+
+    /// Identify only facts carried by an encoded-media prefix.
+    /// Container signatures do not identify the codec inside MP4, Ogg or CAF.
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        let container = match bytes {
+            [b'O', b'g', b'g', b'S', ..] => Some(ContainerFormat::Ogg),
+            [_, _, _, _, b'f', b't', b'y', b'p', ..] => Some(ContainerFormat::Mp4),
+            [_, _, _, _, b's', b't', b'y', b'p', ..] => Some(ContainerFormat::Fmp4),
+            [b'c', b'a', b'f', b'f', ..] => Some(ContainerFormat::Caf),
+            [
+                b'R',
+                b'I',
+                b'F',
+                b'F',
+                _,
+                _,
+                _,
+                _,
+                b'W',
+                b'A',
+                b'V',
+                b'E',
+                ..,
+            ] => Some(ContainerFormat::Wav),
+            [
+                b'F',
+                b'O',
+                b'R',
+                b'M',
+                _,
+                _,
+                _,
+                _,
+                b'A',
+                b'I',
+                b'F',
+                b'F' | b'C',
+                ..,
+            ] => {
+                return Ok(Self::builder()
+                    .codec(AudioCodec::Pcm)
+                    .container(ContainerFormat::Aiff)
+                    .build());
+            }
+            _ => None,
+        };
+        if let Some(container) = container {
+            return Ok(Self::builder().container(container).build());
+        }
+        AudioCodec::try_from(bytes).map(|codec| {
+            let mut info = Self::from(codec);
+            if codec == AudioCodec::AacLc {
+                info.container = Some(ContainerFormat::Adts);
+            }
+            info
+        })
+    }
+}
+
 impl MediaInfo {
     /// Parse codec **and** container from an HTTP `Content-Type` value.
     ///
@@ -108,15 +197,15 @@ impl MediaInfo {
     #[must_use]
     pub fn parse_mime(mime: &str) -> Option<Self> {
         let mime = mime.to_lowercase();
-        let codec = AudioCodec::parse_normalized_mime(&mime)?;
-        let container = match mime.as_str() {
-            "audio/mp4" | "audio/x-m4a" => Some(ContainerFormat::Mp4),
-            "audio/aac" | "audio/aacp" => Some(ContainerFormat::Adts),
-            _ => ContainerFormat::try_from(codec).ok(),
-        };
+        let codec = AudioCodec::parse_normalized_mime(&mime);
+        let container = ContainerFormat::parse_mime(&mime)
+            .or_else(|| codec.and_then(|codec| ContainerFormat::try_from(codec).ok()));
+        if codec.is_none() && container.is_none() {
+            return None;
+        }
         Some(
             Self::builder()
-                .maybe_codec(Some(codec))
+                .maybe_codec(codec)
                 .maybe_container(container)
                 .build(),
         )
@@ -166,6 +255,7 @@ impl TryFrom<AudioCodec> for ContainerFormat {
             AudioCodec::Mp3 => Ok(Self::MpegAudio),
             AudioCodec::Pcm => Ok(Self::Wav),
             AudioCodec::Flac => Ok(Self::Flac),
+            AudioCodec::Ape => Ok(Self::Ape),
             AudioCodec::Vorbis | AudioCodec::Opus => Ok(Self::Ogg),
             AudioCodec::Alac => Ok(Self::Caf),
             AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Adpcm => {
@@ -203,7 +293,7 @@ impl AudioCodec {
             Self::AacLc | Self::AacHe | Self::AacHeV2 => 1024,
             Self::Mp3 => 576,
             Self::Opus => 312,
-            Self::Flac | Self::Vorbis | Self::Alac | Self::Pcm | Self::Adpcm => 0,
+            Self::Flac | Self::Vorbis | Self::Alac | Self::Pcm | Self::Adpcm | Self::Ape => 0,
         }
     }
 
@@ -213,17 +303,12 @@ impl AudioCodec {
         const NAMED: &[(&str, AudioCodec)] = &[
             ("mp3", AudioCodec::Mp3),
             ("aac", AudioCodec::AacLc),
-            ("m4a", AudioCodec::AacLc),
-            ("mp4", AudioCodec::AacLc),
             ("flac", AudioCodec::Flac),
-            ("ogg", AudioCodec::Vorbis),
-            ("oga", AudioCodec::Vorbis),
+            ("ape", AudioCodec::Ape),
             ("opus", AudioCodec::Opus),
-            ("wav", AudioCodec::Pcm),
-            ("wave", AudioCodec::Pcm),
             ("aiff", AudioCodec::Pcm),
             ("aif", AudioCodec::Pcm),
-            ("caf", AudioCodec::Alac),
+            ("aifc", AudioCodec::Pcm),
         ];
         NAMED
             .iter()
@@ -277,14 +362,9 @@ impl AudioCodec {
             (m.contains("mp3") || m == "audio/mpeg", Self::Mp3),
             (m.contains("aac"), Self::AacLc),
             (m.contains("flac"), Self::Flac),
+            (matches!(m, "audio/ape" | "audio/x-ape"), Self::Ape),
             (m.contains("vorbis"), Self::Vorbis),
             (m.contains("opus"), Self::Opus),
-            (m == "audio/ogg", Self::Vorbis),
-            (
-                matches!(m, "audio/wav" | "audio/wave" | "audio/x-wav"),
-                Self::Pcm,
-            ),
-            (matches!(m, "audio/mp4" | "audio/x-m4a"), Self::AacLc),
         ]
         .into_iter()
         .find_map(|(matches, codec)| matches.then_some(codec))
@@ -298,7 +378,7 @@ impl AudioCodec {
             Self::AacLc | Self::AacHe | Self::AacHeV2 | Self::Mp3 | Self::Vorbis | Self::Opus => {
                 true
             }
-            Self::Flac | Self::Alac | Self::Pcm | Self::Adpcm => false,
+            Self::Flac | Self::Alac | Self::Pcm | Self::Adpcm | Self::Ape => false,
         }
     }
 }
@@ -332,25 +412,8 @@ impl TryFrom<&[u8]> for AudioCodec {
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         match bytes {
             b if b.len() < 4 => Err(CodecMagicError::TooShort { got: b.len() }),
-            [b'I', b'D', b'3', ..] => Ok(Self::Mp3),
             [b'f', b'L', b'a', b'C', ..] => Ok(Self::Flac),
-            [b'O', b'g', b'g', b'S', ..] => Ok(Self::Vorbis),
-            [
-                b'R',
-                b'I',
-                b'F',
-                b'F',
-                _,
-                _,
-                _,
-                _,
-                b'W',
-                b'A',
-                b'V',
-                b'E',
-                ..,
-            ] => Ok(Self::Pcm),
-            [_, _, _, _, b'f', b't', b'y', b'p', ..] => Ok(Self::AacLc),
+            [b'M', b'A', b'C', b' ', ..] => Ok(Self::Ape),
             [0xFF, b1, ..] if (b1 & 0xE0) == 0xE0 => match (b1 >> 1) & 0b11 {
                 0b00 => Ok(Self::AacLc),
                 _ => Ok(Self::Mp3),
@@ -358,6 +421,25 @@ impl TryFrom<&[u8]> for AudioCodec {
             _ => Err(CodecMagicError::Unknown),
         }
     }
+}
+
+/// Byte length of a validated `ID3v2` tag, including its header and optional footer.
+/// The caller reads the media prefix at this offset without retaining the tag body.
+#[must_use]
+pub fn id3v2_tag_len(header: &[u8]) -> Option<u64> {
+    let header = header.get(..10)?;
+    if &header[..3] != b"ID3" || !(2..=4).contains(&header[3]) || header[4] == 0xff {
+        return None;
+    }
+    let mut size = 0_u64;
+    for byte in &header[6..10] {
+        if byte & 0x80 != 0 {
+            return None;
+        }
+        size = (size << 7) | u64::from(*byte);
+    }
+    let footer = u64::from(header[3] == 4 && header[5] & 0x10 != 0) * 10;
+    Some(10 + size + footer)
 }
 
 #[cfg(test)]
@@ -438,7 +520,10 @@ mod tests {
     #[kithara::test]
     fn unknown_or_file_like_media_needs_exact_byte_sizes() {
         assert!(needs_exact_byte_sizes(None, Some(ContainerFormat::Fmp4)));
-        assert!(needs_exact_byte_sizes(Some(AudioCodec::Pcm), None));
+        assert!(needs_exact_byte_sizes(
+            Some(AudioCodec::Pcm),
+            Some(ContainerFormat::Aiff)
+        ));
         assert!(needs_exact_byte_sizes(
             Some(AudioCodec::Pcm),
             Some(ContainerFormat::Wav)
@@ -565,18 +650,34 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::id3v2(
-        b"ID3\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
-        AudioCodec::Mp3
-    )]
     #[case::mpeg_sync_layer3(&[0xFF, 0xFB, 0x90, 0x44], AudioCodec::Mp3)]
     #[case::aac_adts_sync(&[0xFF, 0xF1, 0x50, 0x80, 0x00, 0x1F, 0xFC], AudioCodec::AacLc)]
     #[case::flac(b"fLaC\x00\x00\x00\x22", AudioCodec::Flac)]
-    #[case::ogg(b"OggS\x00\x02\x00\x00", AudioCodec::Vorbis)]
-    #[case::wav(b"RIFF\x24\x08\x00\x00WAVEfmt ", AudioCodec::Pcm)]
-    #[case::mp4(b"\x00\x00\x00\x20ftypisom", AudioCodec::AacLc)]
     fn try_from_recognises_known_magic(#[case] bytes: &[u8], #[case] expected: AudioCodec) {
         assert_eq!(AudioCodec::try_from(bytes), Ok(expected));
+    }
+
+    #[kithara::test]
+    #[case(b"OggS\x00\x02\x00\x00", ContainerFormat::Ogg)]
+    #[case(b"\x00\x00\x00\x20ftypisom", ContainerFormat::Mp4)]
+    #[case(b"caff\x00\x01\x00\x00", ContainerFormat::Caf)]
+    #[case(b"RIFF\x24\x08\x00\x00WAVEfmt ", ContainerFormat::Wav)]
+    fn container_magic_does_not_invent_a_codec(
+        #[case] bytes: &[u8],
+        #[case] container: ContainerFormat,
+    ) {
+        let info = MediaInfo::try_from(bytes).expect("container signature");
+        assert_eq!(info.container, Some(container));
+        assert_eq!(info.codec, None);
+        assert!(AudioCodec::try_from(bytes).is_err());
+    }
+
+    #[kithara::test]
+    fn id3_metadata_does_not_identify_audio() {
+        assert_eq!(
+            MediaInfo::try_from(&b"ID3\x04\x00\x00\x00\x00\x00\x00"[..]).ok(),
+            None
+        );
     }
 
     #[kithara::test]
@@ -622,16 +723,12 @@ mod tests {
     #[case("audio/flac", Some(AudioCodec::Flac), "a FLAC mime is FLAC")]
     #[case("audio/vorbis", Some(AudioCodec::Vorbis), "a Vorbis mime is Vorbis")]
     #[case("audio/opus", Some(AudioCodec::Opus), "an Opus mime is Opus")]
-    #[case("audio/ogg", Some(AudioCodec::Vorbis), "a bare Ogg mime is Vorbis")]
-    #[case("audio/wav", Some(AudioCodec::Pcm), "a WAV mime is PCM")]
-    #[case("audio/wave", Some(AudioCodec::Pcm), "the WAVE spelling is PCM too")]
-    #[case("audio/x-wav", Some(AudioCodec::Pcm), "the x- spelling is PCM too")]
-    #[case("audio/mp4", Some(AudioCodec::AacLc), "an MP4 mime carries AAC")]
-    #[case(
-        "audio/x-m4a",
-        Some(AudioCodec::AacLc),
-        "the m4a spelling carries AAC too"
-    )]
+    #[case("audio/ogg", None, "an Ogg mime names only the container")]
+    #[case("audio/wav", None, "a WAV mime names only the container")]
+    #[case("audio/wave", None, "the WAVE spelling names only the container")]
+    #[case("audio/x-wav", None, "the x- spelling names only the container")]
+    #[case("audio/mp4", None, "an MP4 mime names only the container")]
+    #[case("audio/x-m4a", None, "the m4a spelling names only the container")]
     #[case("audio/basic", None, "an unknown mime names no codec")]
     #[case("", None, "an empty mime names no codec")]
     fn mime_parsing_names_the_codec(
@@ -709,20 +806,20 @@ mod tests {
     #[kithara::test]
     #[case("mp3", Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio))]
     #[case("aac", Some(AudioCodec::AacLc), Some(ContainerFormat::Adts))]
-    #[case("m4a", Some(AudioCodec::AacLc), Some(ContainerFormat::Mp4))]
-    #[case("mp4", Some(AudioCodec::AacLc), Some(ContainerFormat::Mp4))]
+    #[case("m4a", None, Some(ContainerFormat::Mp4))]
+    #[case("mp4", None, Some(ContainerFormat::Mp4))]
     #[case("flac", Some(AudioCodec::Flac), Some(ContainerFormat::Flac))]
-    #[case("ogg", Some(AudioCodec::Vorbis), Some(ContainerFormat::Ogg))]
-    #[case("oga", Some(AudioCodec::Vorbis), Some(ContainerFormat::Ogg))]
-    #[case("opus", Some(AudioCodec::Opus), None)]
-    #[case("wav", Some(AudioCodec::Pcm), Some(ContainerFormat::Wav))]
-    #[case("wave", Some(AudioCodec::Pcm), Some(ContainerFormat::Wav))]
-    #[case("aiff", Some(AudioCodec::Pcm), None)]
-    #[case("aif", Some(AudioCodec::Pcm), None)]
-    #[case("caf", Some(AudioCodec::Alac), Some(ContainerFormat::Caf))]
+    #[case("ogg", None, Some(ContainerFormat::Ogg))]
+    #[case("oga", None, Some(ContainerFormat::Ogg))]
+    #[case("opus", Some(AudioCodec::Opus), Some(ContainerFormat::Ogg))]
+    #[case("wav", None, Some(ContainerFormat::Wav))]
+    #[case("wave", None, Some(ContainerFormat::Wav))]
+    #[case("aiff", Some(AudioCodec::Pcm), Some(ContainerFormat::Aiff))]
+    #[case("aif", Some(AudioCodec::Pcm), Some(ContainerFormat::Aiff))]
+    #[case("caf", None, Some(ContainerFormat::Caf))]
     #[case("MP3", Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio))]
     #[case("Flac", Some(AudioCodec::Flac), Some(ContainerFormat::Flac))]
-    #[case("M4A", Some(AudioCodec::AacLc), Some(ContainerFormat::Mp4))]
+    #[case("M4A", None, Some(ContainerFormat::Mp4))]
     #[case("txt", None, None)]
     #[case("doc", None, None)]
     #[case("unknown", None, None)]

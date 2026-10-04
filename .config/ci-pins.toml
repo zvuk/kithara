@@ -23,6 +23,7 @@ brew_formulae = [
   "gitlab-runner",
   "jq",
   "lima",
+  "mac",
   "node",
   "openjdk@17",
   "pkg-config",
@@ -49,12 +50,15 @@ gitleaks_linux_amd64_sha256 = "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f
 gitleaks_linux_arm64_sha256 = "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080"
 gitleaks_version = "8.30.1"
 linux_base_digest = "77fac8b98f9f46062bb680b6d25d5bcaabfc400143952ebc572e924bcbedc3fa"
-linux_android_image = "kithara-ci-android:linux-20261002a"
-linux_android_runner_image = "kithara-ci-android-runner:linux-20261002a"
-linux_image = "kithara-ci:linux-20261002a"
-linux_runner_image = "kithara-ci-runner:linux-20261002a"
+linux_android_image = "kithara-ci-android:linux-20261004a"
+linux_android_runner_image = "kithara-ci-android-runner:linux-20261004a"
+linux_image = "kithara-ci:linux-20261004a"
+linux_runner_image = "kithara-ci-runner:linux-20261004a"
 lockbud_rev = "cc78cb72cb85cb80e596717339cca95ef50c8fe0"
 lockbud_toolchain = "nightly-2026-02-07"
+monkeys_audio_version = "13.27"
+monkeys_audio_source_sha256 = "c47c6b36f6a7bd50d990f2eb36a70915c0074a7b9634be396c94464905e76686"
+monkeys_audio_source_url = "https://monkeysaudio.com/files/MAC_1327_SDK.zip"
 macos_guest_build = "25G72"
 msrv_toolchain = "1.95.0"
 nightly_toolchain = "nightly-2026-07-29"

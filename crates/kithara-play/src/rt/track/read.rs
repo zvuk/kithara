@@ -138,6 +138,10 @@ impl PlayerTrack {
                 sample_rate: self.sample_rate,
             },
         );
+        if self.state == TrackState::FadingOut && self.fade.settled() && frames_until_eof == Some(0)
+        {
+            self.handle_natural_end(sink.notifications, sink.seek_epoch);
+        }
         self.update_after_mix(sink.notifications);
 
         TrackReadOutcome::Full {

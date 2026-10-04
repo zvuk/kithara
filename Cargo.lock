@@ -257,6 +257,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a38750a2a9617d9f1a1428b408fb909f7256a2766c59b0b07993170959731bb"
 
 [[package]]
+name = "ape-decoder"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95097ef8efebf7b1e1d638b77935cfce25576163614427b464efe256bb8b2ec1"
+dependencies = [
+ "crc32fast",
+ "md-5",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4826,6 +4836,7 @@ version = "0.0.1-alpha5"
 name = "kithara-decode"
 version = "0.0.1-alpha5"
 dependencies = [
+ "ape-decoder",
  "core-foundation 0.10.1",
  "core-foundation-sys",
  "delegate",
@@ -4853,6 +4864,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
+ "opus",
  "re_mp4",
  "serde",
  "serde_yaml_ng",
@@ -6743,6 +6755,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest 0.10.7",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7614,6 +7636,24 @@ name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
+
+[[package]]
+name = "opus"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33718946cc77d4032911d4efe03a66dbcbfbd2bb16c3da06aaeadcc637c32216"
+dependencies = [
+ "opusic-sys",
+]
+
+[[package]]
+name = "opusic-sys"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9d1ecdf206421bc74343ab3bb2f30ad2abbfee41fa341f7181fecbaf957769a"
+dependencies = [
+ "cmake",
+]
 
 [[package]]
 name = "orbclient"

@@ -59,6 +59,18 @@ impl<'a> ToolchainInstaller<'a> {
                     .run_command(&mut command, "install CI host cask")?;
             }
         }
+        let encoder = self
+            .process
+            .command(self.config.host.brew_tool("mac"))
+            .output()
+            .context("Monkey's Audio version")?;
+        let banner = String::from_utf8_lossy(&encoder.stdout);
+        if !banner.contains(&format!("v {}", self.config.pins.monkeys_audio_version)) {
+            bail!(
+                "Monkey's Audio {} is required, found {banner}",
+                self.config.pins.monkeys_audio_version
+            );
+        }
         let runner_path = self.config.host.brew_tool("gitlab-runner");
         let runner = self.process.capture(
             path_text(&runner_path)?,

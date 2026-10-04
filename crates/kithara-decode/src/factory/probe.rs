@@ -1,6 +1,6 @@
 use std::io::{Read, Seek, SeekFrom};
 
-use kithara_stream::{AudioCodec, ContainerFormat};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, id3v2_tag_len};
 
 use crate::{
     error::{DecodeError, DecodeResult},
@@ -28,9 +28,195 @@ pub(super) fn resolve_codec_container(
     Ok((probe_codec(hint)?, hint.container))
 }
 
+/// Position the encoded input at its first audio/container byte.
+pub(crate) fn skip_id3_tags(source: &mut BoxedSource) -> DecodeResult<u64> {
+    let mut offset = 0u64;
+    loop {
+        source.seek(SeekFrom::Start(offset))?;
+        let mut prefix = [0; 10];
+        source.read_exact(&mut prefix)?;
+        if !prefix.starts_with(b"ID3") {
+            source.seek(SeekFrom::Start(offset))?;
+            return Ok(offset);
+        }
+        let len = id3v2_tag_len(&prefix).ok_or(DecodeError::InvalidData {
+            detail: "invalid ID3v2 header",
+        })?;
+        offset = offset.checked_add(len).ok_or(DecodeError::InvalidData {
+            detail: "ID3v2 extent overflow",
+        })?;
+    }
+}
+
+pub(super) fn sniff_wav_codec(source: &mut BoxedSource) -> DecodeResult<AudioCodec> {
+    let position = source.stream_position()?;
+    let result = read_wav_codec(source);
+    source.seek(SeekFrom::Start(position))?;
+    result
+}
+
+fn read_wav_codec(source: &mut BoxedSource) -> DecodeResult<AudioCodec> {
+    let range = wav_chunk_range(source, *b"fmt ")?;
+    let size = range.end - range.start;
+    if size < 16 {
+        return Err(DecodeError::ProbeFailed);
+    }
+    let mut fmt = [0; 40];
+    let len = usize::try_from(size.min(fmt.len() as u64)).map_err(|_| DecodeError::ProbeFailed)?;
+    source.read_exact(&mut fmt[..len])?;
+    let tag = u16::from_le_bytes([fmt[0], fmt[1]]);
+    let tag = if tag == 0xfffe {
+        if size < 40
+            || u16::from_le_bytes([fmt[16], fmt[17]]) < 22
+            || u64::from(u16::from_le_bytes([fmt[16], fmt[17]])) + 18 > size
+            || fmt[26..40] != [0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71]
+        {
+            return Err(DecodeError::ProbeFailed);
+        }
+        u16::from_le_bytes([fmt[24], fmt[25]])
+    } else {
+        tag
+    };
+    match tag {
+        1 | 3 => Ok(AudioCodec::Pcm),
+        0x55 => Ok(AudioCodec::Mp3),
+        2 | 0x11 => Ok(AudioCodec::Adpcm),
+        _ => Err(DecodeError::ProbeFailed),
+    }
+}
+
+pub(super) fn wav_data_range(source: &mut BoxedSource) -> DecodeResult<std::ops::Range<u64>> {
+    wav_chunk_range(source, *b"data")
+}
+
+/// Locate a RIFF chunk without crossing the declared container extent.
+fn wav_chunk_range(source: &mut BoxedSource, id: [u8; 4]) -> DecodeResult<std::ops::Range<u64>> {
+    let origin = skip_id3_tags(source)?;
+    let mut header = [0; 12];
+    source.read_exact(&mut header)?;
+    if &header[..4] != b"RIFF" || &header[8..] != b"WAVE" {
+        return Err(DecodeError::ProbeFailed);
+    }
+    let size = u32::from_le_bytes(
+        header[4..8]
+            .try_into()
+            .map_err(|_| DecodeError::ProbeFailed)?,
+    );
+    let end = origin
+        .checked_add(u64::from(size))
+        .and_then(|end| end.checked_add(8))
+        .ok_or(DecodeError::ProbeFailed)?;
+    while source
+        .stream_position()?
+        .checked_add(8)
+        .is_some_and(|next| next <= end)
+    {
+        let mut chunk = [0; 8];
+        source.read_exact(&mut chunk)?;
+        let size = u32::from_le_bytes(
+            chunk[4..]
+                .try_into()
+                .map_err(|_| DecodeError::ProbeFailed)?,
+        );
+        let start = source.stream_position()?;
+        let chunk_end = start
+            .checked_add(u64::from(size))
+            .filter(|chunk_end| *chunk_end <= end)
+            .ok_or(DecodeError::ProbeFailed)?;
+        if chunk[..4] == id {
+            return Ok(start..chunk_end);
+        }
+        let next = chunk_end
+            .checked_add(u64::from(size % 2))
+            .filter(|next| *next <= end)
+            .ok_or(DecodeError::ProbeFailed)?;
+        source.seek(SeekFrom::Start(next))?;
+    }
+    Err(DecodeError::ProbeFailed)
+}
+
+/// Read the identification packet at the beginning of an Ogg stream.
+pub(super) fn sniff_ogg_codec(source: &mut BoxedSource) -> DecodeResult<AudioCodec> {
+    let position = source.stream_position()?;
+    let result = read_ogg_codec(source);
+    source.seek(SeekFrom::Start(position))?;
+    result
+}
+
+fn read_ogg_codec(source: &mut BoxedSource) -> DecodeResult<AudioCodec> {
+    source.seek(SeekFrom::Start(0))?;
+    let mut header = [0; 27];
+    source.read_exact(&mut header)?;
+    if &header[..4] != b"OggS" || header[4] != 0 || header[5] & 3 != 2 {
+        return Err(DecodeError::ProbeFailed);
+    }
+    let segments = usize::from(header[26]);
+    let mut lacing = [0; 255];
+    source.read_exact(&mut lacing[..segments])?;
+    if segments == 0 || lacing[0] < 8 {
+        return Err(DecodeError::ProbeFailed);
+    }
+    let mut packet = [0; 8];
+    source.read_exact(&mut packet)?;
+    match &packet {
+        b"OpusHead" => Ok(AudioCodec::Opus),
+        [1, b'v', b'o', b'r', b'b', b'i', b's', ..] => Ok(AudioCodec::Vorbis),
+        _ => Err(DecodeError::ProbeFailed),
+    }
+}
+
+/// CAF's description chunk identifies the codec independently of the extension.
+pub(super) fn sniff_caf_codec(source: &mut BoxedSource) -> DecodeResult<AudioCodec> {
+    let position = source.stream_position()?;
+    let result = read_caf_codec(source);
+    source.seek(SeekFrom::Start(position))?;
+    result
+}
+
+fn read_caf_codec(source: &mut BoxedSource) -> DecodeResult<AudioCodec> {
+    source.seek(SeekFrom::Start(0))?;
+    let mut header = [0; 8];
+    source.read_exact(&mut header)?;
+    if &header[..4] != b"caff" || header[4..6] != [0, 1] {
+        return Err(DecodeError::ProbeFailed);
+    }
+    loop {
+        let mut chunk = [0; 12];
+        source.read_exact(&mut chunk)?;
+        let size = i64::from_be_bytes(
+            chunk[4..12]
+                .try_into()
+                .map_err(|_| DecodeError::ProbeFailed)?,
+        );
+        if size < 0 {
+            return Err(DecodeError::ProbeFailed);
+        }
+        if &chunk[..4] == b"desc" {
+            if size != 32 {
+                return Err(DecodeError::ProbeFailed);
+            }
+            let mut description = [0; 32];
+            source.read_exact(&mut description)?;
+            return match &description[8..12] {
+                b"alac" => Ok(AudioCodec::Alac),
+                b"lpcm" => Ok(AudioCodec::Pcm),
+                _ => Err(DecodeError::ProbeFailed),
+            };
+        }
+        source.seek(SeekFrom::Current(size))?;
+    }
+}
+
 /// Non-fatal byte sniff for inputs that genuinely arrive without container
 /// metadata; HLS should normally supply this through `MediaInfo`.
 pub(super) fn sniff_container_from_source(source: &mut BoxedSource) -> Option<ContainerFormat> {
+    let position = source.stream_position().ok()?;
+    let container = read_container_from_source(source);
+    source.seek(SeekFrom::Start(position)).ok()?;
+    container
+}
+
+fn read_container_from_source(source: &mut BoxedSource) -> Option<ContainerFormat> {
     const PREFIX_LEN: usize = 12;
 
     if source.seek(SeekFrom::Start(0)).is_err() {
@@ -38,28 +224,26 @@ pub(super) fn sniff_container_from_source(source: &mut BoxedSource) -> Option<Co
     }
 
     let mut prefix = [0; PREFIX_LEN];
-    let read = source.read(&mut prefix).ok()?;
+    let mut read = source.read(&mut prefix).ok()?;
+    while prefix[..read].starts_with(b"ID3") {
+        let skip = id3v2_tag_len(&prefix[..read])?;
+        let offset = source
+            .stream_position()
+            .ok()?
+            .checked_sub(u64::try_from(read).ok()?)?;
+        source
+            .seek(SeekFrom::Start(offset.checked_add(skip)?))
+            .ok()?;
+        read = source.read(&mut prefix).ok()?;
+    }
     if source.seek(SeekFrom::Start(0)).is_err() {
         return None;
     }
 
-    let container = sniff_container_from_prefix(&prefix[..read], source);
-    if source.seek(SeekFrom::Start(0)).is_err() {
-        return None;
-    }
-    container
+    sniff_container_from_prefix(&prefix[..read], source)
 }
 
 fn sniff_container_from_prefix(prefix: &[u8], source: &mut BoxedSource) -> Option<ContainerFormat> {
-    if prefix.starts_with(b"fLaC") {
-        return Some(ContainerFormat::Flac);
-    }
-    if prefix.len() >= 12 && prefix.starts_with(b"RIFF") && prefix.get(8..12) == Some(b"WAVE") {
-        return Some(ContainerFormat::Wav);
-    }
-    if prefix.starts_with(b"OggS") {
-        return Some(ContainerFormat::Ogg);
-    }
     if is_mp4_prefix(prefix) {
         return sniff_mp4_fragmented(&mut **source).map(|fragmented| {
             if fragmented {
@@ -69,27 +253,15 @@ fn sniff_container_from_prefix(prefix: &[u8], source: &mut BoxedSource) -> Optio
             }
         });
     }
-    if is_adts_sync(prefix) {
-        return Some(ContainerFormat::Adts);
-    }
-    if prefix.starts_with(b"ID3") || is_mp3_sync(prefix) {
-        return Some(ContainerFormat::MpegAudio);
-    }
-    None
+    MediaInfo::try_from(prefix)
+        .ok()
+        .and_then(|info| info.container)
 }
 
 fn is_mp4_prefix(prefix: &[u8]) -> bool {
     prefix
         .get(4..8)
         .is_some_and(|kind| kind == b"ftyp" || kind == b"styp")
-}
-
-fn is_adts_sync(prefix: &[u8]) -> bool {
-    prefix.len() >= 2 && prefix[0] == 0xff && (prefix[1] & 0xf0) == 0xf0
-}
-
-fn is_mp3_sync(prefix: &[u8]) -> bool {
-    prefix.len() >= 2 && prefix[0] == 0xff && (prefix[1] & 0xe0) == 0xe0
 }
 
 /// Probe codec from hints.
@@ -122,17 +294,7 @@ pub(super) fn probe_codec(hint: &ProbeHint) -> DecodeResult<AudioCodec> {
 }
 
 pub(super) fn container_from_mime(mime: &str) -> Option<ContainerFormat> {
-    let mime = mime.to_lowercase();
-
-    match mime.as_str() {
-        "audio/mpeg" => Some(ContainerFormat::MpegAudio),
-        "audio/aac" | "audio/aacp" => Some(ContainerFormat::Adts),
-        "audio/flac" => Some(ContainerFormat::Flac),
-        "audio/ogg" => Some(ContainerFormat::Ogg),
-        "audio/wav" | "audio/wave" | "audio/x-wav" => Some(ContainerFormat::Wav),
-        "audio/mp4" | "audio/x-m4a" => Some(ContainerFormat::Mp4),
-        _ => None,
-    }
+    ContainerFormat::parse_mime(mime)
 }
 
 /// Map an MP4 `stsd` sample-entry tag to a codec. The `.m4a`/`.mp4`
@@ -152,15 +314,16 @@ pub(super) const fn codec_from_mp4_fourcc(fourcc: [u8; 4]) -> Option<AudioCodec>
 pub(super) const fn codec_from_container(container: ContainerFormat) -> Option<AudioCodec> {
     match container {
         ContainerFormat::MpegAudio => Some(AudioCodec::Mp3),
-        ContainerFormat::Adts
+        ContainerFormat::Adts | ContainerFormat::MpegTs => Some(AudioCodec::AacLc),
+        ContainerFormat::Flac => Some(AudioCodec::Flac),
+        ContainerFormat::Ape => Some(AudioCodec::Ape),
+        ContainerFormat::Aiff => Some(AudioCodec::Pcm),
+        ContainerFormat::Wav
+        | ContainerFormat::Mkv
         | ContainerFormat::Mp4
         | ContainerFormat::Fmp4
-        | ContainerFormat::MpegTs => Some(AudioCodec::AacLc),
-        ContainerFormat::Flac => Some(AudioCodec::Flac),
-        ContainerFormat::Ogg => Some(AudioCodec::Vorbis),
-        ContainerFormat::Wav => Some(AudioCodec::Pcm),
-        ContainerFormat::Caf => Some(AudioCodec::Alac),
-        ContainerFormat::Mkv => None,
+        | ContainerFormat::Ogg
+        | ContainerFormat::Caf => None,
     }
 }
 
@@ -173,6 +336,21 @@ mod tests {
 
     use super::*;
     use crate::traits::BoxedSource;
+
+    #[kithara::test]
+    #[case(b"ID3\x04\0\0\x80\0\0\0".as_slice(), None)]
+    #[case(b"ID3\x04\0\0\0\0\0\0fLaC".as_slice(), Some(ContainerFormat::Flac))]
+    fn container_probe_restores_position_after_tagged_input(
+        #[case] bytes: &[u8],
+        #[case] expected: Option<ContainerFormat>,
+    ) {
+        let mut source: BoxedSource = Box::new(Cursor::new(bytes.to_vec()));
+        source
+            .seek(SeekFrom::Start(3))
+            .expect("set caller position");
+        assert_eq!(sniff_container_from_source(&mut source), expected);
+        assert_eq!(source.stream_position().expect("caller position"), 3);
+    }
 
     #[kithara::test]
     fn test_probe_hint_default() {
@@ -218,6 +396,35 @@ mod tests {
     }
 
     #[kithara::test]
+    #[case::pcm(1, true, Some(AudioCodec::Pcm))]
+    #[case::float(3, true, Some(AudioCodec::Pcm))]
+    #[case::mpeg(0x55, true, Some(AudioCodec::Mp3))]
+    #[case::unsupported(0x1234, true, None)]
+    #[case::foreign_guid(1, false, None)]
+    fn extensible_wave_codec_comes_from_its_subformat(
+        #[case] tag: u32,
+        #[case] standard_guid: bool,
+        #[case] expected: Option<AudioCodec>,
+    ) {
+        let mut fmt = vec![0; 40];
+        fmt[..2].copy_from_slice(&0xfffe_u16.to_le_bytes());
+        fmt[16..18].copy_from_slice(&22_u16.to_le_bytes());
+        fmt[24..28].copy_from_slice(&tag.to_le_bytes());
+        fmt[28..].copy_from_slice(&[0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113]);
+        if !standard_guid {
+            fmt[39] = 0;
+        }
+        let mut wav = b"RIFF".to_vec();
+        wav.extend_from_slice(&52_u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&40_u32.to_le_bytes());
+        wav.extend_from_slice(&fmt);
+        let mut source: BoxedSource = Box::new(Cursor::new(wav));
+        assert_eq!(sniff_wav_codec(&mut source).ok(), expected);
+        assert_eq!(source.stream_position().expect("position restored"), 0);
+    }
+
+    #[kithara::test]
     fn test_probe_from_direct_codec() {
         let hint = ProbeHint {
             codec: Some(AudioCodec::Vorbis),
@@ -239,11 +446,8 @@ mod tests {
     #[kithara::test]
     #[case("mp3", AudioCodec::Mp3)]
     #[case("aac", AudioCodec::AacLc)]
-    #[case("m4a", AudioCodec::AacLc)]
     #[case("flac", AudioCodec::Flac)]
-    #[case("ogg", AudioCodec::Vorbis)]
     #[case("opus", AudioCodec::Opus)]
-    #[case("wav", AudioCodec::Pcm)]
     #[case("MP3", AudioCodec::Mp3)]
     fn test_probe_from_extension(#[case] extension: &str, #[case] expected: AudioCodec) {
         let hint = ProbeHint {
@@ -259,10 +463,7 @@ mod tests {
     #[case("audio/flac", AudioCodec::Flac)]
     #[case("audio/aac", AudioCodec::AacLc)]
     #[case("audio/vorbis", AudioCodec::Vorbis)]
-    #[case("audio/ogg", AudioCodec::Vorbis)]
     #[case("audio/opus", AudioCodec::Opus)]
-    #[case("audio/wav", AudioCodec::Pcm)]
-    #[case("audio/mp4", AudioCodec::AacLc)]
     fn test_probe_from_mime(#[case] mime: &str, #[case] expected: AudioCodec) {
         let hint = ProbeHint {
             mime: Some(mime.into()),
@@ -274,11 +475,6 @@ mod tests {
 
     #[kithara::test]
     #[case(ContainerFormat::MpegAudio, AudioCodec::Mp3)]
-    #[case(ContainerFormat::Ogg, AudioCodec::Vorbis)]
-    #[case(ContainerFormat::Wav, AudioCodec::Pcm)]
-    #[case(ContainerFormat::Mp4, AudioCodec::AacLc)]
-    #[case(ContainerFormat::Fmp4, AudioCodec::AacLc)]
-    #[case(ContainerFormat::Caf, AudioCodec::Alac)]
     fn test_probe_from_container(#[case] container: ContainerFormat, #[case] expected: AudioCodec) {
         let hint = ProbeHint {
             container: Some(container),
@@ -311,6 +507,10 @@ mod tests {
     }
 
     #[kithara::test]
+    #[case(ProbeHint { container: Some(ContainerFormat::Mp4), ..Default::default() })]
+    #[case(ProbeHint { container: Some(ContainerFormat::Ogg), ..Default::default() })]
+    #[case(ProbeHint { container: Some(ContainerFormat::Wav), ..Default::default() })]
+    #[case(ProbeHint { mime: Some("audio/wav".into()), ..Default::default() })]
     #[case(ProbeHint::default())]
     #[case(ProbeHint { extension: Some("xyz".into()), ..Default::default() })]
     #[case(ProbeHint { mime: Some("application/octet-stream".into()), ..Default::default() })]

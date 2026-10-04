@@ -138,7 +138,9 @@ async fn test_audio_new_publishes_initial_decoder_changed(wav_1000: NamedTempFil
     let audio = worker.open(config).await.unwrap();
     #[cfg(target_os = "android")]
     let expected_backend = DecoderBackend::Android;
-    #[cfg(not(target_os = "android"))]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let expected_backend = DecoderBackend::Apple;
+    #[cfg(not(any(target_os = "android", target_os = "macos", target_os = "ios")))]
     let expected_backend = DecoderBackend::Symphonia;
 
     match events.try_recv().map(|env| env.event) {

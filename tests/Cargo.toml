@@ -175,7 +175,7 @@ kithara = { workspace = true, default-features = false, optional = true }
 kithara = { workspace = true, default-features = false, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
-kithara = { workspace = true, default-features = false, optional = true, features = ["full", "encode", "fdk-aac", "ffmpeg", "symphonia", "client-reqwest", "tls-rustls"] }
+kithara = { workspace = true, default-features = false, optional = true, features = ["full", "encode", "fdk-aac", "ffmpeg", "symphonia", "opus", "ape", "client-reqwest", "tls-rustls"] }
 kithara-app = { workspace = true, default-features = false, optional = true }
 kithara-devtools = { workspace = true, optional = true }
 

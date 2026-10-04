@@ -28,6 +28,7 @@ struct EncodeTarget {
     mime: &'static str,
     codec: Id,
     bit_rate: Option<usize>,
+    sample_format: Option<ffmpeg::format::Sample>,
 }
 
 impl EncodeTarget {
@@ -49,6 +50,7 @@ impl EncodeTarget {
                 codec: Id::MP3,
                 ext: "mp3",
                 mime: "audio/mpeg",
+                sample_format: None,
                 option_pairs: &[],
             },
             BytesEncodeTarget::Flac => Self {
@@ -56,6 +58,9 @@ impl EncodeTarget {
                 ext: "flac",
                 mime: "audio/flac",
                 bit_rate: None,
+                sample_format: Some(ffmpeg::format::Sample::I16(
+                    ffmpeg::format::sample::Type::Packed,
+                )),
                 option_pairs: &[("compression_level", "5")],
             },
             BytesEncodeTarget::Aac => Self {
@@ -63,6 +68,7 @@ impl EncodeTarget {
                 codec: Id::AAC,
                 ext: "aac",
                 mime: "audio/aac",
+                sample_format: None,
                 option_pairs: &[],
             },
             BytesEncodeTarget::M4a => Self {
@@ -70,6 +76,7 @@ impl EncodeTarget {
                 codec: Id::AAC,
                 ext: "m4a",
                 mime: "audio/mp4",
+                sample_format: None,
                 option_pairs: &[],
             },
             BytesEncodeTarget::Alac => Self {
@@ -77,8 +84,66 @@ impl EncodeTarget {
                 ext: "m4a",
                 mime: "audio/mp4",
                 bit_rate: None,
+                sample_format: Some(ffmpeg::format::Sample::I16(
+                    ffmpeg::format::sample::Type::Planar,
+                )),
                 option_pairs: &[],
             },
+            BytesEncodeTarget::Flac24 => Self {
+                codec: Id::FLAC,
+                ext: "flac",
+                mime: "audio/flac",
+                bit_rate: None,
+                sample_format: Some(ffmpeg::format::Sample::I32(
+                    ffmpeg::format::sample::Type::Packed,
+                )),
+                option_pairs: &[("compression_level", "5")],
+            },
+            // FFmpeg's built-in Vorbis encoder requires experimental compliance.
+            BytesEncodeTarget::Vorbis => Self {
+                codec: Id::VORBIS,
+                ext: "ogg",
+                mime: "audio/ogg",
+                bit_rate,
+                sample_format: None,
+                option_pairs: &[("strict", "-2")],
+            },
+            BytesEncodeTarget::Opus => Self {
+                codec: Id::OPUS,
+                ext: "opus",
+                mime: "audio/ogg",
+                bit_rate,
+                sample_format: None,
+                option_pairs: &[("compression_level", "10")],
+            },
+            BytesEncodeTarget::Wav16
+            | BytesEncodeTarget::Wav24
+            | BytesEncodeTarget::Wav32
+            | BytesEncodeTarget::WavFloat32
+            | BytesEncodeTarget::Aiff16 => Self {
+                codec: match request.target {
+                    BytesEncodeTarget::Wav16 => Id::PCM_S16LE,
+                    BytesEncodeTarget::Wav24 => Id::PCM_S24LE,
+                    BytesEncodeTarget::Wav32 => Id::PCM_S32LE,
+                    BytesEncodeTarget::WavFloat32 => Id::PCM_F32LE,
+                    BytesEncodeTarget::Aiff16 => Id::PCM_S16BE,
+                    _ => unreachable!("PCM target selected"),
+                },
+                ext: request.target.extension(),
+                mime: if request.target == BytesEncodeTarget::Aiff16 {
+                    "audio/aiff"
+                } else {
+                    "audio/wav"
+                },
+                bit_rate: None,
+                sample_format: None,
+                option_pairs: &[],
+            },
+            BytesEncodeTarget::Ape => {
+                return Err(EncodeError::UnsupportedCodec(
+                    kithara_stream::AudioCodec::Ape,
+                ));
+            }
         };
 
         Ok(target)
@@ -182,7 +247,7 @@ impl DirectEncoder {
         let input_channel_layout = ChannelLayout::default(i32::from(channels));
         let channel_layout = output_codec
             .channel_layouts()
-            .map_or(ChannelLayout::STEREO, |layouts| {
+            .map_or(input_channel_layout, |layouts| {
                 layouts.best(input_channel_layout.channels())
             });
 
@@ -192,13 +257,16 @@ impl DirectEncoder {
 
         encoder.set_rate(sample_rate as i32);
         encoder.set_channel_layout(channel_layout);
-        encoder.set_format(
-            output_codec
-                .formats()
-                .ok_or(FfmpegError::InvalidData)?
-                .next()
-                .ok_or(FfmpegError::InvalidData)?,
-        );
+        encoder.set_format(target.sample_format.map_or_else(
+            || {
+                output_codec
+                    .formats()
+                    .ok_or(FfmpegError::InvalidData)?
+                    .next()
+                    .ok_or(FfmpegError::InvalidData)
+            },
+            Ok,
+        )?);
         if let Some(bit_rate) = target.bit_rate {
             encoder.set_bit_rate(bit_rate);
             encoder.set_max_bit_rate(bit_rate);

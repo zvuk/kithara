@@ -51,6 +51,7 @@ pub(super) struct Owner {
     pub(super) runner: TrackAnalysisRunner,
     pub(super) entries: Vec<Entry>,
     pub(super) pending: VecDeque<usize>,
+    load_epoch: u64,
 }
 
 impl AnalysisService {
@@ -91,6 +92,7 @@ impl AnalysisService {
             pending: VecDeque::new(),
             active: None,
             axis: None,
+            load_epoch: 0,
         };
         (
             Self {
@@ -179,6 +181,45 @@ impl Owner {
         Some((index, config))
     }
 
+    fn point_entry(
+        &mut self,
+        index: usize,
+        config: AppResourceConfig,
+        queue: AppQueueControl,
+        track_id: TrackId,
+    ) {
+        self.load_epoch = self.load_epoch.wrapping_add(1);
+        self.entries[index].point_at(config, queue, track_id, self.load_epoch);
+    }
+
+    pub(super) fn prune_entries(&mut self) {
+        for index in (0..self.entries.len()).rev() {
+            let entry = &self.entries[index];
+            if entry.is_held() || entry.queue().track_source(entry.track_id()).is_some() {
+                continue;
+            }
+            if let Some(Activity::Running(run)) = &mut self.active
+                && run.entry == index
+            {
+                run.requeue = false;
+                self.runner.clear();
+                continue;
+            }
+            self.entries.remove(index);
+            self.pending.retain(|pending| *pending != index);
+            for pending in &mut self.pending {
+                if *pending > index {
+                    *pending -= 1;
+                }
+            }
+            if let Some(Activity::Running(run)) = &mut self.active
+                && run.entry > index
+            {
+                run.entry -= 1;
+            }
+        }
+    }
+
     fn handle(&mut self, request: Request) {
         match request {
             Request::Subscribe {
@@ -228,6 +269,7 @@ impl Owner {
 
     pub(super) fn pump(&mut self) {
         self.retire_stale_axis();
+        self.prune_entries();
         let Some(axis) = self.axis else {
             return;
         };
@@ -275,14 +317,14 @@ impl Owner {
         }
         match entry.stage() {
             Stage::Queued | Stage::Running => {}
-            Stage::Ended(on) if on == axis => {
+            Stage::Ended(on) | Stage::Failed(on) if on == axis => {
                 debug!(
                     ?track_id,
                     held, "analysis: the pass ran its course; left alone"
                 );
                 return;
             }
-            Stage::Idle | Stage::Ended(_) => {
+            Stage::Idle | Stage::Ended(_) | Stage::Failed(_) => {
                 entry.set_stage(Stage::Queued);
                 self.pending.push_back(index);
                 debug!(?track_id, held, "analysis: scheduled");
@@ -326,7 +368,10 @@ impl Owner {
         let Some((index, config)) = self.entry_for(&queue, track_id, source) else {
             return watch::channel(None).1;
         };
-        self.entries[index].point_at(config, queue, track_id);
+        self.point_entry(index, config, queue, track_id);
+        if matches!(self.entries[index].stage(), Stage::Failed(_)) {
+            self.entries[index].set_stage(Stage::Idle);
+        }
         self.start_loads(index);
         self.seed(index, axis);
         let rx = self.entries[index].subscribe();
@@ -342,6 +387,7 @@ impl Owner {
         axis: NonZeroU32,
     ) {
         self.axis = Some(axis);
+        self.prune_entries();
         for &track_id in track_ids {
             let Some(source) = queue.track_source(track_id) else {
                 continue;
@@ -350,7 +396,7 @@ impl Owner {
                 continue;
             };
             if !self.entries[index].is_held() {
-                self.entries[index].point_at(config, queue.clone(), track_id);
+                self.point_entry(index, config, queue.clone(), track_id);
                 self.start_loads(index);
             }
             self.schedule(index, axis);

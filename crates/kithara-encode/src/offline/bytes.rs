@@ -3,6 +3,10 @@ use crate::EncodeError;
 use crate::{BytesEncodeRequest, EncodeResult, EncodedBytes};
 
 pub(crate) fn encode(request: &BytesEncodeRequest<'_>) -> EncodeResult<EncodedBytes> {
+    #[cfg(feature = "monkeys-audio")]
+    if request.target == crate::BytesEncodeTarget::Ape {
+        return crate::ape::encode(request);
+    }
     #[cfg(feature = "ffmpeg")]
     {
         crate::ffmpeg::bytes::encode_bytes_audio(request)

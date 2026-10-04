@@ -4,9 +4,9 @@ use std::num::NonZeroU32;
 #[cfg(feature = "apple")]
 use std::sync::atomic::AtomicU64;
 
-use kithara_decode::{DecodeError, DecoderBackend, DecoderConfig, DecoderFactory};
 #[cfg(feature = "apple-codec-embedded-resampler")]
 use kithara_decode::{DecodeResult, Decoder, DecoderResamplerConfig};
+use kithara_decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory};
 #[cfg(feature = "apple")]
 use kithara_platform::sync::Arc;
 use kithara_resampler::NoResamplerBackend;
@@ -24,9 +24,17 @@ type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
 #[kithara::test]
 fn decoder_config_selects_the_expected_backend() {
     let config: TestDecoderConfig = TestDecoderConfig::builder().pools(pools()).build();
-    #[cfg(target_os = "android")]
+    #[cfg(android_backend)]
     let expected = DecoderBackend::Android;
-    #[cfg(not(target_os = "android"))]
+    #[cfg(apple_backend)]
+    let expected = DecoderBackend::Apple;
+    #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
+    let expected = DecoderBackend::WebCodecs;
+    #[cfg(not(any(
+        apple_backend,
+        android_backend,
+        all(target_arch = "wasm32", feature = "webcodecs")
+    )))]
     let expected = DecoderBackend::Symphonia;
     assert_eq!(config.backend, expected);
     assert!(config.byte_len_handle.is_none());
@@ -46,25 +54,24 @@ fn decoder_config_custom_apple_backend_preserves_fields() {
 }
 
 #[kithara::test]
-#[case::without_hint(None, false)]
-#[case::mp3_hint(Some("mp3"), true)]
-fn create_with_probe_uses_hint(
-    #[case] hint: Option<&str>,
-    #[case] should_succeed: bool,
-    tone_mp3: &'static [u8],
-) {
-    let result = DecoderFactory::create_with_probe(
+#[case::without_hint(None)]
+#[case::mp3_hint(Some("mp3"))]
+fn create_with_probe_uses_hint(#[case] hint: Option<&str>, tone_mp3: &'static [u8]) {
+    let mut decoder = DecoderFactory::create_with_probe(
         Cursor::new(tone_mp3.to_vec()),
         hint,
         TestDecoderConfig::builder().pools(pools()).build(),
-    );
-    if should_succeed {
-        let spec = result.expect("mp3 hint should produce a decoder").spec();
-        assert!(spec.channels > 0);
-        assert!(spec.sample_rate.get() > 0);
-    } else {
-        assert!(matches!(result, Err(DecodeError::ProbeFailed)));
-    }
+    )
+    .expect("MP3 signature must identify the encoded input");
+    let spec = decoder.spec();
+    assert!(spec.channels > 0);
+    assert!(spec.sample_rate.get() > 0);
+    let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("decode identified MP3")
+    else {
+        panic!("identified MP3 must emit PCM");
+    };
+    assert!(!chunk.samples.is_empty());
+    assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
 }
 
 #[kithara::test]

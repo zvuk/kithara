@@ -3,7 +3,7 @@
 use std::io::Cursor;
 
 use kithara::{
-    decode::{DecoderConfig, DecoderFactory},
+    decode::{DecoderBackend, DecoderConfig, DecoderFactory},
     platform::time::Duration,
     signal::AudioChunk,
 };
@@ -38,6 +38,7 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk(
         Cursor::new(bytes),
         Some("aac"),
         DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .backend(DecoderBackend::Symphonia)
             .pools(pools())
             .build(),
     )
@@ -87,6 +88,7 @@ async fn aac_seek_to_start_discards_previous_signal_history(
         Cursor::new(bytes),
         Some("aac"),
         DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .backend(DecoderBackend::Symphonia)
             .pools(pools())
             .build(),
     )

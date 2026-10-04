@@ -269,6 +269,7 @@ impl ItemDecode {
             Some("Alac") => FfiAudioCodecKind::Alac,
             Some("Pcm") => FfiAudioCodecKind::Pcm,
             Some("Adpcm") => FfiAudioCodecKind::Adpcm,
+            Some("Ape") => FfiAudioCodecKind::Ape,
             _ => FfiAudioCodecKind::Unknown,
         }
     }
@@ -295,6 +296,8 @@ impl ItemDecode {
             Some("Ogg") => FfiContainerKind::Ogg,
             Some("Caf") => FfiContainerKind::Caf,
             Some("Mkv") => FfiContainerKind::Mkv,
+            Some("Aiff") => FfiContainerKind::Aiff,
+            Some("Ape") => FfiContainerKind::Ape,
             _ => FfiContainerKind::Unknown,
         }
     }

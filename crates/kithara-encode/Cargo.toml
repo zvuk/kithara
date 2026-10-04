@@ -16,6 +16,7 @@ fdk-aac = ["dep:fdk-aac-sys"]
 # FFmpeg: byte encoding, FLAC, and offline AAC-LC fixtures. Android links
 # the target libraries statically; other native targets use system FFmpeg.
 ffmpeg = ["dep:ffmpeg-next", "dep:tempfile"]
+monkeys-audio = ["ffmpeg"]
 # HTTP backend forwarding. This crate encodes and never speaks HTTP, but it
 # takes its media types from kithara-stream, which reaches kithara-net, and
 # kithara-net refuses to build without a backend.

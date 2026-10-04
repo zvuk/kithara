@@ -203,6 +203,8 @@ symphonia = [
     "kithara-play?/symphonia",
     "kithara-queue?/symphonia",
 ]
+opus = ["symphonia", "kithara-decode?/opus"]
+ape = ["kithara-decode?/ape"]
 webcodecs = [
     "kithara-analysis?/webcodecs",
     "kithara-audio?/webcodecs",

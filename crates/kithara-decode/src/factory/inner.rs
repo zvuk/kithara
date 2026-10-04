@@ -17,8 +17,8 @@ use kithara_stream::{
 use serde::Deserialize;
 
 use super::probe::{
-    ProbeHint, codec_from_mp4_fourcc, probe_codec, resolve_codec_container,
-    sniff_container_from_source,
+    ProbeHint, codec_from_mp4_fourcc, resolve_codec_container, skip_id3_tags, sniff_caf_codec,
+    sniff_container_from_source, sniff_ogg_codec, sniff_wav_codec, wav_data_range,
 };
 #[cfg(apple_backend)]
 use crate::GaplessInfo;
@@ -49,8 +49,8 @@ compile_error!(
 /// build that has no Apple backend refuses `apple` by name rather than
 /// accepting a value it could not honour.
 ///
-/// Defaults to `WebCodecs` on supported wasm builds, Symphonia when enabled,
-/// or the enabled native platform backend. Android never dispatches to another
+/// Defaults to the enabled native platform backend, or Symphonia elsewhere.
+/// Android never dispatches to another
 /// backend. Apple and `WebCodecs` can use Symphonia for unsupported formats when
 /// that feature is also enabled.
 #[non_exhaustive]
@@ -59,12 +59,12 @@ compile_error!(
 pub enum DecoderBackend {
     /// Apple `AudioToolbox` (macOS/iOS, requires the `apple` feature).
     #[cfg(apple_backend)]
-    #[cfg_attr(all(apple_backend, not(feature = "symphonia")), default)]
+    #[cfg_attr(apple_backend, default)]
     #[display("apple")]
     Apple,
     /// Android `MediaCodec` (Android, requires the `android` feature).
     #[cfg(android_backend)]
-    #[cfg_attr(all(android_backend, not(feature = "symphonia")), default)]
+    #[cfg_attr(android_backend, default)]
     #[display("android")]
     Android,
     /// Browser `AudioDecoder` (wasm32, requires the `webcodecs` feature).
@@ -75,7 +75,14 @@ pub enum DecoderBackend {
     /// Symphonia software decoder (cross-platform, requires the
     /// `symphonia` feature).
     #[cfg(feature = "symphonia")]
-    #[cfg_attr(not(all(target_arch = "wasm32", feature = "webcodecs")), default)]
+    #[cfg_attr(
+        not(any(
+            apple_backend,
+            android_backend,
+            all(target_arch = "wasm32", feature = "webcodecs")
+        )),
+        default
+    )]
     #[display("symphonia")]
     Symphonia,
 }
@@ -188,13 +195,12 @@ impl DecoderFactory {
         Self::create(source, &hint, config)
     }
 
-    /// Create decoder from a file-extension hint.
+    /// Create a decoder from encoded input and an optional file-extension hint.
     ///
     /// # Errors
     ///
-    /// Returns `DecodeError::ProbeFailed` when the hint is missing or too
-    /// weak to pick a codec, and `DecodeError::*` for backend failures.
-    /// No fallback — callers must supply a usable hint.
+    /// Returns `DecodeError::ProbeFailed` when neither the input signature nor
+    /// the supplied hint identifies a codec, and `DecodeError::*` for backend failures.
     ///
     /// MP4 and M4A are container-only formats, so the `stsd` sample-entry tag is sniffed to choose
     /// the actual codec backend.
@@ -208,23 +214,12 @@ impl DecoderFactory {
         B: ResamplerBackend,
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
-        let mut source = source;
-        let mut probe_hint = ProbeHint {
+        let probe_hint = ProbeHint {
             container: hint.and_then(ContainerFormat::parse_extension),
             extension: hint.map(String::from),
             ..Default::default()
         };
 
-        if matches!(
-            probe_hint.container,
-            Some(ContainerFormat::Mp4 | ContainerFormat::Fmp4)
-        ) && let Some(codec) =
-            sniff_mp4_codec(&mut source, &config.pools)?.and_then(codec_from_mp4_fourcc)
-        {
-            probe_hint.codec = Some(codec);
-        }
-
-        probe_codec(&probe_hint)?;
         Self::create(source, &probe_hint, config)
     }
 
@@ -237,10 +232,29 @@ impl DecoderFactory {
         B: ResamplerBackend,
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
-        let (codec, mut container) = resolve_codec_container(hint)?;
-        if container.is_none() {
-            container = sniff_container_from_source(&mut source);
+        let mut hint = hint.clone();
+        if hint.container.is_none() {
+            hint.container = sniff_container_from_source(&mut source);
         }
+        if hint.codec.is_none()
+            && matches!(
+                hint.container,
+                Some(ContainerFormat::Mp4 | ContainerFormat::Fmp4)
+            )
+        {
+            hint.codec =
+                sniff_mp4_codec(&mut *source, &config.pools)?.and_then(codec_from_mp4_fourcc);
+        }
+        if hint.codec.is_none() && hint.container == Some(ContainerFormat::Ogg) {
+            hint.codec = Some(sniff_ogg_codec(&mut source)?);
+        }
+        if hint.codec.is_none() && hint.container == Some(ContainerFormat::Caf) {
+            hint.codec = Some(sniff_caf_codec(&mut source)?);
+        }
+        if hint.container == Some(ContainerFormat::Wav) {
+            hint.codec = Some(sniff_wav_codec(&mut source)?);
+        }
+        let (codec, container) = resolve_codec_container(&hint)?;
 
         tracing::debug!(
             ?codec,
@@ -408,6 +422,11 @@ where
 {
     use crate::apple::AppleCodec;
 
+    #[cfg(feature = "ape")]
+    if codec == AudioCodec::Ape {
+        return create_ape(source, config);
+    }
+
     if should_use_segment_aware(codec, container, &config)
         && let Some(layout) = config.byte_map.clone()
     {
@@ -434,12 +453,15 @@ where
 
     if matches!(
         (codec, container),
-        (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio))
+        (
+            AudioCodec::Mp3,
+            Some(ContainerFormat::MpegAudio | ContainerFormat::Wav)
+        )
     ) {
         tracing::debug!("apple-mpeg: routing via the MPEG audio demuxer");
         let target_output_rate = decoder_embedded_target_output_rate(&config);
         let gapless = config.gapless;
-        return build_mpeg_decoder(source, config, |demuxer| {
+        return build_mpeg_decoder(source, container, config, |demuxer| {
             use crate::demuxer::Demuxer;
 
             let output_track =
@@ -469,6 +491,29 @@ where
     }
 }
 
+#[cfg(feature = "ape")]
+fn create_ape<B, S>(
+    source: BoxedSource,
+    config: DecoderConfig<B, S>,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    B: ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    let pools = config.pools.clone();
+    let resampler = config.resampler;
+    let decoder = crate::ape::ApeDecoder::open(
+        source,
+        crate::composed::DecoderRuntime {
+            pools: pools.clone(),
+            hooks: config.hooks,
+            epoch: config.epoch,
+            byte_len_handle: config.byte_len_handle,
+        },
+    )?;
+    crate::resampled::wrap(Box::new(decoder), resampler, &pools)
+}
+
 #[cfg(apple_backend)]
 fn build_apple_standalone_decoder<B, S>(
     mut source: BoxedSource,
@@ -491,7 +536,9 @@ where
     } else {
         None
     };
-    let open_mode = if config.byte_len_handle.is_some() {
+    let open_mode = if config.byte_len_handle.is_some()
+        && (codec != AudioCodec::Pcm || config.byte_map.is_some())
+    {
         SourceOpenMode::Streaming
     } else {
         SourceOpenMode::Complete
@@ -504,6 +551,7 @@ where
         &config.pools,
     )?;
     demuxer.set_byte_len_handle(config.byte_len_handle.clone());
+    demuxer.set_byte_map(config.byte_map.clone());
     demuxer.set_gapless(probed_gapless);
     let target_output_rate = decoder_embedded_target_output_rate(&config);
     let output_track = track_with_output_domain_gapless(demuxer.track_info(), target_output_rate)?;
@@ -673,7 +721,7 @@ where
         gapless::probe_mp4_gapless,
     };
     if codec == AudioCodec::Mp3 {
-        return build_mpeg_decoder(source, config, |demuxer| {
+        return build_mpeg_decoder(source, container, config, |demuxer| {
             AndroidCodec::open_with_config(demuxer.track_info())
         });
     }
@@ -722,9 +770,10 @@ where
 
 /// MPEG audio through the demuxer that rolls a packet read back when it meets bytes still in
 /// flight, so a stalled read resumes at the same packet and a seek reads only from where it lands.
-#[cfg(any(android_backend, apple_backend))]
+#[cfg(any(android_backend, apple_backend, feature = "symphonia"))]
 fn build_mpeg_decoder<C, F, B, S>(
     mut source: BoxedSource,
+    container: Option<ContainerFormat>,
     config: DecoderConfig<B, S>,
     open_codec: F,
 ) -> DecodeResult<Box<dyn Decoder>>
@@ -737,7 +786,7 @@ where
     use kithara_mpa::MpaReader;
     use symphonia_core::{
         formats::FormatOptions,
-        io::{MediaSourceStream, MediaSourceStreamOptions},
+        io::{MediaSourceStream, MediaSourceStreamOptions, ReadBytes},
     };
 
     use crate::{
@@ -746,15 +795,31 @@ where
         symphonia::{SymphoniaDemuxer, adapter::ReadSeekAdapter},
     };
 
+    let audio_start = skip_id3_tags(&mut source)?;
+    let range = if container == Some(ContainerFormat::Wav) {
+        Some(wav_data_range(&mut source)?)
+    } else {
+        None
+    };
+    source.seek(std::io::SeekFrom::Start(0))?;
     let gapless = if config.gapless {
         scoped_probe(&mut *source, AudioCodec::Mp3, &config.pools)?
     } else {
         None
     };
     let adapter = ReadSeekAdapter::new(source, config.byte_len_handle, true);
+    let adapter = match range {
+        Some(range) => adapter.with_range(range)?,
+        None => adapter,
+    };
     let byte_len_handle = adapter.byte_len_handle();
     let byte_pos_handle = adapter.byte_pos_handle();
-    let stream = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
+    let mut stream = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
+    if container != Some(ContainerFormat::Wav) {
+        stream
+            .ignore_bytes(audio_start)
+            .map_err(DecodeError::backend)?;
+    }
     let reader =
         MpaReader::try_new(stream, FormatOptions::default()).map_err(DecodeError::backend)?;
     let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(
@@ -788,6 +853,20 @@ where
     B: ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    #[cfg(feature = "ape")]
+    if codec == AudioCodec::Ape {
+        return create_ape(source, config);
+    }
+    if codec == AudioCodec::Mp3 && container == Some(ContainerFormat::Wav) {
+        let gapless = config.gapless;
+        let symphonia_config = crate::symphonia::SymphoniaConfig::builder()
+            .gapless(gapless)
+            .build();
+        return build_mpeg_decoder(source, container, config, |demuxer| {
+            use crate::{demuxer::Demuxer, symphonia::SymphoniaCodec};
+            SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)
+        });
+    }
     if should_use_segment_aware(codec, container, &config)
         && let Some(layout) = config.byte_map.clone()
     {
@@ -1336,5 +1415,57 @@ mod apple_headerless_cbr_mp3_tests {
              without forwarding it the open reports no duration and every seek \
              lands nowhere"
         );
+    }
+}
+
+#[cfg(all(test, apple_backend))]
+mod apple_container_identity_tests {
+    use std::io::Cursor;
+
+    use kithara_stream::{ContainerFormat, MediaInfo};
+    use kithara_test_fixtures::assets::alac_silence_1s;
+    use kithara_test_utils::kithara;
+
+    use super::{DecoderBackend, DecoderConfig, DecoderFactory};
+    use crate::{
+        DecoderChunkOutcome,
+        test_pools::{TestPools, pools},
+    };
+
+    #[kithara::test]
+    #[case::file_metadata(true)]
+    #[case::extension(false)]
+    fn alac_in_mp4_decodes_through_both_factory_entries(#[case] metadata: bool) {
+        let bytes = alac_silence_1s().bytes().to_vec();
+        let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
+            DecoderConfig::builder()
+                .backend(DecoderBackend::Apple)
+                .gapless(false)
+                .pools(pools())
+                .build();
+        let mut decoder = if metadata {
+            DecoderFactory::create_from_media_info(
+                Cursor::new(bytes),
+                &MediaInfo::builder().container(ContainerFormat::Mp4).build(),
+                config,
+            )
+        } else {
+            DecoderFactory::create_with_probe(Cursor::new(bytes), Some("m4a"), config)
+        }
+        .expect("ALAC in MP4 opens without an AAC guess");
+        let mut frames = 0;
+        loop {
+            match decoder.next_chunk().expect("ALAC decodes") {
+                DecoderChunkOutcome::Chunk(chunk) => {
+                    frames += u64::from(chunk.meta.frames);
+                    assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
+                }
+                DecoderChunkOutcome::Eof => break,
+                DecoderChunkOutcome::Pending(reason) => {
+                    panic!("complete MP4 is pending: {reason:?}")
+                }
+            }
+        }
+        assert_eq!(frames, 44_100);
     }
 }

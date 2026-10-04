@@ -11,5 +11,6 @@ mod pcm;
 mod remote;
 mod rhythm;
 mod signal;
+mod signal_profiles;
 
 mod wav;

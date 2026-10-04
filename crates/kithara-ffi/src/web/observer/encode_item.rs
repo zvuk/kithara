@@ -538,6 +538,7 @@ fn audio_codec_kind_str(kind: FfiAudioCodecKind) -> &'static str {
         FfiAudioCodecKind::Alac => "Alac",
         FfiAudioCodecKind::Pcm => "Pcm",
         FfiAudioCodecKind::Adpcm => "Adpcm",
+        FfiAudioCodecKind::Ape => "Ape",
         FfiAudioCodecKind::Unknown => "Unknown",
     }
 }
@@ -554,6 +555,8 @@ fn container_kind_str(kind: FfiContainerKind) -> &'static str {
         FfiContainerKind::Ogg => "Ogg",
         FfiContainerKind::Caf => "Caf",
         FfiContainerKind::Mkv => "Mkv",
+        FfiContainerKind::Aiff => "Aiff",
+        FfiContainerKind::Ape => "Ape",
         FfiContainerKind::Unknown => "Unknown",
     }
 }

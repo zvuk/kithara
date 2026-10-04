@@ -147,7 +147,7 @@ tracing-log = { workspace = true }
 tracing-wasm = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-kithara = { workspace = true, default-features = false, features = ["download", "apple", "client-wreq"] }
+kithara = { workspace = true, default-features = false, features = ["download", "apple", "opus", "ape", "client-wreq"] }
 
 [build-dependencies]
 kithara-app-document = { workspace = true }

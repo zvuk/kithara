@@ -38,6 +38,7 @@ pub(crate) enum Stage {
     Queued,
     Running,
     Ended(NonZeroU32),
+    Failed(NonZeroU32),
 }
 
 impl Entry {
@@ -62,7 +63,7 @@ impl Entry {
 
     /// Take in an artifact its own source answered with, and republish: one
     /// publication carries every origin the track has.
-    pub(crate) fn accept(&mut self, loaded: Loaded) {
+    pub(super) fn accept(&mut self, loaded: Loaded) {
         match loaded {
             Loaded::BeatGrid(result) => self.prepared.beat_grid = result.into(),
             Loaded::Waveform(result) => self.prepared.waveform = result.into(),
@@ -92,8 +93,9 @@ impl Entry {
         config: AppResourceConfig,
         queue: AppQueueControl,
         track_id: TrackId,
+        epoch: u64,
     ) {
-        self.epoch = self.epoch.wrapping_add(1);
+        self.epoch = epoch;
         self.prepared = Prepared::for_config(&config);
         self.config = config;
         self.queue = queue;
@@ -104,6 +106,20 @@ impl Entry {
         if !self.is_held() {
             self.held = None;
             self.tx.send_replace(None);
+        }
+    }
+
+    pub(super) fn has_terminal_publication(&self) -> bool {
+        matches!(self.stage, Stage::Ended(_) | Stage::Failed(_)) && self.tx.borrow().is_some()
+    }
+
+    delegate::delegate! {
+        to self.tx {
+            pub(crate) fn subscribe(&self) -> watch::Receiver<Option<TrackArtifacts>>;
+            #[call(receiver_count)]
+            #[expr($ > 0)]
+            pub(crate) fn is_held(&self) -> bool;
+            pub(super) fn closed(&self) -> impl Future<Output = ()>;
         }
     }
 
@@ -129,14 +145,5 @@ impl Entry {
             .as_ref()
             .filter(|progress| progress.analysis().source_sample_rate() == axis)
             .cloned()
-    }
-
-    delegate::delegate! {
-        to self.tx {
-            pub(crate) fn subscribe(&self) -> watch::Receiver<Option<TrackArtifacts>>;
-            #[call(receiver_count)]
-            #[expr($ > 0)]
-            pub(crate) fn is_held(&self) -> bool;
-        }
     }
 }

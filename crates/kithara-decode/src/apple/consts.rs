@@ -1,10 +1,11 @@
 pub(crate) use kithara_apple::audio_toolbox::NO_ERR;
 use kithara_apple::audio_toolbox::{
-    AUDIO_CONVERTER_ERR_NO_DATA_NOW, AUDIO_FILE_AAC_ADTS_TYPE, AUDIO_FILE_CAF_TYPE,
-    AUDIO_FILE_FLAC_TYPE, AUDIO_FILE_M4A_TYPE, AUDIO_FILE_WAVE_TYPE, AUDIO_FORMAT_APPLE_LOSSLESS,
-    AUDIO_FORMAT_FLAC, AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PACKED, AUDIO_FORMAT_LINEAR_PCM,
-    AUDIO_FORMAT_MPEG_LAYER3, AUDIO_FORMAT_MPEG4_AAC, AUDIO_FORMAT_PROPERTY_FORMAT_LIST,
-    AudioFormatFlags, AudioFormatID, OSStatus, os_status_to_string as format_os_status,
+    AUDIO_CONVERTER_ERR_NO_DATA_NOW, AUDIO_FILE_AAC_ADTS_TYPE, AUDIO_FILE_AIFF_TYPE,
+    AUDIO_FILE_CAF_TYPE, AUDIO_FILE_FLAC_TYPE, AUDIO_FILE_M4A_TYPE, AUDIO_FILE_WAVE_TYPE,
+    AUDIO_FORMAT_APPLE_LOSSLESS, AUDIO_FORMAT_FLAC, AUDIO_FORMAT_FLAGS_NATIVE_FLOAT_PACKED,
+    AUDIO_FORMAT_LINEAR_PCM, AUDIO_FORMAT_MPEG_LAYER3, AUDIO_FORMAT_MPEG4_AAC,
+    AUDIO_FORMAT_PROPERTY_FORMAT_LIST, AudioFormatFlags, AudioFormatID, OSStatus,
+    os_status_to_string as format_os_status,
 };
 
 /// AAC always decodes 1024 samples per packet (SBR spectral bands
@@ -24,9 +25,10 @@ pub(crate) const FILE_FLAC_TYPE: u32 = AUDIO_FILE_FLAC_TYPE;
 pub(crate) const FILE_M4A_TYPE: u32 = AUDIO_FILE_M4A_TYPE;
 /// `'WAVE'` — RIFF WAV file-type hint for `audio_file_open_with_callbacks`.
 pub(crate) const FILE_WAVE_TYPE: u32 = AUDIO_FILE_WAVE_TYPE;
-/// Bytes prepended to STREAMINFO in the Apple FLAC magic cookie:
-/// 4 bytes `"fLaC"` marker + 4 bytes `METADATA_BLOCK_HEADER`.
-pub(crate) const FLAC_COOKIE_PREFIX_LEN: usize = 8;
+/// Audio Interchange File Format.
+pub(crate) const FILE_AIFF_TYPE: u32 = AUDIO_FILE_AIFF_TYPE;
+/// The dfLa box size, type, version/flags and STREAMINFO block header.
+pub(crate) const FLAC_COOKIE_PREFIX_LEN: usize = 16;
 /// Size of the FLAC STREAMINFO metadata block body (fixed by spec).
 pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
 /// Same as [`FLAC_STREAMINFO_LEN`] typed for the

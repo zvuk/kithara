@@ -14,7 +14,7 @@ use ::kithara::{
         tokio::sync::watch,
     },
 };
-use kithara_test_utils::{kithara, off_thread::OffThread};
+use kithara_test_utils::{TestTempDir, kithara, off_thread::OffThread, temp_dir};
 
 use super::{
     AnalysisService, TrackArtifacts,
@@ -497,7 +497,7 @@ async fn a_close_without_a_value_is_retried_on_the_next_subscribe(tone_mp3: Stri
         run.owner.cache.get(&run.target, axis()).is_none(),
         "a run that closes with no value caches nothing"
     );
-    assert_eq!(run.owner.entries[0].stage(), Stage::Idle);
+    assert_eq!(run.owner.entries[0].stage(), Stage::Failed(axis()));
 
     let _again = run
         .owner
@@ -506,6 +506,118 @@ async fn a_close_without_a_value_is_retried_on_the_next_subscribe(tone_mp3: Stri
         running_track(&run.owner),
         Some(run.track_id),
         "the track is retried on the next subscribe"
+    );
+    cancel.cancel();
+    run.close().await;
+}
+
+#[kithara::test(native, tokio, flash(false))]
+async fn a_failed_pass_is_not_reopened_by_queue_warm(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut run = close_run(&cancel, &tone_mp3, None).await;
+    run.owner.warm(&run.queue, &[run.track_id], axis());
+    assert!(
+        run.owner.active.is_none(),
+        "an unrelated queue edit must not reopen the failed source"
+    );
+    assert!(run.owner.pending.is_empty());
+    cancel.cancel();
+    run.close().await;
+}
+
+#[kithara::test(native, tokio, flash(false))]
+#[case::one_track(1)]
+#[case::beyond_cache_capacity(128)]
+async fn obsolete_unheld_entries_are_reclaimed(
+    #[case] cycles: u64,
+    tone_mp3: String,
+    temp_dir: TestTempDir,
+) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (host, queue) = queue_off().await;
+    let original = url::Url::parse(&tone_mp3)
+        .expect("fixture URL")
+        .to_file_path()
+        .expect("local fixture");
+    for cycle in 0..cycles {
+        let path = temp_dir.path().join(format!("track-{cycle}.mp3"));
+        std::fs::copy(&original, &path).expect("distinct local track identity");
+        let url: String = url::Url::from_file_path(path)
+            .expect("absolute track path")
+            .into();
+        let (track_id, source) = track(&host, cycle + 1, &url).await;
+        let rx = owner.subscribe(queue.clone(), track_id, source, axis());
+        drop(take_over_run(&mut owner, None));
+        owner.drive().await;
+        drop(rx);
+        host.call(move |(_, queue)| queue.remove(track_id).expect("remove old track"))
+            .await;
+        owner.warm(&queue, &[], axis());
+        assert!(
+            owner.entries.is_empty(),
+            "removed tracks must release their resource configuration and artifacts at cycle {cycle}"
+        );
+    }
+    cancel.cancel();
+    host.close().await;
+}
+
+#[kithara::test(native, tokio, flash(false))]
+async fn removed_background_work_is_not_requeued_or_started(
+    rhythm_a_mp3: String,
+    rhythm_b_mp3: String,
+) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (host, queue) = queue_off().await;
+    let (first, _) = track(&host, 1, &rhythm_a_mp3).await;
+    let (second, _) = track(&host, 2, &rhythm_b_mp3).await;
+    owner.warm(&queue, &[first, second], axis());
+    let tx = take_over_run(&mut owner, None);
+    if let Some(Activity::Running(run)) = &mut owner.active {
+        run.requeue = true;
+    }
+    host.call(move |(_, queue)| {
+        queue.remove(first).expect("remove running track");
+        queue.remove(second).expect("remove queued track");
+    })
+    .await;
+    owner.warm(&queue, &[], axis());
+    assert!(
+        owner.pending.is_empty(),
+        "removed queued work must not start"
+    );
+    assert!(!requeued(&owner), "removed running work must not resume");
+    assert_eq!(owner.entries.len(), 1, "keep only the closing run");
+    drop(tx);
+    owner.drive().await;
+    assert!(owner.active.is_none());
+    assert!(
+        owner.entries.is_empty(),
+        "closed obsolete work must release its owner"
+    );
+    cancel.cancel();
+    host.close().await;
+}
+
+#[kithara::test(native, tokio, flash(false))]
+async fn a_completed_pass_releases_its_publication_after_the_last_subscriber_leaves(
+    tone_mp3: String,
+) {
+    let cancel = CancelToken::root();
+    let mut run = close_run(&cancel, &tone_mp3, Some(progress(analysis()))).await;
+    run.owner.drive().await;
+    assert!(run.owner.active.is_none(), "the checkpoint commit finished");
+    assert!(run.owner.entries[0].value_for(axis()).is_some());
+    let old = std::mem::replace(&mut run.rx, watch::channel(None).1);
+    drop(old);
+    time::timeout(Duration::from_millis(100), run.owner.drive())
+        .await
+        .expect("unsubscribe must wake the owner even after completion");
+    assert!(
+        run.owner.entries[0].value_for(axis()).is_none(),
+        "only the bounded cache may retain the completed analysis"
     );
     cancel.cancel();
     run.close().await;
@@ -544,7 +656,7 @@ async fn a_close_on_an_unsettled_value_is_resumed_on_the_next_subscribe(long_wav
         Some(checkpoint.analysis().revision())
     );
     assert!(run.owner.cache.get(&run.target, axis()).is_some());
-    assert_eq!(run.owner.entries[0].stage(), Stage::Idle);
+    assert_eq!(run.owner.entries[0].stage(), Stage::Failed(axis()));
 
     let _again = run
         .owner

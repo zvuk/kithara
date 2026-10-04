@@ -134,6 +134,26 @@ $cmake = (Get-ChildItem -Path $root -Directory -Filter 'cmake-*-windows-x86_64')
     [Environment]::GetEnvironmentVariable('PATH', 'Machine') + ";$cmake\bin",
     'Machine')
 
+Write-Host "==> Installing Monkey's Audio"
+Get-Verified -Url $settings.monkeys_audio_source_url `
+             -Sha256 $settings.monkeys_audio_source_sha256 `
+             -Path "$root\downloads\monkeys-audio.zip"
+$monkeySource = "$root\monkeys-audio-source"
+$monkeyPrefix = "$root\monkeys-audio"
+Expand-Archive -Path "$root\downloads\monkeys-audio.zip" -DestinationPath $monkeySource -Force
+& "$cmake\bin\cmake.exe" -S $monkeySource -B "$monkeySource\build" "-DCMAKE_INSTALL_PREFIX=$monkeyPrefix"
+if ($LASTEXITCODE -ne 0) { throw "Monkey's Audio configuration failed" }
+& "$cmake\bin\cmake.exe" --build "$monkeySource\build" --config Release --parallel 2
+if ($LASTEXITCODE -ne 0) { throw "Monkey's Audio build failed" }
+& "$cmake\bin\cmake.exe" --install "$monkeySource\build" --config Release
+if ($LASTEXITCODE -ne 0) { throw "Monkey's Audio installation failed" }
+[Environment]::SetEnvironmentVariable(
+    'PATH',
+    [Environment]::GetEnvironmentVariable('PATH', 'Machine') + ";$monkeyPrefix\bin",
+    'Machine')
+
+[Environment]::SetEnvironmentVariable('MONKEYS_AUDIO_DIR', $monkeyPrefix, 'Machine')
+
 # The repository's recipes are bash scripts, so `just` on this machine is
 # useless without a shell to run them in. Git for Windows carries one, and the
 # checkout the runner performs wants git anyway.

@@ -17,6 +17,16 @@ fn encode_bytes_happy_paths_return_expected_metadata_and_container_markers(encod
         (BytesEncodeTarget::Aac, "audio/aac"),
         (BytesEncodeTarget::M4a, "audio/mp4"),
         (BytesEncodeTarget::Alac, "audio/mp4"),
+        (BytesEncodeTarget::Flac24, "audio/flac"),
+        (BytesEncodeTarget::Vorbis, "audio/ogg"),
+        (BytesEncodeTarget::Opus, "audio/ogg"),
+        (BytesEncodeTarget::Wav16, "audio/wav"),
+        (BytesEncodeTarget::Wav24, "audio/wav"),
+        (BytesEncodeTarget::Wav32, "audio/wav"),
+        (BytesEncodeTarget::WavFloat32, "audio/wav"),
+        (BytesEncodeTarget::Aiff16, "audio/aiff"),
+        #[cfg(feature = "monkeys-audio")]
+        (BytesEncodeTarget::Ape, "audio/ape"),
     ];
 
     for (target, content_type) in cases {
@@ -88,7 +98,7 @@ fn assert_container_marker(target: BytesEncodeTarget, bytes: &[u8]) {
                 || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0),
             "MP3 output is missing an ID3 tag or MPEG frame sync"
         ),
-        BytesEncodeTarget::Flac => {
+        BytesEncodeTarget::Flac | BytesEncodeTarget::Flac24 => {
             assert!(
                 bytes.starts_with(b"fLaC"),
                 "FLAC output is missing the `fLaC` marker"
@@ -100,6 +110,26 @@ fn assert_container_marker(target: BytesEncodeTarget, bytes: &[u8]) {
         ),
         BytesEncodeTarget::M4a => assert_mp4(bytes, b"mp4a", "M4A"),
         BytesEncodeTarget::Alac => assert_mp4(bytes, b"alac", "ALAC"),
+        BytesEncodeTarget::Vorbis => {
+            assert!(bytes.starts_with(b"OggS"));
+            assert!(bytes.windows(7).any(|window| window == b"\x01vorbis"));
+        }
+        BytesEncodeTarget::Opus => {
+            assert!(bytes.starts_with(b"OggS"));
+            assert!(bytes.windows(8).any(|window| window == b"OpusHead"));
+        }
+        BytesEncodeTarget::Wav16
+        | BytesEncodeTarget::Wav24
+        | BytesEncodeTarget::Wav32
+        | BytesEncodeTarget::WavFloat32 => {
+            assert!(bytes.starts_with(b"RIFF"));
+            assert_eq!(&bytes[8..12], b"WAVE");
+        }
+        BytesEncodeTarget::Aiff16 => {
+            assert!(bytes.starts_with(b"FORM"));
+            assert_eq!(&bytes[8..12], b"AIFF");
+        }
+        BytesEncodeTarget::Ape => assert!(bytes.starts_with(b"MAC ")),
     }
 }
 

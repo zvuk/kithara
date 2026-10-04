@@ -271,3 +271,19 @@ RUN mkdir -p /etc/pulse/default.pa.d \
       'suspend-sink kithara_ci 1' \
       'suspend-sink kithara_ci 0' \
       > /etc/pulse/default.pa.d/kithara-ci.pa
+
+ARG MONKEYS_AUDIO_SOURCE_URL
+ARG MONKEYS_AUDIO_SOURCE_SHA256
+
+RUN curl -fsSL -o /tmp/monkeys-audio.zip "${MONKEYS_AUDIO_SOURCE_URL}" \
+ && echo "${MONKEYS_AUDIO_SOURCE_SHA256}  /tmp/monkeys-audio.zip" | sha256sum -c - \
+ && mkdir /tmp/monkeys-audio \
+ && cmake -E chdir /tmp/monkeys-audio cmake -E tar xf /tmp/monkeys-audio.zip \
+ && cmake -S /tmp/monkeys-audio -B /tmp/monkeys-audio/build \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
+ && cmake --build /tmp/monkeys-audio/build --parallel 2 \
+ && cmake --install /tmp/monkeys-audio/build \
+ && ldconfig \
+ && rm -rf /tmp/monkeys-audio /tmp/monkeys-audio.zip
+
+ENV MONKEYS_AUDIO_DIR=/usr/local

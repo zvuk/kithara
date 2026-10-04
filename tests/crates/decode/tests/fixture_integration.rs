@@ -19,13 +19,123 @@ use kithara_test_fixtures::{
 use reqwest::Client;
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-#[case(SignalAsset::MP3_SAW_1S, "audio/mpeg")]
-#[case(SignalAsset::FLAC_SAW_1S, "audio/flac")]
-#[case(SignalAsset::AAC_SAW_1S, "audio/aac")]
-#[case(SignalAsset::M4A_SAW_1S, "audio/mp4")]
+#[case(SignalAsset::MP3_SAW_1S, "audio/mpeg", None)]
+#[case(SignalAsset::FLAC_SAW_1S, "audio/flac", Some(44100))]
+#[case(SignalAsset::AAC_SAW_1S, "audio/aac", None)]
+#[case(SignalAsset::M4A_SAW_1S, "audio/mp4", None)]
+#[case(
+    SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT,
+    "audio/flac",
+    Some(1152000)
+)]
+#[case(
+    SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_24BIT,
+    "audio/flac",
+    Some(1152000)
+)]
+#[case(
+    SignalAsset::PROFILE_FLAC_FLAC_22050_1CH_16BIT,
+    "audio/flac",
+    Some(132300)
+)]
+#[case(
+    SignalAsset::PROFILE_FLAC_FLAC_22050_2CH_16BIT,
+    "audio/flac",
+    Some(132300)
+)]
+#[case(
+    SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_16BIT,
+    "audio/flac",
+    Some(264600)
+)]
+#[case(
+    SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_24BIT,
+    "audio/flac",
+    Some(264600)
+)]
+#[case(
+    SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_16BIT,
+    "audio/flac",
+    Some(288000)
+)]
+#[case(
+    SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_24BIT,
+    "audio/flac",
+    Some(288000)
+)]
+#[case(
+    SignalAsset::PROFILE_FLAC_FLAC_88200_2CH_24BIT,
+    "audio/flac",
+    Some(529200)
+)]
+#[case(
+    SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_16BIT,
+    "audio/flac",
+    Some(576000)
+)]
+#[case(
+    SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_24BIT,
+    "audio/flac",
+    Some(576000)
+)]
+#[case(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH, "audio/mpeg", None)]
+#[case(SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH, "audio/mpeg", None)]
+#[case(SignalAsset::PROFILE_MP3_LIBMP3LAME_32000_2CH, "audio/mpeg", None)]
+#[case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH, "audio/mpeg", None)]
+#[case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH, "audio/mpeg", None)]
+#[case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_1CH, "audio/mpeg", None)]
+#[case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_2CH, "audio/mpeg", None)]
+#[case(SignalAsset::PROFILE_M4A_AAC_44100_2CH, "audio/mp4", None)]
+#[case(
+    SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT,
+    "audio/mp4",
+    Some(264600)
+)]
+#[case(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH, "audio/ogg", None)]
+#[case(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH, "audio/ogg", None)]
+#[case(
+    SignalAsset::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT,
+    "audio/aiff",
+    Some(264600)
+)]
+#[case(
+    SignalAsset::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT,
+    "audio/wav",
+    Some(1152000)
+)]
+#[case(
+    SignalAsset::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT,
+    "audio/wav",
+    Some(1152000)
+)]
+#[case(
+    SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT,
+    "audio/wav",
+    Some(264600)
+)]
+#[case(
+    SignalAsset::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT,
+    "audio/wav",
+    Some(264600)
+)]
+#[case(
+    SignalAsset::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT,
+    "audio/wav",
+    Some(1152000)
+)]
+#[case(
+    SignalAsset::PROFILE_APE_MULTIFRAME_44100_2CH_16BIT,
+    "audio/ape",
+    Some(132300)
+)]
+#[case(SignalAsset::PROFILE_TAGGED_FLAC_ID3, "audio/flac", Some(264600))]
+#[case(SignalAsset::PROFILE_TAGGED_MP3_ID3, "audio/mpeg", None)]
+#[case(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3, "audio/mpeg", None)]
+#[case(SignalAsset::PROFILE_ALAC_SILENCE_TAIL, "audio/mp4", Some(264600))]
 async fn test_signal_server_encoded_formats_are_decodable(
     #[case] asset: SignalAsset,
     #[case] content_type: &str,
+    #[case] expected_frames: Option<usize>,
     #[future(awt)] server: TestServerHelper,
 ) {
     let client = Client::new();
@@ -55,8 +165,30 @@ async fn test_signal_server_encoded_formats_are_decodable(
     )
     .unwrap();
 
-    let chunk = AudioChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
-    assert!(!chunk.samples.is_empty());
+    let mut frames = 0;
+    let mut nonzero = false;
+    loop {
+        let chunk = match decoder.next_chunk().unwrap() {
+            DecoderChunkOutcome::Chunk(chunk) => chunk,
+            DecoderChunkOutcome::Eof => break,
+            DecoderChunkOutcome::Pending(reason) => {
+                panic!("in-memory fixture must not stall: {reason:?}")
+            }
+        };
+        assert!(!chunk.samples.is_empty());
+        assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
+        nonzero |= chunk.samples.iter().any(|sample| sample.abs() > 0.01);
+        frames += chunk.frames();
+    }
+    assert!(frames > 0);
+    if let Some(expected) = expected_frames {
+        assert_eq!(frames, expected, "{} must decode every frame", asset.name());
+    }
+    assert!(
+        nonzero,
+        "{} must contain its synthetic signal",
+        asset.name()
+    );
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]

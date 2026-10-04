@@ -1,5 +1,6 @@
 use std::{
     io::{self, Read, Seek, SeekFrom},
+    ops::Range,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
@@ -23,6 +24,7 @@ pub(crate) struct ReadSeekAdapter<R> {
     /// (prevents `IsoMp4Reader` from seeking to end looking for moov atom).
     seek_enabled: Arc<AtomicBool>,
     inner: R,
+    range: Option<Range<u64>>,
 }
 
 impl<R: Seek> ReadSeekAdapter<R> {
@@ -47,7 +49,21 @@ impl<R: Seek> ReadSeekAdapter<R> {
             seek_enabled,
             inner,
             byte_pos: Arc::new(AtomicU64::new(initial_pos)),
+            range: None,
         }
+    }
+
+    pub(crate) fn with_range(mut self, range: Range<u64>) -> io::Result<Self> {
+        if range.start > range.end {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid input range",
+            ));
+        }
+        self.inner.seek(SeekFrom::Start(range.start))?;
+        self.byte_pos.store(range.start, Ordering::Release);
+        self.range = Some(range);
+        Ok(self)
     }
 
     pub(crate) fn byte_len_handle(&self) -> Arc<AtomicU64> {
@@ -73,6 +89,16 @@ impl<R: Seek> ReadSeekAdapter<R> {
 
 impl<R: Read> Read for ReadSeekAdapter<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let available = self.range.as_ref().map_or(buf.len(), |range| {
+            usize::try_from(
+                range
+                    .end
+                    .saturating_sub(self.byte_pos.load(Ordering::Acquire)),
+            )
+            .unwrap_or(usize::MAX)
+            .min(buf.len())
+        });
+        let buf = &mut buf[..available];
         let n = self.inner.read(buf)?;
         if n > 0 {
             self.byte_pos.fetch_add(n as u64, Ordering::Release);
@@ -83,6 +109,23 @@ impl<R: Read> Read for ReadSeekAdapter<R> {
 
 impl<R: Seek> Seek for ReadSeekAdapter<R> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        if let Some(range) = &self.range {
+            let target = match pos {
+                SeekFrom::Start(offset) => range.start.checked_add(offset),
+                SeekFrom::End(offset) => range.end.checked_add_signed(offset),
+                SeekFrom::Current(offset) => self
+                    .byte_pos
+                    .load(Ordering::Acquire)
+                    .checked_add_signed(offset),
+            }
+            .filter(|target| range.contains(target) || *target == range.end)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "seek outside input range")
+            })?;
+            let physical = self.inner.seek(SeekFrom::Start(target))?;
+            self.byte_pos.store(physical, Ordering::Release);
+            return Ok(physical - range.start);
+        }
         let new_pos = self.inner.seek(pos)?;
         self.byte_pos.store(new_pos, Ordering::Release);
         Ok(new_pos)
@@ -91,6 +134,9 @@ impl<R: Seek> Seek for ReadSeekAdapter<R> {
 
 impl<R: Read + Seek + Send + Sync> MediaSource for ReadSeekAdapter<R> {
     fn byte_len(&self) -> Option<u64> {
+        if let Some(range) = &self.range {
+            return Some(range.end - range.start);
+        }
         let len = self.byte_len.load(Ordering::Acquire);
         if len > 0 { Some(len) } else { None }
     }
@@ -108,6 +154,25 @@ mod tests {
     use symphonia_core::io::MediaSource;
 
     use super::*;
+
+    #[kithara::test]
+    fn ranged_input_keeps_seek_and_read_evidence_in_source_coordinates() {
+        let mut adapter = ReadSeekAdapter::new(Cursor::new(vec![9, 8, 1, 2, 3, 7]), None, true)
+            .with_range(2..5)
+            .expect("bounded encoded payload");
+        assert_eq!(adapter.byte_len(), Some(3));
+        let position = adapter.byte_pos_handle();
+        let mut bytes = [0; 8];
+        assert_eq!(adapter.read(&mut bytes).expect("read payload"), 3);
+        assert_eq!(&bytes[..3], &[1, 2, 3]);
+        assert_eq!(position.load(Ordering::Acquire), 5);
+        assert_eq!(adapter.read(&mut bytes).expect("payload EOF"), 0);
+        assert_eq!(adapter.seek(SeekFrom::Start(1)).expect("logical seek"), 1);
+        assert_eq!(position.load(Ordering::Acquire), 3);
+        assert_eq!(adapter.read(&mut bytes).expect("read suffix"), 2);
+        assert_eq!(&bytes[..2], &[2, 3]);
+        assert!(adapter.seek(SeekFrom::End(1)).is_err());
+    }
 
     #[kithara::test]
     fn test_read_seek_adapter_byte_len() {

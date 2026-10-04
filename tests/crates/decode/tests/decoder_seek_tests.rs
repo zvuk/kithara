@@ -17,16 +17,15 @@ use kithara_test_fixtures::SignalAsset;
 use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
-#[kithara::fixture]
-async fn mp3() -> (TestServerHelper, Url) {
+async fn source(asset: SignalAsset) -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
-    let url = server.signal(SignalAsset::MP3_TRACK_SINE440_187S);
+    let url = server.signal(asset);
     (server, url)
 }
 
-/// Open a remote test.mp3 as `Audio<Stream<File>>` with optional hw/sw backend
+/// Open a remote encoded asset as `Audio<Stream<File>>` with optional hw/sw backend
 /// and optional event bus. Centralises the setup shared by every seek test.
-async fn open_test_mp3(
+async fn open_test_audio(
     url: &Url,
     temp_dir: &TestTempDir,
     backend: DecoderBackend,
@@ -44,7 +43,7 @@ async fn open_test_mp3(
         .pools(pools.clone())
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
-        .hint(String::from("mp3"))
+        .hint(url.path().rsplit_once('.').unwrap().1.to_owned())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -79,14 +78,137 @@ async fn next_chunk(audio: &mut RegisteredAudio<Stream<File<TestPools>>, TestPoo
     }
 }
 
-/// Decoder<Stream<File>> reads MP3 samples (no seek, just read).
+/// Decoder<Stream<File>> reads encoded samples (no seek, just read).
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn decoder_file_reads_samples(
-    #[future(awt)] mp3: (TestServerHelper, Url),
-    temp_dir: TestTempDir,
-) {
-    let (_server, url) = mp3;
-    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::default(), None).await;
+#[case(SignalAsset::MP3_TRACK_SINE440_187S)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_22050_1CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_22050_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_88200_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_32000_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_1CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_M4A_AAC_44100_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_APE_MULTIFRAME_44100_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_FLAC_ID3)
+)]
+#[cfg_attr(not(target_arch = "wasm32"), case(SignalAsset::PROFILE_TAGGED_MP3_ID3))]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3)
+)]
+async fn decoder_file_reads_samples(#[case] asset: SignalAsset, temp_dir: TestTempDir) {
+    let (_server, url) = source(asset).await;
+    let mut decoder = open_test_audio(&url, &temp_dir, DecoderBackend::default(), None).await;
 
     next_chunk(&mut decoder, "initial read").await;
 }
@@ -97,15 +219,325 @@ async fn decoder_file_reads_samples(
 /// to 0 again. The backward-seek case (which needs a warmup prelude) is a
 /// separate test.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-#[case::to_zero(Duration::from_secs(0))]
-#[case::forward(Duration::from_secs(2))]
+#[case(SignalAsset::MP3_TRACK_SINE440_187S, Duration::from_secs(0))]
+#[case(SignalAsset::MP3_TRACK_SINE440_187S, Duration::from_secs(2))]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT,
+        Duration::from_secs(0)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT,
+        Duration::from_secs(2)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_24BIT,
+        Duration::from_secs(0)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_24BIT,
+        Duration::from_secs(2)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_22050_1CH_16BIT, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_22050_1CH_16BIT, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_22050_2CH_16BIT, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_22050_2CH_16BIT, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_16BIT, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_16BIT, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_24BIT, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_24BIT, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_16BIT, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_16BIT, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_24BIT, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_24BIT, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_88200_2CH_24BIT, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_88200_2CH_24BIT, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_16BIT, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_16BIT, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_24BIT, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_24BIT, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_32000_2CH, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_32000_2CH, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_1CH, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_1CH, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_2CH, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_2CH, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_M4A_AAC_44100_2CH, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_M4A_AAC_44100_2CH, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT,
+        Duration::from_secs(0)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT,
+        Duration::from_secs(2)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT,
+        Duration::from_secs(0)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT,
+        Duration::from_secs(2)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT,
+        Duration::from_secs(0)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT,
+        Duration::from_secs(2)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT,
+        Duration::from_secs(0)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT,
+        Duration::from_secs(2)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT,
+        Duration::from_secs(0)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT,
+        Duration::from_secs(2)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT,
+        Duration::from_secs(0)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT,
+        Duration::from_secs(2)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_APE_MULTIFRAME_44100_2CH_16BIT,
+        Duration::from_secs(0)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_APE_MULTIFRAME_44100_2CH_16BIT,
+        Duration::from_secs(2)
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_FLAC_ID3, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_FLAC_ID3, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_MP3_ID3, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_MP3_ID3, Duration::from_secs(2))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3, Duration::from_secs(0))
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3, Duration::from_secs(2))
+)]
 async fn decoder_file_single_seek(
-    #[future(awt)] mp3: (TestServerHelper, Url),
+    #[case] asset: SignalAsset,
     temp_dir: TestTempDir,
     #[case] target: Duration,
 ) {
-    let (_server, url) = mp3;
-    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::default(), None).await;
+    let (_server, url) = source(asset).await;
+    let mut decoder = open_test_audio(&url, &temp_dir, DecoderBackend::default(), None).await;
 
     let spec = decoder.spec();
     assert!(spec.sample_rate.get() > 0 && spec.channels > 0);
@@ -123,12 +555,131 @@ async fn decoder_file_single_seek(
 
 /// Decoder<Stream<File>> can seek backward to the beginning after a warmup.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn decoder_file_seek_backward(
-    #[future(awt)] mp3: (TestServerHelper, Url),
-    temp_dir: TestTempDir,
-) {
-    let (_server, url) = mp3;
-    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::default(), None).await;
+#[case(SignalAsset::MP3_TRACK_SINE440_187S)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_22050_1CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_22050_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_88200_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_32000_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_1CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_M4A_AAC_44100_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_FLAC_ID3)
+)]
+#[cfg_attr(not(target_arch = "wasm32"), case(SignalAsset::PROFILE_TAGGED_MP3_ID3))]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3)
+)]
+async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTempDir) {
+    let (_server, url) = source(asset).await;
+    let mut decoder = open_test_audio(&url, &temp_dir, DecoderBackend::default(), None).await;
 
     for stage in 0..3 {
         next_chunk(&mut decoder, &format!("warmup chunk {stage}")).await;
@@ -143,22 +694,565 @@ async fn decoder_file_seek_backward(
 
 /// Decoder<Stream<File>> multiple seeks in sequence.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-#[cfg_attr(not(target_os = "android"), case::sw(DecoderBackend::default()))]
-#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
+#[case(SignalAsset::MP3_TRACK_SINE440_187S, DecoderBackend::default())]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(SignalAsset::MP3_TRACK_SINE440_187S, DecoderBackend::Symphonia)
+)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::hw(DecoderBackend::Apple)
+    case(SignalAsset::MP3_TRACK_SINE440_187S, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_24BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_24BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_24BIT, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_22050_1CH_16BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_22050_1CH_16BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_22050_1CH_16BIT, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_22050_2CH_16BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_22050_2CH_16BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_22050_2CH_16BIT, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_16BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_16BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_16BIT, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_24BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_24BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_24BIT, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_16BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_16BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_16BIT, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_24BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_24BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_24BIT, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_88200_2CH_24BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_88200_2CH_24BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_88200_2CH_24BIT, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_16BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_16BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_16BIT, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_24BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_24BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_24BIT, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_32000_2CH,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_32000_2CH,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_32000_2CH, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_1CH,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_1CH,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_1CH, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_2CH,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_2CH,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_2CH, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::default())
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::Symphonia)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH, DecoderBackend::default())
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH, DecoderBackend::Symphonia)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH, DecoderBackend::default())
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH, DecoderBackend::Symphonia)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(
+        SignalAsset::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT,
+        DecoderBackend::Apple
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT,
+        DecoderBackend::Apple
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT,
+        DecoderBackend::Apple
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT,
+        DecoderBackend::Apple
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT,
+        DecoderBackend::Apple
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT,
+        DecoderBackend::default()
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(
+        SignalAsset::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT,
+        DecoderBackend::Apple
+    )
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_FLAC_ID3, DecoderBackend::default())
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(SignalAsset::PROFILE_TAGGED_FLAC_ID3, DecoderBackend::Symphonia)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_TAGGED_FLAC_ID3, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_MP3_ID3, DecoderBackend::default())
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(SignalAsset::PROFILE_TAGGED_MP3_ID3, DecoderBackend::Symphonia)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_TAGGED_MP3_ID3, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3, DecoderBackend::default())
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3, DecoderBackend::Symphonia)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3, DecoderBackend::Apple)
 )]
 async fn decoder_file_seek_multiple(
-    #[future(awt)] mp3: (TestServerHelper, Url),
+    #[case] asset: SignalAsset,
     temp_dir: TestTempDir,
     #[case] backend: DecoderBackend,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let (_server, url) = mp3;
-    let mut decoder = open_test_mp3(&url, &temp_dir, backend, None).await;
+    let (_server, url) = source(asset).await;
+    let mut decoder = open_test_audio(&url, &temp_dir, backend, None).await;
 
     next_chunk(&mut decoder, "initial read").await;
 
@@ -170,15 +1264,138 @@ async fn decoder_file_seek_multiple(
 
 /// Decoder<Stream<File>> events are emitted on seek.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-async fn decoder_file_seek_emits_events(
-    #[future(awt)] mp3: (TestServerHelper, Url),
-    temp_dir: TestTempDir,
-) {
-    let (_server, url) = mp3;
+#[case(SignalAsset::MP3_TRACK_SINE440_187S)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_22050_1CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_22050_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_88200_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_32000_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_1CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_M4A_AAC_44100_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_APE_MULTIFRAME_44100_2CH_16BIT)
+)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_FLAC_ID3)
+)]
+#[cfg_attr(not(target_arch = "wasm32"), case(SignalAsset::PROFILE_TAGGED_MP3_ID3))]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    case(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3)
+)]
+async fn decoder_file_seek_emits_events(#[case] asset: SignalAsset, temp_dir: TestTempDir) {
+    let (_server, url) = source(asset).await;
     let bus = EventBus::new(64);
     let mut events_rx = bus.subscribe();
 
-    let mut decoder = open_test_mp3(&url, &temp_dir, DecoderBackend::default(), Some(bus)).await;
+    let mut decoder = open_test_audio(&url, &temp_dir, DecoderBackend::default(), Some(bus)).await;
 
     next_chunk(&mut decoder, "before seek events").await;
     decoder.seek(Duration::from_secs(2)).unwrap();

@@ -9,7 +9,8 @@ use std::{
 
 use kithara_bufpool::HasPool;
 use kithara_decode::{
-    DecoderChunkOutcome, DecoderConfig, DecoderFactory, DecoderResamplerConfig, DecoderSeekOutcome,
+    DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory, DecoderResamplerConfig,
+    DecoderSeekOutcome,
 };
 use kithara_platform::time::Duration;
 use kithara_resampler::{
@@ -28,6 +29,11 @@ use kithara_test_utils::{
     bufpool::{TestPools, pools as default_pools},
     kithara,
 };
+
+#[cfg(android_backend)]
+const DECODER_BACKEND: DecoderBackend = DecoderBackend::Android;
+#[cfg(not(android_backend))]
+const DECODER_BACKEND: DecoderBackend = DecoderBackend::Symphonia;
 
 const CHANNELS: u16 = 2;
 const FRAMES: usize = 4;
@@ -555,7 +561,10 @@ fn decoder_factory_uses_configured_pool_region(resampled_wav_four: &'static [u8]
     let pools = default_pools();
     assert_eq!(pools.stats().allocated_bytes, 0);
     let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
-        DecoderConfig::builder().pools(pools.clone()).build();
+        DecoderConfig::builder()
+            .pools(pools.clone())
+            .backend(DECODER_BACKEND)
+            .build();
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
@@ -598,6 +607,7 @@ where
         .build();
     let config = DecoderConfig::builder()
         .pools(default_pools())
+        .backend(DECODER_BACKEND)
         .resampler(
             DecoderResamplerConfig::builder()
                 .target_sample_rate(target_rate)

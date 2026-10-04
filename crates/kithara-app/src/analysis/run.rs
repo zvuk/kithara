@@ -1,4 +1,8 @@
-use std::num::NonZeroU32;
+use std::{
+    future::{Future, poll_fn},
+    num::NonZeroU32,
+    task::Poll,
+};
 
 use kithara::{
     analysis::{AnalysisProducer, AnalysisProgress},
@@ -11,7 +15,11 @@ use kithara::{
 };
 use tracing::{debug, warn};
 
-use super::{entry::Stage, load::LoadReply, service::Owner};
+use super::{
+    entry::{Entry, Stage},
+    load::LoadReply,
+    service::Owner,
+};
 use crate::{
     pools::AppQueueControl,
     wave_cache::{AnalysisPersistenceError, token_for},
@@ -31,6 +39,7 @@ pub(super) struct Run {
 
 /// What woke the owner's one loop.
 enum Woke {
+    Unheld(usize),
     /// An artifact its own source answered for.
     Load(LoadReply),
     /// The pass in flight published a revision.
@@ -46,6 +55,7 @@ impl Owner {
         let woke = self.wake().await;
         let changed = !matches!(&woke, Woke::Progress);
         match woke {
+            Woke::Unheld(index) => self.entries[index].release(),
             Woke::Load(reply) => self.take_load(reply),
             Woke::Progress => self.publish(),
             Woke::Finished => {
@@ -62,6 +72,7 @@ impl Owner {
                 self.pump();
             }
         }
+        self.prune_entries();
         changed
     }
 
@@ -81,7 +92,7 @@ impl Owner {
         } else if ran_its_course {
             entry.set_stage(Stage::Ended(run.axis));
         } else {
-            entry.set_stage(Stage::Idle);
+            entry.set_stage(Stage::Failed(run.axis));
         }
         let Some(progress) = progress else {
             debug!(
@@ -220,34 +231,60 @@ impl Owner {
         );
     }
 
-    /// Wait for whichever of the owner's two sources speaks first: an artifact
-    /// read, or the pass in flight. Artifact reads are taken first, because a
-    /// prepared artifact can only ever remove work the pass would do.
+    /// Wait for a subscriber leaving, an artifact read, or the active pass.
+    /// Artifact reads precede pass progress because prepared artifacts remove work.
     async fn wake(&mut self) -> Woke {
         let Self {
-            active, replies, ..
+            active,
+            replies,
+            entries,
+            ..
         } = self;
-        match active {
-            Some(Activity::Running(run)) => tokio::select! {
-                biased;
-                Some(reply) = replies.recv() => Woke::Load(reply),
-                changed = run.rx.changed() => if changed.is_err() {
-                    Woke::Finished
-                } else {
-                    Woke::Progress
+        let activity = async {
+            match active {
+                Some(Activity::Running(run)) => tokio::select! {
+                    biased;
+                    Some(reply) = replies.recv() => Woke::Load(reply),
+                    changed = run.rx.changed() => if changed.is_err() {
+                        Woke::Finished
+                    } else {
+                        Woke::Progress
+                    },
                 },
-            },
-            Some(Activity::Committing(task)) => tokio::select! {
-                biased;
-                Some(reply) = replies.recv() => Woke::Load(reply),
-                result = task => Woke::Committed(result),
-            },
-            None => match replies.recv().await {
-                Some(reply) => Woke::Load(reply),
-                None => std::future::pending().await,
-            },
+                Some(Activity::Committing(task)) => tokio::select! {
+                    biased;
+                    Some(reply) = replies.recv() => Woke::Load(reply),
+                    result = task => Woke::Committed(result),
+                },
+                None => match replies.recv().await {
+                    Some(reply) => Woke::Load(reply),
+                    None => std::future::pending().await,
+                },
+            }
+        };
+        tokio::select! {
+            index = closed_publication(entries) => Woke::Unheld(index),
+            woke = activity => woke,
         }
     }
+}
+
+async fn closed_publication(entries: &[Entry]) -> usize {
+    let mut closed: Vec<_> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.has_terminal_publication())
+        .map(|(index, entry)| (index, Box::pin(entry.closed())))
+        .collect();
+    poll_fn(|cx| {
+        for (index, future) in &mut closed {
+            if future.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(*index);
+            }
+        }
+        Poll::Pending
+    })
+    .await
 }
 
 fn deliver(queue: &AppQueueControl, track_id: TrackId) -> impl FnOnce(AnalysisProducer) {

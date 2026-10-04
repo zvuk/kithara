@@ -36,6 +36,8 @@ android = ["dep:kithara-mpa", "dep:symphonia-core"]
 # Enables the software (Symphonia) decoder path. When disabled, the
 # factory only uses the compiled hardware backend — no fallback.
 symphonia = ["dep:symphonia", "dep:symphonia-core", "dep:kithara-mpa"]
+opus = ["symphonia", "dep:opus"]
+ape = ["dep:ape-decoder"]
 # Override Symphonia's LC-only AAC decoder with libfdk-aac (HE-AAC
 # v1/v2). Off by default — opt in per-target if needed.
 fdk-aac = ["symphonia", "dep:symphonia-core", "dep:fdk-aac"]
@@ -65,11 +67,14 @@ kithara-stream = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 
+ape-decoder = { workspace = true, optional = true }
+
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fdk-aac = { workspace = true, optional = true }
 fieldwork = { workspace = true }
 num-traits = { workspace = true }
+opus = { workspace = true, optional = true }
 re_mp4 = { workspace = true }
 serde = { workspace = true }
 smallvec = { workspace = true }

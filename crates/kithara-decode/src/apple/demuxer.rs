@@ -3,14 +3,17 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use kithara_apple::audio_toolbox::{AudioStreamPacketDescription, pod_to_vec, pod_write_to_slice};
+use kithara_apple::audio_toolbox::{
+    AUDIO_FORMAT_MPEG4_AAC_HE, AUDIO_FORMAT_MPEG4_AAC_HE_V2, AudioStreamPacketDescription,
+    pod_to_vec, pod_write_to_slice,
+};
 use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioSpec, FrameCount};
-use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, PrerollHint};
+use kithara_stream::{AudioCodec, ByteMap, ContainerFormat, PendingReason, PrerollHint};
 use num_traits::ToPrimitive;
 
-use super::{consts, file::AppleAudioFile, flac::StreamInfo};
+use super::{consts, converter::derive_aac_asbd_from_esds, file::AppleAudioFile, flac::StreamInfo};
 use crate::{
     GaplessInfo,
     codec::CodecPriming,
@@ -27,7 +30,7 @@ fn sample_rate_from_asbd(rate: f64) -> Option<u32> {
     rate.to_u32()
 }
 
-/// [`Demuxer`] over [`AppleAudioFile`] for standalone (non-fMP4)
+/// [`Demuxer`] over [`AppleAudioFile`] for standalone
 /// container formats. Currently wires WAV/PCM, FLAC, AAC (M4A/ADTS) and
 /// ALAC (M4A/CAF); extends via additional file-type hints.
 ///
@@ -47,6 +50,7 @@ pub(crate) struct AppleAudioFileDemuxer {
     /// size-less seek leaves the stream position stale and the reopen read
     /// mis-classifies as EOF. `None` / `0` when the total is unknown.
     byte_len: Option<Arc<AtomicU64>>,
+    byte_map: Option<Arc<dyn ByteMap>>,
     /// `Some(packets_per_call)` for CBR (`LinearPCM`) — every `next_frame`
     /// issues one batched `audio_file_read_packet_data` for that many
     /// packets. `None` for VBR: one packet per call so
@@ -110,12 +114,16 @@ impl AppleAudioFileDemuxer {
     const fn file_type_id(codec: AudioCodec, container: ContainerFormat) -> Option<u32> {
         Some(match (codec, container) {
             (AudioCodec::Pcm, ContainerFormat::Wav) => consts::FILE_WAVE_TYPE,
+            (AudioCodec::Pcm, ContainerFormat::Aiff) => consts::FILE_AIFF_TYPE,
+            (AudioCodec::Pcm | AudioCodec::Alac, ContainerFormat::Caf) => consts::FILE_CAF_TYPE,
             (AudioCodec::Flac, ContainerFormat::Flac) => consts::FILE_FLAC_TYPE,
-            (AudioCodec::Alac, ContainerFormat::Mp4) => consts::FILE_M4A_TYPE,
-            (AudioCodec::Alac, ContainerFormat::Caf) => consts::FILE_CAF_TYPE,
-            (AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2, ContainerFormat::Mp4) => {
+            (AudioCodec::Alac, ContainerFormat::Mp4 | ContainerFormat::Fmp4) => {
                 consts::FILE_M4A_TYPE
             }
+            (
+                AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
+                ContainerFormat::Mp4 | ContainerFormat::Fmp4,
+            ) => consts::FILE_M4A_TYPE,
             (
                 AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
                 ContainerFormat::Adts,
@@ -124,8 +132,8 @@ impl AppleAudioFileDemuxer {
         })
     }
 
-    /// A streaming FLAC open skips the packet-count scan, taking duration and buffer size from
-    /// STREAMINFO instead, and keeps the real file size for correct EOF and seek behavior.
+    /// Streaming FLAC and segmented PCM skip the eager packet-count query so an unavailable
+    /// tail cannot freeze a partial packet table. FLAC retains STREAMINFO duration and bounds.
     fn open<S>(
         source: BoxedSource,
         hint: Option<u32>,
@@ -137,22 +145,44 @@ impl AppleAudioFileDemuxer {
         S: HasPool<u8>,
     {
         let file = match (open_mode, codec) {
-            (SourceOpenMode::Streaming, AudioCodec::Flac) => {
+            (SourceOpenMode::Streaming, AudioCodec::Flac | AudioCodec::Pcm) => {
                 AppleAudioFile::open_sized_streaming(source, hint)?
             }
             _ => AppleAudioFile::open(source, hint)?,
         };
-        let asbd = file.data_format;
+        let mut asbd = file.data_format;
+        let matches_codec = match codec {
+            AudioCodec::Pcm => asbd.format_id == consts::FORMAT_LINEAR_PCM,
+            AudioCodec::Flac => asbd.format_id == consts::FORMAT_FLAC,
+            AudioCodec::Alac => asbd.format_id == consts::FORMAT_APPLE_LOSSLESS,
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => matches!(
+                asbd.format_id,
+                consts::FORMAT_MPEG4_AAC | AUDIO_FORMAT_MPEG4_AAC_HE | AUDIO_FORMAT_MPEG4_AAC_HE_V2
+            ),
+            _ => false,
+        };
+        if !matches_codec {
+            return Err(DecodeError::InvalidData {
+                detail: "apple.audio_file: codec does not match supplied metadata",
+            });
+        }
         let total_packets = file.packet_count;
+        let extra_data = match codec {
+            AudioCodec::Pcm => pod_to_vec(&asbd),
+            _ => file.magic_cookie().unwrap_or_default(),
+        };
+
+        if matches!(
+            codec,
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2
+        ) && !extra_data.is_empty()
+        {
+            asbd = derive_aac_asbd_from_esds(&extra_data)?;
+        }
         let frames_per_packet = if asbd.frames_per_packet > 0 {
             asbd.frames_per_packet
         } else {
             4096
-        };
-
-        let extra_data = match codec {
-            AudioCodec::Pcm => pod_to_vec(&asbd),
-            _ => file.magic_cookie().unwrap_or_default(),
         };
 
         let flac_info = (codec == AudioCodec::Flac)
@@ -178,14 +208,21 @@ impl AppleAudioFileDemuxer {
             spec.duration_for(info.total_samples)
                 .unwrap_or(Duration::from_nanos(u64::MAX))
         });
-        let duration = total_packets
-            .filter(|count| *count > 0)
-            .map(|total_packets| {
-                let frames = total_packets.saturating_mul(u64::from(frames_per_packet));
-                spec.duration_for(frames)
-                    .unwrap_or(Duration::from_nanos(u64::MAX))
-            })
-            .or(flac_duration);
+        let duration = if codec == AudioCodec::Alac {
+            Some(
+                spec.duration_for(file.valid_frames()?)
+                    .map_err(DecodeError::backend)?,
+            )
+        } else {
+            total_packets
+                .filter(|count| *count > 0)
+                .map(|total_packets| {
+                    let frames = total_packets.saturating_mul(u64::from(frames_per_packet));
+                    spec.duration_for(frames)
+                        .unwrap_or(Duration::from_nanos(u64::MAX))
+                })
+                .or(flac_duration)
+        };
 
         let track_info = TrackInfo {
             codec,
@@ -223,6 +260,7 @@ impl AppleAudioFileDemuxer {
             last_packet_desc_blob: [0u8; size_of::<AudioStreamPacketDescription>()],
             next_packet: 0,
             byte_len: None,
+            byte_map: None,
         })
     }
 
@@ -265,6 +303,10 @@ impl AppleAudioFileDemuxer {
         self.byte_len = handle;
     }
 
+    pub(crate) fn set_byte_map(&mut self, byte_map: Option<Arc<dyn ByteMap>>) {
+        self.byte_map = byte_map;
+    }
+
     /// Inject encoder priming/padding metadata probed by the factory
     /// layer (e.g. `iTunSMPB`/`elst` for AAC).
     /// `AudioFileServices` does not expose MP4 edit lists,
@@ -284,6 +326,26 @@ impl AppleAudioFileDemuxer {
 }
 
 impl Demuxer for AppleAudioFileDemuxer {
+    fn current_segment_index(&self) -> Option<u32> {
+        let byte = self
+            .file
+            .packet_to_byte(self.next_packet.saturating_sub(1))?;
+        self.byte_map
+            .as_ref()?
+            .segment_at_byte(byte)
+            .map(|segment| segment.segment_index)
+    }
+
+    fn current_variant_index(&self) -> Option<usize> {
+        let byte = self
+            .file
+            .packet_to_byte(self.next_packet.saturating_sub(1))?;
+        self.byte_map
+            .as_ref()?
+            .segment_at_byte(byte)
+            .map(|segment| segment.variant_index)
+    }
+
     fn duration(&self) -> Option<Duration> {
         self.track_info.duration
     }

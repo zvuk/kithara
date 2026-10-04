@@ -64,7 +64,7 @@ macro_rules! encode_signal {
 
 /// Writes the frame count into STREAMINFO, which the streaming encoder leaves
 /// at zero. A decoder that reads zero there reports an unknown duration.
-fn backfill_flac_frame_count(bytes: &mut [u8], total_frames: usize) {
+pub(super) fn backfill_flac_frame_count(bytes: &mut [u8], total_frames: usize) {
     let field = consts::STREAMINFO_COUNT_OFFSET;
     let Some(slot) = bytes.get_mut(field..field + size_of::<u64>()) else {
         panic!("kithara-test-fixtures: FLAC output is too short to hold a STREAMINFO block");

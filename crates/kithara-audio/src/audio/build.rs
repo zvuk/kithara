@@ -32,7 +32,7 @@ use super::{
     },
     ring::{RingConsumer, RingParts, create_channels, create_trash_channel},
 };
-use crate::{DecoderChangeCause, FrameDomain};
+use crate::{DecoderChangeCause, FrameDomain, pipeline::gapless::visible_duration};
 
 #[derive_where::derive_where(Clone; B: Clone)]
 struct DecoderDeps<B, S> {
@@ -245,7 +245,13 @@ where
 
         let initial_spec = decoder.spec();
         let initial_track_info = decoder.track_info();
-        let total_duration = decoder.duration().or_else(|| playhead.duration());
+        let codec = initial_media_info.as_ref().and_then(|info| info.codec);
+        let total_duration = visible_duration(
+            decoder.duration(),
+            decoder.gapless_profile(codec),
+            deps.decoder.gapless_mode(),
+        )
+        .or_else(|| playhead.duration());
         playhead.set_duration(total_duration);
         let metadata = decoder.metadata();
         let epoch = Arc::new(AtomicU64::new(0));

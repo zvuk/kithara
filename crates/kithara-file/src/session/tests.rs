@@ -13,8 +13,8 @@ use kithara_platform::CancelScope;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{StorageError, WaitOutcome};
 use kithara_stream::{
-    AudioCodec, ContainerFormat, NotReadyCause, PendingReason, PlayheadState, ReadOutcome,
-    SeekState, Source, SourceError as StreamSourceError, SourcePhase, StreamError,
+    AudioCodec, ContainerFormat, MediaInfo, NotReadyCause, PendingReason, PlayheadState,
+    ReadOutcome, SeekState, Source, SourceError as StreamSourceError, SourcePhase, StreamError,
 };
 use kithara_test_utils::kithara;
 
@@ -86,7 +86,7 @@ fn make_source_with_cancel(
             .coord(coord)
             .bus(bus)
             .cancel(cancel)
-            .cached_codec(AudioCodec::Mp3)
+            .cached_media_info(MediaInfo::from(AudioCodec::Mp3))
             .build(),
         local_config(),
     )
@@ -451,7 +451,7 @@ fn source_cancel_interrupts_blocked_wait_without_poisoning_asset() {
             .coord(coord)
             .bus(EventBus::new(16))
             .cancel(scope.token())
-            .cached_codec(AudioCodec::Mp3)
+            .cached_media_info(MediaInfo::from(AudioCodec::Mp3))
             .build(),
         local_config(),
     );
@@ -559,4 +559,16 @@ fn file_source_read_at_does_not_advance_timeline_position() {
     coord.set_read_pos(5);
     assert_eq!(coord.read_pos(), 5);
     assert_eq!(Source::position(&source), 0);
+}
+
+#[kithara::test]
+fn file_magic_looks_past_id3_metadata() {
+    let mut bytes = vec![b'I', b'D', b'3', 4, 0, 0, 0, 0, 0, 16];
+    bytes.extend_from_slice(&[0; 16]);
+    bytes.extend_from_slice(b"fLaC\x80\x00\x00\x22");
+    let reader = create_committed_resource(&bytes);
+    assert_eq!(
+        super::inner::sniff_media_info(&reader),
+        Some(MediaInfo::from(AudioCodec::Flac))
+    );
 }

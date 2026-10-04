@@ -200,6 +200,7 @@ impl FrameCodec for SymphoniaCodec {
                 Some(AudioCodec::Alac) => "symphonia::decoder::alac",
                 Some(AudioCodec::Pcm) => "symphonia::decoder::pcm",
                 Some(AudioCodec::Adpcm) => "symphonia::decoder::adpcm",
+                Some(AudioCodec::Ape) => "symphonia::decoder::ape",
                 None => "symphonia::decoder::native",
             },
             self.decoder.decode_ref(&packet_ref)
@@ -347,7 +348,9 @@ const fn map_codec(codec: AudioCodec) -> DecodeResult<(AudioCodecId, Option<Code
         AudioCodec::Alac => Ok((CODEC_ID_ALAC, None)),
         AudioCodec::Opus => Ok((CODEC_ID_OPUS, None)),
         AudioCodec::Vorbis => Ok((CODEC_ID_VORBIS, None)),
-        AudioCodec::Pcm | AudioCodec::Adpcm => Err(DecodeError::UnsupportedCodec { codec }),
+        AudioCodec::Pcm | AudioCodec::Adpcm | AudioCodec::Ape => {
+            Err(DecodeError::UnsupportedCodec { codec })
+        }
     }
 }
 

@@ -8,11 +8,12 @@ pub(crate) mod codec;
 #[cfg(feature = "symphonia")]
 pub(crate) mod config;
 pub(crate) mod demuxer;
-pub(crate) mod echain;
 #[cfg(feature = "fdk-aac")]
 pub(crate) mod fdk;
 #[cfg(all(test, feature = "symphonia"))]
 mod mp4_tests;
+#[cfg(feature = "opus")]
+mod opus;
 #[cfg(feature = "symphonia")]
 pub(crate) mod probe;
 #[cfg(feature = "symphonia")]
