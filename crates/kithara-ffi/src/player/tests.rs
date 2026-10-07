@@ -152,8 +152,11 @@ fn play_retries_a_failed_track_from_a_thread_without_a_runtime() {
     let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
     let (failed_tx, failed_rx) = mpsc::channel();
     player.set_observer(std::sync::Arc::new(FailureSignal(failed_tx)));
+    // The queue takes only an absolute path, and what is absolute differs
+    // between platforms: a drive-less `/missing.mp3` is not one on Windows.
+    let missing = std::env::temp_dir().join("kithara-ffi-missing.mp3");
     player
-        .append(test_item("/nonexistent/kithara-ffi/missing.mp3"))
+        .append(test_item(missing.to_str().expect("a UTF-8 temporary path")))
         .expect("queue accepts the item");
     wait_for_failure(&failed_rx);
 

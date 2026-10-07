@@ -154,41 +154,7 @@ fn rebuild(
     let answers = build_answer_media(process, host, pins, root)?;
 
     let mut command = process.command("virt-install");
-    command.args([
-        "--name",
-        &guest.name,
-        "--osinfo",
-        "win11",
-        "--boot",
-        "uefi",
-        "--tpm",
-        "backend.type=emulator,backend.version=2.0,model=tpm-crb",
-        "--vcpus",
-        &guest.vcpus.to_string(),
-        "--memory",
-        &guest.memory_mib.to_string(),
-        "--disk",
-        &format!("size={},format=qcow2", guest.disk_gib),
-        // The installation media is the install method, not just another disk.
-        "--cdrom",
-        path_text(media)?,
-        "--disk",
-        &format!("{},device=cdrom", path_text(&answers)?),
-        "--network",
-        &format!("network={}", guest.network),
-        // Windows Setup draws its progress on a screen and does nothing
-        // without one, so the guest gets a display. It listens on the loopback
-        // address only: the machine's own operator can watch an install, and
-        // nobody else can reach it.
-        "--graphics",
-        "vnc,listen=127.0.0.1",
-        // What the guest writes to its first serial port lands in this file:
-        // how provisioning went, and later when its licence runs out. Nothing
-        // else of a guest that is not yet a runner reaches the host.
-        "--serial",
-        &format!("file,path={}", path_text(&console_log(host))?),
-        "--noautoconsole",
-    ]);
+    command.args(creation_args(host, guest, media, &answers)?);
     process.run_command(&mut command, "create the Windows guest")?;
 
     press_a_key(process, &guest.name)?;
@@ -207,6 +173,57 @@ fn rebuild(
     resume_first_phase(process, &guest.name)?;
     await_provisioning(host, guest)?;
     enrol(process, host)
+}
+
+/// What `virt-install` is told the guest is.
+fn creation_args(
+    host: &LinuxHost,
+    guest: &WindowsGuest,
+    media: &Path,
+    answers: &Path,
+) -> Result<Vec<String>> {
+    Ok([
+        "--name",
+        &guest.name,
+        "--osinfo",
+        "win11",
+        "--boot",
+        "uefi",
+        "--tpm",
+        "backend.type=emulator,backend.version=2.0,model=tpm-crb",
+        "--vcpus",
+        &guest.vcpus.to_string(),
+        "--memory",
+        &guest.memory_mib.to_string(),
+        "--disk",
+        &format!("size={},format=qcow2", guest.disk_gib),
+        // The installation media is the install method, not just another disk.
+        "--cdrom",
+        path_text(media)?,
+        "--disk",
+        &format!("{},device=cdrom", path_text(answers)?),
+        "--network",
+        &format!("network={}", guest.network),
+        // Windows Setup draws its progress on a screen and does nothing
+        // without one, so the guest gets a display. It listens on the loopback
+        // address only: the machine's own operator can watch an install, and
+        // nobody else can reach it.
+        "--graphics",
+        "vnc,listen=127.0.0.1",
+        // What the guest writes to its first serial port lands in this file:
+        // how provisioning went, and later when its licence runs out. Nothing
+        // else of a guest that is not yet a runner reaches the host.
+        "--serial",
+        &format!("file,path={}", path_text(&console_log(host))?),
+        // The suite plays through the machine's default audio output, and
+        // Windows has one only for a sound card it can see. The host plays
+        // what reaches the card into nothing, at the rate a card would.
+        "--sound",
+        "model=ich9",
+        "--noautoconsole",
+    ]
+    .map(str::to_owned)
+    .into())
 }
 
 /// Build the guest again when its evaluation licence is about to run out.
@@ -966,6 +983,32 @@ mod tests {
         assert_eq!(
             sources,
             [PathBuf::from("/srv/kithara ci/kithara-ci-windows.qcow2")]
+        );
+    }
+
+    /// The suite opens the machine's default audio output, and Windows has one
+    /// only for a sound card it can see. A guest created without one fails
+    /// every test that plays through it, and nothing before the suite says why.
+    #[test]
+    fn the_guest_is_created_with_a_sound_card() {
+        let host = super::super::profile::tests::host_fixture();
+        let guest = host.windows.clone().unwrap();
+
+        let args = creation_args(
+            &host,
+            &guest,
+            Path::new("/iso/windows.iso"),
+            Path::new("/iso/answers.iso"),
+        )
+        .unwrap();
+
+        let model = args
+            .iter()
+            .position(|arg| arg == "--sound")
+            .and_then(|at| args.get(at + 1));
+        assert!(
+            model.is_some_and(|model| model.starts_with("model=")),
+            "{args:?}"
         );
     }
 
