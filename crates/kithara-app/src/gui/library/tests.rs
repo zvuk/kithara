@@ -76,7 +76,6 @@ fn shown(library: &Library) -> [Option<bool>; 2] {
     ["startup", Probe::ID].map(|id| showing(library, id))
 }
 
-/// Whether `id`'s page stands, or nothing when no source has that id.
 fn showing(library: &Library, id: &str) -> Option<bool> {
     library.index_of(id).map(|_| library.page() == Some(id))
 }

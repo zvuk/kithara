@@ -6,7 +6,7 @@ use serde_yaml_ng::Value;
 
 use crate::Registration;
 
-/// What the application shares with every plugin, built once.
+/// Shared runtime and HTTP client for plugins.
 #[derive(Clone)]
 pub struct Environment {
     runtime: Handle,
@@ -19,7 +19,7 @@ impl Environment {
         Self { runtime, net }
     }
 
-    /// The runtime a plugin spawns its tasks on.
+    /// Runtime for plugin tasks.
     #[must_use]
     pub const fn runtime(&self) -> &Handle {
         &self.runtime
@@ -32,8 +32,7 @@ impl Environment {
     }
 }
 
-/// What is a plugin's own: a cancellation of its own and its entry of the
-/// document's `sources` map, references already resolved.
+/// Plugin cancellation token and resolved `sources` configuration entry.
 pub struct Context {
     cancel: CancelToken,
     section: Value,
@@ -45,13 +44,13 @@ impl Context {
         Self { cancel, section }
     }
 
-    /// The plugin's cancellation, taken once its entry has been read.
+    /// Consumes the context and returns the plugin cancellation token.
     #[must_use]
     pub fn cancel(self) -> CancelToken {
         self.cancel
     }
 
-    /// The plugin's entry in the schema the plugin owns.
+    /// Deserializes the configuration entry into the plugin schema.
     ///
     /// # Errors
     /// Returns [`SectionError`] when the entry does not match that schema.
@@ -60,13 +59,12 @@ impl Context {
     }
 }
 
-/// A `sources` entry its plugin cannot read. It carries no part of the value,
-/// which may hold a resolved secret.
+/// Configuration schema mismatch. Omits the entry value to protect secrets.
 #[derive(Debug, thiserror::Error)]
 #[error("the entry does not match the plugin's schema")]
 pub struct SectionError;
 
-/// A plugin that could not register, named by its factory id.
+/// Registration failure with the plugin id.
 #[derive(Debug, thiserror::Error)]
 #[error("sources.{id}: {cause}")]
 pub struct RegisterError {
@@ -76,14 +74,14 @@ pub struct RegisterError {
 }
 
 impl RegisterError {
-    /// Plugin `id` could not register for `cause`.
+    /// Associates a registration failure with its plugin id.
     #[must_use]
     pub const fn new(id: &'static str, cause: Cause) -> Self {
         Self { id, cause }
     }
 }
 
-/// Why a plugin could not register.
+/// Plugin registration error.
 #[derive(Debug, thiserror::Error)]
 pub enum Cause {
     #[error(transparent)]
@@ -98,11 +96,10 @@ impl From<UiDocError> for Cause {
     }
 }
 
-/// A plugin the application can mount, keyed by the `sources` entry it reads.
+/// Registers a plugin from its `sources` configuration entry.
 pub struct Factory {
-    /// The plugin's id, which names its `sources` entry.
+    /// Plugin id and key in the `sources` map.
     pub id: &'static str,
-    /// Builds the plugin's registration from what the application shares and
-    /// what is its own.
+    /// Registers the plugin with shared services and its own context.
     pub register: fn(&Environment, Context) -> Result<Registration, Cause>,
 }

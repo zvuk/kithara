@@ -12,18 +12,14 @@
 
 # kithara-app-zvuk
 
-Workspace crate (`publish = false`) with the Zvuk library source: typed
-catalogue operations (search, liked tracks, playlists, HLS stream resolution
-and confirmed like and unlike requests) and the page it fills the
-application's library pages with. The source implements `LibrarySource` from
-`kithara-app-library` and compiles for native and WASM targets.
+Workspace crate (`publish = false`) providing the Zvuk library source and page.
+Supports search, liked tracks, playlists, HLS stream resolution, and like/unlike
+requests on native and WASM targets.
 
 ## Usage
 
-The application lists the source's factory among the library sources its build
-mounts. The factory builds the source from the document's `sources.zvuk` entry
-over the application's shared `Environment` and fills `app-library/pages` with
-its page.
+Add `Source::FACTORY` to the app's source list. It reads `sources.zvuk` and
+registers its page in `app-library/pages`.
 
 ```rust
 use kithara_app_library::Factory;
@@ -47,20 +43,6 @@ sources:
 Catalogue requests carry `User-Agent` and `X-Auth-Token` from this entry and no
 DRM provider header. Reads keep the shared client's retry policy; like and
 unlike requests go out once, over a single-attempt handle on the same transport.
-
-## Key Types
-
-<table>
-
-<tr><th>Type</th><th>Role</th></tr>
-
-<tr><td><code>Source</code></td><td>The library source: its branch, rows, page and <code>FACTORY</code></td></tr>
-
-<tr><td><code>Client</code></td><td>The catalogue client over a <code>Net</code> transport that a source is registered with</td></tr>
-
-<tr><td><code>Config</code></td><td>The <code>sources.zvuk</code> entry</td></tr>
-
-</table>
 
 See [library sources](https://github.com/zvuk/kithara/wiki/kithara-app#library-sources)
 for the source contract.

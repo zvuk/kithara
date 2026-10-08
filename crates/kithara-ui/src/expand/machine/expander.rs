@@ -43,15 +43,11 @@ pub(in crate::expand) struct Context<'a> {
     /// button an included surface carries turns the flag its includer reads.
     pub(in crate::expand) instance: String,
     pub(in crate::expand) prefix: String,
-    /// The fill this item template holds in its slot `content`.
+    /// Fill mounted in the template `content` slot.
     pub(in crate::expand) content: Option<&'a SourceUri>,
 }
 
-/// A document drawn inside another: the arguments it receives, the path it
-/// stands under and the fill it holds in its slot `content`.
-///
-/// Every argument `named` must be declared; of those `passed` along from the
-/// context, the document receives the ones it declares.
+/// Expansion arguments: `named` must be declared; undeclared `passed` values are discarded.
 pub(in crate::expand) struct Frame<'a> {
     pub(in crate::expand) named: BTreeMap<String, String>,
     pub(in crate::expand) passed: BTreeMap<String, String>,
@@ -60,7 +56,6 @@ pub(in crate::expand) struct Frame<'a> {
 }
 
 impl Context<'_> {
-    /// The id of the module this context expands.
     pub(in crate::expand) fn module(&self) -> Result<&str, UiDocError> {
         self.set.def(&self.origin).map(|doc| doc.id.0.as_str())
     }

@@ -235,8 +235,6 @@ fn a_manifest_the_resolver_does_not_hold_is_not_found() {
     assert!(matches!(error, UiDocError::NotFound { .. }));
 }
 
-/// A package whose one screen mounts `rack`, a module showing its collection
-/// `items`, with a fill put into each of `addresses`.
 fn filled(addresses: &[&str]) -> MemResolver {
     let mut resolver = MemResolver::default();
     resolver.insert(

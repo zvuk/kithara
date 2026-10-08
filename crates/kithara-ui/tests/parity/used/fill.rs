@@ -1,16 +1,3 @@
-//! What the two hosts owe each other about a slot filled from outside: the
-//! item template drawn once per fill in order, the fill's document in the
-//! template's `content`. The template is expanded with the instance's
-//! parameters plus `key` and `source` it declares, the fill with those of the
-//! template's it declares.
-//!
-//! The template hides itself unless the page selects its key, so a press on
-//! the window reaches the one fill standing. With nothing hidden the slot
-//! stacks its fills top to bottom.
-//!
-//! A `select` slot draws no template: it draws the one fill whose key its read
-//! answers, or its default, and needs the room of its largest fill.
-
 use kithara_test_utils::kithara;
 use kithara_ui::{
     app::{App, Config, Ui},
@@ -32,8 +19,6 @@ use crate::immediate::Immediate;
 
 const WINDOW: (u32, u32) = (400, 200);
 
-/// The module both layouts mount: a slot showing its collection `items`,
-/// with a press of its own as the default.
 const RACK: &str = r#"(schema: "kithara.module", version: 1, id: "rack", chrome: Plain,
     parameters: ["deck"],
     root: Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
@@ -45,8 +30,6 @@ const RACK: &str = r#"(schema: "kithara.module", version: 1, id: "rack", chrome:
             ]),
     ]))"#;
 
-/// The module both layouts mount for a selection: the slot draws the fill
-/// whose key the page reads.
 const PICKER: &str = r#"(schema: "kithara.module", version: 1, id: "rack", chrome: Plain,
     parameters: ["deck"],
     root: Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
@@ -58,13 +41,11 @@ const PICKER: &str = r#"(schema: "kithara.module", version: 1, id: "rack", chrom
             ]),
     ]))"#;
 
-/// A slot asking for both a list and a selection of one collection.
 const BOTH: &str = r#"(schema: "kithara.module", version: 1, id: "rack", chrome: Plain,
     parameters: ["deck"],
     root: Slot(id: "items", from: "items", each: Include(source: "item.kmodule.ron"),
         select: Model(id: "fixture.page")))"#;
 
-/// A rack whose slot shows its collection by `shows` in a box 451 tall.
 fn boxed(shows: &str) -> String {
     format!(
         r#"(schema: "kithara.module", version: 1, id: "rack", chrome: Plain,
@@ -74,7 +55,6 @@ fn boxed(shows: &str) -> String {
     )
 }
 
-/// A fill that needs `height` of room.
 fn tall(height: f32) -> String {
     format!(
         r#"(schema: "kithara.module", version: 1, id: "tall", chrome: Plain,
@@ -83,18 +63,15 @@ fn tall(height: f32) -> String {
     )
 }
 
-/// The item template: the fill's document, hidden unless its key is selected.
 const ITEM: &str = r#"(schema: "kithara.module", version: 1, id: "item", chrome: Plain,
     parameters: ["deck", "key", "source"],
     root: Optional(id: "frame", hidden: Model(id: "fixture.hidden", with: { "source": "$key" }),
         child: Slot(id: "content", size: Some((w: Fill, h: Fill)))))"#;
 
-/// A template with no slot `content` to hold the fill.
 const BARE_ITEM: &str = r#"(schema: "kithara.module", version: 1, id: "item", chrome: Plain,
     parameters: ["deck", "key", "source"],
     root: Spacer(id: "frame", size: Some((w: Fill, h: Fill))))"#;
 
-/// A fill whose whole face is one press writing `endpoint`.
 fn filling(endpoint: &str) -> String {
     format!(
         r#"(schema: "kithara.module", version: 1, id: "press-page", chrome: Plain,
@@ -105,30 +82,25 @@ fn filling(endpoint: &str) -> String {
     )
 }
 
-/// A fill declaring only `source`, whose press names it.
 const SOURCED: &str = r#"(schema: "kithara.module", version: 1, id: "sourced-page", chrome: Plain,
     parameters: ["source"],
     root: Pressable(id: "press", press: Command(id: "fixture.sourced", with: { "source": "$source" }),
         child: Spacer(id: "press-face", size: Some((w: Fill, h: Fill)))))"#;
 
-/// An item template declaring only `key`.
 const KEYED_ITEM: &str = r#"(schema: "kithara.module", version: 1, id: "item", chrome: Plain,
     parameters: ["key"],
     root: Optional(id: "frame", hidden: Model(id: "fixture.hidden", with: { "source": "$key" }),
         child: Slot(id: "content", size: Some((w: Fill, h: Fill)))))"#;
 
-/// A fill declaring only `key`, whose press names it.
 const KEYED: &str = r#"(schema: "kithara.module", version: 1, id: "keyed-page", chrome: Plain,
     parameters: ["key"],
     root: Pressable(id: "press", press: Command(id: "fixture.sourced", with: { "source": "$key" }),
         child: Spacer(id: "press-face", size: Some((w: Fill, h: Fill)))))"#;
 
-/// One instance, `deck: "a"`, filling the window.
 const ONE: &str = r#"(schema: "kithara.layout", version: 1, id: "page",
     root: Module(instance: "demo", source: "rack.kmodule.ron", with: { "deck": "a" },
         size: (w: Fill, h: Fill)))"#;
 
-/// Two instances of the same module side by side, `deck: "a"` on the left.
 const TWO: &str = r#"(schema: "kithara.layout", version: 1, id: "page",
     root: Split(axis: Horizontal, children: [
         (weight: 1.0, node: Module(instance: "left", source: "rack.kmodule.ron",
@@ -137,13 +109,10 @@ const TWO: &str = r#"(schema: "kithara.layout", version: 1, id: "page",
             with: { "deck": "b" }, size: (w: Fill, h: Fill))),
     ]))"#;
 
-/// The page's documents, with `fills` put into `rack/items` in order, each
-/// a key and the endpoint its press writes.
 fn documents(layout: &str, item: &str, fills: &[(&str, &str)]) -> MemResolver {
     documents_in(RACK, layout, item, fills)
 }
 
-/// [`documents`] with `rack` as the module the layout mounts.
 fn documents_in(rack: &str, layout: &str, item: &str, fills: &[(&str, &str)]) -> MemResolver {
     let mut resolver = MemResolver::default();
     resolver.insert("page.klayout.ron", layout);
@@ -158,7 +127,6 @@ fn documents_in(rack: &str, layout: &str, item: &str, fills: &[(&str, &str)]) ->
     resolver
 }
 
-/// The page: which key it selects, and what it was published.
 #[derive(Default)]
 struct Page {
     selected: Option<&'static str>,
@@ -254,7 +222,6 @@ fn compiled(resolver: &dyn SourceResolver) -> Result<CompiledUi, UiDocError> {
     )
 }
 
-/// Loads `resolver` as a package whose one screen is the page.
 fn packaged(mut resolver: MemResolver) -> Result<PackageDoc, UiDocError> {
     resolver.insert(
         "package.kpackage.ron",
@@ -282,7 +249,6 @@ fn retained<'a>(
     .map_err(|error| error.to_string())
 }
 
-/// What a click at each point published on each host, retained first.
 fn clicks(
     resolver: &dyn SourceResolver,
     selected: Option<&'static str>,

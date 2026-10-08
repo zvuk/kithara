@@ -180,8 +180,7 @@ impl<N: Net + Clone + 'static> Source<N> {
 }
 
 impl Source<HttpClient> {
-    /// Mounts the source from its `sources` entry over the application's client,
-    /// its page filling the library's pages.
+    /// Registers the Zvuk source and its library page from `sources.zvuk`.
     pub const FACTORY: Factory = Factory {
         id: consts::ID,
         register: Self::register,

@@ -148,7 +148,6 @@ impl Library {
         }
     }
 
-    /// The id of the source whose page stands: the one holding the selection.
     pub(in crate::gui) fn page(&self) -> Option<&str> {
         let selected = self.selected.as_ref()?;
         Some(self.sources.get(selected.source)?.source.id())

@@ -11,10 +11,6 @@ use kithara_ui::{
 
 use super::consts;
 
-/// The page the source fills the library's pages with, named by its origin.
-///
-/// # Errors
-/// Returns [`UiDocError`] when the embedded page does not parse.
 pub(super) fn document() -> Result<FillDocument, UiDocError> {
     FillDocument::parse(
         include_str!("../../assets/zvuk-page.kmodule.ron"),
@@ -22,8 +18,6 @@ pub(super) fn document() -> Result<FillDocument, UiDocError> {
     )
 }
 
-/// The captions the source's branch and page are worded with, and the reads
-/// and commands the page declares.
 pub(super) fn page() -> SourcePage {
     SourcePage {
         id: consts::ID,

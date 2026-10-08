@@ -6,8 +6,7 @@ use kithara_ui::{
     text::TextDoc,
 };
 
-/// The collection every source's page fills; a source label the catalog does
-/// not word is reported against it.
+/// Library page collection and origin for source caption errors.
 pub const PAGES: &str = "app-library/pages";
 
 /// One branch of the library tree and the page its nodes show.

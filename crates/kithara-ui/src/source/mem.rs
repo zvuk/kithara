@@ -23,8 +23,7 @@ impl MemResolver {
         self.files.insert(path.to_owned(), text.to_owned());
     }
 
-    /// Puts `document` into the collection at `address`, drawn under `key`
-    /// after the fills already there.
+    /// Appends a fill to `<module id>/<collection>` in registration order.
     pub fn fill(&mut self, address: &str, key: &str, document: FillDocument) {
         self.fills.push(Fill {
             document,

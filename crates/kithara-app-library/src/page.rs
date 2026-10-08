@@ -15,8 +15,7 @@ pub struct Document {
     pub text: &'static str,
 }
 
-/// A source's id and what its page needs from the package, known before the
-/// source is built.
+/// Source id, UI endpoints, and caption catalogs.
 pub struct SourcePage {
     /// Names the source; its page reads and writes are scoped by it.
     pub id: &'static str,
@@ -40,8 +39,7 @@ pub struct Endpoint {
 /// Builds a registered source from the package's text catalog.
 type Build = Box<dyn FnOnce(&TextDoc) -> Result<Box<dyn LibrarySource>, UiDocError>>;
 
-/// A source to mount: its page, the documents it puts into the package's
-/// collections, and how to build it from the text catalog.
+/// Source metadata, UI fills, and a builder using the package text catalog.
 pub struct Registration {
     build: Build,
     page: SourcePage,
@@ -60,9 +58,7 @@ impl Registration {
         }
     }
 
-    /// Puts `document` into the collection at `address`,
-    /// `<module id>/<collection>`, drawn under the source's id: a document the
-    /// source parsed, or the path of one the package holds.
+    /// Adds a document to `<module id>/<collection>` under the source id.
     #[must_use]
     pub fn fill(mut self, address: &str, document: FillDocument) -> Self {
         self.fills.push((address.to_owned(), document));
@@ -82,8 +78,7 @@ impl Registration {
         &self.page
     }
 
-    /// Every collection address the source fills, with the document it puts
-    /// there, in the order given.
+    /// Collection addresses and documents in registration order.
     pub fn fills(&self) -> impl Iterator<Item = (&str, &FillDocument)> {
         self.fills
             .iter()

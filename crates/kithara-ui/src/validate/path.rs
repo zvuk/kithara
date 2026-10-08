@@ -61,7 +61,6 @@ pub(super) fn check_state_id(id: &str, origin: &SourceUri) -> Result<(), UiDocEr
     )
 }
 
-/// A fill's key stands as one segment of the path its fill is drawn under.
 pub(crate) fn check_fill_key(address: &str, key: &str) -> Result<(), UiDocError> {
     bad_name(key).map_or(Ok(()), |reason| {
         Err(UiDocError::FillKey {
@@ -72,8 +71,6 @@ pub(crate) fn check_fill_key(address: &str, key: &str) -> Result<(), UiDocError>
     })
 }
 
-/// Each value of a binding's scope stands in its scoped key
-/// `id@name=value,...`.
 pub(crate) fn check_scope(
     with: &BTreeMap<String, String>,
     origin: &SourceUri,
@@ -92,8 +89,6 @@ pub(crate) fn check_scope(
         })
 }
 
-/// Why this cannot stand as a value in a scoped key `id@name=value,...`, or
-/// nothing when it can.
 fn bad_scope_value(value: &str) -> Option<&'static str> {
     if value.contains(',') {
         Some("must not contain ','")

@@ -37,21 +37,21 @@ pub struct LoadedModule {
     pub source: ModuleSource,
 }
 
-/// Where a fill's document comes from: one parsed outside the package, named
-/// by the origin it was parsed with, or the package-relative path of one the
-/// package holds, read through the package's resolver like an include.
+/// Fill supplied as a parsed module or a path resolved through the package.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum FillDocument {
+    /// Parsed module. Its origin must identify one document and differ from package paths.
     Parsed {
         document: Box<ModuleDoc>,
         origin: SourceUri,
     },
+    /// Package-relative path; package overlays apply.
     Path(String),
 }
 
 impl FillDocument {
-    /// The module `text` parsed and named by `origin`.
+    /// Parses a fill module with the given diagnostic and relative-path origin.
     ///
     /// # Errors
     /// Returns [`UiDocError`] when `text` does not parse as a module.
@@ -64,9 +64,7 @@ impl FillDocument {
     }
 }
 
-/// A document put into a module's collection from outside: the collection's
-/// address `<module id>/<collection>`, the key it is drawn under, and its
-/// document.
+/// Document registered under a unique key in `<module id>/<collection>`.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Fill {
@@ -76,7 +74,7 @@ pub struct Fill {
 }
 
 pub trait SourceResolver {
-    /// Every fill this source holds, in the order they were given.
+    /// Registered fills in insertion order.
     fn fills(&self) -> Vec<&Fill>;
 
     /// Loads a module's text or a ready document at the same resolved path.

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::binding::BindingRef;
 
-/// Where the number that picks a branch comes from.
+/// Value used to select an adaptive branch.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
@@ -11,7 +11,7 @@ pub enum Measure {
     Width,
     /// The height the node is given, in logical pixels.
     Height,
-    /// A scalar the host answers.
+    /// Scalar read from the host.
     Read(BindingRef),
 }
 

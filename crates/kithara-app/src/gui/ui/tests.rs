@@ -1623,8 +1623,6 @@ fn the_source_additions_list_exactly_the_registered_sources() {
     }
 }
 
-/// A plugin filling a collection no slot of the package shows is refused
-/// while the package loads, by the address and the plugin's id.
 #[kithara::test]
 fn a_fill_of_a_collection_no_slot_shows_fails_loading_the_package() {
     let page = SourcePage {

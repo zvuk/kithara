@@ -244,14 +244,10 @@ impl BlockNode for CompiledNode {
     }
 }
 
-/// Compiles a layout and its module graph into renderer-ready UI data.
+/// Compiles a layout and its module graph, adding built-in endpoints to the host registry.
 ///
 /// # Errors
-/// Returns [`UiDocError`] when loading, parsing, expansion, or validation fails,
-/// [`UiDocError::FillKey`] or [`UiDocError::FillOrigin`] for the resolver's fill set.
-///
-/// Layers over the application's own declarations, so a document may bind to what the host answers
-/// for itself without every application registering it.
+/// Returns [`UiDocError`] when loading, parsing, expansion, or fill validation fails.
 pub fn compile(
     entry: &str,
     resolver: &dyn SourceResolver,

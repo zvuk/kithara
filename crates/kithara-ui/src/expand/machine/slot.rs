@@ -66,9 +66,6 @@ pub(super) fn expand_slot(
     })
 }
 
-/// Draws every fill under the slot's path and its key, with the parameters
-/// it declares, standing only while `select` reads that key, and `default`
-/// standing while it reads none of them.
 fn expand_selection(
     context: &Context<'_>,
     id: &NodeId,
@@ -113,8 +110,6 @@ fn expand_selection(
     Ok(children)
 }
 
-/// The read of `select` answering whether it names one of `keys`, or none of
-/// them with `invert`.
 fn selecting(select: &Binding, keys: Box<[InternId]>, invert: bool) -> Binding {
     Binding {
         kind: BindingKind::Selects { keys, invert },
@@ -122,7 +117,6 @@ fn selecting(select: &Binding, keys: Box<[InternId]>, invert: bool) -> Binding {
     }
 }
 
-/// `child` as a block its read takes out of the slot.
 fn standing(block: BlockSpec, child: ExpandedNode) -> ExpandedNode {
     ExpandedNode::Optional {
         block,
@@ -130,8 +124,6 @@ fn standing(block: BlockSpec, child: ExpandedNode) -> ExpandedNode {
     }
 }
 
-/// Draws `each` once per fill, under the slot's path and the fill's key, with
-/// those of the instance's parameters plus `key` and `source` it declares.
 fn expand_fills<'a>(
     context: &Context<'a>,
     id: &NodeId,
@@ -162,8 +154,6 @@ fn expand_fills<'a>(
     Ok(children)
 }
 
-/// Draws the fill an item template holds in its own slot `content`, with the
-/// template's parameters the fill declares.
 fn expand_content(
     context: &Context<'_>,
     fill: &SourceUri,
@@ -179,7 +169,6 @@ fn expand_content(
     include_at(context, fill, frame, &[0], depth, machine)
 }
 
-/// The instance's arguments plus the fill's key as `key` and `source`.
 fn fill_args(context: &Context<'_>, fill: &Filled) -> BTreeMap<String, String> {
     let mut args = context.args.clone();
     args.insert("key".to_owned(), fill.key.clone());

@@ -132,8 +132,7 @@ pub enum ExpandedNode {
         size: Option<SizeSpec>,
         children: Vec<Self>,
     },
-    /// With `select` the slot shows one child at a time and needs the room
-    /// of the largest; otherwise it stacks its children top to bottom.
+    /// Selection reserves the largest child size; a list stacks children vertically.
     Slot {
         id: InternId,
         size: Option<SizeSpec>,
@@ -328,8 +327,7 @@ pub enum BindingKind {
     Page {
         name: InternId,
     },
-    /// The text a `select` slot reads. A read answers whether it is one of
-    /// `keys`, or with `invert` whether it is none of them.
+    /// Tests whether a text read matches `keys`; `invert` negates the result.
     Selects {
         keys: Box<[InternId]>,
         invert: bool,

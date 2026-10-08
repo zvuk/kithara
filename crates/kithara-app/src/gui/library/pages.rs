@@ -9,8 +9,6 @@ use kithara_app_library::{Document, LibrarySource, PAGES, Registration, SourcePa
 
 use crate::gui::ui::endpoints::Registry;
 
-/// What the registered sources add to the package: the documents they fill
-/// its collections with, their captions and the endpoints their pages declare.
 pub(in crate::gui) struct SourceAdditions {
     pub(in crate::gui) fills: MemResolver,
     pub(in crate::gui) registry: Registry,
@@ -44,8 +42,6 @@ impl SourceAdditions {
     }
 }
 
-/// A source the shell's table page draws: it fills the library's pages with
-/// that page and declares nothing of its own.
 pub(in crate::gui) fn listed<F>(id: &'static str, build: F) -> Registration
 where
     F: FnOnce(&TextDoc) -> Result<Box<dyn LibrarySource>, UiDocError> + 'static,

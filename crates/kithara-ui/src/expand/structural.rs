@@ -58,8 +58,6 @@ pub(super) fn expand_include(
     include_at(context, &target, frame, &[], depth, machine)
 }
 
-/// Draws the module at `uri` in `frame`, at the current address extended by
-/// `at`, and records it as included there.
 pub(super) fn include_at<'a>(
     context: &Context<'a>,
     uri: &SourceUri,

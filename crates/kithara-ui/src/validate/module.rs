@@ -28,7 +28,6 @@ pub(crate) fn check_module_id(doc: &ModuleDoc, origin: &SourceUri) -> Result<(),
     Ok(())
 }
 
-/// The node ids of `doc`, its root standing among siblings.
 pub(crate) fn check_module_node_ids(doc: &ModuleDoc, origin: &SourceUri) -> Result<(), UiDocError> {
     let mut seen = BTreeSet::new();
     walk_module(
@@ -40,7 +39,6 @@ pub(crate) fn check_module_node_ids(doc: &ModuleDoc, origin: &SourceUri) -> Resu
     )
 }
 
-/// Refuses a block root in `doc` mounted alone, by an include, a layout or a fill.
 pub(crate) fn check_module_root(doc: &ModuleDoc, origin: &SourceUri) -> Result<(), UiDocError> {
     let ControlNode::Optional { id, .. } = &doc.root else {
         return Ok(());

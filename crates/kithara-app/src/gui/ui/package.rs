@@ -63,8 +63,6 @@ impl Package {
         self.screens.document(layout)
     }
 
-    /// Reads the package at `root`, or the embedded one, with the fills of
-    /// `pages` checked against its screens under `limits`.
     pub(in crate::gui) fn load(
         root: Option<&Path>,
         pages: SourceAdditions,

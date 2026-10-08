@@ -7,8 +7,6 @@ use serde_yaml_ng::Value as Section;
 
 use super::{support::queue_completed, *};
 
-/// An entry the plugin cannot read is refused by the plugin's id, and the
-/// message never repeats the entry, which may hold a resolved token.
 #[kithara::test(tokio)]
 async fn a_mismatched_entry_names_the_plugin_and_not_its_value() {
     let cancel = kithara_test_utils::cancel_token();

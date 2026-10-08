@@ -141,7 +141,6 @@ pub(crate) fn combine_vertical(sizes: impl IntoIterator<Item = SizeSpec>) -> Siz
     SizeSpec::new(Dim::from(width), Dim::from(height))
 }
 
-/// The box of a place that shows one of its children at a time.
 fn combine_largest(sizes: impl IntoIterator<Item = SizeSpec>) -> SizeSpec {
     let (width, height) = sizes
         .into_iter()
@@ -151,8 +150,6 @@ fn combine_largest(sizes: impl IntoIterator<Item = SizeSpec>) -> SizeSpec {
     SizeSpec::new(Dim::from(width), Dim::from(height))
 }
 
-/// The box of a slot's children: the largest for a selection, the column
-/// otherwise.
 pub(crate) fn combine_slot(select: bool, sizes: impl IntoIterator<Item = SizeSpec>) -> SizeSpec {
     if select {
         combine_largest(sizes)

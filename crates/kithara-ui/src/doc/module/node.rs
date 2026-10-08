@@ -255,9 +255,9 @@ pub enum ControlNode {
         #[serde(default)]
         children: Vec<Self>,
     },
-    /// A place filled from outside. A slot showing the collection `from` of
-    /// its module draws `each` once per fill of that collection, or the one
-    /// fill whose key `select` reads, and `default` when no fill is drawn.
+    /// Slot with defaults or external content; `from` requires exactly one of `each` or `select`.
+    /// `each` renders a template per fill; `select` renders the matching key.
+    /// Uses `default` when the collection is empty or the key has no match.
     Slot {
         id: NodeId,
         #[serde(default)]
@@ -817,8 +817,7 @@ pub enum ControlNode {
     },
 }
 
-/// The item template a slot draws per fill. Its own slot `content` holds the
-/// fill's document.
+/// Slot item template. Its `content` slot receives the fill document.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
@@ -826,7 +825,7 @@ pub struct Include {
     pub source: String,
 }
 
-/// One form of an adaptive node, taken from `from` logical pixels up.
+/// Adaptive branch selected when the measured value reaches `from`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]

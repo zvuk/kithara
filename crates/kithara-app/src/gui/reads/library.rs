@@ -5,8 +5,7 @@ use kithara::ui::render::{Node, ReadValue, Scope, TableCell, TableRow, TreeRow};
 use super::value::{Value, impl_child_node};
 use crate::gui::library::Library;
 
-/// Answers the tree, the source whose page stands and whether Add folder is
-/// hidden.
+/// Library tree, selected source id, and Add folder visibility.
 pub(super) struct LibraryNode<'a> {
     library: &'a Library,
     tree: OnceCell<Vec<TreeRow<'a>>>,

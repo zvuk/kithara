@@ -80,13 +80,6 @@ impl PackageDoc {
     }
 }
 
-/// Refuses a fill set [`validate::check_fill_set`] refuses, and a fill whose collection
-/// no slot of `package`'s screens shows.
-///
-/// # Errors
-/// Returns [`UiDocError::FillKey`] or [`UiDocError::FillOrigin`] for the fill
-/// set, [`UiDocError::UnknownFill`] naming the first fill no slot shows, or
-/// the error of a screen that cannot be read.
 fn check_fills(
     package: &PackageDoc,
     resolver: &dyn SourceResolver,
@@ -119,7 +112,6 @@ fn check_fills(
         })
 }
 
-/// The module source of every place `node` mounts one, on every page.
 fn modules<'a>(node: &'a LayoutNode, into: &mut Vec<&'a str>) {
     match node {
         LayoutNode::Split { children, .. } => {
@@ -143,17 +135,10 @@ fn modules<'a>(node: &'a LayoutNode, into: &mut Vec<&'a str>) {
     }
 }
 
-/// Reads the manifest at `rel` and checks it before anything else is parsed,
-/// then the fills `resolver` holds against its screens under `limits`.
-///
-/// The contract check comes first: a package written for another build is
-/// refused here, while its documents are still unread, so the message names the
-/// mismatch rather than whatever the first stale document happened to trip on.
+/// Loads the manifest, checking its contract before screen documents and fills.
 ///
 /// # Errors
-/// Returns [`UiDocError`] when the manifest is unavailable, malformed, written
-/// against another contract, or declares nothing to answer with, or when a
-/// fill names a collection no slot of its screens shows.
+/// Returns [`UiDocError`] for an invalid manifest, unreadable screen graph, or invalid fill.
 pub fn load_package(
     resolver: &dyn SourceResolver,
     rel: &str,

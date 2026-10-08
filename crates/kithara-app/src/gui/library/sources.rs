@@ -19,9 +19,7 @@ mod consts {
     ];
 }
 
-/// The sources of `factories` the document configures: each one whose entry
-/// is present and not null, built over one shared environment with its own
-/// cancellation.
+/// Registers sources with non-null configuration entries and child cancellation tokens.
 pub(in crate::gui) fn configured(
     factories: &[Factory],
     sections: &BTreeMap<String, Value>,

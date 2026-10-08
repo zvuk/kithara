@@ -299,8 +299,6 @@ mod library {
         });
     }
 
-    /// Zvuk registered from its `sources` entry, its shutdown already
-    /// cancelled so the source never reaches the network.
     #[cfg(feature = "zvuk")]
     #[kithara::test(native, flash(false))]
     fn the_zvuk_page_stands_when_its_source_is_selected() {

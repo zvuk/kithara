@@ -23,7 +23,7 @@ pub mod consts {
     pub const SCALE: f32 = 1.0;
     pub const STRESS_TICK_MS: u64 = 16;
     pub const WIDTH: f32 = 1300.0;
-    /// The collection the fill page shows, and the document filled into it.
+    /// Collection used by the fill demo.
     pub const FILLED: &str = "gallery-fill/items";
     pub const FILL: &str = "modules/tabs/fill/caption.kmodule.ron";
 }
@@ -38,14 +38,7 @@ pub fn package_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("assets")
 }
 
-/// The gallery reads its pages from the folder it ships them in, over the
-/// built-in library, with the fill page's collection filled twice.
-///
-/// Nothing about a page is embedded: the folder is part of this checkout, so
-/// editing a document and opening the gallery again shows the edit, and a
-/// folder that cannot be read is a broken checkout rather than a runtime
-/// condition. The library underneath is embedded, because a consumer of the
-/// toolkit has no checkout to read it from.
+/// Gallery documents from disk over the embedded library, with two demo fills.
 ///
 /// # Panics
 /// Panics when the folder the gallery ships its documents in cannot be read.

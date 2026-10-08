@@ -8,9 +8,6 @@ use crate::{
     source::{FillDocument, SourceResolver},
 };
 
-/// Refuses a fill whose key is not an id or is taken twice in its
-/// collection, a parsed fill at the origin of a package document, and two
-/// parsed documents at one origin.
 pub(crate) fn check_fill_set(resolver: &dyn SourceResolver) -> Result<(), UiDocError> {
     let mut keys: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     let mut origins: BTreeMap<&SourceUri, &ModuleDoc> = BTreeMap::new();

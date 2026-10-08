@@ -16,19 +16,14 @@ pub(crate) struct ModuleSet {
     /// Nested rather than keyed by a pair so that a lookup borrows both halves
     /// of the key instead of building one.
     shaders: BTreeMap<SourceUri, BTreeMap<String, LoadedSource>>,
-    /// The fills of every collection a slot of these modules shows, by the
-    /// collection's address.
     pub(crate) collections: BTreeMap<String, Vec<Filled>>,
-    /// The documents holding a slot `content` of their own.
     holders: BTreeSet<SourceUri>,
 }
 
-/// The address of the collection `from` of `module`.
 pub(crate) fn collection_address(module: &str, from: &str) -> String {
     format!("{module}/{from}")
 }
 
-/// One fill of a collection: the key it is drawn under and its document.
 #[derive(Debug)]
 pub(crate) struct Filled {
     pub(crate) key: String,
@@ -36,7 +31,6 @@ pub(crate) struct Filled {
 }
 
 impl ModuleSet {
-    /// The document loaded at `uri`.
     pub(crate) fn def(&self, uri: &SourceUri) -> Result<&ModuleDoc, UiDocError> {
         self.defs.get(uri).ok_or_else(|| UiDocError::NotFound {
             origin: uri.clone(),
@@ -66,8 +60,6 @@ pub(crate) fn load_module_graph(
     Ok((uri, loader.set))
 }
 
-/// One walk over a module graph: every document reached through an include,
-/// an item template or a fill, loaded once.
 struct Loader<'a> {
     resolver: &'a dyn SourceResolver,
     limits: &'a Limits,
@@ -86,12 +78,10 @@ impl Loader<'_> {
         self.enter(loaded, depth)
     }
 
-    /// Refuses a block root in the document at `uri`, mounted alone.
     fn mount(&self, uri: &SourceUri) -> Result<(), UiDocError> {
         validate::check_module_root(self.set.def(uri)?, uri)
     }
 
-    /// Loads a fill's document parsed outside the package at its origin.
     fn parsed(
         &mut self,
         origin: &SourceUri,
@@ -147,8 +137,6 @@ impl Loader<'_> {
         Ok(loaded.uri)
     }
 
-    /// Loads the item template of the collection at `address`, when it has
-    /// one, and every fill of it, once per graph.
     fn collection(
         &mut self,
         origin: &SourceUri,
