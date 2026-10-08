@@ -5,7 +5,7 @@ use crate::{
     ids::{NodeId, SourceUri},
     module::MeasureAxis,
     size::{
-        Cells, SizeSpec, axis_dim, axis_min, combine_vertical, consts::NOTHING, min_size, rooms,
+        Cells, SizeSpec, axis_dim, axis_min, combine_slot, consts::NOTHING, min_size, rooms,
         settled,
     },
     skin::SkinDoc,
@@ -75,10 +75,15 @@ fn walk(
             }
             walk_children(children, path, skin, origin)
         }
-        ExpandedNode::Slot { size, children, .. } => {
+        ExpandedNode::Slot {
+            size,
+            select,
+            children,
+            ..
+        } => {
             check_box(
                 *size,
-                combine_vertical(children.iter().map(|child| min_size(child, skin))),
+                combine_slot(*select, children.iter().map(|child| min_size(child, skin))),
                 path,
                 origin,
             )?;

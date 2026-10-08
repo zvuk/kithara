@@ -159,6 +159,7 @@
                                 ],
                             ),
                             "modal": Module(instance: "modal", source: "modules/tabs/modal.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
+                            "fill": Module(instance: "fill", source: "modules/tabs/fill.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),
                             "micro": Split(
                                 axis: Vertical,
                                 children: [

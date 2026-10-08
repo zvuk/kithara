@@ -151,6 +151,15 @@ impl<'a, 'r> Ctx<'a, 'r> {
     pub fn read(self, binding: &Binding) -> Option<ReadValue<'r>> {
         match binding.kind {
             BindingKind::Command => None,
+            BindingKind::Selects { ref keys, invert } => {
+                let named = match self.get(self.ui.resolve(binding.key)) {
+                    Some(ReadValue::Text(read)) => {
+                        keys.iter().any(|key| self.ui.resolve(*key) == read)
+                    }
+                    _ => false,
+                };
+                Some(ReadValue::Bool(named != invert))
+            }
             BindingKind::View { invert, .. } => Some(ReadValue::Bool(
                 self.view.flag(self.ui.resolve(binding.key)) != invert,
             )),

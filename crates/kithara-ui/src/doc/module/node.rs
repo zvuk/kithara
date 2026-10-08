@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     binding::BindingRef,
+    measure::{Measure, MeasureAxis},
     motion::{Motion, Pose},
     style::{
         ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,
@@ -254,12 +255,21 @@ pub enum ControlNode {
         #[serde(default)]
         children: Vec<Self>,
     },
+    /// A place filled from outside. A slot showing the collection `from` of
+    /// its module draws `each` once per fill of that collection, or the one
+    /// fill whose key `select` reads, and `default` when no fill is drawn.
     Slot {
         id: NodeId,
         #[serde(default)]
         size: Option<SizeSpec>,
         #[serde(default)]
         default: Vec<Self>,
+        #[serde(default)]
+        from: Option<String>,
+        #[serde(default)]
+        each: Option<Include>,
+        #[serde(default)]
+        select: Option<BindingRef>,
     },
     DeckSummary {
         id: NodeId,
@@ -807,6 +817,15 @@ pub enum ControlNode {
     },
 }
 
+/// The item template a slot draws per fill. Its own slot `content` holds the
+/// fill's document.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Include {
+    pub source: String,
+}
+
 /// One form of an adaptive node, taken from `from` logical pixels up.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -814,29 +833,6 @@ pub enum ControlNode {
 pub struct AdaptiveStep {
     pub node: ControlNode,
     pub from: f32,
-}
-
-/// Where the number that picks a branch comes from.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub enum Measure {
-    /// The width the node is given, in logical pixels.
-    Width,
-    /// The height the node is given, in logical pixels.
-    Height,
-    /// A scalar the host answers.
-    Read(BindingRef),
-}
-
-impl Measure {
-    pub(crate) const fn axis(&self) -> Option<MeasureAxis> {
-        match self {
-            Self::Width => Some(MeasureAxis::Width),
-            Self::Height => Some(MeasureAxis::Height),
-            Self::Read(_) => None,
-        }
-    }
 }
 
 /// What a placement snaps onto while the pointer carries it: the placements in
@@ -850,23 +846,6 @@ pub struct Magnet {
     pub within: f32,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub enum MeasureAxis {
-    Width,
-    Height,
-}
-
-impl MeasureAxis {
-    pub(crate) const fn name(self) -> &'static str {
-        match self {
-            Self::Width => "width",
-            Self::Height => "height",
-        }
-    }
-}
-
 impl ControlNode {
     pub(crate) const fn bindings(&self) -> (Option<&BindingRef>, Option<&BindingRef>) {
         match self {
@@ -876,6 +855,7 @@ impl ControlNode {
                 ..
             } => (Some(measure), None),
             Self::Optional { hidden, .. } => (Some(hidden), None),
+            Self::Slot { select, .. } => (select.as_ref(), None),
             Self::Popover { open, .. } => (Some(open), None),
             Self::Modal { open, close, .. } => (Some(open), Some(close)),
             Self::Pressable { press, .. } => (None, Some(press)),
@@ -885,7 +865,6 @@ impl ControlNode {
             | Self::Reveal { .. }
             | Self::Scroll { .. }
             | Self::Stage { .. }
-            | Self::Slot { .. }
             | Self::WindowDrag { .. }
             | Self::TitleBar { .. }
             | Self::WindowControls { .. }

@@ -12,7 +12,7 @@ use kithara::ui::{
 };
 
 use super::{cache::DeckLayout, endpoints::Registry};
-use crate::gui::library::PagesModule;
+use crate::gui::library::SourceAdditions;
 
 include!(concat!(env!("OUT_DIR"), "/ui_documents.rs"));
 
@@ -63,27 +63,31 @@ impl Package {
         self.screens.document(layout)
     }
 
+    /// Reads the package at `root`, or the embedded one, with the fills of
+    /// `pages` checked against its screens under `limits`.
     pub(in crate::gui) fn load(
         root: Option<&Path>,
-        pages: PagesModule,
+        pages: SourceAdditions,
+        limits: &Limits,
     ) -> Result<Rc<Self>, UiDocError> {
         match root {
-            Some(root) => Self::read_folder(root, pages),
-            None => Self::read(embedded(), pages),
+            Some(root) => Self::read_folder(root, pages, limits),
+            None => Self::read(embedded(), pages, limits),
         }
     }
 
     fn read<R: SourceResolver + 'static>(
         documents: R,
-        pages: PagesModule,
+        pages: SourceAdditions,
+        limits: &Limits,
     ) -> Result<Rc<Self>, UiDocError> {
-        let PagesModule {
-            modules,
+        let SourceAdditions {
+            fills,
             registry,
             texts,
         } = pages;
-        let resolver: Box<dyn SourceResolver> = Box::new(OverlayResolver::new(modules, documents));
-        let manifest = load_package(resolver.as_ref(), Self::MANIFEST)?;
+        let resolver: Box<dyn SourceResolver> = Box::new(OverlayResolver::new(fills, documents));
+        let manifest = load_package(resolver.as_ref(), Self::MANIFEST, limits)?;
         let screens = Screens::resolve(&manifest, resolver.as_ref())?;
         let mut text = catalog(resolver.as_ref(), &manifest)?;
         for document in texts {
@@ -101,22 +105,30 @@ impl Package {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn read_folder(root: &Path, pages: PagesModule) -> Result<Rc<Self>, UiDocError> {
+    fn read_folder(
+        root: &Path,
+        pages: SourceAdditions,
+        limits: &Limits,
+    ) -> Result<Rc<Self>, UiDocError> {
         use kithara::ui::source::FileResolver;
 
         if !root.exists() {
-            return Self::read(embedded(), pages);
+            return Self::read(embedded(), pages, limits);
         }
         let files = FileResolver::new(root).map_err(|error| UiDocError::Unreadable {
             origin: SourceUri(root.display().to_string()),
             rel: String::new(),
             source: error,
         })?;
-        Self::read(OverlayResolver::new(files, embedded()), pages)
+        Self::read(OverlayResolver::new(files, embedded()), pages, limits)
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn read_folder(root: &Path, _pages: PagesModule) -> Result<Rc<Self>, UiDocError> {
+    fn read_folder(
+        root: &Path,
+        _pages: SourceAdditions,
+        _limits: &Limits,
+    ) -> Result<Rc<Self>, UiDocError> {
         use std::io::ErrorKind;
 
         Err(UiDocError::Unreadable {

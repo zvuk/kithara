@@ -220,6 +220,32 @@ pub enum UiDocError {
         value: String,
         path: String,
     },
+    #[error("fill {address:?} from {key:?} names a collection no slot of the package shows")]
+    UnknownFill { address: String, key: String },
+    #[error("fill {address:?} under key {key:?}: key {reason}")]
+    FillKey {
+        address: String,
+        key: String,
+        reason: &'static str,
+    },
+    #[error("{origin}: fill {address:?} {reason}")]
+    FillOrigin {
+        origin: SourceUri,
+        address: String,
+        reason: &'static str,
+    },
+    #[error("{origin}: item template has no slot \"content\" for the fill")]
+    TemplateWithoutContent { origin: SourceUri },
+    #[error("{origin}: slot {slot:?} shows `from` through exactly one of `each` and `select`")]
+    CollectionShape { origin: SourceUri, slot: String },
+    #[error("{origin}: scope {name:?} at {path} carries {value:?}, which {reason}")]
+    ScopeValue {
+        origin: SourceUri,
+        name: String,
+        value: String,
+        path: String,
+        reason: &'static str,
+    },
     #[error("{origin}: argument {name:?} is not declared in module parameters (at {path})")]
     UnknownParam {
         origin: SourceUri,

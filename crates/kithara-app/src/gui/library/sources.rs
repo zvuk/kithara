@@ -4,45 +4,45 @@ use kithara::{
     net::HttpClient,
     platform::{CancelToken, tokio::runtime::Handle},
 };
-use kithara_app_library::{Context, Factory, Registration, SectionError};
+use kithara_app_library::{Context, Environment, Factory, RegisterError, Registration};
 use serde_yaml_ng::Value;
 
 pub(in crate::gui) use self::consts::FACTORIES;
 
 mod consts {
-    use kithara::net::HttpClient;
     use kithara_app_library::Factory;
 
     /// Every library source this build can mount.
-    pub(in crate::gui) const FACTORIES: &[Factory<HttpClient>] = &[
+    pub(in crate::gui) const FACTORIES: &[Factory] = &[
         #[cfg(feature = "zvuk")]
         kithara_app_zvuk::Source::FACTORY,
     ];
 }
 
 /// The sources of `factories` the document configures: each one whose entry
-/// is present and not null, built over the shared client with its own
+/// is present and not null, built over one shared environment with its own
 /// cancellation.
 pub(in crate::gui) fn configured(
-    factories: &[Factory<HttpClient>],
+    factories: &[Factory],
     sections: &BTreeMap<String, Value>,
     net: &HttpClient,
     runtime: &Handle,
     shutdown: &CancelToken,
-) -> Result<Vec<Registration>, SectionError> {
+) -> Result<Vec<Registration>, RegisterError> {
+    let environment = Environment::new(runtime.clone(), net.clone());
     factories
         .iter()
         .filter_map(|factory| {
             let section = sections
                 .get(factory.id)
                 .filter(|section| !section.is_null())?;
-            Some((factory.register)(Context::new(
-                factory.id,
-                net.clone(),
-                runtime.clone(),
-                shutdown.child(),
-                section.clone(),
-            )))
+            Some(
+                (factory.register)(
+                    &environment,
+                    Context::new(shutdown.child(), section.clone()),
+                )
+                .map_err(|cause| RegisterError::new(factory.id, cause)),
+            )
         })
         .collect()
 }
@@ -51,6 +51,7 @@ pub(in crate::gui) fn configured(
 mod tests {
     use std::cell::RefCell;
 
+    use kithara_app_library::Cause;
     use kithara_test_utils::{cancel_token, kithara};
 
     use super::*;
@@ -60,9 +61,9 @@ mod tests {
         static REGISTERED: RefCell<Vec<CancelToken>> = const { RefCell::new(Vec::new()) };
     }
 
-    fn register(context: Context<HttpClient>) -> Result<Registration, SectionError> {
+    fn register(_: &Environment, context: Context) -> Result<Registration, Cause> {
         context.section::<BTreeMap<String, String>>()?;
-        REGISTERED.with_borrow_mut(|registered| registered.push(context.cancel));
+        REGISTERED.with_borrow_mut(|registered| registered.push(context.cancel()));
         Ok(StartupSource::registered(Vec::new()))
     }
 
@@ -84,7 +85,11 @@ mod tests {
         let refused = configured(&probes, &mismatched, &net, runtime.handle(), &cancel_token);
 
         assert_eq!(registered.len(), 2);
-        assert!(refused.is_err(), "a mismatched entry is refused");
+        let refused = refused.err().map(|error| error.to_string());
+        assert!(
+            refused.is_some_and(|message| message.starts_with("sources.first: ")),
+            "a mismatched entry is refused by its factory id"
+        );
         let [first, second] = REGISTERED
             .take()
             .try_into()

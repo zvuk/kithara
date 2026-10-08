@@ -5,7 +5,8 @@ use kithara::ui::render::{Node, ReadValue, Scope, TableCell, TableRow, TreeRow};
 use super::value::{Value, impl_child_node};
 use crate::gui::library::Library;
 
-/// Answers the tree, the hidden pages and whether Add folder is hidden.
+/// Answers the tree, the source whose page stands and whether Add folder is
+/// hidden.
 pub(super) struct LibraryNode<'a> {
     library: &'a Library,
     tree: OnceCell<Vec<TreeRow<'a>>>,
@@ -29,25 +30,13 @@ impl<'a, 'b: 'a> Node<'a> for &'a LibraryNode<'b> {
             "tree" => Box::new(Value(ReadValue::Tree(
                 self.tree.get_or_init(|| self.library.tree()),
             ))),
-            "page" => Box::new(PageNode(self.library)),
+            "page" => Box::new(Value(ReadValue::Text(self.library.page()?))),
             "add_folder" => Box::new(AddFolderNode(self.add_folder_hidden)),
             _ => return None,
         };
         Some(node)
     }
 }
-
-#[derive(Clone, Copy)]
-struct PageNode<'a>(&'a Library);
-
-impl_child_node!(PageNode<'a>, |this, segment, scope| {
-    match segment {
-        "hidden" => Some(Box::new(Value(ReadValue::Bool(
-            this.0.page_hidden(scope.get("source")?)?,
-        )))),
-        _ => None,
-    }
-});
 
 #[derive(Clone, Copy)]
 struct AddFolderNode(bool);

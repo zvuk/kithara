@@ -276,9 +276,9 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Model,
-        id: "library.page.hidden",
-        value: ValueKind::Bool,
-        scopes: Endpoint::SOURCE,
+        id: "library.page",
+        value: ValueKind::Text,
+        scopes: Endpoint::GLOBAL,
     },
     Endpoint {
         category: EndpointCategory::Model,

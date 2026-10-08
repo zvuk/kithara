@@ -1,34 +1,31 @@
-use std::collections::BTreeMap;
-
 use kithara::ui::{
-    ids::{DocId, EndpointId, NodeId},
-    module::{BindingRef, ControlNode, ModuleDoc},
+    error::UiDocError,
+    ids::EndpointId,
     registry::{EndpointCategory, EndpointDesc},
-    source::MemResolver,
+    source::{FillDocument, MemResolver},
+    text::TextDoc,
 };
-use kithara_app_library::{Document, PAGES, Registration};
+use kithara_app_library::{Document, LibrarySource, PAGES, Registration, SourcePage};
 
 use crate::gui::ui::endpoints::Registry;
 
-/// What the registered sources add to the package: the module that mounts
-/// their pages beside the modules they bring, their captions and the
-/// endpoints their pages declare.
-pub(in crate::gui) struct PagesModule {
-    pub(in crate::gui) modules: MemResolver,
+/// What the registered sources add to the package: the documents they fill
+/// its collections with, their captions and the endpoints their pages declare.
+pub(in crate::gui) struct SourceAdditions {
+    pub(in crate::gui) fills: MemResolver,
     pub(in crate::gui) registry: Registry,
     pub(in crate::gui) texts: Vec<Document>,
 }
 
-impl PagesModule {
+impl SourceAdditions {
     pub(in crate::gui) fn new(sources: &[Registration]) -> Self {
-        let mut modules = MemResolver::default();
+        let mut fills = MemResolver::default();
         let mut texts: Vec<Document> = Vec::new();
         let mut endpoints: Vec<(EndpointCategory, EndpointId, EndpointDesc)> = Vec::new();
-        let mut children: Vec<ControlNode> = Vec::with_capacity(sources.len());
         for source in sources {
             let page = source.page();
-            for module in &page.modules {
-                modules.insert(module.path, module.text);
+            for (address, document) in source.fills() {
+                fills.fill(address, page.id, document.clone());
             }
             texts.extend(page.texts.iter().copied());
             endpoints.extend(page.endpoints.iter().map(|endpoint| {
@@ -38,35 +35,28 @@ impl PagesModule {
                     EndpointDesc::new(endpoint.value).with_scope("source"),
                 )
             }));
-            let scope = BTreeMap::from([("source".to_owned(), page.id.to_owned())]);
-            children.push(ControlNode::Optional {
-                id: NodeId(page.id.to_owned()),
-                hidden: BindingRef::Model {
-                    id: EndpointId("library.page.hidden".to_owned()),
-                    with: scope.clone(),
-                },
-                child: Box::new(ControlNode::Include {
-                    id: NodeId(format!("{}-page", page.id)),
-                    source: page.page.to_owned(),
-                    with: scope,
-                }),
-            });
         }
-        modules.insert_module(
-            PAGES,
-            ModuleDoc::new(
-                DocId("library-pages".to_owned()),
-                ControlNode::Stage {
-                    children,
-                    id: NodeId("pages".to_owned()),
-                    size: None,
-                },
-            ),
-        );
         Self {
-            modules,
+            fills,
             texts,
             registry: Registry::default().with_endpoints(endpoints),
         }
     }
+}
+
+/// A source the shell's table page draws: it fills the library's pages with
+/// that page and declares nothing of its own.
+pub(in crate::gui) fn listed<F>(id: &'static str, build: F) -> Registration
+where
+    F: FnOnce(&TextDoc) -> Result<Box<dyn LibrarySource>, UiDocError> + 'static,
+{
+    let page = SourcePage {
+        id,
+        endpoints: Vec::new(),
+        texts: Vec::new(),
+    };
+    Registration::new(page, build).fill(
+        PAGES,
+        FillDocument::Path("modules/library/source-page.kmodule.ron".to_owned()),
+    )
 }

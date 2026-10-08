@@ -11,9 +11,7 @@ use kithara::{
     },
     ui::{error::UiDocError, module::IconName, render::TableRow, text::TextDoc},
 };
-use kithara_app_library::{
-    BranchNode, LibrarySource, PageStatus, Registration, SourcePage, worded,
-};
+use kithara_app_library::{BranchNode, LibrarySource, PageStatus, Registration, worded};
 use tracing::debug;
 
 use super::{
@@ -65,7 +63,7 @@ impl Explorer {
     ) -> (Registration, FolderPicker) {
         let (found, arrivals) = mpsc::unbounded_channel();
         let picker = FolderPicker::new(found.clone(), runtime.clone());
-        let registration = Registration::new(SourcePage::table(Self::ID), move |text| {
+        let registration = super::listed(Self::ID, move |text| {
             Ok(Box::new(Self::new(home, runtime, found, arrivals, text)?))
         });
         (registration, picker)

@@ -73,10 +73,12 @@ fn selected<'a>(tree: &[TreeRow<'a>]) -> Vec<&'a str> {
 }
 
 fn shown(library: &Library) -> [Option<bool>; 2] {
-    [
-        library.page_hidden("startup").map(|hidden| !hidden),
-        library.page_hidden(Probe::ID).map(|hidden| !hidden),
-    ]
+    ["startup", Probe::ID].map(|id| showing(library, id))
+}
+
+/// Whether `id`'s page stands, or nothing when no source has that id.
+fn showing(library: &Library, id: &str) -> Option<bool> {
+    library.index_of(id).map(|_| library.page() == Some(id))
 }
 
 #[kithara::test]
@@ -136,7 +138,7 @@ fn selecting_a_node_shows_only_its_source_page_and_tells_that_source() {
     assert_eq!(selected(&library.tree()), ["crate"]);
     assert_eq!(shown(&library), [Some(false), Some(true)]);
     assert_eq!(calls.borrow().selected, ["crate"]);
-    assert_eq!(library.page_hidden("elsewhere"), None);
+    assert_eq!(showing(&library, "elsewhere"), None);
 
     library.select(1);
     assert_eq!(shown(&library), [Some(true), Some(false)]);
@@ -330,7 +332,7 @@ mod startup {
                 (1, "Home".to_owned()),
             ]
         );
-        assert_eq!(rig.flag("library.page.hidden@source=startup"), false);
+        assert_eq!(rig.text("library.page").as_deref(), Some("startup"));
         let drags: Vec<Option<String>> = listed(&rig, "startup")
             .into_iter()
             .map(|row| row.drag)

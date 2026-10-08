@@ -1,0 +1,12 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-fill-item",
+    chrome: Plain,
+    root: Column(
+        size: (w: Fill, h: Fixed(32.0)),
+        children: [
+            Slot(id: "content", size: (w: Fill, h: Fill)),
+        ],
+    ),
+)

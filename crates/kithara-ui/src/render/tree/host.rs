@@ -1485,6 +1485,7 @@ mod tests {
             "stress",
             "menu",
             "modal",
+            "fill",
             "clock",
             "pivot",
             "shader",
@@ -4289,7 +4290,7 @@ mod tests {
         assert_eq!(ui.resolve(*module), "gallery-nav");
         let mut components = Vec::new();
         claimed_components(root, &mut components);
-        assert_eq!(components, ["activation"; 32]);
+        assert_eq!(components, ["activation"; 33]);
 
         let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
@@ -4331,6 +4332,7 @@ mod tests {
                 "gallery/stress/item",
                 "gallery/menu/item",
                 "gallery/modal/item",
+                "gallery/fill/item",
                 "gallery/clock/item",
                 "gallery/pivot/item",
                 "gallery/shader/item",

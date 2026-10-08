@@ -10,6 +10,7 @@
 mod bars;
 mod blocks;
 mod extension;
+mod fill;
 mod hand;
 mod modal;
 mod press;

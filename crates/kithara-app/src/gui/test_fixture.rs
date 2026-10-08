@@ -24,14 +24,12 @@ use kithara::{
         text::TextDoc,
     },
 };
-use kithara_app_library::{
-    BranchNode, LibrarySource, PageStatus, Playable, Registration, SourcePage, worded,
-};
+use kithara_app_library::{BranchNode, LibrarySource, PageStatus, Playable, Registration, worded};
 
 use super::{
     app::Kithara,
     frontend::Boot,
-    library::{Library, PagesModule, StartupSource},
+    library::{Library, SourceAdditions, StartupSource},
     ui::{AppUi, package::Package},
 };
 use crate::{
@@ -98,7 +96,11 @@ pub(super) fn mount(
     root: Option<&Path>,
     registered: Vec<Registration>,
 ) -> Result<(Rc<Package>, Library), UiDocError> {
-    let package = Package::load(root, PagesModule::new(&registered))?;
+    let package = Package::load(
+        root,
+        SourceAdditions::new(&registered),
+        &UiConfig::default().limits,
+    )?;
     let library = Library::new(registered, package.text())?;
     Ok((package, library))
 }
@@ -138,7 +140,8 @@ pub(super) fn cover(color: [u8; 3], format: ImageFormat) -> Arc<Vec<u8>> {
 pub(super) fn package(root: Option<&Path>) -> Result<Rc<Package>, UiDocError> {
     Package::load(
         root,
-        PagesModule::new(&[StartupSource::registered(Vec::new())]),
+        SourceAdditions::new(&[StartupSource::registered(Vec::new())]),
+        &UiConfig::default().limits,
     )
 }
 
@@ -164,7 +167,7 @@ impl Probe {
     pub(super) fn registered(label: &'static str) -> (Registration, Rc<RefCell<Calls>>) {
         let calls = Rc::new(RefCell::new(Calls::default()));
         let told = Rc::clone(&calls);
-        let registration = Registration::new(SourcePage::table(Self::ID), move |text| {
+        let registration = super::library::listed(Self::ID, move |text| {
             Ok(Box::new(Self::new(label, text, told)?))
         });
         (registration, calls)

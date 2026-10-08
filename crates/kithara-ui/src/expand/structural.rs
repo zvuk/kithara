@@ -2,13 +2,14 @@ use std::collections::BTreeMap;
 
 use super::{
     ExpandedInclude, ExpandedNode,
-    machine::{Context, Expander, expand_at, walk},
+    machine::{Context, Expander, Frame, child_path, expand_at, walk},
     substitute_map,
 };
 use crate::{
     error::UiDocError,
     ids::{NodeId, SourceUri},
     module::ControlNode,
+    source::resolve_uri,
 };
 
 pub(super) fn walk_children(
@@ -47,43 +48,44 @@ pub(super) fn expand_include(
 ) -> Result<ExpandedNode, UiDocError> {
     let path = child_path(&context.prefix, id);
     let args = substitute_map(&context.args, &context.origin, with, &path)?;
-    let target = crate::source::join_rel(crate::source::base_dir(Some(&context.origin)), source)
-        .map(SourceUri)
-        .ok_or_else(|| UiDocError::RootEscape {
-            origin: context.origin.clone(),
-            rel: source.to_owned(),
-        })?;
-    let module = context
-        .set
-        .defs
-        .get(&target)
-        .ok_or_else(|| UiDocError::NotFound {
-            origin: target.clone(),
-            rel: target.0.clone(),
-        })?
-        .id
-        .0
-        .clone();
+    let target = resolve_uri(Some(&context.origin), source)?;
+    let frame = Frame {
+        named: args,
+        passed: BTreeMap::new(),
+        prefix: path,
+        content: None,
+    };
+    include_at(context, &target, frame, &[], depth, machine)
+}
+
+/// Draws the module at `uri` in `frame`, at the current address extended by
+/// `at`, and records it as included there.
+pub(super) fn include_at<'a>(
+    context: &Context<'a>,
+    uri: &SourceUri,
+    frame: Frame<'a>,
+    at: &[usize],
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    let mark = machine.address.len();
+    machine.address.extend_from_slice(at);
     let root = expand_at(
         context.set,
-        &target,
-        args,
-        path.clone(),
+        uri,
+        frame,
         context.instance.clone(),
         depth + 1,
         machine,
-    )?;
-    machine.includes.push(ExpandedInclude {
-        address: machine.address.clone().into_boxed_slice(),
-        module: machine.interner.intern(&module, &target)?,
+    )
+    .and_then(|root| {
+        let module = &context.set.def(uri)?.id.0;
+        machine.includes.push(ExpandedInclude {
+            address: machine.address.clone().into_boxed_slice(),
+            module: machine.interner.intern(module, uri)?,
+        });
+        Ok(root)
     });
-    Ok(root)
-}
-
-fn child_path(prefix: &str, id: &NodeId) -> String {
-    if prefix.is_empty() {
-        id.0.clone()
-    } else {
-        format!("{prefix}/{}", id.0)
-    }
+    machine.address.truncate(mark);
+    root
 }

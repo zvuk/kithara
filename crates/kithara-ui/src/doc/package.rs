@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -7,7 +7,10 @@ use crate::{
     envelope::{self, DocKind},
     error::UiDocError,
     ids::{DocId, ScreenRole, SourceUri},
-    source::SourceResolver,
+    layout::{LayoutNode, parse_layout},
+    resolve::{load_module_graph, load_source},
+    source::{Limits, SourceResolver},
+    validate,
 };
 
 /// The ui contract this build offers a package.
@@ -77,7 +80,71 @@ impl PackageDoc {
     }
 }
 
-/// Reads the manifest at `rel` and checks it before anything else is parsed.
+/// Refuses a fill set [`validate::check_fill_set`] refuses, and a fill whose collection
+/// no slot of `package`'s screens shows.
+///
+/// # Errors
+/// Returns [`UiDocError::FillKey`] or [`UiDocError::FillOrigin`] for the fill
+/// set, [`UiDocError::UnknownFill`] naming the first fill no slot shows, or
+/// the error of a screen that cannot be read.
+fn check_fills(
+    package: &PackageDoc,
+    resolver: &dyn SourceResolver,
+    limits: &Limits,
+) -> Result<(), UiDocError> {
+    let fills = resolver.fills();
+    if fills.is_empty() {
+        return Ok(());
+    }
+    validate::check_fill_set(resolver)?;
+    let mut shown = BTreeSet::new();
+    for file in package.screens.values() {
+        let loaded = load_source(resolver, None, file, limits)?;
+        let layout = parse_layout(&loaded.text, &loaded.uri)?;
+        let mut sources = Vec::new();
+        modules(&layout.root, &mut sources);
+        for source in sources {
+            let (_, set) = load_module_graph(resolver, Some(&loaded.uri), source, limits)?;
+            shown.extend(set.collections.into_keys());
+        }
+    }
+    fills
+        .into_iter()
+        .find(|fill| !shown.contains(&fill.address))
+        .map_or(Ok(()), |fill| {
+            Err(UiDocError::UnknownFill {
+                address: fill.address.clone(),
+                key: fill.key.clone(),
+            })
+        })
+}
+
+/// The module source of every place `node` mounts one, on every page.
+fn modules<'a>(node: &'a LayoutNode, into: &mut Vec<&'a str>) {
+    match node {
+        LayoutNode::Split { children, .. } => {
+            for child in children {
+                modules(&child.node, into);
+            }
+        }
+        LayoutNode::Optional { node, .. } => modules(node, into),
+        LayoutNode::Adaptive { base, steps, .. } => {
+            modules(base, into);
+            for step in steps {
+                modules(&step.node, into);
+            }
+        }
+        LayoutNode::Module { source, .. } => into.push(source),
+        LayoutNode::Tabs { pages, .. } => {
+            for page in pages.values() {
+                modules(page, into);
+            }
+        }
+    }
+}
+
+/// Reads the manifest at `rel` and checks it before anything else is parsed,
+/// then the fills `resolver` holds against its screens under `limits`.
 ///
 /// The contract check comes first: a package written for another build is
 /// refused here, while its documents are still unread, so the message names the
@@ -85,8 +152,13 @@ impl PackageDoc {
 ///
 /// # Errors
 /// Returns [`UiDocError`] when the manifest is unavailable, malformed, written
-/// against another contract, or declares nothing to answer with.
-pub fn load_package(resolver: &dyn SourceResolver, rel: &str) -> Result<PackageDoc, UiDocError> {
+/// against another contract, or declares nothing to answer with, or when a
+/// fill names a collection no slot of its screens shows.
+pub fn load_package(
+    resolver: &dyn SourceResolver,
+    rel: &str,
+    limits: &Limits,
+) -> Result<PackageDoc, UiDocError> {
     let loaded = resolver.load(None, rel)?;
     let doc = parse_package(&loaded.text, &loaded.uri)?;
     if doc.contract != UI_CONTRACT {
@@ -107,6 +179,7 @@ pub fn load_package(resolver: &dyn SourceResolver, rel: &str) -> Result<PackageD
             });
         }
     }
+    check_fills(&doc, resolver, limits)?;
     Ok(doc)
 }
 

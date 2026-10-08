@@ -1,6 +1,10 @@
 use kithara_platform::sync::Arc;
 
-use crate::{error::UiDocError, ids::SourceUri, module::ModuleDoc};
+use crate::{
+    error::UiDocError,
+    ids::SourceUri,
+    module::{ModuleDoc, parse_module},
+};
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -33,7 +37,48 @@ pub struct LoadedModule {
     pub source: ModuleSource,
 }
 
+/// Where a fill's document comes from: one parsed outside the package, named
+/// by the origin it was parsed with, or the package-relative path of one the
+/// package holds, read through the package's resolver like an include.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum FillDocument {
+    Parsed {
+        document: Box<ModuleDoc>,
+        origin: SourceUri,
+    },
+    Path(String),
+}
+
+impl FillDocument {
+    /// The module `text` parsed and named by `origin`.
+    ///
+    /// # Errors
+    /// Returns [`UiDocError`] when `text` does not parse as a module.
+    pub fn parse(text: &str, origin: SourceUri) -> Result<Self, UiDocError> {
+        let document = parse_module(text, &origin)?;
+        Ok(Self::Parsed {
+            document: Box::new(document),
+            origin,
+        })
+    }
+}
+
+/// A document put into a module's collection from outside: the collection's
+/// address `<module id>/<collection>`, the key it is drawn under, and its
+/// document.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct Fill {
+    pub address: String,
+    pub key: String,
+    pub document: FillDocument,
+}
+
 pub trait SourceResolver {
+    /// Every fill this source holds, in the order they were given.
+    fn fills(&self) -> Vec<&Fill>;
+
     /// Loads a module's text or a ready document at the same resolved path.
     ///
     /// # Errors

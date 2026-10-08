@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::{error::UiDocError, ids::SourceUri};
 
 #[derive(Clone, Debug, Default)]
@@ -57,6 +59,49 @@ pub(super) fn check_state_id(id: &str, origin: &SourceUri) -> Result<(), UiDocEr
         origin,
         bad_name(name).map(|reason| format!("state name {reason}")),
     )
+}
+
+/// A fill's key stands as one segment of the path its fill is drawn under.
+pub(crate) fn check_fill_key(address: &str, key: &str) -> Result<(), UiDocError> {
+    bad_name(key).map_or(Ok(()), |reason| {
+        Err(UiDocError::FillKey {
+            reason,
+            address: address.to_owned(),
+            key: key.to_owned(),
+        })
+    })
+}
+
+/// Each value of a binding's scope stands in its scoped key
+/// `id@name=value,...`.
+pub(crate) fn check_scope(
+    with: &BTreeMap<String, String>,
+    origin: &SourceUri,
+    path: &str,
+) -> Result<(), UiDocError> {
+    with.iter()
+        .find_map(|(name, value)| Some((name, value, bad_scope_value(value)?)))
+        .map_or(Ok(()), |(name, value, reason)| {
+            Err(UiDocError::ScopeValue {
+                reason,
+                origin: origin.clone(),
+                name: name.clone(),
+                value: value.clone(),
+                path: path.to_owned(),
+            })
+        })
+}
+
+/// Why this cannot stand as a value in a scoped key `id@name=value,...`, or
+/// nothing when it can.
+fn bad_scope_value(value: &str) -> Option<&'static str> {
+    if value.contains(',') {
+        Some("must not contain ','")
+    } else if value.contains('=') {
+        Some("must not contain '='")
+    } else {
+        None
+    }
 }
 
 /// Why this cannot be read as a name, or nothing when it can.

@@ -15,7 +15,7 @@ use serde_yaml_ng::Value;
 
 use super::{
     app::Kithara,
-    library::{FACTORIES, Library, PagesModule, StartupSource, configured},
+    library::{FACTORIES, Library, SourceAdditions, StartupSource, configured},
     ui::{AppUi, package::Package, window::consts::WINDOW_SIZE},
     update, view,
 };
@@ -113,7 +113,7 @@ impl Boot {
             .into_iter()
             .chain(configured(FACTORIES, sources, net, &runtime, shutdown)?)
             .collect();
-        let package = Package::load(package, PagesModule::new(&registered))?;
+        let package = Package::load(package, SourceAdditions::new(&registered), &settings.limits)?;
         let library = Library::new(registered, package.text())?;
         let mut ui = AppUi::new(package, settings, runtime)?;
         ui.cache.window.set_chrome_hidden(chrome_hidden);

@@ -200,20 +200,26 @@ mod library {
     use crate::{engine::EngineSnapshot, gui::test_fixture};
 
     fn studio() -> Studio {
+        studio_on(&test_fixture::config())
+    }
+
+    fn studio_on(config: &crate::config::AppConfig) -> Studio {
         let runtime = test_fixture::runtime();
-        let config = test_fixture::config();
         let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
         let (commands, _receiver) = mpsc::unbounded_channel();
         Studio::new(test_fixture::boot(
             runtime.handle(),
-            &config,
+            config,
             snapshots,
             commands,
         ))
     }
 
     fn mounted(check: impl FnOnce(&mut Ui<'_, Studio>)) {
-        let studio = studio();
+        mounted_on(studio(), check);
+    }
+
+    fn mounted_on(studio: Studio, check: impl FnOnce(&mut Ui<'_, Studio>)) {
         let package = Rc::clone(&studio.state.ui.package);
         let mut ui = Ui::new(
             studio,
@@ -238,7 +244,7 @@ mod library {
     fn shown(ui: &mut Ui<'_, Studio>) -> Vec<&'static str> {
         ["startup", "explorer"]
             .into_iter()
-            .filter(|source| laid_out(ui, &format!("library/pages/{source}-page/rows")).is_some())
+            .filter(|source| laid_out(ui, &format!("library/pages/{source}/rows")).is_some())
             .collect()
     }
 
@@ -290,6 +296,33 @@ mod library {
             let startup = row(ui, 1, false);
             press(ui, startup);
             assert_eq!(shown(ui), ["startup"]);
+        });
+    }
+
+    /// Zvuk registered from its `sources` entry, its shutdown already
+    /// cancelled so the source never reaches the network.
+    #[cfg(feature = "zvuk")]
+    #[kithara::test(native, flash(false))]
+    fn the_zvuk_page_stands_when_its_source_is_selected() {
+        let mut config = test_fixture::config();
+        let section = serde_yaml_ng::from_str("{auth_token: token, user_agent: agent}")
+            .unwrap_or_else(|error| panic!("the section parses: {error}"));
+        config.sources.insert("zvuk".to_owned(), section);
+        config.shutdown.cancel();
+        mounted_on(studio_on(&config), |ui| {
+            let zvuk = "library/pages/zvuk/query";
+            assert!(laid_out(ui, zvuk).is_none(), "Startup starts selected");
+
+            let search = labels(ui)
+                .iter()
+                .position(|label| label == "Search")
+                .unwrap_or_else(|| panic!("Zvuk lists Search: {:?}", labels(ui)));
+            let at = row(ui, u8::try_from(search).unwrap_or(u8::MAX), false);
+            press(ui, at);
+
+            assert_eq!(ui.app().state.library.page(), Some("zvuk"));
+            assert!(laid_out(ui, zvuk).is_some(), "the Zvuk page stands");
+            assert_eq!(shown(ui), Vec::<&str>::new());
         });
     }
 

@@ -31,6 +31,7 @@ pub use kithara_ui_input as interact;
 #[cfg(feature = "render")]
 pub use {kithara_ui_draw as draw, kithara_ui_lottie as lottie, kithara_ui_shaping as shaping};
 
+mod consts;
 mod doc;
 mod resolve;
 mod room;

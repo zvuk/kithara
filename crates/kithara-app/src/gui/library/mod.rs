@@ -16,7 +16,7 @@ mod track;
 #[cfg(not(target_arch = "wasm32"))]
 pub(in crate::gui) use self::{explorer::Explorer, folders::FolderPicker};
 pub(in crate::gui) use self::{
-    pages::PagesModule,
+    pages::{SourceAdditions, listed},
     shell::Library,
     sources::{FACTORIES, configured},
     startup::StartupSource,

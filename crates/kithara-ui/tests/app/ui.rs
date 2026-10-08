@@ -28,7 +28,7 @@ use kithara_ui::{
         document::{Clock, Ctx},
     },
     shaping::FontPolicy,
-    source::{LoadedBytes, LoadedSource, MemResolver, SourceResolver, UiConfig},
+    source::{Fill, LoadedBytes, LoadedSource, MemResolver, SourceResolver, UiConfig},
     view,
 };
 use masonry::{core::CursorIcon, vello::Scene};
@@ -525,6 +525,10 @@ struct Counted<'a> {
 }
 
 impl SourceResolver for Counted<'_> {
+    fn fills(&self) -> Vec<&Fill> {
+        self.inner.fills()
+    }
+
     fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
         self.loads.set(self.loads.get() + 1);
         self.inner.bytes(base, rel)
@@ -3122,8 +3126,11 @@ impl<'a> Counting<'a> {
 }
 
 impl SourceResolver for Counting<'_> {
-    fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
-        self.inner.bytes(base, rel)
+    delegate::delegate! {
+        to self.inner {
+            fn fills(&self) -> Vec<&Fill>;
+            fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError>;
+        }
     }
 
     fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {

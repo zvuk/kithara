@@ -141,6 +141,26 @@ pub(crate) fn combine_vertical(sizes: impl IntoIterator<Item = SizeSpec>) -> Siz
     SizeSpec::new(Dim::from(width), Dim::from(height))
 }
 
+/// The box of a place that shows one of its children at a time.
+fn combine_largest(sizes: impl IntoIterator<Item = SizeSpec>) -> SizeSpec {
+    let (width, height) = sizes
+        .into_iter()
+        .fold((Bounds::ZERO, Bounds::ZERO), |(width, height), size| {
+            (width.max(size.w), height.max(size.h))
+        });
+    SizeSpec::new(Dim::from(width), Dim::from(height))
+}
+
+/// The box of a slot's children: the largest for a selection, the column
+/// otherwise.
+pub(crate) fn combine_slot(select: bool, sizes: impl IntoIterator<Item = SizeSpec>) -> SizeSpec {
+    if select {
+        combine_largest(sizes)
+    } else {
+        combine_vertical(sizes)
+    }
+}
+
 /// Returns the intrinsic size for a typed control specification.
 #[must_use]
 pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
@@ -440,9 +460,14 @@ pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
                 .first()
                 .map_or(consts::NOTHING, |first| min_size(first, skin)),
         ),
-        ExpandedNode::Slot { size, children, .. } => at_least(
+        ExpandedNode::Slot {
+            size,
+            select,
+            children,
+            ..
+        } => at_least(
             *size,
-            combine_vertical(children.iter().map(|child| min_size(child, skin))),
+            combine_slot(*select, children.iter().map(|child| min_size(child, skin))),
         ),
         ExpandedNode::Row { size, measure, .. } | ExpandedNode::Column { size, measure, .. } => {
             at_least(*size, settled(node, *measure, skin))

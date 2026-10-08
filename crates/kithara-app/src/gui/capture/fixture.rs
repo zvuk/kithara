@@ -145,11 +145,9 @@ impl Reads for Fixture {
             },
         ];
 
-        let (base, scope) = Scope::split(endpoint);
-        if base == "library.page.hidden" {
-            return Some(ReadValue::Bool(
-                self.library.page_hidden(scope.get("source")?)?,
-            ));
+        let (base, _) = Scope::split(endpoint);
+        if base == "library.page" {
+            return self.library.page().map(ReadValue::Text);
         }
         let value = match readable_kind(base)? {
             ValueKind::Bool => ReadValue::Bool(self.on(base)),

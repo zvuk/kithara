@@ -48,6 +48,7 @@
                     Include(id: "stress", source: "nav/item.kmodule.ron", with: { "icon": "SpeakerHigh", "label": "STRESS", "page": "stress" }),
                     Include(id: "menu", source: "nav/item.kmodule.ron", with: { "icon": "Menu", "label": "MENU", "page": "menu" }),
                     Include(id: "modal", source: "nav/item.kmodule.ron", with: { "icon": "Gear", "label": "MODAL", "page": "modal" }),
+                    Include(id: "fill", source: "nav/item.kmodule.ron", with: { "icon": "Playlist", "label": "FILL", "page": "fill" }),
                     Include(id: "clock", source: "nav/item.kmodule.ron", with: { "icon": "Clock", "label": "CLOCK", "page": "clock" }),
                     Include(id: "pivot", source: "nav/item.kmodule.ron", with: { "icon": "Activity", "label": "PIVOT", "page": "pivot" }),
                     Include(id: "shader", source: "nav/item.kmodule.ron", with: { "icon": "Waveform", "label": "SHADER", "page": "shader" }),

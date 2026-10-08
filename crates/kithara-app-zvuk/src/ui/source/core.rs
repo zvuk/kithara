@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use kithara_app_library::{
-    BranchNode, Context, Factory, LibrarySource, PageStatus, Registration, SectionError, worded,
+    BranchNode, Cause, Context, Environment, Factory, LibrarySource, PAGES, PageStatus,
+    Registration, worded,
 };
 use kithara_net::{HttpClient, Net};
 use kithara_platform::{
@@ -179,19 +180,22 @@ impl<N: Net + Clone + 'static> Source<N> {
 }
 
 impl Source<HttpClient> {
-    /// Mounts the source from its `sources` entry over the application's client.
-    pub const FACTORY: Factory<HttpClient> = Factory {
+    /// Mounts the source from its `sources` entry over the application's client,
+    /// its page filling the library's pages.
+    pub const FACTORY: Factory = Factory {
         id: consts::ID,
         register: Self::register,
     };
 
-    fn register(context: Context<HttpClient>) -> Result<Registration, SectionError> {
+    fn register(environment: &Environment, context: Context) -> Result<Registration, Cause> {
         let config: Config = context.section()?;
-        Ok(Self::registered(
-            Client::new(context.net, &config),
-            context.runtime,
-            context.cancel,
-        ))
+        let page = page::document()?;
+        let registration = Self::registered(
+            Client::new(environment.net().clone(), &config),
+            environment.runtime().clone(),
+            context.cancel(),
+        );
+        Ok(registration.fill(PAGES, page))
     }
 }
 

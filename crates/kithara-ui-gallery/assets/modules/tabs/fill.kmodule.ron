@@ -1,0 +1,22 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-fill",
+    chrome: Plain,
+    root: Column(
+        size: (w: Fill, h: Fill),
+        background: Bg,
+        children: [
+            Text(id: "fill-heading", style: Section, label: "FILLED SLOT", size: (w: Fill, h: Fixed(20.0))),
+            Slot(
+                id: "items",
+                from: "items",
+                each: Include(source: "fill/item.kmodule.ron"),
+                size: (w: Fill, h: Fill),
+                default: [
+                    Text(id: "unfilled", style: MicroLabel, label: "NOTHING FILLS THIS SLOT", size: (w: Fill, h: Fixed(12.0))),
+                ],
+            ),
+        ],
+    ),
+)

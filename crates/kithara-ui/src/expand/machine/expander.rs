@@ -15,6 +15,7 @@ use super::{
         structural::{expand_include, walk_child, walk_children},
     },
     container::{expand_column, expand_row},
+    slot::expand_slot,
 };
 use crate::{
     error::UiDocError,
@@ -42,9 +43,28 @@ pub(in crate::expand) struct Context<'a> {
     /// button an included surface carries turns the flag its includer reads.
     pub(in crate::expand) instance: String,
     pub(in crate::expand) prefix: String,
+    /// The fill this item template holds in its slot `content`.
+    pub(in crate::expand) content: Option<&'a SourceUri>,
+}
+
+/// A document drawn inside another: the arguments it receives, the path it
+/// stands under and the fill it holds in its slot `content`.
+///
+/// Every argument `named` must be declared; of those `passed` along from the
+/// context, the document receives the ones it declares.
+pub(in crate::expand) struct Frame<'a> {
+    pub(in crate::expand) named: BTreeMap<String, String>,
+    pub(in crate::expand) passed: BTreeMap<String, String>,
+    pub(in crate::expand) prefix: String,
+    pub(in crate::expand) content: Option<&'a SourceUri>,
 }
 
 impl Context<'_> {
+    /// The id of the module this context expands.
+    pub(in crate::expand) fn module(&self) -> Result<&str, UiDocError> {
+        self.set.def(&self.origin).map(|doc| doc.id.0.as_str())
+    }
+
     pub(in crate::expand) fn optional_param<T: Clone + DeserializeOwned>(
         &self,
         param: Option<&Param<T>>,
@@ -137,21 +157,16 @@ impl<'m, 'v> Expander<'m, 'v> {
         args: &BTreeMap<String, String>,
         prefix: &str,
     ) -> Result<ExpandedModule, UiDocError> {
-        let doc = set.defs.get(entry).ok_or_else(|| UiDocError::NotFound {
-            origin: entry.clone(),
-            rel: entry.0.clone(),
-        })?;
+        let doc = set.def(entry)?;
         self.address.clear();
         self.includes.clear();
-        let root = expand_at(
-            set,
-            entry,
-            args.clone(),
-            prefix.to_owned(),
-            prefix.to_owned(),
-            0,
-            self,
-        )?;
+        let frame = Frame {
+            named: args.clone(),
+            passed: BTreeMap::new(),
+            prefix: prefix.to_owned(),
+            content: None,
+        };
+        let root = expand_at(set, entry, frame, prefix.to_owned(), 0, self)?;
         let context = Context {
             set,
             text: self.text,
@@ -159,6 +174,7 @@ impl<'m, 'v> Expander<'m, 'v> {
             args: args.clone(),
             instance: prefix.to_owned(),
             prefix: prefix.to_owned(),
+            content: None,
         };
         let footer = doc
             .footer
@@ -201,11 +217,15 @@ impl<'m, 'v> Expander<'m, 'v> {
     }
 }
 
-pub(in crate::expand) fn expand_at(
-    set: &ModuleSet,
+pub(in crate::expand) fn expand_at<'a>(
+    set: &'a ModuleSet,
     uri: &SourceUri,
-    args: BTreeMap<String, String>,
-    prefix: String,
+    Frame {
+        named,
+        mut passed,
+        prefix,
+        content,
+    }: Frame<'a>,
     instance: String,
     depth: usize,
     machine: &mut Expander<'_, '_>,
@@ -217,31 +237,29 @@ pub(in crate::expand) fn expand_at(
             max: machine.max_depth,
         });
     }
-    let doc = set.defs.get(uri).ok_or_else(|| UiDocError::NotFound {
-        origin: uri.clone(),
-        rel: uri.0.clone(),
-    })?;
-    for name in args.keys() {
-        if !doc.parameters.contains(name) {
-            return Err(UiDocError::UnknownParam {
-                origin: uri.clone(),
-                name: name.clone(),
-                path: prefix,
-            });
-        }
+    let doc = set.def(uri)?;
+    if let Some(name) = named.keys().find(|name| !doc.parameters.contains(*name)) {
+        return Err(UiDocError::UnknownParam {
+            origin: uri.clone(),
+            name: name.clone(),
+            path: prefix,
+        });
     }
+    passed.retain(|name, _| doc.parameters.contains(name));
+    passed.extend(named);
     let context = Context {
         set,
-        args,
+        args: passed,
         instance,
         prefix,
+        content,
         text: machine.text,
         origin: uri.clone(),
     };
     walk(&context, &doc.root, depth, machine)
 }
 
-pub(super) fn child_path(prefix: &str, id: &NodeId) -> String {
+pub(in crate::expand) fn child_path(prefix: &str, id: &NodeId) -> String {
     if prefix.is_empty() {
         id.0.clone()
     } else {
@@ -696,6 +714,22 @@ fn intern_magnet(
     })
 }
 
+fn expand_scroll(
+    context: &Context<'_>,
+    id: &NodeId,
+    size: Option<SizeSpec>,
+    child: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    machine.budget.charge(&context.origin)?;
+    Ok(ExpandedNode::Scroll {
+        id: machine.interner.intern(&id.0, &context.origin)?,
+        size,
+        child: Box::new(walk(context, child, depth, machine)?),
+    })
+}
+
 fn expand_stage(
     context: &Context<'_>,
     id: &NodeId,
@@ -712,22 +746,6 @@ fn expand_stage(
     })
 }
 
-fn expand_slot(
-    context: &Context<'_>,
-    id: &NodeId,
-    size: Option<SizeSpec>,
-    default: &[ControlNode],
-    depth: usize,
-    machine: &mut Expander<'_, '_>,
-) -> Result<ExpandedNode, UiDocError> {
-    machine.budget.charge(&context.origin)?;
-    Ok(ExpandedNode::Slot {
-        size,
-        id: machine.interner.intern(&id.0, &context.origin)?,
-        children: walk_children(context, default, depth, machine)?,
-    })
-}
-
 pub(in crate::expand) fn walk(
     context: &Context<'_>,
     node: &ControlNode,
@@ -738,19 +756,22 @@ pub(in crate::expand) fn walk(
         row @ ControlNode::Row { .. } => expand_row(context, row, depth, machine),
         column @ ControlNode::Column { .. } => expand_column(context, column, depth, machine),
         ControlNode::Scroll { id, size, child } => {
-            machine.budget.charge(&context.origin)?;
-            Ok(ExpandedNode::Scroll {
-                id: machine.interner.intern(&id.0, &context.origin)?,
-                size: *size,
-                child: Box::new(walk(context, child, depth, machine)?),
-            })
+            expand_scroll(context, id, *size, child, depth, machine)
         }
         ControlNode::Stage { id, size, children } => {
             expand_stage(context, id, *size, children, depth, machine)
         }
         placed @ ControlNode::Placed { .. } => expand_placed(context, placed, depth, machine),
-        ControlNode::Slot { id, size, default } => {
-            expand_slot(context, id, *size, default, depth, machine)
+        ControlNode::Slot {
+            id,
+            size,
+            default,
+            from,
+            each,
+            select,
+        } => {
+            let shows = (from, each, select);
+            expand_slot(context, node, (id, *size, default), shows, depth, machine)
         }
         ControlNode::Adaptive {
             id,
@@ -758,15 +779,10 @@ pub(in crate::expand) fn walk(
             size,
             base,
             steps,
-        } => expand_adaptive(
-            context,
-            node,
-            id,
-            (measure, *size),
-            (base.as_ref(), steps),
-            depth,
-            machine,
-        ),
+        } => {
+            let (declared, branches) = ((measure, *size), (base.as_ref(), steps.as_slice()));
+            expand_adaptive(context, node, id, declared, branches, depth, machine)
+        }
         ControlNode::Optional { id, hidden, child } => {
             expand_optional(context, node, id, hidden, child, depth, machine)
         }

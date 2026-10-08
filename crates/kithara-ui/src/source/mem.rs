@@ -5,29 +5,32 @@ use kithara_platform::sync::Arc;
 use crate::{
     error::UiDocError,
     ids::SourceUri,
-    module::ModuleDoc,
     source::{
         resolve_uri,
-        uri::{LoadedBytes, LoadedModule, LoadedSource, ModuleSource, SourceResolver},
+        uri::{Fill, FillDocument, LoadedBytes, LoadedSource, SourceResolver},
     },
 };
 
 #[derive(Debug, Default)]
 pub struct MemResolver {
     blobs: BTreeMap<String, Arc<[u8]>>,
-    files: BTreeMap<String, ModuleSource>,
+    files: BTreeMap<String, String>,
+    fills: Vec<Fill>,
 }
 
 impl MemResolver {
     pub fn insert(&mut self, path: &str, text: &str) {
-        self.files
-            .insert(path.to_owned(), ModuleSource::Text(text.to_owned()));
+        self.files.insert(path.to_owned(), text.to_owned());
     }
 
-    /// Stores a ready module at a package-relative path.
-    pub fn insert_module(&mut self, path: &str, document: ModuleDoc) {
-        self.files
-            .insert(path.to_owned(), ModuleSource::Document(Box::new(document)));
+    /// Puts `document` into the collection at `address`, drawn under `key`
+    /// after the fills already there.
+    pub fn fill(&mut self, address: &str, key: &str, document: FillDocument) {
+        self.fills.push(Fill {
+            document,
+            address: address.to_owned(),
+            key: key.to_owned(),
+        });
     }
 
     /// Adds a source that is not text, such as a picture a skin names.
@@ -37,6 +40,10 @@ impl MemResolver {
 }
 
 impl SourceResolver for MemResolver {
+    fn fills(&self) -> Vec<&Fill> {
+        self.fills.iter().collect()
+    }
+
     fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
         let uri = resolve_uri(base, rel)?;
         let origin = base.cloned().unwrap_or_else(|| uri.clone());
@@ -52,9 +59,9 @@ impl SourceResolver for MemResolver {
             })
     }
 
-    fn module(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedModule, UiDocError> {
+    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
         let uri = resolve_uri(base, rel)?;
-        let source = self
+        let text = self
             .files
             .get(&uri.0)
             .cloned()
@@ -62,21 +69,6 @@ impl SourceResolver for MemResolver {
                 origin: base.cloned().unwrap_or_else(|| uri.clone()),
                 rel: rel.to_owned(),
             })?;
-        Ok(LoadedModule { uri, source })
-    }
-
-    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
-        let loaded = self.module(base, rel)?;
-        match loaded.source {
-            ModuleSource::Text(text) => Ok(LoadedSource {
-                uri: loaded.uri,
-                text,
-            }),
-            ModuleSource::Document(_) => Err(UiDocError::WrongDocKind {
-                origin: loaded.uri,
-                expected: "text source",
-                found: "module document",
-            }),
-        }
+        Ok(LoadedSource { uri, text })
     }
 }

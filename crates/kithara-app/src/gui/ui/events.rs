@@ -480,7 +480,7 @@ mod tests {
         fn library_followup_width_writes_stay_with_their_source() {
             let mut rig = Rig::offline();
             rig.send(
-                "library/pages/startup-page/rows/width/artist",
+                "library/pages/startup/rows/width/artist",
                 ControlAction::SetScalar(240.0),
             );
             assert_eq!(

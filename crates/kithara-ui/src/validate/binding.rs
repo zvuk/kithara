@@ -27,7 +27,10 @@ pub(crate) const fn read_kind(control: &ControlNode) -> Option<ValueKind> {
         | ControlNode::Text { .. }
         | ControlNode::Readout { .. }
         | ControlNode::Search { .. }
-        | ControlNode::ContextBar { .. } => Some(ValueKind::Text),
+        | ControlNode::ContextBar { .. }
+        | ControlNode::Slot {
+            select: Some(_), ..
+        } => Some(ValueKind::Text),
         ControlNode::Optional { .. } => Some(consts::BLOCK_HIDDEN),
         ControlNode::Popover { .. }
         | ControlNode::Modal { .. }

@@ -13,7 +13,7 @@ use crate::{
     ids::SourceUri,
     source::{
         resolve_uri,
-        uri::{LoadedBytes, LoadedSource, SourceResolver},
+        uri::{Fill, LoadedBytes, LoadedSource, SourceResolver},
     },
 };
 
@@ -79,6 +79,10 @@ fn refusal(origin: SourceUri, rel: &str, error: &Error) -> UiDocError {
 }
 
 impl SourceResolver for FileResolver {
+    fn fills(&self) -> Vec<&Fill> {
+        Vec::new()
+    }
+
     fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
         let uri = resolve_uri(base, rel)?;
         if let Some(bytes) = self.blobs.borrow().get(&uri.0) {

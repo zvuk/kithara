@@ -1,0 +1,7 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-fill-caption",
+    chrome: Plain,
+    root: Text(id: "caption", style: MicroLabel, label: "FILLED FROM OUTSIDE", size: (w: Fill, h: Fixed(12.0))),
+)

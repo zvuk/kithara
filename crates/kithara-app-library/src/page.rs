@@ -1,6 +1,7 @@
 use kithara_ui::{
     error::UiDocError,
     registry::{EndpointCategory, ValueKind},
+    source::FillDocument,
     text::TextDoc,
 };
 
@@ -14,17 +15,13 @@ pub struct Document {
     pub text: &'static str,
 }
 
-/// A source's id and page, known before the source is built.
+/// A source's id and what its page needs from the package, known before the
+/// source is built.
 pub struct SourcePage {
     /// Names the source; its page reads and writes are scoped by it.
     pub id: &'static str,
-    /// The module the shell mounts as the source's page, handing it the id as
-    /// its `source` parameter.
-    pub page: &'static str,
     /// Reads and writes the source's page declares.
     pub endpoints: Vec<Endpoint>,
-    /// Modules the source brings into the package.
-    pub modules: Vec<Document>,
     /// Caption catalogs laid over the package's own.
     pub texts: Vec<Document>,
 }
@@ -40,27 +37,15 @@ pub struct Endpoint {
     pub value: ValueKind,
 }
 
-impl SourcePage {
-    /// A source the shell's table page draws.
-    #[must_use]
-    pub const fn table(id: &'static str) -> Self {
-        Self {
-            id,
-            page: "modules/library/source-page.kmodule.ron",
-            endpoints: Vec::new(),
-            modules: Vec::new(),
-            texts: Vec::new(),
-        }
-    }
-}
-
 /// Builds a registered source from the package's text catalog.
 type Build = Box<dyn FnOnce(&TextDoc) -> Result<Box<dyn LibrarySource>, UiDocError>>;
 
-/// A source to mount: its page and how to build it from the text catalog.
+/// A source to mount: its page, the documents it puts into the package's
+/// collections, and how to build it from the text catalog.
 pub struct Registration {
     build: Build,
     page: SourcePage,
+    fills: Vec<(String, FillDocument)>,
 }
 
 impl Registration {
@@ -71,7 +56,17 @@ impl Registration {
         Self {
             page,
             build: Box::new(build),
+            fills: Vec::new(),
         }
+    }
+
+    /// Puts `document` into the collection at `address`,
+    /// `<module id>/<collection>`, drawn under the source's id: a document the
+    /// source parsed, or the path of one the package holds.
+    #[must_use]
+    pub fn fill(mut self, address: &str, document: FillDocument) -> Self {
+        self.fills.push((address.to_owned(), document));
+        self
     }
 
     /// Builds the source once the package's text catalog is known.
@@ -85,5 +80,53 @@ impl Registration {
     #[must_use]
     pub const fn page(&self) -> &SourcePage {
         &self.page
+    }
+
+    /// Every collection address the source fills, with the document it puts
+    /// there, in the order given.
+    pub fn fills(&self) -> impl Iterator<Item = (&str, &FillDocument)> {
+        self.fills
+            .iter()
+            .map(|(address, document)| (address.as_str(), document))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+    use kithara_ui::ids::{DocId, SourceUri};
+
+    use super::*;
+    use crate::PAGES;
+
+    #[kithara::test]
+    fn a_registration_carries_the_document_it_fills_a_collection_with() {
+        let origin = SourceUri("probe-page.kmodule.ron".to_owned());
+        let document = FillDocument::parse(
+            r#"(schema: "kithara.module", version: 1, id: "probe-page", root: Spacer(id: "face"))"#,
+            origin,
+        )
+        .expect("the page parses");
+        let page = SourcePage {
+            id: "probe",
+            endpoints: Vec::new(),
+            texts: Vec::new(),
+        };
+
+        let registration = Registration::new(page, |_| {
+            Err(UiDocError::NotFound {
+                origin: SourceUri("probe".to_owned()),
+                rel: String::new(),
+            })
+        })
+        .fill(PAGES, document);
+
+        let fills: Vec<_> = registration.fills().collect();
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].0, "app-library/pages");
+        assert!(matches!(
+            fills[0].1,
+            FillDocument::Parsed { document, .. } if document.id == DocId("probe-page".to_owned())
+        ));
     }
 }

@@ -33,6 +33,7 @@ kithara-test-utils = { workspace = true, features = ["http-server"] }
 
 async-trait = { workspace = true }
 axum = { workspace = true }
+serde_yaml_ng = { workspace = true }
 unimock = { workspace = true }
 
 [lints]

@@ -1,7 +1,5 @@
 use kithara::ui::{error::UiDocError, module::IconName, render::TableRow, text::TextDoc};
-use kithara_app_library::{
-    BranchNode, LibrarySource, PageStatus, Registration, SourcePage, worded,
-};
+use kithara_app_library::{BranchNode, LibrarySource, PageStatus, Registration, worded};
 
 use super::track::{Track, display_name};
 
@@ -18,9 +16,7 @@ impl StartupSource {
     const ID: &'static str = "startup";
 
     pub(in crate::gui) fn registered(urls: Vec<String>) -> Registration {
-        Registration::new(SourcePage::table(Self::ID), move |text| {
-            Ok(Box::new(Self::new(urls, text)?))
-        })
+        super::listed(Self::ID, move |text| Ok(Box::new(Self::new(urls, text)?)))
     }
 
     pub(in crate::gui) fn new(urls: Vec<String>, text: &TextDoc) -> Result<Self, UiDocError> {

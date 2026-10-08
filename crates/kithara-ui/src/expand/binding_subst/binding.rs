@@ -9,6 +9,7 @@ use crate::{
     module::BindingRef,
     param::Param,
     text::TextDoc,
+    validate,
 };
 
 pub(crate) fn substitute(
@@ -175,6 +176,7 @@ pub(crate) fn substitute_binding(
     };
     let id = EndpointId(substitute(args, origin, &id.0, path)?);
     let with = substitute_map(args, origin, with, path)?;
+    validate::check_scope(&with, origin, path)?;
     Ok(match binding {
         BindingRef::Command { .. } => BindingRef::Command { id, with },
         BindingRef::Parameter { .. } => BindingRef::Parameter { id, with },

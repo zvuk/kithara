@@ -97,6 +97,9 @@ search.png                  1
 # shadow over the whole window; it measured 0.1% on 2026-10-07, all of it glyph
 # edges and the module corner ticks the retained host does not draw.
 modal.png                   1
+# Fill is a heading over a slot filled twice from outside, one caption per
+# fill; its 0.5%, measured 2026-10-07, is glyph edges with no ink disagreement.
+fill.png                    1
 micro.png                   2
 table.png                   2
 tokens.png                  2

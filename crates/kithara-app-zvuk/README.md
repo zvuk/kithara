@@ -14,21 +14,21 @@
 
 Workspace crate (`publish = false`) with the Zvuk library source: typed
 catalogue operations (search, liked tracks, playlists, HLS stream resolution
-and confirmed like and unlike requests) and the page an application mounts for
-them in its library. The source implements `LibrarySource` from
+and confirmed like and unlike requests) and the page it fills the
+application's library pages with. The source implements `LibrarySource` from
 `kithara-app-library` and compiles for native and WASM targets.
 
 ## Usage
 
 The application lists the source's factory among the library sources its build
 mounts. The factory builds the source from the document's `sources.zvuk` entry
-over the application's one shared `HttpClient`.
+over the application's shared `Environment` and fills `app-library/pages` with
+its page.
 
 ```rust
 use kithara_app_library::Factory;
-use kithara_net::HttpClient;
 
-const FACTORIES: &[Factory<HttpClient>] = &[kithara_app_zvuk::Source::FACTORY];
+const FACTORIES: &[Factory] = &[kithara_app_zvuk::Source::FACTORY];
 ```
 
 ### Configuration

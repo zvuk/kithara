@@ -8,7 +8,7 @@ mod page;
 mod playable;
 mod source;
 
-pub use context::{Context, Factory, SectionError};
+pub use context::{Cause, Context, Environment, Factory, RegisterError, SectionError};
 pub use page::{Document, Endpoint, Registration, SourcePage};
 pub use playable::{NoSource, Playable};
 pub use source::{BranchNode, LibrarySource, PAGES, PageStatus, worded};

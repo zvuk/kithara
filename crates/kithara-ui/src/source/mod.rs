@@ -4,7 +4,9 @@ pub use file::FileResolver;
 pub use kithara_ui_draw::{DrawPoolLimits, DrawPoolLimitsPatch};
 pub use mem::MemResolver;
 pub use overlay::OverlayResolver;
-pub use uri::{LoadedBytes, LoadedModule, LoadedSource, ModuleSource, SourceResolver};
+pub use uri::{
+    Fill, FillDocument, LoadedBytes, LoadedModule, LoadedSource, ModuleSource, SourceResolver,
+};
 pub(crate) use uri::{base_dir, join_rel, resolve_uri};
 
 mod config;

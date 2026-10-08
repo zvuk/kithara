@@ -12,10 +12,10 @@ use ::kithara::ui::{
         Clock, ControlAction, Ctx, Published, ReadValue, Reads, UiEvent, Walk, WriteValue, tree,
     },
     size::{Dim, SizeSpec, control_size},
-    source::{SourceResolver, UiConfig},
+    source::{FillDocument, SourceResolver, UiConfig},
     view::{self, ViewState},
 };
-use kithara_app_library::{Document, Endpoint, Registration, SourcePage};
+use kithara_app_library::{Document, Endpoint, PAGES, Registration, SourcePage};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -1587,7 +1587,7 @@ fn the_shipped_package_compiles_from_disk() {
 }
 
 #[kithara::test]
-fn the_pages_module_lists_exactly_the_registered_sources() {
+fn the_source_additions_list_exactly_the_registered_sources() {
     let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
     for root in [None, Some(shipped.as_path())] {
         for with_probe in [true, false] {
@@ -1601,8 +1601,6 @@ fn the_pages_module_lists_exactly_the_registered_sources() {
                 let controls = controls(&ui);
                 for (source, registered) in [("startup", true), (Probe::ID, with_probe)] {
                     let scoped = format!("@source={source}");
-                    let hidden = format!("library.page.hidden{scoped}");
-                    let guarded = guarded_by(&ui, &hidden);
                     let bound: Vec<&str> = controls
                         .iter()
                         .filter(|(_, keys)| keys.iter().any(|key| key.ends_with(&scoped)))
@@ -1610,13 +1608,12 @@ fn the_pages_module_lists_exactly_the_registered_sources() {
                         .collect();
                     if registered {
                         assert!(
-                            !bound.is_empty() && bound.iter().all(|path| guarded.contains(path)),
-                            "{root:?} {layout:?}: `{source}` must draw its page under `{hidden}`, \
-                             got {bound:?} against {guarded:?}",
+                            !bound.is_empty(),
+                            "{root:?} {layout:?}: `{source}` must draw its page",
                         );
                     } else {
                         assert!(
-                            bound.is_empty() && guarded.is_empty(),
+                            bound.is_empty(),
                             "{root:?} {layout:?}: unregistered `{source}` is bound at {bound:?}",
                         );
                     }
@@ -1624,6 +1621,40 @@ fn the_pages_module_lists_exactly_the_registered_sources() {
             }
         }
     }
+}
+
+/// A plugin filling a collection no slot of the package shows is refused
+/// while the package loads, by the address and the plugin's id.
+#[kithara::test]
+fn a_fill_of_a_collection_no_slot_shows_fails_loading_the_package() {
+    let page = SourcePage {
+        id: "probe",
+        endpoints: Vec::new(),
+        texts: Vec::new(),
+    };
+    let registration = Registration::new(page, |_| {
+        Err(UiDocError::NotFound {
+            origin: SourceUri("probe".to_owned()),
+            rel: String::new(),
+        })
+    })
+    .fill(
+        "app-library/missing",
+        FillDocument::Path("modules/library/source-page.kmodule.ron".to_owned()),
+    );
+
+    let Err(error) = test_fixture::mount(
+        None,
+        vec![StartupSource::registered(Vec::new()), registration],
+    ) else {
+        panic!("a fill of a collection no slot shows must fail loading");
+    };
+
+    let message = error.to_string();
+    assert!(
+        message.contains("app-library/missing") && message.contains("probe"),
+        "the error names the address and the plugin: {message}"
+    );
 }
 
 /// A refused screen names each required write no control on it declares.
@@ -2162,13 +2193,9 @@ mod answered {
 }
 
 fn custom_search_source() -> Registration {
-    Registration::new(
-        SourcePage {
-            id: Probe::ID,
-            page: "modules/custom-search.kmodule.ron",
-            modules: vec![Document {
-                path: "modules/custom-search.kmodule.ron",
-                text: r#"(
+    let origin = SourceUri("modules/custom-search.kmodule.ron".to_owned());
+    let page = FillDocument::parse(
+        r#"(
     schema: "kithara.module", version: 1, id: "custom-search", chrome: Plain, parameters: ["source"],
     root: Column(id: "body", children: [
         Text(id: "caption", label: "@probe.caption"),
@@ -2178,8 +2205,11 @@ fn custom_search_source() -> Registration {
             write: Command(id: "source.query", with: { "source": "$source" }),
         ),
     ]),
-)"#,
-            }],
+)"#, origin)
+    .expect("the probe page parses");
+    Registration::new(
+        SourcePage {
+            id: Probe::ID,
             texts: vec![Document {
                 path: "texts/probe.ktext.ron",
                 text: r#"(schema: "kithara.text", version: 1, id: "probe", entries: { "probe.caption": "Catalogue" })"#,
@@ -2195,6 +2225,7 @@ fn custom_search_source() -> Registration {
         },
         |text| Probe::registered("menu.module.library").0.build(text),
     )
+    .fill(PAGES, page)
 }
 
 /// A gesture on a source's page reaches that source through the app's write
@@ -2209,7 +2240,7 @@ fn a_source_page_gesture_reaches_its_source_through_the_app_dispatch() {
     drop(update(
         &mut state,
         Message::Ui(Published::Gesture {
-            path: "library/pages/probe-page/query".to_owned(),
+            path: "library/pages/probe/query".to_owned(),
             action: ControlAction::Text("needle".to_owned()),
         }),
     ));

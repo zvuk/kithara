@@ -374,6 +374,7 @@ mod tests {
             ("gallery/clock/item", "activation"),
             ("gallery/custom/item", "activation"),
             ("gallery/faders/item", "activation"),
+            ("gallery/fill/item", "activation"),
             ("gallery/library2/item", "activation"),
             ("gallery/lottie/item", "activation"),
             ("gallery/menu/item", "activation"),

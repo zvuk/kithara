@@ -6,7 +6,14 @@ license = "MIT OR Apache-2.0"
 publish = false
 description = "The library-source contract between the application's library shell and its sources."
 
+[features]
+client-reqwest = ["kithara-net/client-reqwest"]
+tls-rustls = ["kithara-net/tls-rustls"]
+client-wreq = ["kithara-net/client-wreq"]
+flash = ["kithara-net/flash", "kithara-test-utils/flash"]
+
 [dependencies]
+kithara-net = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-ui = { workspace = true, default-features = false, features = ["render"] }
 
@@ -16,6 +23,7 @@ thiserror = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+kithara-net = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 kithara-test-utils = { workspace = true }
 
 [lints]

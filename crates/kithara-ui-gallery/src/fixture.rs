@@ -8,8 +8,10 @@ use kithara_ui::{
     builtin,
     ids::ScreenRole,
     package::load_package,
-    source::{FileResolver, MemResolver, OverlayResolver},
+    source::{FileResolver, FillDocument, MemResolver, OverlayResolver},
 };
+
+use crate::custom;
 
 pub mod consts {
     pub const HEIGHT: f32 = 720.0;
@@ -21,6 +23,9 @@ pub mod consts {
     pub const SCALE: f32 = 1.0;
     pub const STRESS_TICK_MS: u64 = 16;
     pub const WIDTH: f32 = 1300.0;
+    /// The collection the fill page shows, and the document filled into it.
+    pub const FILLED: &str = "gallery-fill/items";
+    pub const FILL: &str = "modules/tabs/fill/caption.kmodule.ron";
 }
 
 /// The gallery's documents on disk, laid over the ones this build embeds.
@@ -34,7 +39,7 @@ pub fn package_root() -> PathBuf {
 }
 
 /// The gallery reads its pages from the folder it ships them in, over the
-/// built-in library.
+/// built-in library, with the fill page's collection filled twice.
 ///
 /// Nothing about a page is embedded: the folder is part of this checkout, so
 /// editing a document and opening the gallery again shows the edit, and a
@@ -47,7 +52,15 @@ pub fn package_root() -> PathBuf {
 #[must_use]
 pub fn resolver() -> Resolver {
     let files = FileResolver::new(package_root()).expect("the gallery ships its own documents");
-    OverlayResolver::new(files, builtin::resolver())
+    let mut library = builtin::resolver();
+    for key in ["first", "second"] {
+        library.fill(
+            consts::FILLED,
+            key,
+            FillDocument::Path(consts::FILL.to_owned()),
+        );
+    }
+    OverlayResolver::new(files, library)
 }
 
 /// The file the gallery's package puts behind `role`.
@@ -78,8 +91,8 @@ pub fn document(role: &str) -> &'static str {
 pub fn pages() -> &'static BTreeMap<ScreenRole, String> {
     static PAGES: LazyLock<BTreeMap<ScreenRole, String>> = LazyLock::new(|| {
         let resolver = resolver();
-        let package = load_package(&resolver, "package.kpackage.ron")
-            .unwrap_or_else(|error| panic!("the gallery ships a package manifest: {error}"));
+        let package = load_package(&resolver, "package.kpackage.ron", &custom::config().limits)
+            .unwrap_or_else(|error| panic!("the gallery ships a package it fills: {error}"));
         package
             .screens
             .keys()

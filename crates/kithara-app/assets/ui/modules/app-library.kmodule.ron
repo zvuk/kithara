@@ -12,7 +12,7 @@
                 write: Command(id: "library.select"),
                 toggle: Command(id: "library.toggle"),
             ),
-            Include(id: "pages", source: "../library-pages.kmodule.ron"),
+            Slot(id: "pages", size: Some((w: Fill, h: Fill)), from: "pages", select: Model(id: "library.page")),
         ],
     ),
 )
