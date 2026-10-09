@@ -486,7 +486,12 @@ fn assemble_staticlib_xcframework(
     headers: &FsPath,
     tools: &ToolsConfig,
 ) -> Result<()> {
-    let staging = TempWorkDir::create("kithara-apple-staticlibs")?;
+    let staging = tempfile::Builder::new()
+        .prefix(&format!(
+            "{}-apple-staticlibs",
+            kithara_devtools::util::project_name()
+        ))
+        .tempdir()?;
     let mut command = Command::new(tools.program("xcodebuild"));
     command.arg("-create-xcframework");
     for (index, targets) in plan.iter().enumerate() {
@@ -866,7 +871,12 @@ fn link_like_a_consumer(xcframework: &FsPath, tools: &ToolsConfig) -> Result<()>
         .and_then(|dict| dict.get("AvailableLibraries"))
         .and_then(PlistValue::as_array)
         .with_context(|| format!("invalid xcframework plist {}", plist.display()))?;
-    let temp = TempWorkDir::create("kithara-apple-consumer")?;
+    let temp = tempfile::Builder::new()
+        .prefix(&format!(
+            "{}-apple-consumer",
+            kithara_devtools::util::project_name()
+        ))
+        .tempdir()?;
     let source = temp.path().join("main.swift");
     fs::write(&source, "import KitharaFFIInternal\n")
         .with_context(|| format!("write {}", source.display()))?;
