@@ -14,6 +14,7 @@ pub(crate) mod fixture;
 mod garbage;
 mod sources;
 mod target;
+mod timings;
 
 pub(crate) use entry::BuildDir;
 pub(crate) use sources::{Claim, claim_beside_alias};

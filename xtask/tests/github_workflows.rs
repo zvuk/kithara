@@ -2350,15 +2350,11 @@ fn a_kept_checkout_is_collected_on_gits_own_thresholds() {
     );
 }
 
-/// A step that reads what the lane built must ask where the lane builds.
+/// A step uploads the job-owned report directory, not the reusable build slot.
 ///
-/// The timing report was collected from a hard-coded `/cache/target`, and
-/// moving the lane's build directory left that path pointing at nothing. The
-/// upload declares `if-no-files-found: error`, so the lane compiled and tested
-/// for twenty-five minutes and then failed on the artefact.
-///
-/// `ci lane` picks the slot as it runs and exports it as `KITHARA_LANE_TARGET`.
-/// A lane that stopped before it took one built nothing to upload.
+/// `ci lane` copies only this build's reports before releasing the slot and
+/// announces `KITHARA_LANE_TIMINGS` only when it has a report. The upload runs
+/// even after a failed lane, or is skipped when there is nothing to upload.
 #[test]
 fn a_step_that_collects_build_output_reads_the_build_directory() {
     let workflow = github_workflow("lane.yml");
@@ -2381,17 +2377,26 @@ fn a_step_that_collects_build_output_reads_the_build_directory() {
         .and_then(|with| with.get("path"))
         .and_then(Value::as_str)
         .expect("the upload names a path");
-    assert!(
-        path.starts_with("${{ env.KITHARA_LANE_TARGET }}"),
-        "the timing report must be read from where the lane built: {path}"
+    assert_eq!(
+        path.trim(),
+        "${{ env.KITHARA_LANE_TIMINGS }}",
+        "the timing report must be read from the job-owned directory: {path}"
     );
     let condition = timings
         .get("if")
         .and_then(Value::as_str)
         .expect("the upload is conditional");
-    assert!(
-        condition.contains("env.KITHARA_LANE_TARGET != ''"),
-        "a lane that stopped before it took a slot has nothing to upload: {condition}"
+    assert_eq!(
+        condition, "${{ always() && env.KITHARA_LANE_TIMINGS != '' }}",
+        "failed lanes still upload their report without a lane list; a job whose build wrote no report has nothing to upload: {condition}"
+    );
+    assert_eq!(
+        timings
+            .get("with")
+            .and_then(|with| with.get("if-no-files-found"))
+            .and_then(Value::as_str),
+        Some("error"),
+        "an announced timing report must exist when the job uploads it"
     );
 }
 

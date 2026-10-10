@@ -56,10 +56,6 @@ mod consts {
     pub(super) const REVISION_POLL_INTERVAL: Duration = Duration::from_millis(1);
 }
 
-pub(crate) fn chunk_seconds() -> NonZeroU32 {
-    NonZeroU32::new(16).expect("fixture chunk duration is non-zero")
-}
-
 pub(crate) fn test_pools() -> Pools {
     pools::build(&PoolsSection::default()).expect("valid app pool policy")
 }
@@ -315,7 +311,11 @@ pub(crate) fn app_config(cancel: &CancelToken, store: AppStore) -> AppConfig {
         .build()
 }
 
-pub(crate) fn persistence(cancel: &CancelToken, pools: Pools) -> AnalysisPersistence {
+pub(crate) fn persistence(
+    cancel: &CancelToken,
+    pools: Pools,
+    chunk_seconds: NonZeroU32,
+) -> AnalysisPersistence {
     let worker = Worker::new(
         WorkerConfig::new()
             .with_cancel(cancel.child())
@@ -326,7 +326,7 @@ pub(crate) fn persistence(cancel: &CancelToken, pools: Pools) -> AnalysisPersist
             .worker(worker)
             .pools(pools)
             .queue_capacity(NonZeroUsize::MIN)
-            .chunk_duration(Duration::from_secs(u64::from(chunk_seconds().get())))
+            .chunk_duration(Duration::from_secs(u64::from(chunk_seconds.get())))
             .dispatcher(
                 DispatcherConfig::builder()
                     .name("analysis-service-test")

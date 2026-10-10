@@ -14,7 +14,7 @@ use tracing::{info, warn};
 use super::declared;
 use crate::{
     ci::{
-        build_dir::{LaneTarget, Target},
+        build_dir::{BuildDir, LaneTarget, Target},
         config::CiPins,
         environment::process_var,
         process::Process,
@@ -104,11 +104,8 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
         },
         var,
     )?;
-    if let Target::Alias { build, .. } = &target {
-        announce(build.path(), var);
-    }
     let process = Process::new(&ctx.root, executor_vars(target.cargo_dir(), args.kind));
-    crate::ci::run::journalled(&process, &args.lane, || {
+    let result = crate::ci::run::journalled(&process, &args.lane, || {
         let result = declared::run(&process, lane, &pins, &ctx.config.tools, args.kind, narrow);
         if var("RUSTC_WRAPPER").is_some_and(|wrapper| !wrapper.is_empty()) {
             let on_github =
@@ -120,24 +117,45 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
             );
         }
         result
-    })
+    });
+    if let Target::Alias { build, .. } = &target {
+        publish_timings(build, var);
+    }
+    result
 }
 
-/// Tells the job's later steps where the lane built. GitHub reads `GITHUB_ENV`
-/// into every step after this one; an executor without it has no later step to
-/// tell. Only the upload of the build's timings reads it, so a lane that cannot
-/// tell builds on and the upload finds nothing to send.
-fn announce(dir: &Path, var: &dyn Fn(&str) -> Option<OsString>) {
-    let Some(env_file) = var("GITHUB_ENV").map(PathBuf::from) else {
+/// Publishes while the slot is still held. The job owns `RUNNER_TEMP`, which
+/// GitHub empties at its start and end, so another job taking the released
+/// slot cannot clear or replace the announced copy. Without both GitHub
+/// variables there is no job to publish to. Failure never fails a lane.
+fn publish_timings(build: &BuildDir, var: &dyn Fn(&str) -> Option<OsString>) {
+    let (Some(env_file), Some(temp)) = (var("GITHUB_ENV"), var("RUNNER_TEMP")) else {
         return;
     };
+    let destination = PathBuf::from(temp).join(consts::CARGO_TIMINGS_DIR);
+    match build.copy_timings(&destination) {
+        Ok(true) => announce(Path::new(&env_file), &destination),
+        Ok(false) => {}
+        Err(error) => warn!(
+            "cannot copy this job's timing reports from {} to {}: {error:#}; their upload is skipped",
+            build.path().display(),
+            destination.display()
+        ),
+    }
+}
+
+/// Tells later steps where this job's copied timing reports are, only after
+/// its build wrote one. GitHub reads `GITHUB_ENV` into later steps. A job
+/// cancelled before this point tells nothing, so its upload is skipped.
+/// Failure to tell never fails a lane.
+fn announce(env_file: &Path, dir: &Path) {
     let written = OpenOptions::new()
         .append(true)
-        .open(&env_file)
-        .and_then(|mut file| writeln!(file, "{}={}", consts::LANE_TARGET_ENV, dir.display()));
+        .open(env_file)
+        .and_then(|mut file| writeln!(file, "{}={}", consts::LANE_TIMINGS_ENV, dir.display()));
     if let Err(error) = written {
         warn!(
-            "later steps cannot find the lane build directory {}: writing {} failed: {error}",
+            "later steps cannot upload this job's timing reports in {}: writing {} failed: {error}",
             dir.display(),
             env_file.display()
         );
@@ -242,6 +260,45 @@ mod tests {
         }
     }
 
+    /// The job announces exactly one directory for its later upload step.
+    #[cfg(unix)]
+    fn announced(github_env: &Path) -> PathBuf {
+        let contents = fs::read_to_string(github_env).expect("read GITHUB_ENV");
+        let lines = contents.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 1, "the job announces exactly one directory");
+        let dir = lines[0]
+            .strip_prefix(&format!("{}=", consts::LANE_TIMINGS_ENV))
+            .expect("the job announces its timing directory");
+        assert!(!dir.is_empty(), "the announced directory is not empty");
+        PathBuf::from(dir)
+    }
+
+    /// Every uploaded file and its content, following directory links like the upload.
+    #[cfg(unix)]
+    fn reports(dir: &Path) -> BTreeMap<String, String> {
+        let mut found = BTreeMap::new();
+        for entry in fs::read_dir(dir).expect("list the upload directory") {
+            let entry = entry.expect("read an upload entry");
+            let path = entry.path();
+            let name = entry
+                .file_name()
+                .into_string()
+                .expect("a UTF-8 upload path");
+            let metadata = fs::metadata(&path).expect("read upload entry metadata");
+            if metadata.is_dir() {
+                for (relative, content) in reports(&path) {
+                    found.insert(format!("{name}/{relative}"), content);
+                }
+            } else if metadata.is_file() {
+                found.insert(
+                    name,
+                    fs::read_to_string(&path).expect("read an uploaded file"),
+                );
+            }
+        }
+        found
+    }
+
     /// A workspace at `root` declaring one lane whose only step succeeds.
     fn trivial_lane(root: &Path) -> (Ctx, LaneArgs) {
         if cfg!(windows) {
@@ -317,8 +374,7 @@ label = "run"
     /// In a CI job a lane builds in a directory of its own beside the alias
     /// the executor named, while Cargo is told the alias: every lane compiles
     /// at the one path, so the compiler cache's keys match across lanes and
-    /// runners. The job's later steps and its artifact paths reach the same
-    /// directory.
+    /// runners.
     #[cfg(unix)]
     #[test]
     fn a_lane_in_a_ci_job_builds_in_its_own_directory_behind_the_alias() {
@@ -363,13 +419,309 @@ label = "run"
             "the lane leased its own build"
         );
         assert_eq!(
-            fs::read_to_string(&github_env).expect("read GITHUB_ENV"),
-            format!("{}={}\n", consts::LANE_TARGET_ENV, own.display())
-        );
-        assert_eq!(
             fs::canonicalize(temp.path().join("target")).unwrap(),
             fs::canonicalize(&own).unwrap(),
             "artifact paths under the checkout's target reach the lane's build"
+        );
+    }
+
+    /// A build that wrote no report announces nothing, so it cannot upload an
+    /// earlier job's report from a warm slot.
+    #[cfg(unix)]
+    #[test]
+    fn a_lane_whose_build_wrote_no_timing_report_tells_the_job_nothing() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let (ctx, args) = trivial_lane(temp.path());
+        let earlier = builds
+            .path()
+            .join("trivial-0/cargo-timings/cargo-timing.html");
+        fs::create_dir_all(earlier.parent().unwrap()).expect("create the earlier timing directory");
+        fs::write(&earlier, "earlier report").expect("write the earlier job's timing report");
+        let github_env = temp.path().join("github-env");
+        fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
+
+        run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                ("CI", "true"),
+                (
+                    "CARGO_TARGET_DIR",
+                    builds.path().to_str().expect("a UTF-8 build root"),
+                ),
+                (
+                    "GITHUB_ENV",
+                    github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
+                ),
+            ]),
+        )
+        .expect("lane runs");
+
+        assert_eq!(
+            fs::read_to_string(&github_env).expect("read GITHUB_ENV"),
+            "",
+            "a job whose build wrote no report must not upload another job's"
+        );
+        assert!(
+            !earlier.exists(),
+            "the earlier job's timing report must not survive slot entry"
+        );
+    }
+
+    /// A finished lane announces a job-owned copy containing only its report,
+    /// so releasing the build slot cannot change the upload.
+    #[cfg(unix)]
+    #[test]
+    fn a_lane_tells_the_job_the_timing_report_its_build_wrote() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let (ctx, args) = lane_running(
+            temp.path(),
+            "sh",
+            r#"args = ["-c", "mkdir -p \"$CARGO_TARGET_DIR/cargo-timings\" && echo report > \"$CARGO_TARGET_DIR/cargo-timings/cargo-timing.html\""]"#,
+        );
+        let github_env = temp.path().join("github-env");
+        fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
+        let runner_temp = tempfile::tempdir_in(temp.path()).expect("create the job's RUNNER_TEMP");
+
+        run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                ("CI", "true"),
+                (
+                    "CARGO_TARGET_DIR",
+                    builds.path().to_str().expect("a UTF-8 build root"),
+                ),
+                (
+                    "GITHUB_ENV",
+                    github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
+                ),
+                (
+                    "RUNNER_TEMP",
+                    runner_temp.path().to_str().expect("a UTF-8 RUNNER_TEMP"),
+                ),
+            ]),
+        )
+        .expect("lane runs");
+
+        let upload = announced(&github_env);
+        assert_eq!(
+            reports(&upload),
+            BTreeMap::from([(
+                "cargo-timings/cargo-timing.html".to_owned(),
+                "report\n".to_owned(),
+            )])
+        );
+        assert!(
+            !upload.starts_with(builds.path()),
+            "the job owns the upload outside the reusable build root"
+        );
+    }
+
+    /// A failed lane still announces a job-owned copy of its report, so its
+    /// timing evidence survives release of the build slot.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_lane_still_tells_the_job_the_timing_report_its_build_wrote() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let (ctx, args) = lane_running(
+            temp.path(),
+            "sh",
+            r#"args = ["-c", "mkdir -p \"$CARGO_TARGET_DIR/cargo-timings\" && echo report > \"$CARGO_TARGET_DIR/cargo-timings/cargo-timing.html\"; exit 1"]"#,
+        );
+        let github_env = temp.path().join("github-env");
+        fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
+        let runner_temp = tempfile::tempdir_in(temp.path()).expect("create the job's RUNNER_TEMP");
+
+        let result = run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                ("CI", "true"),
+                (
+                    "CARGO_TARGET_DIR",
+                    builds.path().to_str().expect("a UTF-8 build root"),
+                ),
+                (
+                    "GITHUB_ENV",
+                    github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
+                ),
+                (
+                    "RUNNER_TEMP",
+                    runner_temp.path().to_str().expect("a UTF-8 RUNNER_TEMP"),
+                ),
+            ]),
+        );
+
+        assert!(result.is_err(), "the failed step must fail its lane");
+        let upload = announced(&github_env);
+        assert_eq!(
+            reports(&upload),
+            BTreeMap::from([(
+                "cargo-timings/cargo-timing.html".to_owned(),
+                "report\n".to_owned(),
+            )])
+        );
+        assert!(
+            !upload.starts_with(builds.path()),
+            "the job owns the upload outside the reusable build root"
+        );
+    }
+
+    /// A job's uploaded report survives the next job clearing the same build slot.
+    #[cfg(unix)]
+    #[test]
+    fn a_report_a_job_announced_survives_the_next_job_taking_its_slot() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let builds = temp.path().join("builds");
+        let checkout_a = tempfile::tempdir_in(temp.path()).expect("create job A's checkout");
+        let runner_temp_a = tempfile::tempdir_in(temp.path()).expect("create job A's RUNNER_TEMP");
+        let github_env_a = temp.path().join("github-env-a");
+        fs::write(&github_env_a, "").expect("create job A's GITHUB_ENV");
+        let (ctx_a, args_a) = lane_running(
+            checkout_a.path(),
+            "sh",
+            r#"args = ["-c", "mkdir -p \"$CARGO_TARGET_DIR/cargo-timings\" && echo report > \"$CARGO_TARGET_DIR/cargo-timings/cargo-timing.html\""]"#,
+        );
+
+        run_in(
+            &args_a,
+            &ctx_a,
+            &environment(&[
+                ("CI", "true"),
+                (
+                    "CARGO_TARGET_DIR",
+                    builds.to_str().expect("a UTF-8 build root"),
+                ),
+                (
+                    "GITHUB_ENV",
+                    github_env_a.to_str().expect("a UTF-8 GITHUB_ENV"),
+                ),
+                (
+                    "RUNNER_TEMP",
+                    runner_temp_a.path().to_str().expect("a UTF-8 RUNNER_TEMP"),
+                ),
+            ]),
+        )
+        .expect("job A's lane runs");
+        let upload = announced(&github_env_a);
+        let slot = builds.join("trivial-0");
+        assert_eq!(
+            fs::read_link(builds.join(consts::BUILD_ALIAS)).unwrap(),
+            slot
+        );
+
+        let checkout_b = tempfile::tempdir_in(temp.path()).expect("create job B's checkout");
+        let runner_temp_b = tempfile::tempdir_in(temp.path()).expect("create job B's RUNNER_TEMP");
+        let github_env_b = temp.path().join("github-env-b");
+        fs::write(&github_env_b, "").expect("create job B's GITHUB_ENV");
+        let (ctx_b, args_b) = trivial_lane(checkout_b.path());
+
+        run_in(
+            &args_b,
+            &ctx_b,
+            &environment(&[
+                ("CI", "true"),
+                (
+                    "CARGO_TARGET_DIR",
+                    builds.to_str().expect("a UTF-8 build root"),
+                ),
+                (
+                    "GITHUB_ENV",
+                    github_env_b.to_str().expect("a UTF-8 GITHUB_ENV"),
+                ),
+                (
+                    "RUNNER_TEMP",
+                    runner_temp_b.path().to_str().expect("a UTF-8 RUNNER_TEMP"),
+                ),
+            ]),
+        )
+        .expect("job B's lane runs");
+
+        assert_eq!(
+            fs::read_link(builds.join(consts::BUILD_ALIAS)).unwrap(),
+            slot
+        );
+        assert_eq!(
+            reports(&upload),
+            BTreeMap::from([(
+                "cargo-timings/cargo-timing.html".to_owned(),
+                "report\n".to_owned(),
+            )]),
+            "job A's report survives job B taking and clearing the same slot"
+        );
+        assert_eq!(
+            fs::read_to_string(&github_env_b).expect("read job B's GITHUB_ENV"),
+            "",
+            "job B wrote no report and announces nothing"
+        );
+    }
+
+    /// The upload contains only owned reports; directory links neither upload
+    /// another build's report nor let clearing delete it.
+    #[cfg(unix)]
+    #[test]
+    fn a_lane_tells_the_job_only_the_reports_its_build_directory_holds() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let builds = temp.path().join("builds");
+        let slot = builds.join("trivial-0");
+        let elsewhere = temp.path().join("elsewhere");
+        let linked_report = elsewhere.join("cargo-timings/cargo-timing.html");
+        fs::create_dir_all(linked_report.parent().unwrap())
+            .expect("create the linked timing directory");
+        fs::write(&linked_report, "elsewhere").expect("write another build's report");
+        fs::create_dir_all(&slot).expect("create the build slot");
+        std::os::unix::fs::symlink(&elsewhere, slot.join("linked")).expect("link another build");
+        let (ctx, args) = lane_running(
+            temp.path(),
+            "sh",
+            r#"args = ["-c", "mkdir -p \"$CARGO_TARGET_DIR/cargo-timings\" \"$CARGO_TARGET_DIR/nested/cargo-timings\" && echo report > \"$CARGO_TARGET_DIR/cargo-timings/cargo-timing.html\" && echo report > \"$CARGO_TARGET_DIR/nested/cargo-timings/cargo-timing.html\""]"#,
+        );
+        let github_env = temp.path().join("github-env");
+        fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
+        let runner_temp = tempfile::tempdir_in(temp.path()).expect("create the job's RUNNER_TEMP");
+
+        run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                ("CI", "true"),
+                (
+                    "CARGO_TARGET_DIR",
+                    builds.to_str().expect("a UTF-8 build root"),
+                ),
+                (
+                    "GITHUB_ENV",
+                    github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
+                ),
+                (
+                    "RUNNER_TEMP",
+                    runner_temp.path().to_str().expect("a UTF-8 RUNNER_TEMP"),
+                ),
+            ]),
+        )
+        .expect("lane runs");
+
+        assert_eq!(
+            reports(&announced(&github_env)),
+            BTreeMap::from([
+                (
+                    "cargo-timings/cargo-timing.html".to_owned(),
+                    "report\n".to_owned(),
+                ),
+                (
+                    "nested/cargo-timings/cargo-timing.html".to_owned(),
+                    "report\n".to_owned(),
+                ),
+            ]),
+            "the upload excludes reports reached through directory links"
+        );
+        assert!(
+            linked_report.is_file(),
+            "clearing must not delete another build's report through a directory link"
         );
     }
 
@@ -555,14 +907,14 @@ cargo.packages = ["tools"]
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let builds = tempfile::tempdir().expect("create the runner's build root");
 
-        let (result, told, called) = run_touched(temp.path(), "crates/probe.rs", builds.path());
+        let (result, _told, called) = run_touched(temp.path(), "crates/probe.rs", builds.path());
 
         result.expect("the selected lane runs");
         assert!(called.exists(), "the selected suite must run");
         let own = fs::read_link(builds.path().join(consts::BUILD_ALIAS)).unwrap();
-        assert_eq!(
-            told,
-            format!("{}={}\n", consts::LANE_TARGET_ENV, own.display())
+        assert!(
+            own.join(lease::FILE).is_file(),
+            "the selected lane leased its own build"
         );
     }
 
@@ -634,14 +986,20 @@ cargo.packages = ["tools"]
         );
     }
 
-    /// Only the upload of the build's timings reads where the lane built, so a
-    /// job whose `GITHUB_ENV` cannot be written still runs its lane.
+    /// A job whose `GITHUB_ENV` cannot be written still runs its lane;
+    /// announcing the job-owned report copy never determines lane success.
+    #[cfg(unix)]
     #[test]
     fn a_lane_that_cannot_tell_the_job_where_it_built_still_runs() {
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let builds = tempfile::tempdir().expect("create the runner's build root");
-        let (ctx, args) = trivial_lane(temp.path());
+        let (ctx, args) = lane_running(
+            temp.path(),
+            "sh",
+            r#"args = ["-c", "mkdir -p \"$CARGO_TARGET_DIR/cargo-timings\" && echo report > \"$CARGO_TARGET_DIR/cargo-timings/cargo-timing.html\""]"#,
+        );
         let github_env = temp.path().join("missing/github-env");
+        let runner_temp = tempfile::tempdir_in(temp.path()).expect("create the job's RUNNER_TEMP");
 
         let result = run_in(
             &args,
@@ -655,6 +1013,10 @@ cargo.packages = ["tools"]
                 (
                     "GITHUB_ENV",
                     github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
+                ),
+                (
+                    "RUNNER_TEMP",
+                    runner_temp.path().to_str().expect("a UTF-8 RUNNER_TEMP"),
                 ),
             ]),
         );

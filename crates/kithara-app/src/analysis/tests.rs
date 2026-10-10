@@ -36,7 +36,7 @@ use crate::{
 
 fn owner_in(cancel: &CancelToken, store: AppStore) -> Owner {
     let config = app_config(cancel, store);
-    let persistence = persistence(cancel, test_pools());
+    let persistence = persistence(cancel, test_pools(), config.analysis_chunk_seconds);
     let (service, _handle) = AnalysisService::new(&config, persistence, cancel.child());
     service.owner
 }
@@ -94,8 +94,11 @@ fn take_over_run(
 async fn a_settled_hit_with_a_gap_is_served_without_a_pass(tone_mp3: String) {
     let cancel = CancelToken::root();
     let config = app_config(&cancel, memory_store());
-    let (mut service, handle) =
-        AnalysisService::new(&config, persistence(&cancel, test_pools()), cancel.child());
+    let (mut service, handle) = AnalysisService::new(
+        &config,
+        persistence(&cancel, test_pools(), config.analysis_chunk_seconds),
+        cancel.child(),
+    );
     let owner = &mut service.owner;
     let (host, queue) = queue_off().await;
     let (track_id, source) = track(&host, 1, &tone_mp3).await;
@@ -677,10 +680,15 @@ async fn a_rejected_checkpoint_opens_a_fresh_pass(long_wav: String) {
     let url = long_wav;
     let checkpoint = resumable_progress(&url).await;
     let cancel = CancelToken::root();
-    let mut config = app_config(&cancel, memory_store());
+    let store = memory_store();
+    let pools = test_pools();
+    let mut config = app_config(&cancel, store.clone());
     config.analysis_chunk_seconds = NonZeroU32::new(7).expect("fixture chunk is non-zero");
-    let (service, _handle) =
-        AnalysisService::new(&config, persistence(&cancel, test_pools()), cancel.child());
+    let (service, _handle) = AnalysisService::new(
+        &config,
+        persistence(&cancel, pools.clone(), config.analysis_chunk_seconds),
+        cancel.child(),
+    );
     let mut owner = service.owner;
     let (host, queue) = queue_off().await;
     let (track_id, source) = track(&host, 1, &url).await;
@@ -697,7 +705,7 @@ async fn a_rejected_checkpoint_opens_a_fresh_pass(long_wav: String) {
         "the fixture checkpoint is rejected on another chunk size"
     );
     owner.runner.clear();
-    owner.cache.put(target, checkpoint.clone());
+    owner.cache.put(target.clone(), checkpoint.clone());
 
     let rx = owner.subscribe(queue, track_id, source, axis());
 
@@ -718,6 +726,26 @@ async fn a_rejected_checkpoint_opens_a_fresh_pass(long_wav: String) {
         "which finishes the track"
     );
     assert!(held.analysis().map(TrackAnalysis::revision) > Some(checkpoint.analysis().revision()));
+    let reader = store
+        .open_resource(target.key(), None)
+        .expect("the final analysis is committed");
+    let mut bytes = pools.get::<u8>();
+    reader
+        .read_into(&mut bytes)
+        .expect("the committed analysis reads");
+    let restored = AnalysisFile::parse(&bytes, owner.runner.fingerprint())
+        .expect("the committed analysis validates");
+    let chunk_duration = Duration::from_secs(u64::from(config.analysis_chunk_seconds.get()));
+    assert!(
+        restored.spec().matches_chunk_duration(chunk_duration),
+        "the saved analysis uses the active chunk size"
+    );
+    let saved_analysis = restored.latest().analysis();
+    assert!(saved_analysis.is_complete());
+    assert_eq!(
+        saved_analysis.revision(),
+        held.analysis().expect("a pass published").revision()
+    );
     cancel.cancel();
     host.close().await;
 }

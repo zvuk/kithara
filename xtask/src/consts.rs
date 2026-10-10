@@ -491,8 +491,15 @@ pub(crate) const APFS_LIST: &str = "\
 /// serialized on the host, so another CI lane cannot bind it concurrently.
 pub(crate) const TEST_SERVER_PORT: u16 = 3444;
 
-/// Where `ci lane` tells the job's later steps its build directory is.
-pub(crate) const LANE_TARGET_ENV: &str = "KITHARA_LANE_TARGET";
+/// Where `ci lane` tells the job's later steps the timing reports its build wrote are: the
+/// job's own temporary copy, told only when that build wrote one.
+pub(crate) const LANE_TIMINGS_ENV: &str = "KITHARA_LANE_TIMINGS";
+
+/// Cargo's timing reports at the top of each target directory.
+pub(crate) const CARGO_TIMINGS_DIR: &str = "cargo-timings";
+
+/// Cargo's latest timing report, alongside its timestamped copies.
+pub(crate) const CARGO_TIMING_FILE: &str = "cargo-timing.html";
 
 /// What a rebuild check adds to the step it repeats: build without running,
 /// have cargo say why it builds each unit, and say it in plain text, since a

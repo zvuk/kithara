@@ -55,8 +55,7 @@ struct Build {
 }
 
 /// Removes from the build directory `dir` the units no build of it asks for
-/// any more, the scratch its tests left and the timing reports older than the
-/// window before its newest build.
+/// any more and the scratch its tests left.
 ///
 /// # Errors
 ///
@@ -90,14 +89,6 @@ pub(super) fn collect(dir: &Path, window: Duration) -> Result<()> {
                 bytes = bytes.saturating_add(remove(&path));
             }
         }
-    }
-    if let Some(cutoff) = builds
-        .iter()
-        .map(|build| build.built)
-        .max()
-        .and_then(|newest| newest.checked_sub(window))
-    {
-        bytes = bytes.saturating_add(old_timings(dir, cutoff)?);
     }
     info!(
         "build directory {}: {} of {} units no build asks for removed, {bytes} bytes freed, {:.1} s",
@@ -300,7 +291,7 @@ fn profiles(dir: &Path) -> Result<Vec<PathBuf>> {
 
 /// `dir` and each directory in it: Cargo writes `tmp` and `cargo-timings` at
 /// the top of a target directory, and a lane may nest one target in another.
-fn targets(dir: &Path) -> Result<Vec<PathBuf>> {
+pub(super) fn targets(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut targets = subdirectories(dir)?;
     targets.push(dir.to_path_buf());
     Ok(targets)
@@ -337,22 +328,6 @@ fn scratch(dir: &Path) -> Result<u64> {
         let tmp = target.join("tmp");
         if tmp.is_dir() {
             bytes = bytes.saturating_add(remove(&tmp));
-        }
-    }
-    Ok(bytes)
-}
-
-/// Removes the timing reports written before `cutoff`.
-fn old_timings(dir: &Path, cutoff: SystemTime) -> Result<u64> {
-    let mut bytes = 0_u64;
-    for target in targets(dir)? {
-        for report in entries(&target.join("cargo-timings"))? {
-            let modified = fs::symlink_metadata(&report)
-                .and_then(|metadata| metadata.modified())
-                .with_context(|| format!("reading {}", report.display()))?;
-            if modified < cutoff {
-                bytes = bytes.saturating_add(remove(&report));
-            }
         }
     }
     Ok(bytes)

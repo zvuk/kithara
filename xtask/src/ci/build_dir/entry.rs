@@ -15,7 +15,10 @@ use kithara_devtools::{
 };
 use tracing::{info, warn};
 
-use super::sources::{Claim, claim};
+use super::{
+    sources::{Claim, claim},
+    timings,
+};
 use crate::{ci::build_cache, consts};
 
 /// A job's hold on its build directory: a slot of its lane, taken, leased,
@@ -35,14 +38,16 @@ pub(crate) struct BuildDir {
 impl BuildDir {
     /// Enters a build of `lane` under `slots`: takes the lane's first slot no
     /// other job holds, leases it, points `alias` at it, removes the units its
-    /// builds no longer ask for, by `window` (see [`super::garbage`]), and
-    /// claims `checkout` for it (see [`super::sources`]).
+    /// builds no longer ask for, by `window` (see [`super::garbage`]), removes
+    /// the timing reports earlier jobs left, and claims `checkout` for it
+    /// (see [`super::sources`]).
     ///
     /// # Errors
     ///
     /// When `alias` is not named `build`, `lane` is not one plain name that is
     /// not hidden, or the slot, the lease, the link or the claim cannot be
-    /// made. A garbage pass that fails is logged: it only saves disk.
+    /// made, or earlier timing reports cannot be removed. A garbage pass that
+    /// fails is logged: it only saves disk.
     pub(crate) fn enter(
         checkout: &Path,
         alias: &Path,
@@ -67,6 +72,7 @@ impl BuildDir {
                 path.display()
             );
         }
+        timings::clear(&path)?;
         let sources = claim(checkout, &path)?;
         Ok(Self {
             path,
@@ -74,6 +80,17 @@ impl BuildDir {
             _lease: lease,
             _slot: slot,
         })
+    }
+
+    /// Copies this job's timing reports out of its held slot, returning
+    /// whether it wrote any.
+    ///
+    /// # Errors
+    ///
+    /// When the destination cannot be removed, the slot's targets cannot be
+    /// listed, or a report cannot be read or copied.
+    pub(crate) fn copy_timings(&self, to: &Path) -> Result<bool> {
+        timings::copy(&self.path, to)
     }
 }
 
@@ -210,6 +227,39 @@ mod tests {
         assert_eq!(build.path(), &root.path().join("lint-0"));
         assert_eq!(fs::read_link(alias(root.path())).unwrap(), *build.path());
         assert!(build.path().join(lease::FILE).is_file());
+    }
+
+    /// Slot entry removes earlier reports so only this job's can be uploaded,
+    /// while keeping build files for reuse.
+    #[test]
+    fn entering_a_slot_removes_the_timing_reports_an_earlier_job_left() {
+        let root = tempfile::tempdir().unwrap();
+        let slot = root.path().join("lint-0");
+        let timings = slot.join("cargo-timings");
+        let nested_timings = slot.join("nested/cargo-timings");
+        fs::create_dir_all(&timings).unwrap();
+        fs::create_dir_all(&nested_timings).unwrap();
+        fs::write(timings.join("cargo-timing.html"), "earlier report").unwrap();
+        fs::write(
+            nested_timings.join("cargo-timing.html"),
+            "earlier nested report",
+        )
+        .unwrap();
+        fs::create_dir_all(slot.join("debug")).unwrap();
+        let keep = slot.join("debug/keep");
+        fs::write(&keep, "build file").unwrap();
+
+        let (_build, _checkout) = enter(&alias(root.path()), "lint").unwrap();
+
+        assert!(
+            !timings.exists(),
+            "the earlier job's timing directory must go"
+        );
+        assert!(
+            !nested_timings.exists(),
+            "the earlier job's nested timing directory must go"
+        );
+        assert!(keep.is_file(), "slot entry must keep the build file");
     }
 
     #[test]

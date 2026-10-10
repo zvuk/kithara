@@ -84,7 +84,7 @@ env:
   # No cache paths here: the runner's container names the fixture store,
   # Cargo's home, the xtask build and the build directory. `ci lane` points
   # that build directory at the lane's own under the runner's build root and
-  # exports it as `KITHARA_LANE_TARGET` for the steps after it.
+  # names the copy of this job's timing reports as `KITHARA_LANE_TIMINGS`.
 
 jobs:
   # Named after the lane, not after this file. A caller reaches this workflow
@@ -141,14 +141,16 @@ jobs:
           export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth"
           just ci lane "${{ inputs.lane }}" --kind "${{ inputs.kind }}" ${NARROW:+--narrow "$NARROW"}
 
-      # The report is in the slot the lane built in. A lane that stopped before
-      # it took one built nothing, so there is nothing to upload.
+      # `ci lane` copies this job's reports out of the slot it held into the
+      # job's own temporary directory and names that copy only when the build
+      # wrote a report. A job that wrote none, or was cancelled first, has
+      # nothing to upload.
       - name: Upload Cargo timing report
-        if: ${{ always() && env.KITHARA_LANE_TARGET != '' && (inputs.lane == 'linux-test-simulated-clock' || inputs.lane == 'linux-test-real-clock') }}
+        if: ${{ always() && env.KITHARA_LANE_TIMINGS != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cargo-timings-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.KITHARA_LANE_TARGET }}/**/cargo-timings/cargo-timing.html
+          path: ${{ env.KITHARA_LANE_TIMINGS }}
           if-no-files-found: error
 
       # `artifact-when: always` uploads even when the lane failed: a budget
