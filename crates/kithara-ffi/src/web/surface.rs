@@ -450,9 +450,13 @@ impl AudioPlayer {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// # Errors
+    /// Returns a JS error for a rejected worker command.
     #[wasm_bindgen(js_name = setMuted)]
-    pub fn set_muted_js(&self, muted: bool) {
-        self.inner.set_muted(muted);
+    pub fn set_muted_js(&self, muted: bool) -> Result<(), JsValue> {
+        self.inner
+            .set_muted(muted)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     /// Register a JS callback (`obj`) as the player-level observer. The
@@ -494,9 +498,13 @@ impl AudioPlayer {
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
+    /// # Errors
+    /// Returns a JS error for a rejected worker command.
     #[wasm_bindgen(js_name = setVolume)]
-    pub fn set_volume_js(&self, volume: f32) {
-        self.inner.set_volume(volume);
+    pub fn set_volume_js(&self, volume: f32) -> Result<(), JsValue> {
+        self.inner
+            .set_volume(volume)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     /// Register a JS DRM key processor (`process_key(key: Uint8Array,

@@ -5,7 +5,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     host::{HostConfig, HostSettings, Tap},
     platform::time::Duration,
-    play::{Resource, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     TestServerHelper,
@@ -58,12 +58,9 @@ async fn playing_worker() -> OfflineWorker {
                     .build(),
             )
             .build();
-            let mut resource = Resource::new(config)
-                .await
-                .expect("open the fixture as a product resource");
-            resource.preload().await.expect("preload the fixture");
-            player.set_fade_duration(0.0);
-            player.load_and_fadein(resource).await;
+
+            player.set_fade_duration(0.0).await;
+            player.load_and_fadein(config).await;
         })
         .await;
     worker

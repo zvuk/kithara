@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU16, NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_command::Live;
@@ -6,19 +6,19 @@ use kithara_effects::LimiterConfig;
 use kithara_output::{
     OfflineRenderError, OfflineRenderReport, OfflineRenderRequest, OfflineRenderer, RenderSink,
 };
-use kithara_platform::{CancelToken, sync::Arc, time::Duration};
+use kithara_platform::{CancelToken, maybe_send::MaybeSend, sync::Arc, time::Duration};
 use kithara_play::PlayError;
+use kithara_render::rt::DeckMixerConfig;
 use kithara_signal::AudioSpec;
-use kithara_sync::GroupState;
 use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
-use super::{Host, HostConfig};
+use super::{Host, HostConfig, platform::Platform};
 use crate::{
-    HostSettings, PlayerMember,
+    HostCore, HostOwner, HostSettings,
     rt::SessionOutput,
     session::{
-        HostDispatcher, RootView,
-        offline::{OfflineSessionClient, OfflineTaskConfig},
+        HostDispatcher, HostRoot, RootView,
+        offline::{OfflineSessionClient, OfflineTaskConfig, OfflineTaskHandle},
     },
 };
 
@@ -64,6 +64,9 @@ impl<S> HostConfig<S> {
         #[builder(default = consts::BLOCK_FRAMES)] max_block_frames: NonZeroU32,
         #[builder(default = consts::BLOCK_FRAMES)] declick_frames: NonZeroU32,
         #[builder(default = Duration::ZERO)] declared_latency: Duration,
+        #[builder(default = crate::consts::MAX_DECKS)] max_decks: NonZeroU16,
+        #[builder(default = crate::consts::DECK_CAPACITY)] deck_capacity: NonZeroUsize,
+        #[builder(default = DeckMixerConfig::default().slots())] max_deck_slots: NonZeroUsize,
         #[builder(default)] limiter: LimiterConfig,
         #[builder(default)] settings: HostSettings,
         #[builder(default = WorkerConfig::new())] worker: WorkerConfig,
@@ -75,6 +78,9 @@ impl<S> HostConfig<S> {
             max_block_frames,
             declick_frames,
             declared_latency,
+            max_decks,
+            deck_capacity,
+            max_deck_slots,
             limiter,
             settings,
             worker,
@@ -84,25 +90,36 @@ impl<S> HostConfig<S> {
     }
 }
 
-pub(super) struct OfflineRuntime<S> {
-    client: Arc<OfflineSessionClient<S>>,
+pub(super) struct OfflineRuntime<S, O: HostOwner<S>> {
+    client: Arc<OfflineSessionClient<O::Command>>,
     _dispatcher: kithara_worker::Dispatcher,
     max_block_frames: NonZeroU32,
-    _task: kithara_worker::TaskHandle,
+    _task: OfflineTaskHandle,
     _worker: Worker,
 }
 
-type StartedOfflineRuntime<S> = (Arc<dyn HostDispatcher<S>>, OfflineRuntime<S>);
+type StartedOfflineRuntime<S, O> = (
+    Arc<dyn HostDispatcher<<O as HostOwner<S>>::Command>>,
+    OfflineRuntime<S, O>,
+);
+/// An offline session started beside the platform that holds its decks.
+pub(super) type StartedOffline<S, O> = (
+    Arc<dyn HostDispatcher<<O as HostOwner<S>>::Command>>,
+    Platform<S, O>,
+    OfflineRuntime<S, O>,
+);
 
-impl<S> OfflineRuntime<S>
+impl<S, O: HostOwner<S>> OfflineRuntime<S, O>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     pub(super) fn new(
         config: HostConfig<S>,
-        root: GroupState<PlayerMember>,
+        root: HostRoot,
         root_view: RootView,
-    ) -> Result<StartedOfflineRuntime<S>, PlayError> {
+        layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
+    ) -> Result<StartedOfflineRuntime<S, O>, PlayError> {
+        let channel_config = config.channel_config();
         let HostConfig::Offline {
             pools,
             max_block_frames,
@@ -113,6 +130,7 @@ where
             worker,
             dispatcher,
             task,
+            ..
         } = config
         else {
             unreachable!("offline runtime requires offline Host config");
@@ -129,12 +147,14 @@ where
                 .declared_latency(declared_latency)
                 .output(SessionOutput::new(limiter))
                 .settings(settings)
+                .channel_config(channel_config)
                 .declick_frames(declick_frames)
                 .max_block_frames(max_block_frames)
                 .pools(pools)
                 .build(),
+            layer,
         )?;
-        let host_dispatcher: Arc<dyn HostDispatcher<S>> = client.clone();
+        let host_dispatcher: Arc<dyn HostDispatcher<O::Command>> = client.clone();
         Ok((
             host_dispatcher,
             Self {
@@ -147,10 +167,15 @@ where
         ))
     }
 
-    fn position(&self) -> Result<u64, OfflineRenderError> {
-        self.client.position().map_err(OfflineRenderError::backend)
+    delegate::delegate! {
+        to self.client {
+            #[expr($.map_err(OfflineRenderError::backend))]
+            fn position(&self) -> Result<u64, OfflineRenderError>;
+        }
     }
 
+    /// Renders `request` block by block, the Host's decks ticking ahead of
+    /// each block.
     fn render(
         &mut self,
         request: &OfflineRenderRequest,
@@ -233,7 +258,7 @@ where
     }
 }
 
-impl<S> OfflineRenderer for Host<S>
+impl<S, O: HostOwner<S>> OfflineRenderer for Host<S, O>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
@@ -243,20 +268,18 @@ where
         cancel: &CancelToken,
         sink: &mut dyn RenderSink,
     ) -> Result<OfflineRenderReport, OfflineRenderError> {
-        let rate = self
-            .output_sample_rate()
-            .map_err(OfflineRenderError::backend)?
-            .output();
+        let rate = self.output_sample_rate().output();
         let rate = NonZeroU32::new(rate).ok_or_else(|| {
             OfflineRenderError::backend(PlayError::Internal(
                 "offline session reported a zero output rate".into(),
             ))
         })?;
         let spec = AudioSpec::new(consts::CHANNELS, rate);
-        self.session
-            .offline_runtime_mut()
-            .ok_or(OfflineRenderError::SessionModeUnavailable)?
-            .render(request, spec, cancel, sink)
+        let (_platform, runtime) = self
+            ._session
+            .offline_mut()
+            .ok_or(OfflineRenderError::SessionModeUnavailable)?;
+        runtime.render(request, spec, cancel, sink)
     }
 }
 
@@ -429,6 +452,21 @@ mod tests {
             Err(PlayError::Late)
         ));
         assert_eq!(host.tempo(), tempo(120.0), "a late change changes nothing");
+    }
+
+    #[kithara::test(native)]
+    fn a_change_one_block_ahead_is_accepted_offline() {
+        let mut host = tempo_host();
+        render_frames(&mut host, 0..128);
+
+        host.configure(
+            HostSettingsChange::Tempo(tempo(128.0)),
+            When::At(SessionFrame::new(256)),
+        )
+        .expect("one block gives the offline owner enough delivery lead");
+        assert_eq!(host.tempo(), tempo(120.0));
+        render_frames(&mut host, 128..384);
+        assert_eq!(host.tempo(), tempo(128.0));
     }
 
     #[kithara::test(native)]

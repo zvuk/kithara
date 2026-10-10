@@ -9,6 +9,12 @@ use crate::{
     },
 };
 impl NativeInner {
+    pub(crate) fn notify_interruption(&self, kind: InterruptionKind) {
+        if let Err(error) = self.queue.notify_interruption(kind) {
+            tracing::warn!(%error, "platform interruption was not accepted");
+        }
+    }
+
     pub(crate) fn advance_to_next_item(&self) -> Result<(), FfiError> {
         self.queue
             .next(Transition::None)
@@ -70,7 +76,6 @@ impl NativeInner {
             #[call(position_seconds)]
             pub(crate) fn current_time(&self) -> f64;
             pub(crate) fn is_muted(&self) -> bool;
-            pub(crate) fn notify_interruption(&self, kind: InterruptionKind);
             pub(crate) fn pause(&self);
             pub(crate) fn play(&self);
             #[call(default_rate)]
@@ -80,10 +85,13 @@ impl NativeInner {
             pub(crate) fn repeat_mode(&self) -> FfiRepeatMode;
             #[expr($.map_err(FfiError::from))]
             pub(crate) fn reset_eq(&self) -> Result<(), FfiError>;
-            pub(crate) fn set_muted(&self, muted: bool);
+            #[expr($.map_err(FfiError::from))]
+            pub(crate) fn set_muted(&self, muted: bool) -> Result<(), FfiError>;
             #[call(set_default_rate)]
-            pub(crate) fn set_playing_rate(&self, rate: f32);
-            pub(crate) fn set_volume(&self, volume: f32);
+            #[expr($.map_err(FfiError::from))]
+            pub(crate) fn set_playing_rate(&self, rate: f32) -> Result<(), FfiError>;
+            #[expr($.map_err(FfiError::from))]
+            pub(crate) fn set_volume(&self, volume: f32) -> Result<(), FfiError>;
             pub(crate) fn volume(&self) -> f32;
         }
     }

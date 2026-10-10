@@ -95,7 +95,9 @@ pub fn scripted_decoder(
             Ok(next_chunk_queue
                 .lock()
                 .pop_front()
-                .map_or(DecoderChunkOutcome::Eof, DecoderChunkOutcome::Chunk))
+                .map_or(DecoderChunkOutcome::Eof, |chunk| {
+                    DecoderChunkOutcome::Chunk(Box::new(chunk))
+                }))
         },
         seek_results,
         duration,
@@ -149,13 +151,13 @@ fn build_infinite_decoder(
                 .get_with_len::<f32>(MOCK_CHUNK_SIZE)
                 .expect("mock chunk fits the test pool budget");
             samples.fill(SAMPLE_VALUE);
-            Ok(DecoderChunkOutcome::Chunk(AudioChunk::new(
+            Ok(DecoderChunkOutcome::Chunk(Box::new(AudioChunk::new(
                 AudioChunkInfo {
                     spec,
                     ..Default::default()
                 },
                 samples,
-            )))
+            ))))
         },
         Vec::new(),
         Some(Duration::from_secs(MOCK_DURATION_SECS)),

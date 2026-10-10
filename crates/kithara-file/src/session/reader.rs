@@ -1,5 +1,3 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::sync::Arc;
 use kithara_stream::{ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
@@ -8,47 +6,20 @@ use crate::{FileEvent, coord::FileCoord};
 
 pub(crate) struct FileReaderEventSink {
     coord: Arc<FileCoord>,
-    seek_epoch_handle: Arc<AtomicU64>,
     bus: DeferredBus<FileEvent>,
-    initial_seek_published: bool,
     /// See `HlsReaderEventSink::initial_cursor` — same recreate-after-
     /// seek-failure scenario.
-    initial_cursor: u64,
     last_cursor: u64,
 }
 
 impl FileReaderEventSink {
-    pub(crate) fn new(
-        bus: EventBus,
-        coord: Arc<FileCoord>,
-        seek_epoch_handle: Arc<AtomicU64>,
-        event_capacity: usize,
-    ) -> Self {
+    pub(crate) fn new(bus: EventBus, coord: Arc<FileCoord>, event_capacity: usize) -> Self {
         let last_cursor = coord.position();
         Self {
             bus: DeferredBus::new(bus, event_capacity),
             coord,
             last_cursor,
-            seek_epoch_handle,
-            initial_cursor: last_cursor,
-            initial_seek_published: false,
         }
-    }
-
-    fn publish_initial_seek(&mut self, cursor: u64) {
-        if self.initial_seek_published {
-            return;
-        }
-        self.initial_seek_published = true;
-        let seek_epoch = self.seek_epoch_handle.load(Ordering::Acquire);
-        if seek_epoch == 0 {
-            return;
-        }
-        self.bus.enqueue(FileEvent::ReaderSeek {
-            seek_epoch,
-            from_offset: self.initial_cursor,
-            to_offset: cursor,
-        });
     }
 }
 
@@ -62,7 +33,6 @@ impl ReaderEventSink for FileReaderEventSink {
             return;
         }
         let cursor = self.coord.position();
-        self.publish_initial_seek(cursor);
         self.last_cursor = cursor;
         self.bus.enqueue(FileEvent::ReadProgress {
             position: cursor,
@@ -71,7 +41,6 @@ impl ReaderEventSink for FileReaderEventSink {
     }
 
     fn on_seek(&mut self, signal: ReaderSeekSignal) {
-        self.initial_seek_published = true;
         let ReaderSeekSignal::Landed { landed_byte, .. } = signal else {
             return;
         };
@@ -80,29 +49,23 @@ impl ReaderEventSink for FileReaderEventSink {
         };
         let from = self.last_cursor;
         self.last_cursor = to;
-        let seek_epoch = self.seek_epoch_handle.load(Ordering::Acquire);
         self.bus.enqueue(FileEvent::ReaderSeek {
-            seek_epoch,
             from_offset: from,
             to_offset: to,
         });
     }
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_events::BusEvent;
-    use kithara_stream::{PlayheadState, SeekState};
+    use kithara_stream::PlayheadState;
     use kithara_test_utils::kithara;
 
     use super::*;
 
     fn sink(bus: EventBus, event_capacity: usize) -> FileReaderEventSink {
-        let coord = Arc::new(FileCoord::new(
-            Arc::new(PlayheadState::new()),
-            Arc::new(SeekState::new()),
-        ));
-        FileReaderEventSink::new(bus, coord, Arc::new(AtomicU64::new(0)), event_capacity)
+        let coord = Arc::new(FileCoord::new(Arc::new(PlayheadState::new())));
+        FileReaderEventSink::new(bus, coord, event_capacity)
     }
 
     fn burst(sink: &mut FileReaderEventSink, chunks: usize) {

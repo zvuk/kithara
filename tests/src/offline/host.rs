@@ -6,21 +6,25 @@ use std::{num::NonZeroU32, ops::Deref};
 use kithara::play::{SessionError, TransportRevision};
 use kithara::{
     bufpool::{HasPool, PoolRegion},
-    host::{Host, HostConfig, HostLevel, HostOwned, HostSettingsControl, Tap},
+    host::{DeckControl, Host, HostConfig, HostOwned, HostSettingsControl, Tap},
     output::{OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
         maybe_send::MaybeSend,
         sync::{
-            Arc,
+            Arc, Mutex,
             atomic::{AtomicU64, Ordering},
         },
         time::Duration,
     },
-    play::{MixTapWriter, PlayError, player::PlayerControlSource},
+    play::{DeckPass, HostedDeck, MixTapWriter, Outbox, PlayError, PlayWorker, TrackReceipt},
     queue::Queue,
     signal::AudioSpec,
     warp::{BeatGrid, BeatGridSnapshot},
+};
+use kithara_render::{
+    bridge::{DeckSnapshot, RtMetricsSnapshot},
+    rt::DeckMixerConfig,
 };
 use ringbuf::{
     HeapCons, HeapRb,
@@ -28,6 +32,56 @@ use ringbuf::{
 };
 
 use super::owner::HostOwner;
+
+pub struct ObservedDeck<P: DeckControl> {
+    pub(super) inner: P,
+    pub(super) snapshot: Arc<Mutex<DeckSnapshot>>,
+}
+
+impl<P: DeckControl> DeckControl for ObservedDeck<P> {
+    type Control = P::Control;
+
+    fn control(&self) -> Self::Control {
+        self.inner.control()
+    }
+}
+
+impl<P, S> HostedDeck<S> for ObservedDeck<P>
+where
+    P: DeckControl + HostedDeck<S>,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+        *self.snapshot.lock() = pass.deck.clone();
+        self.inner.drain(pass, out);
+    }
+
+    fn settle(
+        &mut self,
+        receipt: TrackReceipt<'_, S>,
+        pass: DeckPass<'_>,
+        out: &mut Outbox<'_, S>,
+    ) {
+        *self.snapshot.lock() = pass.deck.clone();
+        self.inner.settle(receipt, pass, out);
+    }
+
+    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+        *self.snapshot.lock() = pass.deck.clone();
+        self.inner.tick(pass, out);
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn worker(&self) -> Option<&PlayWorker<S>>;
+            fn mixer_config(&self) -> DeckMixerConfig;
+            fn close(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError>;
+            fn hold(&mut self, waker: std::task::Waker);
+            fn release(&mut self);
+        }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 use crate::usdt_trace;
 
@@ -58,13 +112,19 @@ pub(super) const fn offline_pools<S>(config: &HostConfig<S>) -> &PoolRegion<S> {
     }
 }
 
-struct HostState<S> {
+struct HostState<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     host: Host<S>,
     position: Arc<AtomicU64>,
 }
 
 /// Test owner for the product offline Host and its monotonic render cursor.
-pub struct OfflineHostHarness<S> {
+pub struct OfflineHostHarness<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     off: HostOwner<HostState<S>>,
     position: Arc<AtomicU64>,
     max_block_frames: NonZeroU32,
@@ -73,17 +133,19 @@ pub struct OfflineHostHarness<S> {
 /// Product Host plus the typed control for one resident test facade.
 pub struct OfflineResident<P, S>
 where
-    P: PlayerControlSource<Schema = S>,
+    P: DeckControl,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     host: OfflineHostHarness<S>,
-    member: HostOwned<P>,
+    member: HostOwned<ObservedDeck<P>>,
+    snapshot: Arc<Mutex<DeckSnapshot>>,
 }
 
 impl<P, S> OfflineResident<P, S>
 where
-    P: PlayerControlSource<Schema = S> + MaybeSend + 'static,
+    P: DeckControl + HostedDeck<S> + MaybeSend + 'static,
     P::Control: MaybeSend,
-    S: HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     pub async fn new(config: HostConfig<S>, player: P) -> Result<Self, PlayError> {
         Self::open(OfflineHostHarness::new(config).await?, player).await
@@ -101,15 +163,30 @@ where
     }
 
     async fn open(host: OfflineHostHarness<S>, player: P) -> Result<Self, PlayError> {
-        let member = host.insert(player).await?;
-        Ok(Self { host, member })
+        let (member, snapshot) = host.insert_observed(player).await?;
+        Ok(Self {
+            host,
+            member,
+            snapshot,
+        })
     }
 
     pub async fn render(&self, frames: usize) -> Vec<f32> {
         self.host.render(frames).await
     }
 
-    pub fn control(&self) -> P::Control {
+    pub fn deck_snapshot(&self) -> DeckSnapshot {
+        self.snapshot.lock().clone()
+    }
+
+    pub fn metrics(&self) -> RtMetricsSnapshot {
+        self.snapshot.lock().metrics
+    }
+
+    pub fn control(&self) -> P::Control
+    where
+        P::Control: Clone,
+    {
         self.member.control().clone()
     }
 
@@ -132,17 +209,23 @@ where
 
     /// Drops the resident before waiting for Host session teardown.
     pub async fn close(self) {
-        let Self { host, member } = self;
+        let Self {
+            host,
+            member,
+            snapshot,
+        } = self;
+        drop(snapshot);
         drop(member);
         host.close().await;
     }
 }
 
 /// Reads the control in place. A command goes through [`OfflineResident::run`]:
-/// it can wait on the control's admission, which an async test body must not.
+/// it waits for the control's owner, which an async test body must not.
 impl<P, S> Deref for OfflineResident<P, S>
 where
-    P: PlayerControlSource<Schema = S>,
+    P: DeckControl,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     type Target = P::Control;
 
@@ -155,7 +238,7 @@ pub type OfflineQueue<S> = OfflineResident<Queue<S>, S>;
 
 impl<S> OfflineHostHarness<S>
 where
-    S: HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     /// Build the same offline Host used by product rendering. The playhead
     /// then moves only where the test renders.
@@ -248,16 +331,34 @@ where
     /// Transfer one configured player facade into the product Host.
     pub async fn insert<P>(&self, player: P) -> Result<HostOwned<P>, PlayError>
     where
-        P: PlayerControlSource<Schema = S> + MaybeSend + 'static,
+        P: DeckControl + HostedDeck<S> + MaybeSend + 'static,
         P::Control: MaybeSend,
     {
         self.off.call(move |state| state.host.insert(player)).await
     }
 
+    pub async fn insert_observed<P>(
+        &self,
+        player: P,
+    ) -> Result<(HostOwned<ObservedDeck<P>>, Arc<Mutex<DeckSnapshot>>), PlayError>
+    where
+        P: DeckControl + HostedDeck<S> + MaybeSend + 'static,
+        P::Control: MaybeSend,
+    {
+        let snapshot = Arc::new(Mutex::new(DeckSnapshot::default()));
+        let member = self
+            .insert(ObservedDeck {
+                inner: player,
+                snapshot: snapshot.clone(),
+            })
+            .await?;
+        Ok((member, snapshot))
+    }
+
     pub async fn insert_control<P>(&self, player: P) -> Result<P::Control, PlayError>
     where
-        P: PlayerControlSource<Schema = S> + MaybeSend + 'static,
-        P::Control: MaybeSend,
+        P: DeckControl + HostedDeck<S> + MaybeSend + 'static,
+        P::Control: Clone + MaybeSend,
     {
         self.insert(player)
             .await
@@ -338,16 +439,6 @@ where
             .await
     }
 
-    pub async fn apply_mix<I>(&self, levels: I) -> Result<(), PlayError>
-    where
-        I: IntoIterator<Item = HostLevel>,
-    {
-        let levels: Vec<HostLevel> = levels.into_iter().collect();
-        self.off
-            .call(move |state| state.host.apply_mix(levels))
-            .await
-    }
-
     /// The callback transport revision after a renderer commit was recorded.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
@@ -389,7 +480,7 @@ where
 /// own cursor and this one never disagree and a request never needs re-anchoring.
 fn render_forward_on<S>(state: &mut HostState<S>, block: u64, frames: u64) -> u64
 where
-    S: HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     let spec = output_spec(&state.host);
     let cancel = CancelScope::new(None);
@@ -488,12 +579,9 @@ pub fn assert_playhead_tracks_renderer(gain: f64, frames: u64, spec: AudioSpec, 
 /// The output format the session renders at now; a rate change moves it.
 fn output_spec<S>(host: &Host<S>) -> AudioSpec
 where
-    S: HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    let rate = host
-        .output_sample_rate()
-        .unwrap_or_else(|error| panic!("query product offline Host output rate: {error}"))
-        .output();
+    let rate = host.output_sample_rate().output();
     AudioSpec::new(
         CHANNELS,
         NonZeroU32::new(rate).expect("product offline Host renders at a non-zero rate"),

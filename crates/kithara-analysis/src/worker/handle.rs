@@ -9,7 +9,7 @@ use kithara_platform::{
 };
 use kithara_resampler::ResamplerBackend;
 use kithara_worker::{
-    Dispatcher, DispatcherConfig, OwnedPoolConfig, TaskConfig, TaskError, TaskHandle, Worker,
+    Dispatcher, DispatcherConfig, OwnedPoolConfig, TaskConfig, TaskError, TaskHandle, Wake, Worker,
     WorkerConfig,
 };
 use tracing::warn;
@@ -203,6 +203,12 @@ impl AnalysisWorker {
     #[must_use]
     pub const fn is_active(&self) -> bool {
         self.active
+    }
+
+    /// Wakes the dispatcher that pulls each analysis pass's reader.
+    #[must_use]
+    pub fn wake_handle(&self) -> Wake {
+        self.dispatcher.wake_handle()
     }
 
     /// Open a pass and its bounded playback producer without waiting for the

@@ -12,7 +12,7 @@ enum StageState {
 }
 
 pub enum EffectDrainStep {
-    Produced(AudioChunk),
+    Produced(Box<AudioChunk>),
     Progress,
     Exhausted,
 }
@@ -68,8 +68,10 @@ fn pull(
         match pull(effects, exhausted, stage - 1) {
             EffectDrainStep::Produced(chunk) => {
                 return effects[stage]
-                    .process(chunk)
-                    .map_or(EffectDrainStep::Progress, EffectDrainStep::Produced);
+                    .process(*chunk)
+                    .map_or(EffectDrainStep::Progress, |chunk| {
+                        EffectDrainStep::Produced(Box::new(chunk))
+                    });
             }
             EffectDrainStep::Progress => return EffectDrainStep::Progress,
             EffectDrainStep::Exhausted => exhausted[stage] = StageState::Flushing as u8,
@@ -91,6 +93,6 @@ fn flush_stage(
             exhausted[stage] = StageState::Exhausted as u8;
             EffectDrainStep::Exhausted
         },
-        EffectDrainStep::Produced,
+        |chunk| EffectDrainStep::Produced(Box::new(chunk)),
     )
 }

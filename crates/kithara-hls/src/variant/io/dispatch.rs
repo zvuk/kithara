@@ -206,7 +206,6 @@ where
     }
 
     #[kithara::probe(
-        seek_epoch = ctx.seek_epoch,
         segment_index = u64::from(seg_idx),
         variant = self.variant as u64
     )]
@@ -302,7 +301,6 @@ where
     let window = ctx.look_ahead_segments?;
     Some(u32::try_from(window.max(1)).unwrap_or(u32::MAX))
 }
-
 #[cfg(test)]
 mod tests {
     use std::{io, path::PathBuf};

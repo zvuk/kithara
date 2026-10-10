@@ -250,9 +250,8 @@ mod tests {
         );
         let physical = ElasticRequest::new(32, 16).expect("physical span");
         assert_eq!(physical.output_source_frames(), physical.source_frames());
-        let request = physical
-            .with_output_source_frames(16)
-            .expect("audible unity span");
+        let request =
+            crate::elastic::with_output_source_frames(physical, 16).expect("audible unity span");
         assert_eq!(capabilities.validate(request, 64, 32), Ok(()));
         assert_eq!(
             capabilities.validate(request, 32, 32),
@@ -261,8 +260,7 @@ mod tests {
                 expected: 64,
             })
         );
-        let invalid = physical
-            .with_output_source_frames(128)
+        let invalid = crate::elastic::with_output_source_frames(physical, 128)
             .expect("non-empty audible span");
         assert_eq!(
             capabilities.validate(invalid, 64, 32),
@@ -272,7 +270,7 @@ mod tests {
             })
         );
         assert_eq!(
-            physical.with_output_source_frames(0),
+            crate::elastic::with_output_source_frames(physical, 0),
             Err(ElasticError::EmptySource)
         );
         let immediate = ElasticCapabilities::new(
@@ -317,9 +315,8 @@ mod tests {
             capabilities.validate_prime(ordinary, 16, 16, 64, 32),
             Ok(())
         );
-        let distinct = ordinary
-            .with_output_source_frames(16)
-            .expect("distinct audible span");
+        let distinct =
+            crate::elastic::with_output_source_frames(ordinary, 16).expect("distinct audible span");
         assert_eq!(
             capabilities.validate_prime(distinct, 16, 16, 64, 32),
             Err(ElasticError::EnginePreparation(

@@ -1,36 +1,38 @@
 use kithara_bufpool::HasPool;
+use kithara_command::Seq;
 use kithara_events::TrackId;
-use kithara_platform::sync::atomic::{AtomicU64, Ordering};
-pub use kithara_play::player::PlaybackView;
-use kithara_play::{CrossfadeSettings, ResourceSrc, SelectionPlayback};
+use kithara_play::{Bound, CrossfadeSettings, ResourceSrc};
 
-use crate::track::TrackSource;
+use crate::{event::AdvanceReason, track::TrackSource};
 
-/// Transition style for a track switch.
-///
-/// Mirrors the Apple-idiomatic pattern of a namespace-style type with
-/// variants describing "what" — not "how" — so the same method
-/// signature handles both manual and auto-advance cases.
-///
-/// - [`Transition::None`] — immediate cut (0 seconds). Matches
-///   `AVQueuePlayer`'s user-initiated selection idiom.
-/// - [`Transition::Crossfade`] — use the player's configured
-///   [`PlayerImpl::crossfade_duration`](kithara_play::PlayerImpl::crossfade_duration).
-/// - [`Transition::CrossfadeWith`] — explicit override in seconds.
+/// One coherent view of the current track's published playback state.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct PlaybackView {
+    /// Seconds playable without further network access.
+    pub buffered: Option<f64>,
+    /// Total media duration in seconds; `None` while unknown.
+    pub duration: Option<f64>,
+    /// Playback position in seconds; `None` until a stable value exists.
+    pub position: Option<f64>,
+    /// Whether playback is active.
+    pub playing: bool,
+}
+
+/// The profile a caller requests for a track switch.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Transition {
     /// No crossfade; immediate cut.
     None,
-    /// Use the player's configured crossfade duration.
+    /// Use the queue's configured crossfade.
     Crossfade,
-    /// Use an explicit crossfade duration (seconds).
+    /// Use an explicit crossfade profile.
     CrossfadeWith { settings: CrossfadeSettings },
 }
 
 impl Transition {
-    /// Resolve the transition to an actual crossfade duration in
-    /// seconds using `default` for [`Transition::Crossfade`].
+    /// Resolves the requested profile against the queue's default.
     #[must_use]
     pub const fn settings(self, default: CrossfadeSettings) -> CrossfadeSettings {
         match self {
@@ -44,178 +46,24 @@ impl Transition {
     }
 }
 
-/// A pending-select entry: a track id waiting to be applied plus the
-/// [`Transition`] the caller asked for. Stored until loading finishes.
+/// The transition the queue carries out, and why.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct PendingSelect {
-    pub(super) reason: crate::AdvanceReason,
+pub(super) struct Target {
+    pub(super) to: TrackId,
+    pub(super) bound: Bound,
     pub(super) settings: CrossfadeSettings,
-    pub(super) playback: SelectionPlayback,
-    pub(super) id: TrackId,
-}
-
-/// Crossfade-arm coordination state. Replaces the `u64::MAX` sentinel
-/// previously stored in `crossfade_armed_for`; "no track armed" is the
-/// explicit [`CrossfadeArm::Disarmed`] variant.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CrossfadeArm {
-    Disarmed,
-    Armed { for_track: TrackId },
-}
-
-impl CrossfadeArm {
-    pub(super) const fn armed(for_track: TrackId) -> Self {
-        Self::Armed { for_track }
-    }
-
-    pub(super) fn is_armed_for(self, id: TrackId) -> bool {
-        matches!(self, Self::Armed { for_track } if for_track == id)
-    }
-}
-
-/// Pending-select phase. Replaces `Option<PendingSelect>` where `None`
-/// conflated "idle" with "absent"; [`SelectPhase::Idle`] makes the
-/// no-selection state explicit.
-#[derive(Clone, Copy, Debug)]
-pub(super) enum SelectPhase {
-    Idle,
-    Pending(PendingSelect),
-}
-
-/// Cached monotonic playback position. Replaces the `f64::NAN` sentinel
-/// stored in `cached_position`; "no value yet" is the explicit
-/// [`CachedPosition::Unknown`] variant.
-#[derive(Clone, Copy, Debug)]
-pub(super) enum CachedPosition {
-    Unknown,
-    Known { seconds: f64 },
-}
-
-impl CachedPosition {
-    /// Build a [`CachedPosition::Known`], canonicalising a `NaN` input to
-    /// [`CachedPosition::Unknown`] so the type never carries a `NaN`.
-    pub(super) const fn known(seconds: f64) -> Self {
-        if seconds.is_nan() {
-            Self::Unknown
-        } else {
-            Self::Known { seconds }
-        }
-    }
-}
-
-impl From<CachedPosition> for Option<f64> {
-    fn from(pos: CachedPosition) -> Self {
-        match pos {
-            CachedPosition::Known { seconds } => Some(seconds),
-            CachedPosition::Unknown => None,
-        }
-    }
-}
-
-/// Lock-free [`CrossfadeArm`] cell for the `tick` hot path. The
-/// `u64::MAX` bit pattern encodes [`CrossfadeArm::Disarmed`]; real ids
-/// are allocated monotonically from `0`, so the top of the range is
-/// free as the sentinel. Orderings match the original raw-`AtomicU64`
-/// accessors: `Acquire` load, `Release` store, `AcqRel` swap /
-/// compare-exchange.
-pub(super) struct AtomicTrackId(AtomicU64);
-
-impl AtomicTrackId {
-    const NONE_BITS: u64 = u64::MAX;
-
-    /// CAS [`CrossfadeArm::Disarmed`] → `Armed(track)`.
-    pub(super) fn arm_if_disarmed(&self, track: TrackId) -> bool {
-        self.0
-            .compare_exchange(
-                Self::NONE_BITS,
-                track.as_u64(),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
-    }
-
-    const fn decode(bits: u64) -> CrossfadeArm {
-        if bits == Self::NONE_BITS {
-            CrossfadeArm::Disarmed
-        } else {
-            CrossfadeArm::Armed {
-                for_track: TrackId(bits),
-            }
-        }
-    }
-
-    /// CAS `Armed(track)` → [`CrossfadeArm::Disarmed`]. Returns `true` when
-    /// `track` was the armed id.
-    pub(super) fn disarm_if_matches(&self, track: TrackId) -> bool {
-        self.0
-            .compare_exchange(
-                track.as_u64(),
-                Self::NONE_BITS,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
-    }
-
-    pub(super) fn disarmed() -> Self {
-        Self(AtomicU64::new(Self::NONE_BITS))
-    }
-
-    const fn encode(arm: CrossfadeArm) -> u64 {
-        match arm {
-            CrossfadeArm::Disarmed => Self::NONE_BITS,
-            CrossfadeArm::Armed { for_track } => for_track.as_u64(),
-        }
-    }
-
-    pub(super) fn load(&self) -> CrossfadeArm {
-        Self::decode(self.0.load(Ordering::Acquire))
-    }
-
-    pub(super) fn store(&self, arm: CrossfadeArm) {
-        self.0.store(Self::encode(arm), Ordering::Release);
-    }
-
-    pub(super) fn take_if_matches(&self, track: TrackId) -> bool {
-        self.0
-            .compare_exchange(
-                track.as_u64(),
-                Self::NONE_BITS,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
-    }
-}
-
-/// Lock-free [`CachedPosition`] cell for the `tick` hot path. The
-/// `f64::NAN` bit pattern encodes [`CachedPosition::Unknown`]; any `NaN`
-/// observed on load (including a `NaN` written through `store`)
-/// canonicalises back to `Unknown`.
-pub(super) struct AtomicCachedPosition(AtomicU64);
-
-impl AtomicCachedPosition {
-    pub(super) fn load(&self) -> CachedPosition {
-        let seconds = f64::from_bits(self.0.load(Ordering::Acquire));
-        if seconds.is_nan() {
-            CachedPosition::Unknown
-        } else {
-            CachedPosition::Known { seconds }
-        }
-    }
-
-    pub(super) fn store(&self, pos: CachedPosition) {
-        let bits = match pos {
-            CachedPosition::Unknown => f64::NAN.to_bits(),
-            CachedPosition::Known { seconds } => seconds.to_bits(),
-        };
-        self.0.store(bits, Ordering::Release);
-    }
-
-    pub(super) fn unknown() -> Self {
-        Self(AtomicU64::new(f64::NAN.to_bits()))
-    }
+    pub(super) transition: Transition,
+    pub(super) reason: AdvanceReason,
+    pub(super) playing: bool,
+    /// Scheduled ahead of the current track's end rather than pressed: the
+    /// navigation cursor moves once it applies, and it gives way when nothing
+    /// sounds by the time it enters.
+    pub(super) auto: bool,
+    /// The withdrawn transition whose stale receipt permits recomputation.
+    pub(super) stale: Option<Seq>,
+    pub(super) retry: Option<Seq>,
+    pub(super) repeat: Option<Seq>,
+    pub(super) chained: bool,
 }
 
 /// Where a new track should land in the queue's internal `Vec`.
@@ -228,40 +76,9 @@ pub(super) enum Placement {
     At(usize),
 }
 
-/// Current playback position and total duration in seconds, bundled
-/// so the `should_arm_crossfade` signature does not put 3 consecutive
-/// raw float parameters at the API boundary.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct PlaybackTime {
-    pub(crate) dur: f64,
-    pub(crate) pos: f64,
-}
-
-/// Decide whether `Queue::tick` should arm the pre-end advance.
-///
-/// Returns `true` when:
-/// - `crossfade > 0` (no pre-arm without crossfade — natural-EOF advance is
-///   handled via [`PlayerEvent::ItemDidPlayToEnd`] instead), AND
-/// - `time.pos` and `time.dur` are positive (track has meaningful position + duration), AND
-/// - remaining playtime is below `crossfade` seconds, AND
-/// - we haven't already armed for this track this play-through.
-pub(crate) fn should_arm_crossfade(
-    time: PlaybackTime,
-    crossfade: f32,
-    current_id: TrackId,
-    armed_for: CrossfadeArm,
-) -> bool {
-    let PlaybackTime { pos, dur } = time;
-    crossfade > 0.0
-        && dur > 0.0
-        && pos > 0.0
-        && dur - pos <= f64::from(crossfade)
-        && !armed_for.is_armed_for(current_id)
-}
-
 pub(super) fn extract_track_name<S>(source: &TrackSource<S>) -> String
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     let raw = match source {
         TrackSource::Uri(s) => s.as_str(),
@@ -289,7 +106,6 @@ fn name_from_raw(s: &str) -> String {
         .unwrap_or("Unknown")
         .to_string()
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
@@ -297,96 +113,30 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn atomic_track_id_disarmed_loads_disarmed() {
-        let cell = AtomicTrackId::disarmed();
-        assert_eq!(cell.load(), CrossfadeArm::Disarmed);
-    }
-
-    #[kithara::test]
-    fn atomic_track_id_take_if_matches_only_disarms_matching_track() {
-        let cell = AtomicTrackId::disarmed();
-        cell.store(CrossfadeArm::armed(TrackId(7)));
-        assert_eq!(
-            cell.load(),
-            CrossfadeArm::Armed {
-                for_track: TrackId(7),
-            }
-        );
-        assert!(!cell.take_if_matches(TrackId(8)));
-        assert_eq!(
-            cell.load(),
-            CrossfadeArm::Armed {
-                for_track: TrackId(7),
-            }
-        );
-        assert!(cell.take_if_matches(TrackId(7)));
-        assert_eq!(cell.load(), CrossfadeArm::Disarmed);
-    }
-
-    #[kithara::test]
-    fn atomic_track_id_cas_arm_then_disarm() {
-        let cell = AtomicTrackId::disarmed();
-        cell.arm_if_disarmed(TrackId(3));
-        cell.arm_if_disarmed(TrackId(4));
-        assert_eq!(
-            cell.load(),
-            CrossfadeArm::Armed {
-                for_track: TrackId(3),
-            },
-            "a second arm must not replace the armed track"
-        );
-        assert!(!cell.disarm_if_matches(TrackId(4)));
-        assert!(cell.disarm_if_matches(TrackId(3)));
-        assert_eq!(cell.load(), CrossfadeArm::Disarmed);
-    }
-
-    #[kithara::test]
-    fn atomic_cached_position_unknown_loads_none() {
-        let cell = AtomicCachedPosition::unknown();
-        assert_eq!(Option::<f64>::from(cell.load()), None);
-    }
-
-    #[kithara::test]
-    fn atomic_cached_position_round_trip_zero() {
-        let cell = AtomicCachedPosition::unknown();
-        cell.store(CachedPosition::known(0.0));
-        assert_eq!(Option::<f64>::from(cell.load()), Some(0.0));
-    }
-
-    #[kithara::test]
     fn cached_position_known_nan_canonicalises_to_unknown() {
-        assert!(matches!(
-            CachedPosition::known(f64::NAN),
-            CachedPosition::Unknown
-        ));
+        assert!(kithara_play::Position::try_from_secs_f64(f64::NAN).is_err());
     }
 
     #[kithara::test]
-    fn crossfade_arm_is_armed_for_matches_track() {
-        let arm = CrossfadeArm::armed(TrackId(2));
-        assert!(arm.is_armed_for(TrackId(2)));
-        assert!(!arm.is_armed_for(TrackId(3)));
-    }
+    fn a_target_carries_its_transition_and_reason() {
+        let bound = Bound::AtOrAfter(kithara_signal::SessionFrame::new(64));
+        let target = Target {
+            playing: true,
+            to: TrackId(5),
+            bound,
+            settings: CrossfadeSettings::default(),
+            transition: Transition::Crossfade,
+            reason: AdvanceReason::UserSelect,
+            auto: false,
+            stale: None,
+            retry: None,
+            repeat: None,
+            chained: false,
+        };
 
-    #[kithara::test]
-    fn select_phase_pending_carries_captured_policy() {
-        let phase = SelectPhase::Pending(PendingSelect {
-            id: TrackId(5),
-            settings: CrossfadeSettings {
-                duration: 0.0,
-                ..CrossfadeSettings::default()
-            },
-            playback: SelectionPlayback::Play,
-            reason: crate::AdvanceReason::UserSelect,
-        });
-        match phase {
-            SelectPhase::Pending(p) => {
-                assert_eq!(p.id, TrackId(5));
-                assert_eq!(p.settings.duration, 0.0);
-                assert_eq!(p.playback, SelectionPlayback::Play);
-                assert_eq!(p.reason, crate::AdvanceReason::UserSelect);
-            }
-            SelectPhase::Idle => panic!("expected Pending"),
-        }
+        assert_eq!(target.to, TrackId(5));
+        assert_eq!(target.bound, bound);
+        assert_eq!(target.reason, AdvanceReason::UserSelect);
+        assert!(!target.auto);
     }
 }

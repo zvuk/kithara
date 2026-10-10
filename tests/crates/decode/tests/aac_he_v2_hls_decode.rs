@@ -50,16 +50,21 @@ async fn aac_he_v2_hls_produces_pcm(
         .build();
     // Park on ring underrun instead of spinning on Pending, so the read
     // loop needs no wall-clock iteration cap.
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .block_on_underrun(true)
-        .build();
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
 
-    let mut audio = worker.load(config).await.expect("audio creation");
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio creation");
 
     let pcm = spawn_blocking(move || {
         let target_samples = SAMPLE_RATE as usize * CHANNELS as usize;

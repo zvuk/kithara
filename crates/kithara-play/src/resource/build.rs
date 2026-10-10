@@ -1,8 +1,10 @@
-use kithara_audio::{AudioConfig, AudioObserver, ConsumerWakeMode, ResamplerBackend};
+use kithara_audio::{AudioConfig, AudioObserver, ResamplerBackend};
 use kithara_bufpool::HasPool;
 use kithara_decode::DecodeError;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
+use kithara_render::TrackConfig;
+use kithara_stream::StreamType;
 use url::Url;
 
 use super::{ResourceConfig, ResourceSrc};
@@ -64,8 +66,6 @@ where
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(extension)
             .maybe_observer(observer)
-            .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
-            .block_on_underrun(self.block_on_underrun)
             .maybe_host_sample_rate(self.host_sample_rate)
             .decoder(self.decoder)
             .build();
@@ -105,13 +105,25 @@ where
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint)
             .maybe_observer(observer)
-            .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
-            .block_on_underrun(self.block_on_underrun)
             .maybe_host_sample_rate(self.host_sample_rate)
             .decoder(self.decoder)
             .build();
         audio_config.apply(self.audio.clone());
         Ok(audio_config)
+    }
+
+    /// Transfers playback geometry and effects ownership to one render lane.
+    pub(crate) fn build_track_config<T>(&self, audio: AudioConfig<T, B>) -> TrackConfig<T, B>
+    where
+        T: StreamType,
+    {
+        TrackConfig::for_audio(audio)
+            .maybe_preload_chunks(self.preload_chunks)
+            .maybe_audio_buffer_chunks(self.audio_buffer_chunks)
+            .block_on_underrun(self.block_on_underrun)
+            .maybe_engine_load(self.engine_load.clone())
+            .warp(self.warp.clone())
+            .build()
     }
 }
 
@@ -120,7 +132,6 @@ mod tests {
     use std::{io::Read, num::NonZeroUsize};
 
     use kithara_assets::{AcquisitionResult, AssetResource, AssetStore, StorageBackend, WriteSide};
-    use kithara_audio::AudioConfigPatch;
     use kithara_config::Config as _;
     use kithara_test_utils::kithara;
 
@@ -271,23 +282,19 @@ mod tests {
         assert_eq!(read, bytes);
     }
 
-    fn preload_chunks(count: usize) -> AudioConfigPatch {
-        let mut patch = AudioConfigPatch::default();
-        patch.preload_chunks = Some(NonZeroUsize::new(count).expect("a preload count above zero"));
-        patch
-    }
-
     /// `preload_chunks` is both a document key and read in production, so the
     /// value a document names has to survive the whole way to the built HLS
     /// pipeline.
     #[kithara::test]
     fn the_document_preload_count_reaches_the_built_hls_config() {
         let mut config = config("https://example.com/live.m3u8");
-        config.audio = preload_chunks(9);
+        config.preload_chunks = NonZeroUsize::new(9);
 
-        let built = config
+        let audio = config
+            .clone()
             .build_hls_config(&worker(), None)
             .expect("valid HLS config");
+        let built = config.build_track_config(audio);
 
         assert_eq!(built.preload_chunks().get(), 9);
     }
@@ -296,9 +303,10 @@ mod tests {
     #[kithara::test]
     fn the_document_preload_count_reaches_the_built_file_config() {
         let mut config = config("https://example.com/song.mp3");
-        config.audio = preload_chunks(9);
+        config.preload_chunks = NonZeroUsize::new(9);
 
-        let built = config.build_file_config(&worker(), None);
+        let audio = config.clone().build_file_config(&worker(), None);
+        let built = config.build_track_config(audio);
 
         assert_eq!(built.preload_chunks().get(), 9);
     }
@@ -310,13 +318,15 @@ mod tests {
     #[kithara::test]
     fn an_audio_knob_the_resource_never_declared_reaches_the_built_config() {
         let mut config = config("https://example.com/live.m3u8");
-        config.audio.audio_buffer_chunks = Some(24);
+        config.audio_buffer_chunks = NonZeroUsize::new(24);
 
-        let built = config
+        let audio = config
+            .clone()
             .build_hls_config(&worker(), None)
             .expect("valid HLS config");
+        let built = config.build_track_config(audio);
 
-        assert_eq!(built.audio_buffer_chunks(), 24);
+        assert_eq!(built.audio_buffer_chunks().get(), 24);
     }
 
     /// `block_on_underrun` is the one audio knob no document can name, so the
@@ -329,11 +339,13 @@ mod tests {
         let mut config = config("https://example.com/live.m3u8");
         config.block_on_underrun = true;
 
-        let built = config
+        let audio = config
+            .clone()
             .build_hls_config(&worker(), None)
             .expect("valid HLS config");
+        let built = config.build_track_config(audio);
 
-        assert!(built.block_on_underrun);
+        assert!(built.block_on_underrun());
     }
 
     /// The file branch reads the same field from the same place.
@@ -342,8 +354,9 @@ mod tests {
         let mut config = config("https://example.com/song.mp3");
         config.block_on_underrun = true;
 
-        let built = config.build_file_config(&worker(), None);
+        let audio = config.clone().build_file_config(&worker(), None);
+        let built = config.build_track_config(audio);
 
-        assert!(built.block_on_underrun);
+        assert!(built.block_on_underrun());
     }
 }

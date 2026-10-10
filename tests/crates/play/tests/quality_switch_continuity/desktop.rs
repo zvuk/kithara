@@ -7,9 +7,9 @@ use kithara::{
     audio::{
         DecoderBackend as DecoderBackendKind, DecoderEvent, DecoderResamplerSettings, ResamplerKind,
     },
-    events::{EventReceiver, TrackId},
+    events::EventReceiver,
     platform::{time::sleep, tokio::sync::broadcast::error::TryRecvError},
-    play::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc},
+    play::{PlaybackResamplerBackend, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
     warp::WarpConfig,
 };
@@ -188,6 +188,21 @@ async fn render_paced(harness: &OfflinePlayer, frames: usize) -> Vec<f32> {
     block
 }
 
+async fn render_until_current(
+    harness: &OfflinePlayer,
+    id: kithara::events::TrackId,
+    block_frames: usize,
+    deadline: WallInstant,
+) {
+    while harness.player().current().map(|entry| entry.id) != Some(id) {
+        assert!(
+            WallInstant::now() < deadline,
+            "desktop queue did not commit current track {id:?} before the render deadline"
+        );
+        render_paced(harness, block_frames).await;
+    }
+}
+
 async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPrepared {
     kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
 
@@ -225,37 +240,20 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     .initial_abr_mode(AbrMode::manual(AAC_HIGH))
     .events(bus)
     .build();
-    let config = harness
+    let id = harness.load_config(config).await;
+    render_until_current(
+        &harness,
+        id,
+        BLOCK_FRAMES,
+        WallInstant::now() + kithara_integration_tests::offline::LOCAL_LOAD_DEADLINE,
+    )
+    .await;
+    let abr = harness
         .player()
-        .prepare_config(config)
-        .unwrap_or_else(|error| panic!("prepare {label} Kithara App resource: {error}"));
-    let resource = Resource::new(config)
-        .await
-        .unwrap_or_else(|error| panic!("open {label} Kithara App resource: {error:?}"));
-    assert_eq!(
-        resource.spec().sample_rate.get(),
-        HOST_SAMPLE_RATE,
-        "{label} resource must expose the host-rate PCM contract",
-    );
-    let abr = resource
-        .abr_handle()
+        .current_abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
-    let select_label = label.to_owned();
-    harness
-        .with_player(move |player| {
-            player.reserve_slots(1);
-            player
-                .replace_item(0, resource, TrackId::allocate())
-                .expect("replace quality-switch fixture item");
-            player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .unwrap_or_else(|error| {
-                    panic!("select {select_label} Kithara App resource: {error}")
-                });
-        })
-        .await;
 
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = WallInstant::now() + Duration::from_secs(20);
     let mut active_blocks = 0usize;
     let mut lifecycle = Lifecycle::default();
     drain_lifecycle(&mut events, 0, &mut lifecycle);
@@ -284,7 +282,7 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
             active_blocks = 0;
         }
         assert!(
-            Instant::now() <= deadline,
+            WallInstant::now() <= deadline,
             "timed out preparing {label}: current_variant={:?}, position={position:.3}",
             abr.current_variant_index(),
         );
@@ -296,6 +294,15 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
         "{label} must start on AAC high",
     );
     assert_initial_apple_decoder(&lifecycle.decoders, label);
+    assert_eq!(
+        lifecycle
+            .resamplers
+            .first()
+            .expect("resource publishes its PCM resampler")
+            .output_rate,
+        HOST_SAMPLE_RATE,
+        "{label} resource must expose the host-rate PCM contract",
+    );
     assert_rubato_route(&lifecycle.resamplers, label);
     let capture_frame = host_frame(harness.player().position_seconds().unwrap_or(0.0), label);
     DesktopPrepared {

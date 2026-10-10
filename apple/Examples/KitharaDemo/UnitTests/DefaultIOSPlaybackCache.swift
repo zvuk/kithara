@@ -149,7 +149,13 @@ extension IntegrationRegressionsIOS {
             .filter { !baselinePaths.contains($0.standardizedFileURL.path) }
             .sorted { $0.pathComponents.count > $1.pathComponents.count }
         for entry in createdEntries {
-            try FileManager.default.removeItem(at: entry)
+            do {
+                try FileManager.default.removeItem(at: entry)
+            } catch CocoaError.fileNoSuchFile {
+                // The store keeps flushing its index after the player stops:
+                // a temp file renamed away since the listing is already gone.
+                continue
+            }
         }
     }
 

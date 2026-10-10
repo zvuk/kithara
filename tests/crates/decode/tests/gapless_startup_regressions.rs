@@ -4,9 +4,8 @@ use std::{num::NonZeroU32, path::Path};
 
 use kithara::{
     decode::{GaplessMode, SilenceTrimParams},
-    events::TrackId,
     platform::time::{self, Duration, Instant},
-    play::{Resource, ResourceConfig, ResourceSrc, player::PlayerControl},
+    play::{ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -62,13 +61,9 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
     .await;
 
     let started_at = Instant::now();
-    let resource = create_delayed_gapless_hls_resource(&harness, &master, temp_dir.path()).await;
+    let resource = create_delayed_gapless_hls_resource(&master, temp_dir.path()).await;
 
-    harness
-        .with_player(move |player| player.insert(resource, TrackId::allocate(), None))
-        .await;
-
-    harness.with_player(PlayerControl::play).await;
+    harness.load_and_fadein(resource).await;
     let _ = harness.tick_and_drain().await;
 
     let deadline = started_at + STARTUP_TIMEOUT;
@@ -111,24 +106,16 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
 }
 
 async fn create_delayed_gapless_hls_resource(
-    harness: &OfflinePlayer,
     master: &Url,
     cache_dir: &Path,
-) -> Resource {
+) -> ResourceConfig<TestPools> {
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::<TestPools>::for_src(
+
+    ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(master.as_str()).expect("valid HLS master URL"),
     )
     .store(store)
-    .build();
-    config = harness
-        .with_player(move |player| player.prepare_config(config))
-        .await
-        .expect("prepare delayed gapless HLS resource config");
-
-    Resource::new(config)
-        .await
-        .expect("open delayed gapless HLS resource")
+    .build()
 }
 
 /// Head segments arrive late.

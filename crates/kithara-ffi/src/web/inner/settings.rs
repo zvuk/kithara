@@ -1,18 +1,12 @@
 use kithara::{
     platform::{atomic::RelaxedAtomicF32, sync::Mutex},
-    play::{CrossfadeSettings, DEFAULT_CROSSFADE_DURATION},
+    play::CrossfadeSettings,
     queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode},
 };
 
-use super::{
-    WasmInner,
-    core::{send, try_send},
-};
+use super::{WasmInner, core::try_send};
 use crate::{
-    types::{
-        FfiActionAtItemEnd, FfiCrossfadeSettings, FfiDuckingMode, FfiError, FfiPlaybackOrder,
-        FfiRepeatMode,
-    },
+    types::{FfiActionAtItemEnd, FfiCrossfadeSettings, FfiError, FfiPlaybackOrder, FfiRepeatMode},
     web::{bridge::WorkerBridge, commands::WorkerCmd},
 };
 mod consts {
@@ -20,8 +14,8 @@ mod consts {
 }
 
 /// Main-thread settings mirrored into the worker-owned Queue.
-/// Policy updates commit locally only after the command is accepted; volume,
-/// mute and EQ retain their existing immediate local-update semantics.
+/// Policy, volume and mute updates commit locally only after the command is
+/// accepted; EQ retains its immediate local-update semantics.
 pub(super) struct Settings {
     playing_rate: RelaxedAtomicF32,
     volume: RelaxedAtomicF32,
@@ -37,12 +31,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             volume: RelaxedAtomicF32::new(Self::DEFAULT_VOLUME),
-            crossfade_settings: Mutex::new(FfiCrossfadeSettings {
-                duration: Self::DEFAULT_CROSSFADE_SECONDS,
-                curve: crate::types::FfiCrossfadeCurve::EqualPower,
-                depth: 1.0,
-                position: 0.5,
-            }),
+            crossfade_settings: Mutex::new(CrossfadeSettings::default().into()),
             playing_rate: RelaxedAtomicF32::new(Self::DEFAULT_PLAYING_RATE),
             repeat_mode: Mutex::new(FfiRepeatMode::Off),
             playback_order: Mutex::new(FfiPlaybackOrder::Sequential),
@@ -54,7 +43,6 @@ impl Default for Settings {
 }
 
 impl Settings {
-    const DEFAULT_CROSSFADE_SECONDS: f32 = DEFAULT_CROSSFADE_DURATION;
     const DEFAULT_PLAYING_RATE: f32 = 1.0;
     const DEFAULT_VOLUME: f32 = 0.5;
 
@@ -121,14 +109,6 @@ impl Settings {
         Ok(())
     }
 
-    pub(super) fn set_ducking_mode(
-        &self,
-        bridge: &WorkerBridge,
-        mode: FfiDuckingMode,
-    ) -> Result<(), FfiError> {
-        try_send(bridge, WorkerCmd::SetDucking(mode.into()))
-    }
-
     pub(super) fn set_eq_gain(
         &self,
         bridge: &WorkerBridge,
@@ -141,10 +121,11 @@ impl Settings {
         try_send(bridge, WorkerCmd::SetEqGain { band, gain_db })
     }
 
-    pub(super) fn set_muted(&self, bridge: &WorkerBridge, muted: bool) {
-        *self.muted.lock() = muted;
+    pub(super) fn set_muted(&self, bridge: &WorkerBridge, muted: bool) -> Result<(), FfiError> {
         let volume = if muted { 0.0 } else { self.volume.load() };
-        send(bridge, WorkerCmd::SetVolume(volume));
+        try_send(bridge, WorkerCmd::SetVolume(volume))?;
+        *self.muted.lock() = muted;
+        Ok(())
     }
 
     pub(super) fn set_playback_order(
@@ -187,11 +168,12 @@ impl Settings {
         Ok(())
     }
 
-    pub(super) fn set_volume(&self, bridge: &WorkerBridge, volume: f32) {
-        self.volume.store(volume);
+    pub(super) fn set_volume(&self, bridge: &WorkerBridge, volume: f32) -> Result<(), FfiError> {
         if !*self.muted.lock() {
-            send(bridge, WorkerCmd::SetVolume(volume));
+            try_send(bridge, WorkerCmd::SetVolume(volume))?;
         }
+        self.volume.store(volume);
+        Ok(())
     }
 
     delegate::delegate! {
@@ -225,16 +207,12 @@ impl WasmInner {
         self.settings.set_crossfade_settings(&self.bridge, settings)
     }
 
-    pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {
-        self.settings.set_ducking_mode(&self.bridge, mode)
-    }
-
     pub(crate) fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
         self.settings.set_eq_gain(&self.bridge, band, gain_db)
     }
 
-    pub(crate) fn set_muted(&self, muted: bool) {
-        self.settings.set_muted(&self.bridge, muted);
+    pub(crate) fn set_muted(&self, muted: bool) -> Result<(), FfiError> {
+        self.settings.set_muted(&self.bridge, muted)
     }
 
     pub(crate) fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
@@ -249,8 +227,8 @@ impl WasmInner {
         self.settings.set_repeat_mode(&self.bridge, mode)
     }
 
-    pub(crate) fn set_volume(&self, volume: f32) {
-        self.settings.set_volume(&self.bridge, volume);
+    pub(crate) fn set_volume(&self, volume: f32) -> Result<(), FfiError> {
+        self.settings.set_volume(&self.bridge, volume)
     }
 
     delegate::delegate! {

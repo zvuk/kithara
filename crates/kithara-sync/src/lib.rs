@@ -1,21 +1,17 @@
+//! Pure synchronization mathematics over track grids and session tempo steps.
 #![forbid(unsafe_code)]
 
-//! Recursive synchronization-group ownership and its control-plane protocol.
+mod bound;
+mod error;
+mod math;
+mod tempo;
+mod trajectory;
 
-mod execution;
-mod owner;
-mod protocol;
-
-pub use execution::{
-    ExecutedGroup, ReceiptSink, StagePort, SyncAttachment, SyncExecution, SyncExecutor,
+pub use bound::Bound;
+pub use error::TrajectoryError;
+pub use math::{
+    CorrectionPlan, CorrectionStep, PhaseError, checked_correction, correction, covers, entry,
+    jump_target, phase_error, speed,
 };
-pub use owner::{GroupState, SyncStaged};
-pub use protocol::{
-    AlignmentSource, LoadGeneration, ParentFact, ParentGridUpdate, ParentWithdrawal,
-    SessionAxisUpdate, SyncAdmission, SyncApplied, SyncCapability, SyncEffect, SyncError,
-    SyncExecutionReject, SyncExecutionStamp, SyncGroup, SyncGroupSnapshot, SyncGroupTopologyError,
-    SyncIntent, SyncMember, SyncMemberKind, SyncMemberSnapshot, SyncMode, SyncOperation,
-    SyncOperationId, SyncPreparation, SyncReceipt, SyncRejected, SyncStatusSnapshot,
-    SyncTransition, TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation,
-};
-mod consts;
+pub use tempo::{Tempo, TempoError};
+pub use trajectory::{TempoStep, TempoTrajectory};

@@ -120,6 +120,7 @@ async fn audio_server(hls_sized_wav_three: Vec<u8>) -> CreatedHls {
                 .segments_per_variant(SEGMENT_COUNT)
                 .segment_size(SawWav::DEFAULT.segment_size)
                 .segment_duration_secs(segment_duration)
+                .codecs("wav".to_string())
                 .custom_data(Arc::new(wav_data)),
         )
         .await
@@ -164,8 +165,7 @@ async fn ephemeral_pipeline_no_disk_writes(#[future(awt)] audio_server: CreatedH
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
-    let mut audio = worker
-        .load(config)
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 

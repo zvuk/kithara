@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use kithara_events::Event;
-use kithara_stream::{AudioCodec, ContainerFormat, SeekEpoch};
+use kithara_stream::{AudioCodec, ContainerFormat};
 
 /// Errors specific to the file stream layer (non-network, non-downloader).
 ///
@@ -52,7 +52,6 @@ pub enum FileEvent {
     ReaderSeek {
         from_offset: u64,
         to_offset: u64,
-        seek_epoch: SeekEpoch,
     },
     /// Non-network error specific to the file stream.
     Error {

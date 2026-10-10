@@ -199,7 +199,7 @@ fn decode_visible_frames(mut decoder: Box<dyn Decoder>) -> DecodeResult<DecodedF
     loop {
         match decoder.next_chunk()? {
             DecoderChunkOutcome::Chunk(chunk) => {
-                for chunk in trimmer.push(chunk) {
+                for chunk in trimmer.push(*chunk) {
                     frames = frames.saturating_add(chunk.frames());
                 }
             }

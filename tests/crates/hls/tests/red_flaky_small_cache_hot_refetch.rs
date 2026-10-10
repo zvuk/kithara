@@ -62,10 +62,14 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(
     // Offline pull: park on ring underrun instead of spinning on Pending,
     // so the loops need no wall-clock deadlines — a hot-refetch livelock
     // becomes a permanent park caught by the hang watchdog / timeout.
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .block_on_underrun(true)
-        .build();
-    let mut audio = worker.load(config).await.expect("audio creation");
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
+    )
+    .block_on_underrun(true)
+    .build();
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio creation");
 
     // The blocking read phase must NOT run on the test runtime thread: with
     // block_on_underrun the read parks the thread, and on the current-thread

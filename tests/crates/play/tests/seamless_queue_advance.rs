@@ -5,15 +5,23 @@ use std::num::NonZeroU32;
 use kithara::{
     decode::{GaplessMode, SilenceTrimParams},
     events::TrackId,
-    platform::time::{self, Duration, Instant},
-    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
+    platform::{
+        time::{self, Duration, Instant},
+        tokio::sync::broadcast::error::TryRecvError,
+    },
+    play::{PlayerEvent, ResourceConfig, ResourceSrc},
+    queue::{QueueControl, Transition},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
+    event::TestEvent,
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
-    offline::{OfflinePlayer, OfflinePlayerOptions, TimedPlayerEvent},
+    offline::{
+        OfflinePlayer, OfflinePlayerOptions, TimedPlayerEvent, append_source_loaded,
+        offline_queue_fixture_with_options,
+    },
 };
 use kithara_test_fixtures::signal::{deinterleave_left, goertzel_magnitude, max_silence_run};
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -67,13 +75,22 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(
         .crossfade_duration(0.0)
         .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
         .build();
-    let harness = OfflinePlayer::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE).await;
-    let first = create_gapless_hls_resource(harness.player(), &first_url, temp_dir.path()).await;
-    let second = create_gapless_hls_resource(harness.player(), &second_url, temp_dir.path()).await;
+    let (harness, queue) =
+        offline_queue_fixture_with_options(player_config, GAPLESS_SAMPLE_RATE).await;
+    let first = append_source_loaded(
+        &harness,
+        &queue,
+        gapless_hls_config(&first_url, temp_dir.path()),
+    )
+    .await;
+    let _ = append_source_loaded(
+        &harness,
+        &queue,
+        gapless_hls_config(&second_url, temp_dir.path()),
+    )
+    .await;
 
-    load_queue(&harness, [first, second]).await;
-
-    let (rendered, events) = render_until_second_item_end(&harness).await;
+    let (rendered, events) = render_until_second_item_end(&harness, &queue, first).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
     let sample_rate = usize::try_from(GAPLESS_SAMPLE_RATE).expect("sample rate fits usize");
 
@@ -138,13 +155,22 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(
         .crossfade_duration(1.0)
         .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
         .build();
-    let harness = OfflinePlayer::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE).await;
-    let first = create_gapless_hls_resource(harness.player(), &first_url, temp_dir.path()).await;
-    let second = create_gapless_hls_resource(harness.player(), &second_url, temp_dir.path()).await;
+    let (harness, queue) =
+        offline_queue_fixture_with_options(player_config, GAPLESS_SAMPLE_RATE).await;
+    let first = append_source_loaded(
+        &harness,
+        &queue,
+        gapless_hls_config(&first_url, temp_dir.path()),
+    )
+    .await;
+    let second = append_source_loaded(
+        &harness,
+        &queue,
+        gapless_hls_config(&second_url, temp_dir.path()),
+    )
+    .await;
 
-    load_queue(&harness, [first, second]).await;
-
-    let (rendered, events) = render_until_second_item_end(&harness).await;
+    let (rendered, events) = render_until_second_item_end(&harness, &queue, first).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
     let sample_rate = usize::try_from(GAPLESS_SAMPLE_RATE).expect("sample rate fits usize");
 
@@ -152,8 +178,12 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(
         .expect("first item must emit ItemDidPlayToEnd before the queue completes");
     let item2_activated = events
         .iter()
-        .filter(|timed| matches!(&timed.event, PlayerEvent::CurrentItemChanged { .. }))
-        .nth(1)
+        .find(|timed| {
+            matches!(
+                &timed.event,
+                PlayerEvent::CurrentItemChanged { item: Some(id) } if *id == second
+            )
+        })
         .map(|timed| timed.frame_end)
         .expect("CurrentItemChanged should fire when item-2 takes over");
 
@@ -233,46 +263,26 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(
     harness.close().await;
 }
 
-async fn create_gapless_hls_resource(
-    player: &kithara::play::player::PlayerControl<TestPools>,
-    master: &Url,
-    cache_dir: &std::path::Path,
-) -> Resource {
-    let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::<TestPools>::for_src(
+fn gapless_hls_config(master: &Url, cache_dir: &std::path::Path) -> ResourceConfig<TestPools> {
+    ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(master.as_str()).expect("valid HLS master URL"),
     )
-    .store(store)
-    .build();
-    config = player
-        .prepare_config(config)
-        .expect("prepare seamless queue HLS resource config");
-    let mut resource = Resource::new(config)
-        .await
-        .expect("open HLS resource for seamless queue fixture");
-    let _ = resource.preload().await;
-    resource
+    .store(kithara_integration_tests::disk_asset_store(cache_dir))
+    .build()
 }
 
-async fn load_queue<const N: usize>(harness: &OfflinePlayer, items: [Resource; N]) {
-    harness
-        .with_player(move |player| {
-            player.reserve_slots(items.len());
-            for (index, resource) in items.into_iter().enumerate() {
-                player
-                    .replace_item(index, resource, TrackId::allocate())
-                    .expect("replace seamless fixture item");
-            }
-            player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
-        })
-        .await;
-}
-
+/// Starts the queue at `first` and renders until both items have ended,
+/// stamping every player event the queue saw with the frame it arrived by.
 async fn render_until_second_item_end(
     harness: &OfflinePlayer,
+    queue: &QueueControl<TestPools>,
+    first: TrackId,
 ) -> (Vec<f32>, Vec<TimedPlayerEvent>) {
+    let mut rx = queue.subscribe();
+    harness
+        .run(queue, move |q| q.select(first, Transition::None))
+        .await
+        .expect("select the first queue item");
     let deadline = Instant::now() + Duration::from_secs(10);
     // Pace each rendered block at its real audio duration so the decode worker
     // stays ahead and the ring never underruns. Under flash a fixed sub-block
@@ -285,32 +295,31 @@ async fn render_until_second_item_end(
     let mut rendered_frames = 0usize;
     let mut events = Vec::new();
 
+    let mut post_roll = None;
+
     loop {
+        let _ = harness.run(queue, QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES as usize).await;
         rendered.extend_from_slice(&block);
         rendered_frames = rendered_frames.saturating_add(BLOCK_FRAMES as usize);
-        events.extend(
-            harness
-                .tick_and_drain()
-                .await
-                .into_iter()
-                .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
-        );
-
-        if count_item_end(&events) >= 2 {
-            for _ in 0..POST_ROLL_BLOCKS {
-                let block = harness.render(BLOCK_FRAMES as usize).await;
-                rendered.extend_from_slice(&block);
-                rendered_frames = rendered_frames.saturating_add(BLOCK_FRAMES as usize);
-                events.extend(
-                    harness
-                        .tick_and_drain()
-                        .await
-                        .into_iter()
-                        .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
-                );
+        loop {
+            match rx.try_recv().map(|envelope| envelope.event) {
+                Ok(TestEvent::Player(event)) => {
+                    events.push(TimedPlayerEvent::new(rendered_frames, event));
+                }
+                Ok(_) | Err(TryRecvError::Lagged(_)) => {}
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             }
-            return (rendered, events);
+        }
+
+        if post_roll.is_none() && count_item_end(&events) >= 2 {
+            post_roll = Some(POST_ROLL_BLOCKS);
+        }
+        if let Some(blocks) = post_roll.as_mut() {
+            if *blocks == 0 {
+                return (rendered, events);
+            }
+            *blocks -= 1;
         }
 
         assert!(

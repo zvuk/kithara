@@ -8,14 +8,10 @@ mod guard;
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 
 pub mod api;
-pub mod bridge;
-pub mod engine;
 pub mod player;
 pub mod policy;
 pub mod resource;
-pub mod rt;
 pub mod session;
-pub mod worker;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
@@ -24,38 +20,42 @@ pub mod wasm;
 pub mod mock;
 
 pub use api::{
-    BpmInfo, CrossfadeCurve, CrossfadeSettings, DjEvent, EngineEvent, Equalizer, InterruptionKind,
-    ItemRole, ItemStatus, MediaTime, PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription,
-    PortType, RouteChangeReason, RouteDescription, SelectionPlayback, SessionBeat,
-    SessionDuckingMode, SessionEvent, SessionTransportSnapshot, SlotId, StretchBackendKind,
-    SyncUnavailable, Tempo, TempoError, TimeControlStatus, TimeRange, TrackBinding, TrackRef,
-    TransportRevision, WaitingReason,
+    BpmInfo, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemRole, ItemStatus, MediaTime,
+    PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription, PortType, RouteChangeReason,
+    RouteDescription, SelectionPlayback, SessionBeat, SessionDuckingMode, SessionEvent,
+    SessionTransportSnapshot, SlotId, StretchBackendKind, SyncUnavailable, Tempo, TempoError,
+    TimeControlStatus, TimeRange, TrackBinding, TrackRef, TransportRevision, WaitingReason,
 };
-pub use bridge::{
-    AllocatedSlot, Cmd, MixTapWriter, NodeInputs, PlaybackFault, PlaybackShared, PlaybackSnapshot,
-    PlayerId, PlayerLevel, PlayerNotification, Reply, SessionBinding, SessionDispatcher,
-    SessionError, SessionHandle, SessionSampleRate, SharedEq, SlotControl, TrackPlaybackStopReason,
-    TrackState, TrackTransition,
-};
-pub use engine::{DEFAULT_GATE_SMOOTHING, EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
-use humantime_serde as _;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
-pub use kithara_effects::eq::EqBandConfig;
+pub use kithara_effects::{GainDb, eq::EqBandConfig};
 pub use kithara_net::Headers;
+pub use kithara_render::{
+    CrossfadeCurve, CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError,
+    DispatcherProtocol, EngineLoad, EngineLoadSnapshot, InvalidCrossfade, LoadRefusal, PlayWorker,
+    PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
+    bridge::{
+        DeckEqChange, DeckEvent, DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol,
+        DeckRefusal, DeckSnapshot, EqSnapshot, FadeDir, MixTapWriter, PlaybackFault,
+        RtMetricsSnapshot, Slot, SlotSnapshot,
+    },
+    dispatch,
+    rt::{
+        BufferGeometryError, DeckMixerConfig, DeckMixerConfigPatch, DeckMixerConfigPatchError,
+        PlayerNode, StreamShape,
+    },
+};
 pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, MIN_SPEED};
 pub use player::{
-    DEFAULT_CROSSFADE_DURATION, DEFAULT_PLAYING_RATE, PlayerConfig, PlayerConfigPatch, PlayerImpl,
-    SelectTransition,
+    Bound, DeckControl, DeckPass, HostedDeck, Outbox, Player, PlayerConfig, PlayerFactory,
+    PlayerImpl, Position, Settled, Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings,
+    TrackSettingsChange, TrackSettingsPatch, TrackSettingsPatchError, TrackSnapshot, TrackStatus,
 };
 pub use resource::{
     ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,
-    PlaybackResamplerBackend, PreparedGrid, Resource, ResourceConfig, ResourceSrc, SourceType,
+    OpenedTrack, PlaybackResamplerBackend, Resource, ResourceConfig, ResourceLane, ResourceLoad,
+    ResourcePrep, ResourcePrepPatch, ResourceSrc, SourceType,
 };
-pub use rt::{PlayerNode, StreamShape};
-pub use worker::{
-    EngineLoad, EngineLoadSnapshot, LoadRefusal, PlayWorker, PlayWorkerConfig,
-    PlayWorkerConfigPatch, RegisteredAudio, ServiceClass, TrackConfig,
-};
+pub use session::{OutputSnapshot, PlayerId, SessionError, SessionOutputView, SessionSampleRate};
 mod consts;

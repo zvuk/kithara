@@ -1,11 +1,13 @@
 #[cfg(feature = "gui")]
-use kithara::effects::{GainDb, eq::EqBandConfig};
+use kithara::effects::{
+    GainDb,
+    eq::{EqBandConfig, generate_log_spaced_bands},
+};
 use kithara::{
-    effects::eq::generate_log_spaced_bands,
-    host::{HostOwned, HostSettingsControl},
+    host::HostOwned,
     platform::CancelToken,
-    play::{PlayError, PlayerConfig, PlayerImpl},
-    queue::QueueConfig,
+    play::{DeckMixerConfig, PlayError, ResourcePrep},
+    queue::{QueueConfig, QueueError},
 };
 
 use crate::{
@@ -90,7 +92,7 @@ fn midpoint(low: GainDb, high: GainDb) -> GainDb {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeckId(pub usize);
 
-/// One app deck: its own cancellation subtree, player and queue.
+/// One app deck: its own cancellation subtree and hosted queue.
 pub struct Deck {
     pub id: DeckId,
     pub queue: HostOwned<AppQueue>,
@@ -98,31 +100,28 @@ pub struct Deck {
 }
 
 impl Deck {
-    /// Build a deck with its own player and queue, both hanging off the app's shutdown token. Every deck joins `session`: the
-    /// mix batch only accepts players of one shared audio session.
+    /// Builds a queue under the app's shutdown token and registers it with the Host.
     ///
     /// # Errors
     /// Returns [`PlayError`] when the Host rejects the new deck.
     pub fn build(id: DeckId, config: &AppConfig, host: &mut AppHost) -> Result<Self, PlayError> {
         let cancel = config.shutdown.child();
-        let mut player_config = PlayerConfig::builder()
-            .cancel(cancel.clone())
-            .eq_layout(generate_log_spaced_bands(config.eq_bands))
-            .sample_rate(host.sample_rate())
+        let prep = ResourcePrep::builder()
             .worker(config.worker.clone())
+            .warp(config.warp.clone())
+            .cancel(cancel.child())
             .build();
-        player_config
-            .apply(config.player.clone())
-            .map_err(|error| PlayError::InvalidConfiguration {
-                reason: error.to_string(),
-            })?;
-        let player = PlayerImpl::new(player_config);
         let mut queue_config = QueueConfig::builder()
-            .player(player)
+            .prep(prep)
             .store(config.store.clone())
             .cancel(cancel.clone())
+            .mixer(DeckMixerConfig::builder().eq_bands(config.eq_bands).build())
             .build();
-        queue_config.apply(config.queue.clone());
+        queue_config.apply(config.queue.clone()).map_err(|error| {
+            PlayError::InvalidConfiguration {
+                reason: error.to_string(),
+            }
+        })?;
         let queue = AppQueue::new(queue_config);
         let queue = host.insert(queue)?;
 
@@ -177,7 +176,7 @@ impl DeckSet {
     ///
     /// # Errors
     /// See [`DeckSet::commit`]. A rejected apply leaves the set unchanged.
-    pub fn add(&mut self, deck: Deck) -> Result<(), PlayError> {
+    pub fn add(&mut self, deck: Deck) -> Result<(), QueueError> {
         self.next_id = self.next_id.max(deck.id.0 + 1);
         self.decks.push(deck);
         let next = self.mix.resized(self.decks.len());
@@ -203,18 +202,15 @@ impl DeckSet {
         self.mix = self.mix.resized(0);
     }
 
-    /// Actuate `next` in one session batch, storing it only on success.
+    /// Send each deck its level from `next`, storing `next` only when every deck takes it.
     ///
     /// # Errors
-    /// Returns [`PlayError`] when the mix is invalid or the session rejects it.
-    pub fn commit(&mut self, next: MixState) -> Result<(), PlayError> {
+    /// Returns [`QueueError`] when the mix is invalid or a deck refuses its level.
+    pub fn commit(&mut self, next: MixState) -> Result<(), QueueError> {
         let levels = next.levels()?;
-        let inputs = self
-            .decks
-            .iter()
-            .zip(&levels)
-            .map(|(deck, &level)| deck.queue.level(level));
-        self.host.apply_mix(inputs)?;
+        for (deck, &level) in self.decks.iter().zip(&levels) {
+            deck.queue.set_level(level)?;
+        }
         self.mix = next;
         Ok(())
     }
@@ -242,7 +238,7 @@ impl DeckSet {
     ///
     /// # Errors
     /// See [`DeckSet::commit`]. A rejected apply leaves the set unchanged.
-    pub fn remove(&mut self, id: DeckId) -> Result<(), PlayError> {
+    pub fn remove(&mut self, id: DeckId) -> Result<(), QueueError> {
         let Some(index) = self.position(id) else {
             return Ok(());
         };
@@ -258,7 +254,7 @@ impl DeckSet {
         if let Err(error) = self.host.remove(&deck.queue) {
             self.decks.insert(index, deck);
             self.commit(previous)?;
-            return Err(error);
+            return Err(error.into());
         }
         Ok(())
     }
@@ -267,7 +263,7 @@ impl DeckSet {
     ///
     /// # Errors
     /// See [`DeckSet::commit`].
-    pub fn set_crossfader(&mut self, position: f32) -> Result<(), PlayError> {
+    pub fn set_crossfader(&mut self, position: f32) -> Result<(), QueueError> {
         let mut next = self.mix.clone();
         next.position = position;
         self.commit(next)
@@ -277,7 +273,7 @@ impl DeckSet {
     ///
     /// # Errors
     /// See [`DeckSet::commit`].
-    pub fn set_trim(&mut self, id: DeckId, trim: f32) -> Result<(), PlayError> {
+    pub fn set_trim(&mut self, id: DeckId, trim: f32) -> Result<(), QueueError> {
         let mut next = self.mix.clone();
         if let Some(strip) = self.position(id).and_then(|at| next.strips.get_mut(at)) {
             strip.trim = trim;
@@ -310,16 +306,13 @@ mod tests {
         parent: &CancelToken,
     ) -> Deck {
         let cancel = parent.child();
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .cancel(cancel.clone())
-                .sample_rate(host.sample_rate())
-                .worker(worker.clone())
-                .build(),
-        );
+        let prep = ResourcePrep::builder()
+            .cancel(cancel.clone())
+            .worker(worker.clone())
+            .build();
         let queue = AppQueue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(prep)
                 .cancel(cancel.clone())
                 .build(),
         );
@@ -432,7 +425,10 @@ mod tests {
         let before = set.mix().clone();
 
         let err = set.set_crossfader(1.5).expect_err("invalid position");
-        assert!(matches!(err, PlayError::MixPosition { .. }));
+        assert!(matches!(
+            err,
+            QueueError::Play(PlayError::MixPosition { .. })
+        ));
         assert_eq!(set.mix(), &before);
     }
 

@@ -93,7 +93,11 @@ fn render(
     let store = FfiStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .build();
-    let worker = FfiWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let worker = FfiWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .runtime(Some(runtime.handle().clone()))
+            .build(),
+    );
     let mut host = FfiHost::new(
         HostConfig::offline(pools)
             .settings(
@@ -107,7 +111,7 @@ fn render(
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(consts::SAMPLE_RATE)
-            .worker(worker)
+            .worker(worker.clone())
             .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
@@ -121,6 +125,7 @@ fn render(
             FfiResourceConfig::for_src(ResourceSrc::Path(input.to_path_buf()))
                 .store(store)
                 .build(),
+            worker,
         )
         .map_err(|err| CaptureError::step("resource-config", err))?;
     let resource = runtime.block_on(async {
@@ -132,9 +137,8 @@ fn render(
         })?;
         Ok::<_, CaptureError>(resource)
     })?;
-    control.insert(resource, TrackId::allocate(), None);
     control
-        .select_item(0, SelectionPlayback::Play)
+        .select(TrackId::allocate(), Some(resource), SelectionPlayback::Play)
         .map_err(|err| CaptureError::step("player-select", err))?;
 
     let mut file = File::create(output)

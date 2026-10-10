@@ -92,7 +92,7 @@ fn stress_seeks_preserve_timeline_integrity(stress_wav: &'static [u8]) {
 
             assert_eq!(meta.segment_index, None);
             assert_eq!(meta.variant_index, None);
-            assert_eq!(meta.epoch, 0);
+            assert_eq!(meta.segment.get(), 0);
 
             prev_frame_end = Some(meta.frame_offset + chunk.frames() as u64);
         }

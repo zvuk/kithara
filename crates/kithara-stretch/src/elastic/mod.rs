@@ -27,6 +27,8 @@ pub use rate::ElasticRateEnvelope;
 
 mod request;
 pub use request::ElasticRequest;
+#[cfg(test)]
+pub(crate) use request::tests::with_output_source_frames;
 
 mod span;
 pub use span::{ElasticCursor, ElasticSpan, ElasticSpanPlan, ElasticSpanRequest};

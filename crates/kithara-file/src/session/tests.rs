@@ -14,7 +14,7 @@ use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{StorageError, WaitOutcome};
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, NotReadyCause, PendingReason, PlayheadState,
-    ReadOutcome, SeekState, Source, SourceError as StreamSourceError, SourcePhase, StreamError,
+    ReadOutcome, Source, SourceError as StreamSourceError, SourcePhase, StreamError,
 };
 use kithara_test_utils::kithara;
 
@@ -50,10 +50,7 @@ fn nz_bytes(n: usize) -> ReadOutcome {
 }
 
 fn make_coord() -> Arc<FileCoord> {
-    Arc::new(FileCoord::new(
-        Arc::new(PlayheadState::new()),
-        Arc::new(SeekState::new()),
-    ))
+    Arc::new(FileCoord::new(Arc::new(PlayheadState::new())))
 }
 
 fn local_config() -> Arc<FileConfig<TestPools>> {
@@ -306,7 +303,7 @@ fn file_source_phase_at_known_end_waits_until_active_commit() {
 }
 
 #[kithara::test]
-#[case::seeking_when_data_not_ready(100, 50..60, SourcePhase::Seeking)]
+#[case::seeking_when_data_not_ready(100, 50..60, SourcePhase::Waiting)]
 #[case::ready_beats_seeking_when_data_present(11, 0..5, SourcePhase::Ready)]
 fn file_source_phase_during_seek(
     #[case] total_bytes: u64,
@@ -318,10 +315,8 @@ fn file_source_phase_during_seek(
     let coord = make_coord();
     let bus = EventBus::new(16);
     coord.set_total_bytes(Some(total_bytes));
-    let seek = coord.seek_control();
+    coord.set_position(range.start);
     let source = make_source(res, coord, bus);
-
-    let _ = seek.begin(Duration::from_secs(0));
 
     assert_eq!(source.phase_at(range), expected);
 }
@@ -351,13 +346,14 @@ fn file_source_wait_range_returns_interrupted_while_flushing() {
     let coord = make_coord();
     let bus = EventBus::new(16);
     coord.set_total_bytes(Some(100));
-    let seek = coord.seek_control();
+    coord.set_position(50);
     let mut source = make_source(res, coord, bus);
 
-    let _ = seek.begin(Duration::from_secs(0));
-
     let result = Source::wait_range(&mut source, 50..60, Some(Duration::from_secs(1)));
-    assert_eq!(result.unwrap(), WaitOutcome::Interrupted);
+    assert!(matches!(
+        result,
+        Err(StreamError::Source(StreamSourceError::WaitBudgetExceeded))
+    ));
 }
 
 #[kithara::test]

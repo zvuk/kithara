@@ -9,6 +9,11 @@ description = "Player engine: audio graph, EQ, crossfade, DJ-ready."
 keywords = ["audio", "player", "dj", "crossfade", "playback"]
 categories = ["multimedia::audio"]
 
+[package.metadata.cargo-machete]
+# `unimock` is reached only through `#[kithara::mock]`, whose expansion names
+# it; no source line in this crate spells the crate out.
+ignored = ["unimock"]
+
 [features]
 default = ["symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
@@ -67,24 +72,23 @@ stretch-signalsmith = ["kithara-render/stretch-signalsmith", "kithara-warp/stret
 stretch-bungee = ["kithara-render/stretch-bungee", "kithara-warp/stretch-bungee"]
 stretch-glide = ["kithara-render/stretch-glide", "kithara-warp/stretch-glide"]
 stretch-identity = ["kithara-render/stretch-identity", "kithara-warp/stretch-identity"]
-usdt = [
-    "kithara-effects/usdt",
-    "kithara-test-utils/usdt",
-    "kithara-sync/usdt",
-    "kithara-warp/usdt",
-    "kithara-worker/usdt",
-]
+usdt = ["kithara-effects/usdt", "kithara-render/usdt", "kithara-test-utils/usdt", "kithara-warp/usdt"]
 flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
-mock = ["dep:unimock", "kithara-effects/mock", "kithara-stream/mock"]
+mock = [
+    "dep:unimock",
+    "kithara-audio/mock",
+    "kithara-effects/mock",
+    "kithara-render/mock",
+    "kithara-stream/mock",
+]
 no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 perf = [
     "dep:hotpath",
     "hotpath/hotpath",
     "kithara-audio/perf",
     "kithara-decode/perf",
-    "kithara-sync/perf",
+    "kithara-render/perf",
     "kithara-warp/perf",
-    "kithara-worker/perf",
 ]
 
 [dependencies]
@@ -100,18 +104,16 @@ kithara-decode = { workspace = true, default-features = false }
 kithara-derive = { workspace = true, features = ["built-default", "patch", "ranged"] }
 kithara-download = { workspace = true, default-features = false }
 kithara-drm = { workspace = true }
-kithara-dsp = { workspace = true }
 kithara-effects = { workspace = true }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
 kithara-net = { workspace = true, default-features = false }
-kithara-output = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-render = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
-kithara-sync = { workspace = true, default-features = false }
+kithara-sync = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 kithara-warp = { workspace = true, default-features = false, features = ["render"] }
@@ -120,7 +122,6 @@ kithara-worker = { workspace = true }
 
 # Utilities
 arc-swap = { workspace = true }
-bon = { workspace = true }
 bytes = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
@@ -131,15 +132,12 @@ fieldwork = { workspace = true }
 firewheel = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
-humantime-serde = { workspace = true }
 num-traits = { workspace = true }
 
 # Async & channels
-ringbuf = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -165,8 +163,9 @@ unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["http-server"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["http-server", "temp-dir"] }
 
+assert_no_alloc = { workspace = true }
 axum = { workspace = true }
 serde_yaml_ng = { workspace = true }
 

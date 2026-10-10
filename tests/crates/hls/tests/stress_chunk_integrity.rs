@@ -57,7 +57,11 @@ fn detect_chunk_direction(chunk: &AudioChunk) -> Direction {
 fn format_meta(meta: &AudioChunkInfo, pcm_len: usize) -> String {
     format!(
         "frame_offset={}, samples={}, segment={:?}, variant={:?}, epoch={}",
-        meta.frame_offset, pcm_len, meta.segment_index, meta.variant_index, meta.epoch
+        meta.frame_offset,
+        pcm_len,
+        meta.segment_index,
+        meta.variant_index,
+        meta.segment.get()
     )
 }
 
@@ -91,7 +95,7 @@ async fn next_chunk_with_timeout<R: AudioRead>(
     let deadline = Instant::now() + timeout;
     loop {
         match AudioRead::next_chunk(audio) {
-            Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
+            Ok(ChunkOutcome::Chunk(chunk)) => return Some(*chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
@@ -197,8 +201,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
-    let mut audio = worker
-        .load(config)
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 
@@ -334,7 +337,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
                         actual_offset = meta.frame_offset,
                         segment = ?meta.segment_index,
                         variant = ?meta.variant_index,
-                        epoch = meta.epoch,
+                        epoch = meta.segment.get(),
                         "CHUNK CONTINUITY BREAK (frame_offset)"
                     );
                 }

@@ -33,6 +33,7 @@ members = [
     "crates/kithara-fixture-media",
     "crates/kithara-hls",
     "crates/kithara-host",
+    "crates/kithara-link",
     "crates/kithara-mp4",
     "crates/kithara-mpa",
     "crates/kithara-net",
@@ -118,6 +119,7 @@ default-members = [
     "crates/kithara-platform",
     "crates/kithara-play",
     "crates/kithara-queue",
+    "crates/kithara-link",
     "crates/kithara-record",
     "crates/kithara-render",
     "crates/kithara-resampler",
@@ -158,7 +160,6 @@ default-members = [
     "tests/crates/play",
     "tests/crates/queue",
     "tests/crates/stream",
-    "tests/crates/sync",
     "tests/crates/warp",
 ]
 
@@ -314,6 +315,7 @@ kithara-fixture-media = { path = "crates/kithara-fixture-media", version = "0.0.
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha5", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha5", default-features = false }
 kithara-integration-tests = { path = "tests", default-features = false }
+kithara-link = { path = "crates/kithara-link", version = "0.0.1-alpha5", default-features = false }
 kithara-mp4 = { path = "crates/kithara-mp4", version = "0.0.1-alpha5" }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha5" }
 kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha5", default-features = false }

@@ -287,7 +287,16 @@ where
 /// virtual deadline advances at real pace while the load is in flight. A
 /// fast-path and `Lagged` re-read guard against an already-terminal status or
 /// a dropped event.
+///
+/// Runs under the hang watchdog: a load whose status stops changing fails
+/// with its last status once the watchdog budget passes, instead of waiting
+/// out `deadline`. Every status change of the track is progress.
+///
+/// # Panics
+///
+/// Panics when the track's status does not change within the watchdog budget.
 #[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 pub async fn wait_for_loader_done_event<S>(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
@@ -302,23 +311,37 @@ where
     {
         return res;
     }
+    let stalled = |queue: &QueueControl<S>| {
+        format!(
+            "track {track_id:?} loader status stayed {:?}",
+            queue.track(track_id).map(|entry| entry.status)
+        )
+    };
     timeout(deadline, async {
         loop {
-            match rx.recv().await.map(|env| env.event) {
+            let Ok(received) = timeout(__hang_detector.remaining(), rx.recv()).await else {
+                hang_tick!(stalled(queue));
+                continue;
+            };
+            match received.map(|env| env.event) {
                 Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged { id, status }))
                     if id == track_id =>
                 {
                     if let Some(res) = loader_outcome(&status) {
                         return res;
                     }
+                    hang_reset!();
                 }
-                Ok(_) => {}
+                Ok(_) => {
+                    hang_tick!(stalled(queue));
+                }
                 Err(RecvError::Lagged(_)) => {
                     if let Some(entry) = queue.track(track_id)
                         && let Some(res) = loader_outcome(&entry.status)
                     {
                         return res;
                     }
+                    hang_tick!(stalled(queue));
                 }
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             }

@@ -5,12 +5,6 @@ use kithara_platform::time::Duration;
 pub enum EngineEvent {
     Started,
     Stopped,
-    SlotAllocated {
-        slot: SlotId,
-    },
-    SlotReleased {
-        slot: SlotId,
-    },
     CrossfadeStarted {
         from: SlotId,
         to: SlotId,

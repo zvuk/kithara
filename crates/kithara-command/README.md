@@ -74,6 +74,49 @@ while let Some(due) = inbox.next_due(Frame(64), 64) {
 assert_eq!(sender.receipts().next().map(|receipt| receipt.seq()), Some(seq));
 ```
 
+### Scoped publication
+
+`scoped_channel::<Root, Scope>(ScopedConfig)` reserves independent credits and
+target ledgers for a root and a fixed number of reusable scope slots. The owner
+opens a slot with `open(targets)` and borrows its `ScopeSender` with `scope(id)`.
+Both ports implement `Port`; sending stages a batch, and `publish()` makes the
+whole pass visible with one ring-index store. Draining before publication sees
+none of that pass. Execution order is `(When, Seq)` within each level; the send
+counter is shared, but levels are walked independently.
+
+`close(id)` uses reserved room even when the scope has no normal credits left.
+After a drain exposes Close, the executor finishes its walk and calls
+`LevelInbox::retire()` when it is ready. With no running executor, the owner can
+call `retire_closing()`. Retirement returns leftovers whole as Unanswered and
+sends `ScopedReceipt::Closed(id)` last. Retirement advances the generation;
+reading Closed frees the owner slot. Reopening uses the new generation, so the
+old ID no longer borrows a level.
+
+`ScopedConfig::builder()` takes `root(ChannelConfig)`, `scope(ChannelConfig)`
+and `scopes(NonZeroU16)`. The scope config's target count is the maximum admitted
+by `open`; all executor storage is reserved when the channel is built.
+
+### Basis and deferred batches
+
+`Port::basis(target, when)` projects applied receipts and pending batches up to
+`when`, skipping batches whose basis would be Stale. A future At or Deferred
+does not shift the basis of a Next. An accepted race remains: a Next can land
+after an already-pending At on the same target; it then receives Stale, and the
+owner plans from the At receipt.
+
+`When::Deferred` sorts after every At and is never returned by `next_due`.
+`next_deferred()` exposes the unjudged arrival; `park()` keeps it until an
+executor event names its moment. `resume(seq, start, at)` judges it and computes
+the offset from the firing block's start. Applying a batch eagerly returns all
+outdated scheduled, arrived and parked batches of that level as Stale.
+
+`Due::commit()` records the ledger and eagerly invalidates outdated batches at
+the due moment, but leaves its batch and credit in the inbox. The executor can
+fill result commands through `committed_mut(seq)` and later call
+`complete(seq, data)` on `Inbox` or `LevelInbox`. Completion uses the original
+moment and never judges the basis again. An unfinished committed batch returns
+whole through the existing retirement or inbox-drop path as Unanswered.
+
 ## Key Types
 
 <table>
@@ -96,16 +139,19 @@ assert_eq!(sender.receipts().next().map(|receipt| receipt.seq()), Some(seq));
 
 ## Integration
 
-The real-time Host, the lane dispatcher, and each lane own one `Inbox` each
-and speak their own `Protocol`; the owner that computes commands holds the
-matching `Sender`. The crate carries no audio domain: frames, targets, and
-commands are the executor's types.
+An executor owns a plain `Inbox`, or borrows a `LevelInbox` from a shared
+`ScopedInbox`, and speaks its own `Protocol`. The owner that computes commands
+holds the matching `Port`. Both forms use the same scheduling and judging
+mechanism. The crate carries no audio domain: frames, targets, and commands
+are the executor's types.
 
 ### Live configuration
 
-`Live<C, P>` keeps a `LiveConfig` on the sender's side of an executor. `send`
+`Live<C, P>` keeps a `LiveConfig` on the owner's side of an executor. `send`
 checks a field change and hands it over as one batch with an empty basis and
-the single command `wrap` makes of it; the configuration changes only when
+the single command `wrap` makes of it, through any `Port<P>`. `track` records a
+checked change carried by a batch the owner built itself. The configuration
+changes only when
 `settle` meets the batch's receipt as applied, so getters read what the
 executor confirmed. Settle receipts in the execution order returned by
 `Sender::receipts()`; reordering them can leave the configuration different

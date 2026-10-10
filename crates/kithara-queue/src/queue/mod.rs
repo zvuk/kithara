@@ -1,20 +1,20 @@
-//! Queue orchestration over player tracks, loading, navigation and selection.
+//! A queue is a deck: one owner drives its tracks through commands and receipts.
 
-mod access;
-mod engine_events;
+mod command;
+mod handle;
+mod hosted;
 mod lifecycle;
-mod owner;
-mod passthrough;
-mod playback;
-mod player;
-mod selection;
+mod slots;
 mod state;
+mod transition;
 mod types;
+mod view;
 
-#[cfg(test)]
-pub(crate) use state::tests::test_session;
+pub(crate) use command::QueuePostbox;
 
 pub use self::{
+    command::QueueCommand,
     state::{Queue, QueueControl},
     types::{PlaybackView, Transition},
+    view::QueueSnapshot,
 };

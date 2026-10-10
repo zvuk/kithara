@@ -10,12 +10,12 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
 
-use super::{ByteMap, ReadOutcome, SeekPrepare, SourcePhase, SourceProbe, VariantControl};
+use super::{ByteMap, ReadOutcome, SourcePhase, SourceProbe, VariantControl};
 use crate::{
+    activity::{Activity, ActivityWriter},
     error::StreamResult,
     media::MediaInfo,
     playhead::{PlayheadRead, PlayheadWrite},
-    seek_state::{Activity, SeekControl, SeekObserve},
     wake::{DeferredWake, WorkerWake},
 };
 
@@ -71,7 +71,10 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     }
 
     /// Narrow handle to the playback-activity flag.
-    fn activity(&self) -> Arc<dyn Activity>;
+    fn activity(&self) -> Activity;
+
+    /// Transfer the single publisher to the owning audio chain.
+    fn take_activity_writer(&mut self) -> Option<ActivityWriter>;
 
     /// Advance the byte cursor by `n` bytes after a successful read.
     fn advance(&self, n: u64);
@@ -167,18 +170,6 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// Returns an error if the read fails or the source is in an invalid state.
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome>;
 
-    /// Narrow mutating handle to seek coordination (`FLUSH_START` / `FLUSH_STOP`).
-    fn seek_control(&self) -> Arc<dyn SeekControl>;
-
-    /// Narrow read-only handle to seek/flush coordination state.
-    fn seek_observe(&self) -> Arc<dyn SeekObserve>;
-
-    /// Control-plane hook run once per seek, before the epoch is minted. Sources with a fixed byte
-    /// space keep the default `None`.
-    fn seek_prepare(&self) -> Option<Arc<dyn SeekPrepare>> {
-        None
-    }
-
     /// Absolute set of the byte cursor — used by [`crate::Stream::seek`] and
     /// post-seek landings. Sources implement this via the same atomic
     /// cursor that backs [`Self::position`] / [`Self::advance`].
@@ -233,7 +224,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{PlayheadState, SeekState};
+    use crate::{ActivityWriter, PlayheadState};
 
     /// Constant-phase probe for the minimal test sources below; shares the
     /// source's cursor cell and mirrors its `len`.
@@ -277,7 +268,8 @@ mod tests {
     #[kithara::test]
     fn phase_default_delegates_to_phase_at() {
         struct ReadySource {
-            seek: Arc<SeekState>,
+            activity: Activity,
+            activity_writer: Option<ActivityWriter>,
             playhead: Arc<PlayheadState>,
             position: Arc<AtomicU64>,
         }
@@ -288,14 +280,11 @@ mod tests {
             fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
                 Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
             }
-            fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-                Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+            fn activity(&self) -> Activity {
+                self.activity.clone()
             }
-            fn seek_control(&self) -> Arc<dyn SeekControl> {
-                Arc::clone(&self.seek) as Arc<dyn SeekControl>
-            }
-            fn activity(&self) -> Arc<dyn Activity> {
-                Arc::clone(&self.seek) as Arc<dyn Activity>
+            fn take_activity_writer(&mut self) -> Option<ActivityWriter> {
+                self.activity_writer.take()
             }
             fn wait_range(
                 &mut self,
@@ -330,27 +319,22 @@ mod tests {
                 self.position.store(pos, Ordering::Release);
             }
         }
+        let writer = ActivityWriter::new();
         let source = ReadySource {
-            seek: Arc::new(SeekState::new()),
+            activity: writer.reader(),
+            activity_writer: Some(writer),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
         };
         assert_eq!(source.phase(), SourcePhase::Ready);
     }
 
-    /// Exercises all five narrow `Source` accessor default methods.
-    ///
-    /// Verifies that:
-    /// - `playhead_read().position()` starts at `Duration::ZERO`.
-    /// - `playhead_read().duration()` starts at `None`.
-    /// - `seek_observe().epoch()` starts at `0`.
-    /// - `seek_control().begin(t)` returns a monotonically increasing epoch
-    ///   and `seek_observe().epoch()` observes the new value.
-    /// - `activity().is_playing()` toggles correctly.
+    /// Read-only source accessors follow their sole playhead and activity writers.
     #[kithara::test]
     fn narrow_source_accessors_seam() {
         struct MinimalSource {
-            seek: Arc<SeekState>,
+            activity: Activity,
+            activity_writer: Option<ActivityWriter>,
             playhead: Arc<PlayheadState>,
             position: Arc<AtomicU64>,
         }
@@ -361,14 +345,11 @@ mod tests {
             fn playhead_write(&self) -> Arc<dyn PlayheadWrite> {
                 Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
             }
-            fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-                Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+            fn activity(&self) -> Activity {
+                self.activity.clone()
             }
-            fn seek_control(&self) -> Arc<dyn SeekControl> {
-                Arc::clone(&self.seek) as Arc<dyn SeekControl>
-            }
-            fn activity(&self) -> Arc<dyn Activity> {
-                Arc::clone(&self.seek) as Arc<dyn Activity>
+            fn take_activity_writer(&mut self) -> Option<ActivityWriter> {
+                self.activity_writer.take()
             }
             fn wait_range(
                 &mut self,
@@ -404,8 +385,10 @@ mod tests {
             }
         }
 
-        let src = MinimalSource {
-            seek: Arc::new(SeekState::new()),
+        let writer = ActivityWriter::new();
+        let mut src = MinimalSource {
+            activity: writer.reader(),
+            activity_writer: Some(writer),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
         };
@@ -413,21 +396,25 @@ mod tests {
         assert_eq!(src.playhead_read().position(), Duration::ZERO);
         assert_eq!(src.playhead_read().duration(), None);
 
-        assert_eq!(src.seek_observe().epoch(), 0);
-        assert!(!src.seek_observe().is_flushing());
-        assert!(src.seek_observe().target().is_none());
+        let mut writer = src.take_activity_writer().expect("sole activity writer");
+        assert!(src.take_activity_writer().is_none());
+        let snapshot = writer.reader();
+        let clone = snapshot.clone();
+        assert!(!snapshot.is_playing());
+        assert!(!clone.is_playing());
+        assert!(!writer.reader().is_playing());
 
-        // seek_control.begin bumps the epoch; seek_observe sees it
-        let epoch = src.seek_control().begin(Duration::from_secs(5));
-        assert_eq!(epoch, 1);
-        assert_eq!(src.seek_observe().epoch(), 1);
-        assert_eq!(src.seek_observe().target(), Some(Duration::from_secs(5)));
-        assert!(src.seek_observe().is_flushing());
+        writer.set_playing(true);
+        assert!(snapshot.is_playing());
+        assert!(clone.is_playing());
+        assert!(writer.reader().is_playing());
+        assert!(snapshot.clone().is_playing());
+        assert!(clone.clone().is_playing());
 
-        assert!(!src.activity().is_playing());
-        src.activity().set_playing(true);
-        assert!(src.activity().is_playing());
-        src.activity().set_playing(false);
-        assert!(!src.activity().is_playing());
+        assert!(snapshot.is_playing());
+        writer.set_playing(false);
+        assert!(!snapshot.is_playing());
+        writer.set_playing(true);
+        assert!(snapshot.is_playing());
     }
 }

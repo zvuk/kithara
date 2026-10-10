@@ -11,7 +11,7 @@ use kithara::{
         time,
         time::{Duration, Instant},
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -144,10 +144,6 @@ async fn flac_swallow_fixture(
             .worker(worker)
             .build();
 
-    let resource = Resource::new(cfg)
-        .await
-        .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
-
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
             .settings(
@@ -158,7 +154,7 @@ async fn flac_swallow_fixture(
             .build(),
     )
     .await;
-    player.load_and_fadein(resource).await;
+    player.load_config(cfg).await;
 
     let window_frames: f64 = (BLOCKS_PER_WINDOW * BLOCK_FRAMES).as_();
     let window_secs = window_frames / f64::from(OUT_RATE);

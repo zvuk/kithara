@@ -144,14 +144,17 @@ fn spawn_player_worker(sender: wasm::HostSender<TestPools>, stage: Arc<AtomicU64
             resource.preload().await.expect("preload the fixture");
             stage.store(5, Ordering::Relaxed);
 
-            control.insert(resource, TrackId(0), None);
             control
-                .select_item(0, kithara::play::SelectionPlayback::Play)
+                .select(
+                    TrackId(0),
+                    Some(resource),
+                    kithara::play::SelectionPlayback::Play,
+                )
                 .expect("select the fixture for playback");
             control.play();
             stage.store(6, Ordering::Relaxed);
 
-            while control.tick().is_ok() {
+            while !control.is_closed() {
                 sleep(WORKER_TICK).await;
             }
             stage.store(7, Ordering::Relaxed);
@@ -193,8 +196,8 @@ fn first_audible_sample(samples: &[f32]) -> Option<usize> {
 }
 
 fn session_is_live(host: &Host<TestPools>) -> bool {
-    host.output_sample_rate()
-        .is_ok_and(|rates| rates.measured == Some(rates.requested))
+    let rates = host.output_sample_rate();
+    rates.measured == Some(rates.requested)
 }
 
 /// Dominant frequency of a mono window, taken from its rising zero crossings.
@@ -227,7 +230,6 @@ async fn live_web_audio_plays_at_session_rate() {
     )
     .expect("build the product web Host");
     let (sender, receiver) = wasm::worker_host_channel(&host).expect("open the Worker route");
-    wasm::warm_up_audio(&host).expect("warm up the audio context");
 
     let (pcm_tx, mut pcm_rx) = HeapRb::<f32>::new(TAP_CAPACITY).split();
     let drops = Arc::new(AtomicU64::new(0));
@@ -268,9 +270,7 @@ async fn live_web_audio_plays_at_session_rate() {
     let frames = window.len() / CHANNELS;
     let dropped = drops.load(Ordering::Relaxed);
     let stage = stage_name(stage.load(Ordering::Relaxed));
-    let rates = host
-        .output_sample_rate()
-        .expect("read the session output rate");
+    let rates = host.output_sample_rate();
     assert_eq!(
         (rates.requested, rates.measured),
         (RATE.get(), Some(RATE.get())),
@@ -384,9 +384,12 @@ async fn open_deck(
         .await
         .expect("open the fixture as a product resource");
     resource.preload().await.expect("preload the fixture");
-    control.insert(resource, TrackId(0), None);
     control
-        .select_item(0, kithara::play::SelectionPlayback::Pause)
+        .select(
+            TrackId(0),
+            Some(resource),
+            kithara::play::SelectionPlayback::Pause,
+        )
         .expect("select the fixture");
     owner
 }
@@ -416,13 +419,11 @@ fn spawn_deck_pair_worker(sender: wasm::HostSender<TestPools>, pair: Arc<DeckPai
                     let position = f32::from_bits(requested);
                     let levels = [CrossfaderBus::A, CrossfaderBus::B]
                         .map(|bus| crossfader_gain(bus, position).expect("a valid position"));
-                    host.apply_mix(
-                        decks
-                            .iter()
-                            .zip(levels)
-                            .map(|(deck, level)| deck.level(level)),
-                    )
-                    .expect("apply the crossfader batch");
+                    for (deck, level) in decks.iter().zip(levels) {
+                        deck.control()
+                            .set_level(level)
+                            .expect("set the crossfader level");
+                    }
                     if applied == DeckPair::UNAPPLIED {
                         for deck in &decks {
                             deck.control().play();
@@ -432,7 +433,7 @@ fn spawn_deck_pair_worker(sender: wasm::HostSender<TestPools>, pair: Arc<DeckPai
                     pair.applied.store(applied, Ordering::Release);
                 }
                 for (deck, position) in decks.iter().zip(&pair.positions) {
-                    if deck.control().tick().is_err() {
+                    if deck.control().is_closed() {
                         pair.stage.store(3, Ordering::Relaxed);
                         return;
                     }
@@ -503,7 +504,6 @@ async fn two_decks_in_one_host_follow_the_crossfader() {
     )
     .expect("build the product web Host");
     let (sender, receiver) = wasm::worker_host_channel(&host).expect("open the Worker route");
-    wasm::warm_up_audio(&host).expect("warm up the audio context");
 
     let (pcm_tx, mut pcm_rx) = HeapRb::<f32>::new(TAP_CAPACITY).split();
     let drops = Arc::new(AtomicU64::new(0));
@@ -528,9 +528,7 @@ async fn two_decks_in_one_host_follow_the_crossfader() {
     let at_b = pair.positions();
 
     let dropped = drops.load(Ordering::Relaxed);
-    let rates = host
-        .output_sample_rate()
-        .expect("read the session output rate");
+    let rates = host.output_sample_rate();
     assert_eq!(
         (rates.requested, rates.measured),
         (RATE.get(), Some(RATE.get())),

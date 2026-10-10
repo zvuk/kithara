@@ -1,7 +1,7 @@
 use super::WarpCursor;
 use crate::{
     AssetFrame, BeatAlignment, BeatGridQuery, BeatGridSnapshot, BeatGridUnavailable,
-    GridProjectionError, MapAxis, MapPoint, MapPosition, SessionFrame, WarpMapRevision,
+    GridProjectionError, MapPoint, MapPosition, SessionFrame, WarpMapRevision,
 };
 
 /// One immutable session-output-to-source map revision.
@@ -29,34 +29,6 @@ impl WarpMap {
             revision,
             projection: None,
         }
-    }
-
-    /// Session position of an absolute recording endpoint.
-    pub fn output_at(&self, source: AssetFrame) -> BeatGridQuery<SessionFrame> {
-        let Some(projection) = &self.projection else {
-            return BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry);
-        };
-        projection
-            .source
-            .beat_at(MapPoint::new(
-                projection.source.stamp(),
-                MapPosition::Asset(source),
-            ))
-            .and_then(|beat| projection.grid.position_at(*beat.value()))
-            .and_then(|position| match *position.value().value() {
-                MapPosition::Session(frame) => BeatGridQuery::Resolved(frame),
-                MapPosition::Asset(_) => {
-                    BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch)
-                }
-            })
-    }
-
-    /// The session axis of a projected map.
-    #[must_use]
-    pub fn output_axis(&self) -> Option<MapAxis> {
-        self.projection
-            .as_ref()
-            .map(|projection| projection.grid.axis())
     }
 
     /// Freezes a recording projected onto a session grid using stamped alignment.
@@ -103,14 +75,6 @@ impl WarpMap {
             MapPosition::Session(output),
         ))
     }
-
-    /// The source axis of a projected map; identity maps have no fixed axis.
-    #[must_use]
-    pub fn source_axis(&self) -> Option<MapAxis> {
-        self.projection
-            .as_ref()
-            .map(|projection| projection.source.axis())
-    }
 }
 
 #[cfg(test)]
@@ -135,8 +99,17 @@ mod tests {
     fn projected_map_uses_absolute_source_endpoints() {
         use std::num::NonZeroU32;
 
-        use crate::{BeatGridQuery, mock};
-        let plan = mock::projected_plan(120.0, 180.0, NonZeroU32::new(48_000).expect("rate"));
+        use crate::{Beat, BeatGridQuery, mock};
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let source = mock::asset_grid(120.0, rate);
+        let target = mock::session_grid(180.0, rate);
+        let cue = Beat::new(0.0).expect("finite cue");
+        let alignment = BeatAlignment::new(
+            MapPoint::new(source.stamp(), cue),
+            MapPoint::new(target.stamp(), cue),
+        );
+        let plan = WarpMap::projected(source, target, alignment, WarpMapRevision::first())
+            .expect("compatible axes");
         let BeatGridQuery::Resolved(source) = plan.source_at(SessionFrame::new(128)) else {
             panic!("projected source resolves");
         };

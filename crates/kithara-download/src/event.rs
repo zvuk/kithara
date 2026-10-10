@@ -65,15 +65,12 @@ pub enum RequestPriority {
 /// Why a fetch was cancelled.
 ///
 /// Distinguishes the cancel paths so subscribers can tell e.g. a
-/// seek-driven epoch flush from a peer drop or a downloader-wide
-/// shutdown.
+/// source-request cancellation from a peer drop or a downloader-wide shutdown.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, kithara::IntoProbeArg)]
 #[probe_arg(encode_only)]
 pub enum CancelReason {
-    /// The protocol's epoch cancel token fired (e.g. HLS bumped
-    /// `seek_epoch`, invalidating in-flight fetches of the prior
-    /// epoch).
+    /// The protocol's per-request cancel token fired, retiring in-flight work.
     EpochCancel,
     /// The peer's own cancel token fired — the last `PeerHandle` clone
     /// was dropped, the protocol is shutting down its track.
@@ -184,7 +181,6 @@ pub enum DownloaderEvent {
         to: RequestPriority,
     },
 }
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;

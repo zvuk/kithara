@@ -339,11 +339,17 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(
         drop(second_output);
     });
 
-    let terminal = assert_no_alloc(|| effect.flush());
-    permit_alloc(|| {
-        effect.prepare(spec);
-        drop(terminal);
-    });
+    loop {
+        let terminal = assert_no_alloc(|| effect.drain(8_192).expect("prepared terminal drain"));
+        let finished = terminal.is_none();
+        permit_alloc(|| {
+            effect.prepare(spec);
+            drop(terminal);
+        });
+        if finished {
+            break;
+        }
+    }
 }
 
 #[kithara::test]
@@ -397,7 +403,8 @@ fn timestretch_pending_and_maximum_output_are_allocation_free(
 
     let terminal = assert_no_alloc(|| {
         pending
-            .flush()
+            .drain(8_192)
+            .expect("prepared terminal drain")
             .unwrap_or_else(|| panic!("pending frame plus terminal tail must render"))
     });
     permit_alloc(|| {

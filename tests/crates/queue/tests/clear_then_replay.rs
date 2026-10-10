@@ -4,7 +4,7 @@
 use kithara::{
     host::HostConfig,
     platform::time::Duration,
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -22,11 +22,11 @@ use crate::bufpool_ext::pools;
 
 /// Emptying the queue while it plays must not cost the next track its output.
 ///
-/// `clear` stops the engine and disarms every selection, so what comes after it
-/// starts from the same state a fresh player would — except that the output is
-/// already built. A player that only arms its output on the first start plays
-/// the replacement silently: the track loads, its duration lands, and the
-/// playhead never leaves zero.
+/// `clear` disarms every selection while the Host keeps the deck and its
+/// output, so what comes after it starts from the same state a fresh player
+/// would. A player that only arms its output on its first track plays the
+/// replacement silently: the track loads, its duration lands, and the playhead
+/// never leaves zero.
 #[kithara::test(tokio, timeout(Duration::from_secs(180)))]
 async fn a_cleared_queue_plays_the_track_appended_after_it(
     #[future(awt)] served_mp3: (TestServerHelper, Url),
@@ -37,19 +37,16 @@ async fn a_cleared_queue_plays_the_track_appended_after_it(
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let session_pools = pools();
     let session = HostConfig::offline(session_pools.clone()).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.settings().sample_rate())
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(session_pools.clone()).build(),
-            ))
-            .build(),
-    );
+    let player = kithara::play::ResourcePrep::builder()
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::builder(session_pools.clone()).build(),
+        ))
+        .build();
     let queue = OfflineQueue::paced(
         session,
         Queue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(player)
                 .store(store.clone())
                 .build(),
         ),
@@ -77,7 +74,10 @@ async fn a_cleared_queue_plays_the_track_appended_after_it(
         .await
         .expect("the first track must play before the queue is emptied");
 
-    queue.run(kithara::queue::QueueControl::clear).await;
+    queue
+        .run(kithara::queue::QueueControl::clear)
+        .await
+        .expect("the queue clears");
     assert_eq!(queue.control().len(), 0, "clear must empty the queue");
 
     let mut rx = queue.subscribe();

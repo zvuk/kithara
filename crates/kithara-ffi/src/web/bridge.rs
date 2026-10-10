@@ -1,5 +1,5 @@
 use std::sync::{
-    LazyLock,
+    LazyLock, OnceLock,
     atomic::{AtomicI64, Ordering},
 };
 
@@ -15,7 +15,7 @@ use kithara::{
 use wasm_bindgen::JsValue;
 
 use crate::{
-    pools::{FfiHost, FfiPools, Pools, build as build_pools},
+    pools::{FfiHost, FfiPools, FfiQueueControl, Pools, build as build_pools},
     web::commands::WorkerCmd,
 };
 
@@ -49,8 +49,6 @@ fn ensure_host_channel() -> Result<(wasm::HostSender<FfiPools>, Pools), JsValue>
     let (sender, receiver) = wasm::worker_host_channel(&host)
         .map_err(|error| JsValue::from_str(&format!("host channel failed: {error}")))?;
     play_wasm::spawn_webcodecs_probe(pools.clone());
-    wasm::warm_up_audio(&host)
-        .map_err(|error| JsValue::from_str(&format!("audio warm-up failed: {error}")))?;
     *guard = Some(HostChannel {
         receiver,
         _host: host,
@@ -91,6 +89,8 @@ pub(crate) fn set_current_track_id(id: Option<TrackId>) {
 pub(crate) struct WorkerBridge {
     cmd_tx: Mutex<Option<mpsc::Sender<WorkerCmd>>>,
     start_lock: Mutex<()>,
+    queue: OnceLock<FfiQueueControl>,
+    queue_rx: Mutex<Option<mpsc::Receiver<FfiQueueControl>>>,
 }
 
 impl WorkerBridge {
@@ -108,11 +108,20 @@ impl WorkerBridge {
         }
     }
 
-    /// Current item duration (seconds) read from the worker's audio
-    /// session bridge. `0.0` when unknown.
+    fn queue(&self) -> Option<&FfiQueueControl> {
+        if let Some(queue) = self.queue.get() {
+            return Some(queue);
+        }
+        let received = self.queue_rx.lock().as_ref()?.try_recv().ok()?;
+        Some(self.queue.get_or_init(|| received))
+    }
+
+    /// Current item duration (seconds) read from the deck's published
+    /// snapshot. `0.0` when unknown.
     pub(crate) fn duration_secs(&self) -> f64 {
-        let _ = self;
-        wasm::bridge_duration_secs()
+        self.queue()
+            .and_then(FfiQueueControl::duration_seconds)
+            .unwrap_or(0.0)
     }
 
     /// Boot the engine worker once. Idempotent: subsequent calls return
@@ -132,36 +141,44 @@ impl WorkerBridge {
         };
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (queue_tx, queue_rx) = mpsc::channel();
+        *self.queue_rx.lock() = Some(queue_rx);
         *self.lock_cmd_tx() = Some(cmd_tx);
 
         let worker = thread::spawn(move || {
-            crate::web::worker::worker_main(cmd_rx, host_sender, pools);
+            crate::web::worker::worker_main(cmd_rx, host_sender, pools, queue_tx);
         });
         std::mem::forget(worker);
     }
 
-    /// Whether the worker's audio session is currently playing.
-    pub(crate) fn is_playing(&self) -> bool {
-        let _ = self;
-        wasm::bridge_is_playing()
+    delegate::delegate! {
+        to self {
+            /// Whether the deck's published snapshot is currently playing.
+            #[expr($.is_some_and(FfiQueueControl::is_playing))]
+            #[call(queue)]
+            pub(crate) fn is_playing(&self) -> bool;
+            /// Audio-thread process calls served so far. Monotonic, so a caller
+            /// samples twice and reads the delta.
+            #[expr($.map_or(0, FfiQueueControl::mixer_blocks))]
+            #[call(queue)]
+            pub(crate) fn process_calls(&self) -> u64;
+            /// Underruns the audio thread has recorded so far.
+            #[expr($.map_or(0, |queue| queue.mixer_metrics().underruns()))]
+            #[call(queue)]
+            pub(crate) fn underruns(&self) -> u64;
+        }
     }
 
     fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
         self.cmd_tx.lock()
     }
 
-    /// Live playback position (seconds) read from the worker's audio
-    /// session bridge. `0.0` when no item is loaded.
+    /// Live playback position (seconds) read from the deck's published
+    /// snapshot. `0.0` when no item is loaded.
     pub(crate) fn position_secs(&self) -> f64 {
-        let _ = self;
-        wasm::bridge_position_secs()
-    }
-
-    /// Audio-thread process calls served so far. Monotonic, so a caller
-    /// samples twice and reads the delta.
-    pub(crate) fn process_calls(&self) -> u64 {
-        let _ = self;
-        wasm::bridge_process_calls()
+        self.queue()
+            .and_then(FfiQueueControl::position_seconds)
+            .unwrap_or(0.0)
     }
 
     /// Forward a command to the worker.
@@ -181,11 +198,5 @@ impl WorkerBridge {
             .ok_or_else(|| JsValue::from_str("command channel not ready"))?;
         tx.send(cmd)
             .map_err(|_| JsValue::from_str("worker channel closed"))
-    }
-
-    /// Underruns the audio thread has recorded so far.
-    pub(crate) fn underruns(&self) -> u64 {
-        let _ = self;
-        wasm::bridge_underruns()
     }
 }

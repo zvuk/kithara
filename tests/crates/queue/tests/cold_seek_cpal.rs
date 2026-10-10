@@ -10,10 +10,7 @@ use kithara::{
         CancelToken, time,
         time::{Duration, Instant, timeout},
     },
-    play::{
-        PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
-        ResourceSrc,
-    },
+    play::{PlayError, PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{event::TestEvent, kithara, offline::QueueTicker};
@@ -113,13 +110,10 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let owner = OffThread::spawn("cpal-seek-host", move || {
         let mut host = Host::new(HostConfig::builder().build())?;
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(host.sample_rate())
-                .worker(worker)
-                .build(),
-        );
-        let queue = Queue::new(QueueConfig::builder().player(player).build());
+        let player = kithara::play::ResourcePrep::builder()
+            .worker(worker)
+            .build();
+        let queue = Queue::new(QueueConfig::builder().prep(player).build());
         let queue = host.insert(queue)?;
         Ok::<_, PlayError>((queue, host))
     })
@@ -127,7 +121,8 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     .expect("create playback host");
     owner
         .call(|(queue, _)| queue.set_volume(kithara_integration_tests::e2e::volume()))
-        .await;
+        .await
+        .expect("the player takes the volume");
     let queue = owner.call(|(queue, _)| queue.control().clone()).await;
 
     let queue_for_tick = queue.clone();

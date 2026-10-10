@@ -142,8 +142,7 @@ async fn abr_auto_switch_during_playback(
         .events(bus)
         .media_info(wav_info)
         .build();
-    let mut audio = worker
-        .load(config)
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>>");
 

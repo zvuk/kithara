@@ -18,7 +18,7 @@ use kithara::{
         },
     },
     prelude::{PlaybackResamplerBackend, Resource},
-    worker::Worker,
+    worker::{Wake, Worker},
 };
 use tracing::warn;
 
@@ -187,7 +187,7 @@ async fn run_analysis(
     rate: NonZeroU32,
     pass: AnalysisPass,
 ) {
-    let Some(reader) = open_reader(config, &cancel, rate).await else {
+    let Some(reader) = open_reader(config, &cancel, rate, worker.wake_handle()).await else {
         return;
     };
     worker.start(pass, reader);
@@ -197,21 +197,22 @@ async fn open_reader(
     mut config: AppResourceConfig,
     cancel: &CancelToken,
     rate: NonZeroU32,
+    wake: Wake,
 ) -> Option<Box<dyn AudioReader>> {
     if cancel.is_cancelled() {
         return None;
     }
     config.set_cancel(cancel.child());
     config.set_host_sample_rate(rate);
-    let mut resource = match Resource::new(config).await {
-        Ok(r) => r,
-        Err(e) => {
-            warn!(?e, "analysis: resource open failed");
+    let mut resource = match Resource::open(config, wake).await {
+        Ok(resource) => resource,
+        Err(error) => {
+            warn!(?error, "analysis: resource open failed");
             return None;
         }
     };
-    if let Err(e) = resource.preload().await {
-        warn!(?e, "analysis: preload failed");
+    if let Err(error) = resource.preload().await {
+        warn!(?error, "analysis: preload failed");
         return None;
     }
     Some(resource.into())

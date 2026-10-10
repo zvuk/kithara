@@ -133,12 +133,18 @@ class KitharaPlayer(config: Config = Config()) {
     /**
      * Target playback speed used by [play]. While the player is
      * playing, [rate] equals this; on pause [rate] falls to `0`.
-     * Mirrors the iOS `AudioPlayerProtocol.playingRate`.
+     * Mirrors the iOS `AudioPlayerProtocol.playingRate`. Setting a rate the
+     * player refuses, such as one that is not a finite number, throws
+     * [KitharaError] and leaves the value as it was.
      */
     var playingRate: Float
         get() = inner.playingRate()
         set(value) {
-            inner.setPlayingRate(value)
+            try {
+                inner.setPlayingRate(value)
+            } catch (error: FfiException) {
+                throw KitharaError.fromFfi(error)
+            }
         }
 
     var crossfadeSettings: CrossfadeSettings
@@ -155,18 +161,26 @@ class KitharaPlayer(config: Config = Config()) {
         get() = inner.actionAtItemEnd().toPublic()
         set(value) { inner.setActionAtItemEnd(value.toFfi()) }
 
-    /** Volume scalar, usually 0.0 to 1.0. */
+    /** Volume scalar, usually 0.0 to 1.0; a refused change throws [KitharaError]. */
     var volume: Float
         get() = inner.volume()
         set(value) {
-            inner.setVolume(value)
+            try {
+                inner.setVolume(value)
+            } catch (error: FfiException) {
+                throw KitharaError.fromFfi(error)
+            }
         }
 
-    /** Mute state. */
+    /** Mute state; a refused change throws [KitharaError]. */
     var isMuted: Boolean
         get() = inner.isMuted()
         set(value) {
-            inner.setMuted(value)
+            try {
+                inner.setMuted(value)
+            } catch (error: FfiException) {
+                throw KitharaError.fromFfi(error)
+            }
         }
 
     /** Starts or resumes playback. */

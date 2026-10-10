@@ -29,7 +29,6 @@ kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "te
 
 aes = { workspace = true }
 bytes = { workspace = true }
-delegate = { workspace = true }
 num-traits = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "stream"] }
 serial_test = { workspace = true }

@@ -4,7 +4,7 @@
 use kithara::{
     host::HostConfig,
     platform::time::Duration,
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource},
 };
 use kithara_integration_tests::{
@@ -44,19 +44,16 @@ async fn play_issued_before_the_load_lands_still_starts_the_track(
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let session_pools = pools();
     let session = HostConfig::offline(session_pools.clone()).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.settings().sample_rate())
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(session_pools.clone()).build(),
-            ))
-            .build(),
-    );
+    let player = kithara::play::ResourcePrep::builder()
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::builder(session_pools.clone()).build(),
+        ))
+        .build();
     let queue = OfflineQueue::paced(
         session,
         Queue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(player)
                 .store(store.clone())
                 .build(),
         ),

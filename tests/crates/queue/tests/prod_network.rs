@@ -21,7 +21,7 @@ use kithara::{
         CancelToken,
         time::{Duration, sleep},
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_app::{
@@ -102,13 +102,10 @@ fn build_prod_ctx() -> ProdCtx {
 
 async fn prod_queue(prod: &ProdCtx, pacing: Option<Duration>) -> OfflineQueue<AppPools> {
     let session = HostConfig::offline(prod.config.worker.pools().clone()).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.settings().sample_rate())
-            .worker(prod.config.worker.clone())
-            .build(),
-    );
-    let queue = Queue::new(QueueConfig::builder().player(player).build());
+    let player = kithara::play::ResourcePrep::builder()
+        .worker(prod.config.worker.clone())
+        .build();
+    let queue = Queue::new(QueueConfig::builder().prep(player).build());
     match pacing {
         Some(interval) => OfflineQueue::paced(session, queue, interval).await,
         None => OfflineQueue::new(session, queue).await,
@@ -159,7 +156,6 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
 }
 
 async fn apply_action_to_queue(queue: &OfflineQueue<AppPools>, action: &Action) {
-    use kithara::play::SeekOutcome;
     let label = action.label();
     let duration = queue.duration_seconds().unwrap_or(0.0);
     assert!(duration > 0.0, "[{label}] duration unknown");
@@ -167,11 +163,13 @@ async fn apply_action_to_queue(queue: &OfflineQueue<AppPools>, action: &Action) 
         Action::SeekRatio(r) | Action::SeekNearEnd(r) => {
             let target = (duration * r).clamp(0.0, duration);
             let pre_track = queue.current().map(|e| e.id);
-            let outcome = queue
+            queue
                 .run(move |q| q.seek(target))
                 .await
                 .unwrap_or_else(|e| panic!("[{label}] seek Err: {e}"));
-            if matches!(outcome, SeekOutcome::PastEof { .. }) {
+            // A seek to the known end ends the track: there is no position
+            // to settle at.
+            if target >= duration {
                 return;
             }
             let started = kithara::platform::time::Instant::now();
@@ -358,7 +356,6 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
 /// decoder hasn't parsed the init segment's mvhd yet, so seek targets
 /// past the demuxer-known timestamp fail `OutOfRange`.
 async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
-    use kithara::play::SeekOutcome;
     let prod = build_prod_ctx();
     let queue = prod_queue(&prod, Some(RENDER_PACE)).await;
     let q_for_tick = queue.control();
@@ -396,20 +393,10 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
         sleep(Duration::from_millis(50)).await;
     };
     let target = (duration * ratio).clamp(0.0, duration);
-    let outcome = queue
+    queue
         .run(move |q| q.seek(target))
         .await
         .unwrap_or_else(|e| panic!("queue.seek Err: {e}"));
-    if let SeekOutcome::PastEof {
-        duration: reported_dur,
-        ..
-    } = outcome
-    {
-        panic!(
-            "PastEof for ratio={ratio:.2} target={target:.2}s \
-             reported_dur={reported_dur:?} queue.duration={duration:.2}s"
-        );
-    }
     let started = kithara::platform::time::Instant::now();
     let budget = Duration::from_secs(15);
     let mut landed = false;
@@ -632,7 +619,9 @@ fn assert_audio_live(samples: &[f32], label: &str) {
 /// silence (the timeline commits the seek-landed position before any
 /// chunk is decoded). Reading PCM is the ground truth.
 async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
-    use kithara::play::SeekOutcome;
+    /// How far the published position may sit from a target the seek landed
+    /// on; a seek judged past the end leaves the pre-seek position instead.
+    const LANDING_SLACK_S: f64 = 1.0;
 
     let prod = build_prod_ctx();
     let queue = prod_queue(&prod, None).await;
@@ -679,14 +668,16 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
                 .duration_seconds()
                 .expect("duration known after wait_for_handover");
             let target = (duration * 0.90).clamp(0.0, duration);
-            let outcome = queue
+            queue
                 .run(move |q| q.seek(target))
                 .await
                 .unwrap_or_else(|e| panic!("{ctx} seek Err: {e}"));
+            let landed = queue.position_seconds();
             assert!(
-                matches!(outcome, SeekOutcome::Landed { .. }),
-                "{ctx} seek to {target:.2}s of a {duration:.2}s track reported {outcome:?} — \
-                 the reader parked at the end, so there is no post-seek audio to measure"
+                landed.is_some_and(|landed| (landed - target).abs() < LANDING_SLACK_S),
+                "{ctx} seek to {target:.2}s of a {duration:.2}s track did not land \
+                 (the queue reads {landed:?}) — the reader parked at the end, so there \
+                 is no post-seek audio to measure"
             );
 
             let phase2 = format!("{ctx} phase2 (post-near-end-seek)");

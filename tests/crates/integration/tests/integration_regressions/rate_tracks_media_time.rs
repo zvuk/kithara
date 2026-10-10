@@ -4,11 +4,11 @@ use std::path::Path;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    events::TrackId,
     platform::time::{self, Duration},
-    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
+    play::{PlayerEvent, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
+    bufpool_ext::TestPools,
     kithara,
     offline::{OfflinePlayer, OfflinePlayerOptions},
 };
@@ -29,7 +29,11 @@ const DRAIN_BLOCK_BUDGET: usize = 4_000;
 const DRAIN_SHARE_NUM: usize = 3;
 const DRAIN_SHARE_DEN: usize = 4;
 
-async fn file_resource(harness: &OfflinePlayer, path: &Path, store_dir: &Path) -> Resource {
+async fn file_resource(
+    harness: &OfflinePlayer,
+    path: &Path,
+    store_dir: &Path,
+) -> ResourceConfig<TestPools> {
     let pools = harness.worker().pools().clone();
     let config: ResourceConfig<_> = ResourceConfig::for_src(
         ResourceSrc::parse(path.to_str().expect("utf-8 fixture path"))
@@ -43,11 +47,7 @@ async fn file_resource(harness: &OfflinePlayer, path: &Path, store_dir: &Path) -
             .build(),
     )
     .build();
-    let config = harness
-        .player()
-        .prepare_config(config)
-        .expect("offline player remains open");
-    Resource::new(config).await.expect("open local resource")
+    config
 }
 
 async fn render_blocks(harness: &OfflinePlayer, blocks: usize) {
@@ -81,15 +81,11 @@ async fn blocks_until_end(drain_tone: &'static [u8], temp_dir: &TestTempDir, rat
         &temp_dir.path().join(format!("store-{tag}")),
     )
     .await;
+    harness.load_and_fadein(resource).await;
     harness
-        .with_player(move |player| {
-            player.insert(resource, TrackId::allocate(), None);
-            player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
-        })
-        .await;
-    harness.player().set_default_rate(rate);
+        .with_queue(move |player| player.set_default_rate(rate))
+        .await
+        .expect("a finite rate is accepted");
 
     let mut blocks = 0usize;
     let mut ended_at = None;
@@ -126,14 +122,7 @@ async fn media_time_advances_with_the_playing_rate(tone_mp3: &'static [u8], temp
     let path = temp_dir.path().join("rate.mp3");
     std::fs::write(&path, tone_mp3).expect("write mp3 fixture");
     let resource = file_resource(&harness, &path, &temp_dir.path().join("store")).await;
-    harness
-        .with_player(move |player| {
-            player.insert(resource, TrackId::allocate(), None);
-            player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
-        })
-        .await;
+    harness.load_and_fadein(resource).await;
 
     render_blocks(&harness, SETTLE_BLOCKS).await;
     let baseline = media_advance(&harness, MEASURE_BLOCKS).await;
@@ -142,7 +131,10 @@ async fn media_time_advances_with_the_playing_rate(tone_mp3: &'static [u8], temp
         "precondition: media time must advance at rate 1.0, got {baseline}s"
     );
 
-    harness.player().set_default_rate(FAST_RATE);
+    harness
+        .with_queue(move |player| player.set_default_rate(FAST_RATE))
+        .await
+        .expect("a finite rate is accepted");
     render_blocks(&harness, SETTLE_BLOCKS).await;
     let accelerated = media_advance(&harness, MEASURE_BLOCKS).await;
 

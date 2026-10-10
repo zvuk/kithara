@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 #[cfg(test)]
 use kithara_abr::{AbrMode, VariantIndex};
 use kithara_bufpool::HasPool;
@@ -67,7 +65,6 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     bus: Arc<DeferredBus<HlsEvent>>,
-    seek_epoch_handle: Arc<AtomicU64>,
     route: HlsReaderRoute<S>,
     /// `(variant_index, segment_index)` of the last segment the
     /// reader was observed in. A change between `on_chunk` calls
@@ -75,13 +72,7 @@ where
     /// across a seek is intentionally treated as a no-op for the
     /// boundary event (the seek itself was already announced).
     last_segment: Option<(usize, usize)>,
-    initial_seek_published: bool,
-    /// Cursor at hooks-creation time. After a `Seek` failure the
-    /// decoder may discard the seek outcome and resume at the
-    /// pre-seek cursor; we publish that fallback as a `ReaderSeek`
-    /// the first time `on_chunk` fires so the bus subscriber sees a
-    /// non-default `seek_epoch` even if `on_seek` never landed.
-    initial_cursor: u64,
+    /// Last observed cursor, used as the origin of a landed reader seek.
     last_cursor: u64,
     last_progress_cursor: u64,
     last_segment_start_cursor: u64,
@@ -91,20 +82,15 @@ impl<S> HlsReaderEventSink<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    pub(crate) fn new(
-        bus: Arc<DeferredBus<HlsEvent>>,
-        coord: Arc<HlsCoord<S>>,
-        seek_epoch_handle: Arc<AtomicU64>,
-    ) -> Self {
-        Self::with_route(bus, HlsReaderRoute::Active(coord), seek_epoch_handle)
+    pub(crate) fn new(bus: Arc<DeferredBus<HlsEvent>>, coord: Arc<HlsCoord<S>>) -> Self {
+        Self::with_route(bus, HlsReaderRoute::Active(coord))
     }
 
     pub(crate) fn for_session(
         bus: Arc<DeferredBus<HlsEvent>>,
         session: Arc<HlsSession<S>>,
-        seek_epoch_handle: Arc<AtomicU64>,
     ) -> Self {
-        Self::with_route(bus, HlsReaderRoute::Session(session), seek_epoch_handle)
+        Self::with_route(bus, HlsReaderRoute::Session(session))
     }
 
     fn maybe_publish_end_of_stream(&mut self) {
@@ -156,18 +142,6 @@ where
         });
     }
 
-    fn publish_initial_seek(&mut self, cursor: u64) {
-        if self.initial_seek_published {
-            return;
-        }
-        self.initial_seek_published = true;
-        let seek_epoch = self.seek_epoch_handle.load(Ordering::Acquire);
-        if seek_epoch == 0 {
-            return;
-        }
-        self.publish_seek(self.initial_cursor, cursor);
-    }
-
     fn publish_seek(&self, from: u64, to: u64) {
         let (variant, segment_index, byte_in_segment) = match self.route.find_at_offset(to) {
             Some((seg, seg_start, _size)) => (
@@ -177,9 +151,7 @@ where
             ),
             None => (None, None, None),
         };
-        let seek_epoch = self.seek_epoch_handle.load(Ordering::Acquire);
         self.bus.enqueue(HlsEvent::ReaderSeek {
-            seek_epoch,
             variant,
             segment_index,
             byte_in_segment,
@@ -188,21 +160,14 @@ where
         });
     }
 
-    fn with_route(
-        bus: Arc<DeferredBus<HlsEvent>>,
-        route: HlsReaderRoute<S>,
-        seek_epoch_handle: Arc<AtomicU64>,
-    ) -> Self {
+    fn with_route(bus: Arc<DeferredBus<HlsEvent>>, route: HlsReaderRoute<S>) -> Self {
         let last_cursor = route.position();
         Self {
             bus,
             route,
             last_cursor,
             last_segment_start_cursor: last_cursor,
-            seek_epoch_handle,
-            initial_cursor: last_cursor,
             last_progress_cursor: last_cursor,
-            initial_seek_published: false,
             last_segment: None,
         }
     }
@@ -220,7 +185,6 @@ where
         let cursor = self.route.position();
         match signal {
             ReaderChunkSignal::Chunk => {
-                self.publish_initial_seek(cursor);
                 self.maybe_publish_segment_start(cursor);
                 self.maybe_publish_read_progress(cursor);
                 self.last_cursor = cursor;
@@ -231,7 +195,6 @@ where
     }
 
     fn on_seek(&mut self, signal: ReaderSeekSignal) {
-        self.initial_seek_published = true;
         let ReaderSeekSignal::Landed {
             landed_byte,
             preroll,
@@ -251,10 +214,9 @@ where
         self.publish_seek(from, to);
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::sync::{OnceLock, atomic::AtomicU64};
+    use std::sync::OnceLock;
 
     use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
@@ -263,7 +225,7 @@ mod tests {
         CancelToken,
         sync::{Arc, ThreadGate},
     };
-    use kithara_stream::{AudioCodec, ContainerFormat, PlayheadState, SeekState};
+    use kithara_stream::{ActivityWriter, AudioCodec, ContainerFormat, PlayheadState};
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
@@ -298,7 +260,6 @@ mod tests {
                     discriminator: Some("reader-test".to_owned()),
                 })
                 .expect("reader asset scope"),
-            seek_epoch: 0,
             look_ahead_segments: None,
             signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
             config: Arc::new(
@@ -367,7 +328,6 @@ mod tests {
         let variant = VariantParts {
             segments,
             init: None,
-            seek_obs: Arc::new(SeekState::new()) as Arc<dyn kithara_stream::SeekObserve>,
             codec: playlist.variant_codec(0),
             container: playlist.variant_container(0),
         }
@@ -394,7 +354,7 @@ mod tests {
                 signal: ctx.signal,
             },
             Arc::new(PlayheadState::new()),
-            Arc::new(SeekState::new()),
+            ActivityWriter::new(),
             handle,
             publisher,
             Arc::from(vec![variant]),
@@ -407,11 +367,7 @@ mod tests {
         let mut events = bus.subscribe();
         let coord = coord(&bus);
         coord.set_position(60);
-        let mut sink = HlsReaderEventSink::new(
-            Arc::new(DeferredBus::new(bus, 8)),
-            coord.clone(),
-            Arc::new(AtomicU64::new(0)),
-        );
+        let mut sink = HlsReaderEventSink::new(Arc::new(DeferredBus::new(bus, 8)), coord.clone());
 
         sink.on_chunk(ReaderChunkSignal::Chunk);
         coord.set_position(100);

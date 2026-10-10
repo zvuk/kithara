@@ -14,18 +14,16 @@
 
 # kithara-sync
 
-`kithara-sync` owns the recursive synchronization group: its direct-child
-membership policy, its ordered topology transactions, and the control-plane
-protocol through which operations are admitted and acknowledged.
+Pure synchronization mathematics: sided entry placement, grid coverage, phase
+error, bounded speed correction, and continuous piecewise-constant tempo
+trajectories. It owns no player, renderer, group topology, or receipt custody.
 
-It owns `SyncGroup`, the live owner state behind it, the operation and
-admission vocabulary, the immutable topology snapshot, and the monotonic
-topology, operation, and load identities. Musical geometry — beat grids, beat
-alignment, warp maps, and the presentation frontier — remains in
-`kithara-warp`. Session timeline and clock ownership remain in `kithara-host`,
-and execution, epochs, and real-time residency remain in `kithara-play`.
+## Usage
 
-The crate has no renderer, executor, platform backend, or transport
-responsibility, and never depends on a player, host, or queue.
+Construct a `TempoTrajectory` from a `TempoStep`, meter, and output sample rate.
+Use `entry(&trajectory, &grid, position, Bound::AtOrAfter(frame))` or
+`Bound::AtOrBefore(frame)` to find the nearest in-phase entry while preserving
+the media position, expressed as `kithara_platform::time::Duration`. Use `covers` before
+`phase_error`, and `speed` for the host-to-track tempo ratio.
 
-See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-sync) for the ownership contract.
+See the [Sync contract](https://github.com/zvuk/kithara/wiki/kithara-sync).

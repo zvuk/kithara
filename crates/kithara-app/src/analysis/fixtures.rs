@@ -3,7 +3,7 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
-use kithara::{
+use ::kithara::{
     analysis::{
         AnalysisFingerprint, AnalysisProgress, AnalysisToken, BeatArtifact, BeatGridModel,
         BeatGridState, BeatSnapshot, BeatState, Bucket, GRID_SCHEMA_VERSION, GridBeat, RangeSet,
@@ -12,25 +12,26 @@ use kithara::{
     assets::StorageBackend,
     download::{Downloader, DownloaderConfig},
     events::TrackId,
-    host::{HostConfig, HostSettingsControl},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
         time::{Duration, sleep},
         tokio::{
+            self,
             runtime::Handle,
             sync::{mpsc, oneshot, watch},
             task,
         },
     },
-    play::{PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
+    play::{PlayWorkerConfig, ResourcePrep, policy::DomainKeyPolicy},
     prelude::{ArtifactSource, ResourceSrc},
     queue::QueueConfig,
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
 };
 use kithara_test_fixtures::{asset::Asset, assets};
-use kithara_test_utils::off_thread::OffThread;
+use kithara_test_utils::{kithara, off_thread::OffThread};
 use url::Url;
 
 use super::{Entry, Request, TrackArtifacts};
@@ -157,13 +158,8 @@ pub(crate) fn queue() -> (AppHost, AppQueueControl) {
     let worker = AppWorker::new(PlayWorkerConfig::builder(test_pools()).build());
     let mut host =
         AppHost::new(HostConfig::offline(worker.pools().clone()).build()).expect("test host");
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .worker(worker)
-            .sample_rate(host.sample_rate())
-            .build(),
-    );
-    let queue = AppQueue::new(QueueConfig::builder().player(player).build());
+    let prep = ResourcePrep::builder().worker(worker).build();
+    let queue = AppQueue::new(QueueConfig::builder().prep(prep).build());
     let queue = host.insert(queue).expect("host accepts queue");
     let control = queue.control().clone();
     (host, control)
@@ -270,6 +266,8 @@ pub(crate) async fn track_sourced(
         .worker(app.worker.clone())
         .store(app.store.clone())
         .audio(app.audio.clone())
+        .maybe_preload_chunks(app.preload_chunks)
+        .maybe_audio_buffer_chunks(app.audio_buffer_chunks)
         .hls(app.hls.clone())
         .file(app.file.clone())
         .maybe_beat_grid(beat_grid)
@@ -371,6 +369,7 @@ pub(crate) fn long_wav() -> String {
     asset_url(&assets::sine_wav_a440_12s())
 }
 
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 pub(crate) async fn next_subscribe(
     requests: &mut mpsc::Receiver<Request>,
 ) -> (
@@ -378,7 +377,13 @@ pub(crate) async fn next_subscribe(
     oneshot::Sender<watch::Receiver<Option<TrackArtifacts>>>,
 ) {
     loop {
-        match requests.recv().await {
+        hang_tick!();
+        let request = tokio::select! {
+            request = requests.recv() => request,
+            () = sleep(Duration::from_millis(100)) => continue,
+        };
+        hang_reset!();
+        match request {
             Some(Request::Subscribe {
                 track_id, reply, ..
             }) => return (track_id, reply),
@@ -431,8 +436,10 @@ pub(crate) async fn serve_subscribe(
 /// the virtual clock; a deck parked on a timer then waits on a clock this loop
 /// is holding still, and the budget expires on a publication that was only
 /// ever one clock step away.
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 pub(crate) async fn wait_for_revision(state: &Mutex<UiState>, revision: u64) {
     for _ in 0..consts::REVISION_POLLS {
+        hang_tick!();
         if state
             .lock()
             .analysis
@@ -441,6 +448,7 @@ pub(crate) async fn wait_for_revision(state: &Mutex<UiState>, revision: u64) {
             .map(TrackAnalysis::revision)
             == Some(revision)
         {
+            hang_reset!();
             return;
         }
         sleep(consts::REVISION_POLL_INTERVAL).await;

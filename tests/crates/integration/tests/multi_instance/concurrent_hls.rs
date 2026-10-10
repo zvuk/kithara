@@ -5,12 +5,13 @@ use kithara::{
     audio::AudioConfig,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
+    mock::LaneAudio,
     reads::{ReadLimit, read_for_concurrency_check},
 };
 use kithara_test_fixtures::integration_fixtures::concurrent_wav;
@@ -33,6 +34,7 @@ async fn create_hls_server(wav_data: Arc<Vec<u8>>, abr_variants: usize) -> Creat
         .segments_per_variant(consts::SEGMENT_COUNT)
         .segment_size(SawWav::DEFAULT.segment_size)
         .segment_duration_secs(SawWav::DEFAULT.segment_duration_secs())
+        .codecs("wav".to_string())
         .custom_data(wav_data);
     let ladder = if abr_variants > 1 {
         ladder.variant_bandwidths(vec![5_000_000, 1_000_000])
@@ -51,7 +53,7 @@ async fn create_hls_audio(
     server: &CreatedHls,
     cache_dir: &Path,
     abr: AbrMode,
-) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
+) -> LaneAudio<Stream<Hls<TestPools>>, TestPools> {
     let url = server.master_url();
     let cancel = CancelToken::never();
     let pools = pools();
@@ -75,14 +77,16 @@ async fn create_hls_audio(
         .build();
     // Park on ring underrun instead of surfacing Pending, so the blocking
     // readers never spin against the virtual clock.
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .media_info(wav_info)
-        .block_on_underrun(true)
-        .build();
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .media_info(wav_info)
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    worker
-        .load(config)
+    kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>>")
 }

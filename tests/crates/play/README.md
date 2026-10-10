@@ -7,7 +7,6 @@ keeps an independent cached artifact.
 
 Player, resource, engine, and RT processor contracts that drive
 `kithara-play` alone are crate tests in `kithara-play`. Host mixing contracts
-live in `kithara-host-tests`, warp tempo/pitch and rate-response contracts in
-`kithara-warp-tests`, and synchronization contracts across Host, Player, and
-Queue in `kithara-sync-tests`. Functional assertions determine ownership; the
-test driver does not.
+live in `kithara-host-tests`, and warp tempo/pitch and rate-response contracts
+in `kithara-warp-tests`. Functional assertions determine ownership; the test
+driver does not.

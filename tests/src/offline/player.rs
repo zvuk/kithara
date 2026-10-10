@@ -1,60 +1,59 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::audio::AudioReader;
 use kithara::{
-    audio::AudioReader,
     decode::GaplessMode,
     effects::eq::EqBandConfig,
     events::{EventReceiver, TrackId},
-    host::{HostConfig, HostOwned, HostSettings},
+    host::{DeckControl, HostConfig, HostOwned, HostSettings},
     platform::{
         maybe_send::MaybeSend,
         sync::{Arc, Mutex},
+        time::WallInstant,
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
-        CrossfadeSettings, DEFAULT_CROSSFADE_DURATION, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        PlayerEvent, PlayerImpl, Resource,
-        bridge::RtMetricsSnapshot,
-        player::{Player, PlayerControl, PlayerControlSource},
+        CrossfadeSettings, HostedDeck, PlayWorker, PlayWorkerConfig, PlayerEvent, PlayerFactory,
+        Resource, ResourcePrep, TrackFactory, TrackSettings,
     },
-    queue::{Queue, QueueConfig, QueueControl},
+    queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     warp::WarpConfig,
 };
+use kithara_render::bridge::{DeckSnapshot, RtMetricsSnapshot};
 
-use super::{OfflineHostHarness, host::offline_pools};
+use super::{
+    OfflineHostHarness,
+    host::{ObservedDeck, offline_pools},
+};
 use crate::{
+    assets_ext::memory_asset_store,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
 };
 
-/// Product Player on an offline Host, rendered deterministically by the test.
-///
-/// The player enters the Host on the first render or control call. Until
-/// then a test may [`take_player`](Self::take_player) it into another facade,
-/// such as a queue, and insert that facade instead.
-pub struct OfflinePlayer {
+/// Product queue on an offline Host, rendered deterministically by the test.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
+pub struct OfflinePlayer<F: TrackFactory<TestPools> = PlayerFactory> {
     events: Mutex<EventReceiver<TestEvent>>,
     host: OfflineHostHarness<TestPools>,
-    slot: Mutex<PlayerSlot>,
-    player_control: PlayerControl<TestPools>,
+    queue: HostOwned<ObservedDeck<Queue<TestPools, F>>>,
+    snapshot: Arc<Mutex<DeckSnapshot>>,
     worker: PlayWorker<TestPools>,
-}
-
-/// Where the harness player lives.
-enum PlayerSlot {
-    /// Built, not yet in the Host.
-    Pending(Box<PlayerImpl<TestPools>>),
-    /// In the Host, owned by this harness.
-    Resident,
-    /// Handed to another facade through [`OfflinePlayer::take_player`].
-    Transferred,
+    #[field(get = resource_prep)]
+    prep: ResourcePrep<TestPools>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pcm_decks: Mutex<Vec<crate::mock::PcmDeck>>,
 }
 
 /// Product player settings a test varies.
 #[derive(Clone, bon::Builder)]
 pub struct OfflinePlayerOptions {
-    #[builder(default = DEFAULT_CROSSFADE_DURATION)]
+    #[builder(default = CrossfadeSettings::default().duration)]
     crossfade_duration: f32,
+    #[builder(default)]
+    gapless: bool,
     eq_layout: Option<Vec<EqBandConfig>>,
     #[builder(default)]
     gapless_mode: GaplessMode,
@@ -87,16 +86,8 @@ pub async fn offline_queue_fixture_with_options(
     options: OfflinePlayerOptions,
     sample_rate: u32,
 ) -> (OfflinePlayer, QueueControl<TestPools>) {
-    let crossfade_duration = options.crossfade_duration;
     let harness = OfflinePlayer::with_sample_rate(options, sample_rate).await;
-    let config = QueueConfig::builder()
-        .player(harness.take_player())
-        .crossfade_settings(CrossfadeSettings {
-            duration: crossfade_duration,
-            ..CrossfadeSettings::default()
-        })
-        .build();
-    let queue = harness.insert_control(Queue::new(config)).await;
+    let queue = harness.queue.control().clone();
     (harness, queue)
 }
 
@@ -126,40 +117,100 @@ impl OfflinePlayer {
         options: OfflinePlayerOptions,
         session: HostConfig<TestPools>,
     ) -> Self {
-        let sample_rate = session.settings().sample_rate();
+        Self::with_factory(options, session, PlayerFactory).await
+    }
+}
+
+impl<F> OfflinePlayer<F>
+where
+    F: TrackFactory<TestPools> + MaybeSend + 'static,
+    F::Track: MaybeSend,
+{
+    pub async fn with_factory(
+        options: OfflinePlayerOptions,
+        session: HostConfig<TestPools>,
+        factory: F,
+    ) -> Self {
         let pools = offline_pools(&session).clone();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .crossfade_duration(options.crossfade_duration)
-                .gapless_mode(options.gapless_mode)
-                .block_on_underrun(options.block_on_underrun)
-                .sample_rate(sample_rate)
-                .worker(worker.clone())
-                .maybe_eq_layout(options.eq_layout)
-                .maybe_warp(options.warp)
-                .maybe_response_budget_frames(options.response_budget_frames)
+        let track = options
+            .warp
+            .as_ref()
+            .map_or_else(TrackSettings::default, |warp| {
+                TrackSettings::builder()
+                    .speed(warp.speed())
+                    .keylock(warp.keylock())
+                    .backend(warp.backend())
+                    .build()
+            });
+        let prep = ResourcePrep::builder()
+            .worker(worker.clone())
+            .gapless_mode(options.gapless_mode)
+            .block_on_underrun(options.block_on_underrun)
+            .maybe_warp(options.warp)
+            .maybe_response_budget_frames(options.response_budget_frames)
+            .build();
+        let settings = QueueSettings::builder()
+            .gapless(options.gapless)
+            .crossfade(CrossfadeSettings {
+                duration: options.crossfade_duration,
+                ..CrossfadeSettings::default()
+            })
+            .build();
+        let queue = Queue::new(
+            QueueConfig::with_factory(factory)
+                .prep(prep.clone())
+                .track(track)
+                .settings(settings)
+                .store(memory_asset_store())
                 .build(),
         );
-        let player_control = player.control();
-        let events = player.subscribe();
+        let events = queue.control().subscribe();
         let host = OfflineHostHarness::new(session)
             .await
             .unwrap_or_else(|error| panic!("create product offline Host: {error}"));
 
+        let snapshot = Arc::new(Mutex::new(DeckSnapshot::default()));
+        let queue = host
+            .insert(ObservedDeck {
+                inner: queue,
+                snapshot: snapshot.clone(),
+            })
+            .await
+            .unwrap_or_else(|error| panic!("insert product offline queue: {error}"));
+        if let Some(layout) = options.eq_layout {
+            queue
+                .set_eq_layout(layout)
+                .unwrap_or_else(|error| panic!("configure product offline queue EQ: {error}"));
+        }
         Self {
+            snapshot,
             events: Mutex::new(events),
             host,
-            slot: Mutex::new(PlayerSlot::Pending(Box::new(player))),
-            player_control,
+            queue,
             worker,
+            prep,
+            #[cfg(not(target_arch = "wasm32"))]
+            pcm_decks: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The resident queue's published control and observations.
+    #[must_use]
+    pub fn player(&self) -> &QueueControl<TestPools> {
+        self.queue.control()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn pcm_deck(&self, reader: Box<dyn AudioReader>) -> TrackSource<TestPools> {
+        let deck = crate::mock::PcmDeck::new(reader);
+        let source = deck.source();
+        self.pcm_decks.lock().push(deck);
+        source
     }
 
     delegate::delegate! {
         to self {
-            #[field(&player_control)]
-            pub const fn player(&self) -> &PlayerControl<TestPools>;
             /// Decode worker this player pulls from, for opening resources
             /// beside it.
             #[field(&worker)]
@@ -168,52 +219,56 @@ impl OfflinePlayer {
             #[field(&host)]
             pub const fn host(&self) -> &OfflineHostHarness<TestPools>;
         }
-        to self.player_control {
-            /// Set the transition duration used by the next load.
-            #[call(set_crossfade_duration)]
-            pub fn set_fade_duration(&self, seconds: f32);
-            /// Set the player volume used by subsequent offline renders.
-            pub fn set_volume(&self, volume: f32);
-        }
     }
 
-    /// Snapshot the real-time counters owned by this player slot.
-    #[must_use]
-    pub fn metrics(&self) -> RtMetricsSnapshot {
-        self.player_control.rt_metrics().unwrap_or_default()
+    /// Set the transition duration used by the next load.
+    pub async fn set_fade_duration(&self, seconds: f32) {
+        self.with_queue(move |control| {
+            control.set_crossfade_settings(CrossfadeSettings {
+                duration: seconds,
+                ..control.crossfade_settings()
+            })
+        })
+        .await
+        .unwrap_or_else(|error| panic!("configure offline crossfade: {error}"));
+    }
+
+    /// Set the player volume used by subsequent offline renders.
+    ///
+    /// # Errors
+    /// Returns the player's refusal of the change.
+    pub async fn set_volume(&self, volume: f32) -> Result<(), QueueError> {
+        self.with_queue(move |control| control.set_volume(volume))
+            .await
     }
 
     /// Current playback position in seconds.
     #[must_use]
     pub fn position(&self) -> f64 {
-        self.player_control.position_seconds().unwrap_or_default()
+        self.queue.position_seconds().unwrap_or_default()
     }
 
-    /// Hands the not yet inserted player to another facade.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the player already entered the Host or was taken.
-    pub fn take_player(&self) -> PlayerImpl<TestPools> {
-        match std::mem::replace(&mut *self.slot.lock(), PlayerSlot::Transferred) {
-            PlayerSlot::Pending(player) => *player,
-            PlayerSlot::Resident | PlayerSlot::Transferred => {
-                panic!("offline harness player was already inserted or transferred")
-            }
-        }
+    pub fn metrics(&self) -> RtMetricsSnapshot {
+        self.snapshot.lock().metrics
     }
 
-    /// Issues player control calls from the host owner thread, as the app
-    /// would.
-    pub async fn with_player<R>(
+    pub fn deck_snapshot(&self) -> DeckSnapshot {
+        self.snapshot.lock().clone()
+    }
+
+    /// Issues queue control calls from the host owner thread.
+    pub async fn with_queue<R>(
         &self,
-        use_player: impl FnOnce(&PlayerControl<TestPools>) -> R + MaybeSend + 'static,
+        use_queue: impl FnOnce(&QueueControl<TestPools>) -> R + MaybeSend + 'static,
     ) -> R
     where
         R: MaybeSend + 'static,
     {
-        self.ensure_player_inserted().await;
-        self.run(&self.player_control, use_player).await
+        assert!(
+            !self.queue.is_closed(),
+            "the offline harness queue is closed; command a resident queue"
+        );
+        self.run(self.queue.control(), use_queue).await
     }
 
     /// Issues a control call on `control` from the host owner thread, as the
@@ -229,22 +284,10 @@ impl OfflinePlayer {
 
     /// # Panics
     ///
-    /// Panics if the player was transferred to another facade.
-    pub fn set_host_level(&self, level: f32) {
-        match &*self.slot.lock() {
-            PlayerSlot::Pending(player) => player.set_host_level(level),
-            PlayerSlot::Resident | PlayerSlot::Transferred => {
-                panic!("offline harness player is no longer pending")
-            }
-        }
-    }
-
-    /// # Panics
-    ///
     /// Panics if the Host rejects the facade.
     pub async fn insert<P>(&self, player: P) -> HostOwned<P>
     where
-        P: PlayerControlSource<Schema = TestPools> + MaybeSend + 'static,
+        P: DeckControl + HostedDeck<TestPools> + MaybeSend + 'static,
         P::Control: MaybeSend,
     {
         self.host
@@ -255,8 +298,8 @@ impl OfflinePlayer {
 
     pub async fn insert_control<P>(&self, player: P) -> P::Control
     where
-        P: PlayerControlSource<Schema = TestPools> + MaybeSend + 'static,
-        P::Control: MaybeSend,
+        P: DeckControl + HostedDeck<TestPools> + MaybeSend + 'static,
+        P::Control: Clone + MaybeSend,
     {
         self.insert(player).await.control().clone()
     }
@@ -266,25 +309,71 @@ impl OfflinePlayer {
     /// # Panics
     ///
     /// Panics if the product player rejects the resource.
-    pub async fn load_and_fadein(&self, resource: Resource) {
-        self.with_player(move |control| {
-            control.reserve_slots(1);
+    pub async fn load_and_fadein(&self, source: impl Into<TrackSource<TestPools>>) {
+        let source = source.into();
+        self.with_queue(move |control| {
+            let id = control
+                .append(source)
+                .unwrap_or_else(|error| panic!("append offline queue item: {error}"));
             control
-                .replace_item(0, resource, TrackId::allocate())
-                .expect("replace offline player item");
+                .select(id, Transition::Crossfade)
+                .unwrap_or_else(|error| panic!("select offline queue item: {error}"));
             control.play();
         })
         .await;
     }
 
-    /// Seek through the product player. The product runtime owns seek epochs.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn load_config(&self, config: kithara::play::ResourceConfig<TestPools>) -> TrackId {
+        let mut events = self.player().subscribe();
+        let id = self
+            .with_queue(move |control| {
+                let id = control
+                    .append(TrackSource::Config(Box::new(config)))
+                    .expect("append configured fixture source");
+                control
+                    .select(id, Transition::Crossfade)
+                    .expect("select configured fixture source");
+                control.play();
+                id
+            })
+            .await;
+        crate::waits::wait_for_loader_done_event(
+            &mut events,
+            self.player(),
+            id,
+            super::loader::LOCAL_LOAD_DEADLINE,
+        )
+        .await
+        .expect("configured fixture source is ready");
+        id
+    }
+
+    /// Render until selection is committed by the queue, not merely prepared by its loader.
+    pub async fn render_until_current(
+        &self,
+        id: TrackId,
+        block_frames: usize,
+        deadline: WallInstant,
+    ) {
+        while self.player().current().map(|entry| entry.id) != Some(id) {
+            assert!(
+                WallInstant::now() < deadline,
+                "queue did not commit current track {id:?} before the render deadline"
+            );
+            self.render(block_frames).await;
+            let _ = self.tick_and_drain().await;
+        }
+    }
+
+    /// Seek through the product player. The product runtime owns segments.
     ///
     /// # Panics
     ///
     /// Panics if the product player rejects the seek.
-    pub fn seek(&self, seconds: f64) {
-        self.player_control
-            .seek_seconds(seconds)
+    pub async fn seek(&self, seconds: f64) {
+        self.with_queue(move |control| control.seek(seconds))
+            .await
             .unwrap_or_else(|error| panic!("seek offline player: {error}"));
     }
 
@@ -292,20 +381,15 @@ impl OfflinePlayer {
     /// A resident player then publishes what the block produced, as the app
     /// update loop would.
     pub async fn render(&self, frames: usize) -> Vec<f32> {
-        let resident = self.ensure_player_inserted().await;
         let output = self.host.render(frames).await;
-        if resident {
-            self.run(&self.player_control, PlayerControl::process_notifications)
-                .await;
-        }
+        self.tick_player().await;
         output
     }
 
     /// Pump the player's notification ringbuf and drain `PlayerEvent`s
     /// from the bus subscriber.
     pub async fn tick_and_drain(&self) -> Vec<PlayerEvent> {
-        self.run(&self.player_control, PlayerControl::process_notifications)
-            .await;
+        self.tick_player().await;
         self.drain_events()
             .into_iter()
             .filter_map(|event| match event {
@@ -316,8 +400,8 @@ impl OfflinePlayer {
     }
 
     /// Drain the product event stream into the scenario observation tags.
-    pub fn take_notification_kinds(&self) -> Vec<NotificationKind> {
-        self.player_control.process_notifications();
+    pub async fn take_notification_kinds(&self) -> Vec<NotificationKind> {
+        self.tick_player().await;
         self.drain_events()
             .into_iter()
             .filter_map(|event| match event {
@@ -327,12 +411,6 @@ impl OfflinePlayer {
                 TestEvent::Player(
                     PlayerEvent::ItemDidPlayToEnd { .. } | PlayerEvent::ItemDidFail { .. },
                 ) => Some(NotificationKind::PlaybackStopped),
-                TestEvent::Player(PlayerEvent::PrefetchRequested) => {
-                    Some(NotificationKind::Requested)
-                }
-                TestEvent::Player(PlayerEvent::HandoverRequested { .. }) => {
-                    Some(NotificationKind::HandoverRequested)
-                }
                 _ => None,
             })
             .collect()
@@ -342,15 +420,21 @@ impl OfflinePlayer {
         let Self {
             events,
             host,
-            slot,
-            player_control,
+            queue,
             worker,
+            prep,
+            #[cfg(not(target_arch = "wasm32"))]
+            pcm_decks,
+            snapshot,
         } = self;
         drop(events);
-        drop(slot);
-        drop(player_control);
+        drop(snapshot);
+        drop(queue);
         drop(worker);
         host.close().await;
+        drop(prep);
+        #[cfg(not(target_arch = "wasm32"))]
+        drop(pcm_decks);
     }
 
     fn drain_events(&self) -> Vec<TestEvent> {
@@ -366,34 +450,19 @@ impl OfflinePlayer {
         events
     }
 
-    /// Moves a pending player into the Host; returns whether the player is
-    /// resident here rather than transferred.
-    async fn ensure_player_inserted(&self) -> bool {
-        let previous = std::mem::replace(&mut *self.slot.lock(), PlayerSlot::Resident);
-        match previous {
-            PlayerSlot::Pending(player) => {
-                self.host
-                    .insert(*player)
-                    .await
-                    .unwrap_or_else(|error| panic!("insert offline player into Host: {error}"));
-                true
-            }
-            PlayerSlot::Resident => true,
-            PlayerSlot::Transferred => {
-                *self.slot.lock() = PlayerSlot::Transferred;
-                false
-            }
-        }
+    /// Settles receipts and publishes observations through the queue owner.
+    async fn tick_player(&self) {
+        self.with_queue(QueueControl::tick)
+            .await
+            .unwrap_or_else(|error| panic!("tick offline queue: {error}"));
     }
 }
 
 /// Test observation tags retained for scenario assertions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationKind {
-    HandoverRequested,
     PlaybackStarted,
     PlaybackStopped,
-    Requested,
 }
 
 /// Thin wrapper around [`Resource::from_reader`] for tests.

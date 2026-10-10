@@ -4,14 +4,13 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     audio::{
-        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, ChunkOutcome,
-        ConsumerWakeMode, DecoderChangeCause, DecoderEvent, ReadOutcome, RubatoBackend,
-        SeekLifecycleStage,
+        AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, DecoderChangeCause,
+        DecoderEvent, ReadOutcome, RubatoBackend,
     },
     platform::time::{self, Duration, Instant},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig},
-    signal::AudioChunk,
-    stream::{AudioCodec, ContainerFormat, MediaInfo, SeekEpoch, Stream},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
+    signal::{AudioChunk, SegmentId},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
     warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
@@ -19,6 +18,7 @@ use kithara_integration_tests::{
     event::TestEvent,
     kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
+    mock::LaneAudio,
     reads::{blocking_audio, read_to_eof, read_until_samples},
 };
 use kithara_test_fixtures::integration_fixtures::{
@@ -37,15 +37,15 @@ fn wav_stream(wav: &[u8]) -> AudioConfig<MemStream> {
 }
 
 async fn wait_for_chunk(
-    mut audio: RegisteredAudio<Stream<MemStream>, TestPools>,
+    mut audio: LaneAudio<Stream<MemStream>, TestPools>,
     budget: Duration,
-) -> (RegisteredAudio<Stream<MemStream>, TestPools>, AudioChunk) {
+) -> (LaneAudio<Stream<MemStream>, TestPools>, AudioChunk) {
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
         let (next_audio, outcome) = blocking_audio(audio, AudioRead::next_chunk).await;
         audio = next_audio;
         match outcome.expect("decode while waiting for a PCM chunk") {
-            ChunkOutcome::Chunk(chunk) => return (audio, chunk),
+            ChunkOutcome::Chunk(chunk) => return (audio, *chunk),
             ChunkOutcome::Pending { .. } => time::sleep(Duration::from_millis(10)).await,
             ChunkOutcome::Eof { .. } => panic!("source reached EOF while waiting for PCM"),
         }
@@ -57,8 +57,8 @@ async fn wait_for_chunk(
 /// Unlike [`wait_for_frames`], a pass that yields no frames is a result, not a
 /// panic, so a caller can keep the output moving while it watches the bus.
 async fn pump_once(
-    audio: RegisteredAudio<Stream<MemStream>, TestPools>,
-) -> (RegisteredAudio<Stream<MemStream>, TestPools>, ReadOutcome) {
+    audio: LaneAudio<Stream<MemStream>, TestPools>,
+) -> (LaneAudio<Stream<MemStream>, TestPools>, ReadOutcome) {
     let mut buf = [0.0f32; 256];
     let (audio, (_buf, outcome)) = blocking_audio(audio, move |audio| {
         let outcome = audio.read(&mut buf);
@@ -73,7 +73,9 @@ async fn basic_decode_to_eof(audio_wav_8000: &'static [u8]) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(audio_wav_8000);
-    let audio = worker.load(config).await.expect("audio construction");
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio construction");
 
     let (_audio, frames) = blocking_audio(audio, read_to_eof).await;
     assert!(
@@ -127,12 +129,11 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
                 .build(),
         )
         .host_sample_rate(source_rate)
-        .preload_chunks(NonZeroUsize::new(PRELOAD_CHUNKS).expect("preload count is non-zero"))
-        .audio_buffer_chunks(RING_CHUNKS)
-        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .hint("wav".to_owned())
         .build();
     let config = TrackConfig::for_audio(audio)
+        .preload_chunks(NonZeroUsize::new(PRELOAD_CHUNKS).expect("preload count is non-zero"))
+        .audio_buffer_chunks(NonZeroUsize::new(RING_CHUNKS).expect("ring count is non-zero"))
         .warp(
             WarpConfig::builder()
                 .speed(0.5)
@@ -143,19 +144,14 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         .build();
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let audio = worker.load(config).await.expect("audio construction");
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio construction");
     let mut events = audio.event_bus().subscribe();
-    let gate = audio
-        .preload_gate()
-        .expect("worker-backed audio exposes its preload gate");
-    time::timeout(
-        Duration::from_secs(5),
-        gate.wait_for_epoch(audio.preload_epoch()),
-    )
-    .await
-    .expect("non-unity source must preload");
+    let mut audio = audio;
+    kithara_integration_tests::mock::wait_for_preload(&mut audio, "non-unity source").await;
 
-    let (audio, first) = wait_for_chunk(audio, Duration::from_secs(2)).await;
+    let (mut audio, first) = wait_for_chunk(audio, Duration::from_secs(2)).await;
     let resume_margin = first
         .meta
         .end_timestamp
@@ -227,36 +223,16 @@ async fn seek_during_active_decode_completes_without_hang(audio_wav_132300: &'st
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(audio_wav_132300);
-    let audio = worker.load(config).await.expect("audio construction");
-    let mut events = audio.event_bus().subscribe();
-
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio construction");
     let (audio, _initial_frames) =
         blocking_audio(audio, |audio| read_until_samples(audio, 1)).await;
     let (mut audio, seek_result) =
         blocking_audio(audio, |audio| audio.seek(Duration::from_secs_f64(1.5))).await;
     seek_result.expect("seek");
-
-    let mut observed_epoch: Option<SeekEpoch> = None;
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if let Ok(Ok(TestEvent::Audio(AudioEvent::SeekLifecycle {
-            stage: SeekLifecycleStage::SeekRequest,
-            seek_epoch,
-            ..
-        }))) = time::timeout(remaining, events.recv())
-            .await
-            .map(|r| r.map(|env| env.event))
-        {
-            observed_epoch = Some(seek_epoch);
-            break;
-        }
-    }
-    let expected_epoch = observed_epoch.expect("SeekLifecycle::SeekRequest event");
-
-    // `SeekComplete` is published from the first output pass after the seek, so
-    // the consumer has to keep reading: waiting on the bus without reading waits
-    // for an event nothing will produce.
+    let expected_segment = audio.segment();
+    kithara_integration_tests::mock::wait_for_preload(&mut audio, "active decode seek").await;
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut saw_complete = false;
     while Instant::now() < deadline && !saw_complete {
@@ -265,17 +241,12 @@ async fn seek_during_active_decode_completes_without_hang(audio_wav_132300: &'st
         if matches!(outcome, ReadOutcome::Pending { .. }) {
             time::sleep(Duration::from_millis(20)).await;
         }
-        while let Ok(envelope) = events.try_recv() {
-            if let TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) = envelope.event
-                && seek_epoch == expected_epoch
-            {
-                saw_complete = true;
-                break;
-            }
-        }
+        saw_complete = audio.committed_segment() == Some(expected_segment);
     }
-    assert!(saw_complete, "SeekComplete must arrive after seek");
-
+    assert!(
+        saw_complete,
+        "matching committed segment must arrive after seek"
+    );
     let (_audio, frames_after) = blocking_audio(audio, |audio| read_until_samples(audio, 1)).await;
     assert!(
         frames_after > 0,
@@ -294,156 +265,41 @@ async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) 
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(audio_wav_176400);
-    let mut audio = worker.load(config).await.expect("audio construction");
-    let mut events = audio.event_bus().subscribe();
-
-    // Keep the settle reads inline so the flash rewriter retargets these
-    // sleeps onto the virtual clock. `Audio::seek()` publishes SeekRequest
-    // synchronously; SeekComplete / PlaybackProgress still require reads to
-    // commit post-seek output.
-
-    // Prime: read until the first decoded frames arrive.
-    {
-        let mut buf = [0.0f32; 256];
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline {
-            let (next_audio, (next_buf, outcome)) = blocking_audio(audio, move |audio| {
-                let outcome = audio.read(&mut buf);
-                (buf, outcome)
-            })
-            .await;
-            audio = next_audio;
-            buf = next_buf;
-            match outcome {
-                Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Eof { .. }) => break,
-                Ok(ReadOutcome::Pending { .. }) => {
-                    time::sleep(Duration::from_millis(20)).await;
-                }
-                Err(error) => panic!("decode error while priming: {error}"),
-            }
-        }
-    }
-
-    let mut expected_epochs = Vec::with_capacity(SEEK_COUNT);
-    for i in 0..SEEK_COUNT {
-        let target = Duration::from_millis(200 + (i as u64) * 250);
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio construction");
+    let (next_audio, _) = blocking_audio(audio, |audio| read_until_samples(audio, 1)).await;
+    audio = next_audio;
+    let mut expected_segments = Vec::with_capacity(SEEK_COUNT);
+    let mut committed = Vec::new();
+    let mut turns = 0usize;
+    for index in 0..SEEK_COUNT {
+        let target = Duration::from_millis(200 + (index as u64) * 250);
         let (next_audio, seek_result) =
             blocking_audio(audio, move |audio| audio.seek(target)).await;
         audio = next_audio;
         seek_result.expect("seek");
-
-        let deadline = Instant::now() + Duration::from_secs(1);
-        let mut captured = None;
-        while Instant::now() < deadline {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if let Ok(Ok(TestEvent::Audio(AudioEvent::SeekLifecycle {
-                stage: SeekLifecycleStage::SeekRequest,
-                seek_epoch,
-                ..
-            }))) = time::timeout(remaining, events.recv())
-                .await
-                .map(|r| r.map(|env| env.event))
-            {
-                captured = Some(seek_epoch);
-                break;
-            }
-        }
-        expected_epochs.push(captured.expect("seek epoch from SeekRequest"));
-
-        // Settle on the virtual clock: read post-seek frames so the consumer
-        // commits this seek and the worker advances before the next `seek()`.
-        let mut buf = [0.0f32; 256];
-        let deadline = Instant::now() + Duration::from_millis(500);
-        while Instant::now() < deadline {
-            let (next_audio, (next_buf, outcome)) = blocking_audio(audio, move |audio| {
-                let outcome = audio.read(&mut buf);
-                (buf, outcome)
-            })
-            .await;
-            audio = next_audio;
-            buf = next_buf;
-            match outcome {
-                Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Eof { .. }) => break,
-                Ok(ReadOutcome::Pending { .. }) => {
-                    time::sleep(Duration::from_millis(20)).await;
-                }
-                Err(error) => panic!("decode error while settling seek: {error}"),
-            }
-        }
+        let expected = audio.segment();
+        expected_segments.push(expected);
+        kithara_integration_tests::mock::wait_for_preload(&mut audio, "rapid seek").await;
+        let (next_audio, _) = blocking_audio(audio, |audio| read_until_samples(audio, 1)).await;
+        audio = next_audio;
+        turns += 1;
+        let observed = audio
+            .committed_segment()
+            .expect("seek produced committed PCM");
+        assert_eq!(observed, expected, "each seek commits only its own segment");
+        committed.push(observed);
     }
-
-    let highest_expected = *expected_epochs
+    let highest_expected = *expected_segments
         .iter()
         .max()
-        .expect("at least one seek epoch");
-
-    /// One park's wait. Deliberately a step and not the loop's remaining
-    /// budget: a park is one engine round, so a far deadline lets the virtual
-    /// clock jump the whole budget at once and the loop exits with a single
-    /// read behind it. A step bounds that jump, so every turn is a real read.
-    const EVENT_STEP: Duration = Duration::from_millis(50);
-
-    let mut buf = [0.0f32; 256];
-    let mut last_complete: Option<SeekEpoch> = None;
-    let mut committed: Vec<SeekEpoch> = Vec::new();
-    let mut turns = 0usize;
-    // Read each turn so the consumer keeps committing post-seek output and
-    // emitting `SeekComplete` for the highest requested epoch. The ownership
-    // roundtrip keeps a possible read park off the runtime. The loop waits on
-    // that epoch, never on a budget; the test's own `timeout(...)` is the only
-    // backstop, as the read-pump contract states.
-    loop {
-        let (next_audio, (next_buf, outcome)) = blocking_audio(audio, move |audio| {
-            let outcome = audio.read(&mut buf);
-            (buf, outcome)
-        })
-        .await;
-        audio = next_audio;
-        buf = next_buf;
-        turns += 1;
-        match outcome {
-            Ok(ReadOutcome::Frames { .. })
-            | Ok(ReadOutcome::Eof { .. })
-            | Ok(ReadOutcome::Pending { .. }) => {}
-            Err(error) => panic!("decode error while draining seek completions: {error}"),
-        }
-        match time::timeout(EVENT_STEP, events.recv())
-            .await
-            .map(|r| r.map(|env| env.event))
-        {
-            Ok(Ok(TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))) => {
-                last_complete = Some(seek_epoch);
-                if seek_epoch >= highest_expected {
-                    break;
-                }
-            }
-            Ok(Ok(TestEvent::Audio(AudioEvent::SeekLifecycle {
-                stage: SeekLifecycleStage::OutputCommitted,
-                seek_epoch,
-                ..
-            }))) => committed.push(seek_epoch),
-            Ok(Ok(_)) | Err(_) => {}
-            Ok(Err(_)) => break,
-        }
-    }
-    while let Ok(envelope) = events.try_recv() {
-        match envelope.event {
-            TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) => {
-                last_complete = Some(seek_epoch);
-            }
-            TestEvent::Audio(AudioEvent::SeekLifecycle {
-                stage: SeekLifecycleStage::OutputCommitted,
-                seek_epoch,
-                ..
-            }) => committed.push(seek_epoch),
-            _ => {}
-        }
-    }
+        .expect("at least one segment");
+    let last_complete: Option<SegmentId> = audio.committed_segment();
     assert_eq!(
         last_complete,
         Some(highest_expected),
-        "last observed SeekComplete must match the highest requested epoch; \
-         requested {expected_epochs:?}, output-committed {committed:?}, {turns} read turn(s)"
+        "last committed segment must match the highest requested segment; requested {expected_segments:?}, output-committed {committed:?}, {turns} read turn(s)"
     );
 }
 
@@ -461,7 +317,9 @@ async fn truncated_wav_surfaces_decode_error_or_eof(audio_wav_44100: &'static [u
     .hint("wav".to_string())
     .build();
 
-    let audio = worker.load(config).await.expect("audio construction");
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio construction");
 
     let (_audio, saw_terminal) = blocking_audio(audio, |audio| {
         let mut buf = [0.0f32; 4096];

@@ -1,20 +1,16 @@
-#[cfg(test)]
-use std::num::NonZeroU32;
 use std::num::NonZeroUsize;
 
-/// Default parallelism cap for async track loads.
+use kithara_platform::time::Duration;
+
+/// Background loads a queue keeps open by default.
 pub(crate) const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
-    Some(n) => n,
+    Some(count) => count,
     None => unreachable!(),
 };
+/// Dispatcher batches a background load leaves free in one pass: a superseded
+/// target's Release, an old replacement's Release, and a select's Load or `SetPriority`.
+pub(crate) const SELECT_DISPATCH_RESERVE: usize = 3;
 
-/// Default prefetch lead time before EOF, in seconds.
-///
-/// Mirrors `kithara_play::PlayerConfig::prefetch_duration` default.
-pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
-
-#[cfg(test)]
-pub(crate) const TEST_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(sample_rate) => sample_rate,
-    None => unreachable!(),
-};
+/// Default session time before a track ends at which the queue loads its
+/// successor.
+pub(crate) const DEFAULT_PRELOAD_LEAD: Duration = Duration::from_millis(3_500);

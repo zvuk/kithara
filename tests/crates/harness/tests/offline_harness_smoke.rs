@@ -43,18 +43,17 @@ fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
     ))
 }
 
-async fn file_resource(harness: &OfflinePlayer, path: &Path, store_dir: &Path) -> Resource {
+fn file_resource(
+    path: &Path,
+    store_dir: &Path,
+) -> ResourceConfig<kithara_integration_tests::bufpool_ext::TestPools> {
     let config: ResourceConfig<_> = ResourceConfig::for_src(
         ResourceSrc::parse(path.to_str().expect("utf-8 fixture path"))
             .expect("local media path is a valid resource src"),
     )
     .store(disk_asset_store(store_dir))
     .build();
-    let config = harness
-        .player()
-        .prepare_config(config)
-        .expect("offline player remains open");
-    Resource::new(config).await.expect("open local resource")
+    config
 }
 
 async fn render_target(harness: &OfflinePlayer) -> Vec<f32> {
@@ -76,13 +75,17 @@ async fn offline_harness_smoke(constant_half: &'static [u8]) {
         consts::SAMPLE_RATE,
     )
     .await;
+    let deck_source = harness.pcm_deck((make_resource(constant_half, 0.1)).into());
     harness
-        .with_player(move |player| {
-            player.insert(make_resource(constant_half, 0.1), TrackId::allocate(), None);
-            player.insert(make_resource(constant_half, 0.1), TrackId::allocate(), None);
+        .with_queue(move |player| {
+            let deck_id = TrackId::allocate();
             player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
+                .append_with_id(deck_id, deck_source)
+                .expect("append PCM deck");
+            player
+                .select(deck_id, kithara::queue::Transition::None)
+                .expect("select the item");
+            player.play();
         })
         .await;
 
@@ -130,16 +133,20 @@ async fn offline_harness_glide_varispeed(drain_tone: &'static [u8], temp_dir: Te
     )
     .await;
     let path = temp_dir.write("glide.wav", drain_tone);
-    let resource = file_resource(&harness, &path, &temp_dir.path().join("store")).await;
+    let resource = file_resource(&path, &temp_dir.path().join("store"));
     harness
-        .with_player(move |player| {
-            player.insert(resource, TrackId::allocate(), None);
+        .with_queue(move |player| {
+            let id = player.append(resource).expect("append local deck");
             player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
+                .select(id, kithara::queue::Transition::None)
+                .expect("select the item");
+            player.play();
         })
         .await;
-    harness.player().set_default_rate(GLIDE_RATE);
+    harness
+        .with_queue(move |player| player.set_default_rate(GLIDE_RATE))
+        .await
+        .expect("a finite rate is accepted");
 
     let audible = audible_frames_until_end(&harness).await;
 

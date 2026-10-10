@@ -4,25 +4,37 @@ use crate::types::{FfiItemEvent, FfiPlayerEvent};
 ///
 /// All calls happen on an arbitrary background thread.
 /// Platform bindings must dispatch to the UI thread as needed.
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    uniffi::export(with_foreign)
+)]
 pub trait PlayerObserver: Send + Sync {
     fn on_event(&self, event: FfiPlayerEvent);
 }
 
 /// Receives item-level state changes from Rust.
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    uniffi::export(with_foreign)
+)]
 pub trait ItemObserver: Send + Sync {
     fn on_event(&self, event: FfiItemEvent);
 }
 
 /// Callback for seek completion.
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    uniffi::export(with_foreign)
+)]
 pub trait SeekCallback: Send + Sync {
     fn on_complete(&self, finished: bool);
 }
 
 /// Callback fired when [`crate::item::AudioPlayerItem::load`] resolves.
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    uniffi::export(with_foreign)
+)]
 pub trait ItemLoadCallback: Send + Sync {
     fn on_complete(&self, result: crate::types::FfiItemLoadResult);
 }
@@ -35,7 +47,10 @@ pub trait ItemLoadCallback: Send + Sync {
 /// from the salt should re-build it on every call. Implementations that
 /// hold a pre-built cipher (legacy behaviour) can ignore the argument.
 #[kithara::mock(api = FfiKeyProcessorMock)]
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    uniffi::export(with_foreign)
+)]
 pub trait FfiKeyProcessor: Send + Sync {
     fn process_key(&self, key: Vec<u8>, salt: String) -> Vec<u8>;
 }

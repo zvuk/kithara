@@ -462,7 +462,6 @@ fn edge_requests(capabilities: ElasticCapabilities) -> [ElasticRequest; 3] {
 }
 
 mod facade;
-mod parity;
 mod priming;
 
 #[kithara::test]

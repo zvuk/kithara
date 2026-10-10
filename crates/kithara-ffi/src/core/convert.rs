@@ -77,7 +77,6 @@ impl TryFrom<&DecoderEvent> for FfiItemEvent {
                 channels,
                 bit_depth,
                 bitrate,
-                epoch,
                 cause,
                 variant,
                 base_offset,
@@ -99,7 +98,6 @@ impl TryFrom<&DecoderEvent> for FfiItemEvent {
                     channels: *channels,
                     bit_depth: *bit_depth,
                     bitrate: *bitrate,
-                    epoch: *epoch,
                     cause: (*cause).into(),
                     variant: *variant,
                     base_offset: *base_offset,
@@ -163,15 +161,10 @@ impl TryFrom<&AudioEvent> for FfiItemEvent {
                 new_channels: new.channels,
                 new_sample_rate: new.sample_rate.get(),
             }),
-            AudioEvent::SeekComplete {
-                position,
-                seek_epoch,
-            } => Ok(Self::SeekComplete {
+            AudioEvent::SeekComplete { position } => Ok(Self::SeekComplete {
                 position_seconds: duration_to_seconds(*position),
-                epoch: *seek_epoch,
             }),
-            AudioEvent::SeekRejected { epoch, target } => Ok(Self::SeekRejected {
-                epoch: *epoch,
+            AudioEvent::SeekRejected { target } => Ok(Self::SeekRejected {
                 target_seconds: duration_to_seconds(*target),
             }),
             AudioEvent::DecoderReady {
@@ -181,35 +174,21 @@ impl TryFrom<&AudioEvent> for FfiItemEvent {
                 base_offset: *base_offset,
                 variant: *variant,
             }),
-            AudioEvent::TrackFailed {
-                failure,
-                seek_epoch,
-            } => Ok(Self::TrackFailed {
+            AudioEvent::TrackFailed { failure } => Ok(Self::TrackFailed {
                 reason: (*failure).into(),
-                epoch: *seek_epoch,
             }),
-            AudioEvent::UnderrunStarted {
-                position_ms,
-                seek_epoch,
-            } => Ok(Self::UnderrunStarted {
+            AudioEvent::UnderrunStarted { position_ms } => Ok(Self::UnderrunStarted {
                 position_ms: *position_ms,
-                epoch: *seek_epoch,
             }),
-            AudioEvent::UnderrunEnded {
-                position_ms,
-                seek_epoch,
-            } => Ok(Self::UnderrunEnded {
+            AudioEvent::UnderrunEnded { position_ms } => Ok(Self::UnderrunEnded {
                 position_ms: *position_ms,
-                epoch: *seek_epoch,
             }),
             AudioEvent::BufferHealth {
                 buffered_ms,
                 decoded_frontier_ms,
-                seek_epoch,
             } => Ok(Self::BufferHealth {
                 buffered_ms: *buffered_ms,
                 decoded_frontier_ms: *decoded_frontier_ms,
-                epoch: *seek_epoch,
             }),
             AudioEvent::EngineLoad {
                 load,
@@ -234,7 +213,7 @@ impl TryFrom<&AudioEvent> for FfiItemEvent {
             AudioEvent::PlaybackProgress { .. }
             | AudioEvent::OutputAvailable
             | AudioEvent::SeekLifecycle { .. }
-            | AudioEvent::EndOfStream { .. } => Err(NotForwarded),
+            | AudioEvent::EndOfStream => Err(NotForwarded),
         }
     }
 }
@@ -251,8 +230,6 @@ impl TryFrom<&HlsEvent> for FfiItemEvent {
             | HlsEvent::SegmentReadComplete { .. }
             | HlsEvent::ReadProgress { .. }
             | HlsEvent::ReaderSeek { .. }
-            | HlsEvent::StaleRequestDropped { .. }
-            | HlsEvent::StaleFetchDropped { .. }
             | HlsEvent::Seek { .. }
             | HlsEvent::Error { .. }
             | HlsEvent::EndOfStream => Err(NotForwarded),
@@ -447,10 +424,9 @@ impl TryFrom<&EngineEvent> for FfiPlayerEvent {
             EngineEvent::MasterVolumeChanged { volume } => {
                 Self::MasterVolumeChanged { volume: *volume }
             }
-            EngineEvent::SlotAllocated { .. }
-            | EngineEvent::SlotReleased { .. }
-            | EngineEvent::CrossfadeStarted { .. }
-            | EngineEvent::CrossfadeProgress { .. } => return Err(NotForwarded),
+            EngineEvent::CrossfadeStarted { .. } | EngineEvent::CrossfadeProgress { .. } => {
+                return Err(NotForwarded);
+            }
         })
     }
 }
@@ -547,9 +523,7 @@ impl TryFrom<&PlayerEvent> for FfiPlayerEvent {
             },
             PlayerEvent::PlaybackStarted { .. }
             | PlayerEvent::CurrentItemChanged { .. }
-            | PlayerEvent::PrerollCompleted { .. }
-            | PlayerEvent::PrefetchRequested
-            | PlayerEvent::HandoverRequested { .. } => return Err(NotForwarded),
+            | PlayerEvent::PrerollCompleted { .. } => return Err(NotForwarded),
         })
     }
 }
@@ -744,7 +718,6 @@ mod tests {
                     channels: 2,
                     bit_depth: Some(24),
                     bitrate: Some(320_000),
-                    epoch: 7,
                     cause: DecoderChangeCause::VariantSwitch,
                     variant: Some(3),
                     base_offset: 4096,
@@ -762,7 +735,6 @@ mod tests {
                             channels: 2,
                             bit_depth: Some(24),
                             bitrate: Some(320_000),
-                            epoch: 7,
                             cause: FfiDecoderChangeCause::VariantSwitch,
                             variant: Some(3),
                             base_offset: 4096,
@@ -886,28 +858,24 @@ mod tests {
             (
                 AudioEvent::SeekComplete {
                     position: Duration::from_millis(1250),
-                    seek_epoch: 3,
                 },
                 |event| {
                     matches!(
                         event,
                         FfiItemEvent::SeekComplete {
                             position_seconds: 1.25,
-                            epoch: 3,
                         }
                     )
                 },
             ),
             (
                 AudioEvent::SeekRejected {
-                    epoch: 4,
                     target: Duration::from_millis(1500),
                 },
                 |event| {
                     matches!(
                         event,
                         FfiItemEvent::SeekRejected {
-                            epoch: 4,
                             target_seconds: 1.5,
                         }
                     )
@@ -931,53 +899,26 @@ mod tests {
             (
                 AudioEvent::TrackFailed {
                     failure: TrackFailureKind::RecreateFailed { offset: 99 },
-                    seek_epoch: 5,
                 },
                 |event| {
                     matches!(
                         event,
                         FfiItemEvent::TrackFailed {
                             reason: FfiTrackFailureKind::RecreateFailed { offset: 99 },
-                            epoch: 5,
                         }
                     )
                 },
             ),
-            (
-                AudioEvent::UnderrunStarted {
-                    position_ms: 600,
-                    seek_epoch: 6,
-                },
-                |event| {
-                    matches!(
-                        event,
-                        FfiItemEvent::UnderrunStarted {
-                            position_ms: 600,
-                            epoch: 6,
-                        }
-                    )
-                },
-            ),
-            (
-                AudioEvent::UnderrunEnded {
-                    position_ms: 700,
-                    seek_epoch: 6,
-                },
-                |event| {
-                    matches!(
-                        event,
-                        FfiItemEvent::UnderrunEnded {
-                            position_ms: 700,
-                            epoch: 6,
-                        }
-                    )
-                },
-            ),
+            (AudioEvent::UnderrunStarted { position_ms: 600 }, |event| {
+                matches!(event, FfiItemEvent::UnderrunStarted { position_ms: 600 })
+            }),
+            (AudioEvent::UnderrunEnded { position_ms: 700 }, |event| {
+                matches!(event, FfiItemEvent::UnderrunEnded { position_ms: 700 })
+            }),
             (
                 AudioEvent::BufferHealth {
                     buffered_ms: 800,
                     decoded_frontier_ms: 900,
-                    seek_epoch: 7,
                 },
                 |event| {
                     matches!(
@@ -985,7 +926,6 @@ mod tests {
                         FfiItemEvent::BufferHealth {
                             buffered_ms: 800,
                             decoded_frontier_ms: 900,
-                            epoch: 7,
                         }
                     )
                 },
@@ -1069,14 +1009,11 @@ mod tests {
         ];
 
         for (failure, expected) in cases {
-            let source = AudioEvent::TrackFailed {
-                failure,
-                seek_epoch: 37,
-            };
+            let source = AudioEvent::TrackFailed { failure };
             let event = FfiItemEvent::try_from(&source).expect("event must be forwarded");
             assert!(matches!(
                 event,
-                FfiItemEvent::TrackFailed { reason, epoch: 37 } if reason == expected
+                FfiItemEvent::TrackFailed { reason } if reason == expected
             ));
         }
     }
@@ -1460,7 +1397,7 @@ mod tests {
 
     #[kithara::test]
     fn decoder_end_of_stream_is_not_duplicated() {
-        let event = AudioEvent::EndOfStream { seek_epoch: 3 };
+        let event = AudioEvent::EndOfStream;
 
         assert!(matches!(FfiItemEvent::try_from(&event), Err(NotForwarded)));
     }
@@ -1548,8 +1485,10 @@ mod tests {
             Err(NotForwarded)
         ));
         assert!(matches!(
-            FfiPlayerEvent::try_from(&EngineEvent::SlotAllocated {
-                slot: SlotId::new(3),
+            FfiPlayerEvent::try_from(&EngineEvent::CrossfadeProgress {
+                from: SlotId::new(1),
+                to: SlotId::new(2),
+                progress: 0.5,
             }),
             Err(NotForwarded)
         ));

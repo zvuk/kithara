@@ -13,8 +13,8 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ByteMap, ConstructionGate, PendingReason, ReaderProfile, SeekObserve, SegmentDescriptor,
-    SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
+    ByteMap, ConstructionGate, PendingReason, ReaderProfile, SegmentDescriptor, SourceError,
+    SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
 };
 use tracing::debug;
 
@@ -30,7 +30,6 @@ pub(crate) struct HlsSession<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    seek: Arc<dyn SeekObserve>,
     pub(super) variant: Arc<HlsVariant<S>>,
     active: AtomicBool,
     position: AtomicU64,
@@ -68,14 +67,12 @@ where
 
     pub(crate) fn active(
         cancel: CancelToken,
-        seek: Arc<dyn SeekObserve>,
         signal: SizeSignal,
         variant_index: usize,
         variant: Arc<HlsVariant<S>>,
         position: u64,
     ) -> Self {
         Self {
-            seek,
             signal,
             variant,
             variant_index,
@@ -109,13 +106,6 @@ where
     pub(super) fn check_live(&self) -> io::Result<()> {
         if self.cancel.root.is_cancelled() {
             return Err(pending(PendingReason::SessionRetired));
-        }
-        if !self.active.load(Ordering::Acquire)
-            && self
-                .transition
-                .is_some_and(|transition| self.seek.epoch() != transition.id().seek_epoch())
-        {
-            return Err(pending(PendingReason::SeekPending));
         }
         Ok(())
     }
@@ -211,7 +201,6 @@ where
     pub(crate) fn incoming(
         cancel: CancelToken,
         profile: ReaderProfile,
-        seek: Arc<dyn SeekObserve>,
         signal: SizeSignal,
         transition: VariantTransition,
         variant: Arc<HlsVariant<S>>,
@@ -219,7 +208,6 @@ where
     ) -> StreamResult<Self> {
         let preparation = variant.prepare_reader(profile, content_time)?;
         Ok(Self {
-            seek,
             signal,
             variant,
             active: AtomicBool::new(false),
@@ -341,9 +329,15 @@ where
         range: Range<u64>,
         timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
+        if self.cancel.root.is_cancelled() {
+            return Ok(WaitOutcome::Interrupted);
+        }
         match timeout {
             Some(_) => self.variant.wait_range(range, timeout),
             None => self.signal.wait_range_blocking(&self.cancel.root, || {
+                if self.cancel.root.is_cancelled() {
+                    return Ok(WaitOutcome::Interrupted);
+                }
                 let outcome = self.variant.wait_range(range.clone(), Some(Duration::ZERO));
                 if matches!(
                     outcome,

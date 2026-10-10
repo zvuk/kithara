@@ -5,17 +5,13 @@ use std::num::NonZeroU32;
 use kithara_command::When;
 use kithara_events::{EventBus, EventReceiver};
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
-use kithara_play::{Cmd, Reply, SessionTransportSnapshot, Tempo};
+use kithara_play::{SessionTransportSnapshot, Tempo};
 use kithara_signal::SessionFrame;
-use kithara_test_utils::{bufpool::pools, kithara};
+use kithara_test_utils::kithara;
 use kithara_warp::BeatGridId;
 
 use super::ring::{ManualRingConfig, ManualRingSession};
-use crate::{
-    consts,
-    host::HostSettingsChange,
-    session::{HostCmd, HostReply, TransportEvent},
-};
+use crate::{consts, host::HostSettingsChange, session::TransportEvent};
 
 fn session(block_frames: u32, capacity_blocks: usize) -> ManualRingSession {
     let rate = NonZeroU32::new(consts::RING_ADMISSION_SAMPLE_RATE)
@@ -24,31 +20,16 @@ fn session(block_frames: u32, capacity_blocks: usize) -> ManualRingSession {
         .expect("invariant: manual ring session starts")
 }
 
-fn expect_ok(reply: Reply) {
-    match reply {
-        Reply::Ok => {}
-        Reply::Err(error) => panic!("session command failed: {error}"),
-        _ => panic!("unexpected session command reply"),
-    }
-}
-
 fn register_transport_events(session: &ManualRingSession) -> EventReceiver<TransportEvent> {
     let bus = EventBus::default();
     let events = bus.subscribe();
-    match session
-        .exec(Cmd::RegisterPlayer {
-            bus,
-            grid_id: BeatGridId::allocate().expect("fixture grid id"),
-            eq_layout: Vec::new(),
-            gate_smoothing: kithara_play::DEFAULT_GATE_SMOOTHING,
-            pools: pools(),
-        })
-        .expect("invariant: player registration reaches the session")
+    if let Err(error) = session
+        .install(BeatGridId::allocate().expect("fixture grid id"), bus)
+        .expect("the deck reaches the graph")
     {
-        Reply::PlayerRegistered(_) => events,
-        Reply::Err(error) => panic!("player registration failed: {error}"),
-        _ => panic!("unexpected player registration reply"),
+        panic!("the graph refused the deck: {error}");
     }
+    events
 }
 
 fn drain_transport_events(events: &mut EventReceiver<TransportEvent>) -> Vec<TransportEvent> {
@@ -65,16 +46,11 @@ fn drain_transport_events(events: &mut EventReceiver<TransportEvent>) -> Vec<Tra
 
 fn set_tempo_at(session: &ManualRingSession, beats_per_minute: f64, at: When<SessionFrame>) {
     let tempo = Tempo::new(beats_per_minute).expect("invariant: test tempo is valid");
-    match session
-        .exec_host(HostCmd::Configure {
-            at,
-            change: HostSettingsChange::Tempo(tempo),
-        })
+    if let Err(error) = session
+        .configure(HostSettingsChange::Tempo(tempo), at)
         .expect("invariant: tempo command reaches the session")
     {
-        HostReply::Ok => {}
-        HostReply::Err(error) => panic!("tempo command failed: {error}"),
-        _ => panic!("unexpected tempo command reply"),
+        panic!("tempo command failed: {error}");
     }
 }
 
@@ -85,19 +61,14 @@ fn set_tempo(session: &ManualRingSession, beats_per_minute: f64) {
 /// Ticks the session first, as its owner loop does between device blocks, so
 /// the receipts of the rendered blocks are settled before the query.
 fn snapshot(session: &ManualRingSession) -> SessionTransportSnapshot {
-    expect_ok(
-        session
-            .exec(Cmd::Tick)
-            .expect("invariant: tick reaches the session"),
-    );
-    match session
-        .exec(Cmd::QuerySessionTransport)
-        .expect("invariant: transport query reaches the session")
-    {
-        Reply::SessionTransport(snapshot) => snapshot,
-        Reply::Err(error) => panic!("transport query failed: {error}"),
-        _ => panic!("unexpected transport query reply"),
-    }
+    session
+        .tick()
+        .expect("invariant: tick reaches the session")
+        .expect("the session tick succeeds");
+    session
+        .transport()
+        .expect("invariant: transport read reaches the session")
+        .expect("the rendered blocks committed the transport")
 }
 
 fn commit_initial_transport(

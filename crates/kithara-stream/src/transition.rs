@@ -1,7 +1,5 @@
 use kithara_abr::{AbrTicket, VariantIndex};
 
-use crate::seek::SeekEpoch;
-
 /// Result of publishing an audio-approved incoming variant.
 #[must_use]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -12,39 +10,28 @@ pub enum VariantPromotion {
     /// The transition is still exact, but publication is temporarily locked or
     /// its move-only reader has not been transferred yet.
     Deferred,
-    /// The transition was superseded, aborted, promoted, or invalidated by a
-    /// seek epoch change.
+    /// The transition was superseded, aborted, or already promoted.
     Stale,
 }
 
-/// Exact identity of one variant transition in one seek epoch.
+/// Exact identity of one variant transition for one accepted ABR request.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub struct VariantTransitionId {
     abr_ticket: AbrTicket,
-    seek_epoch: SeekEpoch,
 }
 
 impl VariantTransitionId {
-    /// Bind an accepted ABR request to the seek epoch that observed it.
+    /// Bind an accepted ABR request to its source transition.
     #[must_use]
-    pub const fn new(abr_ticket: AbrTicket, seek_epoch: SeekEpoch) -> Self {
-        Self {
-            abr_ticket,
-            seek_epoch,
-        }
+    pub const fn new(abr_ticket: AbrTicket) -> Self {
+        Self { abr_ticket }
     }
 
     /// Accepted ABR request carried by this transition.
     #[must_use]
     pub const fn abr_ticket(self) -> AbrTicket {
         self.abr_ticket
-    }
-
-    /// Seek epoch in which the request was prepared.
-    #[must_use]
-    pub const fn seek_epoch(self) -> SeekEpoch {
-        self.seek_epoch
     }
 }
 
@@ -113,7 +100,6 @@ impl VariantTransition {
         self.outgoing_disposition
     }
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_abr::{AbrMode, AbrReason, AbrState, PendingAbrDecision, VariantIndex};
@@ -132,10 +118,21 @@ mod tests {
 
     #[kithara::test]
     fn transition_identity_includes_ticket_and_seek_epoch() {
-        let ticket = ticket_for(1);
-        let first = VariantTransitionId::new(ticket, 7);
-        let same = VariantTransitionId::new(ticket, 7);
-        let after_seek = VariantTransitionId::new(ticket, 8);
+        let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
+        let ticket = state
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("first target must have a ticket")
+            .ticket();
+        let first = VariantTransitionId::new(ticket);
+        let same = VariantTransitionId::new(ticket);
+        state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+        let after_seek = VariantTransitionId::new(
+            state
+                .claim_pending_decision(VariantIndex::new(0))
+                .expect("superseding target must have a ticket")
+                .ticket(),
+        );
 
         assert_eq!(first, same);
         assert_ne!(first, after_seek);
@@ -143,21 +140,22 @@ mod tests {
 
     #[kithara::test]
     fn transition_keeps_active_and_incoming_roles_distinct() {
+        let ticket = ticket_for(1);
         let transition = VariantTransition::new(
-            VariantTransitionId::new(ticket_for(1), 3),
+            VariantTransitionId::new(ticket),
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
 
         assert_eq!(transition.active_variant(), VariantIndex::new(0));
         assert_eq!(transition.incoming_variant(), VariantIndex::new(1));
-        assert_eq!(transition.id().seek_epoch(), 3);
+        assert_eq!(transition.id().abr_ticket(), ticket);
     }
 
     #[kithara::test]
     fn outgoing_disposition_defaults_to_retained_and_changes_immutably() {
         let retained = VariantTransition::new(
-            VariantTransitionId::new(ticket_for(1), 3),
+            VariantTransitionId::new(ticket_for(1)),
             VariantIndex::new(0),
             VariantIndex::new(1),
         );

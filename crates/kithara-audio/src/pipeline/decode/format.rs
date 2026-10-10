@@ -1,8 +1,8 @@
-use kithara_stream::{MediaInfo, SeekObserve, StreamType};
+use kithara_stream::{MediaInfo, StreamType};
 
 use crate::pipeline::{
     decode::DecoderGeneration,
-    rebuild::{RecreateCause, RecreateNext, RecreateState},
+    rebuild::{RecreateCause, RecreateState},
     seek::anchor::variant_boundary,
     stream::shared::SharedStream,
 };
@@ -15,11 +15,7 @@ pub(crate) enum FormatDecision {
 pub(crate) fn detect<T: StreamType>(
     stream: &SharedStream<T>,
     active: &DecoderGeneration,
-    seek: &dyn SeekObserve,
 ) -> FormatDecision {
-    if seek.is_pending() && active.installed_at_seek_epoch() == seek.epoch() {
-        return FormatDecision::None;
-    }
     let Some(current) = stream.media_info() else {
         return FormatDecision::None;
     };
@@ -30,9 +26,14 @@ pub(crate) fn detect<T: StreamType>(
         return FormatDecision::None;
     };
     FormatDecision::Recreate(RecreateState {
-        media_info,
-        cause: RecreateCause::FormatBoundary,
-        next: RecreateNext::Decode,
+        cause: if active.media_info().and_then(|info| info.variant_index)
+            != media_info.variant_index
+        {
+            RecreateCause::VariantSwitch
+        } else {
+            RecreateCause::FormatBoundary
+        },
+        media_info: Some(media_info),
         offset: range.start,
     })
 }
@@ -71,7 +72,6 @@ pub(crate) fn resolve_target(cached: Option<&MediaInfo>, current: &MediaInfo) ->
         },
     ))
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};

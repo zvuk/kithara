@@ -40,12 +40,17 @@ async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayer {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SESSION_RATE)
             .await;
+    let deck_source = harness.pcm_deck((tone_resource(broadcast_tone)).into());
     harness
-        .with_player(move |player| {
-            player.insert(tone_resource(broadcast_tone), TrackId::allocate(), None);
+        .with_queue(move |player| {
+            let deck_id = TrackId::allocate();
             player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
+                .append_with_id(deck_id, deck_source)
+                .expect("append PCM deck");
+            player
+                .select(deck_id, kithara::queue::Transition::None)
+                .expect("select tone");
+            player.play();
         })
         .await;
     harness.render(BLOCK_FRAMES).await;

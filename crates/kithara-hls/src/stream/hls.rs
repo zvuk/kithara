@@ -14,9 +14,7 @@ use kithara_platform::{
     tokio::sync::mpsc,
     traits::FromWithParams,
 };
-use kithara_stream::{
-    Activity, PlayheadState, PlayheadWrite, SeekObserve, SeekState, SourceError, StreamType,
-};
+use kithara_stream::{ActivityWriter, PlayheadState, PlayheadWrite, SourceError, StreamType};
 
 use super::{
     coord::{HlsCoord, HlsCoordEnv},
@@ -92,11 +90,9 @@ where
         let invalidation_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), evict_tx);
 
         let playhead = Arc::new(PlayheadState::new());
-        let seek = Arc::new(SeekState::new());
-        let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
+        let activity_writer = ActivityWriter::new();
         let hls_peer = Arc::new(HlsPeer::new(
-            Arc::clone(&seek_obs),
-            Arc::clone(&seek) as Arc<dyn Activity>,
+            activity_writer.reader(),
             config.initial_abr_mode,
             cancel.clone(),
         ));
@@ -142,7 +138,6 @@ where
             look_ahead_segments,
             bus: bus.clone(),
             scope: stream_peer.scope(),
-            seek_epoch: seek_obs.epoch(),
             signal: signal.clone(),
         };
 
@@ -155,7 +150,6 @@ where
                 HlsVariant::try_build(&playlist_state)
                     .ctx(&plan_ctx)
                     .decrypt_contexts(&decrypt_contexts)
-                    .seek_obs(Arc::clone(&seek_obs))
                     .init_decrypt_ctx(init_decrypt_ctx)
                     .variant_idx(idx)
                     .call()
@@ -173,7 +167,7 @@ where
                 emit: Arc::clone(&emit),
             },
             playhead,
-            seek,
+            activity_writer,
             stream_peer.peer_handle().abr().clone(),
             hls_peer.abr_publisher(),
             Arc::clone(&variants),
@@ -263,7 +257,6 @@ where
         .build();
     Downloader::new(dl_config)
 }
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;

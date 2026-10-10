@@ -18,12 +18,14 @@
 # rebuilds less of the workspace and a green group is not re-run because
 # another one is still red.
 
+# The crossfader law: how much each bus hears at a position, and which
+# positions are refused rather than clamped.
 [[suite]]
 name = "crossfader"
 group = "playback"
-package = "kithara-play"
-files = ["crates/kithara-play/src/engine/mix.rs"]
-test_filters = ["test(/engine::mix::tests::/)"]
+package = "kithara-host"
+files = ["crates/kithara-host/src/api.rs"]
+test_filters = ["test(/api::tests::/)"]
 timeout_seconds = 120
 
 # Throughput estimation: sample windows, minimum durations, chunk filtering and

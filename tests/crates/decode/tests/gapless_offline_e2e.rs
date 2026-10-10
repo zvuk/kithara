@@ -8,15 +8,13 @@ use kithara::{
         SeekOutcome,
     },
     decode::{
-        DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer,
-        SilenceTrimParams, TrackMetadata,
+        GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, SilenceTrimParams,
+        TrackMetadata,
     },
     events::{EventBus, TrackId},
-    platform::{
-        sync::Arc,
-        time::{self, Duration},
-    },
-    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
+    platform::time::{self, Duration},
+    play::{PlayerEvent, ResourceConfig, ResourceSrc},
+    queue::{TrackSource, Transition},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     stream::AudioCodec,
 };
@@ -129,6 +127,7 @@ async fn single_track_silence_trim_strips_leading_priming(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -186,6 +185,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -257,6 +257,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -266,7 +267,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(
     let first = create_resource(&harness, &trimmed.1, temp_dir.path()).await;
     let second = create_resource(&harness, &trimmed_stitch.1, temp_dir.path()).await;
 
-    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]).await;
+    let [_, second_id] = load_tagged_queue(&harness, [first, second]).await;
 
     let (rendered, events) = render_until_item_end(&harness, second_id).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -276,7 +277,6 @@ async fn two_tracks_gapless_stitch_continuity_metric(
         "rendered PCM must cover the stitch window; left_frames={}, stitch_frame={stitch_frame}, events={events:?}",
         left.len()
     );
-    assert_prefetch_before_first_end(&events, first_id);
 
     let switch_peak = peak_first_diff(&left, stitch_frame, ContinuityMetric::HALF_WINDOW_FRAMES);
     let (control_peak, control_count) = gapless_control_peak(&left, stitch_frame);
@@ -313,7 +313,6 @@ async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch(
         "FUSED_GAPLESS_DEFICIT compensated_db={compensated_db:.2} uncompensated_db={uncompensated_db:.2}"
     );
 
-    assert_prefetch_before_first_end(&compensated.events, compensated.first_id);
     assert_eq!(compensated.first_frames, FUSED_FIXTURE_IDEAL_DEVICE_FRAMES);
     assert_eq!(
         uncompensated.first_frames,
@@ -369,6 +368,7 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
@@ -427,6 +427,7 @@ async fn render_apple_fused_deficit_seam(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
@@ -451,7 +452,6 @@ async fn render_apple_fused_deficit_seam(
     })
     .expect("first fused item must emit ItemDidPlayToEnd");
 
-    assert_prefetch_before_first_end(&events, first_id);
     assert!(
         stitch_frame < left.len(),
         "fused stitch frame must be inside rendered PCM; stitch_frame={stitch_frame}, left_frames={}, events={events:?}",
@@ -486,6 +486,7 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(GaplessMode::Disabled)
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -528,6 +529,7 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -560,6 +562,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -635,6 +638,7 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -721,25 +725,15 @@ async fn gapless_source(
 }
 
 async fn create_resource(
-    harness: &OfflinePlayer,
+    _harness: &OfflinePlayer,
     created: &CreatedHls,
     cache_dir: &std::path::Path,
-) -> Resource {
-    let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::<TestPools>::for_src(
+) -> ResourceConfig<TestPools> {
+    ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
-    .store(store)
-    .build();
-    config = harness
-        .with_player(move |player| player.prepare_config(config))
-        .await
-        .expect("prepare gapless e2e HLS resource config");
-    let mut resource = Resource::new(config)
-        .await
-        .expect("open HLS resource for gapless e2e fixture");
-    let _ = resource.preload().await;
-    resource
+    .store(kithara_integration_tests::disk_asset_store(cache_dir))
+    .build()
 }
 
 #[cfg(all(
@@ -770,8 +764,9 @@ async fn create_apple_fused_resource(
             .build(),
     )
     .build();
+    let worker = harness.worker().clone();
     let config = harness
-        .with_player(move |player| player.prepare_config(config))
+        .with_player(move |player| player.prepare_config(config, worker))
         .await
         .expect("prepare Apple fused HLS resource config");
     let mut resource = Resource::new(config)
@@ -805,27 +800,28 @@ async fn render_synthetic_fused_deficit_seam(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(GaplessMode::Disabled)
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
     )
     .await;
-    harness.set_host_level(FUSED_FIXTURE_MASTER_LEVEL);
+    harness
+        .with_queue(move |queue| queue.set_level(FUSED_FIXTURE_MASTER_LEVEL))
+        .await
+        .expect("set the mix level");
     let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation, stereo);
     let first_frame_count = first_frames.len();
-    let first = Resource::from_reader(
-        SyntheticPcmReader::new(first_frames, first_frame_count),
-        Some(Arc::from("fused-deficit-1")),
-    );
-    let second = Resource::from_reader(
-        SyntheticPcmReader::new(
-            pcm[FUSED_FIXTURE_IDEAL_DEVICE_FRAMES..].to_vec(),
-            FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
-        ),
-        Some(Arc::from("fused-deficit-2")),
-    );
+    let first = harness.pcm_deck(Box::new(SyntheticPcmReader::new(
+        first_frames,
+        first_frame_count,
+    )));
+    let second = harness.pcm_deck(Box::new(SyntheticPcmReader::new(
+        pcm[FUSED_FIXTURE_IDEAL_DEVICE_FRAMES..].to_vec(),
+        FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
+    )));
 
-    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]).await;
+    let [_, second_id] = load_tagged_queue(&harness, [first, second]).await;
 
     let (rendered, events) = render_until_item_end(&harness, second_id).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -838,7 +834,6 @@ async fn render_synthetic_fused_deficit_seam(
         left,
         events,
         first_frames: first_frame_count,
-        first_id,
     };
     harness.close().await;
     result
@@ -899,34 +894,40 @@ fn left_frames_from_chunks(chunks: impl IntoIterator<Item = AudioChunk>) -> Vec<
         .collect()
 }
 
-/// Loads the queue and returns the identity the player will report back
-/// for each item, in the order they were given.
+/// Starts the first of one or two items on the deck and arms the second as
+/// its gapless successor, as the queue does ahead of the first item's end.
+/// Returns the identity the player will report back for each item, in the
+/// order they were given.
 async fn load_tagged_queue<const N: usize>(
     harness: &OfflinePlayer,
-    items: [Resource; N],
+    items: [impl Into<TrackSource<TestPools>>; N],
 ) -> [TrackId; N] {
-    let ids = [(); N].map(|()| TrackId::allocate());
+    let mut items = items.into_iter();
+    let first = items.next().map(Into::into);
+    let second = items.next().map(Into::into);
+    assert!(items.next().is_none(), "the deck holds at most two items");
     harness
-        .with_player(move |player| {
-            player.reserve_slots(items.len());
-            for (index, (resource, id)) in items.into_iter().zip(ids.iter().copied()).enumerate() {
-                player
-                    .replace_item(index, resource, id)
-                    .expect("replace gapless fixture item");
+        .with_queue(move |queue| {
+            let mut ids = Vec::new();
+            for item in first.into_iter().chain(second) {
+                ids.push(queue.append(item).expect("append gapless queue item"));
             }
-            player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
+            if let Some(id) = ids.first() {
+                queue
+                    .select(*id, Transition::None)
+                    .expect("select first queue item");
+                queue.play();
+            }
+            ids.try_into()
+                .unwrap_or_else(|_| panic!("queue must retain every item identity"))
         })
-        .await;
-    ids
+        .await
 }
 
 struct SyntheticSeamRender {
     left: Vec<f32>,
     events: Vec<TimedPlayerEvent>,
     first_frames: usize,
-    first_id: TrackId,
 }
 
 #[cfg(all(
@@ -1097,7 +1098,7 @@ impl AudioRead for SyntheticPcmReader {
 }
 
 impl AudioControl for SyntheticPcmReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
         let frames = frames_for_test_duration(position);
         if frames >= self.frames.len() {
             self.position_frames = self.frames.len();
@@ -1192,27 +1193,6 @@ where
         .iter()
         .find(|timed| predicate(&timed.event))
         .map(|timed| timed.frame_end)
-}
-
-fn assert_prefetch_before_first_end(events: &[TimedPlayerEvent], first_item_id: TrackId) {
-    let prefetch = events
-        .iter()
-        .position(|timed| matches!(&timed.event, PlayerEvent::PrefetchRequested))
-        .expect("PrefetchRequested must fire so the test exercises arm_next");
-    let first_end = events
-        .iter()
-        .position(|timed| {
-            matches!(
-                &timed.event,
-                PlayerEvent::ItemDidPlayToEnd { item, .. }
-                    if item.id() == first_item_id
-            )
-        })
-        .expect("first item must emit ItemDidPlayToEnd");
-    assert!(
-        prefetch < first_end,
-        "PrefetchRequested must precede the first ItemDidPlayToEnd; events={events:?}"
-    );
 }
 
 fn peak_first_diff(left: &[f32], center: usize, half: usize) -> f32 {

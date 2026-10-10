@@ -297,10 +297,11 @@ mod tests {
             .build()
             .expect("valid preparation");
         let mut engine = BungeeElastic::prepare(config).expect("prepared Bungee");
-        let request = ElasticRequest::new(32, 16)
-            .expect("physical span")
-            .with_output_source_frames(16)
-            .expect("audible span");
+        let request = crate::elastic::with_output_source_frames(
+            ElasticRequest::new(32, 16).expect("physical span"),
+            16,
+        )
+        .expect("audible span");
         let mut output = [0.25; 32];
         let input_end = engine.core.source_end();
         assert_eq!(

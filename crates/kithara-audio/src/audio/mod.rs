@@ -2,29 +2,9 @@ mod build;
 mod core;
 mod cursor;
 pub(crate) mod event;
-mod park;
 mod position;
-mod ring;
+#[cfg(test)]
 mod seek;
-
-pub use core::{Audio, PreparedAudio};
+pub use core::Audio;
 
 pub(crate) use position::chunk_position;
-pub use seek::SeekHandle;
-
-pub(crate) use crate::{
-    AudioConfig, AudioControl, AudioDecoderConfig, AudioLaneEvent, AudioRead, AudioReadError,
-    AudioSession, ChunkOutcome, ConsumerWakeMode, DecodeError, Fetch, PendingReason, PreloadGate,
-    PreparedAudioLane, ReadOutcome, SeekOutcome,
-    pipeline::{
-        consumer::{ConsumerPhase, FailureSource},
-        fetch::EpochValidator,
-        parts::SourceParts,
-        rebuild::port::RebuildRuntime,
-        source::{
-            DecodeInit, DecoderFactory as StreamDecoderFactory, SharedStream, StreamAudioSource,
-        },
-    },
-    producer::ProducerPort,
-    runtime::{Inlet, Outlet, WakeSignal, connect, wake::ThreadWake},
-};

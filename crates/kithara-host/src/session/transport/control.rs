@@ -1,25 +1,13 @@
 use firewheel::FirewheelContext;
 use kithara_config::ConfigOwner;
-use kithara_sync::{ParentGridUpdate, SyncError};
-use kithara_warp::{BeatGrid, BeatGridState, MapAxis};
+use kithara_warp::{BeatGridState, MapAxis};
 
 use super::{
     commit::{SessionGridGeneration, TransportObservation},
     event::TransportEvent,
     process::converge_transport_restart,
 };
-use crate::{
-    api::SessionTransportSnapshot,
-    session::{SessionError, queue::settle_receipts, state::SessionState},
-};
-
-pub(crate) fn snapshot<T, S>(
-    state: &mut SessionState<T, S>,
-) -> Result<SessionTransportSnapshot, SessionError> {
-    refresh_observation(state)?
-        .snapshot()
-        .ok_or(SessionError::TransportNotProcessed)
-}
+use crate::session::{SessionError, state::SessionState};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RouteRestartStatus {
@@ -32,12 +20,13 @@ pub(crate) enum RouteRestartStatus {
 pub(crate) fn prepare_route_restart<T, S>(
     state: &mut SessionState<T, S>,
 ) -> Result<RouteRestartStatus, SessionError> {
+    state.iteration_clock = None;
     let was_running = state
         .ctx
         .as_ref()
         .ok_or(SessionError::NoContext)?
         .is_active();
-    let current = state.root.snapshot();
+    let current = state.root.grid();
     let MapAxis::Session(axis) = current.axis() else {
         return Err(SessionError::Graph(
             "session host published a non-session grid axis".to_owned(),
@@ -59,10 +48,12 @@ pub(crate) fn prepare_route_restart<T, S>(
         target
     } else {
         let observed = state
-            .transport_control
+            .transport_observation
             .as_mut()
-            .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
-            .observation()
+            .ok_or_else(|| {
+                SessionError::Graph("session transport observation is missing".to_owned())
+            })?
+            .read()
             .session_grid();
         if observed.epoch() < axis.epoch() {
             return Err(SessionError::Graph(
@@ -81,7 +72,7 @@ pub(crate) fn prepare_route_restart<T, S>(
         let sample_rate = state.settings.config().sample_rate();
         state
             .root
-            .publish_unavailable_grid(stamp, sample_rate, target.epoch())?;
+            .publish_unavailable(stamp, sample_rate, target.epoch());
         state.publish_root();
         state.reserved_session_grid = Some(target);
         target
@@ -99,9 +90,8 @@ pub(crate) fn prepare_route_restart<T, S>(
     finish_route_restart(state, target)
 }
 
-/// Once the stopped stream's processor is back, settles every receipt it
-/// returned and seeds the transport with the settings the Host reads, so the
-/// next stream renders from them; the batches still queued apply on top.
+/// Once the stopped stream's processor is back, converges its grid while
+/// settling applied root changes before seeding its settings from the owner.
 fn finish_route_restart<T, S>(
     state: &mut SessionState<T, S>,
     target: SessionGridGeneration,
@@ -115,7 +105,7 @@ fn finish_route_restart<T, S>(
     {
         return Ok(RouteRestartStatus::Pending);
     }
-    settle_receipts(state);
+    crate::session::queue::settle_root_receipts(state);
     let settings = *state.settings.config();
     let Some(store) = state
         .ctx
@@ -124,14 +114,13 @@ fn finish_route_restart<T, S>(
     else {
         return Ok(RouteRestartStatus::Pending);
     };
-    let actual = converge_transport_restart(store, target, settings)
+    let actual = converge_transport_restart(store, settings, target)
         .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
     let promoted = target
         .promote(actual)
         .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
     if promoted != target {
-        let published = state.root.snapshot();
-        let MapAxis::Session(published_axis) = published.axis() else {
+        let MapAxis::Session(published_axis) = state.root.grid().axis() else {
             return Err(SessionError::Graph(
                 "session host published a non-session grid axis".to_owned(),
             ));
@@ -139,19 +128,17 @@ fn finish_route_restart<T, S>(
         let stamp = promoted
             .stamp()
             .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
-        state.root.publish_unavailable_grid(
-            stamp,
-            published_axis.sample_rate(),
-            promoted.epoch(),
-        )?;
+        state
+            .root
+            .publish_unavailable(stamp, published_axis.sample_rate(), promoted.epoch());
         state.publish_root();
         state.reserved_session_grid = Some(promoted);
     }
     let observed = state
-        .transport_control
+        .transport_observation
         .as_mut()
-        .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
-        .observation()
+        .ok_or_else(|| SessionError::Graph("session transport observation is missing".to_owned()))?
+        .read()
         .session_grid();
     if observed != promoted {
         return Err(SessionError::Graph(
@@ -161,63 +148,37 @@ fn finish_route_restart<T, S>(
     Ok(RouteRestartStatus::Ready)
 }
 
-fn refresh_observation<T, S>(
-    state: &mut SessionState<T, S>,
-) -> Result<TransportObservation, SessionError> {
-    if state.reserved_session_grid.is_some() {
-        return Err(SessionError::TransportNotProcessed);
-    }
-    let observation = state
-        .transport_control
-        .as_mut()
-        .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
-        .observation();
-    publish_committed(state, &observation)?;
-    Ok(observation)
-}
-
-/// Brings the root group up to what the render graph has committed: on every
-/// session tick and offline block, and before a synchronization command reads
-/// it, so the Host grid follows the tempo it clicks with no deck ticking.
+/// Brings the Host grid up to what the render graph has committed: on every
+/// session tick and offline block, so the Host grid follows the tempo it
+/// clicks with no deck ticking.
 ///
 /// Nothing is committed while no graph runs or a route restart holds the
 /// session grid.
-///
-/// # Errors
-///
-/// Returns the root group's refusal of the committed session grid.
-pub(crate) fn observe_commits<T, S>(state: &mut SessionState<T, S>) -> Result<(), SyncError> {
+pub(crate) fn observe_commits<T, S>(state: &mut SessionState<T, S>) {
     if state.reserved_session_grid.is_some() {
-        return Ok(());
+        return;
     }
-    let Some(control) = state.transport_control.as_mut() else {
-        return Ok(());
+    let Some(observation) = state.transport_observation.as_mut() else {
+        return;
     };
-    let observation = control.observation();
-    publish_committed(state, &observation)
+    let observation = *observation.read();
+    publish_committed(state, &observation);
 }
 
-/// Publishes the committed session grid on the root group; idempotent.
-fn publish_committed<T, S>(
-    state: &mut SessionState<T, S>,
-    observation: &TransportObservation,
-) -> Result<(), SyncError> {
+/// Publishes the committed session grid as the Host grid; idempotent.
+fn publish_committed<T, S>(state: &mut SessionState<T, S>, observation: &TransportObservation) {
     if let Some(snapshot) = observation.snapshot()
-        && state.root.snapshot().stamp() != snapshot.session_grid_stamp()
+        && state.root.grid().stamp() != snapshot.session_grid_stamp()
     {
-        state.root.publish_session(ParentGridUpdate::new(
-            snapshot.session_grid_stamp(),
-            snapshot.session_epoch(),
-            snapshot.anchor(),
-            None,
-        ))?;
+        state.root.publish(snapshot.session_grid());
         state.publish_root();
     }
-    Ok(())
 }
 
 pub(crate) fn publish_transport_event<T, S>(state: &SessionState<T, S>, event: &TransportEvent) {
-    for deck in state.graph.decks() {
-        deck.bus.publish(event.clone());
+    for deck in &state.deck_nodes {
+        if let Some(bus) = &deck.bus {
+            bus.publish(event.clone());
+        }
     }
 }

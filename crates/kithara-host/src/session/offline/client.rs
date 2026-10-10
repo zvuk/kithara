@@ -1,123 +1,126 @@
-use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::SampleBuffer;
-use kithara_platform::sync::{Mutex, mpsc};
-use kithara_play::{PlayError, SessionDispatcher, SessionSampleRate, StreamShape};
-use kithara_worker::TaskControl;
+use kithara_command::Ticket;
+use kithara_platform::{
+    maybe_send::MaybeSend,
+    sync::{Arc, Mutex, mpsc},
+};
+use kithara_play::PlayError;
 
-use super::{OfflineSessionError, task::OfflineMsg};
+use super::{
+    OfflineSessionError, OfflineTaskRoute,
+    task::{OfflineMsg, OfflineRequest},
+};
 use crate::session::{
-    Cmd, HostCmd, HostDispatcher, HostReply, Reply,
-    protocol::{HostCmdMsg, HostDispatchError},
-    state::RootView,
+    decks::{DeckInbox, DeckMsg},
+    protocol::{HostDispatchError, HostDispatcher, HostPostbox, not_taken},
 };
 
-pub(crate) struct OfflineSessionClient<S> {
-    cmd_tx: Mutex<mpsc::Sender<OfflineMsg<S>>>,
-    root_view: RootView,
-    control: TaskControl,
+pub(crate) struct OfflineSessionClient<C> {
+    postbox: HostPostbox<C>,
+    cmd_tx: Arc<Mutex<mpsc::Sender<OfflineMsg>>>,
+    control: OfflineTaskRoute,
 }
 
-impl<S> OfflineSessionClient<S> {
+impl<C> OfflineSessionClient<C> {
     pub(super) fn new(
-        cmd_tx: mpsc::Sender<OfflineMsg<S>>,
-        control: TaskControl,
-        root_view: RootView,
+        postbox: HostPostbox<C>,
+        cmd_tx: mpsc::Sender<OfflineMsg>,
+        control: OfflineTaskRoute,
     ) -> Self {
         Self {
-            root_view,
+            postbox,
+            cmd_tx: Arc::new(Mutex::new(cmd_tx)),
             control,
-            cmd_tx: Mutex::new(cmd_tx),
         }
     }
-
-    fn call(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
-        let (reply_tx, reply_rx) = mpsc::channel();
-        let message = OfflineMsg::Host(HostCmdMsg { cmd, reply_tx });
-        if let Err(message) = self.send(message) {
-            let OfflineMsg::Host(message) = *message else {
-                return Err(HostDispatchError::after_send(PlayError::Internal(
-                    "offline Host command changed protocol variant before send".into(),
-                )));
-            };
-            return Err(HostDispatchError::before_send(
-                PlayError::SessionGone {
-                    reason: "offline session stopped accepting commands",
-                },
-                message.cmd,
-            ));
-        }
-        reply_rx.recv().map_err(|_| {
-            HostDispatchError::after_send(PlayError::SessionGone {
-                reason: "offline session dropped the reply channel",
-            })
-        })
-    }
-
     pub(crate) fn position(&self) -> Result<u64, OfflineSessionError> {
-        let (reply_tx, reply_rx) = mpsc::channel();
-        self.send(OfflineMsg::Position { reply_tx })
+        let (answer, receipt) = mpsc::channel();
+        self.send(OfflineMsg::Request(OfflineRequest::Position(answer)))
             .map_err(|_| OfflineSessionError::SessionGone)?;
-        reply_rx
-            .recv()
-            .map_err(|_| OfflineSessionError::SessionGone)
+        receipt.recv().map_err(|_| OfflineSessionError::SessionGone)
     }
-
     pub(crate) fn render(
         &self,
         position: u64,
         frames: u32,
     ) -> Result<SampleBuffer, OfflineSessionError> {
-        let (reply_tx, reply_rx) = mpsc::channel();
-        self.send(OfflineMsg::Render {
+        let (answer, receipt) = mpsc::channel();
+        self.send(OfflineMsg::Request(OfflineRequest::Render {
             position,
             frames,
-            reply_tx,
-        })
+            answer,
+        }))
         .map_err(|_| OfflineSessionError::SessionGone)?;
-        reply_rx
+        receipt
             .recv()
             .map_err(|_| OfflineSessionError::SessionGone)?
     }
-
-    fn send(&self, message: OfflineMsg<S>) -> Result<(), Box<OfflineMsg<S>>> {
+    fn send(&self, message: OfflineMsg) -> Result<(), PlayError> {
         self.cmd_tx
             .lock()
             .send(message)
-            .map_err(|error| Box::new(error.0))?;
+            .map_err(|_| PlayError::SessionGone {
+                reason: "offline session stopped taking commands",
+            })?;
         self.control.wake();
         Ok(())
     }
 }
 
-impl<S: Send + Sync + 'static> SessionDispatcher<S> for OfflineSessionClient<S> {
-    /// Offline render pulls the graph from the session task, an ordinary thread
-    /// that may block and read the clock, so a reader wakes its producer inline.
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::ImmediateOffRt
+impl<C: MaybeSend + 'static> HostDispatcher<C> for OfflineSessionClient<C> {
+    fn dispatch(&self, command: C) -> Result<Ticket<PlayError>, HostDispatchError> {
+        let ticket = self.postbox.post(command).map_err(not_taken)?;
+        self.send(OfflineMsg::Posted)
+            .map_err(HostDispatchError::NotTaken)?;
+        Ok(ticket)
     }
-
-    fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
-        match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
-            HostReply::Play(reply) => Ok(reply),
-            HostReply::Err(error) => Err(error),
-            _ => Err(PlayError::Internal(
-                "unexpected offline Host reply for player command".into(),
-            )),
-        }
-    }
-
-    delegate::delegate! {
-        to self.root_view {
-            #[expr(Ok($))]
-            fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
-            #[expr(Ok($))]
-            fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError>;
+    fn shutdown(&self) {
+        let (completion, completed) = mpsc::channel();
+        if self.send(OfflineMsg::Shutdown(completion)).is_ok() {
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = completed.recv();
+            #[cfg(target_arch = "wasm32")]
+            drop(completed);
         }
     }
 }
 
-impl<S: Send + Sync + 'static> HostDispatcher<S> for OfflineSessionClient<S> {
-    fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
-        self.call(cmd)
+impl<C: MaybeSend + 'static> DeckInbox for OfflineSessionClient<C> {
+    fn post(&self, message: DeckMsg) -> Result<(), PlayError> {
+        self.send(OfflineMsg::Deck(message))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn waker(self: Arc<Self>, message: DeckMsg) -> std::task::Waker {
+        std::task::Waker::from(Arc::new(OfflineDeckWake {
+            cmd_tx: self.cmd_tx.clone(),
+            control: self.control.clone(),
+            message,
+        }))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+struct OfflineDeckWake {
+    cmd_tx: Arc<Mutex<mpsc::Sender<OfflineMsg>>>,
+    control: OfflineTaskRoute,
+    message: DeckMsg,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl std::task::Wake for OfflineDeckWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        if self
+            .cmd_tx
+            .lock()
+            .send(OfflineMsg::Deck(self.message))
+            .is_ok()
+        {
+            self.control.wake();
+        }
     }
 }

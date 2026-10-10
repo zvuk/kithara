@@ -3,7 +3,6 @@
 use kithara_events::Event;
 use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;
-use kithara_stream::SeekEpoch;
 
 /// Seek lifecycle stage used for end-to-end diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,7 +56,6 @@ pub enum AudioEvent {
         position_ms: u64,
         total_ms: Option<u64>,
         buffered_ms: Option<u64>,
-        seek_epoch: SeekEpoch,
     },
     /// Decoded output became available to a non-blocking reader.
     ///
@@ -67,41 +65,27 @@ pub enum AudioEvent {
     /// Seek lifecycle diagnostics.
     SeekLifecycle {
         stage: SeekLifecycleStage,
-        seek_epoch: SeekEpoch,
         location: SegmentLocation,
     },
     /// Seek completed at the first committed post-seek output frame.
-    SeekComplete {
-        position: Duration,
-        seek_epoch: SeekEpoch,
-    },
-    /// Seek could not be applied and playback continues from the current decoder position.
-    SeekRejected { epoch: SeekEpoch, target: Duration },
-    /// Decoder initialized or recreated (ABR switch, format boundary, recovery).
+    SeekComplete { position: Duration },
+    /// The owning-thread seek failed; the decoded source is terminal.
+    SeekRejected { target: Duration },
+    /// Decoder initialized or recreated (ABR switch, format boundary, host rate).
     DecoderReady {
         base_offset: u64,
         variant: Option<u32>,
     },
     /// Terminal track failure surfaced by the audio FSM.
-    TrackFailed {
-        failure: TrackFailureKind,
-        seek_epoch: SeekEpoch,
-    },
+    TrackFailed { failure: TrackFailureKind },
     /// Consumer crossed from playable output into starvation.
-    UnderrunStarted {
-        position_ms: u64,
-        seek_epoch: SeekEpoch,
-    },
+    UnderrunStarted { position_ms: u64 },
     /// Consumer recovered from starvation and resumed playback.
-    UnderrunEnded {
-        position_ms: u64,
-        seek_epoch: SeekEpoch,
-    },
+    UnderrunEnded { position_ms: u64 },
     /// Low-rate worker-side view of decoded/buffered progress.
     BufferHealth {
         buffered_ms: u64,
         decoded_frontier_ms: u64,
-        seek_epoch: SeekEpoch,
     },
     /// Low-rate worker-side engine cost snapshot.
     EngineLoad {
@@ -116,8 +100,8 @@ pub enum AudioEvent {
         source_sample_rate: u32,
         active: bool,
     },
-    /// Decoding finished for one seek epoch.
-    EndOfStream { seek_epoch: SeekEpoch },
+    /// Decoding finished for the open source.
+    EndOfStream,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

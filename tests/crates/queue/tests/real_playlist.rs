@@ -391,7 +391,10 @@ async fn track_plays_end_to_end(
         url,
     );
 
-    ctx.queue.remove(track_id).expect("remove");
+    ctx.queue
+        .run(move |q| q.remove(track_id))
+        .await
+        .expect("remove");
 }
 
 async fn wait_for_queue_event<F>(
@@ -443,10 +446,13 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     assert!(urls.len() >= 3, "need ≥3 tracks for scenario");
 
     ctx.queue
-        .set_crossfade_settings(kithara::play::CrossfadeSettings {
-            duration: 2.0,
-            ..Default::default()
+        .run(|q| {
+            q.set_crossfade_settings(kithara::play::CrossfadeSettings {
+                duration: 2.0,
+                ..Default::default()
+            })
         })
+        .await
         .expect("valid crossfade settings");
 
     let mut rx = ctx.queue.subscribe();
@@ -527,7 +533,8 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
     let xf_duration = ctx.queue.crossfade_settings().duration;
     ctx.queue
-        .next(Transition::Crossfade)
+        .run(|q| q.next(Transition::Crossfade))
+        .await
         .expect("advance real-playlist crossfade");
     let started = wait_for_queue_event(
         &mut rx,
@@ -608,8 +615,10 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
             .queue
             .duration_seconds()
             .ok_or_else(|| "duration unknown".to_string())?;
+        let target = (dur - 3.0).max(0.0);
         ctx.queue
-            .seek((dur - 3.0).max(0.0))
+            .run(move |q| q.seek(target))
+            .await
             .map_err(|e| format!("seek: {e}"))?;
         wait_for_queue_event(
             &mut rx,
@@ -736,7 +745,7 @@ async fn prod_tracks_sequential_startup_latency() {
         }
         .await;
 
-        let _ = ctx.queue.remove(track_id);
+        let _ = ctx.queue.run(move |q| q.remove(track_id)).await;
         report.push((url, outcome));
     }
 
@@ -875,10 +884,13 @@ async fn hls_hands_over_to_mpeg_at_its_own_end(#[case] backend: DecoderBackend) 
 
     let ctx = shared_test_ctx().await;
     ctx.queue
-        .set_crossfade_settings(kithara::play::CrossfadeSettings {
-            duration: CROSSFADE_SECS,
-            ..Default::default()
+        .run(|q| {
+            q.set_crossfade_settings(kithara::play::CrossfadeSettings {
+                duration: CROSSFADE_SECS,
+                ..Default::default()
+            })
         })
+        .await
         .expect("valid crossfade settings");
 
     let mut rx = ctx.queue.subscribe();
@@ -949,6 +961,10 @@ async fn hls_hands_over_to_mpeg_at_its_own_end(#[case] backend: DecoderBackend) 
         seam.reason
     );
 
-    let _ = ctx.queue.remove(hls);
-    let _ = ctx.queue.remove(mpeg);
+    ctx.queue
+        .run(move |q| {
+            let _ = q.remove(hls);
+            let _ = q.remove(mpeg);
+        })
+        .await;
 }

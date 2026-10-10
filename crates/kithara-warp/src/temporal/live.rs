@@ -314,18 +314,6 @@ impl RenderSnapshot {
         self.frontier = self.frontier.with_warp_map(revision);
         self
     }
-
-    #[cfg(feature = "render")]
-    pub(crate) fn mapped(self, cursor: crate::WarpCursor) -> Self {
-        Self {
-            context: self.context,
-            frontier: PresentationFrontier::builder()
-                .source(cursor.source())
-                .output(cursor.output())
-                .warp_map(cursor.revision())
-                .build(),
-        }
-    }
 }
 
 #[cfg(test)]

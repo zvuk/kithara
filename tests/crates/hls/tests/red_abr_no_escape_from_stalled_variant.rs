@@ -98,15 +98,20 @@ async fn abr_escapes_stalled_initial_variant(
         .pools(pools)
         .initial_abr_mode(auto(0))
         .build();
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .block_on_underrun(true)
-        .build();
-    let mut audio = worker.load(config).await.expect("audio creation");
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio creation");
 
     // Clone the live ABR handle to read `current_variant` after the drain —
     // the `Arc<AbrState>` it holds outlives `audio` (dropped inside the

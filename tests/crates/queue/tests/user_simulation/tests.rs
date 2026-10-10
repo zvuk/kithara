@@ -8,7 +8,7 @@ use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::AudioCodec,
 };
@@ -334,6 +334,10 @@ async fn user_sim_long_play_then_seek_forward(#[case] kind: PreparedTrack, #[cas
 #[case::aac_plain(track_hls_aac_lc_abr4().await, 0.50)]
 #[case::mp3_streamhq(track_mp3_stream_hq().await, 0.50)]
 async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[case] ratio: f64) {
+    /// How far the published position may run past a landed target before
+    /// it is read: well under any case's target, so a seek that never
+    /// landed cannot pass.
+    const LANDING_SLACK_S: f64 = 1.0;
     let (_helper, url) = kind;
     let spec = build_spec(url, AbrMode::Auto(None), DecoderBackend::default());
     let temp = temp_dir();
@@ -362,15 +366,12 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
     .initial_abr_mode(AbrMode::Auto(None))
     .build();
     let session_config = HostConfig::offline(pools).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session_config.settings().sample_rate())
-            .worker(worker)
-            .build(),
-    );
+    let player = kithara::play::ResourcePrep::builder()
+        .worker(worker)
+        .build();
     let queue = OfflineQueue::paced(
         session_config,
-        Queue::new(QueueConfig::builder().player(player).build()),
+        Queue::new(QueueConfig::builder().prep(player).build()),
         RENDER_PACE,
     )
     .await
@@ -395,22 +396,19 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
     // right after the track turns "ready" in the playlist.
     let dur_at_seek = queue.duration_seconds().unwrap_or(0.0);
     let target = (dur_at_seek * ratio).clamp(0.0, dur_at_seek);
-    let outcome = queue
+    queue
         .run(move |queue| queue.seek(target))
         .await
         .unwrap_or_else(|e| panic!("queue.seek Err: {e}"));
-    if let kithara::play::SeekOutcome::PastEof {
-        duration: reported_dur,
-        ..
-    } = outcome
-    {
-        panic!(
-            "FRESH-LOADED SEEK RACE BUG: Queue::seek returned PastEof for \
-             ratio={ratio:.2} target={target:.2}s reported_dur={reported_dur:?} \
-             queue.duration={dur_at_seek:.2}s — Loaded status fires before mvhd \
-             is parsed; seek target lands at 0 → PastEof → false-EOF auto-advance"
-        );
-    }
+    // The queue publishes before it answers: a seek that landed shows its
+    // target as the queue's position; one judged past the end leaves it.
+    let landed = queue.position_seconds();
+    assert!(
+        landed.is_some_and(|landed| (landed - target).abs() < LANDING_SLACK_S),
+        "FRESH-LOADED SEEK RACE BUG: ratio={ratio:.2} target={target:.2}s landed at \
+         {landed:?}, queue.duration={dur_at_seek:.2}s — Loaded status fires before mvhd \
+         is parsed; the target reads past the end and never lands → false-EOF auto-advance"
+    );
 
     tick.stop().await;
 }

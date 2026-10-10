@@ -7,7 +7,7 @@ use kithara::{
     host::{HostConfig, HostSettings},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
-    play::{PlayerConfig, PlayerEvent, PlayerImpl, ResourceConfig, ResourceSrc, SeekOutcome},
+    play::{PlayerEvent, ResourceConfig, ResourceSrc},
     queue::{PlaybackView, Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -110,14 +110,11 @@ async fn run_case(
         u32::try_from(BLOCK_FRAMES).expect("fixture block size fits u32"),
     )
     .expect("fixture block size must be non-zero");
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(sample_rate)
-            .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build(),
-    );
+    let player = kithara::play::ResourcePrep::builder()
+        .worker(kithara::play::PlayWorker::new(
+            kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
+        .build();
     let queue = OfflineQueue::new(
         HostConfig::offline(pools)
             .settings(HostSettings::builder().sample_rate(sample_rate).build())
@@ -125,7 +122,7 @@ async fn run_case(
             .build(),
         Queue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(player)
                 .store(store.clone())
                 .build(),
         ),
@@ -187,22 +184,18 @@ async fn run_case(
         Target::NearEnd => duration - NEAR_END_OFFSET_SECS,
         Target::End => duration,
     };
-    let outcome = queue
+    queue
         .run(move |q| q.seek(target))
         .await
         .unwrap_or_else(|error| panic!("seek to {target:.3}s failed: {error}"));
-    match target_kind {
-        Target::NearEnd => assert!(
-            matches!(outcome, SeekOutcome::Landed { .. }),
-            "near-end seek to {target:.3}s was classified as {outcome:?}"
-        ),
-        Target::End => assert!(
-            matches!(
-                outcome,
-                SeekOutcome::Landed { .. } | SeekOutcome::PastEof { .. }
-            ),
-            "duration-boundary seek returned {outcome:?}"
-        ),
+    if let Target::NearEnd = target_kind {
+        // Only a seek that lands moves the published position to its target;
+        // one judged past the end leaves the warmup position in place.
+        let landed = queue.playback_view().position;
+        assert!(
+            landed.is_some_and(|landed| (landed - target).abs() < POSITION_TOLERANCE_SECS),
+            "near-end seek to {target:.3}s did not land; the queue reads {landed:?}"
+        );
     }
 
     gate.release();
@@ -249,7 +242,10 @@ async fn run_case(
          after seeking to {target:.3}s"
     );
 
-    queue.run(QueueControl::clear).await;
+    queue
+        .run(QueueControl::clear)
+        .await
+        .expect("the queue clears");
     queue.close().await;
 }
 

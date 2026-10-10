@@ -33,6 +33,7 @@ mod hls_timeline {
                     .segments_per_variant(SEGMENT_COUNT)
                     .segment_size(SawWav::DEFAULT.segment_size)
                     .segment_duration_secs(segment_duration)
+                    .codecs("wav".to_string())
                     .custom_data(Arc::new(wav)),
             )
             .await
@@ -127,7 +128,11 @@ mod hls_timeline {
                     "variant_index should be 0 at chunk {chunk_count}"
                 );
 
-                assert_eq!(meta.epoch, 0, "epoch should stay 0 at chunk {chunk_count}");
+                assert_eq!(
+                    meta.segment.get(),
+                    0,
+                    "epoch should stay 0 at chunk {chunk_count}"
+                );
 
                 prev_frame_end = meta.frame_offset + chunk.frames() as u64;
                 chunk_count += 1;

@@ -5,7 +5,7 @@ use kithara::{
     decode::DecoderBackend,
     host::HostConfig,
     platform::time::{self, Duration},
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -15,7 +15,6 @@ use kithara_integration_tests::{
     hls_fixture::create_test_downloader,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    test_defaults::consts as shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
 };
 use kithara_test_utils::{bufpool::pools, temp_dir};
@@ -42,15 +41,12 @@ async fn cold_seek_far_segment_hls_offline(
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = create_test_downloader();
 
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .build(),
-    );
+    let player = kithara::play::ResourcePrep::builder()
+        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .build();
     let queue = OfflineQueue::paced(
         HostConfig::offline(pools()).build(),
-        Queue::new(QueueConfig::builder().player(player).build()),
+        Queue::new(QueueConfig::builder().prep(player).build()),
         RENDER_PACE,
     )
     .await

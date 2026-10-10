@@ -54,8 +54,7 @@ async fn nonuniform_gapless_hls_is_continuous_at_every_boundary(
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls).build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = worker
-        .load(config)
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .unwrap_or_else(|error| panic!("open {path}: {error}"));
     audio

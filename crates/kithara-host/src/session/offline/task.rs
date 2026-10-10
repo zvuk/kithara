@@ -1,55 +1,64 @@
-use std::num::NonZeroU32;
+use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_command::Live;
+use kithara_command::{Live, ScopedConfig, mailbox};
 use kithara_config::Config;
 use kithara_platform::{
+    maybe_send::MaybeSend,
     sync::{Arc, mpsc, mpsc::TryRecvError},
     time::Duration,
 };
 use kithara_play::PlayError;
-use kithara_sync::{GroupState, SyncError};
-use kithara_worker::{Dispatcher, Task, TaskConfig, TaskHandle, TickResult};
+use kithara_worker::{Dispatcher, Task, TaskConfig, TickResult};
 use thiserror::Error;
-use tracing::warn;
 
 use super::{
-    super::{
-        dispatch::run_host_cmd,
-        protocol::{HostCmd, HostCmdMsg, HostReply},
-        queue::{HostProtocol, settle_receipts},
-        state::{RootView, SessionState, ensure_ctx},
-        transport,
-    },
-    OfflineSessionClient,
+    OfflineSessionClient, OfflineTaskHandle, OfflineTaskRoute,
     backend::{BackendConfig, OfflineStream},
 };
-use crate::{HostSettings, PlayerMember, rt::SessionOutput};
-
+use crate::{
+    HostCore, HostOwner, HostSettings,
+    rt::SessionOutput,
+    session::{
+        decks::{DeckInbox, DeckMsg},
+        dispatch::OwnerPosts,
+        protocol::HostMailbox,
+        queue::HostProtocol,
+        state::{HostRoot, RootView, SessionBufferConfig, SessionState, SessionStream},
+    },
+};
 pub(crate) mod consts {
     pub(crate) const CHANNELS: usize = 2;
 }
 
-pub(super) enum OfflineMsg<S> {
-    Host(HostCmdMsg<S>),
-    Position {
-        reply_tx: mpsc::Sender<u64>,
-    },
+pub(in crate::session::offline) enum OfflineMsg {
+    Posted,
+    Deck(DeckMsg),
+    Request(OfflineRequest),
+    Shutdown(mpsc::Sender<()>),
+}
+
+pub(in crate::session::offline) enum OfflineRequest {
+    Position(mpsc::Sender<u64>),
     Render {
         position: u64,
         frames: u32,
-        reply_tx: mpsc::Sender<Result<SampleBuffer, OfflineSessionError>>,
+        answer: mpsc::Sender<Result<SampleBuffer, OfflineSessionError>>,
     },
 }
 
-struct OfflineSessionTask<S> {
-    max_block_frames: NonZeroU32,
-    cmd_rx: Option<mpsc::Receiver<OfflineMsg<S>>>,
-    state: Option<SessionState<OfflineStream, S>>,
-    pools: PoolRegion<S>,
+struct OfflineSessionTask<S, O: HostOwner<S>> {
+    cmd_rx: mpsc::Receiver<OfflineMsg>,
+    mailbox: HostMailbox<O::Command>,
+    owner: O,
+    /// Dropped after the owner, acknowledging that retained controls are closed.
+    shutdown_completion: Option<mpsc::Sender<()>>,
+    posts: OwnerPosts,
     position: u64,
+    max_block_frames: NonZeroU32,
+    pools: PoolRegion<S>,
+    marker: PhantomData<fn() -> S>,
 }
-
 #[derive(Config)]
 #[config(construction)]
 pub(crate) struct OfflineTaskConfig<S> {
@@ -60,6 +69,8 @@ pub(crate) struct OfflineTaskConfig<S> {
     #[config(skip = "transferred to session state")]
     pub(crate) settings: Live<HostSettings, HostProtocol>,
     #[config(skip = "transferred to session state")]
+    pub(crate) channel_config: ScopedConfig,
+    #[config(skip = "transferred to session state")]
     pub(crate) declick_frames: NonZeroU32,
     #[config(skip = "transferred to the offline task")]
     pub(crate) max_block_frames: NonZeroU32,
@@ -67,9 +78,9 @@ pub(crate) struct OfflineTaskConfig<S> {
     pub(crate) pools: PoolRegion<S>,
 }
 
-impl<S> OfflineSessionTask<S>
+impl<S, O: HostOwner<S>> OfflineSessionTask<S, O>
 where
-    S: HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<f32>,
 {
     fn render(&mut self, position: u64, frames: u32) -> Result<SampleBuffer, OfflineSessionError> {
         if position != self.position {
@@ -84,106 +95,39 @@ where
                 maximum: self.max_block_frames.get(),
             });
         }
-        let state = self
-            .state
-            .as_mut()
-            .ok_or(OfflineSessionError::SessionGone)?;
-        let output = render_block(state, frames, self.position, &self.pools)?;
-        self.position = self
-            .position
+        let next = position
             .checked_add(u64::from(frames))
             .ok_or(OfflineSessionError::TimelineOverflow)?;
+        let frames =
+            usize::try_from(frames).map_err(|_| OfflineSessionError::SampleCountOverflow)?;
+        let samples = frames
+            .checked_mul(consts::CHANNELS)
+            .ok_or(OfflineSessionError::SampleCountOverflow)?;
+        let mut output = self.pools.get::<f32>();
+        output
+            .ensure_len(samples)
+            .map_err(OfflineSessionError::Pool)?;
+        self.owner
+            .render_offline(position, frames, &mut output)
+            .map_err(OfflineSessionError::Owner)?;
+        self.position = next;
         Ok(output)
     }
-
-    fn tick_host(&mut self, message: HostCmdMsg<S>) -> TickResult {
-        let HostCmdMsg { cmd, reply_tx } = message;
-        if matches!(&cmd, HostCmd::Shutdown) {
-            drop(self.cmd_rx.take());
-            self.state.take();
-            if reply_tx.send(HostReply::Ok).is_err() {
-                warn!("offline Host shutdown reply receiver dropped");
-            }
-            return TickResult::Done;
-        }
-        let reply = self.state.as_mut().map_or_else(
-            || {
-                HostReply::Err(PlayError::SessionGone {
-                    reason: "offline session state is unavailable",
-                })
-            },
-            |state| run_host_cmd(state, cmd),
-        );
-        if reply_tx.send(reply).is_err() {
-            warn!("offline Host command reply receiver dropped");
-        }
-        TickResult::Progress
-    }
-
-    fn tick_message(&mut self, message: OfflineMsg<S>) -> TickResult {
-        match message {
-            OfflineMsg::Host(message) => self.tick_host(message),
-            OfflineMsg::Position { reply_tx } => self.tick_position(&reply_tx),
-            OfflineMsg::Render {
-                position,
-                frames,
-                reply_tx,
-            } => self.tick_render(position, frames, &reply_tx),
-        }
-    }
-
-    fn tick_position(&self, reply_tx: &mpsc::Sender<u64>) -> TickResult {
-        if reply_tx.send(self.position).is_err() {
-            warn!("offline position reply receiver dropped");
-        }
-        TickResult::Progress
-    }
-
-    fn tick_render(
-        &mut self,
-        position: u64,
-        frames: u32,
-        reply_tx: &mpsc::Sender<Result<SampleBuffer, OfflineSessionError>>,
-    ) -> TickResult {
-        let reply = self.render(position, frames);
-        if reply_tx.send(reply).is_err() {
-            warn!("offline render reply receiver dropped");
-        }
-        TickResult::Progress
-    }
 }
 
-impl<S> Task for OfflineSessionTask<S>
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    fn on_cancel(&mut self) {
-        self.state.take();
-    }
+type StartedOfflineTask<C> = (Arc<OfflineSessionClient<C>>, OfflineTaskHandle);
 
-    fn tick(&mut self) -> TickResult {
-        let Some(cmd_rx) = self.cmd_rx.as_ref() else {
-            return TickResult::Done;
-        };
-        match cmd_rx.try_recv() {
-            Ok(message) => self.tick_message(message),
-            Err(TryRecvError::Disconnected) => TickResult::Done,
-            Err(TryRecvError::Empty) => TickResult::Waiting,
-            #[cfg(target_arch = "wasm32")]
-            Err(_) => TickResult::Waiting,
-        }
-    }
-}
-
-pub(crate) fn spawn<S>(
+pub(crate) fn spawn<S, O>(
     dispatcher: &Dispatcher,
     task_config: TaskConfig,
-    root: GroupState<PlayerMember>,
+    root: HostRoot,
     root_view: RootView,
     config: OfflineTaskConfig<S>,
-) -> Result<(Arc<OfflineSessionClient<S>>, TaskHandle), PlayError>
+    layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
+) -> Result<StartedOfflineTask<O::Command>, PlayError>
 where
     S: HasPool<f32> + Send + Sync + 'static,
+    O: HostOwner<S>,
 {
     let OfflineTaskConfig {
         pools,
@@ -192,110 +136,156 @@ where
         declared_latency,
         output,
         settings,
+        channel_config,
     } = config;
     let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (postbox, mailbox) = mailbox();
     let pending = dispatcher.reserve(task_config).map_err(|error| {
         PlayError::Internal(format!("offline session task reservation: {error}"))
     })?;
-    let control = pending.context().control();
-    let client = Arc::new(OfflineSessionClient::new(
-        cmd_tx,
-        control,
-        root_view.clone(),
-    ));
-    let task = pending
-        .start_local(move |_| {
-            let start_stream = move |ctx: &mut firewheel::FirewheelContext, rate: u32| {
-                let rate = NonZeroU32::new(rate)
-                    .ok_or_else(|| "offline sample rate must be non-zero".to_owned())?;
-                let config = BackendConfig::builder()
-                    .block_frames(max_block_frames)
-                    .declared_latency(declared_latency)
-                    .sample_rate(rate)
-                    .build();
-                OfflineStream::start(ctx, config).map_err(|error| error.to_string())
-            };
-            OfflineSessionTask {
-                cmd_rx: Some(cmd_rx),
-                max_block_frames,
-                pools,
-                position: 0,
-                state: Some(SessionState::new(
-                    root,
-                    root_view,
-                    Some(max_block_frames),
-                    Some(declick_frames),
-                    output,
-                    settings,
-                    start_stream,
-                )),
-            }
-        })
-        .map_err(|error| PlayError::Internal(format!("offline session task start: {error}")))?;
+    let route = OfflineTaskRoute::new(&pending);
+    let client = Arc::new(OfflineSessionClient::new(postbox, cmd_tx, route.clone()));
+    let inbox: Arc<dyn DeckInbox> = client.clone();
+    let factory = move |_| {
+        let start = move |ctx: &mut firewheel::FirewheelContext, rate: u32| {
+            let rate = NonZeroU32::new(rate)
+                .ok_or_else(|| "offline sample rate must be non-zero".to_owned())?;
+            let backend = BackendConfig::builder()
+                .block_frames(max_block_frames)
+                .declared_latency(declared_latency)
+                .sample_rate(rate)
+                .build();
+            OfflineStream::start(ctx, backend)
+                .map(|stream| SessionStream::Offline(Box::new(stream)))
+                .map_err(|error| error.to_string())
+        };
+        let state = SessionState::new(
+            root,
+            root_view,
+            SessionBufferConfig {
+                max_block_frames: Some(max_block_frames),
+                declick_frames: Some(declick_frames),
+            },
+            output,
+            settings,
+            channel_config,
+            start,
+        );
+        OfflineSessionTask {
+            cmd_rx,
+            mailbox,
+            owner: layer(HostCore::new(state, inbox)),
+            shutdown_completion: None,
+            posts: OwnerPosts::new(),
+            position: 0,
+            max_block_frames,
+            pools,
+            marker: PhantomData,
+        }
+    };
+    #[cfg(target_arch = "wasm32")]
+    let task = route.start(pending, factory);
+    #[cfg(not(target_arch = "wasm32"))]
+    let task = OfflineTaskRoute::start(pending, factory);
+    let task =
+        task.map_err(|error| PlayError::Internal(format!("offline session task start: {error}")))?;
     Ok((client, task))
 }
-
-fn render_block<S>(
-    state: &mut SessionState<OfflineStream, S>,
-    frames: u32,
-    position: u64,
-    pools: &PoolRegion<S>,
-) -> Result<SampleBuffer, OfflineSessionError>
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    if state.ctx.is_none() {
-        ensure_ctx(state).map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
-    }
-    let total_samples = usize::try_from(frames)
-        .map_err(|_| OfflineSessionError::SampleCountOverflow)?
-        .checked_mul(consts::CHANNELS)
-        .ok_or(OfflineSessionError::SampleCountOverflow)?;
-    let mut output = pools
-        .get_with_len::<f32>(total_samples)
-        .map_err(OfflineSessionError::Pool)?;
-    state
-        .ctx
-        .as_mut()
-        .ok_or(OfflineSessionError::GraphUnavailable)?
-        .update()
-        .map_err(|error| OfflineSessionError::Graph(format!("{error:?}")))?;
-    state
-        .stream
-        .as_mut()
-        .ok_or(OfflineSessionError::BackendUnavailable)?
-        .render(
-            position,
-            usize::try_from(frames).map_err(|_| OfflineSessionError::TimelineOverflow)?,
-            &mut output,
-        )?;
-    transport::observe_commits(state)?;
-    settle_receipts(state);
-    Ok(output)
-}
-
 #[derive(Debug, Error)]
 pub(crate) enum OfflineSessionError {
-    #[error("offline backend is unavailable")]
-    BackendUnavailable,
     #[error("offline channel count cannot be represented")]
     ChannelCountOverflow,
     #[error("offline render expected cursor {expected}, but the session is at {actual}")]
     CursorChanged { expected: u64, actual: u64 },
     #[error("offline graph failed: {0}")]
     Graph(String),
-    #[error("offline graph has not started")]
-    GraphUnavailable,
     #[error("offline block requests {requested} frames, maximum is {maximum}")]
     InvalidBlockFrames { requested: u32, maximum: u32 },
+    #[error("offline owner failed: {0}")]
+    Owner(PlayError),
     #[error("offline output pool failed: {0}")]
     Pool(kithara_bufpool::PoolError),
     #[error("offline sample count overflow")]
     SampleCountOverflow,
     #[error("offline session is gone")]
     SessionGone,
-    #[error("offline session grid was refused: {0}")]
-    SessionGrid(#[from] SyncError),
     #[error("offline timeline overflow")]
     TimelineOverflow,
+}
+
+impl<S, O: HostOwner<S>> Task for OfflineSessionTask<S, O>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    fn tick(&mut self) -> TickResult {
+        self.owner.begin_pass();
+        let mut progress = false;
+        let mut requests: Vec<OfflineRequest> = Vec::new();
+        let mut stopped = false;
+        loop {
+            match self.cmd_rx.try_recv() {
+                Ok(OfflineMsg::Posted) => {
+                    self.posts.drain(&mut self.owner, &mut self.mailbox);
+                    progress = true;
+                }
+                Ok(OfflineMsg::Deck(message)) => {
+                    message.run(&mut self.owner);
+                    progress = true;
+                }
+                Ok(OfflineMsg::Request(request)) => {
+                    requests.push(request);
+                    progress = true;
+                }
+                Ok(OfflineMsg::Shutdown(completion)) => {
+                    self.shutdown_completion = Some(completion);
+                    stopped = true;
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    stopped = true;
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                #[cfg(target_arch = "wasm32")]
+                Err(_) => break,
+            }
+        }
+        self.posts.drain(&mut self.owner, &mut self.mailbox);
+        let mut published = false;
+        for request in requests {
+            match request {
+                OfflineRequest::Position(answer) => {
+                    let _ = answer.send(self.position);
+                }
+                OfflineRequest::Render {
+                    position,
+                    frames,
+                    answer,
+                } => {
+                    let prepared = self.owner.prepare_offline();
+                    self.owner.begin_pass();
+                    self.posts.pass(&mut self.owner, true);
+                    published = true;
+                    let result = prepared
+                        .map_err(OfflineSessionError::Owner)
+                        .and_then(|()| self.render(position, frames));
+                    if result.is_ok() {
+                        self.owner.begin_pass();
+                        self.posts.pass(&mut self.owner, false);
+                    }
+                    drop(answer.send(result));
+                }
+            }
+        }
+        if !published {
+            self.posts.pass(&mut self.owner, false);
+        }
+        if stopped {
+            TickResult::Done
+        } else if progress {
+            TickResult::Progress
+        } else {
+            TickResult::Waiting
+        }
+    }
 }

@@ -157,9 +157,9 @@ wasm BROWSER="chrome" SUITE="all":
     fi
 
 # Render the same active no-SYNC scenarios into listening artifacts, the Host
-# metronome over a sine deck through a tempo ride, then the SYNC and Warp
-# scenarios on Richie Hawtin - The Tunnel; the metronome and SYNC captures come
-# from the Host output tap, clicks included. Recorders that only write artifacts
+# metronome over a sine deck through a tempo ride, then the Warp scenarios on
+# Richie Hawtin - The Tunnel; the metronome capture comes from the Host output
+# tap, clicks included. Recorders that only write artifacts
 # are ignored in ordinary CI so filesystem work cannot consume their
 # behavioral-test deadlines.
 [positional-arguments]
@@ -179,10 +179,6 @@ audio-artifacts OUTPUT:
       just test run -p kithara-host-tests --test host \
         --run-ignored=all \
         -E 'test(=no_sync_real_media::matrix::record_no_sync_real_media_artifacts) | test(=metronome::the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_ride)'
-    KITHARA_AUDIO_ARTIFACT_DIR="$output" \
-      just test run -p kithara-sync-tests --test sync \
-        --run-ignored=all \
-        -E 'test(/^sync_(listening::record_sync_listening_wavs_|staging::)/)'
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
       just test run -p kithara-warp-tests --test warp \
         -E 'test(=region::rendered_clicks_follow_the_integral_of_the_tempo_ramp_signalsmith) | test(/^real_track::/)'

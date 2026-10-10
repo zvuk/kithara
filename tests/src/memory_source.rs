@@ -11,9 +11,8 @@ use kithara::{
     platform::{sync::Arc, time::Duration},
     storage::WaitOutcome,
     stream::{
-        Activity, ByteMap, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
-        SeekObserve, SeekState, Source, SourceError, SourcePhase, SourceProbe, Stream,
-        StreamResult, StreamType,
+        Activity, ActivityWriter, ByteMap, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome,
+        Source, SourceError, SourcePhase, SourceProbe, Stream, StreamResult, StreamType,
     },
 };
 
@@ -75,7 +74,8 @@ impl SourceProbe for LenPhaseProbe {
 /// Set `report_len` to `false` to simulate sources without known length
 /// (e.g. for testing `SeekFrom::End` error paths).
 pub struct MemorySource {
-    seek: Arc<SeekState>,
+    activity: Activity,
+    activity_writer: Option<ActivityWriter>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
     data: Vec<u8>,
@@ -85,9 +85,11 @@ pub struct MemorySource {
 impl MemorySource {
     #[must_use]
     pub fn new(data: Vec<u8>) -> Self {
+        let activity_writer = ActivityWriter::new();
         Self {
             data,
-            seek: Arc::new(SeekState::new()),
+            activity: activity_writer.reader(),
+            activity_writer: Some(activity_writer),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             report_len: true,
@@ -165,16 +167,12 @@ impl Source for MemorySource {
         Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
     }
 
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+    fn activity(&self) -> Activity {
+        self.activity.clone()
     }
 
-    fn seek_control(&self) -> Arc<dyn SeekControl> {
-        Arc::clone(&self.seek) as Arc<dyn SeekControl>
-    }
-
-    fn activity(&self) -> Arc<dyn Activity> {
-        Arc::clone(&self.seek) as Arc<dyn Activity>
+    fn take_activity_writer(&mut self) -> Option<ActivityWriter> {
+        self.activity_writer.take()
     }
 
     fn wait_range(

@@ -30,6 +30,7 @@ kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
+delegate = { workspace = true }
 num-traits = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }

@@ -148,8 +148,6 @@ impl Read for Download {
                     buf.len(),
                     Some(len),
                     SourcePhase::Waiting,
-                    0,
-                    false,
                 ),
             ));
         }

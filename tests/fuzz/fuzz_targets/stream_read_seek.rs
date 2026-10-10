@@ -15,8 +15,8 @@ use kithara::{
     platform::{time::Duration, tokio::runtime::Builder},
     storage::WaitOutcome,
     stream::{
-        Activity, ByteMap, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
-        SeekObserve, SeekState, Source, SourcePhase, SourceProbe, Stream, StreamResult, StreamType,
+        Activity, ActivityWriter, ByteMap, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome,
+        Source, SourcePhase, SourceProbe, Stream, StreamResult, StreamType,
     },
 };
 use libfuzzer_sys::fuzz_target;
@@ -133,9 +133,9 @@ impl<'a> Arbitrary<'a> for Input {
     }
 }
 
-#[derive(Default)]
 struct ScriptSource {
-    seek: Arc<SeekState>,
+    activity: Activity,
+    activity_writer: Option<ActivityWriter>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
     data: Vec<u8>,
@@ -152,16 +152,12 @@ impl Source for ScriptSource {
         Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
     }
 
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+    fn activity(&self) -> Activity {
+        self.activity.clone()
     }
 
-    fn seek_control(&self) -> Arc<dyn SeekControl> {
-        Arc::clone(&self.seek) as Arc<dyn SeekControl>
-    }
-
-    fn activity(&self) -> Arc<dyn Activity> {
-        Arc::clone(&self.seek) as Arc<dyn Activity>
+    fn take_activity_writer(&mut self) -> Option<ActivityWriter> {
+        self.activity_writer.take()
     }
 
     fn position(&self) -> u64 {
@@ -246,8 +242,10 @@ fuzz_target!(|input: Input| {
         }
     });
 
+    let activity_writer = ActivityWriter::new();
     let source = ScriptSource {
-        seek: Arc::new(SeekState::new()),
+        activity: activity_writer.reader(),
+        activity_writer: Some(activity_writer),
         playhead: Arc::new(PlayheadState::new()),
         position: Arc::new(AtomicU64::new(0)),
         data: input.data,

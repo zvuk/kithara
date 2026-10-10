@@ -8,10 +8,10 @@ use kithara::{
     events::{EventBus, EventReceiver},
     host::{HostConfig, HostSettings},
     platform::{
-        time::{Duration, Instant, sleep},
+        time::{Duration, WallInstant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -319,12 +319,6 @@ async fn prepare_player(
     .initial_abr_mode(AbrMode::manual(initial_variant))
     .events(bus)
     .build();
-    let resource = Resource::new(config)
-        .await
-        .unwrap_or_else(|error| panic!("open {label} resource: {error:?}"));
-    let abr = resource
-        .abr_handle()
-        .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
     // WHY: The fixture sine peaks at full scale, so its inter-sample reconstruction
     // can exceed a unity ceiling. Keep it below the limiter while measuring playback.
     let mut player = OfflinePlayer::new(
@@ -343,8 +337,22 @@ async fn prepare_player(
             .build(),
     )
     .await;
-    player.set_volume(0.9);
-    player.load_and_fadein(resource).await;
+    player
+        .set_volume(0.9)
+        .await
+        .expect("the player takes the volume");
+    let id = player.load_config(config).await;
+    player
+        .render_until_current(
+            id,
+            BLOCK_FRAMES,
+            WallInstant::now() + kithara_integration_tests::offline::LOCAL_LOAD_DEADLINE,
+        )
+        .await;
+    let abr = player
+        .player()
+        .current_abr_handle()
+        .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
 
     // Render to a capture point fixed in *frames*, not to whichever frame the
     // warm-up happens to stop on. A cold start can hand back a short block, and
@@ -354,7 +362,7 @@ async fn prepare_player(
     // now asks for exactly the frames still missing, so it lands on
     // `capture_frame` whatever the pipeline did on the way there.
     let capture_frame = capture_frame_target();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = WallInstant::now() + Duration::from_secs(15);
     let mut active_blocks = 0usize;
     let mut decoder_events = drain_decoder_events(&mut events, 0);
     loop {
@@ -380,7 +388,7 @@ async fn prepare_player(
             break;
         }
         assert!(
-            Instant::now() <= deadline,
+            WallInstant::now() <= deadline,
             "timed out preparing {label}: initial={initial_variant}, current={:?}, position={:.3}",
             abr.current_variant_index(),
             player.position(),

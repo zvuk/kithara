@@ -604,7 +604,7 @@ async fn the_metronome_clicks_on_host_beats_while_every_deck_is_paused(
 ) {
     let harness = playing_harness(constant_half).await;
     harness
-        .with_player(kithara::play::player::PlayerControl::pause)
+        .with_queue(kithara::queue::QueueControl::pause)
         .await;
     render_blocks(&harness, consts::SETTLE_BLOCKS).await;
 

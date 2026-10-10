@@ -15,6 +15,18 @@ use kithara_warp::{SpeedCurve, StretchKind, WarpCapabilities};
 use kithara_warp::{Warp, WarpConfig};
 
 #[cfg(feature = "stretch-identity")]
+trait TerminalDrain {
+    fn flush(&mut self) -> Option<AudioChunk>;
+}
+
+#[cfg(feature = "stretch-identity")]
+impl<S: kithara_bufpool::HasPool<f32>> TerminalDrain for kithara_warp::WarpRenderer<S> {
+    fn flush(&mut self) -> Option<AudioChunk> {
+        self.drain(usize::MAX).expect("terminal drain")
+    }
+}
+
+#[cfg(feature = "stretch-identity")]
 #[kithara::test]
 fn identity_preserves_pcm_and_unity_accounting_despite_live_controls() {
     let bits = [
@@ -65,7 +77,9 @@ fn identity_preserves_pcm_and_unity_accounting_despite_live_controls() {
         .enumerate()
     {
         let revision = u64::try_from(index).expect("revision");
-        renderer.set_speed(SpeedCurve::Constant(speed), revision);
+        renderer
+            .set_speed(SpeedCurve::Constant(speed), revision)
+            .expect("valid speed");
         renderer.set_keylock(keylock);
         renderer.prepare(spec);
         let input = AudioChunk::new(

@@ -1,12 +1,11 @@
 use std::num::NonZeroU32;
 
-use kithara_decode::{DecodeError, TrackMetadata};
+use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;
 
 use super::{AudioReadError, ChunkOutcome, ReadOutcome, SeekOutcome};
-use crate::{ConsumerWakeMode, producer::PreloadGate};
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
@@ -30,11 +29,11 @@ pub trait AudioRead {
         Duration::from_secs(0)
     }
 
-    /// Read a decoded chunk with metadata, discarding any partially consumed [`AudioRead::read`] chunk.
+    /// Read a decoded chunk with metadata, yielding the unread tail of a partial [`AudioRead::read`].
     /// Returns a chunk or natural EOF; the default reports immediate EOF without chunk-level support.
     ///
     /// # Errors
-    /// Returns terminal producer failures with the same semantics as [`Self::read`].
+    /// Returns terminal source failures with the same semantics as [`Self::read`].
     fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
         Ok(ChunkOutcome::Eof {
             position: self.position(),
@@ -44,23 +43,22 @@ pub trait AudioRead {
     /// Get current playback position.
     fn position(&self) -> Duration;
 
-    /// Read interleaved samples from buffered data without blocking after preload.
+    /// Read interleaved samples, driving the source on its owning thread and copying available PCM.
     /// [`ReadOutcome`] distinguishes data from natural EOF; count is samples, or count/channels frames.
     ///
     /// # Errors
-    /// Terminal decoder, channel or backend failures persist on subsequent reads.
+    /// Terminal source I/O, decoder or backend failures persist on subsequent reads.
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError>;
 
     /// Read deinterleaved (planar) audio samples.
     ///
-    /// After `preload()`, returns immediately from buffered data
-    /// without blocking. Each slice in `output` corresponds to one
+    /// Drives the source on its owning thread. Each slice in `output` corresponds to one
     /// channel. The returned [`ReadOutcome`] has the same semantics as
     /// [`Self::read`]; `count` is frames-per-channel.
     ///
     /// # Errors
     ///
-    /// Same as [`Self::read`] — terminal producer failures are surfaced
+    /// Same as [`Self::read`] — terminal source failures are surfaced
     /// as `Err(AudioReadError)`.
     fn read_planar<'a>(
         &mut self,
@@ -89,52 +87,24 @@ pub trait AudioSession {
     /// Access the unified event bus for subscribing to all pipeline events.
     fn event_bus(&self) -> &EventBus;
 
-    /// Whether this reader has crossed its one-way playback preload latch.
-    ///
-    /// Readers without worker-backed preload keep the default `false`.
+    /// Whether initial preparation was requested for this reader.
     fn is_preloaded(&self) -> bool {
         false
     }
 
     /// Get track metadata.
     fn metadata(&self) -> &TrackMetadata;
-
-    /// Decoder epoch whose preload gate should be observed by async callers.
-    ///
-    /// Readers without epoch-based seek invalidation keep the default initial
-    /// epoch (`0`). Worker-backed [`Audio`](crate::audio::Audio) readers return
-    /// the current seek epoch so a stale pre-seek signal cannot release a
-    /// post-seek preload wait.
-    fn preload_epoch(&self) -> u64 {
-        0
-    }
-
-    /// Startup gate signalled once preload completes (first chunk
-    /// available). The async consumer awaits [`PreloadGate::wait`]; the
-    /// worker opens it with a lock-free store. `None` for readers without
-    /// a worker-backed preload (file, test fixtures).
-    fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
-        None
-    }
-}
-
-/// The control-plane half of a seek: the part that publishes an event and wakes a decode worker,
-/// both lock-taking, leaving the audio callback only [`AudioControl::sync_seek`].
-pub trait SeekBegin: Send + Sync {
-    /// Begin a seek to `position` and report where it will land. Blocking by design — never call
-    /// this from an audio callback.
-    fn begin(&self, position: Duration) -> SeekOutcome;
 }
 
 /// Decoded-audio control operations and runtime knobs.
 #[kithara::mock(api = AudioControlMock)]
 pub trait AudioControl {
-    /// Buffer startup chunks for immediate `read`, `read_planar` and `next_chunk` calls.
-    /// Natural EOF, including an empty stream, succeeds here and is reported by the subsequent read.
+    /// Prepare initial input on the chain's owning thread.
+    /// Pending input and natural EOF do not constitute setup failures.
     ///
     /// # Errors
-    /// Returns only terminal setup failures, including a closed audio channel or backend error.
-    fn preload(&mut self) -> Result<(), DecodeError> {
+    /// Returns a source or decoder failure.
+    fn preload(&mut self) -> Result<(), AudioReadError> {
         Ok(())
     }
 
@@ -142,38 +112,18 @@ pub trait AudioControl {
     ///
     /// Returns [`SeekOutcome::Landed`] when the reader is now parked
     /// at the requested position, [`SeekOutcome::PastEof`] when the
-    /// target was beyond `duration()`. Seek failures (stream I/O,
-    /// decoder recreate) surface as `Err(DecodeError)`.
+    /// target was beyond `duration()`. The search is synchronous and never
+    /// rebuilds a decoder merely because seeking failed.
     ///
     /// # Errors
     ///
-    /// Returns `Err(DecodeError)` when seek cannot complete: stream I/O
-    /// failure, decoder recreate failure, or terminal producer error.
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
-
-    /// Control-plane handle that begins a seek without touching the reader, leaving
-    /// [`sync_seek`](Self::sync_seek) to pick the target up.
-    ///
-    /// `None` means the reader cannot be seeked from an audio callback at all: such a caller must
-    /// reach it off-thread through [`seek`](Self::seek).
-    fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
-        None
-    }
-
-    /// Adopt the wake capability of the consumer that will read this reader.
-    ///
-    /// The owning session declares it; readers with no ring to arm keep the
-    /// default no-op.
-    fn set_consumer_wake_mode(&mut self, _mode: ConsumerWakeMode) {}
+    /// Returns a source, format-boundary rebuild, or decoder-search failure.
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError>;
 
     /// Set the target sample rate of the audio host.
     ///
     /// Used for dynamic updates when the host sample rate changes at runtime.
-    fn set_host_sample_rate(&self, _sample_rate: NonZeroU32) {}
-
-    /// Adopt a seek epoch begun through [`seek_handle`](Self::seek_handle). Must be lock-free —
-    /// this is the only half an audio callback may run.
-    fn sync_seek(&mut self) {}
+    fn set_host_sample_rate(&mut self, _sample_rate: NonZeroU32) {}
 }
 
 /// Primary interface for reading and controlling decoded audio.

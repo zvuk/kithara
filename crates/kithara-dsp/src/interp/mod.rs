@@ -5,5 +5,5 @@ mod ramp;
 mod tests;
 
 pub use error::InterpError;
-pub use interpolation::{Interpolation, interpolate};
+pub use interpolation::{Interpolation, interpolate, quadratic};
 pub use ramp::RateRamp;

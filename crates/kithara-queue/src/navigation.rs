@@ -51,12 +51,6 @@ impl NavigationState {
         Self::with_rng(history_limit, StdRng::from_rng(&mut rand::rng()))
     }
 
-    pub(crate) fn finish(&mut self) {
-        if let Some(current) = self.current.take() {
-            self.push_history(current);
-        }
-    }
-
     fn fresh_cycle(&mut self, tracks: &[TrackId], avoid_first: Option<TrackId>) {
         self.bag.clear();
         self.bag.extend_from_slice(tracks);
@@ -78,10 +72,6 @@ impl NavigationState {
             self.bag.push(id);
             self.bag.shuffle(&mut self.rng);
         }
-    }
-
-    pub(crate) fn last_selected(&self) -> Option<TrackId> {
-        self.current.or_else(|| self.history.back().copied())
     }
 
     /// Choose the successor without moving the cursor onto it. A caller reads
@@ -128,20 +118,6 @@ impl NavigationState {
             self.fresh_cycle(tracks, self.current);
         }
         self.bag.last().copied()
-    }
-
-    pub(crate) fn peek_next(&self, tracks: &[TrackId]) -> Option<TrackId> {
-        match self.playback_order {
-            PlaybackOrder::Sequential => {
-                self.next_sequential(tracks, self.repeat_mode == RepeatMode::All)
-            }
-            PlaybackOrder::Shuffle => self
-                .bag
-                .iter()
-                .rev()
-                .find(|id| tracks.contains(id))
-                .copied(),
-        }
     }
 
     pub(crate) fn prev(&mut self, tracks: &[TrackId]) -> Option<TrackId> {

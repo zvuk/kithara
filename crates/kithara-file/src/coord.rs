@@ -2,10 +2,8 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kithara_platform::sync::{Arc, Notify};
-use kithara_stream::{
-    Activity, PlayheadRead, PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState,
-};
+use kithara_platform::sync::{Arc, Mutex, Notify};
+use kithara_stream::{Activity, ActivityWriter, PlayheadRead, PlayheadState, PlayheadWrite};
 use kithara_test_utils::kithara;
 
 #[derive(fieldwork::Fieldwork)]
@@ -13,7 +11,7 @@ use kithara_test_utils::kithara;
 pub(crate) struct FileCoord {
     /// Narrow activity handle (`is_playing`) read by the downloader peer.
     #[field(get, vis = "pub(crate)", deref = false)]
-    activity: Arc<dyn Activity>,
+    activity: Activity,
     /// Backing playhead state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
     playhead: Arc<PlayheadState>,
@@ -22,13 +20,7 @@ pub(crate) struct FileCoord {
     /// its own atomic, lock-free for both reader and downloader threads.
     position: Arc<AtomicU64>,
     read_pos: Arc<AtomicU64>,
-    /// Backing seek/activity state — the coord owns the `Arc` directly and
-    /// vends narrow trait-object handles from it.
-    seek: Arc<SeekState>,
-    /// Narrow seek-observe handle (flush gate) — derived from the shared
-    /// `SeekState`, so it observes the same flags without the wide type.
-    #[field(get, vis = "pub(crate)", deref = false)]
-    seek_obs: Arc<dyn SeekObserve>,
+    activity_writer: Mutex<Option<ActivityWriter>>,
     total_bytes: Arc<AtomicU64>,
     reader_advanced: Notify,
 }
@@ -40,13 +32,12 @@ impl FileCoord {
     const NO_TOTAL_BYTES: u64 = u64::MAX;
 
     #[must_use]
-    pub(crate) fn new(playhead: Arc<PlayheadState>, seek: Arc<SeekState>) -> Self {
-        let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
-        let activity = Arc::clone(&seek) as Arc<dyn Activity>;
+    pub(crate) fn new(playhead: Arc<PlayheadState>) -> Self {
+        let writer = ActivityWriter::new();
+        let activity = writer.reader();
         Self {
             playhead,
-            seek,
-            seek_obs,
+            activity_writer: Mutex::new(Some(writer)),
             activity,
             position: Arc::new(AtomicU64::new(0)),
             read_pos: Arc::new(AtomicU64::new(0)),
@@ -56,8 +47,12 @@ impl FileCoord {
     }
 
     #[must_use]
-    pub(crate) fn activity_handle(&self) -> Arc<dyn Activity> {
-        Arc::clone(&self.seek) as Arc<dyn Activity>
+    pub(crate) fn activity_handle(&self) -> Activity {
+        self.activity.clone()
+    }
+
+    pub(crate) fn take_activity_writer(&self) -> Option<ActivityWriter> {
+        self.activity_writer.lock().take()
     }
 
     pub(crate) fn advance_position(&self, n: u64) {
@@ -89,21 +84,6 @@ impl FileCoord {
     #[must_use]
     pub(crate) fn read_pos_handle(&self) -> Arc<AtomicU64> {
         Arc::clone(&self.read_pos)
-    }
-
-    #[must_use]
-    pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl> {
-        Arc::clone(&self.seek) as Arc<dyn SeekControl>
-    }
-
-    #[must_use]
-    pub(crate) fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
-        self.seek.seek_epoch_arc()
-    }
-
-    #[must_use]
-    pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
     }
 
     /// Report the current download byte position: the contiguous prefix the
@@ -148,6 +128,6 @@ impl FileCoord {
 
 impl Default for FileCoord {
     fn default() -> Self {
-        Self::new(Arc::new(PlayheadState::new()), Arc::new(SeekState::new()))
+        Self::new(Arc::new(PlayheadState::new()))
     }
 }

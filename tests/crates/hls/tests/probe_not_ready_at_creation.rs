@@ -116,7 +116,11 @@ async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsFix
             .build(),
     );
     let started = WallInstant::now();
-    let result = worker.load(audio_config(&server, &pools, &cancel)).await;
+    let result = kithara_integration_tests::mock::load_audio(
+        &worker,
+        audio_config(&server, &pools, &cancel),
+    )
+    .await;
     let elapsed = started.elapsed();
 
     assert!(
@@ -179,7 +183,11 @@ async fn audio_new_succeeds_when_first_segment_released_during_probe(
         }
     });
 
-    let result = worker.load(audio_config(&server, &pools, &cancel)).await;
+    let result = kithara_integration_tests::mock::load_audio(
+        &worker,
+        audio_config(&server, &pools, &cancel),
+    )
+    .await;
     releaser.await.expect("releaser joins");
 
     assert!(

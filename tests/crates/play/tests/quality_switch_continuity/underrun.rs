@@ -1,16 +1,12 @@
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioSession},
-    hls::{Hls, HlsConfig},
     play::{PlayWorker, PlayWorkerConfig},
 };
-use kithara_integration_tests::{
-    CreatedHls, TestServerHelper, fixture_protocol::DelayRule, offline::resource_from_reader,
-};
+use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::DelayRule};
 
 use super::*;
-use crate::bufpool_ext::{TestPools, pools};
+use crate::bufpool_ext::pools;
 
 const OUTPUT_RING_CHUNKS: usize = 1;
 const TARGET_SEGMENT_DELAY_MS: u64 = 250;
@@ -71,29 +67,22 @@ async fn prepare_tiny_ring_player(
             root: temp.path().to_path_buf(),
         })
         .build();
-    let hls = HlsConfig::for_url(master_url.clone())
-        .store(store)
-        .pools(pools.clone())
-        .initial_abr_mode(AbrMode::manual(initial_variant))
-        .events(bus.clone())
-        .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls)
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .events(bus)
-        .audio_buffer_chunks(OUTPUT_RING_CHUNKS)
-        .build();
-    let audio = worker
-        .load(config)
-        .await
-        .unwrap_or_else(|error| panic!("open {label} audio: {error:?}"));
-    let abr = audio
-        .abr_handle()
-        .unwrap_or_else(|| panic!("{label} HLS audio must expose an ABR handle"));
+    let config =
+        kithara::play::ResourceConfig::for_src(kithara::play::ResourceSrc::Url(master_url.clone()))
+            .store(store)
+            .worker(worker)
+            .initial_abr_mode(AbrMode::manual(initial_variant))
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .events(bus)
+            .audio_buffer_chunks(
+                std::num::NonZeroUsize::new(OUTPUT_RING_CHUNKS).expect("output ring depth"),
+            )
+            .build();
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools)
             .settings(
@@ -104,9 +93,20 @@ async fn prepare_tiny_ring_player(
             .build(),
     )
     .await;
-    player.load_and_fadein(resource_from_reader(audio)).await;
+    let id = player.load_config(config).await;
+    player
+        .render_until_current(
+            id,
+            BLOCK_FRAMES,
+            WallInstant::now() + kithara_integration_tests::offline::LOCAL_LOAD_DEADLINE,
+        )
+        .await;
+    let abr = player
+        .player()
+        .current_abr_handle()
+        .unwrap_or_else(|| panic!("{label} HLS audio must expose an ABR handle"));
 
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = WallInstant::now() + Duration::from_secs(15);
     let mut active_blocks = 0usize;
     let mut decoder_events = drain_decoder_events(&mut events, 0);
     loop {
@@ -127,7 +127,7 @@ async fn prepare_tiny_ring_player(
             break;
         }
         assert!(
-            Instant::now() <= deadline,
+            WallInstant::now() <= deadline,
             "timed out preparing {label}: initial={initial_variant}, current={:?}, position={:.3}",
             abr.current_variant_index(),
             player.position(),

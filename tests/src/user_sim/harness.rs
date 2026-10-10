@@ -1,24 +1,27 @@
 use std::path::Path;
 
-use kithara::{
+use ::kithara::{
     abr::{AbrHandle, AbrMode},
     audio::{AudioEvent, SeekLifecycleStage},
     bufpool::HasPool,
     decode::DecoderBackend,
     events::{EventReceiver, TrackId},
     platform::{
-        time::{Duration, timeout},
-        tokio::sync::broadcast::error::{RecvError, TryRecvError},
+        time::{Duration, sleep, timeout},
+        tokio::{
+            self,
+            sync::broadcast::error::{RecvError, TryRecvError},
+        },
     },
-    play::{ResourceConfig, ResourceSrc, SeekOutcome},
+    play::{ResourceConfig, ResourceSrc},
     queue::{QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
+use kithara_test_utils::kithara;
 use url::Url;
 
 use crate::{
     bufpool_ext::TestPools,
     event::TestEvent,
-    kithara,
     offline::{DiskQueue, RenderPacing},
     user_sim::actions::Action,
 };
@@ -117,7 +120,7 @@ impl SimHarness {
             .downloader(rig.downloader.clone())
             .store(rig.store.clone())
             .decoder(
-                kithara::audio::AudioDecoderConfig::builder()
+                ::kithara::audio::AudioDecoderConfig::builder()
                     .backend(spec.backend)
                     .build(),
             )
@@ -158,22 +161,45 @@ impl SimHarness {
     /// offline renderer, then tick the queue so the playhead it publishes
     /// reflects what the sink consumed. Returns the frames the renderer
     /// advanced by — the queue's cached position only moves inside `tick`.
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     async fn render_step(&self) -> u64 {
         let batch = u64::from(self.rig.queue.host().max_block_frames().get())
             .saturating_mul(RENDER_BATCH_BLOCKS);
-        let rendered = self.rig.queue.host().render_forward(batch).await;
-        let _ = self.run(QueueControl::tick).await;
-        rendered
+        let step = async {
+            let rendered = self.rig.queue.host().render_forward(batch).await;
+            let _ = self.run(QueueControl::tick).await;
+            rendered
+        };
+        tokio::pin!(step);
+        loop {
+            hang_tick!();
+            tokio::select! {
+                rendered = &mut step => {
+                    hang_reset!();
+                    return rendered;
+                }
+                () = sleep(Duration::from_millis(100)) => {}
+            }
+        }
     }
 
     /// Render turns until `done` sees the state it waits for, at most `turns`
     /// of them. Returns whether it landed.
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     async fn render_until(&self, turns: u32, mut done: impl FnMut(&Self) -> bool) -> bool {
+        let mut observed = (self.current_track_id(), self.position(), self.is_playing());
         for _ in 0..turns {
+            hang_tick!();
             if done(self) {
+                hang_reset!();
                 return true;
             }
             self.render_step().await;
+            let progress = (self.current_track_id(), self.position(), self.is_playing());
+            if progress != observed {
+                observed = progress;
+                hang_reset!();
+            }
         }
         done(self)
     }
@@ -303,29 +329,9 @@ impl SimHarness {
         let pre_track = self.current_track_id();
         let pre_pos = self.position();
 
-        let outcome = self
-            .run(move |queue| queue.seek(target))
+        self.run(move |queue| queue.seek(target))
             .await
             .unwrap_or_else(|e| panic!("[{action_label}] queue.seek returned Err: {e}"));
-
-        match outcome {
-            SeekOutcome::Landed { .. } => {}
-            SeekOutcome::PastEof {
-                duration: seek_duration,
-                ..
-            } => {
-                // PastEof is only acceptable for SeekNearEnd very close
-                // to 1.0; everything else means we computed `target` wrong.
-                assert!(
-                    near_end && ratio >= 0.95,
-                    "[{action_label}] unexpected PastEof (target={target:.3}s, \
-                     queue dur={duration:.3}s, seek dur={seek_duration:?}, \
-                     track {pre_track:?} -> {:?})",
-                    self.current_track_id()
-                );
-                return;
-            }
-        }
 
         // Settle on the seek by driving the product renderer forward: each
         // turn renders a batch and ticks the queue, so the playhead the queue

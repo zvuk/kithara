@@ -42,9 +42,8 @@ where
                     if slot.transition != transition {
                         return Ok(None);
                     }
-                    let epoch_matches = self.seek_observe().epoch() == transition.id().seek_epoch();
                     let active_matches = self.variant_index() == transition.active_variant().get();
-                    if !epoch_matches || !active_matches {
+                    if !active_matches {
                         self.discard_incoming(&mut state, false);
                         return Ok(None);
                     }
@@ -63,11 +62,7 @@ where
             PendingAbrClaim::Ready(claim) => claim,
             _ => return Err(unsupported_pending_claim()),
         };
-        let expected = transition_for_claim(
-            claim,
-            self.seek_observe().epoch(),
-            VariantIndex::new(self.variant_index()),
-        );
+        let expected = transition_for_claim(claim, VariantIndex::new(self.variant_index()));
         if transition != expected {
             let abort_intent = state
                 .incoming
@@ -116,7 +111,6 @@ where
         let session = match HlsSession::incoming(
             self.cancel.child(),
             profile,
-            self.seek_observe(),
             self.signal(),
             transition,
             target,
@@ -128,20 +122,13 @@ where
                 return Err(error);
             }
         };
-
-        let epoch_matches = self.seek_observe().epoch() == transition.id().seek_epoch();
         let claim_matches = match self.abr.pending_claim() {
             PendingAbrClaim::Ready(current) | PendingAbrClaim::Locked(current) => current == claim,
             _ => false,
         };
-        if !epoch_matches
-            || !claim_matches
-            || self.variant_index() != transition.active_variant().get()
-        {
+        if !claim_matches || self.variant_index() != transition.active_variant().get() {
             session.abort();
-            if epoch_matches {
-                let _ = self.abr_publisher.abort_pending(claim.ticket());
-            }
+            let _ = self.abr_publisher.abort_pending(claim.ticket());
             return Ok(None);
         }
 
@@ -153,7 +140,6 @@ where
             Some(Box::new(HlsReaderEventSink::for_session(
                 Arc::clone(&self.emit),
                 Arc::clone(&session),
-                self.seek_epoch_handle(),
             ))),
         );
         let reader = OpenedVariantReader::new(plan, reader);

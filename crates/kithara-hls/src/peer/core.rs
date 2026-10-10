@@ -21,7 +21,7 @@ use kithara_platform::{
         task::{spawn, yield_runnable},
     },
 };
-use kithara_stream::{Activity, DeferredWake, SeekObserve, WorkerWake};
+use kithara_stream::{Activity, DeferredWake, WorkerWake};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -63,7 +63,7 @@ where
     abr: Arc<AbrState>,
     /// Narrow activity handle. Used by `priority()` to check whether
     /// the track is currently playing.
-    activity: Arc<dyn Activity>,
+    activity: Activity,
     /// Reader→peer wake channel. The HLS `Source` fires this whenever it
     /// advances the byte cursor or completes a seek, so `poll_next` runs
     /// again without waiting for the next downloader-driven wakeup. Owned
@@ -71,10 +71,6 @@ where
     /// of the peer, not of shared state.
     reader_advanced: Arc<DeferredWake>,
     reader_segment: Arc<AtomicUsize>,
-    /// Narrow seek-observe handle. Used by `poll_next`'s inner logic
-    /// (via `HlsTrackState`) to read the current epoch/target without
-    /// holding a wide seek/playhead aggregate.
-    seek_obs: Arc<dyn SeekObserve>,
     state: Mutex<Option<HlsTrackState<S>>>,
     cancel: CancelToken,
     /// Wake-up trigger for the waker-forwarding micro-task: not a
@@ -96,16 +92,10 @@ impl<S> HlsPeer<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    pub(crate) fn new(
-        seek_obs: Arc<dyn SeekObserve>,
-        activity: Arc<dyn Activity>,
-        initial_mode: AbrMode,
-        cancel: CancelToken,
-    ) -> Self {
+    pub(crate) fn new(activity: Activity, initial_mode: AbrMode, cancel: CancelToken) -> Self {
         let abr = Arc::new(AbrState::new(initial_mode));
         let abr_publisher = abr.publisher();
         Self {
-            seek_obs,
             activity,
             abr,
             abr_publisher,
@@ -148,7 +138,6 @@ where
             look_ahead_segments: coord.look_ahead_segments,
             bus: active.event_bus(),
             scope: coord.scope.clone(),
-            seek_epoch: self.seek_obs.epoch(),
             signal: coord.signal(),
         };
         active.rebuild(&plan_ctx, initial_seg);
@@ -160,7 +149,6 @@ where
             *guard = Some(HlsTrackState::new(
                 coord,
                 Arc::clone(&self.reader_segment),
-                Arc::clone(&self.seek_obs),
                 eviction_rx,
             ));
         }
@@ -351,8 +339,8 @@ impl<S> HlsPeer<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    /// The track state reconciles while guarded; ABR lock synchronization and
-    /// reevaluation run after the guard drops, since they read peer progress.
+    /// The track state reconciles while guarded; ABR reevaluation runs after
+    /// the guard drops, since it reads peer progress.
     fn poll_state_phase(&self, cx: &mut Context<'_>) -> PollPhase<S> {
         let mut guard = self.state.lock();
         let Some(state) = guard.as_mut() else {
@@ -363,7 +351,6 @@ where
             return PollPhase::Terminated;
         };
         drop(guard);
-        outcome.coord.sync_abr_lock();
         if outcome.needs_retick {
             outcome.coord.abr.reevaluate();
         }
@@ -374,20 +361,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_stream::SeekState;
+    use kithara_stream::ActivityWriter;
 
     use super::*;
 
     #[kithara::test]
     fn abr_cancel_observes_the_hls_track_scope() {
         let track_cancel = CancelToken::never();
-        let seek = Arc::new(SeekState::new());
-        let peer: HlsPeer<crate::test_pools::TestPools> = HlsPeer::new(
-            Arc::clone(&seek) as Arc<dyn SeekObserve>,
-            seek as Arc<dyn Activity>,
-            AbrMode::default(),
-            track_cancel.clone(),
-        );
+        let writer = ActivityWriter::new();
+        let peer: HlsPeer<crate::test_pools::TestPools> =
+            HlsPeer::new(writer.reader(), AbrMode::default(), track_cancel.clone());
         let observed = Abr::cancel(&peer);
 
         assert!(!observed.is_cancelled());

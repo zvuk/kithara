@@ -1,4 +1,8 @@
-use std::{fmt, num::NonZeroU32, path::PathBuf};
+use std::{
+    fmt,
+    num::{NonZeroU32, NonZeroUsize},
+    path::PathBuf,
+};
 
 #[cfg(feature = "gui")]
 use kithara::ui::source::UiConfig;
@@ -11,9 +15,10 @@ use kithara::{
     hls::HlsConfigPatch,
     net::{Headers, HttpClient},
     platform::{CancelToken, sync::Arc},
-    play::{PlayerConfigPatch, policy::DomainKeyPolicy},
+    play::policy::DomainKeyPolicy,
     prelude::PlaybackResamplerBackend,
     queue::QueueConfigPatch,
+    warp::WarpConfig,
     worker::{DispatcherConfigPatch, Worker},
 };
 use kithara_config::Config;
@@ -119,6 +124,12 @@ pub struct AppConfig {
     /// track does. Reached through `audio`, not through [`AppConfigPatch`].
     #[config(builder(default), patch(skip))]
     pub audio: AudioConfigPatch,
+    #[config(patch(skip))]
+    pub preload_chunks: Option<NonZeroUsize>,
+    #[config(patch(skip))]
+    pub audio_buffer_chunks: Option<NonZeroUsize>,
+    #[config(builder(default = WarpConfig::builder().build()), patch(skip))]
+    pub warp: WarpConfig,
     /// What the document's `hls:` section says about every HLS track. Carried
     /// as a patch for the same reason [`AppConfig::audio`] is.
     #[config(builder(default), patch(skip))]
@@ -145,11 +156,6 @@ pub struct AppConfig {
         patch(skip)
     )]
     pub tracks: Vec<String>,
-    /// What the document's `player:` section says about every deck's player,
-    /// carried as a patch because no `PlayerConfig` exists until a deck does.
-    /// Reached through `player`, not through [`AppConfigPatch`].
-    #[config(builder(default), patch(skip))]
-    pub player: PlayerConfigPatch,
     /// Complete live-broadcast construction config for this app session. The
     /// document's `broadcast:` section is applied to it in `main`, where the
     /// worker and pools it is built from exist; nothing here carries a second
@@ -211,7 +217,6 @@ impl fmt::Debug for AppConfig {
                 "base_worker_cancelled",
                 &self.base_worker.as_ref().map(Worker::is_cancelled),
             )
-            .field("player", &self.player)
             .field("broadcast", &self.broadcast)
             .field("waveform_max_buckets", &self.waveform_max_buckets)
             .field("eq_bands", &self.eq_bands)

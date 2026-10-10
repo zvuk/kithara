@@ -6,13 +6,14 @@ use kithara::{
     decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::PcmPattern,
+    mock::LaneAudio,
     usdt_trace::{self, ProbeEvent},
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -299,6 +300,7 @@ async fn wav_seek(wav_data: Vec<u8>, segment_count: usize) -> (TestServerHelper,
                 .segments_per_variant(segment_count)
                 .segment_size(consts::D.segment_size)
                 .segment_duration_secs(consts::D.segment_duration_secs())
+                .codecs("wav".to_string())
                 .custom_data(Arc::new(wav_data)),
         )
         .await
@@ -327,7 +329,7 @@ async fn flac_hundred() -> (TestServerHelper, CreatedHls) {
     (helper, created)
 }
 
-type HlsAudio = RegisteredAudio<Stream<Hls<TestPools>>, TestPools>;
+type HlsAudio = LaneAudio<Stream<Hls<TestPools>>, TestPools>;
 
 /// Per-read checks of the random seek loop, and what they found.
 struct SeekCheck {
@@ -740,19 +742,21 @@ async fn stress_seek_audio_hls(
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .media_info(fixture.media_info())
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .block_on_underrun(true)
-        .build();
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .media_info(fixture.media_info())
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
     let trace = usdt_trace::scope();
 
-    let mut audio = worker
-        .load(config)
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 

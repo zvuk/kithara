@@ -15,8 +15,8 @@ use kithara::{
     },
     storage::WaitOutcome,
     stream::{
-        Activity, PlayheadRead, PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, Source,
-        SourceError, SourcePhase, SourceProbe, Stream, StreamError, StreamResult, StreamType,
+        Activity, ActivityWriter, PlayheadRead, PlayheadWrite, ReadOutcome, Source, SourceError,
+        SourcePhase, SourceProbe, Stream, StreamError, StreamResult, StreamType,
     },
 };
 use kithara_integration_tests::memory_source::MemorySource;
@@ -49,7 +49,8 @@ impl Source for StalledSource {
 
     delegate::delegate! {
         to self.bytes {
-            fn activity(&self) -> Arc<dyn Activity>;
+            fn activity(&self) -> Activity;
+            fn take_activity_writer(&mut self) -> Option<ActivityWriter>;
             fn advance(&self, n: u64);
             fn len(&self) -> Option<u64>;
             fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
@@ -57,8 +58,6 @@ impl Source for StalledSource {
             fn position(&self) -> u64;
             fn probe(&self) -> Arc<dyn SourceProbe>;
             fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome>;
-            fn seek_control(&self) -> Arc<dyn SeekControl>;
-            fn seek_observe(&self) -> Arc<dyn SeekObserve>;
             fn set_position(&self, pos: u64);
         }
     }

@@ -32,7 +32,7 @@ impl BroadcastHost for AppHost {
     }
 
     fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
-        Ok(self.output_sample_rate()?.measured)
+        Ok(self.output_sample_rate().measured)
     }
 }
 

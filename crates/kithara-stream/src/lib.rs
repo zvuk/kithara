@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod activity;
 mod consts;
 mod error;
 mod hooks;
@@ -15,7 +16,7 @@ mod playhead;
 mod preroll;
 mod profile;
 mod reader;
-mod seek;
+#[cfg(test)]
 mod seek_state;
 mod source;
 mod stream;
@@ -25,6 +26,7 @@ mod wake;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
+pub use activity::{Activity, ActivityWriter};
 pub use error::{SourceError, StreamError, StreamResult};
 pub use hooks::{BoxedEventSink, ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 pub use kithara_storage::WaitOutcome;
@@ -36,11 +38,9 @@ pub use reader::{
     ConstructionGate, OpenedReader, OpenedVariantReader, SessionReader, VariantReaderPlan,
     VariantReaderTake,
 };
-pub use seek::SeekEpoch;
-pub use seek_state::{Activity, SeekControl, SeekObserve, SeekState};
 pub use source::{
-    ByteMap, NotReadyCause, PendingReason, ReadOutcome, SeekPrepare, SegmentDescriptor, Source,
-    SourcePhase, SourceProbe, SourceSeekAnchor, VariantControl,
+    ByteMap, NotReadyCause, PendingReason, ReadOutcome, SegmentDescriptor, Source, SourcePhase,
+    SourceProbe, SourceSeekAnchor, VariantControl,
 };
 pub use stream::{
     Stream, StreamPending, StreamReadError, StreamReadOutcome, StreamSeekPastEof, StreamType,

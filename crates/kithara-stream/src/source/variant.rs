@@ -58,7 +58,7 @@ pub trait VariantControl: Send + Sync + 'static {
     ) -> StreamResult<Option<VariantTransition>>;
 
     /// Publish the incoming variant only when `transition` still identifies
-    /// the exact pending ABR intent in the same seek epoch.
+    /// the exact pending ABR intent and its prepared source session.
     fn promote_variant(&self, transition: VariantTransition) -> VariantPromotion;
 
     /// Transfer the prepared reader exactly once. The typed result keeps

@@ -14,12 +14,10 @@ pub enum SourcePhase {
     Eof,
     /// Requested range is available for non-blocking read.
     Ready,
-    /// Active seek in progress — decoder should be interrupted.
-    Seeking,
     /// Default: data not yet available, no specific sub-state.
     #[default]
     Waiting,
-    /// On-demand request is queued or already in flight for this seek epoch.
+    /// On-demand request is queued or already in flight for this reader.
     WaitingDemand,
     /// Metadata lookup needed before data can be requested.
     WaitingMetadata,
@@ -33,11 +31,6 @@ pub enum SourcePhase {
 #[derive(derive_more::Error)]
 #[error(ignore)]
 pub enum PendingReason {
-    /// A seek is pending (consumer flagged the timeline). The caller
-    /// must abort the current read and let the seek apply — do **not**
-    /// retry from the same byte offset.
-    #[display("seek pending")]
-    SeekPending,
     /// Data is not yet available at the requested range. Transient —
     /// caller may retry after backoff. The inner [`NotReadyCause`] tells
     /// which point in the read pipeline failed to make progress (wait
@@ -77,10 +70,10 @@ pub enum NotReadyCause {
     /// budget. Typical when a fetch is slower than the read deadline.
     #[display("wait budget exhausted")]
     WaitBudgetExhausted,
-    /// `wait_range` returned `Interrupted` without an active flush, also
+    /// `wait_range` returned `Interrupted` without a terminal interruption, also
     /// past the spin budget — the downloader woke us but range still
     /// wasn't satisfied. Typical sign of a flapping ABR/eviction race.
-    #[display("wait interrupted, no flush")]
+    #[display("wait interrupted, source wait")]
     WaitInterrupted,
     /// `wait_range` reported ready but `read_at` then returned `Pending`
     /// with a non-`Retry` reason — surfaced verbatim from the source.

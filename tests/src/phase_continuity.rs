@@ -4,20 +4,19 @@
 use std::f64::consts::{PI, TAU};
 
 use kithara::{
-    audio::{AudioControl, AudioRead, AudioSession, ReadOutcome},
+    audio::{AudioControl, AudioRead, ReadOutcome},
     events::EventBus,
     platform::{
         thread::paced_backoff,
         time::{Duration, sleep},
     },
-    play::RegisteredAudio,
     stream::{Stream, StreamType},
 };
 use kithara_test_utils::Xorshift64;
 use num_traits::ToPrimitive;
 use tracing::{info, warn};
 
-use crate::bufpool_ext::TestPools;
+use crate::{bufpool_ext::TestPools, mock::LaneAudio};
 
 pub const SAMPLE_RATE: u32 = 44_100;
 pub const CHANNELS: u16 = 2;
@@ -36,12 +35,12 @@ pub const MIN_SIGNAL_AMP: f64 = 0.1;
 /// = 2.9 ms post-seek read budget — well within decoder warm-up.
 pub const READ_FRAMES_AFTER_SEEK: usize = 128;
 pub const READ_PENDING_RETRIES: usize = 4096;
+/// Retry budget for the post-seek segment readiness, in `READ_PENDING_POLL` steps.
+pub use crate::mock::PRELOAD_READY_RETRIES;
 /// Cadence between re-reads of a pending outcome, shared by both read twins
 /// and by the preload wait. One millisecond keeps `READ_PENDING_RETRIES`
 /// worth of retries (≈4 s) well inside every scan budget.
-pub const READ_PENDING_POLL: Duration = Duration::from_millis(1);
-/// Retry budget for the post-seek preload epoch, in `READ_PENDING_POLL` steps.
-pub const PRELOAD_READY_RETRIES: usize = 4096;
+pub use crate::mock::READ_PENDING_POLL;
 pub const E2E_SCAN_INTERVAL_FRAMES: u64 = SAMPLE_RATE as u64 / 8;
 pub const SAFETY_END_MARGIN_FRAMES: u64 = 4096;
 
@@ -132,7 +131,7 @@ pub fn measure_phase_rad_window(mono: &[f64], delta_rad: f64) -> (f64, f64) {
 }
 
 fn read_block<T>(
-    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
+    audio: &mut LaneAudio<Stream<T>, TestPools>,
     buf: &mut [f32],
     label: &str,
 ) -> Option<usize>
@@ -155,7 +154,7 @@ where
 /// carries the same guard.
 #[kithara::flash(true)]
 fn read_block_with_position<T>(
-    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
+    audio: &mut LaneAudio<Stream<T>, TestPools>,
     buf: &mut [f32],
     label: &str,
 ) -> Option<(usize, Duration)>
@@ -202,7 +201,7 @@ fn start_frame_from_read_position(position: Duration, frames_read: u64) -> u64 {
 /// report as a timeout with no site attached.
 #[kithara::flash(true)]
 async fn read_block_async<T>(
-    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
+    audio: &mut LaneAudio<Stream<T>, TestPools>,
     buf: &mut [f32],
     label: &str,
 ) -> Option<usize>
@@ -305,7 +304,7 @@ pub fn check_against_previous(
 }
 
 pub fn e2e_phase_scan<T>(
-    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
+    audio: &mut LaneAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_frames_truth: u64,
 ) -> Vec<PhaseDrift>
@@ -344,7 +343,7 @@ where
 }
 
 pub fn seek_phase_scan<T, F>(
-    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
+    audio: &mut LaneAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_secs: f64,
     seek_count: usize,
@@ -399,7 +398,7 @@ where
 /// (catches the "periodically swallowed fragment" glitch); a backward gap
 /// degenerates to a single post-seek window (catches the seek glitch).
 pub async fn scripted_phase_scan<T, S, F>(
-    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
+    audio: &mut LaneAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_frames_truth: u64,
     scenario: &[(S, f64)],
@@ -469,30 +468,7 @@ where
     drifts
 }
 
-/// Wait for the producer to arm the post-seek preload epoch.
-///
-/// Bounded for the same reason the pending read is: an epoch that never arms
-/// is a pipeline stall, and the gate's own wait is unbounded, so the scan can
-/// only surface it as a timeout that names neither the step nor the epoch.
-#[kithara::flash(true)]
-async fn wait_for_preload<T>(audio: &RegisteredAudio<Stream<T>, TestPools>, label: &str)
-where
-    T: StreamType<Events = EventBus>,
-{
-    let Some(gate) = audio.preload_gate() else {
-        return;
-    };
-    let epoch = audio.preload_epoch();
-    let mut retries = 0usize;
-    while !gate.is_ready_for_epoch(epoch) {
-        retries += 1;
-        assert!(
-            retries < PRELOAD_READY_RETRIES,
-            "{label}: preload epoch {epoch} never armed within {PRELOAD_READY_RETRIES} polls",
-        );
-        sleep(READ_PENDING_POLL).await;
-    }
-}
+pub use crate::mock::wait_for_preload;
 
 #[cfg(test)]
 mod tests {

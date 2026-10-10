@@ -40,7 +40,6 @@ pub use temporal::{
 };
 pub use warp::{
     Warp, WarpConfig, WarpConfigPatch, WarpConfigPatchError, WarpCursor, WarpMap, WarpMapRevision,
-    WarpPlan, WarpPlanError, WarpPlanSlot, supports_playback_rate,
 };
 mod consts;
 pub use consts::MIN_SPEED;

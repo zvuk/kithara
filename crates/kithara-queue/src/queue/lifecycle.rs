@@ -1,321 +1,589 @@
 use kithara_bufpool::HasPool;
+use kithara_command::{Seq, When};
 use kithara_events::TrackId;
-use kithara_play::SelectionPlayback;
-use smallvec::SmallVec;
+use kithara_play::{
+    Outbox, OutputSnapshot, PlayError, Player, PlayerConfig, Position, Slot, Track, TrackCommand,
+    TrackFactory, TrackStatus as PlayingStatus,
+};
+use tracing::warn;
 
 use super::{
-    QueueControl,
-    types::{
-        CachedPosition, CrossfadeArm, PendingSelect, Placement, SelectPhase, Transition,
-        extract_track_name,
-    },
+    Queue, Transition,
+    slots::{Active, LoadState, Parked, Role},
+    transition::TransitionRequest,
+    types::{Placement, extract_track_name},
 };
 use crate::{
-    attempts::LoadClass,
-    error::QueueError,
-    event::{AdvanceReason, QueueEvent},
-    navigation::{NavigationState, PlaybackOrder},
-    track::{TrackRecord, TrackSource},
+    AdvanceReason, NavigationState, QueueError, QueueEvent, TrackSource, TrackStatus, consts,
+    track::TrackRecord,
 };
 
-impl<S> QueueControl<S>
+impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
 {
-    /// Append a track. Loading starts immediately in the background.
-    /// The id is allocated from the global counter via
-    /// [`TrackId::allocate`]; use [`Self::append_with_id`] when the
-    /// caller owns the id (FFI item pre-allocation).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QueueError::Play`] after the resident player is closed.
-    pub fn append<T: Into<TrackSource<S>>>(&self, source: T) -> Result<TrackId, QueueError> {
-        let source = source.into();
-        self.with_open(|queue| queue.insert_entry(TrackId::allocate(), source, Placement::Append))
-            .map_err(QueueError::from)
-    }
-
-    /// Append a track with a caller-supplied id. The id MUST come from
-    /// [`TrackId::allocate`] so it stays inside the process-wide
-    /// monotonic address space. Used by the FFI layer where the item
-    /// reserves its id at construction and surfaces it as `audioId`
-    /// before insert.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QueueError::Play`] after the resident player is closed.
-    pub fn append_with_id<T: Into<TrackSource<S>>>(
-        &self,
-        id: TrackId,
-        source: T,
-    ) -> Result<TrackId, QueueError> {
-        let source = source.into();
-        self.with_open(|queue| queue.insert_entry(id, source, Placement::Append))
-            .map_err(QueueError::from)
-    }
-
-    /// Remove all tracks from the queue. Dropping the records aborts
-    /// their in-flight loads.
-    pub fn clear(&self) {
-        self.command(Self::clear_inner);
-    }
-
-    fn clear_inner(&self) {
-        let ids: Vec<TrackId> = {
-            let _apply = self.lock_select_apply();
-            let mut guard = self.lock_tracks_mut();
-            let ids = guard.iter().map(|r| r.id).collect();
-            guard.clear();
-            drop(guard);
-
-            *self.lock_pending_select_mut() = SelectPhase::Idle;
-            let mut navigation = self.lock_navigation_mut();
-            let repeat = navigation.repeat_mode();
-            let order = navigation.playback_order();
-            *navigation = NavigationState::new(navigation.history_limit());
-            navigation.set_repeat(repeat);
-            navigation.set_playback_order(order, &[]);
-            drop(navigation);
-            self.write_armed_for(CrossfadeArm::Disarmed);
-            self.write_cached_position(CachedPosition::Unknown);
-            self.autoplay_target.store(CrossfadeArm::Disarmed);
-            self.player.remove_all_items();
-            ids
-        };
-        *self.player_rx.lock() = self.bus.subscribe();
-        for id in ids {
-            self.bus.publish(QueueEvent::TrackRemoved { id });
-        }
-    }
-
-    /// Insert a track after the given id, or at the head when `after` is
-    /// `None`. Loading starts immediately.
-    ///
-    /// # Errors
-    /// Returns [`QueueError::UnknownTrackId`] if `after` does not match any
-    /// track.
-    pub fn insert<T: Into<TrackSource<S>>>(
-        &self,
-        source: T,
-        after: Option<TrackId>,
-    ) -> Result<TrackId, QueueError> {
-        let source = source.into();
-        self.with_open_result(|queue| {
-            queue.insert_with_id_inner(TrackId::allocate(), source, after)
-        })
-    }
-
-    /// Inserts a resolved track placement into queue state and starts loading.
     pub(super) fn insert_entry(
-        &self,
+        &mut self,
         id: TrackId,
         source: TrackSource<S>,
         placement: Placement,
-    ) -> TrackId {
-        let record = TrackRecord::new(id, extract_track_name(&source), source.clone());
-        if self.current().is_none() && self.autoplay_target.arm_if_disarmed(id) {
-            self.override_pending_select(PendingSelect {
-                id,
-                settings: Transition::None.settings(self.crossfade_settings()),
-                playback: if self.config.should_autoplay {
-                    SelectionPlayback::Play
-                } else {
-                    SelectionPlayback::Pause
-                },
-                reason: AdvanceReason::InitialLoad,
-            });
+    ) {
+        let record = TrackRecord::new(id, extract_track_name(&source), source);
+        let records = self.tracks.records_mut();
+        let index = match placement {
+            Placement::Append => {
+                records.push(record);
+                records.len() - 1
+            }
+            Placement::At(index) => {
+                records.insert(index, record);
+                index
+            }
+        };
+        self.navigation.insert(id);
+        self.announce(QueueEvent::TrackAdded { id, index });
+    }
+
+    pub(super) fn arm_initial_load(
+        &mut self,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) {
+        if self.clock.is_none()
+            || output.is_none()
+            || self.current.is_some()
+            || self.target.is_some()
+            || self.navigation.current().is_some()
+        {
+            return;
         }
-
-        let index = {
-            let mut guard = self.lock_tracks_mut();
-            match placement {
-                Placement::Append => {
-                    guard.push(record);
-                    guard.len() - 1
-                }
-                Placement::At(pos) => {
-                    guard.insert(pos, record);
-                    pos
-                }
-            }
-        };
-        self.player.reserve_slots(self.len());
-        self.bus.publish(QueueEvent::TrackAdded { id, index });
-        let ids = self
-            .tracks()
-            .into_iter()
-            .map(|track| track.id)
-            .collect::<SmallVec<[_; 16]>>();
-        let mut navigation = self.lock_navigation_mut();
-        navigation.reconcile(&ids);
-        navigation.insert(id);
-        drop(navigation);
-        self.spawn_apply_after_load(id, source, LoadClass::Prefetch);
-        id
+        if let Err(error) = self.next_target(
+            Transition::None,
+            AdvanceReason::InitialLoad,
+            false,
+            self.config.should_autoplay,
+            output,
+            out,
+        ) {
+            warn!(%error, "the initial load could not start");
+        }
     }
 
-    /// Insert a track with a caller-supplied id. See
-    /// [`Self::append_with_id`] for why the id MUST come from
-    /// [`TrackId::allocate`].
-    ///
-    /// # Errors
-    /// Returns [`QueueError::UnknownTrackId`] if `after` does not match
-    /// any track.
-    pub fn insert_with_id<T: Into<TrackSource<S>>>(
-        &self,
+    pub(super) fn remove_entry(
+        &mut self,
         id: TrackId,
-        source: T,
-        after: Option<TrackId>,
-    ) -> Result<TrackId, QueueError> {
-        let source = source.into();
-        self.with_open_result(|queue| queue.insert_with_id_inner(id, source, after))
-    }
-
-    fn insert_with_id_inner(
-        &self,
-        id: TrackId,
-        source: TrackSource<S>,
-        after: Option<TrackId>,
-    ) -> Result<TrackId, QueueError> {
-        let pos = {
-            let guard = self.lock_tracks();
-            match after {
-                None => 0,
-                Some(after_id) => guard
-                    .iter()
-                    .position(|e| e.id == after_id)
-                    .map(|i| i + 1)
-                    .ok_or(QueueError::UnknownTrackId(after_id))?,
-            }
-        };
-        Ok(self.insert_entry(id, source, Placement::At(pos)))
-    }
-
-    /// Remove a track from the queue by id.
-    ///
-    /// If the removed track is currently playing:
-    /// - with tracks remaining → switches to the next (or previous if
-    ///   we were at the tail) with an immediate cut.
-    /// - with no tracks remaining → pauses the player.
-    ///
-    /// # Errors
-    /// Returns [`QueueError::UnknownTrackId`] if `id` is not in the queue.
-    pub fn remove(&self, id: TrackId) -> Result<(), QueueError> {
-        self.with_open_result(|queue| queue.remove_inner(id))
-    }
-
-    fn remove_inner(&self, id: TrackId) -> Result<(), QueueError> {
-        let was_current = self.current().map(|e| e.id) == Some(id);
-        let playback = if self.player.is_playing() {
-            SelectionPlayback::Play
-        } else {
-            SelectionPlayback::Pause
-        };
-        let successor_id = if was_current {
-            let guard = self.lock_tracks();
-            let pos = guard.iter().position(|e| e.id == id);
-            let result = pos.and_then(|p| {
-                let next = guard.get(p + 1);
-                let prev = if p > 0 { guard.get(p - 1) } else { None };
-                next.or(prev).map(|e| e.id)
-            });
-            drop(guard);
-            result
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, QueueError> {
+        let index = self
+            .tracks
+            .records()
+            .iter()
+            .position(|record| record.id == id)
+            .ok_or(QueueError::UnknownTrackId(id))?;
+        let replacement = if self.current == Some(id) {
+            self.tracks
+                .records()
+                .get(index + 1)
+                .or_else(|| {
+                    index
+                        .checked_sub(1)
+                        .and_then(|previous| self.tracks.records().get(previous))
+                })
+                .map(|record| record.id)
         } else {
             None
         };
-
-        let index = {
-            let mut guard = self.lock_tracks_mut();
-            let pos = guard
-                .iter()
-                .position(|e| e.id == id)
-                .ok_or(QueueError::UnknownTrackId(id))?;
-            guard.remove(pos);
-            pos
-        };
-        let _ = self.player.remove_at(index)?;
-        self.bus.publish(QueueEvent::TrackRemoved { id });
-
-        let entries = self.tracks();
-        let ids = entries
-            .iter()
-            .map(|entry| entry.id)
-            .collect::<SmallVec<[_; 16]>>();
-        let order = self.lock_navigation().playback_order();
-        self.lock_navigation_mut().reconcile(&ids);
-
-        if was_current {
-            let replacement = match order {
-                PlaybackOrder::Sequential => {
-                    successor_id.filter(|candidate| ids.contains(candidate))
-                }
-                PlaybackOrder::Shuffle => self.lock_navigation_mut().next(&ids, false, false),
-            };
-            if let Some(next) = replacement {
-                self.select_with(
-                    next,
-                    Transition::None,
-                    AdvanceReason::RemovedCurrent,
-                    playback,
-                )?;
-                self.commit_navigation_to(next);
-            } else {
-                self.player.pause();
-            }
+        if self.target.is_some_and(|target| target.to == id) {
+            self.cancel_target(out)?;
         }
-        Ok(())
+        let mut sent = None;
+        for active_index in self.active.indices(|active| {
+            active.item == id && !(active.role == Role::Current && replacement.is_some())
+        }) {
+            sent = self.release_track(active_index, out)?.or(sent);
+        }
+        for parked in self
+            .active
+            .parked_iter_mut()
+            .filter(|parked| parked.item == id)
+        {
+            sent = parked.track.apply(TrackCommand::Release, out)?.or(sent);
+        }
+        drop(self.tracks.records_mut().remove(index));
+        self.navigation.reconcile(&self.track_ids());
+        self.announce(QueueEvent::TrackRemoved { id });
+        if let Some(replacement) = replacement {
+            return self.request_transition(
+                TransitionRequest {
+                    id: replacement,
+                    transition: Transition::None,
+                    reason: AdvanceReason::RemovedCurrent,
+                    auto: false,
+                    playing: true,
+                },
+                output,
+                out,
+            );
+        }
+        self.reap_released();
+        Ok(sent)
     }
 
-    /// Replace the entire queue with the given sources.
-    pub fn set_tracks<I, T>(&self, sources: I)
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<TrackSource<S>>,
-    {
-        self.command(|queue| {
-            queue.clear_inner();
-            for source in sources {
-                queue.insert_entry(TrackId::allocate(), source.into(), Placement::Append);
+    pub(super) fn clear_entries(
+        &mut self,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, QueueError> {
+        let sent = self.release_all(out)?;
+        self.target = None;
+        self.held_position = None;
+        let ids = self.track_ids();
+        self.tracks.records_mut().clear();
+        let repeat = self.navigation.repeat_mode();
+        let order = self.navigation.playback_order();
+        self.navigation = NavigationState::new(self.navigation.history_limit());
+        self.navigation.set_repeat(repeat);
+        self.navigation.set_playback_order(order, &[]);
+        for id in ids {
+            self.announce(QueueEvent::TrackRemoved { id });
+        }
+        self.reap_released();
+        Ok(sent)
+    }
+
+    pub(super) fn load_track(
+        &mut self,
+        id: TrackId,
+        role: Role,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, QueueError> {
+        if let Some(index) = self.active.position(|active| {
+            active.item == id && matches!(active.role, Role::Incoming { .. } | Role::Preloaded)
+        }) {
+            let active = self.active.get_mut(index).ok_or(QueueError::NotReady(id))?;
+            active.role = role;
+            return Ok(active.load.map(LoadState::seq));
+        }
+        if out.deck_available() == 0 {
+            return Err(PlayError::Full("deck").into());
+        }
+        let taken = self
+            .active
+            .parked_position(|parked| {
+                parked.item == id
+                    && parked.track.snapshot().as_ref().status != PlayingStatus::Released
+            })
+            .map(|index| self.active.take_parked(index));
+        let Some(slot) = self.active.free_slot() else {
+            return self.evict_for(id, role, taken, output, out);
+        };
+        let (track, load) = if let Some(mut parked) = taken {
+            let result = (|| {
+                if let Some(to) = self.held_position {
+                    parked.track.apply(TrackCommand::Seek { to }, out)?;
+                    self.held_position = None;
+                }
+                parked.track.apply(
+                    TrackCommand::Seat {
+                        slot,
+                        at: When::Next,
+                    },
+                    out,
+                )
+            })();
+            if let Err(error) = result {
+                if let Err(error) = parked.track.apply(TrackCommand::Release, out) {
+                    warn!(%error, "a refused background seat waits to release");
+                }
+                self.active.park(parked);
+                return Err(error.into());
             }
+            (parked.track, parked.load)
+        } else {
+            let (track, seq) = self.open_track(
+                id,
+                Some(slot),
+                self.held_position.unwrap_or(Position::ZERO),
+                output,
+                out,
+            )?;
+            self.held_position = None;
+            (track, seq.map(LoadState::Opening))
+        };
+        let seq = load.map(LoadState::seq);
+        self.active.push(Active {
+            item: id,
+            slot,
+            track,
+            role,
+            load,
         });
+        Ok(seq)
+    }
+
+    fn open_track(
+        &mut self,
+        id: TrackId,
+        slot: Option<Slot>,
+        position: Position,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<(F::Track, Option<Seq>), QueueError> {
+        if out.dispatcher_available() == 0 {
+            return Err(PlayError::Full("dispatcher").into());
+        }
+        let source = self
+            .tracks
+            .source(id)
+            .ok_or(QueueError::UnknownTrackId(id))?;
+        let observer = self
+            .tracks
+            .observer(id)
+            .ok_or(QueueError::UnknownTrackId(id))?;
+        let settings = self
+            .current_track()
+            .map_or(self.config.track, Track::projected);
+        let mut track = self.config.factory.track(PlayerConfig {
+            item: id,
+            slot,
+            settings,
+        })?;
+        let loader = self
+            .loader
+            .as_ref()
+            .ok_or_else(|| PlayError::InvalidConfiguration {
+                reason: "a hosted queue requires resource preparation".into(),
+            })?;
+        let output = output.ok_or(PlayError::NotReady)?;
+        let (item, load) = loader.start(id, source, observer, output)?;
+        let seq = track.apply(TrackCommand::Load { item, position }, out)?;
+        self.tracks.begin_load(id, load);
+        Ok((track, seq))
+    }
+
+    fn evict_for(
+        &mut self,
+        id: TrackId,
+        role: Role,
+        taken: Option<Parked<F::Track>>,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, QueueError> {
+        let staging = (|| {
+            if let Some(index) = self.active.replacement_index() {
+                self.release_track(index, out)?;
+                self.reap_released();
+            }
+            let victim = self
+                .active
+                .quietest(&self.deck.mixer, |_| true)
+                .ok_or_else(|| PlayError::InvalidConfiguration {
+                    reason: "a mixer must have at least one slot".into(),
+                })?;
+            Ok::<_, QueueError>(
+                self.active
+                    .get(victim)
+                    .ok_or(QueueError::NotReady(id))?
+                    .slot,
+            )
+        })();
+        let slot = match staging {
+            Ok(slot) => slot,
+            Err(error) => {
+                if let Some(parked) = taken {
+                    self.active.park(parked);
+                }
+                return Err(error);
+            }
+        };
+        let (track, load) = if let Some(mut parked) = taken {
+            if let Some(to) = self.held_position {
+                if let Err(error) = parked.track.apply(TrackCommand::Seek { to }, out) {
+                    if let Err(error) = parked.track.apply(TrackCommand::Release, out) {
+                        warn!(%error, "a refused background seek waits to release");
+                    }
+                    self.active.park(parked);
+                    return Err(error.into());
+                }
+                self.held_position = None;
+            }
+            (parked.track, parked.load)
+        } else {
+            let (track, seq) = self.open_track(
+                id,
+                None,
+                self.held_position.unwrap_or(Position::ZERO),
+                output,
+                out,
+            )?;
+            self.held_position = None;
+            (track, seq.map(LoadState::Opening))
+        };
+        let seq = load.map(LoadState::seq);
+        self.active.stage(Active {
+            item: id,
+            slot,
+            track,
+            role,
+            load,
+        });
+        Ok(seq)
     }
 }
 
+impl<S, F> Queue<S, F>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
+{
+    pub(super) fn release_track(
+        &mut self,
+        index: usize,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError> {
+        let replacement = self.active.is_replacement(index);
+        let active = self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?;
+        let sent = active.track.apply(TrackCommand::Release, out)?;
+        let slot = active.slot;
+        active.role = Role::Leaving;
+        if !replacement {
+            self.active.clear_fade(slot);
+        }
+        Ok(sent)
+    }
+
+    pub(super) fn release_all(
+        &mut self,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError> {
+        let mut detach = false;
+        let mut dispatcher = self.active.parked_len();
+        for active in self.active.iter() {
+            if active.track.snapshot().as_ref().attached {
+                detach = true;
+            } else {
+                dispatcher += 1;
+            }
+        }
+        if detach && out.deck_available() == 0 {
+            return Err(PlayError::Full("deck"));
+        }
+        if out.dispatcher_available() < dispatcher {
+            return Err(PlayError::Full("dispatcher"));
+        }
+        let mut release = |out: &mut Outbox<'_, S>| {
+            for active in self.active.iter_mut() {
+                active.track.apply(TrackCommand::Release, out)?;
+            }
+            for parked in self.active.parked_iter_mut() {
+                parked.track.apply(TrackCommand::Release, out)?;
+            }
+            Ok::<(), PlayError>(())
+        };
+        let sent = if detach {
+            out.together(When::Next, release)?.1
+        } else {
+            release(out)?;
+            None
+        };
+        for active in self.active.iter_mut() {
+            active.role = Role::Leaving;
+        }
+        Ok(sent)
+    }
+
+    pub(super) fn close_tracks(
+        &mut self,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError> {
+        let sent = self.release_all(out)?;
+        self.target = None;
+        self.shutdown.cancel();
+        self.tracks.cancel_loads();
+        self.reap_released();
+        Ok(sent)
+    }
+
+    pub(super) fn reap_released(&mut self) {
+        for index in (0..self.active.parked_len()).rev() {
+            if self.active.parked_get_mut(index).is_some_and(|parked| {
+                parked.track.snapshot().as_ref().status == PlayingStatus::Released
+                    && !matches!(parked.load, Some(LoadState::Opening(_)))
+            }) {
+                self.active.take_parked(index);
+            }
+        }
+        for index in self
+            .active
+            .indices(|active| {
+                active.track.snapshot().as_ref().status == PlayingStatus::Released
+                    && !matches!(active.load, Some(LoadState::Opening(_)))
+            })
+            .into_iter()
+            .rev()
+        {
+            let active = self.active.remove(index);
+            if active.role == Role::Leaving
+                && self.current == Some(active.item)
+                && self.active_current_index().is_none()
+            {
+                self.current = None;
+                self.announce(QueueEvent::CurrentTrackChanged { id: None });
+            }
+        }
+    }
+
+    pub(super) fn pump_loads(&mut self, output: Option<&OutputSnapshot>, out: &mut Outbox<'_, S>) {
+        if self.shutdown.is_cancelled() || output.is_none() {
+            return;
+        }
+        while self.active.parked_len() < self.config.max_concurrent_loads.get()
+            && out.dispatcher_available() > consts::SELECT_DISPATCH_RESERVE
+        {
+            let Some(id) = self
+                .tracks
+                .records()
+                .iter()
+                .find(|record| record.status == TrackStatus::Pending)
+                .map(|record| record.id)
+            else {
+                break;
+            };
+            match self.open_track(id, None, Position::ZERO, output, out) {
+                Ok((track, load)) => self.active.park(Parked {
+                    item: id,
+                    track,
+                    load: load.map(LoadState::Opening),
+                }),
+                Err(QueueError::Play(PlayError::Full(_) | PlayError::Closed)) => break,
+                Err(error) => {
+                    self.tracks.fail(id, &error);
+                    self.announce(QueueEvent::TrackLoadFailed {
+                        id,
+                        reason: error.to_string(),
+                        auto_skipped: false,
+                    });
+                }
+            }
+        }
+    }
+
+    pub(super) fn retry_load(
+        &mut self,
+        index: usize,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<(), QueueError> {
+        let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
+        let id = active.item;
+        let position = active.track.snapshot().as_ref().position;
+        let source = self
+            .tracks
+            .source(id)
+            .ok_or(QueueError::UnknownTrackId(id))?;
+        let observer = self
+            .tracks
+            .observer(id)
+            .ok_or(QueueError::UnknownTrackId(id))?;
+        let loader = self.loader.as_ref().ok_or(PlayError::NotReady)?;
+        let output = output.ok_or(PlayError::NotReady)?;
+        let (item, load) = loader.start(id, source, observer, output)?;
+        let seq = self
+            .active
+            .get_mut(index)
+            .ok_or(PlayError::NoActiveSlot)?
+            .track
+            .apply(TrackCommand::Load { item, position }, out)?;
+        self.active
+            .get_mut(index)
+            .ok_or(PlayError::NoActiveSlot)?
+            .load = seq.map(LoadState::Opening);
+        self.tracks.begin_load(id, load);
+        Ok(())
+    }
+}
 #[cfg(test)]
 mod tests {
-    use kithara_platform::sync::Arc;
-    use kithara_play::{ItemRole, PlayerEvent, SlotId, TrackRef};
+    use kithara_assets::{AssetStore, StorageBackend};
+    use kithara_host::{Host, HostConfig, HostOwned};
+    use kithara_platform::tokio::task::spawn_blocking;
+    use kithara_play::{
+        DeckEvent, HostedDeck, PlayWorker, PlayWorkerConfig, ResourcePrep, Slot, TrackReceipt,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
+        QueueConfig, QueueControl,
         event::QueueEvent,
-        queue::state::tests::{make_queue, wait_for_queue_event},
+        queue::{
+            QueueCommand,
+            state::tests::{apply, make_queue, wait_for_queue_event, with_outbox},
+        },
+        test_pools::{TestPools, pools},
     };
 
-    fn append(queue: &crate::Queue<crate::test_pools::TestPools>, source: &str) -> TrackId {
-        queue
-            .append(source)
-            .expect("BUG: open queue must accept a track")
+    async fn hosted_queue() -> (HostOwned<Queue<TestPools>>, Host<TestPools>) {
+        spawn_blocking(|| {
+            let prep = ResourcePrep::builder()
+                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+                .build();
+            let config = QueueConfig::builder()
+                .prep(prep)
+                .store(
+                    AssetStore::builder(pools())
+                        .backend(StorageBackend::Memory)
+                        .build(),
+                )
+                .build();
+            let mut host =
+                Host::new(HostConfig::offline(pools()).build()).expect("fixture offline Host");
+            let queue = host
+                .insert(Queue::new(config))
+                .expect("insert fixture queue");
+            (queue, host)
+        })
+        .await
+        .expect("create queue on the blocking test worker")
+    }
+
+    async fn command<R: Send + 'static>(
+        queue: &QueueControl<TestPools>,
+        run: impl FnOnce(QueueControl<TestPools>) -> R + Send + 'static,
+    ) -> R {
+        let control = queue.clone();
+        spawn_blocking(move || run(control))
+            .await
+            .expect("queue command worker must not panic")
+    }
+
+    async fn append(queue: &QueueControl<TestPools>, source: &str) -> TrackId {
+        let source = source.to_owned();
+        command(queue, move |control| {
+            control
+                .append(source)
+                .expect("BUG: open queue must accept a track")
+        })
+        .await
     }
 
     #[kithara::test(tokio)]
     async fn len_is_empty_reflect_append() {
-        let queue = make_queue();
+        let (queue, _host) = hosted_queue().await;
         assert!(queue.is_empty());
-        let _ = append(&queue, "https://example.com/a.mp3");
-        let _ = append(&queue, "https://example.com/b.mp3");
+        let _ = append(&queue, "https://example.com/a.mp3").await;
+        let _ = append(&queue, "https://example.com/b.mp3").await;
         assert_eq!(queue.len(), 2);
     }
 
     #[kithara::test(tokio)]
     async fn append_returns_monotonic_ids_and_emits_track_added() {
-        let queue = make_queue();
+        let (queue, _host) = hosted_queue().await;
         let mut rx = queue.subscribe();
-        let a = append(&queue, "https://example.com/a.mp3");
-        let b = append(&queue, "https://example.com/b.mp3");
+        let a = append(&queue, "https://example.com/a.mp3").await;
+        let b = append(&queue, "https://example.com/b.mp3").await;
         assert_ne!(a, b);
         assert!(a.as_u64() < b.as_u64());
 
@@ -337,13 +605,13 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn remove_drops_from_queue_and_emits() {
-        let queue = make_queue();
-        let a = append(&queue, "https://example.com/a.mp3");
-        let _b = append(&queue, "https://example.com/b.mp3");
+        let (queue, _host) = hosted_queue().await;
+        let a = append(&queue, "https://example.com/a.mp3").await;
+        let _b = append(&queue, "https://example.com/b.mp3").await;
         let mut rx = queue.subscribe();
 
-        queue
-            .remove(a)
+        command(&queue, move |control| control.remove(a))
+            .await
             .expect("BUG: just-appended track must be removable");
         assert_eq!(queue.len(), 1);
         let saw_removed = wait_for_queue_event(
@@ -357,44 +625,55 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn clear_empties_queue() {
-        let queue = make_queue();
-        let _a = append(&queue, "https://example.com/a.mp3");
-        let _b = append(&queue, "https://example.com/b.mp3");
+        let (queue, _host) = hosted_queue().await;
+        let _a = append(&queue, "https://example.com/a.mp3").await;
+        let _b = append(&queue, "https://example.com/b.mp3").await;
         assert_eq!(queue.len(), 2);
-        queue.clear();
+        command(&queue, |control| control.clear())
+            .await
+            .expect("the idle deck takes the clear");
         assert_eq!(queue.len(), 0);
     }
 
     #[kithara::test(tokio)]
     async fn clear_discards_old_eof_before_reinsert() {
-        let queue = make_queue();
-        let old = queue
-            .append("https://example.com/old.mp3")
-            .expect("open queue accepts a track");
-        queue.lock_navigation_mut().select(old, &[old]);
-        queue.player.bus().publish(PlayerEvent::ItemDidPlayToEnd {
-            item: ItemRole::Leading(TrackRef::new(
-                old,
-                SlotId::new(0),
-                Arc::from(format!("test://memory/{}", old.as_u64())),
-            )),
+        let (mut queue, mut rig) = make_queue();
+        let old = TrackId::allocate();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Append {
+                id: old,
+                source: "https://example.com/old.mp3".into(),
+            },
+        )
+        .expect("open queue accepts a track");
+        queue.navigation.select(old, &[old]);
+        let ended = DeckEvent::Ended {
+            slot: Slot::new(0),
+            at: kithara_signal::SessionFrame::new(0),
+        };
+
+        apply(&mut queue, &mut rig, QueueCommand::RemoveAll)
+            .expect("the idle deck takes the clear");
+        let replacement = TrackId::allocate();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Append {
+                id: replacement,
+                source: "https://example.com/replacement.mp3".into(),
+            },
+        )
+        .expect("open queue accepts a replacement track");
+        queue.navigation.select(replacement, &[replacement]);
+        with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            HostedDeck::settle(queue, TrackReceipt::Event(ended), pass, out);
+            HostedDeck::tick(queue, pass, out);
         });
 
-        queue.clear();
-        let replacement = queue
-            .append("https://example.com/replacement.mp3")
-            .expect("open queue accepts a replacement track");
-        queue
-            .lock_navigation_mut()
-            .select(replacement, &[replacement]);
-        queue.player.set_rate(1.0);
-
-        queue
-            .tick()
-            .expect("tick must accept a freshly reinserted queue");
-
         assert_eq!(
-            queue.current().map(|entry| entry.id),
+            queue.control().current().map(|entry| entry.id),
             Some(replacement),
             "an EOF queued before clear must not end the replacement queue"
         );
@@ -402,24 +681,33 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn set_tracks_replaces_queue() {
-        let queue = make_queue();
-        let _a = append(&queue, "https://example.com/a.mp3");
-        queue.set_tracks([
-            "https://example.com/1.mp3",
-            "https://example.com/2.mp3",
-            "https://example.com/3.mp3",
-        ]);
+        let (queue, _host) = hosted_queue().await;
+        let _a = append(&queue, "https://example.com/a.mp3").await;
+        command(&queue, |control| {
+            control.set_tracks(
+                [
+                    "https://example.com/1.mp3",
+                    "https://example.com/2.mp3",
+                    "https://example.com/3.mp3",
+                ]
+                .map(TrackSource::from),
+            )
+        })
+        .await
+        .expect("the idle deck takes the clear");
         assert_eq!(queue.len(), 3);
     }
 
     #[kithara::test(tokio)]
     async fn insert_after_id_places_next() {
-        let queue = make_queue();
-        let a = append(&queue, "https://example.com/a.mp3");
-        let b = append(&queue, "https://example.com/b.mp3");
-        let mid = queue
-            .insert("https://example.com/mid.mp3", Some(a))
-            .expect("BUG: insert relative to existing track");
+        let (queue, _host) = hosted_queue().await;
+        let a = append(&queue, "https://example.com/a.mp3").await;
+        let b = append(&queue, "https://example.com/b.mp3").await;
+        let mid = command(&queue, move |control| {
+            control.insert("https://example.com/mid.mp3", Some(a))
+        })
+        .await
+        .expect("BUG: insert relative to existing track");
         let snapshot = queue.tracks();
         let ids: Vec<TrackId> = snapshot.iter().map(|e| e.id).collect();
         assert_eq!(ids, vec![a, mid, b]);
@@ -427,9 +715,9 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn track_source_is_keyed_by_id_across_removal() {
-        let queue = make_queue();
-        let a = append(&queue, "https://example.com/a.mp3");
-        let b = append(&queue, "https://example.com/b.mp3");
+        let (queue, _host) = hosted_queue().await;
+        let a = append(&queue, "https://example.com/a.mp3").await;
+        let b = append(&queue, "https://example.com/b.mp3").await;
 
         assert_eq!(
             queue
@@ -441,7 +729,9 @@ mod tests {
 
         // Removing an earlier track must not shift which source `b` resolves
         // to, and the removed id must no longer have a source.
-        queue.remove(a).expect("BUG: remove existing track");
+        command(&queue, move |control| control.remove(a))
+            .await
+            .expect("BUG: remove existing track");
         assert!(
             queue.track_source(a).is_none(),
             "removed track has no source"

@@ -16,10 +16,7 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
         tokio::{sync::broadcast::error::RecvError, task, task::yield_now},
     },
-    play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, Resource,
-        ResourceConfig, ResourceSrc,
-    },
+    play::{PlayWorker, PlayWorkerConfig, PlayerEvent, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -122,7 +119,11 @@ async fn churn_rates(queue: QueueControl<TestPools>, seed: u64, stop: CancelToke
     while !stop.is_cancelled() {
         let random_byte = rng.next_u64().to_le_bytes()[0];
         let rate = consts::RATE_PATTERN[usize::from(random_byte) % consts::RATE_PATTERN.len()];
-        queue.set_rate(rate);
+        let control = queue.clone();
+        task::spawn_blocking(move || control.set_rate(rate))
+            .await
+            .expect("rate change")
+            .expect("a finite rate is accepted");
         changes += 1;
         sleep(consts::RATE_CHANGE_INTERVAL).await;
     }
@@ -174,49 +175,54 @@ async fn observe_playback(
     Ok(stats)
 }
 
-async fn seek_and_require_read(queue: &QueueControl<TestPools>, stage: &str, target: f64) {
-    let mut progress_rx = queue.subscribe();
+async fn seek_and_require_read(queue: &OfflineQueue<TestPools>, stage: &str, target: f64) {
+    let previous = queue
+        .deck_snapshot()
+        .slots
+        .iter()
+        .find_map(|slot| slot.mark)
+        .unwrap_or_else(|| panic!("{stage}: playing slot must have a committed mark"));
     let trace = usdt_trace::scope();
     queue
-        .seek(target)
+        .run(move |q| q.seek(target))
+        .await
         .unwrap_or_else(|error| panic!("{stage}: seek to {target:.2}s: {error}"));
 
-    let seek_output = |event: &usdt_trace::ProbeEvent| {
-        event.target == "kithara_audio_probe"
-            && event.probe == "post_seek_output"
-            && event
-                .field("pending")
-                .is_some_and(|pending| pending != 0 && event.field("epoch") == Some(pending))
-    };
     timeout(consts::RATE_SEEK_PROGRESS_BUDGET, async {
-        trace
-            .wait_for(|events| events.iter().any(seek_output))
-            .await;
-        let events = trace.events();
-        let output_index = events
-            .iter()
-            .position(seek_output)
-            .unwrap_or_else(|| panic!("{stage}: seek produced no output"));
-        let seek_epoch = events[output_index]
-            .field("epoch")
-            .expect("post-seek output epoch");
-        trace
-            .wait_for(|events| {
-                events[output_index + 1..].iter().any(|event| {
-                    event.target == "kithara_stream_probe" && event.probe == "write_playhead"
-                })
-            })
-            .await;
-
-        loop {
-            match progress_rx.recv().await.map(|envelope| envelope.event) {
-                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress {
-                    seek_epoch: progress_epoch,
-                    ..
-                })) if progress_epoch == seek_epoch => break,
-                Ok(_) | Err(RecvError::Lagged(_)) => {}
-                Err(RecvError::Closed) => panic!("{stage}: playback event stream closed"),
+        let first = loop {
+            if let Some(mark) = queue
+                .deck_snapshot()
+                .slots
+                .iter()
+                .find_map(|slot| slot.mark)
+                && mark.lane.segment != previous.lane.segment
+                && mark.lane.frame > 0
+                && mark.position.as_secs_f64() >= target
+            {
+                break mark;
             }
+            sleep(Duration::from_millis(1)).await;
+        };
+        let output_index = trace.events().len();
+        loop {
+            let progressed = queue
+                .deck_snapshot()
+                .slots
+                .iter()
+                .filter_map(|slot| slot.mark)
+                .any(|mark| {
+                    mark.lane.segment == first.lane.segment
+                        && mark.lane.frame > first.lane.frame
+                        && mark.session > first.session
+                        && mark.position > first.position
+                });
+            let sink_progress = trace.events()[output_index..].iter().any(|event| {
+                event.target == "kithara_stream_probe" && event.probe == "write_playhead"
+            });
+            if progressed && sink_progress {
+                break;
+            }
+            sleep(Duration::from_millis(1)).await;
         }
     })
     .await
@@ -295,9 +301,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build();
 
-    let resource = Resource::new(cfg)
-        .await
-        .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
+    let resource = cfg;
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
@@ -331,7 +335,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(
     for iter in 0..consts::STRESS_ITERATIONS {
         let target = consts::SEEK_TARGETS[(iter as usize) % consts::SEEK_TARGETS.len()];
         let pos_before = player.position();
-        player.seek(target);
+        player.seek(target).await;
         let segment = segment_for_target(target);
         if let Some(index) = gates
             .iter()
@@ -431,18 +435,15 @@ async fn hls_rate_seek_stress_keeps_playback_live(
         ))
         .build(),
     );
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
-            .worker(worker)
-            .cancel(shutdown_token.child())
-            .build(),
-    );
+    let player = kithara::play::ResourcePrep::builder()
+        .worker(worker)
+        .cancel(shutdown_token.child())
+        .build();
     let queue = OfflineQueue::paced(
         HostConfig::offline(pools).build(),
         Queue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(player)
                 .store(store.clone())
                 .cancel(shutdown_token.child())
                 .build(),

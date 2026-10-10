@@ -1,114 +1,86 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
-use kithara_command::Live;
-use kithara_platform::sync::Arc;
-use kithara_play::{PlayError, player::PlayerControlSource};
-use kithara_sync::{GroupState, SyncAdmission, SyncOperation, SyncRejected};
-use kithara_warp::BeatGridId;
+use kithara_command::{Live, ScopedConfig};
+use kithara_platform::{maybe_send::MaybeSend, sync::Arc};
+use kithara_play::PlayError;
 
-use super::{
-    super::{HeldPlayer, Host, HostOwned},
-    PlatformResult,
+use super::PlatformResult;
+#[cfg(feature = "offline")]
+use crate::host::{
+    HostConfig,
+    offline::{OfflineRuntime, StartedOffline},
 };
 use crate::{
-    HostSettings, PlayerMember,
+    HostCore, HostOwner, HostSettings,
     rt::SessionOutput,
-    session::{HostDispatcher, HostProtocol, RootView},
+    session::{HostDispatcher, HostProtocol, HostRoot, RootView},
 };
 
-type StartedPlatform<S> = (Arc<dyn HostDispatcher<S>>, Platform<S>);
+type StartedPlatform<S, O> = (
+    Arc<dyn HostDispatcher<<O as HostOwner<S>>::Command>>,
+    Platform<S, O>,
+);
 
-impl<S> PlatformResult<Self> for Platform<S> {
+type PlatformMarker<S, O> = PhantomData<fn() -> (S, O)>;
+
+impl<S, O: HostOwner<S>> PlatformResult<Self> for StartedPlatform<S, O> {
     fn resolve(self) -> Result<Self, PlayError> {
         Ok(self)
     }
 }
 
-impl<S> PlatformResult<Self> for StartedPlatform<S> {
-    fn resolve(self) -> Result<Self, PlayError> {
-        Ok(self)
-    }
+pub(in crate::host) struct Platform<S, O: HostOwner<S>> {
+    marker: PlatformMarker<S, O>,
 }
 
-pub(in crate::host) struct Platform<S> {
-    marker: PhantomData<fn() -> S>,
-}
-
-impl<S> Platform<S> {
-    pub(in crate::host) const fn close(_platform: &mut Self, _host_id: BeatGridId) {}
-
+impl<S, O: HostOwner<S>> Platform<S, O> {
     #[cfg(feature = "offline")]
-    pub(in crate::host) const fn offline() -> Self {
-        Self::owner()
-    }
-
-    pub(in crate::host) const fn owner() -> Self {
-        Self {
-            marker: PhantomData,
-        }
-    }
-
-    pub(in crate::host) fn realtime(
-        group: GroupState<PlayerMember>,
+    pub(in crate::host) fn offline(
+        config: HostConfig<S>,
+        root: HostRoot,
         view: RootView,
-        output_block_frames: Option<NonZeroU32>,
-        output: SessionOutput,
-        settings: Live<HostSettings, HostProtocol>,
-    ) -> StartedPlatform<S>
+        layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
+    ) -> Result<StartedOffline<S, O>, PlayError>
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        let dispatcher =
-            crate::session::native::spawn::<S>(group, view, output_block_frames, output, settings);
-        (dispatcher, Self::owner())
+        let (dispatcher, runtime) = OfflineRuntime::new(config, root, view, layer)?;
+        Ok((
+            dispatcher,
+            Self {
+                marker: PhantomData,
+            },
+            runtime,
+        ))
     }
 
-    pub(in crate::host) fn transact(
-        _platform: &Self,
-        dispatcher: &Arc<dyn HostDispatcher<S>>,
-        operation: SyncOperation<PlayerMember>,
-    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-        dispatcher.transact(operation)
-    }
-}
-
-impl<S> Host<S>
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    /// Attaches and transfers one fully configured player or decorator into
-    /// this Host, then prepares its graph and initial slot before returning.
-    /// Audio-device setup may block; musical playback remains stopped.
-    ///
-    /// # Errors
-    /// Returns an error when binding, attachment, or graph preparation fails.
-    pub fn insert<P>(&mut self, mut player: P) -> Result<HostOwned<P>, PlayError>
+    pub(in crate::host) fn realtime(
+        root: HostRoot,
+        view: RootView,
+        output_block_frames: Option<NonZeroU32>,
+        channel_config: ScopedConfig,
+        output: SessionOutput,
+        settings: Live<HostSettings, HostProtocol>,
+        layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
+    ) -> StartedPlatform<S, O>
     where
-        P: PlayerControlSource<Schema = S>,
+        S: HasPool<f32> + Send + Sync + 'static,
     {
-        let (attachment, control) = self.bind_player(&mut player)?;
-        let grid_id = attachment.id();
-        self.attach_member(PlayerMember::new(attachment, HeldPlayer::new(player)))?;
-        let owned = self.owned::<P>(grid_id, control);
-        if let Err(error) = P::prepare_control(owned.control()) {
-            self.remove(&owned)?;
-            return Err(error);
-        }
-        Ok(owned)
-    }
-
-    /// Closes the lower runtime on the caller thread, then detaches its
-    /// canonical member after graph unregistration has completed.
-    ///
-    /// # Errors
-    /// Returns an error when close or canonical detachment fails.
-    pub fn remove<P>(&mut self, player: &HostOwned<P>) -> Result<(), PlayError>
-    where
-        P: PlayerControlSource<Schema = S>,
-    {
-        self.validate_removal(player)?;
-        P::close_control(player.control())?;
-        self.detach_member(player.id())
+        let session = crate::session::native_engine::spawn::<S, O>(
+            root,
+            view,
+            output_block_frames,
+            channel_config,
+            output,
+            settings,
+            layer,
+        );
+        (
+            session,
+            Self {
+                marker: PhantomData,
+            },
+        )
     }
 }

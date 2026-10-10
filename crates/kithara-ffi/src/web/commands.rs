@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use kithara::{
-    play::{CrossfadeSettings, SessionDuckingMode},
+    play::CrossfadeSettings,
     queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, TrackId, Transition},
 };
 
@@ -80,8 +80,6 @@ pub(crate) enum WorkerCmd {
     SetRepeat(RepeatMode),
     SetPlaybackOrder(PlaybackOrder),
     SetActionAtItemEnd(ActionAtItemEnd),
-    /// Lower or restore the whole session output through the owning Host.
-    SetDucking(SessionDuckingMode),
     /// Apply per-network peak-bitrate ceilings to the worker's current ABR
     /// handle. Mirrors
     /// [`NativeInner::update_peak_bitrate`](crate::native::inner::NativeInner).

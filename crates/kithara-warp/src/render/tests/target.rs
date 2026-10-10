@@ -116,6 +116,18 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
     assert!(fx.engine.is_some());
     assert!(fx.pending_source.is_some());
     assert!(fx.scratch.is_some());
+
+    for target_spec in [initial, rebuilt, initial, rebuilt] {
+        fx.prepare(target_spec);
+        assert_eq!(fx.spec, target_spec);
+        assert!(
+            fx.engine.is_some(),
+            "every format rebuild fits one target budget"
+        );
+        assert!(fx.pending_source.is_some());
+        assert!(fx.scratch.is_some());
+        assert!(pools.stats().allocated_bytes <= target_bytes);
+    }
 }
 
 #[cfg(any(

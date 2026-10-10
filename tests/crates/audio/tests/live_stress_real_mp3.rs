@@ -12,7 +12,7 @@ use kithara::{
         time::Duration,
         tokio::task::{spawn, spawn_blocking},
     },
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     signal::AudioChunk,
     stream::Stream,
 };
@@ -20,6 +20,7 @@ use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
+    mock::LaneAudio,
     served_mp3,
 };
 use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
@@ -36,7 +37,7 @@ mod consts {
     pub(super) const REVISIT_SEEKS: usize = 64;
 }
 
-type TestAudio = RegisteredAudio<Stream<File<TestPools>>, TestPools>;
+type TestAudio = LaneAudio<Stream<File<TestPools>>, TestPools>;
 
 #[derive(Clone, Default)]
 struct LiveStats {
@@ -84,7 +85,7 @@ fn snapshot(stats: &Arc<Mutex<LiveStats>>) -> LiveStats {
 fn next_chunk(audio: &mut TestAudio, stage: &str) -> Option<AudioChunk> {
     loop {
         match AudioRead::next_chunk(audio) {
-            Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
+            Ok(ChunkOutcome::Chunk(chunk)) => return Some(*chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
@@ -179,11 +180,12 @@ fn phase4_sequential_after_burst(audio: &mut TestAudio) {
             .unwrap_or_else(|| panic!("sequential read stopped early at chunk {idx}"));
         if let Some(epoch) = seq_epoch {
             assert_eq!(
-                chunk.meta.epoch, epoch,
+                chunk.meta.segment.get(),
+                epoch,
                 "sequential read changed epoch unexpectedly after final seek"
             );
         } else {
-            seq_epoch = Some(chunk.meta.epoch);
+            seq_epoch = Some(chunk.meta.segment.get());
         }
         if let Some(prev_end) = seq_end_frame {
             assert!(
@@ -258,15 +260,18 @@ async fn live_stress_real_mp3_seek_read_cache(
         .events(EventBus::default())
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = worker
-        .load(
+    let mut audio = kithara_integration_tests::mock::load_audio(
+        &worker,
+        kithara::play::TrackConfig::for_audio(
             AudioConfig::<File<TestPools>>::for_stream(file_config)
                 .hint(("mp3").to_string())
-                .block_on_underrun(true)
                 .build(),
         )
-        .await
-        .expect("audio creation");
+        .block_on_underrun(true)
+        .build(),
+    )
+    .await
+    .expect("audio creation");
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
     let mut events = audio.event_bus().subscribe();

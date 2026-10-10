@@ -1,6 +1,6 @@
 use std::{num::NonZeroU32, ops::Range};
 
-use crate::Revision;
+use crate::{FrameCount, Revision};
 
 /// A frame on the session clock, counted from the master ring's origin.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, derive_more::Into)]
@@ -23,6 +23,22 @@ impl SessionFrame {
         } else {
             Some(self.0.abs_diff(start.0))
         }
+    }
+}
+
+impl core::ops::Add<FrameCount> for SessionFrame {
+    type Output = Self;
+
+    fn add(self, frames: FrameCount) -> Self {
+        Self(self.0.saturating_add_unsigned(frames.get() as u64))
+    }
+}
+
+impl core::ops::Sub<FrameCount> for SessionFrame {
+    type Output = Self;
+
+    fn sub(self, frames: FrameCount) -> Self {
+        Self(self.0.saturating_sub_unsigned(frames.get() as u64))
     }
 }
 

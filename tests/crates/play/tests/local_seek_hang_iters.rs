@@ -8,14 +8,14 @@ use kithara::{
     audio::AudioEvent,
     decode::DecoderBackend,
     download::Downloader,
-    events::EventReceiver,
+    events::{EventBus, EventReceiver},
     host::{HostConfig, HostSettings},
     platform::{
         time,
-        time::{Duration, Instant, timeout},
+        time::{Duration, Instant},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
@@ -195,7 +195,9 @@ async fn build_resource(
     store: kithara::assets::AssetStore<TestPools>,
     backend: DecoderBackend,
     abr: AbrMode,
-) -> Resource {
+) -> (ResourceConfig<TestPools>, EventReceiver<TestEvent>) {
+    let bus = EventBus::new(4096);
+    let events = bus.subscribe();
     let cfg: ResourceConfig<TestPools> = ResourceConfig::for_src(
         ResourceSrc::parse(url.as_str())
             .unwrap_or_else(|e| panic!("ResourceSrc::parse({url}): {e}")),
@@ -210,15 +212,9 @@ async fn build_resource(
             .build(),
     )
     .initial_abr_mode(abr)
+    .events(bus)
     .build();
-    let mut resource = Resource::new(cfg)
-        .await
-        .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));
-    timeout(Duration::from_secs(10), resource.preload())
-        .await
-        .unwrap_or_else(|_| panic!("Resource::preload({url}) timed out after 10s"))
-        .unwrap_or_else(|err| panic!("Resource::preload({url}) failed: {err}"));
-    resource
+    (cfg, events)
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
@@ -290,11 +286,11 @@ async fn local_seek_middle_hang_iters(
         .await;
         let mut iteration_samples: Vec<f32> = Vec::new();
 
-        let resource = build_resource(&master, &downloader, &iter_label, store, backend, abr).await;
+        let (resource, mut events) =
+            build_resource(&master, &downloader, &iter_label, store, backend, abr).await;
         // Subscribe before the resource moves into the player so no
         // `PlaybackProgress` event is missed once the render pull starts.
-        let mut events = resource.subscribe();
-        player.load_and_fadein(resource).await;
+        player.load_config(resource).await;
 
         // TestEvent-driven warmup: drive the render pull until the worker has
         // actually produced PCM (position advances past the warmup horizon),
@@ -346,7 +342,7 @@ async fn local_seek_middle_hang_iters(
         );
 
         let seek_target = player.position() + 30.0;
-        player.seek(seek_target);
+        player.seek(seek_target).await;
 
         // Wait for the seek to land in produced audio before measuring: the
         // post-seek render pull emits `PlaybackProgress` past the target once

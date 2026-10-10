@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use kithara_events::Event;
-use kithara_stream::SeekEpoch;
 
 /// Errors specific to the HLS stream layer (non-network, non-downloader).
 #[derive(Debug, Clone, derive_more::Display, PartialEq, Eq)]
@@ -50,29 +49,13 @@ pub enum HlsEvent {
     ReaderSeek {
         from_offset: u64,
         to_offset: u64,
-        seek_epoch: SeekEpoch,
         variant: Option<usize>,
         segment_index: Option<usize>,
         byte_in_segment: Option<u64>,
     },
-    /// Stale seek request dropped before planning.
-    StaleRequestDropped {
-        seek_epoch: SeekEpoch,
-        current_epoch: SeekEpoch,
-        variant: usize,
-        segment_index: usize,
-    },
-    /// Stale fetch result dropped before commit.
-    StaleFetchDropped {
-        seek_epoch: SeekEpoch,
-        current_epoch: SeekEpoch,
-        variant: usize,
-        segment_index: usize,
-    },
     /// Targeted seek diagnostics for debugging index drift.
     Seek {
         stage: &'static str,
-        seek_epoch: SeekEpoch,
         variant: usize,
         offset: u64,
         from_segment_index: usize,

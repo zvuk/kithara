@@ -7,10 +7,13 @@ use kithara::{
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::Stream,
 };
-use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    mock::LaneAudio,
+};
 use kithara_test_fixtures::integration_fixtures::origin_tone;
 use url::Url;
 
@@ -52,8 +55,7 @@ async fn the_production_client_plays_the_stopped_broadcast(origin_tone: Vec<f32>
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
 
-    let mut audio = worker
-        .load(audio_config)
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, audio_config)
         .await
         .expect("open the stopped broadcast as HLS");
     audio.preload().expect("preload the VOD tail");
@@ -75,7 +77,7 @@ async fn the_production_client_plays_the_stopped_broadcast(origin_tone: Vec<f32>
 }
 
 fn read_left_channel(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     samples: usize,
 ) -> Vec<f32> {
     let channels = usize::from(audio.spec().channels);

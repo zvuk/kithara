@@ -1,30 +1,37 @@
 use kithara::{
-    audio::{AudioEvent, DecoderEvent, PlaybackResamplerKind, SeekLifecycleStage},
+    audio::{AudioEvent, DecoderEvent, PlaybackResamplerKind},
     download::DownloaderEvent,
     events::{BusEvent, EventReceiver},
     file::FileEvent,
     hls::HlsEvent,
     host::HostOwned,
-    platform::tokio::sync::broadcast::error::TryRecvError,
-    play::{PlayError, PlayerEvent, PlayerImpl, Resource, SessionError},
-    queue::ItemEvent,
-    signal::TransportRevision,
+    platform::{
+        sync::{Arc, Mutex},
+        tokio::sync::broadcast::error::TryRecvError,
+    },
+    play::{DeckSnapshot, PlayError, PlayerEvent, SessionError},
+    queue::{ItemEvent, Queue},
+    signal::{SegmentId, TransportRevision},
 };
-use kithara_integration_tests::{event::TestEvent, offline::OfflineHostHarness};
+use kithara_integration_tests::{
+    event::TestEvent,
+    offline::{OfflineHostHarness, host::ObservedDeck},
+};
 use kithara_test_utils::bufpool::TestPools;
 use serde::Serialize;
 
 use super::{Case, SOURCE_RATE};
 
 pub(super) struct Deck {
-    pub(super) player: HostOwned<PlayerImpl<TestPools>>,
-    pub(super) reference: Resource,
+    pub(super) player: HostOwned<ObservedDeck<Queue<TestPools>>>,
+    pub(super) reference: super::reference::ReferenceAudio,
+    pub(super) snapshot: Arc<Mutex<DeckSnapshot>>,
     pub(super) reference_events: EventReceiver<TestEvent>,
     pub(super) events: EventReceiver<TestEvent>,
     pub(super) observation: DeckObservation,
-    pub(super) seek_request_epoch: Option<u64>,
-    pub(super) seek_complete_epoch: Option<u64>,
-    pub(super) muted_seek_underrun_epoch: Option<u64>,
+    pub(super) seek_request_segment: Option<SegmentId>,
+    pub(super) seek_complete_segment: Option<SegmentId>,
+    pub(super) muted_seek_underrun_segment: Option<SegmentId>,
     pub(super) seek_terminal: bool,
     pub(super) capture_target_secs: f64,
 }
@@ -65,6 +72,22 @@ pub(super) fn drain_all_events(
     failures: &mut Vec<String>,
 ) {
     for (deck_index, deck) in decks.iter_mut().enumerate() {
+        if let Some(requested) = deck.seek_request_segment {
+            let mark = deck.snapshot.lock().slots.iter().find_map(|slot| slot.mark);
+            if let Some(mark) = mark {
+                if mark.lane.segment == requested && mark.lane.frame > 0 {
+                    if deck.seek_complete_segment.is_none() {
+                        deck.observation
+                            .seek_positions_secs
+                            .push(mark.position.as_secs_f64());
+                    }
+                    deck.seek_complete_segment = Some(mark.lane.segment);
+                } else if mark.lane.segment > requested {
+                    failures.push(format!("deck {deck_index} committed stale seek segment {:?}, expected {requested:?}", mark.lane.segment));
+                    deck.seek_terminal = true;
+                }
+            }
+        }
         loop {
             match deck.events.try_recv() {
                 Ok(envelope) => {
@@ -182,58 +205,19 @@ fn observe_audio_event(
     failures: &mut Vec<String>,
 ) {
     match event {
-        AudioEvent::SeekLifecycle {
-            stage: SeekLifecycleStage::SeekRequest,
-            seek_epoch,
-            ..
-        } => {
-            if deck.seek_request_epoch.replace(*seek_epoch).is_some() {
-                failures.push(format!(
-                    "deck {deck_index} ({}) observed duplicate seek request during {phase}",
-                    deck.observation.label,
-                ));
-            }
-        }
-        AudioEvent::SeekComplete {
-            position,
-            seek_epoch,
-        } => {
-            deck.observation
-                .seek_positions_secs
-                .push(position.as_secs_f64());
-            if deck.seek_request_epoch != Some(*seek_epoch) {
-                failures.push(format!(
-                    "deck {deck_index} ({}) completed stale seek epoch {seek_epoch} during {phase}; expected {:?}",
-                    deck.observation.label, deck.seek_request_epoch,
-                ));
-                deck.seek_terminal = true;
-            } else {
-                deck.seek_complete_epoch = Some(*seek_epoch);
-            }
-        }
-        AudioEvent::SeekRejected { epoch, target } => {
+        AudioEvent::SeekRejected { target } => {
             deck.seek_terminal = true;
             failures.push(format!(
                 "deck {deck_index} ({}) rejected seek to {:.3}s during {phase}",
                 deck.observation.label,
-                target.as_secs_f64(),
+                target.as_secs_f64()
             ));
-            if deck.seek_request_epoch != Some(*epoch) {
-                failures.push(format!(
-                    "deck {deck_index} ({}) rejected stale seek epoch {epoch}; expected {:?}",
-                    deck.observation.label, deck.seek_request_epoch,
-                ));
-            }
         }
-        AudioEvent::UnderrunStarted { seek_epoch, .. } => {
+        AudioEvent::UnderrunStarted { .. } => {
             if matches!(policy, EventPolicy::MutedSeekSetup)
-                && deck.seek_request_epoch == Some(*seek_epoch)
+                && let Some(segment) = deck.seek_request_segment
             {
-                if deck
-                    .muted_seek_underrun_epoch
-                    .replace(*seek_epoch)
-                    .is_some()
-                {
+                if deck.muted_seek_underrun_segment.replace(segment).is_some() {
                     failures.push(format!(
                         "deck {deck_index} ({}) reported duplicate muted seek underrun during {phase}",
                         deck.observation.label,
@@ -247,9 +231,9 @@ fn observe_audio_event(
                 ));
             }
         }
-        AudioEvent::UnderrunEnded { seek_epoch, .. } => {
-            if deck.muted_seek_underrun_epoch == Some(*seek_epoch) {
-                deck.muted_seek_underrun_epoch = None;
+        AudioEvent::UnderrunEnded { .. } => {
+            if deck.muted_seek_underrun_segment.is_some() {
+                deck.muted_seek_underrun_segment = None;
                 if !matches!(policy, EventPolicy::MutedSeekSetup) {
                     failures.push(format!(
                         "deck {deck_index} ({}) muted seek underrun recovered only after audible playback resumed during {phase}",

@@ -26,7 +26,6 @@ where
         codec,
         DecoderRuntime {
             pools: pools.clone(),
-            epoch: config.epoch,
             byte_len_handle: config.byte_len_handle,
             hooks: config.hooks,
         },
@@ -50,7 +49,6 @@ where
         DecoderRuntime {
             pools: pools.clone(),
             hooks: config.hooks,
-            epoch: config.epoch,
             byte_len_handle: config.byte_len_handle,
         },
     )?;

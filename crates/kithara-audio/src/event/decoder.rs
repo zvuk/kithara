@@ -3,7 +3,7 @@
 use kithara_decode::GaplessInfo;
 use kithara_events::Event;
 use kithara_platform::time::Duration;
-use kithara_stream::{AudioCodec, ContainerFormat, SeekEpoch};
+use kithara_stream::{AudioCodec, ContainerFormat};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderBackend {
@@ -17,8 +17,6 @@ pub enum DecoderChangeCause {
     Initial,
     VariantSwitch,
     FormatBoundary,
-    SeekRecreate,
-    Recovery,
     HostRateChange,
 }
 
@@ -70,7 +68,6 @@ pub enum DecoderEvent {
         channels: u16,
         bit_depth: Option<u16>,
         bitrate: Option<u32>,
-        epoch: SeekEpoch,
         cause: DecoderChangeCause,
         variant: Option<u32>,
         base_offset: u64,

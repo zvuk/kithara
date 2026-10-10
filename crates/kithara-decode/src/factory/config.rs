@@ -60,9 +60,6 @@ pub struct DecoderConfig<B, S> {
     /// Enable gapless trim wiring through the per-backend codec.
     #[config(value, builder(default = true))]
     pub(crate) gapless: bool,
-    /// Epoch counter for decoder recreation tracking.
-    #[config(skip = "transferred to decoder runtime state", builder(default))]
-    pub(crate) epoch: u64,
 }
 
 #[cfg(test)]

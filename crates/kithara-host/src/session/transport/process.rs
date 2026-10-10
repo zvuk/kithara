@@ -1,13 +1,19 @@
 use std::{iter, num::NonZeroU32, ops::Range};
 
 use firewheel::node::{ProcInfo, ProcStore};
-use kithara_command::{Due, Inbox};
+use kithara_command::{Due, LevelInbox, ScopeId, ScopedInbox};
 use kithara_config::LiveConfig;
+use kithara_render::bridge::{DeckProtocol, DeckRefusal, SessionInbox};
 use kithara_signal::{SessionEpoch, SessionFrame};
 use kithara_warp::{SessionAnchor, SessionBeat};
+use ringbuf::traits::{Consumer, Producer};
 use triple_buffer::Input;
 
-use super::commit::{SessionGridGeneration, TransportObservation, TransportProcessError};
+use super::{
+    OfflineInbox,
+    commit::{SessionGridGeneration, TransportObservation, TransportProcessError},
+    inbox::InboxExchange,
+};
 use crate::{
     api::{SessionTransportSnapshot, Tempo, TransportRevision},
     consts,
@@ -27,7 +33,8 @@ pub(super) struct TransportFrame {
 /// the frames of the block the changes applied on, and the inbox the session
 /// owner sends changes through.
 pub(crate) struct TransportState {
-    inbox: Inbox<HostProtocol>,
+    inbox: Option<ScopedInbox<HostProtocol, DeckProtocol>>,
+    inbox_exchange: Option<InboxExchange>,
     /// The spans of the block rendering now that end where a later one
     /// starts, in frame order. Storage holds one per batch the inbox can have
     /// in flight, so the audio thread never grows it.
@@ -101,13 +108,13 @@ pub(crate) fn restart_transport(store: &mut ProcStore) -> Result<(), TransportPr
 
 pub(crate) fn converge_transport_restart(
     store: &mut ProcStore,
-    target: SessionGridGeneration,
     settings: HostSettings,
+    target: SessionGridGeneration,
 ) -> Result<SessionGridGeneration, TransportProcessError> {
     let result = store
         .try_get_mut::<TransportState>()
         .ok_or(TransportProcessError::MissingState)?
-        .converge_restart(target, settings);
+        .converge_restart(settings, target);
     publish_observation(store)?;
     result
 }
@@ -150,13 +157,14 @@ fn publish_observation(store: &mut ProcStore) -> Result<(), TransportProcessErro
 impl TransportState {
     /// A transport whose inbox holds up to `capacity` batches in flight.
     pub(crate) fn new(
-        inbox: Inbox<HostProtocol>,
+        inbox: ScopedInbox<HostProtocol, DeckProtocol>,
         settings: HostSettings,
         session_grid: SessionGridGeneration,
         capacity: usize,
     ) -> Self {
         Self {
-            inbox,
+            inbox: Some(inbox),
+            inbox_exchange: None,
             session_grid,
             closed: Vec::with_capacity(capacity),
             current: Span {
@@ -171,13 +179,69 @@ impl TransportState {
         }
     }
 
+    pub(crate) fn park_offline_inbox(&mut self) -> Result<OfflineInbox, TransportProcessError> {
+        self.acquire_inbox()?;
+        let inbox = self
+            .inbox
+            .take()
+            .ok_or(TransportProcessError::MissingState)?;
+        let (owner, exchange) = OfflineInbox::new(inbox);
+        self.inbox_exchange = Some(exchange);
+        Ok(owner)
+    }
+
+    fn acquire_inbox(&mut self) -> Result<(), TransportProcessError> {
+        if self.inbox.is_none()
+            && let Some(exchange) = &mut self.inbox_exchange
+            && let Some((inbox, frames)) = exchange.from_owner.try_pop()
+        {
+            self.inbox = Some(inbox);
+            exchange.remaining_frames = frames;
+        }
+        self.inbox
+            .as_ref()
+            .map(|_| ())
+            .ok_or(TransportProcessError::MissingState)
+    }
+
+    pub(crate) fn return_inbox(&mut self, frames: usize) -> Result<(), TransportProcessError> {
+        let Some(exchange) = &mut self.inbox_exchange else {
+            return Ok(());
+        };
+        exchange.remaining_frames = exchange
+            .remaining_frames
+            .checked_sub(frames)
+            .ok_or(TransportProcessError::MissingState)?;
+        if exchange.remaining_frames != 0 {
+            return Ok(());
+        }
+        let inbox = self
+            .inbox
+            .take()
+            .ok_or(TransportProcessError::MissingState)?;
+        if let Err(inbox) = exchange.to_owner.try_push(inbox) {
+            self.inbox = Some(inbox);
+            return Err(TransportProcessError::MissingState);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn retire_closing(&mut self) -> Result<(), TransportProcessError> {
+        self.acquire_inbox()?;
+        self.inbox
+            .as_mut()
+            .ok_or(TransportProcessError::MissingState)?
+            .retire_closing();
+        Ok(())
+    }
+
     /// Puts the beat anchor on the first block of a stream: session beat 0 on
     /// a fresh transport, the beat a restart stopped on otherwise.
     fn anchor_block(&mut self, info: &ProcInfo) -> Result<(), TransportProcessError> {
         if self.current.anchor.is_some() {
             return Ok(());
         }
-        let beat = match self.reanchor_beat.take() {
+        let beat = match self.reanchor_beat {
             Some(beat) => beat,
             None => SessionBeat::new(0.0).map_err(|_| TransportProcessError::InvalidBeatRange)?,
         };
@@ -189,6 +253,7 @@ impl TransportState {
         )?;
         let revision = self.session_grid.next_revision()?;
         self.current.anchor = Some(anchor);
+        self.reanchor_beat = None;
         self.boundary = None;
         self.session_grid.commit_revision(revision);
         Ok(())
@@ -202,7 +267,11 @@ impl TransportState {
     /// every tempo change due in it with `continuity`'s error, since no beat
     /// anchor is known on its frames; a metronome or ducking change applies
     /// in any block.
-    fn apply_due(&mut self, info: &ProcInfo, continuity: Result<(), TransportProcessError>) {
+    fn apply_due(
+        &mut self,
+        info: &ProcInfo,
+        continuity: Result<(), TransportProcessError>,
+    ) -> Result<(), TransportProcessError> {
         let Self {
             inbox,
             closed,
@@ -211,9 +280,12 @@ impl TransportState {
             session_grid,
             ..
         } = self;
-        inbox.drain();
+        let mut root = inbox
+            .as_mut()
+            .ok_or(TransportProcessError::MissingState)?
+            .root();
         let start = SessionFrame::new(info.clock_samples.0);
-        while let Some(due) = inbox.next_due(start, info.frames) {
+        while let Some(due) = root.next_due(start, info.frames) {
             let staged = Self::stage(&due, current.settings, current.anchor, continuity).and_then(
                 |staged| {
                     if !staged.retargeted {
@@ -249,6 +321,7 @@ impl TransportState {
                 Err(error) => due.refuse(error),
             }
         }
+        Ok(())
     }
 
     fn build_anchor(
@@ -269,19 +342,18 @@ impl TransportState {
         Ok(anchor)
     }
 
-    /// Takes `settings` as the ones the next stream starts from and moves the
-    /// session grid to the restart `target`.
+    /// Moves the session grid to the restart `target` with the owner's settled settings.
     fn converge_restart(
         &mut self,
-        target: SessionGridGeneration,
         settings: HostSettings,
+        target: SessionGridGeneration,
     ) -> Result<SessionGridGeneration, TransportProcessError> {
-        self.current.settings = settings;
         let target_stamp = target.stamp()?;
         let current_stamp = self.session_grid.stamp()?;
         if current_stamp.grid_id() != target_stamp.grid_id() {
             return Err(TransportProcessError::SessionGridGenerationMismatch);
         }
+        self.current.settings = settings;
         if self.session_grid.epoch() < target.epoch() {
             let mut successor = self.session_grid;
             successor.advance_restart()?;
@@ -303,11 +375,16 @@ impl TransportState {
     }
 
     fn process(&mut self, info: &ProcInfo) -> Result<TransportFrame, TransportProcessError> {
+        self.acquire_inbox()?;
+        self.inbox
+            .as_mut()
+            .ok_or(TransportProcessError::MissingState)?
+            .drain();
         self.closed.clear();
         self.current.offset = 0;
-        self.anchor_block(info)?;
-        let continuity = self.validate_frame(info);
-        self.apply_due(info, continuity);
+        let anchor = self.anchor_block(info);
+        let continuity = anchor.and_then(|_| self.validate_frame(info));
+        self.apply_due(info, continuity)?;
         continuity?;
         let anchor = self
             .current
@@ -334,8 +411,14 @@ impl TransportState {
     /// on it, keeps the ones for the next block, and leaves the beat it
     /// stopped on for the next stream to anchor.
     fn restart(&mut self) -> Result<(), TransportProcessError> {
+        self.acquire_inbox()?;
         self.inbox
-            .refuse_timed(TransportProcessError::SessionAxisRestarted);
+            .as_mut()
+            .ok_or(TransportProcessError::MissingState)?
+            .refuse_timed(
+                TransportProcessError::SessionAxisRestarted,
+                DeckRefusal::AxisRestarted,
+            );
         if let Some(snapshot) = self.snapshot.take() {
             self.reanchor_beat = Some(snapshot.position());
         }
@@ -425,5 +508,11 @@ impl TransportState {
             return Err(TransportProcessError::FrameDiscontinuity);
         }
         Ok(())
+    }
+}
+
+impl SessionInbox for TransportState {
+    fn scope(&mut self, id: ScopeId) -> Option<LevelInbox<'_, DeckProtocol>> {
+        self.inbox.as_mut()?.scope(id)
     }
 }

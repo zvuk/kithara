@@ -3,7 +3,7 @@
 use kithara::{
     audio::{
         AudioControl, AudioRead, AudioReadError, AudioReader, AudioSession, ChunkOutcome,
-        DecodeError, PendingReason, ReadOutcome, SeekOutcome,
+        PendingReason, ReadOutcome, SeekOutcome,
     },
     decode::TrackMetadata,
     events::EventBus,
@@ -72,7 +72,7 @@ impl AudioRead for Stalled {
 }
 
 impl AudioControl for Stalled {
-    fn seek(&mut self, _position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, _position: Duration) -> Result<SeekOutcome, AudioReadError> {
         unreachable!("this reader never moves")
     }
 }

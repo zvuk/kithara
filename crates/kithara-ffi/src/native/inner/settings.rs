@@ -1,12 +1,8 @@
-use kithara::{
-    abr::AbrMode,
-    queue::{QueueError, RepeatMode},
-};
+use kithara::{abr::AbrMode, queue::RepeatMode};
 
 use super::{NativeInner, PeakBitrate};
 use crate::types::{
-    FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiDuckingMode, FfiError,
-    FfiPlaybackOrder, FfiRepeatMode,
+    FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiError, FfiPlaybackOrder, FfiRepeatMode,
 };
 impl NativeInner {
     pub(crate) fn eq_band_count(&self) -> u32 {
@@ -19,17 +15,6 @@ impl NativeInner {
 
     pub(crate) fn eq_gain(&self, band: u32) -> f32 {
         self.queue.eq_gain(band as usize).unwrap_or(0.0)
-    }
-
-    pub(crate) fn notify_audio_route_changed(&self, reason: &str) -> Result<(), FfiError> {
-        self.queue
-            .notify_audio_route_changed(reason)
-            .map_err(|err| match err {
-                QueueError::Play(err) => FfiError::from(err),
-                other => FfiError::Internal {
-                    description: other.to_string(),
-                },
-            })
     }
 
     pub(crate) fn set_abr_mode(&self, mode: FfiAbrMode) {
@@ -60,17 +45,6 @@ impl NativeInner {
         self.queue
             .set_crossfade_settings(settings.try_into()?)
             .map_err(FfiError::from)
-    }
-
-    pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {
-        self.queue
-            .set_session_ducking(mode.into())
-            .map_err(|err| match err {
-                QueueError::Play(err) => FfiError::from(err),
-                other => FfiError::Internal {
-                    description: other.to_string(),
-                },
-            })
     }
 
     pub(crate) fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {

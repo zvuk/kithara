@@ -5,18 +5,17 @@ use kithara::{
     assets::StorageBackend,
     drm::{KeyRequest, KeyRequestFactory},
     hls::KeyOptions,
-    host::{HostSettingsControl, wasm},
+    host::wasm,
     platform::{
         sync::{Arc, mpsc},
         thread::{assert_not_main_thread, keep_worker_alive},
-        time::{Duration, sleep},
         tokio::task::spawn as task_spawn,
     },
     play::{
-        CrossfadeSettings, PlayError, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
+        CrossfadeSettings, PlayError, PlayWorkerConfig, ResourcePrep, ResourceSrc,
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
-    queue::{QueueConfig, TrackId, Transition},
+    queue::{QueueConfig, QueueSettings, TrackId, Transition},
 };
 
 use crate::{
@@ -78,16 +77,17 @@ macro_rules! clog {
 /// Entry called inside a Web Worker thread (via `thread::spawn`).
 ///
 /// Inserts and owns one [`FfiQueue`] member in the canonical Host (mirroring
-/// [`NativeInner`](crate::native::inner::NativeInner)'s construction), spawns
-/// a periodic `tick` loop, then drives the command channel.
+/// [`NativeInner`](crate::native::inner::NativeInner)'s construction), then
+/// drives the command channel. The Host ticks the queue it holds.
 ///
 /// `keep_worker_alive` is required: without it the Worker's spawn closure returns immediately since
 /// it only spawns async tasks, and `wasm_safe_thread` then closes the Worker, killing the command
-/// and tick loops.
+/// loop and the Host's deck clock.
 pub(crate) fn worker_main(
     cmd_rx: mpsc::Receiver<WorkerCmd>,
     host_sender: wasm::HostSender<FfiPools>,
     pools: Pools,
+    queue_tx: mpsc::Sender<FfiQueueControl>,
 ) {
     /// Default crossfade window, in seconds. Mirrors the legacy worker.
     const CROSSFADE_SECONDS: f32 = 5.0;
@@ -99,15 +99,18 @@ pub(crate) fn worker_main(
         let mut host = wasm::remote_host(host_sender);
         let state = BuildState::new(pools);
         let queue_store = state.store.clone();
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(host.sample_rate())
-                .worker(state.worker.clone())
-                .build(),
-        );
+        let prep = ResourcePrep::builder().worker(state.worker.clone()).build();
         let queue = FfiQueue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(prep)
+                .settings(
+                    QueueSettings::builder()
+                        .crossfade(CrossfadeSettings {
+                            duration: CROSSFADE_SECONDS,
+                            ..Default::default()
+                        })
+                        .build(),
+                )
                 .store(queue_store)
                 .build(),
         );
@@ -119,14 +122,12 @@ pub(crate) fn worker_main(
             }
         };
         let queue = owner.control().clone();
-        let _ = queue.set_crossfade_settings(CrossfadeSettings {
-            duration: CROSSFADE_SECONDS,
-            ..Default::default()
-        });
-
+        if queue_tx.send(queue.clone()).is_err() {
+            clog!("[WORKER] queue reader receiver was dropped");
+            return;
+        }
         let analysis = Rc::new(RefCell::new(AnalysisRuns::new(state.pools.clone())));
         let build_state = Rc::new(RefCell::new(state));
-        spawn_tick_loop(queue.clone());
         crate::web::observer::source::spawn(&queue);
 
         while let Ok(cmd) = cmd_rx.recv_async().await {
@@ -139,29 +140,6 @@ pub(crate) fn worker_main(
             Err(error) => {
                 clog!("[WORKER] host queue removal failed; resident retained: {error}");
             }
-        }
-    });
-}
-
-/// Spawn the periodic `FfiQueue::tick` loop. `tick` is synchronous; the
-/// loop awaits a `setTimeout`-backed `sleep` between ticks so it yields
-/// to the worker's task executor without busy-spinning.
-fn spawn_tick_loop(queue: FfiQueueControl) {
-    /// Tick cadence for the queue's internal `tick()` loop, in
-    /// milliseconds. Drives auto-advance / crossfade arming and drains
-    /// engine events. Wall clock; not tied to the audio-thread process
-    /// callback.
-    const TICK_INTERVAL_MS: u64 = 100;
-
-    task_spawn(async move {
-        loop {
-            if queue.is_closed() {
-                break;
-            }
-            if let Err(err) = queue.tick() {
-                clog!("[WORKER] queue tick error: {err}");
-            }
-            sleep(Duration::from_millis(TICK_INTERVAL_MS)).await;
         }
     });
 }
@@ -185,8 +163,12 @@ fn dispatch_cmd(
         WorkerCmd::Seek(ms) => {
             let _ = queue.seek(ms.max(0.0) / MS_PER_SECOND);
         }
-        WorkerCmd::SetVolume(vol) => queue.set_volume(vol),
-        WorkerCmd::SetPlayingRate(rate) => queue.set_default_rate(rate),
+        WorkerCmd::SetVolume(vol) => {
+            let _ = queue.set_volume(vol);
+        }
+        WorkerCmd::SetPlayingRate(rate) => {
+            let _ = queue.set_default_rate(rate);
+        }
         WorkerCmd::SetCrossfade(settings) => {
             let _ = queue.set_crossfade_settings(settings);
         }
@@ -258,21 +240,18 @@ fn dispatch_cmd(
             let result = queue.select(id, transition).map_err(|e| e.to_string());
             crate::web::interop::send_reply(request_id, result);
         }
-        WorkerCmd::RemoveAll => {
-            analysis.borrow_mut().clear();
-            queue.clear();
-        }
+        WorkerCmd::RemoveAll => match queue.clear() {
+            Ok(()) => analysis.borrow_mut().clear(),
+            Err(error) => {
+                tracing::warn!(%error, "the queue refused to clear and keeps its items");
+            }
+        },
         WorkerCmd::SetAbrMode { variant_index } => {
             apply_abr_mode(queue, variant_index);
         }
         WorkerCmd::SetRepeat(mode) => queue.set_repeat(mode),
         WorkerCmd::SetPlaybackOrder(order) => queue.set_playback_order(order),
         WorkerCmd::SetActionAtItemEnd(action) => queue.set_action_at_item_end(action),
-        WorkerCmd::SetDucking(mode) => {
-            if let Err(err) = queue.set_session_ducking(mode) {
-                clog!("[WORKER] session ducking failed: {err}");
-            }
-        }
         WorkerCmd::PeakBitrate {
             wifi_bps,
             cellular_bps,

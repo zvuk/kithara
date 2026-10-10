@@ -25,10 +25,6 @@ impl WasmInner {
         crate::web::interop::next_request_id()
     }
 
-    pub(crate) fn notify_audio_route_changed(&self, _reason: &str) -> Result<(), FfiError> {
-        Ok(())
-    }
-
     pub(crate) fn notify_interruption(&self, _kind: InterruptionKind) {}
 
     pub(crate) fn pause(&self) {

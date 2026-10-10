@@ -6,7 +6,7 @@ mod read;
 mod traits;
 mod variant;
 
-pub use byte_map::{ByteMap, SeekPrepare};
+pub use byte_map::ByteMap;
 pub use probe::SourceProbe;
 pub use read::{NotReadyCause, PendingReason, ReadOutcome, SourcePhase};
 #[cfg(any(test, feature = "mock"))]

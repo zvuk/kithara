@@ -4,6 +4,9 @@ mod dispatcher;
 mod observer;
 mod task;
 mod wake;
+
+#[cfg(any(test, feature = "mock"))]
+pub mod mock;
 mod worker;
 
 pub use compute::{ComputeContext, ComputeRejected, ComputeSubmitError};

@@ -6,7 +6,7 @@ use std::{
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
 
-use crate::AudioSpec;
+use crate::{AudioSpec, SegmentId, SourceSpan};
 
 /// Position and provenance facts for one decoded-audio chunk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,6 +17,8 @@ pub struct AudioChunkInfo {
     pub end_timestamp: Duration,
     /// Media-timeline position of the first frame in this chunk.
     pub timestamp: Duration,
+    /// Exact decoded-source mapping of this physical output interval.
+    pub source_span: Option<SourceSpan>,
     /// Opaque immutable source/output mapping revision, absent for unmapped PCM.
     pub mapping_revision: Option<NonZeroU64>,
     /// Opaque source segment index reported by the decoder, when available.
@@ -27,8 +29,12 @@ pub struct AudioChunkInfo {
     pub variant_index: Option<usize>,
     /// Number of interleaved audio frames represented by this chunk.
     pub frames: u32,
-    /// Decoder generation, incremented on decoder recreation.
-    pub epoch: u64,
+    /// Lane segment represented by this chunk.
+    pub segment: SegmentId,
+    /// First frame of this chunk on the segment's lane timeline.
+    pub lane_frame: u64,
+    /// Whether this chunk ends the track.
+    pub end_of_track: bool,
     /// Absolute frame offset from the start of the track.
     pub frame_offset: u64,
     /// Opaque producer render revision represented by this chunk.
@@ -60,11 +66,14 @@ impl Default for AudioChunkInfo {
             spec: AudioSpec::new(0, PLACEHOLDER_RATE),
             end_timestamp: Duration::ZERO,
             timestamp: Duration::ZERO,
+            source_span: None,
             segment_index: None,
             source_byte_offset: None,
             variant_index: None,
             frames: 0,
-            epoch: 0,
+            segment: SegmentId::FIRST,
+            lane_frame: 0,
+            end_of_track: false,
             render_revision: 0,
             mapping_revision: None,
             frame_offset: 0,

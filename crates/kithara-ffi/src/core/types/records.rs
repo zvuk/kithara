@@ -19,7 +19,10 @@ use kithara_hls::{KeyFailureStage, KeySource};
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
 #[derive(Clone, Debug, thiserror::Error)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Error)
+)]
 pub enum FfiError {
     #[error("player not ready")]
     NotReady,
@@ -51,7 +54,10 @@ pub const fn duration_to_seconds(d: Duration) -> f64 {
 /// Holds domain-scoped DRM rules - providers with different key
 /// processors and headers can coexist.
 #[derive(Clone, Default)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Record)
+)]
 #[derive(derive_more::Debug)]
 pub struct FfiKeyOptions {
     #[debug("{:?}", self.rules.len())]
@@ -61,7 +67,10 @@ pub struct FfiKeyOptions {
 /// A single DRM rule: domain patterns + key processor + optional
 /// per-provider headers / query params.
 #[derive(Clone, derive_more::Debug)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Record)
+)]
 pub struct FfiKeyRule {
     #[debug(skip)]
     pub processor: Arc<dyn crate::observer::FfiKeyProcessor>,
@@ -82,7 +91,10 @@ pub struct FfiKeyRule {
 /// FFI-friendly per-item configuration. All fields immutable after
 /// [`crate::item::AudioPlayerItem::new`].
 #[derive(Clone, Debug, kithara_config::Config)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Record)
+)]
 #[config(builder(none), fields(value))]
 pub struct FfiItemConfig {
     pub abr_mode: Option<FfiAbrMode>,
@@ -134,7 +146,10 @@ impl FfiItemConfig {
 /// FFI-friendly mirror of [`PlayerStatus`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = PlayerStatus)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiPlayerStatus {
     Unknown,
     ReadyToPlay,
@@ -145,7 +160,10 @@ pub enum FfiPlayerStatus {
 /// caller reads a consistent set instead of three independently locked
 /// values.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Record)
+)]
 pub struct FfiItemState {
     pub status: FfiItemStatus,
     /// Playable duration once the metadata layer answers.
@@ -156,7 +174,10 @@ pub struct FfiItemState {
 /// FFI-friendly mirror of [`ItemStatus`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = ItemStatus)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiItemStatus {
     Unknown,
     ReadyToPlay,
@@ -166,7 +187,10 @@ pub enum FfiItemStatus {
 /// FFI-friendly mirror of [`TimeControlStatus`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = TimeControlStatus)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiTimeControlStatus {
     Paused,
     WaitingToPlay,
@@ -179,7 +203,10 @@ pub enum FfiTimeControlStatus {
 /// fails, or cancels an item.
 #[derive(Clone, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = kithara::queue::TrackStatus)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiTrackStatus {
     /// The item is known to the queue but loading has not started.
     Pending,
@@ -200,7 +227,10 @@ pub enum FfiTrackStatus {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = AdvanceReason)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiAdvanceReason {
     InitialLoad,
     NaturalEof,
@@ -218,7 +248,10 @@ pub enum FfiAdvanceReason {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = QueueRepeatMode)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiRepeatMode {
     Off,
     One,
@@ -228,7 +261,10 @@ pub enum FfiRepeatMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiPlaybackOrder {
     Sequential,
     Shuffle,
@@ -236,7 +272,10 @@ pub enum FfiPlaybackOrder {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiActionAtItemEnd {
     Advance,
     Pause,
@@ -245,7 +284,10 @@ pub enum FfiActionAtItemEnd {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiCrossfadeCurve {
     Linear,
     EqualPower,
@@ -253,7 +295,10 @@ pub enum FfiCrossfadeCurve {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Record)
+)]
 pub struct FfiCrossfadeSettings {
     pub duration: f32,
     pub curve: FfiCrossfadeCurve,
@@ -264,7 +309,10 @@ pub struct FfiCrossfadeSettings {
 /// How far the whole session output drops under a competing sound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(into = SessionDuckingMode)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiDuckingMode {
     /// Full level.
     Off,
@@ -277,7 +325,10 @@ pub enum FfiDuckingMode {
 /// What one platform audio-interruption notification reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(into = InterruptionKind)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiInterruptionKind {
     /// The system took the output away.
     Began,
@@ -287,7 +338,10 @@ pub enum FfiInterruptionKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = RouteChangeReason)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiRouteChangeReason {
     Unknown,
     NewDeviceAvailable,
@@ -301,7 +355,10 @@ pub enum FfiRouteChangeReason {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = StretchBackendKind)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiStretchBackendKind {
     Signalsmith,
     Bungee,
@@ -310,7 +367,10 @@ pub enum FfiStretchBackendKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = EvictReason)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiEvictReason {
     QuotaBytes,
     QuotaAssets,
@@ -321,7 +381,10 @@ pub enum FfiEvictReason {
 
 /// FFI-friendly time range (seconds-based).
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Record)
+)]
 pub struct FfiTimeRange {
     pub duration_seconds: f64,
     pub start_seconds: f64,
@@ -336,7 +399,7 @@ pub struct FfiTimeRange {
 /// (async broadcast task + OS polling thread). Swift must handle
 /// thread-safe delivery internally.
 #[derive(Debug)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(all(feature = "uniffi", not(target_arch = "wasm32")), derive(uniffi::Enum))]
 #[rustfmt::skip]
 pub enum FfiPlayerEvent {
     TimeChanged { seconds: f64 },
@@ -402,7 +465,10 @@ pub enum FfiPlayerEvent {
 /// duration (typical for auto-advance and Next/Prev buttons), or
 /// [`FfiTransition::CrossfadeWith`] to override per-call.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiTransition {
     None,
     Crossfade,
@@ -411,7 +477,10 @@ pub enum FfiTransition {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = AudioCodec)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiAudioCodecKind {
     AacLc,
     AacHe,
@@ -430,7 +499,10 @@ pub enum FfiAudioCodecKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = ContainerFormat)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiContainerKind {
     Mp4,
     Fmp4,
@@ -450,7 +522,10 @@ pub enum FfiContainerKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = DecoderBackend)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiDecoderBackend {
     Symphonia,
     Apple,
@@ -461,13 +536,14 @@ pub enum FfiDecoderBackend {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = DecoderChangeCause)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiDecoderChangeCause {
     Initial,
     VariantSwitch,
     FormatBoundary,
-    SeekRecreate,
-    Recovery,
     HostRateChange,
     #[mirror(skip)]
     Unknown,
@@ -475,7 +551,10 @@ pub enum FfiDecoderChangeCause {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = DecodeErrorClass)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiDecodeErrorClass {
     Interrupted,
     VariantChange,
@@ -486,7 +565,10 @@ pub enum FfiDecodeErrorClass {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = DecodeErrorKind)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiDecodeErrorKind {
     Io,
     UnsupportedCodec,
@@ -507,7 +589,10 @@ pub enum FfiDecodeErrorKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = FrameDomain)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiFrameDomain {
     Source,
     Output,
@@ -517,7 +602,10 @@ pub enum FfiFrameDomain {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = ResamplerKind)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiResamplerKind {
     Rubato,
     Apple,
@@ -529,7 +617,10 @@ pub enum FfiResamplerKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = PlaybackResamplerKind)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiPlaybackResamplerKind {
     Rubato,
     Glide,
@@ -539,7 +630,10 @@ pub enum FfiPlaybackResamplerKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiTrackFailureKind {
     Decode { kind: FfiDecodeErrorKind },
     RecreateFailed { offset: u64 },
@@ -563,7 +657,10 @@ impl From<TrackFailureKind> for FfiTrackFailureKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = CancelReason)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiCancelReason {
     EpochCancel,
     PeerCancel,
@@ -573,7 +670,10 @@ pub enum FfiCancelReason {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = TotalBytesSource)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiTotalBytesSource {
     CommittedLen,
     ContentLength,
@@ -583,7 +683,10 @@ pub enum FfiTotalBytesSource {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = KeyFailureStage)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiKeyFailureStage {
     Network,
     BodyCollect,
@@ -595,7 +698,10 @@ pub enum FfiKeyFailureStage {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]
 #[mirror(from = KeySource)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiKeySource {
     Network,
     DiskCache,
@@ -606,7 +712,10 @@ pub enum FfiKeySource {
 
 /// Typed item event dispatched through [`crate::observer::ItemObserver::on_event`].
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiItemEvent {
     DurationChanged {
         seconds: f64,
@@ -656,7 +765,6 @@ pub enum FfiItemEvent {
         channels: u16,
         bit_depth: Option<u16>,
         bitrate: Option<u32>,
-        epoch: u64,
         cause: FfiDecoderChangeCause,
         variant: Option<u32>,
         base_offset: u64,
@@ -700,10 +808,8 @@ pub enum FfiItemEvent {
     },
     SeekComplete {
         position_seconds: f64,
-        epoch: u64,
     },
     SeekRejected {
-        epoch: u64,
         target_seconds: f64,
     },
     DecoderReady {
@@ -712,20 +818,16 @@ pub enum FfiItemEvent {
     },
     TrackFailed {
         reason: FfiTrackFailureKind,
-        epoch: u64,
     },
     UnderrunStarted {
         position_ms: u64,
-        epoch: u64,
     },
     UnderrunEnded {
         position_ms: u64,
-        epoch: u64,
     },
     BufferHealth {
         buffered_ms: u64,
         decoded_frontier_ms: u64,
-        epoch: u64,
     },
     EngineLoad {
         load: f32,
@@ -824,7 +926,10 @@ pub enum FfiItemEvent {
 
 /// FFI-friendly HLS variant descriptor.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Record)
+)]
 pub struct FfiVariant {
     pub name: Option<String>,
     pub index: u32,
@@ -834,7 +939,10 @@ pub struct FfiVariant {
 /// Outcome reported by [`crate::observer::ItemLoadCallback::on_complete`]
 /// when [`crate::item::AudioPlayerItem::load`] resolves.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Record)
+)]
 pub struct FfiItemLoadResult {
     /// `true` once the metadata layer recognises encrypted segments.
     pub has_protected_content: bool,
@@ -844,7 +952,10 @@ pub struct FfiItemLoadResult {
 
 /// FFI-friendly ABR mode.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiAbrMode {
     Auto,
     Manual { variant_index: u32 },
@@ -855,7 +966,10 @@ pub enum FfiAbrMode {
 /// Fields are `Option` when no current item is loaded - callers should
 /// not assume defaults.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Record)
+)]
 pub struct FfiPlayerSnapshot {
     pub status: FfiPlayerStatus,
     pub current_time: Option<f64>,
@@ -902,11 +1016,11 @@ mod tests {
         PlayError::ItemFailed { reason: "bad codec".into() },
         (|f: &FfiError| matches!(f, FfiError::ItemFailed { .. })) as fn(&FfiError) -> bool
     )]
-    #[case::index_out_of_range(
-        PlayError::IndexOutOfRange { index: 3, len: 2 },
+    #[case::item_consumed(
+        PlayError::ItemConsumed { item: TrackId::from(3_u64) },
         (|f: &FfiError| matches!(f, FfiError::InvalidArgument { .. })) as fn(&FfiError) -> bool
     )]
-    #[case::internal_fallback(PlayError::ArenaFull, (|f: &FfiError| matches!(f, FfiError::Internal { .. })) as fn(&FfiError) -> bool)]
+    #[case::internal_fallback(PlayError::CrossfadeActive, (|f: &FfiError| matches!(f, FfiError::Internal { .. })) as fn(&FfiError) -> bool)]
     fn play_error_maps_to_expected_ffi_variant(
         #[case] input: PlayError,
         #[case] matches_variant: fn(&FfiError) -> bool,
@@ -1021,14 +1135,6 @@ mod tests {
             (
                 DecoderChangeCause::FormatBoundary,
                 FfiDecoderChangeCause::FormatBoundary,
-            ),
-            (
-                DecoderChangeCause::SeekRecreate,
-                FfiDecoderChangeCause::SeekRecreate,
-            ),
-            (
-                DecoderChangeCause::Recovery,
-                FfiDecoderChangeCause::Recovery,
             ),
             (
                 DecoderChangeCause::HostRateChange,

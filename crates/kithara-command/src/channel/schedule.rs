@@ -1,4 +1,4 @@
-use super::sender::Sent;
+use super::{ledger::Ledger, sender::Sent};
 use crate::protocol::{Protocol, When};
 
 /// Batches waiting for their moment, the next one to run last.
@@ -32,6 +32,14 @@ impl<P: Protocol> Schedule<P> {
             .items
             .partition_point(|sent| matches!(sent.when, When::At(_)));
         timed.checked_sub(1).map(|index| self.items.remove(index))
+    }
+
+    pub(super) fn take_outdated(&mut self, ledger: &Ledger) -> Option<Sent<P>> {
+        let index = self
+            .items
+            .iter()
+            .rposition(|sent| ledger.outdates(&sent.batch.basis))?;
+        Some(self.items.remove(index))
     }
 
     delegate::delegate! {

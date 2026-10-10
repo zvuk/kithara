@@ -30,7 +30,7 @@ impl FfiPlayerConfig {
         Self {
             eq_band_count: 10,
             auth_token: String::new(),
-            playing_rate: kithara::play::DEFAULT_PLAYING_RATE,
+            playing_rate: kithara::play::TrackSettings::default().speed(),
             key_options: FfiKeyOptions::default(),
             store: Arc::new(FfiAssetStore::for_test()),
             playback_order: FfiPlaybackOrder::Sequential,

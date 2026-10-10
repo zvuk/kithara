@@ -1,14 +1,13 @@
 use kithara::{
     download::{Downloader, DownloaderConfig},
-    effects::eq::generate_log_spaced_bands,
     host::HostOwned,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
     },
-    play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
-    queue::QueueConfig,
+    play::{DeckMixerConfig, PlayWorkerConfig, ResourcePrep, TrackSettings},
+    queue::{QueueConfig, QueueSettings},
     warp::{StretchKind, WarpCapabilities, WarpConfig},
 };
 
@@ -123,28 +122,37 @@ impl NativeInner {
         let worker = FfiWorker::new(
             PlayWorkerConfig::builder(pools.clone())
                 .cancel(cancel.child())
+                .runtime(Some(crate::FFI_RUNTIME.clone()))
                 .build(),
         );
-        let player_cancel = cancel.clone();
         let queue_store = store.handle().clone();
-        let player_config = PlayerConfig::builder()
-            .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
-            .warp(player_warp())
-            .cancel(player_cancel.child())
-            .sample_rate(session::requested_sample_rate())
+        let warp = player_warp();
+        let track = TrackSettings::builder().keylock(warp.keylock()).build();
+        let prep = ResourcePrep::builder()
             .worker(worker)
+            .warp(warp)
+            .cancel(cancel.child())
             .build();
-        let player = PlayerImpl::new(player_config);
         let queue_config = QueueConfig::builder()
-            .player(player)
+            .mixer(
+                DeckMixerConfig::builder()
+                    .eq_bands(eq_band_count as usize)
+                    .build(),
+            )
+            .prep(prep)
+            .track(track)
+            .cancel(cancel.child())
             .runtime(crate::FFI_RUNTIME.clone())
             .store(queue_store)
             .playback_order(playback_order.try_into()?)
             .action_at_item_end(action_at_item_end.try_into()?)
-            .crossfade_settings(crossfade_settings.try_into()?)
+            .settings(
+                QueueSettings::builder()
+                    .crossfade(crossfade_settings.try_into()?)
+                    .build(),
+            )
             .build();
-        let queue_owner = session::insert(FfiQueue::new(queue_config))
-            .expect("INVARIANT: the process Host must accept a freshly allocated Queue");
+        let queue_owner = session::insert(FfiQueue::new(queue_config))?;
         let queue = queue_owner.control().clone();
         let net = default_net_options();
         let downloader = Downloader::new(
@@ -164,7 +172,7 @@ impl NativeInner {
             items: Arc::new(Mutex::default()),
         };
         inner.setup_network(auth_token);
-        inner.set_playing_rate(playing_rate);
+        inner.set_playing_rate(playing_rate)?;
         Ok(inner)
     }
 

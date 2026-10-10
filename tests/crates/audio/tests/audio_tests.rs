@@ -6,15 +6,13 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{
         AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, ChunkOutcome,
-        ConsumerWakeMode, DecoderBackend, DecoderChangeCause, DecoderEvent, ReadOutcome,
-        SeekLifecycleStage,
+        DecoderBackend, DecoderChangeCause, DecoderEvent, ReadOutcome,
     },
     events::{EventBus, EventReceiver},
     file::{FileConfig, FileSrc},
     platform::time::{self, Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig},
-    signal::AudioSpec,
-    stream::SeekEpoch,
+    signal::{AudioSpec, SegmentId},
 };
 use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
@@ -45,28 +43,6 @@ async fn wait_for_frames<R: AudioRead>(audio: &mut R, budget: Duration) -> usize
     panic!("timed out waiting for ReadOutcome::Frames");
 }
 
-/// Drains events until a `SeekLifecycle::SeekRequest` arrives, returning its epoch.
-async fn await_seek_request_epoch(
-    events: &mut EventReceiver<TestEvent>,
-    budget: Duration,
-) -> SeekEpoch {
-    let deadline = Instant::now() + budget;
-    while Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if let Ok(Ok(TestEvent::Audio(AudioEvent::SeekLifecycle {
-            stage: SeekLifecycleStage::SeekRequest,
-            seek_epoch,
-            ..
-        }))) = time::timeout(remaining, events.recv())
-            .await
-            .map(|r| r.map(|env| env.event))
-        {
-            return seek_epoch;
-        }
-    }
-    panic!("SeekLifecycle::SeekRequest was not observed");
-}
-
 /// Write test WAV to a temp file and return config for it.
 ///
 /// The returned [`TestTempDir`] owns an isolated cache directory —
@@ -76,12 +52,8 @@ async fn await_seek_request_epoch(
 ///
 /// Every reader in this file pulls off the real-time thread — from a
 /// blocking pool thread or from the test task itself, never from a render
-/// callback — so the configuration says so. The default
-/// [`ConsumerWakeMode::RealtimeDeferred`] only arms a scheduler pass and
-/// leaves the producer's thread gate unsignalled, which is correct when a
-/// render callback runs that pass and a deadlock when nothing does: a
-/// producer parked on a full ring waits for a wake the reader never sends,
-/// and the reader polls an empty ring forever.
+/// callback. Reads publish their events inline on that owning thread; deck
+/// callbacks consume only PCM packets and report through deck channels.
 fn test_wav_config(
     tmp: &NamedTempFile,
     worker: &PlayWorker<TestPools>,
@@ -98,7 +70,6 @@ fn test_wav_config(
         .pools(worker.pools().clone())
         .build();
     let config = AudioConfig::<kithara::file::File<TestPools>>::for_stream(file_config)
-        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .hint("wav".to_string())
         .build();
     (cache, config)
@@ -111,7 +82,9 @@ async fn test_audio_new(#[case] wav_input: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_input, &worker);
-    let _audio = worker.load(config).await.unwrap();
+    let _audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .unwrap();
 }
 
 /// The decoder topic opens with the initial `DecoderChanged`.
@@ -132,7 +105,9 @@ async fn test_audio_new_publishes_initial_decoder_changed(wav_1000: NamedTempFil
         .events(bus)
         .build();
 
-    let audio = worker.load(config).await.unwrap();
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .unwrap();
     #[cfg(target_os = "android")]
     let expected_backend = DecoderBackend::Android;
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -189,7 +164,9 @@ async fn test_audio_spec(wav_1000: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_1000, &worker);
-    let audio = worker.load(config).await.unwrap();
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .unwrap();
 
     let spec = audio.spec();
     assert_eq!(spec.sample_rate.get(), 44100);
@@ -201,7 +178,9 @@ async fn test_audio_read(wav_1000: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_1000, &worker);
-    let audio = worker.load(config).await.unwrap();
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .unwrap();
 
     let (_audio, (total_read, saw_eof)) = blocking_audio(audio, |audio| {
         let mut buf = [0.0f32; 256];
@@ -228,7 +207,9 @@ async fn test_audio_read_small_buffer(#[case] wav_input: NamedTempFile, #[case] 
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_input, &worker);
-    let audio = worker.load(config).await.unwrap();
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .unwrap();
 
     let (_audio, outcome) = blocking_audio(audio, move |audio| {
         let mut buf = vec![0.0f32; buf_len];
@@ -248,7 +229,9 @@ async fn test_audio_seek(wav_44100: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_44100, &worker);
-    let audio = worker.load(config).await.unwrap();
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .unwrap();
 
     let (audio, initial_read) = blocking_audio(audio, |audio| {
         let mut buf = [0.0f32; 256];
@@ -257,8 +240,10 @@ async fn test_audio_seek(wav_44100: NamedTempFile) {
     .await;
     let _ = initial_read;
 
-    let (audio, result) = blocking_audio(audio, |audio| audio.seek(Duration::from_secs(0))).await;
+    let (mut audio, result) =
+        blocking_audio(audio, |audio| audio.seek(Duration::from_secs(0))).await;
     assert!(result.is_ok());
+    kithara_integration_tests::mock::wait_for_preload(&mut audio, "seek to start").await;
 
     let (_audio, read_result) = blocking_audio(audio, |audio| {
         let mut buf = [0.0f32; 256];
@@ -273,34 +258,20 @@ async fn test_audio_playback_progress_uses_output_commit(wav_1024: NamedTempFile
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_1024, &worker);
-    let audio = worker.load(config).await.unwrap();
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .unwrap();
 
-    let mut events = audio.event_bus().subscribe();
     let mut buf = [0.0f32; 256];
-
-    let (_audio, _read_result) = blocking_audio(audio, move |audio| audio.read(&mut buf)).await;
-
-    let mut saw_progress = false;
-    let deadline = Instant::now() + Duration::from_millis(300);
-    while Instant::now() < deadline {
-        if let Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress {
-            position_ms,
-            total_ms,
-            seek_epoch,
-            ..
-        }))) = time::timeout(Duration::from_millis(40), events.recv())
-            .await
-            .map(|r| r.map(|env| env.event))
-        {
-            assert!(position_ms > 0);
-            assert!(total_ms.is_some());
-            assert_eq!(seek_epoch, 0);
-            saw_progress = true;
-            break;
-        }
-    }
-
-    assert!(saw_progress, "playback progress event was not observed");
+    let (audio, read_result) = blocking_audio(audio, move |audio| audio.read(&mut buf)).await;
+    assert!(matches!(read_result, Ok(ReadOutcome::Frames { .. })));
+    assert!(audio.position().as_millis() > 0);
+    assert!(audio.duration().is_some());
+    assert_eq!(audio.committed_segment(), Some(SegmentId::FIRST));
+    assert!(
+        audio.committed_segment().is_some(),
+        "playback progress was not observed"
+    );
 }
 
 #[kithara::test(tokio)]
@@ -308,32 +279,20 @@ async fn test_seek_emits_matching_playback_progress(wav_176400: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_176400, &worker);
-    let audio = worker.load(config).await.unwrap();
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .unwrap();
 
-    let mut events = audio.event_bus().subscribe();
-    let mut buf = [0.0f32; 256];
-
-    let (audio, seek_result) =
+    let (mut audio, seek_result) =
         blocking_audio(audio, |audio| audio.seek(Duration::from_secs_f64(2.5))).await;
     seek_result.unwrap();
-    let expected_epoch = await_seek_request_epoch(&mut events, Duration::from_secs(1)).await;
-    let (_audio, _read_result) = blocking_audio(audio, move |audio| audio.read(&mut buf)).await;
-
-    let deadline = Instant::now() + Duration::from_millis(500);
-    let mut matched_epoch = None;
-    while Instant::now() < deadline {
-        if let Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { seek_epoch, .. }))) =
-            time::timeout(Duration::from_millis(40), events.recv())
-                .await
-                .map(|r| r.map(|env| env.event))
-            && seek_epoch == expected_epoch
-        {
-            matched_epoch = Some(seek_epoch);
-            break;
-        }
-    }
-
-    assert_eq!(matched_epoch, Some(expected_epoch));
+    let expected_segment = audio.segment();
+    assert_eq!(expected_segment, SegmentId::FIRST.next());
+    kithara_integration_tests::mock::wait_for_preload(&mut audio, "seek commit").await;
+    let mut buf = [0.0f32; 256];
+    let (audio, read_result) = blocking_audio(audio, move |audio| audio.read(&mut buf)).await;
+    assert!(matches!(read_result, Ok(ReadOutcome::Frames { .. })));
+    assert_eq!(audio.committed_segment(), Some(expected_segment));
 }
 
 #[kithara::test(tokio)]
@@ -346,42 +305,28 @@ async fn test_seek_complete_emitted_only_after_output_commit(
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_176400, &worker);
-    let audio = worker.load(config).await.unwrap();
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .unwrap();
 
-    let mut events = audio.event_bus().subscribe();
-    let (audio, seek_result) =
+    let (mut audio, seek_result) =
         blocking_audio(audio, |audio| audio.seek(Duration::from_secs_f64(1.5))).await;
     seek_result.unwrap();
-    let expected_epoch = await_seek_request_epoch(&mut events, Duration::from_secs(1)).await;
-
-    // The gate opens once the producer has queued the post-seek preload, so the
-    // output is ready but uncommitted, and the commit below needs no polling:
-    // `next_chunk` never parks, and spinning on its `Pending` keeps a simulated
-    // clock from reaching the producer's backpressure timer.
-    let gate = audio
-        .preload_gate()
-        .expect("worker-backed audio exposes its preload gate");
-    time::timeout(Duration::from_secs(1), gate.wait_for_epoch(expected_epoch))
-        .await
-        .expect("the producer must preload the post-seek epoch");
-
-    let mut saw_seek_complete_before_read = false;
-    while let Ok(event) = events.try_recv().map(|env| env.event) {
-        if matches!(event, TestEvent::Audio(AudioEvent::SeekComplete { .. })) {
-            saw_seek_complete_before_read = true;
-            break;
-        }
-    }
-    assert!(
-        !saw_seek_complete_before_read,
-        "SeekComplete must not be emitted before output commit"
+    let expected_segment = audio.segment();
+    kithara_integration_tests::mock::wait_for_preload(&mut audio, "seek commit").await;
+    assert_ne!(
+        audio.committed_segment(),
+        Some(expected_segment),
+        "seek must not commit before output"
     );
-
-    let (_audio, committed) = blocking_audio(audio, move |audio| {
+    let (mut audio, committed) = blocking_audio(audio, move |audio| {
         if next_chunk {
             match audio.next_chunk() {
-                Ok(ChunkOutcome::Chunk(chunk)) => chunk.frames() > 0,
-                outcome => panic!("a preloaded epoch must yield a chunk, got {outcome:?}"),
+                Ok(ChunkOutcome::Chunk(chunk)) => {
+                    assert_eq!(chunk.meta.segment, expected_segment);
+                    chunk.frames() > 0
+                }
+                outcome => panic!("a ready segment must yield a chunk, got {outcome:?}"),
             }
         } else {
             let mut buf = [0.0f32; 512];
@@ -390,39 +335,14 @@ async fn test_seek_complete_emitted_only_after_output_commit(
     })
     .await;
     assert!(committed, "read must commit PCM output");
-
-    let deadline = Instant::now() + Duration::from_millis(400);
-    let mut saw_seek_complete = false;
-    let mut saw_output_committed = false;
-    while Instant::now() < deadline {
-        match time::timeout(Duration::from_millis(40), events.recv())
-            .await
-            .map(|r| r.map(|env| env.event))
-        {
-            Ok(Ok(TestEvent::Audio(AudioEvent::SeekLifecycle {
-                stage: SeekLifecycleStage::OutputCommitted,
-                seek_epoch,
-                ..
-            }))) => {
-                assert_eq!(seek_epoch, expected_epoch);
-                saw_output_committed = true;
-            }
-            Ok(Ok(TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))) => {
-                assert_eq!(seek_epoch, expected_epoch);
-                saw_seek_complete = true;
-                break;
-            }
-            _ => {}
-        }
-    }
-
+    assert_eq!(audio.committed_segment(), Some(expected_segment));
     assert!(
-        saw_output_committed,
-        "expected OutputCommitted lifecycle event"
+        audio.committed_segment().is_some(),
+        "expected committed output"
     );
     assert!(
-        saw_seek_complete,
-        "expected SeekComplete after output commit"
+        audio.current_segment_ready(),
+        "expected matching seek readiness receipt"
     );
 }
 
@@ -433,7 +353,9 @@ async fn test_audio_preload(wav_1000: NamedTempFile, #[case] second_preload: boo
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_1000, &worker);
-    let mut audio = worker.load(config).await.unwrap();
+    let mut audio = kithara_integration_tests::mock::load_source_audio(&worker, config)
+        .await
+        .unwrap();
 
     assert!(
         !audio.is_preloaded(),
@@ -456,7 +378,9 @@ async fn test_audio_preload_rearms_after_seek(wav_44100: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_44100, &worker);
-    let mut audio = worker.load(config).await.unwrap();
+    let mut audio = kithara_integration_tests::mock::load_source_audio(&worker, config)
+        .await
+        .unwrap();
 
     audio.preload().expect("preload must succeed");
     let initial = wait_for_frames(&mut audio, Duration::from_secs(2)).await;
@@ -480,7 +404,9 @@ async fn preloaded_survives_seek(wav_88200: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_88200, &worker);
-    let mut audio = worker.load(config).await.expect("create audio");
+    let mut audio = kithara_integration_tests::mock::load_source_audio(&worker, config)
+        .await
+        .expect("create audio");
 
     audio.preload().expect("preload must succeed");
     let initial = wait_for_frames(&mut audio, Duration::from_secs(2)).await;

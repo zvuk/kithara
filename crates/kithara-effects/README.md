@@ -16,9 +16,9 @@
 
 Channel and master audio effects for Kithara. The crate owns the `AudioEffect`
 contract, the effect chain and its end-of-stream drain, the band equaliser and
-the DJ isolator, the peak limiter, and the two Firewheel nodes that put an
-equaliser and a limiter on a session bus. It does not decode audio, own player
-or session state, or reach the network.
+the DJ isolator, the stereo equaliser a deck runs, the peak limiter, and the
+Firewheel node that puts the limiter on a session bus. It does not decode
+audio, own player or session state, or reach the network.
 
 ## Usage
 
@@ -52,7 +52,7 @@ fn boost_low_band<S>(config: &EqConfig<S>, sample_rate: u32, channels: u16) {
 
 <tr><td><code>GainDb</code></td><td>Band gain in dB, clamped to a fixed range</td></tr>
 
-<tr><td><code>MasterEqNode</code></td><td>Firewheel node putting an equaliser on a session bus</td></tr>
+<tr><td><code>StereoEq</code></td><td>Stereo equaliser crossing over between band layouts built off the audio thread</td></tr>
 
 <tr><td><code>LimiterNode</code></td><td>Firewheel node putting the limiter on a session bus</td></tr>
 
@@ -72,8 +72,9 @@ fn boost_low_band<S>(config: &EqConfig<S>, sample_rate: u32, channels: u16) {
 
 ## Integration
 
-`kithara-play` builds a per-track effect chain; `kithara-host` puts
-`MasterEqNode` and `LimiterNode` on the session bus. Reusable DSP building
+`kithara-play` builds a per-track effect chain and the band layouts its deck
+takes; `kithara-render` runs a `StereoEq` on every deck; `kithara-host` puts
+`LimiterNode` on the session bus. Reusable DSP building
 blocks stay private under `src/dsp/` until they become `kithara-dsp`.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-effects) for detailed contracts, invariants, and internals.

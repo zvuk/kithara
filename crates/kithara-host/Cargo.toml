@@ -19,7 +19,8 @@ default = [
     "tls-rustls",
 ]
 backend-cpal = ["firewheel/cpal"]
-offline = ["dep:kithara-worker"]
+offline = []
+mock = []
 flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
 no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 client-reqwest = ["kithara-play/client-reqwest"]
@@ -37,10 +38,9 @@ stretch-signalsmith = ["kithara-play/stretch-signalsmith"]
 stretch-bungee = ["kithara-play/stretch-bungee"]
 stretch-glide = ["kithara-play/stretch-glide"]
 stretch-identity = ["kithara-play/stretch-identity"]
-usdt = ["kithara-effects/usdt", "kithara-play/usdt", "kithara-sync/usdt"]
+usdt = ["kithara-effects/usdt", "kithara-play/usdt"]
 
 [dependencies]
-kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-command = { workspace = true }
 kithara-config = { workspace = true }
@@ -50,11 +50,11 @@ kithara-events = { workspace = true }
 kithara-output = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
+kithara-render = { workspace = true }
 kithara-signal = { workspace = true }
-kithara-sync = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
 kithara-warp = { workspace = true, default-features = false }
-kithara-worker = { workspace = true, optional = true }
+kithara-worker = { workspace = true }
 
 arc-swap = { workspace = true }
 audioadapter-buffers = { workspace = true }
@@ -81,11 +81,15 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 bevy_platform = { workspace = true, features = ["web"] }
 firewheel = { workspace = true, features = ["wasm-bindgen"] }
 firewheel-web-audio = { workspace = true }
+send_wrapper = { workspace = true }
 
 [dev-dependencies]
+kithara-assets = { workspace = true }
 kithara-audio = { workspace = true, features = ["usdt", "mock"] }
 kithara-bufpool = { workspace = true }
 kithara-effects = { workspace = true, features = ["mock"] }
+kithara-host = { workspace = true, default-features = false, features = ["mock"] }
+kithara-queue = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "subscriber"] }
 wasm-bindgen-test = { workspace = true }
 

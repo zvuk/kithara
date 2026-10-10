@@ -1,3 +1,5 @@
+use num_traits::ToPrimitive;
+
 use super::InterpError;
 use crate::backend::platform;
 
@@ -43,4 +45,16 @@ pub fn interpolate(
     output: &mut [f32],
 ) -> Result<usize, InterpError> {
     platform::interpolate(method, window, positions, output)
+}
+
+/// Evaluates the parabola through `[previous, current, next]` at `fraction`
+/// from the current tap toward the next. Arithmetic stays in `f64` and rounds
+/// once to `f32`, without adding the fraction to a window index.
+#[must_use]
+#[inline]
+pub fn quadratic(taps: [f32; 3], fraction: f64) -> f32 {
+    let [previous, current, next] = taps.map(f64::from);
+    crate::backend::quadratic([previous, current, next, 0.0], fraction)
+        .to_f32()
+        .unwrap_or(f32::NAN)
 }

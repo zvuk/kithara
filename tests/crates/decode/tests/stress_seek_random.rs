@@ -5,11 +5,14 @@ use kithara::{
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     file::{File, FileConfig, FileSrc},
     platform::{time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     signal::AudioSpec,
     stream::Stream,
 };
-use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    mock::LaneAudio,
+};
 use kithara_test_fixtures::fixtures::stress_wav;
 use kithara_test_utils::{TestTempDir, Xorshift64};
 use tempfile::NamedTempFile;
@@ -68,7 +71,7 @@ impl SeekStats {
 }
 
 fn run_seek_iterations(
-    audio: &mut RegisteredAudio<Stream<File<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<File<TestPools>>, TestPools>,
     buf: &mut [f32],
     seek_positions: &[f64],
     spec: AudioSpec,
@@ -148,7 +151,7 @@ fn run_seek_iterations(
 }
 
 fn read_final_tail(
-    audio: &mut RegisteredAudio<Stream<File<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<File<TestPools>>, TestPools>,
     buf: &mut [f32],
     final_seek_secs: f64,
 ) -> (u64, bool) {
@@ -210,7 +213,9 @@ async fn stress_random_seek_read_synthetic_wav(#[future(awt)] wav_file: NamedTem
         .hint("wav".to_string())
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = worker.load(config).await.expect("create audio pipeline");
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio pipeline");
 
     let total_duration = audio.duration().expect("WAV should report known duration");
     let total_secs = total_duration.as_secs_f64();

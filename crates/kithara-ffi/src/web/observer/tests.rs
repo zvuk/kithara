@@ -212,7 +212,7 @@ fn drm_key_schema_omits_absent_optional_fields() {
 }
 
 #[wasm_bindgen_test]
-fn track_failure_preserves_kind_offset_and_epoch() {
+fn track_failure_preserves_kind_and_offset_without_epoch() {
     let cases = [
         (
             FfiTrackFailureKind::Decode {
@@ -256,7 +256,6 @@ fn track_failure_preserves_kind_offset_and_epoch() {
     for (reason, reason_name, decode_kind, offset) in cases {
         let encoded = encode_item::encode_item_event(&FfiItemEvent::TrackFailed {
             reason: reason.clone(),
-            epoch: MAX_SAFE_INTEGER,
         });
 
         assert_eq!(
@@ -272,15 +271,11 @@ fn track_failure_preserves_kind_offset_and_epoch() {
             decode_kind
         );
         assert_eq!(marshal::get_f64(&encoded, "offset"), offset);
-        assert_eq!(
-            marshal::get_f64(&encoded, "epoch"),
-            Some(MAX_SAFE_INTEGER_F64)
-        );
+        assert!(!Reflect::has(&encoded, &JsValue::from_str("epoch")).expect("epoch presence"));
         assert!(matches!(
             decode_item::decode_item_event(&encoded),
             Some(FfiItemEvent::TrackFailed {
                 reason: decoded_reason,
-                epoch: MAX_SAFE_INTEGER,
             }) if decoded_reason == reason
         ));
     }

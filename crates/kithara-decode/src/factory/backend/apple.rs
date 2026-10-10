@@ -475,7 +475,7 @@ mod apple_factory_tests {
             match decoder.next_chunk().expect("BUG: next chunk") {
                 DecoderChunkOutcome::Chunk(chunk) => {
                     trimmed_frames =
-                        trimmed_frames.saturating_add(output_frames(trimmer.push(chunk)));
+                        trimmed_frames.saturating_add(output_frames(trimmer.push(*chunk)));
                 }
                 DecoderChunkOutcome::Pending(reason) => panic!("unexpected Pending: {reason:?}"),
                 DecoderChunkOutcome::Eof => {

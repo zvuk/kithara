@@ -29,6 +29,38 @@ fn worker(pools: Pools, parent: &CancelToken) -> AnalysisWorker {
 }
 
 #[kithara::test(tokio)]
+async fn a_reader_wake_reticks_a_pending_pass_before_its_park_ends(analysis_pcm: &'static [f32]) {
+    use kithara_platform::time::{self, Duration};
+    let pools = pools();
+    let worker = AnalysisWorker::new(
+        AnalysisWorkerConfig::for_builder(waveform_only(pools.clone()))
+            .wait_timeout(Duration::from_secs(60))
+            .idle_timeout(Duration::from_secs(60))
+            .build(),
+    );
+    let reader = FakeReader::chunked(&pools, sine(analysis_pcm, 8192), 3)
+        .pending_with_wake(worker.wake_handle());
+    let (mut rx, _producer) = worker
+        .analyze(
+            Box::new(reader),
+            "wake-track".into(),
+            super::fixtures::spec().sample_rate,
+            0,
+            AnalysisDemand::ALL,
+        )
+        .expect("analysis pass");
+    time::timeout(Duration::from_secs(1), rx.changed())
+        .await
+        .expect("reader wake must interrupt parking")
+        .expect("analysis progress");
+    assert!(
+        rx.borrow()
+            .as_ref()
+            .is_some_and(|progress| progress.analysis().waveform().is_some())
+    );
+}
+
+#[kithara::test(tokio)]
 async fn delivers_result_on_its_own_thread(analysis_pcm: &'static [f32]) {
     let pools = pools();
     let master = CancelToken::root();

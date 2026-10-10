@@ -5,9 +5,12 @@ use firewheel::{
         NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara_command::{ChannelConfig, Sender, channel};
+use kithara_command::{ScopedConfig, ScopedSender, scoped_channel};
 use kithara_config::Config;
-use kithara_play::rt::{install_render_context, invalidate_render_context, publish_render_context};
+use kithara_render::{
+    bridge::DeckProtocol,
+    rt::{install_render_context, invalidate_render_context, publish_render_context},
+};
 use kithara_signal::{OutputContext, SessionFrame};
 use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;
@@ -22,15 +25,20 @@ use super::{
 };
 use crate::{host::HostSettings, session::queue::HostProtocol};
 
+type InstalledTransport = (
+    ScopedSender<HostProtocol, DeckProtocol>,
+    Output<TransportObservation>,
+);
+
 pub(crate) fn install(
     ctx: &mut FirewheelContext,
     session_grid: SessionGridGeneration,
     settings: HostSettings,
-) -> Result<TransportControl, &'static str> {
+    config: ScopedConfig,
+) -> Result<InstalledTransport, &'static str> {
     let initial = TransportObservation::new(None, session_grid);
     let (observation_input, observation_output) = triple_buffer(&initial);
-    let config = ChannelConfig::builder().build();
-    let (queue, inbox) = channel(config);
+    let (channel, inbox) = scoped_channel::<HostProtocol, DeckProtocol>(config);
     let store = ctx
         .proc_store_mut()
         .ok_or("session transport store is unavailable while the stream is running")?;
@@ -40,7 +48,7 @@ pub(crate) fn install(
             inbox,
             settings,
             session_grid,
-            config.values().capacity.get(),
+            config.values().root.values().capacity.get(),
         ))
         .map_err(|_| "session transport state store slot already exists")?;
     store
@@ -48,30 +56,7 @@ pub(crate) fn install(
         .map_err(|_| "session transport observation store slot already exists")?;
     ctx.add_node(SessionTransportNode, None)
         .map_err(|_| "session transport node was rejected by the audio graph")?;
-    Ok(TransportControl {
-        queue,
-        observation: observation_output,
-    })
-}
-
-/// The session owner's half of the transport: the queue it sends Host
-/// changes through and the observation the render graph publishes.
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, vis = "pub(crate)")]
-pub(crate) struct TransportControl {
-    observation: Output<TransportObservation>,
-    #[field(get_mut = queue)]
-    queue: Sender<HostProtocol>,
-}
-
-impl TransportControl {
-    delegate::delegate! {
-        to self.observation {
-            #[expr(*$)]
-            #[call(read)]
-            pub(crate) fn observation(&mut self) -> TransportObservation;
-        }
-    }
+    Ok((channel, observation_output))
 }
 
 pub(crate) struct SessionTransportNode;

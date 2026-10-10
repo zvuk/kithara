@@ -35,21 +35,22 @@ impl<T: StreamType> Read for OffsetReader<T> {
 }
 
 impl<T: StreamType> Seek for OffsetReader<T> {
-    /// The decoder runs on the produce core, so seeking goes through the real-time `probe_seek`
-    /// rather than `prime_seek_range`, which is forbidden on that path.
+    /// Preserve the shared reader's blocking seek mode during an owning-thread search.
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         match pos {
-            SeekFrom::Start(p) => {
-                let abs = self.base_offset + p;
-                let real_pos = self.shared.probe_seek(SeekFrom::Start(abs))?;
+            SeekFrom::Start(offset) => {
+                let absolute = self.base_offset.checked_add(offset).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "decoder seek offset overflow")
+                })?;
+                let real_pos = self.shared.seek(SeekFrom::Start(absolute))?;
                 Ok(real_pos.saturating_sub(self.base_offset))
             }
             SeekFrom::Current(delta) => {
-                let real_pos = self.shared.probe_seek(SeekFrom::Current(delta))?;
+                let real_pos = self.shared.seek(SeekFrom::Current(delta))?;
                 Ok(real_pos.saturating_sub(self.base_offset))
             }
             SeekFrom::End(delta) => {
-                let real_pos = self.shared.probe_seek(SeekFrom::End(delta))?;
+                let real_pos = self.shared.seek(SeekFrom::End(delta))?;
                 Ok(real_pos.saturating_sub(self.base_offset))
             }
         }

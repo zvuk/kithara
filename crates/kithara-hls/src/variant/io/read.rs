@@ -36,20 +36,8 @@ where
             Some(RangeGate::Eof) => SourcePhase::Eof,
             Some(RangeGate::Metadata(phase)) => phase,
             Some(RangeGate::Ready) => SourcePhase::Ready,
-            Some(RangeGate::Pending) => {
-                if self.flow.reader.is_flushing() {
-                    SourcePhase::Seeking
-                } else {
-                    self.range_wait_phase(&range)
-                }
-            }
-            None => {
-                if self.flow.reader.is_flushing() {
-                    SourcePhase::Seeking
-                } else {
-                    SourcePhase::WaitingDemand
-                }
-            }
+            Some(RangeGate::Pending) => self.range_wait_phase(&range),
+            None => SourcePhase::WaitingDemand,
         }
     }
 
@@ -61,9 +49,7 @@ where
         self.layout.try_published(|| {
             let uses_seek_alias = self.seek_alias_at(range.start).is_some();
             let total = self.total_bytes();
-            let eof = !uses_seek_alias
-                && self.eof_at_published(range.start, total)
-                && !self.flow.reader.is_flushing();
+            let eof = !uses_seek_alias && self.eof_at_published(range.start, total);
             after_eof();
             if eof {
                 return Some(RangeGate::Eof);

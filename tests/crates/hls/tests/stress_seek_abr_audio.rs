@@ -3,13 +3,14 @@ use kithara::{
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::{DelayRule, PcmPattern},
+    mock::LaneAudio,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{
@@ -91,7 +92,7 @@ fn assert_abr_size_probes(fixture: AbrAudioFixture, helper: &TestServerHelper, h
     }
 }
 
-type HlsAudio = RegisteredAudio<Stream<Hls<TestPools>>, TestPools>;
+type HlsAudio = LaneAudio<Stream<Hls<TestPools>>, TestPools>;
 
 /// Phase 1: read until the saw turns from ascending to descending, the ABR
 /// switch onto the low-bandwidth variant.
@@ -464,12 +465,14 @@ async fn stress_seek_abr_audio(
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .media_info(fixture.media_info())
-        .block_on_underrun(true)
-        .build();
-    let mut audio = worker
-        .load(config)
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .media_info(fixture.media_info())
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 

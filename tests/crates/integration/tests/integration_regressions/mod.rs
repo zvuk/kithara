@@ -9,6 +9,5 @@ mod rate_applies_while_playing;
 mod rate_tracks_media_time;
 mod resume_from_saved_position;
 mod seek_to_end_is_sane;
-mod select_after_play_consumed_the_load;
 mod suspended_output_reports_silence;
 mod transient_failure_no_permanent_skip;

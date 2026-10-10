@@ -88,21 +88,4 @@ pub(crate) const N: usize = 1 << 14;
 #[cfg(test)]
 pub(crate) const SR: u32 = 44_100;
 
-/// Source beat the entered plan activates at: well inside the recording,
-/// so the engine history before it is real audio rather than padding.
-#[cfg(feature = "render")]
-#[cfg(test)]
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-pub(crate) const CUE_BEAT: f64 = 4.0;
-
-/// Span the speed smoother measures its settle threshold against: the range
-/// a playback speed realistically travels over, from a heavy stretch back to
-/// unity and a little past it. The smoother reads it as a scale, not a bound,
-/// so a speed outside it still smooths — it just settles on the same relative
-/// terms as one inside.
-#[cfg(feature = "render")]
-pub(crate) const SPEED_SMOOTHING_SPAN: f32 = 2.0;
+pub(crate) const SOURCE_RADIUS: u64 = 16;

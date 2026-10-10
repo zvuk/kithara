@@ -46,7 +46,7 @@ const ENGINE_DOMAINS: &[&str] = &[
     "sync",
     "warp",
     "usdt-warp",
-    "usdt-play-scheduler",
+    "usdt-render-scheduler",
     "usdt-hls",
     "usdt-hls-stress",
     "usdt-queue",

@@ -9,9 +9,9 @@ use kithara_platform::{
     time::{Duration, Instant},
 };
 use kithara_stream::{
-    OpenedVariantReader, OutgoingDisposition, ReaderProfile, SeekEpoch, SourceError, SourcePhase,
-    StreamError, StreamResult, VariantPromotion, VariantReaderPlan, VariantReaderTake,
-    VariantTransition, VariantTransitionId,
+    OpenedVariantReader, OutgoingDisposition, ReaderProfile, SourceError, SourcePhase, StreamError,
+    StreamResult, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
+    VariantTransitionId,
 };
 use kithara_test_utils::kithara;
 use tracing::debug;
@@ -272,7 +272,6 @@ where
         &self,
         landing: Option<Duration>,
     ) -> StreamResult<Option<VariantReaderPlan>> {
-        self.sync_abr_lock();
         let mut state = self.sessions.transition.lock();
         let claim = match self.abr.pending_claim() {
             PendingAbrClaim::Absent => {
@@ -283,11 +282,9 @@ where
                 if let Some(slot) = state.incoming.as_ref()
                     && slot.claim == claim
                 {
-                    let epoch_matches =
-                        self.seek_observe().epoch() == slot.transition.id().seek_epoch();
                     let active_matches =
                         self.variant_index() == slot.transition.active_variant().get();
-                    if !epoch_matches || !active_matches {
+                    if !active_matches {
                         self.discard_incoming(&mut state, false);
                         return Ok(None);
                     }
@@ -303,11 +300,7 @@ where
             PendingAbrClaim::Ready(claim) => claim,
             _ => return Err(unsupported_pending_claim()),
         };
-        let transition = transition_for_claim(
-            claim,
-            self.seek_observe().epoch(),
-            VariantIndex::new(self.variant_index()),
-        );
+        let transition = transition_for_claim(claim, VariantIndex::new(self.variant_index()));
 
         if let Some(slot) = state.incoming.as_ref()
             && slot.transition == transition
@@ -334,26 +327,16 @@ where
                 transition.incoming_variant().get()
             ))));
         };
-        let epoch_matches = self.seek_observe().epoch() == transition.id().seek_epoch();
         let claim_matches = match self.abr.pending_claim() {
             PendingAbrClaim::Ready(current) | PendingAbrClaim::Locked(current) => current == claim,
             _ => false,
         };
-        if !epoch_matches
-            || !claim_matches
-            || self.variant_index() != transition.active_variant().get()
-        {
-            if epoch_matches {
-                let _ = self.abr_publisher.abort_pending(claim.ticket());
-            }
+        if !claim_matches || self.variant_index() != transition.active_variant().get() {
+            let _ = self.abr_publisher.abort_pending(claim.ticket());
             return Ok(None);
         }
 
-        let landing_time = variant_switch_target_time(
-            self.seek_observe().as_ref(),
-            self.playhead_read().as_ref(),
-            landing,
-        );
+        let landing_time = variant_switch_target_time(self.playhead_read().as_ref(), landing);
         Ok(Some(VariantReaderPlan::new(
             transition,
             target.media_info(),
@@ -374,10 +357,6 @@ where
             return VariantPromotion::Stale;
         };
         if slot.transition != transition {
-            return VariantPromotion::Stale;
-        }
-        if self.seek_observe().epoch() != transition.id().seek_epoch() {
-            self.discard_incoming(&mut state, false);
             return VariantPromotion::Stale;
         }
         match self.abr.pending_claim() {
@@ -406,41 +385,26 @@ where
         };
         let outgoing = self.active_session();
         let now = Instant::now();
-        let committed = self.commit_if_seek_epoch(transition.id().seek_epoch(), || {
-            if !self.abr_publisher.commit_pending(slot.claim, now) {
-                return false;
-            }
-            slot.session.activate();
-            self.sessions
-                .publish_exact_one(&mut state, Arc::clone(&slot.session));
-            outgoing.abort();
-            true
-        });
-        match committed {
-            None => {
-                self.sessions.publish_exact_one(&mut state, outgoing);
-                slot.session.abort();
-                return VariantPromotion::Stale;
-            }
-            Some(false) => {
-                let claim_matches = match self.abr.pending_claim() {
-                    PendingAbrClaim::Ready(current) | PendingAbrClaim::Locked(current) => {
-                        current == slot.claim
-                    }
-                    _ => false,
-                };
-                let epoch_matches = self.seek_observe().epoch() == transition.id().seek_epoch();
-                let active_matches = self.variant_index() == transition.active_variant().get();
-                if claim_matches && epoch_matches && active_matches {
-                    state.incoming = Some(slot);
-                    return VariantPromotion::Deferred;
+        if !self.abr_publisher.commit_pending(slot.claim, now) {
+            let claim_matches = match self.abr.pending_claim() {
+                PendingAbrClaim::Ready(current) | PendingAbrClaim::Locked(current) => {
+                    current == slot.claim
                 }
-                self.sessions.publish_exact_one(&mut state, outgoing);
-                slot.session.abort();
-                return VariantPromotion::Stale;
+                _ => false,
+            };
+            let active_matches = self.variant_index() == transition.active_variant().get();
+            if claim_matches && active_matches {
+                state.incoming = Some(slot);
+                return VariantPromotion::Deferred;
             }
-            Some(true) => {}
+            self.sessions.publish_exact_one(&mut state, outgoing);
+            slot.session.abort();
+            return VariantPromotion::Stale;
         }
+        slot.session.activate();
+        self.sessions
+            .publish_exact_one(&mut state, Arc::clone(&slot.session));
+        outgoing.abort();
         drop(state);
         debug!(?transition, "variant transition promoted");
         self.abr
@@ -466,9 +430,6 @@ where
         let mut state = self.sessions.transition.lock();
         let result = if let Some(slot) = state.incoming.as_mut() {
             if slot.transition != transition {
-                Ok(VariantReaderTake::Stale)
-            } else if self.seek_observe().epoch() != transition.id().seek_epoch() {
-                self.discard_incoming(&mut state, false);
                 Ok(VariantReaderTake::Stale)
             } else {
                 match self.abr.pending_claim() {
@@ -519,7 +480,6 @@ where
 
 pub(super) fn transition_for_claim(
     claim: PendingAbrDecision,
-    seek_epoch: SeekEpoch,
     active_variant: VariantIndex,
 ) -> VariantTransition {
     let outgoing_disposition = match claim.decision() {
@@ -530,7 +490,7 @@ pub(super) fn transition_for_claim(
         _ => OutgoingDisposition::Retained,
     };
     VariantTransition::new(
-        VariantTransitionId::new(claim.ticket(), seek_epoch),
+        VariantTransitionId::new(claim.ticket()),
         active_variant,
         claim.decision().target(),
     )
@@ -543,7 +503,6 @@ pub(super) fn unsupported_pending_claim() -> StreamError {
         "unsupported pending ABR claim state",
     )))
 }
-
 #[cfg(test)]
 mod tests {
     use std::io::Read;

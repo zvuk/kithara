@@ -11,7 +11,6 @@ use crate::{
     consts,
     pipeline::{
         blend::GaplessBlender,
-        rebuild::state::BuildId,
         seek::skip::{apply as apply_skip, apply_frames},
     },
 };
@@ -19,11 +18,6 @@ use crate::{
 pub(crate) enum IncomingDecode {
     Preparing {
         transition: VariantTransition,
-        frontier: OutgoingFrontier,
-    },
-    Building {
-        transition: VariantTransition,
-        build: BuildId,
         frontier: OutgoingFrontier,
     },
     Priming {
@@ -41,7 +35,6 @@ impl IncomingDecode {
     pub(crate) const fn transition(&self) -> VariantTransition {
         match self {
             Self::Preparing { transition, .. }
-            | Self::Building { transition, .. }
             | Self::Priming { transition, .. }
             | Self::Failed { transition, .. } => *transition,
         }
@@ -53,7 +46,7 @@ impl From<IncomingDecode> for Option<DecoderGeneration> {
         match incoming {
             IncomingDecode::Priming { generation, .. }
             | IncomingDecode::Failed { generation, .. } => Some(generation),
-            IncomingDecode::Preparing { .. } | IncomingDecode::Building { .. } => None,
+            IncomingDecode::Preparing { .. } => None,
         }
     }
 }
@@ -137,7 +130,6 @@ impl super::core::ActiveDecode {
         self.announced_hold = Some(transition);
         let (stage, staged, incoming_finished) = match self.incoming.as_ref() {
             Some(IncomingDecode::Preparing { .. }) => ("preparing", None, false),
-            Some(IncomingDecode::Building { .. }) => ("building", None, false),
             Some(IncomingDecode::Priming { generation, .. }) => (
                 "priming",
                 generation.staged_span().map(|(first, end, _)| (first, end)),
@@ -180,39 +172,23 @@ impl super::core::ActiveDecode {
             | Some(IncomingDecode::Failed { generation, .. }) => {
                 generation.decoder_mut().flush_reader_signals();
             }
-            Some(IncomingDecode::Preparing { .. } | IncomingDecode::Building { .. }) | None => {}
+            Some(IncomingDecode::Preparing { .. }) | None => {}
         }
     }
 
     pub(crate) const fn has_live_incoming(&self) -> bool {
         matches!(
             self.incoming,
-            Some(
-                IncomingDecode::Preparing { .. }
-                    | IncomingDecode::Building { .. }
-                    | IncomingDecode::Priming { .. }
-            )
+            Some(IncomingDecode::Preparing { .. } | IncomingDecode::Priming { .. })
         )
     }
 
     pub(crate) fn incoming_frontier(&self) -> Option<OutgoingFrontier> {
         match self.incoming.as_ref()? {
             IncomingDecode::Preparing { frontier, .. }
-            | IncomingDecode::Building { frontier, .. }
             | IncomingDecode::Priming { frontier, .. } => Some(*frontier),
             IncomingDecode::Failed { .. } => None,
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn incoming_is_building(&self, transition: VariantTransition) -> bool {
-        matches!(
-            self.incoming,
-            Some(IncomingDecode::Building {
-                transition: current,
-                ..
-            }) if current == transition
-        )
     }
 
     pub(crate) fn incoming_is_preparing(&self, transition: VariantTransition) -> bool {
@@ -247,18 +223,16 @@ impl super::core::ActiveDecode {
     pub(crate) fn install_incoming(
         &mut self,
         transition: VariantTransition,
-        build: BuildId,
         generation: DecoderGeneration,
     ) -> Option<DecoderGeneration> {
-        let Some(IncomingDecode::Building {
+        let Some(IncomingDecode::Preparing {
             transition: current,
-            build: current_build,
             frontier,
         }) = self.incoming.as_ref()
         else {
             return Some(generation);
         };
-        if *current != transition || *current_build != build {
+        if *current != transition {
             return Some(generation);
         }
         let frontier = *frontier;
@@ -281,26 +255,6 @@ impl super::core::ActiveDecode {
         let origin = self.active.timeline_origin(self.gapless_mode());
         let active_rate = self.active.blender_profile().spec().sample_rate.get();
         content_time(rate, frame, active_rate, origin)
-    }
-
-    pub(crate) fn mark_incoming_building(
-        &mut self,
-        transition: VariantTransition,
-        build: BuildId,
-    ) -> bool {
-        if !self.incoming_is_preparing(transition) {
-            return false;
-        }
-        let Some(IncomingDecode::Preparing { frontier, .. }) = self.incoming.as_ref() else {
-            return false;
-        };
-        let frontier = *frontier;
-        self.incoming = Some(IncomingDecode::Building {
-            transition,
-            build,
-            frontier,
-        });
-        true
     }
 
     pub(crate) fn observe_source_exhaustion(&mut self) {
@@ -373,10 +327,14 @@ impl super::core::ActiveDecode {
             generation.decoder_mut().prepare_next_chunk();
             outcome = match generation.next_chunk() {
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {
-                    let epoch = generation.installed_at_seek_epoch();
-                    let Some(chunk) = apply_skip(chunk, epoch, generation.pending_head_skip_mut())
-                    else {
-                        continue;
+                    let chunk = match apply_skip(*chunk, generation.pending_head_skip_mut()) {
+                        Ok(Some(chunk)) => chunk,
+                        Ok(None) => continue,
+                        Err(error) => {
+                            tracing::warn!(?error, "incoming source mapping failed");
+                            outcome = IncomingPrime::Failed;
+                            break;
+                        }
                     };
                     if !chunk.samples.is_empty() {
                         generation.stage(chunk);
@@ -782,20 +740,23 @@ fn timeline_spec(sample_rate: u32) -> Option<AudioSpec> {
     NonZeroU32::new(sample_rate).map(|sample_rate| AudioSpec::new(1, sample_rate))
 }
 
-pub(super) fn trim_staged_head(generation: &mut DecoderGeneration, overlap: OverlapSpan) -> bool {
+pub(super) fn trim_staged_head(
+    generation: &mut DecoderGeneration,
+    overlap: OverlapSpan,
+) -> kithara_decode::DecodeResult<bool> {
     let mut remaining = overlap.incoming_next.saturating_sub(overlap.incoming_first);
     if remaining == 0 {
-        return generation.has_output();
+        return Ok(generation.has_output());
     }
     while remaining != 0 {
         let Some(chunk) = generation.pop_staged() else {
-            return false;
+            return Ok(false);
         };
-        if let Some(chunk) = apply_frames(chunk, &mut remaining) {
+        if let Some(chunk) = apply_frames(chunk, &mut remaining)? {
             generation.push_staged_front(chunk);
         }
     }
-    generation.has_output()
+    Ok(generation.has_output())
 }
 
 pub(super) fn incoming_origin(
@@ -845,7 +806,6 @@ pub(super) fn shares_default_profile(
         && incoming.gapless().is_none()
         && active.default_priming_frames() == incoming.default_priming_frames()
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;

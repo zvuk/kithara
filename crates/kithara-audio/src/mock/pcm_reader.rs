@@ -221,7 +221,7 @@ impl AudioRead for TestPcmReader {
 }
 
 impl AudioControl for TestPcmReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
         let target = position;
         let frame = self
             .spec

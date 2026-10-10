@@ -9,7 +9,7 @@ use kithara::{
         time::{Duration, sleep},
         tokio::task::yield_now,
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     SegmentGateHandle, TestServerHelper, fixture_protocol::DelayRule,
@@ -205,10 +205,6 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
         }
     };
 
-    let resource = Resource::new(cfg)
-        .await
-        .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
-
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
             .settings(
@@ -221,7 +217,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
             .build(),
     )
     .await;
-    player.load_and_fadein(resource).await;
+    player.load_config(cfg).await;
 
     let warmup_target = player.position() + consts::PRE_SEEK_RENDER_SECS;
     render_until_position(
@@ -240,7 +236,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
          (pos={pos_before_seek:.3}s, delay_ms={delay_ms})"
     );
 
-    player.seek(consts::SEEK_TARGET_SECS);
+    player.seek(consts::SEEK_TARGET_SECS).await;
     eprintln!(
         "[{label} delay_ms={delay_ms}] seek issued target={:.1}s epoch=1",
         consts::SEEK_TARGET_SECS

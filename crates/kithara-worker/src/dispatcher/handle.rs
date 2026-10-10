@@ -1,26 +1,20 @@
-use std::{
-    mem,
-    panic::{AssertUnwindSafe, catch_unwind},
-};
-
 use kithara_platform::{
-    CancelGroup, CancelToken, CancelWakerGuard,
-    sync::{
-        Arc, Mutex, Weak,
-        atomic::{AtomicU64, Ordering},
-        mpsc::{self},
-    },
+    CancelGroup, CancelToken,
+    sync::{Arc, Mutex, Weak, atomic::AtomicU64, mpsc},
     thread::spawn_named,
+    time::Duration,
     tokio::runtime::Handle,
 };
 
 use super::{
     core::run_loop,
-    state::{Capacity, Command, Registration, Reservation, TaskFactory},
+    owner::{Admission, DispatcherInner},
+    pending::PendingTask,
+    state::{Capacity, Reservation},
 };
 use crate::{
     DispatcherConfig, Task, TaskConfig, TaskContext, TaskControl, TaskId, Wake,
-    compute::{Budget, ComputeRuntime},
+    compute::ComputeRuntime,
 };
 
 /// Task admission or dispatcher lifecycle failure.
@@ -45,6 +39,16 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
+    /// Longest park duration before the dispatcher checks for new work.
+    #[must_use]
+    pub fn wake_allowance(&self) -> Duration {
+        let config = &self.inner.config;
+        config
+            .wait_timeout
+            .max(config.idle_timeout)
+            .max(config.backpressure_poll_interval)
+    }
+
     /// Return whether this dispatcher subtree has been cancelled.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
@@ -132,224 +136,13 @@ impl Dispatcher {
     }
 }
 
-struct DispatcherInner {
-    config: Arc<DispatcherConfig>,
-    capacity: Arc<Capacity>,
-    compute: Arc<ComputeRuntime>,
-    next_id: AtomicU64,
-    cancel: CancelToken,
-    admission: Mutex<Admission>,
-    runtime: Option<Handle>,
-    cmd_tx: mpsc::Sender<Command>,
-    wake: Wake,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum Admission {
-    Open,
-    Closed,
-}
-
-impl DispatcherInner {
-    fn register(&self, registration: Registration) -> Result<(), TaskError> {
-        let mut admission = self.admission.lock();
-        if *admission == Admission::Closed || self.cancel.is_cancelled() {
-            drop(admission);
-            drop(registration);
-            return Err(TaskError::Stopped);
-        }
-        let sent = self.cmd_tx.send(Command::Register(registration));
-        if sent.is_err() {
-            *admission = Admission::Closed;
-        }
-        drop(admission);
-        sent.map_err(|_| TaskError::Stopped)
-    }
-
-    fn reserve(self: &Arc<Self>, config: TaskConfig) -> Result<PendingTask, TaskError> {
-        let admission = self.admission.lock();
-        if *admission == Admission::Closed || self.cancel.is_cancelled() {
-            return Err(TaskError::Stopped);
-        }
-        let limit = self.config.capacity.get();
-        let reservation = Capacity::reserve(&self.capacity, limit)
-            .ok_or(TaskError::Capacity { capacity: limit })?;
-        drop(admission);
-        let id = TaskId::new(self.next_id.fetch_add(1, Ordering::Relaxed));
-        let token = self.cancel.child();
-        let cancel = config.cancel.clone().map_or_else(
-            || CancelGroup::from(token.clone()),
-            |domain| CancelGroup::from(token.clone()) | domain,
-        );
-        let control = TaskControl::new(Arc::new(config), token.clone(), self.wake.clone());
-        let context = TaskContext::new(
-            cancel.clone(),
-            Arc::clone(&self.compute),
-            Arc::new(Budget::default()),
-            control,
-            self.runtime.clone(),
-            token.clone(),
-        );
-        let task_wake = self.wake.clone();
-        let task_token = token.clone();
-        let cancel_guards = cancel.on_cancel(move || {
-            task_token.cancel();
-            task_wake.wake();
-        });
-
-        if cancel.is_cancelled() {
-            return Err(TaskError::Cancelled);
-        }
-
-        Ok(PendingTask {
-            cancel_guards,
-            context,
-            id,
-            token,
-            inner: Arc::clone(self),
-            reservation: Some(reservation),
-            submitted: false,
-        })
-    }
-
-    fn shutdown(&self) {
-        let mut admission = self.admission.lock();
-        if *admission == Admission::Open {
-            *admission = Admission::Closed;
-            self.cmd_tx.send(Command::Shutdown).ok();
-        }
-        drop(admission);
-        self.cancel.cancel();
-        self.wake.wake();
-    }
-
-    fn unregister(&self, id: TaskId) {
-        let admission = self.admission.lock();
-        if *admission == Admission::Open {
-            self.cmd_tx.send(Command::Unregister(id)).ok();
-        }
-        drop(admission);
-        self.wake.wake();
-    }
-}
-
-impl Drop for DispatcherInner {
-    fn drop(&mut self) {
-        self.shutdown();
-    }
-}
-
-/// Capacity reservation with a derived task context not yet submitted.
-pub struct PendingTask {
-    inner: Arc<DispatcherInner>,
-    token: CancelToken,
-    reservation: Option<Reservation>,
-    context: TaskContext,
-    id: TaskId,
-    cancel_guards: Vec<CancelWakerGuard>,
-    submitted: bool,
-}
-
-impl PendingTask {
-    /// Context available before task construction and submission.
-    #[must_use]
-    pub const fn context(&self) -> &TaskContext {
-        &self.context
-    }
-
-    /// Stable task identifier assigned with the reservation.
-    #[must_use]
-    pub const fn id(&self) -> TaskId {
-        self.id
-    }
-
-    /// Construct and submit the task while preserving the reserved context.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TaskError::Cancelled`] if cancellation raced construction or
-    /// [`TaskError::Stopped`] if the dispatcher stopped before submission.
-    pub fn start<T, F>(self, factory: F) -> Result<TaskHandle, TaskError>
-    where
-        T: Task + Send,
-        F: FnOnce(TaskContext) -> T,
-    {
-        if self.context.cancel_group().is_cancelled() {
-            return Err(TaskError::Cancelled);
-        }
-        let task = Box::new(factory(self.context.clone()));
-        if self.context.cancel_group().is_cancelled() {
-            return Err(TaskError::Cancelled);
-        }
-        let factory: TaskFactory = Box::new(move || Ok(task));
-        self.submit(factory)
-    }
-
-    /// Construct and submit a thread-bound task on the dispatcher thread.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TaskError::Cancelled`] if cancellation raced submission or
-    /// [`TaskError::Stopped`] if the dispatcher stopped before submission.
-    pub fn start_local<T, F>(self, factory: F) -> Result<TaskHandle, TaskError>
-    where
-        T: Task,
-        F: FnOnce(TaskContext) -> T + Send + 'static,
-    {
-        let context = self.context.clone();
-        let factory: TaskFactory = Box::new(move || {
-            catch_unwind(AssertUnwindSafe(|| {
-                Box::new(factory(context)) as Box<dyn Task>
-            }))
-        });
-        self.submit(factory)
-    }
-
-    fn submit(mut self, factory: TaskFactory) -> Result<TaskHandle, TaskError> {
-        if self.context.cancel_group().is_cancelled() {
-            return Err(TaskError::Cancelled);
-        }
-        let Some(reservation) = self.reservation.take() else {
-            return Err(TaskError::Stopped);
-        };
-        let registration = Registration {
-            factory,
-            cancel_guards: mem::take(&mut self.cancel_guards),
-            cancel: self.context.cancel_group().clone(),
-            control: self.context.control(),
-            id: self.id,
-            priority: self.context.control().priority(),
-            token: self.token.clone(),
-        };
-        self.inner.register(registration)?;
-        let handle = TaskHandle {
-            _reservation: reservation,
-            control: self.context.control(),
-            id: self.id,
-            inner: Arc::downgrade(&self.inner),
-            token: self.token.clone(),
-        };
-        self.submitted = true;
-        self.inner.wake.wake();
-        Ok(handle)
-    }
-}
-
-impl Drop for PendingTask {
-    fn drop(&mut self) {
-        if !self.submitted {
-            self.token.cancel();
-        }
-    }
-}
-
 /// Non-cloneable ownership handle for one admitted task.
 pub struct TaskHandle {
-    token: CancelToken,
-    _reservation: Reservation,
-    control: TaskControl,
-    id: TaskId,
-    inner: Weak<DispatcherInner>,
+    pub(super) token: CancelToken,
+    pub(super) _reservation: Reservation,
+    pub(super) control: TaskControl,
+    pub(super) id: TaskId,
+    pub(super) inner: Weak<DispatcherInner>,
 }
 
 impl TaskHandle {
@@ -361,7 +154,7 @@ impl TaskHandle {
 
     delegate::delegate! {
         to self.control {
-            /// Clone the restricted priority and wake control.
+            /// Clone the restricted cancellation and wake control.
             #[must_use]
             #[call(clone)]
             pub fn control(&self) -> TaskControl;

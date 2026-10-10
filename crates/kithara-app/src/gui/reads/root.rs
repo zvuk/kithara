@@ -362,15 +362,15 @@ mod tests {
         const DERIVED: [&str; 1] = ["deck.playback.position_normalized"];
 
         let config = test_fixture::config();
-        let (_host, queue) = fixtures::queue();
+        let (host, queue) = fixtures::queue_off().await;
         let mut source = build_resource_config(&short_wav, &config).expect("fixture source");
         source.set_metadata(TrackMetadata {
             artwork: Some(test_fixture::cover([255, 0, 0], ImageFormat::Png)),
             ..Default::default()
         });
-        queue
-            .append(AppTrackSource::from(source))
-            .expect("fixture track");
+        let source = AppTrackSource::from(source);
+        host.call(move |(_, queue)| queue.append(source).expect("fixture track"))
+            .await;
         let mut covered = fixture_in(EqMode::ThreeBand);
         covered.decks[0].0.tracks = queue.tracks();
         covered.decks[0].0.current_track_index = Some(0);
@@ -434,6 +434,7 @@ mod tests {
             None,
             "the session has two decks",
         );
+        host.close().await;
     }
 
     #[kithara::test]

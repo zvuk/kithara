@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     ops::Range,
     path::PathBuf,
 };
@@ -9,8 +9,8 @@ use std::{
 use kithara::{
     host::HostOwned,
     platform::time::{self, Duration},
-    play::{ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, Transition},
+    play::{PlayError, ResourceConfig, ResourceSrc},
+    queue::{Queue, QueueConfig, QueueError, Transition},
     stretch::{BungeeConfig, ElasticBackendConfig, SignalsmithConfig},
     warp::{StretchKind, WarpConfig},
 };
@@ -30,6 +30,8 @@ fn response_source() -> PathBuf {
         .path()
         .expect("generated sine fixture is stored on disk")
 }
+
+use kithara_integration_tests::mock::RampedFactory;
 
 use crate::bufpool_ext::TestPools;
 
@@ -242,6 +244,39 @@ async fn capture_command_boundary(
     );
 }
 
+/// Sends the case's burst of alternating rates, then its target rate, and
+/// returns the frame the target is sent at. A burst the deck has no room for
+/// stops at its refusal; the next block answers the burst and returns the
+/// room the target needs.
+async fn send_target_rate(
+    harness: &OfflinePlayer,
+    queue: &HostOwned<Queue<TestPools, RampedFactory>>,
+    case: ResponseCase,
+    samples: &mut Vec<f32>,
+) -> usize {
+    let refused = harness
+        .run(queue.control(), move |q| {
+            (0..case.burst).find_map(|command| {
+                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 })
+                    .err()
+            })
+        })
+        .await;
+    if let Some(refused) = refused {
+        assert!(
+            matches!(refused, QueueError::Play(PlayError::Full(_))),
+            "a burst past the deck's room is refused as full, not {refused:?}"
+        );
+        samples.extend(capture_frames(harness, case.callback_frames, case.callback_frames).await);
+    }
+    let command_frame = samples.len() / usize::from(CHANNELS);
+    harness
+        .run(queue.control(), move |q| q.set_rate(case.target_rate))
+        .await
+        .expect("the deck has room for the target rate");
+    command_frame
+}
+
 async fn capture_until_applied(
     harness: &OfflinePlayer,
     trace: &Scope,
@@ -313,16 +348,13 @@ async fn playing_queue(
     backends: ElasticBackendConfig,
     case: ResponseCase,
     response_source: PathBuf,
-) -> (OfflinePlayer, HostOwned<Queue<TestPools>>) {
+) -> (OfflinePlayer, HostOwned<Queue<TestPools, RampedFactory>>) {
     let warp = WarpConfig::builder()
         .speed(1.0)
         .backend(backend)
         .backends(backends)
         .source_block_frames(
             NonZeroUsize::new(case.source_block_frames).expect("case source block is non-zero"),
-        )
-        .rate_smooth_frames(
-            NonZeroUsize::new(case.smooth_frames).expect("case smoothing is non-zero"),
         )
         .maybe_render_quantum_frames(case.render_quantum_frames)
         .build();
@@ -345,11 +377,18 @@ async fn playing_queue(
         SAMPLE_RATE,
     )
     .await;
-    let queue = Queue::new(QueueConfig::builder().player(harness.take_player()).build());
+    let frames = NonZeroU64::new(u64::try_from(case.smooth_frames).expect("smoothing fits u64"))
+        .expect("smoothing is nonzero");
+    let queue = Queue::new(
+        QueueConfig::with_factory(RampedFactory(frames))
+            .prep(harness.resource_prep().clone())
+            .build(),
+    );
     let queue = harness.insert(queue).await;
     harness
         .run(queue.control(), move |q| {
-            q.set_default_rate(case.initial_rate);
+            q.set_default_rate(case.initial_rate)
+                .expect("a finite rate is accepted");
         })
         .await;
     let path = response_source;
@@ -510,7 +549,6 @@ async fn run_case(
     let trace = usdt_trace::scope();
     let mut samples =
         capture_command_boundary(&harness, &trace, case.initial_tone, case.callback_frames).await;
-    let command_frame = samples.len() / usize::from(CHANNELS);
     assert!(
         queue.is_playing(),
         "{backend} command boundary is not playing"
@@ -532,14 +570,7 @@ async fn run_case(
         consumed_end <= published_end,
         "{backend} presented transport {consumed_end} is ahead of published transport {published_end}"
     );
-    harness
-        .run(queue.control(), move |q| {
-            for command in 0..case.burst {
-                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 });
-            }
-            q.set_rate(case.target_rate);
-        })
-        .await;
+    let command_frame = send_target_rate(&harness, &queue, case, &mut samples).await;
     let (acknowledged, revision, at_apply) = capture_until_applied(&harness, &trace, case).await;
     let apply_frame = command_frame + acknowledged.len() / usize::from(CHANNELS);
     samples.extend(acknowledged);
@@ -801,7 +832,6 @@ async fn run_strict_case(
     let trace = usdt_trace::scope();
     let mut samples =
         capture_command_boundary(&harness, &trace, case.initial_tone, case.callback_frames).await;
-    let command_frame = samples.len() / usize::from(CHANNELS);
     assert!(
         queue.is_playing(),
         "{backend} command boundary is not playing"
@@ -823,14 +853,7 @@ async fn run_strict_case(
         consumed_end <= published_end,
         "{backend} presented transport {consumed_end} is ahead of published transport {published_end}"
     );
-    harness
-        .run(queue.control(), move |q| {
-            for command in 0..case.burst {
-                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 });
-            }
-            q.set_rate(case.target_rate);
-        })
-        .await;
+    let command_frame = send_target_rate(&harness, &queue, case, &mut samples).await;
     samples.extend(capture_frames(&harness, case.observation_frames(), case.callback_frames).await);
     let events = response_events(&trace);
     drop(trace);
@@ -928,7 +951,8 @@ async fn rate_multiplier_step_is_ramped_across_blocks(
     let before_applied = trace.events_of("rate_applied").len();
     harness
         .run(queue.control(), move |q| q.set_rate(case.target_rate))
-        .await;
+        .await
+        .expect("a finite rate is accepted");
     samples.extend(capture_frames(&harness, case.smooth_frames * 12, case.callback_frames).await);
     save_response_audio(backend, case, command_frame, &samples);
     let smoothing_events = trace.events_of("rate_smoothed");

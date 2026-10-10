@@ -166,9 +166,7 @@ impl Router {
             | PlayerEvent::VolumeChanged { .. }
             | PlayerEvent::MuteChanged { .. }
             | PlayerEvent::CurrentItemChanged { .. }
-            | PlayerEvent::PrerollCompleted { .. }
-            | PlayerEvent::PrefetchRequested
-            | PlayerEvent::HandoverRequested { .. } => return,
+            | PlayerEvent::PrerollCompleted { .. } => return,
         };
         let Some(track_id) = target else { return };
         let Some(item) = self.items.lock().get(&track_id).cloned() else {
@@ -187,9 +185,7 @@ impl Router {
             | PlayerEvent::VolumeChanged { .. }
             | PlayerEvent::MuteChanged { .. }
             | PlayerEvent::CurrentItemChanged { .. }
-            | PlayerEvent::PrerollCompleted { .. }
-            | PlayerEvent::PrefetchRequested
-            | PlayerEvent::HandoverRequested { .. } => return,
+            | PlayerEvent::PrerollCompleted { .. } => return,
         };
         item.deliver(ffi_event);
     }
@@ -244,8 +240,8 @@ impl EventBridge {
         });
     }
 
-    /// Dedicated OS thread that drives `Queue::tick` and polls current
-    /// time / duration / decoded frontier at ~10 Hz. Uses a plain thread
+    /// Dedicated OS thread that polls current time / duration / decoded
+    /// frontier at ~10 Hz; the Host ticks the queue itself. Uses a plain thread
     /// instead of an async task to avoid blocking the single-threaded
     /// tokio runtime with sync locks held inside the engine.
     fn spawn_time_thread(
@@ -261,8 +257,6 @@ impl EventBridge {
 
             while !cancel.is_cancelled() {
                 sleep(interval);
-                let _ = queue.tick();
-                queue.process_notifications();
                 let view = queue.playback_view();
                 router.emit_if_changed(view.position, &mut last_time, |seconds| {
                     FfiPlayerEvent::TimeChanged { seconds }
@@ -296,7 +290,7 @@ mod tests {
             sync::{Arc, Mutex},
             tokio::task::spawn_blocking,
         },
-        play::{ItemRole, PlayWorkerConfig, PlaybackFault, PlayerConfig, PlayerImpl, TrackRef},
+        play::{ItemRole, PlayWorkerConfig, PlaybackFault, ResourcePrep, TrackRef},
         queue::{AdvanceReason, QueueConfig, QueueEvent, QueueRepeatMode, TrackStatus, Transition},
     };
     use kithara_file::{FileError, FileEvent};
@@ -951,19 +945,15 @@ mod tests {
         .await
     }
 
-    /// The polling thread drives `Queue::tick`, including repeat-one replay.
+    /// The process Host's deck clock drives `Queue::tick`, including
+    /// repeat-one replay, with no FFI thread ticking the queue.
     #[kithara::test(tokio, flash(false))]
-    async fn polling_thread_replays_a_consumed_track_after_eof() {
+    async fn the_process_host_replays_a_consumed_repeat_one_track_after_eof() {
         let worker = FfiWorker::new(
             PlayWorkerConfig::builder(pools::build().expect("valid FFI pool policy")).build(),
         );
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(crate::native::session::requested_sample_rate())
-                .worker(worker)
-                .build(),
-        );
-        let queue = FfiQueue::new(QueueConfig::builder().player(player).build());
+        let prep = ResourcePrep::builder().worker(worker).build();
+        let queue = FfiQueue::new(QueueConfig::builder().prep(prep).build());
         // The FFI surface calls the session from the caller's thread, never
         // from a runtime worker.
         let owner = spawn_blocking(move || crate::native::session::insert(queue))
@@ -971,30 +961,23 @@ mod tests {
             .expect("insert task completes")
             .expect("INVARIANT: the FFI test Host accepts its allocated Queue");
         let queue = owner.control().clone();
-        queue.set_repeat(kithara::queue::RepeatMode::One);
-        queue.set_rate(1.0);
         let mut events = queue.subscribe();
         let track = assets::sine_wav_a440_100_frames()
             .path()
             .expect("the short decoder WAV lives on disk");
-        let id = queue
-            .append(track.to_string_lossy().into_owned())
-            .expect("open queue accepts a local track");
+        let setup = queue.clone();
+        let id = spawn_blocking(move || {
+            setup.set_repeat(kithara::queue::RepeatMode::One);
+            setup.set_rate(1.0).expect("a finite rate is accepted");
+            setup.append(track.to_string_lossy().into_owned())
+        })
+        .await
+        .expect("setup task completes")
+        .expect("open queue accepts a local track");
         let loaded = wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await;
         assert!(
             loaded.observed(),
             "real local track must load before playback; wait: {loaded}"
-        );
-
-        let cancel = CancelToken::root();
-        let observer: Arc<dyn PlayerObserver> = Arc::new(CollectingPlayerObserver::default());
-        let thread = EventBridge::spawn_time_thread(
-            queue.clone(),
-            Arc::new(Router::new(
-                observer,
-                Arc::new(Mutex::new(ItemRegistry::default())),
-            )),
-            cancel.clone(),
         );
 
         let selecting = queue.clone();
@@ -1005,12 +988,10 @@ mod tests {
 
         let replay = wait_for_eof_advance(&mut events, id, 2000).await;
         let status = queue.track(id).map(|entry| entry.status);
-        cancel.cancel();
-        let (joined, owner) = spawn_blocking(move || {
-            let joined = thread.join();
+        let owner = spawn_blocking(move || {
             crate::native::session::remove(&owner)
                 .expect("INVARIANT: the FFI test Queue detaches from its Host");
-            (joined, owner)
+            owner
         })
         .await
         .expect("teardown task completes");
@@ -1019,10 +1000,6 @@ mod tests {
         assert!(
             replay.observed(),
             "tick after EOF must replay the consumed repeat-one track; wait: {replay}, status: {status:?}"
-        );
-        assert!(
-            joined.is_ok(),
-            "polling thread must survive the reload it starts"
         );
     }
 

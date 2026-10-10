@@ -13,7 +13,7 @@ use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, TrackStatus},
     resampler::NoResamplerBackend,
     signal::AudioSpec,
@@ -43,17 +43,14 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays(
         .build();
     let session_config = HostConfig::offline(pools.clone()).build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session_config.settings().sample_rate())
-            .worker(worker)
-            .build(),
-    );
+    let player = kithara::play::ResourcePrep::builder()
+        .worker(worker)
+        .build();
     let queue = OfflineQueue::paced(
         session_config,
         Queue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(player)
                 .store(store.clone())
                 .build(),
         ),

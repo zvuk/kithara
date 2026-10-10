@@ -233,24 +233,46 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     /// Target playback speed used by ``play()``. Mirrors the iOS
     /// `playingRate`: while playing, ``rate`` equals
-    /// this value; on pause, ``rate`` falls to `0`.
+    /// this value; on pause, ``rate`` falls to `0`. A refused rate, such as
+    /// one that is not a finite number, leaves the value as it was and
+    /// arrives as an `.error` event.
     public var playingRate: Float {
         get { _inner.playingRate() }
-        set { _inner.setPlayingRate(rate: newValue) }
+        set {
+            do {
+                try _inner.setPlayingRate(rate: newValue)
+            } catch {
+                _eventSubject.send(.error(error: String(describing: error)))
+            }
+        }
     }
 
     // MARK: - Volume & Mute
 
-    /// Playback volume (0.0–1.0, clamped).
+    /// Playback volume (0.0–1.0, clamped). A refused change leaves the
+    /// value as it was and arrives as an `.error` event.
     public var volume: Float {
         get { _inner.volume() }
-        set { _inner.setVolume(volume: newValue) }
+        set {
+            do {
+                try _inner.setVolume(volume: newValue)
+            } catch {
+                _eventSubject.send(.error(error: String(describing: error)))
+            }
+        }
     }
 
-    /// Whether the player is muted.
+    /// Whether the player is muted. A refused change leaves the value as it
+    /// was and arrives as an `.error` event.
     public var isMuted: Bool {
         get { _inner.isMuted() }
-        set { _inner.setMuted(muted: newValue) }
+        set {
+            do {
+                try _inner.setMuted(muted: newValue)
+            } catch {
+                _eventSubject.send(.error(error: String(describing: error)))
+            }
+        }
     }
 
     // MARK: - EQ

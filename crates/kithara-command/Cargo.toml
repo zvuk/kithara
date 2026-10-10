@@ -11,9 +11,11 @@ categories = ["concurrency", "data-structures"]
 
 [dependencies]
 kithara-config = { workspace = true }
+kithara-platform = { workspace = true }
 
 delegate = { workspace = true }
 fieldwork = { workspace = true }
+futures = { workspace = true }
 ringbuf = { workspace = true }
 thiserror = { workspace = true }
 
@@ -21,7 +23,6 @@ thiserror = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-kithara-platform = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["subscriber"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

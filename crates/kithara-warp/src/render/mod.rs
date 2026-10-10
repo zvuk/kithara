@@ -1,12 +1,7 @@
 mod error;
 mod renderer;
-mod renderer_activation;
-mod renderer_entry;
-mod renderer_lifecycle;
-mod renderer_projection;
-mod renderer_render;
-mod renderer_residency;
-mod renderer_target;
+mod source_sample;
+mod trajectory;
 
 pub use error::WarpRenderError;
 pub use renderer::WarpRenderer;

@@ -3,6 +3,7 @@
 use kithara::{
     dsp::param::{DEFAULT_SETTLE_RATIO, DEFAULT_SMOOTH_SECONDS},
     platform::time::Duration,
+    queue::QueueControl,
 };
 use kithara_integration_tests::{
     kithara,
@@ -43,7 +44,10 @@ async fn the_observation_window_carries_no_silent_block() {
 async fn deck_volume_step_is_ramped() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
     let before = observe(&harness, consts::OBSERVE_BLOCKS).await;
-    harness.run(|deck| deck.set_volume(0.0)).await;
+    harness
+        .run(|deck| deck.set_volume(0.0))
+        .await
+        .expect("the deck takes the volume");
     let (after, silent) = observe_until(&harness, |block| peak(block) == 0.0).await;
     assert!(
         silent,
@@ -64,17 +68,20 @@ async fn deck_volume_step_is_ramped() {
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn prepared_deck_preserves_play_pause_order() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
-    let deck = harness.control();
-    deck.pause();
-    deck.play();
-    deck.pause();
+    harness
+        .run(|deck| {
+            deck.pause();
+            deck.play();
+            deck.pause();
+        })
+        .await;
     let (paused, silent) = observe_until(&harness, |block| peak(block) == 0.0).await;
     assert!(
         silent,
         "the last pause must reach silence: {}",
         last_block_peak(&paused)
     );
-    deck.play();
+    harness.run(QueueControl::play).await;
     let (resumed, audible) = observe_until(&harness, |block| peak(block) > 0.1).await;
     assert!(
         audible,

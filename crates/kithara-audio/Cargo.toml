@@ -9,6 +9,11 @@ description = "Decoded-audio source pipeline: lifecycle, resampling, and readine
 keywords = ["audio", "dsp", "resampling", "playback", "player"]
 categories = ["multimedia::audio"]
 
+[package.metadata.cargo-machete]
+# `serde` is reached only through `#[derive(Patch)]`; the expansion names it,
+# never a source line in this crate.
+ignored = ["serde"]
+
 [features]
 default = ["symphonia", "resample-rubato", "client-reqwest", "tls-rustls"]
 usdt = ["kithara-test-utils/usdt"]
@@ -52,13 +57,11 @@ kithara-stream = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 
-arc-swap = { workspace = true }
 crossbeam-queue = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
 fieldwork = { workspace = true }
 num-traits = { workspace = true }
-ringbuf = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

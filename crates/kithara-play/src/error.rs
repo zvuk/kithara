@@ -1,7 +1,15 @@
 use kithara_bufpool::PoolError;
 use kithara_platform::time::Duration;
+use kithara_render::{
+    InvalidCrossfade,
+    bridge::{DeckRefusal, InvalidMixLevel},
+    rt::BufferGeometryError,
+};
 
-use crate::{api::SlotId, session::SessionError};
+use crate::{
+    api::{SlotId, TrackId},
+    session::SessionError,
+};
 
 #[derive(Clone, Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -15,17 +23,20 @@ pub enum PlayError {
     #[error("no active slot")]
     NoActiveSlot,
 
-    #[error("slot command channel full: {slot:?}")]
-    SlotChannelFull { slot: SlotId },
+    #[error("the {0} queue has no room")]
+    Full(&'static str),
 
-    #[error("item {index} has no resource (already consumed)")]
-    ItemConsumed { index: usize },
+    #[error("a later consecutive tempo change superseded this one")]
+    Superseded,
 
-    #[error("item index out of range: {index} (len {len})")]
-    IndexOutOfRange { index: usize, len: usize },
+    #[error("the deck refused a batch: {0:?}")]
+    Deck(DeckRefusal),
 
-    #[error("commit index mismatch: requested {requested}, armed {armed}")]
-    ArmIndexMismatch { requested: usize, armed: usize },
+    #[error("item {item:?} is not on the deck and came without a resource")]
+    ItemConsumed { item: TrackId },
+
+    #[error("commit mismatch: requested {requested:?}, armed {armed:?}")]
+    ArmedItemMismatch { requested: TrackId, armed: TrackId },
 
     #[error("eq band out of range: {band} (bands: {bands})")]
     EqBandOutOfRange { band: usize, bands: usize },
@@ -47,9 +58,6 @@ pub enum PlayError {
 
     #[error("slot already occupied: {0:?}")]
     SlotOccupied(SlotId),
-
-    #[error("no available slots in arena")]
-    ArenaFull,
 
     #[error("crossfade already in progress")]
     CrossfadeActive,
@@ -93,14 +101,8 @@ pub enum PlayError {
     #[error("crossfader position {position} is not a finite value in 0.0..=1.0")]
     MixPosition { position: f32 },
 
-    #[error("mix input player belongs to a different audio session")]
-    MixForeignSession,
-
     #[error("player belongs to a different audio session")]
     ForeignSession,
-
-    #[error("player is not attached to an audio session")]
-    SessionUnbound,
 
     #[error("player is already attached to an audio session")]
     SessionAlreadyBound,
@@ -110,9 +112,6 @@ pub enum PlayError {
 
     #[error("an audio session is already active on this thread")]
     SessionAlreadyActive,
-
-    #[error("mix input lists the same player more than once")]
-    MixDuplicatePlayer,
 
     #[error("end of resource")]
     Eof,
@@ -124,19 +123,29 @@ pub enum PlayError {
     SessionGone { reason: &'static str },
 
     #[error(transparent)]
-    Session(SessionError),
+    Session(#[from] SessionError),
 
     #[error("{0}")]
     Internal(String),
 }
 
-impl From<SessionError> for PlayError {
-    fn from(error: SessionError) -> Self {
-        match error {
-            SessionError::EqBandOutOfRange { band, bands } => {
-                Self::EqBandOutOfRange { band, bands }
-            }
-            error => Self::Session(error),
+impl From<BufferGeometryError> for PlayError {
+    fn from(error: BufferGeometryError) -> Self {
+        Self::Session(error.into())
+    }
+}
+
+impl From<InvalidCrossfade> for PlayError {
+    fn from(InvalidCrossfade { name, value }: InvalidCrossfade) -> Self {
+        Self::InvalidParameter {
+            name: name.into(),
+            value,
         }
+    }
+}
+
+impl From<InvalidMixLevel> for PlayError {
+    fn from(InvalidMixLevel { level }: InvalidMixLevel) -> Self {
+        Self::MixLevel { level }
     }
 }

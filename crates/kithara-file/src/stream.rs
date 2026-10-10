@@ -10,7 +10,7 @@ use kithara_events::EventBus;
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::sleep, tokio};
 use kithara_storage::StorageError;
-use kithara_stream::{PlayheadState, SeekState, SourceError as StreamSourceError, StreamType};
+use kithara_stream::{PlayheadState, SourceError as StreamSourceError, StreamType};
 #[cfg(test)]
 use kithara_test_utils::kithara;
 use url::Url;
@@ -58,10 +58,7 @@ fn local_key(path: PathBuf) -> Result<ResourceKey, SourceError> {
 }
 
 fn coord_with_total(len: Option<u64>) -> Arc<FileCoord> {
-    let coord = Arc::new(FileCoord::new(
-        Arc::new(PlayheadState::new()),
-        Arc::new(SeekState::new()),
-    ));
+    let coord = Arc::new(FileCoord::new(Arc::new(PlayheadState::new())));
     coord.set_total_bytes(len);
     coord
 }
@@ -327,7 +324,6 @@ where
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_assets::{AcquisitionResult, AssetStore, StorageBackend};

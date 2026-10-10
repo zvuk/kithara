@@ -3,27 +3,8 @@ pub use kithara_play::{
     SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo, TempoError,
     TransportRevision,
 };
-use kithara_warp::BeatGridId;
 
 use crate::error::PlayError;
-
-/// One canonical Host member's desired linear mix level.
-#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
-#[non_exhaustive]
-pub struct HostLevel {
-    #[field(get, copy)]
-    pub(crate) grid_id: BeatGridId,
-    #[field(get, copy)]
-    pub(crate) level: f32,
-}
-
-impl HostLevel {
-    #[must_use]
-    pub const fn new(grid_id: BeatGridId, level: f32) -> Self {
-        Self { grid_id, level }
-    }
-}
 
 /// Which side of the DJ crossfader a mix input is assigned to. `Bypass` is unity
 /// at any position, for an ordinary fader with no crossfade.

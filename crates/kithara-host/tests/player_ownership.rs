@@ -1,34 +1,38 @@
 //! A host owns the players inserted into it: only the owning host closes a
 //! player, and dropping the host closes every player it still owns.
 
-use kithara_host::{Host, HostConfig, HostOwned, HostSettingsControl};
-use kithara_play::{PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl};
+use kithara_host::{Host, HostConfig, HostOwned};
+use kithara_play::{PlayError, PlayWorker, PlayWorkerConfig, ResourcePrep};
+use kithara_queue::{Queue, QueueConfig};
 #[cfg(target_os = "android")]
 use kithara_test_dylib as _;
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
     kithara,
 };
-use kithara_warp::BeatGridId;
 
-fn insert_player(host: &mut Host<TestPools>) -> HostOwned<PlayerImpl<TestPools>> {
-    let instance_id = BeatGridId::allocate().expect("fixture grid id");
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .grid_id(instance_id)
-            .sample_rate(host.sample_rate())
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+fn insert_player(host: &mut Host<TestPools>) -> HostOwned<Queue<TestPools>> {
+    let player = Queue::new(
+        QueueConfig::builder()
+            .prep(
+                ResourcePrep::builder()
+                    .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+                    .build(),
+            )
             .build(),
     );
     let owner = host.insert(player).expect("insert fixture player instance");
-    assert_eq!(owner.id(), instance_id);
+    assert_ne!(owner.id(), kithara_warp::BeatGrid::id(host));
+    assert!(!host.is_empty());
     owner
 }
 
 #[kithara::test]
 fn foreign_host_cannot_close_owned_player() {
-    let mut owner_host = Host::new(HostConfig::builder().build()).expect("create owner host");
-    let mut foreign_host = Host::new(HostConfig::builder().build()).expect("create foreign host");
+    let mut owner_host =
+        Host::new(HostConfig::offline(pools()).build()).expect("create owner host");
+    let mut foreign_host =
+        Host::new(HostConfig::offline(pools()).build()).expect("create foreign host");
     let player = insert_player(&mut owner_host);
 
     let error = foreign_host
@@ -49,7 +53,8 @@ fn foreign_host_cannot_close_owned_player() {
 #[kithara::test]
 fn dropping_host_invalidates_retained_player_control() {
     let player = {
-        let mut host = Host::new(HostConfig::builder().build()).expect("create fixture host");
+        let mut host =
+            Host::new(HostConfig::offline(pools()).build()).expect("create fixture host");
         insert_player(&mut host)
     };
 

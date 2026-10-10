@@ -667,8 +667,6 @@ mod tests {
                 want,
                 len,
                 SourcePhase::Waiting,
-                0,
-                false,
             ),
         )
     }

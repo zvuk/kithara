@@ -148,7 +148,7 @@ tracing-subscriber = { workspace = true }
 # `symphonia`, which would leak into apple/android device builds (compiled
 # with `--no-default-features`). symphonia is re-added explicitly via the
 # crate-local `symphonia` feature (in the default set, off on device).
-kithara = { workspace = true, default-features = false, features = ["download", "backend-cpal", "file", "hls", "sync", "warp"] }
+kithara = { workspace = true, default-features = false, features = ["download", "backend-cpal", "file", "hls", "warp"] }
 
 bytes = { workspace = true }
 # Pulled in by firewheel-cpal transitively; surfaced as a direct dep under
@@ -169,6 +169,7 @@ kithara = { workspace = true, default-features = false, features = [
     "hls",
     "host",
     "resample-rubato",
+    "stretch-glide",
     "symphonia",
     "webcodecs",
 ] }
@@ -207,6 +208,7 @@ kithara-apple = { workspace = true, features = ["foundation"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara = { workspace = true, features = ["usdt", "audio", "download", "net", "offline", "signal"] }
+kithara-platform = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["wav"] }
 kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang"] }
 

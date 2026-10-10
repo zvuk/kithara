@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ConsumerWakeMode},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration},
@@ -191,11 +191,9 @@ async fn run_case_paced(
                 .backend(backend)
                 .build(),
         )
-        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = worker
-        .load(audio_config)
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, audio_config)
         .await
         .expect("create Audio<Stream<Hls>>");
     audio.preload().expect("preload HLS phase scanner");

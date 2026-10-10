@@ -104,7 +104,9 @@ where
             Ok(WaitOutcome::Ready) => {}
             Ok(WaitOutcome::Eof) => return Ok(0),
             Ok(WaitOutcome::Interrupted) => {
-                return Err(pending(PendingReason::SeekPending));
+                return Err(pending(PendingReason::NotReady(
+                    NotReadyCause::WaitInterrupted,
+                )));
             }
             Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
                 self.session.arm_peer();

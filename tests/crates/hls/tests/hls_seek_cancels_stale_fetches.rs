@@ -11,7 +11,7 @@ use kithara::{
     hls::HlsEvent,
     platform::{
         time,
-        time::{Duration, Instant},
+        time::{Duration, WallInstant},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
@@ -180,25 +180,6 @@ async fn hls_seek_near_end_skips_prefix(
 
     let mut pre_seek_enqueued: HashSet<RequestId> = HashSet::new();
 
-    // Warmup = wait until the player is in *steady processor playback*, i.e.
-    // the offline render loop has actually committed PCM for this track and
-    // emitted `AudioEvent::PlaybackProgress` with a non-zero position. This
-    // is the discriminating gate: `HlsEvent::SegmentReadStart` only proves
-    // the stream layer is reading (it can fire during the up-front blocking
-    // preparation in `PlayWorker::load`, before the processor has the track in a playing
-    // state). The seek path runs through the processor —
-    // `apply_seek` only forwards `track.seek` for tracks in
-    // `FadingIn`/`Playing`, and only that path reaches `Audio::seek ->
-    // SeekControl::begin`, which bumps the stream seek epoch the HLS
-    // scheduler observes as `seek_epoch_reset`. Seeking before the track is
-    // actually rendering means `apply_seek` finds no eligible track, drops
-    // the seek silently, the epoch never bumps, and the scheduler never sees
-    // a new epoch (even while it stays busy emitting other probes). Gating on
-    // `PlaybackProgress` removes that race. We keep recording every
-    // `RequestEnqueued` seen on the way so the pre-seek baseline stays
-    // complete. The `time::timeout` is a safety deadline bounding a hang, not
-    // a pacing wait; under flash the `rx.recv().await` parks on the virtual
-    // clock so the render cadence (and scheduler) advance between events.
     let _ = time::timeout(consts::LOAD_DEADLINE, async {
         loop {
             match rx.recv().await.map(|env| env.event) {
@@ -243,19 +224,12 @@ async fn hls_seek_near_end_skips_prefix(
     // sits at an index past `pre_seek`.
     let pre_seek = probe_recorder.events().len();
 
-    let seek_at = Instant::now();
+    let seek_at = WallInstant::now();
     queue
         .run(move |q| q.seek(target_seconds))
         .await
         .expect("seek");
 
-    // Observe post-seek bus events AND wait for the scheduler to record the
-    // epoch reset, concurrently. Awaiting the scope parks the test body until
-    // a probe is recorded, which lets the flash engine advance virtual time so
-    // the (flash-coherent) tick driver cycles the HLS scheduler — that poll
-    // cycle is what fires `kithara_hls_probe::seek_epoch_reset`. The budget is
-    // a virtual hang ceiling, not a pacing wait; the probe-fired assertion
-    // below is unchanged.
     let (observation, _reset_evt) = tokio::join!(
         observe_post_seek(&mut rx, seek_at, &pre_seek_enqueued),
         time::timeout(
@@ -263,7 +237,7 @@ async fn hls_seek_near_end_skips_prefix(
             probe_recorder.wait_for(|events| {
                 events[pre_seek..]
                     .iter()
-                    .any(|e| e.target == "kithara_hls_probe" && e.probe == "seek_epoch_reset")
+                    .any(|e| e.target == "kithara_hls_probe" && e.probe == "rebuild")
             }),
         ),
     );
@@ -281,22 +255,16 @@ async fn hls_seek_near_end_skips_prefix(
 
     let post_seek_resets: Vec<_> = probe_events
         .iter()
-        .filter(|e| e.target == "kithara_hls_probe" && e.probe == "seek_epoch_reset")
+        .filter(|e| e.target == "kithara_hls_probe" && e.probe == "rebuild")
         .collect();
     assert!(
         !post_seek_resets.is_empty(),
-        "[{backend:?}, probe] hls_probe::seek_epoch_reset never fired after \
-         queue.seek — scheduler did not observe a new epoch (total probes = {total_probes})"
+        "[{backend:?}, probe] hls_probe::rebuild never fired after \
+         queue.seek — scheduler did not re-plan the target (total probes = {total_probes})"
     );
-    let new_epoch = post_seek_resets
-        .iter()
-        .filter_map(|e| e.field("seek_epoch"))
-        .max()
-        .expect("seek_epoch field present on seek_epoch_reset probe");
-
     let Some(TestEvent::Hls(HlsEvent::ReaderSeek {
         to_offset,
-        seek_epoch: reader_seek_epoch,
+        variant: reader_variant,
         segment_index,
         ..
     })) = observation.reader_seek
@@ -306,10 +274,6 @@ async fn hls_seek_near_end_skips_prefix(
              decoder seek didn't fire (or didn't reach the stream layer)"
         );
     };
-    assert_eq!(
-        reader_seek_epoch, new_epoch,
-        "[{backend:?}] ReaderSeek epoch {reader_seek_epoch} does not match scheduler epoch {new_epoch}"
-    );
     let target_segment = segment_index.unwrap_or_else(|| {
         panic!(
             "[{backend:?}] ReaderSeek to_offset={to_offset} landed outside \
@@ -324,10 +288,31 @@ async fn hls_seek_near_end_skips_prefix(
         consts::MAX_CONCURRENT,
     );
 
-    let post_seek_prefix_emissions: Vec<_> = probe_events
+    let reset = post_seek_resets
+        .first()
+        .expect("post-seek fetch plan rebuild");
+    let scheduler_variant = reset.field("variant").expect("fetch plan variant");
+    let scheduler_segment = reset.field("from_seg").expect("fetch plan target");
+    assert_eq!(
+        reader_variant.map(|variant| u64::try_from(variant).expect("variant fits u64")),
+        Some(scheduler_variant),
+        "the reader and the replacement fetch plan must name the same variant"
+    );
+    assert_eq!(
+        scheduler_segment,
+        u64::try_from(target_floor).expect("target floor fits u64"),
+        "the replacement fetch plan must start at the reader's seek target: {scheduler_segment} vs {target_segment}"
+    );
+    let reset_index = probe_events
+        .iter()
+        .position(|event| std::ptr::eq(event, *reset))
+        .expect("recorded rebuild belongs to this seek's probe window");
+    let post_reset_events = &probe_events[reset_index + 1..];
+
+    let post_seek_prefix_emissions: Vec<_> = post_reset_events
         .iter()
         .filter(|e| e.target == "kithara_hls_probe" && e.probe == "emit_fetch_cmd")
-        .filter(|e| e.field("seek_epoch") == Some(new_epoch))
+        .filter(|e| e.field("variant") == Some(scheduler_variant))
         .filter(|e| {
             e.field("segment_index").is_some_and(|s| {
                 let seg = usize::try_from(s).unwrap_or(usize::MAX);
@@ -338,7 +323,7 @@ async fn hls_seek_near_end_skips_prefix(
     assert!(
         post_seek_prefix_emissions.is_empty(),
         "[bug, {backend:?}, probe-level defense-in-depth] {} `fetch_cmd_emitted` \
-         events for prefix segments in the new epoch ({new_epoch}) after ReaderSeek \
+         events for prefix segments in the replacement fetch plan after ReaderSeek \
          landed at segment {target_segment} — scheduler walked through prefix \
          despite cursor reset. Sample seg indices: {:?}",
         post_seek_prefix_emissions.len(),
@@ -349,10 +334,10 @@ async fn hls_seek_near_end_skips_prefix(
             .collect::<Vec<_>>(),
     );
 
-    let target_emissions: Vec<_> = probe_events
+    let target_emissions: Vec<_> = post_reset_events
         .iter()
         .filter(|e| e.target == "kithara_hls_probe" && e.probe == "emit_fetch_cmd")
-        .filter(|e| e.field("seek_epoch") == Some(new_epoch))
+        .filter(|e| e.field("variant") == Some(scheduler_variant))
         .filter(|e| {
             e.field("segment_index").is_some_and(|s| {
                 let seg = usize::try_from(s).unwrap_or(0);
@@ -363,7 +348,7 @@ async fn hls_seek_near_end_skips_prefix(
     assert!(
         !target_emissions.is_empty(),
         "[{backend:?}, probe] no `fetch_cmd_emitted` for ReaderSeek target segment {target_segment} \
-         (or near it within WARMUP_TOLERANCE) in the new epoch ({new_epoch}) — \
+         (or near it within WARMUP_TOLERANCE) in the replacement fetch plan — \
          scheduler did not emit a FetchCmd for the seek target"
     );
 
@@ -418,7 +403,7 @@ async fn hls_seek_near_end_skips_prefix(
 
 async fn observe_post_seek(
     rx: &mut kithara::events::EventReceiver<TestEvent>,
-    _seek_at: Instant,
+    _seek_at: WallInstant,
     pre_seek_enqueued: &HashSet<RequestId>,
 ) -> PostSeekObservation {
     let mut obs = PostSeekObservation::default();

@@ -2,8 +2,7 @@
 //! pass-level tests drive, over silence or over real PCM.
 
 use kithara_audio::{
-    AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, DecodeError, ReadOutcome,
-    SeekOutcome,
+    AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome,
 };
 use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;
@@ -121,7 +120,7 @@ impl AudioRead for Track {
         let channels = u64::from(self.spec.channels);
         let from = (at * channels).to_usize().unwrap_or(0);
         let len = (frames * channels).to_usize().unwrap_or(0);
-        Ok(ChunkOutcome::Chunk(AudioChunk::new(
+        Ok(ChunkOutcome::Chunk(Box::new(AudioChunk::new(
             AudioChunkInfo {
                 spec: self.spec,
                 frames: u32::try_from(frames).unwrap_or(0),
@@ -129,7 +128,7 @@ impl AudioRead for Track {
                 ..Default::default()
             },
             sample_buffer(&self.pools, &self.pcm[from..from + len]),
-        )))
+        ))))
     }
 
     fn position(&self) -> Duration {
@@ -153,7 +152,7 @@ impl AudioRead for Track {
 }
 
 impl AudioControl for Track {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
         let target = self.spec.frame_at(position).unwrap_or(0);
         if target >= self.frames {
             return Ok(SeekOutcome::PastEof {

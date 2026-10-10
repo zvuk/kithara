@@ -18,7 +18,7 @@ mod time;
 mod units;
 
 pub use buffer::{InterleavedView, PlanarBuffer, PlanarView};
-pub use chunk::{AudioChunk, AudioChunkInfo, SourceSpan};
+pub use chunk::{AudioChunk, AudioChunkInfo, SegmentId, SourceSpan};
 pub use coverage::{CoverageRead, CoverageWrite, FrameCoverage, FrameSpan};
 pub use error::SignalError;
 pub use fader::FaderValue;

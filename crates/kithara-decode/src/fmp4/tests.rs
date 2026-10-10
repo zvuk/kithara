@@ -161,7 +161,7 @@ fn pull_one_chunk(
 ) -> Option<AudioChunk> {
     for _ in 0..16 {
         match decoder.next_chunk().ok()? {
-            DecoderChunkOutcome::Chunk(chunk) => return Some(chunk),
+            DecoderChunkOutcome::Chunk(chunk) => return Some(*chunk),
             DecoderChunkOutcome::Pending(_) => continue,
             DecoderChunkOutcome::Eof => return None,
         }

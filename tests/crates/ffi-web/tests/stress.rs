@@ -11,7 +11,7 @@ use kithara::{
     events::EventBus,
     hls::{Hls, HlsConfig},
     platform::time::{Duration, Instant},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -19,6 +19,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     fixture_protocol::DataMode,
+    mock::LaneAudio,
 };
 use kithara_test_fixtures::signal;
 use kithara_test_utils::Xorshift64;
@@ -66,7 +67,7 @@ async fn create_stress_source(jitter: bool) -> (TestServerHelper, Url) {
 /// seek reads what an earlier one downloaded.
 const STRESS_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
-async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
+async fn create_pipeline_with_url(url: Url) -> LaneAudio<Stream<Hls<TestPools>>, TestPools> {
     const EVENT_BUS_CAPACITY: usize = 4096;
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
     let pools = pools();
@@ -99,14 +100,16 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
         .media_info(wav_info)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = worker.load(config).await.unwrap();
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .unwrap();
     audio
         .preload()
         .expect("start preloading the stress fixture");
     audio
 }
 
-async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls<TestPools>>, TestPools>) {
+async fn run_seek_pcm_window_check(mut audio: LaneAudio<Stream<Hls<TestPools>>, TestPools>) {
     let spec = audio.spec();
     let channels = spec.channels as usize;
     let sample_rate = spec.sample_rate.get() as usize;
@@ -210,7 +213,7 @@ async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls<TestPoo
 /// uses `preload()` mode where `read()` returns 0 when data isn't ready yet.
 /// We yield via `gloo_timers` to let async downloads and Web Workers proceed.
 async fn read_with_yield(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
 ) -> Option<usize> {
     read_with_yield_limit(audio, buf, 500).await
@@ -223,7 +226,7 @@ async fn read_with_yield(
 /// stream ends the warmup early. Collapsing the two would judge a slow
 /// browser as a silent one.
 async fn warm_up(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
 ) -> usize {
     let mut produced = 0usize;
@@ -240,7 +243,7 @@ async fn warm_up(
 /// of the stream; `Some(0)` is a reader that stayed pending for the whole
 /// budget.
 async fn read_with_yield_limit(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
     budget_ms: u32,
 ) -> Option<usize> {

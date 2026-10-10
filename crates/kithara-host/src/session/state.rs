@@ -4,165 +4,49 @@ use arc_swap::ArcSwap;
 use firewheel::{
     FirewheelConfig, FirewheelContext,
     channel_config::ChannelCount,
-    diff::Memo,
     node::{AudioNode, NodeID},
-    nodes::volume::VolumeNode,
 };
-use kithara_bufpool::PoolRegion;
-use kithara_command::Live;
+use kithara_command::{Live, ScopedConfig, ScopedSender, Seq, When};
 use kithara_config::ConfigOwner;
-use kithara_dsp::param::SmootherConfig;
-use kithara_effects::{GainDb, eq::EqBandConfig};
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_play::{SessionSampleRate, StreamShape, session::RegisteredPlayer};
-use kithara_sync::{GroupState, SyncError, SyncGroup, SyncGroupSnapshot, SyncStatusSnapshot};
-use kithara_warp::{BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot};
+use kithara_play::{PlayError, SessionOutputView, SessionSampleRate, StreamShape};
+use kithara_render::bridge::DeckProtocol;
+use kithara_signal::{FrameCount, SessionEpoch, SessionFrame};
+use kithara_warp::{
+    BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, MapAxis, SessionAxis,
+};
 use tracing::{debug, warn};
+use triple_buffer::Output;
 
 use super::{
     dispatch::{restart_stream, sample_rate, stream_shape, trace_stream_info},
     graph::tap,
-    protocol::{PlayerId, SessionError, StartStreamFn},
+    protocol::{SessionError, StartStreamFn},
     queue::HostProtocol,
-    transport::{SessionGridGeneration, TransportControl, install},
+    transport::{SessionGridGeneration, SessionInboxReturnNode, TransportObservation, install},
 };
 use crate::{
-    PlayerMember,
-    api::{SlotId, Tap},
-    bridge::SharedEq,
+    DeckId,
+    api::Tap,
     host::HostSettings,
-    rt::{MasterEqNode, MasterNode, SessionOutput},
+    rt::{MasterNode, SessionOutput},
 };
 
-#[derive(Debug)]
-pub(super) struct SlotNodes {
-    pub(super) volume_memo: Memo<VolumeNode>,
-    pub(super) player_node_id: NodeID,
-    pub(super) volume_node_id: NodeID,
-    pub(super) slot_id: SlotId,
-}
-
-pub(super) struct Deck<S> {
-    pub(super) grid_id: BeatGridId,
-    pub(super) bus: EventBus,
-    pub(super) master_eq_memo: Option<Memo<MasterEqNode<S>>>,
-    pub(super) master_eq_node_id: Option<NodeID>,
-    pub(super) master_volume_memo: Option<Memo<VolumeNode>>,
-    pub(super) master_volume_node_id: Option<NodeID>,
-    pub(super) player_id: PlayerId,
-    pub(super) pools: PoolRegion<S>,
-    pub(super) shared_eq: SharedEq,
-    pub(super) gate_smoothing: SmootherConfig,
-    pub(super) eq_layout: Vec<EqBandConfig>,
-    pub(super) slots: Vec<SlotNodes>,
-    pub(super) started: bool,
-    pub(super) master_volume: f32,
-    pub(super) next_slot_id: u64,
-}
-
-impl<S> Deck<S> {
-    pub(super) fn new(
-        player_id: PlayerId,
-        grid_id: BeatGridId,
-        bus: EventBus,
-        eq_layout: Vec<EqBandConfig>,
-        pools: PoolRegion<S>,
-        master_volume: f32,
-        gate_smoothing: SmootherConfig,
-    ) -> Self {
-        let (eq_layout, gains) = prepare_eq_layout(eq_layout);
-        let band_count = eq_layout.len();
-        let shared_eq = SharedEq::new(band_count);
-        shared_eq.replace(&gains);
-        Self {
-            bus,
-            eq_layout,
-            gate_smoothing,
-            pools,
-            player_id,
-            grid_id,
-            master_volume,
-            shared_eq,
-            master_eq_memo: None,
-            master_eq_node_id: None,
-            master_volume_memo: None,
-            master_volume_node_id: None,
-            next_slot_id: 1,
-            slots: Vec::new(),
-            started: false,
-        }
-    }
-}
-
-#[derive_where::derive_where(Default)]
-pub(super) struct GraphRegistry<S> {
-    decks: Vec<Deck<S>>,
-}
-
-impl<S> GraphRegistry<S> {
-    pub(super) fn index_by_grid(&self, grid_id: BeatGridId) -> Option<usize> {
-        self.decks
-            .iter()
-            .position(|candidate| candidate.grid_id == grid_id)
-    }
-
-    pub(super) fn index_by_player(&self, player_id: PlayerId) -> Option<usize> {
-        self.decks
-            .iter()
-            .position(|candidate| candidate.player_id == player_id)
-    }
-
-    pub(super) fn insert(&mut self, deck: Deck<S>) -> Result<(), SessionError> {
-        if self
-            .decks
-            .iter()
-            .any(|candidate| candidate.grid_id == deck.grid_id)
-        {
-            return Err(SessionError::Graph(
-                "player grid is already projected into the session graph".to_owned(),
-            ));
-        }
-        self.decks.push(deck);
-        Ok(())
-    }
-
-    pub(super) fn remove(&mut self, index: usize) -> Option<Deck<S>> {
-        (index < self.decks.len()).then(|| self.decks.remove(index))
-    }
-
-    delegate::delegate! {
-        to self.decks {
-            #[call(get)]
-            pub(super) fn deck(&self, index: usize) -> Option<&Deck<S>>;
-            #[call(get_mut)]
-            pub(super) fn deck_mut(&mut self, index: usize) -> Option<&mut Deck<S>>;
-            #[call(iter)]
-            pub(super) fn decks(&self) -> impl Iterator<Item = &Deck<S>>;
-            pub(super) fn len(&self) -> usize;
-        }
-    }
-}
-
-pub(super) fn prepare_eq_layout(eq_layout: Vec<EqBandConfig>) -> (Vec<EqBandConfig>, Vec<GainDb>) {
-    let gains = eq_layout.iter().map(EqBandConfig::gain_db).collect();
-    (eq_layout, gains)
-}
-
-pub(super) enum TapSlot {
+pub(crate) enum TapSlot {
     Requested(OutputGroup),
     Installed(NodeID),
 }
 
 #[derive(Default)]
-pub(super) struct Taps {
+pub(crate) struct Taps {
     master: Option<TapSlot>,
     output: Option<TapSlot>,
 }
 
 impl Taps {
-    pub(super) fn slot(&mut self, tap: Tap) -> &mut Option<TapSlot> {
+    pub(crate) fn slot(&mut self, tap: Tap) -> &mut Option<TapSlot> {
         match tap {
             Tap::Master => &mut self.master,
             Tap::Output => &mut self.output,
@@ -170,97 +54,198 @@ impl Taps {
     }
 }
 
-struct RootSnapshot {
+/// The Host's session grid, which its transport publishes into.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
+pub(crate) struct HostRoot {
+    /// The session grid the transport last committed.
+    #[field(get, vis = "pub(crate)")]
     grid: BeatGridSnapshot,
-    settings: HostSettings,
-    stream_shape: Option<StreamShape>,
-    topology: Result<SyncGroupSnapshot, SyncError>,
-    sample_rate: SessionSampleRate,
-    status: SyncStatusSnapshot,
 }
 
+impl HostRoot {
+    /// A root `id` with no deck, its grid not yet live on a session axis at
+    /// `sample_rate`.
+    pub(crate) fn new(id: BeatGridId, sample_rate: NonZeroU32) -> Self {
+        Self {
+            grid: BeatGridSnapshot::unavailable(
+                id,
+                BeatGridRevision::first(),
+                MapAxis::Session(SessionAxis::new(sample_rate, SessionEpoch::new(0))),
+            ),
+        }
+    }
+
+    pub(crate) fn id(&self) -> BeatGridId {
+        self.grid.id()
+    }
+
+    /// Takes the session grid the transport committed.
+    pub(crate) fn publish(&mut self, grid: BeatGridSnapshot) {
+        self.grid = grid;
+    }
+
+    /// Takes the grid of a route boundary: a later revision `stamp` names,
+    /// on the session axis of `epoch` at `sample_rate`, with no geometry
+    /// until the transport commits one.
+    pub(crate) fn publish_unavailable(
+        &mut self,
+        stamp: BeatGridStamp,
+        sample_rate: NonZeroU32,
+        epoch: SessionEpoch,
+    ) {
+        self.publish(BeatGridSnapshot::unavailable(
+            stamp.grid_id(),
+            stamp.revision(),
+            MapAxis::Session(SessionAxis::new(sample_rate, epoch)),
+        ));
+    }
+}
+
+struct RootSnapshot {
+    /// Completion fence unavailable until mailbox posts expose their ticket sequence.
+    applied: Option<Seq>,
+    decks: Box<[BeatGridId]>,
+    grid: BeatGridSnapshot,
+    settings: HostSettings,
+}
+
+/// What the session last published: its decks, grid and settings, and the
+/// output its decks read.
 #[derive(Clone)]
-pub(crate) struct RootView(Arc<ArcSwap<RootSnapshot>>);
+pub(crate) struct RootView {
+    root: Arc<ArcSwap<RootSnapshot>>,
+    pub(crate) output: SessionOutputView,
+}
 
 impl RootView {
-    pub(crate) fn new(root: &GroupState<PlayerMember>, settings: HostSettings) -> Self {
-        Self(Arc::new(ArcSwap::from_pointee(RootSnapshot {
-            settings,
-            grid: root.snapshot(),
-            stream_shape: None,
-            sample_rate: SessionSampleRate::new(None, settings.sample_rate().get()),
-            status: root.status(),
-            topology: root.topology(),
-        })))
+    pub(crate) fn new(root: &HostRoot, settings: HostSettings) -> Self {
+        Self {
+            root: Arc::new(ArcSwap::from_pointee(RootSnapshot {
+                applied: None,
+                settings,
+                decks: Box::default(),
+                grid: root.grid.clone(),
+            })),
+            output: SessionOutputView::new(settings.sample_rate()),
+        }
     }
 
     fn publish(
         &self,
-        root: &GroupState<PlayerMember>,
+        root: &HostRoot,
         settings: HostSettings,
         stream_shape: Option<StreamShape>,
         sample_rate: SessionSampleRate,
     ) {
-        self.0.store(Arc::new(RootSnapshot {
+        let snapshot = self.root.load();
+        self.root.store(Arc::new(RootSnapshot {
+            applied: snapshot.applied,
             settings,
-            stream_shape,
-            sample_rate,
-            grid: root.snapshot(),
-            status: root.status(),
-            topology: root.topology(),
+            decks: snapshot.decks.clone(),
+            grid: root.grid.clone(),
+        }));
+        self.output.publish(sample_rate, stream_shape);
+    }
+
+    pub(crate) fn publish_decks(&self, decks: Box<[BeatGridId]>) {
+        let snapshot = self.root.load();
+        self.root.store(Arc::new(RootSnapshot {
+            applied: snapshot.applied,
+            decks,
+            grid: snapshot.grid.clone(),
+            settings: snapshot.settings,
         }));
     }
 
+    /// Whether the deck `grid_id` is in the session.
+    pub(crate) fn holds(&self, grid_id: BeatGridId) -> bool {
+        self.root.load().decks.contains(&grid_id)
+    }
+
+    /// Whether the session holds no deck.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.root.load().decks.is_empty()
+    }
+
     delegate::delegate! {
-        to self.0 {
+        to self.root {
             #[call(load)]
             #[expr($.grid.clone())]
             pub(crate) fn grid(&self) -> BeatGridSnapshot;
             #[call(load)]
-            #[expr($.sample_rate)]
-            pub(crate) fn sample_rate(&self) -> SessionSampleRate;
-            #[call(load)]
             #[expr($.settings)]
             pub(crate) fn settings(&self) -> HostSettings;
-            #[call(load)]
-            #[expr($.stream_shape)]
-            pub(crate) fn stream_shape(&self) -> Option<StreamShape>;
-            #[call(load)]
-            #[expr($.status)]
-            pub(crate) fn status(&self) -> SyncStatusSnapshot;
-            #[call(load)]
-            #[expr($.topology.clone())]
-            pub(crate) fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
+        }
+        to self.output {
+            #[call(get)]
+            #[expr($.sample_rate)]
+            pub(crate) fn sample_rate(&self) -> SessionSampleRate;
         }
     }
 }
 
+pub(crate) enum SessionStream {
+    #[cfg(not(target_arch = "wasm32"))]
+    Realtime {
+        _backend: Box<firewheel::cpal::CpalStream>,
+    },
+    #[cfg(target_arch = "wasm32")]
+    Realtime {
+        _backend: firewheel_web_audio::WebAudioBackend,
+    },
+    #[cfg(feature = "offline")]
+    Offline(Box<crate::session::offline::backend::OfflineStream>),
+}
+
+pub(crate) struct DeckNode {
+    pub(crate) id: DeckId,
+    pub(crate) node: NodeID,
+    pub(crate) bus: Option<EventBus>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct SessionBufferConfig {
+    pub(crate) max_block_frames: Option<NonZeroU32>,
+    pub(crate) declick_frames: Option<NonZeroU32>,
+}
+
 pub(crate) struct SessionState<T, S> {
-    pub(super) graph: GraphRegistry<S>,
-    pub(super) root: GroupState<PlayerMember>,
-    pub(super) output: SessionOutput,
-    pub(super) session_metronome_node_id: Option<NodeID>,
-    pub(super) ctx: Option<FirewheelContext>,
-    pub(super) taps: Taps,
+    pub(crate) settled: Vec<crate::HostSettled>,
+    /// The single clock read and delivery lead for the current owner pass.
+    pub(crate) iteration_clock: Option<(SessionFrame, FrameCount)>,
+    /// Wall-time delivery lead, absent for a runtime that drains before rendering.
+    pub(crate) delivery_delay: Option<Duration>,
+    /// Graph node identities; deck state remains with the deck's owner.
+    pub(crate) deck_nodes: Vec<DeckNode>,
+    pub(crate) channel_config: ScopedConfig,
+    marker: std::marker::PhantomData<fn() -> S>,
+    pub(crate) root: HostRoot,
+    pub(crate) output: SessionOutput,
+    pub(crate) session_metronome_node_id: Option<NodeID>,
+    pub(crate) ctx: Option<FirewheelContext>,
+    pub(crate) taps: Taps,
     /// The pause/resume fade length the session asks Firewheel for, in frames.
     /// `None` leaves Firewheel's own default in place.
-    pub(super) requested_declick_frames: Option<NonZeroU32>,
-    pub(super) requested_max_block_frames: Option<NonZeroU32>,
-    pub(super) reserved_session_grid: Option<SessionGridGeneration>,
-    pub(super) session_limiter_node_id: Option<NodeID>,
-    pub(super) session_output_node_id: Option<NodeID>,
-    pub(super) stream: Option<T>,
-    pub(super) transport_control: Option<TransportControl>,
-    pub(super) next_player_id: PlayerId,
-    pub(super) root_view: RootView,
+    pub(crate) requested_declick_frames: Option<NonZeroU32>,
+    pub(crate) requested_max_block_frames: Option<NonZeroU32>,
+    pub(crate) reserved_session_grid: Option<SessionGridGeneration>,
+    pub(crate) session_limiter_node_id: Option<NodeID>,
+    pub(crate) session_output_node_id: Option<NodeID>,
+    pub(crate) stream: Option<T>,
+    /// The root and deck scopes of the session's command channel.
+    pub(crate) channel: Option<ScopedSender<HostProtocol, DeckProtocol>>,
+    /// What the running transport last committed.
+    pub(crate) transport_observation: Option<Output<TransportObservation>>,
+    pub(crate) root_view: RootView,
     /// The Host settings as the render graph confirmed them, with the
     /// changes still on their way to it.
-    pub(super) settings: Live<HostSettings, HostProtocol>,
-    pub(super) start_stream_fn: StartStreamFn<T>,
+    pub(crate) settings: Live<HostSettings, HostProtocol>,
+    pub(crate) start_stream_fn: StartStreamFn<T>,
     /// Set when the output device is acquired once and cannot be rebuilt, so
     /// an idle session must keep it rather than release it.
-    pub(super) retains_output: bool,
-    pub(super) stream_needs_restart: bool,
+    pub(crate) retains_output: bool,
+    pub(crate) stream_needs_restart: bool,
 }
 
 /// The stream outlives nothing: it is dropped before the context.
@@ -277,19 +262,16 @@ impl<T, S> Drop for SessionState<T, S> {
 }
 
 impl<T, S> SessionState<T, S> {
-    #[cfg(test)]
-    pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
-
     /// Creates session state with its own musical-grid topology, asking for
     /// the output at the sample rate its settings name.
     #[must_use]
     pub(crate) fn new<F>(
-        root: GroupState<PlayerMember>,
+        root: HostRoot,
         root_view: RootView,
-        requested_max_block_frames: Option<NonZeroU32>,
-        requested_declick_frames: Option<NonZeroU32>,
+        buffers: SessionBufferConfig,
         output: SessionOutput,
         settings: Live<HostSettings, HostProtocol>,
+        channel_config: ScopedConfig,
         start_stream_fn: F,
     ) -> Self
     where
@@ -300,8 +282,9 @@ impl<T, S> SessionState<T, S> {
         generation.commit_revision(BeatGridRevision::first());
         let state = Self {
             settings,
-            requested_max_block_frames,
-            requested_declick_frames,
+            channel_config,
+            requested_max_block_frames: buffers.max_block_frames,
+            requested_declick_frames: buffers.declick_frames,
             output,
             session_metronome_node_id: None,
             root,
@@ -309,21 +292,66 @@ impl<T, S> SessionState<T, S> {
             start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
             stream: None,
-            transport_control: None,
+            channel: None,
+            transport_observation: None,
             taps: Taps::default(),
-            next_player_id: 1,
             session_output_node_id: None,
             session_limiter_node_id: None,
             retains_output: false,
             stream_needs_restart: false,
             reserved_session_grid: Some(generation),
-            graph: GraphRegistry::default(),
+            settled: Vec::new(),
+            iteration_clock: None,
+            delivery_delay: None,
+            deck_nodes: Vec::new(),
+            marker: std::marker::PhantomData,
         };
         state.publish_root();
         state
     }
 
-    pub(super) fn publish_root(&self) {
+    pub(crate) fn begin_iteration(&mut self) {
+        self.iteration_clock = self.ctx.as_ref().and_then(|ctx| {
+            let _ = ctx.stream_info()?;
+            Some((
+                SessionFrame::new(ctx.audio_clock().samples.0),
+                self.delivery(),
+            ))
+        });
+    }
+
+    /// Rejects a timed change that cannot reach the render executor in this pass.
+    pub(crate) fn check_when(&self, when: When<SessionFrame>) -> Result<(), PlayError> {
+        match when {
+            When::Next => Ok(()),
+            When::At(frame) => {
+                let (now, delivery) = self.iteration_clock.ok_or(PlayError::Untimed)?;
+                if frame < now + delivery {
+                    Err(PlayError::Late)
+                } else {
+                    Ok(())
+                }
+            }
+            When::Deferred => Err(PlayError::Internal(
+                "this owner change cannot be deferred".to_owned(),
+            )),
+        }
+    }
+
+    /// The configured owner pump and worker wake allowances, plus one output block.
+    pub(crate) fn delivery(&self) -> FrameCount {
+        let duration = self.delivery_delay.unwrap_or_default();
+        let publication_frames = duration
+            .as_nanos()
+            .saturating_mul(u128::from(sample_rate(self).output()))
+            .div_ceil(1_000_000_000);
+        let publication_frames = usize::try_from(publication_frames).unwrap_or(usize::MAX);
+        let block_frames =
+            stream_shape(self).map_or(0, |shape| shape.max_block_frames.get() as usize);
+        FrameCount::new(publication_frames.saturating_add(block_frames))
+    }
+
+    pub(crate) fn publish_root(&self) {
         self.root_view.publish(
             &self.root,
             *self.settings.config(),
@@ -336,7 +364,7 @@ impl<T, S> SessionState<T, S> {
 /// Adds a node to the graph, turning the rejection Firewheel now reports into
 /// the session's own graph error. A node the graph refuses is a wiring bug, not
 /// a runtime condition the session can route around.
-pub(super) fn add_graph_node<N: AudioNode + 'static>(
+pub(crate) fn add_graph_node<N: AudioNode + 'static>(
     ctx: &mut FirewheelContext,
     node: N,
 ) -> Result<NodeID, SessionError> {
@@ -344,56 +372,7 @@ pub(super) fn add_graph_node<N: AudioNode + 'static>(
         .map_err(|err| SessionError::Graph(format!("audio graph rejected a node: {err}")))
 }
 
-pub(super) fn register_player<T, S>(
-    state: &mut SessionState<T, S>,
-    grid_id: BeatGridId,
-    bus: EventBus,
-    eq_layout: Vec<EqBandConfig>,
-    pools: PoolRegion<S>,
-    gate_smoothing: SmootherConfig,
-) -> Result<RegisteredPlayer, SessionError> {
-    let player_id = state.next_player_id;
-    let next_player_id = player_id
-        .checked_add(1)
-        .ok_or(SessionError::PlayerIdExhausted)?;
-    let master_volume = state
-        .root
-        .with_group(grid_id, PlayerMember::host_level)
-        .ok_or_else(|| {
-            SessionError::Graph(
-                "player must be attached to the host before graph registration".to_owned(),
-            )
-        })?;
-    if !master_volume.is_finite() || !(0.0..=1.0).contains(&master_volume) {
-        return Err(SessionError::MasterVolumeOutOfRange {
-            player_id,
-            level: master_volume,
-        });
-    }
-    let deck = Deck::new(
-        player_id,
-        grid_id,
-        bus,
-        eq_layout,
-        pools,
-        master_volume,
-        gate_smoothing,
-    );
-    let registration = RegisteredPlayer {
-        id: player_id,
-        eq: deck.shared_eq.clone(),
-    };
-    state.graph.insert(deck)?;
-    state.next_player_id = next_player_id;
-    debug!(
-        player_id,
-        players = state.graph.len(),
-        "[KITHARA-ROUTE] session player registered"
-    );
-    Ok(registration)
-}
-
-pub(super) fn ensure_ctx<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+pub(crate) fn ensure_ctx<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     ensure_stream_ready(state)?;
     ensure_session_output(state)
 }
@@ -403,7 +382,7 @@ fn ensure_stream_ready<T, S>(state: &mut SessionState<T, S>) -> Result<(), Sessi
         return create_firewheel_context(state);
     }
 
-    if state.stream_needs_restart {
+    if state.stream_needs_restart || state.stream.is_none() {
         debug!("[KITHARA-ROUTE] ensuring stopped stream is restarted");
         restart_stream(state)?;
     }
@@ -430,8 +409,13 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
         .reserved_session_grid
         .take()
         .ok_or_else(|| SessionError::Graph("session grid generation is missing".to_owned()))?;
-    let transport_control = match install(&mut ctx, session_grid, *state.settings.config()) {
-        Ok(control) => control,
+    let (channel, transport_observation) = match install(
+        &mut ctx,
+        session_grid,
+        *state.settings.config(),
+        state.channel_config,
+    ) {
+        Ok(transport) => transport,
         Err(error) => {
             state.reserved_session_grid = Some(session_grid);
             return Err(SessionError::Graph(error.into()));
@@ -446,7 +430,8 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
     };
     state.ctx = Some(ctx);
     state.stream = Some(stream);
-    state.transport_control = Some(transport_control);
+    state.channel = Some(channel);
+    state.transport_observation = Some(transport_observation);
     state.stream_needs_restart = false;
     state.publish_root();
     trace_stream_info(state, "start-stream");
@@ -472,6 +457,7 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
     let session_id = add_graph_node(fw_ctx, MasterNode)?;
     let limiter_id = add_graph_node(fw_ctx, limiter)?;
     let metronome_id = add_graph_node(fw_ctx, metronome)?;
+    let inbox_return_id = add_graph_node(fw_ctx, SessionInboxReturnNode)?;
     let graph_out = fw_ctx.graph_out_node_id();
     fw_ctx
         .connect(session_id, limiter_id, &[(0, 0), (1, 1)], false)
@@ -484,9 +470,14 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
             SessionError::Graph(format!("connect limiter to metronome failed: {err}"))
         })?;
     fw_ctx
-        .connect(metronome_id, graph_out, &[(0, 0), (1, 1)], false)
+        .connect(metronome_id, inbox_return_id, &[(0, 0), (1, 1)], false)
         .map_err(|err| {
-            SessionError::Graph(format!("connect metronome to graph_out failed: {err}"))
+            SessionError::Graph(format!("connect metronome to inbox return failed: {err}"))
+        })?;
+    fw_ctx
+        .connect(inbox_return_id, graph_out, &[(0, 0), (1, 1)], false)
+        .map_err(|err| {
+            SessionError::Graph(format!("connect inbox return to graph_out failed: {err}"))
         })?;
     if let Err(err) = fw_ctx.update() {
         warn!("session graph update after output init failed: {err:?}");

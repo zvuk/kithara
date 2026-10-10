@@ -25,7 +25,10 @@ network-manual = []
 
 [dependencies]
 kithara = { workspace = true, features = ["usdt", "backend-cpal", "download", "dsp", "mock", "offline", "queue", "resample-rubato", "signal", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }
+kithara-command = { workspace = true }
+kithara-config = { workspace = true }
 kithara-integration-tests = { workspace = true, features = ["all"] }
+kithara-render = { workspace = true }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "library", "packaged", "rhythm", "signal"] }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "temp-dir"] }

@@ -46,7 +46,6 @@ pub(crate) fn decode_item_event(data: &JsValue) -> Option<FfiItemEvent> {
             channels: ItemDecode::narrow_u16(get_f64(data, "channels")?),
             bit_depth: get_f64(data, "bit_depth").map(ItemDecode::narrow_u16),
             bitrate: get_f64(data, "bitrate").map(ItemDecode::narrow_u32),
-            epoch: ItemDecode::narrow_u64(get_f64(data, "epoch")?),
             cause: ItemDecode::decode_decoder_change_cause(get_str(data, "cause")),
             variant: get_f64(data, "variant").map(ItemDecode::narrow_u32),
             base_offset: ItemDecode::narrow_u64(get_f64(data, "base_offset")?),
@@ -89,10 +88,8 @@ pub(crate) fn decode_item_event(data: &JsValue) -> Option<FfiItemEvent> {
         },
         "SeekComplete" => FfiItemEvent::SeekComplete {
             position_seconds: get_f64(data, "position_seconds")?,
-            epoch: ItemDecode::narrow_u64(get_f64(data, "epoch")?),
         },
         "SeekRejected" => FfiItemEvent::SeekRejected {
-            epoch: ItemDecode::narrow_u64(get_f64(data, "epoch")?),
             target_seconds: get_f64(data, "target_seconds")?,
         },
         "DecoderReady" => FfiItemEvent::DecoderReady {
@@ -101,20 +98,16 @@ pub(crate) fn decode_item_event(data: &JsValue) -> Option<FfiItemEvent> {
         },
         "TrackFailed" => FfiItemEvent::TrackFailed {
             reason: ItemDecode::decode_track_failure_kind(data)?,
-            epoch: ItemDecode::narrow_u64(get_f64(data, "epoch")?),
         },
         "UnderrunStarted" => FfiItemEvent::UnderrunStarted {
             position_ms: ItemDecode::narrow_u64(get_f64(data, "position_ms")?),
-            epoch: ItemDecode::narrow_u64(get_f64(data, "epoch")?),
         },
         "UnderrunEnded" => FfiItemEvent::UnderrunEnded {
             position_ms: ItemDecode::narrow_u64(get_f64(data, "position_ms")?),
-            epoch: ItemDecode::narrow_u64(get_f64(data, "epoch")?),
         },
         "BufferHealth" => FfiItemEvent::BufferHealth {
             buffered_ms: ItemDecode::narrow_u64(get_f64(data, "buffered_ms")?),
             decoded_frontier_ms: ItemDecode::narrow_u64(get_f64(data, "decoded_frontier_ms")?),
-            epoch: ItemDecode::narrow_u64(get_f64(data, "epoch")?),
         },
         "EngineLoad" => FfiItemEvent::EngineLoad {
             load: narrow_f32(get_f64(data, "load")?),
@@ -344,8 +337,6 @@ impl ItemDecode {
             Some("Initial") => FfiDecoderChangeCause::Initial,
             Some("VariantSwitch") => FfiDecoderChangeCause::VariantSwitch,
             Some("FormatBoundary") => FfiDecoderChangeCause::FormatBoundary,
-            Some("SeekRecreate") => FfiDecoderChangeCause::SeekRecreate,
-            Some("Recovery") => FfiDecoderChangeCause::Recovery,
             Some("HostRateChange") => FfiDecoderChangeCause::HostRateChange,
             _ => FfiDecoderChangeCause::Unknown,
         }

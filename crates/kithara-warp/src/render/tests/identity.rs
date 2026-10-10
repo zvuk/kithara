@@ -3,21 +3,21 @@ use kithara_stretch::StretchKind;
 use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 
-use super::{chunk, renderer, spec};
+use super::{chunk, fixtures::TerminalDrain, renderer, spec};
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use super::{flush_serviced, render_serviced};
-use crate::{WarpConfig, WarpRenderError, mock};
+use crate::{GridSegment, RegionPlan, WarpConfig, WarpRenderError};
 
 #[kithara::test]
-fn identity_projection_refusal_retains_the_original_pcm() {
+fn identity_region_plan_refusal_retains_the_original_pcm() {
     let config = WarpConfig::builder()
         .backend(StretchKind::Identity)
         .speed(0.5)
         .keylock(true)
+        .region_plan(kithara_platform::sync::Arc::new(
+            RegionPlan::new(vec![GridSegment::new(0, 4, 1.25)]).expect("one region"),
+        ))
         .build();
-    config.plan().install(Some(kithara_platform::sync::Arc::new(
-        mock::projected_plan(120.0, 180.0, spec().sample_rate),
-    )));
     let mut renderer = renderer(&config);
     renderer.prepare(spec());
     let input = chunk(&renderer.pools, &[0.25, -0.0, -0.25, 1.0]);
@@ -31,12 +31,12 @@ fn identity_projection_refusal_retains_the_original_pcm() {
 
     assert!(matches!(
         renderer.prepare_quantum(meta, input.frames(), usize::MAX),
-        Err(WarpRenderError::UnsupportedProjection)
+        Err(WarpRenderError::UnsupportedRegionPlan)
     ));
     let retained = renderer
         .render(input)
         .break_value()
-        .expect("unsupported projection retains PCM");
+        .expect("an unsupported region plan retains PCM");
     assert_eq!(retained.samples.as_ptr(), pointer);
     assert_eq!(retained.meta, meta);
     assert_eq!(

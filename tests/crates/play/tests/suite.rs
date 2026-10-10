@@ -13,6 +13,7 @@ mod common {
 }
 pub use kithara_integration_tests::gapless as gapless_common;
 
+mod bare_deck;
 mod crossfade_hls_to_mp3_repeats;
 mod hls_seek_middle_no_queue;
 mod hls_seek_middle_stress;
@@ -20,7 +21,9 @@ mod hls_seek_past_end_terminates;
 mod local_seek_hang_iters;
 mod non_leading_track_completion;
 mod parameter_smoothing;
+mod player;
 mod quality_switch_continuity;
+#[cfg(not(target_arch = "wasm32"))]
 mod resource_regressions;
 mod seamless_queue_advance;
 mod track_replay_after_switch;

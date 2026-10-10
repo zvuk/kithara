@@ -368,7 +368,7 @@ where
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             if let Some(output) = self.drain_ready()? {
-                return Ok(DecoderChunkOutcome::Chunk(output));
+                return Ok(DecoderChunkOutcome::Chunk(Box::new(output)));
             }
             match self.decoder.next_chunk()? {
                 DecoderChunkOutcome::Chunk(chunk) => {
@@ -381,7 +381,7 @@ where
                     if !self.eof_flushed {
                         self.eof_flushed = true;
                         if let Some(output) = self.flush_residual()? {
-                            return Ok(DecoderChunkOutcome::Chunk(output));
+                            return Ok(DecoderChunkOutcome::Chunk(Box::new(output)));
                         }
                     }
                     return Ok(DecoderChunkOutcome::Eof);

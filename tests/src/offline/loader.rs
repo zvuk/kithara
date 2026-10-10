@@ -1,7 +1,7 @@
 use kithara::{
     events::{EventReceiver, TrackId},
     platform::time::Duration,
-    queue::QueueControl,
+    queue::{QueueControl, TrackSource},
 };
 use kithara_test_fixtures::asset::Asset;
 
@@ -43,8 +43,9 @@ pub async fn append_loaded(
 pub async fn append_source_loaded(
     harness: &OfflinePlayer,
     queue: &QueueControl<TestPools>,
-    source: String,
+    source: impl Into<TrackSource<TestPools>>,
 ) -> TrackId {
+    let source = source.into();
     let mut events: EventReceiver<TestEvent> = queue.subscribe();
     let id = harness
         .run(queue, move |q| q.append(source))

@@ -70,14 +70,12 @@ pub enum DecoderSeekOutcome {
 /// Mirrors [`kithara_stream::ReadOutcome`] / [`InputReadOutcome`] in
 /// shape so every layer of the pipeline carries the same three-way
 /// distinction (`progress | pending | terminal`). `Pending` carries
-/// the typed [`PendingReason`] — typically
-/// [`PendingReason::SeekPending`] when an in-flight seek aborted the
-/// underlying read, or [`PendingReason::NotReady`] when the source
-/// signalled transient backpressure.
+/// the typed [`PendingReason`] for transient backpressure or a
+/// cross-variant boundary.
 #[derive(Debug)]
 pub enum DecoderChunkOutcome {
     /// Decoded PCM chunk.
-    Chunk(AudioChunk),
+    Chunk(Box<AudioChunk>),
     /// Decoder is alive but produced no chunk this call. See
     /// [`PendingReason`] for the precise cause.
     Pending(PendingReason),
@@ -90,7 +88,7 @@ impl TryFrom<DecoderChunkOutcome> for AudioChunk {
 
     fn try_from(outcome: DecoderChunkOutcome) -> Result<Self, Self::Error> {
         match outcome {
-            DecoderChunkOutcome::Chunk(chunk) => Ok(chunk),
+            DecoderChunkOutcome::Chunk(chunk) => Ok(*chunk),
             other => Err(other),
         }
     }
@@ -101,8 +99,8 @@ impl TryFrom<DecoderChunkOutcome> for AudioChunk {
 /// Supertrait combining `Read + Seek + Send + Sync`. Adds typed
 /// [`try_read`] returning [`InputReadOutcome`] so decoders never
 /// confuse "0 bytes" between EOF and `Pending(...)`.
-/// `kithara_stream::Stream` packages its typed status (`SeekPending`,
-/// `VariantChange`, `NotReady`/`Retry`) into `io::Error` payloads via
+/// `kithara_stream::Stream` packages its typed status (`VariantChange`,
+/// `NotReady`/`Retry`) into `io::Error` payloads via
 /// `impl Read for Stream`; the default `try_read` here downcasts those
 /// payloads back into [`PendingReason`]. Arbitrary `Read + Seek`
 /// sources (test cursors, fixtures) take the same default impl —
@@ -114,8 +112,8 @@ pub trait DecoderInput: Read + Seek + Send + Sync {
     /// # Errors
     ///
     /// Returns [`StreamReadError::Source`] for genuine source I/O
-    /// failures. Status conditions (seek pending, variant change,
-    /// data not ready) come back as `Ok(InputReadOutcome::Pending(...))`.
+    /// failures. Status conditions (variant change, data not ready)
+    /// come back as `Ok(InputReadOutcome::Pending(...))`.
     fn try_read(&mut self, buf: &mut [u8]) -> Result<InputReadOutcome, StreamReadError> {
         match Read::read(self, buf) {
             Ok(0) => Ok(InputReadOutcome::Eof),

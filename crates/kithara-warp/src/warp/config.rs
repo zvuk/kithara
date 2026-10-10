@@ -7,7 +7,7 @@ use kithara_stretch::{
     ElasticBackendConfig, ElasticBackendConfigPatch, ElasticBackendConfigPatchError, StretchKind,
 };
 
-use crate::{RegionPlan, WarpPlan, WarpPlanSlot, consts};
+use crate::{RegionPlan, consts};
 
 /// Fixed resources used to construct one resident [`super::Warp`].
 ///
@@ -16,9 +16,6 @@ use crate::{RegionPlan, WarpPlan, WarpPlanSlot, consts};
 #[config(builder(state_mod(vis = "pub")), patch(fallible), fields(value))]
 #[non_exhaustive]
 pub struct WarpConfig {
-    /// Explicit projected selection prepared by the musical policy owner.
-    #[config(skip = "shared projected warp plan handle", builder(default = Arc::new(WarpPlanSlot::default())), get(ref), patch(skip))]
-    plan: Arc<WarpPlanSlot>,
     /// Media seconds consumed per output second a renderer built from this
     /// configuration starts at. Not a document key: the render lane changes it
     /// on a frame.
@@ -57,40 +54,13 @@ pub struct WarpConfig {
     /// Maximum source frames admitted to one elastic render operation.
     #[config(builder(default = consts::DEFAULT_SOURCE_BLOCK_FRAMES), get(copy))]
     source_block_frames: NonZeroUsize,
-    /// Output-frame window used to smooth live rate changes.
-    #[config(builder(default = NonZeroUsize::MIN), get(copy))]
-    rate_smooth_frames: NonZeroUsize,
     /// Optional output-frame cap between samples of live temporal controls.
     /// Without a cap, Warp consumes the complete source span accepted by its backend.
     #[config(get(copy))]
     render_quantum_frames: Option<NonZeroUsize>,
-    /// Whether a renderer built from this configuration enters its plan at
-    /// the plan's activation rather than waiting for a presented output to
-    /// reach it. Only [`WarpConfig::entering`] sets it.
-    #[config(skip = "staged renderer activation state", builder(skip), patch(skip))]
-    entering: bool,
 }
 
 impl WarpConfig {
-    /// A copy that renders `plan` from its activation on through a plan slot
-    /// of its own: a staged lane prepares audio the plan will present, while
-    /// the lane that sounds now keeps its slot and its selection.
-    #[must_use]
-    pub fn entering(&self, plan: Arc<WarpPlan>) -> Self {
-        let slot = WarpPlanSlot::default();
-        slot.install(Some(plan));
-        Self {
-            plan: Arc::new(slot),
-            entering: true,
-            ..self.clone()
-        }
-    }
-
-    #[cfg(feature = "render")]
-    pub(crate) const fn enters_plan(&self) -> bool {
-        self.entering
-    }
-
     /// A copy whose renderer starts at `speed` on `backend`, keylocked where
     /// `keylock`: where a track's render lane stands when it opens, before
     /// the lane's first command.

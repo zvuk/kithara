@@ -21,30 +21,68 @@ stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
 stretch-bungee = ["kithara-warp/stretch-bungee"]
 stretch-glide = ["kithara-warp/stretch-glide"]
 stretch-identity = ["kithara-warp/stretch-identity"]
+flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
+mock = []
+no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
+perf = ["dep:hotpath", "hotpath/hotpath", "kithara-worker/perf"]
+usdt = ["kithara-test-utils/usdt", "kithara-worker/usdt"]
 
 [dependencies]
+kithara-abr = { workspace = true, default-features = false }
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-command = { workspace = true }
+kithara-config = { workspace = true }
+kithara-decode = { workspace = true, default-features = false }
+kithara-derive = { workspace = true, features = ["patch"] }
+kithara-dsp = { workspace = true }
 kithara-effects = { workspace = true }
+kithara-events = { workspace = true }
+kithara-output = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
+kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true }
 kithara-warp = { workspace = true, default-features = false, features = ["render"] }
+kithara-worker = { workspace = true }
 
+bon = { workspace = true }
 delegate = { workspace = true }
+derive-where = { workspace = true }
+fieldwork = { workspace = true }
+firewheel = { workspace = true }
+futures = { workspace = true }
+humantime-serde = { workspace = true }
+num-traits = { workspace = true }
+ringbuf = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+triple_buffer = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# hotpath profiling does not build on wasm32; keep it off the wasm closure.
+hotpath = { workspace = true, optional = true }
+
 [dev-dependencies]
+kithara-assets = { workspace = true }
+kithara-audio = { workspace = true, default-features = false, features = ["mock"] }
 kithara-beat = { workspace = true }
+kithara-file = { workspace = true, default-features = false }
+kithara-render = { path = ".", default-features = false, features = ["mock", "usdt"] }
+kithara-stream = { workspace = true, default-features = false, features = ["mock"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true }
-num-traits = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["mock", "hang"] }
+kithara-worker = { workspace = true, features = ["mock"] }
+unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
+serde_yaml_ng = { workspace = true }
 
 [lints]
 workspace = true

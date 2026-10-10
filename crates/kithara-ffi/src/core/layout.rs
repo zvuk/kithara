@@ -1,6 +1,9 @@
 /// FFI representation of an asset whose resources share one cache root.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiAssetSource {
     Remote {
         url: String,
@@ -13,7 +16,10 @@ pub enum FfiAssetSource {
 
 /// FFI representation of one resource within an asset.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiAssetResource {
     /// Direct-file source bytes with their resolved extension.
     Source { extension: String },
@@ -25,7 +31,10 @@ pub enum FfiAssetResource {
 
 /// Domain-scoped query parameters that identify remote media content.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Record)
+)]
 pub struct FfiCacheIdentityRule {
     /// Exact hosts, `*.domain` subdomain patterns, or `*`.
     pub domains: Vec<String>,
@@ -46,7 +55,10 @@ pub struct FfiCacheIdentityRule {
 /// Windows device names are refused; `_index`, `.tmp` and device-name checks
 /// are case-insensitive.
 #[kithara::mock(api = FfiAssetLayoutMock)]
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    uniffi::export(with_foreign)
+)]
 pub trait FfiAssetLayout: Send + Sync {
     fn path(&self, resource: FfiAssetResource) -> String;
     fn root(&self, source: FfiAssetSource) -> String;

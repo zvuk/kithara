@@ -1,21 +1,13 @@
-mod config;
-mod control;
-mod core;
-mod flow;
-mod lifecycle;
-mod player_impl;
-mod protocol;
-mod staging;
-mod state;
-mod view;
+mod factory;
+mod hosted;
+mod outbox;
+mod settings;
+mod track;
 
-pub use core::PlayerRuntime;
-
-pub use config::{
-    DEFAULT_CROSSFADE_DURATION, DEFAULT_PLAYING_RATE, PlayerConfig, PlayerConfigPatch,
+pub use factory::{PlayerFactory, Track, TrackFactory};
+pub use hosted::{DeckControl, DeckPass, HostedDeck};
+pub use outbox::{Bound, Outbox, Player, Settled, TrackReceipt};
+pub use settings::{
+    PlayerConfig, TrackSettings, TrackSettingsChange, TrackSettingsPatch, TrackSettingsPatchError,
 };
-pub use control::PlayerControl;
-pub use flow::SelectTransition;
-pub use player_impl::PlayerImpl;
-pub use protocol::{Player, PlayerControlSource};
-pub use view::PlaybackView;
+pub use track::{PlayerImpl, Position, TrackCommand, TrackSnapshot, TrackStatus};

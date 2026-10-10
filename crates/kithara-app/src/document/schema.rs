@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, num::NonZeroUsize};
 
 #[cfg(feature = "broadcast")]
 use kithara::broadcast::BroadcastConfigPatch;
@@ -12,8 +12,9 @@ use kithara::{
     file::FileConfigPatch,
     hls::HlsConfigPatch,
     net::NetOptionsPatch,
-    play::{PlayWorkerConfigPatch, PlayerConfigPatch},
+    play::PlayWorkerConfigPatch,
     queue::QueueConfigPatch,
+    warp::WarpConfigPatch,
     worker::{DispatcherConfigPatch, WorkerConfigPatch},
 };
 use serde::Deserialize;
@@ -36,7 +37,7 @@ pub(crate) struct Document {
     pub(crate) app: AppConfigPatch,
     pub(crate) assets: Assets,
     pub(crate) assets_store: AssetStoreConfigPatch,
-    pub(crate) audio: AudioConfigPatch,
+    pub(crate) audio: Audio,
     pub(crate) beat: BeatAnalysisConfigPatch,
     #[cfg(feature = "broadcast")]
     pub(crate) broadcast: BroadcastConfigPatch,
@@ -57,7 +58,6 @@ pub(crate) struct Document {
     pub(crate) net: NetOptionsPatch,
     /// Thread budgets of the one playback worker every deck shares.
     pub(crate) play_worker: PlayWorkerConfigPatch,
-    pub(crate) player: PlayerConfigPatch,
     pub(crate) playlist: Playlist,
     pub(crate) pools: PoolsSection,
     pub(crate) queue: QueueConfigPatch,
@@ -73,6 +73,42 @@ pub(crate) struct Document {
     #[cfg(feature = "gui")]
     pub(crate) ui: UiConfigPatch,
     pub(crate) worker: WorkerConfigPatch,
+    pub(crate) warp: WarpConfigPatch,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Audio {
+    pub(crate) pipeline: AudioConfigPatch,
+    pub(crate) preload_chunks: Option<NonZeroUsize>,
+    pub(crate) audio_buffer_chunks: Option<NonZeroUsize>,
+}
+
+impl<'de> Deserialize<'de> for Audio {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut fields = BTreeMap::<String, Value>::deserialize(deserializer)?;
+        let preload_chunks = fields
+            .remove("preload_chunks")
+            .map(serde_yaml_ng::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+        let audio_buffer_chunks = fields
+            .remove("audio_buffer_chunks")
+            .map(serde_yaml_ng::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+        let pipeline = serde_yaml_ng::from_value(Value::Mapping(
+            fields
+                .into_iter()
+                .map(|(key, value)| (Value::String(key), value))
+                .collect(),
+        ))
+        .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            pipeline,
+            preload_chunks,
+            audio_buffer_chunks,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -169,10 +205,39 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_refused_and_named() {
-        let error = serde_yaml_ng::from_str::<Document>("player:\n  fade_style: dj\n")
+        let error = serde_yaml_ng::from_str::<Document>("warp:\n  fade_style: dj\n")
             .expect_err("a typo must not pass silently");
 
         assert!(error.to_string().contains("fade_style"), "{error}");
+    }
+
+    #[kithara::test(native)]
+    fn audio_buffers_and_pipeline_settings_share_one_section() {
+        let document: Document = serde_yaml_ng::from_str(
+            "audio:\n  preload_chunks: 7\n  audio_buffer_chunks: 9\n  decoder: {}\n",
+        )
+        .expect("buffer and decoder settings parse together");
+
+        assert_eq!(document.audio.preload_chunks, NonZeroUsize::new(7));
+        assert_eq!(document.audio.audio_buffer_chunks, NonZeroUsize::new(9));
+    }
+
+    #[kithara::test(native)]
+    fn a_document_names_the_background_load_cap() {
+        let document: Document = serde_yaml_ng::from_str("queue:\n  max_concurrent_loads: 5\n")
+            .expect("the background load cap is valid");
+        assert_eq!(document.queue.max_concurrent_loads, NonZeroUsize::new(5));
+    }
+
+    #[kithara::test(native)]
+    fn audio_rejects_unknown_and_zero_buffer_settings() {
+        for yaml in [
+            "audio:\n  preload_chunk: 7\n",
+            "audio:\n  preload_chunks: 0\n",
+            "audio:\n  audio_buffer_chunks: 0\n",
+        ] {
+            assert!(serde_yaml_ng::from_str::<Document>(yaml).is_err(), "{yaml}");
+        }
     }
 
     #[kithara::test(native, flash(false))]
@@ -199,6 +264,10 @@ mod tests {
         assert!(
             document.assets_store.cache_capacity.is_none(),
             "a document naming no assets_store section leaves the crate default standing"
+        );
+        assert!(
+            document.queue.mixer.slots.is_none(),
+            "a document naming no queue section leaves the crate default standing"
         );
         assert!(
             document.queue.max_concurrent_loads.is_none(),

@@ -5,13 +5,14 @@ use kithara::{
     events::EventBus,
     file::{File, FileConfig},
     platform::time::{self, Duration},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::Stream,
 };
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
+    mock::LaneAudio,
 };
 use kithara_test_fixtures::SignalAsset;
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -31,7 +32,7 @@ async fn open_test_audio(
     temp_dir: &TestTempDir,
     backend: DecoderBackend,
     events: Option<EventBus>,
-) -> Option<RegisteredAudio<Stream<File<TestPools>>, TestPools>> {
+) -> Option<LaneAudio<Stream<File<TestPools>>, TestPools>> {
     let pools = pools();
     let file_config = FileConfig::for_src(url.clone().into())
         .store(
@@ -53,7 +54,10 @@ async fn open_test_audio(
         .maybe_events(events)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    kithara_integration_tests::fixtures::assert_fixture_open(asset, worker.load(config).await)
+    kithara_integration_tests::fixtures::assert_fixture_open(
+        asset,
+        kithara_integration_tests::mock::load_audio(&worker, config).await,
+    )
 }
 
 /// Nonblocking re-poll loop: these tests are browser-portable (async body,
@@ -63,7 +67,7 @@ async fn open_test_audio(
 /// deadline. `flash(true)` keeps the re-poll sleep on the virtual clock
 /// when called from a flash test.
 #[kithara::flash(true)]
-async fn next_chunk(audio: &mut RegisteredAudio<Stream<File<TestPools>>, TestPools>, stage: &str) {
+async fn next_chunk(audio: &mut LaneAudio<Stream<File<TestPools>>, TestPools>, stage: &str) {
     loop {
         match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(_)) => return,

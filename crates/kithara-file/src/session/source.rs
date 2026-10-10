@@ -8,9 +8,9 @@ use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{ResourceStatus, StorageError, WaitOutcome};
 use kithara_stream::{
-    Activity, ByteMap, MediaInfo, NotReadyCause, PendingReason, PlayheadRead, PlayheadWrite,
-    ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor, SourceError as StreamSourceError,
-    SourcePhase, SourceProbe, StreamError, StreamResult, WorkerWake,
+    Activity, ActivityWriter, ByteMap, MediaInfo, NotReadyCause, PendingReason, PlayheadRead,
+    PlayheadWrite, ReadOutcome, SegmentDescriptor, SourceError as StreamSourceError, SourcePhase,
+    SourceProbe, StreamError, StreamResult, WorkerWake,
 };
 use kithara_test_utils::kithara;
 use tracing::trace;
@@ -237,9 +237,6 @@ where
             return SourcePhase::Ready;
         }
 
-        if self.source.coord.seek_obs().is_flushing() {
-            return SourcePhase::Seeking;
-        }
         SourcePhase::Waiting
     }
 
@@ -345,7 +342,6 @@ where
         let hooks = super::reader::FileReaderEventSink::new(
             self.inner.source.bus.clone(),
             Arc::clone(&self.coord),
-            self.coord.seek_epoch_handle(),
             self.reader_event_capacity(),
         );
         Some(Box::new(hooks))
@@ -365,7 +361,6 @@ where
         }
         match self.phase_at(range.clone()) {
             SourcePhase::Cancelled => return Err(Self::cancelled_error()),
-            SourcePhase::Seeking => return Ok(WaitOutcome::Interrupted),
             SourcePhase::Eof => return Ok(WaitOutcome::Eof),
             SourcePhase::Ready => return Ok(WaitOutcome::Ready),
             _ => {}
@@ -387,14 +382,13 @@ where
     delegate::delegate! {
         to self.coord {
             #[call(activity_handle)]
-            fn activity(&self) -> Arc<dyn Activity>;
+            fn activity(&self) -> Activity;
+            fn take_activity_writer(&mut self) -> Option<ActivityWriter>;
             #[call(advance_position)]
             fn advance(&self, n: u64);
             fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
             fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
             fn position(&self) -> u64;
-            fn seek_control(&self) -> Arc<dyn SeekControl>;
-            fn seek_observe(&self) -> Arc<dyn SeekObserve>;
             fn set_position(&self, pos: u64);
         }
         to self.inner {

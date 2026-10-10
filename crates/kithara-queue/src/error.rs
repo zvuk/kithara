@@ -17,10 +17,6 @@ pub enum QueueError {
     #[error("track not ready: {0:?}")]
     NotReady(TrackId),
 
-    /// Load attempt aborted: superseded by a newer selection or torn down with its track.
-    #[error("load cancelled: {0:?}")]
-    Cancelled(TrackId),
-
     /// Error bubbled up from `kithara-play`.
     #[error(transparent)]
     Play(#[from] PlayError),
@@ -28,4 +24,8 @@ pub enum QueueError {
     /// Resource construction failed (decoding, config, or I/O).
     #[error("resource error: {0}")]
     Resource(String),
+
+    /// The queue was built with no runtime, so it has nowhere to run a load.
+    #[error("the queue has no runtime to run its loads on")]
+    NoRuntime,
 }

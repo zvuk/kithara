@@ -11,7 +11,10 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
-    offline::{OfflinePlayer, append_loaded, offline_queue_fixture},
+    offline::{
+        OfflinePlayer, OfflinePlayerOptions, append_loaded, offline_queue_fixture,
+        offline_queue_fixture_with_options,
+    },
 };
 use kithara_test_fixtures::{assets, signal::mean_abs};
 
@@ -179,13 +182,23 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
 /// selection bookkeeping. The judging window opens on the queue's own
 /// statement that the switch reached the player, so what it measures is the
 /// audio that follows it and not the reload it waited on.
+///
+/// Every verdict here is a track's level, so a render waits for the decode
+/// it reads: a zero-filled underrun would pass for the track falling silent.
 #[kithara::test(tokio, flash(false))]
 #[case::selected(InitialStart::Select)]
 #[case::play_button(InitialStart::Play)]
 async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: InitialStart) {
     const WARMUP_BLOCKS: usize = 64;
 
-    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
+    let (harness, queue) = offline_queue_fixture_with_options(
+        OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    )
+    .await;
     let source_a = assets::constant_wav_quiet_8s();
     let source_b = assets::constant_wav_loud_8s();
     let id_a = append_loaded(&harness, &queue, &source_a).await;

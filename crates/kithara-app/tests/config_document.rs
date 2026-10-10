@@ -2,7 +2,9 @@
 
 use std::{fs, path::PathBuf};
 
-use kithara_app::document::Config;
+use kithara::{platform::tokio::runtime::Handle, play::ResourcePrep};
+use kithara_app::{config::AppConfig, document::Config, pools};
+use kithara_config::Config as _;
 use tempfile::TempDir;
 
 /// Every test here overlays the DRM section with a provider whose cipher key
@@ -87,14 +89,14 @@ fn the_app_section_reaches_the_config_patch() {
 }
 
 /// The stretch backends' preparation geometry is the deepest nesting a
-/// document reaches: `player:` carries a `warp:` section, which carries a
+/// document reaches: `warp:` carries a
 /// `backends:` section, which carries the preparation geometry for each engine.
-#[kithara::test(native, flash(false))]
-fn the_document_reaches_the_stretch_backend_geometry() {
+#[kithara::test(tokio, native, flash(false))]
+async fn the_document_reaches_the_stretch_backend_geometry() {
     const WARP_BACKENDS: &str = concat!(
-        "player:\n  warp:\n    backends:\n",
-        "      signalsmith:\n        block_frames: 512\n        interval_frames: 16\n",
-        "      bungee:\n        log2_synthesis_hop_adjust: -2\n",
+        "warp:\n  backends:\n",
+        "    signalsmith:\n      block_frames: 512\n      interval_frames: 16\n",
+        "    bungee:\n      log2_synthesis_hop_adjust: -2\n",
     );
 
     let dir = tempdir();
@@ -102,7 +104,32 @@ fn the_document_reaches_the_stretch_backend_geometry() {
 
     let config = Config::load(Some(&path), None).expect("the overlay loads");
 
-    let backends = config.player().warp.backends;
+    let cancel = kithara_test_utils::cancel_token();
+    let document_pools = pools::build(&config.pools()).expect("document pools");
+    let net = AppConfig::client(&config, &document_pools, &cancel, false);
+    let app = AppConfig::assemble()
+        .document(&config)
+        .pools(document_pools.clone())
+        .net(net)
+        .grants(&[])
+        .shutdown(cancel.clone())
+        .runtime(Handle::current())
+        .call()
+        .expect("assemble document settings");
+    let prep = ResourcePrep::builder()
+        .worker(app.worker.clone())
+        .warp(app.warp.clone())
+        .build();
+    let engine = kithara::stretch::ElasticConfig::builder()
+        .backends(prep.warp.backends())
+        .pools(document_pools)
+        .sample_rate(44_100)
+        .channels(2)
+        .max_source_frames(prep.warp.source_block_frames().get())
+        .max_output_frames(512)
+        .build()
+        .expect("document stretch preparation geometry");
+    let backends = engine.values().backends;
     assert_eq!(
         backends.signalsmith.block_frames,
         std::num::NonZeroUsize::new(512)
@@ -111,7 +138,8 @@ fn the_document_reaches_the_stretch_backend_geometry() {
         backends.signalsmith.interval_frames,
         std::num::NonZeroUsize::new(16)
     );
-    assert_eq!(backends.bungee.log2_synthesis_hop_adjust, Some(-2));
+    assert_eq!(backends.bungee.log2_synthesis_hop_adjust, -2);
+    cancel.cancel();
 }
 
 #[kithara::test(native, flash(false))]

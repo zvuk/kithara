@@ -1,5 +1,4 @@
 use kithara_bufpool::HasPool;
-use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use tracing::debug;
 
@@ -46,7 +45,7 @@ where
     /// enqueue is already `Loaded`, so it would only reseed entries `dispatch`
     /// skips — that is [`Self::fetch_plan_satisfied`]. *And* the queue holds no
     /// fetch for a segment behind `from_seg`. Those are entries a previous
-    /// epoch left there; they are not part of the plan a rebuild would produce,
+    /// request plan left there; they are not part of the plan a rebuild would produce,
     /// and `fetch_plan_satisfied` never sees them because it only inspects
     /// `[from_seg, num_segments)`. Its "dispatch skips them" argument does not
     /// cover them either — nothing says a segment behind the new target is
@@ -78,20 +77,6 @@ where
             return;
         }
         self.rebuild_queue(from_seg, None);
-    }
-
-    pub(crate) fn rebuild_at_time(&self, _ctx: &PlanCtx<S>, target: Duration) -> Option<u32> {
-        let seg = self.segment_index_at_time(target)?;
-        let fetch_start = self.seek_readahead_start_segment(seg);
-        if let Some(byte) = self.segment_byte_offset(fetch_start) {
-            self.set_prefetch_anchor(byte);
-        }
-        if self.fetch_plan_satisfied(fetch_start) {
-            self.flow.queue.lock().replace_with(std::iter::empty());
-        } else {
-            self.rebuild_queue(fetch_start, None);
-        }
-        Some(seg)
     }
 
     #[kithara::probe]

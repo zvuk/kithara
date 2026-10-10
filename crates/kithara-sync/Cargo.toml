@@ -5,38 +5,33 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Recursive synchronization-group ownership and control-plane protocol for Kithara."
-keywords = ["audio", "beatgrid", "dj", "synchronization", "topology"]
+description = "Pure beat-phase, entry-placement, and tempo-trajectory mathematics."
+keywords = ["audio", "beatgrid", "tempo", "sync"]
 categories = ["multimedia::audio"]
 
-[features]
-default = []
-stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
-stretch-bungee = ["kithara-warp/stretch-bungee"]
-stretch-glide = ["kithara-warp/stretch-glide"]
-stretch-identity = ["kithara-warp/stretch-identity"]
-usdt = ["kithara-warp/usdt"]
-perf = ["kithara-warp/perf"]
+[package.metadata.cargo-machete]
+# `serde` is reached only through `#[derive(Ranged)]`; the expansion names it,
+# never a source line in this crate.
+ignored = ["serde"]
 
 [dependencies]
+kithara-beat = { workspace = true }
+kithara-derive = { workspace = true, features = ["ranged"] }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
-kithara-warp = { workspace = true, default-features = false }
+kithara-warp = { workspace = true }
 
-bon = { workspace = true }
-
-delegate = { workspace = true }
-derive_more = { workspace = true }
 fieldwork = { workspace = true }
 num-traits = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "tls-rustls"] }
+kithara-test-utils = { workspace = true }
+kithara-warp = { workspace = true, features = ["stretch-identity"] }
 
 [lints]
 workspace = true

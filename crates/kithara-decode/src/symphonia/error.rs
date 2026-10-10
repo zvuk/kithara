@@ -30,10 +30,7 @@ pub(super) fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
             if matches!(
                 io_err.kind(),
                 ErrorKind::Interrupted | ErrorKind::WouldBlock
-            ) || io_err.get_ref().is_some_and(|src| {
-                src.downcast_ref::<PendingReason>()
-                    .is_some_and(|reason| matches!(reason, PendingReason::SeekPending))
-            }) =>
+            ) =>
         {
             tracing::debug!(error = ?io_err, "demuxer seek interrupted");
             DecodeError::Interrupted

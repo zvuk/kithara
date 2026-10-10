@@ -13,8 +13,7 @@ use kithara_signal::AudioSpec;
 
 use super::pcm_reader::prepared_sample;
 use crate::{
-    AudioControl, AudioRead, AudioReadError, AudioSession, ConsumerWakeMode, PendingReason,
-    ReadOutcome, SeekBegin, SeekOutcome,
+    AudioControl, AudioRead, AudioReadError, AudioSession, PendingReason, ReadOutcome, SeekOutcome,
 };
 
 mod consts {
@@ -41,7 +40,6 @@ enum MockBehavior {
     /// Records the session-owned capabilities an owner applies to the reader.
     AdoptionTracking {
         recorded_host_rate: Arc<AtomicU32>,
-        recorded_wake_mode: Arc<Mutex<Option<ConsumerWakeMode>>>,
         duration: Duration,
     },
     SeekTracking {
@@ -62,7 +60,6 @@ enum MockBehavior {
 fn adoption_tracking(recorded_host_rate: Arc<AtomicU32>, duration: Duration) -> MockBehavior {
     MockBehavior::AdoptionTracking {
         recorded_host_rate,
-        recorded_wake_mode: Arc::new(Mutex::new(None)),
         duration,
     }
 }
@@ -90,21 +87,6 @@ impl MockReader {
         let recorded = Arc::new(AtomicU32::new(0));
         let reader = Self::with_behavior(spec, adoption_tracking(Arc::clone(&recorded), duration));
         (reader, recorded)
-    }
-
-    /// Reader recording the consumer wake mode its owner applies to it.
-    #[must_use]
-    pub fn wake_mode_tracking(spec: AudioSpec) -> (Self, Arc<Mutex<Option<ConsumerWakeMode>>>) {
-        let behavior = adoption_tracking(Arc::new(AtomicU32::new(0)), Duration::from_secs(60));
-        let MockBehavior::AdoptionTracking {
-            ref recorded_wake_mode,
-            ..
-        } = behavior
-        else {
-            unreachable!("adoption tracking builds one variant")
-        };
-        let recorded = Arc::clone(recorded_wake_mode);
-        (Self::with_behavior(spec, behavior), recorded)
     }
 
     #[must_use]
@@ -287,7 +269,7 @@ impl AudioRead for MockReader {
 }
 
 impl AudioControl for MockReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
         match &mut self.behavior {
             MockBehavior::SeekTracking { seek_log } => {
                 let ms = u64::try_from(position.as_millis()).expect("test seek fits in u64");
@@ -296,7 +278,8 @@ impl AudioControl for MockReader {
             MockBehavior::Faulty(Fault::RefuseSeek) => {
                 return Err(DecodeError::Io {
                     source: std::io::Error::other("mock seek refusal"),
-                });
+                }
+                .into());
             }
             MockBehavior::SeekSplit(counts) => {
                 counts.blocking_seeks.fetch_add(1, Ordering::Relaxed);
@@ -309,34 +292,12 @@ impl AudioControl for MockReader {
         })
     }
 
-    fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode) {
-        if let MockBehavior::AdoptionTracking {
-            recorded_wake_mode, ..
-        } = &self.behavior
-        {
-            *recorded_wake_mode.lock() = Some(mode);
-        }
-    }
-
-    fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
+    fn set_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
         if let MockBehavior::AdoptionTracking {
             recorded_host_rate, ..
         } = &self.behavior
         {
             recorded_host_rate.store(sample_rate.get(), Ordering::Relaxed);
-        }
-    }
-
-    fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
-        match &self.behavior {
-            MockBehavior::SeekSplit(counts) => Some(Arc::new(SeekSpy(counts.clone()))),
-            _ => None,
-        }
-    }
-
-    fn sync_seek(&mut self) {
-        if let MockBehavior::SeekSplit(counts) = &self.behavior {
-            counts.syncs.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -376,17 +337,5 @@ impl SeekSplitCounts {
     #[must_use]
     pub fn syncs(&self) -> u64 {
         self.syncs.load(Ordering::Relaxed)
-    }
-}
-
-struct SeekSpy(SeekSplitCounts);
-
-impl SeekBegin for SeekSpy {
-    fn begin(&self, position: Duration) -> SeekOutcome {
-        self.0.begins.fetch_add(1, Ordering::Relaxed);
-        SeekOutcome::Landed {
-            target: position,
-            landed_at: position,
-        }
     }
 }

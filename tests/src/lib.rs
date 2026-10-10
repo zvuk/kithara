@@ -76,6 +76,8 @@ pub mod log_filter;
     feature = "wasm"
 ))]
 pub mod memory_source;
+#[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
+pub mod mock;
 #[cfg(all(
     any(feature = "all", feature = "audio", feature = "wasm"),
     not(target_arch = "wasm32")

@@ -9,7 +9,7 @@ use kithara::{
         time::{Duration, Instant},
         tokio::task::{spawn, spawn_blocking},
     },
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -17,13 +17,14 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     mixed_encrypted, mixed_plain,
+    mock::LaneAudio,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tracing::info;
 use url::Url;
 
 fn warmup_until_first_frame(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
 ) -> u64 {
     let mut warmup_samples = 0u64;
@@ -46,7 +47,7 @@ struct SeekStats {
 }
 
 fn run_rapid_random_seeks(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
 ) -> SeekStats {
     let mut stats = SeekStats::default();
@@ -123,7 +124,9 @@ async fn stress_seek_during_abr_switch_real_decoder(
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
 
-    let mut audio = worker.load(config).await.expect("audio creation");
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio creation");
 
     let mut events_rx = audio.event_bus().subscribe::<TestEvent>();
 
@@ -221,7 +224,9 @@ async fn seek_sequence_from_log_real_stream(
         .initial_abr_mode(auto(0))
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
-    let mut audio = worker.load(config).await.expect("audio creation");
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio creation");
 
     let result = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];

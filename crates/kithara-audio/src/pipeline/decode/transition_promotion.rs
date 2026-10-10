@@ -82,7 +82,17 @@ impl ActiveDecode {
         let IncomingDecode::Priming { mut generation, .. } = self.incoming.take()? else {
             return None;
         };
-        let trimmed = trim_staged_head(&mut generation, span.overlap);
+        let trimmed = match trim_staged_head(&mut generation, span.overlap) {
+            Ok(trimmed) => trimmed,
+            Err(error) => {
+                tracing::warn!(?error, "incoming promotion mapping failed");
+                self.incoming = Some(IncomingDecode::Failed {
+                    transition,
+                    generation,
+                });
+                return None;
+            }
+        };
         assert!(
             trimmed || generation.is_finished(),
             "BUG: a minted incoming promotion no longer covers its proven cut"

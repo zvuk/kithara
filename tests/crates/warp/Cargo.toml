@@ -9,8 +9,10 @@ autotests = false
 
 [features]
 default = ["playback", "stretch-signalsmith", "usdt"]
+mock = []
 client-wreq = ["kithara/client-wreq", "kithara-integration-tests?/client-wreq"]
 playback = [
+    "mock",
     "kithara/decode",
     "kithara/offline",
     "kithara/queue",

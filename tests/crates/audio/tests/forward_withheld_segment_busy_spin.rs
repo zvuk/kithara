@@ -128,8 +128,7 @@ async fn forward_into_withheld_segment_waits_and_resumes(
         .media_info(wav_info)
         .build();
 
-    let mut audio = worker
-        .load(audio_config)
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, audio_config)
         .await
         .expect("audio creation (segment 0 not withheld)");
 

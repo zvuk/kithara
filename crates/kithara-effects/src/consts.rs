@@ -52,3 +52,8 @@ pub(crate) const DETECTOR_RESOLUTION: f32 = 1e-3;
 /// ceiling rather than on it.
 #[cfg(test)]
 pub(crate) const STEP_OVERSHOOT: f32 = 1.1351;
+
+/// The rate the stereo EQ tests build their layouts at.
+#[cfg(test)]
+pub(crate) const TEST_RATE: core::num::NonZeroU32 =
+    core::num::NonZeroU32::new(48_000).expect("a non-zero rate");

@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 
 use kithara_config::Config;
 use kithara_derive::Patch;
@@ -8,24 +8,9 @@ use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
 use kithara_stream::{MediaInfo, StreamType};
 
 use crate::{
-    consts,
     pipeline::config::{AudioDecoderConfig, AudioDecoderConfigPatch},
     traits::AudioObserver,
 };
-
-/// The consumer's thread capability: how it wakes the decode worker after
-/// draining its ring, and how its reader-born events reach the bus.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum ConsumerWakeMode {
-    /// Arm a coalesced scheduler pass without signaling a thread gate.
-    #[default]
-    RealtimeDeferred,
-    /// Unpark the worker's thread, for a consumer off the real-time thread.
-    /// Marks the consumer's read path as free to block, so reader-born events
-    /// publish inline instead of waiting for a scheduler-shell flush.
-    ImmediateOffRt,
-}
 
 /// Configuration for audio pipeline with stream config.
 ///
@@ -47,16 +32,6 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
         get(ref)
     )]
     pub(crate) stream: T::Config,
-    /// Consumer wake capability for ring pops and reader-event delivery. Not
-    /// a document key: a player-managed resource has this value overwritten
-    /// with its session's wake policy, and declaring `ImmediateOffRt` here
-    /// would make a player-bound resource publish reads inline on the render
-    /// callback.
-    #[config(value, builder(default), patch(skip), get(copy))]
-    pub consumer_wake_mode: ConsumerWakeMode,
-    /// Number of chunks to buffer before signaling preload readiness.
-    #[config(value, builder(default = NonZeroUsize::new(consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero")), get(copy))]
-    pub preload_chunks: NonZeroUsize,
     /// Target sample rate of the audio host (for resampling). Not a document
     /// key: this is the rate the audio host actually opened, and the
     /// resource-preparation step that shares a player's engine always
@@ -68,16 +43,6 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
         get(copy)
     )]
     pub host_sample_rate: Option<NonZeroU32>,
-    /// Make audio-thread reads block on a producer-ring underrun instead of
-    /// zero-filling. Not a document key: the shipped binary is a real-time
-    /// host whose audio callback can never block; only an offline harness or
-    /// a player's own session policy sets this explicitly.
-    #[config(value, builder(default), patch(skip), get(copy))]
-    pub block_on_underrun: bool,
-    /// Output-ring depth in producer chunks. Default: 10 on native, 32 on
-    /// wasm32.
-    #[config(value, builder(default = consts::AUDIO_BUFFER_CHUNKS), get(copy))]
-    pub audio_buffer_chunks: usize,
     /// Decoder construction settings, including decoder-side resampling. A
     /// document names it under `audio.decoder`.
     #[config(
@@ -135,11 +100,8 @@ where
         self.media_info.as_ref()
     }
 }
-
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod document_tests {
-    use std::num::NonZeroUsize;
-
     use kithara_decode::{DecoderBackend, GaplessMode};
     use kithara_test_utils::kithara;
 
@@ -177,10 +139,6 @@ mod document_tests {
         assert!(error.to_string().contains("teapot"), "{error}");
     }
 
-    /// `preload_chunks` and `audio_buffer_chunks` are the patch's only
-    /// declared fields, and `headroom` is neither a substring of either nor
-    /// contains one, so the assertion cannot pass off serde's list of valid
-    /// names.
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_rejected_and_named() {
         let error = serde_yaml_ng::from_str::<AudioConfigPatch>("headroom: 8\n")
@@ -189,32 +147,7 @@ mod document_tests {
         assert!(error.to_string().contains("headroom"), "{error}");
     }
 
-    #[kithara::test(native, flash(false))]
-    fn the_document_names_both_live_keys() {
-        let patch: AudioConfigPatch =
-            serde_yaml_ng::from_str("preload_chunks: 8\naudio_buffer_chunks: 20\n")
-                .expect("the document types");
-
-        assert_eq!(patch.preload_chunks, NonZeroUsize::new(8));
-        assert_eq!(patch.audio_buffer_chunks, Some(20));
-    }
-
-    /// A document that names neither key leaves both unset, so the merge has
-    /// nothing to write and the caller's values stand.
-    #[kithara::test(native, flash(false))]
-    fn an_absent_key_stays_unset_rather_than_defaulting() {
-        let patch: AudioConfigPatch =
-            serde_yaml_ng::from_str("preload_chunks: 8\n").expect("the document types");
-
-        assert_eq!(patch.preload_chunks, NonZeroUsize::new(8));
-        assert!(
-            patch.audio_buffer_chunks.is_none(),
-            "an unnamed key must stay `None` so `apply` skips it"
-        );
-    }
-
-    /// `consumer_wake_mode` is overwritten for every player-managed resource
-    /// (see the field's doc comment).
+    /// The deleted consumer policy cannot be revived by a configuration document.
     #[kithara::test(native, flash(false))]
     fn the_realtime_unsafe_wake_mode_is_not_a_document_key() {
         let error =

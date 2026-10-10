@@ -4643,6 +4643,7 @@ dependencies = [
  "kithara-file",
  "kithara-hls",
  "kithara-host",
+ "kithara-link",
  "kithara-net",
  "kithara-output",
  "kithara-platform",
@@ -4654,7 +4655,6 @@ dependencies = [
  "kithara-storage",
  "kithara-stream",
  "kithara-stretch",
- "kithara-sync",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-ui",
@@ -4943,7 +4943,6 @@ dependencies = [
 name = "kithara-audio"
 version = "0.0.1-alpha5"
 dependencies = [
- "arc-swap",
  "crossbeam-queue",
  "delegate",
  "derive-where",
@@ -4970,7 +4969,6 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
- "ringbuf",
  "serde",
  "serde_yaml_ng",
  "thiserror 2.0.21",
@@ -5114,6 +5112,7 @@ dependencies = [
  "assert_no_alloc",
  "delegate",
  "fieldwork",
+ "futures",
  "kithara-config",
  "kithara-platform",
  "kithara-test-utils",
@@ -5351,7 +5350,6 @@ dependencies = [
  "num-traits",
  "serde",
  "thiserror 2.0.21",
- "tracing",
  "unimock",
 ]
 
@@ -5427,6 +5425,7 @@ dependencies = [
  "kithara-events",
  "kithara-file",
  "kithara-hls",
+ "kithara-platform",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
@@ -5698,6 +5697,7 @@ dependencies = [
  "fieldwork",
  "firewheel",
  "firewheel-web-audio",
+ "kithara-assets",
  "kithara-audio",
  "kithara-bufpool",
  "kithara-command",
@@ -5705,11 +5705,13 @@ dependencies = [
  "kithara-dsp",
  "kithara-effects",
  "kithara-events",
+ "kithara-host",
  "kithara-output",
  "kithara-platform",
  "kithara-play",
+ "kithara-queue",
+ "kithara-render",
  "kithara-signal",
- "kithara-sync",
  "kithara-test-dylib",
  "kithara-test-utils",
  "kithara-warp",
@@ -5717,6 +5719,7 @@ dependencies = [
  "kithara-workspace-hack",
  "num-traits",
  "ringbuf",
+ "send_wrapper",
  "thiserror 2.0.21",
  "tracing",
  "triple_buffer",
@@ -5727,6 +5730,7 @@ dependencies = [
 name = "kithara-host-tests"
 version = "0.0.1-alpha5"
 dependencies = [
+ "delegate",
  "kithara",
  "kithara-command",
  "kithara-config",
@@ -5765,11 +5769,13 @@ dependencies = [
  "kithara",
  "kithara-app",
  "kithara-app-library",
+ "kithara-command",
  "kithara-devtools",
  "kithara-dsp",
  "kithara-encode",
  "kithara-events",
  "kithara-record",
+ "kithara-render",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
@@ -5794,6 +5800,34 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+]
+
+[[package]]
+name = "kithara-link"
+version = "0.0.1-alpha5"
+dependencies = [
+ "delegate",
+ "futures",
+ "kithara-assets",
+ "kithara-audio",
+ "kithara-beat",
+ "kithara-bufpool",
+ "kithara-command",
+ "kithara-config",
+ "kithara-decode",
+ "kithara-events",
+ "kithara-host",
+ "kithara-play",
+ "kithara-queue",
+ "kithara-render",
+ "kithara-signal",
+ "kithara-sync",
+ "kithara-test-utils",
+ "kithara-warp",
+ "kithara-workspace-hack",
+ "num-traits",
+ "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]
@@ -5912,8 +5946,8 @@ name = "kithara-play"
 version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
+ "assert_no_alloc",
  "axum",
- "bon",
  "bytes",
  "delegate",
  "derive-where",
@@ -5923,7 +5957,6 @@ dependencies = [
  "futures",
  "hex",
  "hotpath",
- "humantime-serde",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
@@ -5935,13 +5968,11 @@ dependencies = [
  "kithara-derive",
  "kithara-download",
  "kithara-drm",
- "kithara-dsp",
  "kithara-effects",
  "kithara-events",
  "kithara-file",
  "kithara-hls",
  "kithara-net",
- "kithara-output",
  "kithara-platform",
  "kithara-play",
  "kithara-render",
@@ -5957,12 +5988,10 @@ dependencies = [
  "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
- "ringbuf",
  "serde",
  "serde_json",
  "serde_yaml_ng",
  "sha2",
- "smallvec",
  "thiserror 2.0.21",
  "tracing",
  "unimock",
@@ -5976,7 +6005,10 @@ dependencies = [
  "cochlea-features",
  "derive_more",
  "kithara",
+ "kithara-command",
+ "kithara-config",
  "kithara-integration-tests",
+ "kithara-render",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
@@ -5989,6 +6021,7 @@ dependencies = [
 name = "kithara-queue"
 version = "0.0.1-alpha5"
 dependencies = [
+ "arc-swap",
  "delegate",
  "derive-where",
  "derive_more",
@@ -5998,25 +6031,27 @@ dependencies = [
  "kithara-assets",
  "kithara-audio",
  "kithara-bufpool",
+ "kithara-command",
  "kithara-config",
  "kithara-decode",
  "kithara-derive",
  "kithara-download",
  "kithara-events",
+ "kithara-host",
  "kithara-net",
  "kithara-platform",
  "kithara-play",
  "kithara-queue",
+ "kithara-render",
  "kithara-signal",
- "kithara-sync",
+ "kithara-stream",
  "kithara-test-utils",
  "kithara-warp",
- "kithara-waveform",
  "kithara-workspace-hack",
+ "num-traits",
  "rand 0.10.3",
  "serde",
  "serde_yaml_ng",
- "smallvec",
  "thiserror 2.0.21",
  "tracing",
 ]
@@ -6027,7 +6062,6 @@ version = "0.0.1-alpha5"
 dependencies = [
  "aes",
  "bytes",
- "delegate",
  "kithara",
  "kithara-app",
  "kithara-devtools",
@@ -6067,20 +6101,46 @@ dependencies = [
 name = "kithara-render"
 version = "0.0.1-alpha5"
 dependencies = [
+ "bon",
  "delegate",
+ "derive-where",
+ "fieldwork",
+ "firewheel",
+ "futures",
+ "hotpath",
+ "humantime-serde",
+ "kithara-abr",
+ "kithara-assets",
  "kithara-audio",
  "kithara-beat",
  "kithara-bufpool",
  "kithara-command",
+ "kithara-config",
+ "kithara-decode",
+ "kithara-derive",
+ "kithara-dsp",
  "kithara-effects",
+ "kithara-events",
+ "kithara-file",
+ "kithara-output",
  "kithara-platform",
+ "kithara-render",
  "kithara-signal",
  "kithara-stream",
  "kithara-test-fixtures",
+ "kithara-test-macros",
  "kithara-test-utils",
  "kithara-warp",
+ "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
+ "ringbuf",
+ "serde",
+ "serde_yaml_ng",
+ "thiserror 2.0.21",
+ "tracing",
+ "triple_buffer",
+ "unimock",
 ]
 
 [[package]]
@@ -6135,6 +6195,7 @@ dependencies = [
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "num-traits",
  "rangemap",
  "serde",
 ]
@@ -6173,7 +6234,7 @@ dependencies = [
 name = "kithara-stream"
 version = "0.0.1-alpha5"
 dependencies = [
- "bitflags 2.13.2",
+ "arc-swap",
  "bon",
  "delegate",
  "derive_more",
@@ -6237,34 +6298,29 @@ dependencies = [
 name = "kithara-sync"
 version = "0.0.1-alpha5"
 dependencies = [
- "bon",
- "delegate",
- "derive_more",
  "fieldwork",
+ "kithara-beat",
+ "kithara-derive",
  "kithara-platform",
  "kithara-signal",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-workspace-hack",
  "num-traits",
+ "serde",
  "thiserror 2.0.21",
- "tracing",
 ]
 
 [[package]]
 name = "kithara-sync-tests"
 version = "0.0.1-alpha5"
 dependencies = [
- "delegate",
  "futures",
  "kithara",
- "kithara-app",
  "kithara-integration-tests",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
- "num-traits",
- "serde_json",
 ]
 
 [[package]]
@@ -6497,7 +6553,6 @@ dependencies = [
 name = "kithara-warp"
 version = "0.0.1-alpha5"
 dependencies = [
- "arc-swap",
  "bon",
  "delegate",
  "derive-where",

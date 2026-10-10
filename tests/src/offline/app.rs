@@ -10,10 +10,7 @@ use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration, tokio},
-    play::{
-        PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, PlayerConfig, PlayerImpl,
-        ResourceSrc,
-    },
+    play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, ResourcePrep, ResourceSrc},
     queue::{Queue, QueueConfig},
 };
 use kithara_app::{
@@ -125,15 +122,15 @@ pub async fn app_queue(document: Config) -> AppQueueFixture {
         .store(store)
         .build();
     let session_config = HostConfig::offline(session_pools).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session_config.settings().sample_rate())
-            .worker(worker)
-            .build(),
-    );
+    let prep = ResourcePrep::builder().worker(worker).build();
     let queue = OfflineQueue::paced(
         session_config,
-        Queue::new(QueueConfig::builder().player(player).build()),
+        Queue::new(
+            QueueConfig::builder()
+                .prep(prep)
+                .store(config.store.clone())
+                .build(),
+        ),
         RENDER_PACE,
     )
     .await
@@ -198,6 +195,8 @@ pub fn app_track_source(
         .keys(keys)
         .maybe_headers(headers)
         .audio(config.audio.clone())
+        .maybe_preload_chunks(config.preload_chunks)
+        .maybe_audio_buffer_chunks(config.audio_buffer_chunks)
         .hls(config.hls.clone())
         .file(config.file.clone())
         .store(store)

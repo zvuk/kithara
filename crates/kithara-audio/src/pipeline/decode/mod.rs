@@ -1,7 +1,6 @@
 pub(crate) mod core;
 pub(crate) mod event;
 pub(crate) mod format;
-pub(crate) mod gate;
 pub(crate) mod generation;
 mod generation_holdback;
 pub(crate) mod output;

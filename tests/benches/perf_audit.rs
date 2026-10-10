@@ -186,8 +186,7 @@ fn bench_gapless_trim(c: &mut Criterion) {
                     .hint("mp3".to_string())
                     .build();
                 let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-                let mut audio = worker
-                    .load(config)
+                let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
                     .await
                     .unwrap_or_else(|e| panic!("audio init failed: {e}"));
                 let mut buf = [0.0_f32; 8_192];
@@ -228,8 +227,7 @@ async fn analyze_track(
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint("mp3".to_owned())
         .build();
-    let reader = play_worker
-        .load(config)
+    let reader = kithara_integration_tests::mock::load_audio(play_worker, config)
         .await
         .unwrap_or_else(|error| panic!("analysis benchmark reader failed to open: {error}"));
     let rate = reader.spec().sample_rate;

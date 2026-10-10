@@ -25,7 +25,7 @@ use crate::{
     broadcast::Broadcaster,
     catalog,
     config::AppConfig,
-    deck::{Deck, DeckId, DeckSet, EqMode},
+    deck::{Deck, DeckId, DeckSet, EqMode, TempoPercent},
     state::StateController,
 };
 
@@ -288,7 +288,6 @@ impl Engine {
         self.broadcast.poll(self.session.host());
         self.finish_drain();
         for deck in &self.decks {
-            let _ = deck.controller.queue().tick();
             deck.controller.refresh_continuous();
         }
     }
@@ -338,10 +337,7 @@ impl EngineDeck {
                     error!(?track, error = %e, "remove failed");
                 }
             }
-            DeckCmd::SetTempo(tempo) => {
-                self.settings.tempo = tempo;
-                queue.set_rate(tempo.speed());
-            }
+            DeckCmd::SetTempo(tempo) => self.set_tempo(tempo),
             DeckCmd::SetQuality(variant) => self.set_quality(variant),
         }
     }
@@ -371,6 +367,14 @@ impl EngineDeck {
         }
     }
 
+    /// Keeps `tempo` only once the deck took its speed.
+    fn set_tempo(&mut self, tempo: TempoPercent) {
+        match self.controller.queue().set_rate(tempo.speed()) {
+            Ok(()) => self.settings.tempo = tempo,
+            Err(e) => error!(speed = tempo.speed(), error = %e, "tempo refused"),
+        }
+    }
+
     fn set_quality(&self, variant: Option<usize>) {
         let handle = self.controller.queue().current_abr_handle();
         let requested = variant.map_or(AbrMode::Auto(None), AbrMode::manual);
@@ -394,10 +398,13 @@ impl Drop for Engine {
 mod tests {
     use std::convert::Infallible;
 
-    use ::kithara::platform::{CancelToken, time::Instant};
+    use ::kithara::{
+        platform::{CancelToken, time::Instant},
+        queue::QueueControl,
+    };
     use kithara_test_utils::{kithara, off_thread::OffThread};
 
-    use crate::{analysis::fixtures::tone_mp3, gui::rig::Rig, pools::AppQueueControl};
+    use crate::{analysis::fixtures::tone_mp3, gui::rig::Rig};
     #[cfg(not(feature = "broadcast"))]
     use crate::{
         deck::DeckId,
@@ -415,7 +422,7 @@ mod tests {
         );
         assert_eq!(applied.len(), 1, "closing the window queues one shutdown");
         assert!(
-            rig.queues.iter().all(AppQueueControl::is_closed),
+            rig.queues.iter().all(QueueControl::is_closed),
             "every deck left the host"
         );
         assert!(

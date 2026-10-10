@@ -19,7 +19,6 @@ pub(crate) struct GenerationInstalled<'a> {
     pub(crate) cause: DecoderChangeCause,
     pub(crate) recreates_on_route: bool,
     pub(crate) host_sample_rate: u32,
-    pub(crate) epoch: u64,
 }
 
 pub(crate) fn enqueue_generation_installed(
@@ -29,7 +28,6 @@ pub(crate) fn enqueue_generation_installed(
     let &GenerationInstalled {
         backend,
         cause,
-        epoch,
         generation,
         host_sample_rate,
         playback_resampler_backend,
@@ -44,7 +42,6 @@ pub(crate) fn enqueue_generation_installed(
         backend,
         media_info,
         spec,
-        epoch,
         cause,
         duration,
         track_info: &track_info,

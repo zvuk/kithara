@@ -51,7 +51,7 @@ fn test_progressive_file_timeline_monotonic(tone_wav: &'static [u8]) {
         assert_eq!(meta.segment_index, None);
         assert_eq!(meta.variant_index, None);
 
-        assert_eq!(meta.epoch, 0);
+        assert_eq!(meta.segment, kithara_signal::SegmentId::FIRST);
 
         prev_frame_end = meta.frame_offset + chunk.frames() as u64;
         chunk_count += 1;

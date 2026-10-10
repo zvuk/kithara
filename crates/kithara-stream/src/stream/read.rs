@@ -1,7 +1,4 @@
-use std::{
-    io::{self, Error as IoError, ErrorKind, Read},
-    ops::Range,
-};
+use std::io::{self, Error as IoError, ErrorKind, Read};
 
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
@@ -10,10 +7,7 @@ use kithara_test_utils::kithara;
 use super::{
     Stream, StreamPending, StreamReadError, StreamReadOutcome, StreamType, VariantChangeError,
 };
-use crate::{
-    NotReadyCause, PendingReason, ReadOutcome, Source, SourceError, StreamError, StreamResult,
-    consts,
-};
+use crate::{NotReadyCause, PendingReason, ReadOutcome, Source, SourceError, StreamError, consts};
 
 /// Per-probe wait policy threaded into [`Stream::try_read_with`]. Internal
 /// plumbing, NOT a public knob — it selects the `Source::wait_range` timeout
@@ -55,7 +49,7 @@ impl<T: StreamType> Stream<T> {
     /// # Errors
     ///
     /// Returns [`StreamReadError::Source`] only when the underlying source
-    /// reports a genuine I/O failure. Backpressure, seek-pending, and a
+    /// reports a genuine I/O failure. Backpressure and a
     /// variant fence are non-errors — they surface as `Ok(Pending(..))`.
     pub fn try_read(&mut self, buf: &mut [u8]) -> Result<StreamReadOutcome, StreamReadError> {
         self.try_read_with(buf, WaitMode::Probe)
@@ -78,9 +72,7 @@ impl<T: StreamType> Stream<T> {
             });
         }
 
-        let seek_obs = self.source.seek_observe();
         loop {
-            let read_epoch = seek_obs.epoch();
             let pos = self.source.position();
             let requested_end = pos.saturating_add(buf.len() as u64);
             let unit_end = if self.source.peer_wake().is_some() {
@@ -107,12 +99,18 @@ impl<T: StreamType> Stream<T> {
             let wait_outcome = match wait_result {
                 Ok(outcome) => outcome,
                 Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
-                    if seek_obs.is_flushing() || seek_obs.epoch() != read_epoch {
-                        return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
-                    }
                     return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
                         NotReadyCause::WaitBudgetExhausted,
                     )));
+                }
+                Err(StreamError::Source(SourceError::Io(error))) => {
+                    if let Some(reason) = error
+                        .get_ref()
+                        .and_then(|inner| inner.downcast_ref::<PendingReason>())
+                    {
+                        return Ok(StreamReadOutcome::Pending(*reason));
+                    }
+                    return Err(StreamReadError::Source(error));
                 }
                 Err(e) => {
                     return Err(StreamReadError::Source(IoError::other(e.to_string())));
@@ -124,17 +122,10 @@ impl<T: StreamType> Stream<T> {
                     return Ok(StreamReadOutcome::Eof { byte_position: pos });
                 }
                 WaitOutcome::Interrupted => {
-                    if seek_obs.is_flushing() {
-                        return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
-                    }
                     return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
                         NotReadyCause::WaitInterrupted,
                     )));
                 }
-            }
-
-            if seek_obs.epoch() != read_epoch {
-                return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
             }
 
             match self
@@ -143,9 +134,6 @@ impl<T: StreamType> Stream<T> {
                 .map_err(|e| StreamReadError::Source(IoError::other(e.to_string())))?
             {
                 ReadOutcome::Bytes(count) => {
-                    if seek_obs.epoch() != read_epoch {
-                        return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
-                    }
                     hang_reset!();
                     self.source.advance(count.get() as u64);
                     let new_pos = self.source.position();
@@ -204,10 +192,6 @@ impl<T: StreamType> Stream<T> {
         match self.try_read(buf) {
             Ok(StreamReadOutcome::Bytes { count, .. }) => Ok(count.get()),
             Ok(StreamReadOutcome::Eof { .. }) => Ok(0),
-            Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
-                self.arm_peer_wake();
-                Err(IoError::new(ErrorKind::Interrupted, reason))
-            }
             Ok(StreamReadOutcome::Pending(
                 reason @ (PendingReason::NotReady(_) | PendingReason::Retry),
             )) => {
@@ -225,21 +209,6 @@ impl<T: StreamType> Stream<T> {
             }
             Err(StreamReadError::Source(e)) => Err(e),
         }
-    }
-
-    /// Single wake-free readiness probe for `range` that also files it as
-    /// reader demand ([`Source::wait_range`] with a zero budget). The demand
-    /// side is the point: dispatch budgets follow the ranges the source knows
-    /// a reader waits on, and a phase snapshot alone leaves a parked reader
-    /// invisible. Never blocks — the audio worker's readiness gate calls it
-    /// from the produce core when a phase poll parks the decoder.
-    ///
-    /// # Errors
-    ///
-    /// A not-ready range surfaces as the source's typed budget-exceeded
-    /// error; cancel and storage failures pass through unchanged.
-    pub fn probe_wait(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome> {
-        self.source.wait_range(range, Some(Duration::ZERO))
     }
 }
 
@@ -265,10 +234,6 @@ impl<T: StreamType> Read for Stream<T> {
                     hang_tick!();
                     self.notify_peer_wake();
                 }
-                Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
-                    self.notify_peer_wake();
-                    return Err(IoError::new(ErrorKind::Interrupted, reason));
-                }
                 Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {
                     return Err(IoError::other(VariantChangeError));
                 }
@@ -286,22 +251,19 @@ impl<T: StreamType> Stream<T> {
     /// `Pending(NotReady|Retry)` surfaced through `impl Read`. Pulls
     /// live source/timeline state at the moment of the wrap so the
     /// resulting `io::Error` carries the real reason ("data not ready
-    /// (`wait_budget_exhausted`): pos=N len=M phase=… epoch=E flushing=…")
+    /// (`wait_budget_exhausted`): pos=N len=M phase=…")
     /// instead of a bare "data not ready". Decoders downcast on
     /// `StreamPending` to recover the typed [`PendingReason`].
     fn snapshot_pending(&self, reason: PendingReason, want: usize) -> StreamPending {
         let pos = self.source.position();
         let len = self.source.len();
         let phase = self.source.phase_at(pos..pos.saturating_add(want as u64));
-        let seek_obs = self.source.seek_observe();
         StreamPending {
+            len,
             reason,
+            phase,
             pos,
             want,
-            len,
-            phase,
-            epoch: seek_obs.epoch(),
-            flushing: seek_obs.is_flushing(),
         }
     }
 }
