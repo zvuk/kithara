@@ -105,9 +105,9 @@ pub(crate) fn parse_junit_report(xml: &str) -> Result<JunitReport> {
             .children()
             .any(|c| c.has_tag_name("failure") || c.has_tag_name("error"));
         let flaky = !failed
-            && node
-                .children()
-                .any(|child| child.has_tag_name("flakyFailure"));
+            && node.children().any(|child| {
+                child.has_tag_name("flakyFailure") || child.has_tag_name("flakyError")
+            });
         if node.children().any(|child| child.has_tag_name("skipped")) {
             if iteration.is_some() {
                 bail!("selected testcase {suite} {name} was skipped");
@@ -175,7 +175,7 @@ fn failure_output(node: roxmltree::Node<'_, '_>) -> (String, bool) {
 
 /// The failing attempt of a case the runner retried into a pass.
 ///
-/// That attempt is described entirely inside `flakyFailure`, streams included.
+/// That attempt lives inside `flakyFailure` or `flakyError`, streams included.
 /// The `testcase` keeps its own `system-out` and `system-err`, but they belong
 /// to the attempt that passed, so reading the case the ordinary way returns
 /// the green run and drops the red one it is evidence of.
@@ -184,7 +184,7 @@ fn retried_failure_output(node: roxmltree::Node<'_, '_>) -> (String, bool) {
     let mut truncated = false;
     for child in node
         .children()
-        .filter(|child| child.has_tag_name("flakyFailure"))
+        .filter(|child| child.has_tag_name("flakyFailure") || child.has_tag_name("flakyError"))
     {
         truncated |= append_failure_description(&mut output, child);
         truncated |= append_streams(&mut output, child);
@@ -350,6 +350,33 @@ mod tests {
             !cases[0].output.contains("green stdout"),
             "output must not carry the passing attempt: {}",
             cases[0].output
+        );
+    }
+
+    #[test]
+    fn a_retried_handle_leak_is_failing_and_keeps_the_failed_attempt() {
+        let xml = r#"<testsuite name="kithara_blob">
+  <testcase name="frame::tests::round_trips_with_version_header" classname="kithara_blob" time="0.002">
+    <flakyError type="test exited with code 0, but leaked handles so was marked failed">
+      <system-out>test frame::tests::round_trips_with_version_header ... ok</system-out>
+      <system-err>first-attempt handle leak</system-err>
+    </flakyError>
+    <system-out>successful retry stdout</system-out>
+    <system-err>successful retry stderr</system-err>
+  </testcase>
+</testsuite>"#;
+
+        let cases = parse_junit(xml).expect("parse retried handle leak");
+
+        assert_eq!(cases.len(), 1);
+        assert!(!cases[0].failed);
+        assert!(cases[0].flaky);
+        assert!(cases[0].failing());
+        assert_eq!(
+            cases[0].output,
+            "test exited with code 0, but leaked handles so was marked failed\n\
+             test frame::tests::round_trips_with_version_header ... ok\n\
+             first-attempt handle leak"
         );
     }
 
@@ -524,7 +551,7 @@ mod tests {
 
     #[test]
     fn a_skip_cannot_hide_failure_evidence() {
-        for outcome in ["failure", "error", "flakyFailure"] {
+        for outcome in ["failure", "error", "flakyFailure", "flakyError"] {
             let xml = format!(
                 r#"<testsuite name="demo">
   <testcase name="seek" classname="demo" time="0.1"><skipped/><{outcome}/></testcase>

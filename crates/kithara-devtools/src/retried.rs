@@ -366,17 +366,20 @@ mod tests {
 
     #[test]
     fn a_retried_pass_fails_the_lane_that_reported_it() {
-        let temp = lane(consts::RETRYING_PROFILE, Some(consts::RETRIED_PASS));
+        for outcome in ["flakyFailure", "flakyError"] {
+            let report = consts::RETRIED_PASS.replace("flakyFailure", outcome);
+            let temp = lane(consts::RETRYING_PROFILE, Some(&report));
 
-        let error = judge(temp.path(), &[], CI, Some(0))
-            .expect_err("a retried pass is not a clean lane")
-            .to_string();
+            let error = judge(temp.path(), &[], CI, Some(0))
+                .expect_err("a retried pass is not a clean lane")
+                .to_string();
 
-        assert!(error.contains("passed only on a retry"), "{error}");
-        assert!(
-            error.contains("  - kithara_queue::delayed_target"),
-            "{error}"
-        );
+            assert!(error.contains("passed only on a retry"), "{error}");
+            assert!(
+                error.contains("  - kithara_queue::delayed_target"),
+                "{error}"
+            );
+        }
     }
 
     #[test]

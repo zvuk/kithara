@@ -88,7 +88,13 @@ mod tests {
     #[test]
     fn instrumentation_requires_reported_cases_to_pass() {
         assert_eq!(validate(&report(&render(""))).unwrap(), [consts::RENDER]);
-        for outcome in ["<skipped/>", "<failure/>", "<error/>", "<flakyFailure/>"] {
+        for outcome in [
+            "<skipped/>",
+            "<failure/>",
+            "<error/>",
+            "<flakyFailure/>",
+            "<flakyError/>",
+        ] {
             assert!(validate(&report(&render(outcome))).is_err(), "{outcome}");
         }
         assert!(validate(&report("")).is_err());
