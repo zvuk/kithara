@@ -171,3 +171,47 @@ impl TraceWriter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn writer_preserves_records_as_versioned_json_lines() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("trace.jsonl");
+        let records = [
+            TraceRecord::new(1, TraceRecordKind::Send, "send")
+                .with_source(TraceSource::new("src/lib.rs", 4, 2))
+                .with_span("producer")
+                .with_parent_span("root")
+                .with_task("worker")
+                .with_thread("thread-1")
+                .with_correlation("message-1")
+                .with_resource("Buffer", "7"),
+            TraceRecord::new(2, TraceRecordKind::Receive, "receive").with_correlation("message-1"),
+        ];
+        let mut writer = TraceWriter::create(&path).expect("writer");
+        for record in &records {
+            writer.write(record).expect("record");
+        }
+        writer.finish().expect("finish");
+        let jsonl = fs::read_to_string(&path).expect("read trace");
+        let decoded = jsonl
+            .lines()
+            .map(|line| serde_json::from_str::<TraceRecord>(line).expect("trace record"))
+            .collect::<Vec<_>>();
+
+        assert!(jsonl.ends_with('\n'));
+        assert_eq!(decoded, records);
+        assert!(
+            decoded
+                .iter()
+                .all(|record| record.schema_version == TRACE_SCHEMA_VERSION)
+        );
+    }
+}

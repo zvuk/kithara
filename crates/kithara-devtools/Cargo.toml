@@ -7,39 +7,66 @@ license = "MIT OR Apache-2.0"
 description = "Reusable, config-driven xtask command core (lint, format, test, health and friends)"
 repository = "https://github.com/zvuk/kithara"
 
+[[bin]]
+name = "kithara-devtools-fake-tool"
+required-features = ["tools"]
+
 [features]
 default = ["lint", "viz"]
 # Enables the arch/style/idioms lint command family.
-lint = []
+lint = ["tools"]
+tools = [
+    "dep:kithara-config",
+    "dep:cargo_metadata",
+    "dep:clap",
+    "dep:delegate",
+    "dep:derive-where",
+    "dep:derive_more",
+    "dep:fs4",
+    "dep:glob",
+    "dep:hex",
+    "dep:proc-macro2",
+    "dep:quote",
+    "dep:rayon",
+    "dep:regex",
+    "dep:roxmltree",
+    "dep:same-file",
+    "dep:sha2",
+    "dep:syn",
+    "dep:toml",
+    "dep:tracing",
+    "dep:url",
+]
+trace = []
 # Enables architecture visualization commands.
-viz = []
+viz = ["tools", "trace"]
 
 [dependencies]
-kithara-config = { workspace = true }
+kithara-config = { workspace = true, optional = true }
 
 anyhow = { workspace = true }
-cargo_metadata = { workspace = true }
-clap = { workspace = true }
-delegate = { workspace = true }
-derive-where = { workspace = true }
-derive_more = { workspace = true }
+cargo_metadata = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+delegate = { workspace = true, optional = true }
+derive-where = { workspace = true, optional = true }
+derive_more = { workspace = true, optional = true }
 fieldwork = { workspace = true }
-fs4 = { workspace = true }
-glob = { workspace = true }
-hex = { workspace = true }
-proc-macro2 = { workspace = true, features = ["span-locations"] }
-quote = { workspace = true }
-rayon = { workspace = true }
-regex = { workspace = true }
-roxmltree = { workspace = true }
-same-file = { workspace = true }
+fs4 = { workspace = true, optional = true }
+glob = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+proc-macro2 = { workspace = true, features = ["span-locations"], optional = true }
+quote = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
+regex = { workspace = true, optional = true }
+roxmltree = { workspace = true, optional = true }
+same-file = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
-syn = { workspace = true, features = ["full", "extra-traits", "visit"] }
-toml = { workspace = true }
-tracing = { workspace = true }
-url = { workspace = true }
+sha2 = { workspace = true, optional = true }
+syn = { workspace = true, features = ["full", "extra-traits", "visit"], optional = true }
+toml = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -47,3 +74,15 @@ tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "config_contract"
+required-features = ["tools"]
+
+[[test]]
+name = "init_contract"
+required-features = ["tools"]
+
+[[test]]
+name = "viz_portable"
+required-features = ["viz"]

@@ -179,7 +179,7 @@ kithara = { workspace = true, default-features = false, optional = true }
 kithara = { workspace = true, default-features = false, optional = true, features = ["full", "encode", "fdk-aac", "ffmpeg", "symphonia", "opus", "ape", "client-reqwest", "tls-rustls"] }
 kithara-app = { workspace = true, default-features = false, optional = true }
 kithara-app-library = { workspace = true, optional = true }
-kithara-devtools = { workspace = true, optional = true }
+kithara-devtools = { workspace = true, default-features = false, features = ["trace"], optional = true }
 
 keyring-core = { workspace = true, optional = true, features = ["sample"] }
 

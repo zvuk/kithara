@@ -83,8 +83,11 @@ crate's docs; `just tooling xtask --help` lists the current surface.
 
 ## Features
 
-- `lint` (default) — the syn-based `arch` / `style` / `idioms` lint family.
-- `viz` (default) — architecture visualization.
+- `lint` (default) - the syn-based `arch` / `style` / `idioms` lint family; includes `tools`.
+- `tools` - the common command core for format, test, health, and analysis.
+- `trace` - the `viz::trace` record and JSONL writer API.
+- `viz` (default) - architecture visualization; includes `tools` and `trace`.
 
-`--no-default-features` drops those command families for a project that only
-wants format, test, health, and friends.
+Use `--no-default-features --features tools` for commands without lint or
+visualization. Trace consumers use `--no-default-features --features trace` to
+build the record and writer API without the command or renderer modules.
