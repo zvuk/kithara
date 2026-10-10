@@ -631,9 +631,7 @@ async fn resumable_progress(url: &str) -> AnalysisProgress {
     let target = target_of(&owner, &source);
     let _rx = owner.subscribe(queue, track_id, source, axis());
     loop {
-        time::timeout(Duration::from_secs(2), owner.drive())
-            .await
-            .expect("the pass progresses");
+        drive_once(&mut owner).await;
         let held = owner.cache.get(&target, axis());
         if let Some(progress) = held.filter(AnalysisProgress::is_resumable) {
             cancel.cancel();
@@ -830,9 +828,34 @@ async fn a_background_warm_keeps_the_holder_of_a_held_entry(tone_mp3: String) {
 
 async fn settle(owner: &mut Owner) {
     while owner.active.is_some() {
-        time::timeout(Duration::from_secs(2), owner.drive())
-            .await
-            .expect("the pass progresses");
+        drive_once(owner).await;
+    }
+}
+
+async fn drive_once(owner: &mut Owner) {
+    if let Err(error) = time::timeout(Duration::from_secs(2), owner.drive()).await {
+        match owner.active.as_ref() {
+            Some(Activity::Running(run)) => {
+                let changed = run.rx.has_changed();
+                let progress = run.rx.borrow().clone();
+                let analysis = progress.as_ref().map(AnalysisProgress::analysis);
+                panic!(
+                    "the pass progresses: {error:?}; phase=running; track={:?}; changed={:?}; \
+                     revision={:?}; extent={:?}; frontier={:?}; settled={:?}",
+                    owner.entries[run.entry].track_id(),
+                    changed,
+                    analysis.map(TrackAnalysis::revision),
+                    analysis.and_then(TrackAnalysis::extent),
+                    analysis.map(|analysis| analysis.coverage().frontier()),
+                    analysis.map(TrackAnalysis::is_settled),
+                );
+            }
+            Some(Activity::Committing(task)) => panic!(
+                "the pass progresses: {error:?}; phase=committing; task_finished={}",
+                task.is_finished(),
+            ),
+            None => panic!("the pass progresses: {error:?}; phase=idle"),
+        }
     }
 }
 
@@ -904,12 +927,26 @@ async fn an_invalid_layout_yields_no_analysis(tone_mp3: String) {
     host.close().await;
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(
+    native,
+    tokio,
+    flash(false),
+    tracing(
+        "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
+    )
+)]
 async fn a_track_shorter_than_its_header_claims_is_done(tone_mp3: String) {
     the_source_gave_everything_it_can(&tone_mp3).await;
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(
+    native,
+    tokio,
+    flash(false),
+    tracing(
+        "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
+    )
+)]
 async fn a_resampled_track_is_covered_from_its_first_frame(rhythm_a_mp3: String) {
     the_source_gave_everything_it_can(&rhythm_a_mp3).await;
 }
@@ -998,7 +1035,14 @@ async fn a_track_opened_with_every_artifact_is_not_analysed(tone_mp3: String) {
     host.close().await;
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(
+    native,
+    tokio,
+    flash(false),
+    tracing(
+        "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
+    )
+)]
 async fn a_served_waveform_leaves_only_the_beats_to_analyse(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
@@ -1208,7 +1252,14 @@ async fn a_cached_pass_never_replaces_the_grid_the_caller_supplied(tone_mp3: Str
 /// The mirror of the served-waveform case: one publication carries a grid the
 /// caller handed over and a waveform this build analysed, and neither origin
 /// is visible to the consumer that reads them.
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(
+    native,
+    tokio,
+    flash(false),
+    tracing(
+        "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
+    )
+)]
 async fn a_supplied_grid_is_published_beside_a_locally_analysed_waveform(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
