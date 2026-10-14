@@ -1,0 +1,4 @@
+# Specs live in a separate store: openspec store register <clone> --id kithara
+# .claude/skills and .agents/skills share docs/skills, so regenerate the skills
+# only with `openspec config set delivery skills`.
+store: kithara

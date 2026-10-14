@@ -112,6 +112,16 @@ pub(crate) const RULE_BAR: &str =
 pub(crate) const GIT_LISTING_ARGS: [&str; 4] =
     ["ls-files", "--cached", "--others", "--exclude-standard"];
 
+/// Skill directories `openspec update` writes into `docs/skills`; they stay as generated.
+pub(crate) const OPENSPEC_SKILLS: [&str; 6] = [
+    "openspec-apply-change",
+    "openspec-archive-change",
+    "openspec-explore",
+    "openspec-propose",
+    "openspec-sync-specs",
+    "openspec-update-change",
+];
+
 /// Substrings that mark an environment-level failure rather than a real
 /// regression — typically a missing tool or unpublished baseline.
 /// When any of these appear in the stage log on non-zero exit the stage
