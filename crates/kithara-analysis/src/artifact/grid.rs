@@ -1,9 +1,11 @@
 use std::num::NonZeroU16;
 
 use kithara_beat::{
-    BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid,
+    BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, RawBeatGrid,
     SCHEMA_VERSION,
 };
+use kithara_signal::{AudioSpec, SignalError};
+use kithara_sync::Meter;
 use num_traits::cast::ToPrimitive;
 use thiserror::Error;
 
@@ -28,6 +30,12 @@ pub const ORDINAL_TOLERANCE_BEATS: f64 = 0.25;
 pub enum BeatGridUnavailable {
     #[error("the pass published no beat artifact")]
     NoBeats,
+    #[error("the source states no original media clock")]
+    MediaOrigin,
+    #[error(transparent)]
+    SourceClock(#[from] SignalError),
+    #[error("source extent {end} precedes media zero {origin}")]
+    MediaExtent { origin: u64, end: u64 },
     #[error(transparent)]
     Rejected(#[from] BeatGridError),
     #[error("the artifact carries {bpm} where a tempo would be")]
@@ -47,10 +55,27 @@ impl TryFrom<&TrackAnalysis> for BeatGridModel {
         if !bpm.is_finite() || bpm <= 0.0 {
             return Err(BeatGridUnavailable::Tempo { bpm });
         }
-        let rate = f64::from(analysis.source_sample_rate().get());
-        let duration = analysis.extent().map(|extent| seconds(extent, rate));
-        let placed = place(snapshot, rate, bpm, duration);
-        let (downbeats, meter) = bars(snapshot, &placed, rate, duration);
+        let spec = AudioSpec::new(1, analysis.source_sample_rate());
+        let origin = spec.frame_at(
+            analysis
+                .media_origin()
+                .ok_or(BeatGridUnavailable::MediaOrigin)?,
+        )?;
+        let rate = f64::from(spec.sample_rate.get());
+        let duration = analysis
+            .extent()
+            .map(|extent| {
+                extent
+                    .checked_sub(origin)
+                    .map(|frames| seconds(frames, rate))
+                    .ok_or(BeatGridUnavailable::MediaExtent {
+                        origin,
+                        end: extent,
+                    })
+            })
+            .transpose()?;
+        let placed = place(snapshot, rate, bpm, duration, origin);
+        let (downbeats, meter) = bars(snapshot, &placed);
         Ok(Self::try_from(RawBeatGrid {
             duration,
             bpm,
@@ -78,6 +103,7 @@ fn place(
     rate: f64,
     bpm: f64,
     duration: Option<f64>,
+    origin: u64,
 ) -> Vec<(u64, GridBeat)> {
     let artifact = snapshot.artifact();
     let period = consts::SECONDS_PER_MINUTE / bpm;
@@ -93,13 +119,14 @@ fn place(
         .beats()
         .iter()
         .zip(artifact.beat_confidence())
-        .map(|(frame, confidence)| {
+        .filter_map(|(frame, confidence)| {
+            let frame_after_origin = frame.checked_sub(origin)?;
             let beat = GridBeat {
-                at: seconds(*frame, rate),
+                at: seconds(frame_after_origin, rate),
                 ordinal: 0,
                 confidence: *confidence,
             };
-            (*frame, beat)
+            Some((*frame, beat))
         })
         .filter(|(_, beat)| !duration.is_some_and(|duration| beat.at > duration))
         .collect();
@@ -165,18 +192,12 @@ fn longest_run_start(
 /// bar the detector skipped is stated without a confidence of its own and a
 /// bar line on the wrong beat is left out. Votes that agree on nothing state
 /// no bars at all.
-fn bars(
-    snapshot: &BeatSnapshot,
-    placed: &[(u64, GridBeat)],
-    rate: f64,
-    duration: Option<f64>,
-) -> (Vec<GridDownbeat>, Option<Meter>) {
+fn bars(snapshot: &BeatSnapshot, placed: &[(u64, GridBeat)]) -> (Vec<GridDownbeat>, Option<Meter>) {
     let artifact = snapshot.artifact();
     let heard: Vec<(usize, Option<f32>)> = artifact
         .downbeats()
         .iter()
         .zip(artifact.downbeat_confidence().iter())
-        .filter(|(frame, _)| duration.is_none_or(|duration| seconds(**frame, rate) <= duration))
         .filter_map(|(frame, confidence)| {
             let index = placed
                 .binary_search_by_key(frame, |(placed, _)| *placed)
@@ -223,9 +244,13 @@ fn seconds(frame: u64, rate: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::num::{NonZeroU16, NonZeroU32};
 
-    use kithara_beat::{BeatGridModel, BeatGridState};
+    use kithara_beat::{
+        BeatGridModel, BeatGridState, GridBeat, GridDownbeat, RawBeatGrid, SCHEMA_VERSION,
+    };
+    use kithara_platform::time::Duration;
+    use kithara_sync::Meter;
     use kithara_test_utils::kithara;
 
     use super::{BeatGridUnavailable, BeatSnapshot, BeatState, TrackAnalysis};
@@ -256,7 +281,18 @@ mod tests {
         extent: Option<u64>,
         state: BeatState,
     ) -> TrackAnalysis {
+        artifact_analysis_at(rate, artifact, extent, state, Some(Duration::ZERO))
+    }
+
+    fn artifact_analysis_at(
+        rate: u32,
+        artifact: BeatArtifact,
+        extent: Option<u64>,
+        state: BeatState,
+        origin: Option<Duration>,
+    ) -> TrackAnalysis {
         TrackAnalysis::builder()
+            .maybe_media_origin(origin)
             .token(AnalysisToken::from("track-42"))
             .source_sample_rate(NonZeroU32::new(rate).expect("invariant: a fixture rate is set"))
             .beat(BeatSnapshot::new(artifact, state, Vec::new()))
@@ -506,6 +542,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_pass_without_a_beat_artifact_states_no_grid() {
         let waveform_only = TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token(AnalysisToken::from("track-42"))
             .source_sample_rate(
                 NonZeroU32::new(consts::RATE_48).expect("invariant: a fixture rate is set"),
@@ -682,5 +719,149 @@ mod tests {
         ));
 
         assert_eq!(times(&model), [(0, 0.0), (1, 0.5), (2, 1.0)]);
+    }
+    #[kithara::test]
+    fn a_raw_grid_with_an_origin_matches_the_imported_media_grid() {
+        let imported = BeatGridModel::try_from(RawBeatGrid {
+            duration: Some(4.5),
+            bpm: 120.0,
+            beats: (0..9)
+                .map(|ordinal| GridBeat {
+                    at: f64::from(ordinal) * 0.5,
+                    ordinal: i64::from(ordinal),
+                    confidence: Some(1.0),
+                })
+                .collect(),
+            downbeats: [0, 4, 8]
+                .map(|ordinal| GridDownbeat {
+                    at: f64::from(ordinal) * 0.5,
+                    beat_ordinal: i64::from(ordinal),
+                    confidence: Some(0.9),
+                })
+                .to_vec(),
+            meter: Some(Meter {
+                beats_per_bar: NonZeroU16::new(4).expect("four beats form a bar"),
+                origin_beat_ordinal: 0,
+            }),
+            schema_version: SCHEMA_VERSION,
+            model_id: "track-42".to_owned(),
+            revision: 7,
+            state: BeatGridState::Final,
+        })
+        .expect("the authored media grid is valid");
+        let rate = NonZeroU32::new(44_100).expect("test rate is non-zero");
+        let spec = kithara_signal::AudioSpec::new(1, rate);
+        for offset in [529, 1105] {
+            let raw = BeatArtifact::new(
+                120.0,
+                (0..9)
+                    .map(|beat| (offset + beat * 22_050, Some(1.0)))
+                    .collect(),
+                [0, 4, 8]
+                    .map(|beat| (offset + beat * 22_050, Some(0.9)))
+                    .to_vec(),
+            );
+            let analysis = artifact_analysis_at(
+                rate.get(),
+                raw.clone(),
+                Some(offset + 198_450),
+                BeatState::Final,
+                Some(spec.duration_for(offset).expect("origin is representable")),
+            );
+            assert_eq!(grid(&analysis), imported, "raw origin {offset}");
+            assert_eq!(
+                analysis.beat().expect("raw artifact survives").artifact(),
+                &raw
+            );
+            assert_eq!(analysis.extent(), Some(offset + 198_450));
+        }
+    }
+
+    #[kithara::test]
+    fn a_positive_first_native_position_is_not_rebased_as_media_zero() {
+        let raw = BeatArtifact::new(
+            120.0,
+            [12_000, 36_000, 60_000]
+                .map(|frame| (frame, Some(1.0)))
+                .to_vec(),
+            Vec::new(),
+        );
+        let analysis = artifact_analysis_at(
+            48_000,
+            raw,
+            Some(96_000),
+            BeatState::Final,
+            Some(Duration::ZERO),
+        );
+        assert_eq!(times(&grid(&analysis)), [(0, 0.25), (1, 0.75), (2, 1.25)]);
+        assert_eq!(grid(&analysis).as_raw().duration, Some(2.0));
+    }
+
+    #[kithara::test]
+    fn an_unknown_media_origin_refuses_a_grid_and_retains_raw_artifacts() {
+        let raw = BeatArtifact::new(
+            120.0,
+            vec![(529, Some(1.0)), (22_579, Some(1.0))],
+            Vec::new(),
+        );
+        let analysis =
+            artifact_analysis_at(44_100, raw.clone(), Some(44_629), BeatState::Final, None);
+        assert_eq!(
+            BeatGridModel::try_from(&analysis),
+            Err(BeatGridUnavailable::MediaOrigin)
+        );
+        assert_eq!(analysis.media_origin(), None);
+        assert_eq!(analysis.extent(), Some(44_629));
+        assert_eq!(
+            analysis
+                .beat()
+                .expect("raw artifact remains available")
+                .artifact(),
+            &raw
+        );
+    }
+
+    #[kithara::test]
+    fn only_the_public_projection_omits_markers_before_media_zero() {
+        let raw = BeatArtifact::new(
+            120.0,
+            [0, 24_000, 48_000, 72_000]
+                .map(|frame| (frame, Some(1.0)))
+                .to_vec(),
+            vec![(0, Some(0.9))],
+        );
+        let analysis = artifact_analysis_at(
+            48_000,
+            raw.clone(),
+            Some(96_000),
+            BeatState::Final,
+            Some(Duration::from_millis(500)),
+        );
+        let public = grid(&analysis);
+        assert_eq!(times(&public), [(0, 0.0), (1, 0.5), (2, 1.0)]);
+        assert_eq!(public.as_raw().duration, Some(1.5));
+        assert!(public.as_raw().downbeats.is_empty());
+        assert_eq!(
+            analysis.beat().expect("raw artifact survives").artifact(),
+            &raw
+        );
+    }
+
+    #[kithara::test]
+    fn an_extent_before_the_media_origin_is_a_typed_refusal() {
+        let analysis = artifact_analysis_at(
+            48_000,
+            BeatArtifact::new(120.0, vec![(24_000, Some(1.0))], Vec::new()),
+            Some(12_000),
+            BeatState::Final,
+            Some(Duration::from_millis(500)),
+        );
+        assert_eq!(
+            BeatGridModel::try_from(&analysis),
+            Err(BeatGridUnavailable::MediaExtent {
+                origin: 24_000,
+                end: 12_000,
+            })
+        );
     }
 }

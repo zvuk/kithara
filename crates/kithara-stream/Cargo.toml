@@ -33,7 +33,8 @@ kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-test-utils = { workspace = true }
 
-bitflags = { workspace = true }
+arc-swap = { workspace = true }
+
 bon = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }

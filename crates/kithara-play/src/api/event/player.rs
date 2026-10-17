@@ -4,10 +4,10 @@ use std::{cmp, hash, ops};
 
 use kithara_events::{Event, TrackId};
 use kithara_platform::time::Duration;
+use kithara_render::bridge::PlaybackFault;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{ItemRole, PlayerStatus, PortType, TimeControlStatus, WaitingReason};
-use crate::bridge::PlaybackFault;
 
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get)]
@@ -248,20 +248,6 @@ pub enum PlayerEvent {
         item: ItemRole,
         fault: PlaybackFault,
     },
-    /// Leading track entered the prefetch window — arm the next slot.
-    PrefetchRequested,
-    /// A track entered its crossfade window — commit the armed slot.
-    /// Suppressed when `crossfade_duration == 0` (audio thread handles
-    /// handover at EOF).
-    ///
-    /// Carries [`ItemRole`] for the same reason
-    /// [`ItemDidPlayToEnd`](Self::ItemDidPlayToEnd) does: the request names
-    /// the track that is running out, and a consumer whose cursor has
-    /// already moved to the successor must be able to see that this
-    /// handover was already performed.
-    HandoverRequested {
-        item: ItemRole,
-    },
 }
 
 #[cfg(test)]
@@ -276,5 +262,31 @@ mod tests {
             ::core::any::type_name::<PlayerEvent>(),
             "kithara_play::api::event::player::PlayerEvent"
         );
+    }
+
+    // Ruling: Loaded → StatusChanged(ReadyToPlay) — spec §4.3, player lifecycle events.
+    // Ruling: Requested → TimeControlStatusChanged(WaitingToPlay) — spec §4.3, loading is explicit.
+    // Ruling: HandoverRequested → ItemDidPlayToEnd(Leading) — spec §4.4, Queue owns the successor.
+    // Ruling: FadingIn → PlaybackStarted(Leading) — spec §4.3, playback belongs to the slot.
+    // Ruling: RateChanged → PlayerEvent::RateChanged — spec §4.3, applied speed observation.
+    // Ruling: PlaybackStopped(Eof) → ItemDidPlayToEnd(Leading) — spec §4.3, natural end event.
+    #[kithara::test]
+    #[case(PlayerEvent::StatusChanged { status: PlayerStatus::ReadyToPlay }, "StatusChanged")]
+    #[case(PlayerEvent::TimeControlStatusChanged { status: TimeControlStatus::WaitingToPlay, reason: None }, "TimeControlStatusChanged")]
+    #[case(PlayerEvent::ItemDidPlayToEnd { item: item("ending.mp3") }, "ItemDidPlayToEnd")]
+    #[case(PlayerEvent::PlaybackStarted { item: item("a.mp3") }, "PlaybackStarted")]
+    #[case(PlayerEvent::RateChanged { rate: 1.25 }, "RateChanged")]
+    #[case(PlayerEvent::ItemDidPlayToEnd { item: item("ended.mp3") }, "ItemDidPlayToEnd")]
+    fn notification_debug_format(#[case] notification: PlayerEvent, #[case] variant_name: &str) {
+        let debug = format!("{notification:?}");
+        assert!(debug.contains(variant_name));
+    }
+
+    fn item(source: &str) -> ItemRole {
+        ItemRole::Leading(super::super::TrackRef::new(
+            TrackId::allocate(),
+            kithara_events::SlotId::new(0),
+            kithara_platform::sync::Arc::from(source),
+        ))
     }
 }

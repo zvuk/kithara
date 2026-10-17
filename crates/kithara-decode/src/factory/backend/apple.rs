@@ -240,15 +240,15 @@ mod apple_factory_tests {
     }
 
     impl Demuxer for PacketDemuxer {
-        fn duration(&self) -> Option<Duration> {
-            Some(
+        fn duration(&self) -> Option<crate::DecoderDuration> {
+            Some(crate::DecoderDuration::RawLength(
                 self.source_spec()
                     .duration_for(
                         self.packet_count
                             .saturating_mul(u64::from(self.packet_frames)),
                     )
                     .expect("test duration is representable"),
-            )
+            ))
         }
 
         fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
@@ -298,16 +298,22 @@ mod apple_factory_tests {
     impl FrameCodec for OutputDomainCodec {
         fn decode_frame(
             &mut self,
-            bytes: &[u8],
-            _pts: Duration,
-            _packet_desc: &[u8],
+            frame: Frame<'_>,
+            metadata: crate::demuxer::PacketMetadata,
             out: &mut SampleBuffer,
-        ) -> DecodeResult<u32> {
+        ) -> DecodeResult<crate::codec::DecodedPacket> {
+            let Frame {
+                data: bytes,
+                pts: _pts,
+                packet_desc: _packet_desc,
+                ..
+            } = frame;
             if bytes.is_empty() {
                 out.clear();
-                return Ok(0);
+                return Ok(crate::codec::DecodedPacket::new(0, metadata));
             }
             write_silent_frame(&self.pcm, self.spec, self.frames_per_call, out)
+                .map(|frames| crate::codec::DecodedPacket::new(frames, metadata))
         }
 
         fn flush(&mut self) -> DecodeResult<()> {
@@ -474,12 +480,14 @@ mod apple_factory_tests {
         loop {
             match decoder.next_chunk().expect("BUG: next chunk") {
                 DecoderChunkOutcome::Chunk(chunk) => {
-                    trimmed_frames =
-                        trimmed_frames.saturating_add(output_frames(trimmer.push(chunk)));
+                    trimmed_frames = trimmed_frames.saturating_add(output_frames(
+                        trimmer.push(*chunk).expect("valid gapless PCM"),
+                    ));
                 }
                 DecoderChunkOutcome::Pending(reason) => panic!("unexpected Pending: {reason:?}"),
                 DecoderChunkOutcome::Eof => {
-                    trimmed_frames = trimmed_frames.saturating_add(output_frames(trimmer.flush()));
+                    trimmed_frames = trimmed_frames
+                        .saturating_add(output_frames(trimmer.flush().expect("valid gapless PCM")));
                     break;
                 }
             }
@@ -591,5 +599,150 @@ mod apple_container_identity_tests {
             }
         }
         assert_eq!(frames, 44_100);
+    }
+}
+
+#[cfg(all(test, apple_backend))]
+mod apple_output_clock_tests {
+    use std::io::Cursor;
+
+    use kithara_platform::time::Duration;
+    use kithara_signal::AudioChunkInfo;
+    use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+    use kithara_test_fixtures::assets::signal_profile_mp3_libmp3lame_44100_1ch;
+    use kithara_test_utils::kithara;
+
+    use crate::{
+        Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory, PcmOrigin,
+        test_pools::{TestPools, pools},
+    };
+
+    fn decoder() -> Box<dyn Decoder> {
+        let media = MediaInfo::builder()
+            .codec(AudioCodec::Mp3)
+            .container(ContainerFormat::MpegAudio)
+            .build();
+        let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
+            DecoderConfig::builder()
+                .backend(DecoderBackend::Apple)
+                .gapless(true)
+                .pools(pools())
+                .build();
+        DecoderFactory::create_from_media_info(
+            Cursor::new(signal_profile_mp3_libmp3lame_44100_1ch().bytes().to_vec()),
+            &media,
+            config,
+        )
+        .expect("open native Apple MPEG fixture")
+    }
+
+    #[kithara::hang_watchdog]
+    fn drain(decoder: &mut dyn Decoder) -> (Vec<AudioChunkInfo>, Vec<f32>) {
+        let mut metadata = Vec::new();
+        let mut first_pcm = Vec::new();
+        loop {
+            hang_tick!();
+            match decoder.next_chunk().expect("decode native Apple MPEG") {
+                DecoderChunkOutcome::Chunk(chunk) => {
+                    if metadata.is_empty() {
+                        first_pcm = chunk.samples.to_vec();
+                    }
+                    assert_eq!(chunk.frames(), chunk.meta.frames as usize);
+                    assert_eq!(
+                        chunk.samples.len(),
+                        chunk.frames() * usize::from(chunk.meta.spec.channels)
+                    );
+                    assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
+                    metadata.push(chunk.meta);
+                    hang_reset!();
+                }
+                DecoderChunkOutcome::Pending(_) => {}
+                DecoderChunkOutcome::Eof => break,
+            }
+        }
+        (metadata, first_pcm)
+    }
+
+    fn assert_clock(chunks: &[AudioChunkInfo], origin: Duration) -> u64 {
+        let first = chunks.first().expect("decoded native PCM");
+        let mut frames = 0u64;
+        for (index, meta) in chunks.iter().enumerate() {
+            assert_eq!(meta.spec, first.spec);
+            let expected = origin + meta.spec.duration_for(frames).expect("PCM extent");
+            assert!(
+                meta.timestamp.abs_diff(expected) <= Duration::from_nanos(1),
+                "native PCM clock index={index} actual={:?} expected={expected:?} \
+                 frame_offset={} total_frames={frames} chunk_frames={} spec={:?} \
+                 origin={origin:?} first={first:?}",
+                meta.timestamp,
+                meta.frame_offset,
+                meta.frames,
+                meta.spec,
+            );
+            assert_eq!(
+                meta.frame_offset,
+                first.frame_offset + frames,
+                "the raw clock must follow the PCM actually emitted"
+            );
+            frames += u64::from(meta.frames);
+        }
+        frames
+    }
+
+    #[kithara::test]
+    fn apple_mpeg_buffered_head_and_eof_share_one_raw_clock() {
+        let mut decoder = decoder();
+        let gapless = decoder
+            .gapless_profile(Some(AudioCodec::Mp3))
+            .gapless()
+            .expect("LAME fixture trim");
+        let (chunks, _) = drain(decoder.as_mut());
+        let frames = assert_clock(&chunks, Duration::ZERO);
+        assert_eq!(chunks[0].timestamp, Duration::ZERO);
+        assert_eq!(chunks[0].frame_offset, 0);
+        assert_eq!(
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(
+            frames - gapless.leading_frames - gapless.trailing_frames,
+            264_600
+        );
+    }
+
+    #[kithara::test]
+    fn apple_mpeg_seek_preserves_original_origin_and_exact_sought_suffix() {
+        let mut decoder = decoder();
+        let (original, _) = drain(decoder.as_mut());
+        let original_frames = assert_clock(&original, Duration::ZERO);
+        let target = Duration::from_millis(1_500);
+        decoder.seek(target).expect("native MPEG content seek");
+        let (suffix, _) = drain(decoder.as_mut());
+        let suffix_frames = assert_clock(&suffix, target);
+        assert_eq!(suffix[0].frame_offset, 66_150);
+        assert_eq!(
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
+            Some(Duration::ZERO)
+        );
+        assert!(
+            suffix_frames.abs_diff(original_frames - 66_150) <= 1,
+            "a sought suffix must keep all remaining decoded PCM"
+        );
+    }
+
+    #[kithara::test]
+    fn apple_mpeg_rewind_reanchors_the_codec_from_the_first_input() {
+        let mut decoder = decoder();
+        let (original, original_pcm) = drain(decoder.as_mut());
+        let original_frames = assert_clock(&original, Duration::ZERO);
+        decoder.seek(Duration::ZERO).expect("native MPEG rewind");
+        let (replay, replay_pcm) = drain(decoder.as_mut());
+        assert_eq!(assert_clock(&replay, Duration::ZERO), original_frames);
+        assert_eq!(replay[0].frame_offset, 0);
+        assert_eq!(
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(replay_pcm, original_pcm);
     }
 }

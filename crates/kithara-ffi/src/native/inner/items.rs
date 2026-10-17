@@ -94,7 +94,10 @@ impl NativeInner {
     }
 
     pub(crate) fn remove_all_items(&self) {
-        self.queue.clear();
+        if let Err(error) = self.queue.clear() {
+            tracing::warn!(%error, "the queue refused to clear and keeps its items");
+            return;
+        }
         let mut items = self.items.lock();
         for (_, item) in items.drain() {
             *item.inserted.lock() = false;

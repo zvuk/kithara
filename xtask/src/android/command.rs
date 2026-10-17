@@ -310,7 +310,7 @@ pub(crate) fn run_build(
         ffi_crate,
         "--no-default-features",
         "--features",
-        &device_features(profile),
+        &device_features(profile).replace(&format!("{ffi_crate}/"), ""),
     ]);
 
     if matches!(profile, BuildProfile::Release) {

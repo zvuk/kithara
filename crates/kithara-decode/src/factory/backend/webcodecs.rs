@@ -80,6 +80,10 @@ mod standalone {
                 hint: config.hint.clone(),
                 byte_len_handle: config.byte_len_handle.clone(),
                 byte_map: config.byte_map.clone(),
+                control: config
+                    .reader_control
+                    .clone()
+                    .unwrap_or_else(|| kithara_stream::ReaderControl::new(None)),
             },
         )?;
         if probed_gapless.is_some() {

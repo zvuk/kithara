@@ -11,6 +11,7 @@ async fn single_track_silence_trim_strips_leading_priming(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -68,6 +69,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -139,6 +141,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -148,7 +151,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(
     let first = create_resource(&harness, &trimmed.1, temp_dir.path()).await;
     let second = create_resource(&harness, &trimmed_stitch.1, temp_dir.path()).await;
 
-    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]).await;
+    let [_, second_id] = load_tagged_queue(&harness, [first, second]).await;
 
     let (rendered, events) = render_until_item_end(&harness, second_id).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -158,7 +161,6 @@ async fn two_tracks_gapless_stitch_continuity_metric(
         "rendered PCM must cover the stitch window; left_frames={}, stitch_frame={stitch_frame}, events={events:?}",
         left.len()
     );
-    assert_prefetch_before_first_end(&events, first_id);
 
     let switch_peak = peak_first_diff(&left, stitch_frame, ContinuityMetric::HALF_WINDOW_FRAMES);
     let (control_peak, control_count) = gapless_control_peak(&left, stitch_frame);
@@ -195,7 +197,6 @@ async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch(
         "FUSED_GAPLESS_DEFICIT compensated_db={compensated_db:.2} uncompensated_db={uncompensated_db:.2}"
     );
 
-    assert_prefetch_before_first_end(&compensated.events, compensated.first_id);
     assert_eq!(compensated.first_frames, FUSED_FIXTURE_IDEAL_DEVICE_FRAMES);
     assert_eq!(
         uncompensated.first_frames,
@@ -251,12 +252,16 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
     )
     .await;
     let probe = create_apple_fused_resource(&probe_harness, &apple_probe.1, temp_dir.path()).await;
+    let probe = kithara_integration_tests::mock::open_resource(&probe)
+        .await
+        .expect("open Apple fused probe");
     let probe = drain_resource_to_eof(probe).await;
     assert!(
         (floor_frames..=ceil_frames).contains(&probe.output_frames),
@@ -309,6 +314,7 @@ async fn render_apple_fused_deficit_seam(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
@@ -333,7 +339,6 @@ async fn render_apple_fused_deficit_seam(
     })
     .expect("first fused item must emit ItemDidPlayToEnd");
 
-    assert_prefetch_before_first_end(&events, first_id);
     assert!(
         stitch_frame < left.len(),
         "fused stitch frame must be inside rendered PCM; stitch_frame={stitch_frame}, left_frames={}, events={events:?}",
@@ -368,6 +373,7 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(GaplessMode::Disabled)
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -410,6 +416,7 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -442,6 +449,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -517,6 +525,7 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,

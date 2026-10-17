@@ -199,7 +199,7 @@ mod runs {
             }
         }
 
-        pub(crate) fn cancel(&mut self, id: TrackId) {
+        fn cancel(&mut self, id: TrackId) {
             if let Some(cancel) = self.live.borrow_mut().remove(&id) {
                 cancel.cancel();
             }
@@ -209,6 +209,16 @@ mod runs {
             for (_, cancel) in self.live.borrow_mut().drain() {
                 cancel.cancel();
             }
+        }
+
+        pub(crate) fn reconcile(&mut self, queue: &FfiQueueControl) {
+            self.live.borrow_mut().retain(|id, cancel| {
+                let present = queue.track(*id).is_some();
+                if !present {
+                    cancel.cancel();
+                }
+                present
+            });
         }
 
         /// Open a pass for `id` on the queue's decoded-audio axis.
@@ -340,7 +350,7 @@ mod runs {
         }
         config.set_cancel(cancel.child());
         config.set_host_sample_rate(rate);
-        let mut resource = Resource::new(config)
+        let mut resource = Resource::open(config, kithara::worker::Wake::default())
             .await
             .map_err(|error| format!("resource open failed: {error}"))?;
         resource

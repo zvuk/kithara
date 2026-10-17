@@ -1,4 +1,7 @@
-use std::io::{Read, Seek, SeekFrom};
+use std::{
+    io::{Read, Seek, SeekFrom},
+    num::NonZeroU16,
+};
 
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, id3v2_tag_len};
 
@@ -49,13 +52,17 @@ pub(crate) fn skip_id3_tags(source: &mut BoxedSource) -> DecodeResult<u64> {
 }
 
 pub(super) fn sniff_wav_codec(source: &mut BoxedSource) -> DecodeResult<AudioCodec> {
+    sniff_wav_format(source).map(|(codec, _)| codec)
+}
+
+pub(crate) fn sniff_wav_format(source: &mut BoxedSource) -> DecodeResult<(AudioCodec, NonZeroU16)> {
     let position = source.stream_position()?;
-    let result = read_wav_codec(source);
+    let result = read_wav_format(source);
     source.seek(SeekFrom::Start(position))?;
     result
 }
 
-fn read_wav_codec(source: &mut BoxedSource) -> DecodeResult<AudioCodec> {
+fn read_wav_format(source: &mut BoxedSource) -> DecodeResult<(AudioCodec, NonZeroU16)> {
     let range = wav_chunk_range(source, *b"fmt ")?;
     let size = range.end - range.start;
     if size < 16 {
@@ -64,6 +71,11 @@ fn read_wav_codec(source: &mut BoxedSource) -> DecodeResult<AudioCodec> {
     let mut fmt = [0; 40];
     let len = usize::try_from(size.min(fmt.len() as u64)).map_err(|_| DecodeError::ProbeFailed)?;
     source.read_exact(&mut fmt[..len])?;
+    let block_align = NonZeroU16::new(u16::from_le_bytes([fmt[12], fmt[13]])).ok_or(
+        DecodeError::InvalidData {
+            detail: "WAV block alignment is zero",
+        },
+    )?;
     let tag = u16::from_le_bytes([fmt[0], fmt[1]]);
     let tag = if tag == 0xfffe {
         if size < 40
@@ -77,15 +89,16 @@ fn read_wav_codec(source: &mut BoxedSource) -> DecodeResult<AudioCodec> {
     } else {
         tag
     };
-    match tag {
-        1 | 3 => Ok(AudioCodec::Pcm),
-        0x55 => Ok(AudioCodec::Mp3),
-        2 | 0x11 => Ok(AudioCodec::Adpcm),
-        _ => Err(DecodeError::ProbeFailed),
-    }
+    let codec = match tag {
+        1 | 3 | 6 | 7 => AudioCodec::Pcm,
+        0x55 => AudioCodec::Mp3,
+        2 | 0x11 => AudioCodec::Adpcm,
+        _ => return Err(DecodeError::ProbeFailed),
+    };
+    Ok((codec, block_align))
 }
 
-pub(super) fn wav_data_range(source: &mut BoxedSource) -> DecodeResult<std::ops::Range<u64>> {
+pub(crate) fn wav_data_range(source: &mut BoxedSource) -> DecodeResult<std::ops::Range<u64>> {
     wav_chunk_range(source, *b"data")
 }
 
@@ -214,7 +227,7 @@ fn read_caf_codec(source: &mut BoxedSource) -> DecodeResult<AudioCodec> {
 
 /// Non-fatal byte sniff for inputs that genuinely arrive without container
 /// metadata; HLS should normally supply this through `MediaInfo`.
-pub(super) fn sniff_container_from_source(source: &mut BoxedSource) -> Option<ContainerFormat> {
+pub(crate) fn sniff_container_from_source(source: &mut BoxedSource) -> Option<ContainerFormat> {
     let position = source.stream_position().ok()?;
     let container = read_container_from_source(source);
     source.seek(SeekFrom::Start(position)).ok()?;
@@ -229,7 +242,7 @@ fn read_container_from_source(source: &mut BoxedSource) -> Option<ContainerForma
     }
 
     let mut prefix = [0; PREFIX_LEN];
-    let mut read = source.read(&mut prefix).ok()?;
+    let mut read = read_container_prefix(source, &mut prefix)?;
     while prefix[..read].starts_with(b"ID3") {
         let skip = id3v2_tag_len(&prefix[..read])?;
         let offset = source
@@ -239,13 +252,25 @@ fn read_container_from_source(source: &mut BoxedSource) -> Option<ContainerForma
         source
             .seek(SeekFrom::Start(offset.checked_add(skip)?))
             .ok()?;
-        read = source.read(&mut prefix).ok()?;
+        read = read_container_prefix(source, &mut prefix)?;
     }
     if source.seek(SeekFrom::Start(0)).is_err() {
         return None;
     }
 
     sniff_container_from_prefix(&prefix[..read], source)
+}
+
+fn read_container_prefix(source: &mut BoxedSource, prefix: &mut [u8]) -> Option<usize> {
+    let mut read = 0;
+    while read < prefix.len() {
+        let len = source.read(&mut prefix[read..]).ok()?;
+        if len == 0 {
+            break;
+        }
+        read += len;
+    }
+    Some(read)
 }
 
 fn sniff_container_from_prefix(prefix: &[u8], source: &mut BoxedSource) -> Option<ContainerFormat> {
@@ -334,13 +359,40 @@ pub(super) const fn codec_from_container(container: ContainerFormat) -> Option<A
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use std::io::{Cursor, Seek};
+    use std::io::{self, Cursor, Seek};
 
     use kithara_test_fixtures::unit_fixtures::{aac_init, aac_segment};
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::traits::BoxedSource;
+
+    struct ShortSource(Cursor<Vec<u8>>);
+
+    impl Read for ShortSource {
+        fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+            let len = out.len().min(3);
+            self.0.read(&mut out[..len])
+        }
+    }
+
+    impl Seek for ShortSource {
+        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+            self.0.seek(position)
+        }
+    }
+
+    #[kithara::test]
+    fn container_probe_collects_short_signature_reads() {
+        let mut source: BoxedSource =
+            Box::new(ShortSource(Cursor::new(b"RIFF\x04\0\0\0WAVE".to_vec())));
+        source.seek(SeekFrom::Start(3)).expect("caller position");
+        assert_eq!(
+            sniff_container_from_source(&mut source),
+            Some(ContainerFormat::Wav)
+        );
+        assert_eq!(source.stream_position().expect("position restored"), 3);
+    }
 
     #[kithara::test]
     #[case(b"ID3\x04\0\0\x80\0\0\0".as_slice(), None)]
@@ -413,6 +465,7 @@ mod tests {
     ) {
         let mut fmt = vec![0; 40];
         fmt[..2].copy_from_slice(&0xfffe_u16.to_le_bytes());
+        fmt[12..14].copy_from_slice(&4_u16.to_le_bytes());
         fmt[16..18].copy_from_slice(&22_u16.to_le_bytes());
         fmt[24..28].copy_from_slice(&tag.to_le_bytes());
         fmt[28..].copy_from_slice(&[0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113]);

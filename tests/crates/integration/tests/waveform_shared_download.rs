@@ -20,13 +20,14 @@ use kithara::{
     audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
     file::{File, FileConfig, FileSrc},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorkerConfig, RegisteredAudio, ResourceSrc},
+    play::{PlayWorkerConfig, ResourceSrc},
     stream::Stream,
 };
 use kithara_app::{
     pools::{AppPools, AppResourceConfig, AppStore, AppWorker, PoolsSection, build},
     waveform::TrackAnalysisRunner,
 };
+use kithara_integration_tests::mock::LaneAudio;
 use kithara_test_fixtures::integration_fixtures::audio_wav_44100;
 use kithara_test_utils::TestHttpServer;
 
@@ -51,7 +52,7 @@ async fn serve_wav(State(state): State<CountState>) -> Response {
         .expect("valid response")
 }
 
-fn drain_to_eof(mut audio: RegisteredAudio<Stream<File<AppPools>>, AppPools>) -> bool {
+fn drain_to_eof(mut audio: LaneAudio<Stream<File<AppPools>>, AppPools>) -> bool {
     loop {
         match audio.next_chunk() {
             Ok(ChunkOutcome::Chunk(_) | ChunkOutcome::Pending { .. }) => {}
@@ -91,11 +92,14 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
     // Player consumer of the same URL through the same shared store. Built
     // with `block_on_underrun(true)` so the drain parks on the virtual clock
     // until the worker delivers, instead of sleep-polling on `Pending`.
-    let player_cfg = AudioConfig::<File<AppPools>>::for_stream(
-        FileConfig::for_src(FileSrc::Remote(url.clone()))
-            .store(store)
-            .pools(pools.clone())
-            .build(),
+    let player_cfg = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<File<AppPools>>::for_stream(
+            FileConfig::for_src(FileSrc::Remote(url.clone()))
+                .store(store)
+                .pools(pools.clone())
+                .build(),
+        )
+        .build(),
     )
     .block_on_underrun(true)
     .build();
@@ -121,7 +125,9 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
         )
         .expect("the pass opens");
 
-    let player = worker.load(player_cfg).await.expect("open player audio");
+    let player = kithara_integration_tests::mock::load_audio(&worker, player_cfg)
+        .await
+        .expect("open player audio");
     let player_drain = spawn_blocking(move || {
         let mut player = player;
         player.preload().expect("player preload");

@@ -25,8 +25,18 @@ fn codec_warm_pool_keeps_allocated_bytes_stable(trim_silence: Vec<f32>) {
     for _ in 0..200 {
         let mut buf = pools.get::<f32>();
         let frames = codec
-            .decode_frame(&[], Duration::ZERO, &[], &mut buf)
-            .expect("BUG: decode_frame");
+            .decode_frame(
+                crate::demuxer::Frame {
+                    data: &[],
+                    pts: Duration::ZERO,
+                    duration: Duration::ZERO,
+                    packet_desc: &[],
+                },
+                crate::demuxer::PacketMetadata::default(),
+                &mut buf,
+            )
+            .expect("BUG: decode_frame")
+            .frames;
         assert_eq!(frames, 1024);
     }
 

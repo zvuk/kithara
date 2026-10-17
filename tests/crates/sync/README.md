@@ -1,11 +1,10 @@
 # kithara-sync-tests
 
-Functional synchronization acceptance tests live in [`tests`](tests): operation
-ordering and tempo rides, runtime PCM synchronization oracles, listening
-artifacts, and synchronization-fixture validation. The tests compose Host,
-Player, and Queue through the existing integration support; their assertions
-belong to the [Sync contract](https://github.com/zvuk/kithara/wiki/kithara-sync).
+Synchronization-fixture validation in [tests](tests): static PCM rhythm oracles
+and a census that materializes every provider's file and HLS sources. Provider
+support does not construct a playback engine. Runtime, product-matrix, listening,
+and staging acceptance are outside this package's restored coverage.
 
-Run the suite through `just test run --lane=sync`.
+Run the suite through `just test run -p kithara-sync-tests --test sync`.
 Plain playback, source-rate conversion, and seek continuity remain in
 `kithara-play-tests`.

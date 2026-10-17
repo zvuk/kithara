@@ -1,3 +1,6 @@
+#![cfg(not(target_arch = "wasm32"))]
+#![forbid(unsafe_code)]
+
 pub(super) use std::{
     io::Read,
     num::{NonZeroU32, NonZeroUsize},
@@ -5,33 +8,25 @@ pub(super) use std::{
 
 pub(super) use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
     decode::DecoderBackend,
-    file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
     host::{HostConfig, HostSettings},
     platform::{
         CancelScope, CancelToken,
         sync::Arc,
-        time::{Duration, Instant, sleep, timeout},
+        time::{Duration, WallInstant, sleep, timeout},
     },
-    play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, RegisteredAudio, Resource,
-        ResourceConfig, ResourceSrc,
-    },
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 pub(super) use kithara_integration_tests::{
     Content, CreatedHls, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::PackagedSignal,
-    offline::resource_from_reader,
-    output_continuity::{
-        CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
-        render_offline_window, render_until_audible,
-    },
+    output_continuity::{CONTINUITY_SAMPLE_RATE, render_offline_window},
 };
 pub(super) use kithara_test_fixtures::{
-    Mp3Shape, SignalAsset, fixtures::tone_mp3, integration_fixtures::saw_segments,
+    SignalAsset, fixtures::tone_mp3, integration_fixtures::saw_segments,
 };
 pub(super) use kithara_test_utils::{TestTempDir, temp_dir};
 pub(super) use num_traits::AsPrimitive;
@@ -148,7 +143,7 @@ pub(super) async fn open_resource(
     backend: DecoderBackend,
 ) -> Resource {
     let config = resource_config(url, store, backend, Some("mp3"), worker);
-    Resource::new(config)
+    kithara_integration_tests::mock::open_resource(&config)
         .await
         .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
 }
@@ -157,6 +152,7 @@ pub(super) async fn open_resource(
 // the consumer hang watchdog before the HLS producer necessarily gets scheduled.
 // The loop already drives preload and handles Pending explicitly.
 #[kithara::flash(true)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 pub(super) async fn warm_hls_worker(
     url: &url::Url,
     store: AssetStore<TestPools>,
@@ -180,16 +176,17 @@ pub(super) async fn warm_hls_worker(
                 .build(),
         )
         .build();
-    let mut audio = worker
-        .load(config)
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
 
     let mut buf = [0.0f32; 4096];
     loop {
+        hang_tick!(format!("HLS warmup awaits PCM from {url}"));
         audio.preload().expect("preload must succeed");
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => {
+                hang_reset!();
                 if seek.is_none() {
                     return audio.position().as_secs_f64();
                 }
@@ -209,6 +206,7 @@ pub(super) async fn warm_hls_worker(
         .unwrap_or_else(|err| panic!("HLS warmup seek must succeed for {}: {err}", url));
 
     loop {
+        hang_tick!(format!("HLS warmup seek awaits PCM from {url}"));
         audio.preload().expect("preload must succeed");
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => {
@@ -261,6 +259,7 @@ pub(super) async fn open_audio_hls_server(saw_segments: &'static [u8]) -> Create
         .create_hls(
             HlsFixtureBuilder::new()
                 .custom_data(Arc::new(saw_segments.to_vec()))
+                .codecs("wav".to_string())
                 .segment_duration_secs(segment_duration)
                 .segment_size(consts::HLS_SEGMENT_SIZE)
                 .segments_per_variant(consts::HLS_SEGMENT_COUNT),
@@ -286,8 +285,9 @@ pub(super) async fn open_packaged_hls_audio(
     worker: PlayWorker<TestPools>,
     _codec: AudioCodec,
     backend: DecoderBackend,
-) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
+) -> kithara_integration_tests::mock::LaneAudio<Stream<Hls<TestPools>>, TestPools> {
     let hls = HlsConfig::for_url(url.clone())
+        .events(kithara::events::EventBus::default())
         .store(store)
         .pools(worker.pools().clone())
         .build();
@@ -298,25 +298,29 @@ pub(super) async fn open_packaged_hls_audio(
                 .build(),
         )
         .build();
-    let mut audio = worker
-        .load(config)
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .unwrap_or_else(|err| panic!("packaged HLS audio should open for {url}: {err}"));
     audio.preload().expect("packaged HLS preload must succeed");
     audio
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 pub(super) async fn read_audio_some(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut kithara_integration_tests::mock::LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     stage: &str,
 ) -> usize {
-    let deadline = Instant::now() + consts::READ_TIMEOUT;
+    let deadline = WallInstant::now() + consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
 
     loop {
+        hang_tick!(format!("packaged PCM at {stage}"));
         audio.preload().expect("preload must succeed");
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => return count.get(),
+            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => {
+                hang_reset!();
+                return count.get();
+            }
             Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while waiting for packaged audio at stage={stage}")
@@ -324,24 +328,36 @@ pub(super) async fn read_audio_some(
             Err(e) => panic!("decode error while waiting for packaged audio at stage={stage}: {e}"),
         }
         assert!(
-            Instant::now() <= deadline,
+            WallInstant::now() <= deadline,
             "timed out waiting for packaged audio at stage={stage}"
         );
         sleep(Duration::from_millis(10)).await;
     }
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 pub(super) async fn read_some(resource: &mut Resource, stage: &str) -> usize {
-    let deadline = Instant::now() + consts::READ_TIMEOUT;
+    let deadline = WallInstant::now() + consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
 
     loop {
-        timeout(consts::READ_TIMEOUT, resource.preload())
-            .await
-            .unwrap_or_else(|_| panic!("timed out waiting for preload at stage={stage}"))
-            .unwrap_or_else(|err| panic!("preload failed at stage={stage}: {err}"));
+        hang_tick!(format!("resource PCM at {stage}"));
+        {
+            // WHY: The decoder's fixture read is real work, not a virtual-clock participant.
+            let _real_io = kithara::platform::flash::real_io();
+            timeout(__hang_detector.remaining(), resource.preload())
+                .await
+                .unwrap_or_else(|_| {
+                    hang_tick!(format!("preload at {stage}"));
+                    panic!("timed out waiting for preload at stage={stage}")
+                })
+                .unwrap_or_else(|err| panic!("preload failed at stage={stage}: {err}"));
+        }
         match resource.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => return count.get(),
+            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => {
+                hang_reset!();
+                return count.get();
+            }
             Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
                 // The duration decides where a seek lands: the seek engine
@@ -359,7 +375,7 @@ pub(super) async fn read_some(resource: &mut Resource, stage: &str) -> usize {
             Err(e) => panic!("decode error while waiting for stage={stage}: {e}"),
         }
         assert!(
-            Instant::now() <= deadline,
+            WallInstant::now() <= deadline,
             "timed out waiting for decoded PCM at stage={stage}"
         );
         sleep(Duration::from_millis(10)).await;
@@ -375,11 +391,6 @@ pub(super) async fn seek_and_read(resource: &mut Resource, position: Duration, s
     Resource::position(resource).as_secs_f64()
 }
 
-/// Local fixture (the generated ~187s MPEG clip, packaged AAC HLS ~64s) through
-/// `ResourceConfig` — same code path as kithara-app. Mirrors
-/// `live_remote_resource_decodes_with_duration` (now in
-/// `live_remote_network.rs`) but against `TestServerHelper`, so it stays in the
-/// regular suite: no VPN, no internet.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum LocalKind {
     Mp3,

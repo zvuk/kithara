@@ -12,7 +12,7 @@ use crate::{
     traits::Decoder,
 };
 
-fn test_spec(sample_rate: u32) -> AudioSpec {
+pub(super) fn test_spec(sample_rate: u32) -> AudioSpec {
     AudioSpec::new(
         1,
         NonZeroU32::new(sample_rate).expect("test sample rate is non-zero"),
@@ -45,16 +45,16 @@ struct ThreeFrameDemuxer {
 }
 
 #[derive(Clone, Copy)]
-struct BoundaryFrame {
-    duration: Duration,
-    pts: Duration,
+pub(super) struct BoundaryFrame {
+    pub(super) duration: Duration,
+    pub(super) pts: Duration,
 }
 
-struct BoundaryFrameDemuxer {
-    track: TrackInfo,
-    frames: Vec<BoundaryFrame>,
-    held: Vec<u8>,
-    idx: usize,
+pub(super) struct BoundaryFrameDemuxer {
+    pub(super) track: TrackInfo,
+    pub(super) frames: Vec<BoundaryFrame>,
+    pub(super) held: Vec<u8>,
+    pub(super) idx: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -65,8 +65,8 @@ enum SeekTrimLayout {
 }
 
 impl Demuxer for ThreeFrameDemuxer {
-    fn duration(&self) -> Option<Duration> {
-        Some(Duration::from_millis(60))
+    fn duration(&self) -> Option<crate::DecoderDuration> {
+        Some(crate::DecoderDuration::RawLength(Duration::from_millis(60)))
     }
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         let pts_ms = match self.idx {
@@ -90,7 +90,7 @@ impl Demuxer for ThreeFrameDemuxer {
 }
 
 impl Demuxer for BoundaryFrameDemuxer {
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
         None
     }
 
@@ -114,11 +114,65 @@ impl Demuxer for BoundaryFrameDemuxer {
     reset_demuxer_seek!(idx = 0);
 }
 
+#[kithara::test]
+#[case::original_observed(true)]
+#[case::seek_before_original(false)]
+fn initial_pcm_position_never_adopts_a_sought_suffix(
+    trim_silence: Vec<f32>,
+    zero_packet: &'static [u8],
+    #[case] observe_original: bool,
+) {
+    let spec = test_spec(consts::SAMPLE_RATE);
+    let first = Duration::from_millis(700);
+    let suffix = Duration::from_secs(2);
+    let demuxer = BoundaryFrameDemuxer {
+        track: empty_track(),
+        frames: vec![
+            BoundaryFrame {
+                pts: first,
+                duration: packet_duration(),
+            },
+            BoundaryFrame {
+                pts: suffix,
+                duration: packet_duration(),
+            },
+        ],
+        held: zero_packet.to_vec(),
+        idx: 0,
+    };
+    let codec = CountingCodec::new(trim_silence, spec, consts::PACKET_FRAMES);
+    let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+    assert_eq!(decoder.initial_pcm_origin().map(PcmOrigin::position), None);
+    if observe_original {
+        let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("original PCM") else {
+            panic!("original PCM chunk");
+        };
+        assert_eq!(chunk.meta.timestamp, first);
+        assert_eq!(chunk.meta.frames, consts::PACKET_FRAMES);
+        assert_eq!(chunk.frames(), consts::PACKET_FRAMES as usize);
+        assert_eq!(
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
+            Some(first)
+        );
+    }
+    decoder.seek(suffix).expect("nonzero seek");
+    let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("sought PCM") else {
+        panic!("sought PCM chunk");
+    };
+    assert_eq!(chunk.meta.timestamp, suffix);
+    assert_eq!(chunk.meta.frames, consts::PACKET_FRAMES);
+    assert_eq!(chunk.frames(), consts::PACKET_FRAMES as usize);
+    assert_eq!(
+        decoder.initial_pcm_origin().map(PcmOrigin::position),
+        observe_original.then_some(first)
+    );
+}
+
 fn empty_track() -> TrackInfo {
     track_with_rate(consts::SAMPLE_RATE)
 }
 
-fn track_with_rate(sample_rate: u32) -> TrackInfo {
+pub(super) fn track_with_rate(sample_rate: u32) -> TrackInfo {
     TrackInfo {
         sample_rate,
         codec: AudioCodec::AacLc,
@@ -313,6 +367,58 @@ fn composed_decoder_observes_head_strip_from_packet_duration(
 }
 
 #[kithara::test]
+#[case::replay_original_head(0, 10, 480)]
+#[case::seek_inside_the_first_granule(15, 15, 240)]
+fn a_seek_landing_at_zero_preserves_the_observed_pcm_head_and_sought_suffix(
+    trim_silence: Vec<f32>,
+    zero_packet: &'static [u8],
+    #[case] requested_millis: u64,
+    #[case] output_millis: u64,
+    #[case] frames: u32,
+) {
+    let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
+    let codec = CountingCodec::new(trim_silence, spec, 480);
+    let demuxer = BoundaryFrameDemuxer {
+        track: track_with_rate(48_000),
+        held: zero_packet.to_vec(),
+        idx: 0,
+        frames: vec![BoundaryFrame {
+            pts: Duration::ZERO,
+            duration: Duration::from_millis(20),
+        }],
+    };
+    let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+    let DecoderChunkOutcome::Chunk(original) = decoder.next_chunk().expect("original PCM") else {
+        panic!("original PCM chunk");
+    };
+    assert_eq!(original.meta.timestamp, Duration::from_millis(10));
+    assert_eq!(original.meta.frames, 480);
+    assert_eq!(
+        decoder.initial_pcm_origin().map(PcmOrigin::position),
+        Some(Duration::from_millis(10))
+    );
+    let outcome = decoder
+        .seek(Duration::from_millis(requested_millis))
+        .expect("granule seek");
+    assert!(matches!(
+        outcome,
+        DecoderSeekOutcome::Landed { landed_at, landed_frame: 0, .. }
+        if landed_at.is_zero()
+    ));
+    let DecoderChunkOutcome::Chunk(sought) = decoder.next_chunk().expect("sought PCM") else {
+        panic!("sought PCM chunk");
+    };
+    assert_eq!(sought.meta.timestamp, Duration::from_millis(output_millis));
+    assert_eq!(sought.meta.frame_offset, output_millis * 48);
+    assert_eq!(sought.meta.frames, frames);
+    assert_eq!(sought.samples.len(), frames as usize * 2);
+    assert_eq!(
+        decoder.initial_pcm_origin().map(PcmOrigin::position),
+        Some(Duration::from_millis(10))
+    );
+}
+
+#[kithara::test]
 fn fully_trimmed_seek_packet_is_dropped_before_target_chunk(
     trim_silence: Vec<f32>,
     zero_packet: &'static [u8],
@@ -358,6 +464,220 @@ fn fully_trimmed_seek_packet_is_dropped_before_target_chunk(
     );
     assert_eq!(chunk.meta.frame_offset, u64::from(PACKET_FRAMES));
     assert_eq!(chunk.meta.timestamp, target);
+
+    let truncated_target = Duration::from_nanos(5_051_145_833);
+    let packet_boundary = test_duration(SAMPLE_RATE, u64::from(PACKET_FRAMES));
+    for (
+        rate,
+        pts,
+        frames,
+        target,
+        prefix_frame,
+        nearest_frame,
+        prefix_raw,
+        nearest_raw,
+        divisor,
+    ) in [
+        (
+            48_000,
+            test_duration(48_000, 241_921),
+            1_152,
+            truncated_target,
+            242_454,
+            242_455,
+            242_454,
+            242_455,
+            1,
+        ),
+        (
+            48_000,
+            test_duration(48_000, 241_920),
+            1_152,
+            truncated_target,
+            242_454,
+            242_455,
+            242_454,
+            242_455,
+            1,
+        ),
+        (
+            48_000,
+            test_duration(48_000, 241_919),
+            1_152,
+            truncated_target,
+            242_454,
+            242_455,
+            242_454,
+            242_455,
+            1,
+        ),
+        (
+            SAMPLE_RATE,
+            Duration::ZERO,
+            PACKET_FRAMES,
+            packet_boundary,
+            1_023,
+            1_024,
+            1_023,
+            1_024,
+            1,
+        ),
+        (
+            SAMPLE_RATE,
+            test_duration(SAMPLE_RATE, 800),
+            224,
+            packet_boundary,
+            1_023,
+            1_024,
+            1_023,
+            1_024,
+            1,
+        ),
+        (
+            1_000,
+            Duration::from_micros(42_250),
+            8,
+            Duration::from_millis(43),
+            42,
+            43,
+            169,
+            173,
+            4,
+        ),
+        (
+            1_000,
+            Duration::from_micros(42_250),
+            8,
+            Duration::from_micros(44_250),
+            44,
+            44,
+            177,
+            177,
+            4,
+        ),
+    ] {
+        for prefix in [true, false] {
+            let spec = test_spec(rate);
+            let origin = test_frame(rate, pts);
+            let duration = test_duration(rate, u64::from(frames));
+            let next_pts =
+                pts + test_duration(rate, origin + u64::from(frames)) - test_duration(rate, origin);
+            let pcm = (0..frames)
+                .map(|frame| f32::from(u16::try_from(frame).expect("fixture frame")) / 2_048.0)
+                .collect();
+            let codec = CountingCodec::new(pcm, spec, frames);
+            let calls = Arc::clone(&codec.decode_calls);
+            let demuxer = BoundaryFrameDemuxer {
+                track: track_with_rate(rate),
+                held: zero_packet.to_vec(),
+                idx: 0,
+                frames: vec![
+                    BoundaryFrame { duration, pts },
+                    BoundaryFrame {
+                        duration,
+                        pts: next_pts,
+                    },
+                ],
+            };
+            let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+            if prefix {
+                decoder.seek_prefix(target).expect("prefix seek");
+            } else {
+                decoder.seek(target).expect("nearest seek");
+            }
+            let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("sought PCM")
+            else {
+                panic!("seek must retain PCM");
+            };
+            let (expected_frame, expected_raw) = if prefix {
+                (prefix_frame, prefix_raw)
+            } else {
+                (nearest_frame, nearest_raw)
+            };
+            assert_eq!(
+                chunk.meta.frame_offset, expected_frame,
+                "rate={rate} pts={pts:?} prefix={prefix}"
+            );
+            let local_frame = (expected_frame - origin) % u64::from(frames);
+            assert_eq!(
+                chunk.samples[0].to_bits(),
+                (f32::from(u16::try_from(local_frame).expect("retained frame")) / 2_048.0)
+                    .to_bits(),
+                "the first retained PCM sample must match its physical frame"
+            );
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                if expected_frame >= origin + u64::from(frames) {
+                    2
+                } else {
+                    1
+                }
+            );
+            let (numerator, denominator) = chunk
+                .meta
+                .source_geometry()
+                .expect("retained native geometry")
+                .source_ratio_at(0)
+                .expect("retained raw origin");
+            assert_eq!(
+                numerator * divisor,
+                expected_raw * denominator.get(),
+                "raw geometry must preserve native and fractional origins"
+            );
+        }
+    }
+}
+
+#[kithara::test]
+fn delayed_codec_eof_keeps_the_last_pcm_presentation_time(
+    trim_silence: Vec<f32>,
+    zero_packet: &'static [u8],
+) {
+    const FRAME_FRAMES: u32 = 882;
+    let first = Duration::from_millis(700);
+    let last = Duration::from_secs(1);
+    let spec = test_spec(44_100);
+    let codec = LaggedQueueCodec::new(trim_silence, spec, FRAME_FRAMES);
+    let demuxer = BoundaryFrameDemuxer {
+        track: empty_track(),
+        frames: vec![
+            BoundaryFrame {
+                pts: first,
+                duration: Duration::from_millis(20),
+            },
+            BoundaryFrame {
+                pts: last,
+                duration: Duration::from_millis(20),
+            },
+        ],
+        held: zero_packet.to_vec(),
+        idx: 0,
+    };
+    let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+    let DecoderChunkOutcome::Chunk(head) = decoder.next_chunk().expect("delayed head") else {
+        panic!("delayed head must emit PCM");
+    };
+    assert_eq!(head.meta.timestamp, first);
+    assert_eq!(head.meta.frames, FRAME_FRAMES);
+    assert_eq!(
+        decoder.initial_pcm_origin().map(PcmOrigin::position),
+        Some(first)
+    );
+    let DecoderChunkOutcome::Chunk(tail) = decoder.next_chunk().expect("delayed EOF tail") else {
+        panic!("EOF must release the held last packet");
+    };
+    assert_eq!(tail.meta.timestamp, last);
+    assert_eq!(tail.meta.frame_offset, 44_100);
+    assert_eq!(tail.meta.frames, FRAME_FRAMES);
+    assert_eq!(tail.samples.len(), FRAME_FRAMES as usize);
+    assert_eq!(
+        decoder.initial_pcm_origin().map(PcmOrigin::position),
+        Some(first)
+    );
+    assert!(matches!(
+        decoder.next_chunk().expect("drained EOF"),
+        DecoderChunkOutcome::Eof
+    ));
 }
 
 #[kithara::test]
@@ -514,6 +834,57 @@ fn seek_trim_uses_codec_output_rate_for_resampled_chunks(
         consts::OUTPUT_SAMPLE_RATE
     );
     assert_eq!(chunk.meta.frame_offset, expected_frame);
-    assert_eq!(chunk.meta.timestamp, target);
+    assert_eq!(chunk.meta.timestamp, Duration::from_nanos(34_824_121));
     assert_eq!(chunk.meta.frames, expected_frames);
+    for (rate, requested_ns) in [(1_000, 42_800_000), (8_000, 42_350_000)] {
+        for prefix in [false, true] {
+            let spec = test_spec(rate);
+            let origin = Duration::from_nanos(42_250_000);
+            let pcm = (0..64_u16)
+                .map(|frame| f32::from(frame) / 128.0)
+                .collect::<Vec<_>>();
+            let codec = CountingCodec::new(pcm.clone(), spec, 64);
+            let demuxer = BoundaryFrameDemuxer {
+                track: track_with_rate(rate),
+                held: zero_packet.to_vec(),
+                idx: 0,
+                frames: vec![BoundaryFrame {
+                    pts: origin,
+                    duration: spec.duration_for(64).expect("native packet extent"),
+                }],
+            };
+            let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+            let requested = Duration::from_nanos(requested_ns);
+            if prefix {
+                decoder.seek_prefix(requested)
+            } else {
+                decoder.seek(requested)
+            }
+            .expect("owned native seek");
+            let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("native seek PCM")
+            else {
+                panic!("native prefix PCM");
+            };
+            let selected = usize::from(!prefix);
+            assert_eq!(chunk.samples.as_ref(), &pcm[selected..]);
+            assert_eq!(
+                chunk.meta.timestamp,
+                origin
+                    + spec
+                        .duration_for(u64::try_from(selected).expect("native selected sample"))
+                        .expect("native selected time")
+            );
+            assert_eq!(
+                chunk.meta.frame_offset,
+                spec.frame_at(origin).expect("native physical anchor")
+                    + u64::try_from(selected).expect("native selected frame")
+            );
+            assert_eq!(chunk.frames(), 64 - selected);
+            if prefix {
+                assert!(chunk.meta.timestamp <= requested);
+            } else {
+                assert!(chunk.meta.timestamp > requested);
+            }
+        }
+    }
 }

@@ -15,6 +15,7 @@ mod kithara {
 }
 
 use crate::{
+    PcmOrigin,
     error::DecodeResult,
     types::{BlenderProfile, GaplessProfile, TrackMetadata},
 };
@@ -42,6 +43,9 @@ pub enum InputReadOutcome {
 /// without rounding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderSeekOutcome {
+    /// Accepted seek with no landing coordinate yet. Drive [`Decoder::prepare_seek`]
+    /// before consuming prepared PCM.
+    Pending(PendingReason),
     /// Successful seek coordinates from one decoder state, all naming the same landing point.
     /// `landed_byte` is the absolute next-packet body offset; the pipeline uses it without
     /// frame/byte heuristics. If unavailable (such as an unbuilt streaming MP3 seek table),
@@ -70,14 +74,12 @@ pub enum DecoderSeekOutcome {
 /// Mirrors [`kithara_stream::ReadOutcome`] / [`InputReadOutcome`] in
 /// shape so every layer of the pipeline carries the same three-way
 /// distinction (`progress | pending | terminal`). `Pending` carries
-/// the typed [`PendingReason`] — typically
-/// [`PendingReason::SeekPending`] when an in-flight seek aborted the
-/// underlying read, or [`PendingReason::NotReady`] when the source
-/// signalled transient backpressure.
+/// the typed [`PendingReason`] for transient backpressure or a
+/// cross-variant boundary.
 #[derive(Debug)]
 pub enum DecoderChunkOutcome {
     /// Decoded PCM chunk.
-    Chunk(AudioChunk),
+    Chunk(Box<AudioChunk>),
     /// Decoder is alive but produced no chunk this call. See
     /// [`PendingReason`] for the precise cause.
     Pending(PendingReason),
@@ -90,7 +92,7 @@ impl TryFrom<DecoderChunkOutcome> for AudioChunk {
 
     fn try_from(outcome: DecoderChunkOutcome) -> Result<Self, Self::Error> {
         match outcome {
-            DecoderChunkOutcome::Chunk(chunk) => Ok(chunk),
+            DecoderChunkOutcome::Chunk(chunk) => Ok(*chunk),
             other => Err(other),
         }
     }
@@ -101,8 +103,8 @@ impl TryFrom<DecoderChunkOutcome> for AudioChunk {
 /// Supertrait combining `Read + Seek + Send + Sync`. Adds typed
 /// [`try_read`] returning [`InputReadOutcome`] so decoders never
 /// confuse "0 bytes" between EOF and `Pending(...)`.
-/// `kithara_stream::Stream` packages its typed status (`SeekPending`,
-/// `VariantChange`, `NotReady`/`Retry`) into `io::Error` payloads via
+/// `kithara_stream::Stream` packages its typed status (`VariantChange`,
+/// `NotReady`/`Retry`) into `io::Error` payloads via
 /// `impl Read for Stream`; the default `try_read` here downcasts those
 /// payloads back into [`PendingReason`]. Arbitrary `Read + Seek`
 /// sources (test cursors, fixtures) take the same default impl —
@@ -114,8 +116,8 @@ pub trait DecoderInput: Read + Seek + Send + Sync {
     /// # Errors
     ///
     /// Returns [`StreamReadError::Source`] for genuine source I/O
-    /// failures. Status conditions (seek pending, variant change,
-    /// data not ready) come back as `Ok(InputReadOutcome::Pending(...))`.
+    /// failures. Status conditions (variant change, data not ready)
+    /// come back as `Ok(InputReadOutcome::Pending(...))`.
     fn try_read(&mut self, buf: &mut [u8]) -> Result<InputReadOutcome, StreamReadError> {
         match Read::read(self, buf) {
             Ok(0) => Ok(InputReadOutcome::Eof),
@@ -160,6 +162,26 @@ impl<T: Read + Seek + Send + Sync + ?Sized> DecoderInput for T {}
 /// demuxers don't have to be generic over the byte source.
 pub(crate) type BoxedSource = Box<dyn DecoderInput>;
 
+/// Waiting policy of one front-side preparation or seek settlement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrepareWait {
+    /// Submit or inspect work without waiting for native input.
+    Poll,
+    /// Wait for the same operation to finish or be cancelled.
+    Wait,
+}
+
+/// Whether a decoder has relinquished its input for a source command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputState {
+    /// A healthy parser has no operation using the input.
+    Idle,
+    /// Cancellation is in flight; the source cursor is still owned by the parser.
+    Retiring,
+    /// The parser has dropped its input and cannot be resumed.
+    Retired,
+}
+
 /// Trait for runtime-polymorphic audio decoders.
 ///
 /// This trait is used by kithara-audio for dynamic dispatch when the
@@ -190,10 +212,26 @@ pub trait Decoder: Send + 'static {
         AudioCodec::encoder_priming_frames(codec)
     }
 
+    /// Original physical PCM position and its content-comparison basis.
+    ///
+    /// Capture both at the original head, before read-ahead can change the live
+    /// gap. The basis removes only the gap already reflected in that head's
+    /// position, independent of later PTS jumps and codec gap modelling.
+    /// Wrappers retain the exact basis while projecting the physical position.
+    /// The record survives seeks; sought output cannot establish an unknown one.
+    fn initial_pcm_origin(&self) -> Option<PcmOrigin> {
+        None
+    }
+
+    /// Raw PCM coordinate of track-media zero, independent of gapless policy and seeks.
+    fn media_origin(&self) -> Option<Duration> {
+        None
+    }
+
     /// Get total duration from track metadata.
     ///
     /// Returns `None` if duration cannot be determined.
-    fn duration(&self) -> Option<Duration>;
+    fn duration(&self) -> Option<crate::DecoderDuration>;
 
     /// Publish reader-hook events queued during decode.
     ///
@@ -262,19 +300,89 @@ pub trait Decoder: Send + 'static {
     /// consumes them. Pending is provisional and may be refreshed by later preparation.
     fn prepare_next_chunk(&mut self) {}
 
+    /// Prepare with an explicit waiting policy for this call.
+    fn prepare_next_chunk_with_wait(&mut self, _wait: PrepareWait) {
+        self.prepare_next_chunk();
+    }
+
+    /// Relinquish an in-flight input operation before another owner changes its cursor.
+    fn release_input(&mut self) -> InputState {
+        InputState::Idle
+    }
+
     /// Seek to a time position.
     ///
     /// On success returns [`DecoderSeekOutcome::Landed`] with the
     /// authoritative landed position (often a granule boundary near
     /// the requested target — never assume `landed_at == pos`), or
     /// [`DecoderSeekOutcome::PastEof`] when the target is beyond the
-    /// decoder's known duration.
+    /// decoder's known duration. [`DecoderSeekOutcome::Pending`] carries no landing
+    /// coordinate; use [`Self::prepare_seek`] to continue that operation.
     ///
     /// # Errors
     ///
     /// Returns [`crate::error::DecodeError::SeekFailed`] if seeking is not supported
     /// or the position is invalid for reasons other than past-EOF.
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome>;
+
+    /// Seek with an explicit front-side waiting policy.
+    ///
+    /// # Errors
+    /// Returns the errors described by [`Self::seek`].
+    fn seek_with_wait(
+        &mut self,
+        pos: Duration,
+        _wait: PrepareWait,
+    ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek(pos)
+    }
+
+    /// Continue an unresolved seek without starting it again.
+    ///
+    /// `None` means no unresolved seek. A terminal outcome settles the operation once;
+    /// later calls return `None`. Ordinary PCM preparation does not settle a seek.
+    ///
+    /// # Errors
+    /// Returns source or decoder failures from the same seek operation.
+    fn prepare_seek(&mut self) -> DecodeResult<Option<DecoderSeekOutcome>> {
+        Ok(None)
+    }
+
+    /// Settle the same pending seek with an explicit waiting policy.
+    ///
+    /// # Errors
+    /// Returns the errors described by [`Self::prepare_seek`].
+    fn prepare_seek_with_wait(
+        &mut self,
+        _wait: PrepareWait,
+    ) -> DecodeResult<Option<DecoderSeekOutcome>> {
+        self.prepare_seek()
+    }
+
+    /// Seeks while retaining the native sample at or before `pos` for later rendering.
+    ///
+    /// Rate adapters forward this operation before converting PCM. The ordinary
+    /// seek operation retains its nearest-sample behavior.
+    ///
+    /// # Errors
+    /// Returns an error when native-prefix seeking is unsupported or repositioning fails.
+    fn seek_prefix(&mut self, _pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        Err(crate::DecodeError::SeekFailed {
+            detail: "native-prefix seeking is unsupported",
+        })
+    }
+
+    /// Seek a native prefix with an explicit front-side waiting policy.
+    ///
+    /// # Errors
+    /// Returns the errors described by [`Self::seek_prefix`].
+    fn seek_prefix_with_wait(
+        &mut self,
+        pos: Duration,
+        _wait: PrepareWait,
+    ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_prefix(pos)
+    }
 
     /// Get the decoded audio output specification.
     fn spec(&self) -> AudioSpec;

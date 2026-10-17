@@ -61,6 +61,10 @@ async fn media_playlist(
             if let Some(rule) = fixture.match_http_error(HlsRouteKind::Media, Some(variant), None) {
                 return inject_error(rule);
             }
+            if let Some(gate) = state.media_playlist_gate(&hls_spec, variant) {
+                gate.mark_requested();
+                gate.wait_until_released().await;
+            }
             fixture.media_playlist(variant).map_or_else(
                 || StatusCode::NOT_FOUND.into_response(),
                 |playlist| {

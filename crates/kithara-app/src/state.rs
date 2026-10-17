@@ -205,6 +205,7 @@ pub(crate) fn covered(runs: &[(u64, u64)], extent: Option<u64>) -> TrackAnalysis
         coverage.insert(start..end);
     }
     TrackAnalysis::builder()
+        .media_origin(Duration::ZERO)
         .token("track".into())
         .revision(1)
         .source_sample_rate(NonZeroU32::new(44_100).expect("a positive rate"))
@@ -554,9 +555,9 @@ fn same_revision(shown: Option<&TrackArtifacts>, next: Option<&TrackArtifacts>) 
 /// solely by the player's volume path.
 pub(crate) fn apply_event(event: &AnalysisEvent, queue: &AppQueueControl, state: &Mutex<UiState>) {
     match *event {
-        AnalysisEvent::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
-            let current_index = queue.current_index();
+        AnalysisEvent::Queue(QueueEvent::CurrentTrackChanged { id }) => {
             let mut st = state.lock();
+            let current_index = id.and_then(|id| st.tracks.iter().position(|track| track.id == id));
             st.current_track_index = current_index;
             st.track_name = current_index
                 .and_then(|idx| st.tracks.get(idx).map(caption))
@@ -703,6 +704,7 @@ mod tests {
     fn progress(revision: u64) -> TrackArtifacts {
         let mut analysis = covered(&[(0, 1_000)], Some(1_000));
         analysis = TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token(analysis.token().clone())
             .revision(revision)
             .source_sample_rate(analysis.source_sample_rate())
@@ -760,7 +762,8 @@ mod tests {
         tx.send_replace(Some(progress(1)));
         wait_for_revision(&state, 1).await;
 
-        queue.remove(track_id).expect("remove test track");
+        host.call(move |(_, queue)| queue.remove(track_id).expect("remove test track"))
+            .await;
 
         for _ in 0..2_000 {
             if tx.receiver_count() == 0 && state.lock().analysis.is_none() {
@@ -867,7 +870,8 @@ mod tests {
         let (_state, mut requests, cancel) = deck(&queue);
         let first = answer_subscribe(&mut requests, first_id).await;
 
-        queue.remove(first_id).expect("remove test track");
+        host.call(move |(_, queue)| queue.remove(first_id).expect("remove test track"))
+            .await;
         let (asked, reply) = time::timeout(Duration::from_secs(2), next_subscribe(&mut requests))
             .await
             .expect("the deck asks for the track it moved to");
@@ -930,6 +934,7 @@ mod tests {
 
     fn analysed(beats: Vec<(u64, Option<f32>)>) -> TrackAnalysis {
         TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token("track".into())
             .revision(1)
             .source_sample_rate(NonZeroU32::new(44_100).expect("a positive rate"))
@@ -991,6 +996,7 @@ mod tests {
         let mut coverage = RangeSet::new();
         coverage.insert(0..220_500);
         TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token("deck-track".into())
             .revision(revision)
             .source_sample_rate(NonZeroU32::new(44_100).expect("a positive rate"))

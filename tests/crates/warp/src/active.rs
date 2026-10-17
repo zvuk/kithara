@@ -4,6 +4,7 @@ use kithara_integration_tests::audio_artifact::write_audio_artifact;
 use kithara_integration_tests::cochlea::{
     CochleaReport, assert_oracle_load_bearing, time_stretch_failures,
 };
+use kithara_test_fixtures::assets::{marked_sine_wav_a440_6s, sine_wav_a440_6s};
 #[cfg(not(target_os = "android"))]
 use serde::Serialize;
 
@@ -49,11 +50,15 @@ pub async fn run_active_stretch(
     backend: StretchKind,
     record_artifacts: bool,
 ) {
-    let control = render_passthrough(source, None, false).await;
-    let candidate = render_passthrough(source, Some((backend, ACTIVE_SPEED)), false).await;
-    let rate_control = render_passthrough(marker_source, None, false).await;
+    let asset = sine_wav_a440_6s();
+    let marker_asset = marked_sine_wav_a440_6s();
+    assert_eq!(asset.bytes(), source);
+    assert_eq!(marker_asset.bytes(), marker_source);
+    let control = render_passthrough(&asset, None, false).await;
+    let candidate = render_passthrough(&asset, Some((backend, ACTIVE_SPEED)), false).await;
+    let rate_control = render_passthrough(&marker_asset, None, false).await;
     let rate_candidate =
-        render_passthrough(marker_source, Some((backend, ACTIVE_SPEED)), false).await;
+        render_passthrough(&marker_asset, Some((backend, ACTIVE_SPEED)), false).await;
     let control_report = CochleaReport::measure(&control.pcm, CHANNELS, SAMPLE_RATE);
     let candidate_report = CochleaReport::measure(&candidate.pcm, CHANNELS, SAMPLE_RATE);
     let candidate_sine_fit = measure_quiet_sine(&candidate.pcm);

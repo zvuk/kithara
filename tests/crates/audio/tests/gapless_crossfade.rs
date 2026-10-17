@@ -90,10 +90,10 @@ fn trim_track(
     );
 
     let mut output = Vec::new();
-    for chunk in trimmer.push(chunk) {
+    for chunk in trimmer.push(chunk).expect("valid gapless PCM") {
         output.extend_from_slice(&chunk.samples[..]);
     }
-    for chunk in trimmer.flush() {
+    for chunk in trimmer.flush().expect("valid gapless PCM") {
         output.extend_from_slice(&chunk.samples[..]);
     }
     output

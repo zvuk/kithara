@@ -2,7 +2,7 @@ use std::io::Cursor;
 
 use kithara::{
     decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory},
-    platform::time::Duration,
+    platform::{time::Duration, tokio::task::spawn_blocking},
     signal::AudioChunk,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
@@ -156,42 +156,47 @@ async fn test_signal_server_encoded_formats_are_decodable(
     let bytes = response.bytes().await.unwrap();
     assert!(!bytes.is_empty());
 
-    let result = DecoderFactory::create_with_probe(
-        Cursor::new(bytes.to_vec()),
-        Some(ext),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
-            .pools(pools())
-            .build(),
-    );
-    let Some(mut decoder) = kithara_integration_tests::fixtures::assert_fixture_open(asset, result)
-    else {
-        return;
-    };
-
-    let mut frames = 0;
-    let mut nonzero = false;
-    loop {
-        let chunk = match decoder.next_chunk().unwrap() {
-            DecoderChunkOutcome::Chunk(chunk) => chunk,
-            DecoderChunkOutcome::Eof => break,
-            DecoderChunkOutcome::Pending(reason) => {
-                panic!("in-memory fixture must not stall: {reason:?}")
-            }
+    spawn_blocking(move || {
+        let result = DecoderFactory::create_with_probe(
+            Cursor::new(bytes.to_vec()),
+            Some(ext),
+            DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+                .pools(pools())
+                .build(),
+        );
+        let Some(mut decoder) =
+            kithara_integration_tests::fixtures::assert_fixture_open(asset, result)
+        else {
+            return;
         };
-        assert!(!chunk.samples.is_empty());
-        assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
-        nonzero |= chunk.samples.iter().any(|sample| sample.abs() > 0.01);
-        frames += chunk.frames();
-    }
-    assert!(frames > 0);
-    if let Some(expected) = expected_frames {
-        assert_eq!(frames, expected, "{} must decode every frame", asset.name());
-    }
-    assert!(
-        nonzero,
-        "{} must contain its synthetic signal",
-        asset.name()
-    );
+
+        let mut frames = 0;
+        let mut nonzero = false;
+        loop {
+            let chunk = match decoder.next_chunk().unwrap() {
+                DecoderChunkOutcome::Chunk(chunk) => chunk,
+                DecoderChunkOutcome::Eof => break,
+                DecoderChunkOutcome::Pending(reason) => {
+                    panic!("in-memory fixture must not stall: {reason:?}")
+                }
+            };
+            assert!(!chunk.samples.is_empty());
+            assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
+            nonzero |= chunk.samples.iter().any(|sample| sample.abs() > 0.01);
+            frames += chunk.frames();
+        }
+        assert!(frames > 0);
+        if let Some(expected) = expected_frames {
+            assert_eq!(frames, expected, "{} must decode every frame", asset.name());
+        }
+        assert!(
+            nonzero,
+            "{} must contain its synthetic signal",
+            asset.name()
+        );
+    })
+    .await
+    .expect("raw decoder task completes");
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
@@ -219,47 +224,51 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
     );
 
     let bytes = response.bytes().await.unwrap();
-    let mut decoder = DecoderFactory::create_with_probe(
-        Cursor::new(bytes.to_vec()),
-        Some(ext),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
-            .pools(pools())
-            .build(),
-    )
-    .unwrap_or_else(|error| panic!("probe {name} decode failed: {error}"));
+    spawn_blocking(move || {
+        let mut decoder = DecoderFactory::create_with_probe(
+            Cursor::new(bytes.to_vec()),
+            Some(ext),
+            DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+                .pools(pools())
+                .build(),
+        )
+        .unwrap_or_else(|error| panic!("probe {name} decode failed: {error}"));
 
-    let pcm_spec = decoder.spec();
-    assert_eq!(pcm_spec.sample_rate.get(), 44_100);
-    assert_eq!(pcm_spec.channels, 2);
+        let pcm_spec = decoder.spec();
+        assert_eq!(pcm_spec.sample_rate.get(), 44_100);
+        assert_eq!(pcm_spec.channels, 2);
 
-    let mut total_frames = 0usize;
-    let mut ascending_chunks = 0usize;
-    for chunk_idx in 0..8 {
-        let outcome = decoder
-            .next_chunk()
-            .unwrap_or_else(|error| panic!("decode chunk {chunk_idx} failed for {name}: {error}"));
-        let Ok(chunk) = AudioChunk::try_from(outcome) else {
-            break;
-        };
-        assert_eq!(chunk.spec().sample_rate.get(), 44_100);
-        assert_eq!(chunk.spec().channels, 2);
-        assert_valid_pcm_samples(&chunk.samples, format!("{name} chunk {chunk_idx}").as_str());
-        total_frames += chunk.frames();
-        if detect_direction(&chunk.samples, chunk.spec().channels as usize)
-            == SignalDirection::Ascending
-        {
-            ascending_chunks += 1;
+        let mut total_frames = 0usize;
+        let mut ascending_chunks = 0usize;
+        for chunk_idx in 0..8 {
+            let outcome = decoder.next_chunk().unwrap_or_else(|error| {
+                panic!("decode chunk {chunk_idx} failed for {name}: {error}")
+            });
+            let Ok(chunk) = AudioChunk::try_from(outcome) else {
+                break;
+            };
+            assert_eq!(chunk.spec().sample_rate.get(), 44_100);
+            assert_eq!(chunk.spec().channels, 2);
+            assert_valid_pcm_samples(&chunk.samples, format!("{name} chunk {chunk_idx}").as_str());
+            total_frames += chunk.frames();
+            if detect_direction(&chunk.samples, chunk.spec().channels as usize)
+                == SignalDirection::Ascending
+            {
+                ascending_chunks += 1;
+            }
         }
-    }
 
-    assert!(
-        total_frames >= 4096,
-        "{name} should decode a meaningful amount of PCM, got {total_frames} frames"
-    );
-    assert!(
-        ascending_chunks > 0,
-        "{name} round-trip should preserve the sawtooth direction"
-    );
+        assert!(
+            total_frames >= 4096,
+            "{name} should decode a meaningful amount of PCM, got {total_frames} frames"
+        );
+        assert!(
+            ascending_chunks > 0,
+            "{name} round-trip should preserve the sawtooth direction"
+        );
+    })
+    .await
+    .expect("raw decoder task completes");
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
@@ -403,7 +412,10 @@ async fn test_packaged_hls_concat_bytes_work_with_decoder_factory_direct_fmp4(
     #[case] input: (TestServerHelper, Vec<u8>),
 ) {
     let (_server, bytes) = input;
-    run_packaged_fmp4_decoder_check(label, codec, backend, bytes);
+    let label = label.to_owned();
+    spawn_blocking(move || run_packaged_fmp4_decoder_check(&label, codec, backend, bytes))
+        .await
+        .expect("raw fMP4 decoder task completes");
 }
 
 async fn fmp4_input(codec: AudioCodec) -> (TestServerHelper, Vec<u8>) {

@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     rc::Rc,
 };
 
@@ -12,6 +12,7 @@ use kithara_platform::{
     time::{self, Duration},
     tokio::task::spawn as task_spawn,
 };
+use kithara_signal::AudioSpec;
 use num_traits::ToPrimitive;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
@@ -21,13 +22,130 @@ use web_sys::{
 };
 
 use super::protocol::{HostCmd, HostOut};
-use crate::{DecodeError, DecodeResult};
+use crate::{DecodeError, DecodeResult, types::checked_audio_spec};
 
 struct DecoderHost {
     decoder: AudioDecoder,
     _error_callback: Closure<dyn FnMut(JsValue)>,
     _output_callback: Closure<dyn FnMut(AudioData)>,
-    pending: Rc<RefCell<VecDeque<(u64, u64)>>>,
+    clock: Rc<RefCell<Option<PcmClock>>>,
+}
+
+enum PcmClock {
+    AwaitingOutput {
+        configured_rate: u32,
+        inputs: Vec<(Duration, u64)>,
+    },
+    Output {
+        origin: Duration,
+        spec: AudioSpec,
+        frames_seen: u64,
+    },
+    Failed,
+}
+
+impl PcmClock {
+    fn new(configured_rate: u32) -> Self {
+        Self::AwaitingOutput {
+            configured_rate,
+            inputs: Vec::new(),
+        }
+    }
+
+    fn accept(&mut self, pts: Duration, encoded_us: u64) {
+        if let Self::AwaitingOutput { inputs, .. } = self
+            && inputs.last() != Some(&(pts, encoded_us))
+        {
+            inputs.push((pts, encoded_us));
+        }
+    }
+
+    fn next_pts(
+        &mut self,
+        spec: AudioSpec,
+        frames: u32,
+        browser_us: u64,
+    ) -> DecodeResult<Duration> {
+        let (origin, spec, offset) = match self {
+            Self::AwaitingOutput {
+                configured_rate,
+                inputs,
+            } => {
+                let origin = match output_origin(
+                    inputs,
+                    *configured_rate,
+                    spec.sample_rate.get(),
+                    browser_us,
+                ) {
+                    Ok(origin) => origin,
+                    Err(err) => {
+                        *self = Self::Failed;
+                        return Err(err);
+                    }
+                };
+                *self = Self::Output {
+                    origin,
+                    spec,
+                    frames_seen: u64::from(frames),
+                };
+                (origin, spec, 0)
+            }
+            Self::Output {
+                origin,
+                spec,
+                frames_seen,
+            } => {
+                let offset = *frames_seen;
+                *frames_seen =
+                    offset
+                        .checked_add(u64::from(frames))
+                        .ok_or(DecodeError::InvalidData {
+                            detail: "WebCodecs PCM output frame count overflows",
+                        })?;
+                (*origin, *spec, offset)
+            }
+            Self::Failed => {
+                return Err(DecodeError::InvalidData {
+                    detail: "WebCodecs PCM clock origin is unavailable",
+                });
+            }
+        };
+        let start = spec.frame_at(origin)?;
+        let end = start.checked_add(offset).ok_or(DecodeError::InvalidData {
+            detail: "WebCodecs PCM output frame offset overflows",
+        })?;
+        let elapsed = spec.duration_for(end)? - spec.duration_for(start)?;
+        origin.checked_add(elapsed).ok_or(DecodeError::InvalidData {
+            detail: "WebCodecs PCM output timestamp overflows",
+        })
+    }
+}
+
+fn output_origin(
+    inputs: &[(Duration, u64)],
+    configured_rate: u32,
+    actual_rate: u32,
+    browser_us: u64,
+) -> DecodeResult<Duration> {
+    let candidate_count = if configured_rate == actual_rate {
+        1
+    } else {
+        inputs.len()
+    };
+    let mut matching = inputs
+        .iter()
+        .take(candidate_count)
+        .filter(|(_, encoded_us)| *encoded_us == browser_us)
+        .map(|(pts, _)| *pts);
+    let origin = matching.next().ok_or(DecodeError::InvalidData {
+        detail: "WebCodecs PCM clock origin has no accepted input",
+    })?;
+    if matching.any(|pts| pts != origin) {
+        return Err(DecodeError::InvalidData {
+            detail: "WebCodecs PCM clock origin is ambiguous",
+        });
+    }
+    Ok(origin)
 }
 
 struct DecoderState {
@@ -135,7 +253,7 @@ where
         HostCmd::Decode {
             decoder_id,
             data,
-            pts_us,
+            pts,
             key,
             generation,
         } => {
@@ -150,9 +268,9 @@ where
             if generation != state.generation.get() {
                 return;
             }
-            let result = state.host.decode(&data, pts_us, key, generation);
+            let result = state.host.decode(&data, pts, key);
             if let Err(err) = result {
-                tracing::error!(decoder_id, generation, pts_us, error = %err, "failed to queue WebCodecs chunk");
+                tracing::error!(decoder_id, generation, pts = ?pts, error = %err, "failed to queue WebCodecs chunk");
                 send_error(&state.out_tx, &err, generation);
             }
         }
@@ -173,7 +291,7 @@ where
             }
             state.generation.set(generation);
             state.announced_generation.set(None);
-            state.host.pending.borrow_mut().clear();
+            state.host.clock.borrow_mut().take();
             if let Err(err) = state.host.decoder.reset() {
                 let err = api_error("reset", &err);
                 tracing::error!(decoder_id, generation, error = %err, "failed to reset WebCodecs decoder");
@@ -290,31 +408,21 @@ impl DecoderHost {
             error_tx.send(HostOut::Error { detail, generation }).ok();
         });
 
-        let pending = Rc::new(RefCell::new(VecDeque::new()));
-        let output_pending = Rc::clone(&pending);
+        let clock = Rc::new(RefCell::new(None::<PcmClock>));
+        let output_clock = Rc::clone(&clock);
         let output_callback = Closure::new(move |data: AudioData| {
-            let pts_us = data.timestamp().to_u64();
-            let Some((input_pts_us, output_generation)) = output_pending.borrow_mut().pop_front()
-            else {
-                data.close();
-                tracing::debug!(decoder_id, pts_us, "dropping unmatched WebCodecs output");
-                return;
-            };
-            if pts_us != Some(input_pts_us) {
-                tracing::debug!(decoder_id, input_pts_us, output_pts_us = ?pts_us, "WebCodecs adjusted output timestamp");
-            }
             let generation = generation.get();
-            if output_generation != generation {
+            let mut clock = output_clock.borrow_mut();
+            let Some(clock) = clock.as_mut() else {
                 data.close();
                 tracing::debug!(
-                    output_generation,
-                    generation,
                     decoder_id,
-                    "dropping stale WebCodecs output"
+                    generation,
+                    "dropping WebCodecs output without an accepted input"
                 );
                 return;
-            }
-            match copy_audio(&data, output_generation, &pools) {
+            };
+            match copy_audio(&data, generation, clock, &pools) {
                 Ok(output) => {
                     if announced_generation.get() != Some(generation)
                         && let HostOut::Pcm {
@@ -348,7 +456,7 @@ impl DecoderHost {
         let decoder = AudioDecoder::new(&init).map_err(|err| api_error("create", &err))?;
         Ok(Self {
             decoder,
-            pending,
+            clock,
             _error_callback: error_callback,
             _output_callback: output_callback,
         })
@@ -361,7 +469,7 @@ impl DecoderHost {
         sample_rate: u32,
         channels: u16,
     ) -> DecodeResult<()> {
-        self.pending.borrow_mut().clear();
+        self.clock.borrow_mut().take();
         let config: AudioDecoderConfig = Object::new().unchecked_into();
         config.set_codec(codec);
         config.set_sample_rate(sample_rate);
@@ -372,10 +480,12 @@ impl DecoderHost {
         }
         self.decoder
             .configure(&config)
-            .map_err(|err| api_error("configure", &err))
+            .map_err(|err| api_error("configure", &err))?;
+        *self.clock.borrow_mut() = Some(PcmClock::new(sample_rate));
+        Ok(())
     }
 
-    fn decode(&self, data: &[u8], pts_us: u64, key: bool, generation: u64) -> DecodeResult<()> {
+    fn decode(&self, data: &[u8], pts: Duration, key: bool) -> DecodeResult<()> {
         let data = Uint8Array::from(data);
         let chunk_type = if key {
             EncodedAudioChunkType::Key
@@ -383,6 +493,7 @@ impl DecoderHost {
             EncodedAudioChunkType::Delta
         };
         let init = EncodedAudioChunkInit::new_with_u8_array(&data, 0, chunk_type);
+        let pts_us = u64::try_from(pts.as_micros())?;
         let timestamp = pts_us.to_f64().ok_or_else(|| {
             DecodeError::backend(HostError::Number {
                 field: "timestamp",
@@ -391,19 +502,34 @@ impl DecoderHost {
         })?;
         init.set_timestamp_f64(timestamp);
         let chunk = EncodedAudioChunk::new(&init).map_err(|err| api_error("chunk", &err))?;
+        let encoded_us = chunk.timestamp().to_u64().ok_or_else(|| {
+            DecodeError::backend(HostError::Number {
+                field: "encoded timestamp",
+                value: chunk.timestamp(),
+            })
+        })?;
         self.decoder
             .decode(&chunk)
             .map_err(|err| api_error("decode", &err))?;
-        self.pending.borrow_mut().push_back((pts_us, generation));
+        let mut clock = self.clock.borrow_mut();
+        let clock = clock.as_mut().ok_or(DecodeError::InvalidData {
+            detail: "WebCodecs PCM clock has no configuration",
+        })?;
+        clock.accept(pts, encoded_us);
         Ok(())
     }
 }
 
-fn copy_audio<S>(data: &AudioData, generation: u64, pools: &PoolRegion<S>) -> DecodeResult<HostOut>
+fn copy_audio<S>(
+    data: &AudioData,
+    generation: u64,
+    clock: &mut PcmClock,
+    pools: &PoolRegion<S>,
+) -> DecodeResult<HostOut>
 where
     S: HasPool<f32>,
 {
-    let result = copy_audio_inner(data, generation, pools);
+    let result = copy_audio_inner(data, generation, clock, pools);
     data.close();
     result
 }
@@ -411,6 +537,7 @@ where
 fn copy_audio_inner<S>(
     data: &AudioData,
     generation: u64,
+    clock: &mut PcmClock,
     pools: &PoolRegion<S>,
 ) -> DecodeResult<HostOut>
 where
@@ -430,13 +557,14 @@ where
             value: sample_rate_value,
         })
     })?;
-    let pts_value = data.timestamp();
-    let pts_us = pts_value.to_u64().ok_or_else(|| {
+    let spec = checked_audio_spec(channels, sample_rate, "webcodecs.output.sample_rate")?;
+    let browser_us = data.timestamp().to_u64().ok_or_else(|| {
         DecodeError::backend(HostError::Number {
             field: "timestamp",
-            value: pts_value,
+            value: data.timestamp(),
         })
     })?;
+    let pts = clock.next_pts(spec, frames, browser_us)?;
     let sample_count = usize::try_from(frames)
         .ok()
         .and_then(|frames| frames.checked_mul(usize::from(channels)))
@@ -466,7 +594,7 @@ where
         frames,
         sample_rate,
         channels,
-        pts_us,
+        pts,
         generation,
     })
 }
@@ -595,9 +723,14 @@ mod tests {
                 MetadataOptions::default(),
             )
             .expect("BUG: MP3 probe should succeed");
-        let demuxer =
-            crate::symphonia::SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
-                .expect("BUG: MP3 demuxer should build");
+        let demuxer = crate::symphonia::SymphoniaDemuxer::from_reader_with_layout(
+            format_reader,
+            None,
+            None,
+            None,
+            kithara_stream::ReaderControl::new(None),
+        )
+        .expect("BUG: MP3 demuxer should build");
         let track = demuxer.track_info().clone();
         let codec =
             WebCodecsCodec::open(&track, false, pools.clone()).expect("BUG: WebCodecs open");
@@ -654,22 +787,29 @@ mod tests {
                 MetadataOptions::default(),
             )
             .expect("BUG: MP3 probe should succeed");
-        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
-            .expect("BUG: MP3 demuxer should build");
+        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(
+            format_reader,
+            None,
+            None,
+            None,
+            kithara_stream::ReaderControl::new(None),
+        )
+        .expect("BUG: MP3 demuxer should build");
         let track = demuxer.track_info().clone();
         let mut codec =
             WebCodecsCodec::open(&track, false, pools.clone()).expect("BUG: WebCodecs open");
         let mut buf = pools.get::<f32>();
 
         for step in 0..64_u32 {
-            let (data, pts) = match demuxer.next_frame().expect("demux") {
-                DemuxOutcome::Frame(frame) => (frame.data.to_vec(), frame.pts),
+            let frame = match demuxer.next_frame().expect("demux") {
+                DemuxOutcome::Frame(frame) => frame,
                 other => panic!("unexpected demux outcome: {other:?}"),
             };
-            let frames = codec
-                .decode_frame(&data, pts, &[], &mut buf)
+            let packet = codec
+                .decode_frame(frame, crate::demuxer::PacketMetadata::default(), &mut buf)
                 .expect("decode_frame");
-            tracing::warn!(step, frames, bytes = data.len(), "mp3 e2e probe step");
+            let frames = packet.frames;
+            tracing::warn!(step, frames, bytes = frame.data.len(), "mp3 e2e probe step");
             if frames > 0 {
                 return;
             }

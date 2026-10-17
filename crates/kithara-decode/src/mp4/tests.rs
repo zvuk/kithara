@@ -120,7 +120,7 @@ impl RecordingVisitor {
                     track.sample_rate = Some(sample_rate);
                 }
             }
-            Mp4Event::TrackCodec(_) => {}
+            Mp4Event::TrackCodec(_) | Mp4Event::TrackId(_) => {}
         }
         ControlFlow::Continue(())
     }
@@ -375,6 +375,8 @@ fn emits_track_callbacks_in_order() {
             edit_list: vec![Mp4EditListEntry {
                 segment_duration: 1_916,
                 media_time: 2_112,
+
+                media_rate: 1 << 16,
             }],
         }]
     );
@@ -431,6 +433,8 @@ fn emits_v1_elst_with_signed_media_time() {
         vec![Mp4EditListEntry {
             segment_duration: 2_000,
             media_time: -1,
+
+            media_rate: 1 << 16,
         }]
     );
 }

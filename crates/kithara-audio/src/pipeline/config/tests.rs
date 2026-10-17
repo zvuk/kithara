@@ -9,7 +9,7 @@ mod native {
     use unimock::Unimock;
 
     use crate::{
-        pipeline::config::{AudioConfig, AudioDecoderConfig, ConsumerWakeMode},
+        pipeline::config::{AudioConfig, AudioDecoderConfig},
         test_pools::{TestPools, pools},
     };
 
@@ -25,30 +25,6 @@ mod native {
         )
         .pools(pools)
         .build()
-    }
-
-    #[kithara::test]
-    fn audio_config_defaults_to_realtime_deferred_consumer_wakes() {
-        let config = AudioConfig::<kithara_file::File<TestPools>, NoResamplerBackend>::for_stream(
-            file_config(),
-        )
-        .build();
-
-        assert_eq!(
-            config.consumer_wake_mode(),
-            ConsumerWakeMode::RealtimeDeferred
-        );
-    }
-
-    #[kithara::test]
-    fn audio_config_keeps_the_native_ring_and_preload_defaults() {
-        let config = AudioConfig::<kithara_file::File<TestPools>, NoResamplerBackend>::for_stream(
-            file_config(),
-        )
-        .build();
-
-        assert_eq!(config.audio_buffer_chunks(), 10);
-        assert_eq!(config.preload_chunks().get(), 3);
     }
 
     #[kithara::test]

@@ -49,6 +49,7 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for AnalysisProgress {
 mod tests {
     use std::num::NonZeroU64;
 
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use rangemap::RangeSet;
 
@@ -57,6 +58,7 @@ mod tests {
 
     fn analysis(settled: bool) -> TrackAnalysis {
         TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token(AnalysisToken::from("progress-codec"))
             .revision(7)
             .source_sample_rate(std::num::NonZeroU32::MIN)

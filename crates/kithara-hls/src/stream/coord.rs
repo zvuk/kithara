@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Range, sync::atomic::AtomicU64};
+use std::ops::Range;
 
 use delegate::delegate;
 use kithara_abr::{AbrHandle, AbrPublisher};
@@ -14,14 +14,17 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadState, PlayheadWrite,
-    ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekPrepare, SeekState,
-    SegmentDescriptor, SourcePhase, SourceProbe, SourceSeekAnchor, StreamError, StreamResult,
-    VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
+    Activity, ActivityWriter, ByteMap, DeferredWake, MediaInfo, OpenedReader, PlayheadRead,
+    PlayheadState, PlayheadWrite, ReadOutcome, ReaderProfile, SegmentDescriptor, SourcePhase,
+    SourceProbe, SourceSeekAnchor, StreamError, StreamResult, VariantControl, VariantPromotion,
+    VariantReaderPlan, VariantReaderTake, VariantTransition,
 };
 use kithara_test_utils::kithara;
 
-use super::{session::HlsSession, transition::SessionSlots};
+use super::{
+    session::{HlsSession, HlsSessionReader},
+    transition::SessionSlots,
+};
 use crate::{
     HlsEvent,
     config::HlsConfig,
@@ -64,18 +67,8 @@ where
     /// Backing playhead state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
     playhead: Arc<PlayheadState>,
-    /// Backing seek/activity state — the coord owns the `Arc` directly and
-    /// vends narrow trait-object handles from it.
-    seek: Arc<SeekState>,
-    /// Narrow seek-observe handle — derived from `seek` at construction.
-    /// Used by internal methods that only need epoch/target/pending reads.
-    seek_obs: Arc<dyn SeekObserve>,
-    /// Whether this coord currently holds the ABR lock for an in-flight seek.
-    /// The ABR lock is a shared counter, so the coord records its own level
-    /// rather than reading the counter back: it must never release a level it
-    /// did not take. The mutex also serialises the two threads that reconcile
-    /// the mirror — the peer poll and the produce pass that plans a reader.
-    abr_seek_lock: Mutex<bool>,
+    activity: Activity,
+    activity_writer: Mutex<Option<ActivityWriter>>,
     signal: SizeSignal,
 }
 
@@ -86,7 +79,7 @@ where
     pub(crate) fn new(
         env: HlsCoordEnv<S>,
         playhead: Arc<PlayheadState>,
-        seek: Arc<SeekState>,
+        writer: ActivityWriter,
         abr: AbrHandle,
         abr_publisher: AbrPublisher,
         variants: Arc<[Arc<HlsVariant<S>>]>,
@@ -99,7 +92,7 @@ where
             abr.current_variant_index().is_some(),
             "HlsCoord requires an AbrHandle with state — HlsPeer must construct AbrState"
         );
-        let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
+        let activity = writer.reader();
         let active_index = abr
             .current_variant_index()
             .expect("invariant: stateful ABR handle checked above");
@@ -110,7 +103,6 @@ where
         );
         let active_session = Arc::new(HlsSession::active(
             env.cancel.child(),
-            Arc::clone(&seek_obs),
             env.signal.clone(),
             active_index,
             Arc::clone(&active_variant),
@@ -118,12 +110,11 @@ where
         ));
         Self {
             playhead,
-            seek,
-            seek_obs,
+            activity,
+            activity_writer: Mutex::new(Some(writer)),
             abr,
             abr_publisher,
             variants,
-            abr_seek_lock: Mutex::new(false),
             cancel: env.cancel,
             scope: env.scope,
             config: env.config,
@@ -134,12 +125,15 @@ where
         }
     }
 
-    pub(crate) fn activity(&self) -> Arc<dyn Activity> {
-        Arc::clone(&self.seek) as Arc<dyn Activity>
+    pub(crate) fn activity(&self) -> Activity {
+        self.activity.clone()
     }
 
-    /// Mark an evicted segment missing and rebuild each resident reader from
-    /// its own cursor. Variants without a reader rebuild on activation.
+    pub(crate) fn take_activity_writer(&self) -> Option<ActivityWriter> {
+        self.activity_writer.lock().take()
+    }
+
+    /// Rebuild resident readers from their own cursors after an eviction.
     pub(crate) fn broadcast_eviction(
         &self,
         ctx: &PlanCtx<S>,
@@ -170,13 +164,6 @@ where
         }
     }
 
-    pub(super) fn commit_if_seek_epoch<T, F>(&self, epoch: u64, commit: F) -> Option<T>
-    where
-        F: FnOnce() -> T,
-    {
-        self.seek.commit_if_epoch(epoch, commit)
-    }
-
     /// Resolve the segment whose fetch queue owns the reader cursor.
     ///
     /// Deliberately wider than [`Self::find_at_offset`]: a cursor inside the
@@ -195,7 +182,7 @@ where
     /// Track-level phase. Master-cancel takes precedence (terminal
     /// `Cancelled`); otherwise the variant that currently serves
     /// `range.start` decides — mid-buffer boundary cross resolves to
-    /// the right `range_ready` / `is_flushing` / `total_bytes` view.
+    /// the right `range_ready` / `total_bytes` view.
     pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         if self.cancel.is_cancelled() {
             return SourcePhase::Cancelled;
@@ -211,8 +198,7 @@ where
         Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
     }
 
-    /// Wakes a reader parked on the pre-seek range so it re-probes against the new position and
-    /// flush gate after a seek repositions the active variant.
+    /// Retire the incoming session before seeking the active source.
     pub(crate) fn prepare_for_seek(&self) {
         self.cancel_incoming_for_seek();
         if !self.active().layout_seek_invariant() {
@@ -266,18 +252,6 @@ where
         }
     }
 
-    pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl> {
-        Arc::clone(&self.seek) as Arc<dyn SeekControl>
-    }
-
-    pub(crate) fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
-        self.seek.seek_epoch_arc()
-    }
-
-    pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-    }
-
     /// Install the peer's `reader_advanced` wake so the `on_slow` hook can
     /// re-poll the peer when an in-flight fetch stalls past `soft_timeout`.
     /// Called once by `HlsPeer::activate`.
@@ -302,38 +276,21 @@ where
         self.signal.clone()
     }
 
-    /// Keep ABR locked until the first post-seek output is committed.
-    ///
-    /// `plan_variant_reader` reconciles before it reads the claim, because it
-    /// is the site that mints a switch: a plan refused against a mirror that
-    /// still reads locked after the seek settled is refused for good — nothing
-    /// re-derives the pending intent, and the switch is lost. Idempotent, and
-    /// safe from any thread: the coord owns at most one lock level and moves
-    /// it only on an edge, so it never releases a level it did not take.
-    pub(crate) fn sync_abr_lock(&self) {
-        let mut held = self.abr_seek_lock.lock();
-        let pending = self.seek_obs.is_pending() || self.seek_obs.pending_epoch().is_some();
-        if pending && !*held {
-            self.abr.lock();
-            *held = true;
-        } else if !pending && *held {
-            self.abr.unlock();
-            *held = false;
-        }
-    }
-
     /// On the RT path this is a single wake-free probe that never parks. Off-RT it blocks on the
     /// readiness gate, event-driven, until the range resolves, a segment fails, or cancel fires.
     pub(crate) fn wait_range(
         &self,
         range: Range<u64>,
         timeout: Option<Duration>,
+        reader_cancel: Option<&kithara_stream::ReaderControl>,
     ) -> StreamResult<WaitOutcome> {
         match timeout {
             Some(_) => self.probe_range(range, timeout),
-            None => self.signal.wait_range_blocking(&self.cancel, || {
-                self.probe_range(range.clone(), Some(Duration::ZERO))
-            }),
+            None => self
+                .signal
+                .wait_range_blocking(&self.cancel, reader_cancel, || {
+                    self.probe_range(range.clone(), Some(Duration::ZERO))
+                }),
         }
     }
 
@@ -343,10 +300,6 @@ where
             pub(crate) fn active(&self) -> Arc<HlsVariant<S>>;
             pub(crate) fn advance(&self, n: u64);
             pub(crate) fn position(&self) -> u64;
-            pub(crate) fn seek_time_anchor(
-                &self,
-                position: Duration,
-            ) -> StreamResult<Option<SourceSeekAnchor>>;
             #[call(seek_to_byte)]
             pub(crate) fn set_position(&self, pos: u64);
             /// Variant index of the authoritative active source session.
@@ -371,18 +324,22 @@ where
             pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
         }
     }
+
+    pub(crate) fn seek_time_anchor(
+        &self,
+        position: Duration,
+    ) -> StreamResult<Option<SourceSeekAnchor>> {
+        self.prepare_for_seek();
+        let anchor = self.active_session().seek_time_anchor(position)?;
+        self.signal().fire();
+        Ok(anchor)
+    }
 }
 
 pub(super) fn variant_switch_target_time(
-    seek_obs: &dyn SeekObserve,
     playhead_read: &dyn PlayheadRead,
     landing: Option<Duration>,
 ) -> Duration {
-    if seek_obs.is_pending() || seek_obs.is_flushing() {
-        return seek_obs
-            .target()
-            .unwrap_or_else(|| playhead_read.position());
-    }
     landing.unwrap_or_else(|| playhead_read.position())
 }
 
@@ -437,6 +394,15 @@ impl<S> VariantControl for HlsCoord<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    fn bind_active_reader(&self, reader: OpenedReader) -> OpenedReader {
+        HlsSessionReader::open(
+            self.active_session(),
+            reader.control(),
+            reader.construction_gate(),
+            Arc::clone(&self.emit),
+        )
+    }
+
     fn abort_variant(&self, transition: VariantTransition) -> bool {
         Self::abort_variant(self, transition)
     }
@@ -513,23 +479,10 @@ where
         }
     }
 }
-
-impl<S> SeekPrepare for HlsCoord<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    delegate! {
-        to self {
-            #[call(prepare_for_seek)]
-            fn prepare(&self);
-        }
-    }
-}
-
 #[cfg(test)]
 pub(super) mod tests {
     use std::{
-        io::{ErrorKind, Read},
+        io::{self, ErrorKind, Read, Seek, SeekFrom},
         num::NonZeroU64,
         sync::{
             OnceLock,
@@ -544,12 +497,15 @@ pub(super) mod tests {
     use kithara_download::RequestPriority;
     use kithara_events::EventBus;
     use kithara_platform::{
-        sync::{Arc, ThreadGate},
-        time::Instant,
+        CancelScope,
+        sync::{Arc, Mutex, Notify, mpsc},
+        time::{Instant, timeout},
+        tokio::{runtime::Handle, task::spawn_blocking_on},
     };
     use kithara_stream::{
-        AudioCodec, ContainerFormat, OutgoingDisposition, PlayheadWrite, ReaderInput, ReaderWarmup,
-        SeekControl, SourceError, WorkerWake,
+        AudioCodec, ConstructionGate, ContainerFormat, NotReadyCause, OutgoingDisposition,
+        PendingReason, PlayheadWrite, PrerollHint, ReaderControl, ReaderInput, ReaderSeekSignal,
+        ReaderWarmup, SourceError, Stream, StreamType, WorkerWake, resolve_seek_target,
     };
     use unimock::{MockFn, Unimock, matching};
 
@@ -558,6 +514,7 @@ pub(super) mod tests {
         config::HlsConfig,
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
+        stream::source::HlsSource,
         variant::{PlanCtx, VariantParts},
     };
 
@@ -612,7 +569,10 @@ pub(super) mod tests {
                 .cancel(cancel.clone())
                 .build(),
         );
-        let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
+        let signal = SizeSignal::new(
+            Arc::new(kithara_platform::sync::CondvarGate::default()),
+            Arc::new(OnceLock::new()),
+        );
         let ctx = PlanCtx {
             bus: bus.clone(),
             scope: store
@@ -623,7 +583,6 @@ pub(super) mod tests {
                     discriminator: Some("coord-test".to_owned()),
                 })
                 .expect("coord asset scope"),
-            seek_epoch: 0,
             look_ahead_segments: None,
             signal: signal.clone(),
             config: Arc::new(
@@ -646,7 +605,6 @@ pub(super) mod tests {
             VariantParts {
                 init: None,
                 segments: media_segments(&ctx, &v0_urls, &v0_slots),
-                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
                 codec: playlist.variant_codec(0),
                 container: playlist.variant_container(0),
             }
@@ -654,7 +612,6 @@ pub(super) mod tests {
             VariantParts {
                 init: None,
                 segments: media_segments(&ctx, &v1_urls, &v1_slots),
-                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
                 codec: playlist.variant_codec(1),
                 container: playlist.variant_container(1),
             }
@@ -684,7 +641,7 @@ pub(super) mod tests {
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
             },
             Arc::new(PlayheadState::new()),
-            Arc::new(SeekState::new()),
+            ActivityWriter::new(),
             handle,
             abr_publisher,
             variants,
@@ -812,71 +769,56 @@ pub(super) mod tests {
 
     #[kithara::test]
     fn variant_switch_target_uses_active_seek_target() {
-        let seek = SeekState::new();
         let playhead = PlayheadState::new();
         playhead.set_position(Duration::from_secs(9));
 
-        let _epoch = seek.begin(Duration::from_secs(5));
-
         assert_eq!(
-            variant_switch_target_time(&seek, &playhead, None),
+            variant_switch_target_time(&playhead, Some(Duration::from_secs(5))),
             Duration::from_secs(5)
         );
     }
 
     #[kithara::test]
     fn variant_switch_target_keeps_flushing_seek_target_after_decoder_applies() {
-        let seek = SeekState::new();
         let playhead = PlayheadState::new();
         playhead.set_position(Duration::from_secs(9));
 
-        let epoch = seek.begin(Duration::from_secs(5));
-        seek.clear_pending(epoch);
-
         assert_eq!(
-            variant_switch_target_time(&seek, &playhead, None),
+            variant_switch_target_time(&playhead, Some(Duration::from_secs(5))),
             Duration::from_secs(5)
         );
     }
 
     #[kithara::test]
     fn variant_switch_target_ignores_completed_seek_target() {
-        let seek = SeekState::new();
         let playhead = PlayheadState::new();
 
-        let epoch = seek.begin(Duration::from_secs(5));
-        seek.clear_pending(epoch);
-        seek.complete(epoch);
         playhead.set_position(Duration::from_secs(9));
 
         assert_eq!(
-            variant_switch_target_time(&seek, &playhead, None),
+            variant_switch_target_time(&playhead, None),
             Duration::from_secs(9)
         );
     }
 
     #[kithara::test]
     fn variant_switch_target_prefers_the_named_landing_over_the_playhead() {
-        let seek = SeekState::new();
         let playhead = PlayheadState::new();
         playhead.set_position(Duration::from_secs(9));
 
         assert_eq!(
-            variant_switch_target_time(&seek, &playhead, Some(Duration::from_secs(12))),
+            variant_switch_target_time(&playhead, Some(Duration::from_secs(12))),
             Duration::from_secs(12)
         );
     }
 
     #[kithara::test]
     fn variant_switch_target_keeps_the_seek_target_over_a_named_landing() {
-        let seek = SeekState::new();
         let playhead = PlayheadState::new();
         playhead.set_position(Duration::from_secs(9));
 
-        let _epoch = seek.begin(Duration::from_secs(5));
-
         assert_eq!(
-            variant_switch_target_time(&seek, &playhead, Some(Duration::from_secs(12))),
+            variant_switch_target_time(&playhead, Some(Duration::from_secs(5))),
             Duration::from_secs(5)
         );
     }
@@ -1082,12 +1024,15 @@ pub(super) mod tests {
 
         assert_eq!(coord.variant_index(), 0);
         assert_eq!(coord.position(), 17);
-        assert!(matches!(
-            coord
-                .take_prepared_variant_reader(transition)
-                .expect("probe incoming"),
-            VariantReaderTake::Preparing
-        ));
+        let VariantReaderTake::Ready(reader) = coord
+            .take_prepared_variant_reader(transition)
+            .expect("probe incoming")
+        else {
+            panic!("the exact Incremental reader must remain transferable without media");
+        };
+        assert_eq!(reader.transition(), transition);
+        assert_eq!(coord.variant_index(), 0);
+        assert_eq!(coord.position(), 17);
         assert!(coord.abort_variant(transition));
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.variant_index(), 0);
@@ -1163,21 +1108,18 @@ pub(super) mod tests {
     async fn incoming_readiness_tracks_required_bytes_not_delivery_chunks() {
         let (coord, _bus, ctx, _abr_state) = switch_coord();
         coord.set_position(17);
-        let transition = prepare_incoming(&coord, incremental_profile(32))
+        let profile = ReaderProfile::new(
+            ReaderInput::InitOnly,
+            ReaderWarmup::None,
+            NonZeroU64::new(32).expect("read-ahead bytes"),
+        );
+        let transition = prepare_incoming(&coord, profile)
             .expect("prepare incoming")
             .expect("pending switch");
         let mut commands = coord.dispatch_incoming(&ctx, 1);
         assert_eq!(commands.len(), 1);
         let mut command = commands.pop().expect("target fetch");
-        // Construction fetches outrank speculation. The peer's budget decides
-        // how many a poll may emit; it cannot decide when the downloader runs
-        // them, and that queue is first-in-first-out within a priority slot. The
-        // audible variant appends to it on every poll, so an untagged
-        // construction pack is never reached: measured on a cross-codec switch,
-        // the incoming variant started exactly two fetches all test — its
-        // playlist and its init — while both of its media segments sat queued
-        // until teardown and readiness stayed false on all 216 polls. Tagged,
-        // both segments start and the reader becomes readable.
+        // With no separate init, the declared header covers the first media segment.
         assert_eq!(command.priority(), Some(RequestPriority::High));
         assert_eq!(command.url().as_str(), "https://example.com/v1-seg0.m4s");
         let mut writer = command.take_writer().expect("streaming writer");
@@ -1191,6 +1133,14 @@ pub(super) mod tests {
         ));
 
         writer(&[2; 25]).expect("second delivery chunk");
+        assert!(matches!(
+            coord
+                .take_prepared_variant_reader(transition)
+                .expect("probe incomplete header after read-ahead bytes"),
+            VariantReaderTake::Preparing
+        ));
+        writer(&[3; 68]).expect("remaining header bytes");
+        command.take_on_complete().expect("completion handler")(100, None, None);
         let VariantReaderTake::Ready(reader) = coord
             .take_prepared_variant_reader(transition)
             .expect("take ready incoming")
@@ -1212,8 +1162,6 @@ pub(super) mod tests {
             VariantReaderTake::Taken
         ));
 
-        writer(&[3; 68]).expect("remaining delivery body");
-        command.take_on_complete().expect("completion handler")(100, None, None);
         let mut first = [0_u8; 8];
         assert_eq!(input.read(&mut first).expect("read incoming"), first.len());
         assert_eq!(coord.position(), 17);
@@ -1301,12 +1249,13 @@ pub(super) mod tests {
             StreamError::Source(SourceError::Io(ref error))
                 if error.kind() == ErrorKind::InvalidInput
         ));
-        assert!(matches!(
-            coord
-                .take_prepared_variant_reader(transition)
-                .expect("original transition remains live"),
-            VariantReaderTake::Preparing
-        ));
+        let VariantReaderTake::Ready(reader) = coord
+            .take_prepared_variant_reader(transition)
+            .expect("original transition remains live")
+        else {
+            panic!("the exact Incremental reader must remain transferable without media");
+        };
+        assert_eq!(reader.transition(), transition);
         assert!(coord.abort_variant(transition));
     }
 
@@ -1349,12 +1298,13 @@ pub(super) mod tests {
         );
         assert!(!coord.abort_variant(stale));
         assert!(!current_cancel.is_cancelled());
-        assert!(matches!(
-            coord
-                .take_prepared_variant_reader(current)
-                .expect("replacement remains live"),
-            VariantReaderTake::Preparing
-        ));
+        let VariantReaderTake::Ready(reader) = coord
+            .take_prepared_variant_reader(current)
+            .expect("replacement remains live")
+        else {
+            panic!("the exact Incremental reader must remain transferable without media");
+        };
+        assert_eq!(reader.transition(), current);
         assert!(coord.abort_variant(current));
         assert!(current_cancel.is_cancelled());
     }
@@ -1476,7 +1426,7 @@ pub(super) mod tests {
             .expect("pending switch");
         coord.abr.lock();
 
-        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.prepare_for_seek();
 
         assert_eq!(
             coord.plan_variant_reader(None).expect("reject old epoch"),
@@ -1489,10 +1439,8 @@ pub(super) mod tests {
     #[kithara::test]
     fn a_settled_seek_stops_refusing_a_switch_plan_before_the_next_peer_poll() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        let epoch = coord.seek_control().begin(Duration::from_secs(1));
-        coord.sync_abr_lock();
-        assert!(coord.abr.is_locked());
-        coord.seek_control().clear_pending(epoch);
+        coord.prepare_for_seek();
+        assert!(!coord.abr.is_locked());
 
         let plan = coord
             .plan_variant_reader(None)
@@ -1505,42 +1453,32 @@ pub(super) mod tests {
     #[kithara::test]
     fn a_live_seek_refuses_a_switch_plan_without_a_peer_poll() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
-
-        assert_eq!(
-            coord
-                .plan_variant_reader(None)
-                .expect("plan while the seek is live"),
-            None
-        );
-        assert!(coord.abr.is_locked());
+        coord.prepare_for_seek();
+        let plan = coord
+            .plan_variant_reader(None)
+            .expect("plan after synchronous seek")
+            .expect("selection survives seek");
+        assert_eq!(plan.transition().incoming_variant(), VariantIndex::new(1));
+        assert!(!coord.abr.is_locked());
     }
 
     #[kithara::test]
     fn ready_stale_plan_drops_old_epoch_incoming_without_deleting_selection() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        let plan = coord
-            .plan_variant_reader(None)
-            .expect("plan incoming")
-            .expect("pending switch");
-        let stale = plan.clone();
-        coord
-            .prepare_planned_variant_reader(plan, incremental_profile(32))
+        let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
         let claim = coord
             .abr
             .claim_pending_decision()
-            .expect("selection remains pending until promotion");
-
-        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
-
-        assert_eq!(
+            .expect("selection remains pending");
+        coord.prepare_for_seek();
+        assert!(matches!(
             coord
-                .prepare_planned_variant_reader(stale, incremental_profile(32))
-                .expect("reject old epoch"),
-            None
-        );
+                .take_prepared_variant_reader(transition)
+                .expect("retired reader"),
+            VariantReaderTake::Stale
+        ));
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
     }
@@ -1577,6 +1515,11 @@ pub(super) mod tests {
     #[kithara::test]
     fn active_seek_anchor_updates_the_session_cursor() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
+        let deferred = Arc::new(DeferredWake::default());
+        coord.set_peer_wake(
+            Arc::clone(&deferred),
+            Arc::new(CountingWake::default()) as Arc<dyn WorkerWake>,
+        );
         coord.set_position(17);
 
         let anchor = ByteMap::anchor_at_time(coord.as_ref(), Duration::from_secs(1))
@@ -1585,25 +1528,322 @@ pub(super) mod tests {
 
         assert_eq!(anchor.byte_offset, 0);
         assert_eq!(coord.position(), anchor.byte_offset);
+
+        let session = coord.active_session();
+        coord.set_position(17);
+        let fixed = HlsSessionReader::open(
+            Arc::clone(&session),
+            session.new_reader_control(),
+            None,
+            Arc::clone(&coord.emit),
+        );
+        deferred.flush();
+        assert!(
+            !deferred.flush(),
+            "fixture wake is drained before the fixed anchor"
+        );
+        let fixed_anchor = fixed
+            .byte_map()
+            .expect("fixed active byte map")
+            .anchor_at_time(Duration::from_secs(1))
+            .expect("fixed active seek anchor")
+            .expect("fixed active segmented anchor");
+        assert_eq!(fixed_anchor.byte_offset, anchor.byte_offset);
+        assert_eq!(coord.position(), fixed_anchor.byte_offset);
+        assert!(
+            deferred.flush(),
+            "the fixed active anchor must arm its own peer"
+        );
+        assert!(!deferred.flush(), "the anchor wake is delivered once");
     }
 
-    #[kithara::test]
-    fn seek_aborts_the_exact_incoming_session() {
-        let (coord, _bus, _ctx, _abr_state) = switch_coord();
+    struct ReadEntered {
+        entered: Notify,
+        release: Mutex<Option<mpsc::Receiver<()>>>,
+    }
+
+    impl WorkerWake for ReadEntered {
+        fn defer(&self) {
+            self.entered.notify_one();
+        }
+
+        fn wake(&self) {
+            let release = self.release.lock().take();
+            if let Some(release) = release {
+                self.entered.notify_one();
+                let _ = release.recv();
+            }
+        }
+    }
+
+    struct ReaderStream;
+
+    impl StreamType for ReaderStream {
+        type Config = HlsSource<crate::test_pools::TestPools>;
+        type Events = HlsEvent;
+        type Source = Self::Config;
+
+        async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
+            Ok(config)
+        }
+    }
+
+    struct TestReaderInput {
+        stream: Stream<ReaderStream>,
+        gate: ConstructionGate,
+        control: ReaderControl,
+    }
+
+    impl Read for TestReaderInput {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            if self.gate.is_armed() || self.control.is_blocking() {
+                self.stream.read_with_control(bytes, Some(&self.control))
+            } else {
+                self.stream.probe_read(bytes)
+            }
+        }
+    }
+
+    impl Seek for TestReaderInput {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            if self.gate.is_armed() || self.control.is_blocking() {
+                self.stream.seek_with_control(pos, Some(&self.control))
+            } else {
+                let position = resolve_seek_target(pos, self.stream.position(), self.stream.len())?;
+                self.stream.set_position(position);
+                Ok(position)
+            }
+        }
+    }
+
+    async fn open_active_test_reader(coord: &Arc<TestHlsCoord>) -> OpenedReader {
+        let source = HlsSource::new(
+            Arc::clone(coord),
+            Arc::clone(&coord.emit),
+            CancelScope::new(Some(coord.cancel.clone())),
+        );
+        let mut stream = Stream::<ReaderStream>::new(source)
+            .await
+            .expect("real HLS source adapter");
+        let len = stream.len();
+        let map = stream.byte_map();
+        let sink = stream.take_reader_event_sink();
+        let gate = ConstructionGate::default();
+        let control = ReaderControl::new(Some(coord.cancel.clone()));
+        let input = TestReaderInput {
+            stream,
+            gate: gate.clone(),
+            control: control.clone(),
+        };
+        let opened = OpenedReader::new(input, len, map, Some(gate), control, sink);
+        coord.bind_active_reader(opened)
+    }
+
+    async fn assert_active_reader_stays_pinned() {
+        let (coord, bus, ctx, _abr) = switch_coord();
+        coord.set_position(17);
+        let mut events = bus.subscribe();
+        let mut opened = open_active_test_reader(&coord).await;
+        let retired_control = opened.control();
+        let retired_map = opened.byte_map().expect("fixed outgoing byte map");
+        let mut retired_sink = opened.take_event_sink().expect("fixed outgoing event sink");
+        let retired_gate = opened
+            .construction_gate()
+            .expect("outgoing construction gate");
+        retired_gate.arm();
+        let mut reader = opened.into_inner();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
+        let mut command = coord.dispatch_incoming(&ctx, 1).pop().expect("V1 fetch");
+        command.take_writer().expect("V1 writer")(&[0x5c; 100]).expect("V1 bytes");
+        command.take_on_complete().expect("V1 completion")(100, None, None);
+        let VariantReaderTake::Ready(incoming) = coord
+            .take_prepared_variant_reader(transition)
+            .expect("transfer V1 reader")
+        else {
+            panic!("resident V1 bytes must yield its exact reader");
+        };
+        let (_plan, incoming) = incoming.split();
+        let (release, released) = mpsc::channel::<()>();
+        let entered = Arc::new(ReadEntered {
+            entered: Notify::default(),
+            release: Mutex::new(Some(released)),
+        });
+        coord.set_peer_wake(Arc::new(DeferredWake::default()), entered.clone());
+        let (complete, completion) = mpsc::channel();
+        let runtime = Handle::try_current().expect("reader test runtime");
+        let owner = spawn_blocking_on(&runtime, move || {
+            let mut bytes = [0xa5; 16];
+            let result = reader.read(&mut bytes);
+            let _ = complete.send((result, bytes));
+        });
+        let parked = timeout(Duration::from_secs(1), entered.entered.notified()).await;
+        let before = completion.try_recv();
+        let was_pending = matches!(before, Err(mpsc::TryRecvError::Empty));
+        let promotion = coord.promote_planned_variant(transition);
+        let promoted_position = coord.position();
+        drop(release);
+        let joined = owner.await;
+        let (result, bytes) = before
+            .or_else(|_| completion.try_recv())
+            .expect("retired outgoing read must return");
 
-        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
-        coord.prepare_for_seek();
+        assert!(parked.is_ok());
+        assert!(was_pending);
+        assert!(joined.is_ok());
+        assert_eq!(promotion, VariantPromotion::Promoted);
+        assert_eq!(promoted_position, 0);
+        assert_eq!(coord.variant_index(), 1);
+        assert_eq!(coord.position(), promoted_position);
+        assert_eq!(bytes, [0xa5; 16]);
+        let error = result.expect_err("an outgoing read cannot consume the promoted session");
+        assert_eq!(
+            error
+                .get_ref()
+                .and_then(|error| error.downcast_ref::<PendingReason>()),
+            Some(&PendingReason::SessionRetired)
+        );
+        assert_eq!(
+            retired_map
+                .segment_at_index(0)
+                .expect("V0 descriptor")
+                .variant_index,
+            0
+        );
+        retired_sink.on_seek(ReaderSeekSignal::Landed {
+            landed_byte: Some(17),
+            preroll: PrerollHint::NotNeeded,
+        });
+        retired_sink.flush();
+        let seek =
+            std::iter::from_fn(|| events.try_recv().ok()).find_map(|envelope| {
+                match envelope.event {
+                    HlsEvent::ReaderSeek { variant, .. } => Some(variant),
+                    _ => None,
+                }
+            });
+        assert_eq!(seek, Some(Some(0)));
+        retired_control.cancel();
+        let cancelled = open_active_test_reader(&coord).await;
+        let cancelled_control = cancelled.control();
+        let cancelled_gate = cancelled.construction_gate().expect("first V1 gate");
+        cancelled_gate.arm();
+        cancelled_control.cancel();
+        let mut cancelled = cancelled.into_inner();
+        let error = cancelled
+            .read(&mut [0; 16])
+            .expect_err("generation cancellation reaches its input");
+        assert_eq!(
+            error
+                .get_ref()
+                .and_then(|error| error.downcast_ref::<PendingReason>()),
+            Some(&PendingReason::SessionRetired)
+        );
+        assert_eq!(coord.position(), promoted_position);
+        let reopened = open_active_test_reader(&coord).await;
+        assert!(!reopened.control().is_cancelled());
+        assert!(!reopened.construction_gate().expect("fresh gate").is_armed());
+        assert!(cancelled_gate.is_armed());
+        assert!(retired_gate.is_armed());
+        assert_eq!(
+            reopened
+                .byte_map()
+                .expect("V1 map")
+                .segment_at_index(0)
+                .expect("V1 descriptor")
+                .variant_index,
+            1
+        );
+        let mut reopened = reopened.into_inner();
+        let mut bytes = [0; 16];
+        assert_eq!(
+            reopened.read(&mut bytes).expect("fresh reader serves V1"),
+            16
+        );
+        assert_eq!(bytes, [0x5c; 16]);
+        assert_eq!(coord.position(), promoted_position + 16);
+        drop(incoming);
+    }
 
-        assert!(matches!(
-            coord
+    #[kithara::test(tokio)]
+    async fn seek_aborts_the_exact_incoming_session() {
+        for seek in [true, false] {
+            let (coord, _bus, _ctx, _abr_state) = switch_coord();
+            let transition = prepare_incoming(&coord, incremental_profile(32))
+                .expect("prepare incoming")
+                .expect("pending switch");
+            let VariantReaderTake::Ready(opened) = coord
                 .take_prepared_variant_reader(transition)
-                .expect("probe stale incoming"),
-            VariantReaderTake::Stale
-        ));
-        assert_eq!(coord.variant_index(), 0);
+                .expect("transfer the incremental reader without media bytes")
+            else {
+                panic!("Incremental construction must not wait for media");
+            };
+            let (_, reader) = opened.split();
+            let gate = reader
+                .construction_gate()
+                .expect("real HLS construction gate");
+            gate.arm();
+            let mut reader = reader.into_inner();
+            let (release, released) = mpsc::channel::<()>();
+            let entered = Arc::new(ReadEntered {
+                entered: Notify::default(),
+                release: Mutex::new(Some(released)),
+            });
+            coord.set_peer_wake(Arc::new(DeferredWake::default()), entered.clone());
+            let (complete, completion) = mpsc::channel();
+            let runtime = Handle::try_current().expect("reader test runtime");
+            let owner = spawn_blocking_on(&runtime, move || {
+                let mut bytes = [0xa5; 16];
+                let result = reader.read(&mut bytes);
+                let _ = complete.send((result, bytes));
+            });
+            let entered = timeout(Duration::from_secs(1), entered.entered.notified()).await;
+            let before_abort = completion.try_recv();
+            let exact_abort = if seek {
+                coord.prepare_for_seek();
+                None
+            } else {
+                Some(VariantControl::abort_variant(coord.as_ref(), transition))
+            };
+            drop(release);
+            let joined = owner.await;
+            gate.disarm();
+            let was_pending = matches!(before_abort, Err(mpsc::TryRecvError::Empty));
+            let (result, bytes) = before_abort
+                .or_else(|_| completion.try_recv())
+                .expect("aborted real construction read must return");
+
+            assert!(
+                entered.is_ok(),
+                "real reader must reach its unavailable-range probe"
+            );
+            assert!(
+                was_pending,
+                "real construction read must remain pending before abort"
+            );
+            assert!(joined.is_ok());
+            assert!(exact_abort.is_none_or(|aborted| aborted));
+            let error = result.expect_err("cancelled construction read must not produce PCM bytes");
+            assert!(matches!(
+                error
+                    .get_ref()
+                    .and_then(|error| error.downcast_ref::<PendingReason>()),
+                Some(
+                    PendingReason::SessionRetired
+                        | PendingReason::NotReady(NotReadyCause::WaitInterrupted)
+                )
+            ));
+            assert_eq!(bytes, [0xa5; 16]);
+            assert!(matches!(
+                coord
+                    .take_prepared_variant_reader(transition)
+                    .expect("probe stale incoming"),
+                VariantReaderTake::Stale
+            ));
+            assert_eq!(coord.variant_index(), 0);
+        }
+        assert_active_reader_stays_pinned().await;
     }
 
     #[kithara::test]
@@ -1617,17 +1857,25 @@ pub(super) mod tests {
             .expect("prepare incoming")
             .expect("pending switch");
 
-        let next_epoch = coord.seek_control().begin(Duration::from_secs(1));
+        let retired = coord.sessions.incoming_session().expect("prepared session");
         coord.prepare_for_seek();
 
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
-        coord.seek_control().clear_pending(next_epoch);
         let replacement = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement")
             .expect("manual selection survives seek");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
-        assert_eq!(replacement.id().seek_epoch(), next_epoch);
-        assert_ne!(replacement, stale);
+        assert!(matches!(
+            retired.wait_range(0..1, Some(Duration::ZERO), None),
+            Ok(WaitOutcome::Interrupted)
+        ));
+        assert!(!Arc::ptr_eq(
+            &retired,
+            &coord
+                .sessions
+                .incoming_session()
+                .expect("replacement session")
+        ));
     }
 
     #[kithara::test]
@@ -1643,17 +1891,25 @@ pub(super) mod tests {
             .expect("prepare incoming")
             .expect("pending switch");
 
-        let next_epoch = coord.seek_control().begin(Duration::from_secs(1));
+        let retired = coord.sessions.incoming_session().expect("prepared session");
         coord.prepare_for_seek();
 
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
-        coord.seek_control().clear_pending(next_epoch);
         let replacement = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement")
             .expect("automatic selection survives seek");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
-        assert_eq!(replacement.id().seek_epoch(), next_epoch);
-        assert_ne!(replacement, stale);
+        assert!(matches!(
+            retired.wait_range(0..1, Some(Duration::ZERO), None),
+            Ok(WaitOutcome::Interrupted)
+        ));
+        assert!(!Arc::ptr_eq(
+            &retired,
+            &coord
+                .sessions
+                .incoming_session()
+                .expect("replacement session")
+        ));
     }
 
     #[kithara::test(tokio)]
@@ -1668,7 +1924,8 @@ pub(super) mod tests {
             .expect("pending switch");
         take_ready_incremental_reader(&coord, &ctx, stale);
 
-        let next_epoch = coord.seek_control().begin(Duration::from_secs(1));
+        let retired = coord.sessions.incoming_session().expect("prepared session");
+        coord.prepare_for_seek();
 
         assert_eq!(
             coord.promote_planned_variant(stale),
@@ -1676,12 +1933,14 @@ pub(super) mod tests {
         );
         assert_eq!(coord.variant_index(), 0);
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
-        coord.seek_control().clear_pending(next_epoch);
         let replacement = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement")
             .expect("manual selection survives epoch change");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
-        assert_eq!(replacement.id().seek_epoch(), next_epoch);
+        assert!(matches!(
+            retired.wait_range(0..1, Some(Duration::ZERO), None),
+            Ok(WaitOutcome::Interrupted)
+        ));
     }
 
     fn v0_seg_idx(cmd: &kithara_download::FetchCmd) -> u32 {
@@ -1691,6 +1950,55 @@ pub(super) mod tests {
             .trim_end_matches(".m4s")
             .parse()
             .expect("v0 segment url")
+    }
+
+    #[kithara::test]
+    fn seek_preserves_active_fetches_until_their_bytes_commit() {
+        let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
+        coord.variants[0].rebuild(&ctx, 0);
+        let mut commands = coord.dispatch_active(&ctx, 6);
+        assert_eq!(commands.len(), 6);
+
+        let anchor = coord
+            .seek_time_anchor(Duration::from_secs(4))
+            .expect("same-variant seek")
+            .expect("seek anchor");
+        assert_eq!(anchor.segment_index, Some(2));
+
+        assert!(commands.iter().all(|command| {
+            !command
+                .cancel()
+                .expect("session fetch has cancellation")
+                .is_cancelled()
+        }));
+        assert!(!matches!(
+            coord
+                .active_session()
+                .wait_range(0..1, Some(Duration::ZERO), None),
+            Ok(WaitOutcome::Interrupted)
+        ));
+        let command = commands
+            .iter_mut()
+            .find(|command| v0_seg_idx(command) == 2)
+            .expect("the original target fetch");
+        let mut writer = command.take_writer().expect("original body writer");
+        writer(&[7; 100]).expect("post-seek body delivery");
+        command.take_on_complete().expect("original completion")(100, None, None);
+        let mut bytes = [0; 8];
+        assert!(matches!(
+            coord
+                .read_at(anchor.byte_offset, &mut bytes)
+                .expect("cached target"),
+            ReadOutcome::Bytes(_)
+        ));
+        assert_eq!(bytes, [7; 8]);
+        coord.active_session().abort();
+        assert!(commands.iter().all(|command| {
+            command
+                .cancel()
+                .expect("session fetch has cancellation")
+                .is_cancelled()
+        }));
     }
 
     /// Installing the incoming slot retires the outgoing session's look-ahead.
@@ -1954,12 +2262,14 @@ pub(super) mod tests {
     #[kithara::test]
     fn seek_epoch_handle_reads_the_live_epoch() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
-        let handle = coord.seek_epoch_handle();
+        let handle = coord.activity();
+        let mut writer = coord.take_activity_writer().expect("sole activity writer");
 
-        let epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.prepare_for_seek();
 
-        assert_ne!(epoch, 0, "a begun seek mints a non-zero epoch");
-        assert_eq!(handle.load(Ordering::Acquire), epoch);
+        writer.set_playing(true);
+        assert!(handle.is_playing(), "the chain publishes playback activity");
+        assert!(coord.activity().is_playing());
     }
 
     #[kithara::test]
@@ -2004,11 +2314,11 @@ pub(super) mod tests {
     #[kithara::test]
     fn sync_abr_lock_locks_abr_while_a_seek_is_pending() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
-        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.prepare_for_seek();
 
-        coord.sync_abr_lock();
+        coord.prepare_for_seek();
 
-        assert!(coord.abr.is_locked());
+        assert!(!coord.abr.is_locked());
     }
 
     /// The seek lock is taken through the coord, so it is released through
@@ -2017,11 +2327,10 @@ pub(super) mod tests {
     #[kithara::test]
     fn sync_abr_lock_unlocks_abr_once_no_seek_is_pending() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
-        let epoch = coord.seek_control().begin(Duration::from_secs(1));
-        coord.sync_abr_lock();
-        coord.seek_control().clear_pending(epoch);
+        coord.prepare_for_seek();
+        coord.prepare_for_seek();
 
-        coord.sync_abr_lock();
+        coord.prepare_for_seek();
 
         assert!(!coord.abr.is_locked());
     }
@@ -2029,17 +2338,14 @@ pub(super) mod tests {
     #[kithara::test]
     fn sync_abr_lock_waits_for_first_post_seek_output() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
-        let epoch = coord.seek_control().begin(Duration::from_secs(1));
-        coord.seek_control().mark_pending(epoch);
-        coord.sync_abr_lock();
+        coord.prepare_for_seek();
+        coord.prepare_for_seek();
 
-        coord.seek_control().clear_pending(epoch);
-        coord.seek_control().complete(epoch);
-        coord.sync_abr_lock();
-        assert!(coord.abr.is_locked());
+        coord.prepare_for_seek();
+        assert!(!coord.abr.is_locked());
 
-        assert!(coord.seek_observe().clear_pending_epoch(epoch));
-        coord.sync_abr_lock();
+        assert!(coord.take_activity_writer().is_some());
+        coord.prepare_for_seek();
         assert!(!coord.abr.is_locked());
     }
 
@@ -2052,7 +2358,7 @@ pub(super) mod tests {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         coord.abr.lock();
 
-        coord.sync_abr_lock();
+        coord.prepare_for_seek();
 
         assert!(coord.abr.is_locked());
     }
@@ -2061,7 +2367,7 @@ pub(super) mod tests {
     fn sync_abr_lock_leaves_a_quiet_coord_unlocked() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
 
-        coord.sync_abr_lock();
+        coord.prepare_for_seek();
 
         assert!(!coord.abr.is_locked());
     }
@@ -2069,10 +2375,10 @@ pub(super) mod tests {
     #[kithara::test]
     fn sync_abr_lock_keeps_a_pending_seek_locked() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
-        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.prepare_for_seek();
         coord.abr.lock();
 
-        coord.sync_abr_lock();
+        coord.prepare_for_seek();
 
         assert!(coord.abr.is_locked());
     }

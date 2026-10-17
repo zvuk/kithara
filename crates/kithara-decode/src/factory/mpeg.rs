@@ -45,7 +45,13 @@ where
     } else {
         None
     };
-    let adapter = ReadSeekAdapter::new(source, config.byte_len_handle.take(), true);
+    let control = config
+        .reader_control
+        .clone()
+        .unwrap_or_else(|| kithara_stream::ReaderControl::new(None));
+    control.require_blocking();
+    let adapter = ReadSeekAdapter::new(source, config.byte_len_handle.take(), true)
+        .with_control(control.clone());
     let adapter = match range {
         Some(range) => adapter.with_range(range)?,
         None => adapter,
@@ -64,6 +70,8 @@ where
         Box::new(reader),
         Some(byte_pos_handle),
         config.byte_map.take(),
+        None,
+        control,
     )?;
     demuxer.set_gapless(gapless);
     let codec = open_codec(&mut demuxer)?;

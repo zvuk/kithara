@@ -1,4 +1,5 @@
 use kithara_platform::sync::Arc;
+use kithara_sync::SessionAnchor;
 
 use super::{
     BeatEstimate, BeatGridId, BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridStamp,
@@ -9,7 +10,7 @@ use super::{
 };
 use crate::{
     AssetFrame, Beat, BeatsPerMinute, MapAxis, MapPoint, MapPosition, Meter, MeterFacts,
-    SegmentSet, SessionAnchor, SessionEpoch,
+    SegmentSet, SessionEpoch,
 };
 
 /// One immutable, revisioned beat-grid observation.

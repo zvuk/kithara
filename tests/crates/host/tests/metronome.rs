@@ -604,7 +604,7 @@ async fn the_metronome_clicks_on_host_beats_while_every_deck_is_paused(
 ) {
     let harness = playing_harness(constant_half).await;
     harness
-        .with_player(kithara::play::player::PlayerControl::pause)
+        .with_queue(kithara::queue::QueueControl::pause)
         .await;
     render_blocks(&harness, consts::SETTLE_BLOCKS).await;
 
@@ -671,12 +671,15 @@ struct Ride {
 
 /// Rides the Host tempo from [`consts::RIDE_FROM_BPM`] to
 /// [`consts::RIDE_TO_BPM`] with the metronome on over a deck playing `tone`.
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn ride_over(tone: Vec<f32>) -> Ride {
     let frames = u64::try_from(tone.len()).expect("tone length");
     let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
     let harness = play_resource(
         OfflinePlayer::with_sample_rate(
-            OfflinePlayerOptions::builder().build(),
+            OfflinePlayerOptions::builder()
+                .block_on_underrun(true)
+                .build(),
             consts::SAMPLE_RATE,
         )
         .await,
@@ -708,6 +711,7 @@ async fn ride_over(tone: Vec<f32>) -> Ride {
     // placed by the grid of the step it belongs to.
     let mut beats = Vec::new();
     for step in ride() {
+        hang_tick!();
         let from = host.position();
         let tempo = Tempo::new(f64::from(step)).expect("ride tempo");
         if host.with(|host| host.tempo()).await != tempo {
@@ -717,19 +721,27 @@ async fn ride_over(tone: Vec<f32>) -> Ride {
                 .expect("Host tempo");
             let mut waited = 0;
             while host.session_grid().await.revision() == revision {
+                hang_tick!();
                 assert!(
                     waited < consts::GRID_WAIT_BLOCKS,
                     "the Host publishes the {step} BPM grid"
                 );
                 render_blocks(&harness, 1).await;
                 waited += 1;
+                hang_reset!();
             }
         }
         let (beat, downbeat) = beat_from(&host.session_grid().await, from);
         while host.position() <= beat + consts::SILENT_FOOT {
+            hang_tick!();
+            let before = host.position();
             render_blocks(&harness, 1).await;
+            if host.position() > before {
+                hang_reset!();
+            }
         }
         beats.push((beat, downbeat));
+        hang_reset!();
     }
     render_blocks(&harness, consts::CLICK_TAIL_BLOCKS).await;
     harness.close().await;
@@ -921,7 +933,9 @@ async fn deck_under_clicks(level: f32) -> (Vec<f32>, Vec<f32>) {
     let deck = vec![level; usize::try_from(frames).expect("deck length")];
     let harness = play_resource(
         OfflinePlayer::with_sample_rate(
-            OfflinePlayerOptions::builder().build(),
+            OfflinePlayerOptions::builder()
+                .block_on_underrun(true)
+                .build(),
             consts::SAMPLE_RATE,
         )
         .await,

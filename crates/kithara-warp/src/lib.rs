@@ -2,7 +2,6 @@
 
 //! Beat-grid geometry, projection, and warp rendering.
 
-mod anchor;
 mod beat_grid;
 mod coordinate;
 #[cfg(feature = "render")]
@@ -15,7 +14,6 @@ pub(crate) use kithara_test_utils::bufpool as test_pools;
 pub mod mock;
 mod warp;
 
-pub use anchor::{CoordinateError, SessionAnchor, SessionBeat};
 pub use beat_grid::{
     BeatEstimate, BeatGrid, BeatGridId, BeatGridIdAllocationError, BeatGridModelError,
     BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridSnapshot, BeatGridSnapshotError,
@@ -28,7 +26,7 @@ pub use coordinate::{
 };
 pub(crate) use kithara_signal::{SessionEpoch, SessionFrame};
 #[cfg(feature = "render")]
-pub use render::{WarpRenderError, WarpRenderer};
+pub use render::{SourceTrajectory, WarpRenderError, WarpRenderer};
 pub use segment::{
     BeatEvidence, BeatMarker, BeatsPerMinute, BeatsPerMinuteError, MapRegion, MapRegionError,
     MapSegment, Meter, MeterError, MeterFacts, SegmentEndpoint, SegmentError, SegmentFacts,
@@ -36,11 +34,9 @@ pub use segment::{
 };
 pub use temporal::{
     ActiveRegion, GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext,
-    RenderPublisher, RenderReader, RenderSnapshot, SpeedCurve, StretchKind, WarpCapabilities,
+    RenderPublisher, RenderReader, RenderSnapshot, StretchKind, WarpCapabilities,
 };
 pub use warp::{
     Warp, WarpConfig, WarpConfigPatch, WarpConfigPatchError, WarpCursor, WarpMap, WarpMapRevision,
-    WarpPlan, WarpPlanError, WarpPlanSlot, supports_playback_rate,
 };
 mod consts;
-pub use consts::MIN_SPEED;

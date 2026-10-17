@@ -10,6 +10,7 @@ pub(crate) struct Mp4MediaTiming {
 pub(crate) struct Mp4EditListEntry {
     pub(crate) media_time: i64,
     pub(crate) segment_duration: u64,
+    pub(crate) media_rate: i32,
 }
 
 /// Typed iTunes "iTunSMPB" payload. The four hex fields are: encoder version
@@ -28,6 +29,7 @@ pub(crate) enum Mp4Event<'a> {
     ItunSmpb(ItunSmpb),
     MovieTimescale(u32),
     TrackBegin,
+    TrackId(u32),
     TrackCodec([u8; 4]),
     TrackEditList(&'a [Mp4EditListEntry]),
     TrackEnd,

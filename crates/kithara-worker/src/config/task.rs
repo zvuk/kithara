@@ -1,11 +1,11 @@
 use std::num::NonZeroUsize;
 
 use kithara_config::Config;
-use kithara_platform::{CancelGroup, atomic::RelaxedAtomicU32, sync::Arc};
+use kithara_platform::CancelGroup;
 
 use crate::Priority;
 
-/// Admission, cancellation, priority, and compute budget for one task.
+/// Admission, cancellation, initial priority, and compute budget for one task.
 #[non_exhaustive]
 #[derive(Clone, Config, fieldwork::Fieldwork)]
 #[config(builder(existing))]
@@ -17,8 +17,8 @@ pub struct TaskConfig {
     #[config(skip = "composed into the task cancel group")]
     #[field(with, option_set_some)]
     pub(crate) cancel: Option<CancelGroup>,
-    #[config(value(Priority, self.priority()))]
-    priority: Arc<RelaxedAtomicU32>,
+    #[config(value)]
+    priority: Priority,
 }
 
 impl TaskConfig {
@@ -28,18 +28,12 @@ impl TaskConfig {
         Self::default()
     }
 
-    pub(crate) fn priority(&self) -> Priority {
-        Priority::new(self.priority.load())
-    }
-
-    pub(crate) fn set_priority(&self, priority: Priority) {
-        self.priority.store(priority.get());
-    }
-
-    #[must_use]
-    pub fn with_priority(mut self, priority: Priority) -> Self {
-        self.priority = Arc::new(RelaxedAtomicU32::new(priority.get()));
-        self
+    delegate::delegate! {
+        to self {
+            #[expr({ self.priority = priority; self })]
+            #[must_use]
+            pub fn with_priority(mut self, priority: Priority) -> Self;
+        }
     }
 }
 
@@ -48,7 +42,7 @@ impl Default for TaskConfig {
         Self {
             cancel: None,
             max_compute_tasks: NonZeroUsize::MIN,
-            priority: Arc::new(RelaxedAtomicU32::new(0)),
+            priority: Priority::default(),
         }
     }
 }

@@ -226,6 +226,7 @@ mod tests {
 
     #[kithara::test]
     fn shared_store_outlives_each_player() {
+        crate::mock::offline();
         let store = Arc::new(FfiAssetStore::for_test());
         let cancel = store.cancel_token();
         let config = |store| FfiPlayerConfig {
@@ -294,6 +295,7 @@ mod tests {
 
     #[kithara::test]
     fn runtime_key_rules_append_in_registration_order() {
+        crate::mock::offline();
         let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
         inner.setup_hls_aes_with_rule(tagged_rule(1, "first-salt", &["keys.example.com"]));
         inner.setup_hls_aes_with_rule(tagged_rule(2, "second-salt", &["*"]));
@@ -329,6 +331,7 @@ mod tests {
 
     #[kithara::test]
     fn setup_network_writes_auth_token_into_player_headers() {
+        crate::mock::offline();
         let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
         inner.setup_network("token-123".to_string());
         let token = inner
@@ -341,6 +344,7 @@ mod tests {
 
     #[kithara::test]
     fn setup_network_clears_auth_token_when_empty() {
+        crate::mock::offline();
         let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
         inner.setup_network("token-123".to_string());
         inner.setup_network(String::new());
@@ -354,6 +358,7 @@ mod tests {
 
     #[kithara::test]
     fn setup_hls_aes_registers_wildcard_rule_with_prod_salt() {
+        crate::mock::offline();
         let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
         inner.setup_hls_aes(Arc::new(Unimock::new(())));
 

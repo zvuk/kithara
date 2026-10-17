@@ -7,7 +7,4 @@ mod order;
 pub use order::{Acquire, ReadOrder, Relaxed, Release, SeqCst, WriteOrder};
 
 mod value;
-pub use value::{
-    AtomicPrimitive, AtomicValue, RelaxedAtomicBool, RelaxedAtomicF32, RelaxedAtomicF64,
-    RelaxedAtomicU32,
-};
+pub use value::{AtomicPrimitive, AtomicValue, RelaxedAtomicF32};

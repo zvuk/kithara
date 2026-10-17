@@ -88,6 +88,8 @@ where
 /// met. The bus event is the primary sink-truth signal; `position_seconds()` is
 /// re-checked on the same virtual poll cadence so a dropped / delayed broadcast
 /// receiver cannot turn already-reached playback state into a timeout.
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 pub async fn wait_for_position_event<S>(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
@@ -103,18 +105,27 @@ where
         return Ok(pos);
     }
     let min_ms = (min_secs * 1000.0) as u64;
+    let mut high_water = 0;
     timeout(deadline, async {
         loop {
+            hang_tick!(format!(
+                "waiting for rendered position {min_secs}; current={:?}",
+                queue.position_seconds()
+            ));
             if let Some(pos) = queue.position_seconds()
                 && pos >= min_secs
             {
                 return Ok(pos);
             }
-            match timeout(POLL_TICK, rx.recv())
+            match timeout(POLL_TICK.min(__hang_detector.remaining()), rx.recv())
                 .await
                 .map(|r| r.map(|env| env.event))
             {
                 Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
+                    if position_ms > high_water {
+                        high_water = position_ms;
+                        hang_reset!();
+                    }
                     if position_ms >= min_ms {
                         return Ok(position_ms as f64 / 1000.0);
                     }
@@ -170,6 +181,8 @@ where
 /// hiding an already-near position; it is the cache being unable to say
 /// whether the seek has landed, so there is nothing here for a cache read to
 /// fall back to.
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 pub async fn wait_for_position_near_event<S>(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
@@ -180,20 +193,31 @@ pub async fn wait_for_position_near_event<S>(
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    let mut closest = f64::INFINITY;
     timeout(deadline, async {
         loop {
-            match timeout(POLL_TICK, rx.recv())
+            hang_tick!(format!(
+                "waiting for rendered seek {target} +/- {tolerance}; current={:?}",
+                queue.position_seconds()
+            ));
+            match timeout(POLL_TICK.min(__hang_detector.remaining()), rx.recv())
                 .await
                 .map(|r| r.map(|env| env.event))
             {
                 Ok(Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))) => {
                     let pos = position_ms as f64 / 1000.0;
-                    if (pos - target).abs() < tolerance {
+                    let distance = (pos - target).abs();
+                    if distance < closest {
+                        closest = distance;
+                        hang_reset!();
+                    }
+                    if distance < tolerance {
                         return Ok(pos);
                     }
                 }
                 Ok(Ok(TestEvent::Audio(AudioEvent::SeekComplete { position, .. }))) => {
                     let pos = position.as_secs_f64();
+                    hang_reset!();
                     if (pos - target).abs() < tolerance {
                         return Ok(pos);
                     }
@@ -220,6 +244,8 @@ where
 /// bound. `Lagged` is tolerated (mirrors other multi-subscriber tests); `Closed`
 /// is an error. This is the generic primitive behind the typed
 /// [`wait_for_position_event`] / [`wait_for_loader_done_event`].
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 pub async fn wait_for_event(
     rx: &mut EventReceiver<TestEvent>,
     what: &str,
@@ -228,8 +254,16 @@ pub async fn wait_for_event(
 ) -> Result<(), String> {
     timeout(deadline, async {
         loop {
-            match rx.recv().await {
-                Ok(ev) if pred(&ev.event) => return Ok(()),
+            hang_tick!(format!("waiting for {what}"));
+            let Ok(received) = timeout(__hang_detector.remaining(), rx.recv()).await else {
+                hang_tick!(format!("waiting for {what}"));
+                continue;
+            };
+            match received {
+                Ok(ev) if pred(&ev.event) => {
+                    hang_reset!();
+                    return Ok(());
+                }
                 Ok(_) | Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return Err(format!("event bus closed before {what}")),
             }
@@ -296,7 +330,7 @@ where
 ///
 /// Panics when the track's status does not change within the watchdog budget.
 #[kithara::flash(io)]
-#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 pub async fn wait_for_loader_done_event<S>(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
@@ -319,6 +353,7 @@ where
     };
     timeout(deadline, async {
         loop {
+            hang_tick!(stalled(queue));
             let Ok(received) = timeout(__hang_detector.remaining(), rx.recv()).await else {
                 hang_tick!(stalled(queue));
                 continue;
@@ -367,15 +402,20 @@ where
 /// catches the growth. The watchdog PANICS on genuine non-quiescence rather than
 /// returning a mid-teardown reading that an assertion could pass against.
 #[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 pub async fn wait_thread_count_quiesced(deadline: Duration) -> usize {
     let watchdog = Instant::now() + deadline;
     let mut last = active_named_thread_count();
     let mut stable = 0usize;
     loop {
+        hang_tick!(format!(
+            "waiting for named threads to quiesce: last={last}, stable={stable}"
+        ));
         sleep(POLL_TICK).await;
         let now = active_named_thread_count();
         if now == last {
             stable += 1;
+            hang_reset!();
             if stable >= QUIESCE_TICKS {
                 return now;
             }
@@ -401,6 +441,8 @@ pub async fn wait_thread_count_quiesced(deadline: Duration) -> usize {
 /// `until_position = pre_pos + target_advance` for warmup and
 /// `until_position = seek_target + min_advance` for post-seek to discriminate a
 /// seek jump from render-driven progress.
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 pub async fn render_until_position(
     player: &mut OfflinePlayer,
     max_blocks: u32,
@@ -420,8 +462,12 @@ pub async fn render_until_position(
     let mut last_position = player.position();
     let mut stall_ticks: u64 = 0;
     loop {
+        hang_tick!(format!(
+            "rendered {rendered}/{max_blocks} blocks; position={last_position}, target={until_position}"
+        ));
         let this = max_blocks.saturating_sub(rendered).clamp(1, BATCH);
         for _ in 0..this {
+            hang_tick!(format!("rendering a block toward {until_position}"));
             drop(player.render(block_frames).await);
         }
         rendered = rendered.saturating_add(this);
@@ -430,6 +476,7 @@ pub async fn render_until_position(
             return;
         }
         if position > last_position {
+            hang_reset!();
             last_position = position;
             stall_ticks = 0;
         } else {

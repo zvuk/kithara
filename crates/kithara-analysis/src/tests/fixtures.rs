@@ -126,6 +126,16 @@ pub(super) fn spec() -> AudioSpec {
     }
 }
 
+pub(super) fn info(frame_offset: u64) -> AudioChunkInfo {
+    AudioChunkInfo {
+        spec: spec(),
+        frame_offset,
+        media_origin: Some(Duration::ZERO),
+        visible_origin: Some(Duration::ZERO),
+        ..Default::default()
+    }
+}
+
 pub(super) fn sine(pcm: &[f32], frames: usize) -> &[f32] {
     sine_from(pcm, 0, frames)
 }
@@ -139,10 +149,8 @@ pub(super) fn chunk(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioC
     let frames = samples.len() / usize::from(consts::CH);
     AudioChunk::new(
         AudioChunkInfo {
-            spec: spec(),
             frames: u32::try_from(frames).unwrap_or(0),
-            frame_offset,
-            ..Default::default()
+            ..info(frame_offset)
         },
         sample_buffer(pools, samples),
     )
@@ -152,6 +160,8 @@ pub(super) struct FakeReader {
     bus: EventBus,
     metadata: TrackMetadata,
     outcomes: VecDeque<Result<ChunkOutcome, DecodeError>>,
+    #[cfg(feature = "analysis-waveform")]
+    wake: Option<kithara_worker::Wake>,
 }
 
 impl FakeReader {
@@ -160,6 +170,8 @@ impl FakeReader {
             outcomes,
             bus: EventBus::default(),
             metadata: TrackMetadata::default(),
+            #[cfg(feature = "analysis-waveform")]
+            wake: None,
         }
     }
 
@@ -172,11 +184,17 @@ impl FakeReader {
             .map(|part| {
                 let at = frame_offset;
                 frame_offset += u64::try_from(part.len() / usize::from(consts::CH)).unwrap_or(0);
-                Ok(ChunkOutcome::Chunk(chunk(pools, part, at)))
+                Ok(ChunkOutcome::Chunk(Box::new(chunk(pools, part, at))))
             })
             .collect();
         outcomes.push_back(Ok(eof()));
         Self::new(outcomes)
+    }
+
+    #[cfg(feature = "analysis-waveform")]
+    pub(super) fn pending_with_wake(mut self, wake: kithara_worker::Wake) -> Self {
+        self.wake = Some(wake);
+        self
     }
 
     #[cfg(feature = "analysis-waveform")]
@@ -245,6 +263,11 @@ impl AudioSession for FakeReader {
 
 impl AudioRead for FakeReader {
     fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
+        #[cfg(feature = "analysis-waveform")]
+        if let Some(wake) = self.wake.take() {
+            wake.wake();
+            return Ok(pending());
+        }
         self.outcomes
             .pop_front()
             .unwrap_or_else(|| Ok(eof()))
@@ -272,7 +295,7 @@ impl AudioRead for FakeReader {
 }
 
 impl AudioControl for FakeReader {
-    fn seek(&mut self, _position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, _position: Duration) -> Result<SeekOutcome, AudioReadError> {
         unreachable!("analysis never seeks")
     }
 }

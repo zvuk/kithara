@@ -1,6 +1,171 @@
+use kithara::{audio::DecoderBackend as EventDecoderBackend, decode::DecoderBackend};
+
 use super::{cases::*, harness::*, imports::*, providers::*};
 
+#[kithara::test(native, tokio, multi_thread, serial)]
+#[case::synthetic(synthetic_sources().await, CUE)]
+#[case::mp3_same(source_mp3_same().await, CUE)]
+#[case::mp3_distinct(source_mp3_distinct().await, CUE)]
+#[case::hls_plain(source_hls_same_plain().await, CUE)]
+#[case::hls_drm(source_hls_same_drm().await, CUE)]
+#[case::hls_mp3(source_hls_mp3_plain().await, CUE)]
+#[case::hls_mp3_drm(source_hls_mp3_drm().await, CUE)]
+#[case::ambient_trip_hop(source_ambient_trip_hop_provider().await, CUE)]
+#[case::downtempo_house(source_downtempo_house_provider().await, CUE)]
+#[case::techno_breakbeat(source_techno_breakbeat_provider().await, CUE)]
+#[case::cross_style(source_cross_style_provider().await, CUE)]
+#[case::tunnel(tunnel_sources().await, TUNNEL_CUE)]
+#[case::newtechno(newtechno_sources().await, NEWTECHNO_PHRASE)]
+#[case::library(prepared_sources(Provider::Library(crate::providers::LIBRARY)).await, CUE)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+async fn provider_tempo_controls_measure_without_sync(
+    #[case] prepared: PreparedSources,
+    #[case] start: Start,
+) {
+    let mut failures = Vec::new();
+    for (deck, source) in prepared.2.iter().enumerate() {
+        if prepared.2[..deck].contains(source) {
+            continue;
+        }
+        let ArtifactSource::Value(mut grid) = prepared.0.beat_grid(deck) else {
+            panic!("control has a known fixture grid");
+        };
+        let native_bpm = grid.as_raw().bpm;
+        #[cfg(not(target_os = "android"))]
+        let mut reference = match prepared.0.control_reference(deck) {
+            Some(asset) => Some(
+                kithara_integration_tests::pcm_oracle::decode_native(asset.bytes())
+                    .await
+                    .expect("independent native control reference"),
+            ),
+            None => None,
+        };
+        #[cfg(target_os = "android")]
+        let mut reference: Option<kithara_integration_tests::pcm_oracle::Audio> = None;
+        let wrong_asset = prepared.0.wrong_control_reference(deck);
+        #[cfg(not(target_os = "android"))]
+        let mut wrong_source =
+            kithara_integration_tests::pcm_oracle::decode_native(wrong_asset.bytes())
+                .await
+                .expect("independent wrong-source control reference");
+        #[cfg(target_os = "android")]
+        let mut wrong_source = kithara_integration_tests::pcm_oracle::Audio {
+            samples: kithara_integration_tests::pcm_oracle::decode(wrong_asset.bytes())
+                .await
+                .expect("independent 48 kHz stereo wrong-source fixture"),
+            channels: CHANNELS,
+            sample_rate: 48_000,
+        };
+        for target in [native_bpm, 108.0, 120.0, 127.0, 132.0] {
+            hang_tick!(format!(
+                "{:?}: deck {deck}, native {native_bpm}, target {target}",
+                prepared.0
+            ));
+            let (trace, captured) = super::control::capture(
+                source.clone(),
+                48_000,
+                native_bpm,
+                target,
+                prepared.0.start_seconds(deck, start),
+            )
+            .await;
+            let label = format!(
+                "{:?} deck {deck} native {native_bpm} target {target}",
+                prepared.0
+            );
+            let analysis_label = label.clone();
+            let analysis_source = source.clone();
+            let requested_start_seconds = prepared.0.start_seconds(deck, start);
+            let has_score_markers = prepared.0.has_score_markers();
+            let (captured, returned_reference, returned_wrong_source, returned_grid, measured) =
+                kithara::platform::tokio::task::spawn_blocking(move || {
+                    let label = analysis_label;
+                    let source = analysis_source;
+                    let pcm = captured.pcm.as_slice();
+                    let measured = reference.as_ref().map_or_else(
+                        || captured.observed_content_failures(&wrong_source, &grid),
+                        |reference| captured.source_content_failures(reference, &wrong_source, &grid),
+                    );
+                    if !measured.is_empty() {
+                        let diagnostic = serde_json::json!({
+                            "label": label,
+                            "source": source,
+                            "requested_start_seconds": requested_start_seconds,
+                            "failures": measured,
+                            "flight_events": kithara_test_utils::flight::tail(),
+                            "flight_probes": kithara_test_utils::flight::probes_tail(),
+                        });
+                        eprintln!("ORACLE_CONTROL_FAILURE {diagnostic}");
+                    }
+                    let supplemental = if has_score_markers {
+                        marked_synchronization_failures(&label, &[pcm], CHANNELS, 48_000, target)
+                    } else {
+                        synchronization_failures(&label, &[pcm], CHANNELS, 48_000, target)
+                    };
+                    eprintln!("ORACLE_SUPPLEMENTAL_PEAKS {label}: {supplemental:?}");
+                    let (markers, downbeats) =
+                        kithara_integration_tests::cochlea::marked_rhythm_markers(pcm, CHANNELS, 48_000);
+                    eprintln!(
+                        "ORACLE_PCM source={source} start={} markers={markers:?} downbeats={downbeats:?}",
+                        requested_start_seconds
+                    );
+                    (captured, reference, wrong_source, grid, measured)
+                })
+                .await
+                .expect("provider control reference analysis must join");
+            reference = returned_reference;
+            wrong_source = returned_wrong_source;
+            grid = returned_grid;
+            let pcm = captured.pcm.as_slice();
+            let artifact = format!(
+                "{}-{deck}-{target}",
+                kithara_integration_tests::audio_artifact::artifact_label()
+            )
+            .replace('.', "-");
+            if let Some(mut tap) =
+                kithara_integration_tests::audio_artifact::AudioArtifactTap::from_env(
+                    &artifact, 48_000, CHANNELS,
+                )
+                .expect("control artifact")
+            {
+                tap.push(pcm);
+                tap.evidence("control", captured.evidence());
+                tap.evidence("grid", serde_json::json!(grid.as_raw()));
+                tap.evidence(
+                    "source",
+                    serde_json::json!({
+                        "path": source,
+                        "start": prepared.0.start_seconds(deck, start),
+                        "native_bpm": native_bpm,
+                        "target_bpm": target,
+                    }),
+                );
+            }
+            drop(captured);
+            drop(trace);
+            eprintln!("ORACLE_CONTROL {label}: {measured:?}");
+            failures.extend(measured);
+            hang_reset!();
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "provider tempo controls failed: {failures:?}"
+    );
+}
+
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
+    run_with_decoder(case, prepared, start, None).await;
+}
+
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+async fn run_with_decoder(
+    case: SyncCase,
+    prepared: PreparedSources,
+    start: Start,
+    decoder: Option<(DecoderBackend, EventDecoderBackend)>,
+) {
     let provider = prepared.0;
     let expected_frames: usize = (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm() * 6.0)
         .round()
@@ -9,8 +174,34 @@ async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
     let mut tracks = Vec::with_capacity(case.decks);
     let mut request_failures = Vec::new();
     for audible_deck in 0..case.decks {
-        let mut harness =
-            ProductHarness::new(case, &prepared, start, Audible::Deck(audible_deck)).await;
+        let wrong_source = kithara_integration_tests::pcm_oracle::decode(
+            provider.wrong_control_reference(audible_deck).bytes(),
+        )
+        .await
+        .expect("independent wrong-source payload");
+        let wrong_source = kithara_integration_tests::pcm_oracle::Audio {
+            samples: wrong_source,
+            channels: CHANNELS,
+            sample_rate: 48_000,
+        };
+        hang_tick!(format!(
+            "{} {provider:?}: capturing deck {audible_deck}",
+            case.id
+        ));
+        let mut harness = if let Some((backend, expected)) = decoder {
+            let harness = ProductHarness::new_with_decoder(
+                case,
+                &prepared,
+                start,
+                Audible::Deck(audible_deck),
+                backend,
+            )
+            .await;
+            harness.assert_decoder_backend(expected);
+            harness
+        } else {
+            ProductHarness::new(case, &prepared, start, Audible::Deck(audible_deck)).await
+        };
         harness.run_operations(case).await;
         harness.ride_tempo(case).await;
         let pcm = harness.capture(case).await;
@@ -20,12 +211,21 @@ async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
             "{} {provider:?}: deck {audible_deck} capture must contain six complete beats",
             case.id,
         );
+        request_failures.extend(
+            harness
+                .physical_failures(case, audible_deck, &pcm, &wrong_source, None)
+                .await,
+        );
+        request_failures.extend(harness.grid_binding_failures(case).await);
+        request_failures.extend(harness.grid_anchor_failures(case, None).await);
         tracks.push(pcm);
-        request_failures.extend(harness.failures);
+        request_failures.append(&mut harness.failures);
+        drop(harness);
+        hang_reset!();
     }
     let track_slices = tracks.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let label = format!("{} {provider:?}", case.id);
-    let mut failures = if provider.has_score_markers() {
+    let supplemental = if provider.has_score_markers() {
         marked_synchronization_failures(
             &label,
             &track_slices,
@@ -42,23 +242,17 @@ async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
             case.ride.final_bpm(),
         )
     };
-    failures.extend(request_failures);
+    eprintln!("ORACLE_SUPPLEMENTAL_PEAKS {label}: {supplemental:?}");
+    let failures = request_failures;
     assert!(
         failures.is_empty(),
-        "ignored-red product synchronization assertion failed for {} {provider:?}:\n{}",
+        "product synchronization assertion failed for {} {provider:?}:\n{}",
         case.id,
         failures.join("\n"),
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(60))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
 #[case::mp3(source_mp3_same().await)]
 #[case::drm(source_hls_same_drm().await)]
 async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: PreparedSources) {
@@ -81,15 +275,7 @@ async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: Prepar
     drop(harness);
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(600))
-)]
-#[ignore = "ignored-red: product Warp alignment is not implemented"]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(600)))]
 #[case::play_sync_seek(PLAY_SYNC_SEEK, source_synthetic().await)]
 #[case::play_seek_sync(PLAY_SEEK_SYNC, source_synthetic().await)]
 #[case::seek_play_sync(SEEK_PLAY_SYNC, source_synthetic().await)]
@@ -112,15 +298,7 @@ async fn wav_product_rows_reach_the_pcm_oracle(
     run(case, provider, CUE).await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(600))
-)]
-#[ignore = "ignored-red: product Warp alignment is not implemented"]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(600)))]
 #[case::hls_same_play_sync_seek(source_hls_same_plain().await, PLAY_SYNC_SEEK)]
 #[case::hls_same_play_seek_sync(source_hls_same_plain().await, PLAY_SEEK_SYNC)]
 #[case::hls_same_seek_play_sync(source_hls_same_plain().await, SEEK_PLAY_SYNC)]
@@ -194,15 +372,7 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     run(case, provider, CUE).await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    flash(false),
-    timeout(Duration::from_secs(600))
-)]
-#[ignore = "ignored-red: product Warp alignment is not implemented"]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(600)))]
 #[case::tunnel_play_sync_seek(tunnel_sources().await, TUNNEL_CUE, PLAY_SYNC_SEEK.gridded())]
 #[case::tunnel_play_seek_sync(tunnel_sources().await, TUNNEL_CUE, PLAY_SEEK_SYNC.gridded())]
 #[case::tunnel_seek_play_sync(tunnel_sources().await, TUNNEL_CUE, SEEK_PLAY_SYNC.gridded())]
@@ -237,12 +407,10 @@ async fn real_track_product_rows_reach_the_pcm_oracle(
 pub(crate) async fn synthetic_sources() -> PreparedSources {
     prepared_sources(Provider::Synthetic).await
 }
-
 #[kithara::fixture]
 pub(crate) async fn sweep_sources() -> PreparedSources {
     prepared_sources(Provider::Sweep).await
 }
-
 #[kithara::fixture]
 pub(crate) async fn mixed_sources() -> PreparedSources {
     prepared_sources(Provider::HlsMp3(HlsProtection::Plain)).await
@@ -311,4 +479,26 @@ pub(crate) async fn tunnel_sources() -> PreparedSources {
 #[kithara::fixture]
 pub(crate) async fn newtechno_sources() -> PreparedSources {
     prepared_sources(Provider::Library(NEWTECHNO)).await
+}
+
+#[cfg(not(target_os = "android"))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(Duration::from_secs(60)),
+    tracing("info")
+)]
+#[case::paused_sync_then_play(PAUSED_SYNC)]
+#[case::play_sync_seek(PLAY_SYNC_SEEK)]
+async fn mixed_mp3_and_hls_keep_the_pcm_contract_on_symphonia(#[case] case: SyncCase) {
+    let prepared = source_hls_mp3_plain().await;
+    run_with_decoder(
+        case,
+        prepared,
+        CUE,
+        Some((DecoderBackend::Symphonia, EventDecoderBackend::Symphonia)),
+    )
+    .await;
 }

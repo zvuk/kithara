@@ -1,352 +1,321 @@
-use core::ops::Deref;
-
 use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::HasPool;
-use kithara_events::{EventBus, EventReceiver, TrackId};
-use kithara_platform::{
-    CancelScope, CancelToken,
-    sync::{Arc, ExclusiveGate, ExclusiveGuard, Mutex, MutexGuard},
-    tokio::runtime::Handle as RuntimeHandle,
-};
+use kithara_command::mailbox;
+use kithara_events::{EventBus, TrackId};
+use kithara_platform::{CancelScope, CancelToken, tokio::runtime::Handle as RuntimeHandle};
 use kithara_play::{
-    PlayError, PlayerImpl,
-    player::{PlayerControl, PlayerControlSource},
+    PlayError, Player, PlayerEvent, PlayerFactory, TrackFactory, TrackStatus as PlayingStatus,
 };
+use kithara_signal::{FrameCount, SessionFrame};
 
 use super::{
-    engine_events::PlayerBusEvent,
-    types::{AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase},
+    command::{QueueMailbox, QueuePostbox},
+    slots::{Role, Slots},
+    types::{PendingHandover, SeekPosition, Target},
+    view::{DeckObservation, QueueView},
 };
-use crate::{
-    config::QueueConfig,
-    loader::Loader,
-    navigation::NavigationState,
-    track::{TrackRecord, Tracks},
-};
+use crate::{QueueConfig, QueueEvent, loader::Loader, navigation::NavigationState, track::Tracks};
 
-/// AVQueuePlayer-analogue orchestration facade.
-///
-/// Owns a [`PlayerImpl`] and a private async track loader, plus
-/// queue-level state (ordered tracks, navigation, pending-select).
-/// Publishes [`QueueEvent`](crate::event::QueueEvent) on the shared
-/// [`EventBus`] alongside player / audio / hls / file events so
-/// [`Queue::subscribe`] returns a single unified stream.
-#[doc(hidden)]
-pub struct QueueRuntime<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    pub(super) loader: Arc<Loader<S>>,
-    pub(super) navigation: Arc<Mutex<NavigationState>>,
-    pub(super) pending_select: Arc<Mutex<SelectPhase>>,
-    /// Serialises a selection-apply against a concurrent [`Queue::select`]. A track's
-    /// `spawn_apply_after_load` completion and a later `select` that supersedes it both
-    /// mutate the same selection state (pending, current, navigation cursor,
-    /// `TrackStatus::Cancelled`); without a single serialization point the completion
-    /// can observe-not-cancelled then `select_item` *after* the superseding select
-    /// committed, so the superseded track barges in. Held only across the synchronous
-    /// apply critical section - never across an `.await`. That section waits on the
-    /// player's session, so a contender parks on the gate instead of blocking a lock.
-    pub(super) select_apply: ExclusiveGate,
-    /// Sole owner of the `Vec<TrackRecord>` (status, source, and live
-    /// load attempt per track). Shared with [`Loader`] through
-    /// `Arc<Tracks>`; every status transition goes through
-    /// [`Tracks::set_status`](crate::track::Tracks::set_status) so polling
-    /// and the event stream stay in sync.
-    pub(super) tracks: Arc<Tracks<S>>,
-    /// Authoritative playback position updated on every `tick`. Filters
-    /// transient 0.0 blips the engine reports on pause/resume —
-    /// downstream UIs should read from this field rather than polling
-    /// the engine directly. Read/written lock-free as a typed
-    /// [`CachedPosition`] — [`CachedPosition::Unknown`] before the first
-    /// stable sample.
-    pub(super) cached_position: AtomicCachedPosition,
-    /// Track whose load completion starts playback: the first one appended
-    /// while nothing is selected, when [`QueueConfig::should_autoplay`] is on.
-    pub(super) autoplay_target: AtomicTrackId,
-    /// Tracks the id of the track whose crossfade-advance has already
-    /// been armed during `tick()`. Prevents triggering the next-track
-    /// select repeatedly as the remaining playtime keeps ticking below
-    /// the crossfade threshold. Cleared on
-    /// [`QueueEvent::CurrentTrackChanged`](crate::event::QueueEvent::CurrentTrackChanged).
-    ///
-    /// Read/written lock-free as a typed [`CrossfadeArm`] from the tick
-    /// loop and the engine event handler.
-    pub(super) crossfade_armed_for: AtomicTrackId,
-    /// Master cancel token for queue-owned loader work.
-    pub(super) shutdown: CancelToken,
-    pub(super) bus: EventBus,
-    pub(super) config: Arc<QueueConfig<S>>,
-    /// Serializes every state-changing command against terminal close. A command
-    /// waits on the player's session while admitted, so a contender parks on the
-    /// gate instead of blocking a lock.
-    pub(super) admission: ExclusiveGate,
-    /// Subscription to the shared bus; drained in `tick()` to convert
-    /// engine events into queue-level side-effects (auto-advance / current
-    /// track change forwarding).
-    pub(super) player_rx: Mutex<EventReceiver<PlayerBusEvent>>,
-}
-
-/// Cloneable queue command capability without beat-grid identity or topology.
-#[derive_where::derive_where(Clone; S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static)]
+/// Cloneable command capability and the queue's published state.
+/// Commands answer after the owner accepts and sends them; executor effects
+/// enter the published state on their receipts.
+#[derive_where::derive_where(Clone)]
 pub struct QueueControl<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
-    pub(super) player: PlayerControl<S>,
-    runtime: Arc<QueueRuntime<S>>,
+    pub(super) postbox: QueuePostbox<S>,
+    pub(super) view: QueueView<S>,
+    pub(super) bus: EventBus,
 }
 
-/// AVQueuePlayer-analogue orchestration facade.
-///
-/// Owns the resident player and its canonical synchronization state. Runtime
-/// commands are exposed through a separate cloneable [`QueueControl`].
-pub struct Queue<S>
+/// A deck whose track list, navigation and active tracks have one owner.
+pub struct Queue<S, F = PlayerFactory>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
+    F: TrackFactory<S>,
 {
-    pub(super) player: PlayerImpl<S>,
-    pub(super) control: QueueControl<S>,
+    pub(super) config: QueueConfig<S, F>,
+    pub(super) tracks: Tracks<S>,
+    pub(super) navigation: NavigationState,
+    pub(super) current: Option<TrackId>,
+    pub(super) held_position: Option<SeekPosition>,
+    pub(super) target: Option<Target>,
+    pub(super) pending_handover: Option<PendingHandover>,
+    pub(super) active: Slots<F::Track>,
+    pub(super) postbox: QueuePostbox<S>,
+    pub(super) mailbox: QueueMailbox<S>,
+    pub(super) view: QueueView<S>,
+    pub(super) bus: EventBus,
+    pub(super) loader: Option<Loader<S>>,
+    pub(super) shutdown: CancelToken,
+    pub(super) events: Vec<QueueEvent>,
+    pub(super) clock: Option<(SessionFrame, FrameCount)>,
+    pub(super) deck: DeckObservation,
 }
 
-impl<S> Deref for QueueControl<S>
+impl<S, F> Queue<S, F>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
+    F: TrackFactory<S>,
 {
-    type Target = QueueRuntime<S>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.runtime
-    }
-}
-
-impl<S> Deref for Queue<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    type Target = QueueControl<S>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.control
-    }
-}
-
-impl<S> Queue<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    /// Build a queue from a [`QueueConfig`].
-    ///
-    /// The queue takes ownership of the supplied [`PlayerImpl`]; all access to
-    /// the decorated player then goes through this facade.
+    /// Builds the owner; its host checks registration before driving it.
     #[must_use]
-    pub fn new(mut config: QueueConfig<S>) -> Self {
-        let player = config
-            .player
-            .take()
-            .unwrap_or_else(|| unreachable!("QueueConfig builder requires a player"));
-        let runtime = config.runtime.take();
-        let store = config.store.take();
-        let config_cancel = config.cancel.take();
-        let max_concurrent_loads = config.max_concurrent_loads;
-        let max_history_size = config.max_history_size;
-        let prefetch_duration = config.prefetch_duration;
-        let playback_order = config.playback_order;
-        let crossfade_settings = config.crossfade_settings();
-        let cancel = CancelScope::new(config_cancel).token();
-        let store = store.unwrap_or_else(|| {
-            AssetStore::builder(player.pools().clone())
-                .backend(StorageBackend::default())
-                .cancel(cancel.child())
-                .build()
+    pub fn new(mut config: QueueConfig<S, F>) -> Self {
+        let shutdown = CancelScope::new(config.cancel.clone()).token();
+        if let Some(prep) = &mut config.prep {
+            prep.cancel = Some(shutdown.clone());
+        }
+        let bus = config
+            .prep
+            .as_ref()
+            .map_or_else(EventBus::default, |prep| prep.bus.clone());
+        let (postbox, mailbox) = mailbox();
+        let loader = config.prep.as_ref().map(|prep| {
+            let store = config.store.clone().unwrap_or_else(|| {
+                AssetStore::builder(prep.worker.pools().clone())
+                    .backend(StorageBackend::default())
+                    .cancel(shutdown.child())
+                    .build()
+            });
+            Loader::new(
+                prep.clone(),
+                store,
+                config
+                    .runtime
+                    .clone()
+                    .or_else(|| RuntimeHandle::try_current().ok()),
+                postbox.clone(),
+            )
         });
-        player.set_auto_advance_enabled(false);
-        player.set_prefetch_duration(prefetch_duration);
-        player.set_crossfade_duration(crossfade_settings.duration);
-        let bus = player.bus().clone();
-        let player_control = player.control();
-        let tracks = Arc::new(Tracks::new(bus.clone()));
-        let loader = Arc::new(Loader::new(
-            player_control.clone(),
-            runtime.or_else(|| RuntimeHandle::try_current().ok()),
-            store,
-            max_concurrent_loads,
-            Arc::clone(&tracks),
-            cancel.child(),
-        ));
-        let player_rx = player.subscribe();
-        let mut navigation = NavigationState::new(max_history_size);
-        navigation.set_playback_order(playback_order, &[]);
-        let navigation = Arc::new(Mutex::new(navigation));
-        config.navigation = Some(Arc::clone(&navigation));
-        let runtime = Arc::new(QueueRuntime {
-            loader,
-            tracks,
-            bus,
-            config: Arc::new(config),
-            admission: ExclusiveGate::default(),
-            shutdown: cancel,
-            navigation,
-            pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
-            select_apply: ExclusiveGate::default(),
-            player_rx: Mutex::new(player_rx),
-            crossfade_armed_for: AtomicTrackId::disarmed(),
-            autoplay_target: AtomicTrackId::disarmed(),
-            cached_position: AtomicCachedPosition::unknown(),
-        });
+        let mut navigation = NavigationState::new(config.max_history_size);
+        navigation.set_playback_order(config.playback_order, &[], None);
+        let tracks = Tracks::default();
+        let deck = DeckObservation::new(config.mixer);
+        let view = QueueView::new(
+            &tracks,
+            &navigation,
+            config.settings,
+            config.track,
+            config.action_at_item_end,
+            deck.clone(),
+        );
         Self {
-            player,
-            control: QueueControl {
-                runtime,
-                player: player_control,
-            },
+            active: Slots::new(config.mixer.slots().get()),
+            config,
+            tracks,
+            navigation,
+            current: None,
+            held_position: None,
+            target: None,
+            pending_handover: None,
+            postbox,
+            mailbox,
+            view,
+            bus,
+            loader,
+            shutdown,
+            events: Vec::new(),
+            clock: None,
+            deck,
         }
     }
-}
 
-impl<S> QueueControl<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    /// Close the resident player, then irreversibly cancel queue-owned work.
-    ///
-    /// # Errors
-    ///
-    /// Returns the player detach failure without cancelling the queue token;
-    /// the player control gate is reopened so the owner can retry.
-    pub fn close(&self) -> Result<(), PlayError> {
-        let _admission = self.lock_admission();
-        self.player.close()?;
-        self.shutdown.cancel();
-        Ok(())
+    /// The handle reaches this owner's mailbox, never a track implementation.
+    #[must_use]
+    pub fn control(&self) -> QueueControl<S> {
+        QueueControl {
+            postbox: self.postbox.clone(),
+            view: self.view.clone(),
+            bus: self.bus.clone(),
+        }
     }
 
-    pub(in crate::queue) fn command(&self, operation: impl FnOnce(&Self)) {
-        let _ = self.with_open(operation);
+    delegate::delegate! {
+        to self.active {
+            /// Every track the queue holds: on the deck, staged, and loaded in the background.
+            #[call(tracks_mut)]
+            pub fn tracks_mut(&mut self) -> impl Iterator<Item = &mut F::Track>;
+            /// Every track the queue holds: on the deck, staged, and loaded in the background.
+            #[call(tracks)]
+            pub fn tracks_active(&self) -> impl Iterator<Item = &F::Track>;
+        }
+        to self.config {
+            /// The factory a track decorator configures for subsequent loads.
+            #[field(&mut factory)]
+            pub fn factory_mut(&mut self) -> &mut F;
+            /// The factory whose configuration subsequent tracks inherit.
+            #[must_use]
+            #[field(&factory)]
+            pub fn factory(&self) -> &F;
+        }
     }
 
-    fn ensure_open(&self) -> Result<(), PlayError> {
-        if self.is_closed() {
+    /// The sounding track, chosen only when its transition applies.
+    #[must_use]
+    pub fn current_track(&self) -> Option<&F::Track> {
+        self.active
+            .iter()
+            .find(|active| {
+                active.role == Role::Current
+                    && !matches!(
+                        active.track.snapshot().as_ref().status,
+                        PlayingStatus::Ended { .. }
+                            | PlayingStatus::Failed { .. }
+                            | PlayingStatus::Released
+                    )
+            })
+            .map(|active| &active.track)
+    }
+
+    pub(super) fn active_current_index(&self) -> Option<usize> {
+        self.active.position(|active| active.role == Role::Current)
+    }
+
+    pub(super) fn earliest(&self) -> Result<SessionFrame, PlayError> {
+        self.clock
+            .map(|(now, delivery)| now + delivery)
+            .ok_or(PlayError::Untimed)
+    }
+
+    pub(super) fn ensure_open(&self) -> Result<(), PlayError> {
+        if self.shutdown.is_cancelled() {
             Err(PlayError::Closed)
         } else {
             Ok(())
         }
     }
 
-    pub(crate) fn invalidate(&self) {
-        self.shutdown.cancel();
+    /// Records the tracks' earlier changes before the owner's next event.
+    pub(super) fn announce(&mut self, event: QueueEvent) {
+        self.events.extend(self.tracks.drain_events());
+        self.events.push(event);
     }
 
-    #[must_use]
-    pub fn is_closed(&self) -> bool {
-        self.shutdown.is_cancelled() || self.player.is_closed()
+    /// Publishes before announcing, so an event's reader sees its state.
+    pub(super) fn publish(&mut self) {
+        if let Some(SeekPosition::Pending { item, segment, .. }) = self.held_position {
+            let active = self
+                .active_current_index()
+                .or_else(|| {
+                    self.target.and_then(|target| {
+                        self.active.position(|active| {
+                            active.item == target.to && matches!(active.role, Role::Incoming)
+                        })
+                    })
+                })
+                .and_then(|index| self.active.get(index));
+            if active.is_none_or(|active| active.item != item)
+                || active.is_some_and(|active| {
+                    segment.is_some_and(|segment| {
+                        active
+                            .track
+                            .snapshot()
+                            .as_ref()
+                            .mark
+                            .is_some_and(|mark| mark.lane.segment == segment)
+                    })
+                })
+            {
+                self.held_position = None;
+            }
+        }
+        self.events.extend(self.tracks.drain_events());
+        let snapshot = self.queue_snapshot();
+        let previous = self.view.read().deck.mix;
+        let mix = snapshot.deck.mix;
+        self.view.publish(snapshot);
+        if previous.volume() != mix.volume() {
+            self.bus.publish(PlayerEvent::VolumeChanged {
+                volume: f32::from(mix.volume()),
+            });
+        }
+        if previous.muted() != mix.muted() {
+            self.bus
+                .publish(PlayerEvent::MuteChanged { muted: mix.muted() });
+        }
+        for event in self.events.drain(..) {
+            if let QueueEvent::CurrentTrackChanged { id } = &event {
+                self.bus
+                    .publish(PlayerEvent::CurrentItemChanged { item: *id });
+            }
+            self.bus.publish(event);
+        }
     }
 
-    pub(in crate::queue) fn with_open<T>(
-        &self,
-        operation: impl FnOnce(&Self) -> T,
-    ) -> Result<T, PlayError> {
-        let _admission = self.lock_admission();
-        self.ensure_open()?;
-        Ok(operation(self))
+    pub(super) fn track_ids(&self) -> Vec<TrackId> {
+        self.tracks
+            .records()
+            .iter()
+            .map(|record| record.id)
+            .collect()
     }
 
-    pub(in crate::queue) fn with_open_result<T, E>(
-        &self,
-        operation: impl FnOnce(&Self) -> Result<T, E>,
-    ) -> Result<T, E>
-    where
-        E: From<PlayError>,
-    {
-        let _admission = self.lock_admission();
-        self.ensure_open().map_err(E::from)?;
-        operation(self)
+    pub(super) fn navigation_cursor(&self) -> Option<TrackId> {
+        self.target.map(|target| target.to).or(self.current)
     }
 
-    delegate::delegate! {
-        to self.tracks {
-            #[call(lock)]
-            pub(super) fn lock_tracks(&self) -> MutexGuard<'_, Vec<TrackRecord<S>>>;
-            #[call(lock)]
-            pub(super) fn lock_tracks_mut(&self) -> MutexGuard<'_, Vec<TrackRecord<S>>>;
-            pub(super) fn set_status(&self, id: TrackId, status: crate::event::TrackStatus);
-        }
-        to self.crossfade_armed_for {
-            #[call(load)]
-            pub(super) fn read_armed_for(&self) -> CrossfadeArm;
-            #[call(take_if_matches)]
-            pub(super) fn take_armed_for_if_matches(&self, id: TrackId) -> bool;
-            #[call(store)]
-            pub(super) fn write_armed_for(&self, arm: CrossfadeArm);
-        }
-        to self.cached_position {
-            #[call(load)]
-            pub(super) fn read_cached_position(&self) -> CachedPosition;
-            #[call(store)]
-            pub(super) fn write_cached_position(&self, pos: CachedPosition);
-        }
-        to self.admission {
-            #[call(lock)]
-            pub(in crate::queue) fn lock_admission(&self) -> ExclusiveGuard<'_>;
-        }
-        to self.navigation {
-            #[call(lock)]
-            pub(super) fn lock_navigation(&self) -> MutexGuard<'_, NavigationState>;
-            #[call(lock)]
-            pub(super) fn lock_navigation_mut(&self) -> MutexGuard<'_, NavigationState>;
-        }
-        to self.pending_select {
-            #[call(lock)]
-            pub(in crate::queue) fn lock_pending_select_mut(&self) -> MutexGuard<'_, SelectPhase>;
-        }
-        to self.select_apply {
-            /// Acquire the selection-apply serialization guard (see
-            /// [`Self::select_apply`]). Taken before `tracks`/`pending_select`/
-            /// `navigation`/`player` in both `select` and the
-            /// `spawn_apply_after_load` completion, so the two cannot interleave.
-            #[call(lock)]
-            pub(in crate::queue) fn lock_select_apply(&self) -> ExclusiveGuard<'_>;
-        }
+    pub(super) fn selectable_ids(&self) -> Vec<TrackId> {
+        let cursor = self.navigation_cursor();
+        self.tracks
+            .records()
+            .iter()
+            .filter(|record| {
+                self.current == Some(record.id)
+                    || cursor == Some(record.id)
+                    || !matches!(
+                        record.status,
+                        crate::TrackStatus::Cancelled | crate::TrackStatus::Failed(_)
+                    )
+            })
+            .map(|record| record.id)
+            .collect()
     }
 }
 
-impl<S> Drop for Queue<S>
+impl<S, F> Drop for Queue<S, F>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
+    F: TrackFactory<S>,
 {
     fn drop(&mut self) {
-        self.control.invalidate();
+        self.shutdown.cancel();
+        self.tracks.cancel_loads();
     }
 }
-
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::sync::mpsc::{self, TryRecvError};
+    use std::{
+        sync::Arc,
+        task::{Wake, Waker},
+    };
 
-    use kithara_audio::ConsumerWakeMode;
+    use kithara_assets::{AssetStore, StorageBackend};
+    use kithara_command::{Seq, When};
     use kithara_config::Config;
-    use kithara_events::{Envelope, EventReceiver};
+    use kithara_events::{Envelope, EventReceiver, TrackId};
     use kithara_platform::{
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicU64, Ordering},
-        },
+        sync::mpsc,
         thread,
-        time::{Duration, Instant, WallInstant, timeout},
+        time::{Duration, WallInstant, timeout},
+        tokio::sync::mpsc::{UnboundedSender, unbounded_channel},
     };
     use kithara_play::{
-        AllocatedSlot, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        Reply, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq, SlotId,
-        bridge::slot_channels, player::PlayerControlSource,
+        DeckMixerConfig, DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, PlayWorkerConfig,
+        Player, Position, ResourcePrep,
+        mock::{self, DeckRig},
     };
+    use kithara_signal::{FrameCount, SessionFrame};
     use kithara_test_utils::kithara;
-    use kithara_warp::BeatGridId;
 
-    use super::*;
+    use super::{
+        super::{QueueCommand, types::Placement},
+        *,
+    };
     use crate::{
-        consts,
-        event::QueueEvent,
-        navigation::{ActionAtItemEnd, PlaybackOrder},
+        QueueError, QueueSettingsChange,
+        event::{QueueEvent, QueueRepeatMode, TrackStatus},
+        navigation::{ActionAtItemEnd, PlaybackOrder, RepeatMode},
         test_pools::{TestPools, pools},
     };
 
@@ -360,71 +329,57 @@ pub(crate) mod tests {
             .build()
     }
 
-    pub(in crate::queue) fn make_queue() -> Queue<TestPools> {
-        Queue::new(queue_config())
-    }
-
-    struct TestSession {
-        next_slot: AtomicU64,
-        nodes: Mutex<Vec<NodeInputs>>,
-    }
-
-    impl SessionDispatcher<TestPools> for TestSession {
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
-        }
-
-        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
-            let reply = match cmd {
-                Cmd::RegisterPlayer { .. } => {
-                    Reply::PlayerRegistered(kithara_play::session::RegisteredPlayer {
-                        id: 1,
-                        eq: SharedEq::new(10),
-                    })
-                }
-                Cmd::AllocateSlot { .. } => {
-                    let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
-                    let (inputs, control) = slot_channels(SharedEq::new(10));
-                    self.nodes.lock().push(inputs);
-                    Reply::SlotAllocated(AllocatedSlot::new(control, slot))
-                }
-                Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(None, 44_100)),
-                Cmd::QueryStreamShape => Reply::StreamShape(None),
-                _ => Reply::Ok,
-            };
-            Ok(reply)
-        }
-    }
-
-    pub(crate) fn test_session() -> SessionBinding<TestPools> {
-        SessionBinding::new(
-            Arc::new(TestSession {
-                next_slot: AtomicU64::new(0),
-                nodes: Mutex::default(),
-            }),
-            consts::TEST_SAMPLE_RATE,
-        )
+    /// A queue the mock session holds, seated the way a Host's insert seats it.
+    /// A queue its Host has seated on a deck slot, with the mock that answers
+    /// as the slot's audio thread.
+    pub(in crate::queue) fn make_queue() -> (Queue<TestPools>, DeckRig<TestPools>) {
+        let mut queue = Queue::new(queue_config());
+        queue.clock = Some((SessionFrame::new(0), FrameCount::new(128)));
+        queue.deck.mixer.sample_rate = mock::SAMPLE_RATE.get();
+        let audio_thread = DeckRig::new(DeckMixerConfig::default()).expect("deck scope");
+        (queue, audio_thread)
     }
 
     fn queue_config() -> QueueConfig<TestPools> {
-        let player = player();
-        let store = AssetStore::builder(player.pools().clone())
-            .backend(StorageBackend::Memory)
-            .build();
-        QueueConfig::builder().player(player).store(store).build()
-    }
-
-    fn player() -> PlayerImpl<TestPools> {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-        PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(consts::TEST_SAMPLE_RATE)
-                .worker(worker)
-                .session(test_session())
-                .build(),
-        )
+        QueueConfig::builder()
+            .prep(ResourcePrep::builder().worker(worker).build())
+            .store(make_store())
+            .build()
     }
 
+    pub(in crate::queue) fn with_outbox<Value>(
+        queue: &mut Queue<TestPools>,
+        rig: &mut DeckRig<TestPools>,
+        run: impl FnOnce(&mut Queue<TestPools>, DeckPass<'_>, &mut Outbox<'_, TestPools>) -> Value,
+    ) -> Value {
+        let output = mock::output(None).get();
+        let deck = queue.deck.mixer.clone();
+        let pass = DeckPass {
+            mix: queue.deck.mix,
+            suspended: false,
+            now: SessionFrame::new(0),
+            delivery: FrameCount::new(128),
+            output: &output,
+            deck: &deck,
+        };
+        let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
+        let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);
+        run(queue, pass, &mut out)
+    }
+
+    pub(in crate::queue) fn apply(
+        queue: &mut Queue<TestPools>,
+        rig: &mut DeckRig<TestPools>,
+        command: QueueCommand<TestPools>,
+    ) -> Result<Option<Seq>, PlayError> {
+        with_outbox(queue, rig, |queue, _, out| {
+            Player::apply(queue, command, out)
+        })
+    }
+
+    #[kithara::flash(io)]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     pub(in crate::queue) async fn wait_for_queue_event<F>(
         rx: &mut EventReceiver<QueueEvent>,
         mut matches: F,
@@ -433,14 +388,18 @@ pub(crate) mod tests {
     where
         F: FnMut(&QueueEvent) -> bool,
     {
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        let deadline = WallInstant::now() + Duration::from_millis(timeout_ms);
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
+            hang_tick!("queue event predicate remains unsatisfied".to_owned());
+            let remaining = deadline.saturating_duration_since(WallInstant::now());
             if remaining.is_zero() {
                 return false;
             }
-            match timeout(remaining, rx.recv()).await {
-                Ok(Ok(Envelope { event: ev, .. })) if matches(&ev) => return true,
+            match timeout(remaining.min(__hang_detector.remaining()), rx.recv()).await {
+                Ok(Ok(Envelope { event: ev, .. })) if matches(&ev) => {
+                    hang_reset!();
+                    return true;
+                }
                 Ok(Ok(_)) => continue,
                 Ok(Err(_)) | Err(_) => return false,
             }
@@ -449,176 +408,704 @@ pub(crate) mod tests {
 
     #[kithara::test]
     fn queue_new_constructs_without_panic() {
-        let _queue = make_queue();
+        let (_queue, _audio_thread) = make_queue();
     }
 
     #[kithara::test]
-    fn queue_hands_its_session_the_resident_players_sync_attachment() {
-        let grid_id = BeatGridId::allocate().expect("fixture grid id");
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .grid_id(grid_id)
-                .sample_rate(consts::TEST_SAMPLE_RATE)
-                .worker(worker)
-                .build(),
-        );
-        let mut queue = Queue::new(QueueConfig::builder().player(player).build());
+    fn a_control_reads_closed_once_its_queue_is_dropped() {
+        let (queue, _audio_thread) = make_queue();
+        let control = queue.control();
+        assert!(!control.is_closed(), "the queue still owns its mailbox");
 
-        let attachment = queue
-            .attach_session(test_session())
-            .expect("the queue binds its session");
-        assert_eq!(attachment.id(), grid_id);
+        drop(queue);
+
+        assert!(control.is_closed());
     }
 
     #[kithara::test]
-    fn queue_control_rejects_mutation_after_close() {
-        let queue = make_queue();
-        let control = queue.control.clone();
+    fn queue_registers_its_resident_players_deck_with_the_session() {
+        let mut host = kithara_host::Host::new(kithara_host::HostConfig::offline(pools()).build())
+            .expect("offline host");
+        let deck = host
+            .insert(Queue::new(queue_config()))
+            .expect("host registers the queue");
+        let deck_id = deck.id();
+        assert!(!deck.is_closed());
+        host.remove(&deck)
+            .expect("the owning host releases the queue");
+        assert!(deck.is_closed());
+        assert!(matches!(host.remove(&deck),
+            Err(PlayError::Session(kithara_play::SessionError::DeckNotFound(refused)))
+                if refused == deck_id));
+    }
 
-        control.close().expect("unstarted fixture must close");
+    /// A holder's waker that reports each wake.
+    struct Wakes(mpsc::Sender<()>);
 
-        assert!(control.runtime.shutdown.is_cancelled());
-        assert!(matches!(
-            control.append("https://example.com/a.mp3"),
-            Err(crate::QueueError::Play(PlayError::Closed))
-        ));
-        assert!(queue.is_empty());
+    impl Wake for Wakes {
+        fn wake(self: Arc<Self>) {
+            let _ = self.0.send(());
+        }
     }
 
     #[kithara::test]
-    fn close_waits_for_an_admitted_queue_mutation() {
-        let queue = make_queue();
-        let deadline = WallInstant::now() + Duration::from_secs(5);
-        let remaining = || deadline.saturating_duration_since(WallInstant::now());
-        let mutation_control = queue.control.clone();
-        let close_control = queue.control.clone();
-        let (entered_tx, entered_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let (mutation_tx, mutation_rx) = mpsc::channel();
-        let mutation = thread::spawn(move || {
-            let result = mutation_control.with_open(|_| {
-                entered_tx.send(()).expect("test receiver remains alive");
-                release_rx.recv().expect("test sender releases mutation");
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+    fn a_control_command_runs_when_the_holder_drains_the_queue() {
+        let (mut queue, mut rig) = make_queue();
+        let control = queue.control();
+        let (woke_tx, woke_rx) = mpsc::channel();
+        HostedDeck::hold(&mut queue, Waker::from(Arc::new(Wakes(woke_tx))));
+
+        let (control, appended) = {
+            // WHY: The append caller is a real thread that Flash does not count as busy.
+            let _real_io = kithara_platform::flash::real_io();
+            let append = thread::spawn(move || {
+                let appended = control.append("https://example.com/a.mp3");
+                (control, appended)
             });
-            mutation_tx
-                .send(result)
-                .expect("test receiver remains alive");
-        });
+            woke_rx
+                .recv_timeout(kithara_platform::time::Instant::now() + __hang_detector.remaining())
+                .expect("a post wakes the holder");
 
-        entered_rx
-            .recv_timeout(remaining())
-            .expect("mutation must enter the queue admission gate");
-        let (close_started_tx, close_started_rx) = mpsc::channel();
-        let (close_tx, close_rx) = mpsc::channel();
-        let close = thread::spawn(move || {
-            close_started_tx
-                .send(())
-                .expect("test receiver remains alive");
-            close_tx
-                .send(close_control.close())
-                .expect("test receiver remains alive");
-        });
+            assert!(
+                queue.control().is_empty(),
+                "the command waits for the holder to drain"
+            );
 
-        close_started_rx
-            .recv_timeout(remaining())
-            .expect("close thread must reach the admission attempt");
-        kithara_test_utils::test::wall_sleep(Duration::from_millis(50));
-        assert!(
-            matches!(close_rx.try_recv(), Err(TryRecvError::Empty)),
-            "close must not overtake an admitted queue mutation"
+            with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+                HostedDeck::drain(queue, pass, out);
+            });
+            while !append.is_finished() {
+                hang_tick!("append caller awaits its mailbox answer".to_owned());
+                thread::yield_now();
+            }
+            let (control, appended) = append.join().expect("append thread must not panic");
+            hang_reset!();
+            (control, appended)
+        };
+        hang_reset!();
+        let id = appended.expect("an open queue appends");
+        assert_eq!(
+            queue.control().tracks().first().map(|track| track.id),
+            Some(id)
         );
-        release_tx.send(()).expect("mutation thread remains alive");
-        mutation_rx
-            .recv_timeout(remaining())
-            .expect("mutation must complete after release")
-            .expect("admitted mutation remains open");
-        close_rx
-            .recv_timeout(remaining())
-            .expect("close must complete after the mutation")
-            .expect("unstarted fixture must close");
-        mutation.join().expect("mutation thread must not panic");
-        close.join().expect("close thread must not panic");
-        assert!(queue.is_closed());
+
+        drop(queue);
+        assert!(matches!(
+            control.append("https://example.com/b.mp3"),
+            Err(QueueError::Play(PlayError::Closed))
+        ));
     }
 
-    /// `PlayerImpl::set_prefetch_duration` names the queue as the canonical
-    /// owner of this knob, so what the queue's config says has to be what
-    /// the player it drives runs with.
-    #[kithara::test]
-    fn the_configured_prefetch_lead_reaches_the_player() {
-        let queue = Queue::new(
-            QueueConfig::builder()
-                .player(player())
-                .store(make_store())
-                .prefetch_duration(8.0)
-                .build(),
-        );
+    /// A holder's waker that reports each wake to an async waiter.
+    struct WakesTask(UnboundedSender<()>);
 
-        assert!((queue.player.prefetch_duration() - 8.0).abs() < f32::EPSILON);
+    impl Wake for WakesTask {
+        fn wake(self: Arc<Self>) {
+            let _ = self.0.send(());
+        }
+    }
+
+    /// A load's transitions reach its track on the queue's owner: whatever the
+    /// load did meanwhile, the track keeps the status the owner left it with
+    /// until the executor holding the queue drains it.
+    #[kithara::test(tokio)]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+    async fn a_load_reaches_its_track_only_when_the_holder_drains_the_queue() {
+        let (mut queue, mut rig) = make_queue();
+        let (woke_tx, mut woke_rx) = unbounded_channel();
+        rig.dispatcher
+            .hold(Waker::from(Arc::new(WakesTask(woke_tx))));
+        let id = TrackId::allocate();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Append {
+                position: Position::ZERO,
+                id,
+                source: "/kithara/missing-track.wav".into(),
+            },
+        )
+        .expect("an open queue appends");
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Select {
+                id,
+                transition: super::super::Transition::None,
+            },
+        )
+        .expect("select queues the load");
+        let status = |queue: &Queue<TestPools>| {
+            queue
+                .control()
+                .track(id)
+                .expect("the track stays queued")
+                .status
+        };
+
+        loop {
+            hang_tick!("dispatcher load awaits a queue owner wake".to_owned());
+            let left = status(&queue);
+            let receipt = rig
+                .open(Err(kithara_play::LoadRefusal::Source(
+                    kithara_audio::TrackFailureKind::Decode {
+                        kind: kithara_audio::DecodeErrorKind::Io,
+                    },
+                )))
+                .expect("the dispatcher answers the load");
+            timeout(__hang_detector.remaining(), woke_rx.recv())
+                .await
+                .expect("the load reports to the holder");
+            hang_reset!();
+            assert_eq!(
+                status(&queue),
+                left,
+                "a load's report waits for the holder to drain the queue"
+            );
+            with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+                HostedDeck::settle(
+                    queue,
+                    kithara_play::TrackReceipt::Loaded(receipt),
+                    pass,
+                    out,
+                );
+            });
+            if matches!(status(&queue), TrackStatus::Failed(_)) {
+                break;
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn a_closed_queue_rejects_mutation() {
+        let (mut queue, mut rig) = make_queue();
+
+        with_outbox(&mut queue, &mut rig, |queue, _, out| {
+            HostedDeck::close(queue, out)
+        })
+        .expect("unstarted fixture must close");
+
+        assert!(queue.shutdown.is_cancelled());
+        assert!(matches!(
+            apply(
+                &mut queue,
+                &mut rig,
+                QueueCommand::Append {
+                    position: Position::ZERO,
+                    id: TrackId::allocate(),
+                    source: "https://example.com/a.mp3".into(),
+                }
+            ),
+            Err(PlayError::Closed)
+        ));
+        assert!(queue.control().is_empty());
     }
 
     #[kithara::test]
     fn retained_config_follows_live_queue_controls() {
-        let queue = make_queue();
-        queue.set_action_at_item_end(ActionAtItemEnd::Pause);
-        queue.set_playback_order(PlaybackOrder::Shuffle);
-        let mut crossfade = queue.crossfade_settings();
+        let (mut queue, mut rig) = make_queue();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::SetActionAtItemEnd(ActionAtItemEnd::Pause),
+        )
+        .expect("action");
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::SetPlaybackOrder(PlaybackOrder::Shuffle),
+        )
+        .expect("order");
+        let mut crossfade = queue.control().crossfade_settings();
         crossfade.duration = 2.0;
-        queue
-            .set_crossfade_settings(crossfade)
-            .expect("valid crossfade settings");
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::ConfigureQueue(QueueSettingsChange::Crossfade(crossfade), When::Next),
+        )
+        .expect("valid crossfade settings");
 
         let values = queue.config.values();
         assert_eq!(values.action_at_item_end, ActionAtItemEnd::Pause);
         assert_eq!(values.playback_order, PlaybackOrder::Shuffle);
-        assert_eq!(values.crossfade_settings, crossfade);
-        assert_eq!(queue.player.crossfade_duration(), crossfade.duration);
-    }
-
-    #[kithara::test]
-    fn crossfade_arm_disarmed_after_construction() {
-        let queue = make_queue();
-        assert_eq!(queue.read_armed_for(), CrossfadeArm::Disarmed);
-    }
-
-    #[kithara::test]
-    fn crossfade_arm_take_only_disarms_matching_track() {
-        let queue = make_queue();
-        queue.write_armed_for(CrossfadeArm::armed(TrackId(9)));
-        assert!(!queue.take_armed_for_if_matches(TrackId(10)));
+        assert_eq!(values.settings.crossfade(), crossfade);
         assert_eq!(
-            queue.read_armed_for(),
-            CrossfadeArm::Armed {
-                for_track: TrackId(9),
-            }
+            queue.control().crossfade_settings().duration,
+            crossfade.duration
         );
-        assert!(queue.take_armed_for_if_matches(TrackId(9)));
-        assert_eq!(queue.read_armed_for(), CrossfadeArm::Disarmed);
+    }
+
+    /// A queue event is heard only with the view that shows it, in the order
+    /// the queue made its changes: a handle that hears a track change reads
+    /// that change.
+    #[kithara::test]
+    fn a_current_item_event_is_published_with_its_committed_queue_view() {
+        let (mut queue, _) = make_queue();
+        let control = queue.control();
+        let id = TrackId::allocate();
+        queue.insert_entry(
+            id,
+            "https://example.com/a.mp3".into(),
+            Position::ZERO,
+            Placement::Append,
+        );
+        let mut events = control.subscribe::<PlayerEvent>();
+        queue.current = Some(id);
+        queue.announce(QueueEvent::CurrentTrackChanged { id: Some(id) });
+        assert!(events.try_recv().is_err());
+        assert!(control.current().is_none());
+
+        queue.publish();
+        assert!(matches!(
+            events.try_recv().expect("committed current item").event,
+            PlayerEvent::CurrentItemChanged { item: Some(actual) } if actual == id
+        ));
+        assert_eq!(control.current().expect("published current").id, id);
+        queue.publish();
+        assert!(
+            events.try_recv().is_err(),
+            "unchanged current is not re-announced"
+        );
+
+        queue.current = None;
+        queue.announce(QueueEvent::CurrentTrackChanged { id: None });
+        queue.publish();
+        assert!(matches!(
+            events.try_recv().expect("committed inactive queue").event,
+            PlayerEvent::CurrentItemChanged { item: None }
+        ));
+        assert!(control.current().is_none());
+    }
+
+    #[kithara::test]
+    fn a_queue_event_is_heard_with_the_view_that_shows_it() {
+        let (mut queue, mut rig) = make_queue();
+        let control = queue.control();
+        let id = TrackId::allocate();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Append {
+                position: Position::ZERO,
+                id,
+                source: "https://example.com/a.mp3".into(),
+            },
+        )
+        .expect("an open queue appends");
+        let mut events = queue.bus.subscribe::<QueueEvent>();
+
+        queue.tracks.set_status(id, TrackStatus::Consumed);
+        assert!(
+            events.try_recv().is_err(),
+            "a change is not heard before the queue publishes it"
+        );
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::SetRepeat(RepeatMode::All),
+        )
+        .expect("repeat");
+
+        let heard: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+            .map(|envelope| envelope.event)
+            .collect();
+        assert!(
+            matches!(
+                heard.as_slice(),
+                [
+                    QueueEvent::TrackStatusChanged {
+                        id: changed,
+                        status: TrackStatus::Consumed,
+                    },
+                    QueueEvent::RepeatModeChanged {
+                        mode: QueueRepeatMode::All,
+                    },
+                ] if *changed == id
+            ),
+            "the publish announces both changes in order: {heard:?}"
+        );
+        assert_eq!(
+            control.track(id).map(|track| track.status),
+            Some(TrackStatus::Consumed)
+        );
+        assert_eq!(control.repeat_mode(), RepeatMode::All);
     }
 
     #[kithara::test]
     fn cached_position_unknown_after_construction() {
-        let queue = make_queue();
-        assert_eq!(Option::<f64>::from(queue.read_cached_position()), None);
-    }
-
-    #[kithara::test]
-    fn cached_position_round_trips_through_queue() {
-        let queue = make_queue();
-        queue.write_cached_position(CachedPosition::known(12.5));
+        let (queue, _audio_thread) = make_queue();
         assert_eq!(
-            Option::<f64>::from(queue.read_cached_position()),
-            Some(12.5)
+            queue.queue_snapshot().track.map(|track| track.position),
+            None
         );
+        assert_eq!(queue.control().position_seconds(), None);
     }
 
     #[kithara::test]
     fn select_phase_idle_after_construction() {
-        let queue = make_queue();
+        let (queue, _audio_thread) = make_queue();
+        assert!(queue.target.is_none());
+    }
+
+    fn armed_queue(id: TrackId) -> (Queue<TestPools>, DeckRig<TestPools>, Seq, Seq) {
+        let (mut queue, mut rig) = make_queue();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Append {
+                position: Position::ZERO,
+                id,
+                source: "/kithara/missing-track.wav".into(),
+            },
+        )
+        .expect("append transition fixture");
+        let seq = apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Select {
+                id,
+                transition: super::super::Transition::None,
+            },
+        )
+        .expect("select queues its load")
+        .expect("load sequence");
+        let index = queue.incoming_index(id).expect("incoming track");
+        queue.active.get_mut(index).expect("active incoming").role = Role::Incoming;
+        queue.pending_handover = Some(PendingHandover {
+            seq,
+            item: id,
+            slot: queue.active.get(index).expect("incoming slot").slot,
+            replacement: queue.active.is_replacement(index),
+            reason: crate::AdvanceReason::UserSelect,
+        });
+        let other = TrackId(id.0 + 1);
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Append {
+                position: Position::ZERO,
+                id: other,
+                source: "/kithara/other-missing-track.wav".into(),
+            },
+        )
+        .expect("append unrelated track");
+        let unrelated = with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            queue.load_track(other, Role::Preloaded, Some(pass.output), out)
+        })
+        .expect("preload unrelated track")
+        .expect("unrelated load sequence");
+        assert_ne!(seq, unrelated);
+        (queue, rig, seq, unrelated)
+    }
+
+    #[kithara::test]
+    fn atomic_track_id_disarmed_loads_disarmed() {
+        let (queue, _rig) = make_queue();
+        assert_eq!(queue.target.map(|target| target.to), None);
+    }
+
+    #[kithara::test(tokio)]
+    async fn atomic_track_id_take_if_matches_only_disarms_matching_track() {
+        let (mut queue, _rig, seq, unrelated) = armed_queue(TrackId(7));
+        assert_eq!(queue.target.map(|target| target.to), Some(TrackId(7)));
+        queue
+            .transition_applied(
+                unrelated,
+                queue.incoming_index(TrackId(7)).expect("incoming"),
+                SessionFrame::new(128),
+            )
+            .expect("stale receipt");
+        assert_eq!(queue.target.map(|target| target.to), Some(TrackId(7)));
+        assert_eq!(queue.current, None);
+        queue
+            .transition_applied(
+                seq,
+                queue.incoming_index(TrackId(7)).expect("incoming"),
+                SessionFrame::new(128),
+            )
+            .expect("matching receipt");
+        assert_eq!(queue.current, Some(TrackId(7)));
+        assert!(queue.target.is_none());
+    }
+
+    #[kithara::test]
+    fn atomic_cached_position_unknown_loads_none() {
+        let (queue, _rig) = make_queue();
+        assert_eq!(queue.control().position_seconds(), None);
+    }
+
+    #[kithara::test]
+    fn atomic_cached_position_round_trip_zero() {
+        let (mut queue, mut rig) = make_queue();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Seek { to: Position::ZERO },
+        )
+        .expect("seek to zero");
+        queue.publish();
+        assert_eq!(queue.control().position_seconds(), Some(0.0));
+    }
+
+    #[kithara::test(tokio)]
+    async fn crossfade_arm_is_armed_for_matches_track() {
+        let (queue, _rig, _, _) = armed_queue(TrackId(2));
+        assert!(queue.target.is_some_and(|target| target.to == TrackId(2)));
+        assert!(!queue.target.is_some_and(|target| target.to == TrackId(3)));
+    }
+
+    #[kithara::test]
+    fn cached_position_round_trips_through_queue() {
+        let (mut queue, mut rig) = make_queue();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Seek {
+                to: Position::try_from_secs_f64(12.5).expect("finite position"),
+            },
+        )
+        .expect("seek to held position");
+        queue.publish();
+        assert_eq!(queue.control().position_seconds(), Some(12.5));
+    }
+
+    #[kithara::test]
+    fn crossfade_arm_disarmed_after_construction() {
+        let (queue, _rig) = make_queue();
+        assert_eq!(queue.target.map(|target| target.to), None);
+    }
+
+    #[kithara::test(tokio)]
+    async fn crossfade_arm_take_only_disarms_matching_track() {
+        let (mut queue, _rig, seq, unrelated) = armed_queue(TrackId(9));
+        queue
+            .transition_applied(
+                unrelated,
+                queue.incoming_index(TrackId(9)).expect("incoming"),
+                SessionFrame::new(128),
+            )
+            .expect("unrelated receipt");
+        assert_eq!(queue.target.map(|target| target.to), Some(TrackId(9)));
+        assert_eq!(queue.current, None);
+        queue
+            .transition_applied(
+                seq,
+                queue.incoming_index(TrackId(9)).expect("incoming"),
+                SessionFrame::new(128),
+            )
+            .expect("matching receipt");
+        assert_eq!(queue.current, Some(TrackId(9)));
+        assert!(queue.target.is_none());
+    }
+
+    #[kithara::test]
+    fn the_configured_prefetch_lead_reaches_the_player() {
+        let mut config = queue_config();
+        config.preload_lead = Duration::from_secs(8);
+        let queue = Queue::new(config);
+        assert!((queue.config.preload_lead.as_secs_f32() - 8.0).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test(native)]
+    fn queue_hands_its_session_the_resident_players_sync_attachment() {
+        use kithara_host::{DeckId, Host, HostConfig, HostOwner};
+
+        let expected = DeckId::allocate().expect("fixture deck id");
+        let queue = Queue::new(queue_config());
+        let control = queue.control();
+        let append = control
+            .postbox
+            .post(QueueCommand::Append {
+                position: Position::ZERO,
+                id: TrackId(42),
+                source: "https://example.com/attachment.mp3".into(),
+            })
+            .expect("post to the queue being registered");
+        let _host = Host::layered(HostConfig::offline(pools()).build(), move |mut core| {
+            core.register(expected, Box::new(queue))
+                .expect("register the queue");
+            answered(append).expect("registration drains the same queue's control");
+            let mut attachments = Vec::new();
+            core.each_deck(&mut |id, deck, _, _| {
+                attachments.push(id);
+                assert_eq!(deck.tracks.records().len(), 1);
+                assert_eq!(deck.tracks.records()[0].id, TrackId(42));
+            });
+            assert_eq!(attachments, [expected]);
+            core.with_deck(expected, &mut |deck, _, _| {
+                assert_eq!(deck.tracks.records()[0].id, TrackId(42));
+                assert_eq!(control.tracks().len(), 1);
+            })
+            .expect("the exact registration identity routes back to the same queue");
+            core
+        })
+        .expect("offline session attachment");
+    }
+
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
+    fn answered(
+        mut ticket: kithara_command::Ticket<QueueError>,
+    ) -> Result<(), kithara_command::Refused<QueueError>> {
+        let _real_io = kithara_platform::flash::real_io();
+        loop {
+            let mut answer = None;
+            hang_park!(
+                |remaining: Duration| {
+                    let now = kithara_platform::time::Instant::now();
+                    answer = Some(ticket.wait_until(now + remaining));
+                },
+                "queue fixture owner has not answered its ticket".to_owned()
+            );
+            match answer {
+                Some(Ok(answer)) => {
+                    hang_reset!();
+                    return answer;
+                }
+                Some(Err(pending)) => ticket = pending,
+                None => unreachable!("the watchdog executes its wait closure"),
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn queue_control_post_preserves_order_and_reports_the_owner_outcome() {
+        let (mut queue, mut rig) = make_queue();
+        let control = queue.control();
+        let first = TrackId(41);
+        let second = TrackId(42);
+        let append = control
+            .post(QueueCommand::Append {
+                position: Position::ZERO,
+                id: first,
+                source: "https://example.com/first.mp3".into(),
+            })
+            .expect("post before the owner runs");
+        let insert = control
+            .post(QueueCommand::Insert {
+                id: second,
+                source: "https://example.com/second.mp3".into(),
+                after: Some(first),
+            })
+            .expect("the second post shares the first mailbox");
+        let unknown = TrackId(99);
+        let refused = control
+            .post(QueueCommand::Remove(unknown))
+            .expect("a post does not claim owner acceptance");
+        assert!(
+            control.is_empty(),
+            "posting must not mutate the published view"
+        );
+        let Err(append) = append.wait_until(kithara_platform::time::Instant::now()) else {
+            panic!("the owner has not run yet");
+        };
+        with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            HostedDeck::drain(queue, pass, out);
+        });
+        answered(append).expect("first command applied");
+        answered(insert).expect("insertion observes the earlier append");
         assert!(matches!(
-            *queue.lock_pending_select_mut(),
-            SelectPhase::Idle
+            answered(refused),
+            Err(kithara_command::Refused::Owner(QueueError::UnknownTrackId(id))) if id == unknown
         ));
+        assert_eq!(
+            control
+                .tracks()
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            [first, second]
+        );
+        let unanswered = control.post(QueueCommand::Tick).expect("live mailbox");
+        drop(queue);
+        assert!(matches!(
+            answered(unanswered),
+            Err(kithara_command::Refused::Unanswered)
+        ));
+        assert!(matches!(
+            control.post(QueueCommand::Tick),
+            Err(QueueError::Play(PlayError::Closed))
+        ));
+    }
+
+    #[kithara::test]
+    fn queue_control_rejects_mutation_after_close() {
+        let (mut queue, mut rig) = make_queue();
+        let control = queue.control();
+        let close = control
+            .postbox
+            .post(QueueCommand::Close)
+            .expect("post close");
+        with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            HostedDeck::drain(queue, pass, out);
+        });
+        answered(close).expect("unstarted fixture must close");
+        assert!(queue.shutdown.is_cancelled());
+        let append = control
+            .postbox
+            .post(QueueCommand::Append {
+                position: Position::ZERO,
+                id: TrackId(1),
+                source: "https://example.com/a.mp3".into(),
+            })
+            .expect("owner still holds the closed queue's mailbox");
+        with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            HostedDeck::drain(queue, pass, out);
+        });
+        assert!(matches!(
+            answered(append),
+            Err(kithara_command::Refused::Owner(QueueError::Play(
+                PlayError::Closed
+            )))
+        ));
+        assert!(control.is_empty());
+        assert!(queue.tracks.records().is_empty());
+    }
+
+    #[kithara::test]
+    fn close_waits_for_an_admitted_queue_mutation() {
+        let (mut queue, mut rig) = make_queue();
+        let control = queue.control();
+        let mutation = control
+            .postbox
+            .post(QueueCommand::Append {
+                position: Position::ZERO,
+                id: TrackId(1),
+                source: "https://example.com/a.mp3".into(),
+            })
+            .expect("admit mutation");
+        let mut admitted = queue.mailbox.drain();
+        let post = admitted.next().expect("one admitted mutation");
+        assert!(admitted.next().is_none());
+        let close = control
+            .postbox
+            .post(QueueCommand::Close)
+            .expect("post close after admission");
+        assert!(mutation.seq() < close.seq());
+        assert!(
+            !queue.shutdown.is_cancelled(),
+            "close cannot overtake the admitted mutation"
+        );
+        assert!(queue.tracks.records().is_empty());
+
+        let result = with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            queue.apply_command(post.command, Some(pass.output), out)
+        });
+        assert!(result.is_ok());
+        post.answer.answer(result.map(|_| ()));
+        answered(mutation).expect("admitted mutation remains open");
+        assert_eq!(queue.tracks.records().len(), 1);
+        assert_eq!(queue.tracks.records()[0].id, TrackId(1));
+        assert!(
+            !queue.shutdown.is_cancelled(),
+            "mutation completes before close"
+        );
+
+        with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            HostedDeck::drain(queue, pass, out);
+        });
+        answered(close).expect("unstarted fixture must close");
+        assert!(queue.shutdown.is_cancelled());
+        assert!(matches!(queue.ensure_open(), Err(PlayError::Closed)));
     }
 }

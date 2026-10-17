@@ -1,14 +1,13 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
-    net::ToSocketAddrs,
     path::Path,
     sync::mpsc::{self, Receiver, RecvTimeoutError},
     thread,
     time::{Duration, Instant},
 };
 
-use anyhow::{Result, anyhow, bail, ensure};
+use anyhow::{Result, bail, ensure};
 use tiny_http::Server;
 use tracing::{info, warn};
 
@@ -46,26 +45,21 @@ pub(in crate::ci::cache) struct Evictor {
 }
 
 impl Evictor {
-    /// Starts hearing the store's audit log at `address`. The store checks
+    /// Starts hearing the store's audit log on `server`. The store checks
     /// its webhook once, as it starts, and never again, so the stack listens
     /// before it starts the store; what the log reports until [`Self::run`]
     /// reaches the store waits for it.
-    pub(in crate::ci::cache) fn listen(
-        address: impl ToSocketAddrs,
-        buckets: Vec<(String, u64)>,
-    ) -> Result<Self> {
-        let server = Server::http(address)
-            .map_err(|error| anyhow!("listen for the store's audit log: {error}"))?;
+    pub(in crate::ci::cache) fn listen(server: Server, buckets: Vec<(String, u64)>) -> Self {
         let (sender, deliveries) = mpsc::sync_channel(Owner::CHANNEL);
         let managed = buckets
             .iter()
             .map(|(bucket, _)| bucket.clone())
             .collect::<Vec<_>>();
         thread::spawn(move || audit::receive(&server, &managed, &sender));
-        Ok(Self {
+        Self {
             buckets,
             deliveries,
-        })
+        }
     }
 
     /// Evicts from the store the stack has brought up.
@@ -382,11 +376,9 @@ esac
     /// waits for it.
     #[test]
     fn the_audit_log_is_heard_from_the_moment_the_evictor_listens() {
-        let address = std::net::TcpListener::bind("127.0.0.1:0")
-            .and_then(|probe| probe.local_addr())
-            .unwrap();
-        let evictor = Evictor::listen(address, vec![("kithara-review".to_owned(), 1000)])
-            .expect("the evictor listens on a free address");
+        let server = Server::http("127.0.0.1:0").expect("the evictor binds its listener");
+        let address = server.server_addr().to_ip().expect("the listener uses IP");
+        let evictor = Evictor::listen(server, vec![("kithara-review".to_owned(), 1000)]);
         let body = serde_json::json!({"Records": [{
             "time": 400_000_u64,
             "api": {

@@ -97,7 +97,10 @@ impl AppleAudioFileDemuxer {
         if total_bytes == 0 {
             return None;
         }
-        let total = self.track_info.duration?.as_nanos();
+        let crate::DecoderDuration::RawLength(duration) = self.track_info.duration? else {
+            return None;
+        };
+        let total = duration.as_nanos();
         if total == 0 {
             return None;
         }
@@ -136,7 +139,7 @@ impl AppleAudioFileDemuxer {
     /// Streaming FLAC and segmented PCM skip the eager packet-count query so an unavailable
     /// tail cannot freeze a partial packet table. FLAC retains STREAMINFO duration and bounds.
     fn open<S>(
-        source: BoxedSource,
+        mut source: BoxedSource,
         hint: Option<u32>,
         codec: AudioCodec,
         open_mode: SourceOpenMode,
@@ -145,6 +148,7 @@ impl AppleAudioFileDemuxer {
     where
         S: HasPool<u8>,
     {
+        let pcm_data_bytes = Self::pcm_data_bytes(&mut source, hint, codec, open_mode)?;
         let file = match (open_mode, codec) {
             (SourceOpenMode::Segmented(end), _) => {
                 AppleAudioFile::open_segmented(source, hint, end, pools)?
@@ -155,22 +159,8 @@ impl AppleAudioFileDemuxer {
             _ => AppleAudioFile::open(source, hint, pools)?,
         };
         let mut asbd = file.data_format;
-        let matches_codec = match codec {
-            AudioCodec::Pcm => asbd.format_id == consts::FORMAT_LINEAR_PCM,
-            AudioCodec::Flac => asbd.format_id == consts::FORMAT_FLAC,
-            AudioCodec::Alac => asbd.format_id == consts::FORMAT_APPLE_LOSSLESS,
-            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => matches!(
-                asbd.format_id,
-                consts::FORMAT_MPEG4_AAC | AUDIO_FORMAT_MPEG4_AAC_HE | AUDIO_FORMAT_MPEG4_AAC_HE_V2
-            ),
-            _ => false,
-        };
-        if !matches_codec {
-            return Err(DecodeError::InvalidData {
-                detail: "apple.audio_file: codec does not match supplied metadata",
-            });
-        }
-        let total_packets = file.packet_count;
+        Self::validate_codec(codec, asbd.format_id)?;
+        let total_packets = Self::packet_count(&file, pcm_data_bytes)?;
         let extra_data = match codec {
             AudioCodec::Pcm => pod_to_vec(&asbd),
             _ => file.magic_cookie().unwrap_or_default(),
@@ -230,7 +220,7 @@ impl AppleAudioFileDemuxer {
 
         let track_info = TrackInfo {
             codec,
-            duration,
+            duration: duration.map(crate::DecoderDuration::RawLength),
             extra_data,
             channels,
             sample_rate,
@@ -265,6 +255,75 @@ impl AppleAudioFileDemuxer {
             next_packet: 0,
             byte_len: None,
             byte_map: None,
+        })
+    }
+
+    fn validate_codec(codec: AudioCodec, format_id: u32) -> DecodeResult<()> {
+        let matches_codec = match codec {
+            AudioCodec::Pcm => format_id == consts::FORMAT_LINEAR_PCM,
+            AudioCodec::Flac => format_id == consts::FORMAT_FLAC,
+            AudioCodec::Alac => format_id == consts::FORMAT_APPLE_LOSSLESS,
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => matches!(
+                format_id,
+                consts::FORMAT_MPEG4_AAC | AUDIO_FORMAT_MPEG4_AAC_HE | AUDIO_FORMAT_MPEG4_AAC_HE_V2
+            ),
+            _ => false,
+        };
+        if !matches_codec {
+            return Err(DecodeError::InvalidData {
+                detail: "apple.audio_file: codec does not match supplied metadata",
+            });
+        }
+        Ok(())
+    }
+
+    fn pcm_data_bytes(
+        source: &mut BoxedSource,
+        hint: Option<u32>,
+        codec: AudioCodec,
+        open_mode: SourceOpenMode,
+    ) -> DecodeResult<Option<u64>> {
+        if codec == AudioCodec::Pcm
+            && hint == Some(consts::FILE_WAVE_TYPE)
+            && open_mode != SourceOpenMode::Complete
+        {
+            let data = crate::factory::wav_data_range(source)?;
+            if let SourceOpenMode::Segmented(end) = open_mode
+                && data.end > end
+            {
+                return Err(DecodeError::InvalidData {
+                    detail: "apple.audio_file: WAV data exceeds the declared source extent",
+                });
+            }
+            Ok(Some(data.end - data.start))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn packet_count(
+        file: &AppleAudioFile,
+        pcm_data_bytes: Option<u64>,
+    ) -> DecodeResult<Option<u64>> {
+        let asbd = file.data_format;
+        Ok(match pcm_data_bytes {
+            Some(bytes) => {
+                let packet_bytes = u64::from(asbd.bytes_per_packet);
+                let packet_frames = u64::from(asbd.frames_per_packet);
+                let frame_bytes = u64::from(asbd.bytes_per_frame);
+                if packet_bytes == 0
+                    || packet_frames == 0
+                    || frame_bytes == 0
+                    || frame_bytes.checked_mul(packet_frames) != Some(packet_bytes)
+                    || !bytes.is_multiple_of(packet_bytes)
+                {
+                    return Err(DecodeError::InvalidData {
+                        detail: "apple.audio_file: WAV data does not match native PCM packet geometry",
+                    });
+                }
+                Some(bytes / packet_bytes)
+            }
+            None => file.packet_count,
         })
     }
 
@@ -350,7 +409,7 @@ impl Demuxer for AppleAudioFileDemuxer {
             .map(|segment| segment.variant_index)
     }
 
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
         self.track_info.duration
     }
 
@@ -430,6 +489,10 @@ impl Demuxer for AppleAudioFileDemuxer {
             landed_byte,
             preroll: PrerollHint::NotNeeded,
         })
+    }
+
+    fn media_origin(&self) -> Option<Duration> {
+        Some(Duration::ZERO)
     }
 
     fn track_info(&self) -> &TrackInfo {
@@ -564,9 +627,8 @@ mod tests {
 
     #[kithara::test]
     fn open_wav_demuxer_track_info_and_first_frame(tone_wav: &'static [u8]) {
-        let bytes = tone_wav.to_vec();
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
-            Box::new(Cursor::new(bytes)),
+            Box::new(Cursor::new(tone_wav.to_vec())),
             AudioCodec::Pcm,
             Some(ContainerFormat::Wav),
             SourceOpenMode::Complete,
@@ -578,10 +640,37 @@ mod tests {
         assert!(info.channels >= 1);
         assert!(info.sample_rate >= 8000);
         assert!(info.duration.is_some());
+        let duration = info.duration;
 
         match dx.next_frame().expect("next_frame ok") {
             DemuxOutcome::Frame(frame) => assert!(!frame.data.is_empty()),
             other => panic!("expected Frame, got {other:?}"),
+        }
+
+        let length = u64::try_from(tone_wav.len()).expect("fixture length");
+        for mode in [SourceOpenMode::Streaming, SourceOpenMode::Segmented(length)] {
+            let tail_read = Arc::new(AtomicBool::new(false));
+            let mut streamed = AppleAudioFileDemuxer::open_for_with_mode(
+                Box::new(NotReadySource::new(
+                    tone_wav.to_vec(),
+                    length / 2,
+                    Some(Arc::clone(&tail_read)),
+                )),
+                AudioCodec::Pcm,
+                Some(ContainerFormat::Wav),
+                mode,
+            )
+            .expect("WAV header prefix supplies its complete frame count");
+            assert_eq!(streamed.track_info().duration, duration, "{mode:?}");
+            assert!(
+                !tail_read.load(Ordering::Acquire),
+                "{mode:?} must resolve PCM extent without reading the unavailable tail"
+            );
+            assert!(matches!(
+                streamed.next_frame().expect("first streamed PCM packet"),
+                DemuxOutcome::Frame(frame) if !frame.data.is_empty()
+            ));
+            assert!(!tail_read.load(Ordering::Acquire));
         }
     }
 
@@ -671,8 +760,6 @@ mod tests {
                 want,
                 len,
                 SourcePhase::Waiting,
-                0,
-                false,
             ),
         )
     }
@@ -811,7 +898,10 @@ mod tests {
         .expect("streaming FLAC open");
         assert_eq!(dx.track_info().sample_rate, 96_000);
         assert_eq!(dx.track_info().channels, 2);
-        assert_eq!(dx.duration(), Some(Duration::from_secs(6)));
+        assert_eq!(
+            dx.duration(),
+            Some(crate::DecoderDuration::RawLength(Duration::from_secs(6)))
+        );
 
         let target = Duration::from_secs(1);
         for index in 0..4 {
@@ -959,7 +1049,10 @@ mod tests {
         ));
         let (last_pts, last_duration, _) = packets.last().expect("fixture packets");
         let duration = Duration::from_secs(6);
-        assert_eq!(dx.duration(), Some(duration));
+        assert_eq!(
+            dx.duration(),
+            Some(crate::DecoderDuration::RawLength(duration))
+        );
         assert!(*last_pts < duration && *last_pts + *last_duration >= duration);
         assert!(matches!(
             dx.next_frame().expect("stable natural EOF"),

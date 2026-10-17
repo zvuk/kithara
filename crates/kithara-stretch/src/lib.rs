@@ -1,6 +1,6 @@
 #[cfg(not(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
+    all(feature = "stretch-signalsmith", not(target_arch = "wasm32")),
+    all(feature = "stretch-bungee", not(target_arch = "wasm32")),
     feature = "stretch-glide",
     feature = "stretch-identity"
 )))]

@@ -116,7 +116,11 @@ async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsFix
             .build(),
     );
     let started = WallInstant::now();
-    let result = worker.load(audio_config(&server, &pools, &cancel)).await;
+    let result = kithara_integration_tests::mock::load_audio(
+        &worker,
+        audio_config(&server, &pools, &cancel),
+    )
+    .await;
     let elapsed = started.elapsed();
 
     assert!(
@@ -127,7 +131,7 @@ async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsFix
         panic!("construction reads the withheld segment it opens in");
     };
     let message = err.to_string();
-    info!(?elapsed, %message, is_interrupted = err.is_interrupted(), "PlayWorker::load failed");
+    info!(?elapsed, %message, error_class = ?err.classify(), "PlayWorker::load failed");
     let lower = message.to_ascii_lowercase();
     assert!(
         lower.contains("not ready") || lower.contains("wait budget"),
@@ -179,7 +183,11 @@ async fn audio_new_succeeds_when_first_segment_released_during_probe(
         }
     });
 
-    let result = worker.load(audio_config(&server, &pools, &cancel)).await;
+    let result = kithara_integration_tests::mock::load_audio(
+        &worker,
+        audio_config(&server, &pools, &cancel),
+    )
+    .await;
     releaser.await.expect("releaser joins");
 
     assert!(

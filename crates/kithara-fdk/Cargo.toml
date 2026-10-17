@@ -1,0 +1,20 @@
+[package]
+name = "kithara-fdk"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Safe ownership and decoding operations for native FDK AAC."
+keywords = ["audio", "aac", "decoder", "fdk"]
+categories = ["multimedia::audio"]
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+fdk-aac-sys = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

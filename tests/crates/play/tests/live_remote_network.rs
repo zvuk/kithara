@@ -3,11 +3,11 @@
 
 //! The two `resource_regressions` cases that read a real remote stream instead
 //! of a fixture: one through `Resource` directly, one through the full
-//! `PlayerImpl` flow the GUI uses. Their local mirrors stay in
+//! player and queue flow the GUI uses. Their local mirrors stay in
 //! `resource_regressions.rs`; these need the internet, and the `zvq.me` URLs
 //! need the corporate VPN on top.
 //!
-//! Compiled only into `suite_network`, which needs the `network` feature.
+//! Compiled only into `network_manual`, which needs the `network-manual` feature.
 use std::num::NonZeroUsize;
 
 use kithara::{
@@ -15,18 +15,16 @@ use kithara::{
     audio::ReadOutcome,
     decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
-    events::TrackId,
-    host::{Host, HostConfig, HostSettingsControl},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken, time,
         time::{Duration, Instant},
     },
-    play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
-        ResourceSrc, SelectTransition,
-    },
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+    queue::{TrackSource, Transition},
 };
+use kithara_integration_tests::offline::OfflinePlayer;
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tracing::debug;
 
@@ -191,7 +189,7 @@ async fn live_remote_resource_decodes_with_duration(
             )
             .build();
 
-    let mut resource = Box::pin(Resource::new(config))
+    let mut resource = kithara_integration_tests::mock::open_resource(&config)
         .await
         .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 
@@ -240,8 +238,8 @@ async fn live_remote_resource_decodes_with_duration(
     );
 }
 
-/// Reproduces EXACTLY the app flow: `PlayerImpl` + `prepare_config` + `Resource::new` +
-/// `select_item` + `duration_seconds()`. This is what the GUI reads.
+/// Live MP3 metadata through the product queue and player composition.
+/// `duration_seconds()` is the observation the GUI reads.
 // flash(false): live-internet sockets are invisible to the flash engine; a virtual
 // 500ms pacing sleep would elapse before the real metadata fetch completes.
 #[kithara::test(
@@ -300,20 +298,11 @@ async fn player_mp3_duration_matches_app_flow(
     let pools = pools();
     let store = asset_store(&temp_dir, true, pools.clone());
 
-    let mut host = Host::new(HostConfig::builder().build()).expect("create playback host");
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(host.sample_rate())
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools).build()))
-            .build(),
-    );
-    let player = host
-        .insert(player)
-        .expect("insert player into playback host");
-    player.reserve_slots(1);
-
-    let mut config: ResourceConfig<TestPools> =
+    let harness = OfflinePlayer::new(HostConfig::offline(pools).build()).await;
+    let player = harness.player();
+    let config: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(url).unwrap())
+            .worker(harness.worker().clone())
             .store(store)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
@@ -321,35 +310,20 @@ async fn player_mp3_duration_matches_app_flow(
                     .build(),
             )
             .build();
-    config = player
-        .prepare_config(config)
-        .expect("prepare live remote resource config");
+    harness
+        .with_queue(move |control| {
+            let id = control
+                .append(TrackSource::Config(Box::new(config)))
+                .expect("append live remote resource");
+            control
+                .select(id, Transition::Crossfade)
+                .expect("select live remote resource");
+            control.play();
+        })
+        .await;
 
-    let resource = Box::pin(Resource::new(config))
-        .await
-        .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
-
-    player
-        .replace_item(0, resource, TrackId::allocate())
-        .expect("install live remote resource");
-    player
-        .select_item_with_crossfade(
-            0,
-            SelectTransition {
-                playback: kithara::play::SelectionPlayback::Play,
-                crossfade: kithara::play::CrossfadeSettings {
-                    duration: player.crossfade_duration(),
-                    ..Default::default()
-                },
-            },
-        )
-        .expect("select live remote resource");
-
-    // Wait on the concrete state the assertion below reads: the selected
-    // slot's duration committed into player shared state. The inner sleep is
-    // only the poll cadence of this state-checking loop; the test-level
-    // `timeout(30s)` bounds a genuine stall.
     while player.duration_seconds().is_none() {
+        harness.render(512).await;
         time::sleep(Duration::from_millis(20)).await;
     }
 
@@ -361,5 +335,5 @@ async fn player_mp3_duration_matches_app_flow(
     );
     let dur_secs = dur.expect("checked");
     assert!(dur_secs > 30.0, "{url}: expected >30s, got {dur_secs:.1}s");
-    host.remove(&player).expect("remove live remote player");
+    harness.close().await;
 }

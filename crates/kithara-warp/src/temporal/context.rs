@@ -1,9 +1,8 @@
 use std::ops::Range;
 
 use kithara_signal::OutputContext;
+use kithara_sync::{SessionAnchor, SessionBeat};
 use num_traits::ToPrimitive;
-
-use crate::{SessionAnchor, SessionBeat};
 
 /// Immutable session position for one output subrange.
 ///
@@ -96,10 +95,11 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
+    use kithara_sync::SessionBeat;
     use kithara_test_utils::kithara;
 
     use super::RenderContext;
-    use crate::{SessionBeat, consts};
+    use crate::consts;
 
     fn beat(value: f64) -> SessionBeat {
         SessionBeat::new(value).expect("invariant: fixture beat is finite")
@@ -166,10 +166,11 @@ mod tests {
     }
     #[kithara::test]
     fn ramp_subranges_follow_the_same_trajectory() {
-        let anchor = crate::SessionAnchor::new(SessionFrame::new(0), beat(0.0), 2.0, sample_rate())
-            .expect("fixture anchor is valid")
-            .retarget(SessionFrame::new(0), 3.0, 0.005)
-            .expect("fixture ramp is valid");
+        let anchor =
+            kithara_sync::SessionAnchor::new(SessionFrame::new(0), beat(0.0), 2.0, sample_rate())
+                .expect("fixture anchor is valid")
+                .retarget(SessionFrame::new(0), 3.0, 0.005)
+                .expect("fixture ramp is valid");
         let context = RenderContext::new(output(Some(TransportRevision::first())), Some(anchor))
             .expect("fixture context is valid");
         for split in [1, 17, 128, 240, 479] {

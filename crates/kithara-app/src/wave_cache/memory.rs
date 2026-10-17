@@ -189,7 +189,7 @@ pub(crate) fn token_for(key: &ResourceKey) -> AnalysisToken {
 mod tests {
     use std::{num::NonZeroU32, ops::Range};
 
-    use ::kithara::platform::sync::Arc;
+    use ::kithara::platform::{sync::Arc, time::Duration};
     /// The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
         analysis::{
@@ -271,6 +271,7 @@ mod tests {
             coverage.insert(0..extent);
         }
         TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token("assets/track.analysis".into())
             .revision(7)
             .source_sample_rate(rate())
@@ -631,6 +632,7 @@ mod tests {
         let mut coverage = RangeSet::new();
         coverage.insert(0..500);
         let partial = TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token("assets/track.analysis".into())
             .revision(3)
             .source_sample_rate(rate())
@@ -658,6 +660,7 @@ mod tests {
         let mut coverage = RangeSet::new();
         coverage.insert(20..1000);
         let settled = TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token("assets/track.analysis".into())
             .revision(3)
             .source_sample_rate(rate())

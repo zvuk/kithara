@@ -30,11 +30,12 @@ fn chunk(pools: &Pools, spec: AudioSpec, samples: &[f32]) -> AudioChunk {
             source_byte_offset: Some(1_024),
             variant_index: Some(2),
             frames: u32::try_from(frames).expect("fixture frame count"),
-            epoch: 11,
+            segment: kithara_signal::SegmentId::FIRST,
             render_revision: 13,
             mapping_revision: std::num::NonZeroU64::new(17),
             frame_offset: 9_876,
             source_bytes: 512,
+            ..Default::default()
         },
         sample_buffer(pools, samples),
     )

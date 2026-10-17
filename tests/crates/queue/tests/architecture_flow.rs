@@ -50,12 +50,16 @@ async fn queue_playback_architecture(#[future(awt)] served_mp3: (TestServerHelpe
     let queue = harness
         .insert_control(Queue::new(
             QueueConfig::builder()
-                .player(harness.take_player())
+                .prep(harness.resource_prep().clone())
                 .store(store.clone())
-                .crossfade_settings(kithara::play::CrossfadeSettings {
-                    duration: 0.0,
-                    ..kithara::play::CrossfadeSettings::default()
-                })
+                .settings(
+                    kithara::queue::QueueSettings::builder()
+                        .crossfade(kithara::play::CrossfadeSettings {
+                            duration: 0.0,
+                            ..kithara::play::CrossfadeSettings::default()
+                        })
+                        .build(),
+                )
                 .build(),
         ))
         .await;
@@ -128,7 +132,7 @@ async fn queue_playback_architecture(#[future(awt)] served_mp3: (TestServerHelpe
         }),
         json!({
             "schema_version": TRACE_SCHEMA_VERSION, "sequence": 6,
-            "kind": TraceRecordKind::ResourceTransfer, "name": "PlayerImpl::replace_item",
+            "kind": TraceRecordKind::ResourceTransfer, "name": "PlayerImpl::select",
             "resource_type": "Decoder", "resource_id": resource_id
         }),
         json!({

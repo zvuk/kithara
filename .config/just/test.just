@@ -22,14 +22,22 @@ all:
 # Both suites run the wasm Host tests and FFI wire contract. SUITE `all` also
 # runs the integration browser suite; `webcodecs` adds kithara-decode's target.
 
-# Run the Rust tests that need a browser (SUITE: all | webcodecs).
+# Run browser tests; REAL_AUDIO_ROUTE selects device-backed binaries for CI only.
 [positional-arguments]
-wasm BROWSER="chrome" SUITE="all":
+wasm BROWSER="chrome" SUITE="all" REAL_AUDIO_ROUTE="exclude":
     #!/usr/bin/env bash
     set -euo pipefail
     browser="{{ BROWSER }}"
     suite="{{ SUITE }}"
+    real_audio_route="{{ REAL_AUDIO_ROUTE }}"
     toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
+    case "$real_audio_route" in
+      exclude|include) ;;
+      *)
+        echo "unknown real audio route selection: $real_audio_route (use exclude|include)"
+        exit 2
+        ;;
+    esac
     case "$suite" in
       all|webcodecs) ;;
       *)
@@ -71,13 +79,15 @@ wasm BROWSER="chrome" SUITE="all":
       -Z build-std-features=optimize_for_size \
       -p kithara-host --lib --no-default-features \
       --features symphonia,webcodecs,resample-rubato,stretch-identity,client-reqwest,tls-rustls
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-ffi --test web-observer --no-default-features \
-      --features wasm
+    if [[ "$real_audio_route" == "include" ]]; then
+      WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+        cargo "+$toolchain" test --profile test-release \
+        --target wasm32-unknown-unknown \
+        -Z build-std=std,panic_abort,core,alloc \
+        -Z build-std-features=optimize_for_size \
+        -p kithara-ffi --test web-observer --no-default-features \
+        --features wasm
+    fi
     WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
       cargo "+$toolchain" test --profile test-release \
       --target wasm32-unknown-unknown \
@@ -109,12 +119,14 @@ wasm BROWSER="chrome" SUITE="all":
       -Z build-std-features=optimize_for_size \
       -p kithara-analysis --lib --no-default-features \
       --features analysis-waveform,beat-dsp,client-reqwest,tls-rustls,symphonia,webcodecs
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-ffi-web-analysis-tests --features browser --test web-analysis
+    if [[ "$real_audio_route" == "include" ]]; then
+      WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+        cargo "+$toolchain" test --profile test-release \
+        --target wasm32-unknown-unknown \
+        -Z build-std=std,panic_abort,core,alloc \
+        -Z build-std-features=optimize_for_size \
+        -p kithara-ffi-web-analysis-tests --features browser --test web-analysis
+    fi
     if [[ "$suite" == "all" ]]; then
       # `optimize_for_size` matches crates/kithara-ffi/.cargo/config.toml
       # so both lanes rebuild one identical std. The release-grade test profile
@@ -129,13 +141,15 @@ wasm BROWSER="chrome" SUITE="all":
         --features kithara-integration-tests/wasm --test ffi_web --test suite_heavy
       # `wasm-bindgen-test` picks its thread per binary, and the live-graph
       # oracle needs the page's main thread.
-      WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-        cargo "+$toolchain" test --profile test-release \
-        --target wasm32-unknown-unknown \
-        -Z build-std=std,panic_abort,core,alloc \
-        -Z build-std-features=optimize_for_size \
-        -p kithara-integration-tests --no-default-features \
-        --features kithara-integration-tests/wasm --test suite_live_web_audio
+      if [[ "$real_audio_route" == "include" ]]; then
+        WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+          cargo "+$toolchain" test --profile test-release \
+          --target wasm32-unknown-unknown \
+          -Z build-std=std,panic_abort,core,alloc \
+          -Z build-std-features=optimize_for_size \
+          -p kithara-integration-tests --no-default-features \
+          --features kithara-integration-tests/wasm --test suite_live_web_audio
+      fi
     fi
     # `webcodecs_browser` belongs to kithara-decode, not to any integration
     # suite, so it is its own cargo invocation. WebCodecs is a Chromium API;
@@ -157,9 +171,9 @@ wasm BROWSER="chrome" SUITE="all":
     fi
 
 # Render the same active no-SYNC scenarios into listening artifacts, the Host
-# metronome over a sine deck through a tempo ride, then the SYNC and Warp
-# scenarios on Richie Hawtin - The Tunnel; the metronome and SYNC captures come
-# from the Host output tap, clicks included. Recorders that only write artifacts
+# metronome over a sine deck through a tempo ride, then the Warp scenarios on
+# Richie Hawtin - The Tunnel; the metronome capture comes from the Host output
+# tap, clicks included. Recorders that only write artifacts
 # are ignored in ordinary CI so filesystem work cannot consume their
 # behavioral-test deadlines.
 [positional-arguments]
@@ -180,12 +194,15 @@ audio-artifacts OUTPUT:
         --run-ignored=all \
         -E 'test(=no_sync_real_media::matrix::record_no_sync_real_media_artifacts) | test(=metronome::the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_ride)'
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
-      just test run -p kithara-sync-tests --test sync \
-        --run-ignored=all \
-        -E 'test(/^sync_(listening::record_sync_listening_wavs_|staging::)/)'
-    KITHARA_AUDIO_ARTIFACT_DIR="$output" \
       just test run -p kithara-warp-tests --test warp \
         -E 'test(=region::rendered_clicks_follow_the_integral_of_the_tempo_ramp_signalsmith) | test(/^real_track::/)'
+
+    KITHARA_AUDIO_ARTIFACT_DIR="$output" \
+      just test run -p kithara-sync-tests --test sync \
+        -E 'test(/^sync_listening::record_sync_listening_wavs_/) | test(=sync_product_matrix::queue::one_queue_crossfades_five_music_tracks_and_retargets_host_during_overlap) | test(=sync_product_matrix::queue::one_queue_crossfades_five_real_tracks_through_four_public_next_requests)'
+    KITHARA_AUDIO_ARTIFACT_DIR="$output" \
+      just test run -p kithara-queue-tests --test queue \
+        -E 'test(/^next_crossfade_hands_over_transport::a_next_press_hands_the_transport_to_the_track_it_crossfades_in_/)'
 
 # Every UI test target, followed by both hosts drawing the same gallery and
 # shipped studio pages, and the gallery built the other way it ships. This is
@@ -514,7 +531,7 @@ rtsan-async FILTER="no_block": (_rtsan "-p kithara-harness-tests --test suite_li
 # `metronome` drives the Host click inserted after the limiter.
 # `analysis_offer_is_realtime_safe` puts the analysis offer where a decode tick
 # makes it. The lib case checks construction and drop of real stream terminal errors.
-rtsan FILTER="offline_harness rt_metrics mix_tap metronome analysis_offer_is_realtime_safe real_stream_terminal_error_construction_and_drop_are_rt_safe": (_rtsan "-p kithara-play -p kithara-harness-tests -p kithara-host-tests -p kithara-analysis-tests --lib --test play --test suite_light --test host --test analysis" "kithara-play/apple-fused-src,kithara-host-tests/apple-fused-src" FILTER)
+rtsan FILTER="offline_harness rt_metrics mix_tap metronome analysis_offer_is_realtime_safe real_stream_terminal_error_construction_and_drop_are_rt_safe": (_rtsan "-p kithara-play -p kithara-render -p kithara-harness-tests -p kithara-host-tests -p kithara-analysis-tests --lib --test play --test suite_light --test host --test analysis" "kithara-play/apple-fused-src,kithara-host-tests/apple-fused-src" FILTER)
 
 rtsan-file FILTER="phase_continuity": (_rtsan "-p kithara-decode-tests --test decode_heavy" "apple-fused-src" FILTER)
 

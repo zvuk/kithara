@@ -65,13 +65,6 @@ impl ItemRole {
         self.track().id
     }
 
-    /// Whether this is the item being heard, and so the one that should
-    /// drive auto-advance.
-    #[must_use]
-    pub const fn is_leading(&self) -> bool {
-        matches!(self, Self::Leading(_))
-    }
-
     /// The item this role is about.
     #[must_use]
     pub const fn track(&self) -> &TrackRef {

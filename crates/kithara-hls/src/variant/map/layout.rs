@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use kithara_bufpool::HasPool;
+use kithara_stream::needs_exact_byte_sizes;
 use kithara_test_utils::kithara;
 use tracing::debug;
 
@@ -10,6 +11,18 @@ impl<S> HlsVariant<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    #[kithara::probe(variant = self.variant as u64, natural_total = self.layout.total_bytes())]
+    pub(crate) fn total_bytes(&self) -> u64 {
+        let total = self.layout.total_bytes();
+        if !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
+            && let Some(alias) = self.seek.alias.load()
+            && let Some(offset) = self.layout.segment_byte_offset(alias.segment)
+        {
+            return alias.anchor.saturating_add(total.saturating_sub(offset));
+        }
+        total
+    }
+
     pub(crate) fn authoritative_len(&self) -> Option<u64> {
         self.layout.try_published(|| {
             let total = self.total_bytes();
@@ -147,11 +160,6 @@ where
             /// than mint EOF for an in-range offset that only looks past-the-end
             /// against the under-count.
             pub(crate) fn sizes_complete(&self) -> bool;
-            #[kithara::probe(
-                variant = self.variant as u64,
-                total = self.layout.total_bytes()
-            )]
-            pub(crate) fn total_bytes(&self) -> u64;
         }
     }
 }

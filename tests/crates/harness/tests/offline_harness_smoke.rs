@@ -5,7 +5,10 @@ use std::path::Path;
 use kithara::{
     self,
     events::TrackId,
-    platform::time::{self, Duration},
+    platform::{
+        flash::real_io,
+        time::{self, Duration},
+    },
     play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
     warp::{StretchKind, WarpConfig},
 };
@@ -13,6 +16,7 @@ use kithara_integration_tests::{
     disk_asset_store,
     offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
     test_defaults::consts,
+    waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::integration_fixtures::{constant_half, drain_tone};
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -43,28 +47,35 @@ fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
     ))
 }
 
-async fn file_resource(harness: &OfflinePlayer, path: &Path, store_dir: &Path) -> Resource {
+fn file_resource(
+    path: &Path,
+    store_dir: &Path,
+) -> ResourceConfig<kithara_integration_tests::bufpool_ext::TestPools> {
     let config: ResourceConfig<_> = ResourceConfig::for_src(
         ResourceSrc::parse(path.to_str().expect("utf-8 fixture path"))
             .expect("local media path is a valid resource src"),
     )
     .store(disk_asset_store(store_dir))
     .build();
-    let config = harness
-        .player()
-        .prepare_config(config)
-        .expect("offline player remains open");
-    Resource::new(config).await.expect("open local resource")
+    config
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn render_target(harness: &OfflinePlayer) -> Vec<f32> {
     let mut rendered: Vec<f32> = Vec::new();
     let mut total_frames: usize = 0;
     while rendered.len() < TARGET_SAMPLES && total_frames < MAX_RENDERED_FRAMES {
+        hang_tick!(format!(
+            "rendered {total_frames} frames toward the PCM window"
+        ));
         let block = harness.render(BLOCK_FRAMES).await;
         rendered.extend_from_slice(&block);
         total_frames = total_frames.saturating_add(BLOCK_FRAMES);
         let _ = harness.tick_and_drain().await;
+        if !block.is_empty() {
+            hang_reset!();
+        }
     }
     rendered
 }
@@ -76,15 +87,33 @@ async fn offline_harness_smoke(constant_half: &'static [u8]) {
         consts::SAMPLE_RATE,
     )
     .await;
-    harness
-        .with_player(move |player| {
-            player.insert(make_resource(constant_half, 0.1), TrackId::allocate(), None);
-            player.insert(make_resource(constant_half, 0.1), TrackId::allocate(), None);
+    {
+        let _real_io = real_io();
+        harness.render(BLOCK_FRAMES).await;
+    }
+    let deck_source = harness.pcm_deck((make_resource(constant_half, 0.1)).into());
+    let mut events = harness.player().subscribe();
+    let deck_id = harness
+        .with_queue(move |player| {
+            let deck_id = TrackId::allocate();
             player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
+                .append_with_id(deck_id, deck_source)
+                .expect("append PCM deck");
+            player
+                .select(deck_id, kithara::queue::Transition::None)
+                .expect("select the item");
+            player.play();
+            deck_id
         })
         .await;
+    wait_for_loader_done_event(
+        &mut events,
+        harness.player(),
+        deck_id,
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("PCM deck loads before the render window");
 
     let rendered = render_target(&harness).await;
 
@@ -95,16 +124,25 @@ async fn offline_harness_smoke(constant_half: &'static [u8]) {
 
 /// Audible frames rendered until the item plays to its end. A zero-filled
 /// underrun frame is silent, so decode latency does not count.
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn audible_frames_until_end(harness: &OfflinePlayer) -> usize {
     let mut audible = 0usize;
     for _ in 0..DRAIN_BLOCK_BUDGET {
+        hang_tick!(format!(
+            "waiting for the end after {audible} audible frames"
+        ));
         let block = harness.render(BLOCK_FRAMES).await;
-        audible += block
+        let progress = block
             .as_chunks::<OUTPUT_CHANNELS>()
             .0
             .iter()
             .filter(|frame| frame.iter().any(|sample| *sample != 0.0))
             .count();
+        audible += progress;
+        if progress > 0 {
+            hang_reset!();
+        }
         let ended = harness
             .tick_and_drain()
             .await
@@ -113,7 +151,7 @@ async fn audible_frames_until_end(harness: &OfflinePlayer) -> usize {
         if ended {
             return audible;
         }
-        time::sleep(Duration::from_millis(1)).await;
+        time::sleep(Duration::from_millis(1).min(__hang_detector.remaining())).await;
     }
     panic!("the source never played to its end within {DRAIN_BLOCK_BUDGET} blocks");
 }
@@ -131,19 +169,24 @@ async fn offline_harness_glide_varispeed(drain_tone: &'static [u8], temp_dir: Te
         consts::SAMPLE_RATE,
     )
     .await;
+    {
+        let _real_io = real_io();
+        harness.render(BLOCK_FRAMES).await;
+    }
     let path = temp_dir.write("glide.wav", drain_tone);
-    let resource = file_resource(&harness, &path, &temp_dir.path().join("store")).await;
+    let resource = file_resource(&path, &temp_dir.path().join("store"));
     harness
-        .with_player(move |player| {
-            player.insert(resource, TrackId::allocate(), None);
+        .with_queue(move |player| {
+            let id = player.append(resource).expect("append local deck");
             player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
+                .select(id, kithara::queue::Transition::None)
+                .expect("select the item");
+            player.play();
         })
         .await;
     harness
-        .player()
-        .set_default_rate(GLIDE_RATE)
+        .with_queue(move |player| player.set_default_rate(GLIDE_RATE))
+        .await
         .expect("a finite rate is accepted");
 
     let audible = audible_frames_until_end(&harness).await;

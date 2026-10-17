@@ -40,7 +40,7 @@ opus = ["symphonia", "dep:opus"]
 ape = ["dep:ape-decoder"]
 # Override Symphonia's LC-only AAC decoder with libfdk-aac (HE-AAC
 # v1/v2). Off by default — opt in per-target if needed.
-fdk-aac = ["symphonia", "dep:symphonia-core", "dep:fdk-aac"]
+fdk-aac = ["symphonia", "dep:symphonia-core", "dep:kithara-fdk"]
 usdt = ["kithara-test-utils/usdt"]
 mock = ["dep:unimock"]
 flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
@@ -71,7 +71,6 @@ ape-decoder = { workspace = true, optional = true }
 
 delegate = { workspace = true }
 derive_more = { workspace = true }
-fdk-aac = { workspace = true, optional = true }
 fieldwork = { workspace = true }
 num-traits = { workspace = true }
 opus = { workspace = true, optional = true }
@@ -94,6 +93,8 @@ core-foundation = { workspace = true, optional = true }
 core-foundation-sys = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-fdk = { workspace = true, optional = true }
+
 # hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
 hotpath = { workspace = true, optional = true }
 

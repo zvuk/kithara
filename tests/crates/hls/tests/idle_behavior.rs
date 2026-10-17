@@ -85,10 +85,12 @@ async fn idle_does_not_panic_hang_detector(
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let mut audio = worker
-        .load(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
-        .await
-        .expect("audio creation");
+    let mut audio = kithara_integration_tests::mock::load_audio(
+        &worker,
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
+    )
+    .await
+    .expect("audio creation");
 
     // Mirror the user-facing app: opening the audio handle implicitly
     // arms its scheduler slot via `preload()`. After that no consumer
@@ -181,14 +183,14 @@ async fn idle_prefetch_is_capped(
         .events(bus.clone())
         .build();
 
-    let _audio = worker
-        .load(
-            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-                .events(bus.clone())
-                .build(),
-        )
-        .await
-        .expect("audio creation");
+    let _audio = kithara_integration_tests::mock::load_audio(
+        &worker,
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .events(bus.clone())
+            .build(),
+    )
+    .await
+    .expect("audio creation");
 
     // Wait for prefetch quiescence on the real signal instead of a fixed
     // wall: each segment fetch emits `DownloaderEvent` (Enqueued/Started/

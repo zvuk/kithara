@@ -2,7 +2,7 @@ use std::io::Cursor;
 
 use kithara::{
     decode::{DecoderBackend, DecoderConfig, DecoderFactory},
-    platform::time::Duration,
+    platform::{time::Duration, tokio::task::spawn_blocking},
     signal::AudioChunk,
 };
 use kithara_integration_tests::{
@@ -60,44 +60,48 @@ fn write_enc_delay(bytes: &mut [u8], lame_tag_off: usize, new_enc_delay: u32) {
 /// absolute value exceeds `threshold`. For a sawtooth signal that
 /// starts at amplitude ~1.0, this index is the count of leading
 /// silence samples the decoder emitted.
-fn measure_leading_silence(
+async fn measure_leading_silence(
     mp3_bytes: Vec<u8>,
     backend: DecoderBackend,
     gapless: bool,
 ) -> (usize, f32, usize) {
-    let config = DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
-        .pools(pools())
-        .backend(backend)
-        .gapless(gapless)
-        .build();
-    let mut decoder =
-        DecoderFactory::create_with_probe(Cursor::new(mp3_bytes), Some("mp3"), config)
-            .expect("probe MP3 decoder");
-    let mut left = Vec::<f32>::with_capacity(SAMPLE_RATE as usize);
-    let chan = usize::from(CHANNELS);
-    for _ in 0..200 {
-        let outcome = decoder.next_chunk().expect("decode chunk");
-        let Ok(chunk) = AudioChunk::try_from(outcome) else {
-            break;
-        };
-        if chunk.samples.is_empty() {
-            continue;
+    spawn_blocking(move || {
+        let config = DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
+            .backend(backend)
+            .gapless(gapless)
+            .build();
+        let mut decoder =
+            DecoderFactory::create_with_probe(Cursor::new(mp3_bytes), Some("mp3"), config)
+                .expect("probe MP3 decoder");
+        let mut left = Vec::<f32>::with_capacity(SAMPLE_RATE as usize);
+        let chan = usize::from(CHANNELS);
+        for _ in 0..200 {
+            let outcome = decoder.next_chunk().expect("decode chunk");
+            let Ok(chunk) = AudioChunk::try_from(outcome) else {
+                break;
+            };
+            if chunk.samples.is_empty() {
+                continue;
+            }
+            for frame_chunk in chunk.samples.chunks_exact(chan) {
+                left.push(frame_chunk[0]);
+            }
+            if left.len() >= (SAMPLE_RATE as usize) {
+                break;
+            }
         }
-        for frame_chunk in chunk.samples.chunks_exact(chan) {
-            left.push(frame_chunk[0]);
-        }
-        if left.len() >= (SAMPLE_RATE as usize) {
-            break;
-        }
-    }
-    let threshold = 0.5_f32;
-    let total = left.len();
-    let idx = left
-        .iter()
-        .position(|v| v.abs() > threshold)
-        .unwrap_or(total);
-    let value = left.get(idx).copied().unwrap_or(0.0);
-    (idx, value, total)
+        let threshold = 0.5_f32;
+        let total = left.len();
+        let idx = left
+            .iter()
+            .position(|v| v.abs() > threshold)
+            .unwrap_or(total);
+        let value = left.get(idx).copied().unwrap_or(0.0);
+        (idx, value, total)
+    })
+    .await
+    .expect("raw MP3 decoder task completes")
 }
 
 #[kithara::test(
@@ -129,9 +133,9 @@ async fn mp3_raw_decoder_shift_vs_reference(
     let lame_off = find_lame_tag_offset(&bytes);
     let lame_tag = lame_off.and_then(|off| read_enc_delay_padding(&bytes, off));
     let (leading_silence, first_value, total) =
-        measure_leading_silence(bytes.clone(), backend, false);
+        measure_leading_silence(bytes.clone(), backend, false).await;
     let (leading_silence_gapless_on, first_value_on, _) =
-        measure_leading_silence(bytes.clone(), backend, true);
+        measure_leading_silence(bytes.clone(), backend, true).await;
 
     println!(
         "\n===== {backend:?}, {} =====\n\
@@ -211,7 +215,7 @@ async fn mp3_decoder_reads_lame_enc_delay_or_not(
         write_enc_delay(&mut patched, lame_off, override_val);
         let (round_trip_delay, _) = read_enc_delay_padding(&patched, lame_off).expect("read back");
         let (leading_silence, first_value, total) =
-            measure_leading_silence(patched, backend, false);
+            measure_leading_silence(patched, backend, false).await;
         println!(
             "  enc_delay_override = {override_val:>4} (round-trip read = {round_trip_delay:>4}) → \
             leading_silence = {leading_silence:>5} samples (decoded[{leading_silence}] = {first_value:+.6}, total_window = {total})",

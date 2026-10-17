@@ -97,12 +97,12 @@ fn decode_left_channel(
     );
     let mut left = Vec::new();
     while let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("decode chunk") {
-        for chunk in trimmer.push(chunk) {
+        for chunk in trimmer.push(*chunk).expect("valid gapless PCM") {
             let channels = usize::from(chunk.spec().channels);
             left.extend(chunk.samples.iter().step_by(channels));
         }
     }
-    for chunk in trimmer.flush() {
+    for chunk in trimmer.flush().expect("valid gapless PCM") {
         let channels = usize::from(chunk.spec().channels);
         left.extend(chunk.samples.iter().step_by(channels));
     }

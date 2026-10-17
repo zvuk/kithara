@@ -1,10 +1,9 @@
 use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass};
-use kithara_signal::AudioChunk;
-use kithara_stream::{PendingReason, StreamType};
+use kithara_stream::{PendingReason, SourcePhase, StreamType};
 use kithara_test_utils::kithara;
 
 use crate::{
-    AudioEvent, DecoderEvent, SeekLifecycleStage, SegmentLocation,
+    DecoderEvent,
     audio::event::{decode_error_detail, map_decode_error_class, map_decode_error_kind},
     pipeline::{
         decode::{
@@ -12,9 +11,8 @@ use crate::{
             format::{FormatDecision, detect},
         },
         fetch::Fetch,
-        gapless::visible_duration,
         seek::skip::apply as apply_skip,
-        track::{TrackFailure, WaitingReason},
+        track::WaitingReason,
     },
 };
 
@@ -27,26 +25,18 @@ pub(crate) fn tick<T: StreamType>(
     core: &mut ActiveDecode,
     mut ctx: DecodeCtx<'_, T>,
 ) -> DecodeAction {
-    let active = core.active();
-    if let Some(duration) = visible_duration(
-        active.decoder().duration(),
-        active.gapless_profile(),
-        core.gapless_mode(),
-    ) && Some(duration) > ctx.playhead.duration()
-    {
-        ctx.playhead.set_duration(Some(duration));
-    }
-    let epoch = ctx.seek.epoch();
     let mut decoded = false;
     loop {
-        if ctx.seek_observe.is_flushing() || ctx.seek_observe.is_pending() {
-            return DecodeAction::SeekInterrupted;
-        }
+        hang_tick!();
         if let Some(error) = core.take_stage_error() {
             return decode_failed(core, error, &ctx);
         }
-        match core.next_output(&mut *ctx.cursor, epoch) {
-            Ok(Some(chunk)) => return produced(chunk, epoch, &mut ctx),
+        match core.next_output(
+            &mut *ctx.cursor,
+            ctx.physical_duration,
+            ctx.physical_reconciled,
+        ) {
+            Ok(Some(chunk)) => return DecodeAction::Produced(Box::new(Fetch::data(chunk))),
             Ok(None) => {}
             Err(error) => return decode_failed(core, error, &ctx),
         }
@@ -54,31 +44,17 @@ pub(crate) fn tick<T: StreamType>(
             return transition_hold(core, &ctx);
         }
         if core.active().is_source_exhausted() {
-            if core.has_live_incoming() {
-                return transition_hold(core, &ctx);
-            }
-            if !core.active().is_exhaustion_observed() {
-                core.observe_source_exhaustion();
-                return DecodeAction::TransitionPending;
-            }
-            core.finish_active();
-            match core.next_output_unheld(&mut *ctx.cursor, epoch) {
-                Ok(Some(chunk)) => return produced(chunk, epoch, &mut ctx),
-                Ok(None) => {}
-                Err(error) => return decode_failed(core, error, &ctx),
-            }
-            if let FormatDecision::Recreate(recreate) =
-                detect(ctx.stream, core.active(), ctx.seek_observe)
-            {
-                return DecodeAction::StartRecreate(recreate);
-            }
-            return DecodeAction::Eof;
+            return finish_exhausted(core, &mut ctx);
         }
         if decoded {
             return DecodeAction::Progress;
         }
         decoded = true;
+        kithara::probe_event!(decode_step);
         match core.next_chunk(ctx.stream.position()) {
+            Ok(DecoderChunkOutcome::Pending(PendingReason::SessionRetired)) => {
+                return DecodeAction::ReaderRetired;
+            }
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
                 return variant_change(core, &ctx);
             }
@@ -86,11 +62,18 @@ pub(crate) fn tick<T: StreamType>(
                 return DecodeAction::Progress;
             }
             Ok(DecoderChunkOutcome::Pending(_)) => {
-                return DecodeAction::Pending(WaitingReason::Waiting);
+                let reason = match ctx.stream.phase() {
+                    SourcePhase::WaitingDemand => WaitingReason::WaitingDemand,
+                    SourcePhase::WaitingMetadata => WaitingReason::WaitingMetadata,
+                    _ => WaitingReason::Waiting,
+                };
+                return DecodeAction::Pending(reason);
             }
             Ok(DecoderChunkOutcome::Chunk(chunk)) => {
-                let Some(chunk) = apply_skip(chunk, epoch, ctx.resume.as_deref_mut()) else {
-                    continue;
+                let chunk = match apply_skip(*chunk, core.active.pending_head_skip_mut()) {
+                    Ok(Some(chunk)) => chunk,
+                    Ok(None) => continue,
+                    Err(error) => return decode_failed(core, error, &ctx),
                 };
                 if chunk.samples.is_empty() {
                     continue;
@@ -107,10 +90,38 @@ pub(crate) fn tick<T: StreamType>(
             Err(error) if error.classify() == ErrorClass::VariantChange => {
                 return variant_change(core, &ctx);
             }
-            Err(error) if error.classify() == ErrorClass::Interrupted => {}
             Err(error) => return decode_failed(core, error, &ctx),
         }
     }
+}
+
+fn finish_exhausted<T: StreamType>(
+    core: &mut ActiveDecode,
+    ctx: &mut DecodeCtx<'_, T>,
+) -> DecodeAction {
+    if core.has_live_incoming() {
+        return transition_hold(core, ctx);
+    }
+    if !core.active().is_exhaustion_observed() {
+        core.observe_source_exhaustion();
+        return DecodeAction::Progress;
+    }
+    if let Err(error) = core.finish_active() {
+        return decode_failed(core, error, ctx);
+    }
+    match core.next_output_unheld(
+        &mut *ctx.cursor,
+        ctx.physical_duration,
+        ctx.physical_reconciled,
+    ) {
+        Ok(Some(chunk)) => return DecodeAction::Produced(Box::new(Fetch::data(chunk))),
+        Ok(None) => {}
+        Err(error) => return decode_failed(core, error, ctx),
+    }
+    if let FormatDecision::Recreate(recreate) = detect(ctx.stream, core.active()) {
+        return DecodeAction::StartRecreate(recreate);
+    }
+    DecodeAction::Eof
 }
 
 fn transition_hold<T: StreamType>(core: &mut ActiveDecode, ctx: &DecodeCtx<'_, T>) -> DecodeAction {
@@ -137,40 +148,15 @@ fn decode_failed<T: StreamType>(
             detail: decode_error_detail(&error),
         });
     }
-    DecodeAction::Failed(TrackFailure::Decode(error))
-}
-
-pub(crate) fn produced<T: StreamType>(
-    chunk: AudioChunk,
-    epoch: u64,
-    ctx: &mut DecodeCtx<'_, T>,
-) -> DecodeAction {
-    if ctx
-        .resume
-        .as_deref()
-        .is_some_and(|resume| resume.seek.epoch == epoch)
-        && let Some(emit) = ctx.emit
-    {
-        emit.enqueue(AudioEvent::SeekLifecycle {
-            stage: SeekLifecycleStage::DecodeStarted,
-            seek_epoch: epoch,
-            location: SegmentLocation::new(
-                chunk.meta.variant_index,
-                chunk.meta.segment_index,
-                None,
-                None,
-            ),
-        });
-    }
-    DecodeAction::Produced(Fetch::data(chunk, epoch))
+    DecodeAction::Failed(error)
 }
 
 pub(crate) fn variant_change<T: StreamType>(
     core: &ActiveDecode,
     ctx: &DecodeCtx<'_, T>,
 ) -> DecodeAction {
-    match detect(ctx.stream, core.active(), ctx.seek_observe) {
+    match detect(ctx.stream, core.active()) {
         FormatDecision::Recreate(recreate) => DecodeAction::StartRecreate(recreate),
-        FormatDecision::None => DecodeAction::SeekInterrupted,
+        FormatDecision::None => DecodeAction::Pending(WaitingReason::Waiting),
     }
 }

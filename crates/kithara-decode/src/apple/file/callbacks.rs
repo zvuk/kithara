@@ -97,11 +97,7 @@ impl CallbackCtx {
             && (error.classify() == ErrorClass::VariantChange
                 || matches!(
                     error.pending_reason(),
-                    Some(
-                        PendingReason::SeekPending
-                            | PendingReason::VariantChange
-                            | PendingReason::SessionRetired
-                    )
+                    Some(PendingReason::VariantChange | PendingReason::SessionRetired)
                 ))
         {
             return read.map(|_| ());
@@ -509,12 +505,6 @@ mod tests {
         3,
         false
     )]
-    #[case::seek_pending(
-        Error::new(ErrorKind::Interrupted, PendingReason::SeekPending),
-        Some(PendingReason::SeekPending),
-        30,
-        false
-    )]
     #[case::variant_pending(
         Error::new(ErrorKind::Interrupted, PendingReason::VariantChange),
         Some(PendingReason::VariantChange),
@@ -535,12 +525,6 @@ mod tests {
         ),
         Some(PendingReason::NotReady(NotReadyCause::SourcePending)),
         3,
-        true
-    )]
-    #[case::seek_pending_during_seek(
-        Error::new(ErrorKind::Interrupted, PendingReason::SeekPending),
-        Some(PendingReason::SeekPending),
-        30,
         true
     )]
     #[case::variant_pending_during_seek(

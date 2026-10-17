@@ -13,6 +13,8 @@ use kithara::{
 };
 use kithara_test_utils::kithara as test_attrs;
 
+#[cfg(all(test, feature = "gui"))]
+pub(crate) use crate::engine::render_fixture as render_rig;
 use crate::pools::AppHost;
 
 struct Discard;
@@ -23,7 +25,7 @@ impl RenderSink for Discard {
     }
 }
 
-/// Drive the application host through one exact offline output range.
+/// Apply an exact output range to an offline application host.
 ///
 /// # Errors
 /// Returns the host's offline rendering failure.

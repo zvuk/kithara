@@ -5,7 +5,7 @@ use super::{
     fade::{FadeInState, apply_fade_in, apply_trailing_fade_out},
     silence::{find_leading_trim_frames, trailing_silent_frames},
 };
-use crate::{GaplessOutput, gapless::heuristic::SilenceTrimParams};
+use crate::{DecodeResult, GaplessOutput, gapless::heuristic::SilenceTrimParams};
 
 #[derive(Debug)]
 pub(super) struct HeuristicState {
@@ -47,9 +47,9 @@ impl HeuristicState {
         tail: &mut BufferedChunks,
         trailing_frames: u64,
         chunk: AudioChunk,
-    ) -> GaplessOutput {
+    ) -> DecodeResult<GaplessOutput> {
         if !self.leading_enabled {
-            return self.forward_post_leading(tail, trailing_frames, chunk);
+            return Ok(self.forward_post_leading(tail, trailing_frames, chunk));
         }
         self.leading_buffer.push(chunk);
         if let Some(trim_frames) = find_leading_trim_frames(
@@ -67,7 +67,7 @@ impl HeuristicState {
             self.leading_enabled = false;
             return self.drain_leading_buffer(tail, trailing_frames, 0);
         }
-        GaplessOutput::new()
+        Ok(GaplessOutput::new())
     }
 
     fn forward_post_leading(
@@ -85,7 +85,7 @@ impl HeuristicState {
         &mut self,
         tail: &mut BufferedChunks,
         trailing_frames: u64,
-    ) -> GaplessOutput {
+    ) -> DecodeResult<GaplessOutput> {
         let mut ready = GaplessOutput::new();
         if self.leading_enabled {
             let trim_frames = find_leading_trim_frames(
@@ -98,7 +98,7 @@ impl HeuristicState {
             if trim_frames > 0 {
                 self.arm_fade_in();
             }
-            ready.extend(self.drain_leading_buffer(tail, trailing_frames, trim_frames));
+            ready.extend(self.drain_leading_buffer(tail, trailing_frames, trim_frames)?);
         }
         if self.params.trim_trailing {
             let silent_suffix = trailing_silent_frames(tail.chunks(), self.silence_threshold_amp);
@@ -106,7 +106,7 @@ impl HeuristicState {
                 && silent_suffix < tail.frames()
                 && silent_suffix >= self.params.min_trim_frames
             {
-                tail.trim(silent_suffix);
+                tail.trim(silent_suffix)?;
                 let sample_rate = tail
                     .chunks()
                     .last()
@@ -115,7 +115,7 @@ impl HeuristicState {
             }
         }
         ready.extend(tail.drain());
-        ready
+        Ok(ready)
     }
 
     fn arm_fade_in(&mut self) {
@@ -132,14 +132,14 @@ impl HeuristicState {
         tail: &mut BufferedChunks,
         trailing_frames: u64,
         mut trim_frames: u64,
-    ) -> GaplessOutput {
+    ) -> DecodeResult<GaplessOutput> {
         for chunk in self.leading_buffer.take() {
-            let Some(mut chunk) = trim_leading(chunk, &mut trim_frames) else {
+            let Some(mut chunk) = trim_leading(chunk, &mut trim_frames)? else {
                 continue;
             };
             apply_fade_in(&mut self.fade_in, &mut chunk);
             tail.push(chunk);
         }
-        tail.release(trailing_frames)
+        Ok(tail.release(trailing_frames))
     }
 }

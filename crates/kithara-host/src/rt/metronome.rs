@@ -13,10 +13,10 @@ use firewheel::{
 };
 use kithara_config::Config;
 use kithara_platform::time::Duration;
-use kithara_play::rt::read_render_context;
+use kithara_render::rt::read_render_context;
 use kithara_signal::SessionFrame;
+use kithara_sync::{SessionAnchor, SessionBeat};
 use kithara_test_utils::kithara;
-use kithara_warp::{SessionAnchor, SessionBeat};
 use num_traits::ToPrimitive;
 
 use crate::{

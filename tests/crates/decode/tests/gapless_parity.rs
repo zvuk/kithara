@@ -4,7 +4,7 @@ use kithara::{
     decode::{
         DecodeResult, Decoder, DecoderBackend, DecoderConfig, DecoderFactory, GaplessTrimmer,
     },
-    platform::time::Duration,
+    platform::{time::Duration, tokio::task::spawn_blocking},
     resampler::NoResamplerBackend,
     stream::{AudioCodec as StreamAudioCodec, AudioCodec, ContainerFormat, MediaInfo},
 };
@@ -31,74 +31,78 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
 ) {
     let (_server, fixture) = gapless_aac;
 
-    let direct = create_decoder_from_media_info(
-        &fixture,
-        TestDecoderConfig::builder().pools(pools()).build(),
-    )
-    .expect("create direct AAC fMP4 decoder");
-    let direct_gapless = direct
-        .track_info()
-        .gapless
-        .expect("direct gapless metadata");
-    let expected_leading = u64::from(AAC_GAPLESS_ENCODER_DELAY)
-        + u64::try_from(AAC_FRAME_SAMPLES).expect("AAC frame samples fit u64");
-    assert_eq!(direct_gapless.leading_frames, expected_leading);
-    assert_eq!(
-        direct_gapless.trailing_frames,
-        u64::from(AAC_GAPLESS_TRAILING_DELAY)
-    );
-    let direct_pcm = decode_visible_frames(direct).expect("decode direct AAC fMP4");
+    spawn_blocking(move || {
+        let direct = create_decoder_from_media_info(
+            &fixture,
+            TestDecoderConfig::builder().pools(pools()).build(),
+        )
+        .expect("create direct AAC fMP4 decoder");
+        let direct_gapless = direct
+            .track_info()
+            .gapless
+            .expect("direct gapless metadata");
+        let expected_leading = u64::from(AAC_GAPLESS_ENCODER_DELAY)
+            + u64::try_from(AAC_FRAME_SAMPLES).expect("AAC frame samples fit u64");
+        assert_eq!(direct_gapless.leading_frames, expected_leading);
+        assert_eq!(
+            direct_gapless.trailing_frames,
+            u64::from(AAC_GAPLESS_TRAILING_DELAY)
+        );
+        let direct_pcm = decode_visible_frames(direct).expect("decode direct AAC fMP4");
 
-    let probe = create_decoder_with_probe(
-        fixture.bytes.clone(),
-        "m4a",
-        TestDecoderConfig::builder().pools(pools()).build(),
-    )
-    .expect("create probe AAC fMP4 decoder");
-    let probe_gapless = probe.track_info().gapless.expect("probe gapless metadata");
-    assert_eq!(probe_gapless, direct_gapless);
-    let probe_pcm = decode_visible_frames(probe).expect("decode probe AAC fMP4");
+        let probe = create_decoder_with_probe(
+            fixture.bytes.clone(),
+            "m4a",
+            TestDecoderConfig::builder().pools(pools()).build(),
+        )
+        .expect("create probe AAC fMP4 decoder");
+        let probe_gapless = probe.track_info().gapless.expect("probe gapless metadata");
+        assert_eq!(probe_gapless, direct_gapless);
+        let probe_pcm = decode_visible_frames(probe).expect("decode probe AAC fMP4");
 
-    let preferred = create_decoder_from_media_info(
-        &fixture,
-        TestDecoderConfig::builder()
-            .pools(pools())
-            .backend(DecoderBackend::default())
-            .build(),
-    )
-    .expect("create preferred-backend AAC fMP4 decoder");
-    let preferred_pcm = decode_visible_frames(preferred).expect("decode preferred AAC fMP4");
+        let preferred = create_decoder_from_media_info(
+            &fixture,
+            TestDecoderConfig::builder()
+                .pools(pools())
+                .backend(DecoderBackend::default())
+                .build(),
+        )
+        .expect("create preferred-backend AAC fMP4 decoder");
+        let preferred_pcm = decode_visible_frames(preferred).expect("decode preferred AAC fMP4");
 
-    assert_frames_within(
-        direct_pcm.frames,
-        fixture.expected_visible_frames,
-        2,
-        "direct AAC fMP4",
-    );
-    assert_frames_within(
-        probe_pcm.frames,
-        fixture.expected_visible_frames,
-        2,
-        "probe AAC fMP4",
-    );
-    assert_frames_within(
-        preferred_pcm.frames,
-        fixture.expected_visible_frames,
-        2,
-        "preferred AAC fMP4",
-    );
-    assert_frames_within(
-        probe_pcm.frames,
-        direct_pcm.frames,
-        2,
-        "probe vs direct AAC",
-    );
-    assert_frames_within(
-        preferred_pcm.frames,
-        direct_pcm.frames,
-        2,
-        "preferred vs direct AAC",
-    );
+        assert_frames_within(
+            direct_pcm.frames,
+            fixture.expected_visible_frames,
+            2,
+            "direct AAC fMP4",
+        );
+        assert_frames_within(
+            probe_pcm.frames,
+            fixture.expected_visible_frames,
+            2,
+            "probe AAC fMP4",
+        );
+        assert_frames_within(
+            preferred_pcm.frames,
+            fixture.expected_visible_frames,
+            2,
+            "preferred AAC fMP4",
+        );
+        assert_frames_within(
+            probe_pcm.frames,
+            direct_pcm.frames,
+            2,
+            "probe vs direct AAC",
+        );
+        assert_frames_within(
+            preferred_pcm.frames,
+            direct_pcm.frames,
+            2,
+            "preferred vs direct AAC",
+        );
+    })
+    .await
+    .expect("raw decoder task completes");
 }
 
 struct GaplessFixture {
@@ -199,7 +203,7 @@ fn decode_visible_frames(mut decoder: Box<dyn Decoder>) -> DecodeResult<DecodedF
     loop {
         match decoder.next_chunk()? {
             DecoderChunkOutcome::Chunk(chunk) => {
-                for chunk in trimmer.push(chunk) {
+                for chunk in trimmer.push(*chunk)? {
                     frames = frames.saturating_add(chunk.frames());
                 }
             }
@@ -208,7 +212,7 @@ fn decode_visible_frames(mut decoder: Box<dyn Decoder>) -> DecodeResult<DecodedF
         }
     }
 
-    for chunk in trimmer.flush() {
+    for chunk in trimmer.flush()? {
         frames = frames.saturating_add(chunk.frames());
     }
 
@@ -248,36 +252,40 @@ async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
     let (_server, bytes) = audio;
     let hint = asset.ext();
 
-    let default_pcm = decode_visible_frames(
-        create_decoder_with_probe(
-            bytes.clone(),
-            hint,
-            TestDecoderConfig::builder().pools(pools()).build(),
+    spawn_blocking(move || {
+        let default_pcm = decode_visible_frames(
+            create_decoder_with_probe(
+                bytes.clone(),
+                hint,
+                TestDecoderConfig::builder().pools(pools()).build(),
+            )
+            .expect("create default decoder"),
         )
-        .expect("create default decoder"),
-    )
-    .expect("decode default path");
-    let preferred_pcm = decode_visible_frames(
-        create_decoder_with_probe(
-            bytes,
-            hint,
-            TestDecoderConfig::builder()
-                .pools(pools())
-                .backend(DecoderBackend::default())
-                .build(),
+        .expect("decode default path");
+        let preferred_pcm = decode_visible_frames(
+            create_decoder_with_probe(
+                bytes,
+                hint,
+                TestDecoderConfig::builder()
+                    .pools(pools())
+                    .backend(DecoderBackend::default())
+                    .build(),
+            )
+            .expect("create preferred decoder"),
         )
-        .expect("create preferred decoder"),
-    )
-    .expect("decode preferred path");
+        .expect("decode preferred path");
 
-    assert_frames_within(default_pcm.frames, expected_frames, 2, hint);
-    assert_frames_within(preferred_pcm.frames, expected_frames, 2, hint);
-    assert_frames_within(
-        preferred_pcm.frames,
-        default_pcm.frames,
-        2,
-        "preferred parity",
-    );
+        assert_frames_within(default_pcm.frames, expected_frames, 2, hint);
+        assert_frames_within(preferred_pcm.frames, expected_frames, 2, hint);
+        assert_frames_within(
+            preferred_pcm.frames,
+            default_pcm.frames,
+            2,
+            "preferred parity",
+        );
+    })
+    .await
+    .expect("raw decoder task completes");
 }
 
 #[kithara::fixture]

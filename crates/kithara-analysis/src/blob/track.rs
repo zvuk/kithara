@@ -1,5 +1,6 @@
 use std::{num::NonZeroU32, ops::Range};
 
+use kithara_platform::time::Duration;
 use kithara_signal::{CoverageRead, CoverageWrite, FrameSpan};
 
 use crate::{
@@ -19,6 +20,10 @@ impl TrackAnalysis {
         writer.write_u32(consts::TRACK_ANALYSIS_BYTES_VERSION);
         writer.write_str(self.token().as_str())?;
         writer.write_u32(self.source_sample_rate().get());
+        let origin = self.media_origin();
+        writer.write_bool(origin.is_some());
+        writer.write_u64(origin.map_or(0, |origin| origin.as_secs()));
+        writer.write_u32(origin.map_or(0, |origin| origin.subsec_nanos()));
         writer.write_optional_u64(self.extent());
         writer.write_u64(self.revision());
         writer.write_bool(self.is_settled());
@@ -58,7 +63,7 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
         }
 
         let token = reader.read_str()?;
-        let source_sample_rate = NonZeroU32::new(reader.read_u32()?).ok_or(BlobError::Corrupt)?;
+        let (source_sample_rate, media_origin) = read_source_axis(&mut reader)?;
         let extent = reader.read_optional_u64()?;
         let revision = reader.read_u64()?;
         let settled = reader.read_bool()?;
@@ -104,6 +109,7 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
             .token(token.as_str().into())
             .revision(revision)
             .source_sample_rate(source_sample_rate)
+            .maybe_media_origin(media_origin)
             .maybe_extent(extent)
             .settled(settled)
             .coverage(coverage)
@@ -115,6 +121,20 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
             .maybe_beat(grid.map(|grid| BeatSnapshot::new(grid, state, unanalysed)))
             .build())
     }
+}
+
+fn read_source_axis(reader: &mut Reader<'_>) -> Result<(NonZeroU32, Option<Duration>), BlobError> {
+    let source_sample_rate = NonZeroU32::new(reader.read_u32()?).ok_or(BlobError::Corrupt)?;
+    let has_origin = reader.read_bool()?;
+    let origin_secs = reader.read_u64()?;
+    let origin_nanos = reader.read_u32()?;
+    if origin_nanos >= 1_000_000_000 || !has_origin && (origin_secs != 0 || origin_nanos != 0) {
+        return Err(BlobError::Corrupt);
+    }
+    Ok((
+        source_sample_rate,
+        has_origin.then(|| Duration::new(origin_secs, origin_nanos)),
+    ))
 }
 
 fn write_ranges(writer: &mut Writer<'_>, ranges: &[Range<u64>]) {
@@ -182,6 +202,7 @@ mod tests {
             coverage.insert(0..extent);
         }
         TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token(consts::TRACK_TOKEN.into())
             .revision(7)
             .source_sample_rate(rate())
@@ -222,12 +243,28 @@ mod tests {
     }
 
     #[kithara::test]
-    fn frozen_v7_fixture_decodes_and_reencodes_identically() {
+    fn frozen_v7_fixture_is_a_cache_miss() {
         let active = fingerprint("wave:v1", "beat:v1");
-        let decoded = TrackAnalysis::try_from((consts::V7_FIXTURE, &active)).expect("v7 decodes");
+        assert!(matches!(
+            TrackAnalysis::try_from((consts::V7_FIXTURE, &active)),
+            Err(BlobError::Version {
+                found: 0x4b41_0007,
+                expected: consts::TRACK_ANALYSIS_BYTES_VERSION,
+            })
+        ));
+    }
 
-        assert_eq!(decoded.token().as_str(), "golden-v7");
+    #[kithara::test]
+    fn frozen_v8_fixture_decodes_and_reencodes_identically() {
+        let active = fingerprint("wave:v1", "beat:v1");
+        let decoded = TrackAnalysis::try_from((consts::V8_FIXTURE, &active)).expect("v8 decodes");
+
+        assert_eq!(decoded.token().as_str(), "golden-v8");
         assert_eq!(decoded.source_sample_rate().get(), 44_100);
+        assert_eq!(
+            decoded.media_origin(),
+            Some(Duration::from_nanos(25_056_689))
+        );
         assert_eq!(decoded.extent(), Some(1_234));
         assert_eq!(decoded.revision(), 9);
         assert!(!decoded.is_settled());
@@ -240,8 +277,8 @@ mod tests {
         assert!(decoded.beat().is_none());
 
         let mut encoded = Vec::new();
-        decoded.write_to(&mut encoded).expect("v7 re-encodes");
-        assert_eq!(encoded.as_slice(), consts::V7_FIXTURE);
+        decoded.write_to(&mut encoded).expect("v8 re-encodes");
+        assert_eq!(encoded.as_slice(), consts::V8_FIXTURE);
     }
 
     #[kithara::test]
@@ -261,6 +298,7 @@ mod tests {
         let mut coverage = RangeSet::new();
         coverage.insert(0..64);
         let analysis = TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token("empty-fingerprint".into())
             .revision(1)
             .source_sample_rate(rate())
@@ -310,6 +348,7 @@ mod tests {
         coverage.insert(0..400);
         coverage.insert(600..1000);
         let want = TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token(consts::TRACK_TOKEN.into())
             .revision(11)
             .source_sample_rate(rate())
@@ -331,6 +370,7 @@ mod tests {
 
         assert_eq!(got.token(), want.token());
         assert_eq!(got.source_sample_rate(), want.source_sample_rate());
+        assert_eq!(got.media_origin(), want.media_origin());
         assert_eq!(got.extent(), want.extent());
         assert_eq!(got.coverage(), want.coverage());
         assert_eq!(got.revision(), want.revision());
@@ -347,14 +387,57 @@ mod tests {
     #[kithara::test]
     fn rejects_non_boolean_flags() {
         let mut bytes = encode(&analysis(Some(grid()), Some(wave()), 1));
-        let extent_flag = consts::TRACK_ANALYSIS_BYTES_VERSION.to_le_bytes().len()
+        let origin_flag = consts::TRACK_ANALYSIS_BYTES_VERSION.to_le_bytes().len()
             + 4
             + consts::TRACK_TOKEN.len()
             + 4;
-        bytes[extent_flag] = 2;
+        bytes[origin_flag] = 2;
         assert!(matches!(
             TrackAnalysis::try_from((&bytes[..], &active())),
             Err(BlobError::Corrupt)
         ));
+    }
+    #[kithara::test]
+    fn media_origin_round_trips_without_losing_subsecond_precision() {
+        for origin in [
+            None,
+            Some(Duration::ZERO),
+            Some(Duration::new(3, 25_056_689)),
+        ] {
+            let want = TrackAnalysis::builder()
+                .token(consts::TRACK_TOKEN.into())
+                .revision(1)
+                .source_sample_rate(rate())
+                .maybe_media_origin(origin)
+                .beat(BeatSnapshot::new(grid(), BeatState::Final, Vec::new()))
+                .fingerprint(active())
+                .build();
+            let bytes = encode(&want);
+            let back = TrackAnalysis::try_from((&bytes[..], &active())).expect("v8 decodes");
+            assert_eq!(back.media_origin(), origin);
+            assert_eq!(
+                back.beat().expect("raw markers survive").artifact(),
+                &grid()
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn media_origin_rejects_noncanonical_absence_and_nanoseconds() {
+        let want = analysis(Some(grid()), None, 0);
+        let origin_flag = 4 + 4 + consts::TRACK_TOKEN.len() + 4;
+        let original = encode(&want);
+        for (present, seconds, nanos) in
+            [(false, 1u64, 0u32), (false, 0, 1), (true, 0, 1_000_000_000)]
+        {
+            let mut bytes = original.clone();
+            bytes[origin_flag] = u8::from(present);
+            bytes[origin_flag + 1..origin_flag + 9].copy_from_slice(&seconds.to_le_bytes());
+            bytes[origin_flag + 9..origin_flag + 13].copy_from_slice(&nanos.to_le_bytes());
+            assert!(matches!(
+                TrackAnalysis::try_from((&bytes[..], &active())),
+                Err(BlobError::Corrupt)
+            ));
+        }
     }
 }

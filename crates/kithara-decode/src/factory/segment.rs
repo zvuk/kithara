@@ -36,7 +36,7 @@ pub(super) const fn segment_aware_container(
 pub(super) fn build_fmp4_segment_decoder<C>(
     source: BoxedSource,
     layout: Arc<dyn ByteMap>,
-    config: DecoderConfig<
+    mut config: DecoderConfig<
         impl ResamplerBackend,
         impl HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     >,
@@ -47,7 +47,12 @@ where
 {
     use crate::{demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer};
 
-    let demuxer = Fmp4SegmentDemuxer::open(source, layout, config.pools.clone())?;
+    let demuxer = Fmp4SegmentDemuxer::open(
+        source,
+        layout,
+        config.pools.clone(),
+        config.construction_gate.take(),
+    )?;
     let codec = open_codec(demuxer.track_info())?;
     finish(demuxer, codec, config)
 }

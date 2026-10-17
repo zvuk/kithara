@@ -20,19 +20,21 @@ use kithara::{
         CancelToken,
         sync::Arc,
         thread,
-        time::{self, Duration, Instant},
+        time::{self, Duration, WallInstant},
         tokio,
         tokio::task::spawn_blocking,
     },
-    play::{PlayWorker, PlayWorkerConfig},
-    stream::{AudioCodec, ContainerFormat, MediaInfo},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, SegmentGateHandle, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    mock::LaneAudio,
     usdt_trace::{self, ProbeEvent},
 };
 use kithara_test_fixtures::hls_fixtures::{hls_header_boundary, hls_pcm_boundary};
+use kithara_test_utils::{kithara as watchdog, test::usdt::events_of};
 use num_traits::AsPrimitive;
 use tracing::info;
 
@@ -128,8 +130,10 @@ async fn forward_into_withheld_segment_waits_and_resumes(
         .media_info(wav_info)
         .build();
 
-    let mut audio = worker
-        .load(audio_config)
+    let audio_config = TrackConfig::for_audio(audio_config)
+        .block_on_underrun(true)
+        .build();
+    let audio = kithara_integration_tests::mock::load_audio(&worker, audio_config)
         .await
         .expect("audio creation (segment 0 not withheld)");
 
@@ -145,25 +149,15 @@ async fn forward_into_withheld_segment_waits_and_resumes(
     let release_at_boundary = Arc::clone(&at_boundary);
     let release_flag = Arc::clone(&released);
     let releaser = tokio::task::spawn(async move {
-        let deadline = Instant::now() + Duration::from_secs(8);
-        loop {
-            if release_gate.requested() > 0 && release_at_boundary.load(Ordering::Acquire) {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "decode never parked at the withheld boundary within budget"
-            );
-            time::sleep(Duration::from_millis(5)).await;
-        }
+        wait_for_boundary(&release_gate, &release_at_boundary).await;
 
-        let before = count_decode_steps(&usdt_trace::events());
+        let before = count_decode_steps(&events_of("decode_step"));
         assert!(
             before > 0,
             "decode_step never fired before the withheld boundary"
         );
         time::sleep(OBSERVE_WINDOW).await;
-        let parked = count_decode_steps(&usdt_trace::events()).saturating_sub(before);
+        let parked = count_decode_steps(&events_of("decode_step")).saturating_sub(before);
 
         release_flag.store(true, Ordering::Release);
         release_gate.release();
@@ -172,58 +166,8 @@ async fn forward_into_withheld_segment_waits_and_resumes(
 
     let decode_at_boundary = Arc::clone(&at_boundary);
     let decode_released = Arc::clone(&released);
-    let decode = spawn_blocking(move || -> (u64, u64) {
-        let mut buf = vec![0.0f32; read_samples];
-        let mut frames_before = 0u64;
-        let mut frames_after = 0u64;
-
-        // Phase 1: drive forward (blocking reads — the offline-pull contract)
-        // until the gate has been released. Before release, reads consume the
-        // ready segments 0..GATED_SEGMENT, then block at the withheld
-        // boundary. The moment a read blocks (consumes all ready data and the
-        // worker can't fill the ring), signal the boundary so the releaser
-        // can release the real segment body.
-        let deadline = Instant::now() + Duration::from_secs(20);
-        loop {
-            if decode_released.load(Ordering::Acquire) {
-                break;
-            }
-            // Signal "at boundary" once we've decoded a full segment's worth —
-            // the worker is now past the ready segments and about to (or
-            // already) block on the withheld one.
-            if frames_before >= (GATED_SEGMENT as u64) * (SEGMENT_SIZE as u64) / 4 {
-                decode_at_boundary.store(true, Ordering::Release);
-            }
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count, .. }) => frames_before += count.get() as u64,
-                Ok(ReadOutcome::Pending { .. }) => {
-                    decode_at_boundary.store(true, Ordering::Release);
-                }
-                Ok(ReadOutcome::Eof { .. }) => break,
-                Err(e) => panic!("read error before release: {e}"),
-            }
-            assert!(
-                Instant::now() < deadline,
-                "decode stalled before the gate released within budget"
-            );
-        }
-
-        // Phase 2: gate released — playback must resume past the boundary.
-        let resume_deadline = Instant::now() + Duration::from_secs(15);
-        while frames_after < 4_096 {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count, .. }) => frames_after += count.get() as u64,
-                Ok(ReadOutcome::Pending { .. }) => thread::yield_now(),
-                Ok(ReadOutcome::Eof { .. }) => break,
-                Err(e) => panic!("read error after release: {e}"),
-            }
-            assert!(
-                Instant::now() < resume_deadline,
-                "playback did not resume within budget after releasing the body"
-            );
-        }
-
-        (frames_before, frames_after)
+    let decode = spawn_blocking(move || {
+        read_at_boundary(audio, read_samples, decode_at_boundary, decode_released)
     });
 
     let parked = releaser.await.expect("releaser joins");
@@ -252,4 +196,88 @@ async fn forward_into_withheld_segment_waits_and_resumes(
     );
 
     drop(server);
+}
+
+#[watchdog::hang_watchdog(timeout = Duration::from_secs(1))]
+async fn wait_for_boundary(gate: &SegmentGateHandle, at_boundary: &AtomicBool) {
+    let deadline = WallInstant::now() + Duration::from_secs(8);
+    loop {
+        hang_tick!();
+        if gate.requested() > 0 && at_boundary.load(Ordering::Acquire) {
+            break;
+        }
+        assert!(
+            WallInstant::now() < deadline,
+            "decode never parked at the withheld boundary within budget"
+        );
+        time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+#[watchdog::hang_watchdog(timeout = Duration::from_secs(1))]
+fn read_at_boundary(
+    mut audio: LaneAudio<Stream<Hls<TestPools>>, TestPools>,
+    read_samples: usize,
+    at_boundary: Arc<AtomicBool>,
+    released: Arc<AtomicBool>,
+) -> (u64, u64) {
+    let mut buf = vec![0.0f32; read_samples];
+    let mut frames_before = 0u64;
+    let mut frames_after = 0u64;
+
+    // Phase 1: drive forward (blocking reads — the offline-pull contract)
+    // until the gate has been released. Before release, reads consume the
+    // ready segments 0..GATED_SEGMENT, then block at the withheld
+    // boundary. The moment a read blocks (consumes all ready data and the
+    // worker can't fill the ring), signal the boundary so the releaser
+    // can release the real segment body.
+    let deadline = WallInstant::now() + Duration::from_secs(20);
+    loop {
+        hang_tick!();
+        if released.load(Ordering::Acquire) {
+            break;
+        }
+        // Signal "at boundary" once we've decoded a full segment's worth —
+        // the worker is now past the ready segments and about to (or
+        // already) block on the withheld one.
+        if frames_before >= (GATED_SEGMENT as u64) * (SEGMENT_SIZE as u64) / 4 {
+            at_boundary.store(true, Ordering::Release);
+        }
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                hang_reset!();
+                frames_before += count.get() as u64;
+            }
+            Ok(ReadOutcome::Pending { .. }) => {
+                at_boundary.store(true, Ordering::Release);
+            }
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("read error before release: {e}"),
+        }
+        assert!(
+            WallInstant::now() < deadline,
+            "decode stalled before the gate released within budget"
+        );
+    }
+
+    // Phase 2: gate released — playback must resume past the boundary.
+    let resume_deadline = WallInstant::now() + Duration::from_secs(15);
+    while frames_after < 4_096 {
+        hang_tick!();
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                hang_reset!();
+                frames_after += count.get() as u64;
+            }
+            Ok(ReadOutcome::Pending { .. }) => thread::yield_now(),
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("read error after release: {e}"),
+        }
+        assert!(
+            WallInstant::now() < resume_deadline,
+            "playback did not resume within budget after releasing the body"
+        );
+    }
+
+    (frames_before, frames_after)
 }

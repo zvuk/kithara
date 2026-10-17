@@ -4,7 +4,7 @@ use kithara_bufpool::PoolRegion;
 use kithara_config::Config;
 use kithara_platform::sync::Arc;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality};
-use kithara_stream::{BoxedEventSink, ByteMap};
+use kithara_stream::{BoxedEventSink, ByteMap, ConstructionGate, ReaderControl};
 
 use super::inner::DecoderBackend;
 
@@ -42,6 +42,12 @@ pub struct DecoderConfig<B, S> {
     /// Optional byte-map handle over the underlying source.
     #[config(skip = "transferred to the decoder")]
     pub(crate) byte_map: Option<Arc<dyn ByteMap>>,
+    /// Reader-owned I/O mode shared with resumable segment operations.
+    #[config(skip = "transferred to the segment reader")]
+    pub(crate) construction_gate: Option<ConstructionGate>,
+    /// Cancellation and availability owned by this opened input generation.
+    #[config(skip = "transferred to the native parser input")]
+    pub(crate) reader_control: Option<ReaderControl>,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
     #[cfg(feature = "symphonia")]
     #[config(skip = "consumed by the decoder probe", builder(into))]
@@ -60,9 +66,6 @@ pub struct DecoderConfig<B, S> {
     /// Enable gapless trim wiring through the per-backend codec.
     #[config(value, builder(default = true))]
     pub(crate) gapless: bool,
-    /// Epoch counter for decoder recreation tracking.
-    #[config(skip = "transferred to decoder runtime state", builder(default))]
-    pub(crate) epoch: u64,
 }
 
 #[cfg(test)]
@@ -94,6 +97,7 @@ mod tests {
         let expected = DecoderBackend::Symphonia;
         assert_eq!(config.backend, expected);
         assert!(config.byte_len_handle.is_none());
+        assert!(config.construction_gate.is_none());
     }
 
     #[cfg(apple_backend)]

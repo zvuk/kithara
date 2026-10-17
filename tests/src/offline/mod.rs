@@ -3,6 +3,8 @@ mod app;
 #[cfg(not(target_arch = "wasm32"))]
 mod disk_queue;
 pub mod host;
+#[cfg(feature = "link")]
+pub mod linked;
 #[cfg(not(target_arch = "wasm32"))]
 mod loader;
 mod owner;

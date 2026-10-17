@@ -23,6 +23,12 @@ pub fn participate<F: Future>(fut: F, _loc: &'static Location<'static>) -> Parti
     fut
 }
 
+/// Execute synchronous driver work on the real clock.
+#[inline]
+pub fn participate_sync<F: FnOnce() -> R, R>(work: F) -> R {
+    work()
+}
+
 /// Off the sim path ambient does not exist, so there is nothing to re-assert
 /// per poll: the wrapper is the future itself. Under `flash` this is the
 /// engine's per-poll ambient re-assert wrapper.

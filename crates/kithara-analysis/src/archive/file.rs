@@ -285,7 +285,7 @@ struct Header {
 }
 
 impl Header {
-    const VERSION: u32 = 0x4b41_4603;
+    const VERSION: u32 = 0x4b41_4604;
 
     fn base(spec: &AnalysisFileSpec, layout: Layout) -> Self {
         Self {

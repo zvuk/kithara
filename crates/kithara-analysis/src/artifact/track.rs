@@ -2,7 +2,7 @@ use std::{num::NonZeroU32, ops::Range, sync::OnceLock};
 
 use bon::Builder;
 use kithara_beat::BeatGridModel;
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::FrameCoverage;
 use rangemap::RangeSet;
 use tracing::debug;
@@ -76,6 +76,8 @@ pub struct TrackAnalysis {
     fingerprint: AnalysisFingerprint,
     token: AnalysisToken,
     source_sample_rate: NonZeroU32,
+    /// Raw source position of canonical track-media zero, absent when unmapped.
+    media_origin: Option<Duration>,
     /// The grid this publication states, derived from the artifact above the
     /// first time a consumer asks and kept with the publication that owns it.
     /// Deriving rather than carrying it is what keeps one grid per
@@ -94,6 +96,12 @@ pub struct TrackAnalysis {
 }
 
 impl TrackAnalysis {
+    /// Raw source position of canonical track-media zero, when mapped.
+    #[must_use]
+    pub const fn media_origin(&self) -> Option<Duration> {
+        self.media_origin
+    }
+
     #[must_use]
     pub const fn beat(&self) -> Option<&BeatSnapshot> {
         self.beat.as_ref()

@@ -461,11 +461,19 @@ fn standalone_decoder_seek_reanchors_output_to_trimmed_target(
         u64::try_from(test_frames(TARGET_RATE, TARGET)).expect("target frame fits u64");
 
     assert_eq!(output.meta.frame_offset, target_frame);
-    assert_eq!(output.meta.timestamp, TARGET);
+    assert_eq!(output.meta.timestamp, test_duration(SOURCE_RATE, 1_367));
+    let span = output
+        .meta
+        .source_span
+        .expect("selected native PCM geometry");
+    assert_eq!(span.sample_rate(), target_rate);
     assert_eq!(
-        output.meta.timestamp,
-        test_duration(TARGET_RATE, output.meta.frame_offset)
+        span.source_ratio_at(0),
+        Some((218_720, std::num::NonZeroU128::new(147).expect("SRC ratio")))
     );
+    assert_eq!(span.position_at(0), Some(output.meta.timestamp));
+    assert_eq!(span.output_frames(), u64::from(output.meta.frames));
+    assert_eq!(&output.samples[..8], marker_samples());
 }
 
 #[kithara::test(native, flash(false))]
@@ -516,7 +524,25 @@ fn standalone_decoder_seek_rounds_timeline_frames_half_up(
         (landed_frame, output.meta.frame_offset),
         (EXPECTED_LANDED_FRAME, EXPECTED_OUTPUT_FRAME)
     );
-    assert_eq!(output.meta.timestamp, Duration::from_nanos(32_686_854));
+    assert_eq!(
+        output.meta.timestamp,
+        test_duration(SOURCE_RATE, SOURCE_TARGET_FRAME)
+    );
+    let span = output
+        .meta
+        .source_span
+        .expect("selected native PCM geometry");
+    assert_eq!(span.sample_rate(), target_rate);
+    assert_eq!(
+        span.source_ratio_at(0),
+        Some((
+            4_235_099,
+            std::num::NonZeroU128::new(2_940).expect("SRC ratio")
+        ))
+    );
+    assert_eq!(span.position_at(0), Some(output.meta.timestamp));
+    assert_eq!(span.output_frames(), u64::from(output.meta.frames));
+    assert_eq!(&output.samples[..8], marker_samples());
 }
 
 #[kithara::test(native, flash(false))]

@@ -9,7 +9,11 @@ use pin_project_lite::pin_project;
 
 use super::{
     join::{Join, hand_over},
-    system::{self, credit::AsyncPollGuard, gate::TaskGate},
+    system::{
+        self,
+        credit::{AsyncPollGuard, DedicatedSlot},
+        gate::TaskGate,
+    },
 };
 use crate::sync::Arc;
 
@@ -83,6 +87,18 @@ pub fn participate<F: Future>(fut: F, loc: &'static Location<'static>) -> Partic
         gate: system::async_acquire(loc),
         join: None,
     }
+}
+
+/// Count synchronous driver work until it returns or enters a wrapped wait.
+/// An enclosing thread or async participant already owns the required credit.
+/// The closure must not drive an async runtime awaiting virtual timers.
+#[track_caller]
+pub fn participate_sync<F: FnOnce() -> R, R>(work: F) -> R {
+    if !super::ctx::flash_ambient() || super::ctx::dedicated() || super::ctx::poll_depth() != 0 {
+        return work();
+    }
+    let _participant = DedicatedSlot::reserve(Location::caller()).claim_pooled();
+    work()
 }
 
 impl<F> Participating<F> {

@@ -9,7 +9,7 @@ use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{CancelToken, sync::Arc, time::Duration},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueEvent, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -18,7 +18,6 @@ use kithara_integration_tests::{
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    test_defaults::consts as shared,
     test_server::NetworkMode,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
@@ -84,19 +83,16 @@ async fn transient_failure_does_not_kill_the_track(
             root: temp_dir.path().into(),
         })
         .build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
-            .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build(),
-    );
+    let player = kithara::play::ResourcePrep::builder()
+        .worker(kithara::play::PlayWorker::new(
+            kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
+        .build();
     let queue = OfflineQueue::paced(
         HostConfig::offline(pools).build(),
         Queue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(player)
                 .store(store.clone())
                 .build(),
         ),
@@ -227,7 +223,10 @@ async fn transient_failure_does_not_kill_the_track(
         )
     });
 
-    queue.run(move |q| q.clear()).await;
+    queue
+        .run(move |q| q.clear())
+        .await
+        .expect("the queue clears");
     ticker.stop().await;
     queue.close().await;
 }

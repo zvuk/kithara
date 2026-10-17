@@ -58,6 +58,16 @@ struct WakeInner {
     gate: ThreadGate,
 }
 
+/// Observe immediate gate signals and pending deferred work without consuming either.
+#[cfg(any(test, feature = "mock"))]
+#[must_use]
+pub fn wake_state(wake: &Wake) -> (u64, bool) {
+    (
+        wake.inner.gate.current(),
+        wake.inner.deferred.load(Ordering::Acquire),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_platform::time::Duration;
@@ -83,7 +93,7 @@ mod tests {
                 atomic::{AtomicUsize, Ordering},
             },
             thread,
-            time::Instant,
+            time::WallInstant,
         };
 
         let wake = Wake::default();
@@ -95,9 +105,12 @@ mod tests {
             producer_wake.defer();
         });
 
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = WallInstant::now() + Duration::from_secs(2);
         while !wake.wait_timeout(Duration::ZERO) {
-            assert!(Instant::now() < deadline, "deferred wake was not observed");
+            assert!(
+                WallInstant::now() < deadline,
+                "deferred wake was not observed"
+            );
             thread::yield_now();
         }
         assert_eq!(published.load(Ordering::Relaxed), 42);

@@ -68,6 +68,8 @@ pub(crate) fn build_resource_config(url: &str, config: &AppConfig) -> Option<App
             .keys(keys)
             .maybe_headers(headers)
             .audio(config.audio.clone())
+            .maybe_preload_chunks(config.preload_chunks)
+            .maybe_audio_buffer_chunks(config.audio_buffer_chunks)
             .hls(config.hls.clone())
             .file(config.file.clone())
             .build(),

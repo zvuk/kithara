@@ -1,100 +1,73 @@
 use js_sys::Function;
-use kithara::{platform::sync::Arc, play::InterruptionKind, queue::TrackId};
+use kithara::{
+    platform::{sync::Arc, tokio::task::spawn},
+    play::{InterruptionKind, PlayError, Position},
+    queue::{QueueCommand, TrackId, Transition},
+};
+use kithara_command::When;
 
 use super::WasmInner;
 use crate::{
     observer::{PlayerObserver, SeekCallback},
+    pools::{FfiPools, FfiQueueControl},
     types::{FfiError, FfiPlayerSnapshot, FfiPlayerStatus},
-    web::commands::WorkerCmd,
 };
+
 impl WasmInner {
-    /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
     pub(crate) fn advance_to_next_item(&self) -> Result<(), FfiError> {
-        self.try_send(WorkerCmd::Next)
+        self.submit(QueueCommand::Next(Transition::None))
     }
 
-    /// Start (or restart) the analysis pass for a queued track.
     pub(crate) fn analyze(&self, id: TrackId) -> Result<(), FfiError> {
-        let request_id = Self::next_request_id();
-        self.try_send(WorkerCmd::Analyze { id, request_id })
-    }
-
-    pub(super) fn next_request_id() -> u32 {
-        crate::web::interop::next_request_id()
-    }
-
-    pub(crate) fn notify_audio_route_changed(&self, _reason: &str) -> Result<(), FfiError> {
+        let (sender, request) = self.bridge.analysis_request(id)?;
+        let queue = self.bridge.control()?;
+        let admissions = self.items.lock().admissions();
+        if admissions.is_empty() {
+            if queue.is_closed() {
+                return Err(FfiError::Internal {
+                    description: PlayError::Closed.to_string(),
+                });
+            }
+            if queue.track(id).is_none() {
+                return Err(FfiError::InvalidArgument {
+                    reason: format!("track {id:?} is not queued"),
+                });
+            }
+            return sender.send(request).map_err(|_| FfiError::Internal {
+                description: "analysis worker closed".into(),
+            });
+        }
+        let routes = self.routes.clone();
+        spawn(async move {
+            for admission in admissions {
+                if let Err(error) = admission.await {
+                    routes.error(format!("analysis admission closed: {error}"));
+                    return;
+                }
+            }
+            if queue.is_closed() {
+                routes.error(PlayError::Closed.to_string());
+            } else if queue.track(id).is_none() {
+                routes.error(format!("track {id:?} is not queued"));
+            } else if sender.send(request).is_err() {
+                routes.error("analysis worker closed".to_owned());
+            }
+        });
         Ok(())
     }
 
-    pub(crate) fn notify_interruption(&self, _kind: InterruptionKind) {}
+    pub(crate) fn notify_interruption(&self, kind: InterruptionKind) {
+        self.send(QueueCommand::NotifyInterruption(kind));
+    }
 
     pub(crate) fn pause(&self) {
-        self.send(WorkerCmd::Pause);
+        self.send(QueueCommand::Pause { at: When::Next });
     }
 
     pub(crate) fn play(&self) {
-        self.send(WorkerCmd::Play);
-    }
-
-    pub(crate) fn rate(&self) -> f32 {
-        if self.bridge.is_playing() {
-            self.settings.playing_rate()
-        } else {
-            0.0
-        }
-    }
-
-    pub(crate) fn return_to_previous_item(&self) -> Result<(), FfiError> {
-        self.try_send(WorkerCmd::Previous)
-    }
-
-    pub(crate) fn seek(
-        &self,
-        to_seconds: f64,
-        tolerance: Option<f64>,
-        callback: &Arc<dyn SeekCallback>,
-    ) {
-        let _ = tolerance;
-        self.send(WorkerCmd::Seek(to_seconds.max(0.0) * Self::MS_PER_SECOND));
-        callback.on_complete(true);
-    }
-
-    /// Fire-and-forget seek in milliseconds for the JS control surface
-    /// (no [`SeekCallback`] round-trip). The shared facade `seek` carries
-    /// a callback; this is the wasm-only convenience the JS surface uses.
-    pub(crate) fn seek_ms(&self, position_ms: f64) {
-        self.send(WorkerCmd::Seek(position_ms.max(0.0)));
-    }
-
-    /// Forward commands for infallible facade methods such as play and pause.
-    /// Log dropped commands because these methods have no error channel.
-    pub(super) fn send(&self, cmd: WorkerCmd) {
-        super::core::send(&self.bridge, cmd);
-    }
-
-    pub(super) fn try_send(&self, cmd: WorkerCmd) -> Result<(), FfiError> {
-        super::core::try_send(&self.bridge, cmd)
-    }
-
-    pub(crate) fn snapshot(&self) -> FfiPlayerSnapshot {
-        let position = self.bridge.position_secs();
-        let duration = self.bridge.duration_secs();
-        FfiPlayerSnapshot {
-            status: FfiPlayerStatus::ReadyToPlay,
-            current_time: (position > 0.0).then_some(position),
-            duration: (duration > 0.0).then_some(duration),
-            rate: self.rate(),
-            playing_rate: self.settings.playing_rate(),
-            volume: self.settings.volume(),
-            is_muted: self.settings.is_muted(),
-        }
-    }
-
-    pub(crate) fn stop(&self) {
-        self.send(WorkerCmd::Stop);
+        self.send(QueueCommand::Play { at: When::Next });
     }
 
     delegate::delegate! {
@@ -113,6 +86,91 @@ impl WasmInner {
             /// Underruns the audio thread has recorded so far.
             #[call(underruns)]
             pub(crate) fn rt_underruns(&self) -> u64;
+            #[expr($.map_or(0.0, FfiQueueControl::rate))]
+            #[call(queue)]
+            pub(crate) fn rate(&self) -> f32;
         }
+    }
+
+    pub(crate) fn return_to_previous_item(&self) -> Result<(), FfiError> {
+        self.submit(QueueCommand::Previous(Transition::None))
+    }
+
+    fn seek_command(&self, seconds: f64) -> Result<QueueCommand<FfiPools>, FfiError> {
+        let seconds = if seconds == f64::INFINITY {
+            self.bridge
+                .queue()
+                .and_then(FfiQueueControl::duration_seconds)
+                .unwrap_or_default()
+        } else {
+            seconds.max(0.0)
+        };
+        let to =
+            Position::try_from_secs_f64(seconds).map_err(|error| FfiError::InvalidArgument {
+                reason: error.to_string(),
+            })?;
+        Ok(QueueCommand::Seek { to })
+    }
+
+    pub(crate) fn seek(
+        &self,
+        to_seconds: f64,
+        tolerance: Option<f64>,
+        callback: &Arc<dyn SeekCallback>,
+    ) {
+        let _ = tolerance;
+        let ticket = match self
+            .seek_command(to_seconds)
+            .and_then(|command| self.post(command))
+        {
+            Ok(ticket) => ticket,
+            Err(error) => {
+                callback.on_complete(false);
+                self.routes.error(error.to_string());
+                return;
+            }
+        };
+        let callback = Arc::clone(callback);
+        let routes = self.routes.clone();
+        spawn(async move {
+            let result = super::core::answer(ticket).await;
+            callback.on_complete(result.is_ok());
+            if let Err(error) = result {
+                routes.error(error.to_string());
+            }
+        });
+    }
+
+    pub(crate) fn seek_ms(&self, position_ms: f64) {
+        self.report(
+            self.seek_command(position_ms.max(0.0) / Self::MS_PER_SECOND)
+                .and_then(|command| self.submit(command)),
+        );
+    }
+
+    pub(crate) fn snapshot(&self) -> FfiPlayerSnapshot {
+        FfiPlayerSnapshot {
+            status: self
+                .bridge
+                .queue()
+                .map_or(FfiPlayerStatus::Unknown, |queue| queue.status().into()),
+            current_time: self
+                .bridge
+                .queue()
+                .and_then(FfiQueueControl::position_seconds),
+            duration: self
+                .bridge
+                .queue()
+                .and_then(FfiQueueControl::duration_seconds),
+            rate: self.rate(),
+            playing_rate: self.playing_rate(),
+            volume: self.volume(),
+            is_muted: self.is_muted(),
+        }
+    }
+
+    pub(crate) fn stop(&self) {
+        self.pause();
+        self.seek_ms(0.0);
     }
 }

@@ -6,7 +6,7 @@ use kithara::{
         CancelToken,
         sync::Arc,
         thread,
-        time::{Duration, Instant, WallInstant},
+        time::{Duration, WallInstant},
         tokio::sync::{
             mpsc::{self, UnboundedReceiver},
             watch,
@@ -77,13 +77,15 @@ impl Rig {
         if config.eq_bands > 3 {
             for deck in &decks {
                 hang_tick!();
-                deck.queue
-                    .control()
-                    .set_eq_layout(
-                        crate::deck::EqMode::ThreeBand
-                            .layout(&[kithara::effects::GainDb::default(); 3]),
-                    )
-                    .expect("the fixture starts in three-band mode");
+                hang_park!(|_| {
+                    deck.queue
+                        .control()
+                        .set_eq_layout(
+                            crate::deck::EqMode::ThreeBand
+                                .layout(&[kithara::effects::GainDb::default(); 3]),
+                        )
+                        .expect("the fixture starts in three-band mode");
+                });
                 hang_reset!();
             }
             crate::mock::render_host(&mut host, 0..128, &config.shutdown)
@@ -173,20 +175,34 @@ impl Rig {
     #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
     pub(crate) fn pump(&mut self) -> Vec<u64> {
         let mut applied = Vec::new();
+        let _ = __hang_detector.remaining();
+        hang_tick!();
         while let Ok(envelope) = self.commands.try_recv() {
-            hang_tick!();
             applied.push(envelope.seq);
             self.engine.apply(envelope);
+            let remaining = __hang_detector.remaining();
+            hang_tick!();
+            assert!(
+                !remaining.is_zero(),
+                "app fixture command application exceeded its idle budget"
+            );
             hang_reset!();
+            let _ = __hang_detector.remaining();
         }
         crate::engine::render_fixture(self, 128);
         self.engine.tick();
         self.engine.publish();
+        let remaining = __hang_detector.remaining();
+        hang_tick!();
+        assert!(
+            !remaining.is_zero(),
+            "app fixture render and publication exceeded its idle budget"
+        );
         applied
     }
 
     #[cfg(not(feature = "broadcast"))]
-    pub(crate) fn offline_listening() -> Self {
+    pub(crate) fn playback() -> Self {
         let config = test_fixture::config();
         let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
             .expect("test host");
@@ -242,11 +258,8 @@ impl Rig {
 
     /// Drive `step` until `done`, giving up after `within`.
     ///
-    /// The budget rides the platform clock, which under `flash` the quiescence
-    /// engine advances in one step whenever every participant parks — so it can
-    /// run out with no real time spent. The verdict says which happened, in the
-    /// wording the hang detector uses, so both read as one cluster in a stress
-    /// report.
+    /// The wall-clock budget bounds fixture I/O as well as engine work. A
+    /// playing deck's position or an applied command resets its idle budget.
     #[test_attrs::flash(io)]
     #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
     pub(crate) fn until(
@@ -256,39 +269,51 @@ impl Rig {
         mut step: impl FnMut(&mut Self),
         mut done: impl FnMut(&mut Self) -> bool,
     ) {
-        let deadline = Instant::now() + within;
+        let deadline = WallInstant::now() + within;
         let started_real = WallInstant::now();
         let progress = |rig: &Self| {
             (
                 rig.applied_seq(),
                 rig.queues
                     .iter()
-                    .map(|queue| (queue.current_index(), queue.position_seconds()))
+                    .map(|queue| {
+                        (
+                            queue.current_index(),
+                            queue.position_seconds(),
+                            queue.duration_seconds(),
+                        )
+                    })
                     .collect::<Vec<_>>(),
             )
         };
         loop {
-            hang_tick!();
+            let _ = __hang_detector.remaining();
             let before = progress(self);
             crate::engine::render_fixture(self, 1024);
             self.engine.tick();
             self.engine.publish();
             step(self);
-            if done(self) {
-                hang_reset!();
-                return;
-            }
-            if before != progress(self) {
-                hang_reset!();
-            }
+            let reached = done(self);
+            let after = progress(self);
+            let remaining = __hang_detector.remaining();
+            hang_tick!();
             assert!(
-                Instant::now() < deadline,
+                !remaining.is_zero(),
+                "{what}: app fixture step exceeded its idle budget"
+            );
+            assert!(
+                WallInstant::now() < deadline,
                 "{what}: not within {within:?} | {}",
                 real_clock_verdict(started_real, within)
             );
-            hang_park!(|remaining: Duration| {
-                thread::paced_backoff(remaining.min(Duration::from_millis(5)));
-            });
+            if reached {
+                return;
+            }
+            if before != after {
+                tracing::debug!(what, ?after, "the app fixture advanced");
+                hang_reset!();
+            }
+            thread::paced_backoff(__hang_detector.remaining().min(Duration::from_millis(5)));
         }
     }
 }

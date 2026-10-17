@@ -1,17 +1,5 @@
 use std::num::NonZeroUsize;
 
-#[cfg(test)]
-pub(crate) const BEATS_PER_SECOND: f64 = 2.0;
-
-#[cfg(test)]
-pub(crate) const FRAMES_PER_BEAT: i64 = 24_000;
-
-#[cfg(test)]
-pub(crate) const RATE: u32 = 48_000;
-
-#[cfg(test)]
-pub(crate) const SMOOTH_SECONDS: f64 = 0.005;
-
 pub(crate) const MODEL_SECONDS_PER_MINUTE: f64 = 60.0;
 
 #[cfg(test)]
@@ -50,11 +38,8 @@ pub(crate) const FRAME_COUNT: u64 = 48_000;
 #[cfg(test)]
 pub(crate) const BLOCK_FRAMES: usize = 480;
 
-/// Lowest supported media seconds consumed per output second.
-///
-/// This already asks the backend for a 20x stretch; lower values collapse
-/// quality without providing a useful playback mode.
-pub const MIN_SPEED: f32 = 0.05;
+pub(crate) const NATIVE_PACKET_FRAMES: usize = 480;
+pub(crate) const MAX_NATIVE_STRETCH: f64 = 2.0;
 
 pub(crate) const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) {
     Some(frames) => frames,
@@ -88,21 +73,4 @@ pub(crate) const N: usize = 1 << 14;
 #[cfg(test)]
 pub(crate) const SR: u32 = 44_100;
 
-/// Source beat the entered plan activates at: well inside the recording,
-/// so the engine history before it is real audio rather than padding.
-#[cfg(feature = "render")]
-#[cfg(test)]
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-pub(crate) const CUE_BEAT: f64 = 4.0;
-
-/// Span the speed smoother measures its settle threshold against: the range
-/// a playback speed realistically travels over, from a heavy stretch back to
-/// unity and a little past it. The smoother reads it as a scale, not a bound,
-/// so a speed outside it still smooths — it just settles on the same relative
-/// terms as one inside.
-#[cfg(feature = "render")]
-pub(crate) const SPEED_SMOOTHING_SPAN: f32 = 2.0;
+pub(crate) const SOURCE_RADIUS: usize = 16;

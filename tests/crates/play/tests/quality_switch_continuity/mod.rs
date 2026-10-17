@@ -15,7 +15,7 @@ use kithara::{
     decode::DecoderBackend,
     events::EventBus,
     host::{HostConfig, HostSettings},
-    platform::time::{Duration, Instant},
+    platform::time::{Duration, WallInstant},
 };
 use kithara_integration_tests::{HlsFixtureBuilder, offline::OfflinePlayer};
 use kithara_test_utils::TestTempDir;

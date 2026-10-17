@@ -2,9 +2,10 @@ use std::{
     collections::VecDeque,
     fmt::{self, Write as _},
     hash::{BuildHasher as _, BuildHasherDefault, DefaultHasher, Hash as _, Hasher as _},
-    sync::{Mutex, MutexGuard, PoisonError},
+    sync::{Mutex, MutexGuard, OnceLock, PoisonError},
 };
 
+use kithara_platform::time::WallInstant;
 use tracing::{
     Event, Level, Metadata, Subscriber,
     field::{Field, Visit},
@@ -50,11 +51,14 @@ mod consts {
 
 static EVENTS: Mutex<VecDeque<Entry>> = Mutex::new(VecDeque::new());
 static PROBES: Mutex<VecDeque<Entry>> = Mutex::new(VecDeque::new());
+static STARTED: OnceLock<WallInstant> = OnceLock::new();
 
 /// One recorded line and how many times it repeated inside the window.
 struct Entry {
+    first_ns: u128,
     /// Hash of the counter-filtered thread, span, and event fields.
     key: u64,
+    last_ns: u128,
     line: String,
     repeats: u32,
 }
@@ -75,7 +79,10 @@ pub fn layer<S>() -> impl Layer<S>
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
-    RingLayer.with_filter(filter_fn(|meta| classify(meta).is_some()))
+    RingLayer {
+        started: *STARTED.get_or_init(WallInstant::now),
+    }
+    .with_filter(filter_fn(|meta| classify(meta).is_some()))
 }
 
 /// Snapshot of the recorded DEBUG-event tail, oldest first.
@@ -94,20 +101,22 @@ fn snapshot(ring: &Mutex<VecDeque<Entry>>) -> Vec<String> {
     lock(ring)
         .iter()
         .map(|entry| {
+            let line = clamp(format!(
+                "mono_ns={:039}..{:039} {}",
+                entry.first_ns, entry.last_ns, entry.line
+            ));
             if entry.repeats > 1 {
-                format!(
-                    "{line} (x{repeats})",
-                    line = entry.line,
-                    repeats = entry.repeats
-                )
+                format!("{line} (x{repeats})", repeats = entry.repeats)
             } else {
-                entry.line.clone()
+                line
             }
         })
         .collect()
 }
 
-struct RingLayer;
+struct RingLayer {
+    started: WallInstant,
+}
 
 enum Lane {
     Event,
@@ -173,9 +182,7 @@ where
         let Some(lane) = classify(meta) else {
             return;
         };
-        // No timestamp: the ring is chronological by construction, and a wall
-        // stamp would mix real and flash-virtual clocks depending on where the
-        // event fired.
+        let at_ns = self.started.elapsed().as_nanos();
         let thread = std::thread::current();
         let prefix = format!(
             "{level} {target}: thread={id:?} thread_name={name:?}",
@@ -208,11 +215,11 @@ where
             Lane::Event => &EVENTS,
             Lane::Probe => &PROBES,
         };
-        record(ring, line, key);
+        record(ring, line, key, at_ns);
     }
 }
 
-fn record(ring: &Mutex<VecDeque<Entry>>, line: String, key: String) {
+fn record(ring: &Mutex<VecDeque<Entry>>, line: String, key: String, at_ns: u128) {
     /// How far back a repeat folds into the entry already in the ring.
     ///
     /// Steady-state volume arrives as a short cycle of a few distinct lines — a
@@ -227,14 +234,18 @@ fn record(ring: &Mutex<VecDeque<Entry>>, line: String, key: String) {
     let window = ring.len().saturating_sub(DEDUP_WINDOW);
     if let Some(entry) = ring.iter_mut().skip(window).find(|entry| entry.key == key) {
         entry.repeats = entry.repeats.saturating_add(1);
+        entry.first_ns = entry.first_ns.min(at_ns);
+        entry.last_ns = entry.last_ns.max(at_ns);
         return;
     }
     if ring.len() == consts::MAX_EVENTS {
         ring.pop_front();
     }
     ring.push_back(Entry {
-        line,
+        first_ns: at_ns,
         key,
+        last_ns: at_ns,
+        line,
         repeats: 1,
     });
 }
@@ -274,6 +285,7 @@ impl Visit for LineVisitor<'_> {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::VecDeque,
         sync::{Mutex, MutexGuard, PoisonError},
         thread,
     };
@@ -283,7 +295,7 @@ mod tests {
 
     use super::{
         consts::{MAX_EVENT_BYTES, MAX_EVENTS},
-        layer, probes_tail, tail,
+        layer, probes_tail, record, snapshot, tail,
     };
     use crate::kithara;
 
@@ -301,6 +313,23 @@ mod tests {
             .with(layer());
         tracing::subscriber::with_default(subscriber, body);
         guard
+    }
+
+    fn without_timestamps(line: &str) -> &str {
+        line.split_once(' ').expect("monotonic timestamp prefix").1
+    }
+
+    #[kithara::test]
+    fn repeated_events_keep_their_monotonic_interval() {
+        let ring = Mutex::new(VecDeque::new());
+        record(&ring, "same event".into(), "same key".into(), 17);
+        record(&ring, "same event".into(), "same key".into(), 31);
+        record(&ring, "same event".into(), "same key".into(), 23);
+
+        assert_eq!(
+            snapshot(&ring),
+            [format!("mono_ns={:039}..{:039} same event (x3)", 17, 31)]
+        );
     }
 
     #[kithara::test]
@@ -501,7 +530,10 @@ mod tests {
         assert!(entries.iter().all(|line| {
             line.len() <= MAX_EVENT_BYTES + '…'.len_utf8() && line.ends_with('…')
         }));
-        assert_eq!(entries[0], entries[1]);
+        assert_eq!(
+            without_timestamps(&entries[0]),
+            without_timestamps(&entries[1])
+        );
     }
 
     #[kithara::test]
@@ -533,7 +565,10 @@ mod tests {
         assert!(entries.iter().all(|line| {
             line.len() <= MAX_EVENT_BYTES + '\u{2026}'.len_utf8() && line.ends_with('\u{2026}')
         }));
-        assert_eq!(entries[0], entries[1]);
+        assert_eq!(
+            without_timestamps(&entries[0]),
+            without_timestamps(&entries[1])
+        );
     }
 
     #[kithara::test]
@@ -563,7 +598,10 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(entries.len(), 2, "{entries:?}");
-        assert_eq!(entries[0], entries[1]);
+        assert_eq!(
+            without_timestamps(&entries[0]),
+            without_timestamps(&entries[1])
+        );
     }
 
     /// The fold count is the tempo of the probe, so it must total the firings

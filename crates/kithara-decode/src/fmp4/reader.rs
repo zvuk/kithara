@@ -4,7 +4,8 @@ use std::{
 };
 
 use kithara_bufpool::ByteBuffer;
-use kithara_stream::{ByteMap, PendingReason, StreamReadError};
+use kithara_stream::{ByteMap, PendingReason, StreamPending, StreamReadError, VariantChangeError};
+use kithara_test_utils::kithara;
 
 use crate::{
     error::{DecodeError, DecodeResult},
@@ -15,6 +16,27 @@ fn map_stream_err(err: StreamReadError) -> DecodeError {
     match err {
         StreamReadError::Source(io_err) => DecodeError::from(io_err),
         _ => DecodeError::parse("stream read", err),
+    }
+}
+
+fn seek_input(source: &mut BoxedSource, position: u64) -> DecodeResult<FillStatus> {
+    match source.seek(SeekFrom::Start(position)) {
+        Ok(_) => Ok(FillStatus::Ready),
+        Err(error) => {
+            let payload = error.get_ref();
+            if let Some(reason) = payload.and_then(|value| value.downcast_ref::<PendingReason>()) {
+                return Ok(FillStatus::Pending(*reason));
+            }
+            if let Some(pending) = payload.and_then(|value| value.downcast_ref::<StreamPending>()) {
+                return Ok(FillStatus::Pending(pending.reason()));
+            }
+            if let Some(value) = payload
+                && value.is::<VariantChangeError>()
+            {
+                return Ok(FillStatus::Pending(PendingReason::VariantChange));
+            }
+            Err(error.into())
+        }
     }
 }
 
@@ -130,19 +152,23 @@ impl<'a> LiveRange<'a> {
 /// bytes from the next segment (or from the seg-0 moof after the init).
 /// `re_mp4` then parses the trailing splice as a malformed box and
 /// errors with "failed to fill whole buffer".
+#[kithara::hang_watchdog]
 pub(crate) fn fill_segment_buffer(
     source: &mut BoxedSource,
     state: &mut SegmentReadState,
     live: LiveRange<'_>,
 ) -> DecodeResult<FillStatus> {
     loop {
+        hang_tick!();
         refresh_range(state, live);
         if state.sync_buffer_ready()? {
             return Ok(FillStatus::Ready);
         }
 
         let abs_offset = state.range.start + state.filled as u64;
-        source.seek(SeekFrom::Start(abs_offset))?;
+        if let FillStatus::Pending(reason) = seek_input(source, abs_offset)? {
+            return Ok(FillStatus::Pending(reason));
+        }
         if refresh_range(state, live) {
             let total_after = state.total();
             state.resize_to(total_after)?;
@@ -150,28 +176,38 @@ pub(crate) fn fill_segment_buffer(
                 return Ok(FillStatus::Ready);
             }
             let corrected = state.range.start + state.filled as u64;
-            source.seek(SeekFrom::Start(corrected))?;
+            if let FillStatus::Pending(reason) = seek_input(source, corrected)? {
+                return Ok(FillStatus::Pending(reason));
+            }
         }
 
         match source
             .try_read(&mut state.buffer[state.filled..])
             .map_err(map_stream_err)?
         {
-            InputReadOutcome::Bytes(n) => state.filled += n.get(),
-            InputReadOutcome::Pending(reason) => return Ok(FillStatus::Pending(reason)),
-            InputReadOutcome::Eof => {
-                if state.filled == state.total() {
-                    return Ok(FillStatus::Ready);
-                }
-                if refresh_range(state, live) && state.sync_buffer_ready()? {
-                    return Ok(FillStatus::Ready);
-                }
-                return Err(DecodeError::InvalidData {
-                    detail: "unexpected EOF before segment buffer filled",
-                });
+            InputReadOutcome::Bytes(n) => {
+                state.filled += n.get();
+                hang_reset!();
             }
+            InputReadOutcome::Pending(reason) => return Ok(FillStatus::Pending(reason)),
+            InputReadOutcome::Eof => return finish_segment_buffer(state, live),
         }
     }
+}
+
+fn finish_segment_buffer(
+    state: &mut SegmentReadState,
+    live: LiveRange<'_>,
+) -> DecodeResult<FillStatus> {
+    if state.filled == state.total() {
+        return Ok(FillStatus::Ready);
+    }
+    if refresh_range(state, live) && state.sync_buffer_ready()? {
+        return Ok(FillStatus::Ready);
+    }
+    Err(DecodeError::InvalidData {
+        detail: "unexpected EOF before segment buffer filled",
+    })
 }
 
 /// Re-resolve `state.range` against the live layout. Returns `true` if
@@ -206,11 +242,14 @@ fn refresh_range(state: &mut SegmentReadState, live: LiveRange<'_>) -> bool {
 mod tests {
     use std::{
         io::{self, Cursor, Read, Seek, SeekFrom},
-        sync::atomic::{AtomicUsize, Ordering},
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use kithara_platform::time::Duration;
-    use kithara_stream::SegmentDescriptor;
+    use kithara_stream::{SegmentDescriptor, SourcePhase};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -321,25 +360,72 @@ mod tests {
         }
     }
 
-    /// A `Read + Seek` source that hands back at most `chunk` bytes per
-    /// `read`, so draining one segment takes several fill iterations — the
-    /// partial-read shape the live HLS source produces, and the
-    /// precondition for an end-shrink to land *mid-fill* (after some bytes
-    /// are already buffered).
+    #[derive(Clone, Copy)]
+    enum InputFault {
+        Reason(PendingReason),
+        Snapshot(PendingReason),
+        Variant,
+        Interrupted,
+        Io,
+    }
+
+    impl InputFault {
+        fn error(self) -> io::Error {
+            match self {
+                Self::Reason(reason) => io::Error::new(io::ErrorKind::Interrupted, reason),
+                Self::Snapshot(reason) => io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    StreamPending::new(reason, 6, 6, Some(12), SourcePhase::Waiting),
+                ),
+                Self::Variant => io::Error::new(io::ErrorKind::Interrupted, VariantChangeError),
+                Self::Interrupted => io::ErrorKind::Interrupted.into(),
+                Self::Io => io::Error::new(io::ErrorKind::PermissionDenied, "fixture read denied"),
+            }
+        }
+
+        fn pending(self) -> Option<PendingReason> {
+            match self {
+                Self::Reason(reason) | Self::Snapshot(reason) => Some(reason),
+                Self::Variant => Some(PendingReason::VariantChange),
+                Self::Interrupted | Self::Io => None,
+            }
+        }
+    }
+
     struct ChunkSource {
         data: Vec<u8>,
         pos: u64,
         chunk: usize,
+        fault: Option<InputFault>,
+        fault_on_seek: bool,
+        reads: std::sync::Arc<Mutex<Vec<Range<u64>>>>,
+    }
+
+    impl ChunkSource {
+        fn interrupt(&mut self, seek: bool) -> io::Result<()> {
+            if self.pos == self.chunk as u64
+                && seek == self.fault_on_seek
+                && let Some(fault) = self.fault.take()
+            {
+                return Err(fault.error());
+            }
+            Ok(())
+        }
     }
 
     impl Read for ChunkSource {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.interrupt(false)?;
             let start = usize::try_from(self.pos).unwrap_or(usize::MAX);
             if start >= self.data.len() {
                 return Ok(0);
             }
             let n = self.chunk.min(buf.len()).min(self.data.len() - start);
             buf[..n].copy_from_slice(&self.data[start..start + n]);
+            self.reads
+                .lock()
+                .expect("read ledger")
+                .push(self.pos..self.pos + n as u64);
             self.pos += n as u64;
             Ok(n)
         }
@@ -347,6 +433,7 @@ mod tests {
 
     impl Seek for ChunkSource {
         fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+            self.interrupt(true)?;
             let abs = match from {
                 SeekFrom::Start(s) => s,
                 SeekFrom::Current(d) => self.pos.saturating_add_signed(d),
@@ -426,15 +513,31 @@ mod tests {
     /// `re_mp4` a buffer whose box-size field read `0x00000000` ("invalid
     /// box size 0 at offset 0" -> decode failure -> producer failed).
     #[kithara::test]
-    fn mid_fill_end_shrink_keeps_already_read_prefix() {
+    #[case::ready(None, false)]
+    #[case::read_retired(Some(InputFault::Reason(PendingReason::SessionRetired)), false)]
+    #[case::seek_retired(Some(InputFault::Reason(PendingReason::SessionRetired)), true)]
+    #[case::seek_snapshot_retired(Some(InputFault::Snapshot(PendingReason::SessionRetired)), true)]
+    #[case::seek_variant(Some(InputFault::Variant), true)]
+    #[case::seek_retry(Some(InputFault::Reason(PendingReason::Retry)), true)]
+    #[case::seek_interrupted(Some(InputFault::Interrupted), true)]
+    #[case::seek_io_error(Some(InputFault::Io), true)]
+    #[case::read_io_error(Some(InputFault::Io), false)]
+    fn mid_fill_end_shrink_keeps_already_read_prefix(
+        #[case] fault: Option<InputFault>,
+        #[case] fault_on_seek: bool,
+    ) {
         let full = 16usize;
         let shrunk = 12usize;
         // Distinct non-zero payload so a zeroed prefix is unambiguous.
         let blob: Vec<u8> = (1..=u8::try_from(full).unwrap_or(0)).collect();
+        let reads = std::sync::Arc::new(Mutex::new(Vec::new()));
         let mut source: BoxedSource = Box::new(ChunkSource {
             data: blob.clone(),
             pos: 0,
             chunk: 6,
+            fault,
+            fault_on_seek,
+            reads: std::sync::Arc::clone(&reads),
         });
         // Shrink on the 4th poll: it is the post-seek `refresh_range` of the
         // second iteration, after 6 bytes are already buffered.
@@ -447,10 +550,39 @@ mod tests {
         let pools = pools();
         let mut state = SegmentReadState::new(0..full as u64, pools.get::<u8>());
 
-        let status = fill_segment_buffer(&mut source, &mut state, LiveRange::Segment(&layout, 0))
-            .expect("fill must not error");
-
-        assert_eq!(status, FillStatus::Ready);
+        let result = fill_segment_buffer(&mut source, &mut state, LiveRange::Segment(&layout, 0));
+        if let Some(fault) = fault {
+            assert_eq!(state.filled, 6);
+            assert_eq!(&state.buffer[..6], &blob[..6]);
+            if let Some(reason) = fault.pending() {
+                assert_eq!(
+                    result.expect("typed source status"),
+                    FillStatus::Pending(reason)
+                );
+                assert_eq!(
+                    fill_segment_buffer(&mut source, &mut state, LiveRange::Segment(&layout, 0))
+                        .expect("resume same read"),
+                    FillStatus::Ready
+                );
+            } else {
+                match (fault, result) {
+                    (InputFault::Interrupted, Err(DecodeError::Interrupted)) => {}
+                    (InputFault::Io, Err(DecodeError::Io { source })) => {
+                        assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
+                        assert_eq!(source.to_string(), "fixture read denied");
+                    }
+                    _ => panic!("genuine source failures must retain their error semantics"),
+                }
+                return;
+            }
+        } else {
+            assert_eq!(result.expect("fill must not error"), FillStatus::Ready);
+        }
+        assert_eq!(
+            reads.lock().expect("read ledger").as_slice(),
+            &[0..6, 6..12],
+            "the completed prefix must be read only once"
+        );
         assert_eq!(
             &state.buffer[..],
             &blob[..shrunk],

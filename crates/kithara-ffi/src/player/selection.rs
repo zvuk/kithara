@@ -1,6 +1,6 @@
 use crate::{item::AudioPlayerItem, player::AudioPlayer, types::FfiError};
 
-#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[cfg_attr(all(feature = "uniffi", not(target_arch = "wasm32")), uniffi::export)]
 impl AudioPlayer {
     /// Selects `item` with an immediate cut for `FfiTransition::None`, or the
     /// configured crossfade duration for `FfiTransition::Crossfade`.

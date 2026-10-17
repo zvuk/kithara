@@ -337,35 +337,35 @@
 # apple-safari / branch
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-safari / platforms
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-safari / merge-request
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-safari / quarantine
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-safari / main
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-safari / nightly
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-safari / weekly
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-safari / release
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-swift-test / branch
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
@@ -2072,7 +2072,7 @@
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
@@ -2085,7 +2085,7 @@
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
@@ -2098,7 +2098,7 @@
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
@@ -2111,7 +2111,7 @@
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
@@ -2124,7 +2124,7 @@
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
@@ -2137,7 +2137,7 @@
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
@@ -2150,7 +2150,7 @@
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
@@ -2163,7 +2163,7 @@
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
@@ -2279,34 +2279,42 @@
   <require os> linux
   <require tools> cargo just
   just quality coverage-risk
+    KITHARA_HANG_DUMP_DIR=<root>/coverage/hang
 # quality-coverage-risk / platforms
   <require os> linux
   <require tools> cargo just
   just quality coverage-risk
+    KITHARA_HANG_DUMP_DIR=<root>/coverage/hang
 # quality-coverage-risk / merge-request
   <require os> linux
   <require tools> cargo just
   just quality coverage-risk
+    KITHARA_HANG_DUMP_DIR=<root>/coverage/hang
 # quality-coverage-risk / quarantine
   <require os> linux
   <require tools> cargo just
   just quality coverage-risk
+    KITHARA_HANG_DUMP_DIR=<root>/coverage/hang
 # quality-coverage-risk / main
   <require os> linux
   <require tools> cargo just
   just quality coverage-risk
+    KITHARA_HANG_DUMP_DIR=<root>/coverage/hang
 # quality-coverage-risk / nightly
   <require os> linux
   <require tools> cargo just
   just quality coverage-risk
+    KITHARA_HANG_DUMP_DIR=<root>/coverage/hang
 # quality-coverage-risk / weekly
   <require os> linux
   <require tools> cargo just
   just quality coverage-risk
+    KITHARA_HANG_DUMP_DIR=<root>/coverage/hang
 # quality-coverage-risk / release
   <require os> linux
   <require tools> cargo just
   just quality coverage-risk
+    KITHARA_HANG_DUMP_DIR=<root>/coverage/hang
 # quality-health / branch
   <require os> linux
   <require tools> cargo just
@@ -2502,67 +2510,67 @@
 # web-chromium / branch
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-chromium / platforms
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-chromium / merge-request
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-chromium / quarantine
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-chromium / main
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-chromium / nightly
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-chromium / weekly
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-chromium / release
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-firefox / branch
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-firefox / platforms
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-firefox / merge-request
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-firefox / quarantine
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-firefox / main
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-firefox / nightly
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-firefox / weekly
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-firefox / release
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-size / branch
   <require os> linux
   <require tools> cargo just

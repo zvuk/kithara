@@ -6,7 +6,7 @@ use kithara::{
     decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     net::{HttpClient, NetError, NetOptions},
     output::LiveOutput,
-    platform::{CancelScope, sync::Mutex, time::Duration},
+    platform::{CancelScope, sync::Mutex, time::Duration, tokio::task::spawn_blocking},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
     worker::{Worker, WorkerConfig},
 };
@@ -129,25 +129,29 @@ fn tag<'a>(text: &'a str, tag: &str) -> &'a str {
         .unwrap_or_else(|| panic!("{tag} is missing from {text}"))
 }
 
-pub(super) fn decode_adts_left(bytes: Vec<u8>) -> Vec<f32> {
-    let mut decoder = DecoderFactory::create_from_media_info(
-        Cursor::new(bytes),
-        &MediaInfo::builder()
-            .codec(AudioCodec::AacLc)
-            .container(ContainerFormat::Adts)
-            .build(),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
-            .pools(pools())
-            .build(),
-    )
-    .expect("create the ADTS AAC-LC decoder");
+pub(super) async fn decode_adts_left(bytes: Vec<u8>) -> Vec<f32> {
+    spawn_blocking(move || {
+        let mut decoder = DecoderFactory::create_from_media_info(
+            Cursor::new(bytes),
+            &MediaInfo::builder()
+                .codec(AudioCodec::AacLc)
+                .container(ContainerFormat::Adts)
+                .build(),
+            DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+                .pools(pools())
+                .build(),
+        )
+        .expect("create the ADTS AAC-LC decoder");
 
-    let mut left = Vec::new();
-    while let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("decode chunk") {
-        let channels = usize::from(chunk.spec().channels);
-        left.extend(chunk.samples.iter().step_by(channels));
-    }
-    left
+        let mut left = Vec::new();
+        while let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("decode chunk") {
+            let channels = usize::from(chunk.spec().channels);
+            left.extend(chunk.samples.iter().step_by(channels));
+        }
+        left
+    })
+    .await
+    .expect("raw ADTS decoder task completes")
 }
 
 pub(super) fn assert_carries_the_tone(pcm: &[f32], tone_hz: f64, sample_rate: u32, label: &str) {

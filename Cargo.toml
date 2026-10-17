@@ -28,12 +28,14 @@ members = [
     "crates/kithara-effects",
     "crates/kithara-encode",
     "crates/kithara-events",
+    "crates/kithara-fdk",
     "crates/kithara-ffi",
     "crates/kithara-file",
     "crates/kithara-fixture-gen",
     "crates/kithara-fixture-media",
     "crates/kithara-hls",
     "crates/kithara-host",
+    "crates/kithara-link",
     "crates/kithara-mp4",
     "crates/kithara-mpa",
     "crates/kithara-net",
@@ -106,6 +108,7 @@ default-members = [
     "crates/kithara-effects",
     "crates/kithara-encode",
     "crates/kithara-events",
+    "crates/kithara-fdk",
     "crates/kithara-file",
     "crates/kithara-fixture-gen",
     "crates/kithara-fixture-media",
@@ -119,6 +122,7 @@ default-members = [
     "crates/kithara-platform",
     "crates/kithara-play",
     "crates/kithara-queue",
+    "crates/kithara-link",
     "crates/kithara-record",
     "crates/kithara-render",
     "crates/kithara-resampler",
@@ -159,7 +163,6 @@ default-members = [
     "tests/crates/play",
     "tests/crates/queue",
     "tests/crates/stream",
-    "tests/crates/sync",
     "tests/crates/warp",
 ]
 
@@ -309,6 +312,7 @@ kithara-dsp = { path = "crates/kithara-dsp", version = "0.0.1-alpha5" }
 kithara-effects = { path = "crates/kithara-effects", version = "0.0.1-alpha5", default-features = false }
 kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha5", default-features = false }
 kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha5", default-features = false }
+kithara-fdk = { path = "crates/kithara-fdk", version = "0.0.1-alpha5" }
 kithara-ffi = { path = "crates/kithara-ffi", default-features = false }
 kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha5", default-features = false }
 kithara-fixture-gen = { path = "crates/kithara-fixture-gen", version = "0.0.1-alpha5", default-features = false }
@@ -316,6 +320,7 @@ kithara-fixture-media = { path = "crates/kithara-fixture-media", version = "0.0.
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha5", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha5", default-features = false }
 kithara-integration-tests = { path = "tests", default-features = false }
+kithara-link = { path = "crates/kithara-link", version = "0.0.1-alpha5", default-features = false }
 kithara-mp4 = { path = "crates/kithara-mp4", version = "0.0.1-alpha5" }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha5" }
 kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha5", default-features = false }
@@ -406,11 +411,12 @@ cpu-time = "1"
 criterion = "0.8.2"
 crossbeam-queue = "0.3"
 dashmap = "6.2.1"
+# The Linux secret-service store for keyring-core.
+dbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
 delegate = "0.13"
 derive-where = "1.7"
 derive_more = { version = "2.1", features = ["debug", "deref", "deref_mut", "display", "error", "from", "into"] }
 fast-interleave = "0.1"
-fdk-aac = "0.8.0"
 fdk-aac-sys = "0.5.0"
 fearless_simd = "1.0"
 ffmpeg-next = "8.1.0"
@@ -473,6 +479,7 @@ obfstr = "0.4.6"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false }
 opus = "0.4.0"
+ordered-float = { version = "5.5.0", default-features = false }
 ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "load-dynamic", "api-18", "cuda", "tracing"] }
 parking_lot = "0.12"
 parking_lot_core = "0.9"
@@ -527,12 +534,12 @@ symphonia = { version = "0.6.1", features = ["all", "opt-simd"] }
 symphonia-core = "0.6.1"
 syn = { version = "3", features = ["full"] }
 tempfile = "3.27.0"
-thirtyfour = { version = "0.37.5", default-features = false, features = ["bidi", "cdp", "reqwest", "rustls"] }
+thirtyfour = { version = "0.37.5", default-features = false, features = ["bidi", "cdp", "component", "reqwest", "rustls"] }
 thiserror = "2.0.21"
 thunderdome = { version = "0.6.1", default-features = false }
 tiny_http = "0.12.0"
 tokio = { version = "1.53.2", default-features = false }
-tokio_with_wasm = { version = "0.10", features = ["full"] }
+tokio_with_wasm = { version = "0.9.2", features = ["full"] }
 toml = { version = "1.1", features = ["preserve_order"] }
 tower-http = { version = "0.7", features = ["cors", "fs", "set-header"] }
 tower-layer = "0.3.3"
@@ -584,8 +591,6 @@ windows-sys = "0.61"
 winit = "0.30"
 wreq = "=6.0.0-rc.31"
 wreq-util = "=3.0.0-rc.14"
-# The Linux secret-service store for keyring-core.
-zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
 
 # Optimise CPU-heavy audio dependencies in debug builds so the audio
 # worker thread can keep up with real-time playback.  Without this,

@@ -61,7 +61,6 @@ pub trait WorkerWake: Send + Sync {
     /// Wake the audio worker so it re-ticks the decoder now that data landed.
     fn wake(&self);
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;

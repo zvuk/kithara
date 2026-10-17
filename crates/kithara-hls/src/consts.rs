@@ -1,5 +1,3 @@
-use kithara_platform::time::Duration;
-
 /// Enough rounds for an obstruction another task is already clearing to
 /// disappear, few enough that a standing one reaches the reader instead of
 /// parking it.
@@ -104,13 +102,6 @@ pub(crate) const MEDIA_PLAYLIST_WITH_UNCLOSED_QUOTE: &[u8] = b"#EXTM3U
 #EXT-X-KEY:METHOD=AES-128,URI=\"
 #EXTINF:4,
 seg0.ts";
-
-/// Watchdog timeout for the off-RT blocking `wait_range(_, None)`: must exceed
-/// the `kithara-net` per-fetch total timeout so a stalled upstream is failed by
-/// the network layer (the wait then returns a terminal `Err`) before this
-/// deadlock watchdog fires. Mirrors `kithara-storage` `WAIT_HANG_TIMEOUT`. Only
-/// a wait that never wakes after every signal site fired is a real deadlock.
-pub(crate) const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub(crate) const INIT_PLACEHOLDER_BYTES: u64 = 16 * 1024;
 

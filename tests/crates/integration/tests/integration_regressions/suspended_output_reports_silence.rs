@@ -3,9 +3,7 @@
 use std::num::NonZeroU32;
 
 use kithara::{events::TrackId, play::InterruptionKind, signal::AudioSpec};
-use kithara_integration_tests::offline::{
-    OfflinePlayer, OfflinePlayerOptions, resource_from_reader,
-};
+use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions};
 use kithara_test_fixtures::integration_fixtures::constant_half;
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -27,8 +25,12 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
     assert!(harness.player().is_playing());
 
     harness
-        .player()
-        .notify_interruption(InterruptionKind::Began);
+        .with_queue(move |player| {
+            player
+                .notify_interruption(InterruptionKind::Began)
+                .expect("begin interruption")
+        })
+        .await;
     assert_eq!(
         harness.player().rate(),
         0.0,
@@ -43,21 +45,36 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
     // it over, the stream rebuild takes it, and until the processor runs the
     // last thing it published still describes an output that is gone.
     harness
-        .player()
-        .notify_interruption(InterruptionKind::Ended {
-            should_resume: true,
-        });
+        .with_queue(move |player| {
+            player
+                .notify_interruption(InterruptionKind::Ended {
+                    should_resume: true,
+                })
+                .expect("end interruption")
+        })
+        .await;
     assert_eq!(
         harness.player().rate(),
         0.0,
         "an interruption that has ended does not by itself drive the output"
     );
 
+    // The first block past the interruption counts itself as it starts and
+    // publishes as it ends. A reader cannot tell it from a block still
+    // rendering, which would hand back what the output published before the
+    // interruption: a pause sent before it would read as resumed playback.
+    let _ = harness.render(BLOCK_FRAMES).await;
+    assert_eq!(
+        harness.player().rate(),
+        0.0,
+        "the first block past the interruption may still be publishing when a reader looks"
+    );
+
     let _ = harness.render(BLOCK_FRAMES).await;
     assert_eq!(
         harness.player().rate(),
         1.0,
-        "one audio block past the interruption the processor speaks for itself"
+        "once the next block starts the first one has published, and the processor speaks for itself"
     );
 
     harness.close().await;
@@ -66,20 +83,21 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
 async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayer {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
+    let deck_source = harness.pcm_deck(Box::new(kithara::audio::mock::TestPcmReader::with_pcm(
+        AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
+        1.0,
+        constant_half,
+    )));
     harness
-        .with_player(move |player| {
-            player.insert(
-                resource_from_reader(kithara::audio::mock::TestPcmReader::with_pcm(
-                    AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
-                    1.0,
-                    constant_half,
-                )),
-                TrackId::allocate(),
-                None,
-            );
+        .with_queue(move |player| {
+            let deck_id = TrackId::allocate();
             player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
+                .append_with_id(deck_id, deck_source)
+                .expect("append PCM deck");
+            player
+                .select(deck_id, kithara::queue::Transition::None)
+                .expect("select the item");
+            player.play();
         })
         .await;
 

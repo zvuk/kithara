@@ -26,10 +26,7 @@ use kithara::{
     host::{HostConfig, HostSettings},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
-    play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, ResourceConfig,
-        ResourceSrc,
-    },
+    play::{PlayWorker, PlayWorkerConfig, PlayerEvent, ResourceConfig, ResourcePrep, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -76,7 +73,7 @@ struct GateMode {
 }
 
 struct Harness {
-    player: Option<PlayerImpl<TestPools>>,
+    prep: ResourcePrep<TestPools>,
     worker: PlayWorker<TestPools>,
     host: OfflineHostHarness<TestPools>,
 }
@@ -96,28 +93,8 @@ impl Harness {
             .await
             .expect("create product offline Host");
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-        let config = PlayerConfig::builder()
-            .crossfade_duration(0.0)
-            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"))
-            .worker(worker.clone())
-            .build();
-        let player = Some(PlayerImpl::new(config));
-        Self {
-            player,
-            worker,
-            host,
-        }
-    }
-
-    delegate::delegate! {
-        to self.player {
-            #[expr($.expect("harness player is available"))]
-            #[call(as_ref)]
-            fn player(&self) -> &PlayerImpl<TestPools>;
-            #[expr($.expect("harness player was transferred"))]
-            #[call(take)]
-            fn take_player(&mut self) -> PlayerImpl<TestPools>;
-        }
+        let prep = ResourcePrep::builder().worker(worker.clone()).build();
+        Self { prep, worker, host }
     }
 
     async fn render(&self, frames: usize) -> Vec<f32> {
@@ -138,12 +115,8 @@ impl Harness {
     }
 
     async fn close(self) {
-        let Self {
-            player,
-            worker,
-            host,
-        } = self;
-        drop(player);
+        let Self { prep, worker, host } = self;
+        drop(prep);
         drop(worker);
         host.close().await;
     }
@@ -211,6 +184,28 @@ async fn immediate_seek(
     run_case(gated_source, mode).await;
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+async fn warm_up(
+    harness: &Harness,
+    queue: &QueueControl<TestPools>,
+    gate: &SegmentGateHandle,
+    mode: GateMode,
+) {
+    for _ in 0..WARMUP_BLOCKS {
+        hang_tick!(format!("warm-up waits for offline block, mode={mode:?}"));
+        let _ = harness.run(queue, QueueControl::tick).await;
+        let _ = harness.render(BLOCK_FRAMES).await;
+        hang_reset!();
+    }
+    assert_eq!(
+        gate.head_requested(),
+        0,
+        "segment-aware fMP4 must not HEAD-probe the gated segment at startup \
+         (mode={mode:?})"
+    );
+}
+
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode) {
     let (hls, gate) = gated_source;
     // A registered gate parks the body by default. Apply the requested mode.
@@ -238,28 +233,31 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
         .build(),
     );
 
-    let mut harness = Harness::new(pools).await;
-    let mut rx = harness.player().subscribe();
+    let harness = Harness::new(pools).await;
 
     // Track 0 = the gated HLS track. Track 1 = a second HLS track so a forward
     // auto-advance has somewhere to land (observable as current_index 0 -> 1).
     let target = build_hls_source(&master, &downloader, &store, &harness.worker);
     let target_src = kithara::platform::sync::Arc::from(master.as_str());
     let next = build_hls_source(&master, &downloader, &store, &harness.worker);
-    let player = harness.take_player();
     let queue = harness
         .host
         .insert_control(Queue::new(
             QueueConfig::builder()
-                .player(player)
-                .crossfade_settings(kithara::play::CrossfadeSettings {
-                    duration: 0.0,
-                    ..kithara::play::CrossfadeSettings::default()
-                })
+                .prep(harness.prep.clone())
+                .settings(
+                    kithara::queue::QueueSettings::builder()
+                        .crossfade(kithara::play::CrossfadeSettings {
+                            duration: 0.0,
+                            ..kithara::play::CrossfadeSettings::default()
+                        })
+                        .build(),
+                )
                 .build(),
         ))
         .await
         .expect("insert queue into product offline Host");
+    let mut rx = queue.subscribe();
     let mut queue_events = queue.subscribe::<TestEvent>();
     let id0 = harness
         .run(&queue, move |q| q.append(target))
@@ -281,19 +279,16 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
         .await
         .expect("select track 0");
     harness.run(&queue, QueueControl::play).await;
-    assert_eq!(queue.current_index(), Some(0), "starts on track 0");
+    assert_eq!(queue.current_index(), None, "Start has not rendered yet");
 
     // Warm up: render some blocks so segment 0 decodes and the track is
     // genuinely playing before the seek arrives.
-    for _ in 0..WARMUP_BLOCKS {
-        let _ = harness.run(&queue, QueueControl::tick).await;
-        let _ = harness.render(BLOCK_FRAMES).await;
-    }
-    assert_eq!(
-        gate.head_requested(),
-        0,
-        "segment-aware fMP4 must not HEAD-probe the gated segment at startup \
-         (mode={mode:?})"
+    warm_up(&harness, &queue, &gate, mode).await;
+    assert_eq!(queue.current_index(), Some(0), "starts on track 0");
+    assert_eq!(queue.current().map(|entry| entry.id), Some(id0));
+    assert!(
+        queue.is_playing(),
+        "native Start must apply before the seek"
     );
 
     // The user taps the slider immediately: seek into the gated segment's time
@@ -306,9 +301,12 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
     let mut trigger = Trigger::NoTerminal;
     let mut outcome = Outcome::HeldOnTrack;
     for _ in 0..OBSERVE_BLOCKS {
+        hang_tick!(format!("withheld seek awaits offline block, mode={mode:?}"));
         let _ = harness.run(&queue, QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
+        hang_reset!();
         while let Ok(ev) = rx.try_recv().map(|env| env.event) {
+            hang_tick!("withheld seek drains terminal events".to_owned());
             if let TestEvent::Player(pe) = ev {
                 match pe {
                     PlayerEvent::ItemDidFail { ref item, .. } if item.track().src == target_src => {
@@ -328,11 +326,10 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
                     | PlayerEvent::VolumeChanged { .. }
                     | PlayerEvent::MuteChanged { .. }
                     | PlayerEvent::CurrentItemChanged { .. }
-                    | PlayerEvent::PrerollCompleted { .. }
-                    | PlayerEvent::PrefetchRequested
-                    | PlayerEvent::HandoverRequested { .. } => {}
+                    | PlayerEvent::PrerollCompleted { .. } => {}
                 }
             }
+            hang_reset!();
         }
         let idx = queue.current_index();
         if idx != Some(0) {
@@ -363,7 +360,9 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
             // *in-withheld-window* contract only.)
         }
         Outcome::AutoAdvanced { new_index, trigger } => {
-            harness.run(&queue, QueueControl::clear).await;
+            harness
+                .run(&queue, |queue| queue.clear().expect("the queue clears"))
+                .await;
             drop(queue);
             drop(hls);
             panic!(
@@ -377,7 +376,9 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
         }
     }
 
-    harness.run(&queue, QueueControl::clear).await;
+    harness
+        .run(&queue, |queue| queue.clear().expect("the queue clears"))
+        .await;
     drop(queue);
     drop(hls);
     harness.close().await;

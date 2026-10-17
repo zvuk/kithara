@@ -56,6 +56,14 @@ pub trait Task: 'static {
     /// Release domain state after cancellation or panic.
     fn on_cancel(&mut self) {}
 
+    /// Return the task-owned priority sampled before each scheduler pass.
+    ///
+    /// `None` uses the immutable priority supplied at admission. `Some` overrides
+    /// that value, including zero, from state owned by the dispatcher thread.
+    fn priority(&self) -> Option<Priority> {
+        None
+    }
+
     /// Reclaim deferred resources outside the task tick.
     fn recycle(&mut self) {}
 
@@ -66,7 +74,7 @@ pub trait Task: 'static {
     fn warm_up(&mut self) {}
 }
 
-/// Cloneable priority and wake control for an admitted task.
+/// Cloneable cancellation and wake control for an admitted task.
 #[derive(Clone, kithara_config::ConfigOwner)]
 #[config_owner(TaskConfig, config)]
 pub struct TaskControl {
@@ -88,18 +96,6 @@ impl TaskControl {
     pub fn cancel(&self) {
         self.token.cancel();
         self.wake.wake();
-    }
-
-    /// Return the current scheduler priority.
-    #[must_use]
-    pub fn priority(&self) -> Priority {
-        self.config.priority()
-    }
-
-    /// Publish a new priority and coalesce a scheduler pass.
-    pub fn set_priority(&self, priority: Priority) {
-        self.config.set_priority(priority);
-        self.wake.defer();
     }
 
     delegate::delegate! {
@@ -151,7 +147,7 @@ impl TaskContext {
         &self.cancel
     }
 
-    /// Cloneable priority and wake control for this task.
+    /// Cloneable cancellation and wake control for this task.
     #[must_use]
     pub fn control(&self) -> TaskControl {
         self.control.clone()

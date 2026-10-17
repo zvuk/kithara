@@ -280,7 +280,7 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
 
             let seek_target = player.position() + 30.0;
             eprintln!("[iter {iter}][t{track_idx}] seek to {seek_target:.2}s");
-            player.seek(seek_target);
+            player.seek(seek_target).await;
 
             let after =
                 render_and_collect(&mut player, window_blocks, &mut iteration_samples).await;

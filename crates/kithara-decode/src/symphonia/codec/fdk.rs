@@ -1,4 +1,4 @@
-use fdk_aac::dec::{Decoder, DecoderError, Transport};
+use kithara_fdk::{Decoder, Error as FdkError, StreamInfo};
 use symphonia::core::{
     audio::{
         AsGenericAudioBufferRef, Audio, AudioBuffer, AudioMut, AudioSpec, Channels,
@@ -31,6 +31,11 @@ mod consts {
     /// Pre-allocated per-frame PCM buffer. AAC frames are at most
     /// 2048 samples × 2 channels for HE-AAC v2.
     pub(super) const MAX_SAMPLES: usize = 8192;
+}
+
+fn native_error(error: &FdkError) -> Error {
+    tracing::debug!(%error, "FDK AAC decoder operation failed");
+    Error::DecodeError("aac: native decoder operation failed")
 }
 
 fn sample_rate_index(rate: u32) -> u8 {
@@ -175,7 +180,7 @@ fn audio_buffer(
     ))
 }
 
-/// Symphonia [`AudioDecoder`] wrapping libfdk-aac via [`fdk_aac`].
+/// Symphonia [`AudioDecoder`] owning one native FDK decoder.
 #[derive(derive_more::Debug)]
 pub(crate) struct AacDecoder {
     config: AacStreamConfig,
@@ -189,9 +194,8 @@ pub(crate) struct AacDecoder {
     reset_error: Option<Error>,
     #[debug(skip)]
     pcm: [i16; consts::MAX_SAMPLES],
-    /// First-decode-only refresh: rebuild [`Self::buf`] and capture
-    /// `outputDelay` once the decoder reports authoritative metadata.
-    metadata_validated: bool,
+    /// Native delay captured when the first decoded geometry is established.
+    output_delay: Option<u32>,
     /// Algorithmic-delay frames still to drop from the head of the
     /// PCM stream. Initialised from `stream_info.outputDelay` on the
     /// first successful decode, decremented as each chunk consumes it.
@@ -200,33 +204,59 @@ pub(crate) struct AacDecoder {
     /// trim (`elst`, iTunSMPB) operates on top of the time-aligned
     /// PCM stream this adapter produces.
     delay_remaining: u32,
+    tail_remaining: u32,
 }
 
 impl AacDecoder {
-    fn configure_metadata(&mut self) -> Result<()> {
-        let info = self.decoder.stream_info();
-        let core_rate = u32::try_from(info.aacSampleRate).unwrap_or(self.config.sample_rate);
-        let output_rate = u32::try_from(info.sampleRate).unwrap_or(core_rate);
-        let channels = u8::try_from(info.numChannels).unwrap_or(self.config.channels);
-        let samples_per_frame =
-            self.decoder.decoded_frame_size().max(channels as usize) / channels.max(1) as usize;
-
-        self.config = AacStreamConfig {
+    fn configure_metadata(&mut self, info: &StreamInfo) -> Result<u32> {
+        let core_rate = u32::try_from(info.aacSampleRate)
+            .ok()
+            .filter(|rate| *rate > 0)
+            .ok_or(Error::DecodeError("aac: invalid decoded core rate"))?;
+        let output_rate = u32::try_from(info.sampleRate)
+            .ok()
+            .filter(|rate| *rate > 0)
+            .ok_or(Error::DecodeError("aac: invalid decoded output rate"))?;
+        let channels = u8::try_from(info.numChannels)
+            .ok()
+            .filter(|channels| *channels > 0)
+            .ok_or(Error::DecodeError("aac: invalid decoded channel count"))?;
+        let frame_size = u32::try_from(info.frameSize)
+            .ok()
+            .filter(|frames| *frames > 0)
+            .ok_or(Error::DecodeError("aac: invalid decoded frame size"))?;
+        let object_type = u8::try_from(info.aot)
+            .ok()
+            .filter(|object_type| *object_type > 0)
+            .ok_or(Error::DecodeError("aac: invalid decoded object type"))?;
+        let samples_per_frame = usize::try_from(frame_size)
+            .map_err(|_| Error::DecodeError("aac: decoded frame size overflow"))?;
+        samples_per_frame
+            .checked_mul(usize::from(channels))
+            .filter(|samples| *samples <= self.pcm.len())
+            .ok_or(Error::DecodeError("aac: decoded PCM exceeds capacity"))?;
+        let layout = channel_layout(channels)
+            .ok_or(Error::Unsupported("aac: unsupported number of channels"))?;
+        let spec = AudioSpec::new(output_rate, layout);
+        let config = AacStreamConfig {
             channels,
-            object_type: u8::try_from(info.aot).unwrap_or(self.config.object_type),
+            object_type,
             sample_rate: core_rate,
             sample_rate_index: sample_rate_index(core_rate),
         };
-        let layout = channel_layout(channels)
-            .ok_or(Error::Unsupported("aac: unsupported number of channels"))?;
-        if *self.buf.spec() != AudioSpec::new(output_rate, layout)
-            || self.buf.capacity() < samples_per_frame
-        {
+        if self.output_delay.is_some() {
+            self.validate_metadata(config, &spec, frame_size, info.outputDelay)?;
+            return Ok(frame_size);
+        }
+        if *self.buf.spec() != spec || self.buf.capacity() < samples_per_frame {
             self.buf = audio_buffer(channels, output_rate, samples_per_frame)?;
         }
+        self.config = config;
         self.codec_params.sample_rate = Some(output_rate);
+        self.codec_params.max_frames_per_packet = Some(u64::from(frame_size));
         self.delay_remaining = info.outputDelay;
-        self.metadata_validated = true;
+        self.tail_remaining = info.outputDelay;
+        self.output_delay = Some(info.outputDelay);
         tracing::debug!(
             target: "kithara_decode::symphonia::fdk",
             core_rate,
@@ -236,6 +266,56 @@ impl AacDecoder {
             output_delay = self.delay_remaining,
             "AAC stream metadata refreshed from decoder",
         );
+        Ok(frame_size)
+    }
+
+    fn validate_metadata(
+        &self,
+        config: AacStreamConfig,
+        spec: &AudioSpec,
+        frame_size: u32,
+        output_delay: u32,
+    ) -> Result<()> {
+        if config.sample_rate != self.config.sample_rate
+            || config.channels != self.config.channels
+            || config.object_type != self.config.object_type
+            || self.buf.spec() != spec
+            || self.codec_params.max_frames_per_packet != Some(u64::from(frame_size))
+            || self.output_delay != Some(output_delay)
+        {
+            return decode_error("aac: decoded stream geometry changed");
+        }
+        Ok(())
+    }
+
+    fn render_decoded(&mut self, info: &StreamInfo, draining: bool) -> Result<()> {
+        self.buf.clear();
+        let frame_size = self.configure_metadata(info)?;
+        let frames_in_chunk = if draining {
+            let frames = frame_size.min(self.tail_remaining);
+            self.tail_remaining -= frames;
+            frames
+        } else {
+            frame_size
+        };
+        let channels = usize::from(self.config.channels);
+        let frames_in_chunk = usize::try_from(frames_in_chunk)
+            .map_err(|_| Error::DecodeError("aac: decoded frame count overflow"))?;
+        let capacity = frames_in_chunk
+            .checked_mul(channels)
+            .filter(|capacity| *capacity <= self.pcm.len())
+            .ok_or(Error::DecodeError("aac: decoded PCM exceeds capacity"))?;
+        let pcm = &self.pcm[..capacity];
+        let delay_frames = usize::try_from(self.delay_remaining)
+            .unwrap_or(usize::MAX)
+            .min(frames_in_chunk);
+        self.delay_remaining = self
+            .delay_remaining
+            .saturating_sub(u32::try_from(delay_frames).unwrap_or(u32::MAX));
+
+        self.buf.render_uninit(Some(frames_in_chunk));
+        self.buf.copy_from_slice_interleaved(&pcm);
+        self.buf.trim(delay_frames, 0);
         Ok(())
     }
 
@@ -245,7 +325,6 @@ impl AacDecoder {
         } else {
             AacStreamConfig::try_from(params)?
         };
-        let mut decoder = Decoder::new(Transport::Raw);
         let generated;
         let extra = if let Some(extra) = params.extra_data.as_deref() {
             extra
@@ -253,10 +332,10 @@ impl AacDecoder {
             generated = audio_specific_config(config)?;
             &generated
         };
-        decoder
-            .config_raw(extra)
-            .map_err(|error| Error::DecodeError(error.message()))?;
-        let info = decoder.stream_info();
+        let decoder = Decoder::new(extra).map_err(|error| native_error(&error))?;
+        let info = decoder
+            .stream_info()
+            .map_err(|error| native_error(&error))?;
         let core_rate = u32::try_from(info.aacSampleRate)
             .map_err(|_| Error::DecodeError("aac: invalid configured core rate"))?;
         let output_rate = if info.extSamplingRate > 0 {
@@ -275,6 +354,7 @@ impl AacDecoder {
             .map_err(|_| Error::DecodeError("aac: configured frame size overflow"))?;
         let buf = audio_buffer(config.channels, output_rate, capacity)?;
         let mut codec_params = params.clone();
+        codec_params.sample_rate = Some(output_rate);
         codec_params.max_frames_per_packet = Some(frames);
         Ok(Self {
             decoder,
@@ -283,7 +363,8 @@ impl AacDecoder {
             codec_params,
             pcm: [0; consts::MAX_SAMPLES],
             delay_remaining: 0,
-            metadata_validated: false,
+            tail_remaining: 0,
+            output_delay: None,
             reset_error: None,
         })
     }
@@ -302,54 +383,28 @@ impl AudioDecoder for AacDecoder {
     }
 
     fn decode_ref(&mut self, packet: &PacketRef<'_>) -> Result<GenericAudioBufferRef<'_>> {
+        self.buf.clear();
         if let Some(error) = self.reset_error.take() {
             return Err(error);
         }
-        let mut reader = packet.as_buf_reader();
-        let payload = reader.read_buf_bytes_available_ref();
-        let consumed = self
+        let draining = packet.data.is_empty();
+        if draining && (self.output_delay.is_none() || self.tail_remaining == 0) {
+            self.buf.clear();
+            return Ok(self.buf.as_generic_audio_buffer_ref());
+        }
+        if !draining {
+            self.decoder
+                .fill(packet.data)
+                .map_err(|error| native_error(&error))?;
+        }
+        self.decoder
+            .decode_frame(&mut self.pcm, draining)
+            .map_err(|error| native_error(&error))?;
+        let info = *self
             .decoder
-            .fill(payload)
-            .map_err(|error| Error::DecodeError(error.message()))?;
-        if consumed != payload.len() {
-            return decode_error("aac: incomplete packet accepted by decoder");
-        }
-
-        match self.decoder.decode_frame(&mut self.pcm) {
-            Ok(()) => {}
-            Err(e) if e == DecoderError::TRANSPORT_SYNC_ERROR => {
-                tracing::warn!(
-                    target: "kithara_decode::symphonia::fdk",
-                    "aac transport sync error: {}",
-                    e.message()
-                );
-                self.buf.clear();
-                return Ok(self.buf.as_generic_audio_buffer_ref());
-            }
-            Err(e) => return Err(Error::DecodeError(e.message())),
-        }
-        if !self.metadata_validated {
-            self.configure_metadata()?;
-        }
-
-        let extra_trim_start = usize::try_from(packet.trim_start.get()).unwrap_or(0);
-        let trim_end = usize::try_from(packet.trim_end.get()).unwrap_or(0);
-        let capacity = self.decoder.decoded_frame_size();
-        let pcm = &self.pcm[..capacity];
-
-        let channels = usize::from(self.config.channels.max(1));
-        let frames_in_chunk = capacity / channels;
-        let delay_frames = usize::try_from(self.delay_remaining)
-            .unwrap_or(usize::MAX)
-            .min(frames_in_chunk);
-        self.delay_remaining = self
-            .delay_remaining
-            .saturating_sub(u32::try_from(delay_frames).unwrap_or(u32::MAX));
-
-        self.buf.clear();
-        self.buf.render_uninit(Some(frames_in_chunk));
-        self.buf.copy_from_slice_interleaved(&pcm);
-        self.buf.trim(delay_frames + extra_trim_start, trim_end);
+            .stream_info()
+            .map_err(|error| native_error(&error))?;
+        self.render_decoded(&info, draining)?;
 
         Ok(self.buf.as_generic_audio_buffer_ref())
     }
@@ -368,7 +423,6 @@ impl AudioDecoder for AacDecoder {
             Err(error) => self.reset_error = Some(error),
         }
         self.buf.clear();
-        self.delay_remaining = self.decoder.stream_info().outputDelay;
     }
 }
 
@@ -399,16 +453,27 @@ impl RegisterableAudioDecoder for AacDecoder {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_fixtures::unit_fixtures::{aac_init, aac_segment};
     use kithara_test_utils::kithara;
     use symphonia::core::{
         audio::Audio,
-        codecs::audio::{AudioCodecParameters, AudioDecoderOptions},
+        codecs::audio::{AudioCodecParameters, AudioDecoder, AudioDecoderOptions},
+        errors::Error,
+        packet::PacketRef,
+        units::{Duration, Timestamp},
     };
 
     use super::{AacDecoder, AacStreamConfig};
+    use crate::{
+        fmp4::parsing::{parse_init, parse_segment_frames},
+        test_pools::pools,
+    };
 
     #[kithara::test]
-    fn explicit_he_v2_prepares_stereo_output_at_extension_rate() {
+    fn explicit_he_v2_prepares_stereo_output_at_extension_rate(
+        aac_init: Vec<u8>,
+        aac_segment: Vec<u8>,
+    ) {
         let extra = [0xeb, 0x8a, 0x08, 0x00];
         let config = AacStreamConfig::try_from(extra.as_slice()).expect("HE-AAC v2 config");
         assert_eq!(config.sample_rate, 22_050);
@@ -421,5 +486,70 @@ mod tests {
         assert_eq!(decoder.buf.spec().channels().count(), 2);
         assert_eq!(decoder.buf.capacity(), 2048);
         assert_eq!(decoder.codec_params.max_frames_per_packet, Some(2048));
+
+        let init = parse_init(&aac_init, &pools()).expect("parse native AAC fixture");
+        params.extra_data = Some(init.config.as_ref().into());
+        let mut decoder = AacDecoder::try_new(&params, AudioDecoderOptions::default())
+            .expect("prepare native AAC fixture");
+        let frames = parse_segment_frames(&init, &aac_segment).expect("native AAC packets");
+        for frame in frames.iter().take(8) {
+            let packet = PacketRef::new(
+                0,
+                Timestamp::ZERO,
+                Duration::ZERO,
+                &aac_segment[frame.offset..frame.offset + frame.size],
+            );
+            decoder
+                .decode_ref(&packet)
+                .expect("decode native AAC fixture");
+        }
+        assert!(decoder.last_decoded().frames() > 0);
+        assert_eq!(decoder.delay_remaining, 0);
+        let info = *decoder
+            .decoder
+            .stream_info()
+            .expect("decoded native metadata");
+        let budgets = (decoder.delay_remaining, decoder.tail_remaining);
+        let mut invalid = [info; 16];
+        invalid[0].aacSampleRate = 0;
+        invalid[1].aacSampleRate = -1;
+        invalid[2].sampleRate = 0;
+        invalid[3].sampleRate = -1;
+        invalid[4].numChannels = 0;
+        invalid[5].numChannels = -1;
+        invalid[6].numChannels = 256;
+        invalid[7].frameSize = 0;
+        invalid[8].frameSize = -1;
+        invalid[9].aacSampleRate += 1;
+        invalid[10].sampleRate += 1;
+        invalid[11].numChannels = if info.numChannels == 1 { 2 } else { 1 };
+        invalid[12].frameSize *= 2;
+        invalid[13].outputDelay += 1;
+        invalid[14].frameSize = i32::MAX;
+        invalid[15].aot = 0;
+        for (case, changed) in invalid.iter().enumerate() {
+            decoder
+                .render_decoded(&info, false)
+                .expect("retain valid native PCM");
+            assert!(decoder.last_decoded().frames() > 0);
+            assert!(
+                matches!(
+                    decoder.render_decoded(changed, true),
+                    Err(Error::DecodeError(_))
+                ),
+                "native geometry case {case} must be rejected before rendering"
+            );
+            assert_eq!(
+                decoder.last_decoded().frames(),
+                0,
+                "stale PCM in case {case}"
+            );
+            assert_eq!(
+                (decoder.delay_remaining, decoder.tail_remaining),
+                budgets,
+                "native geometry case {case} must preserve delay budgets"
+            );
+            assert_eq!(decoder.output_delay, Some(info.outputDelay));
+        }
     }
 }

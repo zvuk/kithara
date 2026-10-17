@@ -1,12 +1,9 @@
-use std::{
-    sync::{
-        Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicBool, Ordering},
-    },
-    task::Waker,
-};
+use std::task::Waker;
 
-use crate::sync::{Arc, Weak};
+use crate::sync::{
+    Arc, Mutex, Weak,
+    atomic::{AtomicBool, Ordering},
+};
 
 /// A synchronous cancel-waker: invoked from the cancelling thread when the node
 /// is cancelled. Cheap, non-blocking, idempotent — typically a `Condvar`/`Notify`
@@ -68,7 +65,7 @@ impl Node {
             return;
         }
         let drained: Vec<Slot> = {
-            let mut w = lock(&self.wakers);
+            let mut w = self.wakers.lock();
             w.fired = true;
             w.slots.drain(..).map(|(_, slot)| slot).collect()
         };
@@ -76,7 +73,7 @@ impl Node {
             slot.fire();
         }
         let children: Vec<Arc<Self>> = {
-            let mut kids = lock(&self.children);
+            let mut kids = self.children.lock();
             let live: Vec<Arc<Self>> = kids.iter().filter_map(Weak::upgrade).collect();
             kids.clear();
             live
@@ -91,7 +88,7 @@ impl Node {
     /// set the parent flag — in the latter case the child is born cancelled
     /// (`flag = true`, `fired = true`) so a future/waker on it never parks.
     pub(super) fn child(parent: &Arc<Self>) -> Arc<Self> {
-        let mut kids = lock(&parent.children);
+        let mut kids = parent.children.lock();
         let born_cancelled = parent.flag.load(Ordering::Acquire);
         let node = Arc::new(Self {
             flag: AtomicBool::new(born_cancelled),
@@ -115,7 +112,7 @@ impl Node {
     /// arrive with a fresh `Context`). If the slot is gone the node has fired —
     /// wake the new waker so the poll resolves.
     pub(super) fn refresh_task(&self, id: u64, waker: &Waker) {
-        let mut w = lock(&self.wakers);
+        let mut w = self.wakers.lock();
         if let Some((_, slot)) = w.slots.iter_mut().find(|(sid, _)| *sid == id) {
             *slot = Slot::Task(waker.clone());
         } else {
@@ -130,7 +127,7 @@ impl Node {
     /// Fires outside the lock when already fired, avoiding a call back into a slot's waker while
     /// the node's lock is held.
     pub(super) fn register(&self, slot: Slot) -> Option<u64> {
-        let mut w = lock(&self.wakers);
+        let mut w = self.wakers.lock();
         if !w.fired {
             let id = w.next_id;
             w.next_id += 1;
@@ -148,12 +145,8 @@ impl Node {
     }
 
     pub(super) fn unregister(&self, id: u64) {
-        lock(&self.wakers).slots.retain(|(sid, _)| *sid != id);
+        self.wakers.lock().slots.retain(|(sid, _)| *sid != id);
     }
-}
-
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -162,8 +155,13 @@ mod tests {
 
     use kithara_test_utils::kithara;
 
-    use super::{Node, Slot, lock};
+    use super::{Node, Slot};
     use crate::sync::Arc;
+    #[cfg(not(target_arch = "wasm32"))]
+    use crate::{
+        sync::atomic::{AtomicUsize, Ordering},
+        thread,
+    };
 
     fn noop_sync() -> Slot {
         Slot::Sync(Arc::new(|| {}))
@@ -183,7 +181,7 @@ mod tests {
             node.unregister(id);
         }
         assert_eq!(
-            lock(&node.wakers).slots.len(),
+            node.wakers.lock().slots.len(),
             0,
             "register/unregister churn must not leak slots"
         );
@@ -202,9 +200,41 @@ mod tests {
         // Deriving a live child sweeps the 1000 dead `Weak`s, then pushes one.
         let _survivor = Node::child(&root);
         assert_eq!(
-            lock(&root.children).len(),
+            root.children.lock().len(),
             1,
             "dead-Weak sweep must keep the children vec bounded under churn"
         );
+    }
+
+    #[kithara::test(loom)]
+    fn child_creation_racing_cancel_keeps_child_cancelled() {
+        let root = Node::root();
+        let cancelling = Arc::clone(&root);
+        let cancel = thread::spawn(move || cancelling.cancel());
+        let child = Node::child(&root);
+
+        assert!(cancel.join().is_ok());
+        assert!(root.is_cancelled());
+        assert!(child.is_cancelled());
+    }
+
+    #[kithara::test(loom)]
+    fn registration_racing_cancel_fires_once_outside_lock() {
+        let root = Node::root();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let registering = Arc::clone(&root);
+        let observed = Arc::clone(&root);
+        let count = Arc::clone(&fired);
+        let register = thread::spawn(move || {
+            registering.register(Slot::Sync(Arc::new(move || {
+                assert!(observed.is_cancelled());
+                assert!(observed.register(noop_sync()).is_none());
+                count.fetch_add(1, Ordering::SeqCst);
+            })))
+        });
+        root.cancel();
+
+        assert!(register.join().is_ok());
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
     }
 }

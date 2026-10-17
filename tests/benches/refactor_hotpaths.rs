@@ -330,8 +330,7 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
                         .hint(("mp3").to_string())
                         .build();
                     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-                    let mut audio = worker
-                        .load(config)
+                    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
                         .await
                         .unwrap_or_else(|e| panic!("audio init failed: {e}"));
 

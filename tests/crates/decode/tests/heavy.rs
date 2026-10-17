@@ -17,6 +17,8 @@ mod gapless_offline_e2e;
 mod gapless_parity;
 mod gapless_startup_regressions;
 mod generated_gapless_hls;
+mod initial_visible_duration;
+mod mp3_grid_clock;
 mod phase_continuity;
 mod stress_seek_random;
 mod stress_timeline;

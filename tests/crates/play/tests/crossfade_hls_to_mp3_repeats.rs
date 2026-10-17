@@ -5,20 +5,12 @@ use std::num::NonZeroU32;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::AudioConfig,
-    file::{File as FileSource, FileConfig, FileSrc},
-    hls::{Hls, HlsConfig},
     host::{HostConfig, HostSettings},
-    platform::{
-        sync::Arc,
-        time::{Duration, timeout},
-    },
-    play::{PlayWorker, PlayWorkerConfig, Resource},
-    stream::{AudioCodec, ContainerFormat, MediaInfo},
+    platform::{sync::Arc, time::Duration},
+    play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    CreatedHls, HlsFixtureBuilder, TestServerHelper,
-    offline::{OfflinePlayer, resource_from_reader},
+    CreatedHls, HlsFixtureBuilder, TestServerHelper, offline::OfflinePlayer,
     output_continuity::render_offline_window,
 };
 use kithara_test_fixtures::{fixtures::tone_mp3, integration_fixtures::saw_segments};
@@ -32,13 +24,12 @@ use crate::{
 };
 
 mod consts {
-    use super::{Duration, shared};
+    use super::shared;
 
     pub(super) const BLOCK: usize = 512;
     /// The bound `stress_offline_crossfade_no_gaps` holds a single crossfade to,
     /// on the same material and the same window length.
     pub(super) const MAX_SILENCE_BLOCKS: u32 = 2;
-    pub(super) const READ_TIMEOUT: Duration = shared::READ_TIMEOUT;
     pub(super) const SR: u32 = shared::SAMPLE_RATE;
 }
 
@@ -56,6 +47,7 @@ async fn hls_server(saw_segments: &'static [u8]) -> CreatedHls {
         .create_hls(
             HlsFixtureBuilder::new()
                 .custom_data(Arc::new(saw_segments.to_vec()))
+                .codecs("wav".to_string())
                 .segment_duration_secs(segment_duration)
                 .segment_size(HLS_SEGMENT_SIZE)
                 .segments_per_variant(HLS_SEGMENT_COUNT),
@@ -109,39 +101,22 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
         let p = local_mp3.clone();
         let store = store.clone();
         async move {
-            let file_cfg = FileConfig::for_src(FileSrc::Local(p))
+            kithara::play::ResourceConfig::for_src(kithara::play::ResourceSrc::Path(p))
                 .store(store)
-                .pools(w.pools().clone())
-                .build();
-            let audio_cfg = AudioConfig::<FileSource<TestPools>>::for_stream(file_cfg)
+                .worker(w)
                 .hint("mp3".to_string())
-                .build();
-            let audio = w.load(audio_cfg).await.expect("create local MP3 audio");
-            resource_from_reader(audio)
+                .build()
         }
     };
 
     let make_hls = |w: PlayWorker<TestPools>, s: AssetStore<TestPools>| {
         let u = hls_url.clone();
         async move {
-            let wav_info = MediaInfo::builder()
-                .maybe_codec(Some(AudioCodec::Pcm))
-                .maybe_container(Some(ContainerFormat::Wav))
-                .build();
-            let cfg = HlsConfig::for_url(u)
+            kithara::play::ResourceConfig::for_src(kithara::play::ResourceSrc::Url(u))
                 .store(s)
-                .pools(w.pools().clone())
-                .build();
-            let audio_cfg = AudioConfig::<Hls<TestPools>>::for_stream(cfg)
-                .media_info(wav_info)
-                .build();
-            let audio = w.load(audio_cfg).await.expect("create HLS audio");
-            let mut r: Resource = resource_from_reader(audio);
-            timeout(consts::READ_TIMEOUT, r.preload())
-                .await
-                .expect("HLS preload")
-                .expect("HLS preload result");
-            r
+                .worker(w)
+                .hint("wav")
+                .build()
         }
     };
 
@@ -150,7 +125,7 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
 
     for iter in 0..10 {
         let hls = make_hls(worker.clone(), store.clone()).await;
-        player.load_and_fadein(hls).await;
+        player.load_config(hls).await;
         let _hls_warmup = render_offline_window(
             &mut player,
             40,
@@ -160,12 +135,8 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
         )
         .await;
 
-        let mut mp3 = make_mp3(worker.clone()).await;
-        timeout(consts::READ_TIMEOUT, mp3.preload())
-            .await
-            .expect("MP3 preload")
-            .expect("MP3 preload result");
-        player.load_and_fadein(mp3).await;
+        let mp3 = make_mp3(worker.clone()).await;
+        player.load_config(mp3).await;
         let fade_stats = render_offline_window(
             &mut player,
             60,

@@ -9,20 +9,22 @@ use std::{
 use jni::{Env, objects::JString, sys::jint};
 use kithara::{
     assets::StorageBackend,
-    events::TrackId,
     host::{HostConfig, HostSettings},
     output::{OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
-        tokio::runtime::{Builder, Runtime},
+        time::{Duration, timeout},
     },
-    play::{PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceSrc, SelectionPlayback},
+    play::{CrossfadeSettings, PlayWorkerConfig, ResourcePrep, ResourceSrc},
+    queue::{QueueConfig, QueueEvent, QueueSettings, TrackStatus},
     signal::AudioSpec,
 };
 use thiserror::Error;
 use tracing::info;
 
-use crate::pools::{FfiHost, FfiResourceConfig, FfiStore, FfiWorker, build as build_pools};
+use crate::pools::{
+    FfiHost, FfiQueue, FfiResourceConfig, FfiStore, FfiWorker, build as build_pools,
+};
 
 #[derive(Debug, Error)]
 pub(super) enum CaptureError {
@@ -67,21 +69,11 @@ pub(super) fn run(
 ) -> Result<(), CaptureError> {
     let input = PathBuf::from(input.try_to_string(env)?);
     let output = PathBuf::from(output.try_to_string(env)?);
-    let runtime = Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|err| CaptureError::step("tokio-runtime", err))?;
-
-    render(&runtime, &input, &output, seconds.max(1).unsigned_abs())
+    render(&input, &output, seconds.max(1).unsigned_abs())
 }
 
 /// Render through an independent offline Host into a stereo float WAV.
-fn render(
-    runtime: &Runtime,
-    input: &Path,
-    output: &Path,
-    seconds: u32,
-) -> Result<(), CaptureError> {
+fn render(input: &Path, output: &Path, seconds: u32) -> Result<(), CaptureError> {
     info!(
         input = %input.display(),
         output = %output.display(),
@@ -93,7 +85,11 @@ fn render(
     let store = FfiStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .build();
-    let worker = FfiWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let worker = FfiWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .runtime(Some(crate::FFI_RUNTIME.clone()))
+            .build(),
+    );
     let mut host = FfiHost::new(
         HostConfig::offline(pools)
             .settings(
@@ -104,38 +100,40 @@ fn render(
             .build(),
     )
     .map_err(|err| CaptureError::step("offline-host", err))?;
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(consts::SAMPLE_RATE)
-            .worker(worker)
-            .block_on_underrun(true)
-            .crossfade_duration(0.0)
+    let queue = FfiQueue::new(
+        QueueConfig::builder()
+            .prep(
+                ResourcePrep::builder()
+                    .worker(worker)
+                    .block_on_underrun(true)
+                    .build(),
+            )
+            .settings(
+                QueueSettings::builder()
+                    .crossfade(CrossfadeSettings {
+                        duration: 0.0,
+                        ..Default::default()
+                    })
+                    .build(),
+            )
+            .runtime(crate::FFI_RUNTIME.clone())
+            .store(store.clone())
+            .should_autoplay(true)
             .build(),
     );
     let member = host
-        .insert(player)
-        .map_err(|err| CaptureError::step("player-insert", err))?;
+        .insert(queue)
+        .map_err(|err| CaptureError::step("queue-insert", err))?;
     let control = member.control();
-    let config: FfiResourceConfig = control
-        .prepare_config(
-            FfiResourceConfig::for_src(ResourceSrc::Path(input.to_path_buf()))
-                .store(store)
-                .build(),
-        )
-        .map_err(|err| CaptureError::step("resource-config", err))?;
-    let resource = runtime.block_on(async {
-        let mut resource = Resource::new(config).await.map_err(|err| {
-            CaptureError::step("resource-open", format!("{}: {err}", input.display()))
-        })?;
-        resource.preload().await.map_err(|err| {
-            CaptureError::step("resource-preload", format!("{}: {err}", input.display()))
-        })?;
-        Ok::<_, CaptureError>(resource)
-    })?;
-    control.insert(resource, TrackId::allocate(), None);
-    control
-        .select_item(0, SelectionPlayback::Play)
-        .map_err(|err| CaptureError::step("player-select", err))?;
+    let mut events = control.subscribe::<QueueEvent>();
+    let config: FfiResourceConfig =
+        FfiResourceConfig::for_src(ResourceSrc::Path(input.to_path_buf()))
+            .store(store)
+            .build();
+    let id = control
+        .append(config)
+        .map_err(|err| CaptureError::step("queue-append", err))?;
+    wait_for_track(&mut events, id, input)?;
 
     let mut file = File::create(output)
         .map_err(|err| CaptureError::step("output-open", format!("{}: {err}", output.display())))?;
@@ -166,7 +164,7 @@ fn render(
         ));
     }
     host.remove(&member)
-        .map_err(|err| CaptureError::step("player-remove", err))?;
+        .map_err(|err| CaptureError::step("queue-remove", err))?;
     sink.file
         .flush()
         .map_err(|err| CaptureError::step("output-flush", err))?;
@@ -177,6 +175,45 @@ fn render(
         samples = sink.samples,
         "offline capture: done"
     );
+    Ok(())
+}
+
+fn wait_for_track(
+    events: &mut kithara::events::EventReceiver<QueueEvent>,
+    id: kithara::events::TrackId,
+    input: &Path,
+) -> Result<(), CaptureError> {
+    crate::FFI_RUNTIME.block_on(async {
+        timeout(Duration::from_secs(20), async {
+            loop {
+                let event = events
+                    .recv()
+                    .await
+                    .map_err(|err| CaptureError::step("resource-preload", err))?
+                    .event;
+                match event {
+                    QueueEvent::TrackStatusChanged {
+                        id: loaded,
+                        status: TrackStatus::Loaded,
+                    } if loaded == id => return Ok(()),
+                    QueueEvent::TrackStatusChanged {
+                        id: failed,
+                        status: TrackStatus::Failed(reason),
+                    } if failed == id => {
+                        return Err(CaptureError::step(
+                            "resource-preload",
+                            format!("{}: {reason}", input.display()),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .map_err(|err| {
+            CaptureError::step("resource-preload", format!("{}: {err}", input.display()))
+        })?
+    })?;
     Ok(())
 }
 

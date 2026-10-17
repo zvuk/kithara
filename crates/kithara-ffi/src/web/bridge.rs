@@ -1,22 +1,23 @@
-use std::sync::{
-    LazyLock,
-    atomic::{AtomicI64, Ordering},
-};
+use std::sync::{LazyLock, OnceLock};
 
 use kithara::{
     host::{HostConfig, wasm},
     platform::{
-        sync::{Mutex, MutexGuard, mpsc},
+        sync::{Arc, Mutex, mpsc},
         thread,
     },
-    play::wasm as play_wasm,
-    queue::TrackId,
+    play::{ResourcePrep, wasm as play_wasm},
+    queue::{QueueCommand, QueueConfig, QueueError, TrackId},
 };
+use kithara_command::Ticket;
 use wasm_bindgen::JsValue;
 
 use crate::{
-    pools::{FfiHost, FfiPools, Pools, build as build_pools},
-    web::commands::WorkerCmd,
+    pools::{
+        FfiHost, FfiPools, FfiQueue, FfiQueueControl, FfiTrackSource, Pools, build as build_pools,
+    },
+    types::{FfiError, FfiKeyRule},
+    web::{analysis::AnalysisRequest, resources::ResourceBuilder},
 };
 
 struct HostChannel {
@@ -24,11 +25,6 @@ struct HostChannel {
     receiver: wasm::HostReceiver<FfiPools>,
     sender: wasm::HostSender<FfiPools>,
     pools: Pools,
-}
-
-fn current_track_id_cell() -> &'static AtomicI64 {
-    static CELL: AtomicI64 = AtomicI64::new(WorkerBridge::NO_CURRENT_TRACK);
-    &CELL
 }
 
 fn host_channel() -> &'static Mutex<Option<HostChannel>> {
@@ -49,8 +45,6 @@ fn ensure_host_channel() -> Result<(wasm::HostSender<FfiPools>, Pools), JsValue>
     let (sender, receiver) = wasm::worker_host_channel(&host)
         .map_err(|error| JsValue::from_str(&format!("host channel failed: {error}")))?;
     play_wasm::spawn_webcodecs_probe(pools.clone());
-    wasm::warm_up_audio(&host)
-        .map_err(|error| JsValue::from_str(&format!("audio warm-up failed: {error}")))?;
     *guard = Some(HostChannel {
         receiver,
         _host: host,
@@ -71,121 +65,132 @@ pub(crate) fn tick_and_poll() {
     }
 }
 
-/// Record the worker's current track id for the main-thread read-back.
-/// Called from the worker's event source on every `CurrentTrackChanged`.
-pub(crate) fn set_current_track_id(id: Option<TrackId>) {
-    let raw = id.map_or(WorkerBridge::NO_CURRENT_TRACK, |id| {
-        i64::try_from(id.as_u64()).unwrap_or(WorkerBridge::NO_CURRENT_TRACK)
-    });
-    current_track_id_cell().store(raw, Ordering::Relaxed);
+struct Engine {
+    queue: FfiQueueControl,
+    resources: Mutex<ResourceBuilder>,
+    analysis: mpsc::Sender<AnalysisRequest>,
 }
 
-/// Owns the command channel to the engine
-/// [`worker`](crate::web::worker) and lazily boots it on first use. Held
-/// by [`WasmInner`](crate::web::inner::WasmInner) as the wasm-side
-/// counterpart of `NativeInner`'s direct `Queue` handle.
-///
-/// The worker itself owns the canonical Host member; this bridge only forwards
-/// [`WorkerCmd`]s and boots the worker once.
+/// Main-thread endpoint to the Queue's sole postbox and published view.
 #[derive(Default)]
-pub(crate) struct WorkerBridge {
-    cmd_tx: Mutex<Option<mpsc::Sender<WorkerCmd>>>,
-    start_lock: Mutex<()>,
+pub(crate) struct QueueBridge {
+    pub(in crate::web) queue: Arc<OnceLock<FfiQueueControl>>,
+    engine: OnceLock<Engine>,
 }
 
-impl WorkerBridge {
-    /// Sentinel stored in [`CURRENT_TRACK_ID`] when no track is current.
-    const NO_CURRENT_TRACK: i64 = -1;
-
-    /// Id of the worker's current track, read synchronously from the
-    /// shared current-track atomic the worker's event source keeps
-    /// in sync. `None` when no track is current.
-    pub(crate) fn current_track_id(&self) -> Option<TrackId> {
-        let _ = self;
-        match current_track_id_cell().load(Ordering::Relaxed) {
-            Self::NO_CURRENT_TRACK => None,
-            raw => u64::try_from(raw).ok().map(TrackId),
+impl QueueBridge {
+    fn engine(&self) -> Result<&Engine, FfiError> {
+        thread::assert_main_thread(concat!(module_path!(), "::engine"));
+        if let Some(engine) = self.engine.get() {
+            return Ok(engine);
         }
-    }
-
-    /// Current item duration (seconds) read from the worker's audio
-    /// session bridge. `0.0` when unknown.
-    pub(crate) fn duration_secs(&self) -> f64 {
-        let _ = self;
-        wasm::bridge_duration_secs()
-    }
-
-    /// Boot the engine worker once. Idempotent: subsequent calls return
-    /// early while a live channel exists.
-    pub(crate) fn ensure_worker_started(&self) {
-        if self.lock_cmd_tx().is_some() {
-            return;
-        }
-
-        let _start_guard = self.start_lock.lock();
-        if self.lock_cmd_tx().is_some() {
-            return;
-        }
-
-        let Ok((host_sender, pools)) = ensure_host_channel() else {
-            return;
-        };
-
-        let (cmd_tx, cmd_rx) = mpsc::channel();
-        *self.lock_cmd_tx() = Some(cmd_tx);
-
+        let (host_sender, pools) = ensure_host_channel().map_err(|error| FfiError::Internal {
+            description: error
+                .as_string()
+                .unwrap_or_else(|| "host construction failed".into()),
+        })?;
+        let resources = ResourceBuilder::new(pools.clone());
+        let queue = FfiQueue::new(
+            QueueConfig::builder()
+                .prep(
+                    ResourcePrep::builder()
+                        .worker(resources.worker.clone())
+                        .build(),
+                )
+                .settings(crate::web::worker::queue_settings())
+                .store(resources.store.clone())
+                .build(),
+        );
+        let control = queue.control();
+        let (analysis, requests) = mpsc::channel();
         let worker = thread::spawn(move || {
-            crate::web::worker::worker_main(cmd_rx, host_sender, pools);
+            crate::web::worker::worker_main(queue, host_sender, pools, requests);
         });
         std::mem::forget(worker);
+        self.queue.get_or_init(|| control.clone());
+        Ok(self.engine.get_or_init(|| Engine {
+            queue: control,
+            resources: Mutex::new(resources),
+            analysis,
+        }))
     }
 
-    /// Whether the worker's audio session is currently playing.
-    pub(crate) fn is_playing(&self) -> bool {
-        let _ = self;
-        wasm::bridge_is_playing()
+    pub(in crate::web) fn queue(&self) -> Option<&FfiQueueControl> {
+        self.queue.get()
     }
 
-    fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
-        self.cmd_tx.lock()
+    pub(in crate::web) fn post(
+        &self,
+        command: QueueCommand<FfiPools>,
+    ) -> Result<Ticket<QueueError>, FfiError> {
+        self.engine()?
+            .queue
+            .post(command)
+            .map_err(|error| FfiError::Internal {
+                description: error.to_string(),
+            })
     }
 
-    /// Live playback position (seconds) read from the worker's audio
-    /// session bridge. `0.0` when no item is loaded.
+    delegate::delegate! {
+        to self {
+            #[expr($.map_or(0, FfiQueueControl::mixer_blocks))]
+            #[call(queue)]
+            pub(crate) fn process_calls(&self) -> u64;
+            #[expr($.map_or(0, |queue| queue.mixer_metrics().underruns()))]
+            #[call(queue)]
+            pub(crate) fn underruns(&self) -> u64;
+            #[expr(Ok($?.queue.clone()))]
+            #[call(engine)]
+            pub(in crate::web) fn control(&self) -> Result<FfiQueueControl, FfiError>;
+            #[expr($?.current().map(|entry| entry.id))]
+            #[call(queue)]
+            pub(crate) fn current_track_id(&self) -> Option<TrackId>;
+        }
+    }
+
+    pub(in crate::web) fn source(&self, url: String) -> Result<FfiTrackSource, FfiError> {
+        self.engine()?
+            .resources
+            .lock()
+            .source(url)
+            .map_err(|reason| FfiError::InvalidArgument { reason })
+    }
+
+    pub(in crate::web) fn analysis_request(
+        &self,
+        id: TrackId,
+    ) -> Result<(mpsc::Sender<AnalysisRequest>, AnalysisRequest), FfiError> {
+        let engine = self.engine()?;
+        Ok((
+            engine.analysis.clone(),
+            AnalysisRequest {
+                id,
+                request_id: crate::web::interop::next_request_id(),
+                resources: engine.resources.lock().clone(),
+            },
+        ))
+    }
+
+    pub(in crate::web) fn set_auth_token(&self, token: String) -> Result<(), FfiError> {
+        self.engine()?.resources.lock().set_auth_token(token);
+        Ok(())
+    }
+
+    pub(in crate::web) fn register_key_rule(
+        &self,
+        rule: FfiKeyRule,
+        salt: String,
+    ) -> Result<(), FfiError> {
+        self.engine()?
+            .resources
+            .lock()
+            .register_key_rule(rule, salt);
+        Ok(())
+    }
+
     pub(crate) fn position_secs(&self) -> f64 {
-        let _ = self;
-        wasm::bridge_position_secs()
-    }
-
-    /// Audio-thread process calls served so far. Monotonic, so a caller
-    /// samples twice and reads the delta.
-    pub(crate) fn process_calls(&self) -> u64 {
-        let _ = self;
-        wasm::bridge_process_calls()
-    }
-
-    /// Forward a command to the worker.
-    ///
-    /// # Errors
-    /// Returns a [`JsValue`] error if the command channel cannot be
-    /// established or the canonical worker has exited. A closed worker is not
-    /// respawned because the main thread cannot prove that its old Host member
-    /// was detached before creating a replacement.
-    pub(crate) fn send(&self, cmd: WorkerCmd) -> Result<(), JsValue> {
-        self.ensure_worker_started();
-
-        let tx = self
-            .lock_cmd_tx()
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| JsValue::from_str("command channel not ready"))?;
-        tx.send(cmd)
-            .map_err(|_| JsValue::from_str("worker channel closed"))
-    }
-
-    /// Underruns the audio thread has recorded so far.
-    pub(crate) fn underruns(&self) -> u64 {
-        let _ = self;
-        wasm::bridge_underruns()
+        self.queue()
+            .and_then(FfiQueueControl::position_seconds)
+            .unwrap_or(0.0)
     }
 }

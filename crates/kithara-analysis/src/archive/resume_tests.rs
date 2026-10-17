@@ -1,5 +1,6 @@
 use std::num::{NonZeroU32, NonZeroU64};
 
+use kithara_platform::time::Duration;
 use kithara_resampler::NoResamplerBackend;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_fixtures::analysis_beat_fixtures::archive_tone;
@@ -51,6 +52,8 @@ fn decoded(pools: &Pools, at: u64, pcm: &[f32]) -> AudioChunk {
             },
             frames: u32::try_from(consts::RESUME_TESTS_CHUNK_FRAMES).unwrap_or(0),
             frame_offset: at,
+            media_origin: Some(Duration::ZERO),
+            visible_origin: Some(Duration::ZERO),
             ..Default::default()
         },
         sample_buffer(pools, samples),

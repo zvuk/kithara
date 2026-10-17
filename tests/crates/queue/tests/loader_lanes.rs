@@ -91,7 +91,8 @@ fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> Option<TrackStatus
     queue.track(id).map(|e| e.status)
 }
 
-#[kithara::flash(true)]
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn wait_for_status_matching(
     queue: &QueueControl<TestPools>,
     id: TrackId,
@@ -100,8 +101,16 @@ async fn wait_for_status_matching(
     pred: impl Fn(&TrackStatus) -> bool,
 ) -> Result<(), String> {
     let start = Instant::now();
+    let mut previous = status_of(queue, id);
     loop {
-        if status_of(queue, id).as_ref().is_some_and(&pred) {
+        let status = status_of(queue, id);
+        hang_tick!(format!("track {id:?} waits for {what}; status={status:?}"));
+        if status != previous {
+            hang_reset!();
+            previous = status.clone();
+        }
+        if status.as_ref().is_some_and(&pred) {
+            hang_reset!();
             return Ok(());
         }
         if start.elapsed() >= deadline {

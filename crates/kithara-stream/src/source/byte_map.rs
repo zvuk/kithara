@@ -4,17 +4,6 @@ use kithara_platform::time::Duration;
 
 use crate::{SegmentDescriptor, SourceSeekAnchor, StreamResult};
 
-/// Rebuilds a source's byte space for a seek about to begin.
-///
-/// The rebuild takes the layout's write lock, so it cannot run on the produce core where the reader
-/// resolves its anchor. Running it before the epoch exists leaves every later observer reading a
-/// layout that matches the seek.
-pub trait SeekPrepare: Send + Sync + 'static {
-    /// Collapse the byte space onto the geometry a seek resolves against. Idempotent: a repeated
-    /// call for the same layout is a no-op.
-    fn prepare(&self);
-}
-
 /// Segment-table view exposed by segmented sources (HLS, fragmented
 /// file-mp4).
 ///

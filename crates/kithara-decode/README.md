@@ -14,7 +14,7 @@
 
 # kithara-decode
 
-Audio decoding library with explicit, typed backend selection. `DecoderFactory` creates synchronous `Decoder` instances that convert compressed audio (MP3, AAC, FLAC, WAV, ALAC, …) into pool-backed decoded-audio chunks. No threading, no channels — just decoding.
+Audio decoding library with explicit, typed backend selection. `DecoderFactory` creates `Decoder` instances that convert compressed audio (MP3, AAC, FLAC, WAV, ALAC, …) into pool-backed decoded-audio chunks. A native container parser owns one persistent off-core worker; prepared PCM consumption remains synchronous.
 
 The public surface centres on one trait - `Decoder`. Concrete backends (Symphonia / Apple / Android) implement it directly. Internally, container parsing and frame decoding are split: the `Demuxer` trait owns container framing, the `FrameCodec` trait owns codec decoding, and `ComposedDecoder<D, C, S>` (internal) pairs them with the registered pool schema so backends can be mixed and matched. The factory hides this detail - callers only ever see `Box<dyn Decoder>`.
 
@@ -77,5 +77,10 @@ through `kithara-audio` and implemented with `kithara-resampler`; this crate sta
 decoder over `R: Read + Seek + Send + Sync + 'static` inputs such as `Stream<File<S>>`, `Stream<Hls<S>>`,
 cursors, or plain files. Shared `AudioSpec`, `AudioChunkInfo`, `AudioChunk`, frame/sample units, and
 pure sample/time math are owned by `kithara-signal`; decoder-specific profiles and errors remain here.
+
+Native parser input uses blocking `Read` semantics. Nonblocking custom inputs share a
+`ReaderControl` through decoder configuration and signal it after publishing availability.
+Kithara stream readers pass cancellation into their actual waits. An opaque user `Read`
+implementation must provide its own way to unblock; standard `Read` cannot be interrupted externally.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-decode) for detailed contracts, invariants, and internals.

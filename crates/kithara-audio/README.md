@@ -15,20 +15,18 @@
 # kithara-audio
 
 Decoded-audio source pipeline with decoder lifecycle, decoder-owned sample-rate
-conversion, and source readiness. `Audio<S>` is the audio reader surface.
-`Audio::prepare` returns the concrete `AudioSource` and
-worker-neutral `PreparedAudioLane`; `kithara-play` owns `PlayWorker`, the
-per-track node, final output admission, playback effects, and engine-load
-measurement, while `kithara-warp` owns the resident Warp renderer.
+conversion, and source readiness. `Audio::prepare` returns an `Audio<S>` that
+owns the open source and decoder. Its owning lane drives reads and synchronous
+seeks on one thread; the PCM ring and segment tags belong to that lane, not this
+crate. Host-rate changes rebuild the decoder without reopening the source.
 
 ## Usage
 
 ```rust
 use kithara_audio::{
-    AudioConfig, AudioDecoderConfig, DecoderResamplerSettings, ResamplerQuality,
+    Audio, AudioConfig, AudioDecoderConfig, DecoderResamplerSettings, ResamplerQuality,
 };
 use kithara_decode::GaplessMode;
-use kithara_play::{PlayWorker, PlayWorkerConfig};
 
 let decoder_config = AudioDecoderConfig::builder()
     .gapless_mode(GaplessMode::CodecPriming)
@@ -43,19 +41,20 @@ let audio_config = AudioConfig::for_stream(hls_config)
     .decoder(decoder_config)
     .build();
 
-let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-let mut audio = worker.load(audio_config).await?;
+let mut audio = Audio::prepare(audio_config, worker_wake, pools).await?;
+let activity_writer = audio.take_activity_writer();
 ```
 
 ## Key Types
 
-- `Audio<S>` — main audio reader; the consumer reads frames from it and requests
-  seeks.
+- `Audio<S>` — open decoded source; the owning lane reads frames, seeks, and
+  sets its host sample rate.
 - `AudioConfig<T>` — `bon` builder for stream config, decode backend,
   decoder-owned resampling, gapless mode, source readiness, and events.
 - `AudioSource` — worker-independent per-track decoded-audio source contract.
-- `PreparedAudio` / `PreparedAudioLane` — reader plus the still-concrete producer
-  seam consumed by `kithara-play`.
+- `Activity` / `ActivityWriter` (from `kithara-stream`) — read-only loader
+  snapshot and its move-only publisher, transferred once to the owning lane
+  through `Audio::take_activity_writer`.
 - `ResamplerQuality` / `ResamplerOptions` — sample-rate-conversion config
   threaded into the decoder-owned resampler plan.
 

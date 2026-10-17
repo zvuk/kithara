@@ -1,10 +1,15 @@
 mod activation;
 mod core;
-mod entry;
 mod lifecycle;
-mod projection;
+mod mapping;
+mod native;
+mod projected;
 mod render;
-mod residency;
+pub(in crate::render) mod residency;
 mod target;
+mod transition;
 
 pub use core::WarpRenderer;
+
+#[cfg(test)]
+mod tests;

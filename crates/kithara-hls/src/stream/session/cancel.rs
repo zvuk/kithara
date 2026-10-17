@@ -4,14 +4,12 @@ use crate::variant::DispatchTokens;
 
 /// Cancel hierarchy of one session: `root` → `fetch` → `lookahead`.
 ///
-/// `fetch` covers every fetch the session issues and rotates on seek
-/// ([`Self::rearm`]). `lookahead` is its child and covers only prefetches
-/// past the owed window, so a variant transition can retire them
-/// ([`Self::retire_lookahead`]) without touching owed work — while a seek's
-/// rearm still burns both through the parent.
+/// Exact size discovery rides `root`; `fetch` keeps immutable body fetches live
+/// across seeks. Its `lookahead` child covers prefetches past the owed window,
+/// which a variant transition can retire without cancelling owed bytes.
 pub(super) struct SessionCancel {
     pub(super) root: CancelToken,
-    fetch: RwLock<CancelToken>,
+    fetch: CancelToken,
     lookahead: RwLock<CancelToken>,
 }
 
@@ -21,28 +19,22 @@ impl SessionCancel {
         let lookahead = RwLock::new(fetch.child());
         Self {
             root,
+            fetch,
             lookahead,
-            fetch: RwLock::new(fetch),
         }
     }
 
     pub(super) fn dispatch_tokens(&self) -> DispatchTokens {
         DispatchTokens {
-            fetch: self.fetch.read().clone(),
+            metadata: self.root.clone(),
+            fetch: self.fetch.clone(),
             lookahead: self.lookahead.read().clone(),
         }
     }
 
-    pub(super) fn rearm(&self) {
-        self.fetch.read().cancel();
-        let fetch = self.root.child();
-        *self.fetch.write() = fetch.clone();
-        *self.lookahead.write() = fetch.child();
-    }
-
     pub(super) fn retire_lookahead(&self) {
         self.lookahead.read().cancel();
-        let next = self.fetch.read().child();
+        let next = self.fetch.child();
         *self.lookahead.write() = next;
     }
 

@@ -1,55 +1,30 @@
-use kithara::platform::time::Duration;
-
 pub(crate) const SAMPLE_RATE: u32 = 44_100;
-
 pub(crate) const CHANNELS: u16 = 2;
-
 pub(crate) const BLOCK_FRAMES: usize = 512;
-
 pub(crate) const SOURCE_SECONDS: usize = 6;
-
 pub(crate) const WARMUP_BLOCKS: usize = 32;
-
 pub(crate) const CAPTURE_BLOCKS: usize = 96;
-
 pub(crate) const LOAD_INTERVAL_BLOCKS: usize = 8;
-
 pub(crate) const LOAD_BURST: Duration = Duration::from_millis(18);
-
 pub(crate) const ACTIVE_SPEED: f32 = 0.8;
-
 pub(crate) const TONE_HZ: f64 = 440.0;
-
 pub(crate) const PITCH_SHIFTED_TONE_HZ: f64 = 352.0;
-
 pub(crate) const TONE_DOMINANCE_RATIO: f64 = 8.0;
-
 pub(crate) const CONTINUITY_RATIO: f32 = 3.0;
-
 pub(crate) const CONTINUITY_SLACK: f32 = 2.0e-3;
-
 pub(crate) const MAX_ACTIVE_STEREO_DELTA: f32 = 1.0e-3;
-
 pub(crate) const RATE_MARKER_START_FRAMES: [usize; 2] = [17_640, 35_280];
-
 pub(crate) const RATE_MARKER_FRAMES: usize = 2_205;
-
 pub(crate) const RATE_MARKER_PEAK: i16 = 2_000;
-
 pub(crate) const RATE_WINDOW_FRAMES: usize = 256;
-
 pub(crate) const RATE_MARKER_JOIN_FRAMES: usize = RATE_WINDOW_FRAMES * 2;
-
 pub(crate) const RATE_TIMING_TOLERANCE_FRAMES: usize = BLOCK_FRAMES * 2;
 
 pub(crate) const LOAD_WARMUP: u8 = 0;
-
 pub(crate) const LOAD_CAPTURE: u8 = 1;
-
 pub(crate) const LOAD_CAPTURE_SEEN: u8 = 2;
-
 pub(crate) const LOAD_DONE: u8 = 3;
 
 pub(crate) const WAV_HEADER_BYTES: usize = 44;
-
 pub(crate) const SAMPLE_BYTES: usize = 2;
+use kithara::platform::time::Duration;

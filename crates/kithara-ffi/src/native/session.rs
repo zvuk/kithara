@@ -1,63 +1,139 @@
-use std::{num::NonZeroU32, sync::OnceLock};
+use std::sync::OnceLock;
 
 use kithara::{
     host::{HostConfig, HostOwned, HostSettingsControl},
     platform::sync::Mutex,
-    play::{PlayError, SessionError, player::PlayerControlSource},
-    sync::SyncGroup,
+    play::{DeckControl, HostedDeck, PlayError},
 };
 
-use crate::pools::{FfiHost, FfiPools};
+use crate::{
+    player::AudioPlayer,
+    pools::{FfiHost, FfiPools},
+    types::{FfiDuckingMode, FfiError},
+};
 
 static HOST: OnceLock<Mutex<Option<FfiHost>>> = OnceLock::new();
+
+#[cfg(all(test, feature = "mock"))]
+pub(crate) mod mock {
+    use kithara::{
+        output::{
+            OfflineRenderError, OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError,
+        },
+        platform::CancelToken,
+        signal::AudioSpec,
+    };
+
+    use super::{FfiHost, HostConfig, HostSettingsControl, host};
+
+    struct Discard;
+
+    impl RenderSink for Discard {
+        fn write(&mut self, _: &[f32]) -> Result<(), RenderSinkError> {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn offline() {
+        let mut slot = host()
+            .try_lock()
+            .expect("the process Host fixture is uncontended");
+        assert!(
+            slot.is_none(),
+            "the fixture starts before a process Host exists"
+        );
+        *slot = Some(
+            FfiHost::new(HostConfig::offline(crate::pools::build().expect("FFI pools")).build())
+                .expect("offline FFI Host"),
+        );
+    }
+
+    pub(crate) fn render(
+        frames: std::ops::Range<u64>,
+        cancel: &CancelToken,
+    ) -> Result<(), OfflineRenderError> {
+        let mut slot = host()
+            .try_lock()
+            .expect("the process Host fixture is uncontended");
+        let host = slot.as_mut().expect("offline process Host is installed");
+        let request = OfflineRenderRequest::builder()
+            .spec(AudioSpec::new(2, host.sample_rate()))
+            .frames(frames)
+            .build();
+        let result = host.render(&request, cancel, &mut Discard);
+        drop(slot);
+        result.map(|_| ())
+    }
+}
 
 fn host() -> &'static Mutex<Option<FfiHost>> {
     HOST.get_or_init(|| Mutex::new(None))
 }
 
-fn active_host(slot: &mut Option<FfiHost>) -> &mut FfiHost {
-    slot.get_or_insert_with(|| {
-        FfiHost::new(HostConfig::builder().build())
-            .expect("INVARIANT: the process audio Host must allocate its root identity")
-    })
+fn active_host(slot: &mut Option<FfiHost>) -> Result<&mut FfiHost, PlayError> {
+    match slot {
+        Some(host) => Ok(host),
+        None => Ok(slot.insert(FfiHost::new(HostConfig::builder().build())?)),
+    }
 }
 
 pub(crate) fn insert<P>(player: P) -> Result<HostOwned<P>, PlayError>
 where
-    P: PlayerControlSource<Schema = FfiPools>,
+    P: HostedDeck<FfiPools> + DeckControl,
 {
-    active_host(&mut host().lock()).insert(player)
+    active_host(&mut host().lock())?.insert(player)
 }
 
-pub(crate) fn requested_sample_rate() -> NonZeroU32 {
-    host().lock().as_ref().map_or_else(
-        || {
-            HostConfig::<FfiPools>::builder()
-                .build()
-                .settings()
-                .sample_rate()
-        },
-        HostSettingsControl::sample_rate,
+fn with_active<R>(apply: impl FnOnce(&FfiHost) -> Result<R, PlayError>) -> Result<R, PlayError> {
+    host().lock().as_ref().map_or(
+        Err(PlayError::SessionGone {
+            reason: "process audio Host is unavailable",
+        }),
+        apply,
     )
 }
 
 pub(crate) fn remove<P>(player: &HostOwned<P>) -> Result<(), PlayError>
 where
-    P: PlayerControlSource<Schema = FfiPools>,
+    P: DeckControl,
 {
     let mut slot = host().lock();
     let active = slot.as_mut().ok_or(PlayError::SessionGone {
         reason: "process audio Host is unavailable",
     })?;
     active.remove(player)?;
-    let empty = active
-        .topology()
-        .map_err(|error| PlayError::from(SessionError::from(error)))?
-        .members()
-        .is_empty();
-    if empty {
+    if active.is_empty() {
         drop(slot.take());
     }
     drop(slot);
     Ok(())
+}
+
+/// Platform audio-session signals the process Host answers: route changes
+/// and competing sounds.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+impl AudioPlayer {
+    /// Notify the native player that the platform audio route changed.
+    ///
+    /// This does not change queue state. If playback is active, the
+    /// native output stream is recreated so CoreAudio/CPAL cannot keep a
+    /// stale route after headphones or Bluetooth devices are removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FfiError`] when the native player cannot schedule the
+    /// route invalidation.
+    pub fn notify_audio_route_changed(&self, reason: &str) -> Result<(), FfiError> {
+        with_active(|host| host.invalidate_audio_route(reason)).map_err(FfiError::from)
+    }
+
+    /// Lower or restore the whole session output under a competing sound,
+    /// such as a call or a navigation prompt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FfiError`] when the audio session rejects the change.
+    pub fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {
+        with_active(|host| host.set_ducking(mode.into())).map_err(FfiError::from)
+    }
 }

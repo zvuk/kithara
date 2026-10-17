@@ -32,8 +32,14 @@ pub(super) fn build_mp3_decoder(
             MetadataOptions::default(),
         )
         .expect("BUG: MP3 probe should succeed");
-    let demuxer = SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
-        .expect("BUG: MP3 demuxer should build");
+    let demuxer = SymphoniaDemuxer::from_reader_with_layout(
+        format_reader,
+        None,
+        None,
+        None,
+        kithara_stream::ReaderControl::new(None),
+    )
+    .expect("BUG: MP3 demuxer should build");
     let track_info = demuxer.track_info().clone();
     let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
         .expect("BUG: MP3 codec should open");

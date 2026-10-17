@@ -5,6 +5,7 @@
 #[fieldwork(get)]
 pub struct GridSegment {
     /// `nominal_bar / fitted_bar`; 1.0 = the region already sits on the grid.
+    /// Rendering uses its nearest f32, the same precision as speed commands.
     ratio_correction: f64,
     end_frame: u64,
     start_frame: u64,

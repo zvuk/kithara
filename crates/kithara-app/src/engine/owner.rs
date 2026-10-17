@@ -288,7 +288,6 @@ impl Engine {
         self.broadcast.poll(self.session.host());
         self.finish_drain();
         for deck in &self.decks {
-            let _ = deck.controller.queue().tick();
             deck.controller.refresh_continuous();
         }
     }
@@ -358,15 +357,6 @@ impl EngineDeck {
         }
     }
 
-    /// Records the tempo only once the queue takes its speed, so the deck never
-    /// shows a tempo the player refused.
-    fn set_tempo(&mut self, tempo: TempoPercent) {
-        match self.controller.queue().set_rate(tempo.speed()) {
-            Ok(()) => self.settings.tempo = tempo,
-            Err(e) => error!(speed = tempo.speed(), error = %e, "tempo refused"),
-        }
-    }
-
     fn set_eq_gain(&mut self, band: usize, gain: GainDb) {
         let Some(slot) = self.settings.eq_bands.get_mut(band) else {
             return;
@@ -374,6 +364,14 @@ impl EngineDeck {
         *slot = gain;
         if let Err(e) = self.controller.queue().set_eq_gain(band, f32::from(gain)) {
             debug!(band, db = f32::from(gain), error = ?e, "set EQ gain deferred");
+        }
+    }
+
+    /// Keeps `tempo` only once the deck took its speed.
+    fn set_tempo(&mut self, tempo: TempoPercent) {
+        match self.controller.queue().set_rate(tempo.speed()) {
+            Ok(()) => self.settings.tempo = tempo,
+            Err(e) => error!(speed = tempo.speed(), error = %e, "tempo refused"),
         }
     }
 
@@ -396,14 +394,14 @@ impl Drop for Engine {
     }
 }
 
-#[cfg(all(test, feature = "mock"))]
+#[cfg(all(test, feature = "mock", feature = "gui"))]
 pub(crate) mod mock {
     use crate::gui::rig::Rig;
 
     pub(crate) fn render(rig: &mut Rig, frames: u64) {
+        let host = crate::deck::mock::host(&mut rig.engine.session);
         let start = rig.rendered_frames;
         let end = start.checked_add(frames).expect("fixture frame range");
-        let host = crate::deck::mock::host(&mut rig.engine.session);
         let report = crate::mock::render_host(host, start..end, &rig.shutdown)
             .expect("the offline app output renders");
         assert_eq!(report.frames, frames);
@@ -415,10 +413,13 @@ pub(crate) mod mock {
 mod tests {
     use std::convert::Infallible;
 
-    use ::kithara::platform::{CancelToken, time::Instant};
+    use ::kithara::{
+        platform::{CancelToken, time::Instant},
+        queue::QueueControl,
+    };
     use kithara_test_utils::{kithara, off_thread::OffThread};
 
-    use crate::{analysis::fixtures::tone_mp3, gui::rig::Rig, pools::AppQueueControl};
+    use crate::{analysis::fixtures::tone_mp3, gui::rig::Rig};
     #[cfg(not(feature = "broadcast"))]
     use crate::{
         deck::DeckId,
@@ -436,7 +437,7 @@ mod tests {
         );
         assert_eq!(applied.len(), 1, "closing the window queues one shutdown");
         assert!(
-            rig.queues.iter().all(AppQueueControl::is_closed),
+            rig.queues.iter().all(QueueControl::is_closed),
             "every deck left the host"
         );
         assert!(
@@ -504,11 +505,15 @@ mod tests {
             .await
             .expect("rig fixture is infallible");
         rig.call(move |rig| {
-            rig.queues[0]
+            let id = rig.queues[0]
                 .append(tone_mp3.as_str())
                 .expect("deck A takes the track");
+            rig.queues[0]
+                .select(id, ::kithara::queue::Transition::None)
+                .expect("deck A loads the selected track while paused");
             let queue_tick = |rig: &mut Rig| {
                 let _ = rig.queues[0].tick();
+                crate::mock::render_rig(rig, 512);
             };
             rig.until(
                 "the queue learns the duration",

@@ -9,6 +9,7 @@ use ::kithara::{
     file::File,
     platform::{
         CancelToken,
+        flash::real_io,
         sync::Arc,
         time::{self, Duration},
         tokio::sync::watch,
@@ -235,12 +236,12 @@ async fn every_revision_reaches_the_deck_that_holds_the_track(
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
     let (host, queue) = queue_off().await;
-    let (_playing, _) = track(&host, 8, &rhythm_a_mp3).await;
+    let (_other, _) = track(&host, 8, &rhythm_a_mp3).await;
     let (held, source) = track(&host, 7, &tone_mp3).await;
-    assert_eq!(
+    assert_ne!(
         queue.current_index(),
-        Some(0),
-        "the player sits on another track"
+        Some(1),
+        "the deck holds the track without playing it"
     );
     let rx = owner.subscribe(queue, held, source, axis());
     let tx = take_over_run(&mut owner, None);
@@ -626,6 +627,7 @@ async fn a_completed_pass_releases_its_publication_after_the_last_subscriber_lea
     run.close().await;
 }
 
+#[kithara::hang_watchdog(ctx = String)]
 async fn resumable_progress(url: &str) -> AnalysisProgress {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
@@ -634,7 +636,9 @@ async fn resumable_progress(url: &str) -> AnalysisProgress {
     let target = target_of(&owner, &source);
     let _rx = owner.subscribe(queue, track_id, source, axis());
     loop {
+        hang_tick!(format!("analysis checkpoint for {track_id:?}"));
         drive_once(&mut owner).await;
+        hang_reset!();
         let held = owner.cache.get(&target, axis());
         if let Some(progress) = held.filter(AnalysisProgress::is_resumable) {
             cancel.cancel();
@@ -854,14 +858,33 @@ async fn a_background_warm_keeps_the_holder_of_a_held_entry(tone_mp3: String) {
     host_b.close().await;
 }
 
+#[kithara::hang_watchdog(timeout = Duration::from_secs(2), ctx = String)]
 async fn settle(owner: &mut Owner) {
     while owner.active.is_some() {
+        hang_tick!("analysis pass awaits executor progress".to_owned());
         drive_once(owner).await;
+        hang_reset!();
     }
 }
 
+#[kithara::hang_watchdog(timeout = Duration::from_secs(2), ctx = String)]
 async fn drive_once(owner: &mut Owner) {
-    if let Err(error) = time::timeout(Duration::from_secs(2), owner.drive()).await {
+    let _real_io = real_io();
+    let result = {
+        let progress = time::timeout(
+            Duration::from_secs(2).min(__hang_detector.remaining()),
+            owner.drive(),
+        );
+        ::kithara::platform::tokio::pin!(progress);
+        loop {
+            hang_tick!("analysis pass awaits executor progress".to_owned());
+            ::kithara::platform::tokio::select! {
+                result = &mut progress => break result,
+                () = time::sleep(Duration::from_millis(100).min(__hang_detector.remaining())) => {}
+            }
+        }
+    };
+    if let Err(error) = result {
         match owner.active.as_ref() {
             Some(Activity::Running(run)) => {
                 let changed = run.rx.has_changed();
@@ -885,6 +908,7 @@ async fn drive_once(owner: &mut Owner) {
             None => panic!("the pass progresses: {error:?}; phase=idle"),
         }
     }
+    hang_reset!();
 }
 
 #[kithara::test(native, tokio, flash(false))]

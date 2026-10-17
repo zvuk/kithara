@@ -1,5 +1,4 @@
-use std::num::NonZeroU16;
-
+use kithara_sync::Meter;
 use serde::{Deserialize, Serialize};
 
 /// Whether the producer may still revise the grid it published.
@@ -33,13 +32,6 @@ pub struct GridDownbeat {
     /// Media seconds, equal to the time the named beat carries.
     pub at: f64,
     pub beat_ordinal: i64,
-}
-
-/// The bar the grid claims, stated only where its phase is provable.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Meter {
-    pub beats_per_bar: NonZeroU16,
-    pub origin_beat_ordinal: i64,
 }
 
 /// A beat grid as it arrives over the wire: a document nobody has checked yet.

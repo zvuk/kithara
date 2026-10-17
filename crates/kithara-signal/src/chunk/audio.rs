@@ -1,22 +1,32 @@
 use std::{
-    num::{NonZeroU32, NonZeroU64},
+    num::{NonZeroU32, NonZeroU64, NonZeroU128},
     ops::Range,
 };
 
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
 
-use crate::AudioSpec;
+use crate::{AudioSpec, SegmentId, SourceSpan};
 
 /// Position and provenance facts for one decoded-audio chunk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AudioChunkInfo {
     /// Decoded-audio format.
     pub spec: AudioSpec,
-    /// Media-timeline position after this chunk's frames have played out.
+    /// Raw decoded-source position after this chunk's frames have played out.
     pub end_timestamp: Duration,
-    /// Media-timeline position of the first frame in this chunk.
+    /// Raw decoded-source position of the first frame in this chunk.
     pub timestamp: Duration,
+    /// Raw decoded-source coordinate of track-media zero, independent of trimming.
+    pub media_origin: Option<Duration>,
+    /// Audio-owned logical media endpoint for this source revision, when known.
+    pub media_end: Option<Duration>,
+    /// Original visible position in this chunk's raw source clock, when known.
+    pub visible_origin: Option<Duration>,
+    /// Audio-owned raw source-coordinate discontinuity represented by this chunk.
+    pub source_revision: u64,
+    /// Exact decoded-source mapping of this physical output interval.
+    pub source_span: Option<SourceSpan>,
     /// Opaque immutable source/output mapping revision, absent for unmapped PCM.
     pub mapping_revision: Option<NonZeroU64>,
     /// Opaque source segment index reported by the decoder, when available.
@@ -27,8 +37,12 @@ pub struct AudioChunkInfo {
     pub variant_index: Option<usize>,
     /// Number of interleaved audio frames represented by this chunk.
     pub frames: u32,
-    /// Decoder generation, incremented on decoder recreation.
-    pub epoch: u64,
+    /// Lane segment represented by this chunk.
+    pub segment: SegmentId,
+    /// First frame of this chunk on the segment's lane timeline.
+    pub lane_frame: u64,
+    /// Whether this chunk ends the track.
+    pub end_of_track: bool,
     /// Absolute frame offset from the start of the track.
     pub frame_offset: u64,
     /// Opaque producer render revision represented by this chunk.
@@ -38,6 +52,39 @@ pub struct AudioChunkInfo {
 }
 
 impl AudioChunkInfo {
+    /// Exact raw source geometry of this physical PCM interval.
+    ///
+    /// Existing mappings are preserved. Invalid or overflowing native clocks return `None`.
+    #[must_use]
+    pub fn source_geometry(&self) -> Option<SourceSpan> {
+        if let Some(span) = self.source_span {
+            return Some(span);
+        }
+        let frames = u64::from(self.frames);
+        self.frame_offset.checked_add(frames)?;
+        let rate = u128::from(self.spec.sample_rate.get());
+        let phase = u128::from(self.frame_offset)
+            .checked_mul(crate::consts::NANOS_PER_SECOND)?
+            .checked_rem(rate)?;
+        let numerator = self
+            .timestamp
+            .as_nanos()
+            .checked_mul(rate)?
+            .checked_add(phase)?;
+        Some(
+            SourceSpan::try_from((
+                numerator,
+                crate::consts::NANOS_PER_SECOND,
+                NonZeroU128::new(crate::consts::NANOS_PER_SECOND)?,
+                self.spec.sample_rate,
+                frames,
+            ))
+            .ok()?
+            .with_render_revision(self.render_revision)
+            .with_mapping_revision(self.mapping_revision),
+        )
+    }
+
     /// The decoded source frames this chunk carries, `[start, end)`.
     ///
     /// Read off the chunk's own metadata: `frame_offset` is absolute from the
@@ -60,11 +107,18 @@ impl Default for AudioChunkInfo {
             spec: AudioSpec::new(0, PLACEHOLDER_RATE),
             end_timestamp: Duration::ZERO,
             timestamp: Duration::ZERO,
+            media_origin: None,
+            media_end: None,
+            visible_origin: None,
+            source_revision: 0,
+            source_span: None,
             segment_index: None,
             source_byte_offset: None,
             variant_index: None,
             frames: 0,
-            epoch: 0,
+            segment: SegmentId::FIRST,
+            lane_frame: 0,
+            end_of_track: false,
             render_revision: 0,
             mapping_revision: None,
             frame_offset: 0,
@@ -166,5 +220,6 @@ mod tests {
         assert_eq!(info.spec.channels, 0);
         assert_eq!(info.frame_offset, 0);
         assert_eq!(info.timestamp, Duration::ZERO);
+        assert_eq!(info.media_end, None);
     }
 }

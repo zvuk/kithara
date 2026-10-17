@@ -66,10 +66,15 @@ where
         "file-symphonia: dispatching to ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec>"
     );
 
-    let probed_gapless = if config.gapless {
+    let probed_gapless = if config.gapless && container != Some(ContainerFormat::Mp4) {
         scoped_probe(&mut *source, codec, &config.pools)?
     } else {
         None
+    };
+    let presentations = if container == Some(ContainerFormat::Mp4) {
+        crate::mp4::probe_presentations(&mut *source, &config.pools)?
+    } else {
+        Vec::new()
     };
 
     let (mut demuxer, _byte_len) = SymphoniaDemuxer::open_file(
@@ -79,11 +84,16 @@ where
             hint: config.hint.clone(),
             byte_len_handle: config.byte_len_handle.clone(),
             byte_map: config.byte_map.clone(),
+            control: config
+                .reader_control
+                .clone()
+                .unwrap_or_else(|| kithara_stream::ReaderControl::new(None)),
         },
     )?;
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
     }
+    demuxer.set_mp4_presentations(presentations, config.gapless);
     let symphonia_config = SymphoniaConfig::builder().gapless(config.gapless).build();
     let codec_impl = if SymphoniaCodec::supports(codec) {
         SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)?
@@ -142,9 +152,12 @@ mod tests {
                 .build();
         let decoder = DecoderFactory::create_with_probe(Cursor::new(bytes), Some("mp3"), config)
             .expect("headerless MP3 opens through the software factory");
-        let duration = decoder
+        let crate::DecoderDuration::RawLength(duration) = decoder
             .duration()
-            .expect("headerless MP3 needs bitrate estimation during reader construction");
+            .expect("headerless MP3 needs bitrate estimation during reader construction")
+        else {
+            panic!("standalone MP3 duration must describe a raw span");
+        };
         assert!((180.0..190.0).contains(&duration.as_secs_f64()));
     }
 }

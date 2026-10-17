@@ -67,16 +67,21 @@ async fn build_hls(helper: &TestServerHelper, mode: FixtureMode) -> Url {
 }
 
 #[kithara::flash(true)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn wait_for_loader_done(
     queue: &QueueControl<TestPools>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<TrackStatus, String> {
+    // WHY: The load depends on disk decoding outside Flash's counted tasks.
+    let _real_io = kithara::platform::flash::real_io();
     let start = time::Instant::now();
     loop {
+        hang_tick!(format!("replay loader {track_id:?} awaits its source"));
         if let Some(entry) = queue.track(track_id) {
             match &entry.status {
                 TrackStatus::Loaded | TrackStatus::Consumed | TrackStatus::Cancelled => {
+                    hang_reset!();
                     return Ok(entry.status);
                 }
                 TrackStatus::Failed(err) => {
@@ -91,7 +96,7 @@ async fn wait_for_loader_done(
                 queue.track(track_id).map(|e| e.status)
             ));
         }
-        sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(50).min(__hang_detector.remaining())).await;
     }
 }
 
@@ -101,13 +106,29 @@ async fn wait_for_loader_done(
 /// missed. Bounded by a safety deadline so a stuck switch fails fast
 /// instead of hanging.
 #[kithara::flash(true)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn wait_for_current_track(
     rx: &mut kithara::events::EventReceiver<TestEvent>,
     expected: TrackId,
     deadline: Duration,
 ) {
+    // WHY: A transition can await an uncounted decode worker's prepared segment.
+    let _real_io = kithara::platform::flash::real_io();
     let wait = async {
-        while let Ok(ev) = rx.recv().await.map(|env| env.event) {
+        loop {
+            hang_tick!(format!(
+                "replay waits for CurrentTrackChanged({expected:?})"
+            ));
+            let received = time::timeout(__hang_detector.remaining(), rx.recv()).await;
+            let Ok(received) = received else {
+                hang_tick!(format!(
+                    "replay waits for CurrentTrackChanged({expected:?})"
+                ));
+                continue;
+            };
+            let Ok(ev) = received.map(|env| env.event) else {
+                break;
+            };
             if let TestEvent::Queue(event) = ev {
                 let id = match event {
                     QueueEvent::CurrentTrackChanged { id }
@@ -115,6 +136,7 @@ async fn wait_for_current_track(
                     _ => None,
                 };
                 if id == Some(expected) {
+                    hang_reset!();
                     return;
                 }
             }
@@ -159,6 +181,7 @@ async fn replay_track_after_switch_does_not_hang_loader(
         .crossfade_seconds(0.0)
         .open()
         .await;
+    let mut events = queue.subscribe();
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
@@ -190,7 +213,6 @@ async fn replay_track_after_switch_does_not_hang_loader(
         .await
         .unwrap_or_else(|e| panic!("[{mode:?}] initial load B: {e}"));
 
-    let mut events = queue.subscribe();
     queue
         .run(move |q| q.select(id_a, Transition::None))
         .await

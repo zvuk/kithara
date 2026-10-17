@@ -21,7 +21,7 @@ struct OneFrameDemuxer {
 }
 
 impl Demuxer for OneFrameDemuxer {
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
         None
     }
 

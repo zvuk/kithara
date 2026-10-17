@@ -250,6 +250,7 @@ impl BeatGridView for SegmentGridView {
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_sync::{SessionAnchor, SessionBeat};
     use kithara_test_utils::kithara;
 
     use super::SegmentGridView;
@@ -258,8 +259,8 @@ mod tests {
         BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridSnapshot, BeatGridStamp,
         BeatGridState, BeatGridUnavailable, BeatGridView, BeatMarker, BeatOrdinal,
         FrameUncertainty, MapAxis, MapPoint, MapPosition, MapRegion, MapRegionError, MapSegment,
-        Meter, MeterFacts, SegmentError, SegmentFacts, SegmentSet, SessionAnchor, SessionBeat,
-        SessionEpoch, SessionFrame, beat_grid::session::SessionGridView, consts,
+        Meter, MeterFacts, SegmentError, SegmentFacts, SegmentSet, SessionEpoch, SessionFrame,
+        beat_grid::session::SessionGridView, consts,
     };
 
     fn sample_rate() -> NonZeroU32 {

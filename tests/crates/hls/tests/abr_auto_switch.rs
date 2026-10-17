@@ -1,29 +1,23 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use kithara::{
+    abr::AbrEvent,
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioSession},
-    events::EventBus,
+    audio::{AudioConfig, AudioRead, AudioSession, ReadOutcome},
+    events::{EventBus, EventReceiver},
     hls::{Hls, HlsConfig},
-    platform::{
-        CancelToken,
-        sync::Arc,
-        time::Duration,
-        tokio::task::{spawn, spawn_blocking},
-    },
-    play::{PlayWorker, PlayWorkerConfig},
-    stream::{AudioCodec, ContainerFormat, MediaInfo},
+    platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, abr_fast, auto,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     fixture_protocol::DelayRule,
-    reads::read_to_eof,
+    mock::LaneAudio,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{hls_header_thirty, hls_pcm_thirty};
-use kithara_test_utils::{TestTempDir, temp_dir};
+use kithara_test_utils::{TestTempDir, pace, temp_dir};
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -99,26 +93,7 @@ async fn abr_auto_switch_during_playback(
     );
 
     let bus = EventBus::new(32);
-    let switches = Arc::new(AtomicUsize::new(0));
-    let switches_bg = switches.clone();
     let mut events_rx = bus.subscribe::<TestEvent>();
-    spawn(async move {
-        use kithara::platform::tokio::sync::broadcast::error::RecvError;
-        loop {
-            match events_rx.recv().await {
-                Ok(env) => {
-                    let ev = env.event;
-                    let ev_str = format!("{ev:?}");
-                    if ev_str.contains("VariantApplied") {
-                        switches_bg.fetch_add(1, Ordering::Relaxed);
-                        info!("ABR switch: {ev_str}");
-                    }
-                }
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => break,
-            }
-        }
-    });
 
     let hls_config = HlsConfig::for_url(url)
         .store(
@@ -142,22 +117,19 @@ async fn abr_auto_switch_during_playback(
         .events(bus)
         .media_info(wav_info)
         .build();
-    let mut audio = worker
-        .load(config)
+    let config = TrackConfig::for_audio(config)
+        .block_on_underrun(true)
+        .build();
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>>");
 
     let abr = audio.abr_handle();
 
-    let result = spawn_blocking(move || {
-        let total_samples = read_to_eof(&mut audio);
-        info!(total_samples, "playback finished");
-        total_samples
-    })
-    .await
-    .expect("spawn_blocking");
+    let (result, switch_count) = spawn_blocking(move || read_playback(&mut audio, &mut events_rx))
+        .await
+        .expect("spawn_blocking");
 
-    let switch_count = switches.load(Ordering::Relaxed);
     let final_variant = abr.and_then(|h| h.current_variant_index());
     info!(
         switch_count,
@@ -175,4 +147,38 @@ async fn abr_auto_switch_during_playback(
         "ABR must down-switch away from the slow variant 0 during playback; \
          final variant index = {final_variant:?} (observed {switch_count} VariantApplied events)"
     );
+}
+
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
+fn read_playback(
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
+    events: &mut EventReceiver<TestEvent>,
+) -> (u64, usize) {
+    let mut samples = [0.0; 4096];
+    let mut total = 0u64;
+    let mut switches = 0usize;
+    loop {
+        hang_tick!();
+        match audio.read(&mut samples) {
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                total += count.get() as u64;
+                hang_reset!();
+            }
+            Ok(ReadOutcome::Pending { .. }) => {
+                hang_park!(|remaining: Duration| pace(remaining.min(Duration::from_micros(500))));
+            }
+            Ok(ReadOutcome::Eof { .. }) => return (total, switches),
+            Err(error) => panic!("ABR playback decode: {error}"),
+        }
+        while let Ok(envelope) = events.try_recv() {
+            hang_tick!();
+            if matches!(
+                envelope.event,
+                TestEvent::Abr(AbrEvent::VariantApplied { .. })
+            ) {
+                switches += 1;
+            }
+        }
+    }
 }

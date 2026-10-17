@@ -42,13 +42,11 @@ pub enum StreamReadOutcome {
     Eof { byte_position: u64 },
 }
 
-/// Typed [`std::io::ErrorKind::Interrupted`] payload carrying [`PendingReason`] and a source/timeline snapshot.
-/// `SeekPending` and `NotReady`/`Retry` use `Interrupted` so fragmented-MP4 treats partial reads
-/// as cooperative pauses; callers downcast the payload instead of matching error messages.
+/// Typed [`std::io::ErrorKind::Interrupted`] payload carrying [`PendingReason`] and a source-state snapshot.
+/// `NotReady`/`Retry` use `Interrupted` so demuxers treat partial reads as transient backpressure,
+/// not terminal failures; callers downcast the payload instead of matching error messages.
 #[derive(Debug, Clone, Copy, derive_more::Display)]
-#[display(
-    "{reason}: pos={pos} want={want} len={len:?} phase={phase:?} epoch={epoch} flushing={flushing}"
-)]
+#[display("{reason}: pos={pos} want={want} len={len:?} phase={phase:?}")]
 #[non_exhaustive]
 #[derive(derive_more::Error)]
 #[error(ignore)]
@@ -56,8 +54,6 @@ pub struct StreamPending {
     pub(crate) len: Option<u64>,
     pub(crate) reason: PendingReason,
     pub(crate) phase: SourcePhase,
-    pub(crate) flushing: bool,
-    pub(crate) epoch: u64,
     pub(crate) pos: u64,
     pub(crate) want: usize,
 }
@@ -71,15 +67,11 @@ impl StreamPending {
         want: usize,
         len: Option<u64>,
         phase: SourcePhase,
-        epoch: u64,
-        flushing: bool,
     ) -> Self {
         Self {
             len,
             reason,
             phase,
-            flushing,
-            epoch,
             pos,
             want,
         }

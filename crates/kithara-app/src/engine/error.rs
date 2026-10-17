@@ -1,4 +1,4 @@
-use kithara::{platform::tokio::runtime::TryCurrentError, play::PlayError};
+use kithara::{platform::tokio::runtime::TryCurrentError, play::PlayError, queue::QueueError};
 
 use crate::{document::AssembleError, wave_cache::AnalysisPersistenceError};
 
@@ -12,6 +12,8 @@ pub(crate) enum EngineError {
     NoExecutor(TryCurrentError),
     #[display("analysis persistence: {_0}")]
     Persistence(AnalysisPersistenceError),
+    #[display("queue: {_0}")]
+    Queue(QueueError),
     #[from(skip)]
     #[error(ignore)]
     #[display("the configuration lacks the {_0}")]

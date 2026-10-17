@@ -2,7 +2,9 @@ use std::{io::Error as IoError, ops::Range};
 
 use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
-use kithara_stream::{SegmentDescriptor, SourceError, StreamError, StreamResult};
+use kithara_stream::{
+    SegmentDescriptor, SourceError, StreamError, StreamResult, needs_exact_byte_sizes,
+};
 use kithara_test_utils::kithara;
 
 use crate::variant::HlsVariant;
@@ -28,7 +30,21 @@ where
     pub(crate) fn descriptor(&self, idx: usize) -> Option<SegmentDescriptor> {
         let entry = self.segments.get(idx)?.as_media()?;
         let seg_idx_u32 = u32::try_from(idx).ok()?;
-        let byte_offset = self.layout.natural_offset(idx)?;
+        let byte_offset = match self.seek.alias.load() {
+            Some(alias)
+                if seg_idx_u32 == alias.segment
+                    || (seg_idx_u32 > alias.segment
+                        && !needs_exact_byte_sizes(self.profile.codec, self.profile.container)) =>
+            {
+                let prefix = self
+                    .segments
+                    .get(usize::try_from(alias.segment).ok()?..idx)?;
+                prefix.iter().try_fold(alias.anchor, |offset, segment| {
+                    offset.checked_add(segment.len())
+                })?
+            }
+            _ => self.layout.natural_offset(idx)?,
+        };
         let size = self.segment_size(idx)?;
         Some(
             SegmentDescriptor::builder()
@@ -43,6 +59,9 @@ where
 
     #[kithara::probe(variant = self.variant as u64, byte)]
     pub(crate) fn descriptor_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
+        if let Some((idx, offset, _)) = self.seek_alias_at(byte) {
+            return self.descriptor(usize::try_from(idx).ok()? + usize::from(offset < byte));
+        }
         let mut idx = self.layout.bisect_left(byte);
         if idx >= self.segments.len() {
             return None;

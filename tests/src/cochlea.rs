@@ -562,7 +562,14 @@ fn lead_in_has_silence(samples: &[f32], channels: usize, sample_rate: u32, frame
     .any(|segment| segment.silent)
 }
 
-/// Cluster loud frames into beat and downbeat markers.
+struct RhythmCluster {
+    first: usize,
+    peak_frame: usize,
+    peak: f32,
+    last: usize,
+}
+
+/// Cluster loud frames and locate each marker at its maximum amplitude.
 ///
 /// The leading cluster is dropped when no silent window precedes it: within one
 /// cluster window of the start an onset and the body of an event that began
@@ -581,29 +588,40 @@ fn rhythm_markers(samples: &[f32], channels: usize, sample_rate: u32) -> (Vec<us
     let cluster_gap =
         usize::try_from(sample_rate).expect("sample rate fits usize") * MARKER_CLUSTER_MS / 1_000;
     let mut markers = Vec::new();
-    let mut active: Option<(usize, f32, usize)> = None;
+    let mut active: Option<RhythmCluster> = None;
     for (frame, values) in samples.chunks_exact(channels).enumerate() {
         let peak = values.iter().map(|sample| sample.abs()).fold(0.0, f32::max);
         if peak < threshold {
             continue;
         }
-        match active {
-            Some((first_frame, best_peak, last_frame)) if frame - last_frame <= cluster_gap => {
-                active = Some((first_frame, best_peak.max(peak), frame));
+        match active.as_mut() {
+            Some(cluster) if frame - cluster.last <= cluster_gap => {
+                if peak > cluster.peak {
+                    cluster.peak_frame = frame;
+                    cluster.peak = peak;
+                }
+                cluster.last = frame;
             }
-            Some((first_frame, best_peak, _)) => {
-                markers.push((first_frame, best_peak));
-                active = Some((frame, peak, frame));
+            _ => {
+                if let Some(cluster) = active.take() {
+                    markers.push(cluster);
+                }
+                active = Some(RhythmCluster {
+                    first: frame,
+                    peak_frame: frame,
+                    peak,
+                    last: frame,
+                });
             }
-            None => active = Some((frame, peak, frame)),
         }
     }
-    if let Some((frame, peak, _)) = active {
-        markers.push((frame, peak));
+    if let Some(cluster) = active {
+        markers.push(cluster);
     }
 
-    let truncated_body = markers.first().is_some_and(|(frame, _)| {
-        *frame < cluster_gap && !lead_in_has_silence(samples, channels, sample_rate, *frame)
+    let truncated_body = markers.first().is_some_and(|cluster| {
+        cluster.first < cluster_gap
+            && !lead_in_has_silence(samples, channels, sample_rate, cluster.first)
     });
     if truncated_body {
         markers.remove(0);
@@ -612,9 +630,12 @@ fn rhythm_markers(samples: &[f32], channels: usize, sample_rate: u32) -> (Vec<us
     let downbeat_threshold = track_peak * DOWNBEAT_MARKER_RATIO;
     let downbeats = markers
         .iter()
-        .filter_map(|(frame, peak)| (*peak >= downbeat_threshold).then_some(*frame))
+        .filter_map(|cluster| (cluster.peak >= downbeat_threshold).then_some(cluster.peak_frame))
         .collect();
-    let beats = markers.into_iter().map(|(frame, _)| frame).collect();
+    let beats = markers
+        .into_iter()
+        .map(|cluster| cluster.peak_frame)
+        .collect();
     (beats, downbeats)
 }
 
@@ -771,6 +792,127 @@ mod tests {
             }
         }
         samples
+    }
+
+    #[kithara::test(native)]
+    #[case::cd_rate(44_100)]
+    #[case::render_rate(48_000)]
+    fn marker_localization_keeps_the_peak_under_preringing_and_gain(#[case] sample_rate: u32) {
+        let original = pulse_train(sample_rate, 120.0);
+        let (expected_beats, expected_downbeats) = marked_rhythm_markers(&original, 1, sample_rate);
+        assert_eq!(expected_beats.len(), 6);
+        assert_eq!(expected_downbeats.len(), 2);
+        let mut preringing = original.clone();
+        for &beat in &expected_beats {
+            preringing[beat - 1] = original[beat] * 0.9;
+        }
+        for sample in &mut preringing {
+            *sample *= 0.25;
+        }
+        assert!(preringing[expected_beats[0] - 1] > 0.9 * 0.25 * BEAT_MARKER_RATIO);
+        assert_eq!(
+            marked_rhythm_markers(&preringing, 1, sample_rate),
+            (expected_beats.clone(), expected_downbeats),
+        );
+        assert!(
+            marked_synchronization_failures(
+                "aligned pulse peaks",
+                &[&original, &preringing],
+                1,
+                sample_rate,
+                120.0,
+            )
+            .is_empty()
+        );
+        assert!(
+            host_beat_alignment_failures(
+                "aligned Host peaks",
+                &preringing,
+                1,
+                sample_rate,
+                &expected_beats,
+            )
+            .is_empty()
+        );
+    }
+
+    #[kithara::test(native)]
+    #[case::cd_rate(44_100)]
+    #[case::render_rate(48_000)]
+    fn marker_localization_rejects_a_frame_shift_and_a_downbeat_shift(#[case] sample_rate: u32) {
+        let original = pulse_train(sample_rate, 120.0);
+        let (beats, _) = marked_rhythm_markers(&original, 1, sample_rate);
+        let frame_shifted = [vec![0.0], original.clone()].concat();
+        let frame_failures = marked_synchronization_failures(
+            "one frame",
+            &[&original, &frame_shifted],
+            1,
+            sample_rate,
+            120.0,
+        );
+        assert!(
+            frame_failures
+                .iter()
+                .any(|failure| failure == "one frame: beat phase spread is 1 frame"),
+            "{frame_failures:?}"
+        );
+        let host_failures =
+            host_beat_alignment_failures("one Host frame", &frame_shifted, 1, sample_rate, &beats);
+        assert_eq!(host_failures.len(), beats.len());
+        assert!(
+            host_failures
+                .iter()
+                .all(|failure| failure.contains("is +1 frames from Host beat")),
+            "{host_failures:?}"
+        );
+
+        let beat_frames = sample_rate as usize / 2;
+        let bar_shifted = [vec![0.0; beat_frames], original].concat();
+        let bar_failures = marked_synchronization_failures(
+            "one downbeat",
+            &[&pulse_train(sample_rate, 120.0), &bar_shifted],
+            1,
+            sample_rate,
+            120.0,
+        );
+        assert!(
+            bar_failures
+                .iter()
+                .any(|failure| failure == "one downbeat: bar phase spread is 1 beat"),
+            "{bar_failures:?}"
+        );
+    }
+
+    #[kithara::test(native)]
+    #[case::cd_rate(44_100)]
+    #[case::render_rate(48_000)]
+    fn marker_localization_preserves_native_offsets_and_rejects_a_dropped_pulse(
+        #[case] sample_rate: u32,
+    ) {
+        let original = pulse_train(sample_rate, 120.0);
+        let lead = sample_rate as usize / 4;
+        let period = sample_rate as usize / 2;
+        let (beats, downbeats) = marked_rhythm_markers(&original, 1, sample_rate);
+        assert_eq!(
+            beats,
+            (0..6).map(|beat| lead + beat * period).collect::<Vec<_>>()
+        );
+        assert_eq!(downbeats, [lead, lead + 4 * period]);
+        let mut missing = original.clone();
+        missing[beats[2]..beats[2] + sample_rate as usize / 50].fill(0.0);
+        let failures = marked_synchronization_failures(
+            "dropped pulse",
+            &[&original, &missing],
+            1,
+            sample_rate,
+            120.0,
+        );
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.contains("track 1 is missing a rhythmic event")),
+            "{failures:?}"
+        );
     }
 
     #[kithara::test(native)]

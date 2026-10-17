@@ -9,7 +9,8 @@ pub enum Rejection<R> {
     Stale,
     /// The executor refused it for a reason of its own domain.
     Refused(R),
-    /// The executor dropped it once due without answering it.
+    /// The executor dropped it once due without answering it, or dropped its
+    /// inbox with the batch still in it.
     Unanswered,
 }
 
@@ -34,6 +35,8 @@ pub enum Outcome<P: Protocol> {
 #[derive(Debug, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct Receipt<P: Protocol> {
+    /// The batch, with anything the executor released into it.
+    #[field(get)]
     pub(crate) batch: Batch<P>,
     /// What became of the batch.
     #[field(get)]

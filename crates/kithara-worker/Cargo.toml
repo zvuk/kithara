@@ -13,6 +13,7 @@ categories = ["concurrency"]
 ignored = ["hotpath"]
 
 [features]
+mock = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
 usdt = ["kithara-test-utils/usdt"]
 

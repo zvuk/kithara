@@ -2,22 +2,24 @@
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum WarpRenderError {
+    /// Rendering stopped after an unrecoverable source mapping failure.
+    #[error("renderer terminated after an unrecoverable source mapping failure")]
+    Terminated,
     /// The previous producer must finish draining or retire outside the render core.
     #[error("renderer requires deferred service or transition drain")]
     NeedsService,
     /// Another source span is already prepared and retains its producer identity.
     #[error("another source quantum is already prepared")]
     OutstandingQuantum,
-    /// A future plan needs the published output activation before accepting source.
-    #[error("projection awaits its published output activation")]
-    PendingActivation,
-    /// The decoded span begins before an entered plan's activation: admit
-    /// exactly `frames` of it through `admit_preroll` and render none.
-    #[error("{frames} decoded frames precede the entered activation")]
-    Preroll { frames: std::num::NonZeroUsize },
-    /// This target has no renderer capable of applying a projection.
-    #[error("projected rendering is unavailable on this target")]
-    UnsupportedProjection,
+    /// This target has no renderer capable of applying a region plan.
+    #[error("region plan rendering is unavailable on this target")]
+    UnsupportedRegionPlan,
+    /// Decoded input already has a nonlinear source law from another render stage.
+    #[error("Warp requires affine decoded PCM geometry; nonlinear input is unsupported")]
+    UnsupportedSourceGeometry,
+    /// A source clock cannot represent the requested physical coordinate.
+    #[error("decoded PCM source geometry is unrepresentable")]
+    InvalidSourceGeometry,
     /// An operation contains no source frames.
     #[error("source quantum is empty")]
     EmptySource,

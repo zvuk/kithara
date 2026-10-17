@@ -1,41 +1,48 @@
+use std::{collections::VecDeque, num::NonZeroU128};
+
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_signal::{AudioChunkInfo, SessionFrame};
-use kithara_stretch::{ElasticError, ElasticLatency, ElasticRequest};
+use kithara_signal::{AudioChunkInfo, SourceSpan};
+use kithara_stretch::{ElasticError, ElasticLatency};
 use num_traits::ToPrimitive;
 
-use super::{
-    core::{PreparedQuantum, RateTarget, WarpRenderer},
-    projection::ProjectedQuantum,
-};
-use crate::WarpPlan;
-
-#[derive(Clone, Copy)]
-pub(in crate::render) struct ResidentRequest {
-    pub(in crate::render) prime: Option<(u64, usize, ElasticRequest)>,
-    pub(in crate::render) projection: ProjectedQuantum,
-    pub(in crate::render) rate: RateTarget,
-    pub(in crate::render) source_end: u64,
-    pub(in crate::render) source_start: u64,
-}
+use super::core::WarpRenderer;
 
 /// A bounded decoded-source window, shared by activation and backend replacement.
 /// It contains history and lookahead, never independently scheduled output.
 pub(in crate::render) struct SourceResidency {
     pub(in crate::render) end: Option<u64>,
-    pub(in crate::render) prepared: Option<ResidentRequest>,
+    pub(in crate::render) origin: Option<u64>,
     pub(in crate::render) replacement: SampleBuffer,
     /// The tail a retiring engine drains into, with what still fades out of
     /// `replacement` blended in; it becomes `replacement` once complete.
     pub(in crate::render) next_replacement: SampleBuffer,
     pub(in crate::render) samples: SampleBuffer,
-    pub(in crate::render) primed: bool,
     pub(in crate::render) start: i64,
     pub(in crate::render) history_frames: usize,
+    mappings: VecDeque<SourceSpan>,
     pub(in crate::render) offset: usize,
     pub(in crate::render) replacement_offset: usize,
 }
 
 impl SourceResidency {
+    pub(in crate::render) fn required_frames(
+        history: usize,
+        latency: ElasticLatency,
+        source: usize,
+        expansion: f64,
+    ) -> Result<usize, ElasticError> {
+        latency
+            .first()
+            .checked_add(latency.second())
+            .and_then(|lead| lead.checked_mul(12))
+            .and_then(|lead| lead.checked_add(history))
+            .and_then(|frames| frames.checked_add(source))
+            .and_then(|frames| frames.to_f64())
+            .and_then(|frames| (frames * expansion).ceil().to_usize())
+            .and_then(|frames| frames.checked_add(crate::consts::SOURCE_RADIUS))
+            .ok_or(ElasticError::SampleCountOverflow)
+    }
+
     /// Only the portion before the physical recording is known silence.
     pub(in crate::render) fn append(
         &mut self,
@@ -48,6 +55,7 @@ impl SourceResidency {
             return Ok(());
         }
         if self.end.is_none() {
+            self.origin = Some(meta.frame_offset);
             let prefix = self
                 .history_frames
                 .min(usize::try_from(meta.frame_offset).unwrap_or(usize::MAX));
@@ -130,8 +138,55 @@ impl SourceResidency {
         self.start = 0;
         self.offset = 0;
         self.end = None;
-        self.primed = false;
-        self.prepared = None;
+        self.origin = None;
+        self.mappings.clear();
+    }
+
+    pub(in crate::render) fn remember_mapping(
+        &mut self,
+        span: SourceSpan,
+    ) -> Result<(), ElasticError> {
+        if let Some(previous) = self.mappings.back_mut()
+            && let Some(joined) = previous.followed_by(span)
+        {
+            *previous = joined;
+        } else {
+            if self.mappings.len() == self.mappings.capacity() {
+                return Err(ElasticError::PoolCapacity);
+            }
+            self.mappings.push_back(span);
+        }
+        let mut remaining =
+            u64::try_from(self.history_frames).map_err(|_| ElasticError::SampleCountOverflow)?;
+        let mut retained = 0;
+        for mapping in self.mappings.iter_mut().rev() {
+            if remaining == 0 {
+                break;
+            }
+            let frames = mapping.output_frames().min(remaining);
+            *mapping = mapping
+                .for_output_range(mapping.output_frames() - frames..mapping.output_frames())
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            remaining -= frames;
+            retained += 1;
+        }
+        while self.mappings.len() > retained {
+            self.mappings.pop_front();
+        }
+        Ok(())
+    }
+
+    pub(in crate::render) fn history_position(
+        &self,
+        mut before: u64,
+    ) -> Option<(u128, NonZeroU128)> {
+        for span in self.mappings.iter().rev() {
+            if before <= span.output_frames() {
+                return span.source_ratio_at(span.output_frames() - before);
+            }
+            before -= span.output_frames();
+        }
+        None
     }
 
     fn make_room(&mut self, samples: usize) -> Result<(), ElasticError> {
@@ -146,32 +201,6 @@ impl SourceResidency {
         Ok(())
     }
 
-    pub(in crate::render) fn pad_to(
-        &mut self,
-        end: u64,
-        channels: usize,
-    ) -> Result<(), ElasticError> {
-        let stored_frames = self.samples.len().saturating_sub(self.offset) / channels;
-        let stored_end = self
-            .start
-            .checked_add(
-                i64::try_from(stored_frames).map_err(|_| ElasticError::SampleCountOverflow)?,
-            )
-            .and_then(|end| u64::try_from(end).ok())
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let pad = usize::try_from(end.saturating_sub(stored_end))
-            .map_err(|_| ElasticError::SampleCountOverflow)?
-            .checked_mul(channels)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        self.make_room(pad)?;
-        let length = self.samples.len();
-        self.samples
-            .ensure_len(length + pad)
-            .map_err(|_| ElasticError::PoolCapacity)?;
-        self.samples[length..].fill(0.0);
-        Ok(())
-    }
-
     pub(in crate::render) fn prepare<S: HasPool<f32>>(
         pools: &PoolRegion<S>,
         reusable: Option<Self>,
@@ -180,18 +209,37 @@ impl SourceResidency {
         replacement_frames: usize,
         channels: usize,
     ) -> Result<Self, ElasticError> {
-        let mut residency = reusable.unwrap_or_else(|| Self {
-            history_frames,
-            samples: pools.get::<f32>(),
-            replacement: pools.get::<f32>(),
-            next_replacement: pools.get::<f32>(),
-            replacement_offset: 0,
-            start: 0,
-            offset: 0,
-            end: None,
-            primed: false,
-            prepared: None,
-        });
+        let mut residency = if let Some(reusable) = reusable {
+            reusable
+        } else {
+            let samples = |frames: usize| {
+                frames
+                    .checked_mul(channels)
+                    .ok_or(ElasticError::SampleCountOverflow)
+                    .and_then(|samples| WarpRenderer::<S>::prepare_buffer(pools, None, samples))
+            };
+            Self {
+                history_frames,
+                mappings: VecDeque::new(),
+                samples: samples(resident_frames)?,
+                replacement: samples(replacement_frames)?,
+                next_replacement: samples(replacement_frames)?,
+                replacement_offset: 0,
+                start: 0,
+                offset: 0,
+                end: None,
+                origin: None,
+            }
+        };
+        let mapping_capacity = history_frames
+            .checked_add(1)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        if residency.mappings.capacity() < mapping_capacity {
+            residency
+                .mappings
+                .try_reserve(mapping_capacity - residency.mappings.len())
+                .map_err(|_| ElasticError::PoolCapacity)?;
+        }
         for (buffer, frames) in [
             (&mut residency.samples, resident_frames),
             (&mut residency.replacement, replacement_frames),
@@ -205,6 +253,7 @@ impl SourceResidency {
                         .ok_or(ElasticError::SampleCountOverflow)?,
                 )
                 .map_err(|_| ElasticError::PoolCapacity)?;
+            buffer.shrink_to_fit();
             buffer.truncate(length);
         }
         residency.history_frames = history_frames;
@@ -217,13 +266,17 @@ impl SourceResidency {
         end: u64,
         channels: usize,
     ) -> Result<std::ops::Range<usize>, ElasticError> {
+        if start < self.start {
+            return Err(ElasticError::SourceHistoryLost {
+                requested: start,
+                resident: self.start,
+            });
+        }
         let first = start
             .checked_sub(self.start)
             .and_then(|frames| usize::try_from(frames).ok())
             .and_then(|frames| frames.checked_mul(channels))
-            .ok_or(ElasticError::EnginePreparation(
-                "required source history is no longer resident",
-            ))?;
+            .ok_or(ElasticError::SampleCountOverflow)?;
         let first = first
             .checked_add(self.offset)
             .ok_or(ElasticError::SampleCountOverflow)?;
@@ -238,16 +291,31 @@ impl SourceResidency {
             .ok_or(ElasticError::SampleCountOverflow)?;
         if last > self.samples.len() || first > last {
             return Err(ElasticError::EnginePreparation(
-                "required projected source is not resident",
+                "required source is not resident",
             ));
         }
         Ok(first..last)
     }
 
     pub(in crate::render) fn retain_from(&mut self, source: u64, channels: usize) {
-        let first = i64::try_from(source)
+        let mut first = i64::try_from(source)
             .unwrap_or(i64::MAX)
             .saturating_sub(i64::try_from(self.history_frames).unwrap_or(i64::MAX));
+        let history = u64::try_from(self.history_frames / 4).unwrap_or(u64::MAX);
+        let mapped = match self.history_position(history) {
+            Some(position) => Some(position),
+            None => self
+                .mappings
+                .front()
+                .and_then(|span| span.source_ratio_at(0)),
+        };
+        if let Some((numerator, denominator)) = mapped {
+            let source = i64::try_from(numerator / denominator.get()).unwrap_or(i64::MAX);
+            first =
+                first.min(source.saturating_sub(
+                    i64::try_from(crate::consts::SOURCE_RADIUS).unwrap_or(i64::MAX),
+                ));
+        }
         let remove = usize::try_from(first.saturating_sub(self.start).max(0))
             .unwrap_or(usize::MAX)
             .saturating_mul(channels)
@@ -270,7 +338,10 @@ impl SourceResidency {
         }
         let frames = input.len() / channels;
         let skip = frames.saturating_sub(self.samples.capacity() / channels);
-        if skip > 0 || self.end.is_some_and(|end| end != meta.frame_offset) {
+        if self.end.is_some_and(|end| end != meta.frame_offset) {
+            self.clear();
+        }
+        if skip > 0 {
             self.samples.clear();
             self.offset = 0;
             meta.frame_offset = meta
@@ -281,400 +352,5 @@ impl SourceResidency {
             self.end = Some(meta.frame_offset);
         }
         self.append(meta, &input[skip * channels..])
-    }
-}
-
-impl<S: HasPool<f32>> WarpRenderer<S> {
-    pub(in crate::render) fn continue_resident_projection(
-        &self,
-        meta: AudioChunkInfo,
-        remaining: usize,
-    ) -> Result<Option<PreparedQuantum>, ElasticError> {
-        let Some(resident) = self.residency.as_ref() else {
-            return Ok(None);
-        };
-        let Some(request) = resident.prepared else {
-            return Ok(None);
-        };
-        let end = resident.end.unwrap_or(meta.frame_offset);
-        if end != meta.frame_offset {
-            return Err(ElasticError::EnginePreparation(
-                "resident continuation has a different decoder origin",
-            ));
-        }
-        let needed = usize::try_from(request.source_end.saturating_sub(end))
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-        let frames = needed
-            .min(remaining.max(1))
-            .min(self.source_block_frames.get());
-        let active_frames = usize::try_from(request.source_end - request.source_start)
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-        let speed = (active_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?
-            / request
-                .projection
-                .output_frames
-                .to_f64()
-                .ok_or(ElasticError::SampleCountOverflow)?)
-        .to_f32()
-        .ok_or(ElasticError::SampleCountOverflow)?;
-        let mut projection = request.projection;
-        if frames < needed {
-            projection.output_frames = 0;
-        }
-        Ok(Some(PreparedQuantum {
-            speed,
-            active_frames,
-            frames,
-            source_start: meta.frame_offset,
-            activation: None,
-            projection: Some(projection),
-            rate: request.rate,
-            landing_frames: None,
-        }))
-    }
-
-    /// Sizes terminal DSP silence only; it does not extend the map. Padding is materialized solely
-    /// by flush after the decoder reports EOF.
-    fn prepare_finite_resident_projection(
-        &mut self,
-        plan: &WarpPlan,
-        start: SessionFrame,
-        meta: AudioChunkInfo,
-        remaining: usize,
-        pending_activation: Option<SessionFrame>,
-        output_offset: usize,
-    ) -> Result<PreparedQuantum, ElasticError> {
-        let uncovered = ElasticError::EnginePreparation("projected terminal extent is uncovered");
-        let Some(crate::MapAxis::Asset(axis)) = plan.source_axis() else {
-            return Err(uncovered);
-        };
-        let crate::AssetExtent::Bounded(end) = axis.extent() else {
-            return Err(uncovered);
-        };
-        let source_end =
-            crate::AssetFrame::new(end.to_f64().ok_or(ElasticError::SampleCountOverflow)?)
-                .map_err(|_| ElasticError::SampleCountOverflow)?;
-        let crate::BeatGridQuery::Resolved(output_end) = plan.map().output_at(source_end) else {
-            return Err(uncovered);
-        };
-        let latency = self
-            .engine
-            .as_ref()
-            .ok_or(ElasticError::PoolCapacity)?
-            .capabilities()
-            .latency();
-        let terminal_offset = self.projected_output_offset(plan, output_end)?;
-        if terminal_offset > output_offset.saturating_add(latency.second()) {
-            return Err(uncovered);
-        }
-        let audible_start = Self::projected_source(plan, start)?;
-        let covered_source = end
-            .checked_sub(audible_start)
-            .ok_or(ElasticError::EmptySource)?;
-        let covered_output = terminal_offset
-            .checked_sub(output_offset)
-            .filter(|frames| *frames > 0)
-            .ok_or(ElasticError::EmptyOutput)?;
-        let warm_frames = (covered_source
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?
-            * latency
-                .second()
-                .to_f64()
-                .ok_or(ElasticError::SampleCountOverflow)?
-            / covered_output
-                .to_f64()
-                .ok_or(ElasticError::SampleCountOverflow)?)
-        .round()
-        .to_u64()
-        .ok_or(ElasticError::SampleCountOverflow)?;
-        let warm_end = audible_start
-            .checked_add(warm_frames)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let input_start = warm_end
-            .checked_add(
-                u64::try_from(latency.first()).map_err(|_| ElasticError::SampleCountOverflow)?,
-            )
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let mut audible_meta = meta;
-        audible_meta.frame_offset = audible_start;
-        let prepared = self.projected_span(
-            plan,
-            start,
-            audible_meta,
-            remaining,
-            pending_activation,
-            output_offset,
-        )?;
-        let projection = prepared.projection.ok_or(ElasticError::EmptyOutput)?;
-        let input_end = input_start
-            .checked_add(
-                projection
-                    .end
-                    .source()
-                    .checked_sub(audible_start)
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            )
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let request = ResidentRequest {
-            projection,
-            source_start: input_start,
-            source_end: input_end,
-            prime: self.resident_prime(plan, audible_start, warm_end, latency)?,
-            rate: prepared.rate,
-        };
-        self.prepare_resident_request(request, meta, remaining)
-    }
-
-    /// Latency is expressed once at the engine boundary; the map itself already converts source
-    /// frames per session output frame.
-    /// Short chunks whose whole-frame endpoints advance no audible source are
-    /// retained; the next chunk projects the output span afresh.
-    pub(in crate::render) fn prepare_resident_projection(
-        &mut self,
-        plan: &WarpPlan,
-        start: SessionFrame,
-        meta: AudioChunkInfo,
-        remaining: usize,
-        pending_activation: Option<SessionFrame>,
-        output_offset: usize,
-    ) -> Result<PreparedQuantum, ElasticError> {
-        let capabilities = self
-            .engine
-            .as_ref()
-            .ok_or(ElasticError::EnginePreparation(
-                "projected engine is unavailable",
-            ))?
-            .capabilities();
-        let latency = capabilities.latency();
-        let axis = plan.output_axis().ok_or(ElasticError::EnginePreparation(
-            "projected output axis is unavailable",
-        ))?;
-        let endpoint = |frames: usize| -> Result<SessionFrame, ElasticError> {
-            let frames = frames.to_f64().ok_or(ElasticError::SampleCountOverflow)?
-                * f64::from(axis.sample_rate().get())
-                / f64::from(self.spec.sample_rate.get());
-            Ok(SessionFrame::new(
-                i64::from(plan.activation().output())
-                    .checked_add(
-                        frames
-                            .round()
-                            .to_i64()
-                            .ok_or(ElasticError::SampleCountOverflow)?,
-                    )
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            ))
-        };
-        let source_at = |at, label| {
-            Self::projected_source(plan, at).map_err(|error| match error {
-                ElasticError::EnginePreparation(_) => ElasticError::EnginePreparation(label),
-                error => error,
-            })
-        };
-        let audible_start = source_at(start, "projected audible start is uncovered")?;
-        let advanced_offset = output_offset
-            .checked_add(latency.second())
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let advanced_start = endpoint(advanced_offset)?;
-        let Ok(delayed_start) = source_at(advanced_start, "projected admitted start is uncovered")
-        else {
-            return self.prepare_finite_resident_projection(
-                plan,
-                start,
-                meta,
-                remaining,
-                pending_activation,
-                output_offset,
-            );
-        };
-        let input_start = delayed_start
-            .checked_add(
-                u64::try_from(latency.first()).map_err(|_| ElasticError::SampleCountOverflow)?,
-            )
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
-        let resident_end = resident.end.unwrap_or(meta.frame_offset);
-        if resident_end != meta.frame_offset {
-            return Err(ElasticError::DiscontinuousSource {
-                expected: resident_end
-                    .to_f64()
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-                actual: meta
-                    .frame_offset
-                    .to_f64()
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            });
-        }
-        let mut virtual_meta = meta;
-        virtual_meta.frame_offset = delayed_start;
-        let prepared = match self.projected_span(
-            plan,
-            advanced_start,
-            virtual_meta,
-            remaining.max(1),
-            pending_activation.map(|at| {
-                SessionFrame::new(
-                    i64::from(at)
-                        .saturating_add(i64::from(advanced_start).saturating_sub(i64::from(start))),
-                )
-            }),
-            advanced_offset,
-        ) {
-            Ok(prepared) => prepared,
-            Err(ElasticError::EmptyOutput) => {
-                return self.prepare_finite_resident_projection(
-                    plan,
-                    start,
-                    meta,
-                    remaining,
-                    pending_activation,
-                    output_offset,
-                );
-            }
-            Err(error) => return Err(error),
-        };
-        let mut projection = prepared.projection.ok_or(ElasticError::EmptyOutput)?;
-        let source_end = projection
-            .end
-            .source()
-            .checked_add(
-                u64::try_from(latency.first()).map_err(|_| ElasticError::SampleCountOverflow)?,
-            )
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let audible_end = endpoint(
-            output_offset
-                .checked_add(projection.output_frames)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        )?;
-        projection.output_offset = output_offset;
-        projection.output_start = start;
-        projection.end = plan.map().reanchor(
-            Self::projected_endpoint(
-                plan,
-                audible_end,
-                meta.frame_offset
-                    .checked_add(
-                        u64::try_from(remaining).map_err(|_| ElasticError::SampleCountOverflow)?,
-                    )
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            )?,
-            audible_end,
-        );
-        let prime = self.resident_prime(plan, audible_start, delayed_start, latency)?;
-        let audible = projection.end.source() > audible_start;
-        let mut prepared = self.prepare_resident_request(
-            ResidentRequest {
-                source_end,
-                prime,
-                projection,
-                source_start: input_start,
-                rate: prepared.rate,
-            },
-            meta,
-            remaining,
-        )?;
-        if !audible && let Some(projection) = prepared.projection.as_mut() {
-            projection.output_frames = 0;
-            if let Some(resident) = self.residency.as_mut() {
-                resident.prepared = None;
-            }
-        }
-        Ok(prepared)
-    }
-
-    fn prepare_resident_request(
-        &mut self,
-        request: ResidentRequest,
-        meta: AudioChunkInfo,
-        remaining: usize,
-    ) -> Result<PreparedQuantum, ElasticError> {
-        let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
-        let end = resident.end.unwrap_or(meta.frame_offset);
-        if end != meta.frame_offset {
-            return Err(ElasticError::EnginePreparation(
-                "resident request has a different decoder origin",
-            ));
-        }
-        let needed = usize::try_from(request.source_end.saturating_sub(end))
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-        let frames = needed
-            .min(self.source_block_frames.get())
-            .min(remaining.max(1));
-        let active_frames = usize::try_from(
-            request
-                .source_end
-                .checked_sub(request.source_start)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        )
-        .map_err(|_| ElasticError::SampleCountOverflow)?;
-        let speed = (active_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?
-            / request
-                .projection
-                .output_frames
-                .to_f64()
-                .ok_or(ElasticError::SampleCountOverflow)?)
-        .to_f32()
-        .ok_or(ElasticError::SampleCountOverflow)?;
-        resident.prepared = Some(request);
-        let mut projection = request.projection;
-        if frames < needed {
-            projection.output_frames = 0;
-        }
-        Ok(PreparedQuantum {
-            speed,
-            active_frames,
-            frames,
-            source_start: meta.frame_offset,
-            activation: None,
-            projection: Some(projection),
-            rate: request.rate,
-            landing_frames: None,
-        })
-    }
-
-    fn resident_prime(
-        &self,
-        plan: &WarpPlan,
-        audible_start: u64,
-        warm_end: u64,
-        latency: ElasticLatency,
-    ) -> Result<Option<(u64, usize, ElasticRequest)>, ElasticError> {
-        let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
-        let same_map = self
-            .projection
-            .active
-            .as_ref()
-            .is_some_and(|active| std::ptr::eq(active.as_ref(), plan));
-        if (resident.primed && same_map) || latency.second() == 0 {
-            return Ok(None);
-        }
-        if audible_start > 0 {
-            let history_start = i64::try_from(audible_start)
-                .ok()
-                .and_then(|cue| {
-                    i64::try_from(latency.first())
-                        .ok()
-                        .and_then(|history| cue.checked_sub(history))
-                })
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            resident.range(
-                history_start,
-                audible_start,
-                usize::from(self.spec.channels.max(1)),
-            )?;
-        }
-        let warm_frames = warm_end
-            .checked_sub(audible_start)
-            .and_then(|frames| usize::try_from(frames).ok())
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        Ok(Some((
-            audible_start,
-            latency.first(),
-            ElasticRequest::new(warm_frames, latency.second())?,
-        )))
     }
 }

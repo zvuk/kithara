@@ -1,37 +1,28 @@
-//! Materializes a served beat grid as the geometry a deck queries.
-//!
-//! The served model states beats in media seconds; a deck asks in decoded
-//! frames. The translation happens once, here, against the axis the decoder
-//! actually produced: the model is never rewritten, and a later change of
-//! output rate reprojects the same source geometry instead of recomputing it.
-//!
-//! The model's `duration` and the decoded axis are two statements about the
-//! same recording. Neither overrides the other: the geometry reaches only as
-//! far as both allow, rounded down to the last whole beat that fits, so a
-//! disagreement between them narrows what the grid claims rather than being
-//! silently resolved in favour of one of them.
+//! Adapts one served document to stamped map queries over sync-owned native geometry.
 
-use kithara_beat::{BeatGridModel, BeatGridState as WireState, GridBeat, RawBeatGrid};
-use num_traits::cast::ToPrimitive;
+use std::ops::RangeInclusive;
 
-use super::{BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridSnapshotError, BeatGridState};
+use kithara_beat::{BeatGridModel, BeatGridState as WireState, RawBeatGrid};
+use kithara_sync::{SourceGrid, SourceGridError};
+
+use super::{
+    BeatEstimate, BeatGridId, BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridSnapshot,
+    BeatGridSnapshotError, BeatGridState, BeatGridUnavailable, BeatGridView, view::stale,
+};
 use crate::{
-    AssetAxis, AssetExtent, AssetFrame, BeatEvidence, BeatMarker, BeatOrdinal, FrameUncertainty,
-    MapAxis, MapCoordinateError, MapSegment, Meter, MeterError, MeterFacts, SegmentError,
-    SegmentFacts, SegmentSet, consts,
+    AssetAxis, AssetExtent, AssetFrame, Beat, BeatEvidence, BeatOrdinal, FrameUncertainty, MapAxis,
+    MapCoordinateError, MapPoint, MapPosition, MapRegion, Meter, MeterError, SegmentEndpoint,
+    SegmentError,
 };
 
 /// A served beat grid cannot be expressed on the decoded axis it was given.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum BeatGridModelError {
-    /// A beat of the model falls past the decoded asset it describes.
     #[error("beat {ordinal} of the model falls outside the decoded asset")]
     OutsideExtent { ordinal: i64 },
-    /// The stated tempo cannot be expressed as a beat length in frames.
     #[error("the stated tempo has no representable beat length in frames")]
     Tempo,
-    /// A beat ordinal cannot be extended without leaving its own range.
     #[error("beat ordinal {ordinal} cannot be extended to the stated extent")]
     Ordinal { ordinal: i64 },
     #[error(transparent)]
@@ -45,18 +36,10 @@ pub enum BeatGridModelError {
 }
 
 impl BeatGridSnapshot {
-    /// Materializes a served beat grid on one decoded-source axis.
-    ///
-    /// Marked beats carry the geometry: consecutive ordinals state the exact
-    /// interval tempo between them, and the spans before the first and after
-    /// the last marker are extended at the stated BPM. The two are never
-    /// averaged, so a marked run keeps the tempo it was measured at.
+    /// Prepares a served grid on its decoded clock and freezes its map protocol.
     ///
     /// # Errors
-    ///
-    /// Returns [`BeatGridModelError`] when a beat of the model falls outside
-    /// the decoded asset, when the stated tempo has no representable beat
-    /// length, or when the resulting geometry is not a valid segment set.
+    /// Returns an error when geometry, native extent, tempo or meter cannot be represented.
     pub fn model(
         id: BeatGridId,
         revision: BeatGridRevision,
@@ -64,284 +47,382 @@ impl BeatGridSnapshot {
         axis: AssetAxis,
     ) -> Result<Self, BeatGridModelError> {
         let raw = model.as_raw();
-        let rate = f64::from(axis.sample_rate().get());
-        let beat_frames = rate * consts::MODEL_SECONDS_PER_MINUTE / raw.bpm;
-        let meter = meter_facts(raw)?;
-        let anchors = anchors(raw, axis, rate)?;
-        let segments = segments(
-            &anchors,
-            beat_frames,
-            horizon(axis, raw.duration, rate),
-            meter,
-        )?;
-        Self::segments(
+        let frames = match axis.extent() {
+            AssetExtent::Bounded(frames) => Some(frames),
+            AssetExtent::Unknown => None,
+        };
+        let state = match (raw.state, frames) {
+            (WireState::Final, Some(_)) => BeatGridState::Complete,
+            _ => BeatGridState::Building,
+        };
+        let source = SourceGrid::new(
+            model.geometry(),
+            axis.sample_rate(),
+            frames,
+            state == BeatGridState::Complete,
+        )
+        .map_err(|error| preparation_error(error, axis))?;
+        let meter = raw
+            .meter
+            .map(|meter| {
+                Meter::new(meter.beats_per_bar.get())
+                    .map(|value| value.with_downbeat(BeatOrdinal::new(meter.origin_beat_ordinal)))
+            })
+            .transpose()?;
+        Self::freeze(ModelGridView {
             id,
             revision,
-            state(raw.state, axis),
-            SegmentSet::new(MapAxis::Asset(axis), segments)?,
-        )
+            axis,
+            state,
+            source,
+            raw: raw.clone(),
+            meter,
+        })
         .map_err(BeatGridModelError::from)
     }
 }
 
-/// One beat of the model placed on the decoded axis.
-#[derive(Clone, Copy, Debug)]
-struct Anchor {
-    evidence: BeatEvidence,
-    frame: f64,
-    ordinal: i64,
+fn preparation_error(error: SourceGridError, axis: AssetAxis) -> BeatGridModelError {
+    match error {
+        SourceGridError::OutsideExtent { ordinal } => BeatGridModelError::OutsideExtent { ordinal },
+        SourceGridError::Ordinal { ordinal } => BeatGridModelError::Ordinal { ordinal },
+        SourceGridError::Coordinate => {
+            BeatGridModelError::Coordinate(MapCoordinateError::NonFinite)
+        }
+        SourceGridError::Tempo => BeatGridModelError::Tempo,
+        SourceGridError::IncompleteAxis => {
+            BeatGridModelError::Snapshot(BeatGridSnapshotError::InvalidState {
+                axis: MapAxis::Asset(axis),
+                state: BeatGridState::Complete,
+            })
+        }
+        SourceGridError::InexactStartOrdinal { .. } => {
+            BeatGridModelError::Segment(SegmentError::InexactOrdinal {
+                endpoint: SegmentEndpoint::Start,
+            })
+        }
+        SourceGridError::InexactEndOrdinal { .. } => {
+            BeatGridModelError::Segment(SegmentError::InexactOrdinal {
+                endpoint: SegmentEndpoint::End,
+            })
+        }
+        SourceGridError::NonIncreasingPosition => {
+            BeatGridModelError::Segment(SegmentError::NonIncreasingPosition)
+        }
+        SourceGridError::NonIncreasingBeat => {
+            BeatGridModelError::Segment(SegmentError::NonIncreasingBeat)
+        }
+        SourceGridError::IntervalOutsideExtent { index } => {
+            BeatGridModelError::Segment(SegmentError::OutsideExtent { index })
+        }
+        SourceGridError::IntervalTempo { index } => {
+            BeatGridModelError::Segment(SegmentError::InvalidTempo { index })
+        }
+    }
 }
 
-/// The model's beats on the decoded axis, or the origin a BPM-only grid
-/// assumes.
-///
-/// A grid that states nothing but a tempo has a geometry and no proven phase,
-/// so the assumed origin enters as extrapolated evidence and the bar phase it
-/// implies stays unproven.
-fn anchors(
-    raw: &RawBeatGrid,
+#[derive(Debug)]
+struct ModelGridView {
+    id: BeatGridId,
+    revision: BeatGridRevision,
     axis: AssetAxis,
-    rate: f64,
-) -> Result<Vec<Anchor>, BeatGridModelError> {
-    if raw.beats.is_empty() {
-        return Ok(vec![Anchor {
-            ordinal: 0,
-            frame: 0.0,
-            evidence: BeatEvidence::Extrapolated,
-        }]);
-    }
-    raw.beats
-        .iter()
-        .map(|beat| anchor(*beat, axis, rate))
-        .collect()
+    state: BeatGridState,
+    source: SourceGrid,
+    raw: RawBeatGrid,
+    meter: Option<Meter>,
 }
 
-/// One beat of the model on the decoded axis.
-///
-/// A beat nothing observed was placed by fitting, so its presence in the
-/// served array is no evidence that anything was heard there.
-fn anchor(beat: GridBeat, axis: AssetAxis, rate: f64) -> Result<Anchor, BeatGridModelError> {
-    let frame = beat.at * rate;
-    if !axis.contains_or_eof(AssetFrame::new(frame)?) {
-        return Err(BeatGridModelError::OutsideExtent {
-            ordinal: beat.ordinal,
-        });
+impl ModelGridView {
+    fn position<T>(&self, position: MapPoint<MapPosition>) -> Result<AssetFrame, BeatGridQuery<T>> {
+        if let Some(stale) = stale(self, position.stamp()) {
+            return Err(stale);
+        }
+        let MapPosition::Asset(frame) = *position.value() else {
+            return Err(BeatGridQuery::Unavailable(
+                BeatGridUnavailable::AxisMismatch,
+            ));
+        };
+        if !self.axis.contains_or_eof(frame) {
+            return Err(BeatGridQuery::OutsideDomain);
+        }
+        Ok(frame)
     }
-    Ok(Anchor {
-        frame,
-        ordinal: beat.ordinal,
-        evidence: if beat.confidence.is_some() {
+
+    fn missing_position<T>(&self, position: MapPosition) -> BeatGridQuery<T> {
+        if self.state == BeatGridState::Complete {
+            BeatGridQuery::OutsideDomain
+        } else {
+            BeatGridQuery::Uncovered {
+                required: MapRegion::point(position),
+            }
+        }
+    }
+
+    fn missing_beat<T>(&self, beat: f64) -> BeatGridQuery<T> {
+        if self.state == BeatGridState::Complete {
+            BeatGridQuery::OutsideDomain
+        } else {
+            let frame = self.source.uncovered_frame_at_beat(beat);
+            let position = AssetFrame::new(frame).map_or_else(
+                |_| unreachable!("prepared missing boundary is a finite native frame"),
+                MapPosition::Asset,
+            );
+            BeatGridQuery::Uncovered {
+                required: MapRegion::point(position),
+            }
+        }
+    }
+
+    fn frame_evidence(&self, frame: f64, frames: &RangeInclusive<f64>) -> BeatEvidence {
+        let evidence_at = |frame| {
+            self.raw
+                .beats
+                .iter()
+                .find(|beat| beat.at * f64::from(self.axis.sample_rate().get()) == frame)
+                .map(|beat| {
+                    if beat.confidence.is_some() {
+                        BeatEvidence::Observed
+                    } else {
+                        BeatEvidence::Interpolated
+                    }
+                })
+        };
+        if let Some(evidence) = evidence_at(frame) {
+            return evidence;
+        }
+        match (evidence_at(*frames.start()), evidence_at(*frames.end())) {
+            (Some(BeatEvidence::Observed), Some(BeatEvidence::Observed)) => BeatEvidence::Observed,
+            (Some(_), Some(_)) => BeatEvidence::Interpolated,
+            _ => BeatEvidence::Extrapolated,
+        }
+    }
+
+    fn interval_evidence(&self, frames: &RangeInclusive<f64>) -> BeatEvidence {
+        let first = self
+            .raw
+            .beats
+            .first()
+            .map(|beat| beat.at * f64::from(self.axis.sample_rate().get()));
+        let last = self
+            .raw
+            .beats
+            .last()
+            .map(|beat| beat.at * f64::from(self.axis.sample_rate().get()));
+        if first.is_none_or(|first| *frames.start() < first)
+            || last.is_none_or(|last| *frames.end() > last)
+        {
+            return BeatEvidence::Extrapolated;
+        }
+        let at = |frame| {
+            self.raw
+                .beats
+                .iter()
+                .find(|beat| beat.at * f64::from(self.axis.sample_rate().get()) == frame)
+                .and_then(|beat| beat.confidence)
+        };
+        if at(*frames.start()).is_some() && at(*frames.end()).is_some() {
             BeatEvidence::Observed
         } else {
             BeatEvidence::Interpolated
-        },
-    })
-}
-
-/// The frame past which nothing is claimed.
-///
-/// Both the stated duration and the decoded extent bound the geometry, so the
-/// horizon is whichever of them arrives first; with neither, the grid reaches
-/// no further than its last marked beat.
-fn horizon(axis: AssetAxis, duration: Option<f64>, rate: f64) -> Option<f64> {
-    let extent = match axis.extent() {
-        AssetExtent::Bounded(frame_count) => frame_count.to_f64(),
-        AssetExtent::Unknown => None,
-    };
-    let stated = duration.map(|seconds| seconds * rate);
-    match (extent, stated) {
-        (Some(extent), Some(stated)) => Some(extent.min(stated)),
-        (bound, None) | (None, bound) => bound,
-    }
-}
-
-/// The meter the model states, with the evidence its downbeats give it.
-fn meter_facts(raw: &RawBeatGrid) -> Result<Option<(Meter, BeatEvidence)>, BeatGridModelError> {
-    let Some(stated) = raw.meter else {
-        return Ok(None);
-    };
-    let meter = Meter::new(stated.beats_per_bar.get())?
-        .with_downbeat(BeatOrdinal::new(stated.origin_beat_ordinal));
-    let evidence = if raw.downbeats.iter().any(|it| it.confidence.is_some()) {
-        BeatEvidence::Observed
-    } else if raw.downbeats.is_empty() {
-        BeatEvidence::Extrapolated
-    } else {
-        BeatEvidence::Interpolated
-    };
-    Ok(Some((meter, evidence)))
-}
-
-/// A bounded grid the producer will not revise is complete; everything else
-/// may still gain coverage, and an asset whose end nobody has established
-/// cannot be complete whatever the producer says about its own revisions.
-fn state(wire: WireState, axis: AssetAxis) -> BeatGridState {
-    match (wire, axis.extent()) {
-        (WireState::Final, AssetExtent::Bounded(_)) => BeatGridState::Complete,
-        _ => BeatGridState::Building,
-    }
-}
-
-fn segments(
-    anchors: &[Anchor],
-    beat_frames: f64,
-    horizon: Option<f64>,
-    meter: Option<(Meter, BeatEvidence)>,
-) -> Result<Vec<MapSegment>, BeatGridModelError> {
-    if !beat_frames.is_finite() || beat_frames <= 0.0 {
-        return Err(BeatGridModelError::Tempo);
-    }
-    let (Some(first), Some(last)) = (anchors.first(), anchors.last()) else {
-        return Ok(Vec::new());
-    };
-    let mut segments: Vec<MapSegment> = Vec::new();
-    segments.extend(head(*first, beat_frames, meter)?);
-    for pair in anchors.windows(2) {
-        let (start, end) = (pair[0], pair[1]);
-        let evidence =
-            if start.evidence == BeatEvidence::Observed && end.evidence == BeatEvidence::Observed {
-                BeatEvidence::Observed
-            } else {
-                BeatEvidence::Interpolated
-            };
-        segments.push(MapSegment::new(
-            marker(start)?,
-            marker(end)?,
-            facts(evidence, meter, evidence),
-        )?);
-    }
-    segments.extend(tail(*last, beat_frames, horizon, meter)?);
-    Ok(segments)
-}
-
-/// The whole beats before the first marked one, at the stated tempo.
-fn head(
-    first: Anchor,
-    beat_frames: f64,
-    meter: Option<(Meter, BeatEvidence)>,
-) -> Result<Option<MapSegment>, BeatGridModelError> {
-    let beats = whole_beats(first.frame / beat_frames)?;
-    if beats == 0 {
-        return Ok(None);
-    }
-    let ordinal = first
-        .ordinal
-        .checked_sub(beats)
-        .ok_or(BeatGridModelError::Ordinal {
-            ordinal: first.ordinal,
-        })?;
-    let start = Anchor {
-        ordinal,
-        frame: beat_frames.mul_add(-beats.to_f64().unwrap_or_default(), first.frame),
-        evidence: BeatEvidence::Extrapolated,
-    };
-    Ok(Some(MapSegment::new(
-        marker(start)?,
-        marker(first)?,
-        extrapolated(meter),
-    )?))
-}
-
-/// The whole beats after the last marked one, at the stated tempo, reaching no
-/// further than the horizon.
-fn tail(
-    last: Anchor,
-    beat_frames: f64,
-    horizon: Option<f64>,
-    meter: Option<(Meter, BeatEvidence)>,
-) -> Result<Option<MapSegment>, BeatGridModelError> {
-    let Some(horizon) = horizon.filter(|horizon| *horizon > last.frame) else {
-        return Ok(None);
-    };
-    let beats = whole_beats((horizon - last.frame) / beat_frames)?;
-    if beats == 0 {
-        return Ok(None);
-    }
-    let ordinal = last
-        .ordinal
-        .checked_add(beats)
-        .ok_or(BeatGridModelError::Ordinal {
-            ordinal: last.ordinal,
-        })?;
-    let end = Anchor {
-        ordinal,
-        frame: beat_frames.mul_add(beats.to_f64().unwrap_or_default(), last.frame),
-        evidence: BeatEvidence::Extrapolated,
-    };
-    Ok(Some(MapSegment::new(
-        marker(last)?,
-        marker(end)?,
-        extrapolated(meter),
-    )?))
-}
-
-fn whole_beats(beats: f64) -> Result<i64, BeatGridModelError> {
-    beats
-        .floor()
-        .to_i64()
-        .ok_or(BeatGridModelError::Tempo)
-        .map(|beats| beats.max(0))
-}
-
-/// The facts of a span the stated tempo extends rather than a marker describes.
-///
-/// A meter carried into such a span is no longer observed there, however it
-/// was established where it was stated.
-fn extrapolated(meter: Option<(Meter, BeatEvidence)>) -> SegmentFacts {
-    facts(
-        BeatEvidence::Extrapolated,
-        meter,
-        BeatEvidence::Extrapolated,
-    )
-}
-
-fn facts(
-    evidence: BeatEvidence,
-    meter: Option<(Meter, BeatEvidence)>,
-    meter_evidence: BeatEvidence,
-) -> SegmentFacts {
-    SegmentFacts::new(
-        evidence,
-        FrameUncertainty::ZERO,
-        meter.map(|(meter, stated)| {
-            MeterFacts::new(
-                meter,
-                weaker(stated, meter_evidence),
-                FrameUncertainty::ZERO,
-            )
-        }),
-    )
-}
-
-/// The evidence a span may claim: never stronger than the meter was stated
-/// with, never stronger than the span it is carried into.
-const fn weaker(stated: BeatEvidence, span: BeatEvidence) -> BeatEvidence {
-    match (stated, span) {
-        (BeatEvidence::Extrapolated, _) | (_, BeatEvidence::Extrapolated) => {
-            BeatEvidence::Extrapolated
         }
-        _ => stated,
+    }
+
+    fn region(frames: &RangeInclusive<f64>) -> MapRegion {
+        MapRegion::between(
+            MapPosition::Asset(
+                AssetFrame::new(*frames.start()).unwrap_or_else(|_| {
+                    unreachable!("prepared interval begins on its native axis")
+                }),
+            ),
+            MapPosition::Asset(
+                AssetFrame::new(*frames.end())
+                    .unwrap_or_else(|_| unreachable!("prepared interval ends on its native axis")),
+            ),
+        )
     }
 }
 
-fn marker(anchor: Anchor) -> Result<BeatMarker, BeatGridModelError> {
-    Ok(BeatMarker::new(
-        AssetFrame::new(anchor.frame)?.into(),
-        Some(BeatOrdinal::new(anchor.ordinal)),
-        anchor.evidence,
-        FrameUncertainty::ZERO,
-    ))
+impl BeatGridView for ModelGridView {
+    fn axis(&self) -> MapAxis {
+        MapAxis::Asset(self.axis)
+    }
+    fn id(&self) -> BeatGridId {
+        self.id
+    }
+    fn revision(&self) -> BeatGridRevision {
+        self.revision
+    }
+    fn state(&self) -> BeatGridState {
+        self.state
+    }
+
+    fn beat_at(
+        &self,
+        position: MapPoint<MapPosition>,
+    ) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>> {
+        let frame = f64::from(match self.position(position) {
+            Ok(frame) => frame,
+            Err(error) => return error,
+        });
+        let Some(beat) = self
+            .source
+            .beat_at_frame(frame)
+            .and_then(|beat| Beat::new(beat).ok())
+        else {
+            return self.missing_position(*position.value());
+        };
+        let Some((frames, _)) = self.source.interval_at_frame(frame) else {
+            return self.missing_position(*position.value());
+        };
+        BeatGridQuery::Resolved(BeatEstimate::new(
+            MapPoint::new(self.stamp(), beat),
+            self.frame_evidence(frame, &frames),
+            FrameUncertainty::ZERO,
+            self.stamp(),
+        ))
+    }
+
+    fn position_at(
+        &self,
+        beat: MapPoint<Beat>,
+    ) -> BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>> {
+        if let Some(stale) = stale(self, beat.stamp()) {
+            return stale;
+        }
+        let value = f64::from(*beat.value());
+        let Some(frame) = self.source.frame_at_beat(value) else {
+            return self.missing_beat(value);
+        };
+        let Some((frames, beats)) = self.source.interval_at_beat(value) else {
+            return self.missing_beat(value);
+        };
+        let position = MapPosition::Asset(
+            AssetFrame::new(frame)
+                .unwrap_or_else(|_| unreachable!("prepared beat resolves on its native axis")),
+        );
+        let evidence = if value == *beats.start() {
+            self.frame_evidence(*frames.start(), &frames)
+        } else if value == *beats.end() {
+            self.frame_evidence(*frames.end(), &frames)
+        } else {
+            self.interval_evidence(&frames)
+        };
+        BeatGridQuery::Resolved(BeatEstimate::new(
+            MapPoint::new(self.stamp(), position),
+            evidence,
+            FrameUncertainty::ZERO,
+            self.stamp(),
+        ))
+    }
+
+    fn tempo_at(
+        &self,
+        position: MapPoint<MapPosition>,
+    ) -> BeatGridQuery<BeatEstimate<crate::BeatsPerMinute>> {
+        let frame = f64::from(match self.position(position) {
+            Ok(frame) => frame,
+            Err(error) => return error,
+        });
+        let Some(tempo) = self
+            .source
+            .bpm_at_frame(frame)
+            .and_then(|tempo| crate::BeatsPerMinute::try_from(tempo).ok())
+        else {
+            return self.missing_position(*position.value());
+        };
+        let Some((frames, _)) = self.source.interval_at_frame(frame) else {
+            return self.missing_position(*position.value());
+        };
+        BeatGridQuery::Resolved(BeatEstimate::new(
+            tempo,
+            self.interval_evidence(&frames),
+            FrameUncertainty::ZERO,
+            self.stamp(),
+        ))
+    }
+
+    fn region_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatGridRegion> {
+        let frame = f64::from(match self.position(position) {
+            Ok(frame) => frame,
+            Err(error) => return error,
+        });
+        self.source.interval_at_frame(frame).map_or_else(
+            || self.missing_position(*position.value()),
+            |(frames, _)| BeatGridQuery::Resolved(BeatGridRegion::Bounded(Self::region(&frames))),
+        )
+    }
+
+    fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>> {
+        if let Some(stale) = stale(self, beat.stamp()) {
+            return stale;
+        }
+        let value = f64::from(*beat.value());
+        let Some((frames, _)) = self.source.interval_at_beat(value) else {
+            return self.missing_beat(value);
+        };
+        let Some(meter) = self.meter else {
+            return if self.state == BeatGridState::Building {
+                BeatGridQuery::Uncovered {
+                    required: Self::region(&frames),
+                }
+            } else {
+                BeatGridQuery::Unavailable(BeatGridUnavailable::NoMeter)
+            };
+        };
+        let stated = if self
+            .raw
+            .downbeats
+            .iter()
+            .any(|beat| beat.confidence.is_some())
+        {
+            BeatEvidence::Observed
+        } else if self.raw.downbeats.is_empty() {
+            BeatEvidence::Extrapolated
+        } else {
+            BeatEvidence::Interpolated
+        };
+        let evidence = if stated == BeatEvidence::Extrapolated
+            || self.interval_evidence(&frames) == BeatEvidence::Extrapolated
+        {
+            BeatEvidence::Extrapolated
+        } else {
+            stated
+        };
+        BeatGridQuery::Resolved(BeatEstimate::new(
+            meter,
+            evidence,
+            FrameUncertainty::ZERO,
+            self.stamp(),
+        ))
+    }
+
+    fn source_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<AssetFrame> {
+        match self.position(position) {
+            Ok(frame) => BeatGridQuery::Resolved(frame),
+            Err(error) => error,
+        }
+    }
+
+    fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64> {
+        self.source_at(position)
+            .and_then(|_| BeatGridQuery::Resolved(1.0))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::num::{NonZeroU16, NonZeroU32};
 
-    use kithara_beat::{GridDownbeat, Meter as WireMeter};
+    use kithara_beat::{GridBeat, GridDownbeat};
+    use kithara_sync::Meter as WireMeter;
     use kithara_test_utils::kithara;
+    use num_traits::ToPrimitive;
 
     use super::*;
-    use crate::{Beat, BeatGridQuery, BeatGridUnavailable, MapPoint, MapPosition, SessionFrame};
+    use crate::{
+        Beat, BeatGridQuery, BeatGridUnavailable, BeatMarker, MapPoint, MapPosition, MapSegment,
+        SegmentFacts, SegmentSet, SessionFrame, consts,
+    };
 
     fn rate(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).expect("invariant: fixture sample rate is non-zero")
@@ -535,18 +616,53 @@ mod tests {
 
     #[kithara::test]
     fn one_marked_beat_fixes_the_phase_the_tempo_extends() {
-        let grid = grid(
+        let original = grid(
             served(vec![beat(4, Some(1.0))]),
             bounded(consts::SAMPLE_RATE, 4.0),
         );
 
         assert_eq!(
-            beat_at(&grid, 96_000.0),
+            beat_at(&original, 96_000.0),
             BeatGridQuery::Resolved(4.0),
             "the single marked beat keeps the ordinal the producer gave it"
         );
-        assert_eq!(beat_at(&grid, 24_000.0), BeatGridQuery::Resolved(1.0));
-        assert_eq!(beat_at(&grid, 144_000.0), BeatGridQuery::Resolved(6.0));
+        assert_eq!(beat_at(&original, 24_000.0), BeatGridQuery::Resolved(1.0));
+        assert_eq!(beat_at(&original, 144_000.0), BeatGridQuery::Resolved(6.0));
+
+        let first_frame = 20_571.0;
+        let partial = grid(
+            RawBeatGrid {
+                bpm: 140.0,
+                ..served(vec![GridBeat {
+                    ordinal: 0,
+                    at: first_frame / 48_000.0,
+                    confidence: Some(1.0),
+                }])
+            },
+            bounded(48_000, 12.0),
+        );
+        let initial = MapPoint::new(
+            partial.stamp(),
+            MapPosition::Asset(AssetFrame::new(0.0).expect("asset origin")),
+        );
+        let BeatGridQuery::Resolved(origin) = partial.beat_at(initial) else {
+            panic!("the partial pickup carries extrapolated geometry");
+        };
+        assert_eq!(origin.evidence(), BeatEvidence::Extrapolated);
+        assert_eq!(
+            f64::from(*origin.value().value()),
+            -first_frame / (48_000.0 * 60.0 / 140.0)
+        );
+        let BeatGridQuery::Resolved(round_trip) = partial.position_at(*origin.value()) else {
+            panic!("the partial beat maps back to the asset origin");
+        };
+        assert_eq!(*round_trip.value().value(), *initial.value());
+        let BeatGridQuery::Resolved(tempo) = partial.tempo_at(initial) else {
+            panic!("the pickup preserves the stated tempo");
+        };
+        assert!((f64::from(*tempo.value()) - 140.0).abs() < 1e-12);
+        assert_eq!(beat_at(&partial, first_frame), BeatGridQuery::Resolved(0.0));
+        assert_eq!(beat_at(&partial, 576_001.0), BeatGridQuery::OutsideDomain);
     }
 
     #[kithara::test]
@@ -723,16 +839,20 @@ mod tests {
     #[kithara::test]
     fn a_tempo_with_no_representable_beat_length_is_refused() {
         assert_eq!(
-            segments(
-                &[Anchor {
-                    ordinal: 0,
-                    frame: 0.0,
-                    evidence: BeatEvidence::Observed,
-                }],
-                f64::INFINITY,
-                Some(48_000.0),
-                None,
+            SourceGrid::new(
+                checked(RawBeatGrid {
+                    bpm: f64::MIN_POSITIVE,
+                    ..served(vec![beat(0, Some(1.0))])
+                })
+                .geometry(),
+                rate(consts::SAMPLE_RATE),
+                Some(48_000),
+                true,
             )
+            .map_err(|error| preparation_error(
+                error,
+                AssetAxis::new(rate(consts::SAMPLE_RATE), AssetExtent::Bounded(48_000))
+            ))
             .err(),
             Some(BeatGridModelError::Tempo)
         );
@@ -761,5 +881,339 @@ mod tests {
             )),
             BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch)
         );
+    }
+
+    #[kithara::test]
+    fn served_native_geometry_matches_independent_manual_intervals() {
+        for sample_rate in consts::RATES {
+            let scale = f64::from(sample_rate);
+            let cases = [
+                (
+                    vec![(0.0, 0), (0.4, 1), (2.2, 4), (2.7, 5)],
+                    120.0,
+                    Some(4.0),
+                    Some(4.0),
+                    WireState::Final,
+                    vec![
+                        (0.0, 0.4, 0.0, 1.0),
+                        (0.4, 2.2, 1.0, 4.0),
+                        (2.2, 2.7, 4.0, 5.0),
+                        (2.7, 3.7, 5.0, 7.0),
+                    ],
+                ),
+                (
+                    vec![(0.0, 0), (0.4, 1), (2.2, 4)],
+                    120.0,
+                    None,
+                    None,
+                    WireState::Final,
+                    vec![(0.0, 0.4, 0.0, 1.0), (0.4, 2.2, 1.0, 4.0)],
+                ),
+                (
+                    vec![(0.0, 0), (0.4, 1), (2.2, 4), (2.7, 5)],
+                    120.0,
+                    Some(4.0),
+                    Some(4.0),
+                    WireState::Provisional,
+                    vec![
+                        (0.0, 0.4, 0.0, 1.0),
+                        (0.4, 2.2, 1.0, 4.0),
+                        (2.2, 2.7, 4.0, 5.0),
+                        (2.7, 3.7, 5.0, 7.0),
+                    ],
+                ),
+                (
+                    vec![],
+                    120.0,
+                    Some(2.0),
+                    Some(2.0),
+                    WireState::Final,
+                    vec![(0.0, 2.0, 0.0, 4.0)],
+                ),
+                (
+                    vec![(2.0, 4)],
+                    120.0,
+                    Some(4.0),
+                    Some(4.0),
+                    WireState::Final,
+                    vec![(0.0, 2.0, 0.0, 4.0), (2.0, 4.0, 4.0, 8.0)],
+                ),
+                (
+                    vec![(0.0, 0), (1.0, 2)],
+                    120.0,
+                    Some(1.0),
+                    Some(4.0),
+                    WireState::Final,
+                    vec![(0.0, 1.0, 0.0, 2.0)],
+                ),
+            ];
+            for (beats, bpm, duration, decoded, state, spans) in cases {
+                let raw = RawBeatGrid {
+                    bpm,
+                    duration,
+                    state,
+                    beats: beats
+                        .into_iter()
+                        .map(|(at, ordinal)| GridBeat {
+                            at,
+                            ordinal,
+                            confidence: Some(1.0),
+                        })
+                        .collect(),
+                    ..served(Vec::new())
+                };
+                let axis = AssetAxis::new(
+                    rate(sample_rate),
+                    decoded.map_or(AssetExtent::Unknown, |seconds| {
+                        AssetExtent::Bounded((seconds * scale).to_u64().expect("fixture extent"))
+                    }),
+                );
+                assert_manual_geometry(raw, axis, &spans);
+            }
+            let first = 20_571.0 / 48_000.0;
+            let head_beat = -(first * scale) / (scale * 60.0 / 140.0);
+            assert_manual_geometry(
+                RawBeatGrid {
+                    bpm: 140.0,
+                    duration: None,
+                    beats: vec![GridBeat {
+                        at: first,
+                        ordinal: 0,
+                        confidence: Some(1.0),
+                    }],
+                    ..served(Vec::new())
+                },
+                AssetAxis::new(rate(sample_rate), AssetExtent::Unknown),
+                &[(0.0, first, head_beat, 0.0)],
+            );
+        }
+        let axis = AssetAxis::new(rate(48_000), AssetExtent::Unknown);
+        let inexact = checked(RawBeatGrid {
+            beats: vec![
+                GridBeat {
+                    at: 0.0,
+                    ordinal: 9_007_199_254_740_993,
+                    confidence: None,
+                },
+                GridBeat {
+                    at: 0.5,
+                    ordinal: 9_007_199_254_740_994,
+                    confidence: None,
+                },
+            ],
+            ..served(Vec::new())
+        });
+        assert_eq!(
+            BeatGridSnapshot::model(
+                BeatGridId::allocate().expect("grid id"),
+                BeatGridRevision::first(),
+                &inexact,
+                axis
+            )
+            .err(),
+            Some(BeatGridModelError::Segment(SegmentError::InexactOrdinal {
+                endpoint: SegmentEndpoint::Start
+            }))
+        );
+        let collapsed = checked(RawBeatGrid {
+            beats: vec![
+                GridBeat {
+                    at: 0.24324324324324326,
+                    ordinal: 0,
+                    confidence: None,
+                },
+                GridBeat {
+                    at: 0.24324324324324328,
+                    ordinal: 1,
+                    confidence: None,
+                },
+            ],
+            ..served(Vec::new())
+        });
+        assert_eq!(
+            BeatGridSnapshot::model(
+                BeatGridId::allocate().expect("grid id"),
+                BeatGridRevision::first(),
+                &collapsed,
+                axis
+            )
+            .err(),
+            Some(BeatGridModelError::Segment(
+                SegmentError::NonIncreasingPosition
+            ))
+        );
+        let model = checked(RawBeatGrid {
+            beats: vec![
+                GridBeat {
+                    at: 1.0,
+                    ordinal: 0,
+                    confidence: None,
+                },
+                GridBeat {
+                    at: 1.5,
+                    ordinal: 1,
+                    confidence: Some(1.0),
+                },
+            ],
+            ..served(Vec::new())
+        });
+        let grid = BeatGridSnapshot::model(
+            BeatGridId::allocate().expect("grid id"),
+            BeatGridRevision::first(),
+            &model,
+            axis,
+        )
+        .expect("mixed evidence");
+        let point = MapPoint::new(
+            grid.stamp(),
+            Beat::new(f64::from_bits(1.0_f64.to_bits() - 1)).expect("interior beat"),
+        );
+        let BeatGridQuery::Resolved(position) = grid.position_at(point) else {
+            panic!("interior inverse resolves");
+        };
+        assert_eq!(position.evidence(), BeatEvidence::Interpolated);
+        assert_eq!(
+            *position.value().value(),
+            MapPosition::Asset(AssetFrame::new(72_000.0).expect("rounded endpoint"))
+        );
+        let large = checked(RawBeatGrid {
+            beats: vec![
+                GridBeat {
+                    at: 1e20,
+                    ordinal: 0,
+                    confidence: None,
+                },
+                GridBeat {
+                    at: 1e20 + 32_768.0,
+                    ordinal: 1,
+                    confidence: None,
+                },
+            ],
+            ..served(Vec::new())
+        });
+        let grid = BeatGridSnapshot::model(
+            BeatGridId::allocate().expect("grid id"),
+            BeatGridRevision::first(),
+            &large,
+            axis,
+        )
+        .expect("finite native geometry exceeds Duration without invalidating Warp");
+        let point = MapPoint::new(
+            grid.stamp(),
+            MapPosition::Asset(AssetFrame::new(1e20 * 48_000.0).expect("native frame")),
+        );
+        assert!(matches!(grid.beat_at(point), BeatGridQuery::Resolved(_)));
+    }
+
+    fn assert_manual_geometry(raw: RawBeatGrid, axis: AssetAxis, spans: &[(f64, f64, f64, f64)]) {
+        let scale = f64::from(axis.sample_rate().get());
+        let model = checked(raw);
+        let actual = BeatGridSnapshot::model(
+            BeatGridId::allocate().expect("grid id"),
+            BeatGridRevision::first(),
+            &model,
+            axis,
+        )
+        .expect("served geometry");
+        let marker = |frame, ordinal| {
+            BeatMarker::new(
+                MapPosition::Asset(AssetFrame::new(frame).expect("native frame")),
+                Some(BeatOrdinal::new(ordinal)),
+                BeatEvidence::Observed,
+                FrameUncertainty::ZERO,
+            )
+        };
+        let segments: Vec<_> = spans
+            .iter()
+            .map(|&(start, end, first, last)| {
+                let facts = SegmentFacts::new(BeatEvidence::Observed, FrameUncertainty::ZERO, None);
+                let end_frame = model
+                    .as_raw()
+                    .beats
+                    .last()
+                    .filter(|beat| end > beat.at)
+                    .map_or(end * scale, |beat| {
+                        (scale * 60.0 / model.as_raw().bpm).mul_add(
+                            last - beat.ordinal.to_f64().expect("source ordinal"),
+                            beat.at * scale,
+                        )
+                    });
+                let end = marker(end_frame, last.to_i64().expect("integral end"));
+                if first.fract() == 0.0 {
+                    MapSegment::new(
+                        marker(start * scale, first.to_i64().expect("integral start")),
+                        end,
+                        facts,
+                    )
+                    .expect("manual affine interval")
+                } else {
+                    crate::segment::partial_start(
+                        MapPosition::Asset(AssetFrame::new(start * scale).expect("start")),
+                        Beat::new(first).expect("fractional pickup"),
+                        end,
+                        facts,
+                    )
+                    .expect("manual pickup")
+                }
+            })
+            .collect();
+        let expected = BeatGridSnapshot::segments(
+            actual.id(),
+            actual.revision(),
+            actual.state(),
+            SegmentSet::new(MapAxis::Asset(axis), segments).expect("manual segment set"),
+        )
+        .expect("manual grid");
+        let points = spans
+            .iter()
+            .flat_map(|&(start, end, _, _)| {
+                [start * scale, (start + end) * scale / 2.0, end * scale]
+            })
+            .chain([
+                0.0,
+                scale * 0.4,
+                scale * 2.2,
+                scale * 3.8,
+                scale * 4.0,
+                scale * 4.0 + 1.0,
+            ]);
+        for frame in points {
+            let position = MapPoint::new(
+                actual.stamp(),
+                MapPosition::Asset(AssetFrame::new(frame).expect("query frame")),
+            );
+            let value = |answer: BeatGridQuery<BeatEstimate<MapPoint<Beat>>>| {
+                answer.and_then(|beat| BeatGridQuery::Resolved(f64::from(*beat.value().value())))
+            };
+            assert_eq!(
+                value(actual.beat_at(position)),
+                value(expected.beat_at(position)),
+                "native beat at {frame}"
+            );
+            assert_eq!(
+                actual.region_at(position),
+                expected.region_at(position),
+                "following interval at {frame}"
+            );
+            let value = |answer: BeatGridQuery<BeatEstimate<crate::BeatsPerMinute>>| {
+                answer.and_then(|tempo| BeatGridQuery::Resolved(f64::from(*tempo.value())))
+            };
+            assert_eq!(
+                value(actual.tempo_at(position)),
+                value(expected.tempo_at(position)),
+                "local tempo at {frame}"
+            );
+            if let BeatGridQuery::Resolved(beat) = actual.beat_at(position) {
+                let point = *beat.value();
+                let value = |answer: BeatGridQuery<BeatEstimate<MapPoint<MapPosition>>>| {
+                    answer.and_then(|position| BeatGridQuery::Resolved(*position.value().value()))
+                };
+                assert_eq!(
+                    value(actual.position_at(point)),
+                    value(expected.position_at(point)),
+                    "inverse native coordinate at {frame}"
+                );
+            }
+        }
     }
 }

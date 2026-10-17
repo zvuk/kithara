@@ -11,8 +11,8 @@ pub(crate) struct Extent {
 }
 
 impl Extent {
-    pub(crate) fn claim(&mut self, duration: Option<Duration>, rate: NonZeroU32) {
-        self.claimed = self.claimed.max(frames_for(duration, rate));
+    pub(crate) fn claim(&mut self, raw_end: Option<Duration>, rate: NonZeroU32) {
+        self.claimed = self.claimed.max(frame_at(raw_end, rate));
     }
 
     pub(crate) fn deliver(&mut self, range: &Range<u64>) {
@@ -40,9 +40,11 @@ impl Extent {
     }
 }
 
-fn frames_for(duration: Option<Duration>, rate: NonZeroU32) -> Option<u64> {
-    let frames = AudioSpec::new(1, rate).frames_for(duration?).ok()?.get();
-    u64::try_from(frames).ok().filter(|frames| *frames > 0)
+fn frame_at(raw_end: Option<Duration>, rate: NonZeroU32) -> Option<u64> {
+    AudioSpec::new(1, rate)
+        .frame_at(raw_end?)
+        .ok()
+        .filter(|frames| *frames > 0)
 }
 
 #[cfg(test)]
@@ -150,5 +152,14 @@ mod tests {
         let mut extent = Extent::default();
         extent.prove_end(50_000);
         assert_eq!(extent.frames(), Some(50_000));
+    }
+    #[kithara::test]
+    fn an_absolute_raw_endpoint_round_trips_a_subsecond_source_frame() {
+        let mut extent = Extent::default();
+        let endpoint = kithara_signal::AudioSpec::new(1, rate())
+            .duration_for(1105)
+            .expect("the raw endpoint is representable");
+        extent.claim(Some(endpoint), rate());
+        assert_eq!(extent.frames(), Some(1105));
     }
 }

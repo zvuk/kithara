@@ -4,6 +4,7 @@ use std::{
 };
 
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_platform::time::Duration;
 use kithara_resampler::ResamplerBackend;
 use kithara_signal::{AudioChunk, FrameCoverage};
 use num_traits::cast::ToPrimitive;
@@ -27,6 +28,7 @@ pub(crate) enum Ingest {
     Covered,
     Deferred,
     ForeignRate,
+    ForeignClock,
 }
 
 #[derive(fieldwork::Fieldwork)]
@@ -38,6 +40,9 @@ where
     pub(super) fingerprint: AnalysisFingerprint,
     pub(super) token: AnalysisToken,
     pub(super) source_sample_rate: NonZeroU32,
+    pub(super) media_origin: Option<Duration>,
+    #[field(get, copy, vis = "pub(crate)")]
+    pub(super) visible_origin: Option<Duration>,
     pub(super) pools: PoolRegion<S>,
     #[field(get, vis = "pub(crate)")]
     pub(super) coverage: RangeSet<u64>,
@@ -52,6 +57,34 @@ where
     B: ResamplerBackend,
     S: HasPool<f32>,
 {
+    fn take_origins(
+        &mut self,
+        media_origin: Option<Duration>,
+        visible_origin: Option<Duration>,
+    ) -> bool {
+        if self
+            .media_origin
+            .zip(media_origin)
+            .is_some_and(|(original, offered)| original != offered)
+            || self
+                .visible_origin
+                .zip(visible_origin)
+                .is_some_and(|(original, offered)| original != offered)
+        {
+            warn!(
+                original_media_origin = ?self.media_origin,
+                original_visible_origin = ?self.visible_origin,
+                ?media_origin,
+                ?visible_origin,
+                "analysis: original source clock facts differ; range dropped"
+            );
+            return false;
+        }
+        self.media_origin = self.media_origin.or(media_origin);
+        self.visible_origin = self.visible_origin.or(visible_origin);
+        true
+    }
+
     pub(crate) fn analysed(&self) -> &RangeSet<u64> {
         self.beat.coverage(&self.coverage)
     }
@@ -140,6 +173,9 @@ where
             return Ingest::ForeignRate;
         }
 
+        if !self.take_origins(chunk.meta.media_origin, chunk.meta.visible_origin) {
+            return Ingest::ForeignClock;
+        }
         let channels = usize::from(chunk.spec().channels.max(1));
         let range = chunk.meta.frame_range();
         self.ingest(
@@ -155,12 +191,22 @@ where
     pub(crate) fn push_mono(
         &mut self,
         mono: &[f32],
-        at: u64,
+        span: crate::producer::ring::Span,
         extent: &mut Extent,
         detector: Option<&mut beat::Detector>,
     ) -> Ingest {
+        if !self.take_origins(span.media_origin, span.visible_origin) {
+            return Ingest::ForeignClock;
+        }
         let frames = mono.len().to_u64().unwrap_or(0);
-        self.ingest(mono, 1, at..at + frames, Opens::Extends, extent, detector)
+        self.ingest(
+            mono,
+            1,
+            span.start..span.start + frames,
+            Opens::Extends,
+            extent,
+            detector,
+        )
     }
 
     pub(crate) fn restore(
@@ -184,6 +230,7 @@ where
         waveform::restore(&mut self.waveform, &self.pools, waveform_resume)?;
         self.beat.restore(&self.pools, resume.beat)?;
         self.coverage = analysis.coverage().clone();
+        self.media_origin = analysis.media_origin();
         self.settled = false;
         Ok(())
     }
@@ -211,6 +258,7 @@ where
             .token(self.token.clone())
             .revision(self.revision)
             .source_sample_rate(self.source_sample_rate)
+            .maybe_media_origin(self.media_origin)
             .maybe_extent(extent)
             .coverage(self.coverage.clone())
             .fingerprint(self.fingerprint.clone())

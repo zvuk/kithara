@@ -10,9 +10,10 @@ use kithara::{
     resampler::NoResamplerBackend,
     signal::{AudioSpec, FrameCount, InterleavedView, SessionEpoch, SessionFrame},
     stretch::StretchKind,
+    sync::{SessionAnchor, SessionBeat},
     warp::{
-        Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapPoint,
-        SessionAnchor, SessionBeat, WarpConfig, WarpMap, WarpMapRevision, WarpPlan,
+        Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapPoint, WarpConfig,
+        WarpMap, WarpMapRevision,
     },
 };
 use kithara_integration_tests::{
@@ -23,7 +24,7 @@ use kithara_test_fixtures::assets::by_name;
 use num_traits::ToPrimitive;
 
 use crate::{
-    region::{CH, Presented, Timeline, render_configured_grid_with_updates},
+    region::{CH, Presented, Projection, Timeline, render_configured_grid_with_updates},
     test_pools::pools,
 };
 
@@ -100,6 +101,7 @@ struct Track {
 }
 
 impl Track {
+    #[kithara_test_utils::kithara::hang_watchdog]
     fn load(library: Library, start: Start, trajectories: &[Trajectory]) -> Self {
         let Library { name, extension } = library;
         let analysed = analysed_grid(name);
@@ -151,6 +153,7 @@ impl Track {
             .expect("a trajectory");
         let mut pcm = Vec::new();
         while pcm.len() < (first_frame + needed) * CH {
+            hang_tick!();
             match decoder
                 .next_chunk()
                 .unwrap_or_else(|error| panic!("decode `{name}`: {error:?}"))
@@ -159,6 +162,7 @@ impl Track {
                 DecoderChunkOutcome::Pending(reason) => panic!("`{name}` pending: {reason:?}"),
                 DecoderChunkOutcome::Eof => panic!("`{name}` ends before frame {needed}"),
             }
+            hang_reset!();
         }
         pcm.truncate((first_frame + needed) * CH);
         pcm.drain(..first_frame * CH);
@@ -241,10 +245,16 @@ fn source_end(name: &str, beats: &[(f64, f64)], last_beat: f64) -> usize {
     let margin = consts::SOURCE_MARGIN_BEATS
         .to_f64()
         .expect("margin fits f64");
-    source_frame(name, beats, last_beat.ceil() + margin)
-        .ceil()
+    let required = source_frame(name, beats, last_beat.ceil() + margin);
+    beats
+        .iter()
+        .find(|&&(_, frame)| frame >= required)
+        .unwrap_or_else(|| panic!("`{name}` has a complete beat past frame {required}"))
+        .1
+        .floor()
         .to_usize()
         .expect("frame fits usize")
+        + 1
 }
 
 /// The Host beat `trajectory` reaches at its end.
@@ -309,7 +319,7 @@ fn plan(
     anchor: SessionAnchor,
     activation: SessionFrame,
     revision: WarpMapRevision,
-) -> WarpPlan {
+) -> Projection {
     let target = BeatGridSnapshot::session(
         BeatGridId::allocate().expect("grid id"),
         BeatGridRevision::first(),
@@ -322,8 +332,10 @@ fn plan(
         MapPoint::new(source.stamp(), beat),
         MapPoint::new(target.stamp(), beat),
     );
+    let grid = BeatGridSnapshot::projection(source.clone(), target.clone(), alignment)
+        .expect("projection");
     let map = WarpMap::projected(source.clone(), target, alignment, revision).expect("projection");
-    WarpPlan::new(map, activation.max(anchor.frame())).expect("activation")
+    (map, activation.max(anchor.frame()), source.clone(), grid)
 }
 
 fn render(

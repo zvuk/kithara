@@ -19,7 +19,7 @@ use kithara::{
         time::{Duration, Instant},
         tokio::task::{spawn, spawn_blocking},
     },
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -29,7 +29,8 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     mixed_plain,
-    reads::{blocking_audio, read_to_eof, read_until_samples},
+    mock::LaneAudio,
+    reads::blocking_audio,
     waits::wait_for_event,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -218,26 +219,42 @@ impl EventCollector {
         self.dropped_events.load(Ordering::Relaxed)
     }
 
+    #[kithara::flash(io)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3))]
     async fn finish_read<A>(&self, (audio, total): (A, u64), bus: &EventBus) -> u64 {
         let mut rx = bus.subscribe();
         self.drain();
-        if !self.request_map.lock().is_empty() {
-            wait_for_event(
-                &mut rx,
-                "all collected segment GETs reaching a terminal downloader event",
-                |_| {
-                    self.drain();
-                    self.request_map.lock().is_empty()
-                },
-                Duration::from_secs(20),
+        let mut pending = self.request_map.lock().len();
+        while pending > 0 {
+            hang_tick!();
+            kithara::platform::time::timeout(
+                __hang_detector.remaining(),
+                wait_for_event(
+                    &mut rx,
+                    "all collected segment GETs reaching a terminal downloader event",
+                    |_| {
+                        self.drain();
+                        self.request_map.lock().len() < pending
+                    },
+                    Duration::from_secs(20),
+                ),
             )
             .await
+            .unwrap_or_else(|_| {
+                hang_tick!();
+                panic!(
+                    "segment GET completion stopped: {:?}",
+                    *self.request_map.lock()
+                );
+            })
             .unwrap_or_else(|error| {
                 panic!(
                     "GETs must settle before dropping the stream owner: {error}; pending={:?}",
                     *self.request_map.lock()
                 );
             });
+            pending = self.request_map.lock().len();
+            hang_reset!();
         }
         assert_eq!(
             self.dropped_events(),
@@ -329,22 +346,13 @@ impl EventCollector {
                     self.applied_transitions.lock().push((to.get(), *reason));
                     self.switch_count.fetch_add(1, Ordering::Release);
                 }
-                TestEvent::Audio(AudioEvent::SeekLifecycle {
-                    stage,
-                    seek_epoch,
-                    location,
-                }) => {
+                TestEvent::Audio(AudioEvent::SeekLifecycle { stage, location }) => {
                     self.push_audio_trace(format!(
-                        "SeekLifecycle({stage:?}, epoch={seek_epoch:?}, location={location:?})"
+                        "SeekLifecycle({stage:?}, location={location:?})"
                     ));
                 }
-                TestEvent::Audio(AudioEvent::SeekComplete {
-                    position,
-                    seek_epoch,
-                }) => {
-                    self.push_audio_trace(format!(
-                        "SeekComplete(epoch={seek_epoch:?}, position={position:?})"
-                    ));
+                TestEvent::Audio(AudioEvent::SeekComplete { position }) => {
+                    self.push_audio_trace(format!("SeekComplete(position={position:?})"));
                 }
                 TestEvent::Audio(AudioEvent::DecoderReady {
                     base_offset,
@@ -354,7 +362,7 @@ impl EventCollector {
                         "DecoderReady(base_offset={base_offset}, variant={variant:?})"
                     ));
                 }
-                TestEvent::Audio(AudioEvent::EndOfStream { .. }) => {
+                TestEvent::Audio(AudioEvent::EndOfStream) => {
                     self.push_audio_trace("EndOfStream".to_owned());
                 }
                 _ => {}
@@ -569,11 +577,15 @@ async fn final_fetch_snapshot_waits_for_completion_before_owner_drop() {
 }
 
 fn read_phase_until_samples<S: StreamType>(
-    audio: &mut RegisteredAudio<Stream<S>, TestPools>,
+    audio: &mut LaneAudio<Stream<S>, TestPools>,
     target_samples: u64,
     label: &str,
 ) -> PhaseReadStats {
     read_phase_until(audio, target_samples, label, || true)
+}
+
+fn read_to_eof<S: StreamType>(audio: &mut LaneAudio<Stream<S>, TestPools>) -> u64 {
+    read_phase_until_samples(audio, u64::MAX, "read to EOF").samples
 }
 
 /// Pump until the sample target is met *and* `settled` holds.
@@ -597,9 +609,10 @@ fn read_phase_until_samples<S: StreamType>(
 /// was asking for something the transition cannot do at any landing. Pacing the
 /// wait gives the switch the same opportunity it has in production; the
 /// assertion itself is unchanged.
-#[kithara::flash(true)]
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 fn read_phase_until<S: StreamType>(
-    audio: &mut RegisteredAudio<Stream<S>, TestPools>,
+    audio: &mut LaneAudio<Stream<S>, TestPools>,
     target_samples: u64,
     label: &str,
     settled: impl Fn() -> bool,
@@ -613,6 +626,7 @@ fn read_phase_until<S: StreamType>(
     let mut consumed = Duration::ZERO;
 
     while stats.samples < target_samples || !settled() {
+        hang_tick!();
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames {
                 count, position, ..
@@ -621,6 +635,7 @@ fn read_phase_until<S: StreamType>(
                     pace(position.saturating_sub(consumed));
                 }
                 consumed = position;
+                hang_reset!();
                 let n = count.get();
                 for &sample in &buf[..n] {
                     assert!(
@@ -635,6 +650,7 @@ fn read_phase_until<S: StreamType>(
             }
             Ok(ReadOutcome::Pending { .. }) => {
                 stats.pending += 1;
+                hang_park!(|remaining: Duration| pace(remaining.min(Duration::from_micros(500))));
             }
             Ok(ReadOutcome::Eof { .. }) => {
                 stats.saw_eof = true;
@@ -653,16 +669,17 @@ fn read_phase_until<S: StreamType>(
 }
 
 async fn read_until_samples_blocking<S>(
-    mut audio: RegisteredAudio<Stream<S>, TestPools>,
+    mut audio: LaneAudio<Stream<S>, TestPools>,
     target_samples: u64,
     label: &str,
-) -> (RegisteredAudio<Stream<S>, TestPools>, u64)
+) -> (LaneAudio<Stream<S>, TestPools>, u64)
 where
     S: StreamType + 'static,
-    RegisteredAudio<Stream<S>, TestPools>: Send + 'static,
+    LaneAudio<Stream<S>, TestPools>: Send + 'static,
 {
+    let read_label = label.to_owned();
     spawn_blocking(move || {
-        let samples = read_until_samples(&mut audio, target_samples);
+        let samples = read_phase_until(&mut audio, target_samples, &read_label, || true).samples;
         (audio, samples)
     })
     .await
@@ -675,61 +692,83 @@ struct BlockingReadStep {
     saw_eof: bool,
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn read_one_chunk_blocking<S>(
-    mut audio: RegisteredAudio<Stream<S>, TestPools>,
+    mut audio: LaneAudio<Stream<S>, TestPools>,
     label: &str,
-) -> (RegisteredAudio<Stream<S>, TestPools>, BlockingReadStep)
+) -> (LaneAudio<Stream<S>, TestPools>, BlockingReadStep)
 where
     S: StreamType + 'static,
-    RegisteredAudio<Stream<S>, TestPools>: Send + 'static,
+    LaneAudio<Stream<S>, TestPools>: Send + 'static,
 {
     let read_label = label.to_owned();
     let join_label = read_label.clone();
-    spawn_blocking(move || {
-        let mut buf = vec![0f32; 4096];
-        loop {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => continue,
-                Ok(ReadOutcome::Frames { count, .. }) => {
-                    let n = count.get();
-                    for &sample in &buf[..n] {
-                        assert!(sample.is_finite(), "{read_label}: non-finite sample");
-                    }
-                    return (
-                        audio,
-                        BlockingReadStep {
-                            samples: n as u64,
-                            saw_eof: false,
-                        },
-                    );
-                }
-                Ok(ReadOutcome::Eof { .. }) => {
-                    return (
-                        audio,
-                        BlockingReadStep {
-                            samples: 0,
-                            saw_eof: true,
-                        },
-                    );
-                }
-                Err(err) => panic!("{read_label}: decode error: {err}"),
-            }
-        }
-    })
-    .await
-    .unwrap_or_else(|err| panic!("{join_label}: spawn_blocking failed: {err}"))
+    hang_tick!();
+    let read = spawn_blocking(move || {
+        let step = read_one_chunk(&mut audio, &read_label);
+        (audio, step)
+    });
+    let result = kithara::platform::time::timeout(__hang_detector.remaining(), read)
+        .await
+        .unwrap_or_else(|_| {
+            hang_tick!();
+            panic!("{join_label}: blocking read did not join");
+        })
+        .unwrap_or_else(|err| panic!("{join_label}: spawn_blocking failed: {err}"));
+    hang_reset!();
+    result
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+fn read_one_chunk<S: StreamType>(
+    audio: &mut LaneAudio<Stream<S>, TestPools>,
+    read_label: &str,
+) -> BlockingReadStep {
+    let mut buf = vec![0f32; 4096];
+    loop {
+        hang_tick!();
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Pending { .. }) => {
+                hang_park!(|remaining: Duration| pace(remaining.min(Duration::from_micros(500))));
+            }
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                hang_reset!();
+                let n = count.get();
+                for &sample in &buf[..n] {
+                    hang_tick!();
+                    assert!(sample.is_finite(), "{read_label}: non-finite sample");
+                }
+                return BlockingReadStep {
+                    samples: n as u64,
+                    saw_eof: false,
+                };
+            }
+            Ok(ReadOutcome::Eof { .. }) => {
+                hang_reset!();
+                return BlockingReadStep {
+                    samples: 0,
+                    saw_eof: true,
+                };
+            }
+            Err(err) => panic!("{read_label}: decode error: {err}"),
+        }
+    }
+}
+
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn read_until_manual_applied<S>(
-    mut audio: RegisteredAudio<Stream<S>, TestPools>,
+    mut audio: LaneAudio<Stream<S>, TestPools>,
     collector: &EventCollector,
     applied_before: usize,
     target: usize,
     label: &str,
-) -> (RegisteredAudio<Stream<S>, TestPools>, PhaseReadStats)
+) -> (LaneAudio<Stream<S>, TestPools>, PhaseReadStats)
 where
     S: StreamType + 'static,
-    RegisteredAudio<Stream<S>, TestPools>: Send + 'static,
+    LaneAudio<Stream<S>, TestPools>: Send + 'static,
 {
     let mut stats = PhaseReadStats {
         samples: 0,
@@ -739,9 +778,13 @@ where
     while !collector.applied_transitions()[applied_before..]
         .contains(&(target, AbrReason::ManualOverride))
     {
+        hang_tick!();
         let (next, step) = read_one_chunk_blocking(audio, label).await;
         audio = next;
         stats.samples = stats.samples.saturating_add(step.samples);
+        if step.samples > 0 {
+            hang_reset!();
+        }
         if step.saw_eof {
             stats.saw_eof = true;
             break;
@@ -834,7 +877,9 @@ async fn vod_manual_switch_affects_future_segments(
                 .build(),
         )
         .build();
-    let audio = worker.load(config).await.expect("create audio");
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio");
 
     let (audio, warmup_samples) =
         read_until_samples_blocking(audio, 8_192, "manual switch warmup").await;
@@ -955,6 +1000,27 @@ async fn vod_manual_switch_affects_future_segments(
     );
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+async fn wait_for_stalled_event(
+    events: &mut EventReceiver<TestEvent>,
+    label: &str,
+    predicate: impl FnMut(&TestEvent) -> bool,
+) {
+    hang_tick!();
+    let result = kithara::platform::time::timeout(
+        __hang_detector.remaining(),
+        wait_for_event(events, label, predicate, Duration::from_secs(20)),
+    )
+    .await;
+    let result = result.unwrap_or_else(|_| {
+        hang_tick!();
+        panic!("stalled event wait exhausted its liveness budget: {label}");
+    });
+    result.expect(label);
+    hang_reset!();
+}
+
 /// Regression for escaping a stalled reader at a clean segment boundary.
 ///
 /// V0's segment 5 body is withheld, so the reader parks at its start. Once the
@@ -1015,11 +1081,13 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
         .events(bus.clone())
         .media_info(wav_info)
         .build();
-    let audio = worker.load(config).await.expect("create audio");
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio");
 
     let mut stalled_requests = HashSet::new();
     let mut saw_load_slow = false;
-    wait_for_event(
+    wait_for_stalled_event(
         &mut rescue_rx,
         "LoadSlow for the gated V0 segment",
         |event| {
@@ -1040,10 +1108,8 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
             }
             saw_load_slow
         },
-        Duration::from_secs(20),
     )
-    .await
-    .expect("LoadSlow for the gated V0 segment");
+    .await;
     assert!(
         gate.requested() > 0,
         "the gated V0 segment body must be parked before reading"
@@ -1051,7 +1117,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
 
     let read = spawn(blocking_audio(audio, read_to_eof));
     let mut saw_escape = false;
-    wait_for_event(
+    wait_for_stalled_event(
         &mut rescue_rx,
         "stalled-boundary EscapeStalled rescue",
         |event| {
@@ -1067,10 +1133,8 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
             }
             saw_escape
         },
-        Duration::from_secs(20),
     )
-    .await
-    .expect("stalled-boundary EscapeStalled rescue");
+    .await;
     gate.release();
 
     let total = collector.finish_read(read.await.expect("read"), &bus).await;
@@ -1170,7 +1234,9 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
         .events(bus1.clone())
         .media_info(wav_info.clone())
         .build();
-    let audio1 = worker.load(config1).await.expect("track 1");
+    let audio1 = kithara_integration_tests::mock::load_audio(&worker, config1)
+        .await
+        .expect("track 1");
 
     let t1_samples = collector1
         .finish_read(blocking_audio(audio1, read_to_eof).await, &bus1)
@@ -1207,7 +1273,9 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
         .events(bus2.clone())
         .media_info(wav_info.clone())
         .build();
-    let audio2 = worker.load(config2).await.expect("track 2");
+    let audio2 = kithara_integration_tests::mock::load_audio(&worker, config2)
+        .await
+        .expect("track 2");
 
     let t2_samples = collector2
         .finish_read(blocking_audio(audio2, read_to_eof).await, &bus2)
@@ -1243,7 +1311,9 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
         .events(bus3.clone())
         .media_info(wav_info)
         .build();
-    let audio3 = worker.load(config3).await.expect("track 1 replay");
+    let audio3 = kithara_integration_tests::mock::load_audio(&worker, config3)
+        .await
+        .expect("track 1 replay");
 
     let t3_samples = collector3
         .finish_read(blocking_audio(audio3, read_to_eof).await, &bus3)
@@ -1331,7 +1401,9 @@ async fn abr_switch_must_not_redownload_covered_segments(
                 .build(),
         )
         .build();
-    let audio = worker.load(config).await.expect("create audio");
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio");
 
     let warmup_budget = D.segment_size as u64 / 2 * (MANUAL_GATE_SEGMENT as u64 - 1);
     let (audio, warmup_samples) =
@@ -1507,7 +1579,9 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant(
         .events(bus)
         .media_info(wav_info)
         .build();
-    let audio = worker.load(config).await.expect("create audio");
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio");
 
     // Warm up a couple of segments so the reader is past the boundary
     // commit gate, then trigger a Manual switch via the handle. The
@@ -1655,7 +1729,9 @@ async fn runtime_cross_codec_manual_switch_no_hang(
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .build();
-    let audio = worker.load(config).await.expect("create audio");
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio");
 
     // Warmup: read until enough AAC samples are produced (state target, not a
     // wall-clock deadline). The outer test timeout is the only backstop.
@@ -1785,12 +1861,17 @@ async fn runtime_manual_switch_works_when_all_segments_cached(
         .build();
     // Offline pull: park on ring underrun instead of spinning on Pending,
     // so the warmup loop needs no wall-clock deadline.
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .events(bus)
-        .media_info(wav_info)
-        .block_on_underrun(true)
-        .build();
-    let audio = worker.load(config).await.expect("create audio");
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .events(bus)
+            .media_info(wav_info)
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio");
 
     // Tiny warmup read on the blocking pool so the current-thread runtime
     // remains free to drive the peer prefetch.
@@ -1912,12 +1993,17 @@ async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: 
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .events(bus)
-        .media_info(wav_info)
-        .block_on_underrun(true)
-        .build();
-    let audio = worker.load(config).await.expect("create audio");
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .events(bus)
+            .media_info(wav_info)
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio");
 
     let (audio, warmup_samples) =
         read_until_samples_blocking(audio, 8_192, "eof-race manual warmup").await;
@@ -2047,9 +2133,13 @@ async fn runtime_manual_switch_works_after_cache_and_seek(#[future(awt)] manual_
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
-        .audio_buffer_chunks(4)
         .build();
-    let audio = worker.load(config).await.expect("create audio");
+    let config = kithara::play::TrackConfig::for_audio(config)
+        .audio_buffer_chunks(std::num::NonZeroUsize::new(4).expect("four buffer chunks"))
+        .build();
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio");
 
     // Tiny warmup on the blocking pool so the peer is actually pumping while
     // the current-thread runtime remains free to drive downloader tasks.
@@ -2212,7 +2302,9 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults(
         .events(bus)
         .media_info(wav_info)
         .build();
-    let audio = worker.load(config).await.expect("create audio");
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio");
 
     // Read until the reader itself enters segment 1. The read pump runs on the
     // blocking pool so it cannot park the current-thread runtime that drives
@@ -2318,7 +2410,9 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof(
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .build();
-    let audio = worker.load(config).await.expect("create audio");
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio");
 
     // Warmup on v=0 (AAC).
     let (mut audio, warmup_total) =
@@ -2463,7 +2557,9 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
                 .build(),
         )
         .build();
-    let mut audio = worker.load(config).await.expect("create audio");
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio");
 
     // Reader cadence is driven by decoded sample targets, not wall-clock
     // deadlines. Slower scheduling may add `Pending` and delay the outer test
@@ -2725,7 +2821,9 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
                 .build(),
         )
         .build();
-    let mut audio = worker.load(config).await.expect("create audio");
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio");
 
     // Phase 1 — play V0 long enough that reader_pos is past seg 6
     // (the seek target ≈ 37 s lands in seg 6). The blocking read

@@ -1,3 +1,9 @@
+use kithara::audio::AudioSession;
+use kithara_integration_tests::output_continuity::{
+    CONTINUITY_BLOCK_FRAMES, PlaybackProgressProbe, render_until_audible,
+};
+use kithara_test_fixtures::Mp3Shape;
+
 use super::*;
 
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]
@@ -29,7 +35,7 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     drop(ok);
 
     for attempt in 0..2 {
-        let result = Resource::new(resource_config(
+        let result = kithara_integration_tests::mock::open_resource(&resource_config(
             &bad_url,
             store.clone(),
             backend,
@@ -173,13 +179,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     let hls_server = open_audio_hls_server;
     let (_server, ok_url, bad_url) = mp3_endpoints;
     let region = pools();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
-            .worker(play_worker(&region))
-            .build(),
-    );
-    let worker = player.worker().clone();
+    let worker = play_worker(&region);
     let store = asset_store(&temp_dir, ephemeral, &region);
     let hls_url = hls_server.master_url();
 
@@ -197,7 +197,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     );
 
     for attempt in 0..2 {
-        let result = Resource::new(resource_config(
+        let result = kithara_integration_tests::mock::open_resource(&resource_config(
             &bad_url,
             store.clone(),
             backend,
@@ -402,6 +402,7 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session(
     target_os = "android",
     case::flac_android(AudioCodec::Flac, DecoderBackend::Android, flac_source().await)
 )]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn packaged_hls_single_variant_continuity_is_stable(
     #[case] codec: AudioCodec,
     #[case] backend: DecoderBackend,
@@ -425,12 +426,16 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     let mut buf = [0.0f32; 4096];
     total_samples += read_audio_some(&mut progress_audio, "packaged_progress_warmup").await as u64;
     progress_probe.drain(&mut progress_rx);
-    let started = Instant::now();
+    let started = WallInstant::now();
     let deadline = started + Duration::from_secs(4);
     let mut frame_reads = 0u64;
     let mut pending_reads = 0u64;
     let mut saw_eof = false;
-    while Instant::now() < deadline && progress_probe.progress_events < 10 {
+    while WallInstant::now() < deadline && progress_probe.progress_events < 10 {
+        hang_tick!(
+            "packaged_hls_single_variant_continuity_is_stable waits for playback progress"
+                .to_owned()
+        );
         progress_audio.preload().expect("preload must succeed");
         let read_count = match progress_audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => count.get(),
@@ -451,6 +456,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         }
         frame_reads += 1;
         total_samples += read_count as u64;
+        hang_reset!();
     }
     progress_probe.drain(&mut progress_rx);
     progress_probe.observe_idle();
@@ -481,13 +487,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         progress_probe.progress_events
     );
 
-    let decode_audio =
-        open_packaged_hls_audio(&url, store, play_worker(&region), codec, backend).await;
-    let mut resource = resource_from_reader(decode_audio);
-    timeout(consts::READ_TIMEOUT, resource.preload())
-        .await
-        .expect("packaged HLS preload must complete")
-        .expect("packaged HLS preload must succeed");
+    let resource = resource_config(&url, store, backend, None, play_worker(&region));
     let mut player = OfflinePlayer::new(
         HostConfig::offline(region.clone())
             .settings(
@@ -500,7 +500,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
             .build(),
     )
     .await;
-    player.load_and_fadein(resource).await;
+    player.load_config(resource).await;
     render_until_audible(
         &mut player,
         "packaged warmup",
@@ -522,6 +522,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         steady.max_silence_run
     );
     player.close().await;
+    hang_reset!();
 }
 
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]
@@ -562,13 +563,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     let hls_server = open_audio_hls_server;
     let (_server, ok_url, _) = mp3_endpoints;
     let region = pools();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
-            .worker(play_worker(&region))
-            .build(),
-    );
-    let worker = player.worker().clone();
+    let worker = play_worker(&region);
     let store = asset_store(&temp_dir, ephemeral, &region);
     let hls_url = hls_server.master_url();
 

@@ -7,9 +7,9 @@ use kithara::{
         AnalysisDemand, AnalysisProducer, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder,
     },
     audio::AudioObserveError,
-    platform::CancelToken,
+    platform::{CancelToken, time::Duration},
     resampler::NoResamplerBackend,
-    signal::AudioSpec,
+    signal::{AudioChunkInfo, AudioSpec},
 };
 use kithara_integration_tests::{
     analysis_pass::stalled_reader,
@@ -25,10 +25,9 @@ const FRAMES: usize = 1024;
 fn offer_under_rt(
     producer: &mut AnalysisProducer,
     pcm: &[f32],
-    spec: AudioSpec,
-    at: u64,
+    info: &AudioChunkInfo,
 ) -> Result<(), AudioObserveError> {
-    producer.offer(pcm, spec, at)
+    producer.offer(pcm, info)
 }
 
 #[kithara::test]
@@ -63,14 +62,26 @@ fn offering_a_decoded_range_neither_blocks_nor_allocates(quarter: Vec<f32>, #[ca
         NonZeroU32::new(48_000).expect("test rate is non-zero"),
     );
 
+    let info = AudioChunkInfo {
+        spec,
+        frames: u32::try_from(FRAMES).expect("test frame count fits u32"),
+        media_origin: Some(Duration::from_nanos(25_056_689)),
+        visible_origin: Some(Duration::ZERO),
+        ..Default::default()
+    };
+    let foreign_info = AudioChunkInfo {
+        spec: foreign,
+        ..info
+    };
+
     assert_eq!(
-        offer_under_rt(&mut producer, pcm, spec, 0),
+        offer_under_rt(&mut producer, pcm, &info),
         Ok(()),
         "the heaviest path: a range on the pass axis is taken at every channel count, \
          one downmix and one copy into the transport the pass allocated when it opened"
     );
     assert_eq!(
-        offer_under_rt(&mut producer, pcm, foreign, 0),
+        offer_under_rt(&mut producer, pcm, &foreign_info),
         Err(AudioObserveError::UnsupportedSampleRate {
             expected: rate,
             actual: foreign.sample_rate,

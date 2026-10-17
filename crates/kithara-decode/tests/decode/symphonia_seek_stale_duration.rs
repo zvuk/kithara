@@ -75,7 +75,9 @@ fn partial_decoder_seek_past_available_bytes_errors(tone_mp3: &'static [u8]) {
     let mut decoder =
         DecoderFactory::create_with_probe(Cursor::new(partial), Some("mp3"), decoder_config())
             .expect("partial mp3 decoder");
-    let duration = decoder.duration().expect("duration known");
+    let Some(kithara_decode::DecoderDuration::RawLength(duration)) = decoder.duration() else {
+        panic!("standalone MP3 must declare a raw PCM length");
+    };
 
     let target_nanos = duration.as_nanos() * u128::from(consts::TARGET_FRACTION_NUM)
         / u128::from(consts::TARGET_FRACTION_DEN);
@@ -105,7 +107,9 @@ fn full_decoder_seeks_to_same_target_without_error(tone_mp3: &'static [u8]) {
     let mut decoder =
         DecoderFactory::create_with_probe(Cursor::new(full), Some("mp3"), decoder_config())
             .expect("full mp3 decoder");
-    let duration = decoder.duration().expect("duration known");
+    let Some(kithara_decode::DecoderDuration::RawLength(duration)) = decoder.duration() else {
+        panic!("standalone MP3 must declare a raw PCM length");
+    };
 
     let target_nanos = duration.as_nanos() * u128::from(consts::TARGET_FRACTION_NUM)
         / u128::from(consts::TARGET_FRACTION_DEN);

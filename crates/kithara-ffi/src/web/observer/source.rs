@@ -5,7 +5,6 @@ use kithara::{
         time::{Duration, sleep},
         tokio::{sync::broadcast::error::RecvError, task::spawn as task_spawn},
     },
-    queue::QueueEvent,
 };
 use wasm_bindgen::JsValue;
 use web_sys::{BroadcastChannel, console};
@@ -80,7 +79,6 @@ async fn run(mut rx: EventReceiver<QueueBusEvent>) {
     loop {
         match rx.recv().await {
             Ok(Envelope { event, .. }) => {
-                mirror_current_track(&event);
                 if let Some(ffi) = to_ffi(&event) {
                     let _ = channel.post_message(&encode(&ffi));
                 }
@@ -88,22 +86,6 @@ async fn run(mut rx: EventReceiver<QueueBusEvent>) {
             Err(RecvError::Lagged(_)) => {}
             Err(RecvError::Closed) => break,
         }
-    }
-}
-
-/// Keep the main-thread current-track read-back
-/// ([`WorkerBridge::current_track_id`](crate::web::bridge::WorkerBridge))
-/// in sync by mirroring the worker's current-track cursor into the shared
-/// atomic on every relevant queue event.
-fn mirror_current_track(event: &QueueBusEvent) {
-    match event {
-        QueueBusEvent::Queue(QueueEvent::CurrentTrackChanged { id }) => {
-            crate::web::bridge::set_current_track_id(*id);
-        }
-        QueueBusEvent::Queue(QueueEvent::QueueEnded) => {
-            crate::web::bridge::set_current_track_id(None);
-        }
-        _ => {}
     }
 }
 

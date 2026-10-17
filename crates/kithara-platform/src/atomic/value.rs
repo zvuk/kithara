@@ -220,15 +220,8 @@ impl<T: AtomicPrimitive + fmt::Debug, R: ReadOrder, W: WriteOrder> fmt::Debug
             .finish()
     }
 }
-
-/// Boolean atomic value using relaxed loads and stores.
-pub type RelaxedAtomicBool = AtomicValue<bool, Relaxed, Relaxed>;
 /// Floating-point atomic value using relaxed loads and stores.
 pub type RelaxedAtomicF32 = AtomicValue<f32, Relaxed, Relaxed>;
-/// Double-precision atomic value using relaxed loads and stores.
-pub type RelaxedAtomicF64 = AtomicValue<f64, Relaxed, Relaxed>;
-/// Unsigned atomic value using relaxed loads and stores.
-pub type RelaxedAtomicU32 = AtomicValue<u32, Relaxed, Relaxed>;
 
 #[cfg(test)]
 mod tests {
@@ -249,13 +242,13 @@ mod tests {
         assert_eq!(value.load().to_bits(), (-0.0_f32).to_bits());
         assert_eq!(snapshot.load().to_bits(), 0x7fc0_1234);
 
-        let wide = RelaxedAtomicF64::new(f64::from_bits(0x7ff8_0000_0000_1234));
+        let wide = AtomicValue::<f64, Relaxed, Relaxed>::new(f64::from_bits(0x7ff8_0000_0000_1234));
         let wide_snapshot = wide.clone();
         wide.store(-0.0);
         assert_eq!(wide.load().to_bits(), (-0.0_f64).to_bits());
         assert_eq!(wide_snapshot.load().to_bits(), 0x7ff8_0000_0000_1234);
 
-        let count = RelaxedAtomicU32::new(7);
+        let count = AtomicValue::<u32, Relaxed, Relaxed>::new(7);
         let count_snapshot = count.clone();
         count.store(11);
         assert_eq!(count.load(), 11);
@@ -265,7 +258,7 @@ mod tests {
     #[cfg(not(feature = "loom"))]
     #[kithara::test(native)]
     fn bool_clone_is_independent() {
-        let value = RelaxedAtomicBool::new(false);
+        let value = AtomicValue::<bool, Relaxed, Relaxed>::new(false);
         let snapshot = value.clone();
         value.store(true);
         assert!(value.load());
@@ -276,8 +269,8 @@ mod tests {
     #[kithara::test(native, loom)]
     fn loom_models_bool_publication_and_scalar_values() {
         let value = Arc::new(RelaxedAtomicF32::new(0.0));
-        let wide = Arc::new(RelaxedAtomicF64::new(0.0));
-        let count = Arc::new(RelaxedAtomicU32::new(0));
+        let wide = Arc::new(AtomicValue::<f64, Relaxed, Relaxed>::new(0.0));
+        let count = Arc::new(AtomicValue::<u32, Relaxed, Relaxed>::new(0));
         let ready = Arc::new(AtomicValue::<bool, Acquire, Release>::new(false));
         let writer_value = Arc::clone(&value);
         let writer_wide = Arc::clone(&wide);

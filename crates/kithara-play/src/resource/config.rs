@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
@@ -12,7 +12,7 @@ use kithara_events::EventBus;
 use kithara_file::FileConfigPatch;
 use kithara_hls::{HlsConfigPatch, KeyOptions};
 use kithara_net::Headers;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::{CancelToken, CancelWakerGuard, sync::Arc};
 use kithara_warp::WarpConfig;
 use kithara_waveform::Waveform;
 use url::Url;
@@ -98,6 +98,9 @@ where
     /// standalone scope (see [`CancelScope::new`](kithara_platform::CancelScope)).
     #[config(skip = "composed into the resource cancel scope")]
     pub(crate) cancel: Option<CancelToken>,
+    /// Keeps the deck's cancellation connected to this track's subtree.
+    #[config(skip = "retained until the resource lane is released", builder(skip))]
+    pub(crate) cancel_link: Option<Arc<CancelWakerGuard>>,
     /// Optional cache discriminator mixed into the asset root.
     #[config(skip = "transferred to the asset key")]
     pub(crate) discriminator: Option<String>,
@@ -127,6 +130,14 @@ where
     /// [`Self::beat_grid`].
     #[config(skip = "transferred to the resource artifact source")]
     pub(crate) waveform: Option<ArtifactSource<Waveform>>,
+    /// Final rendered chunks required before the lane reports readiness.
+    /// An unset value uses the lane configuration's default.
+    #[config(skip = "transferred to the render lane's preload quota")]
+    pub(crate) preload_chunks: Option<NonZeroUsize>,
+    /// Packet capacity of each lane ring. An unset value uses the lane
+    /// configuration's default.
+    #[config(skip = "transferred to the render lane's packet rings")]
+    pub(crate) audio_buffer_chunks: Option<NonZeroUsize>,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     #[config(skip = "transferred to the playback worker")]
@@ -157,10 +168,7 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use kithara_assets::AssetStore;
-    use kithara_audio::{
-        AudioConfigPatch, ConsumerWakeMode, DecoderResamplerSettings, ResamplerBackend,
-        ResamplerOptions,
-    };
+    use kithara_audio::{DecoderResamplerSettings, ResamplerBackend, ResamplerOptions};
     use kithara_decode::DecodeError;
     use kithara_stream::StreamType;
     use kithara_test_utils::kithara;
@@ -170,12 +178,6 @@ mod tests {
         PlayWorkerConfig,
         test_pools::{TestPools, pools},
     };
-
-    fn preload_chunks(count: usize) -> AudioConfigPatch {
-        let mut patch = AudioConfigPatch::default();
-        patch.preload_chunks = NonZeroUsize::new(count);
-        patch
-    }
 
     fn store() -> AssetStore<TestPools> {
         AssetStore::builder(pools()).build()
@@ -282,28 +284,83 @@ mod tests {
         assert!(kithara_hls::Hls::<TestPools>::event_bus(audio_config.stream()).is_some());
     }
 
-    #[kithara::test]
-    fn direct_resources_wake_the_worker_off_rt() {
-        let worker = worker();
-        let file: ResourceConfig<TestPools> =
-            ResourceConfig::for_src(valid_src("https://example.com/a.mp3"))
-                .store(store())
-                .build();
-        assert_eq!(
-            file.build_file_config(&worker, None).consumer_wake_mode(),
-            ConsumerWakeMode::ImmediateOffRt
-        );
+    #[kithara::test(native, tokio)]
+    async fn direct_resources_wake_the_worker_off_rt() {
+        use axum::{Router, routing::get};
+        use kithara_audio::{Audio, DecoderChangeCause, DecoderEvent};
+        use kithara_platform::sync::Arc;
+        use kithara_stream::mock::NoopWorkerWake;
+        use kithara_test_utils::{TestHttpServer, TestTempDir};
 
-        let hls: ResourceConfig<TestPools> =
-            ResourceConfig::for_src(valid_src("https://example.com/a.m3u8"))
+        let worker = worker();
+        let dir = TestTempDir::new();
+        let path = dir.path().join("direct.wav");
+        crate::mock::write_pcm_wav(
+            &path,
+            &vec![0.5; 8_192],
+            kithara_signal::AudioSpec::new(2, crate::mock::SAMPLE_RATE),
+        )
+        .expect("direct float WAV");
+        let file_bus = EventBus::new(32);
+        let mut file_events = file_bus.subscribe::<DecoderEvent>();
+        let file: ResourceConfig<TestPools> =
+            ResourceConfig::for_src(ResourceSrc::Path(path.clone()))
                 .store(store())
+                .events(file_bus)
                 .build();
-        assert_eq!(
+        let _file = Audio::prepare(
+            file.build_file_config(&worker, None),
+            Arc::new(NoopWorkerWake),
+            pools(),
+        )
+        .await
+        .expect("direct file builds");
+        assert!(matches!(
+            file_events
+                .try_recv()
+                .expect("build publishes inline")
+                .event,
+            DecoderEvent::DecoderChanged {
+                cause: DecoderChangeCause::Initial,
+                ..
+            }
+        ));
+
+        let wav = std::fs::read(path).expect("generated segment");
+        let server = TestHttpServer::new(Router::new()
+            .route("/direct.m3u8", get(|| async {
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=2822400\n/direct-media.m3u8\n"
+            }))
+            .route("/direct-media.m3u8", get(|| async {
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:1,\n/direct.wav\n#EXT-X-ENDLIST\n"
+            }))
+            .route("/direct.wav", get(move || {
+                let wav = wav.clone();
+                async move { wav }
+            }))).await;
+        let hls_bus = EventBus::new(32);
+        let mut hls_events = hls_bus.subscribe::<DecoderEvent>();
+        let hls: ResourceConfig<TestPools> =
+            ResourceConfig::for_src(ResourceSrc::Url(server.url("/direct.m3u8")))
+                .store(store())
+                .events(hls_bus)
+                .hint("wav")
+                .build();
+        let _hls = Audio::prepare(
             hls.build_hls_config(&worker, None)
-                .expect("valid HLS config")
-                .consumer_wake_mode(),
-            ConsumerWakeMode::ImmediateOffRt
-        );
+                .expect("valid HLS config"),
+            Arc::new(NoopWorkerWake),
+            pools(),
+        )
+        .await
+        .expect("direct HLS builds");
+        assert!(matches!(
+            hls_events.try_recv().expect("build publishes inline").event,
+            DecoderEvent::DecoderChanged {
+                cause: DecoderChangeCause::Initial,
+                ..
+            }
+        ));
     }
 
     #[kithara::test]
@@ -388,12 +445,12 @@ mod tests {
                 .events(EventBus::new(32))
                 .hint("mp3")
                 .discriminator("test")
-                .audio(preload_chunks(5))
+                .maybe_preload_chunks(NonZeroUsize::new(5))
                 .build();
         assert!(config.bus.is_some());
         assert_eq!(config.hint.as_deref(), Some("mp3"));
         assert_eq!(config.discriminator.as_deref(), Some("test"));
-        assert_eq!(config.audio.preload_chunks, NonZeroUsize::new(5));
+        assert_eq!(config.preload_chunks, NonZeroUsize::new(5));
     }
 
     #[kithara::test]
@@ -457,11 +514,11 @@ mod tests {
             "an unnamed file key must leave kithara-file's own default standing"
         );
         assert!(
-            config.audio.preload_chunks.is_none(),
+            config.preload_chunks.is_none(),
             "an unnamed audio key must leave kithara-audio's own default standing"
         );
         assert!(
-            config.audio.audio_buffer_chunks.is_none(),
+            config.audio_buffer_chunks.is_none(),
             "a direct resource names no output-ring depth, so the platform default stands"
         );
     }

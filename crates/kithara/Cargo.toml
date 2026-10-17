@@ -58,6 +58,7 @@ all = [
     "hls",
     "host",
     "net",
+    "link",
     "offline",
     "output",
     "platform",
@@ -80,9 +81,9 @@ all = [
     "workspace-hack",
 ]
 abr = ["dep:kithara-abr"]
-analysis = ["waveform", "dep:kithara-analysis"]
+analysis = ["waveform", "sync", "dep:kithara-analysis"]
 assets = ["storage", "dep:kithara-assets"]
-beat = ["dep:kithara-beat"]
+beat = ["sync", "dep:kithara-beat"]
 audio = ["dep:kithara-audio"]
 # Live HLS packaging: take a PCM feed on air as an HLS origin. Off by default.
 broadcast = ["output", "dep:kithara-broadcast"]
@@ -102,14 +103,15 @@ output = ["dep:kithara-output"]
 platform = ["dep:kithara-platform"]
 play = ["effects", "dep:kithara-play"]
 queue = ["dep:kithara-queue"]
+link = ["dep:kithara-link"]
 resampler = ["dep:kithara-resampler"]
 signal = ["platform", "dep:kithara-signal", "kithara-platform/signal"]
 storage = ["dep:kithara-storage"]
 stream = ["dep:kithara-stream"]
 stretch = ["dep:kithara-stretch"]
-sync = ["warp", "dep:kithara-sync"]
 ui = ["dep:kithara-ui"]
-warp = ["dep:kithara-warp"]
+sync = ["dep:kithara-sync"]
+warp = ["sync", "dep:kithara-warp"]
 waveform = ["dep:kithara-waveform"]
 worker = ["dep:kithara-worker"]
 workspace-hack = ["dep:kithara-workspace-hack"]
@@ -312,7 +314,6 @@ usdt = [
     "kithara-play?/usdt",
     "kithara-queue?/usdt",
     "kithara-stream?/usdt",
-    "kithara-sync?/usdt",
     "kithara-test-utils/usdt",
     "kithara-warp?/usdt",
     "kithara-worker?/usdt",
@@ -336,7 +337,6 @@ perf = [
     "kithara-play?/perf",
     "kithara-storage?/perf",
     "kithara-stream?/perf",
-    "kithara-sync?/perf",
     "kithara-bufpool?/perf",
     "kithara-file?/perf",
     "kithara-hls?/perf",
@@ -394,7 +394,6 @@ full = [
     "resampler",
     "signal",
     "stream",
-    "sync",
     "warp",
     "workspace-hack",
 ]
@@ -417,6 +416,7 @@ kithara-events = { workspace = true, optional = true }
 kithara-file = { workspace = true, optional = true, default-features = false }
 kithara-hls = { workspace = true, optional = true, default-features = false }
 kithara-host = { workspace = true, optional = true, default-features = false }
+kithara-link = { workspace = true, optional = true, default-features = false }
 kithara-net = { workspace = true, optional = true, default-features = false }
 kithara-output = { workspace = true, optional = true }
 kithara-platform = { workspace = true, optional = true }
@@ -428,7 +428,7 @@ kithara-signal = { workspace = true, optional = true }
 kithara-storage = { workspace = true, optional = true }
 kithara-stream = { workspace = true, optional = true, default-features = false }
 kithara-stretch = { workspace = true, optional = true, default-features = false }
-kithara-sync = { workspace = true, optional = true, default-features = false }
+kithara-sync = { workspace = true, optional = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, optional = true }
 kithara-ui = { workspace = true, optional = true, default-features = false }

@@ -170,10 +170,6 @@ where
             Some(RangeGate::Metadata(_) | RangeGate::Pending) => true,
             None => false,
         };
-        if self.flow.reader.is_flushing() {
-            self.flow.reader.clear_wait();
-            return Ok(WaitOutcome::Interrupted);
-        }
         if stable_pending && self.range_has_failed(&range) {
             self.flow.reader.clear_wait();
             return Err(StreamError::Source(HlsError::SegmentUnavailable.into()));

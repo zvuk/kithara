@@ -18,19 +18,26 @@ use crate::{
 /// facade only owns the object identity and (on native) the `Drop`
 /// shutdown pulse. The JS control surface lives in
 /// `crate::web::surface`.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Object)
+)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct AudioPlayer {
     pub(crate) inner: Inner,
 }
 
 /// Methods exported across the FFI boundary.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[cfg_attr(all(feature = "uniffi", not(target_arch = "wasm32")), uniffi::export)]
 impl AudioPlayer {
     #[cfg(not(target_arch = "wasm32"))]
-    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
+    #[cfg_attr(
+        all(feature = "uniffi", not(target_arch = "wasm32")),
+        uniffi::constructor
+    )]
     /// # Errors
-    /// Returns an error when the player configuration cannot be created.
+    /// Returns an error when the player configuration cannot be created,
+    /// including a playing rate that is not a finite number.
     pub fn new(config: FfiPlayerConfig) -> Result<Arc<Self>, FfiError> {
         Ok(Arc::new(Self {
             inner: Inner::new(config)?,
@@ -201,9 +208,9 @@ impl AudioPlayer {
     /// `seek_with_tolerance` wiring without forcing callers to migrate
     /// twice; `None` preserves legacy behaviour.
     ///
-    /// The callback is invoked synchronously with `true` if the seek
-    /// command was accepted, `false` otherwise (matches `AVPlayer`
-    /// semantics).
+    /// The callback reports owner admission: `true` if the seek command was
+    /// accepted, `false` otherwise. On the browser, callbacks for posted commands
+    /// are delivered asynchronously.
     #[cfg_attr(
         all(),
         expect(
@@ -362,6 +369,7 @@ mod tests {
 
     #[kithara::test]
     fn repeat_mode_round_trips_and_notifies_observer() {
+        crate::mock::offline();
         let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
         let (sender, receiver) = channel();
         player.set_observer(Arc::new(ChannelObserver { sender }));

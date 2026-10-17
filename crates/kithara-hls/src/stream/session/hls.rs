@@ -13,8 +13,8 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ByteMap, ConstructionGate, PendingReason, ReaderProfile, SeekObserve, SegmentDescriptor,
-    SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
+    ByteMap, PendingReason, ReaderControl, ReaderProfile, SegmentDescriptor, SourceError,
+    SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
 };
 use tracing::debug;
 
@@ -30,11 +30,9 @@ pub(crate) struct HlsSession<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    seek: Arc<dyn SeekObserve>,
     pub(super) variant: Arc<HlsVariant<S>>,
     active: AtomicBool,
     position: AtomicU64,
-    construction_gate: ConstructionGate,
     #[field(get, vis = "pub(crate)", copy)]
     transition: Option<VariantTransition>,
     cancel: SessionCancel,
@@ -68,20 +66,17 @@ where
 
     pub(crate) fn active(
         cancel: CancelToken,
-        seek: Arc<dyn SeekObserve>,
         signal: SizeSignal,
         variant_index: usize,
         variant: Arc<HlsVariant<S>>,
         position: u64,
     ) -> Self {
         Self {
-            seek,
             signal,
             variant,
             variant_index,
             active: AtomicBool::new(true),
             cancel: SessionCancel::new(cancel),
-            construction_gate: ConstructionGate::default(),
             position: AtomicU64::new(position),
             readiness: SessionReadiness::Active,
             transition: None,
@@ -109,13 +104,6 @@ where
     pub(super) fn check_live(&self) -> io::Result<()> {
         if self.cancel.root.is_cancelled() {
             return Err(pending(PendingReason::SessionRetired));
-        }
-        if !self.active.load(Ordering::Acquire)
-            && self
-                .transition
-                .is_some_and(|transition| self.seek.epoch() != transition.id().seek_epoch())
-        {
-            return Err(pending(PendingReason::SeekPending));
         }
         Ok(())
     }
@@ -211,7 +199,6 @@ where
     pub(crate) fn incoming(
         cancel: CancelToken,
         profile: ReaderProfile,
-        seek: Arc<dyn SeekObserve>,
         signal: SizeSignal,
         transition: VariantTransition,
         variant: Arc<HlsVariant<S>>,
@@ -219,12 +206,10 @@ where
     ) -> StreamResult<Self> {
         let preparation = variant.prepare_reader(profile, content_time)?;
         Ok(Self {
-            seek,
             signal,
             variant,
             active: AtomicBool::new(false),
             cancel: SessionCancel::new(cancel),
-            construction_gate: ConstructionGate::default(),
             position: AtomicU64::new(0),
             readiness: SessionReadiness::Profiled {
                 profile,
@@ -251,7 +236,7 @@ where
         self.projected_position().byte
     }
 
-    fn prepare_at(&self, position: Duration) -> StreamResult<SourceSeekAnchor> {
+    fn prepare_at(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
         if self.cancel.is_cancelled() {
             return Err(StreamError::Source(SourceError::Cancelled));
         }
@@ -260,18 +245,20 @@ where
             profile,
         } = &self.readiness
         else {
-            return Err(StreamError::Source(SourceError::Io(Error::new(
-                ErrorKind::Unsupported,
-                "active HLS session does not carry a decoder reader profile",
-            ))));
+            let anchor = self.seek_time_anchor(position)?;
+            self.arm_peer();
+            return Ok(anchor);
         };
-        self.cancel.rearm();
         let next = self.variant.prepare_reader(*profile, position)?;
         let anchor = next.anchor();
         *preparation.lock() = next;
         self.set_position(anchor.byte_offset);
         self.arm_peer();
-        Ok(anchor)
+        Ok(Some(anchor))
+    }
+
+    pub(crate) fn new_reader_control(&self) -> ReaderControl {
+        ReaderControl::new(Some(self.cancel.root.clone()))
     }
 
     pub(super) fn projected_position(&self) -> SessionPosition {
@@ -340,27 +327,35 @@ where
         &self,
         range: Range<u64>,
         timeout: Option<Duration>,
+        reader_cancel: Option<&ReaderControl>,
     ) -> StreamResult<WaitOutcome> {
+        if self.cancel.root.is_cancelled() {
+            return Ok(WaitOutcome::Interrupted);
+        }
         match timeout {
             Some(_) => self.variant.wait_range(range, timeout),
-            None => self.signal.wait_range_blocking(&self.cancel.root, || {
-                let outcome = self.variant.wait_range(range.clone(), Some(Duration::ZERO));
-                if matches!(
-                    outcome,
-                    Err(StreamError::Source(SourceError::WaitBudgetExceeded))
-                ) {
-                    debug!(
-                        target: "kithara_hls::wait",
-                        variant = self.variant.variant_index_u32(),
-                        start = range.start,
-                        end = range.end,
-                        phase = ?self.variant.phase_at(range.clone()),
-                        "construction wait parked on an unready range"
-                    );
-                    self.signal.wake_peer();
-                }
-                outcome
-            }),
+            None => self
+                .signal
+                .wait_range_blocking(&self.cancel.root, reader_cancel, || {
+                    if self.cancel.root.is_cancelled() {
+                        return Ok(WaitOutcome::Interrupted);
+                    }
+                    let outcome = self.variant.wait_range(range.clone(), Some(Duration::ZERO));
+                    if matches!(
+                        outcome,
+                        Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+                    ) {
+                        debug!(
+                            target: "kithara_hls::wait",
+                            variant = self.variant.variant_index_u32(),
+                            start = range.start,
+                            end = range.end,
+                            phase = ?self.variant.phase_at(range.clone()),
+                            "construction wait parked on an unready range"
+                        );
+                    }
+                    outcome
+                }),
         }
     }
 
@@ -381,12 +376,6 @@ where
             #[call(wake_peer)]
             pub(crate) fn wake_peer_for_readiness(&self);
         }
-        to self.construction_gate {
-            #[call(is_armed)]
-            pub(crate) fn construction_blocking(&self) -> bool;
-            #[call(clone)]
-            pub(crate) fn construction_gate(&self) -> ConstructionGate;
-        }
         to self.variant {
             pub(crate) fn find_at_offset(&self, byte: u64) -> Option<(u32, u64, u64)>;
             #[call(stream_len)]
@@ -401,7 +390,7 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     fn anchor_at_time(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
-        self.prepare_at(position).map(Some)
+        self.prepare_at(position)
     }
 
     fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {

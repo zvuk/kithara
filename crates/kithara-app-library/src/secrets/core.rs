@@ -41,7 +41,7 @@ impl Secrets {
                         feature = "keystore",
                         unix,
                         not(any(target_os = "macos", target_os = "ios", target_os = "android"))
-                    ) => Self::new(zbus_secret_service_keyring_store::Store::new()),
+                    ) => Self::new(dbus_secret_service_keyring_store::Store::new()),
                     _ => Self {
                         store: Err(SecretError::Unsupported),
                     },

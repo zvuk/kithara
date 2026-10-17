@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use reqwest::blocking::Client;
+use tiny_http::Server;
 use tracing::info;
 
 use super::{
@@ -25,7 +26,10 @@ use crate::{
 pub(super) fn run() -> Result<()> {
     let cancel = Cancel::install()?;
     provision::credentials()?;
-    let evictor = Evictor::listen(consts::EVICT_LISTEN, evict::buckets()?)?;
+    let buckets = evict::buckets()?;
+    let audit = Server::http(consts::EVICT_LISTEN)
+        .map_err(|error| anyhow!("listen for the store's audit log: {error}"))?;
+    let evictor = Evictor::listen(audit, buckets);
     let mut store = child::spawn(Command::new("rustfs").args(["server", "/data"]))?;
     let ready_url = format!("{}/health/ready", consts::CACHE_STORE_URL);
     if let Err(error) =

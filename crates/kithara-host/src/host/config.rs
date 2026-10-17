@@ -1,6 +1,11 @@
-use std::{marker::PhantomData, num::NonZeroU32};
+use std::{
+    marker::PhantomData,
+    num::{NonZeroU16, NonZeroU32, NonZeroUsize},
+};
 
+use kithara_command::{ChannelConfig, ScopedConfig};
 use kithara_effects::LimiterConfig;
+use kithara_render::rt::DeckMixerConfig;
 #[cfg(feature = "offline")]
 use {
     kithara_bufpool::PoolRegion,
@@ -8,7 +13,7 @@ use {
     kithara_worker::{DispatcherConfig, TaskConfig, WorkerConfig},
 };
 
-use crate::HostSettings;
+use crate::{HostSettings, consts};
 
 /// Configuration for the shared output session owned by `Host`.
 #[cfg_attr(not(feature = "offline"), derive_where::derive_where(Clone, Copy))]
@@ -19,6 +24,12 @@ pub enum HostConfig<S> {
     Realtime {
         /// Optional native output callback-size override. `None` preserves the backend default.
         output_block_frames: Option<NonZeroU32>,
+        /// Maximum simultaneously open or closing deck scopes. Default: 8.
+        max_decks: NonZeroU16,
+        /// Batches in flight per deck scope. Default: 32.
+        deck_capacity: NonZeroUsize,
+        /// Maximum slots an opened deck scope can address.
+        max_deck_slots: NonZeroUsize,
         /// Session output limiter policy.
         limiter: LimiterConfig,
         /// Settings the Host starts with; they change while it runs.
@@ -37,6 +48,12 @@ pub enum HostConfig<S> {
         declick_frames: NonZeroU32,
         /// Declared device-equivalent latency used by transport calculations.
         declared_latency: Duration,
+        /// Maximum simultaneously open or closing deck scopes. Default: 8.
+        max_decks: NonZeroU16,
+        /// Batches in flight per deck scope. Default: 32.
+        deck_capacity: NonZeroUsize,
+        /// Maximum slots an opened deck scope can address.
+        max_deck_slots: NonZeroUsize,
         /// Session output limiter policy.
         limiter: LimiterConfig,
         /// Settings the Host starts with; they change while it runs.
@@ -60,11 +77,17 @@ impl<S> HostConfig<S> {
     )]
     fn new(
         output_block_frames: Option<NonZeroU32>,
+        #[builder(default = consts::MAX_DECKS)] max_decks: NonZeroU16,
+        #[builder(default = consts::DECK_CAPACITY)] deck_capacity: NonZeroUsize,
+        #[builder(default = DeckMixerConfig::default().slots())] max_deck_slots: NonZeroUsize,
         #[builder(default)] limiter: LimiterConfig,
         #[builder(default)] settings: HostSettings,
     ) -> Self {
         Self::Realtime {
             output_block_frames,
+            max_decks,
+            deck_capacity,
+            max_deck_slots,
             limiter,
             settings,
             marker: PhantomData,
@@ -79,5 +102,48 @@ impl<S> HostConfig<S> {
             #[cfg(feature = "offline")]
             Self::Offline { settings, .. } => *settings,
         }
+    }
+
+    /// Maximum simultaneously open or closing deck scopes.
+    #[must_use]
+    pub const fn max_decks(&self) -> NonZeroU16 {
+        match self {
+            Self::Realtime { max_decks, .. } => *max_decks,
+            #[cfg(feature = "offline")]
+            Self::Offline { max_decks, .. } => *max_decks,
+        }
+    }
+
+    /// Batches in flight per deck scope.
+    #[must_use]
+    pub const fn deck_capacity(&self) -> NonZeroUsize {
+        match self {
+            Self::Realtime { deck_capacity, .. } => *deck_capacity,
+            #[cfg(feature = "offline")]
+            Self::Offline { deck_capacity, .. } => *deck_capacity,
+        }
+    }
+
+    /// Maximum slots an opened deck scope can address.
+    #[must_use]
+    pub const fn max_deck_slots(&self) -> NonZeroUsize {
+        match self {
+            Self::Realtime { max_deck_slots, .. } => *max_deck_slots,
+            #[cfg(feature = "offline")]
+            Self::Offline { max_deck_slots, .. } => *max_deck_slots,
+        }
+    }
+
+    pub(crate) fn channel_config(&self) -> ScopedConfig {
+        ScopedConfig::builder()
+            .root(ChannelConfig::builder().build())
+            .scopes(self.max_decks())
+            .scope(
+                ChannelConfig::builder()
+                    .capacity(self.deck_capacity())
+                    .targets(self.max_deck_slots().get())
+                    .build(),
+            )
+            .build()
     }
 }

@@ -15,20 +15,7 @@ pub(crate) const JOIN_MICROS: u32 = 40_000;
 pub(crate) const MICROS_PER_SEC: u32 = 1_000_000;
 pub(crate) const MIN_JOIN_FRAMES: u16 = 2;
 
-/// Output ring depth. wasm needs a deeper ring because its worker is
-/// scheduled coarsely.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) const AUDIO_BUFFER_CHUNKS: usize = 10;
-
-#[cfg(target_arch = "wasm32")]
-pub(crate) const AUDIO_BUFFER_CHUNKS: usize = 32;
-
-/// Chunks buffered before preload readiness is signalled.
-pub(crate) const PRELOAD_CHUNKS: usize = 3;
-
-pub(crate) const DEFAULT_READ_AHEAD_BYTES: u64 = 32 * 1024;
 pub(crate) const PRIME_STEPS_PER_PASS: usize = 8;
-pub(crate) const ANCHOR_RESOLUTION: &str = "seek anchor resolution failed";
 pub(crate) const NANOS_PER_SEC: u128 = 1_000_000_000;
 
 #[cfg(test)]

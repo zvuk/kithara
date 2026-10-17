@@ -59,7 +59,6 @@ pub async fn run(shutdown: CancelToken) -> Result<(), FrontendError> {
     )?;
     let (sender, receiver) = wasm::worker_host_channel(&host)?;
     play_wasm::spawn_webcodecs_probe(pools.clone());
-    wasm::warm_up_audio(&host)?;
     let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
     let (commands, received) = mpsc::unbounded_channel();
     let ui_package = app.ui_package.clone();

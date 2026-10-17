@@ -3,8 +3,8 @@ use std::ops::Range;
 use kithara_platform::time::Duration;
 
 use crate::{
-    StreamResult, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
-    profile::ReaderProfile,
+    OpenedReader, StreamResult, VariantPromotion, VariantReaderPlan, VariantReaderTake,
+    VariantTransition, profile::ReaderProfile,
 };
 
 /// HLS-only variant-coordination surface, vended as `Some` by adaptive
@@ -14,6 +14,12 @@ use crate::{
 /// mutability, so callers hold an `Arc<dyn VariantControl>` and never
 /// need `&mut`.
 pub trait VariantControl: Send + Sync + 'static {
+    /// Bind an unopened decoder input to the exact active source session.
+    /// Preserve its independent cancellation and construction gate, and capture
+    /// bytes, byte map and reader events before the first decoder read.
+    #[must_use]
+    fn bind_active_reader(&self, reader: OpenedReader) -> OpenedReader;
+
     /// Cancel one exact incoming session without disturbing the authoritative
     /// outgoing variant or a newer ABR intent.
     #[must_use]
@@ -58,7 +64,7 @@ pub trait VariantControl: Send + Sync + 'static {
     ) -> StreamResult<Option<VariantTransition>>;
 
     /// Publish the incoming variant only when `transition` still identifies
-    /// the exact pending ABR intent in the same seek epoch.
+    /// the exact pending ABR intent and its prepared source session.
     fn promote_variant(&self, transition: VariantTransition) -> VariantPromotion;
 
     /// Transfer the prepared reader exactly once. The typed result keeps

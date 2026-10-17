@@ -510,6 +510,7 @@ mod tests {
             coverage.insert(start..start + frames);
         }
         TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token("persistence-test".into())
             .revision(revision)
             .source_sample_rate(NonZeroU32::MIN)

@@ -91,7 +91,7 @@ fn linear([_, y0, y1, _]: [f64; 4], x: f64) -> f64 {
 /// The parabola through three taps: `(c2·x + c1)·x + y0` with
 /// `c1 = (y1 − ym1)/2` and `c2 = (y1 − 2·y0 + ym1)/2`.
 #[inline(always)]
-fn quadratic([ym1, y0, y1, _]: [f64; 4], x: f64) -> f64 {
+pub(crate) fn quadratic([ym1, y0, y1, _]: [f64; 4], x: f64) -> f64 {
     let c1 = 0.5 * (y1 - ym1);
     let c2 = 0.5 * (y1 - 2.0 * y0 + ym1);
     (c2 * x + c1) * x + y0

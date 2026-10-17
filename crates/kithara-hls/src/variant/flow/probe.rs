@@ -4,6 +4,7 @@ use kithara_bufpool::HasPool;
 use kithara_download::{FetchCmd, OnCompleteFn, WriterFn};
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Arc};
+use kithara_test_utils::kithara;
 use tracing::{debug, trace};
 use url::Url;
 
@@ -39,8 +40,11 @@ impl SizeDemandState {
         self.inflight.remove(&demand);
     }
 
+    #[kithara::hang_watchdog]
     fn pop_dispatchable(&mut self) -> Option<SizeDemand> {
         while let Some(demand) = self.queue.pop_front() {
+            hang_tick!();
+            hang_reset!();
             self.queued.remove(&demand);
             if self.inflight.insert(demand) {
                 return Some(demand);
@@ -128,6 +132,7 @@ where
         ))
     }
 
+    #[kithara::hang_watchdog]
     pub(in crate::variant) fn dispatch_size_demands(
         self: &Arc<Self>,
         ctx: &PlanCtx<S>,
@@ -136,9 +141,11 @@ where
         cancel: &CancelToken,
     ) {
         while *remaining > 0 {
+            hang_tick!();
             let Some(demand) = self.dispatchable_size_demand() else {
                 break;
             };
+            hang_reset!();
             if self.apply_cached_size(demand) {
                 self.finish_size_demand(demand);
                 ctx.signal.fire();

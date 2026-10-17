@@ -4,18 +4,19 @@ use std::{error::Error as StdError, num::NonZeroUsize};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
     download::{Downloader, DownloaderConfig},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::Stream,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{Pools, TestPools, pools},
     hls_server::aes128_encryption,
+    mock::LaneAudio,
     waits::wait_thread_count_quiesced,
 };
 use num_traits::AsPrimitive;
@@ -38,14 +39,20 @@ fn media_secs() -> f64 {
     segments * consts::SEGMENT_SECS
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3))]
 async fn next_chunk_or_timeout(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     label: &str,
 ) {
     let deadline = time::Instant::now() + Duration::from_secs(3);
     loop {
+        hang_tick!();
         match AudioRead::next_chunk(audio) {
-            Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => return,
+            Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => {
+                hang_reset!();
+                return;
+            }
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("next_chunk decode error at `{label}`: {e}"),
         }
@@ -57,15 +64,18 @@ async fn next_chunk_or_timeout(
     }
 }
 
-async fn preload_or_timeout(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
-    label: &str,
-) {
-    if let Some(gate) = AudioSession::preload_gate(audio) {
-        time::timeout(Duration::from_secs(3), gate.wait())
-            .await
-            .unwrap_or_else(|_| panic!("preload timeout at `{label}`"));
-    }
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3))]
+async fn preload_or_timeout(audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>, label: &str) {
+    time::timeout(Duration::from_secs(3), async {
+        while !audio.current_segment_ready() {
+            hang_tick!();
+            time::sleep(Duration::from_micros(200)).await;
+        }
+        hang_reset!();
+    })
+    .await
+    .unwrap_or_else(|_| panic!("preload timeout at `{label}`"));
 
     AudioControl::preload(audio).unwrap_or_else(|err| panic!("preload failed at `{label}`: {err}"));
 }
@@ -89,10 +99,12 @@ async fn run_drm_seek_resume_cycle(
         .initial_abr_mode(auto(0))
         .build();
 
-    let mut audio = shared_worker
-        .load(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
-        .await
-        .expect("audio creation");
+    let mut audio = kithara_integration_tests::mock::load_audio(
+        shared_worker,
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
+    )
+    .await
+    .expect("audio creation");
     preload_or_timeout(&mut audio, &format!("iter_{iter_idx}_preload")).await;
 
     for w in 0..4 {

@@ -7,12 +7,11 @@ use kithara_assets::EvictionSubscription;
 use kithara_bufpool::HasPool;
 use kithara_download::PeerHandle;
 use kithara_events::DeferredBus;
-use kithara_platform::{CancelScope, sync::Arc, time::Duration};
+use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, BoxedEventSink, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadWrite,
-    ReadOutcome, SeekControl, SeekObserve, SeekPrepare, Source, SourcePhase, SourceProbe,
-    StreamResult,
+    Activity, ActivityWriter, BoxedEventSink, ByteMap, DeferredWake, MediaInfo, PlayheadRead,
+    PlayheadWrite, ReadOutcome, Source, SourcePhase, SourceProbe, StreamResult,
 };
 
 use super::coord::{HlsCoord, HlsProbe};
@@ -101,6 +100,10 @@ impl<S> Source for HlsSource<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    fn cancel_token(&self) -> Option<CancelToken> {
+        Some(self.stream_scope.token())
+    }
+
     fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.peer_handle.as_ref().map(|h| h.abr().clone())
     }
@@ -138,16 +141,8 @@ where
         Arc::new(HlsProbe::new(Arc::clone(&self.coord)))
     }
 
-    fn seek_prepare(&self) -> Option<Arc<dyn SeekPrepare>> {
-        Some(Arc::clone(&self.coord) as Arc<dyn SeekPrepare>)
-    }
-
     fn take_reader_event_sink(&mut self) -> Option<BoxedEventSink> {
-        let sink = HlsReaderEventSink::new(
-            Arc::clone(&self.emit),
-            Arc::clone(&self.coord),
-            self.coord.seek_epoch_handle(),
-        );
+        let sink = HlsReaderEventSink::new(Arc::clone(&self.emit), Arc::clone(&self.coord));
         Some(Box::new(sink))
     }
 
@@ -166,19 +161,18 @@ where
                 &mut self,
                 range: Range<u64>,
                 timeout: Option<Duration>,
+                cancel: Option<&kithara_stream::ReaderControl>,
             ) -> StreamResult<WaitOutcome>;
-            fn activity(&self) -> Arc<dyn Activity>;
+            fn activity(&self) -> Activity;
+            fn take_activity_writer(&mut self) -> Option<ActivityWriter>;
             #[expr(Some($))]
             fn media_info(&self) -> Option<MediaInfo>;
             fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
             fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
-            fn seek_control(&self) -> Arc<dyn SeekControl>;
-            fn seek_observe(&self) -> Arc<dyn SeekObserve>;
             fn set_worker_wake(&self, wake: Arc<dyn kithara_stream::WorkerWake>);
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::OnceLock;
@@ -201,7 +195,7 @@ mod tests {
         time::{self, Instant},
         tokio::task,
     };
-    use kithara_stream::{AudioCodec, ContainerFormat, PlayheadState, SeekState};
+    use kithara_stream::{ActivityWriter, AudioCodec, ContainerFormat, PlayheadState};
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
@@ -282,7 +276,6 @@ mod tests {
             let variant = VariantParts {
                 segments,
                 init: None,
-                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
                 codec: playlist.variant_codec(0),
                 container: playlist.variant_container(0),
             }
@@ -308,7 +301,7 @@ mod tests {
                     signal: ctx.signal.clone(),
                 },
                 Arc::new(PlayheadState::new()),
-                Arc::new(SeekState::new()),
+                ActivityWriter::new(),
                 handle,
                 publisher,
                 Arc::from(vec![variant]),
@@ -332,9 +325,11 @@ mod tests {
                         discriminator: Some("source-test".to_owned()),
                     })
                     .expect("source asset scope"),
-                seek_epoch: 0,
                 look_ahead_segments: None,
-                signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
+                signal: SizeSignal::new(
+                    Arc::new(kithara_platform::sync::CondvarGate::default()),
+                    Arc::new(OnceLock::new()),
+                ),
                 config: Arc::new(
                     HlsConfig::for_url("https://example.com/master.m3u8".parse().expect("url"))
                         .store((*store).clone())
@@ -379,7 +374,6 @@ mod tests {
                 CancelScope::new(Some(cancel.clone())),
             );
             let peer = Arc::new(HlsPeer::new(
-                coord.seek_observe(),
                 coord.activity(),
                 AbrMode::Auto(Some(VariantIndex::new(0))),
                 cancel.clone(),
@@ -505,6 +499,7 @@ mod tests {
             None,
             true,
             DispatchTokens {
+                metadata: fixture.cancel.clone(),
                 fetch: fixture.cancel.clone(),
                 lookahead: fixture.cancel.clone(),
             },
@@ -532,6 +527,7 @@ mod tests {
             None,
             true,
             DispatchTokens {
+                metadata: fixture.cancel.clone(),
                 fetch: fixture.cancel.clone(),
                 lookahead: fixture.cancel.clone(),
             },

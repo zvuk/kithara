@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     ops::Range,
     path::PathBuf,
 };
@@ -10,8 +10,8 @@ use kithara::{
     host::HostOwned,
     platform::time::{self, Duration},
     play::{PlayError, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, Transition},
-    stretch::{BungeeConfig, ElasticBackendConfig, SignalsmithConfig},
+    queue::{Queue, QueueConfig, QueueError, Transition},
+    stretch::ElasticBackendConfig,
     warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
@@ -21,7 +21,7 @@ use kithara_integration_tests::{
     usdt_trace::{self, ProbeEvent, Scope},
     waits::wait_for_loader_done_event,
 };
-use kithara_test_fixtures::{assets::signal_mp3_sine880_30s, signal::goertzel_magnitude};
+use kithara_test_fixtures::assets::signal_mp3_sine880_30s;
 use kithara_test_utils::{TestTempDir, temp_dir};
 
 #[kithara::fixture]
@@ -31,104 +31,13 @@ fn response_source() -> PathBuf {
         .expect("generated sine fixture is stored on disk")
 }
 
+use kithara_integration_tests::mock::RampedFactory;
+
+use super::response::{
+    cases::*,
+    signal::{first_target_onset, signal_rms, tone_is_dominant, unrendered_frames},
+};
 use crate::bufpool_ext::TestPools;
-
-const SAMPLE_RATE: u32 = 44_100;
-const CHANNELS: u16 = 2;
-const TARGET_WINDOW_FRAMES: usize = 128;
-const TONES_HZ: [f64; 4] = [440.0, 880.0, 1_760.0, 3_520.0];
-const TONE_DOMINANCE_RATIO: f64 = 4.0;
-const MIN_SIGNAL_RMS: f64 = 0.003;
-const WARMUP_BLOCK_BUDGET: usize = 200;
-fn response_backends() -> ElasticBackendConfig {
-    ElasticBackendConfig::builder()
-        .signalsmith(
-            SignalsmithConfig::builder()
-                .block_frames(NonZeroUsize::new(224).expect("case block is non-zero"))
-                .interval_frames(NonZeroUsize::new(32).expect("case interval is non-zero"))
-                .build()
-                .expect("valid Signalsmith geometry"),
-        )
-        .bungee(
-            BungeeConfig::builder()
-                .log2_synthesis_hop_adjust(-4)
-                .build(),
-        )
-        .build()
-}
-
-const MINIMUM: ResponseCase = ResponseCase {
-    callback_frames: 128,
-    source_block_frames: 4_096,
-    render_quantum_frames: NonZeroUsize::new(16),
-    smooth_frames: 1,
-    response_budget_frames: 441,
-    initial_rate: 1.0,
-    initial_tone: 1,
-    target_rate: 2.0,
-    target_tone: 2,
-    burst: 0,
-};
-const PRODUCT: ResponseCase = ResponseCase {
-    callback_frames: 128,
-    source_block_frames: 8_192,
-    render_quantum_frames: NonZeroUsize::new(32),
-    smooth_frames: 12,
-    response_budget_frames: 441,
-    initial_rate: 2.0,
-    initial_tone: 2,
-    target_rate: 0.5,
-    target_tone: 0,
-    burst: 0,
-};
-const EXTREME: ResponseCase = ResponseCase {
-    callback_frames: 64,
-    source_block_frames: 16_384,
-    render_quantum_frames: NonZeroUsize::new(32),
-    smooth_frames: 64,
-    response_budget_frames: 441,
-    initial_rate: 0.5,
-    initial_tone: 0,
-    target_rate: 4.0,
-    target_tone: 3,
-    burst: 64,
-};
-
-const RAMP: ResponseCase = ResponseCase {
-    callback_frames: 128,
-    source_block_frames: 8_192,
-    render_quantum_frames: NonZeroUsize::new(32),
-    smooth_frames: 882,
-    response_budget_frames: 441,
-    initial_rate: 2.0,
-    initial_tone: 2,
-    target_rate: 4.0,
-    target_tone: 3,
-    burst: 0,
-};
-
-#[derive(Clone, Copy, Debug)]
-struct ResponseCase {
-    callback_frames: usize,
-    source_block_frames: usize,
-    render_quantum_frames: Option<NonZeroUsize>,
-    smooth_frames: usize,
-    response_budget_frames: usize,
-    initial_rate: f32,
-    initial_tone: usize,
-    target_rate: f32,
-    target_tone: usize,
-    burst: usize,
-}
-
-impl ResponseCase {
-    fn observation_frames(self) -> usize {
-        self.response_budget_frames
-            .saturating_add(self.source_block_frames.saturating_mul(2))
-            .saturating_add(TARGET_WINDOW_FRAMES)
-            .saturating_add(self.callback_frames.saturating_mul(2))
-    }
-}
 
 fn frame_period(frames: usize) -> Duration {
     Duration::from_secs_f64(
@@ -137,79 +46,7 @@ fn frame_period(frames: usize) -> Duration {
     )
 }
 
-fn signal_rms(samples: &[f32]) -> f64 {
-    let mut energy = 0.0;
-    let mut frames = 0_u32;
-    for frame in samples.chunks_exact(usize::from(CHANNELS)) {
-        energy = f64::from(frame[0]).mul_add(f64::from(frame[0]), energy);
-        frames += 1;
-    }
-    if frames == 0 {
-        return 0.0;
-    }
-    (energy / f64::from(frames)).sqrt()
-}
-
-fn tone_is_dominant(samples: &[f32], target: usize) -> bool {
-    let mut channel = [0.0; TARGET_WINDOW_FRAMES];
-    let mut frames = 0;
-    for (sample, frame) in channel
-        .iter_mut()
-        .zip(samples.chunks_exact(usize::from(CHANNELS)))
-    {
-        *sample = frame[0];
-        frames += 1;
-    }
-    let magnitudes = TONES_HZ.map(|tone| goertzel_magnitude(&channel[..frames], tone, SAMPLE_RATE));
-    signal_rms(samples) >= MIN_SIGNAL_RMS
-        && magnitudes.iter().enumerate().all(|(index, magnitude)| {
-            index == target || magnitudes[target] > magnitude * TONE_DOMINANCE_RATIO
-        })
-}
-
-fn first_target_onset(samples: &[f32], command_frame: usize, target: usize) -> Option<usize> {
-    let channels = usize::from(CHANNELS);
-    let frames = samples.len() / channels;
-    (command_frame + TARGET_WINDOW_FRAMES..=frames).find_map(|end| {
-        let start = end - TARGET_WINDOW_FRAMES;
-        tone_is_dominant(&samples[start * channels..end * channels], target)
-            .then_some(start - command_frame)
-    })
-}
-
-/// Sends the case's burst of alternating rates, then its target rate, and
-/// returns the frame the target is sent at. A burst the deck has no room for
-/// stops at its refusal; the next block answers the burst and returns the
-/// room the target needs.
-async fn send_target_rate(
-    harness: &OfflinePlayer,
-    queue: &HostOwned<Queue<TestPools>>,
-    case: ResponseCase,
-    samples: &mut Vec<f32>,
-) -> usize {
-    let refused = harness
-        .run(queue.control(), move |q| {
-            (0..case.burst).find_map(|command| {
-                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 })
-                    .err()
-            })
-        })
-        .await;
-    if let Some(refused) = refused {
-        assert!(
-            matches!(refused, PlayError::SlotChannelFull { .. }),
-            "a burst past the deck's room is refused as full, not {refused:?}"
-        );
-        samples.extend(capture_frames(harness, case.callback_frames, case.callback_frames).await);
-    }
-    let command_frame = samples.len() / usize::from(CHANNELS);
-    harness
-        .run(queue.control(), move |q| q.set_rate(case.target_rate))
-        .await
-        .expect("the deck has room for the target rate");
-    command_frame
-}
-
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn capture_frames(
     harness: &OfflinePlayer,
     frames: usize,
@@ -217,15 +54,31 @@ async fn capture_frames(
 ) -> Vec<f32> {
     let mut samples = Vec::with_capacity(frames * usize::from(CHANNELS));
     while samples.len() / usize::from(CHANNELS) < frames {
+        hang_tick!();
         let remaining = frames - samples.len() / usize::from(CHANNELS);
         let block_frames = remaining.min(callback_frames);
-        samples.extend(harness.render(block_frames).await);
-        let _ = harness.tick_and_drain().await;
+        let block = {
+            let _real_io = kithara::platform::flash::real_io();
+            let mut budget = Duration::ZERO;
+            hang_park!(|remaining| budget = remaining);
+            let rendered = time::timeout(budget, async {
+                let block = harness.render(block_frames).await;
+                let _ = harness.tick_and_drain().await;
+                block
+            })
+            .await;
+            hang_tick!();
+            rendered.expect("offline response callback makes progress within its watchdog")
+        };
+        samples.extend(block);
+        hang_reset!();
         time::sleep(frame_period(block_frames)).await;
+        hang_reset!();
     }
     samples
 }
 
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn capture_command_boundary(
     harness: &OfflinePlayer,
     trace: &Scope,
@@ -235,6 +88,7 @@ async fn capture_command_boundary(
     let mut publish_count = probe_count(&response_events(trace), "publish");
     let mut samples = Vec::new();
     for _ in 0..WARMUP_BLOCK_BUDGET {
+        hang_tick!();
         let block = capture_frames(harness, callback_frames, callback_frames).await;
         samples.extend_from_slice(&block);
         let after = response_events(trace);
@@ -275,6 +129,40 @@ async fn capture_command_boundary(
     );
 }
 
+/// Sends the case's burst of alternating rates, then its target rate, and
+/// returns the frame the target is sent at. A burst the deck has no room for
+/// stops at its refusal; the next block answers the burst and returns the
+/// room the target needs.
+async fn send_target_rate(
+    harness: &OfflinePlayer,
+    queue: &HostOwned<Queue<TestPools, RampedFactory>>,
+    case: ResponseCase,
+    samples: &mut Vec<f32>,
+) -> usize {
+    let refused = harness
+        .run(queue.control(), move |q| {
+            (0..case.burst).find_map(|command| {
+                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 })
+                    .err()
+            })
+        })
+        .await;
+    if let Some(refused) = refused {
+        assert!(
+            matches!(refused, QueueError::Play(PlayError::Full(_))),
+            "a burst past the deck's room is refused as full, not {refused:?}"
+        );
+        samples.extend(capture_frames(harness, case.callback_frames, case.callback_frames).await);
+    }
+    let command_frame = samples.len() / usize::from(CHANNELS);
+    harness
+        .run(queue.control(), move |q| q.set_rate(case.target_rate))
+        .await
+        .expect("the deck has room for the target rate");
+    command_frame
+}
+
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn capture_until_applied(
     harness: &OfflinePlayer,
     trace: &Scope,
@@ -282,6 +170,7 @@ async fn capture_until_applied(
 ) -> (Vec<f32>, u64, Vec<ProbeEvent>) {
     let mut samples = Vec::new();
     for _ in 0..WARMUP_BLOCK_BUDGET {
+        hang_tick!();
         samples.extend(capture_frames(harness, case.callback_frames, case.callback_frames).await);
         let events = response_events(trace);
         let Some(revision) = events
@@ -340,22 +229,20 @@ fn probe_count(events: &[ProbeEvent], name: &str) -> usize {
     events.iter().filter(|event| event.probe == name).count()
 }
 
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn playing_queue(
     temp_dir: &TestTempDir,
     backend: StretchKind,
     backends: ElasticBackendConfig,
     case: ResponseCase,
     response_source: PathBuf,
-) -> (OfflinePlayer, HostOwned<Queue<TestPools>>) {
+) -> (OfflinePlayer, HostOwned<Queue<TestPools, RampedFactory>>) {
     let warp = WarpConfig::builder()
         .speed(1.0)
         .backend(backend)
         .backends(backends)
         .source_block_frames(
             NonZeroUsize::new(case.source_block_frames).expect("case source block is non-zero"),
-        )
-        .rate_smooth_frames(
-            NonZeroUsize::new(case.smooth_frames).expect("case smoothing is non-zero"),
         )
         .maybe_render_quantum_frames(case.render_quantum_frames)
         .build();
@@ -378,7 +265,13 @@ async fn playing_queue(
         SAMPLE_RATE,
     )
     .await;
-    let queue = Queue::new(QueueConfig::builder().player(harness.take_player()).build());
+    let frames = NonZeroU64::new(u64::try_from(case.smooth_frames).expect("smoothing fits u64"))
+        .expect("smoothing is nonzero");
+    let queue = Queue::new(
+        QueueConfig::with_factory(RampedFactory(frames))
+            .prep(harness.resource_prep().clone())
+            .build(),
+    );
     let queue = harness.insert(queue).await;
     harness
         .run(queue.control(), move |q| {
@@ -400,33 +293,20 @@ async fn playing_queue(
         .run(queue.control(), move |q| q.append(config))
         .await
         .expect("append sine fixture");
-    wait_for_loader_done_event(&mut events, &queue, id, Duration::from_secs(30))
-        .await
-        .expect("load sine fixture through resident queue");
+    let mut budget = Duration::ZERO;
+    hang_park!(|remaining: Duration| budget = remaining.min(Duration::from_secs(5)));
+    let loaded = {
+        let _real_io = kithara::platform::flash::real_io();
+        wait_for_loader_done_event(&mut events, &queue, id, budget).await
+    };
+    hang_tick!();
+    loaded.expect("load sine fixture through resident queue");
+    hang_reset!();
     harness
         .run(queue.control(), move |q| q.select(id, Transition::None))
         .await
         .expect("select live-rate fixture");
     (harness, queue)
-}
-
-/// Output frames in `[from, to)` that no span covers.
-fn unrendered_frames(spans: &[(u64, u64)], from: u64, to: u64) -> u64 {
-    let mut ordered = spans.to_vec();
-    ordered.sort_unstable();
-    let mut cursor = from;
-    let mut missing = 0;
-    for (start, end) in ordered {
-        if cursor >= to || start >= to {
-            break;
-        }
-        if end <= cursor {
-            continue;
-        }
-        missing += start.saturating_sub(cursor);
-        cursor = end.min(to).max(cursor);
-    }
-    missing + to.saturating_sub(cursor)
 }
 
 /// The output ranges the feeder filled from rendered source.
@@ -533,6 +413,7 @@ fn assert_response(
     );
 }
 
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn run_case(
     temp_dir: &TestTempDir,
     backend: StretchKind,
@@ -594,7 +475,12 @@ async fn run_case(
         &at_apply,
     );
     drop(queue);
-    harness.close().await;
+    let mut budget = Duration::ZERO;
+    hang_park!(|remaining| budget = remaining);
+    time::timeout(budget, harness.close())
+        .await
+        .expect("rate harness shutdown watchdog");
+    hang_tick!();
 }
 
 /// The gap arithmetic must name every frame no span covers and must invent
@@ -816,6 +702,7 @@ fn assert_strict_response(
     );
 }
 
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn run_strict_case(
     temp_dir: &TestTempDir,
     backend: StretchKind,
@@ -867,7 +754,12 @@ async fn run_strict_case(
     save_response_audio(backend, case, command_frame, &samples);
     assert_strict_response(backend, case, command_frame, &samples, &events);
     drop(queue);
-    harness.close().await;
+    let mut budget = Duration::ZERO;
+    hang_park!(|remaining| budget = remaining);
+    time::timeout(budget, harness.close())
+        .await
+        .expect("rate harness shutdown watchdog");
+    hang_tick!();
 }
 
 #[kithara::test(
@@ -919,8 +811,8 @@ async fn live_rate_change_reaches_presented_pcm_within_response_budget(
     run_strict_case(&temp_dir, backend, backends, case, response_source).await;
 }
 
-/// A plain rate step is ramped by the existing Warp manual-rate smoother: no block moves the multiplier
-/// further than the smoother's worst-case step for that block, the renderer
+/// The fixture submits a rate step as an explicit output-frame ramp: no block moves the multiplier
+/// further than the ramp's worst-case step for that block, the renderer
 /// applies intermediate ratios, and the ramp settles at the target.
 #[kithara::test(
     tokio,

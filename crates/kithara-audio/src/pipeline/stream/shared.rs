@@ -1,52 +1,21 @@
 use std::{
     io::{self, Read, Seek, SeekFrom},
     ops::Range,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use delegate::delegate;
 use kithara_abr::AbrHandle;
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+};
 use kithara_stream::{
-    Activity, ByteMap, ConstructionGate, DeferredWake, MediaInfo, OpenedReader, PlayheadWrite,
-    SeekControl, SeekObserve, SourcePhase, SourceProbe, SourceSeekAnchor, Stream, StreamResult,
-    StreamType, VariantControl, WaitOutcome, WorkerWake, format_change_segment_range,
-    resolve_seek_target,
+    ByteMap, ConstructionGate, DeferredWake, MediaInfo, OpenedReader, PlayheadWrite, ReaderControl,
+    SourceProbe, SourceSeekAnchor, Stream, StreamResult, StreamType, VariantControl,
+    format_change_segment_range, resolve_seek_target,
 };
 
 use super::offset::OffsetReader;
-
-/// Reader-demand handoff from the produce core to the scheduler shell.
-///
-/// The gate's parked phase polls must tell the source which range the
-/// decoder waits on, but the filing call ([`Stream::probe_wait`] →
-/// `Source::wait_range`) takes source-side locks and is off-limits on the
-/// forbid-blocking core. Same split as `DeferredWake`: the core arms this
-/// wait-free cell, the shell flushes it. Single writer (produce core),
-/// single reader (shell); a re-arm before the flush overwrites the range —
-/// only the latest polled window matters.
-#[derive(Default)]
-struct DemandCell {
-    armed: AtomicBool,
-    end: AtomicU64,
-    start: AtomicU64,
-}
-
-impl DemandCell {
-    fn arm(&self, range: Range<u64>) {
-        self.start.store(range.start, Ordering::Relaxed);
-        self.end.store(range.end, Ordering::Relaxed);
-        self.armed.store(true, Ordering::Release);
-    }
-
-    fn take(&self) -> Option<Range<u64>> {
-        if self.armed.swap(false, Ordering::AcqRel) {
-            Some(self.start.load(Ordering::Relaxed)..self.end.load(Ordering::Relaxed))
-        } else {
-            None
-        }
-    }
-}
 
 /// Shared stream wrapper for format change detection.
 ///
@@ -55,7 +24,6 @@ impl DemandCell {
 /// - `StreamAudioSource` to check `media_info()` for format changes
 #[derive_where::derive_where(Clone; T: StreamType)]
 pub(crate) struct SharedStream<T: StreamType> {
-    demand: Arc<DemandCell>,
     inner: Arc<Mutex<Stream<T>>>,
     /// Narrow byte-space handle. RT polls — phase, cursor, length, byte
     /// map — answer from here and never take `inner`: off-RT holders (a
@@ -70,6 +38,8 @@ pub(crate) struct SharedStream<T: StreamType> {
     /// gate; every opened reader receives a fresh gate so an off-RT rebuild
     /// cannot switch the active decoder to blocking I/O.
     construction_gate: Option<ConstructionGate>,
+    reader_control: Option<ReaderControl>,
+    cancel: Option<CancelToken>,
     peer_wake: Option<Arc<DeferredWake>>,
     variants: Option<Arc<dyn VariantControl>>,
 }
@@ -80,29 +50,21 @@ impl<T: StreamType> SharedStream<T> {
         let abr = stream.abr_handle();
         let variants = stream.variant_control();
         let peer_wake = stream.peer_wake();
+        let cancel = stream.cancel_token();
         Self {
             probe,
             abr,
             variants,
             peer_wake,
             inner: Arc::new(Mutex::new(stream)),
-            demand: Arc::default(),
             construction_gate: None,
+            reader_control: None,
+            cancel,
         }
     }
 
-    /// Record `range` as the window a parked decoder poll waits on.
-    /// Wait-free; safe on the forbid-blocking produce core.
-    pub(crate) fn arm_demand(&self, range: Range<u64>) {
-        self.demand.arm(range);
-    }
-
-    /// Deliver the armed demand window to the source ([`Stream::probe_wait`]).
-    /// Locks source state — scheduler shell only.
-    pub(crate) fn flush_demand(&self) {
-        if let Some(range) = self.demand.take() {
-            let _ = self.probe_wait(range);
-        }
+    pub(crate) fn variant_control(&self) -> Option<Arc<dyn VariantControl>> {
+        self.variants.clone()
     }
 
     /// Header byte range for decoder recreate after a format change — via
@@ -112,37 +74,52 @@ impl<T: StreamType> SharedStream<T> {
         format_change_segment_range(self.variants.as_deref())
     }
 
-    pub(crate) fn has_variant_surface(&self) -> bool {
-        self.variants.is_some()
+    pub(crate) fn open_initial_reader(&self) -> OpenedReader {
+        self.open_reader_with_control(self.new_reader_control())
     }
 
-    pub(crate) fn open_initial_reader(&self) -> OpenedReader {
+    fn open_reader_with_control(&self, control: ReaderControl) -> OpenedReader {
         let construction_gate = ConstructionGate::default();
-        OpenedReader::new(
-            self.with_construction_gate(construction_gate.clone()),
+        let reader = OpenedReader::new(
+            self.with_reader(construction_gate.clone(), control.clone()),
             self.len(),
             self.byte_map(),
             Some(construction_gate),
+            control,
             self.take_reader_event_sink(),
-        )
+        );
+        match &self.variants {
+            Some(variants) => variants.bind_active_reader(reader),
+            None => reader,
+        }
     }
 
-    pub(crate) fn open_rebuild_reader(&self, base_offset: u64) -> OpenedReader {
-        let byte_len = self.len().map(|length| length.saturating_sub(base_offset));
-        let byte_map = self.byte_map();
-        let event_sink = self.take_reader_event_sink();
-        let construction_gate = ConstructionGate::default();
-        let input = OffsetReader::new(
-            self.with_construction_gate(construction_gate.clone()),
-            base_offset,
-        );
-        OpenedReader::new(
+    pub(crate) fn new_reader_control(&self) -> ReaderControl {
+        ReaderControl::new(self.cancel.clone())
+    }
+
+    pub(crate) fn open_rebuild_reader_with_control(
+        &self,
+        base_offset: u64,
+        control: ReaderControl,
+    ) -> io::Result<OpenedReader> {
+        let mut reader = self.open_reader_with_control(control);
+        let byte_len = reader
+            .byte_len()
+            .map(|length| length.saturating_sub(base_offset));
+        let byte_map = reader.byte_map();
+        let construction_gate = reader.construction_gate();
+        let control = reader.control();
+        let event_sink = reader.take_event_sink();
+        let input = OffsetReader::new(reader.into_inner(), base_offset)?;
+        Ok(OpenedReader::new(
             input,
             byte_len,
             byte_map,
-            Some(construction_gate),
+            construction_gate,
+            control,
             event_sink,
-        )
+        ))
     }
 
     /// Real-time on-core seek (FSM recreate/boundary, decoder
@@ -166,28 +143,26 @@ impl<T: StreamType> SharedStream<T> {
         Ok(new_pos)
     }
 
-    fn with_construction_gate(&self, construction_gate: ConstructionGate) -> Self {
+    fn with_reader(
+        &self,
+        construction_gate: ConstructionGate,
+        reader_control: ReaderControl,
+    ) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
             probe: Arc::clone(&self.probe),
             abr: self.abr.clone(),
             variants: self.variants.clone(),
             peer_wake: self.peer_wake.clone(),
-            demand: Arc::clone(&self.demand),
             construction_gate: Some(construction_gate),
+            reader_control: Some(reader_control),
+            cancel: self.cancel.clone(),
         }
     }
 
     delegate! {
         to self.probe {
-            /// Overall source readiness at current position.
-            ///
-            /// Byte-space polls are answered by the narrow probe rather than the control mutex,
-            /// keeping them RT-safe on the forbid-blocking produce core.
-            pub(crate) fn phase(&self) -> SourcePhase;
-            /// Point-in-time readiness for a specific byte range — same
-            /// contract as [`Self::phase`].
-            pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+            pub(crate) fn phase(&self) -> kithara_stream::SourcePhase;
             /// Current read position — the source's atomic cursor.
             pub(crate) fn position(&self) -> u64;
             /// Absolute byte cursor set — forwards to the inner source's
@@ -219,24 +194,9 @@ impl<T: StreamType> SharedStream<T> {
             pub(crate) fn seek_time_anchor(&self, position: kithara_platform::time::Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
             /// Build a fresh reader-side event-sink instance from the inner source.
             pub(crate) fn take_reader_event_sink(&self) -> Option<kithara_stream::BoxedEventSink>;
-            pub(crate) fn seek_prepare(&self) -> Option<Arc<dyn kithara_stream::SeekPrepare>>;
             /// Narrow mutating playhead handle.
             pub(crate) fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
-            /// Narrow seek-control handle.
-            pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl>;
-            /// Narrow seek-observe handle.
-            pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve>;
-            /// Narrow activity handle.
-            pub(crate) fn activity(&self) -> Arc<dyn Activity>;
-            /// Zero-budget readiness probe that also files `range` as reader
-            /// demand with the source — the channel dispatch budgets follow.
-            /// See [`Stream::probe_wait`].
-            pub(crate) fn probe_wait(&self, range: Range<u64>) -> StreamResult<WaitOutcome>;
-            /// Install the audio worker's data-arrival wake on the inner
-            /// source. Segmented sources (HLS) fire it from their off-RT
-            /// write/settle sites; no-op for non-segmented sources. Set once,
-            /// after the worker exists.
-            pub(crate) fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>);
+
         }
     }
 }
@@ -254,8 +214,12 @@ impl<T: StreamType> Read for SharedStream<T> {
             .construction_gate
             .as_ref()
             .is_some_and(ConstructionGate::is_armed)
+            || self
+                .reader_control
+                .as_ref()
+                .is_some_and(ReaderControl::is_blocking)
         {
-            stream.read(buf)
+            stream.read_with_control(buf, self.reader_control.as_ref())
         } else {
             stream.probe_read(buf)
         }
@@ -268,8 +232,14 @@ impl<T: StreamType> Seek for SharedStream<T> {
             .construction_gate
             .as_ref()
             .is_some_and(ConstructionGate::is_armed)
+            || self
+                .reader_control
+                .as_ref()
+                .is_some_and(ReaderControl::is_blocking)
         {
-            self.inner.lock().seek(pos)
+            self.inner
+                .lock()
+                .seek_with_control(pos, self.reader_control.as_ref())
         } else {
             self.probe_seek(pos)
         }

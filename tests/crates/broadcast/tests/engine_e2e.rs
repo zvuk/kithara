@@ -4,18 +4,24 @@ use kithara::{
     self,
     audio::mock::TestPcmReader,
     broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, BroadcastOutput},
-    events::TrackId,
     host::Tap,
     net::{HttpClient, NetOptions},
     output::{LiveOutput, OutputGroup},
-    platform::{CancelScope, time::Duration, tokio::task::spawn_blocking},
+    platform::{
+        CancelScope,
+        time::{Duration, WallInstant},
+        tokio::task::spawn_blocking,
+    },
     play::Resource,
     signal::AudioSpec,
     worker::{Worker, WorkerConfig},
 };
 use kithara_integration_tests::{
     bufpool_ext::pools,
-    offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
+    offline::{
+        LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions, append_source_loaded,
+        resource_from_reader,
+    },
 };
 use kithara_test_fixtures::integration_fixtures::broadcast_tone;
 use kithara_test_utils::wait_until;
@@ -40,16 +46,20 @@ async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayer {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SESSION_RATE)
             .await;
+    let deck_source = harness.pcm_deck((tone_resource(broadcast_tone)).into());
+    let item = append_source_loaded(&harness, harness.player(), deck_source).await;
     harness
-        .with_player(move |player| {
-            player.insert(tone_resource(broadcast_tone), TrackId::allocate(), None);
+        .with_queue(move |player| {
             player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
+                .select(item, kithara::queue::Transition::None)
+                .expect("select tone");
+            player.play();
         })
         .await;
-    harness.render(BLOCK_FRAMES).await;
-    let _ = harness.tick_and_drain().await;
+    harness
+        .render_until_current(item, BLOCK_FRAMES, WallInstant::now() + LOCAL_LOAD_DEADLINE)
+        .await;
+    assert!(harness.player().playback_view().playing);
     harness
 }
 
@@ -213,9 +223,7 @@ impl Drop for OnAir {
 #[kithara::test(tokio)]
 async fn the_session_renders_the_source_tone(broadcast_tone: Vec<f32>) {
     let harness = playing_harness(broadcast_tone).await;
-
     let rendered = render_blocks(&harness, 200).await;
-
     assert_carries_the_tone(
         &left_channel(&rendered),
         TONE_HZ,
@@ -241,7 +249,7 @@ async fn the_engine_mix_reaches_an_http_client_as_the_source_tone(broadcast_tone
     .await
     .expect("broadcast drain task completes");
 
-    let decoded = decode_adts_left(on_air.listed_stream().await);
+    let decoded = decode_adts_left(on_air.listed_stream().await).await;
 
     assert_eq!(
         on_air.handle.status().dropped_samples,
@@ -301,7 +309,7 @@ async fn an_intake_gap_breaks_the_served_playlist(broadcast_tone: Vec<f32>) {
     for uri in &after_break {
         stream.extend_from_slice(&on_air.get(&format!("v/0/{uri}")).await);
     }
-    let decoded = decode_adts_left(stream);
+    let decoded = decode_adts_left(stream).await;
 
     assert!(
         decoded.len() >= TAIL_TONE_FRAMES,

@@ -1,5 +1,8 @@
 use kithara_bufpool::{ByteBuffer, SampleBuffer};
-use kithara_platform::sync::{Arc, mpsc};
+use kithara_platform::{
+    sync::{Arc, mpsc},
+    time::Duration,
+};
 
 pub(crate) enum HostCmd {
     Open {
@@ -17,7 +20,7 @@ pub(crate) enum HostCmd {
     Decode {
         decoder_id: u64,
         data: ByteBuffer,
-        pts_us: u64,
+        pts: Duration,
         key: bool,
         generation: u64,
     },
@@ -41,7 +44,7 @@ pub(crate) enum HostOut {
         frames: u32,
         sample_rate: u32,
         channels: u16,
-        pts_us: u64,
+        pts: Duration,
         generation: u64,
     },
     Configured {

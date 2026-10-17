@@ -1,38 +1,28 @@
 use super::imports::*;
 
 pub(crate) const BLOCK_FRAMES: usize = 512;
-
 /// How many blocks a build renders before it checks that a transport was
 /// committed. Builds of one case are compared frame by frame, so the span has
 /// to be the same every time rather than however long one race took to
 /// resolve; it is wide enough that the commit lands inside it on a loaded
 /// machine, and a build that still has no transport by the end says so.
 pub(crate) const WARM_UP_BLOCKS: usize = 24;
-
 pub(crate) const CHANNELS: u16 = 2;
-
 pub(crate) const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// Room in the master tap for one `render`, which renders at most a second.
 pub(crate) const MASTER_TAP_SECONDS: usize = 2;
-
 pub(crate) const START_BPM: f64 = 120.0;
-
 /// The metronome over the scenario music: the duck takes a fifth of the mix
 /// under a click, so the beat the click sits on keeps its attack, and the
 /// click peaks at that fifth of the ceiling, the most the duck leaves room for.
 pub(crate) const METRONOME_DUCK: f32 = 0.2;
-
 /// A deadline of ~85 ms at 48 kHz: many times what one player's ring holds
 /// at the bounded render quantum.
 pub(crate) const LOOSE_RESPONSE_BUDGET: usize = 4_096;
-
-/// The synthetic rhythm fixtures: 12 seconds at `START_BPM`, first beat on
-/// frame 0.
+/// The synthetic rhythm fixtures: 12 seconds at `START_BPM`, with the first
+/// audible downbeat one beat after zero.
 pub(crate) const SYNTHETIC_BEATS: u32 = 24;
-
 pub(crate) const SECONDS_PER_MINUTE: f64 = 60.0;
-
 /// A start well inside every track, off its downbeat, for a case that needs
 /// no musical entry.
 pub(crate) const CUE: Start = Start::Seconds(5.25);
@@ -55,8 +45,18 @@ pub(crate) fn synthetic_grid() -> ArtifactSource<BeatGridModel> {
         duration: None,
         bpm: START_BPM,
         beats,
-        downbeats: Vec::new(),
-        meter: None,
+        downbeats: (1..SYNTHETIC_BEATS)
+            .step_by(4)
+            .map(|ordinal| kithara::beat::GridDownbeat {
+                at: f64::from(ordinal) * spacing,
+                beat_ordinal: i64::from(ordinal),
+                confidence: Some(1.0),
+            })
+            .collect(),
+        meter: Some(kithara::sync::Meter {
+            beats_per_bar: std::num::NonZeroU16::new(4).expect("fixture meter"),
+            origin_beat_ordinal: 1,
+        }),
     })
     .expect("synthetic rhythm beats form a valid grid");
     ArtifactSource::Value(Arc::new(model))
@@ -168,7 +168,7 @@ impl SyncCase {
         }
     }
 
-    const fn response_budget(mut self, frames: NonZeroUsize) -> Self {
+    pub(crate) const fn response_budget(mut self, frames: NonZeroUsize) -> Self {
         self.response_budget = Some(frames);
         self
     }
@@ -219,30 +219,23 @@ impl SyncCase {
 
 pub(crate) const PLAY_SYNC_SEEK: SyncCase =
     SyncCase::running("play-sync-seek", 2, 48_000, OperationOrder::PlaySyncSeek);
-
 pub(crate) const PLAY_SEEK_SYNC: SyncCase =
     SyncCase::running("play-seek-sync", 2, 44_100, OperationOrder::PlaySeekSync)
         .ride(TempoRide::Up, 30);
-
 pub(crate) const SEEK_PLAY_SYNC: SyncCase =
     SyncCase::running("seek-play-sync", 2, 48_000, OperationOrder::SeekPlaySync)
         .ride(TempoRide::Down, 60);
-
 pub(crate) const SEEK_SYNC_PLAY: SyncCase =
     SyncCase::running("seek-sync-play", 2, 44_100, OperationOrder::SeekSyncPlay)
         .ride(TempoRide::Triangle, 30);
-
 pub(crate) const SYNC_PLAY_SEEK: SyncCase =
     SyncCase::running("sync-play-seek", 2, 48_000, OperationOrder::SyncPlaySeek)
         .ride(TempoRide::Up, 60);
-
 pub(crate) const SYNC_SEEK_PLAY: SyncCase =
     SyncCase::running("sync-seek-play", 2, 44_100, OperationOrder::SyncSeekPlay)
         .ride(TempoRide::Down, 120);
-
 pub(crate) const SEQUENTIAL_SYNC: SyncCase =
     SyncCase::running("sequential-sync", 2, 48_000, OperationOrder::SequentialSync);
-
 pub(crate) const PAUSED_SYNC: SyncCase = SyncCase::running(
     "paused-sync-then-play",
     2,
@@ -250,32 +243,26 @@ pub(crate) const PAUSED_SYNC: SyncCase = SyncCase::running(
     OperationOrder::SyncPlaySeek,
 )
 .paused();
-
 pub(crate) const FOUR_DECK_SYNC: SyncCase = SyncCase::running(
     "four-deck-sequential-sync",
     4,
     48_000,
     OperationOrder::SequentialSync,
 );
-
 pub(crate) const TEMPO_UP_120: SyncCase =
     SyncCase::running("tempo-up-120hz", 2, 48_000, OperationOrder::PlaySyncSeek)
         .ride(TempoRide::Up, 120);
-
 pub(crate) const TEMPO_DOWN_30: SyncCase =
     SyncCase::running("tempo-down-30hz", 2, 44_100, OperationOrder::PlaySyncSeek)
         .ride(TempoRide::Down, 30);
-
 pub(crate) const ONE_DECK: SyncCase =
     SyncCase::running("one-deck-runtime", 1, 48_000, OperationOrder::PlaySyncSeek);
-
 /// A paused deck on a host whose rate differs from the fixtures' 48 kHz.
 pub(crate) const STAGED_CUE: SyncCase =
     SyncCase::running("staged-cue", 1, 44_100, OperationOrder::SyncPlaySeek)
         .paused()
         .hold(120.0)
         .gridded();
-
 /// [`STAGED_CUE`] beside a second paused deck that keeps the session
 /// running: unloading the first deck then leaves the session's grid alone,
 /// where a session left with no started deck shuts down and withdraws the
@@ -289,7 +276,6 @@ pub(crate) const STAGED_CUE_BESIDE_A_DECK: SyncCase = SyncCase::running(
 .paused()
 .hold(120.0)
 .gridded();
-
 /// A staged cue under a response deadline far looser than the lane's ring.
 pub(crate) const STAGED_UNDER_LOOSE_DEADLINE: SyncCase = SyncCase::running(
     "staged-under-loose-deadline",
@@ -301,7 +287,6 @@ pub(crate) const STAGED_UNDER_LOOSE_DEADLINE: SyncCase = SyncCase::running(
 .hold(120.0)
 .gridded()
 .response_budget(NonZeroUsize::new(LOOSE_RESPONSE_BUDGET).expect("loose budget is not zero"));
-
 /// A deck that keeps sounding while a lane is staged beside it.
 pub(crate) const STAGED_BESIDE_PLAYBACK: SyncCase = SyncCase::running(
     "staged-beside-playback",
@@ -311,7 +296,6 @@ pub(crate) const STAGED_BESIDE_PLAYBACK: SyncCase = SyncCase::running(
 )
 .hold(120.0)
 .gridded();
-
 /// [`STAGED_BESIDE_PLAYBACK`] with nothing staged: the PCM the sounding deck
 /// must keep.
 pub(crate) const STAGED_BESIDE_PLAYBACK_CONTROL: SyncCase = SyncCase::running(
@@ -322,7 +306,6 @@ pub(crate) const STAGED_BESIDE_PLAYBACK_CONTROL: SyncCase = SyncCase::running(
 )
 .hold(120.0)
 .gridded();
-
 /// A sounding deck whose worker has no slot left for a staged lane.
 pub(crate) const STAGED_WITHOUT_CAPACITY: SyncCase = SyncCase::running(
     "staged-without-capacity",
@@ -333,7 +316,6 @@ pub(crate) const STAGED_WITHOUT_CAPACITY: SyncCase = SyncCase::running(
 .hold(120.0)
 .capacity(NonZeroUsize::MIN)
 .gridded();
-
 pub(crate) const SHARED_DEADLINE: SyncCase = SyncCase::running(
     "shared-worker-deadline",
     4,
@@ -341,7 +323,6 @@ pub(crate) const SHARED_DEADLINE: SyncCase = SyncCase::running(
     OperationOrder::PlaySyncSeek,
 )
 .ride(TempoRide::Up, 120);
-
 pub(crate) const SHARED_DEADLINE_CONTROL: SyncCase = SyncCase::running(
     "shared-worker-control",
     1,
@@ -358,7 +339,6 @@ pub(crate) const REAL_TRACK_SYNC: SyncCase = SyncCase::running(
     OperationOrder::SequentialSync,
 )
 .gridded();
-
 /// Four decks of one real track, staggered, synced one after the other.
 pub(crate) const REAL_TRACK_FOUR_DECK_SYNC: SyncCase = SyncCase::running(
     "real-track-four-deck-sequential-sync",
@@ -375,7 +355,6 @@ pub(crate) const AMBIENT_TRIP_HOP_SYNC: SyncCase = SyncCase::running(
     OperationOrder::SequentialSync,
 )
 .hold(74.0);
-
 pub(crate) const DOWNTEMPO_HOUSE_SYNC: SyncCase = SyncCase::running(
     "downtempo-96-to-house-124",
     2,
@@ -383,7 +362,6 @@ pub(crate) const DOWNTEMPO_HOUSE_SYNC: SyncCase = SyncCase::running(
     OperationOrder::PlaySyncSeek,
 )
 .hold(124.0);
-
 pub(crate) const TECHNO_BREAKBEAT_SYNC: SyncCase = SyncCase::running(
     "techno-132-to-breakbeat-140",
     2,
@@ -391,7 +369,6 @@ pub(crate) const TECHNO_BREAKBEAT_SYNC: SyncCase = SyncCase::running(
     OperationOrder::SeekPlaySync,
 )
 .hold(132.0);
-
 pub(crate) const CROSS_STYLE_SYNC: SyncCase = SyncCase::running(
     "cross-style-four-deck-124",
     4,
@@ -401,37 +378,30 @@ pub(crate) const CROSS_STYLE_SYNC: SyncCase = SyncCase::running(
 .hold(124.0);
 
 pub(crate) const AMBIENT_TRIP_HOP: &[&str] = &[
-    "rhythm_wav_ambient_dub_62_aligned",
-    "rhythm_wav_trip_hop_74_aligned",
+    "rhythm_wav_16s_ambient_dub_62_aligned",
+    "rhythm_wav_16s_trip_hop_74_aligned",
 ];
-
 pub(crate) const DOWNTEMPO_HOUSE: &[&str] = &[
     "rhythm_wav_downtempo_96_aligned",
     "rhythm_wav_house_124_aligned",
 ];
-
 pub(crate) const TECHNO_BREAKBEAT: &[&str] = &[
     "rhythm_wav_techno_132_aligned",
     "rhythm_wav_breakbeat_140_aligned",
 ];
-
 pub(crate) const CROSS_STYLE: &[&str] = &[
-    "rhythm_wav_ambient_dub_62_aligned",
+    "rhythm_wav_16s_ambient_dub_62_aligned",
     "rhythm_wav_downtempo_96_aligned",
     "rhythm_wav_house_124_aligned",
     "rhythm_wav_breakbeat_140_aligned",
 ];
-
 /// Richie Hawtin - The Tunnel, a straight-kick track with a steady grid.
 pub(crate) const TUNNEL: &[&str] = &["library_mp3_zvuk_27390231"];
-
 /// A straight 48 kHz techno track, the Tunnel's counterpart at the session rate.
 pub(crate) const NEWTECHNO: &[&str] = &["library_flac_newtechno"];
-
 /// Newtechno's grid states no bars: its detected downbeats disagree on the
 /// bar phase. Its second phrase, where the full groove enters, opens on
 /// analysed beat 64.
 pub(crate) const NEWTECHNO_PHRASE: Start = Start::Beat(64);
-
 /// The Tunnel's fifth bar: a cue well inside the track, on its kick.
 pub(crate) const TUNNEL_CUE: Start = Start::bar(4);

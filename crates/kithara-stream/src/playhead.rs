@@ -33,6 +33,8 @@ pub struct ChunkPosition {
     pub frames: u64,
     /// Source bytes the chunk decoded from (decoder ground truth).
     pub source_bytes: u64,
+    /// Original visible position in this consumed chunk's raw clock, when known.
+    pub visible_origin: Option<Duration>,
 }
 
 /// Source-agnostic playback playhead. The committed position is the single
@@ -68,10 +70,10 @@ pub trait PlayheadRead: Send + Sync {
 /// Mutating view — the decode/produce path holds this. It is the ONLY mutator;
 /// no à-la-carte field setters to desync.
 pub trait PlayheadWrite: PlayheadRead {
-    /// Advance to the end of a consumed chunk (caps at total duration).
+    /// Advance to a consumed raw endpoint, capped in the chunk's source clock.
     fn advance(&self, pos: &ChunkPosition);
-    /// Partial playback-progress write, capped at total duration.
-    fn advance_partial(&self, position: Duration);
+    /// Advance partial raw progress using the matching consumed chunk geometry.
+    fn advance_partial(&self, position: Duration, visible_origin: Option<Duration>);
     /// Pin after a seek to decoder truth, even when duration metadata is stale.
     fn land(&self, pos: &ChunkPosition);
     /// Publish how much of the source is on disk, as a byte prefix measured
@@ -100,20 +102,20 @@ impl PlayheadState {
         }
     }
 
-    fn cap(&self) -> u64 {
-        match self.total_duration_ns.load(Ordering::Acquire) {
-            Self::NO_DURATION => u64::MAX,
-            d => d,
-        }
+    fn cap(&self, visible_origin: Option<Duration>) -> u64 {
+        visible_origin
+            .and_then(|origin| origin.checked_add(self.duration()?))
+            .and_then(|end| u64::try_from(end.as_nanos()).ok())
+            .unwrap_or(u64::MAX)
     }
 
     fn write_ns(&self, ns: u64) {
         self.position_ns.store(ns, Ordering::Release);
     }
 
-    fn write_ns_capped(&self, ns: u64) {
+    fn write_ns_capped(&self, ns: u64, visible_origin: Option<Duration>) {
         self.position_ns
-            .store(ns.min(self.cap()), Ordering::Release);
+            .store(ns.min(self.cap(visible_origin)), Ordering::Release);
     }
 }
 
@@ -150,12 +152,12 @@ impl PlayheadRead for PlayheadState {
 impl PlayheadWrite for PlayheadState {
     fn advance(&self, pos: &ChunkPosition) {
         kithara::probe_event!(write_playhead, committed_ns = pos.end_position_ns);
-        self.write_ns_capped(pos.end_position_ns);
+        self.write_ns_capped(pos.end_position_ns, pos.visible_origin);
     }
 
-    fn advance_partial(&self, position: Duration) {
+    fn advance_partial(&self, position: Duration, visible_origin: Option<Duration>) {
         let nanos = u64::try_from(position.as_nanos()).unwrap_or(u64::MAX);
-        self.write_ns_capped(nanos);
+        self.write_ns_capped(nanos, visible_origin);
     }
 
     fn land(&self, pos: &ChunkPosition) {
@@ -202,7 +204,7 @@ mod tests {
     fn partial_advance_caps_at_duration() {
         let s = PlayheadState::new();
         s.set_duration(Some(Duration::from_secs(5)));
-        s.advance_partial(Duration::from_secs(9));
+        s.advance_partial(Duration::from_secs(9), Some(Duration::ZERO));
         assert_eq!(s.position(), Duration::from_secs(5));
     }
 
@@ -225,6 +227,7 @@ mod tests {
             end_position_ns: 1_000_000_000,
             source_bytes: 4096,
             source_byte_offset: None,
+            visible_origin: Some(Duration::ZERO),
         };
         s.advance(&pos);
         assert_eq!(
@@ -239,6 +242,7 @@ mod tests {
             end_position_ns: 15_000_000_000,
             source_bytes: 4096,
             source_byte_offset: None,
+            visible_origin: Some(Duration::ZERO),
         };
         s.advance(&pos_past);
         assert_eq!(
@@ -258,6 +262,7 @@ mod tests {
             end_position_ns: 9_000_000_000,
             source_bytes: 0,
             source_byte_offset: None,
+            visible_origin: Some(Duration::ZERO),
         };
         s.advance(&pos);
         assert_eq!(s.position(), Duration::from_secs(5));
@@ -273,6 +278,7 @@ mod tests {
             end_position_ns: 9_000_000_000,
             source_bytes: 0,
             source_byte_offset: None,
+            visible_origin: Some(Duration::ZERO),
         };
         s.land(&pos);
         assert_eq!(s.position(), Duration::from_secs(9));
@@ -288,9 +294,40 @@ mod tests {
             end_position_ns: 100_000_000_000,
             source_bytes: 0,
             source_byte_offset: None,
+            visible_origin: Some(Duration::ZERO),
         };
         s.advance(&pos);
         assert_eq!(s.position(), Duration::from_nanos(100_000_000_000));
+    }
+
+    #[kithara::test]
+    fn per_chunk_geometry_caps_each_raw_clock_without_changing_visible_length() {
+        let s = PlayheadState::new();
+        s.set_duration(Some(Duration::from_millis(952)));
+        s.advance_partial(
+            Duration::from_millis(1_700),
+            Some(Duration::from_millis(717)),
+        );
+        assert_eq!(s.position(), Duration::from_millis(1_669));
+        s.advance_partial(
+            Duration::from_millis(1_700),
+            Some(Duration::from_millis(300)),
+        );
+        assert_eq!(s.position(), Duration::from_millis(1_252));
+        s.advance_partial(
+            Duration::from_millis(1_700),
+            Some(Duration::from_millis(717)),
+        );
+        assert_eq!(s.position(), Duration::from_millis(1_669));
+        assert_eq!(s.duration(), Some(Duration::from_millis(952)));
+    }
+
+    #[kithara::test]
+    fn unknown_original_origin_does_not_cap_a_sought_suffix() {
+        let s = PlayheadState::new();
+        s.set_duration(Some(Duration::from_millis(952)));
+        s.advance_partial(Duration::from_millis(1_500), None);
+        assert_eq!(s.position(), Duration::from_millis(1_500));
     }
 
     #[kithara::test]

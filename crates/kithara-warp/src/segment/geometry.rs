@@ -97,15 +97,6 @@ impl MapSegment {
         let end_ordinal = end.ordinal.ok_or(SegmentError::MissingOrdinal {
             endpoint: SegmentEndpoint::End,
         })?;
-        if start.position.kind() != end.position.kind() {
-            return Err(SegmentError::MixedAxes);
-        }
-        if start.position.partial_cmp(&end.position) != Some(Ordering::Less) {
-            return Err(SegmentError::NonIncreasingPosition);
-        }
-        if start_ordinal >= end_ordinal {
-            return Err(SegmentError::NonIncreasingBeat);
-        }
         let start_beat =
             Beat::try_from(start_ordinal).map_err(|_| SegmentError::InexactOrdinal {
                 endpoint: SegmentEndpoint::Start,
@@ -113,6 +104,25 @@ impl MapSegment {
         let end_beat = Beat::try_from(end_ordinal).map_err(|_| SegmentError::InexactOrdinal {
             endpoint: SegmentEndpoint::End,
         })?;
+        Self::with_beats(start, end, start_beat, end_beat, facts)
+    }
+
+    fn with_beats(
+        start: BeatMarker,
+        end: BeatMarker,
+        start_beat: Beat,
+        end_beat: Beat,
+        facts: SegmentFacts,
+    ) -> Result<Self, SegmentError> {
+        if start.position.kind() != end.position.kind() {
+            return Err(SegmentError::MixedAxes);
+        }
+        if start.position.partial_cmp(&end.position) != Some(Ordering::Less) {
+            return Err(SegmentError::NonIncreasingPosition);
+        }
+        if start_beat >= end_beat {
+            return Err(SegmentError::NonIncreasingBeat);
+        }
         Ok(Self {
             start_beat,
             end_beat,
@@ -227,6 +237,28 @@ impl MapSegment {
         self.tempo(axis)
             .map(|tempo| (tempo, self.facts.evidence, self.facts.uncertainty))
     }
+}
+
+#[cfg(test)]
+pub(crate) fn partial_start(
+    position: MapPosition,
+    beat: Beat,
+    end: BeatMarker,
+    facts: SegmentFacts,
+) -> Result<MapSegment, SegmentError> {
+    let ordinal = end.ordinal.ok_or(SegmentError::MissingOrdinal {
+        endpoint: SegmentEndpoint::End,
+    })?;
+    let end_beat = Beat::try_from(ordinal).map_err(|_| SegmentError::InexactOrdinal {
+        endpoint: SegmentEndpoint::End,
+    })?;
+    MapSegment::with_beats(
+        BeatMarker::new(position, None, facts.evidence, facts.uncertainty),
+        end,
+        beat,
+        end_beat,
+        facts,
+    )
 }
 
 /// An inclusive grid-native position region.

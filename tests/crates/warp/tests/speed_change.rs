@@ -95,6 +95,7 @@ fn session() -> HostConfig<TestPools> {
         .build()
 }
 
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn playing_deck(
     temp_dir: &TestTempDir,
     backend: StretchKind,
@@ -114,7 +115,11 @@ async fn playing_deck(
         session(),
     )
     .await;
-    let queue = Queue::new(QueueConfig::builder().player(harness.take_player()).build());
+    let queue = Queue::new(
+        QueueConfig::builder()
+            .prep(harness.resource_prep().clone())
+            .build(),
+    );
     let queue = harness.insert(queue).await;
     harness
         .run(queue.control(), |q| q.set_default_rate(START_SPEED))
@@ -134,9 +139,12 @@ async fn playing_deck(
         .run(queue.control(), move |q| q.append(config))
         .await
         .expect("append the pulse track");
-    wait_for_loader_done_event(&mut events, &queue, id, Duration::from_secs(30))
-        .await
-        .expect("load the pulse track");
+    let mut budget = Duration::ZERO;
+    hang_park!(|remaining: Duration| budget = remaining.min(Duration::from_secs(5)));
+    let loaded = wait_for_loader_done_event(&mut events, &queue, id, budget).await;
+    hang_tick!();
+    loaded.expect("load the pulse track");
+    hang_reset!();
     harness
         .run(queue.control(), move |q| q.select(id, Transition::None))
         .await
@@ -149,6 +157,7 @@ async fn playing_deck(
 /// period elapses only once the worker has rendered; an underrun is then the
 /// lane's, not the machine's.
 #[kithara::flash(true)]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Take {
     let trace = usdt_trace::scope();
     let (harness, queue) = playing_deck(temp_dir, backend, keylock).await;
@@ -173,6 +182,7 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
     );
     let mut warmed = None;
     for block in 0..TOTAL_BLOCKS {
+        hang_tick!();
         if let Some((_, speed)) = CHANGES.iter().find(|(at, _)| *at == block) {
             let speed = *speed;
             harness
@@ -192,6 +202,7 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
             recording.push(&output);
         }
         time::sleep(period.saturating_sub(started.elapsed())).await;
+        hang_reset!();
     }
     let opened = trace.events_of("source_opened").len();
     drop(trace);
@@ -202,7 +213,12 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
     assert_eq!(master.drops(), 0, "the master tap keeps every frame");
     let master = master.drain();
     drop(queue);
-    harness.close().await;
+    let mut budget = Duration::ZERO;
+    hang_park!(|remaining| budget = remaining);
+    time::timeout(budget, harness.close())
+        .await
+        .expect("speed harness shutdown watchdog");
+    hang_tick!();
     Take {
         master,
         underruns,
@@ -321,12 +337,7 @@ fn beat_failures(onsets: &[Onset]) -> Vec<String> {
     failures
 }
 
-#[kithara::test(
-    tokio,
-    serial,
-    timeout(Duration::from_secs(120)),
-    hang_timeout_secs(10)
-)]
+#[kithara::test(tokio, serial, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 #[case::signalsmith(StretchKind::Signalsmith, true)]
 #[cfg_attr(
     all(

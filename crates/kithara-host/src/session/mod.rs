@@ -1,31 +1,25 @@
 //! Concrete session state, graph dispatch, and platform backends.
 
-mod dispatch;
-mod graph;
+pub(crate) mod decks;
+pub(crate) mod dispatch;
+pub(crate) mod graph;
 pub(crate) mod protocol;
-mod queue;
+pub(crate) mod queue;
 pub(crate) mod state;
 #[cfg(test)]
 pub(crate) mod tests;
-mod transport;
+pub(crate) mod transport;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod native;
+pub(crate) mod native_engine;
 #[cfg(feature = "offline")]
 pub(crate) mod offline;
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web;
 
-pub(crate) use protocol::{
-    Cmd, HostCmd, HostDispatcher, HostReply, Reply, SessionError, SessionSampleRate,
-};
+pub(crate) use protocol::{HostDispatcher, SessionError, SessionSampleRate, ask};
 pub(crate) use queue::HostProtocol;
-pub(crate) use state::RootView;
+pub(crate) use state::{HostRoot, RootView};
 pub use transport::TransportEvent;
 pub(crate) use transport::{Span, applied_spans};
-#[cfg(target_arch = "wasm32")]
-pub(crate) use web::{
-    bridge_duration_secs, bridge_is_playing, bridge_position_secs, bridge_process_calls,
-    bridge_underruns, remote, tick_and_poll_remote, warm_up_audio, worker_channel,
-};

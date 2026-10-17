@@ -13,14 +13,13 @@ use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
-    sync::{Arc, ThreadGate},
+    sync::Arc,
     time::{Duration, Instant},
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     AudioCodec, ContainerFormat, ReadOutcome, ReaderInput, ReaderProfile, ReaderWarmup,
-    SeekControl, SeekObserve, SeekState, SourceError, SourcePhase, StreamError, VariantTransition,
-    VariantTransitionId,
+    SourceError, SourcePhase, StreamError, VariantTransition, VariantTransitionId,
 };
 use kithara_test_utils::kithara;
 use url::Url;
@@ -82,9 +81,11 @@ fn ctx_over(
                 discriminator: Some(discriminator.to_owned()),
             })
             .expect("test asset scope"),
-        seek_epoch: 0,
         look_ahead_segments: None,
-        signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
+        signal: SizeSignal::new(
+            Arc::new(kithara_platform::sync::CondvarGate::default()),
+            Arc::new(OnceLock::new()),
+        ),
         config: Arc::new(
             HlsConfig::for_url(Url::parse("https://example.com/master.m3u8").expect("master url"))
                 .store(store.clone())
@@ -161,20 +162,9 @@ fn make_placeholder_seg(idx: u32, size: u64, scope: &TestAssetScope) -> Segment 
     make_media_seg(idx, SegmentSize::placeholder(size), scope)
 }
 
-fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) -> Arc<HlsVariant> {
-    make_var_with_seek_obs(
-        variant,
-        init_size,
-        media_sizes,
-        ctx,
-        Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-    )
-}
-
 fn active_session(v: &Arc<HlsVariant>, ctx: &PlanCtx, position: u64) -> HlsSession {
     HlsSession::active(
         CancelToken::never(),
-        Arc::new(SeekState::new()),
         ctx.signal.clone(),
         v.variant,
         Arc::clone(v),
@@ -182,13 +172,7 @@ fn active_session(v: &Arc<HlsVariant>, ctx: &PlanCtx, position: u64) -> HlsSessi
     )
 }
 
-fn make_var_with_seek_obs(
-    variant: usize,
-    init_size: u64,
-    media_sizes: &[u64],
-    ctx: &PlanCtx,
-    seek_obs: Arc<dyn SeekObserve>,
-) -> Arc<HlsVariant> {
+fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) -> Arc<HlsVariant> {
     let init = make_init(init_size, &ctx.scope);
     let segments: Vec<Segment> = media_sizes
         .iter()
@@ -204,7 +188,6 @@ fn make_var_with_seek_obs(
     VariantParts {
         init,
         segments,
-        seek_obs,
         codec: None,
         container: None,
     }
@@ -244,7 +227,6 @@ fn media_info_carries_playlist_container() {
     let v = VariantParts {
         init: None,
         segments: vec![make_seg(0, 10, &ctx.scope)],
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: playlist_state.variant_codec(0),
         container: playlist_state.variant_container(0),
     }
@@ -309,7 +291,6 @@ fn cache_complete_publishes_once_after_full_commit() {
     let v = VariantParts {
         init: make_init(8, &ctx.scope),
         segments: (0..2).map(|idx| make_seg(idx, 4, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -362,7 +343,6 @@ fn range_ready_clamps_tail_seek_alias_to_eof() {
     let v = VariantParts {
         init: None,
         segments: (0..3).map(|idx| make_seg(idx, 10, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::AacHeV2),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -401,7 +381,6 @@ fn segment_aware_seek_alias_routes_tail_by_segment_index() {
     let v = VariantParts {
         init: None,
         segments: (0..4).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Flac),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -414,6 +393,129 @@ fn segment_aware_seek_alias_routes_tail_by_segment_index() {
     assert_eq!(v.find_at_offset(anchor + 99), Some((2, anchor, 100)));
     assert_eq!(v.find_at_offset(anchor + 100), Some((3, anchor + 100, 100)));
     assert_eq!(v.find_at_offset(anchor + 200), None);
+}
+
+#[kithara::test]
+fn segment_aware_seek_descriptors_keep_the_readers_coordinates_after_prefix_growth() {
+    let ctx = test_ctx(3);
+    let variant = VariantParts {
+        init: None,
+        segments: (0..4)
+            .map(|idx| make_placeholder_seg(idx, 100, &ctx.scope))
+            .collect(),
+        codec: Some(AudioCodec::Flac),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    let anchor = variant
+        .prepare_seek_time_anchor(Duration::from_secs(4))
+        .expect("seek anchor")
+        .expect("segmented seek");
+    variant.apply_resolved_size(SizeDemand::Segment(0), 200);
+
+    let descriptor = variant.descriptor(2).expect("target segment");
+    assert_eq!(
+        descriptor.byte_range,
+        anchor.byte_offset..anchor.byte_offset + 100
+    );
+    assert_eq!(
+        variant.find_at_offset(descriptor.byte_range.start),
+        Some((2, descriptor.byte_range.start, 100))
+    );
+    assert_eq!(
+        variant.descriptor(3).expect("next segment").byte_range,
+        anchor.byte_offset + 100..anchor.byte_offset + 200
+    );
+    assert_eq!(
+        variant
+            .descriptor_after_byte(anchor.byte_offset + 1)
+            .expect("next descriptor")
+            .byte_range,
+        anchor.byte_offset + 100..anchor.byte_offset + 200
+    );
+    assert_eq!(
+        variant
+            .descriptor_at_time(Duration::from_secs(4))
+            .expect("target time")
+            .byte_range,
+        descriptor.byte_range
+    );
+    assert_eq!(variant.segment_byte_offset(2), Some(300));
+}
+
+#[kithara::test]
+#[case::byte_window(Some(150), None, 250)]
+#[case::segment_window(None, Some(2), 300)]
+fn dispatch_windows_follow_seek_alias_after_prefix_growth(
+    #[case] byte_window: Option<u64>,
+    #[case] segment_window: Option<usize>,
+    #[case] resume_byte: u64,
+) {
+    let mut ctx = test_ctx(5);
+    Arc::get_mut(&mut ctx.config)
+        .expect("unshared test config")
+        .look_ahead_bytes = byte_window;
+    ctx.look_ahead_segments = segment_window;
+    let variant = VariantParts {
+        init: None,
+        segments: (0..5)
+            .map(|idx| make_placeholder_seg(idx, 100, &ctx.scope))
+            .collect(),
+        codec: Some(AudioCodec::Flac),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    let anchor = variant
+        .prepare_seek_time_anchor(Duration::from_secs(4))
+        .expect("seek anchor")
+        .expect("segmented seek");
+    variant.apply_resolved_size(SizeDemand::Segment(0), 400);
+    variant.rebuild(&ctx, 2);
+    let session = active_session(&variant, &ctx, anchor.byte_offset);
+
+    let commands = session.dispatch(&ctx, 5);
+    let urls: Vec<_> = commands
+        .iter()
+        .map(|command| command.url().clone())
+        .collect();
+    assert_eq!(urls, vec![segment_url(2), segment_url(3)]);
+    assert!(!variant.take_prefetch_resume_at(resume_byte - 1));
+    assert!(variant.take_prefetch_resume_at(resume_byte));
+}
+
+#[kithara::test]
+fn segment_aware_byte_seek_retires_stale_time_alias() {
+    let ctx = test_ctx(3);
+    let variant = VariantParts {
+        init: None,
+        segments: (0..4)
+            .map(|idx| make_placeholder_seg(idx, 100, &ctx.scope))
+            .collect(),
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    let anchor = variant
+        .prepare_seek_time_anchor(Duration::from_secs(4))
+        .expect("time seek")
+        .expect("segment anchor");
+    let session = active_session(&variant, &ctx, anchor.byte_offset);
+    variant.apply_resolved_size(SizeDemand::Segment(1), 200);
+    let mut refreshed = variant.descriptor(2).expect("refreshed target segment");
+    let natural_offset = variant
+        .segment_byte_offset(2)
+        .expect("refreshed natural segment offset");
+    refreshed.byte_range =
+        natural_offset..natural_offset + (refreshed.byte_range.end - refreshed.byte_range.start);
+    assert_ne!(refreshed.byte_range.start, anchor.byte_offset);
+
+    session.seek_to_byte(refreshed.byte_range.start);
+
+    assert_eq!(
+        session.find_at_offset(refreshed.byte_range.start),
+        Some((2, refreshed.byte_range.start, 100)),
+    );
+    assert!(!seek_projection_is_live(&variant));
 }
 
 #[kithara::test]
@@ -771,7 +873,6 @@ fn read_at_zero_holds_pending_while_init_unsized() {
     let v = VariantParts {
         init,
         segments: vec![make_seg(0, 1024, &ctx.scope)],
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: None,
         container: None,
     }
@@ -849,7 +950,6 @@ fn failed_init_prevents_loaded_media_from_satisfying_the_read(#[case] init_size:
     let v = VariantParts {
         init,
         segments: vec![make_seg(0, 64, &ctx.scope)],
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: None,
         container: None,
     }
@@ -896,7 +996,6 @@ fn an_unsized_init_keeps_its_own_reader_demand() {
     let v = VariantParts {
         init: Some(make_placeholder_init(0, &ctx.scope)),
         segments: vec![make_seg(0, 64, &ctx.scope)],
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: None,
         container: None,
     }
@@ -964,14 +1063,7 @@ fn rebuild_refills_queue_without_touching_session_cancel() {
     let v = make_var(0, 0, &[100; 6], &ctx);
     push_planned(&v, 0);
     let token = CancelToken::root();
-    let session = HlsSession::active(
-        token.clone(),
-        Arc::new(SeekState::new()),
-        ctx.signal.clone(),
-        0,
-        Arc::clone(&v),
-        0,
-    );
+    let session = HlsSession::active(token.clone(), ctx.signal.clone(), 0, Arc::clone(&v), 0);
     assert!(!token.is_cancelled());
     v.rebuild(&ctx, 2);
     assert!(
@@ -988,15 +1080,19 @@ fn segment_aware_rebuild_at_time_prefetches_seek_preroll_segment() {
     let v = VariantParts {
         init: None,
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
     .into_variant(0, &ctx);
 
     let target = v
-        .rebuild_at_time(&ctx, Duration::from_secs(4))
-        .expect("target segment");
+        .prepare_seek_time_anchor(Duration::from_secs(4))
+        .expect("target anchor")
+        .expect("target segment")
+        .segment_index
+        .expect("target segment index");
+
+    v.rebuild(&ctx, v.seek_readahead_start_segment(target));
 
     assert_eq!(target, 2, "time seek still lands on the target segment");
     assert_eq!(
@@ -1016,7 +1112,6 @@ fn segment_aware_seek_time_anchor_leaves_the_fetch_plan_to_the_peer() {
     let v = VariantParts {
         init: None,
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -1049,7 +1144,6 @@ fn segment_aware_rebuild_with_decoder_probe_fetches_recreate_preroll_segment() {
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -1071,17 +1165,21 @@ fn exact_size_rebuild_at_time_starts_at_target_segment() {
     let v = VariantParts {
         init: None,
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
     .into_variant(0, &ctx);
 
     let target = v
-        .rebuild_at_time(&ctx, Duration::from_secs(4))
-        .expect("target segment");
+        .prepare_seek_time_anchor(Duration::from_secs(4))
+        .expect("target anchor")
+        .expect("target segment")
+        .segment_index
+        .expect("target segment index");
 
     assert_eq!(target, 2);
+    v.rebuild(&ctx, v.seek_readahead_start_segment(target));
+
     assert_eq!(queue_seg_indices(&v), vec![2, 3, 4]);
     assert_eq!(
         v.prefetch_anchor(),
@@ -1095,7 +1193,6 @@ fn exact_size_rebuild_with_decoder_probe_starts_tail_at_target_segment() {
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -1113,7 +1210,6 @@ fn incoming_reader_preparation_keeps_the_landing_fetch_anchor() {
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -1148,7 +1244,6 @@ fn an_init_less_reader_plans_the_header_segment_behind_its_tail() {
     let v = VariantParts {
         init: None,
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -1176,7 +1271,6 @@ fn a_map_bearing_reader_leaves_the_header_to_its_init_fetch() {
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -1200,7 +1294,6 @@ fn incoming_session_leads_with_the_landing_and_skips_everything_before_it() {
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
         segments: (0..6).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Flac),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -1211,7 +1304,7 @@ fn incoming_session_leads_with_the_landing_and_skips_everything_before_it() {
         .claim_pending_decision(VariantIndex::new(0))
         .expect("incoming transition claim");
     let transition = VariantTransition::new(
-        VariantTransitionId::new(claim.ticket(), 0),
+        VariantTransitionId::new(claim.ticket()),
         VariantIndex::new(0),
         VariantIndex::new(1),
     );
@@ -1224,7 +1317,6 @@ fn incoming_session_leads_with_the_landing_and_skips_everything_before_it() {
     let session = HlsSession::incoming(
         CancelToken::never(),
         profile,
-        Arc::new(SeekState::new()),
         ctx.signal,
         transition,
         Arc::clone(&v),
@@ -1257,7 +1349,6 @@ fn incoming_session_dispatches_only_the_decoder_construction_window() {
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
         segments: (0..10).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Flac),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -1268,7 +1359,7 @@ fn incoming_session_dispatches_only_the_decoder_construction_window() {
         .claim_pending_decision(VariantIndex::new(0))
         .expect("incoming transition claim");
     let transition = VariantTransition::new(
-        VariantTransitionId::new(claim.ticket(), 0),
+        VariantTransitionId::new(claim.ticket()),
         VariantIndex::new(0),
         VariantIndex::new(1),
     );
@@ -1280,7 +1371,6 @@ fn incoming_session_dispatches_only_the_decoder_construction_window() {
     let session = HlsSession::incoming(
         CancelToken::never(),
         profile,
-        Arc::new(SeekState::new()),
         ctx.signal.clone(),
         transition,
         Arc::clone(&v),
@@ -1288,7 +1378,7 @@ fn incoming_session_dispatches_only_the_decoder_construction_window() {
     )
     .expect("incoming session");
 
-    let commands = session.dispatch_constructing(&ctx, 10);
+    let mut commands = session.dispatch_constructing(&ctx, 10);
 
     assert_eq!(
         commands.len(),
@@ -1302,23 +1392,49 @@ fn incoming_session_dispatches_only_the_decoder_construction_window() {
     // transferred the decoder primes through it, and a session still pinned to
     // the window it was *built* from stops serving those reads: its staged span
     // freezes and the outgoing frontier it is chasing walks away for good.
-    let after_transfer = session.dispatch(&ctx, 10);
+    let mut after_transfer = session.dispatch(&ctx, 10);
     assert_eq!(after_transfer.len(), 5, "the rest of the variant");
     assert!(queue_seg_indices(&v).is_empty());
+
+    let anchor = kithara_stream::ByteMap::anchor_at_time(&session, Duration::from_secs(12))
+        .expect("profiled seek")
+        .expect("seek anchor");
+    assert_eq!(anchor.segment_index, Some(6));
+    assert_eq!(session.position(), anchor.byte_offset);
+    assert!(commands.iter().chain(&after_transfer).all(|command| {
+        !command
+            .cancel()
+            .expect("profiled fetch cancellation")
+            .is_cancelled()
+    }));
+    let command = commands
+        .iter_mut()
+        .chain(&mut after_transfer)
+        .find(|command| command.url() == v.segments()[6].url())
+        .expect("the original target fetch");
+    let mut writer = command.take_writer().expect("original body writer");
+    writer(&[9; 100]).expect("post-seek body delivery");
+    command.take_on_complete().expect("original completion")(100, None, None);
+    assert!(v.segments()[6].state().is_loaded());
+    let mut bytes = [0; 8];
+    assert!(matches!(
+        v.read_at(anchor.byte_offset, &mut bytes)
+            .expect("cached target"),
+        ReadOutcome::Bytes(_)
+    ));
+    assert_eq!(bytes, [9; 8]);
 }
 
-/// The construction pack is not just *emitted* — landing it is what makes the
-/// session readable. An init-only reader cannot be built until its header is
-/// on disk, so the pack and the readiness window have to agree on which bytes
-/// that is: a pack that never covers what readiness waits on leaves the
-/// transition preparing forever with no failure to point at.
+/// Init-only construction waits for its header; media read-ahead remains part
+/// of the fetch plan and is consumed after the reader is transferred.
 #[kithara::test]
 fn incoming_session_is_ready_once_its_construction_fetches_land() {
     let ctx = test_ctx(10);
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
-        segments: (0..10).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        segments: (0..10)
+            .map(|idx| make_seg(idx, 64 * 1_024, &ctx.scope))
+            .collect(),
         codec: Some(AudioCodec::Flac),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -1329,19 +1445,18 @@ fn incoming_session_is_ready_once_its_construction_fetches_land() {
         .claim_pending_decision(VariantIndex::new(0))
         .expect("incoming transition claim");
     let transition = VariantTransition::new(
-        VariantTransitionId::new(claim.ticket(), 0),
+        VariantTransitionId::new(claim.ticket()),
         VariantIndex::new(0),
         VariantIndex::new(1),
     );
     let profile = ReaderProfile::new(
         ReaderInput::InitOnly,
         ReaderWarmup::None,
-        NonZeroU64::new(64).expect("non-zero read ahead"),
+        NonZeroU64::new(32 * 1_024).expect("non-zero read ahead"),
     );
     let session = HlsSession::incoming(
         CancelToken::never(),
         profile,
-        Arc::new(SeekState::new()),
         ctx.signal.clone(),
         transition,
         Arc::clone(&v),
@@ -1355,18 +1470,32 @@ fn incoming_session_is_ready_once_its_construction_fetches_land() {
     );
 
     let mut commands = session.dispatch_constructing(&ctx, 10);
-    for cmd in &mut commands {
-        let Some(mut writer) = cmd.take_writer() else {
-            continue;
-        };
-        writer(&[7; 100]).expect("construction bytes");
-    }
+    assert_eq!(commands.len(), 3, "init, landing backoff, and landing");
+    assert_eq!(queue_seg_indices(&v), vec![5, 6, 7, 8, 9]);
+    assert_eq!(v.prefetch_anchor(), 48 + 4 * 64 * 1_024);
+    assert!(
+        !session
+            .is_ready()
+            .expect("readiness while header is missing")
+    );
+
+    let init = commands
+        .iter_mut()
+        .find(|command| command.url() == v.init().expect("declared init").url())
+        .expect("construction init fetch");
+    init.take_writer().expect("init writer")(&[7; 48]).expect("init bytes");
+    init.take_on_complete().expect("init completion")(48, None, None);
+    assert!(v.init().expect("declared init").state().is_loaded());
+    assert!(
+        v.segments()
+            .iter()
+            .all(|segment| !segment.state().is_loaded())
+    );
+    assert!(!v.segment_contains(4, 0..32 * 1_024));
 
     assert!(
-        session
-            .is_ready()
-            .expect("readiness after construction bytes"),
-        "the construction pack must cover everything readiness waits on"
+        session.is_ready().expect("readiness after init bytes"),
+        "InitOnly construction must not wait for its planned media read-ahead"
     );
 }
 
@@ -1516,7 +1645,6 @@ fn a_seek_supersedes_claims_from_the_previous_plan() {
     let v = VariantParts {
         init: None,
         segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -1535,8 +1663,12 @@ fn a_seek_supersedes_claims_from_the_previous_plan() {
     }
 
     let target = v
-        .rebuild_at_time(&ctx, Duration::from_secs(4))
-        .expect("target segment");
+        .prepare_seek_time_anchor(Duration::from_secs(4))
+        .expect("target anchor")
+        .expect("target segment")
+        .segment_index
+        .expect("target segment index");
+    v.rebuild(&ctx, v.seek_readahead_start_segment(target));
     drop(claim);
 
     assert_eq!(target, 2);
@@ -1670,25 +1802,52 @@ fn a_settled_slot_answers_no_demand() {
 #[kithara::test]
 fn a_readiness_poll_leaves_demand_unfiled() {
     let ctx = test_ctx(3);
-    let v = make_var(0, 0, &[100, 100], &ctx);
+    let v = make_var(0, 0, &[64 * 1_024, 64 * 1_024], &ctx);
     let profile = ReaderProfile::new(
         ReaderInput::Incremental,
         ReaderWarmup::None,
-        NonZeroU64::new(16).expect("non-zero read ahead"),
+        NonZeroU64::new(32 * 1_024).expect("non-zero read ahead"),
     );
     let preparation = v
         .prepare_reader(profile, Duration::ZERO)
         .expect("reader preparation");
-    let _claim = claim_segment_zero(&v, &ctx);
+    let claim = claim_segment_zero(&v, &ctx);
 
     assert!(
-        !v.reader_is_ready(&preparation).expect("readiness poll"),
-        "the claimed segment is not loaded"
+        v.reader_is_ready(&preparation).expect("readiness poll"),
+        "Incremental construction must not wait for any input bytes"
     );
 
     assert!(
         !v.segments()[0].state().is_reader_demanded(),
         "a readiness poll is not a read; only a parked wait escalates the fetch"
+    );
+
+    let mut bytes = [0xa5; 16];
+    assert!(matches!(
+        v.read_at(0, &mut bytes).expect("deferred media read"),
+        ReadOutcome::Pending(_)
+    ));
+    assert_eq!(bytes, [0xa5; 16]);
+    assert!(matches!(
+        v.wait_range(0..16, Some(Duration::ZERO)),
+        Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+    ));
+    assert!(v.segments()[0].state().is_reader_demanded());
+
+    write_seg_bytes(&v, &ctx, 0, 64 * 1_024);
+    claim.into_loaded(64 * 1_024);
+    assert!(matches!(
+        v.wait_range(0..16, Some(Duration::ZERO)),
+        Ok(WaitOutcome::Ready)
+    ));
+    assert!(matches!(
+        v.read_at(0, &mut bytes).expect("landed media read"),
+        ReadOutcome::Bytes(count) if count.get() == bytes.len()
+    ));
+    assert_eq!(
+        bytes,
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     );
 }
 
@@ -1741,11 +1900,10 @@ fn exact_seek_probe_urls(
         Some(make_placeholder_init(EXACT_SEEK_INIT_BYTES, &ctx.scope))
     };
     let v = VariantParts {
-        segments,
-        init,
         codec,
         container,
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        init,
+        segments,
     }
     .into_variant(0, &ctx);
     let anchor = EXACT_SEEK_SEGMENT_BYTES * u64::from(consts::EXACT_SEEK_LANDING);
@@ -1807,16 +1965,58 @@ fn an_exact_seek_on_a_segment_addressed_container_probes_nothing() {
     assert!(probed.is_empty(), "fMP4 resolves by index: {probed:?}");
 }
 
+#[kithara::test]
+#[case::known_init(true)]
+#[case::unknown_init(false)]
+fn exact_byte_seek_inside_init_does_not_wait_for_media_sizes(#[case] init_known: bool) {
+    let ctx = test_ctx(10);
+    let variant = VariantParts {
+        init: if init_known {
+            make_init(44, &ctx.scope)
+        } else {
+            Some(make_placeholder_init(64, &ctx.scope))
+        },
+        segments: (0..3)
+            .map(|index| make_placeholder_seg(index, 256, &ctx.scope))
+            .collect(),
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+    variant.register_session_seek(0, true);
+    assert_eq!(
+        variant.exact_byte_metadata_phase(),
+        if init_known {
+            None
+        } else {
+            Some(SourcePhase::WaitingDemand)
+        }
+    );
+    let session = active_session(&variant, &ctx, 0);
+    let probed: Vec<Url> = session
+        .dispatch(&ctx, 10)
+        .iter()
+        .map(|command| command.url().clone())
+        .collect();
+    assert_eq!(probed, if init_known { vec![] } else { vec![init_url()] });
+    variant.apply_resolved_size(SizeDemand::Init, 44);
+    assert_eq!(variant.exact_byte_metadata_phase(), None);
+    assert!(
+        variant
+            .segments()
+            .iter()
+            .all(|segment| !segment.size().is_exact())
+    );
+}
+
 fn exact_seek_session() -> (Arc<HlsVariant>, HlsSession, u64) {
     let ctx = test_ctx(3);
-    let seek = Arc::new(SeekState::new());
     let segments: Vec<Segment> = (0..3)
         .map(|idx| make_placeholder_seg(idx, 256, &ctx.scope))
         .collect();
     let v = VariantParts {
         segments,
         init: None,
-        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -1828,7 +2028,6 @@ fn exact_seek_session() -> (Arc<HlsVariant>, HlsSession, u64) {
     v.set_exact_seek_demand(stale_anchor, 2);
     let session = HlsSession::active(
         CancelToken::never(),
-        seek,
         ctx.signal,
         0,
         Arc::clone(&v),
@@ -1939,13 +2138,11 @@ fn exact_seek_projection_retires_after_the_first_consumed_byte() {
 #[kithara::test]
 fn late_rebuild_at_time_does_not_reopen_consumed_exact_seek_projection() {
     let ctx = test_ctx(3);
-    let seek = Arc::new(SeekState::new());
     let v = VariantParts {
         segments: (0..4)
             .map(|idx| make_placeholder_seg(idx, 256, &ctx.scope))
             .collect(),
         init: None,
-        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -1956,7 +2153,6 @@ fn late_rebuild_at_time_does_not_reopen_consumed_exact_seek_projection() {
     v.set_exact_seek_demand(stale_anchor, 2);
     let session = HlsSession::active(
         CancelToken::never(),
-        seek,
         ctx.signal.clone(),
         0,
         Arc::clone(&v),
@@ -1971,7 +2167,11 @@ fn late_rebuild_at_time_does_not_reopen_consumed_exact_seek_projection() {
     assert_eq!(session.position(), 201);
     assert!(!seek_projection_is_live(&v));
 
-    assert_eq!(v.rebuild_at_time(&ctx, Duration::from_secs(4)), Some(2));
+    let target = v
+        .seek_point_at_time(Duration::from_secs(4))
+        .map(|(segment, _, _)| segment);
+    assert_eq!(target, Some(2));
+    v.rebuild(&ctx, target.expect("target segment"));
     assert_eq!(session.position(), 201);
     assert_eq!(v.exact_seek_metadata_phase(), None);
     assert!(!seek_projection_is_live(&v));
@@ -2039,7 +2239,6 @@ fn exact_init_gate_stays_closed_until_layout_is_published() {
     let v = VariantParts {
         init: Some(make_placeholder_init(256, &ctx.scope)),
         segments: vec![make_seg(0, 100, &ctx.scope)],
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: None,
         container: Some(ContainerFormat::Fmp4),
     }
@@ -2079,7 +2278,6 @@ fn eof_gate_rejects_a_torn_layout_publication() {
         segments: (0..2)
             .map(|idx| make_placeholder_seg(idx, 100, &ctx.scope))
             .collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -2120,7 +2318,6 @@ fn ready_gate_rejects_a_torn_layout_publication() {
         segments: (0..2)
             .map(|idx| make_placeholder_seg(idx, 100, &ctx.scope))
             .collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -2162,7 +2359,6 @@ fn range_gate_rejects_eof_ready_cross_publication() {
         segments: (0..2)
             .map(|idx| make_placeholder_seg(idx, 256, &ctx.scope))
             .collect(),
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -2200,11 +2396,9 @@ fn exact_session_seek_uses_the_session_cursor_to_detect_movement() {
     let segments: Vec<Segment> = (0..10)
         .map(|idx| make_placeholder_seg(idx, 64, &ctx.scope))
         .collect();
-    let seek = Arc::new(SeekState::new());
     let v = VariantParts {
         segments,
         init: None,
-        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -2213,7 +2407,6 @@ fn exact_session_seek_uses_the_session_cursor_to_detect_movement() {
     v.clear_exact_byte_seek();
     let session = HlsSession::active(
         CancelToken::never(),
-        seek,
         ctx.signal,
         0,
         Arc::clone(&v),
@@ -2239,7 +2432,6 @@ fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
     let v = VariantParts {
         segments,
         init: None,
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::Pcm),
         container: Some(ContainerFormat::Wav),
     }
@@ -2263,11 +2455,31 @@ fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
     assert_eq!(cmds[0].url().clone(), v.segments()[0].url().clone());
     assert_eq!(cmds[1].url().clone(), v.segments()[1].url().clone());
     assert_eq!(cmds[2].url().clone(), v.segments()[2].url().clone());
+    session.seek_to_byte(576);
+    for command in &cmds {
+        assert!(
+            !command
+                .cancel()
+                .expect("size probe cancellation")
+                .is_cancelled(),
+            "a seek must preserve in-flight exact size discovery"
+        );
+    }
     let cmds = session.dispatch(&ctx, 3);
     assert_eq!(cmds.len(), 3);
     assert_eq!(cmds[0].url().clone(), v.segments()[3].url().clone());
     assert_eq!(cmds[1].url().clone(), v.segments()[4].url().clone());
     assert_eq!(cmds[2].url().clone(), v.segments()[5].url().clone());
+    session.abort();
+    for command in &cmds {
+        assert!(
+            command
+                .cancel()
+                .expect("size probe cancellation")
+                .is_cancelled(),
+            "size discovery must still stop with its owning session"
+        );
+    }
 }
 
 #[kithara::test]
@@ -2285,6 +2497,22 @@ fn on_evict_returns_minus_one_for_init() {
         v.segments()[1].state().is_loaded(),
         "init eviction must not touch segment states"
     );
+}
+
+#[kithara::test]
+fn reader_demand_replans_a_prefix_outside_the_forward_window() {
+    let ctx = test_ctx(3);
+    let variant = make_var(0, 0, &[100; 6], &ctx);
+    variant.rebuild(&ctx, 3);
+    let session = active_session(&variant, &ctx, 12);
+
+    assert!(matches!(
+        session.wait_range(12..22, Some(Duration::ZERO), None),
+        Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+    ));
+    let commands = session.dispatch(&ctx, 1);
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].url(), variant.segments()[0].url());
 }
 
 #[kithara::test]
@@ -2319,6 +2547,29 @@ fn rebuild_fills_forward_window_from_seg() {
     assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5, 6, 7, 8, 9]);
 }
 
+#[kithara::test]
+fn rebuild_keeps_the_satisfied_plan_when_queued_prefix_is_cached() {
+    let ctx = test_ctx(3);
+    let variant = make_var(0, 0, &[100; 10], &ctx);
+    for segment in variant.segments() {
+        segment.state().mark_loaded();
+    }
+    push_planned(&variant, 2);
+    push_planned(&variant, 3);
+
+    assert!(
+        variant.queue_matches_plan(8),
+        "loaded prefix entries cannot dispatch work outside the satisfied target window"
+    );
+    variant.rebuild(&ctx, 8);
+    assert_eq!(queue_seg_indices(&variant), vec![2, 3]);
+    assert!(
+        active_session(&variant, &ctx, 800)
+            .dispatch(&ctx, 3)
+            .is_empty()
+    );
+}
+
 /// A rebuild whose forward window is already cached must still drop the
 /// fetches a previous epoch left *behind* the new target.
 ///
@@ -2331,7 +2582,7 @@ fn rebuild_fills_forward_window_from_seg() {
 fn rebuild_drops_prefix_fetches_when_forward_window_is_cached() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100; 10], &ctx);
-    for segment in v.segments() {
+    for segment in v.segments().iter().skip(8) {
         segment.state().mark_loaded();
     }
     push_planned(&v, 2);
@@ -2370,7 +2621,6 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     });
     let v = VariantParts {
         init,
-        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         codec: None,
         container: None,
         segments: vec![seg],
@@ -2451,14 +2701,7 @@ fn dispatch_cmd_cancel_shares_cancellation_with_session() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100], &ctx);
     let root = CancelToken::root();
-    let session = HlsSession::active(
-        root,
-        Arc::new(SeekState::new()),
-        ctx.signal.clone(),
-        0,
-        Arc::clone(&v),
-        0,
-    );
+    let session = HlsSession::active(root, ctx.signal.clone(), 0, Arc::clone(&v), 0);
     for seg in 0..2_u32 {
         push_planned(&v, seg);
     }
@@ -2487,17 +2730,9 @@ fn session_flip_cancels_old_and_keeps_new_live() {
 
     let from_seg = 7_u32;
     let v_new_seg7_offset = v_new.segment_byte_offset(from_seg).expect("seg 7");
-    let old_session = HlsSession::active(
-        old_token.clone(),
-        Arc::new(SeekState::new()),
-        ctx.signal.clone(),
-        0,
-        v_old,
-        0,
-    );
+    let old_session = HlsSession::active(old_token.clone(), ctx.signal.clone(), 0, v_old, 0);
     let new_session = HlsSession::active(
         new_token.clone(),
-        Arc::new(SeekState::new()),
         ctx.signal.clone(),
         1,
         Arc::clone(&v_new),
@@ -2570,26 +2805,19 @@ fn wait_range_probes_without_sleeping() {
 #[kithara::test]
 fn wait_range_flush_short_circuits_without_sleeping() {
     let ctx = test_ctx(3);
-    let seek = Arc::new(SeekState::new());
-    let v = make_var_with_seek_obs(
-        0,
-        200,
-        &[400],
-        &ctx,
-        Arc::clone(&seek) as Arc<dyn SeekObserve>,
-    );
-
-    let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
+    let variant = make_var(0, 200, &[400], &ctx);
+    let session = active_session(&variant, &ctx, 0);
+    session.abort();
     let started = Instant::now();
-    let interrupted = v.wait_range(0..1, Some(Duration::from_millis(10)));
+    let interrupted = session.wait_range(0..1, Some(Duration::from_millis(10)), None);
     let elapsed = Instant::now().saturating_duration_since(started);
     assert!(
         matches!(interrupted, Ok(WaitOutcome::Interrupted)),
-        "flushing seek state must Interrupt the probe, got {interrupted:?}"
+        "retired source must interrupt the probe, got {interrupted:?}"
     );
     assert!(
         elapsed < Duration::from_millis(2),
-        "flush short-circuit must not sleep; took {elapsed:?}"
+        "retirement must not sleep; took {elapsed:?}"
     );
 }
 
@@ -2866,14 +3094,12 @@ fn requeue_planned_reenters_in_plan_order() {
 /// frame, so a late prefix size commit would re-key every raw offset under it.
 fn drifting_seek_session() -> (PlanCtx, Arc<HlsVariant>, HlsSession, u64) {
     let ctx = test_ctx(3);
-    let seek = Arc::new(SeekState::new());
     let segments: Vec<Segment> = (0..12)
         .map(|idx| make_placeholder_seg(idx, 100, &ctx.scope))
         .collect();
     let v = VariantParts {
         segments,
         init: None,
-        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -2886,7 +3112,6 @@ fn drifting_seek_session() -> (PlanCtx, Arc<HlsVariant>, HlsSession, u64) {
     assert_eq!(anchor, 1000, "segment 10 anchor on the placeholder frame");
     let session = HlsSession::active(
         CancelToken::never(),
-        seek,
         ctx.signal.clone(),
         0,
         Arc::clone(&v),
@@ -2967,6 +3192,32 @@ fn eof_mints_at_the_anchored_frame_end_despite_a_late_prefix_settle() {
 }
 
 #[kithara::test]
+fn post_seek_readahead_settle_preserves_the_consumed_target_cursor() {
+    let (ctx, variant, session, anchor) = drifting_seek_session();
+    settle_seg(&variant, &ctx, 10, 100);
+    session.advance(64);
+    settle_seg(&variant, &ctx, 9, 600);
+
+    assert_eq!(session.position(), anchor + 64);
+    assert_eq!(
+        variant
+            .find_at_offset(session.position())
+            .map(|(index, ..)| index),
+        Some(10),
+        "a late preroll commit must not reinterpret consumed target bytes as prefix bytes"
+    );
+    settle_seg(&variant, &ctx, 11, 100);
+    session.advance(136);
+    assert_eq!(variant.total_bytes(), anchor + 200);
+    assert!(matches!(
+        variant
+            .read_at(session.position(), &mut [0_u8; 1])
+            .expect("tail read"),
+        ReadOutcome::Eof
+    ));
+}
+
+#[kithara::test]
 fn the_next_space_re_mint_applies_the_deferred_prefix_settle() {
     let (ctx, v, _session, _anchor) = drifting_seek_session();
 
@@ -3011,12 +3262,10 @@ fn an_init_settle_lands_immediately_while_a_seek_tail_is_live() {
     // ABR pending variant, which deadlocks before activation could drain
     // it. The byte-space shift it causes is the accepted cost.
     let ctx = test_ctx(3);
-    let seek = Arc::new(SeekState::new());
     let segments: Vec<Segment> = (0..12).map(|idx| make_seg(idx, 100, &ctx.scope)).collect();
     let v = VariantParts {
         segments,
         init: Some(make_placeholder_init(256, &ctx.scope)),
-        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -3051,12 +3300,10 @@ fn an_exact_size_revision_parks_and_fails_the_skip_formula() {
     // stays exact, so only the emptiness check in the skip formula can
     // force the re-mint that lands it.
     let ctx = test_ctx(3);
-    let seek = Arc::new(SeekState::new());
     let segments: Vec<Segment> = (0..12).map(|idx| make_seg(idx, 100, &ctx.scope)).collect();
     let v = VariantParts {
         segments,
         init: None,
-        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
         codec: Some(AudioCodec::AacLc),
         container: Some(ContainerFormat::Fmp4),
     }
@@ -3128,7 +3375,6 @@ fn reading_waits_for_available_segment_bytes_before_opening_storage() {
     let v = VariantParts {
         init: None,
         segments: vec![make_placeholder_seg(0, 64, &ctx.scope)],
-        seek_obs: Arc::new(SeekState::new()),
         codec: None,
         container: None,
     }
@@ -3298,14 +3544,7 @@ fn a_cancelled_fetch_settles_a_segment_another_writer_committed() {
     let ctx = test_ctx(1);
     let v = make_var(0, 0, &[64], &ctx);
     let root = CancelToken::root();
-    let session = HlsSession::active(
-        root,
-        Arc::new(SeekState::new()),
-        ctx.signal.clone(),
-        0,
-        Arc::clone(&v),
-        0,
-    );
+    let session = HlsSession::active(root, ctx.signal.clone(), 0, Arc::clone(&v), 0);
     push_planned(&v, 0);
     let mut cmds = session.dispatch(&ctx, 1);
     let on_complete = cmds

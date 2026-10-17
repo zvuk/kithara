@@ -1,4 +1,34 @@
-use super::*;
+use std::{
+    collections::VecDeque,
+    num::{NonZeroU32, NonZeroUsize},
+};
+
+use kithara_audio::{Fetch, TrackStep, WaitingReason};
+use kithara_bufpool::PoolRegion;
+use kithara_command::{Batch, ChannelConfig, Inbox, Sender, channel};
+use kithara_platform::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
+use kithara_signal::AudioChunkInfo;
+use kithara_sync::SpeedCurve;
+use kithara_test_utils::{bufpool::TestPools, kithara};
+use kithara_warp::StretchKind;
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+use kithara_warp::WarpCapabilities;
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+use num_traits::AsPrimitive;
+
+use super::{consts, *};
+use crate::{LaneCommand, LaneProtocol};
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 pub(in crate::source) fn keylock_backends() -> impl Iterator<Item = StretchKind> {
@@ -57,25 +87,37 @@ where
         drain,
         spec,
         pools.clone(),
-        idle_inbox(),
+        LaneSetup {
+            inbox: idle_inbox(),
+            preload_chunks: NonZeroUsize::new(1).expect("preload"),
+            declick: consts::DEFAULT_DECLICK,
+        },
     )
 }
 
 pub(in crate::source) struct RawSource {
-    pub(super) head: Arc<AtomicU64>,
-    pub(super) seek: Arc<SeekState>,
-    pub(super) chunks: VecDeque<AudioChunk>,
+    pub(in crate::source) head: Arc<AtomicU64>,
+    pub(in crate::source) chunks: VecDeque<AudioChunk>,
 }
 
 impl AudioSource for RawSource {
     type Chunk = AudioChunk;
 
-    fn decode_epoch(&self) -> u64 {
-        self.seek.epoch()
+    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
+        Ok(SeekOutcome::Landed {
+            target,
+            landed_at: target,
+        })
     }
 
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+    fn seek_for_render(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
+        self.seek(target)
+    }
+
+    fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+
+    fn host_sample_rate(&self) -> Option<NonZeroU32> {
+        None
     }
 
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
@@ -89,7 +131,7 @@ impl AudioSource for RawSource {
                 .saturating_add(u64::from(chunk.meta.frames)),
             Ordering::Release,
         );
-        TrackStep::Produced(Fetch::data(chunk, self.seek.epoch()))
+        TrackStep::Produced(Fetch::data(chunk))
     }
 }
 
@@ -100,9 +142,8 @@ impl AudioSource for RawSource {
     feature = "stretch-glide"
 ))]
 pub(in crate::source) struct FailedSource {
-    pub(super) seek: Arc<SeekState>,
-    pub(super) failure: TrackFailureKind,
-    pub(super) chunks: VecDeque<AudioChunk>,
+    pub(in crate::source) failure: TrackFailureKind,
+    pub(in crate::source) chunks: VecDeque<AudioChunk>,
 }
 
 #[cfg(any(
@@ -114,22 +155,31 @@ pub(in crate::source) struct FailedSource {
 impl AudioSource for FailedSource {
     type Chunk = AudioChunk;
 
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+    fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+
+    fn host_sample_rate(&self) -> Option<NonZeroU32> {
+        None
+    }
+
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
+        Ok(SeekOutcome::Landed {
+            target: position,
+            landed_at: position,
+        })
     }
 
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
         self.chunks
             .pop_front()
             .map_or(TrackStep::Failed(self.failure), |chunk| {
-                TrackStep::Produced(Fetch::data(chunk, self.seek.epoch()))
+                TrackStep::Produced(Fetch::data(chunk))
             })
     }
 }
 
 #[derive(Default)]
 pub(in crate::source) struct BufferThenHalveFrames {
-    buffered: Option<AudioChunk>,
+    pub(in crate::source) buffered: Option<AudioChunk>,
 }
 
 impl AudioEffect for BufferThenHalveFrames {
@@ -171,13 +221,25 @@ pub(in crate::source) fn halve_frames(mut chunk: AudioChunk) -> Option<AudioChun
 }
 
 pub(in crate::source) struct DeferredSource {
-    pub(super) log: Arc<Mutex<Vec<&'static str>>>,
-    pub(super) seek: Arc<SeekState>,
-    pub(super) spec: AudioSpec,
+    pub(in crate::source) log: Arc<Mutex<Vec<&'static str>>>,
+    pub(in crate::source) spec: AudioSpec,
 }
 
 impl AudioSource for DeferredSource {
     type Chunk = AudioChunk;
+
+    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
+        Ok(SeekOutcome::Landed {
+            target,
+            landed_at: target,
+        })
+    }
+
+    fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+
+    fn host_sample_rate(&self) -> Option<NonZeroU32> {
+        None
+    }
 
     fn finish_deferred(&mut self) {
         self.log.lock().push("source.finish");
@@ -188,18 +250,14 @@ impl AudioSource for DeferredSource {
         Some(self.spec)
     }
 
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-    }
-
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
         TrackStep::Blocked(WaitingReason::Waiting)
     }
 }
 
 pub(in crate::source) struct DeferredEffect {
-    pub(super) log: Arc<Mutex<Vec<&'static str>>>,
-    pub(super) serviced: Arc<Mutex<Option<AudioSpec>>>,
+    pub(in crate::source) log: Arc<Mutex<Vec<&'static str>>>,
+    pub(in crate::source) serviced: Arc<Mutex<Option<AudioSpec>>>,
 }
 
 impl AudioEffect for DeferredEffect {
@@ -224,33 +282,41 @@ impl AudioEffect for DeferredEffect {
 }
 
 pub(in crate::source) struct RevisionSource {
-    pub(super) discontinuity: Arc<Mutex<SourceDiscontinuity>>,
-    pub(super) seek: Arc<SeekState>,
-    pub(super) chunks: VecDeque<AudioChunk>,
+    pub(in crate::source) discontinuity: Arc<Mutex<SourceDiscontinuity>>,
+    pub(in crate::source) chunks: VecDeque<AudioChunk>,
 }
 
 impl AudioSource for RevisionSource {
     type Chunk = AudioChunk;
 
-    fn discontinuity(&self) -> Option<SourceDiscontinuity> {
-        Some(*self.discontinuity.lock())
+    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
+        Ok(SeekOutcome::Landed {
+            target,
+            landed_at: target,
+        })
     }
 
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+    fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+
+    fn host_sample_rate(&self) -> Option<NonZeroU32> {
+        None
+    }
+
+    fn discontinuity(&self) -> Option<SourceDiscontinuity> {
+        Some(*self.discontinuity.lock())
     }
 
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
         self.chunks
             .pop_front()
             .map_or(TrackStep::Blocked(WaitingReason::Waiting), |chunk| {
-                TrackStep::Produced(Fetch::data(chunk, 0))
+                TrackStep::Produced(Fetch::data(chunk))
             })
     }
 }
 
 pub(in crate::source) struct ResetCounter {
-    pub(super) resets: Arc<AtomicU64>,
+    pub(in crate::source) resets: Arc<AtomicU64>,
 }
 
 impl AudioEffect for ResetCounter {
@@ -272,20 +338,37 @@ impl AudioEffect for ResetCounter {
 }
 
 pub(in crate::source) struct CountingEofSource {
-    pub(super) discontinuity: Arc<Mutex<Option<SourceDiscontinuity>>>,
-    pub(super) seek: Arc<SeekState>,
-    pub(super) steps: Arc<AtomicU64>,
+    pub(in crate::source) discontinuity: Arc<Mutex<Option<SourceDiscontinuity>>>,
+    pub(in crate::source) steps: Arc<AtomicU64>,
 }
 
 impl AudioSource for CountingEofSource {
     type Chunk = AudioChunk;
 
-    fn discontinuity(&self) -> Option<SourceDiscontinuity> {
-        *self.discontinuity.lock()
+    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
+        let revision = self
+            .discontinuity
+            .lock()
+            .map_or(0, |stamp| stamp.revision())
+            + 1;
+        *self.discontinuity.lock() = Some(SourceDiscontinuity::new(
+            revision,
+            AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate")),
+        ));
+        Ok(SeekOutcome::Landed {
+            target,
+            landed_at: target,
+        })
     }
 
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+    fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+
+    fn host_sample_rate(&self) -> Option<NonZeroU32> {
+        None
+    }
+
+    fn discontinuity(&self) -> Option<SourceDiscontinuity> {
+        *self.discontinuity.lock()
     }
 
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
@@ -295,8 +378,8 @@ impl AudioSource for CountingEofSource {
 }
 
 pub(in crate::source) struct CountingEmptyTail {
-    pub(super) flushes: Arc<AtomicU64>,
-    pub(super) resets: Arc<AtomicU64>,
+    pub(in crate::source) flushes: Arc<AtomicU64>,
+    pub(in crate::source) resets: Arc<AtomicU64>,
 }
 
 impl AudioEffect for CountingEmptyTail {
@@ -319,32 +402,35 @@ impl AudioEffect for CountingEmptyTail {
 }
 
 pub(in crate::source) struct SeekApplyingSource {
-    pub(super) seek: Arc<SeekState>,
-    pub(super) spec: AudioSpec,
-    pub(super) decode_epoch: u64,
-    pub(super) revision: u64,
+    pub(in crate::source) spec: AudioSpec,
+    pub(in crate::source) revision: u64,
+    pub(in crate::source) pending: bool,
 }
 
 impl AudioSource for SeekApplyingSource {
     type Chunk = AudioChunk;
 
-    fn decode_epoch(&self) -> u64 {
-        self.decode_epoch
+    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
+        self.revision = self.revision.wrapping_add(1);
+        self.pending = true;
+        Ok(SeekOutcome::Landed {
+            target,
+            landed_at: target,
+        })
+    }
+
+    fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+
+    fn host_sample_rate(&self) -> Option<NonZeroU32> {
+        None
     }
 
     fn discontinuity(&self) -> Option<SourceDiscontinuity> {
         Some(SourceDiscontinuity::new(self.revision, self.spec))
     }
 
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-    }
-
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
-        let live_epoch = self.seek.epoch();
-        if live_epoch != self.decode_epoch {
-            self.decode_epoch = live_epoch;
-            self.revision = self.revision.wrapping_add(1);
+        if std::mem::take(&mut self.pending) {
             TrackStep::StateChanged
         } else {
             TrackStep::Eof
@@ -353,8 +439,8 @@ impl AudioSource for SeekApplyingSource {
 }
 
 pub(in crate::source) struct ResettingTail {
-    pub(super) resets: Arc<AtomicU64>,
-    pub(super) tail: Option<AudioChunk>,
+    pub(in crate::source) resets: Arc<AtomicU64>,
+    pub(in crate::source) tail: Option<AudioChunk>,
 }
 
 impl AudioEffect for ResettingTail {
@@ -428,10 +514,10 @@ pub(in crate::source) fn chunk_with_frames(
 
 /// One emitted chunk on the lane axis and the source span it renders.
 pub(in crate::source) struct Emitted {
-    pub(super) lane_start: u64,
-    pub(super) source_start: u64,
-    pub(super) revision: u64,
-    pub(super) samples: Vec<f32>,
+    pub(in crate::source) lane_start: u64,
+    pub(in crate::source) source_start: u64,
+    pub(in crate::source) revision: u64,
+    pub(in crate::source) samples: Vec<f32>,
 }
 
 pub(in crate::source) fn speed_batch(speed: f32) -> Batch<LaneProtocol> {
@@ -497,7 +583,6 @@ pub(in crate::source) fn lane_over<'a>(
     let raw = RawSource {
         chunks,
         head: Arc::new(AtomicU64::new(0)),
-        seek: Arc::new(SeekState::new()),
     };
     let (lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
     let config = kithara_warp::WarpConfig::builder()
@@ -509,11 +594,24 @@ pub(in crate::source) fn lane_over<'a>(
     let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
     let drain =
         EffectDrain::new(0, pools).unwrap_or_else(|error| panic!("test effect drain: {error}"));
-    let source = WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone(), inbox);
+    let source = WarpSource::new(
+        raw,
+        renderer,
+        Vec::new(),
+        drain,
+        spec,
+        pools.clone(),
+        LaneSetup {
+            inbox,
+            preload_chunks: NonZeroUsize::new(1).expect("preload"),
+            declick: consts::DEFAULT_DECLICK,
+        },
+    );
     (source, lane)
 }
 
 /// Steps the lane from output frame `from` until it emitted `until`.
+#[kithara::hang_watchdog]
 pub(in crate::source) fn emit(
     source: &mut WarpSource<RawSource, TestPools>,
     from: u64,
@@ -522,6 +620,7 @@ pub(in crate::source) fn emit(
     let mut emitted = Vec::new();
     let mut cursor = from;
     for _ in 0..4096 {
+        hang_tick!();
         if cursor >= until {
             return emitted;
         }
@@ -534,9 +633,25 @@ pub(in crate::source) fn emit(
                     samples: data.samples.to_vec(),
                 });
                 cursor += u64::from(data.meta.frames);
+                if data.meta.frames > 0 {
+                    hang_reset!();
+                }
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
-            TrackStep::Eof => panic!("the lane ended at frame {cursor} before {until}"),
+            TrackStep::Eof => panic!(
+                "the lane ended at frame {cursor} before {until}; mappings={:?}; raw_head={}; rendered_end={:?}; pending_input={}",
+                emitted
+                    .iter()
+                    .map(|chunk| (
+                        chunk.lane_start,
+                        chunk.source_start,
+                        chunk.samples.len() / 2
+                    ))
+                    .collect::<Vec<_>>(),
+                source.source.head.load(Ordering::Acquire),
+                source.warp.rendered_source_end(),
+                source.pending_input.is_some(),
+            ),
             _ => panic!("the lane failed at frame {cursor} before {until}"),
         }
         flush_deferred(source);

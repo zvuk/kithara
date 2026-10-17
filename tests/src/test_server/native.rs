@@ -11,7 +11,8 @@ use crate::{
     routes::{assets, behavior, control, signal, store, stream},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
     test_server_state::{
-        Content, Delivery, FixtureBehavior, InitGate, NetworkMode, SegmentGate, TestServerState,
+        Content, Delivery, FixtureBehavior, Gate, InitGate, NetworkMode, SegmentGate,
+        TestServerState,
     },
 };
 
@@ -178,6 +179,18 @@ impl TestServerHelper {
         let gate = self.state.register_init_gate(hls_token, variant);
         InitGateHandle { gate }
     }
+
+    /// Withhold one media-playlist response until release or handle drop.
+    #[must_use]
+    pub fn register_media_playlist_gate(
+        &self,
+        hls_token: &str,
+        variant: usize,
+    ) -> MediaPlaylistGateHandle {
+        MediaPlaylistGateHandle {
+            gate: self.state.register_media_playlist_gate(hls_token, variant),
+        }
+    }
 }
 
 /// A test server private to one test: its own port, its own [`TestServerState`].
@@ -236,6 +249,29 @@ impl InitGateHandle {
             #[must_use]
             pub fn requested(&self) -> u64;
         }
+    }
+}
+
+/// A media-playlist response gate that releases on drop.
+pub struct MediaPlaylistGateHandle {
+    gate: Arc<Gate>,
+}
+
+impl MediaPlaylistGateHandle {
+    delegate::delegate! {
+        to self.gate {
+            /// Release the withheld media-playlist response.
+            pub fn release(&self);
+            /// Number of matching GET handlers that reached the gate.
+            #[must_use]
+            pub fn requested(&self) -> u64;
+        }
+    }
+}
+
+impl Drop for MediaPlaylistGateHandle {
+    fn drop(&mut self) {
+        self.gate.release();
     }
 }
 

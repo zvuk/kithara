@@ -228,13 +228,17 @@ where
         let mut folded = false;
 
         for _ in 0..self.producer_drain_limit {
-            let Some(at) = self.ingest.pop(scratch) else {
+            let Some(span) = self.ingest.pop(scratch) else {
                 break;
             };
             let outcome =
-                analyzers.push_mono(scratch, at, &mut self.extent, detector.as_deref_mut());
+                analyzers.push_mono(scratch, span, &mut self.extent, detector.as_deref_mut());
             if outcome != Ingest::Accepted {
-                debug!(?outcome, at, "analysis: offered range not folded in");
+                debug!(
+                    ?outcome,
+                    at = span.start,
+                    "analysis: offered range not folded in"
+                );
             }
             folded = true;
         }
@@ -352,7 +356,7 @@ where
             return TickResult::Progress;
         };
         match self.reader.seek(position) {
-            Ok(SeekOutcome::Landed { .. }) => {
+            Ok(SeekOutcome::Landed { .. } | SeekOutcome::Pending { .. }) => {
                 debug!(at, "analysis: run scheduled");
                 self.frontier = at;
                 self.run = Some(Run {
@@ -447,12 +451,20 @@ where
 
         match self.phase {
             TaskPhase::Decode => {
+                let visible_origin = match self.analyzers.as_ref() {
+                    Some(analyzers) => analyzers.visible_origin(),
+                    None => self.reader.visible_origin(),
+                };
                 let mut detector = detector;
                 let Ok(drained) = self.drain(builder, detector.as_deref_mut()) else {
                     self.phase = TaskPhase::Done;
                     return TickResult::Progress;
                 };
-                self.extent.claim(self.reader.duration(), self.rate);
+                let raw_end = self
+                    .reader
+                    .duration()
+                    .and_then(|length| visible_origin?.checked_add(length));
+                self.extent.claim(raw_end, self.rate);
                 let result = self.step(builder, detector.as_deref_mut());
                 if self.is_ending() || self.due() || self.beat_dirty {
                     self.publish(detector, false);

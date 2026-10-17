@@ -4,17 +4,22 @@ use std::{
 };
 
 use kithara_audio::{
-    AudioSource, Fetch, SourceDiscontinuity, SourceEnd, TrackFailureKind, TrackStep, WaitingReason,
+    AudioReadError, AudioSource, Fetch, SeekOutcome, SourceDiscontinuity, SourceEnd,
+    TrackFailureKind, TrackStep,
 };
-use kithara_bufpool::PoolRegion;
-use kithara_command::{Batch, ChannelConfig, Inbox, Outcome, Rejection, Sender, When, channel};
+#[cfg(feature = "stretch-identity")]
+use kithara_command::Batch;
+use kithara_command::{ChannelConfig, Outcome, Rejection, When, channel};
 use kithara_effects::{AudioEffect, EffectDrain, held_source_frames};
-use kithara_platform::sync::{
-    Arc, Mutex,
-    atomic::{AtomicU64, Ordering},
+use kithara_platform::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
 };
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
-use kithara_stream::{SeekControl, SeekObserve, SeekState};
+use kithara_signal::{AudioChunk, AudioSpec, SegmentId, SourceSpan};
+use kithara_sync::SpeedCurve;
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara_test_fixtures::play_fixtures::half;
 #[cfg(any(
@@ -34,13 +39,13 @@ use kithara_test_utils::{
     bufpool::{TestPools, pools},
     kithara,
 };
+use kithara_warp::StretchKind;
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
 use kithara_warp::WarpCapabilities;
-use kithara_warp::{SpeedCurve, StretchKind};
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
@@ -49,10 +54,10 @@ use kithara_warp::{SpeedCurve, StretchKind};
 use num_traits::AsPrimitive;
 
 use super::core::*;
-use crate::{LaneCommand, LaneFrame, LaneProtocol, consts};
+use crate::{LaneCommand, LaneFrame, LaneProtocol, LaneSetup};
 
+mod consts;
 mod doubles;
 mod flow;
 mod lane;
-
 use doubles::*;

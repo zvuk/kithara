@@ -18,7 +18,7 @@ pub(crate) fn get_codecs() -> &'static CodecRegistry {
     CODEC_REGISTRY.get_or_init(|| {
         let mut registry = CodecRegistry::new();
         register_enabled_codecs(&mut registry);
-        #[cfg(feature = "fdk-aac")]
+        #[cfg(all(not(target_arch = "wasm32"), feature = "fdk-aac"))]
         registry.register_audio_decoder::<super::fdk::AacDecoder>();
         #[cfg(feature = "opus")]
         registry.register_audio_decoder::<super::opus::OpusDecoder>();

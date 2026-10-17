@@ -88,14 +88,24 @@ fn is_loading(queue: &QueueControl<TestPools>, id: TrackId) -> bool {
     )
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn wait_until_loading(
     queue: &QueueControl<TestPools>,
     id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
     let start = kithara::platform::time::Instant::now();
+    let mut previous = queue.track(id).map(|entry| entry.status);
     loop {
+        let status = queue.track(id).map(|entry| entry.status);
+        hang_tick!(format!("track {id:?} waits for Loading; status={status:?}"));
+        if status != previous {
+            hang_reset!();
+            previous = status;
+        }
         if is_loading(queue, id) {
+            hang_reset!();
             return Ok(());
         }
         if start.elapsed() >= deadline {
@@ -109,6 +119,7 @@ async fn wait_until_loading(
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn hung_loads_must_not_starve_user_selected_track(
     #[future(awt)] lane_sources: (TestServerHelper, Vec<Url>, Url),
 ) {
@@ -137,6 +148,10 @@ async fn hung_loads_must_not_starve_user_selected_track(
     // Saturate every permit: each hung append parks in `Resource::new`.
     let mut hung_ids = Vec::new();
     for url in &hung_urls {
+        hang_tick!(format!(
+            "starvation fixture appends track {}",
+            hung_ids.len()
+        ));
         hung_ids.push(
             queue
                 .run({
@@ -146,13 +161,16 @@ async fn hung_loads_must_not_starve_user_selected_track(
                 .await
                 .expect("append hung track"),
         );
+        hang_reset!();
     }
 
     // Gate: select only after every hung track holds a permit (Loading).
     for &id in &hung_ids {
+        hang_tick!(format!("starvation fixture awaits loading {id:?}"));
         wait_until_loading(&queue, id, consts::GATE_DEADLINE)
             .await
             .unwrap_or_else(|e| panic!("hung track gate: {e}"));
+        hang_reset!();
     }
 
     // Reachable track: its load queues behind the saturated semaphore.

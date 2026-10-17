@@ -7,17 +7,6 @@ pub const AAC_FRAME_SAMPLES: usize = 1_024;
 pub const AAC_GAPLESS_ENCODER_DELAY: u32 = 2_112;
 pub const AAC_GAPLESS_TRAILING_DELAY: u32 = 960;
 
-// Native decoders preserve packet lengths; FDK removes 1744 leading frames.
-const AAC_DECODER_HEAD_STRIP: usize = if cfg!(any(
-    target_os = "android",
-    target_os = "macos",
-    target_os = "ios"
-)) {
-    0
-} else {
-    1_744
-};
-
 pub fn generated_aac_elst_visible_frames() -> usize {
     let packets_per_segment = AAC_GAPLESS_SEGMENT_FRAMES.div_ceil(AAC_FRAME_SAMPLES);
     let native_encoder_delay = AAC_FRAME_SAMPLES;
@@ -30,5 +19,4 @@ pub fn generated_aac_elst_visible_frames() -> usize {
         .saturating_sub(native_encoder_delay)
         .saturating_sub(encoder_delay)
         .saturating_sub(trailing_delay)
-        .saturating_sub(AAC_DECODER_HEAD_STRIP)
 }

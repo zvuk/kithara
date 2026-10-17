@@ -5,20 +5,20 @@ use js_sys::{Date, Promise};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{
-        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, ReadOutcome,
-        SeekLifecycleStage,
+        Audio, AudioConfig, AudioControl, AudioEvent, AudioRead, AudioSession, AudioSource,
+        ChunkOutcome, ReadOutcome, SeekLifecycleStage, SourceEnd,
     },
     events::EventBus,
     hls::{Hls, HlsConfig},
     platform::time::{Duration, Instant},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
-    event::TestEvent,
     fixture_protocol::DataMode,
+    mock::LaneAudio,
 };
 use kithara_test_fixtures::signal;
 use kithara_test_utils::Xorshift64;
@@ -66,7 +66,7 @@ async fn create_stress_source(jitter: bool) -> (TestServerHelper, Url) {
 /// seek reads what an earlier one downloaded.
 const STRESS_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
-async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
+fn stress_pipeline_config(url: Url) -> (PlayWorker<TestPools>, AudioConfig<Hls<TestPools>>) {
     const EVENT_BUS_CAPACITY: usize = 4096;
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
     let pools = pools();
@@ -99,14 +99,52 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPo
         .media_info(wav_info)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = worker.load(config).await.unwrap();
+    (worker, config)
+}
+
+async fn create_pipeline_with_url(url: Url) -> LaneAudio<Stream<Hls<TestPools>>, TestPools> {
+    let (worker, config) = stress_pipeline_config(url);
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .unwrap();
     audio
         .preload()
         .expect("start preloading the stress fixture");
     audio
 }
 
-async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls<TestPools>>, TestPools>) {
+#[kithara_test_utils::kithara::hang_watchdog]
+async fn read_committed_source(audio: &mut Audio<Stream<Hls<TestPools>>>) -> Option<usize> {
+    loop {
+        hang_tick!();
+        match audio.next_chunk().expect("read source chunk") {
+            ChunkOutcome::Chunk(chunk) => {
+                let end = chunk.meta.source_span.map_or_else(
+                    || {
+                        SourceEnd::new(
+                            chunk.meta.frame_offset + u64::from(chunk.meta.frames),
+                            chunk.meta.spec.sample_rate,
+                        )
+                        .with_mapping_revision(chunk.meta.mapping_revision)
+                    },
+                    |span| {
+                        SourceEnd::new(span.end(), span.sample_rate())
+                            .with_mapping_revision(span.mapping_revision())
+                    },
+                );
+                audio.commit_source_end(end, chunk.meta);
+                audio.finish_deferred();
+                hang_reset!();
+                return Some(chunk.samples.len());
+            }
+            ChunkOutcome::Eof { .. } => return None,
+            ChunkOutcome::Pending { .. } => yield_macrotask().await,
+        }
+    }
+}
+
+#[kithara_test_utils::kithara::hang_watchdog]
+async fn run_seek_pcm_window_check(mut audio: LaneAudio<Stream<Hls<TestPools>>, TestPools>) {
     let spec = audio.spec();
     let channels = spec.channels as usize;
     let sample_rate = spec.sample_rate.get() as usize;
@@ -127,6 +165,7 @@ async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls<TestPoo
     let mut played_frames = 0usize;
     let target_frames = sample_rate * 5;
     for _ in 0..600 {
+        hang_tick!();
         let Some(n) = read_with_yield_limit(&mut audio, &mut buf, 50).await else {
             break;
         };
@@ -134,6 +173,7 @@ async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls<TestPoo
             continue;
         }
         played_frames += n / channels;
+        hang_reset!();
         if played_frames >= target_frames {
             break;
         }
@@ -156,6 +196,7 @@ async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls<TestPoo
     let mut prev_phase: Option<usize> = None;
 
     for _ in 0..400 {
+        hang_tick!();
         let Some(n) = read_with_yield_limit(&mut audio, &mut buf, 100).await else {
             break;
         };
@@ -164,6 +205,7 @@ async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls<TestPoo
         }
 
         let frames = n / channels;
+        hang_reset!();
         for f in 0..frames {
             if inspected >= inspect_frames {
                 break;
@@ -210,7 +252,7 @@ async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls<TestPoo
 /// uses `preload()` mode where `read()` returns 0 when data isn't ready yet.
 /// We yield via `gloo_timers` to let async downloads and Web Workers proceed.
 async fn read_with_yield(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
 ) -> Option<usize> {
     read_with_yield_limit(audio, buf, 500).await
@@ -222,16 +264,21 @@ async fn read_with_yield(
 /// fetching, not a pipeline that has nothing to give: only the end of the
 /// stream ends the warmup early. Collapsing the two would judge a slow
 /// browser as a silent one.
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn warm_up(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
 ) -> usize {
     let mut produced = 0usize;
     for _ in 0..20 {
+        hang_tick!();
         let Some(count) = read_with_yield(audio, buf).await else {
             break;
         };
         produced += count;
+        if count > 0 {
+            hang_reset!();
+        }
     }
     produced
 }
@@ -239,15 +286,20 @@ async fn warm_up(
 /// Read with a pending budget in wall-clock milliseconds. `None` is the end
 /// of the stream; `Some(0)` is a reader that stayed pending for the whole
 /// budget.
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn read_with_yield_limit(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
     budget_ms: u32,
 ) -> Option<usize> {
     let deadline = Date::now() + f64::from(budget_ms);
     loop {
+        hang_tick!();
         match audio.read(buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => return Some(count.get()),
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                hang_reset!();
+                return Some(count.get());
+            }
             Ok(ReadOutcome::Eof { .. }) => return None,
             Ok(ReadOutcome::Pending { .. }) => {}
             Err(error) => {
@@ -267,6 +319,8 @@ async fn read_with_yield_limit(
 /// A timer turn is clamped to at least 4 ms once timers nest, which Firefox
 /// applies to this loop; a message-port turn has no clamp, so the wait
 /// tracks the pipeline instead of the browser's timer policy.
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn yield_macrotask() {
     let channel = MessageChannel::new().expect("MessageChannel is available in every worker");
     let turn = Promise::new(&mut |resolve, _| channel.port1().set_onmessage(Some(&resolve)));
@@ -274,15 +328,27 @@ async fn yield_macrotask() {
         .port2()
         .post_message(&JsValue::NULL)
         .expect("posting to an owned port cannot fail");
-    let _ = JsFuture::from(turn).await;
+    let mut budget = Duration::ZERO;
+    hang_park!(|remaining| budget = remaining);
+    kithara::platform::time::timeout(budget, JsFuture::from(turn))
+        .await
+        .expect("browser message turn must arrive")
+        .expect("message turn resolves");
 }
 
 /// Yield to event loop so async I/O and Web Workers can progress.
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn yield_ms(ms: u32) {
-    TimeoutFuture::new(ms).await;
+    let mut budget = Duration::ZERO;
+    hang_park!(|remaining| budget = remaining);
+    kithara::platform::time::timeout(budget, TimeoutFuture::new(ms))
+        .await
+        .expect("browser timer turn must arrive");
 }
 
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn stress_read_samples_integrity(#[future(awt)] stress_source: (TestServerHelper, Url)) {
     let (_helper, url) = stress_source;
     info!("Starting stress_read_samples_integrity");
@@ -308,12 +374,14 @@ async fn stress_read_samples_integrity(#[future(awt)] stress_source: (TestServer
     let mut prev_last_phase: Option<usize> = None;
 
     for _ in 0..target_chunks {
+        hang_tick!();
         let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
         if n == 0 {
             break;
         }
         chunks_read += 1;
         total_samples += n;
+        hang_reset!();
         let frames = n / channels;
 
         for (i, &sample) in buf[..n].iter().enumerate() {
@@ -400,6 +468,7 @@ async fn stress_read_samples_integrity(#[future(awt)] stress_source: (TestServer
 }
 
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, Url)) {
     let (_helper, url) = stress_source;
     info!("Starting stress_seek_and_read");
@@ -422,6 +491,7 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
     let mut continuity_errors = 0u64;
 
     for (i, &frac) in seek_positions.iter().enumerate() {
+        hang_tick!();
         let pos_secs = duration_secs * frac;
         let seek_to = Duration::from_secs_f64(pos_secs);
         info!(seek_idx = i, seek_ms = seek_to.as_millis(), "Seeking");
@@ -434,11 +504,13 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
         let mut post_seek_samples = 0;
         let mut position_checked = false;
         for _ in 0..10 {
+            hang_tick!();
             let n = read_with_yield(&mut audio, &mut buf).await.unwrap_or(0);
             if n == 0 {
                 break;
             }
             let frames = n / channels;
+            hang_reset!();
             post_seek_samples += n;
 
             for &sample in &buf[..n] {
@@ -520,6 +592,7 @@ async fn stress_seek_and_read(#[future(awt)] stress_source: (TestServerHelper, U
 /// - All samples must be finite and in [-1.0, 1.0]
 /// - Tolerate at most 1% dead seeks (pipeline restart race)
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestServerHelper, Url)) {
     let (_helper, url) = stress_source;
     info!("Starting stress_rapid_seeks_must_not_stall");
@@ -554,6 +627,7 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
     let mut total_samples = 0u64;
 
     for i in 0..SEEK_COUNT {
+        hang_tick!();
         let r = rng.next_f64();
         let pos_secs = if r < 0.1 {
             rng.range_f64(0.0, 1.0_f64.min(max_seek))
@@ -591,6 +665,7 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
 
         let frames = n / channels;
         if frames > 0 {
+            hang_reset!();
             let expected_frame = (pos_secs * sample_rate as f64).round() as usize;
             let expected_phase = expected_frame % signal::SAW_PERIOD;
             let actual_phase = signal::phase::units(buf[0]);
@@ -661,6 +736,7 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
 /// - Verify: read at least 50 chunks from the beginning, all valid
 /// - Position must be near 0 after seeking, then advance monotonically
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestServerHelper, Url)) {
     let (_helper, url) = stress_source;
     info!("Starting stress_seek_to_zero_after_pressure");
@@ -678,11 +754,15 @@ async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestS
 
     let mut rng = Xorshift64::new(0xABCD_EF01_2345_6789);
     for i in 0..500 {
+        hang_tick!();
         let pos = rng.range_f64(0.001, max_seek);
         let _ = audio.seek(Duration::from_secs_f64(pos));
-        let _ = read_with_yield_limit(&mut audio, &mut buf, 50)
+        let count = read_with_yield_limit(&mut audio, &mut buf, 50)
             .await
             .unwrap_or(0);
+        if count > 0 {
+            hang_reset!();
+        }
 
         if i % 100 == 99 {
             yield_ms(1).await;
@@ -711,6 +791,7 @@ async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestS
     let mut stall_deadline = Instant::now() + Duration::from_secs(25);
 
     for attempt in 0..target_chunks * 20 {
+        hang_tick!();
         let Some(n) = read_with_yield_limit(&mut audio, &mut buf, 100).await else {
             info!(chunks_from_zero, total_from_zero, "EOF reached");
             break;
@@ -731,6 +812,7 @@ async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestS
 
         chunks_from_zero += 1;
         total_from_zero += n;
+        hang_reset!();
         let frames = n / channels;
 
         for (j, &sample) in buf[..n].iter().enumerate() {
@@ -805,6 +887,7 @@ async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestS
 /// Regression: after long playback from the middle, seek near start (but not 0)
 /// must land inside segment 0, not at segment 1 boundary.
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segment(
     #[future(awt)] stress_source: (TestServerHelper, Url),
 ) {
@@ -831,6 +914,7 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
     let mut played_frames = 0usize;
     let target_frames = sample_rate * 5;
     for _ in 0..600 {
+        hang_tick!();
         let Some(n) = read_with_yield_limit(&mut audio, &mut buf, 50).await else {
             break;
         };
@@ -839,8 +923,10 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
         }
         played_frames += n / channels;
         if played_frames >= target_frames {
+            hang_reset!();
             break;
         }
+        hang_reset!();
     }
     assert!(
         played_frames >= sample_rate * 3,
@@ -860,6 +946,7 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
 
     let mut checked = false;
     for _ in 0..200 {
+        hang_tick!();
         let n = read_with_yield_limit(&mut audio, &mut buf, 100)
             .await
             .unwrap_or(0);
@@ -872,6 +959,7 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
         }
 
         let actual_phase = signal::phase::units(buf[0]);
+        hang_reset!();
         let dist_expected = signal::phase::distance(actual_phase, expected_phase);
         let dist_seg1 = signal::phase::distance(actual_phase, seg1_start_phase);
 
@@ -910,42 +998,67 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
 /// one seek command should produce one seek-complete, and playback progress
 /// after that seek should advance without extra backward resets.
 #[kithara::test(wasm, serial, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn stress_seek_events_single_reset_and_monotonic_progress(
     #[future(awt)] stress_source: (TestServerHelper, Url),
 ) {
     let (_helper, url) = stress_source;
     info!("Starting stress_seek_events_single_reset_and_monotonic_progress");
 
-    let mut audio = create_pipeline_with_url(url).await;
-    let mut events_rx = audio.event_bus().subscribe();
+    let (worker, config) = stress_pipeline_config(url);
+    let mut audio = {
+        let _real_io = kithara::platform::flash::real_io();
+        let mut budget = Duration::ZERO;
+        hang_park!(|remaining| budget = remaining);
+        kithara::platform::time::timeout(
+            budget,
+            kithara_integration_tests::mock::load_source_audio(&worker, config),
+        )
+        .await
+        .expect("source-open watchdog")
+        .expect("open the committed source")
+    };
+    hang_reset!();
+    let mut events_rx = audio.event_bus().subscribe::<AudioEvent>();
     let spec = audio.spec();
     let channels = spec.channels as usize;
-    let mut buf = vec![0.0f32; 4096];
 
-    let warmup = warm_up(&mut audio, &mut buf).await;
+    let mut warmup = 0;
+    for _ in 0..20 {
+        hang_tick!();
+        let Some(count) = read_committed_source(&mut audio).await else {
+            break;
+        };
+        warmup += count;
+        hang_reset!();
+    }
     assert!(warmup > 0, "warmup must read some data");
 
-    while events_rx.try_recv().is_ok() {}
+    while events_rx.try_recv().is_ok() {
+        hang_tick!();
+        hang_reset!();
+    }
 
     let duration_secs = audio
         .duration()
         .unwrap_or(Duration::from_secs(60))
         .as_secs_f64();
     let middle_secs = (duration_secs * 0.5).clamp(3.0, (duration_secs - 1.0).max(3.0));
-    audio
-        .seek(Duration::from_secs_f64(middle_secs))
+    AudioSource::seek(&mut audio, Duration::from_secs_f64(middle_secs))
         .expect("seek to middle must succeed");
 
     let mut played_frames = 0usize;
     let target_frames = spec.sample_rate.get() as usize * 5;
     for _ in 0..600 {
-        let Some(n) = read_with_yield_limit(&mut audio, &mut buf, 50).await else {
+        hang_tick!();
+        let Some(n) = read_committed_source(&mut audio).await else {
             break;
         };
         if n == 0 {
             continue;
         }
         played_frames += n / channels;
+        hang_reset!();
         if played_frames >= target_frames {
             break;
         }
@@ -955,53 +1068,65 @@ async fn stress_seek_events_single_reset_and_monotonic_progress(
         "expected at least ~3s playback before test seek"
     );
 
-    while events_rx.try_recv().is_ok() {}
+    while events_rx.try_recv().is_ok() {
+        hang_tick!();
+        hang_reset!();
+    }
 
     let near_start_secs = 0.2_f64;
     let near_start = Duration::from_secs_f64(near_start_secs);
-    audio
-        .seek(near_start)
-        .expect("seek near start must succeed");
+    AudioSource::seek(&mut audio, near_start).expect("seek near start must succeed");
 
-    let mut target_seek_epoch = None;
+    let mut target_seek_request = None;
     let mut seek_complete_for_target = 0usize;
     let mut seek_complete_seen = false;
     let mut playback_positions = Vec::with_capacity(64);
 
     for _ in 0..300 {
-        let _ = read_with_yield_limit(&mut audio, &mut buf, 50)
+        hang_tick!();
+        if read_committed_source(&mut audio)
             .await
-            .unwrap_or(0);
+            .is_some_and(|count| count > 0)
+        {
+            hang_reset!();
+        }
 
         loop {
-            match events_rx.try_recv().map(|env| env.event) {
-                Ok(TestEvent::Audio(AudioEvent::SeekLifecycle {
+            hang_tick!();
+            let Ok(envelope) = events_rx.try_recv() else {
+                break;
+            };
+            hang_reset!();
+            match envelope.event {
+                AudioEvent::SeekLifecycle {
                     stage: SeekLifecycleStage::SeekRequest,
-                    seek_epoch,
                     ..
-                })) => {
-                    target_seek_epoch = Some(seek_epoch);
+                } => {
+                    assert!(
+                        target_seek_request.is_none(),
+                        "one request identifies the target seek"
+                    );
+                    target_seek_request = Some((envelope.meta.origin, envelope.meta.seq));
                 }
-                Ok(TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. })) => {
-                    if target_seek_epoch == Some(seek_epoch) {
+                AudioEvent::SeekComplete { .. } => {
+                    if target_seek_request.is_some_and(|(origin, seq)| {
+                        origin == envelope.meta.origin && seq < envelope.meta.seq
+                    }) {
                         seek_complete_for_target += 1;
                         seek_complete_seen = true;
                         playback_positions.clear();
                     }
                 }
-                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress {
-                    position_ms,
-                    seek_epoch,
-                    ..
-                })) => {
-                    if seek_complete_seen && target_seek_epoch == Some(seek_epoch) {
+                AudioEvent::PlaybackProgress { position_ms, .. } => {
+                    if seek_complete_seen
+                        && target_seek_request.is_some_and(|(origin, seq)| {
+                            origin == envelope.meta.origin && seq < envelope.meta.seq
+                        })
+                    {
                         playback_positions.push(position_ms);
                     }
                 }
-                Ok(_) => {}
-                Err(_) => {
-                    break;
-                }
+                _ => {}
             }
         }
 
@@ -1011,7 +1136,7 @@ async fn stress_seek_events_single_reset_and_monotonic_progress(
     }
 
     assert!(
-        target_seek_epoch.is_some(),
+        target_seek_request.is_some(),
         "no AudioEvent::SeekLifecycle::SeekRequest for target seek"
     );
     assert!(

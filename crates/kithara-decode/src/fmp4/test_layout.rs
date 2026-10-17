@@ -10,6 +10,27 @@ pub(crate) struct FakeSegmented {
     init_range: Range<u64>,
 }
 
+impl FakeSegmented {
+    /// The same segments described with a playlist duration of `extinf`
+    /// each, so the running EXTINF sum drifts from the segments' own times.
+    pub(crate) fn with_extinf(self, extinf: Duration) -> Self {
+        let segments = self
+            .segments
+            .iter()
+            .map(|desc| {
+                let mut desc = desc.clone();
+                desc.decode_time = extinf * desc.segment_index;
+                desc.duration = extinf;
+                desc
+            })
+            .collect();
+        Self {
+            segments: Arc::new(segments),
+            ..self
+        }
+    }
+}
+
 impl ByteMap for FakeSegmented {
     fn init_segment_range(&self) -> Range<u64> {
         self.init_range.clone()

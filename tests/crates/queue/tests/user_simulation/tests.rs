@@ -3,20 +3,30 @@
 
 use kithara::{
     abr::AbrMode,
+    audio::{AudioEvent, SeekLifecycleStage},
     decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
+    events::{EventReceiver, TrackId, TryRecvError},
     host::HostConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
+        time::{Duration, sleep, timeout},
+    },
+    play::{PlayWorker, PlayWorkerConfig, Settled},
+    queue::{Queue, QueueConfig, QueueEvent, TrackSource, TrackStatus, Transition},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
+    event::TestEvent,
     hls_server::aes128_encryption,
     kithara,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE},
+    offline::{
+        OfflineResident, QueueTicker, RENDER_PACE,
+        linked::{LinkObservation, LinkReceiptOrigin, ObservedFactory},
+    },
 };
 use kithara_test_fixtures::SignalAsset;
 use kithara_test_utils::temp_dir;
@@ -334,6 +344,7 @@ async fn user_sim_long_play_then_seek_forward(#[case] kind: PreparedTrack, #[cas
 #[case::aac_plain(track_hls_aac_lc_abr4().await, 0.50)]
 #[case::mp3_streamhq(track_mp3_stream_hq().await, 0.50)]
 async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[case] ratio: f64) {
+    const LANDING_SLACK_S: f64 = 1.0;
     let (_helper, url) = kind;
     let spec = build_spec(url, AbrMode::Auto(None), DecoderBackend::default());
     let temp = temp_dir();
@@ -362,15 +373,17 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
     .initial_abr_mode(AbrMode::Auto(None))
     .build();
     let session_config = HostConfig::offline(pools).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session_config.settings().sample_rate())
-            .worker(worker)
-            .build(),
-    );
-    let queue = OfflineQueue::paced(
+    let player = kithara::play::ResourcePrep::builder()
+        .worker(worker)
+        .build();
+    let observation = Arc::new(Mutex::new(LinkObservation::default()));
+    let queue = OfflineResident::paced(
         session_config,
-        Queue::new(QueueConfig::builder().player(player).build()),
+        Queue::new(
+            QueueConfig::with_factory(ObservedFactory::new(observation.clone()))
+                .prep(player)
+                .build(),
+        ),
         RENDER_PACE,
     )
     .await
@@ -393,26 +406,191 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
 
     // IMMEDIATELY (no warmup) seek — exactly like the user's UI click
     // right after the track turns "ready" in the playlist.
-    let dur_at_seek = queue.duration_seconds().unwrap_or(0.0);
+    let dur_at_seek = queue
+        .duration_seconds()
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .expect("fresh Loaded track publishes its positive duration before seek");
     let target = (dur_at_seek * ratio).clamp(0.0, dur_at_seek);
-    let outcome = queue
+    let mut seeks = queue.subscribe();
+    queue
         .run(move |queue| queue.seek(target))
         .await
         .unwrap_or_else(|e| panic!("queue.seek Err: {e}"));
-    if let kithara::play::SeekOutcome::PastEof {
-        duration: reported_dur,
-        ..
-    } = outcome
-    {
-        panic!(
-            "FRESH-LOADED SEEK RACE BUG: Queue::seek returned PastEof for \
-             ratio={ratio:.2} target={target:.2}s reported_dur={reported_dur:?} \
-             queue.duration={dur_at_seek:.2}s — Loaded status fires before mvhd \
-             is parsed; seek target lands at 0 → PastEof → false-EOF auto-advance"
-        );
-    }
+    let landed = committed_seek_position(&mut seeks, track_id, &observation)
+        .await
+        .as_secs_f64();
+    assert!(
+        (landed - target).abs() < LANDING_SLACK_S,
+        "FRESH-LOADED SEEK RACE BUG: ratio={ratio:.2} target={target:.2}s landed at \
+         {landed:?}, queue.duration={dur_at_seek:.2}s — Loaded status fires before mvhd \
+         is parsed; the target reads past the end and never lands → false-EOF auto-advance"
+    );
 
     tick.stop().await;
+}
+
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
+async fn committed_seek_position(
+    seeks: &mut EventReceiver<TestEvent>,
+    track: TrackId,
+    observation: &Arc<Mutex<LinkObservation>>,
+) -> Duration {
+    let mut command: Option<(LinkReceiptOrigin, kithara_command::Seq)> = None;
+    let mut receipt_applied = false;
+    let mut lifecycle = None;
+    let mut source_clock = None;
+    let mut complete = None;
+    loop {
+        hang_tick!(format!(
+            "fresh Loaded seek {track:?}: command={command:?}, receipt={receipt_applied}, lifecycle={lifecycle:?}, complete={complete:?}"
+        ));
+        {
+            let observed = observation.lock();
+            if command.is_none() {
+                let mut commands = observed.seeks.iter().filter(|(item, _, _)| *item == track);
+                if let Some(&(_, origin, seq)) = commands.next() {
+                    assert!(commands.next().is_none(), "one fresh Loaded seek is issued");
+                    command = Some((origin, seq));
+                    hang_reset!();
+                }
+            }
+            if source_clock.is_none()
+                && let Some((_, info)) = observed
+                    .source_clocks
+                    .iter()
+                    .find(|(item, _)| *item == track)
+            {
+                source_clock = Some(info.media_origin.expect("loaded source owns media zero"));
+            }
+            if !receipt_applied && let Some((origin, seq)) = command {
+                let applied = match origin {
+                    LinkReceiptOrigin::Deck => {
+                        observed
+                            .placement_receipts
+                            .iter()
+                            .find_map(|(item, owner, settled)| match settled {
+                                Settled::Applied { seq: answered, .. }
+                                    if *item == track && *owner == origin && *answered == seq =>
+                                {
+                                    Some(true)
+                                }
+                                Settled::Rejected {
+                                    seq: answered,
+                                    reason,
+                                } if *item == track && *owner == origin && *answered == seq => {
+                                    panic!("fresh Loaded seek {seq:?} rejected: {reason:?}");
+                                }
+                                _ => None,
+                            })
+                    }
+                    LinkReceiptOrigin::Lane => {
+                        observed
+                            .seek_applied
+                            .iter()
+                            .find_map(|&(item, answered, applied)| {
+                                (item == track && answered == seq).then_some(applied)
+                            })
+                    }
+                };
+                if let Some(applied) = applied {
+                    assert!(
+                        applied,
+                        "fresh Loaded seek {seq:?} was rejected by its lane"
+                    );
+                    receipt_applied = true;
+                    hang_reset!();
+                }
+            }
+        }
+        loop {
+            let envelope = match seeks.try_recv() {
+                Ok(envelope) => envelope,
+                Err(TryRecvError::Empty) => break,
+                Err(error) => panic!("first seek event stream must remain complete: {error:?}"),
+            };
+            match envelope.event {
+                TestEvent::Audio(AudioEvent::SeekLifecycle { stage, .. })
+                    if envelope.meta.track == Some(track)
+                        && stage != SeekLifecycleStage::DecodeStarted =>
+                {
+                    match stage {
+                        SeekLifecycleStage::SeekRequest => assert!(
+                            lifecycle.is_none(),
+                            "first seek has one source request: {lifecycle:?}"
+                        ),
+                        SeekLifecycleStage::SeekApplied => assert!(
+                            matches!(lifecycle, Some((_, _, SeekLifecycleStage::SeekRequest))),
+                            "first seek request precedes source application: {lifecycle:?}"
+                        ),
+                        SeekLifecycleStage::OutputCommitted => assert!(
+                            matches!(lifecycle, Some((_, _, SeekLifecycleStage::SeekApplied))),
+                            "first seek application precedes source output: {lifecycle:?}"
+                        ),
+                        SeekLifecycleStage::DecodeStarted => unreachable!(),
+                    }
+                    if let Some((origin, seq, _)) = lifecycle {
+                        assert_eq!(
+                            envelope.meta.origin, origin,
+                            "one decoded source owns the seek"
+                        );
+                        assert!(
+                            envelope.meta.seq > seq,
+                            "source seek events keep their order"
+                        );
+                    }
+                    lifecycle = Some((envelope.meta.origin, envelope.meta.seq, stage));
+                    hang_reset!();
+                }
+                TestEvent::Audio(AudioEvent::SeekComplete { position })
+                    if envelope.meta.track == Some(track) =>
+                {
+                    let (origin, seq, stage) = lifecycle.expect("first seek has lifecycle events");
+                    assert_eq!(stage, SeekLifecycleStage::OutputCommitted);
+                    assert_eq!(
+                        envelope.meta.origin, origin,
+                        "completion belongs to the seeking source"
+                    );
+                    assert!(
+                        envelope.meta.seq > seq,
+                        "completion follows the first source output"
+                    );
+                    assert!(
+                        complete.replace(position).is_none(),
+                        "first seek completes once"
+                    );
+                    hang_reset!();
+                }
+                TestEvent::Audio(AudioEvent::SeekRejected { target })
+                    if envelope.meta.track == Some(track) =>
+                {
+                    panic!("fresh Loaded seek was rejected at {target:?}");
+                }
+                TestEvent::Audio(AudioEvent::TrackFailed { failure })
+                    if envelope.meta.track == Some(track) =>
+                {
+                    panic!("fresh Loaded source seek failed: {failure}");
+                }
+                TestEvent::Queue(QueueEvent::TrackStatusChanged {
+                    id,
+                    status: TrackStatus::Failed(error),
+                }) if id == track => panic!("fresh Loaded seek failed: {error}"),
+                TestEvent::Queue(QueueEvent::QueueEnded) => {
+                    panic!("fresh Loaded seek falsely reached EOF before output committed");
+                }
+                _ => {}
+            }
+        }
+        if receipt_applied && let (Some(position), Some(origin)) = (complete, source_clock) {
+            return position.saturating_sub(origin);
+        }
+        timeout(
+            __hang_detector.remaining(),
+            sleep(Duration::from_millis(10)),
+        )
+        .await
+        .expect("first seek command and source output settle within the liveness budget");
+    }
 }
 
 /// Aggressive seek storm — many seeks in rapid succession, like a

@@ -3,8 +3,14 @@
 use std::{cell::RefCell, rc::Rc};
 
 use js_sys::{Array, Float32Array, Float64Array, Object, Reflect};
-use kithara::platform::time::{Duration, sleep};
-use kithara_ffi::player::AudioPlayer;
+use kithara::{
+    platform::{
+        sync::Arc,
+        time::{Duration, sleep},
+    },
+    queue::QueueError,
+};
+use kithara_ffi::{item::AudioPlayerItem, player::AudioPlayer, types::FfiItemConfig};
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::{BroadcastChannel, MessageEvent};
@@ -217,6 +223,151 @@ async fn a_queued_track_publishes_analysis_until_the_pass_settles() {
             "every publication outranks the one before it: {revisions:?}"
         );
     }
+}
+
+fn clicks_item() -> Arc<AudioPlayerItem> {
+    AudioPlayerItem::new(FfiItemConfig {
+        url: clicks_url(),
+        abr_mode: None,
+        audio_id: None,
+        headers: None,
+        uuid_i64: None,
+        is_live_stream: false,
+        preferred_peak_bitrate: 0.0,
+        preferred_peak_bitrate_expensive: 0.0,
+    })
+}
+
+fn assert_decoded_clicks(events: &Events, track_id: f64) {
+    let received = events.borrow();
+    assert!(
+        received
+            .iter()
+            .all(|event| number(event, "trackId") == track_id)
+    );
+    let settled = received.last().expect("settled replacement analysis");
+    assert!(number(settled, "sampleRate") > 0.0);
+    assert!(number(settled, "sourceFrames") > 0.0);
+    let waveform: Float32Array = get(settled, "waveform").dyn_into().expect("waveform");
+    let energies = waveform.to_vec();
+    assert!(!energies.is_empty());
+    assert_eq!(energies.len() % 3, 0);
+    assert!(energies.iter().all(|energy| energy.is_finite()));
+    assert!(
+        energies.iter().any(|energy| *energy > 0.0),
+        "actual decoded waveform"
+    );
+    let beats: Float64Array = get(settled, "beats").dyn_into().expect("beats");
+    assert!(
+        beats.length() > 0,
+        "the click fixture yields an actual beat grid"
+    );
+}
+
+#[wasm_bindgen_test]
+async fn partial_replacement_keeps_the_accepted_target_and_publishes_its_analysis() {
+    let (player, events, diagnostics) = observed_player();
+    let player = Arc::new(player);
+    player.append_js(clicks_url()).expect("append old item");
+    assert!(
+        drive(&player, &events, |_| player.item_count() == 1)
+            .await
+            .is_some(),
+        "the owner never admitted the old item; {}",
+        progress_report(&events, &diagnostics)
+    );
+    let old = player.items().pop().expect("published old item");
+    let old_id = old.queue_id();
+    let old_ref = Arc::downgrade(&old);
+    let replacement = clicks_item();
+    let replacement_id = replacement.queue_id();
+    let replacement_raw =
+        f64::from(u32::try_from(replacement_id.as_u64()).expect("fixture routing id fits u32"));
+    let replacement_ref = Arc::downgrade(&replacement);
+    let player_events: Events = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&player_events);
+    let observer = Closure::wrap(Box::new(move |event: JsValue| {
+        sink.borrow_mut().push(event);
+    }) as Box<dyn FnMut(JsValue)>);
+    player
+        .set_observer_js(observer.as_ref().clone())
+        .expect("player observer accepted");
+    observer.forget();
+
+    player
+        .replace_item(0, replacement)
+        .expect("post replacement insertion");
+    player
+        .analyze_js(replacement_raw)
+        .expect("analysis waits for the pending composite replacement");
+    // This removal runs before Replace can post its second Remove.
+    player.remove(&old).expect("post old-item removal");
+    assert_eq!(player.items()[0].queue_id(), old_id);
+    assert_eq!(
+        player.item_count(),
+        1,
+        "posting preserves the owner snapshot"
+    );
+    assert!(
+        replacement_ref.upgrade().is_some(),
+        "pending replacement custody"
+    );
+    drop(old);
+
+    let expected = QueueError::UnknownTrackId(old_id).to_string();
+    assert!(
+        drive(&player, &events, |received| {
+            let replacement_is_present = player
+                .items()
+                .as_slice()
+                .first()
+                .is_some_and(|item| item.queue_id() == replacement_id)
+                && player.item_count() == 1;
+            let refused_second_remove = player_events.borrow().iter().any(|event| {
+                get(event, "kind").as_string().as_deref() == Some("Error")
+                    && get(event, "error").as_string().as_deref() == Some(expected.as_str())
+            });
+            replacement_is_present
+                && refused_second_remove
+                && old_ref.upgrade().is_none()
+                && received.last().is_some_and(|event| {
+                    number(event, "trackId") == replacement_raw
+                        && boolean(event, "settled")
+                        && boolean(event, "beatFinal")
+                })
+        })
+        .await
+        .is_some(),
+        "partial replacement did not retain and analyze its accepted target; {}; player events={:?}",
+        progress_report(&events, &diagnostics),
+        &*player_events.borrow()
+    );
+    assert!(
+        replacement_ref.upgrade().is_some(),
+        "confirmed replacement custody"
+    );
+    let errors: Vec<_> = player_events
+        .borrow()
+        .iter()
+        .filter(|event| get(event, "kind").as_string().as_deref() == Some("Error"))
+        .map(|event| get(event, "error").as_string().expect("owner error text"))
+        .collect();
+    assert_eq!(
+        errors,
+        [expected],
+        "only the composite's second removal is refused"
+    );
+    assert_decoded_clicks(&events, replacement_raw);
+
+    player.remove_all_items();
+    assert!(
+        drive(&player, &events, |_| {
+            player.item_count() == 0 && replacement_ref.upgrade().is_none()
+        })
+        .await
+        .is_some(),
+        "published removal releases the accepted replacement object"
+    );
 }
 
 #[wasm_bindgen_test]

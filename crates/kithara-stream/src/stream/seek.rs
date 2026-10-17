@@ -7,7 +7,7 @@ use kithara_test_utils::kithara;
 use tracing::debug;
 
 use super::{Stream, StreamType};
-use crate::{Source, SourcePhase};
+use crate::{PendingReason, Source, SourcePhase};
 
 /// Typed error from [`Stream::seek`] for an absolute byte target that
 /// lands beyond the stream's known length.
@@ -54,17 +54,30 @@ impl<T: StreamType> Stream<T> {
     /// fetch. The outcome is advisory; `seek` re-checks `source.len()`
     /// afterwards.
     #[kithara::flash(true)]
-    fn prime_seek_range(&mut self, range: Range<u64>) {
+    fn prime_seek_range(
+        &mut self,
+        range: Range<u64>,
+        cancel: Option<&crate::ReaderControl>,
+    ) -> io::Result<()> {
         if matches!(
             self.source.phase_at(range.clone()),
             SourcePhase::Ready | SourcePhase::Eof
         ) {
-            return;
+            return Ok(());
         }
         if let Some(wake) = self.source.peer_wake() {
             wake.notify_now();
         }
-        let _ = self.source.wait_range(range, None);
+        self.source
+            .wait_range(range, None, cancel)
+            .map_err(IoError::other)?;
+        if cancel.is_some_and(crate::ReaderControl::is_cancelled) {
+            return Err(IoError::new(
+                ErrorKind::Interrupted,
+                PendingReason::SessionRetired,
+            ));
+        }
+        Ok(())
     }
 
     /// Resolve a [`SeekFrom`] against the live cursor — the shared math
@@ -120,20 +133,36 @@ impl<T: StreamType> Seek for Stream<T> {
     /// which aims from the cursor, targets the new position rather than the stale one.
     #[kithara::measure]
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        self.seek_with_control(pos, None)
+    }
+}
+
+impl<T: StreamType> Stream<T> {
+    /// Reposition off-core with cancellation reaching metadata and byte readiness waits.
+    ///
+    /// # Errors
+    /// Returns source, invalid-position, or reader cancellation errors.
+    pub fn seek_with_control(
+        &mut self,
+        pos: SeekFrom,
+        cancel: Option<&crate::ReaderControl>,
+    ) -> io::Result<u64> {
+        if cancel.is_some_and(crate::ReaderControl::is_cancelled) {
+            return Err(IoError::new(
+                ErrorKind::Interrupted,
+                PendingReason::SessionRetired,
+            ));
+        }
         let current = self.source.position();
 
         if matches!(pos, SeekFrom::End(_)) && self.source.len().is_none() {
-            self.prime_seek_range(0..1);
+            self.prime_seek_range(0..1, cancel)?;
         }
         let new_pos = self.resolve_seek_target(pos, self.source.len())?;
 
         self.source.set_position(new_pos);
 
-        let wait_range = match self.format_change_segment_range() {
-            Ok(range) if range.start == new_pos => range,
-            _ => new_pos..new_pos.saturating_add(1),
-        };
-        self.prime_seek_range(wait_range);
+        self.prime_seek_range(new_pos..new_pos.saturating_add(1), cancel)?;
 
         if let Some(len) = self.source.len()
             && new_pos > len

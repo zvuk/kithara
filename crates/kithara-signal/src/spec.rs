@@ -98,7 +98,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::consts;
+    use crate::{consts, rescale_frame_ceil};
 
     #[kithara::test]
     fn checked_shape_and_time_math() {
@@ -116,6 +116,23 @@ mod tests {
         assert_eq!(spec.duration_for(576), Ok(duration));
         assert_eq!(spec.frames_for(duration), Ok(FrameCount::new(576)));
         assert_eq!(spec.frame_at(duration), Ok(576));
+        for (frame, source_rate, target_rate, expected) in [
+            (0, 44_100, 48_000, 0),
+            (44_100, 44_100, 48_000, 48_000),
+            (44_101, 44_100, 48_000, 48_002),
+            (3, 191_999, 191_997, 3),
+            (95_997, 191_999, 192_001, 95_998),
+            (u64::MAX, u32::MAX, u32::MAX, u64::MAX),
+        ] {
+            assert_eq!(
+                rescale_frame_ceil(
+                    frame,
+                    NonZeroU32::new(source_rate).expect("source rate"),
+                    NonZeroU32::new(target_rate).expect("target rate"),
+                ),
+                Some(expected),
+            );
+        }
     }
 
     #[kithara::test]
@@ -135,6 +152,14 @@ mod tests {
 
     #[kithara::test]
     fn count_and_time_overflow_is_typed() {
+        assert_eq!(
+            rescale_frame_ceil(
+                u64::MAX,
+                NonZeroU32::MIN,
+                NonZeroU32::new(2).expect("target rate"),
+            ),
+            None,
+        );
         let stereo = AudioSpec::new(2, consts::INTERLEAVED_RATE);
 
         assert_eq!(

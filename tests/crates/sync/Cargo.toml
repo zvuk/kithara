@@ -20,8 +20,9 @@ usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
 apple-fused-src = ["kithara/apple-fused-src"]
 
 [dependencies]
-kithara = { workspace = true, features = ["usdt", "backend-cpal", "download", "mock", "offline", "queue", "resample-rubato", "signal", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }
-kithara-integration-tests = { workspace = true, features = ["all", "analysis"] }
+kithara = { workspace = true, features = ["link", "usdt", "backend-cpal", "download", "dsp", "mock", "offline", "queue", "resample-rubato", "signal", "stretch-glide", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }
+kithara-command = { workspace = true }
+kithara-integration-tests = { workspace = true, features = ["all", "analysis", "link"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "library", "packaged", "rhythm", "signal"] }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
@@ -37,6 +38,10 @@ kithara = { workspace = true, features = ["download", "apple", "client-wreq"] }
 [target.'cfg(not(target_os = "android"))'.dependencies]
 kithara = { workspace = true, features = ["full", "symphonia", "fdk-aac"] }
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
+
+[dev-dependencies]
+kithara-derive = { workspace = true }
+kithara-render = { workspace = true }
 
 [lints]
 workspace = true

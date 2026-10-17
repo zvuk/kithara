@@ -2,6 +2,7 @@ use std::sync::atomic::AtomicU64;
 
 use kithara_config::Config;
 use kithara_platform::sync::Arc;
+use kithara_stream::ReaderControl;
 
 /// Minimal configuration carried into the probe / direct-reader path.
 #[derive(Default, Config)]
@@ -10,6 +11,8 @@ pub(crate) struct SymphoniaConfig {
     /// Handle for dynamic byte length updates (HLS).
     #[config(skip = "transferred to the Symphonia reader")]
     pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
+    #[config(skip = "transferred to the native parser input")]
+    pub(crate) reader_control: Option<ReaderControl>,
     /// File extension hint for Symphonia probe (e.g., `"mp3"`, `"aac"`).
     ///
     /// Used by the probe path when no container is known up-front.

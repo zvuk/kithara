@@ -60,6 +60,7 @@ fn analysis_with(
         coverage.insert(start..start + frames);
     }
     TrackAnalysis::builder()
+        .media_origin(Duration::ZERO)
         .token("archive:test".into())
         .revision(revision)
         .source_sample_rate(source_sample_rate)

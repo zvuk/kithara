@@ -48,78 +48,41 @@ async fn stress_offline_crossfade_no_gaps(
     let make_mp3 = |w: PlayWorker<TestPools>, s: AssetStore<TestPools>, cancel: CancelToken| {
         let p = local_mp3.clone();
         async move {
-            let pools = w.pools().clone();
-            let file_cfg = FileConfig::for_src(FileSrc::Local(p))
+            ResourceConfig::for_src(ResourceSrc::Path(p))
                 .store(s)
-                .pools(pools)
-                .cancel(cancel.clone())
-                .build();
-            let audio_cfg = AudioConfig::<FileSource<TestPools>>::for_stream(file_cfg)
+                .worker(w)
                 .hint("mp3".to_string())
                 .cancel(cancel)
-                .build();
-            let audio = w.load(audio_cfg).await.expect("create local MP3 audio");
-            resource_from_reader(audio)
+                .build()
         }
     };
 
     let make_hls = |w: PlayWorker<TestPools>, s: AssetStore<TestPools>, cancel: CancelToken| {
         let u = hls_url.clone();
         async move {
-            let pools = w.pools().clone();
-            let wav_info = MediaInfo::builder()
-                .maybe_codec(Some(AudioCodec::Pcm))
-                .maybe_container(Some(ContainerFormat::Wav))
-                .build();
-            let cfg = HlsConfig::for_url(u)
+            ResourceConfig::for_src(ResourceSrc::Url(u))
                 .store(s)
-                .pools(pools)
-                .cancel(cancel.clone())
-                .build();
-            let audio_config = AudioConfig::<Hls<TestPools>>::for_stream(cfg)
-                .media_info(wav_info)
+                .worker(w)
+                .hint("wav")
                 .cancel(cancel)
-                .build();
-            let audio = w.load(audio_config).await.expect("HLS audio");
-            let mut r = resource_from_reader(audio);
-            timeout(consts::READ_TIMEOUT, r.preload())
-                .await
-                .expect("HLS preload")
-                .expect("HLS preload result");
-            r
+                .build()
         }
     };
 
-    let mut mp3_1 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
-    timeout(consts::READ_TIMEOUT, mp3_1.preload())
-        .await
-        .expect("mp3_1 preload deadline")
-        .expect("mp3_1 preload");
-    player.load_and_fadein(mp3_1).await;
+    let mp3_1 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
+    player.load_config(mp3_1).await;
     let s1a = render_offline_window(&mut player, 40, "MP3 solo", BLOCK, SR).await;
 
-    let mut hls_1 = make_hls(worker.clone(), store.clone(), master_cancel.child()).await;
-    timeout(consts::READ_TIMEOUT, hls_1.preload())
-        .await
-        .expect("hls_1 preload deadline")
-        .expect("hls_1 preload");
-    player.load_and_fadein(hls_1).await;
+    let hls_1 = make_hls(worker.clone(), store.clone(), master_cancel.child()).await;
+    player.load_config(hls_1).await;
     let s1b = render_offline_window(&mut player, 80, "MP3→HLS fade", BLOCK, SR).await;
 
-    let mut mp3_2 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
-    timeout(consts::READ_TIMEOUT, mp3_2.preload())
-        .await
-        .expect("mp3_2 preload deadline")
-        .expect("mp3_2 preload");
-    player.load_and_fadein(mp3_2).await;
+    let mp3_2 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
+    player.load_config(mp3_2).await;
     let s2 = render_offline_window(&mut player, 80, "HLS→MP3 fade", BLOCK, SR).await;
 
-    let mut mp3_3 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
-    timeout(consts::READ_TIMEOUT, mp3_3.preload())
-        .await
-        .expect("mp3_3 preload deadline")
-        .expect("mp3_3 preload");
-    player.load_and_fadein(mp3_3).await;
+    let mp3_3 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
+    player.load_config(mp3_3).await;
     let s3 = render_offline_window(&mut player, 80, "MP3→MP3 fade", BLOCK, SR).await;
 
     info!("\n=== Stress crossfade results (budget={block_budget:?}) ===");
@@ -164,6 +127,7 @@ async fn stress_offline_crossfade_no_gaps(
     target_os = "android",
     case::no_extension_android(mp3_no_extension().await, DecoderBackend::Android)
 )]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn resource_mp3_no_hint_decodes_with_duration(
     #[case] mp3_source: (TestServerHelper, url::Url),
     #[case] backend: DecoderBackend,
@@ -178,7 +142,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     let path = url.as_str();
 
     let config = resource_config(&url, store, backend, None, play_worker(&region));
-    let mut resource = Resource::new(config)
+    let mut resource = kithara_integration_tests::mock::open_resource(&config)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed for path={path}: {e}"));
 
@@ -197,14 +161,18 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     let (samples, position) = {
         let mut total = 0usize;
         let mut buf = [0.0f32; 4096];
-        let deadline = Instant::now() + consts::READ_TIMEOUT;
+        let deadline = WallInstant::now() + consts::READ_TIMEOUT;
         let mut saw_eof = false;
         loop {
+            hang_tick!(
+                "resource_mp3_no_hint_decodes_with_duration waits for playback progress".to_owned()
+            );
             match resource.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     let count = count.get();
                     if count > 0 {
                         total += count;
+                        hang_reset!();
                     }
                 }
                 Ok(ReadOutcome::Eof { .. }) => {
@@ -218,7 +186,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
                 break;
             }
             assert!(
-                Instant::now() <= deadline,
+                WallInstant::now() <= deadline,
                 "path={path}: timed out waiting for PCM data"
             );
             sleep(Duration::from_millis(5)).await;
@@ -232,8 +200,14 @@ async fn resource_mp3_no_hint_decodes_with_duration(
         position >= Duration::from_secs(2),
         "path={path}: must decode at least 2s, got {position:?}"
     );
+    hang_reset!();
 }
 
+/// Local fixture (the generated ~187s MPEG clip, packaged AAC HLS ~64s) through
+/// `ResourceConfig` — same code path as kithara-app. Mirrors
+/// `live_remote_resource_decodes_with_duration` (now in
+/// `live_remote_network.rs`) but against `TestServerHelper`, so it stays in the
+/// regular suite: no VPN, no internet.
 #[kithara::test(tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(10))]
 #[cfg_attr(not(target_os = "android"), case::mp3_symphonia(local_mp3().await, DecoderBackend::Symphonia))]
 #[cfg_attr(
@@ -253,6 +227,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     target_os = "android",
     case::hls_aac_android(local_hls().await, DecoderBackend::Android)
 )]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn local_resource_decodes_with_duration(
     #[case] local_source: (TestServerHelper, url::Url),
     #[case] backend: DecoderBackend,
@@ -272,7 +247,7 @@ async fn local_resource_decodes_with_duration(
             .worker(play_worker(&region))
             .build();
 
-    let mut resource = Resource::new(config)
+    let mut resource = kithara_integration_tests::mock::open_resource(&config)
         .await
         .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 
@@ -284,15 +259,17 @@ async fn local_resource_decodes_with_duration(
         "{url}: expected duration > 30s, got {dur_secs:.1}s"
     );
 
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = WallInstant::now() + Duration::from_secs(20);
     let mut samples = 0usize;
     let mut buf = [0.0f32; 4096];
     loop {
+        hang_tick!("local_resource_decodes_with_duration waits for playback progress".to_owned());
         match resource.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => {
                 let count = count.get();
                 if count > 0 {
                     samples += count;
+                    hang_reset!();
                 }
             }
             Ok(ReadOutcome::Eof { .. }) => break,
@@ -303,7 +280,7 @@ async fn local_resource_decodes_with_duration(
             break;
         }
         assert!(
-            Instant::now() <= deadline,
+            WallInstant::now() <= deadline,
             "{url}: timed out waiting for PCM (pos={:?}, samples={samples})",
             resource.position()
         );
@@ -316,4 +293,5 @@ async fn local_resource_decodes_with_duration(
         "{url}: must decode at least 2s, got {:?}",
         resource.position()
     );
+    hang_reset!();
 }

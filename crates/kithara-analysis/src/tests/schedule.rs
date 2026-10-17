@@ -57,6 +57,8 @@ struct Source {
     pools: Option<kithara_bufpool::PoolRegion<TestPools>>,
     reports: Option<u64>,
     metadata: TrackMetadata,
+    media_origin: Option<Duration>,
+    visible_origin: Option<Duration>,
     echoes: bool,
     refines: bool,
     stalls: bool,
@@ -86,6 +88,8 @@ impl Source {
             bus: EventBus::default(),
             log: Log::default(),
             metadata: TrackMetadata::default(),
+            media_origin: Some(Duration::ZERO),
+            visible_origin: Some(Duration::ZERO),
             pools: None,
         }
     }
@@ -143,6 +147,14 @@ impl Source {
 }
 
 impl AudioSession for Source {
+    fn media_origin(&self) -> Option<Duration> {
+        self.media_origin
+    }
+
+    fn visible_origin(&self) -> Option<Duration> {
+        self.visible_origin
+    }
+
     fn duration(&self) -> Option<Duration> {
         let reports = self.reports?;
         let frames = if self.refines && self.at > 0 {
@@ -189,7 +201,10 @@ impl AudioRead for Source {
         self.chunks = self.chunks.saturating_add(1);
         self.push(Call::Chunk { at });
         let pools = self.pools.as_ref().expect("test pass installs pool region");
-        Ok(ChunkOutcome::Chunk(decoded(self.pcm, pools, at, frames)))
+        let mut chunk = decoded(self.pcm, pools, at, frames);
+        chunk.meta.media_origin = self.media_origin;
+        chunk.meta.visible_origin = self.visible_origin;
+        Ok(ChunkOutcome::Chunk(Box::new(chunk)))
     }
 
     fn position(&self) -> Duration {
@@ -213,7 +228,7 @@ impl AudioRead for Source {
 }
 
 impl AudioControl for Source {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
         let target = spec().frame_at(position).unwrap_or(0);
         if target >= self.frames {
             self.push(Call::PastEof { to: target });
@@ -355,13 +370,30 @@ where
         let frames = frames.to_usize().unwrap_or(0);
         assert_eq!(
             self.producer
-                .offer(sine_from(self.pcm, at, frames), spec(), at),
+                .offer(sine_from(self.pcm, at, frames), &super::fixtures::info(at)),
             Ok(()),
             "the transport takes a range on its own axis"
         );
     }
 
-    fn open(mut source: Source, builder: AnalyzerBuilder<B, TestPools>) -> Self {
+    fn open(source: Source, builder: AnalyzerBuilder<B, TestPools>) -> Self {
+        Self::open_with_settings(
+            source,
+            builder,
+            NonZeroU32::new(consts::SCHEDULE_WINDOW_SECONDS)
+                .expect("test chunk duration is non-zero"),
+            NonZeroUsize::new(8).expect("test drain limit is non-zero"),
+            NonZeroU32::new(5).expect("test publish duration is non-zero"),
+        )
+    }
+
+    fn open_with_settings(
+        mut source: Source,
+        builder: AnalyzerBuilder<B, TestPools>,
+        chunk_seconds: NonZeroU32,
+        producer_drain_limit: NonZeroUsize,
+        publish_seconds: NonZeroU32,
+    ) -> Self {
         let pcm = source.pcm;
         let rate = spec().sample_rate;
         source.pools = Some(builder.pools().clone());
@@ -390,10 +422,9 @@ where
             node: NodeHarness::with_settings(
                 builder,
                 receiver,
-                NonZeroU32::new(consts::SCHEDULE_WINDOW_SECONDS)
-                    .expect("test chunk duration is non-zero"),
-                NonZeroUsize::new(8).expect("test drain limit is non-zero"),
-                NonZeroU32::new(5).expect("test publish duration is non-zero"),
+                chunk_seconds,
+                producer_drain_limit,
+                publish_seconds,
             ),
             producer: AnalysisProducer::new(writer, rate, consts::SCHEDULE_TOKEN.into()),
         }
@@ -401,6 +432,91 @@ where
 
     fn tick(&mut self) {
         let _ = self.node.tick();
+    }
+}
+
+#[cfg(feature = "analysis-waveform")]
+pub(super) fn assert_reader_visible_length_basis(analysis_pcm: &'static [f32]) {
+    let source = spec();
+    let original_visible_origin = source
+        .duration_for(529)
+        .expect("visible origin is representable");
+    let media_origin = source
+        .duration_for(1105)
+        .expect("media origin is representable");
+    for visible_origin in [None, Some(original_visible_origin)] {
+        let mut reader = Source::new(analysis_pcm, 132_829)
+            .reporting(Some(132_300))
+            .flooring(529);
+        reader.at = 529;
+        reader.chunk = 44_100;
+        reader.media_origin = Some(media_origin);
+        reader.visible_origin = visible_origin;
+        let builder = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
+            .with_waveform(consts::NODE_BUCKETS);
+        let mut pass = Pass::open_with_settings(
+            reader,
+            builder,
+            NonZeroU32::new(16).expect("chunk seconds are non-zero"),
+            NonZeroUsize::MIN,
+            NonZeroU32::MIN,
+        );
+
+        if visible_origin.is_some() {
+            assert_eq!(pass.node.tick(), TickResult::Progress);
+            assert_eq!(
+                pass.calls(),
+                [Call::Seek { to: 0, landed: 529 }],
+                "a known raw extent schedules before decoding"
+            );
+            assert!(
+                pass.results.borrow().is_none(),
+                "seeking does not claim decoded coverage"
+            );
+        }
+        assert_eq!(pass.node.tick(), TickResult::Progress);
+        let before = pass.analysis();
+        assert_eq!(
+            before.extent(),
+            visible_origin.map(|_| 132_829),
+            "only the original visible basis translates the reported length"
+        );
+        assert_eq!(
+            before.coverage().iter().collect::<Vec<_>>(),
+            [&(529..44_629)]
+        );
+        if visible_origin.is_some() {
+            assert_eq!(
+                pass.calls(),
+                [Call::Seek { to: 0, landed: 529 }, Call::Chunk { at: 529 },],
+                "coverage starts at the actual source landing"
+            );
+        } else {
+            assert_eq!(pass.calls(), [Call::Chunk { at: 529 }]);
+        }
+        assert_eq!(pass.node.tick(), TickResult::Progress);
+        let after = pass.analysis();
+        assert_eq!(after.extent(), visible_origin.map(|_| 132_829));
+        assert_eq!(
+            decoded_at(&pass.calls()),
+            [529, 44_629],
+            "both published spans came from the reader"
+        );
+        assert_eq!(
+            targets(&pass.calls()),
+            if visible_origin.is_some() {
+                vec![0]
+            } else {
+                Vec::new()
+            },
+            "only a known visible basis permits scheduled raw access"
+        );
+        assert_eq!(
+            after.coverage().iter().collect::<Vec<_>>(),
+            [&(529..88_729)]
+        );
+        assert_eq!(after.media_origin(), Some(media_origin));
+        assert!(after.waveform().is_some());
     }
 }
 

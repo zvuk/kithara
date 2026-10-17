@@ -6,7 +6,7 @@ use kithara_signal::AudioSpec;
 use kithara_stream::AudioCodec;
 use kithara_test_utils::kithara;
 use symphonia::core::{
-    audio::Channels,
+    audio::{Channels, GenericAudioBufferRef},
     codecs::{
         CodecProfile,
         audio::{
@@ -61,6 +61,8 @@ pub(crate) struct SymphoniaCodec {
     /// rate-doubling (HE-AAC v2: container declares core rate, decoder
     /// outputs upsampled rate) without flooding the log.
     logged_first_frame: bool,
+    aac_timing: Option<super::timing::Timing>,
+    decoded_offset: usize,
 }
 
 impl SymphoniaCodec {
@@ -95,6 +97,8 @@ impl SymphoniaCodec {
             codec: None,
             track_info: DecoderTrackInfo::default(),
             logged_first_frame: false,
+            aac_timing: None,
+            decoded_offset: 0,
         })
     }
 
@@ -146,7 +150,11 @@ impl SymphoniaCodec {
             .gapless
             .map(|info| apply_decoder_algo_delay(info, algo_delay));
 
-        let spec = checked_audio_spec(track.channels, track.sample_rate, "symphonia.codec.track")?;
+        let prepared_rate = decoder
+            .codec_params()
+            .sample_rate
+            .unwrap_or(track.sample_rate);
+        let spec = checked_audio_spec(track.channels, prepared_rate, "symphonia.codec.track")?;
         Ok(Self {
             decoder,
             spec,
@@ -156,6 +164,12 @@ impl SymphoniaCodec {
                 ..DecoderTrackInfo::default()
             },
             logged_first_frame: false,
+            aac_timing: matches!(
+                track.codec,
+                AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2
+            )
+            .then(super::timing::Timing::default),
+            decoded_offset: 0,
         })
     }
 
@@ -168,24 +182,161 @@ impl SymphoniaCodec {
     pub(crate) const fn supports(codec: AudioCodec) -> bool {
         !matches!(codec, AudioCodec::Pcm | AudioCodec::Adpcm)
     }
+
+    fn take_aac_output(
+        &mut self,
+        out: &mut SampleBuffer,
+    ) -> DecodeResult<crate::codec::DecodedPacket> {
+        let timing = self.aac_timing.as_mut().ok_or(DecodeError::InvalidData {
+            detail: "AAC output has no packet timing owner",
+        })?;
+        let decoded = self.decoder.last_decoded();
+        let total_frames = decoded.frames();
+        let channels = usize::from(self.spec.channels);
+        while self.decoded_offset < total_frames {
+            let available = u64::try_from(total_frames - self.decoded_offset)?;
+            match timing.take(available, self.spec)? {
+                super::timing::Output::Padding(frames) => {
+                    self.decoded_offset += usize::try_from(frames)?;
+                }
+                super::timing::Output::Samples { frames, metadata } => {
+                    let frames = usize::try_from(frames)?;
+                    let samples = decoded.samples_interleaved();
+                    out.ensure_len(samples)?;
+                    decoded.copy_to_slice_interleaved(&mut out[..samples]);
+                    let start = self.decoded_offset * channels;
+                    let end = (self.decoded_offset + frames) * channels;
+                    out.copy_within(start..end, 0);
+                    out.truncate(frames * channels);
+                    self.decoded_offset += frames;
+                    return Ok(crate::codec::DecodedPacket::new(
+                        u32::try_from(frames)?,
+                        metadata,
+                    ));
+                }
+            }
+        }
+        out.clear();
+        Ok(crate::codec::DecodedPacket::new(
+            0,
+            crate::demuxer::PacketMetadata::default(),
+        ))
+    }
+
+    fn handle_decode_error(
+        &mut self,
+        error: SymphoniaError,
+        out: &mut SampleBuffer,
+        metadata: crate::demuxer::PacketMetadata,
+    ) -> DecodeResult<crate::codec::DecodedPacket> {
+        match error {
+            SymphoniaError::DecodeError(err) => {
+                if self.aac_timing.is_some() {
+                    return Err(DecodeError::backend(SymphoniaError::DecodeError(err)));
+                }
+                tracing::debug!(error = %err, "SymphoniaCodec: skipping undecodable frame");
+                out.clear();
+                Ok(crate::codec::DecodedPacket::new(0, metadata))
+            }
+            SymphoniaError::ResetRequired => {
+                if self.aac_timing.is_some() {
+                    return Err(DecodeError::backend(SymphoniaError::ResetRequired));
+                }
+                self.decoder.reset();
+                out.clear();
+                Ok(crate::codec::DecodedPacket::new(0, metadata))
+            }
+            error => Err(DecodeError::backend(error)),
+        }
+    }
+}
+
+fn update_decoded_spec(
+    spec: &mut AudioSpec,
+    logged_first_frame: &mut bool,
+    decoded: &GenericAudioBufferRef<'_>,
+    pts_ticks: u64,
+) {
+    let num_samples = decoded.samples_interleaved();
+    let actual = decoded.spec();
+    let actual_rate = actual.rate();
+    let actual_channels = u16::try_from(actual.channels().count()).unwrap_or(spec.channels);
+    if !*logged_first_frame {
+        tracing::info!(
+            target: "kithara_decode::symphonia::codec",
+            declared_rate = spec.sample_rate.get(),
+            declared_channels = spec.channels,
+            actual_rate,
+            actual_channels,
+            decoded_frames = decoded.frames(),
+            num_samples_interleaved = num_samples,
+            pts_ticks,
+            "SymphoniaCodec::decode_frame — first frame snapshot"
+        );
+        *logged_first_frame = true;
+    }
+    if let Some(nz_actual_rate) = NonZeroU32::new(actual_rate)
+        && (spec.sample_rate != nz_actual_rate || spec.channels != actual_channels)
+    {
+        tracing::debug!(
+            target: "kithara_decode::symphonia::codec",
+            old_rate = spec.sample_rate.get(),
+            old_channels = spec.channels,
+            new_rate = actual_rate,
+            new_channels = actual_channels,
+            "SymphoniaCodec: live spec update from decoder output"
+        );
+        *spec = AudioSpec::new(actual_channels, nz_actual_rate);
+    }
+}
+
+fn copy_decoded(
+    decoded: &GenericAudioBufferRef<'_>,
+    out: &mut SampleBuffer,
+    spec: AudioSpec,
+    metadata: crate::demuxer::PacketMetadata,
+) -> DecodeResult<crate::codec::DecodedPacket> {
+    let num_samples = decoded.samples_interleaved();
+    if num_samples == 0 {
+        out.clear();
+        return Ok(crate::codec::DecodedPacket::new(0, metadata));
+    }
+
+    out.ensure_len(num_samples)?;
+    kithara::measure_block!("symphonia::output::copy_interleaved", {
+        decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
+    });
+    out.truncate(num_samples);
+    let frames = u32::try_from(decoded.frames()).unwrap_or(u32::MAX);
+    out.truncate(usize::try_from(frames)? * usize::from(spec.channels));
+    Ok(crate::codec::DecodedPacket::new(frames, metadata))
 }
 
 impl FrameCodec for SymphoniaCodec {
     #[kithara::measure(label = "decode.symphonia.codec")]
     fn decode_frame(
         &mut self,
-        frame_data: &[u8],
-        pts: Duration,
-        _packet_desc: &[u8],
+        frame: crate::demuxer::Frame<'_>,
+        metadata: crate::demuxer::PacketMetadata,
         out: &mut SampleBuffer,
-    ) -> DecodeResult<u32> {
-        let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate.get());
+    ) -> DecodeResult<crate::codec::DecodedPacket> {
+        if self.has_output() {
+            return Err(DecodeError::InvalidData {
+                detail: "buffered codec output must be consumed before another packet",
+            });
+        }
+        let crate::demuxer::Frame {
+            pts,
+            packet_desc: _packet_desc,
+            ..
+        } = frame;
+        let pts_ticks = self.spec.frame_at(pts)?;
         let packet_pts = Timestamp::new(i64::try_from(pts_ticks).unwrap_or(i64::MAX));
         let packet_ref = PacketRef::new(
             consts::TRACK_ID,
             packet_pts,
-            PktDuration::new(0),
-            frame_data,
+            PktDuration::new(self.spec.frame_at(frame.duration)?),
+            frame.data,
         );
 
         let decoded = match kithara::measure_block!(
@@ -206,62 +357,37 @@ impl FrameCodec for SymphoniaCodec {
             self.decoder.decode_ref(&packet_ref)
         ) {
             Ok(d) => d,
-            Err(SymphoniaError::DecodeError(err)) => {
-                tracing::debug!(error = %err, "SymphoniaCodec: skipping undecodable frame");
-                out.clear();
-                return Ok(0);
-            }
-            Err(SymphoniaError::ResetRequired) => {
-                self.decoder.reset();
-                out.clear();
-                return Ok(0);
-            }
-            Err(e) => return Err(DecodeError::backend(e)),
+            Err(error) => return self.handle_decode_error(error, out, metadata),
         };
 
-        let num_samples = decoded.samples_interleaved();
-        let actual = decoded.spec();
-        let actual_rate = actual.rate();
-        let actual_channels =
-            u16::try_from(actual.channels().count()).unwrap_or(self.spec.channels);
-        if !self.logged_first_frame {
-            tracing::info!(
-                target: "kithara_decode::symphonia::codec",
-                declared_rate = self.spec.sample_rate.get(),
-                declared_channels = self.spec.channels,
-                actual_rate,
-                actual_channels,
-                decoded_frames = decoded.frames(),
-                num_samples_interleaved = num_samples,
-                pts_ticks,
-                "SymphoniaCodec::decode_frame — first frame snapshot"
-            );
-            self.logged_first_frame = true;
+        update_decoded_spec(
+            &mut self.spec,
+            &mut self.logged_first_frame,
+            &decoded,
+            pts_ticks,
+        );
+        self.decoded_offset = 0;
+        let decoded_frames = decoded.frames();
+        if let Some(timing) = &mut self.aac_timing {
+            if !frame.data.is_empty() {
+                let block = self
+                    .decoder
+                    .codec_params()
+                    .max_frames_per_packet
+                    .unwrap_or_else(|| {
+                        self.codec
+                            .map_or(0, |codec| u64::from(access_unit_frames(codec)))
+                    });
+                timing.push(frame, metadata, self.spec, block)?;
+            }
+            if frame.data.is_empty() && decoded_frames == 0 && !timing.is_complete() {
+                return Err(DecodeError::InvalidData {
+                    detail: "AAC decoder ended before all supplied PCM was recovered",
+                });
+            }
+            return self.take_aac_output(out);
         }
-        if let Some(nz_actual_rate) = NonZeroU32::new(actual_rate)
-            && (self.spec.sample_rate != nz_actual_rate || self.spec.channels != actual_channels)
-        {
-            tracing::debug!(
-                target: "kithara_decode::symphonia::codec",
-                old_rate = self.spec.sample_rate.get(),
-                old_channels = self.spec.channels,
-                new_rate = actual_rate,
-                new_channels = actual_channels,
-                "SymphoniaCodec: live spec update from decoder output"
-            );
-            self.spec = AudioSpec::new(actual_channels, nz_actual_rate);
-        }
-        if num_samples == 0 {
-            out.clear();
-            return Ok(0);
-        }
-
-        out.ensure_len(num_samples)?;
-        kithara::measure_block!("symphonia::output::copy_interleaved", {
-            decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
-        });
-        out.truncate(num_samples);
-        Ok(u32::try_from(decoded.frames()).unwrap_or(u32::MAX))
+        copy_decoded(&decoded, out, self.spec, metadata)
     }
 
     fn decoder_algo_delay(&self, codec: AudioCodec) -> u64 {
@@ -270,7 +396,34 @@ impl FrameCodec for SymphoniaCodec {
 
     fn flush(&mut self) -> DecodeResult<()> {
         self.decoder.reset();
+        self.decoded_offset = 0;
+        if let Some(timing) = &mut self.aac_timing {
+            timing.clear();
+        }
         Ok(())
+    }
+
+    fn has_output(&self) -> bool {
+        self.aac_timing.is_some() && self.decoded_offset < self.decoder.last_decoded().frames()
+    }
+
+    fn take_output(&mut self, out: &mut SampleBuffer) -> DecodeResult<crate::codec::DecodedPacket> {
+        self.take_aac_output(out)
+    }
+
+    fn decoded_pts(&self) -> Option<Duration> {
+        if let Some(timing) = &self.aac_timing {
+            return timing.decoded_pts();
+        }
+        None
+    }
+
+    fn needs_eof_drain(&self, source_sample_rate: u32) -> bool {
+        #[cfg(all(not(target_arch = "wasm32"), feature = "fdk-aac"))]
+        if self.aac_timing.is_some() {
+            return true;
+        }
+        self.spec.sample_rate.get() != source_sample_rate
     }
 
     fn prepare_output(&self, out: &mut SampleBuffer) -> DecodeResult<()> {
@@ -306,14 +459,6 @@ impl FrameCodec for SymphoniaCodec {
 
     fn spec(&self) -> AudioSpec {
         self.spec
-    }
-
-    fn timestamp_bias_frames(&self) -> u64 {
-        if cfg!(feature = "fdk-aac") {
-            self.codec.map_or(0, access_unit_frames).into()
-        } else {
-            0
-        }
     }
 
     fn track_info(&self) -> DecoderTrackInfo {
@@ -352,13 +497,6 @@ const fn map_codec(codec: AudioCodec) -> DecodeResult<(AudioCodecId, Option<Code
             Err(DecodeError::UnsupportedCodec { codec })
         }
     }
-}
-
-fn duration_to_ticks(d: Duration, sample_rate: u32) -> u64 {
-    let secs = d.as_secs();
-    let subsec_nanos = u64::from(d.subsec_nanos());
-    secs.saturating_mul(u64::from(sample_rate))
-        .saturating_add(subsec_nanos.saturating_mul(u64::from(sample_rate)) / 1_000_000_000)
 }
 
 #[cfg(test)]

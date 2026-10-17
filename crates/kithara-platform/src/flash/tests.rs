@@ -2579,3 +2579,72 @@ fn a_parked_async_abort_preserves_native_cancellation_without_credit() {
     assert_eq!(forward::async_active_count(), 0);
     assert_eq!(super::system::FLASH.timed_count(), 0);
 }
+
+#[cfg(not(feature = "loom"))]
+#[kithara::test(native, flash(false))]
+fn synchronous_work_keeps_worker_deadlines_behind_its_completion() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let completed = Arc::new(AtomicUsize::new(0));
+    let started = Instant::now();
+    let wall_started = RealInstant::now();
+
+    let waiter = super::participate_sync(|| {
+        let worker_completed = Arc::clone(&completed);
+        let waiter = crate::thread::spawn(move || {
+            crate::thread::sleep(Duration::from_secs(1));
+            worker_completed.store(1, Ordering::Release);
+        });
+        while super::system::FLASH.timed_count() == 0 && completed.load(Ordering::Acquire) == 0 {
+            assert_fast(wall_started);
+            thread::yield_now();
+        }
+        assert_eq!(completed.load(Ordering::Acquire), 0);
+        assert_eq!(Instant::now(), started);
+        super::participate_sync(|| assert_eq!(Instant::now(), started));
+        crate::thread::sleep(Duration::from_millis(500));
+        assert_eq!(Instant::now(), started + Duration::from_millis(500));
+        assert_eq!(completed.load(Ordering::Acquire), 0);
+        assert!(super::ctx::dedicated());
+        waiter
+    });
+
+    waiter
+        .join()
+        .expect("timed worker completes after synchronous work");
+    assert_eq!(completed.load(Ordering::Acquire), 1);
+    assert!(Instant::now() >= started + Duration::from_secs(1));
+    assert!(!super::ctx::dedicated());
+    assert!(matches!(super::ctx::credit(), super::ctx::Credit::None));
+    assert_fast(wall_started);
+}
+
+#[cfg(not(feature = "loom"))]
+#[kithara::test(native, flash(false))]
+fn synchronous_participation_reuses_async_credit_and_settles_unwinds() {
+    let _g = guard();
+    reset();
+    super::participate_sync(|| assert_eq!(super::system::FLASH.active_count(), 0));
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let ((), elapsed) = on_virtual_clock(async {
+        super::participate_sync(|| {
+            assert_eq!(super::system::FLASH.active_count(), 0);
+            assert_eq!(forward::async_active_count(), 1);
+            assert!(!super::ctx::dedicated());
+        });
+        crate::time::sleep(Duration::from_millis(10)).await;
+    });
+    assert_eq!(elapsed, Duration::from_millis(10));
+    kithara_test_utils::hang::suppress_expected_panic_dumps();
+    let result = std::panic::catch_unwind(|| {
+        super::participate_sync(|| panic!("synchronous work failed"));
+    });
+    assert!(result.is_err());
+    assert!(!super::ctx::dedicated());
+    assert!(matches!(super::ctx::credit(), super::ctx::Credit::None));
+    assert_eq!(super::system::FLASH.active_count(), 0);
+    assert_eq!(forward::async_active_count(), 0);
+}

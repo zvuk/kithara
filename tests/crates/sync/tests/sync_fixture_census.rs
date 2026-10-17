@@ -15,13 +15,28 @@ type Census = (
 );
 
 #[kithara::fixture]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn provider_sources() -> Census {
-    let server = TestServerHelper::new().await;
+    let _io = kithara::platform::flash::real_io();
+    hang_tick!("provider_sources: starting the fixture server".to_owned());
+    let server =
+        kithara::platform::time::timeout(__hang_detector.remaining(), TestServerHelper::new())
+            .await;
+    hang_tick!("provider_sources: starting the fixture server".to_owned());
+    let server = server.expect("fixture server starts within its liveness budget");
+    hang_reset!();
     let mut entries = Vec::new();
     for provider in Provider::ALL {
-        let paths = AssertUnwindSafe(sources(*provider, 2, &server))
-            .catch_unwind()
-            .await
+        hang_tick!(format!("provider_sources: materialising {provider:?}"));
+        let paths = AssertUnwindSafe(kithara::platform::time::timeout(
+            __hang_detector.remaining(),
+            sources(*provider, 2, &server),
+        ))
+        .catch_unwind()
+        .await;
+        hang_tick!(format!("provider_sources: materialising {provider:?}"));
+        let paths = paths
+            .map(|result| result.expect("fixture sources arrive within the watchdog budget"))
             .map_err(|payload| {
                 payload
                     .downcast_ref::<String>()
@@ -29,6 +44,7 @@ async fn provider_sources() -> Census {
                     .unwrap_or_default()
             });
         entries.push((*provider, paths));
+        hang_reset!();
     }
     (server, entries)
 }

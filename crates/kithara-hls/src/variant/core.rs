@@ -13,7 +13,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_storage::ResourceStatus;
-use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve, StreamError, StreamResult};
+use kithara_stream::{AudioCodec, ContainerFormat, StreamError, StreamResult};
 
 use super::{
     flow::{
@@ -44,11 +44,6 @@ where
     /// Prepared window derived from the store's ephemeral cache capacity.
     pub(crate) look_ahead_segments: Option<usize>,
     pub(crate) signal: SizeSignal,
-    /// Snapshot of `SeekObserve::epoch()` at plan-time. Tagged on
-    /// every emitted `FetchCmd`'s probe so integration tests can
-    /// distinguish fetches that pre-date a user seek from those that
-    /// the scheduler issued *after* observing the new epoch.
-    pub(crate) seek_epoch: u64,
 }
 
 pub(crate) struct HlsVariant<S>
@@ -88,7 +83,7 @@ pub(super) struct VariantFlow {
     /// [`HlsVariant::take_prefetch_resume`].
     pub(super) prefetch_resume_at: AtomicU64,
     pub(super) queue: PlanQueue,
-    /// Timeline state consulted for `is_flushing` and active-seek gating.
+    /// Reader activity used to prioritize this variant's fetches.
     pub(super) reader: ReaderRuntime,
 }
 
@@ -260,12 +255,12 @@ where
 }
 
 impl VariantFlow {
-    fn new(seek_obs: Arc<dyn SeekObserve>, num_segments: usize) -> Self {
+    fn new(num_segments: usize) -> Self {
         Self {
             prefetch_anchor: AtomicU64::new(0),
             prefetch_resume_at: AtomicU64::new(consts::NO_PREFETCH_DEFERRAL),
             queue: PlanQueue::new(num_segments.saturating_add(2), num_segments),
-            reader: ReaderRuntime::new(seek_obs),
+            reader: ReaderRuntime::new(),
         }
     }
 }
@@ -287,7 +282,6 @@ impl VariantSeek {
 /// Production builds this from parsed playlist metadata; tests build it
 /// inline from synthesised fixtures.
 pub(crate) struct VariantParts {
-    pub(crate) seek_obs: Arc<dyn SeekObserve>,
     pub(crate) codec: Option<AudioCodec>,
     pub(crate) container: Option<ContainerFormat>,
     pub(crate) init: Option<Segment>,
@@ -343,7 +337,6 @@ where
         #[builder(start_fn)] playlist_state: &Arc<PlaylistState>,
         ctx: &'a PlanCtx<S>,
         decrypt_contexts: &'a [Option<DecryptContext>],
-        seek_obs: Arc<dyn SeekObserve>,
         #[builder(required)] init_decrypt_ctx: Option<DecryptContext>,
         variant_idx: usize,
     ) -> HlsResult<Arc<Self>> {
@@ -358,7 +351,6 @@ where
         let codec = playlist_state.variant_codec(variant_idx);
         let container = playlist_state.variant_container(variant_idx);
         Ok(VariantParts {
-            seek_obs,
             codec,
             container,
             init,
@@ -379,7 +371,6 @@ impl VariantParts {
             init,
             codec,
             container,
-            seek_obs,
             segments,
         } = self;
         let init_size = init_size_of(&init);
@@ -388,7 +379,7 @@ impl VariantParts {
             config: Arc::clone(&ctx.config),
             variant,
             layout,
-            flow: VariantFlow::new(seek_obs, segments.len()),
+            flow: VariantFlow::new(segments.len()),
             profile: VariantProfile {
                 codec,
                 container,

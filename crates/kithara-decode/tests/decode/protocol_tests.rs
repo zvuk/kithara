@@ -126,18 +126,22 @@ fn duration_after_create_is_consistent_across_backends(tone_mp3: &'static [u8]) 
         .collect();
 
     for (backend, duration) in &durations {
-        let d = duration.unwrap_or_else(|| {
-            panic!("backend {backend:?} must report duration for a complete MP3 file")
-        });
+        let Some(kithara_decode::DecoderDuration::RawLength(d)) = duration else {
+            panic!("backend {backend:?} must report a raw PCM length for a complete MP3 file")
+        };
         assert!(
             d.as_secs_f64() > 1.0,
             "duration from {backend:?} is suspiciously short: {d:?}"
         );
     }
 
-    let first = durations[0].1.expect("symphonia reports duration");
+    let Some(kithara_decode::DecoderDuration::RawLength(first)) = durations[0].1 else {
+        panic!("Symphonia must report a raw PCM length");
+    };
     for (backend, duration) in &durations[1..] {
-        let other = duration.expect("backend reports duration");
+        let Some(kithara_decode::DecoderDuration::RawLength(other)) = duration else {
+            panic!("backend {backend:?} must report a raw PCM length");
+        };
         let diff = (first.as_secs_f64() - other.as_secs_f64()).abs();
         let tol = first.as_secs_f64() * 0.05;
         assert!(

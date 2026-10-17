@@ -73,6 +73,9 @@ pub enum ElasticError {
     /// The resident input history exceeded its prepared rolling storage.
     #[error("elastic input history needs {required} frames; prepared capacity is {capacity}")]
     InputStorage { required: usize, capacity: usize },
+    /// The requested source history precedes the retained input frontier.
+    #[error("required source history starts at {requested}; resident input starts at {resident}")]
+    SourceHistoryLost { requested: i64, resident: i64 },
     /// A prepared frame domain produced a rate window that cannot bound a rate.
     #[error("elastic rate envelope {min}..={max} is not a finite positive range")]
     InvalidRateEnvelope { min: f64, max: f64 },

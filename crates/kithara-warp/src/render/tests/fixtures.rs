@@ -17,6 +17,16 @@ use crate::{
 
 pub(super) type WarpRenderer = GenericWarpRenderer<TestPools>;
 
+pub(super) trait TerminalDrain {
+    fn flush(&mut self) -> Option<AudioChunk>;
+}
+
+impl TerminalDrain for WarpRenderer {
+    fn flush(&mut self) -> Option<AudioChunk> {
+        self.drain(usize::MAX).expect("terminal drain")
+    }
+}
+
 pub(super) fn f64_of(x: usize) -> f64 {
     num_traits::cast(x).unwrap_or_default()
 }
@@ -81,6 +91,11 @@ pub(super) fn renderer(config: &WarpConfig) -> WarpRenderer {
     Warp::new((), config).renderer(spec(), pools())
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 pub(super) fn render_serviced(fx: &mut WarpRenderer, input: AudioChunk) -> Option<AudioChunk> {
     fx.prepare(spec());
     let output = fx

@@ -6,9 +6,9 @@ impl StretchKind {
     #[must_use]
     pub const fn all() -> &'static [Self] {
         &[
-            #[cfg(feature = "stretch-signalsmith")]
+            #[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
             Self::Signalsmith,
-            #[cfg(feature = "stretch-bungee")]
+            #[cfg(all(feature = "stretch-bungee", not(target_arch = "wasm32")))]
             Self::Bungee,
             #[cfg(feature = "stretch-glide")]
             Self::Glide,
@@ -21,9 +21,9 @@ impl StretchKind {
     #[must_use]
     pub const fn capabilities(self) -> BackendCapabilities {
         match self {
-            #[cfg(feature = "stretch-signalsmith")]
+            #[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
             Self::Signalsmith => BackendCapabilities::RATE.union(BackendCapabilities::KEYLOCK),
-            #[cfg(feature = "stretch-bungee")]
+            #[cfg(all(feature = "stretch-bungee", not(target_arch = "wasm32")))]
             Self::Bungee => BackendCapabilities::RATE.union(BackendCapabilities::KEYLOCK),
             #[cfg(feature = "stretch-glide")]
             Self::Glide => BackendCapabilities::RATE,

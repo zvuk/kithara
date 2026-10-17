@@ -17,6 +17,7 @@ mod loader_lanes;
 mod loader_starvation;
 mod local_track_plays;
 mod mp3_plays_to_its_end;
+mod next_crossfade_hands_over_transport;
 mod packaged_drm_seek;
 mod play_before_the_load_lands;
 mod player_queue_api_regressions;

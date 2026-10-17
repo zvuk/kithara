@@ -53,13 +53,13 @@ analysis-waveform = ["kithara/analysis-waveform"]
 # modules without pulling in iced. Used by integration tests
 # (`tests/crates/queue/tests/real_playlist.rs`).
 lib-only = []
+mock = ["kithara/offline"]
 # Hand the no-block gate the facade the app is built on, so a lane that runs
 # this package under the gate detects a blocking call made from the app as
 # well as from the crates beneath it.
 no-block = ["kithara/no-block"]
 # Enable app and facade USDT probes together.
 usdt = ["kithara/usdt"]
-mock = ["kithara/offline"]
 # Production Apple decode shape: embedded AudioConverter SRC inside the Apple
 # codec. Opt-in so the default desktop build keeps the Rubato adapter path.
 apple-fused-src = ["kithara/apple-fused-src"]

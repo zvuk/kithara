@@ -1,35 +1,37 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{
-        sync::Arc,
         time::{Duration, Instant},
-        tokio::task::{spawn, spawn_blocking},
+        tokio::task::spawn_blocking,
     },
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::Stream,
 };
 use kithara_integration_tests::{
     TestServerHelper, abr_fast, auto,
     bufpool_ext::{TestPools, pools},
-    event::TestEvent,
     mixed_encrypted, mixed_plain,
+    mock::LaneAudio,
 };
-use kithara_test_utils::{TestTempDir, temp_dir};
+use kithara_test_utils::{TestTempDir, kithara as watchdog, temp_dir};
 use tracing::info;
 use url::Url;
 
+#[watchdog::hang_watchdog(timeout = Duration::from_secs(1))]
 fn warmup_until_first_frame(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
 ) -> u64 {
     let mut warmup_samples = 0u64;
     while warmup_samples == 0 {
+        hang_tick!();
         match audio.read(buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                warmup_samples += count.get() as u64;
+                hang_reset!();
+            }
             Ok(ReadOutcome::Pending { .. } | ReadOutcome::Eof { .. }) => break,
             Err(e) => panic!("warmup decode error: {e}"),
         }
@@ -45,8 +47,9 @@ struct SeekStats {
     dead_seeks: u64,
 }
 
+#[watchdog::hang_watchdog(timeout = Duration::from_secs(1))]
 fn run_rapid_random_seeks(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
 ) -> SeekStats {
     let mut stats = SeekStats::default();
@@ -57,6 +60,7 @@ fn run_rapid_random_seeks(
     ];
 
     for i in 0..200 {
+        hang_tick!();
         let pos = positions_secs[i % positions_secs.len()];
         let position = Duration::from_secs_f64(pos);
         match audio.seek(position) {
@@ -65,6 +69,7 @@ fn run_rapid_random_seeks(
                 match audio.read(buf) {
                     Ok(ReadOutcome::Frames { count, .. }) => {
                         stats.samples_after_seek += count.get() as u64;
+                        hang_reset!();
                     }
                     Ok(_) => {
                         stats.dead_seeks += 1;
@@ -123,21 +128,10 @@ async fn stress_seek_during_abr_switch_real_decoder(
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
 
-    let mut audio = worker.load(config).await.expect("audio creation");
-
-    let mut events_rx = audio.event_bus().subscribe::<TestEvent>();
-
-    let switches = Arc::new(AtomicUsize::new(0));
-    let switches_bg = switches.clone();
-    spawn(async move {
-        while let Ok(ev) = events_rx.recv().await.map(|env| env.event) {
-            let ev_str = format!("{:?}", ev);
-            if ev_str.contains("VariantApplied") {
-                switches_bg.fetch_add(1, Ordering::Relaxed);
-                info!("ABR switch detected: {}", ev_str);
-            }
-        }
-    });
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio creation");
+    audio = kithara_integration_tests::mock::with_blocking_reads(audio);
 
     let result = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
@@ -221,7 +215,9 @@ async fn seek_sequence_from_log_real_stream(
         .initial_abr_mode(auto(0))
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
-    let mut audio = worker.load(config).await.expect("audio creation");
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio creation");
 
     let result = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];

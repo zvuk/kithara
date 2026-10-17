@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_platform::sync::Arc;
-use kithara_stream::{ByteMap, ContainerFormat};
+use kithara_stream::{ByteMap, ContainerFormat, ReaderControl};
 use symphonia_core::formats::FormatOptions;
 
 use super::{
@@ -22,6 +22,7 @@ pub(crate) struct FileOpen {
     pub(crate) byte_map: Option<Arc<dyn ByteMap>>,
     pub(crate) container: Option<ContainerFormat>,
     pub(crate) hint: Option<String>,
+    pub(crate) control: ReaderControl,
 }
 
 impl SymphoniaDemuxer {
@@ -44,10 +45,12 @@ impl SymphoniaDemuxer {
             container,
             byte_len_handle,
             byte_map,
+            control,
         } = open;
         let config = SymphoniaConfig::builder()
             .maybe_byte_len_handle(byte_len_handle)
             .maybe_hint(hint)
+            .reader_control(control.clone())
             .build();
         let format_opts = FormatOptions::default();
         let bootstrap: ReaderBootstrap = if let Some(container) = container {
@@ -60,6 +63,8 @@ impl SymphoniaDemuxer {
             bootstrap.format_reader,
             Some(bootstrap.byte_pos_handle),
             byte_map,
+            bootstrap.wav_block_align,
+            control,
         )?;
         Ok((demuxer, len_handle))
     }

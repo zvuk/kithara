@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 pub use std::num::{NonZeroU32, NonZeroUsize};
 
 pub use kithara::{
@@ -6,15 +8,13 @@ pub use kithara::{
         SeekOutcome,
     },
     decode::{
-        DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer,
-        SilenceTrimParams, TrackMetadata,
+        GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, SilenceTrimParams,
+        TrackMetadata,
     },
     events::{EventBus, TrackId},
-    platform::{
-        sync::Arc,
-        time::{self, Duration},
-    },
-    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
+    platform::time::{self, Duration},
+    play::{PlayerEvent, ResourceConfig, ResourceSrc},
+    queue::{TrackSource, Transition},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     stream::AudioCodec,
 };
@@ -25,13 +25,15 @@ pub use kithara::{
 pub use kithara::{
     audio::{AudioDecoderConfig, DecoderResamplerSettings},
     decode::DecoderBackend,
-    platform::time::Instant,
+    platform::time::WallInstant,
     play::PlaybackResamplerBackend,
+    play::Resource,
 };
 pub use kithara_test_fixtures::{
     analysis_beat_fixtures::{fused_seam, fused_seam_stereo},
     signal::{deinterleave_left, goertzel_magnitude, max_silence_run},
 };
+use kithara_test_utils::kithara as watchdog;
 pub use kithara_test_utils::{
     TestTempDir,
     bufpool::{TestPools, pools},
@@ -112,25 +114,15 @@ pub async fn gapless_source(
 }
 
 pub async fn create_resource(
-    harness: &OfflinePlayer,
+    _harness: &OfflinePlayer,
     created: &CreatedHls,
     cache_dir: &std::path::Path,
-) -> Resource {
-    let store = crate::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::<TestPools>::for_src(
+) -> ResourceConfig<TestPools> {
+    ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
-    .store(store)
-    .build();
-    config = harness
-        .with_player(move |player| player.prepare_config(config))
-        .await
-        .expect("prepare gapless e2e HLS resource config");
-    let mut resource = Resource::new(config)
-        .await
-        .expect("open HLS resource for gapless e2e fixture");
-    let _ = resource.preload().await;
-    resource
+    .store(crate::disk_asset_store(cache_dir))
+    .build()
 }
 
 #[cfg(all(
@@ -138,10 +130,10 @@ pub async fn create_resource(
     any(target_os = "macos", target_os = "ios")
 ))]
 pub async fn create_apple_fused_resource(
-    harness: &OfflinePlayer,
+    _harness: &OfflinePlayer,
     created: &CreatedHls,
     cache_dir: &std::path::Path,
-) -> Resource {
+) -> ResourceConfig<TestPools> {
     let store = crate::disk_asset_store(cache_dir);
     let decoder_defaults = AudioDecoderConfig::builder()
         .resampler(
@@ -150,31 +142,20 @@ pub async fn create_apple_fused_resource(
                 .build(),
         )
         .build();
-    let config = ResourceConfig::for_src(
+    ResourceConfig::for_src(
         ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
+    .host_sample_rate(NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("device rate"))
+    .block_on_underrun(true)
     .decoder(
         AudioDecoderConfig::builder()
             .backend(DecoderBackend::Apple)
+            .gapless_mode(silence_trim_with_trailing())
             .maybe_resampler(decoder_defaults.resampler().cloned())
             .build(),
     )
-    .build();
-    let config = harness
-        .with_player(move |player| player.prepare_config(config))
-        .await
-        .expect("prepare Apple fused HLS resource config");
-    let mut resource = Resource::new(config)
-        .await
-        .expect("open HLS resource for Apple fused fixture");
-    let _ = resource.preload().await;
-    assert_eq!(
-        resource.spec().sample_rate.get(),
-        FUSED_FIXTURE_DEVICE_RATE,
-        "Apple fused decoder must emit the host/device rate"
-    );
-    resource
+    .build()
 }
 
 pub async fn render_synthetic_fused_deficit_seam(
@@ -196,27 +177,28 @@ pub async fn render_synthetic_fused_deficit_seam(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(GaplessMode::Disabled)
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
     )
     .await;
-    harness.set_host_level(FUSED_FIXTURE_MASTER_LEVEL);
+    harness
+        .with_queue(move |queue| queue.set_level(FUSED_FIXTURE_MASTER_LEVEL))
+        .await
+        .expect("set the mix level");
     let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation, stereo);
     let first_frame_count = first_frames.len();
-    let first = Resource::from_reader(
-        SyntheticPcmReader::new(first_frames, first_frame_count),
-        Some(Arc::from("fused-deficit-1")),
-    );
-    let second = Resource::from_reader(
-        SyntheticPcmReader::new(
-            pcm[FUSED_FIXTURE_IDEAL_DEVICE_FRAMES..].to_vec(),
-            FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
-        ),
-        Some(Arc::from("fused-deficit-2")),
-    );
+    let first = harness.pcm_deck(Box::new(SyntheticPcmReader::new(
+        first_frames,
+        first_frame_count,
+    )));
+    let second = harness.pcm_deck(Box::new(SyntheticPcmReader::new(
+        pcm[FUSED_FIXTURE_IDEAL_DEVICE_FRAMES..].to_vec(),
+        FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
+    )));
 
-    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]).await;
+    let [_, second_id] = load_tagged_queue(&harness, [first, second]).await;
 
     let (rendered, events) = render_until_item_end(&harness, second_id).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -229,15 +211,12 @@ pub async fn render_synthetic_fused_deficit_seam(
         left,
         events,
         first_frames: first_frame_count,
-        first_id,
     };
     harness.close().await;
     result
 }
 
 pub fn synthetic_tail_trimmed_first_frames(tail_compensation: bool, stereo: &[f32]) -> Vec<f32> {
-    const TRAILING_FRAMES: u64 = 1;
-
     let actual_pre_trim_frames =
         FUSED_FIXTURE_IDEAL_DEVICE_FRAMES + usize::try_from(TRAILING_FRAMES).expect("fits") - 1;
     let ideal_pre_trim_frames =
@@ -251,8 +230,12 @@ pub fn synthetic_tail_trimmed_first_frames(tail_compensation: bool, stereo: &[f3
         );
 
     let mut output = Vec::new();
-    output.extend(left_frames_from_chunks(trimmer.push(source)));
-    output.extend(left_frames_from_chunks(trimmer.flush()));
+    output.extend(left_frames_from_chunks(
+        trimmer.push(source).expect("valid gapless PCM"),
+    ));
+    output.extend(left_frames_from_chunks(
+        trimmer.flush().expect("valid gapless PCM"),
+    ));
     output
 }
 
@@ -290,26 +273,45 @@ pub fn left_frames_from_chunks(chunks: impl IntoIterator<Item = AudioChunk>) -> 
         .collect()
 }
 
-/// Loads the queue and returns the identity the player will report back
-/// for each item, in the order they were given.
+/// Starts the first of one or two items on the deck and arms the second as
+/// its gapless successor, as the queue does ahead of the first item's end.
+/// Returns the identity the player will report back for each item, in the
+/// order they were given.
 pub async fn load_tagged_queue<const N: usize>(
     harness: &OfflinePlayer,
-    items: [Resource; N],
+    items: [impl Into<TrackSource<TestPools>>; N],
 ) -> [TrackId; N] {
-    let ids = [(); N].map(|()| TrackId::allocate());
-    harness
-        .with_player(move |player| {
-            player.reserve_slots(items.len());
-            for (index, (resource, id)) in items.into_iter().zip(ids.iter().copied()).enumerate() {
-                player
-                    .replace_item(index, resource, id)
-                    .expect("replace gapless fixture item");
+    let mut events = harness.player().subscribe();
+    let mut items = items.into_iter();
+    let first = items.next().map(Into::into);
+    let second = items.next().map(Into::into);
+    assert!(items.next().is_none(), "the deck holds at most two items");
+    let ids: [TrackId; N] = harness
+        .with_queue(move |queue| {
+            let mut ids = Vec::new();
+            for item in first.into_iter().chain(second) {
+                ids.push(queue.append(item).expect("append gapless queue item"));
             }
-            player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
+            if let Some(id) = ids.first() {
+                queue
+                    .select(*id, Transition::None)
+                    .expect("select first queue item");
+                queue.play();
+            }
+            ids.try_into()
+                .unwrap_or_else(|_| panic!("queue must retain every item identity"))
         })
         .await;
+    for id in ids {
+        crate::waits::wait_for_loader_done_event(
+            &mut events,
+            harness.player(),
+            id,
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("gapless queue source must finish loading");
+    }
     ids
 }
 
@@ -317,7 +319,6 @@ pub struct SyntheticSeamRender {
     pub left: Vec<f32>,
     pub events: Vec<TimedPlayerEvent>,
     pub first_frames: usize,
-    pub first_id: TrackId,
 }
 
 #[cfg(all(
@@ -346,13 +347,21 @@ pub struct DrainedResource {
     feature = "apple-fused-src",
     any(target_os = "macos", target_os = "ios")
 ))]
+#[watchdog::hang_watchdog(timeout = Duration::from_secs(1))]
 pub async fn drain_resource_to_eof(mut resource: Resource) -> DrainedResource {
+    assert_eq!(
+        resource.spec().sample_rate.get(),
+        FUSED_FIXTURE_DEVICE_RATE,
+        "Apple fused decoder must emit the host/device rate"
+    );
     let mut output_frames = 0usize;
     let mut pending = 0usize;
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = WallInstant::now() + Duration::from_secs(20);
     loop {
+        hang_tick!();
         match resource.next_chunk().expect("drain Apple fused resource") {
             ChunkOutcome::Chunk(chunk) => {
+                hang_reset!();
                 pending = 0;
                 output_frames = output_frames.saturating_add(chunk.frames());
             }
@@ -363,7 +372,7 @@ pub async fn drain_resource_to_eof(mut resource: Resource) -> DrainedResource {
                     "Apple fused resource stayed pending while draining to EOF"
                 );
                 assert!(
-                    Instant::now() <= deadline,
+                    WallInstant::now() <= deadline,
                     "timed out draining Apple fused resource to EOF"
                 );
                 time::sleep(Duration::from_millis(1)).await;
@@ -471,7 +480,7 @@ impl AudioRead for SyntheticPcmReader {
 
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         let frames = self.fill_interleaved(buf);
-        Ok(self.read_outcome(frames))
+        Ok(self.read_outcome(frames * usize::from(self.spec.channels)))
     }
 
     fn read_planar<'a>(
@@ -488,7 +497,7 @@ impl AudioRead for SyntheticPcmReader {
 }
 
 impl AudioControl for SyntheticPcmReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
         let frames = frames_for_test_duration(position);
         if frames >= self.frames.len() {
             self.position_frames = self.frames.len();
@@ -513,6 +522,7 @@ pub async fn render_until_item_end(
     render_until_item_end_with_post_roll(harness, terminal_item_id, POST_ROLL_BLOCKS).await
 }
 
+#[watchdog::hang_watchdog(timeout = Duration::from_secs(1))]
 pub async fn render_until_item_end_with_post_roll(
     harness: &OfflinePlayer,
     terminal_item_id: TrackId,
@@ -521,11 +531,29 @@ pub async fn render_until_item_end_with_post_roll(
     let mut rendered = Vec::new();
     let mut rendered_frames = 0usize;
     let mut events = Vec::new();
+    let mut track_start = None;
 
     loop {
+        hang_tick!();
         let block = harness.render(BLOCK_FRAMES).await;
+        if block.iter().any(|sample| sample.abs() > SILENCE_THRESHOLD) {
+            hang_reset!();
+        }
         rendered.extend_from_slice(&block);
         rendered_frames = rendered_frames.saturating_add(BLOCK_FRAMES);
+        if track_start.is_none() {
+            track_start = harness
+                .deck_snapshot()
+                .slots
+                .iter()
+                .filter_map(|slot| slot.mark)
+                .filter(|mark| mark.lane.frame > 0)
+                .find_map(|mark| {
+                    mark.session
+                        .frames_since(kithara::signal::SessionFrame::new(0))?
+                        .checked_sub(mark.lane.frame)
+                });
+        }
         events.extend(
             harness
                 .tick_and_drain()
@@ -541,6 +569,7 @@ pub async fn render_until_item_end_with_post_roll(
             )
         }) {
             for _ in 0..post_roll_blocks {
+                hang_tick!();
                 let block = harness.render(BLOCK_FRAMES).await;
                 rendered.extend_from_slice(&block);
                 rendered_frames = rendered_frames.saturating_add(BLOCK_FRAMES);
@@ -551,6 +580,12 @@ pub async fn render_until_item_end_with_post_roll(
                         .into_iter()
                         .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
                 );
+            }
+            let start = usize::try_from(track_start.expect("the ended track must have started"))
+                .expect("track start fits usize");
+            rendered.drain(..start * usize::from(GAPLESS_CHANNELS));
+            for event in &mut events {
+                event.frame_end = event.frame_end.saturating_sub(start);
             }
             return (rendered, events);
         }
@@ -574,27 +609,6 @@ where
         .iter()
         .find(|timed| predicate(&timed.event))
         .map(|timed| timed.frame_end)
-}
-
-pub fn assert_prefetch_before_first_end(events: &[TimedPlayerEvent], first_item_id: TrackId) {
-    let prefetch = events
-        .iter()
-        .position(|timed| matches!(&timed.event, PlayerEvent::PrefetchRequested))
-        .expect("PrefetchRequested must fire so the test exercises arm_next");
-    let first_end = events
-        .iter()
-        .position(|timed| {
-            matches!(
-                &timed.event,
-                PlayerEvent::ItemDidPlayToEnd { item, .. }
-                    if item.id() == first_item_id
-            )
-        })
-        .expect("first item must emit ItemDidPlayToEnd");
-    assert!(
-        prefetch < first_end,
-        "PrefetchRequested must precede the first ItemDidPlayToEnd; events={events:?}"
-    );
 }
 
 pub fn peak_first_diff(left: &[f32], center: usize, half: usize) -> f32 {
@@ -711,13 +725,8 @@ pub fn rms(samples: &[f32], start: usize, end: usize) -> f32 {
     }
     let slice = &samples[start..end];
     let sum_sq: f64 = slice.iter().map(|s| f64::from(*s) * f64::from(*s)).sum();
-    #[expect(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        reason = "test-only RMS: slice length fits f64; result narrowed to f32 to match sample type"
-    )]
-    let rms = (sum_sq / slice.len() as f64).sqrt() as f32;
-    rms
+    let length = num_traits::ToPrimitive::to_f64(&slice.len()).expect("RMS length fits f64");
+    num_traits::ToPrimitive::to_f32(&(sum_sq / length).sqrt()).expect("RMS fits f32")
 }
 
 pub fn assert_close_to(

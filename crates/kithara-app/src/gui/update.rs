@@ -194,6 +194,13 @@ mod tests {
         rig.ui.refresh();
     }
 
+    fn apply_eq(rig: &mut Rig, message: Message) {
+        apply(rig, message);
+        crate::mock::render_rig(rig, 128);
+        rig.engine.publish();
+        rig.ui.refresh();
+    }
+
     #[kithara::test(native, flash(false))]
     fn window_edges_keep_their_native_direction() {
         let cases = [
@@ -304,6 +311,7 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
+    #[kithara::hang_watchdog]
     fn eq_mode_changes_every_deck_as_one_transaction() {
         let mut rig = Rig::offline();
         let initial = [
@@ -311,15 +319,21 @@ mod tests {
             [1.0f32, 3.0, 7.0].map(GainDb::from),
         ];
         for (id, gains) in [DeckId(0), DeckId(1)].into_iter().zip(initial) {
+            hang_tick!();
             for (band, gain) in gains.into_iter().enumerate() {
-                apply(
-                    &mut rig,
-                    Message::Deck(id, DeckMsg::EqBandChanged(band, gain)),
-                );
+                hang_tick!();
+                hang_park!(|_| {
+                    apply_eq(
+                        &mut rig,
+                        Message::Deck(id, DeckMsg::EqBandChanged(band, gain)),
+                    );
+                });
+                hang_reset!();
             }
+            hang_reset!();
         }
 
-        apply(&mut rig, Message::SetEqMode(EqMode::FourBand));
+        apply_eq(&mut rig, Message::SetEqMode(EqMode::FourBand));
         assert_eq!(rig.ui.snapshot.eq_mode, EqMode::FourBand);
         for ((deck, queue), gains) in rig.ui.snapshot.decks.iter().zip(&rig.queues).zip(initial) {
             let expected = vec![gains[0], gains[1], gains[1], gains[2]];
@@ -327,8 +341,8 @@ mod tests {
             assert_eq!(queue.eq_band_count(), 4);
         }
 
-        apply(&mut rig, Message::SetEqMode(EqMode::FourBand));
-        apply(&mut rig, Message::SetEqMode(EqMode::ThreeBand));
+        apply_eq(&mut rig, Message::SetEqMode(EqMode::FourBand));
+        apply_eq(&mut rig, Message::SetEqMode(EqMode::ThreeBand));
         assert_eq!(rig.ui.snapshot.eq_mode, EqMode::ThreeBand);
         for ((deck, queue), gains) in rig.ui.snapshot.decks.iter().zip(&rig.queues).zip(initial) {
             assert_eq!(deck.eq_bands, gains);

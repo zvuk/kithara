@@ -635,6 +635,30 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
  */
 public protocol AudioPlayerProtocol: AnyObject, Sendable {
 
+    /**
+     * Notify the native player that the platform audio route changed.
+     *
+     * This does not change queue state. If playback is active, the
+     * native output stream is recreated so CoreAudio/CPAL cannot keep a
+     * stale route after headphones or Bluetooth devices are removed.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the native player cannot schedule the
+     * route invalidation.
+     */
+    func notifyAudioRouteChanged(reason: String) throws
+
+    /**
+     * Lower or restore the whole session output under a competing sound,
+     * such as a call or a navigation prompt.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the audio session rejects the change.
+     */
+    func setDuckingMode(mode: FfiDuckingMode) throws
+
     func actionAtItemEnd()  -> FfiActionAtItemEnd
 
     /**
@@ -746,9 +770,9 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * `seek_with_tolerance` wiring without forcing callers to migrate
      * twice; `None` preserves legacy behaviour.
      *
-     * The callback is invoked synchronously with `true` if the seek
-     * command was accepted, `false` otherwise (matches `AVPlayer`
-     * semantics).
+     * The callback reports owner admission: `true` if the seek command was
+     * accepted, `false` otherwise. On the browser, callbacks for posted commands
+     * are delivered asynchronously.
      */
     func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback)
 
@@ -908,20 +932,6 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func select(item: AudioPlayerItem, transition: FfiTransition) throws
 
     /**
-     * Notify the native player that the platform audio route changed.
-     *
-     * This does not change queue state. If playback is active, the
-     * native output stream is recreated so CoreAudio/CPAL cannot keep a
-     * stale route after headphones or Bluetooth devices are removed.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError`] when the native player cannot schedule the
-     * route invalidation.
-     */
-    func notifyAudioRouteChanged(reason: String) throws
-
-    /**
      * Notify the native player that the platform interrupted, or released,
      * the audio output.
      *
@@ -929,20 +939,10 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * is no longer invoked, so playback can neither observe the interruption
      * nor report it, and every value the audio thread publishes freezes where
      * it stood. Reporting it here is what keeps the observable playback state
-     * honest while nothing is audible. Getting the output back is
-     * [`notify_audio_route_changed`](Self::notify_audio_route_changed).
+     * honest while nothing is audible. Getting the output back is a route
+     * change, `notify_audio_route_changed`.
      */
     func notifyInterruption(kind: FfiInterruptionKind)
-
-    /**
-     * Lower or restore the whole session output under a competing sound,
-     * such as a call or a navigation prompt.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError`] when the audio session rejects the change.
-     */
-    func setDuckingMode(mode: FfiDuckingMode) throws
 
 }
 /**
@@ -994,7 +994,8 @@ open class AudioPlayer: AudioPlayerProtocol, @unchecked Sendable {
     }
     /**
      * # Errors
-     * Returns an error when the player configuration cannot be created.
+     * Returns an error when the player configuration cannot be created,
+     * including a playing rate that is not a finite number.
      */
 public convenience init(config: FfiPlayerConfig)throws  {
     let handle =
@@ -1017,6 +1018,42 @@ public convenience init(config: FfiPlayerConfig)throws  {
 
 
 
+
+    /**
+     * Notify the native player that the platform audio route changed.
+     *
+     * This does not change queue state. If playback is active, the
+     * native output stream is recreated so CoreAudio/CPAL cannot keep a
+     * stale route after headphones or Bluetooth devices are removed.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the native player cannot schedule the
+     * route invalidation.
+     */
+open func notifyAudioRouteChanged(reason: String)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_notify_audio_route_changed(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(reason),$0
+    )
+}
+}
+
+    /**
+     * Lower or restore the whole session output under a competing sound,
+     * such as a call or a navigation prompt.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the audio session rejects the change.
+     */
+open func setDuckingMode(mode: FfiDuckingMode)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_ducking_mode(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiDuckingMode_lower(mode),$0
+    )
+}
+}
 
 open func actionAtItemEnd() -> FfiActionAtItemEnd  {
     return try!  FfiConverterTypeFfiActionAtItemEnd_lift(try! rustCall() {
@@ -1254,9 +1291,9 @@ open func resetEq()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift
      * `seek_with_tolerance` wiring without forcing callers to migrate
      * twice; `None` preserves legacy behaviour.
      *
-     * The callback is invoked synchronously with `true` if the seek
-     * command was accepted, `false` otherwise (matches `AVPlayer`
-     * semantics).
+     * The callback reports owner admission: `true` if the seek command was
+     * accepted, `false` otherwise. On the browser, callbacks for posted commands
+     * are delivered asynchronously.
      */
 open func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_seek(
@@ -1544,26 +1581,6 @@ open func select(item: AudioPlayerItem, transition: FfiTransition)throws   {try 
 }
 
     /**
-     * Notify the native player that the platform audio route changed.
-     *
-     * This does not change queue state. If playback is active, the
-     * native output stream is recreated so CoreAudio/CPAL cannot keep a
-     * stale route after headphones or Bluetooth devices are removed.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError`] when the native player cannot schedule the
-     * route invalidation.
-     */
-open func notifyAudioRouteChanged(reason: String)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-    uniffi_kithara_ffi_fn_method_audioplayer_notify_audio_route_changed(
-            self.uniffiCloneHandle(),
-        FfiConverterString.lower(reason),$0
-    )
-}
-}
-
-    /**
      * Notify the native player that the platform interrupted, or released,
      * the audio output.
      *
@@ -1571,29 +1588,13 @@ open func notifyAudioRouteChanged(reason: String)throws   {try rustCallWithError
      * is no longer invoked, so playback can neither observe the interruption
      * nor report it, and every value the audio thread publishes freezes where
      * it stood. Reporting it here is what keeps the observable playback state
-     * honest while nothing is audible. Getting the output back is
-     * [`notify_audio_route_changed`](Self::notify_audio_route_changed).
+     * honest while nothing is audible. Getting the output back is a route
+     * change, `notify_audio_route_changed`.
      */
 open func notifyInterruption(kind: FfiInterruptionKind)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_notify_interruption(
             self.uniffiCloneHandle(),
         FfiConverterTypeFfiInterruptionKind_lower(kind),$0
-    )
-}
-}
-
-    /**
-     * Lower or restore the whole session output under a competing sound,
-     * such as a call or a navigation prompt.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError`] when the audio session rejects the change.
-     */
-open func setDuckingMode(mode: FfiDuckingMode)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
-    uniffi_kithara_ffi_fn_method_audioplayer_set_ducking_mode(
-            self.uniffiCloneHandle(),
-        FfiConverterTypeFfiDuckingMode_lower(mode),$0
     )
 }
 }
@@ -5940,8 +5941,6 @@ public enum FfiDecoderChangeCause: Equatable, Hashable {
     case initial
     case variantSwitch
     case formatBoundary
-    case seekRecreate
-    case recovery
     case hostRateChange
     case unknown
 
@@ -5971,13 +5970,9 @@ public struct FfiConverterTypeFfiDecoderChangeCause: FfiConverterRustBuffer {
 
         case 3: return .formatBoundary
 
-        case 4: return .seekRecreate
+        case 4: return .hostRateChange
 
-        case 5: return .recovery
-
-        case 6: return .hostRateChange
-
-        case 7: return .unknown
+        case 5: return .unknown
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -5999,20 +5994,12 @@ public struct FfiConverterTypeFfiDecoderChangeCause: FfiConverterRustBuffer {
             writeInt(&buf, Int32(3))
 
 
-        case .seekRecreate:
+        case .hostRateChange:
             writeInt(&buf, Int32(4))
 
 
-        case .recovery:
-            writeInt(&buf, Int32(5))
-
-
-        case .hostRateChange:
-            writeInt(&buf, Int32(6))
-
-
         case .unknown:
-            writeInt(&buf, Int32(7))
+            writeInt(&buf, Int32(5))
 
         }
     }
@@ -6528,7 +6515,7 @@ public enum FfiItemEvent: Equatable, Hashable {
     /**
      * Decoder configuration changed for the current item.
      */
-    case decoderChanged(backend: FfiDecoderBackend, codec: FfiAudioCodecKind?, container: FfiContainerKind?, sampleRate: UInt32, channels: UInt16, bitDepth: UInt16?, bitrate: UInt32?, epoch: UInt64, cause: FfiDecoderChangeCause, variant: UInt32?, baseOffset: UInt64, durationSeconds: Double?, gaplessLeading: UInt64, gaplessTrailing: UInt64, hasGapless: Bool
+    case decoderChanged(backend: FfiDecoderBackend, codec: FfiAudioCodecKind?, container: FfiContainerKind?, sampleRate: UInt32, channels: UInt16, bitDepth: UInt16?, bitrate: UInt32?, cause: FfiDecoderChangeCause, variant: UInt32?, baseOffset: UInt64, durationSeconds: Double?, gaplessLeading: UInt64, gaplessTrailing: UInt64, hasGapless: Bool
     )
     /**
      * Decoder reported a non-fatal or fatal decode error.
@@ -6549,19 +6536,19 @@ public enum FfiItemEvent: Equatable, Hashable {
     )
     case audioFormatChanged(oldChannels: UInt16, oldSampleRate: UInt32, newChannels: UInt16, newSampleRate: UInt32
     )
-    case seekComplete(positionSeconds: Double, epoch: UInt64
+    case seekComplete(positionSeconds: Double
     )
-    case seekRejected(epoch: UInt64, targetSeconds: Double
+    case seekRejected(targetSeconds: Double
     )
     case decoderReady(baseOffset: UInt64, variant: UInt32?
     )
-    case trackFailed(reason: FfiTrackFailureKind, epoch: UInt64
+    case trackFailed(reason: FfiTrackFailureKind
     )
-    case underrunStarted(positionMs: UInt64, epoch: UInt64
+    case underrunStarted(positionMs: UInt64
     )
-    case underrunEnded(positionMs: UInt64, epoch: UInt64
+    case underrunEnded(positionMs: UInt64
     )
-    case bufferHealth(bufferedMs: UInt64, decodedFrontierMs: UInt64, epoch: UInt64
+    case bufferHealth(bufferedMs: UInt64, decodedFrontierMs: UInt64
     )
     case engineLoad(load: Float, msPerChunk: Float, realtimeFactor: Float
     )
@@ -6647,7 +6634,7 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
         case 10: return .error(error: try FfiConverterString.read(from: &buf)
         )
 
-        case 11: return .decoderChanged(backend: try FfiConverterTypeFfiDecoderBackend.read(from: &buf), codec: try FfiConverterOptionTypeFfiAudioCodecKind.read(from: &buf), container: try FfiConverterOptionTypeFfiContainerKind.read(from: &buf), sampleRate: try FfiConverterUInt32.read(from: &buf), channels: try FfiConverterUInt16.read(from: &buf), bitDepth: try FfiConverterOptionUInt16.read(from: &buf), bitrate: try FfiConverterOptionUInt32.read(from: &buf), epoch: try FfiConverterUInt64.read(from: &buf), cause: try FfiConverterTypeFfiDecoderChangeCause.read(from: &buf), variant: try FfiConverterOptionUInt32.read(from: &buf), baseOffset: try FfiConverterUInt64.read(from: &buf), durationSeconds: try FfiConverterOptionDouble.read(from: &buf), gaplessLeading: try FfiConverterUInt64.read(from: &buf), gaplessTrailing: try FfiConverterUInt64.read(from: &buf), hasGapless: try FfiConverterBool.read(from: &buf)
+        case 11: return .decoderChanged(backend: try FfiConverterTypeFfiDecoderBackend.read(from: &buf), codec: try FfiConverterOptionTypeFfiAudioCodecKind.read(from: &buf), container: try FfiConverterOptionTypeFfiContainerKind.read(from: &buf), sampleRate: try FfiConverterUInt32.read(from: &buf), channels: try FfiConverterUInt16.read(from: &buf), bitDepth: try FfiConverterOptionUInt16.read(from: &buf), bitrate: try FfiConverterOptionUInt32.read(from: &buf), cause: try FfiConverterTypeFfiDecoderChangeCause.read(from: &buf), variant: try FfiConverterOptionUInt32.read(from: &buf), baseOffset: try FfiConverterUInt64.read(from: &buf), durationSeconds: try FfiConverterOptionDouble.read(from: &buf), gaplessLeading: try FfiConverterUInt64.read(from: &buf), gaplessTrailing: try FfiConverterUInt64.read(from: &buf), hasGapless: try FfiConverterBool.read(from: &buf)
         )
 
         case 12: return .decodeError(class: try FfiConverterTypeFfiDecodeErrorClass.read(from: &buf), kind: try FfiConverterTypeFfiDecodeErrorKind.read(from: &buf), codec: try FfiConverterOptionTypeFfiAudioCodecKind.read(from: &buf), detail: try FfiConverterString.read(from: &buf)
@@ -6665,25 +6652,25 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
         case 16: return .audioFormatChanged(oldChannels: try FfiConverterUInt16.read(from: &buf), oldSampleRate: try FfiConverterUInt32.read(from: &buf), newChannels: try FfiConverterUInt16.read(from: &buf), newSampleRate: try FfiConverterUInt32.read(from: &buf)
         )
 
-        case 17: return .seekComplete(positionSeconds: try FfiConverterDouble.read(from: &buf), epoch: try FfiConverterUInt64.read(from: &buf)
+        case 17: return .seekComplete(positionSeconds: try FfiConverterDouble.read(from: &buf)
         )
 
-        case 18: return .seekRejected(epoch: try FfiConverterUInt64.read(from: &buf), targetSeconds: try FfiConverterDouble.read(from: &buf)
+        case 18: return .seekRejected(targetSeconds: try FfiConverterDouble.read(from: &buf)
         )
 
         case 19: return .decoderReady(baseOffset: try FfiConverterUInt64.read(from: &buf), variant: try FfiConverterOptionUInt32.read(from: &buf)
         )
 
-        case 20: return .trackFailed(reason: try FfiConverterTypeFfiTrackFailureKind.read(from: &buf), epoch: try FfiConverterUInt64.read(from: &buf)
+        case 20: return .trackFailed(reason: try FfiConverterTypeFfiTrackFailureKind.read(from: &buf)
         )
 
-        case 21: return .underrunStarted(positionMs: try FfiConverterUInt64.read(from: &buf), epoch: try FfiConverterUInt64.read(from: &buf)
+        case 21: return .underrunStarted(positionMs: try FfiConverterUInt64.read(from: &buf)
         )
 
-        case 22: return .underrunEnded(positionMs: try FfiConverterUInt64.read(from: &buf), epoch: try FfiConverterUInt64.read(from: &buf)
+        case 22: return .underrunEnded(positionMs: try FfiConverterUInt64.read(from: &buf)
         )
 
-        case 23: return .bufferHealth(bufferedMs: try FfiConverterUInt64.read(from: &buf), decodedFrontierMs: try FfiConverterUInt64.read(from: &buf), epoch: try FfiConverterUInt64.read(from: &buf)
+        case 23: return .bufferHealth(bufferedMs: try FfiConverterUInt64.read(from: &buf), decodedFrontierMs: try FfiConverterUInt64.read(from: &buf)
         )
 
         case 24: return .engineLoad(load: try FfiConverterFloat.read(from: &buf), msPerChunk: try FfiConverterFloat.read(from: &buf), realtimeFactor: try FfiConverterFloat.read(from: &buf)
@@ -6795,7 +6782,7 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
             FfiConverterString.write(error, into: &buf)
 
 
-        case let .decoderChanged(backend,codec,container,sampleRate,channels,bitDepth,bitrate,epoch,cause,variant,baseOffset,durationSeconds,gaplessLeading,gaplessTrailing,hasGapless):
+        case let .decoderChanged(backend,codec,container,sampleRate,channels,bitDepth,bitrate,cause,variant,baseOffset,durationSeconds,gaplessLeading,gaplessTrailing,hasGapless):
             writeInt(&buf, Int32(11))
             FfiConverterTypeFfiDecoderBackend.write(backend, into: &buf)
             FfiConverterOptionTypeFfiAudioCodecKind.write(codec, into: &buf)
@@ -6804,7 +6791,6 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
             FfiConverterUInt16.write(channels, into: &buf)
             FfiConverterOptionUInt16.write(bitDepth, into: &buf)
             FfiConverterOptionUInt32.write(bitrate, into: &buf)
-            FfiConverterUInt64.write(epoch, into: &buf)
             FfiConverterTypeFfiDecoderChangeCause.write(cause, into: &buf)
             FfiConverterOptionUInt32.write(variant, into: &buf)
             FfiConverterUInt64.write(baseOffset, into: &buf)
@@ -6854,15 +6840,13 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
             FfiConverterUInt32.write(newSampleRate, into: &buf)
 
 
-        case let .seekComplete(positionSeconds,epoch):
+        case let .seekComplete(positionSeconds):
             writeInt(&buf, Int32(17))
             FfiConverterDouble.write(positionSeconds, into: &buf)
-            FfiConverterUInt64.write(epoch, into: &buf)
 
 
-        case let .seekRejected(epoch,targetSeconds):
+        case let .seekRejected(targetSeconds):
             writeInt(&buf, Int32(18))
-            FfiConverterUInt64.write(epoch, into: &buf)
             FfiConverterDouble.write(targetSeconds, into: &buf)
 
 
@@ -6872,29 +6856,25 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
             FfiConverterOptionUInt32.write(variant, into: &buf)
 
 
-        case let .trackFailed(reason,epoch):
+        case let .trackFailed(reason):
             writeInt(&buf, Int32(20))
             FfiConverterTypeFfiTrackFailureKind.write(reason, into: &buf)
-            FfiConverterUInt64.write(epoch, into: &buf)
 
 
-        case let .underrunStarted(positionMs,epoch):
+        case let .underrunStarted(positionMs):
             writeInt(&buf, Int32(21))
             FfiConverterUInt64.write(positionMs, into: &buf)
-            FfiConverterUInt64.write(epoch, into: &buf)
 
 
-        case let .underrunEnded(positionMs,epoch):
+        case let .underrunEnded(positionMs):
             writeInt(&buf, Int32(22))
             FfiConverterUInt64.write(positionMs, into: &buf)
-            FfiConverterUInt64.write(epoch, into: &buf)
 
 
-        case let .bufferHealth(bufferedMs,decodedFrontierMs,epoch):
+        case let .bufferHealth(bufferedMs,decodedFrontierMs):
             writeInt(&buf, Int32(23))
             FfiConverterUInt64.write(bufferedMs, into: &buf)
             FfiConverterUInt64.write(decodedFrontierMs, into: &buf)
-            FfiConverterUInt64.write(epoch, into: &buf)
 
 
         case let .engineLoad(load,msPerChunk,realtimeFactor):
@@ -9451,6 +9431,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_fficipher_process_key() != 57446) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 36814) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_ducking_mode() != 5346) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_action_at_item_end() != 49131) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -9514,7 +9500,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_reset_eq() != 64063) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 27715) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 7516) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 18523) {
@@ -9577,13 +9563,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_select() != 6525) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 20633) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_interruption() != 57273) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_ducking_mode() != 36471) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_interruption() != 4019) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 59437) {
@@ -9598,7 +9578,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 23745) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 26443) {
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 40564) {
         return InitializationResult.apiChecksumMismatch
     }
 

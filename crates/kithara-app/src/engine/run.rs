@@ -112,7 +112,7 @@ mod tests {
 
     #[kithara::test(native, tokio, flash(false))]
     async fn playback_advances_on_the_engine_tick_alone(tone_mp3: String, short_wav: String) {
-        let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline_listening()))
+        let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::playback()))
             .await
             .expect("rig fixture is infallible");
         rig.call(move |rig| {
@@ -126,6 +126,7 @@ mod tests {
             let next = queue.tracks()[1].name.clone();
             let engine_tick = |rig: &mut Rig| {
                 rig.engine.tick();
+                crate::mock::render_rig(rig, 512);
                 rig.engine.publish();
             };
 

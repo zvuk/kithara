@@ -69,6 +69,7 @@ mod tests {
             let mid = f32::from(GainDb::at_knob(0.75));
             rig.send("mixer/a/three-band/mid-3", ControlAction::SetScalar(0.75));
             rig.pump();
+            crate::mock::render_rig(rig, 128);
             rig.frame();
             assert!((rig.scalar("deck.eq.mid@deck=a") - 0.75).abs() < consts::KNOB);
             assert_eq!(rig.queues[0].eq_gain(1), Some(mid));
@@ -76,6 +77,7 @@ mod tests {
             rig.send("mixer/a/eq-4", ControlAction::Activate);
             rig.send("mixer/a/three-band/high-3", ControlAction::SetScalar(0.0));
             let applied = rig.pump();
+            crate::mock::render_rig(rig, 128);
             assert_eq!(
                 applied.len(),
                 2,

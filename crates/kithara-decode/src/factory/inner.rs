@@ -151,7 +151,9 @@ impl DecoderFactory {
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
         let probe_hint = ProbeHint {
-            container: hint.and_then(ContainerFormat::parse_extension),
+            container: hint
+                .and_then(ContainerFormat::parse_extension)
+                .filter(|container| *container != ContainerFormat::Mp4),
             extension: hint.map(String::from),
             ..Default::default()
         };

@@ -1,6 +1,7 @@
 #[cfg(test)]
 use fixtures::{
-    counting as test_counting_codec, drain as test_eof_drain_codec, stub as test_stub_codec,
+    counting as test_counting_codec, drain as test_eof_drain_codec, frame as test_frame,
+    stub as test_stub_codec,
 };
 #[cfg(test)]
 use kithara_platform::time::Duration;
@@ -10,23 +11,26 @@ use kithara_signal::AudioSpec;
 use kithara_stream::PendingReason;
 #[cfg(test)]
 use kithara_stream::{AudioCodec, NotReadyCause};
-#[cfg(all(test, any(feature = "symphonia", android_backend)))]
+#[cfg(test)]
 use kithara_test_utils::kithara;
 pub(crate) use state::{ComposedDecoder, DecoderRuntime};
-use state::{HeadStrip, Prefill};
+use state::{HeadStrip, PcmOriginState, Prefill};
+#[cfg(test)]
+use test_frame::write_silent_test_frame;
+#[cfg(test)]
 use trim::frames_to_trim;
 
 #[cfg(test)]
-use crate::{consts, demuxer::Demuxer, error::DecodeResult, traits::DecoderChunkOutcome};
+use crate::{PcmOrigin, demuxer::Demuxer, error::DecodeResult, traits::DecoderChunkOutcome};
+#[cfg(test)]
+use crate::{consts, traits::DecoderSeekOutcome};
 #[cfg(all(test, any(feature = "symphonia", android_backend)))]
-use crate::{
-    error::DecodeError,
-    traits::{Decoder, DecoderSeekOutcome},
-};
+use crate::{error::DecodeError, traits::Decoder};
 
 mod decoder;
 mod state;
 mod trim;
+
 #[cfg(test)]
 #[macro_use]
 mod fixtures;
@@ -44,3 +48,8 @@ mod seek_trim_tests;
 #[cfg(test)]
 #[cfg(any(feature = "symphonia", android_backend))]
 mod smoke_tests;
+
+#[cfg(test)]
+mod media_time_tests;
+#[cfg(test)]
+pub(crate) mod origin_tests;

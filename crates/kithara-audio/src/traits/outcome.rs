@@ -16,10 +16,6 @@ pub enum PendingReason {
     /// producer's most recent chunk and is waiting for the next one
     /// (mid-stream async pause, post-seek refill).
     Buffering,
-    /// A seek was issued; the consumer is waiting for the producer to
-    /// acknowledge the new epoch and deliver post-seek frames. Old
-    /// pre-seek frames have been drained.
-    SeekInProgress,
     /// Upstream stream-layer surfaced a pending status (network stall,
     /// retry, source-level backpressure). The reader will progress
     /// once the stream resumes.
@@ -60,9 +56,8 @@ pub enum ReadOutcome {
     Eof { position: Duration },
 }
 
-/// Result of a seek — either the reader landed at a known position or
-/// the target was past the known duration. Failures surface as
-/// `Err(DecodeError)`.
+/// Result of a seek: accepted pending input, a known landing, or a target
+/// past the known duration. Failures surface as `Err(DecodeError)`.
 ///
 /// `Landed` carries both the requested `target` and the actual
 /// `landed_at`. The two may differ when the underlying decoder
@@ -70,14 +65,20 @@ pub enum ReadOutcome {
 /// a "post-seek" position should use `landed_at`, not `target`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeekOutcome {
+    /// Seek accepted without a landing coordinate. Deferred preparation continues
+    /// the same operation; no source position is committed until it settles.
+    Pending {
+        target: Duration,
+        reason: kithara_stream::PendingReason,
+    },
     /// Seek completed; reader is now parked at `landed_at`.
     Landed {
         target: Duration,
         landed_at: Duration,
     },
-    /// Seek target was past the reader's `duration()`. Reader is
-    /// parked at the end; the next `read()` / `next_chunk()` call
-    /// returns `Eof`.
+    /// Reader is parked at its exclusive absolute source endpoint.
+    /// `duration` is that endpoint; the visible media length is reported separately.
+    /// The next `read()` or `next_chunk()` returns `Eof`.
     PastEof {
         target: Duration,
         duration: Duration,
@@ -90,7 +91,7 @@ pub enum SeekOutcome {
 #[derive(Debug)]
 pub enum ChunkOutcome {
     /// Next decoded chunk.
-    Chunk(AudioChunk),
+    Chunk(Box<AudioChunk>),
     /// Reader is alive but has no chunk ready this tick. See
     /// [`PendingReason`] for the precise cause; callers may sleep,
     /// yield, or retry depending on the reason.

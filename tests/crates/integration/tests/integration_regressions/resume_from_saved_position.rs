@@ -8,7 +8,7 @@ use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -18,7 +18,6 @@ use kithara_integration_tests::{
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     served_short_mp3,
-    test_defaults::consts as shared,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -27,17 +26,14 @@ use url::Url;
 const SAVE_AFTER_SECS: f64 = 4.0;
 
 async fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> OfflineQueue<TestPools> {
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
-            .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build(),
-    );
+    let player = kithara::play::ResourcePrep::builder()
+        .worker(kithara::play::PlayWorker::new(
+            kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
+        .build();
     OfflineQueue::paced(
         HostConfig::offline(pools.clone()).build(),
-        Queue::new(QueueConfig::builder().player(player).store(store).build()),
+        Queue::new(QueueConfig::builder().prep(player).store(store).build()),
         RENDER_PACE,
     )
     .await
@@ -118,9 +114,13 @@ async fn playback_starts_from_the_seeked_position(
         played >= SAVE_AFTER_SECS,
         "precondition: playback reached only {played:.2}s"
     );
-    first_queue.run(move |q| q.pause()).await;
+    first_queue
+        .run(move |q| {
+            q.pause();
+            q.clear().expect("the queue clears");
+        })
+        .await;
     let saved = played;
-    first_queue.run(move |q| q.clear()).await;
     first_tick.stop().await;
     first_queue.close().await;
     drop(first_downloader);

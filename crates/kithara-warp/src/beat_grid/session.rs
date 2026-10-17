@@ -1,10 +1,12 @@
+use kithara_sync::{SessionAnchor, SessionBeat};
+
 use super::{
     BeatEstimate, BeatGridId, BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridState,
     BeatGridUnavailable, BeatGridView, view::stale,
 };
 use crate::{
     AssetFrame, Beat, BeatEvidence, BeatsPerMinute, FrameUncertainty, MapAxis, MapPoint,
-    MapPosition, Meter, MeterFacts, SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, consts,
+    MapPosition, Meter, MeterFacts, SessionAxis, SessionEpoch, consts,
 };
 
 /// Immutable mathematical view of a live session clock.
@@ -179,13 +181,14 @@ impl BeatGridView for SessionGridView {
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_sync::{SessionAnchor, SessionBeat};
     use kithara_test_utils::kithara;
 
     use super::SessionGridView;
     use crate::{
         Beat, BeatEvidence, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridUnavailable,
         BeatGridView, BeatOrdinal, FrameUncertainty, MapPoint, MapPosition, Meter, MeterFacts,
-        SessionAnchor, SessionBeat, SessionEpoch, SessionFrame,
+        SessionEpoch, SessionFrame,
     };
 
     #[kithara::test]

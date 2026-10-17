@@ -510,6 +510,7 @@ mod tests {
                 "the dropped track becomes current",
                 Rig::DEADLINE,
                 |rig| {
+                    crate::mock::render_rig(rig, 512);
                     rig.engine.tick();
                     rig.engine.publish();
                 },

@@ -45,14 +45,19 @@ impl MixState {
     ///
     /// # Errors
     /// Returns [`PlayError::MixPosition`] when the crossfader position is not a
-    /// finite value in `0.0..=1.0`.
+    /// finite value in `0.0..=1.0`, and [`PlayError::MixLevel`] when a trim or the
+    /// group master makes a level that is not a number.
     pub fn levels(&self) -> Result<Vec<f32>, PlayError> {
         self.strips
             .iter()
             .map(|strip| {
                 let gain = crossfader_gain(strip.bus, self.position)?;
                 let mute = if strip.muted { 0.0 } else { 1.0 };
-                Ok((strip.trim * mute * gain * self.group_master).clamp(0.0, 1.0))
+                let level = (strip.trim * mute * gain * self.group_master).clamp(0.0, 1.0);
+                if level.is_nan() {
+                    return Err(PlayError::MixLevel { level });
+                }
+                Ok(level)
             })
             .collect()
     }
@@ -126,6 +131,18 @@ mod tests {
 
         // Deck 0: trim 0.5 * A-gain 1.0 * master 0.5. Deck 1: muted.
         assert_eq!(mix.levels().unwrap(), vec![0.25, 0.0]);
+    }
+
+    #[kithara::test(native)]
+    #[case::trim(|mix: &mut MixState| mix.strips[1].trim = f32::NAN)]
+    #[case::group_master(|mix: &mut MixState| mix.group_master = f32::NAN)]
+    fn a_level_that_is_not_a_number_is_refused_before_any_deck_takes_one(
+        #[case] spoil: fn(&mut MixState),
+    ) {
+        let mut mix = MixState::new(2);
+        mix.position = 0.0;
+        spoil(&mut mix);
+        assert!(matches!(mix.levels(), Err(PlayError::MixLevel { .. })));
     }
 
     #[kithara::test(native, flash(false))]

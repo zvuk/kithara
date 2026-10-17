@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_bufpool::SampleBuffer;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::sync::Arc;
 use kithara_signal::AudioSpec;
 
 use crate::{codec::FrameCodec, error::DecodeResult};
@@ -42,14 +42,20 @@ impl CountingCodec {
 impl FrameCodec for CountingCodec {
     fn decode_frame(
         &mut self,
-        _bytes: &[u8],
-        _pts: Duration,
-        _packet_desc: &[u8],
+        frame: crate::demuxer::Frame<'_>,
+        metadata: crate::demuxer::PacketMetadata,
         out: &mut SampleBuffer,
-    ) -> DecodeResult<u32> {
+    ) -> DecodeResult<crate::codec::DecodedPacket> {
+        let crate::demuxer::Frame {
+            data: _bytes,
+            pts: _pts,
+            packet_desc: _packet_desc,
+            ..
+        } = frame;
         self.decode_calls.fetch_add(1, Ordering::SeqCst);
         let frames = self.frames.pop_front().unwrap_or(self.frames_per_call);
         super::write_silent_test_frame(&self.pcm, self.spec, frames, out)
+            .map(|frames| crate::codec::DecodedPacket::new(frames, metadata))
     }
 
     fn flush(&mut self) -> DecodeResult<()> {

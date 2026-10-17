@@ -9,6 +9,7 @@ use super::{
     freeform::read_itunsmpb,
     parse::{
         parse_elst, parse_mdhd, parse_mvhd_timescale, parse_stsd_codec, parse_stsd_sample_rate,
+        parse_tkhd_track_id,
     },
 };
 use crate::{DecoderInput, consts};
@@ -170,6 +171,14 @@ where
         }
 
         let walk = self.walk_children(end, |this, header| match header.kind {
+            consts::BOX_TKHD => {
+                let payload = read_payload(this.reader, header.end, "tkhd", this.pools)?;
+                Ok(
+                    parse_tkhd_track_id(&payload).map_or(ControlFlow::Continue(()), |id| {
+                        (this.visitor)(Mp4Event::TrackId(id))
+                    }),
+                )
+            }
             consts::BOX_MDIA => this.parse_mdia(header.end),
             consts::BOX_EDTS => this.parse_edts(header.end),
             _ => Ok(ControlFlow::Continue(())),

@@ -9,7 +9,7 @@ use kithara_stream::{AudioCodec, ByteMap, PrerollHint, SegmentDescriptor};
 use super::extractor::{AndroidMediaExtractor, TrackFormatInfo};
 use crate::{
     codec::CodecPriming,
-    demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
+    demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PreparedPacket, TrackInfo},
     error::{DecodeError, DecodeResult},
     traits::BoxedSource,
 };
@@ -23,6 +23,8 @@ pub(crate) struct AndroidMediaExtractorDemuxer {
     segment: Option<SegmentDescriptor>,
     track_info: TrackInfo,
     read_buf: Vec<u8>,
+    last_read_len: usize,
+    prepared: Option<PreparedPacket>,
 }
 
 impl AndroidMediaExtractorDemuxer {
@@ -50,7 +52,10 @@ impl AndroidMediaExtractorDemuxer {
             channels,
             sample_rate,
             duration: if duration_us > 0 {
-                u64::try_from(duration_us).ok().map(Duration::from_micros)
+                u64::try_from(duration_us)
+                    .ok()
+                    .map(Duration::from_micros)
+                    .map(crate::DecoderDuration::RawLength)
             } else {
                 None
             },
@@ -65,6 +70,8 @@ impl AndroidMediaExtractorDemuxer {
                 byte_map,
                 read_buf: vec![0u8; 64 * 1024],
                 segment: None,
+                last_read_len: 0,
+                prepared: None,
             },
             format,
         ))
@@ -72,21 +79,46 @@ impl AndroidMediaExtractorDemuxer {
 }
 
 impl Demuxer for AndroidMediaExtractorDemuxer {
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
         self.track_info.duration
     }
 
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        self.prepare_frame()?;
+        self.next_frame_prepared()
+    }
+
+    fn next_frame_prepared(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        Ok(match self.prepared.take() {
+            Some(PreparedPacket::Frame { pts, duration }) => DemuxOutcome::Frame(Frame {
+                pts,
+                duration,
+                data: &self.read_buf[..self.last_read_len],
+                packet_desc: &[],
+            }),
+            Some(PreparedPacket::Pending(reason)) => DemuxOutcome::Pending(reason),
+            Some(PreparedPacket::Eof) => DemuxOutcome::Eof,
+            None => DemuxOutcome::Pending(kithara_stream::PendingReason::Retry),
+        })
+    }
+
+    fn prepare_frame(&mut self) -> DecodeResult<()> {
+        if self.prepared.is_some() {
+            return Ok(());
+        }
         let sample = match self.extractor.read_sample(&mut self.read_buf) {
             Ok(sample) => sample,
             Err(error) => {
-                return error
-                    .pending_reason()
-                    .map_or_else(|| Err(error), |reason| Ok(DemuxOutcome::Pending(reason)));
+                if let Some(reason) = error.pending_reason() {
+                    self.prepared = Some(PreparedPacket::Pending(reason));
+                    return Ok(());
+                }
+                return Err(error);
             }
         };
         let Some((n, pts_us)) = sample else {
-            return Ok(DemuxOutcome::Eof);
+            self.prepared = Some(PreparedPacket::Eof);
+            return Ok(());
         };
         let pts = u64::try_from(pts_us)
             .ok()
@@ -95,23 +127,29 @@ impl Demuxer for AndroidMediaExtractorDemuxer {
             .byte_map
             .as_ref()
             .and_then(|map| map.segment_at_time(pts));
-        let frame = Frame {
+        self.last_read_len = n;
+        self.prepared = Some(PreparedPacket::Frame {
             pts,
-            data: &self.read_buf[..n],
             duration: Duration::ZERO,
-            packet_desc: &[],
-        };
-        Ok(DemuxOutcome::Frame(frame))
+        });
+        Ok(())
     }
 
     fn seek(&mut self, target: Duration, _priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
         self.segment = None;
+        self.prepared = None;
+        self.last_read_len = 0;
         let pts_us = i64::try_from(target.as_micros()).unwrap_or(i64::MAX);
         let Some((landed_at, landed_byte)) = self.extractor.seek_to(pts_us)? else {
             return self
                 .track_info
                 .duration
-                .map(|duration| DemuxSeekOutcome::PastEof { duration })
+                .and_then(|duration| match duration {
+                    crate::DecoderDuration::RawLength(duration) => {
+                        Some(DemuxSeekOutcome::PastEof { duration })
+                    }
+                    crate::DecoderDuration::MediaEnd(_) => None,
+                })
                 .ok_or(DecodeError::SeekFailed {
                     detail: "extractor seek reached EOF without a duration",
                 });
@@ -121,6 +159,10 @@ impl Demuxer for AndroidMediaExtractorDemuxer {
             landed_byte: Some(landed_byte),
             preroll: PrerollHint::NotNeeded,
         })
+    }
+
+    fn media_origin(&self) -> Option<Duration> {
+        Some(Duration::ZERO)
     }
 
     fn track_info(&self) -> &TrackInfo {

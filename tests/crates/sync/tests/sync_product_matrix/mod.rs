@@ -1,7 +1,11 @@
+mod binding;
 mod cases;
+mod consumed;
+mod control;
 mod harness;
 mod imports;
 mod providers;
+mod queue;
 mod recording;
 mod rows;
 

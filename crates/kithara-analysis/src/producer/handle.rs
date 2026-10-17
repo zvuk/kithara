@@ -2,7 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::{AudioObserveError, AudioObserver};
 use kithara_dsp::downmix;
-use kithara_signal::{AudioChunk, AudioSpec};
+use kithara_signal::{AudioChunk, AudioChunkInfo};
 use tracing::debug;
 
 use super::ring::Writer;
@@ -26,20 +26,17 @@ impl AnalysisProducer {
         Self { token, rate, ring }
     }
 
-    /// Offer one interleaved range starting at source frame `at`, downmixed to
-    /// mono by the channel mean. Never blocks, allocates, or retains `pcm`.
+    /// Offer interleaved samples at the metadata's raw source position, retaining
+    /// its original clock facts. Downmixes by the channel mean without allocation,
+    /// blocking, or retaining `pcm`.
     ///
     /// # Errors
     /// Returns the same bounded-ingest errors as [`AudioObserver::try_observe`].
-    pub fn offer(
-        &mut self,
-        pcm: &[f32],
-        spec: AudioSpec,
-        at: u64,
-    ) -> Result<(), AudioObserveError> {
+    pub fn offer(&mut self, pcm: &[f32], info: &AudioChunkInfo) -> Result<(), AudioObserveError> {
         if !self.ring.is_open() {
             return Err(AudioObserveError::Closed);
         }
+        let spec = info.spec;
         if spec.sample_rate != self.rate {
             debug!(
                 token = self.token.as_str(),
@@ -64,7 +61,7 @@ impl AnalysisProducer {
             });
 
         self.ring
-            .push(at, frames, mono)
+            .push(info, frames, mono)
             .then_some(())
             .ok_or(AudioObserveError::Full)
     }
@@ -78,7 +75,7 @@ impl AnalysisProducer {
 
 impl AudioObserver for AnalysisProducer {
     fn try_observe(&mut self, chunk: &AudioChunk) -> Result<(), AudioObserveError> {
-        self.offer(&chunk.samples, chunk.spec(), chunk.meta.frame_offset)
+        self.offer(&chunk.samples, &chunk.meta)
     }
 }
 
@@ -86,8 +83,9 @@ impl AudioObserver for AnalysisProducer {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::AudioObserveError;
-    use kithara_signal::AudioSpec;
+    use kithara_audio::{AudioObserveError, AudioObserver};
+    use kithara_platform::time::Duration;
+    use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
     use kithara_test_fixtures::{
         analysis_beat_fixtures::{producer_mono, producer_stereo, producer_unity},
         analysis_fixtures::{analysis_silence, waveform_mix},
@@ -95,12 +93,25 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::AnalysisProducer;
-    use crate::{producer::ring, test_pools::pools};
+    use crate::{
+        producer::ring,
+        test_pools::{pools, sample_buffer},
+    };
 
     fn spec(rate: u32, channels: u16) -> AudioSpec {
         AudioSpec {
             channels,
             sample_rate: NonZeroU32::new(rate).expect("test rate is non-zero"),
+        }
+    }
+
+    fn info(rate: u32, channels: u16, frame_offset: u64) -> AudioChunkInfo {
+        AudioChunkInfo {
+            spec: spec(rate, channels),
+            frame_offset,
+            media_origin: Some(Duration::ZERO),
+            visible_origin: Some(Duration::ZERO),
+            ..Default::default()
         }
     }
 
@@ -119,12 +130,12 @@ mod tests {
         // Interleaved stereo: L, R, L, R.
         let pcm = producer_stereo;
         assert_eq!(
-            producer.offer(&pcm, spec(44_100, 2), 512),
+            producer.offer(&pcm, &info(44_100, 2, 512)),
             Ok(()),
             "the pass axis matches"
         );
 
-        assert_eq!(reader.pop(&mut out), Some(512));
+        assert_eq!(reader.pop(&mut out).map(|span| span.start), Some(512));
         assert_eq!(
             &out[..],
             &[2.0, -1.0],
@@ -139,13 +150,17 @@ mod tests {
         let mut out = pools.get::<f32>();
 
         assert_eq!(
-            producer.offer(&producer_unity[..2], spec(48_000, 2), 0),
+            producer.offer(&producer_unity[..2], &info(48_000, 2, 0)),
             Err(AudioObserveError::UnsupportedSampleRate {
                 expected: NonZeroU32::new(44_100).expect("test rate is non-zero"),
                 actual: NonZeroU32::new(48_000).expect("test rate is non-zero"),
             })
         );
-        assert_eq!(reader.pop(&mut out), None, "nothing reached the transport");
+        assert_eq!(
+            reader.pop(&mut out).map(|span| span.start),
+            None,
+            "nothing reached the transport"
+        );
     }
 
     #[kithara::test]
@@ -153,11 +168,11 @@ mod tests {
         let (mut producer, _reader) = producer(2, 4);
 
         assert_eq!(
-            producer.offer(&producer_unity[..2], spec(44_100, 2), 0),
+            producer.offer(&producer_unity[..2], &info(44_100, 2, 0)),
             Ok(())
         );
         assert_eq!(
-            producer.offer(&producer_unity, spec(44_100, 2), 1),
+            producer.offer(&producer_unity, &info(44_100, 2, 1)),
             Err(AudioObserveError::Full),
             "a range that does not fit is refused whole"
         );
@@ -172,11 +187,11 @@ mod tests {
         chunk.ensure_len(16).expect("the test pool grows to 16");
         chunk.copy_from_slice(&analysis_silence[..16]);
 
-        assert_eq!(producer.offer(&chunk, spec(44_100, 2), 0), Ok(()));
+        assert_eq!(producer.offer(&chunk, &info(44_100, 2, 0)), Ok(()));
         drop(chunk);
         let mut out = pools.get::<f32>();
         assert_eq!(
-            reader.pop(&mut out),
+            reader.pop(&mut out).map(|span| span.start),
             Some(0),
             "the range survives its source buffer going back to the pool"
         );
@@ -191,13 +206,13 @@ mod tests {
     fn a_pass_that_ended_refuses_as_closed(producer_unity: Vec<f32>) {
         let (mut producer, reader) = producer(64, 4);
         assert_eq!(
-            producer.offer(&producer_unity[..2], spec(44_100, 2), 0),
+            producer.offer(&producer_unity[..2], &info(44_100, 2, 0)),
             Ok(())
         );
 
         drop(reader);
         assert_eq!(
-            producer.offer(&producer_unity[..2], spec(44_100, 2), 1),
+            producer.offer(&producer_unity[..2], &info(44_100, 2, 1)),
             Err(AudioObserveError::Closed),
             "a pass that dropped its half cannot be written to"
         );
@@ -210,9 +225,9 @@ mod tests {
         let mut out = pools.get::<f32>();
 
         let pcm = producer_mono;
-        assert_eq!(producer.offer(&pcm, spec(44_100, 1), 0), Ok(()));
+        assert_eq!(producer.offer(&pcm, &info(44_100, 1, 0)), Ok(()));
 
-        assert_eq!(reader.pop(&mut out), Some(0));
+        assert_eq!(reader.pop(&mut out).map(|span| span.start), Some(0));
         assert_eq!(
             &out[..],
             &pcm[..],
@@ -235,8 +250,8 @@ mod tests {
         let pools = pools();
         let mut out = pools.get::<f32>();
 
-        assert_eq!(producer.offer(pcm, spec(44_100, channels), 0), Ok(()));
-        assert_eq!(reader.pop(&mut out), Some(0));
+        assert_eq!(producer.offer(pcm, &info(44_100, channels, 0)), Ok(()));
+        assert_eq!(reader.pop(&mut out).map(|span| span.start), Some(0));
         let scale = 1.0 / f32::from(channels);
         let want: Vec<u32> = pcm
             .chunks_exact(width)
@@ -247,5 +262,26 @@ mod tests {
             got, want,
             "each of {frames} frames is the mean of its channels, bit for bit"
         );
+    }
+    #[kithara::test]
+    fn observing_a_chunk_preserves_both_origins_and_the_raw_offset(producer_mono: Vec<f32>) {
+        let (mut producer, mut reader) = producer(64, 4);
+        let pools = pools();
+        let mut out = pools.get::<f32>();
+        let metadata = AudioChunkInfo {
+            media_origin: Some(Duration::from_nanos(25_056_689)),
+            visible_origin: Some(Duration::from_nanos(11_995_465)),
+            frames: u32::try_from(producer_mono.len()).expect("fixture fits u32"),
+            ..info(44_100, 1, 22_050)
+        };
+        let chunk = AudioChunk::new(metadata, sample_buffer(&pools, &producer_mono));
+        assert_eq!(producer.try_observe(&chunk), Ok(()));
+        let span = reader
+            .pop(&mut out)
+            .expect("the observed chunk reaches the transport");
+        assert_eq!(span.start, metadata.frame_offset);
+        assert_eq!(span.media_origin, metadata.media_origin);
+        assert_eq!(span.visible_origin, metadata.visible_origin);
+        assert_eq!(&out[..], &producer_mono[..]);
     }
 }

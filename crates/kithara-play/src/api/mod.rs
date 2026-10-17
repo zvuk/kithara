@@ -1,12 +1,10 @@
 mod binding;
-mod crossfade;
 pub mod equalizer;
 mod event;
 mod transport;
 pub mod types;
 
 pub use binding::{SyncUnavailable, TrackBinding};
-pub use crossfade::{CrossfadeCurve, CrossfadeSettings, SelectionPlayback};
 pub use equalizer::Equalizer;
 pub use event::{
     BpmInfo, DjEvent, EngineEvent, InterruptionKind, ItemRole, ItemStatus, MediaTime,
@@ -15,6 +13,6 @@ pub use event::{
     WaitingReason,
 };
 pub use kithara_signal::TransportRevision;
-pub use kithara_warp::SessionBeat;
+pub use kithara_sync::SessionBeat;
 pub use transport::{SessionTransportSnapshot, Tempo, TempoError};
 pub use types::{SessionDuckingMode, SlotId, TrackId};

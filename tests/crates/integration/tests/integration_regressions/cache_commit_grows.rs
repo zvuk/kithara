@@ -8,7 +8,7 @@ use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -17,7 +17,6 @@ use kithara_integration_tests::{
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, RENDER_PACE},
-    test_defaults::consts as shared,
 };
 use kithara_test_fixtures::fixtures::tone_mp3;
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -146,25 +145,22 @@ async fn played_tracks_land_in_the_disk_cache(tone_mp3: &'static [u8], temp_dir:
         ))
         .build(),
     );
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
-            .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build(),
-    );
+    let player = kithara::play::ResourcePrep::builder()
+        .worker(kithara::play::PlayWorker::new(
+            kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
+        .build();
     let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })
-        .event_bus(player.bus().clone())
+        .event_bus(player.bus.clone())
         .build();
     let queue = OfflineQueue::paced(
         HostConfig::offline(pools).build(),
         Queue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(player)
                 .store(store.clone())
                 .build(),
         ),
@@ -235,6 +231,9 @@ async fn played_tracks_land_in_the_disk_cache(tone_mp3: &'static [u8], temp_dir:
          ({after_first} -> {after_second} bytes)"
     );
 
-    queue.run(QueueControl::clear).await;
+    queue
+        .run(QueueControl::clear)
+        .await
+        .expect("the queue clears");
     queue.close().await;
 }

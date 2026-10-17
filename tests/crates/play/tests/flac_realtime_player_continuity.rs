@@ -6,8 +6,8 @@ use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
     host::{HostConfig, HostSettings},
-    platform::time::{Duration, Instant, sleep},
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
+    platform::time::{Duration, WallInstant, sleep},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -93,14 +93,14 @@ async fn render_into(
     let target_blocks =
         num_traits::cast::<f64, u32>((target_secs * f64::from(out_rate) / block_frames).ceil())
             .unwrap_or(u32::MAX);
-    let deadline = Instant::now() + Duration::from_millis(wall_budget_ms);
+    let deadline = WallInstant::now() + Duration::from_millis(wall_budget_ms);
     let mut rendered = 0u32;
     while rendered < target_blocks {
         for _ in 0..BATCH {
             out.extend_from_slice(&player.render(BLOCK_FRAMES).await);
             rendered += 1;
         }
-        if Instant::now() >= deadline {
+        if WallInstant::now() >= deadline {
             break;
         }
         sleep(Duration::from_millis(TICK_MS)).await;
@@ -140,11 +140,6 @@ async fn run_case(
             .initial_abr_mode(initial_mode)
             .build();
 
-    let resource = Resource::new(cfg)
-        .await
-        .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
-    let abr = resource.abr_handle();
-
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
             .settings(
@@ -155,7 +150,15 @@ async fn run_case(
             .build(),
     )
     .await;
-    player.load_and_fadein(resource).await;
+    let id = player.load_config(cfg).await;
+    player
+        .render_until_current(
+            id,
+            512,
+            WallInstant::now() + kithara_integration_tests::offline::LOCAL_LOAD_DEADLINE,
+        )
+        .await;
+    let abr = player.player().current_abr_handle();
 
     let chan = CHANNELS as usize;
     let wall_budget_ms = num_traits::cast::<f64, u64>(PLAY_SECS * 1000.0 / 4.0).unwrap_or(u64::MAX)
@@ -336,7 +339,7 @@ fn scan_rendered_pcm(
     let chan = sine.channels as usize;
     let total_frames = (pcm.len() / chan) as u64;
     let want = READ_FRAMES_AFTER_SEEK;
-    let mut anchor: Option<(u64, f64)> = None;
+    let mut anchor: Option<(f64, f64)> = None;
     let mut drifts: Vec<PhaseDrift> = Vec::new();
     let mut at: u64 = 0;
     while at + want as u64 <= total_frames {
@@ -344,7 +347,8 @@ fn scan_rendered_pcm(
         let end = start + want * chan;
         if let Some(drift) = check_against_previous(
             &mut anchor,
-            at,
+            f64::from(u32::try_from(at).expect("render scan frame fits u32"))
+                / f64::from(sine.sample_rate),
             &pcm[start..end],
             chan,
             sine,

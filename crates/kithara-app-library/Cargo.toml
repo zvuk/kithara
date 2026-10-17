@@ -15,7 +15,7 @@ flash = ["kithara-net/flash", "kithara-test-utils/flash"]
 keystore = [
     "dep:apple-native-keyring-store",
     "dep:windows-native-keyring-store",
-    "dep:zbus-secret-service-keyring-store",
+    "dep:dbus-secret-service-keyring-store",
 ]
 
 [dependencies]
@@ -36,7 +36,7 @@ webbrowser = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
-zbus-secret-service-keyring-store = { workspace = true, optional = true }
+dbus-secret-service-keyring-store = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { workspace = true, optional = true }

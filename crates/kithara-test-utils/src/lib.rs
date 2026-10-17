@@ -40,7 +40,6 @@ pub mod rtsan;
 #[cfg(feature = "temp-dir")]
 pub mod temp_dir;
 pub mod test;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod wait;
 
 pub use cancel::{cancel_token, cancel_token_cancelled};
@@ -51,7 +50,6 @@ pub use pace::pace;
 pub use rng::Xorshift64;
 #[cfg(feature = "temp-dir")]
 pub use temp_dir::{TestTempDir, temp_dir, temp_path};
-#[cfg(not(target_arch = "wasm32"))]
 pub use wait::wait_until;
 
 pub mod kithara {

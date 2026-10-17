@@ -54,7 +54,7 @@ pub(crate) fn build(
     task::spawn(analysis.run());
 
     if let Some(first) = session.decks().first() {
-        first.queue.set_tracks(build_sources(&config));
+        first.queue.set_tracks(build_sources(&config))?;
     }
     let broadcast = config
         .broadcast

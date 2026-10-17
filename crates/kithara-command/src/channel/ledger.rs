@@ -27,4 +27,18 @@ impl Ledger {
             .filter(|&(index, _)| basis.iter().any(|&(target, _)| target.index() == index))
             .for_each(|(_, last)| *last = Some(seq));
     }
+
+    pub(super) fn reset(&mut self) {
+        self.last.fill(None);
+    }
+
+    pub(super) fn outdates<T: Target>(&self, basis: &[(T, Option<Seq>)]) -> bool {
+        basis.iter().any(|&(target, basis)| {
+            self.last
+                .get(target.index())
+                .copied()
+                .flatten()
+                .is_some_and(|current| basis < Some(current))
+        })
+    }
 }

@@ -1,15 +1,18 @@
-use std::iter;
+use std::{iter, ops::Deref, task::Waker};
 
+use futures::task::AtomicWaker;
+use kithara_platform::sync::Arc;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
-    traits::{Consumer, Producer, Split},
+    traits::{Consumer, Observer, Producer, Split},
+    wrap::Wrap,
 };
 
-use super::Inbox;
+use super::{Inbox, book::Book, gate::Gate};
 use crate::{
     config::ChannelConfig,
-    protocol::{Batch, Protocol, Seq, Target, When},
-    receipt::Receipt,
+    protocol::{Batch, Protocol, Seq, When},
+    receipt::{Outcome, Receipt, Rejection},
 };
 
 /// Why a batch was not sent; the batch comes back whole.
@@ -21,6 +24,9 @@ pub enum SendError<P: Protocol> {
     /// The basis names a target the channel does not track.
     #[error("the batch basis names a target outside the channel")]
     Target(Batch<P>),
+    /// The inbox is gone: nothing would answer the batch.
+    #[error("the channel's inbox is gone")]
+    Closed(Batch<P>),
 }
 
 /// A batch on its way to the executor, numbered at send.
@@ -31,6 +37,14 @@ pub(super) struct Sent<P: Protocol> {
 }
 
 impl<P: Protocol> Sent<P> {
+    pub(super) fn unanswered(self) -> Receipt<P> {
+        Receipt {
+            batch: self.batch,
+            seq: self.seq,
+            outcome: Outcome::Rejected(Rejection::Unanswered),
+        }
+    }
+
     /// Execution order: earlier moments first, then send order.
     pub(super) fn key(&self) -> (When<P::Clock>, Seq) {
         (self.when, self.seq)
@@ -41,46 +55,120 @@ impl<P: Protocol> Sent<P> {
 pub struct Sender<P: Protocol> {
     receipts: HeapCons<Receipt<P>>,
     commands: HeapProd<Sent<P>>,
+    /// Declared after `commands`: the sender lets go of its end of the ring
+    /// before the doorbell rings for the last time, so the executor it wakes
+    /// reads the channel closed.
+    doorbell: Doorbell,
+    /// Rung by the executor with each receipt; wakes `holder` while one holds.
+    answered: Arc<AtomicWaker>,
+    holder: Option<Waker>,
+    gate: Arc<Gate>,
     next: Seq,
-    credits: usize,
-    targets: usize,
+    book: Book<P>,
+}
+
+/// The executor's waker, rung by each send and once more as the sender drops.
+pub(super) struct Doorbell(pub(super) Arc<AtomicWaker>);
+
+impl Deref for Doorbell {
+    type Target = Arc<AtomicWaker>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for Doorbell {
+    fn drop(&mut self) {
+        self.0.wake();
+    }
 }
 
 impl<P: Protocol> Sender<P> {
+    /// Wakes `waker` after each receipt from now on, so its owner reads the
+    /// answer when it arrives instead of on its next tick. An owner whose
+    /// executor runs on the audio thread never holds its sender: the audio
+    /// thread wakes no one.
+    pub fn hold(&mut self, waker: Waker) {
+        self.answered.register(&waker);
+        self.holder = Some(waker);
+    }
+
+    /// Stops waking the owner; receipts wait for its next read.
+    pub fn release(&mut self) {
+        self.holder = None;
+        self.answered.register(Waker::noop());
+    }
+
     /// Receipts that arrived since the last call, in the order the executor
     /// answered them. Each one returns a credit to the sender.
     pub fn receipts(&mut self) -> impl Iterator<Item = Receipt<P>> {
+        // A wake spends the registration; hold the owner again before reading,
+        // so a receipt that lands after the last read wakes it once more.
+        if let Some(holder) = &self.holder {
+            self.answered.register(holder);
+        }
         iter::from_fn(move || {
-            let receipt = self.receipts.try_pop()?;
-            self.credits += 1;
+            let receipt = self.receipts.try_pop().or_else(|| {
+                if self.receipts.write_is_held() {
+                    return None;
+                }
+                HeapCons::new(self.commands.rb_ref().clone())
+                    .try_pop()
+                    .map(Sent::unanswered)
+            })?;
+            self.book.settle(&receipt);
             Some(receipt)
         })
     }
 
-    /// Sends `batch` to apply at `when` and returns its number.
+    delegate::delegate! {
+        to self.book {
+            /// The last projected shift of `target` at `when`.
+            #[must_use]
+            pub fn basis(&self, target: P::Target, when: When<P::Clock>) -> Option<Seq>;
+            /// Batches still available before the channel returns [`SendError::Full`].
+            #[must_use]
+            pub fn available(&self) -> usize;
+        }
+    }
+
+    /// Sends `batch` to apply at `when`, wakes an executor waiting on its
+    /// inbox, and returns the batch's number.
     ///
     /// # Errors
     ///
     /// Returns the batch whole as [`SendError::Target`] when its basis names a
-    /// target at or past the configured count, and as [`SendError::Full`] when
-    /// the channel's capacity of batches is already in flight. Neither spends
-    /// a number.
+    /// target at or past the configured count, as [`SendError::Closed`] once
+    /// the inbox is gone, and as [`SendError::Full`] when the channel's
+    /// capacity of batches is already in flight. None spends a number.
     pub fn send(&mut self, when: When<P::Clock>, batch: Batch<P>) -> Result<Seq, SendError<P>> {
-        if batch
-            .basis
-            .iter()
-            .any(|&(target, _)| target.index() >= self.targets)
-        {
+        if !self.gate.enter() {
+            return Err(SendError::Closed(batch));
+        }
+        let pushed = self.push(when, batch);
+        let seq = pushed?;
+        self.doorbell.0.wake();
+        Ok(seq)
+    }
+
+    /// Spends a credit and a number on `batch` and pushes it into the ring.
+    fn push(&mut self, when: When<P::Clock>, batch: Batch<P>) -> Result<Seq, SendError<P>> {
+        if !self.book.admits(&batch) {
             return Err(SendError::Target(batch));
         }
-        let Some(credits) = self.credits.checked_sub(1) else {
+        if self.book.available() == 0 {
             return Err(SendError::Full(batch));
-        };
+        }
+        if self.commands.is_full() {
+            return Err(SendError::Full(batch));
+        }
         let seq = self.next;
+        let basis = batch.basis.clone();
         if let Err(sent) = self.commands.try_push(Sent { batch, seq, when }) {
             return Err(SendError::Full(sent.batch));
         }
-        self.credits = credits;
+        self.book.spend(when, seq, &basis);
         self.next = seq.next();
         Ok(seq)
     }
@@ -96,12 +184,21 @@ pub fn channel<P: Protocol>(config: ChannelConfig) -> (Sender<P>, Inbox<P>) {
     let capacity = config.capacity.get();
     let (commands, pending) = HeapRb::<Sent<P>>::new(capacity).split();
     let (answers, receipts) = HeapRb::<Receipt<P>>::new(capacity).split();
+    let wake = Arc::new(AtomicWaker::new());
+    let answered = Arc::new(AtomicWaker::new());
+    let gate = Arc::new(Gate::default());
     let sender = Sender {
+        gate: Arc::clone(&gate),
+        answered: Arc::clone(&answered),
+        holder: None,
         commands,
         receipts,
+        doorbell: Doorbell(Arc::clone(&wake)),
         next: Seq::FIRST,
-        credits: capacity,
-        targets: config.targets,
+        book: Book::new(capacity, config.targets),
     };
-    (sender, Inbox::new(pending, answers, config))
+    (
+        sender,
+        Inbox::new(pending, answers, wake, answered, gate, config),
+    )
 }

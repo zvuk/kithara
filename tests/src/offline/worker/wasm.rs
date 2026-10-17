@@ -1,7 +1,8 @@
 use futures::future::LocalBoxFuture;
 use kithara::platform::{
-    sync::mpsc::{Sender, channel},
+    sync::mpsc::{Receiver, Sender, channel},
     thread::{keep_worker_alive, spawn_named},
+    time::{Duration, timeout},
     tokio::task,
 };
 
@@ -27,12 +28,7 @@ impl OfflineWorker {
         let (commands, rx) = channel::<Command>();
         spawn_named("offline-harness", move || {
             keep_worker_alive();
-            task::spawn(async move {
-                let player = build().await;
-                while let Ok(command) = rx.recv_async().await {
-                    command(&player).await;
-                }
-            });
+            task::spawn(serve(rx, build));
         });
         Self { commands }
     }
@@ -43,6 +39,8 @@ impl OfflineWorker {
     /// # Panics
     ///
     /// Panics if the harness Worker is gone.
+    #[kithara_test_utils::kithara::flash(io)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     pub async fn call<F, R>(&self, f: F) -> R
     where
         F: AsyncFnOnce(&OfflinePlayer) -> R + Send + 'static,
@@ -56,9 +54,31 @@ impl OfflineWorker {
                 })
             }))
             .unwrap_or_else(|_| panic!("offline harness Worker is gone"));
-        reply_rx
-            .recv_async()
-            .await
+        hang_tick!("offline Worker awaits its command reply".to_owned());
+        let answer = timeout(__hang_detector.remaining(), reply_rx.recv_async()).await;
+        hang_tick!("offline Worker awaits its command reply".to_owned());
+        hang_reset!();
+        answer
+            .expect("offline Worker command made no progress")
             .unwrap_or_else(|error| panic!("offline harness Worker is gone: {error}"))
+    }
+}
+
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+async fn serve<F>(rx: Receiver<Command>, build: F)
+where
+    F: AsyncFnOnce() -> OfflinePlayer + Send + 'static,
+{
+    let player = build().await;
+    while let Ok(command) = rx.recv_async().await {
+        hang_reset!();
+        hang_tick!("offline Worker applies an accepted command".to_owned());
+        let completed = {
+            let _real_io = kithara::platform::flash::real_io();
+            timeout(__hang_detector.remaining(), command(&player)).await
+        };
+        hang_tick!("offline Worker completes an accepted command".to_owned());
+        completed.expect("offline Worker accepted command made no progress");
+        hang_reset!();
     }
 }

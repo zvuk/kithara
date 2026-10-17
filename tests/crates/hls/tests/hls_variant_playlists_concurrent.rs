@@ -16,29 +16,32 @@ use kithara::{
     queue::{QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::TestPools,
     event::TestEvent,
     kithara,
     offline::DiskQueue,
+    test_server::MediaPlaylistGateHandle,
     usdt_trace::{self, ProbeEvent},
 };
-use kithara_test_utils::temp_dir;
+use kithara_test_utils::{temp_dir, wait_until};
 use url::Url;
 
 mod consts {
     use super::Duration;
 
-    pub(super) const VARIANT_COUNT: usize = 3;
+    pub(super) const VARIANT_BANDWIDTHS: [u64; 3] = [192_000, 64_000, 128_000];
+    pub(super) const VARIANT_COUNT: usize = VARIANT_BANDWIDTHS.len();
     pub(super) const SEGMENTS_PER_VARIANT: usize = 4;
     pub(super) const SEGMENT_DURATION_S: f64 = 4.0;
     pub(super) const MAX_CONCURRENT: usize = 3;
     pub(super) const LOAD_DEADLINE: Duration = Duration::from_secs(20);
 }
 
-async fn build_hls(helper: &TestServerHelper) -> Url {
+async fn build_hls(helper: &TestServerHelper) -> CreatedHls {
     let builder = HlsFixtureBuilder::new()
         .variant_count(consts::VARIANT_COUNT)
+        .variant_bandwidths(consts::VARIANT_BANDWIDTHS.to_vec())
         .segments_per_variant(consts::SEGMENTS_PER_VARIANT)
         .segment_duration_secs(consts::SEGMENT_DURATION_S)
         .packaged_audio_aac_lc(44_100, 2);
@@ -46,7 +49,6 @@ async fn build_hls(helper: &TestServerHelper) -> Url {
         .create_hls(builder)
         .await
         .expect("create HLS fixture")
-        .master_url()
 }
 
 fn is_variant_media_playlist(url: &Url, master_url: &Url) -> bool {
@@ -71,10 +73,29 @@ async fn observe_until_loaded(
     queue: &QueueControl<TestPools>,
     track_id: TrackId,
     master_url: &Url,
+    gates: &[MediaPlaylistGateHandle],
 ) -> Result<HashSet<u64>, String> {
     let mut variant_request_ids = HashSet::new();
 
     timeout(consts::LOAD_DEADLINE, async {
+        wait_until(
+            consts::LOAD_DEADLINE,
+            "all three withheld variant GETs",
+            || gates.iter().all(|gate| gate.requested() > 0),
+        )
+        .await
+        .map_err(|error| {
+            format!(
+                "{error}; withheld variant GET counts: {:?}",
+                gates
+                    .iter()
+                    .map(MediaPlaylistGateHandle::requested)
+                    .collect::<Vec<_>>(),
+            )
+        })?;
+        for gate in gates {
+            gate.release();
+        }
         loop {
             match rx.recv().await.map(|env| env.event) {
                 Ok(TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
@@ -121,9 +142,13 @@ async fn observe_until_loaded(
     .map_err(|_| {
         format!(
             "track {track_id} did not reach Loaded within {:?} (last status: {:?}); \
-             variant_request_ids: {}",
+             withheld variant GET counts: {:?}; variant_request_ids: {}",
             consts::LOAD_DEADLINE,
             queue.track(track_id).map(|entry| entry.status),
+            gates
+                .iter()
+                .map(MediaPlaylistGateHandle::requested)
+                .collect::<Vec<_>>(),
             format_variant_request_ids(&variant_request_ids),
         )
     })??;
@@ -131,24 +156,17 @@ async fn observe_until_loaded(
     Ok(variant_request_ids)
 }
 
-/// Largest USDT-observed `BatchGroup::process` batch whose first request is a
-/// variant media playlist. Serial playlist loading yields one request per
-/// batch; concurrent loading produces a batch of at least two.
-fn max_playlist_batch_size(
-    records: &[ProbeEvent],
-    variant_request_ids: &HashSet<u64>,
-) -> Option<u64> {
-    records
-        .iter()
-        .filter(|record| record.probe == "process")
-        .filter_map(|record| {
-            let batch_size = record.field("batch_size")?;
-            let first_request_id = record.field("first_request_id")?;
-            variant_request_ids
-                .contains(&first_request_id)
-                .then_some(batch_size)
-        })
-        .max()
+fn assert_playlist_requests_started(records: &[ProbeEvent], request_ids: &HashSet<u64>) {
+    for request_id in request_ids {
+        for probe in ["start_request", "establish", "deliver"] {
+            assert!(
+                records.iter().any(|record| {
+                    record.probe == probe && record.field("request_id") == Some(*request_id)
+                }),
+                "variant request {request_id} did not execute {probe}",
+            );
+        }
+    }
 }
 
 fn format_variant_request_ids(request_ids: &HashSet<u64>) -> String {
@@ -165,10 +183,16 @@ fn format_variant_request_ids(request_ids: &HashSet<u64>) -> String {
     case::apple(DecoderBackend::Apple)
 )]
 async fn variant_media_playlists_load_concurrently(
-    #[future(awt)] prepared_hls: (TestServerHelper, Url),
+    #[future(awt)] prepared_hls: (TestServerHelper, CreatedHls),
     #[case] decoder: DecoderBackend,
 ) {
-    let (_server, url) = prepared_hls;
+    let (server, hls) = prepared_hls;
+    let url = hls.master_url();
+    let gates: Vec<_> = (0..consts::VARIANT_COUNT)
+        .map(|variant| server.register_media_playlist_gate(hls.token(), variant))
+        .collect();
+    assert_eq!(consts::MAX_CONCURRENT, consts::VARIANT_COUNT);
+    assert!(gates.iter().all(|gate| gate.requested() == 0));
 
     let temp = temp_dir();
     let DiskQueue {
@@ -206,41 +230,52 @@ async fn variant_media_playlists_load_concurrently(
         .await
         .expect("select");
 
-    let variant_request_ids = match observe_until_loaded(&mut rx, &queue, track_id, &url).await {
-        Ok(request_ids) => request_ids,
-        Err(error) => {
-            tick_handle.stop().await;
-            panic!("{error}");
-        }
-    };
+    let variant_request_ids =
+        match observe_until_loaded(&mut rx, &queue, track_id, &url, &gates).await {
+            Ok(request_ids) => request_ids,
+            Err(error) => {
+                drop(gates);
+                tick_handle.stop().await;
+                queue.close().await;
+                panic!("{error}");
+            }
+        };
     let records = trace.events();
     drop(trace);
     tick_handle.stop().await;
 
-    let max_batch = max_playlist_batch_size(&records, &variant_request_ids);
-
-    assert!(
-        variant_request_ids.len() >= 2,
-        "expected at least 2 variant media playlists to load (fixture has {}); got {}",
+    assert_eq!(
+        variant_request_ids.len(),
         consts::VARIANT_COUNT,
+        "all variants must load; got {}",
         format_variant_request_ids(&variant_request_ids),
     );
+    assert_playlist_requests_started(&records, &variant_request_ids);
 
-    assert!(
-        max_batch.is_some_and(|size| size >= 2),
-        "variant media playlists were not batched at the downloader's batch processor \
-         (`BatchGroup::process`): largest batch starting at a variant-playlist request = \
-         {max_batch:?}, expected >= 2 (serial loading yields 1, concurrent `try_join_all` \
-         yields {}). variant_request_ids={}",
-        consts::VARIANT_COUNT,
-        format_variant_request_ids(&variant_request_ids),
+    let variants = queue
+        .current_abr_handle()
+        .expect("loaded track must expose its variants")
+        .variants();
+    let actual: Vec<_> = variants
+        .iter()
+        .map(|variant| (variant.variant_index.get(), variant.bandwidth_bps))
+        .collect();
+    let expected: Vec<_> = consts::VARIANT_BANDWIDTHS
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, bandwidth)| (index, Some(bandwidth)))
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "variants must retain master playlist order"
     );
     queue.close().await;
 }
 
 #[kithara::fixture]
-async fn prepared_hls() -> (TestServerHelper, Url) {
+async fn prepared_hls() -> (TestServerHelper, CreatedHls) {
     let helper = TestServerHelper::new().await;
-    let url = build_hls(&helper).await;
-    (helper, url)
+    let hls = build_hls(&helper).await;
+    (helper, hls)
 }

@@ -4,6 +4,19 @@ use kithara_platform::time::Duration;
 
 use crate::{SignalError, consts};
 
+/// Rescale a frame coordinate, rounding upward without a duration roundtrip.
+///
+/// Returns `None` when the target coordinate exceeds `u64::MAX`.
+#[must_use]
+pub fn rescale_frame_ceil(
+    frame: u64,
+    source_rate: NonZeroU32,
+    target_rate: NonZeroU32,
+) -> Option<u64> {
+    let numerator = u128::from(frame) * u128::from(target_rate.get());
+    u64::try_from(numerator.div_ceil(u128::from(source_rate.get()))).ok()
+}
+
 pub(super) fn duration_for(sample_rate: NonZeroU32, frames: u64) -> Result<Duration, SignalError> {
     let nanos = u128::from(frames)
         .checked_mul(consts::NANOS_PER_SECOND)

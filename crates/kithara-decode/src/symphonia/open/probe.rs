@@ -1,5 +1,6 @@
 use std::{
     io::{Read, Seek, SeekFrom},
+    num::NonZeroU16,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -8,7 +9,7 @@ use kithara_platform::sync::Arc;
 use kithara_stream::ContainerFormat;
 use symphonia::{
     core::{
-        formats::{FormatOptions, FormatReader, probe::Hint},
+        formats::{FormatOptions, FormatReader, probe::Hint, well_known::FORMAT_ID_WAVE},
         io::{MediaSourceStream, MediaSourceStreamOptions, ReadBytes},
         meta::MetadataOptions,
     },
@@ -22,6 +23,7 @@ pub(crate) struct ReaderBootstrap {
     pub(crate) byte_len_handle: Arc<AtomicU64>,
     pub(crate) byte_pos_handle: Arc<AtomicU64>,
     pub(crate) format_reader: Box<dyn FormatReader>,
+    pub(crate) wav_block_align: Option<NonZeroU16>,
 }
 
 /// Create a format reader directly from a known container format.
@@ -53,12 +55,21 @@ where
     );
     let mut source: crate::traits::BoxedSource = Box::new(source);
     let audio_start = crate::factory::skip_id3_tags(&mut source)?;
+    let wav_block_align = if container == ContainerFormat::Wav {
+        Some(crate::factory::sniff_wav_format(&mut source)?.1)
+    } else {
+        None
+    };
     source.seek(SeekFrom::Start(0))?;
-    let adapter = ReadSeekAdapter::new(
+    let mut adapter = ReadSeekAdapter::new(
         source,
         config.byte_len_handle.as_ref().map(Arc::clone),
         seek_enabled,
     );
+    if let Some(control) = &config.reader_control {
+        control.require_blocking();
+        adapter = adapter.with_control(control.clone());
+    }
 
     let byte_len_handle = adapter.byte_len_handle();
     let seek_enabled_handle = adapter.seek_enabled_handle();
@@ -78,6 +89,7 @@ where
         byte_len_handle,
         byte_pos_handle,
         format_reader,
+        wav_block_align,
     })
 }
 
@@ -95,11 +107,22 @@ pub(crate) fn probe_with_seek<R>(
 where
     R: Read + Seek + Send + Sync + 'static,
 {
-    let adapter = ReadSeekAdapter::new(
+    let mut source: crate::traits::BoxedSource = Box::new(source);
+    let wav_block_align =
+        if crate::factory::sniff_container_from_source(&mut source) == Some(ContainerFormat::Wav) {
+            Some(crate::factory::sniff_wav_format(&mut source)?.1)
+        } else {
+            None
+        };
+    let mut adapter = ReadSeekAdapter::new(
         source,
         config.byte_len_handle.as_ref().map(Arc::clone),
         seek_enabled,
     );
+    if let Some(control) = &config.reader_control {
+        control.require_blocking();
+        adapter = adapter.with_control(control.clone());
+    }
 
     let byte_len_handle = adapter.byte_len_handle();
     let seek_enabled_handle = adapter.seek_enabled_handle();
@@ -118,6 +141,15 @@ where
     let format_reader = get_probe()
         .probe(&probe_hint, mss, format_opts, meta_opts)
         .map_err(DecodeError::backend)?;
+    let wav_block_align = match (format_reader.format_info().format, wav_block_align) {
+        (FORMAT_ID_WAVE, Some(align)) => Some(align),
+        (FORMAT_ID_WAVE, None) => {
+            return Err(DecodeError::InvalidData {
+                detail: "selected WAV reader has no header block alignment",
+            });
+        }
+        (_, _) => None,
+    };
 
     if !seek_enabled {
         seek_enabled_handle.store(true, Ordering::Release);
@@ -128,6 +160,7 @@ where
         byte_len_handle,
         byte_pos_handle,
         format_reader,
+        wav_block_align,
     })
 }
 

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use kithara_bufpool::SampleBuffer;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::sync::Arc;
 use kithara_signal::AudioSpec;
 
 use crate::{codec::FrameCodec, error::DecodeResult};
@@ -36,11 +36,16 @@ impl EofDrainCodec {
 impl FrameCodec for EofDrainCodec {
     fn decode_frame(
         &mut self,
-        bytes: &[u8],
-        _pts: Duration,
-        _packet_desc: &[u8],
+        frame: crate::demuxer::Frame<'_>,
+        metadata: crate::demuxer::PacketMetadata,
         out: &mut SampleBuffer,
-    ) -> DecodeResult<u32> {
+    ) -> DecodeResult<crate::codec::DecodedPacket> {
+        let crate::demuxer::Frame {
+            data: bytes,
+            pts: _pts,
+            packet_desc: _packet_desc,
+            ..
+        } = frame;
         let frames = if bytes.is_empty() {
             self.empty_decode_calls.fetch_add(1, Ordering::SeqCst);
             if self.tail_pending {
@@ -53,6 +58,7 @@ impl FrameCodec for EofDrainCodec {
             self.frames_per_call
         };
         super::write_silent_test_frame(&self.pcm, self.spec, frames, out)
+            .map(|frames| crate::codec::DecodedPacket::new(frames, metadata))
     }
 
     fn flush(&mut self) -> DecodeResult<()> {
@@ -88,24 +94,30 @@ impl QueueCodec {
 impl FrameCodec for QueueCodec {
     fn decode_frame(
         &mut self,
-        bytes: &[u8],
-        _pts: Duration,
-        _packet_desc: &[u8],
+        frame: crate::demuxer::Frame<'_>,
+        metadata: crate::demuxer::PacketMetadata,
         out: &mut SampleBuffer,
-    ) -> DecodeResult<u32> {
+    ) -> DecodeResult<crate::codec::DecodedPacket> {
+        let crate::demuxer::Frame {
+            data: bytes,
+            pts: _pts,
+            packet_desc: _packet_desc,
+            ..
+        } = frame;
         if !bytes.is_empty() {
             self.tail_pending = true;
             out.clear();
-            return Ok(0);
+            return Ok(crate::codec::DecodedPacket::new(0, metadata));
         }
 
         self.empty_decode_calls.fetch_add(1, Ordering::SeqCst);
         if !self.tail_pending {
             out.clear();
-            return Ok(0);
+            return Ok(crate::codec::DecodedPacket::new(0, metadata));
         }
         self.tail_pending = false;
         super::write_silent_test_frame(&self.pcm, self.spec, self.tail_frames, out)
+            .map(|frames| crate::codec::DecodedPacket::new(frames, metadata))
     }
 
     fn flush(&mut self) -> DecodeResult<()> {

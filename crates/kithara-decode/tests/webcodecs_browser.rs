@@ -7,7 +7,10 @@ use kithara_decode::{
     Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
     DecoderSeekOutcome, spawn_webcodecs_probe,
 };
-use kithara_platform::time::{self, Duration};
+use kithara_platform::{
+    thread,
+    time::{self, Duration},
+};
 use kithara_resampler::NoResamplerBackend;
 use kithara_signal::AudioSpec;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
@@ -48,26 +51,29 @@ async fn mp3_parity() {
     let signal_mp3_track_sine440_187s = fetch_signal("signal_mp3_track_sine440_187s.mp3").await;
     prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
 
-    let webcodecs = decode_file(
-        signal_mp3_track_sine440_187s,
-        "mp3",
-        DecoderBackend::WebCodecs,
-    )
-    .await;
-    let symphonia = decode_file(
-        signal_mp3_track_sine440_187s,
-        "mp3",
-        DecoderBackend::Symphonia,
-    )
-    .await;
+    thread::spawn_named("webcodecs-mp3-parity", move || {
+        let webcodecs = decode_file(
+            signal_mp3_track_sine440_187s,
+            "mp3",
+            DecoderBackend::WebCodecs,
+        );
+        let symphonia = decode_file(
+            signal_mp3_track_sine440_187s,
+            "mp3",
+            DecoderBackend::Symphonia,
+        );
 
-    assert_common_parity("mp3", &webcodecs, &symphonia, MP3_FRAME_TOLERANCE);
-    tracing::info!(
-        webcodecs_frames = webcodecs.frames,
-        symphonia_frames = symphonia.frames,
-        frame_delta = webcodecs.frames.abs_diff(symphonia.frames),
-        "WebCodecs MP3 priming/tail frame-count probe"
-    );
+        assert_common_parity("mp3", &webcodecs, &symphonia, MP3_FRAME_TOLERANCE);
+        tracing::info!(
+            webcodecs_frames = webcodecs.frames,
+            symphonia_frames = symphonia.frames,
+            frame_delta = webcodecs.frames.abs_diff(symphonia.frames),
+            "WebCodecs MP3 priming/tail frame-count probe"
+        );
+    })
+    .join_async()
+    .await
+    .expect("WebCodecs scenario worker failed");
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
@@ -75,32 +81,35 @@ async fn flac_parity_direction() {
     let flac_unknown_length_saw_6s = fetch_signal("flac_unknown_length_saw_6s.flac").await;
     prepare_webcodecs("flac", flac_unknown_length_saw_6s).await;
 
-    let webcodecs = decode_file(
-        flac_unknown_length_saw_6s,
-        "flac",
-        DecoderBackend::WebCodecs,
-    )
-    .await;
-    let symphonia = decode_file(
-        flac_unknown_length_saw_6s,
-        "flac",
-        DecoderBackend::Symphonia,
-    )
-    .await;
-
-    assert_common_parity("flac", &webcodecs, &symphonia, MP3_FRAME_TOLERANCE);
-    if webcodecs.frames != symphonia.frames {
-        tracing::warn!(
-            webcodecs_frames = webcodecs.frames,
-            symphonia_frames = symphonia.frames,
-            frame_delta = webcodecs.frames.abs_diff(symphonia.frames),
-            "WebCodecs FLAC frame count differs from lossless reference"
+    thread::spawn_named("webcodecs-flac-parity-direction", move || {
+        let webcodecs = decode_file(
+            flac_unknown_length_saw_6s,
+            "flac",
+            DecoderBackend::WebCodecs,
         );
-    }
-    assert!(
-        webcodecs.saw_ascending,
-        "WebCodecs FLAC PCM must preserve the ascending sawtooth direction"
-    );
+        let symphonia = decode_file(
+            flac_unknown_length_saw_6s,
+            "flac",
+            DecoderBackend::Symphonia,
+        );
+
+        assert_common_parity("flac", &webcodecs, &symphonia, MP3_FRAME_TOLERANCE);
+        if webcodecs.frames != symphonia.frames {
+            tracing::warn!(
+                webcodecs_frames = webcodecs.frames,
+                symphonia_frames = symphonia.frames,
+                frame_delta = webcodecs.frames.abs_diff(symphonia.frames),
+                "WebCodecs FLAC frame count differs from lossless reference"
+            );
+        }
+        assert!(
+            webcodecs.saw_ascending,
+            "WebCodecs FLAC PCM must preserve the ascending sawtooth direction"
+        );
+    })
+    .join_async()
+    .await
+    .expect("WebCodecs scenario worker failed");
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
@@ -108,60 +117,65 @@ async fn seek_generation() {
     let signal_mp3_track_sine440_187s = fetch_signal("signal_mp3_track_sine440_187s.mp3").await;
     prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
 
-    let mut decoder = create_file_decoder(
-        signal_mp3_track_sine440_187s,
-        "mp3",
-        DecoderBackend::WebCodecs,
-    );
-    let spec = decoder.spec();
-    let mut warmup_chunks = 0usize;
-    while warmup_chunks < 4 {
-        match decoder.next_chunk().expect("decode MP3 warmup chunk") {
-            DecoderChunkOutcome::Chunk(chunk) => warmup_chunks += usize::from(chunk.frames() > 0),
-            DecoderChunkOutcome::Pending(_) => {}
-            DecoderChunkOutcome::Eof => panic!("MP3 reached EOF during seek warmup"),
-        }
-        time::sleep(Duration::ZERO).await;
-    }
-
-    let duration = decoder.duration().expect("MP3 duration must be known");
-    let target = Duration::from_secs_f64(duration.as_secs_f64() * 0.6);
-    assert!(
-        matches!(
-            decoder.seek(target).expect("seek WebCodecs MP3"),
-            DecoderSeekOutcome::Landed { .. }
-        ),
-        "60% MP3 seek must land before EOF"
-    );
-
-    let earliest = target.saturating_sub(
-        spec.duration_for(1)
-            .expect("single-frame duration is representable"),
-    );
-    let mut post_seek_chunks = 0usize;
-    for _ in 0..MAX_DECODE_OUTCOMES {
-        match decoder.next_chunk().expect("decode post-seek MP3 chunk") {
-            DecoderChunkOutcome::Chunk(chunk) => {
-                assert!(
-                    chunk.meta.timestamp >= earliest,
-                    "stale WebCodecs generation leaked timestamp {:?} before seek threshold {:?}",
-                    chunk.meta.timestamp,
-                    earliest
-                );
-                post_seek_chunks += 1;
-                if post_seek_chunks == 16 {
-                    break;
-                }
+    thread::spawn_named("webcodecs-seek-generation", move || {
+        let mut decoder = create_file_decoder(
+            signal_mp3_track_sine440_187s,
+            "mp3",
+            DecoderBackend::WebCodecs,
+        );
+        let spec = decoder.spec();
+        let mut warmup_chunks = 0usize;
+        while warmup_chunks < 4 {
+            match decoder.next_chunk().expect("decode MP3 warmup chunk") {
+                DecoderChunkOutcome::Chunk(chunk) => warmup_chunks += usize::from(chunk.frames() > 0),
+                DecoderChunkOutcome::Pending(_) => {}
+                DecoderChunkOutcome::Eof => panic!("MP3 reached EOF during seek warmup"),
             }
-            DecoderChunkOutcome::Pending(_) => {}
-            DecoderChunkOutcome::Eof => break,
         }
-        time::sleep(Duration::ZERO).await;
-    }
-    assert!(
-        post_seek_chunks > 0,
-        "WebCodecs MP3 must produce PCM after seek"
-    );
+
+        let Some(kithara_decode::DecoderDuration::RawLength(duration)) = decoder.duration() else {
+            panic!("standalone MP3 must declare a raw PCM length");
+        };
+        let target = Duration::from_secs_f64(duration.as_secs_f64() * 0.6);
+        assert!(
+            matches!(
+                decoder.seek(target).expect("seek WebCodecs MP3"),
+                DecoderSeekOutcome::Landed { .. }
+            ),
+            "60% MP3 seek must land before EOF"
+        );
+
+        let earliest = target.saturating_sub(
+            spec.duration_for(1)
+                .expect("single-frame duration is representable"),
+        );
+        let mut post_seek_chunks = 0usize;
+        for _ in 0..MAX_DECODE_OUTCOMES {
+            match decoder.next_chunk().expect("decode post-seek MP3 chunk") {
+                DecoderChunkOutcome::Chunk(chunk) => {
+                    assert!(
+                        chunk.meta.timestamp >= earliest,
+                        "stale WebCodecs generation leaked timestamp {:?} before seek threshold {:?}",
+                        chunk.meta.timestamp,
+                        earliest
+                    );
+                    post_seek_chunks += 1;
+                    if post_seek_chunks == 16 {
+                        break;
+                    }
+                }
+                DecoderChunkOutcome::Pending(_) => {}
+                DecoderChunkOutcome::Eof => break,
+            }
+        }
+        assert!(
+            post_seek_chunks > 0,
+            "WebCodecs MP3 must produce PCM after seek"
+        );
+    })
+    .join_async()
+    .await
+    .expect("WebCodecs scenario worker failed");
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(300)))]
@@ -169,56 +183,62 @@ async fn seek_trim_no_preroll_leak() {
     let signal_mp3_track_sine440_187s = fetch_signal("signal_mp3_track_sine440_187s.mp3").await;
     prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
 
-    let mut decoder = create_file_decoder(
-        signal_mp3_track_sine440_187s,
-        "mp3",
-        DecoderBackend::WebCodecs,
-    );
-    let duration = decoder.duration().expect("MP3 duration must be known");
-    let spec = decoder.spec();
-
-    for ratio in [0.17, 0.37, 0.73] {
-        let target = mid_packet_target(duration, spec, ratio);
-        assert!(
-            matches!(
-                decoder.seek(target).expect("seek WebCodecs MP3"),
-                DecoderSeekOutcome::Landed { .. }
-            ),
-            "MP3 seek at ratio {ratio} must land before EOF"
+    thread::spawn_named("webcodecs-seek-trim-no-preroll-leak", move || {
+        let mut decoder = create_file_decoder(
+            signal_mp3_track_sine440_187s,
+            "mp3",
+            DecoderBackend::WebCodecs,
         );
+        let Some(kithara_decode::DecoderDuration::RawLength(duration)) = decoder.duration() else {
+            panic!("standalone MP3 must declare a raw PCM length");
+        };
+        let spec = decoder.spec();
 
-        let mut chunks = 0usize;
-        let mut decoded_frames = 0usize;
-        for _ in 0..MAX_DECODE_OUTCOMES {
-            match decoder.next_chunk().expect("decode post-seek MP3 chunk") {
-                DecoderChunkOutcome::Chunk(chunk) => {
-                    if chunks == 0 {
+        for ratio in [0.17, 0.37, 0.73] {
+            let target = mid_packet_target(duration, spec, ratio);
+            assert!(
+                matches!(
+                    decoder.seek(target).expect("seek WebCodecs MP3"),
+                    DecoderSeekOutcome::Landed { .. }
+                ),
+                "MP3 seek at ratio {ratio} must land before EOF"
+            );
+
+            let mut chunks = 0usize;
+            let mut decoded_frames = 0usize;
+            for _ in 0..MAX_DECODE_OUTCOMES {
+                match decoder.next_chunk().expect("decode post-seek MP3 chunk") {
+                    DecoderChunkOutcome::Chunk(chunk) => {
+                        if chunks == 0 {
+                            assert!(
+                                chunk.meta.timestamp >= target,
+                                "post-seek PCM timestamp {:?} precedes target {:?} at ratio {ratio}",
+                                chunk.meta.timestamp,
+                                target
+                            );
+                        }
+                        assert!(!chunk.samples.is_empty(), "post-seek PCM must be non-empty");
                         assert!(
-                            chunk.meta.timestamp >= target,
-                            "post-seek PCM timestamp {:?} precedes target {:?} at ratio {ratio}",
-                            chunk.meta.timestamp,
-                            target
+                            chunk.samples.iter().all(|sample| sample.is_finite()),
+                            "post-seek PCM must be finite"
                         );
+                        decoded_frames = decoded_frames.saturating_add(chunk.frames());
+                        chunks += 1;
+                        if chunks == 4 {
+                            break;
+                        }
                     }
-                    assert!(!chunk.samples.is_empty(), "post-seek PCM must be non-empty");
-                    assert!(
-                        chunk.samples.iter().all(|sample| sample.is_finite()),
-                        "post-seek PCM must be finite"
-                    );
-                    decoded_frames = decoded_frames.saturating_add(chunk.frames());
-                    chunks += 1;
-                    if chunks == 4 {
-                        break;
-                    }
+                    DecoderChunkOutcome::Pending(_) => {}
+                    DecoderChunkOutcome::Eof => break,
                 }
-                DecoderChunkOutcome::Pending(_) => {}
-                DecoderChunkOutcome::Eof => break,
             }
-            time::sleep(Duration::ZERO).await;
+            assert_eq!(chunks, 4, "WebCodecs MP3 must continue after seek");
+            assert!(decoded_frames > 0, "post-seek PCM must contain frames");
         }
-        assert_eq!(chunks, 4, "WebCodecs MP3 must continue after seek");
-        assert!(decoded_frames > 0, "post-seek PCM must contain frames");
-    }
+    })
+    .join_async()
+    .await
+    .expect("WebCodecs scenario worker failed");
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
@@ -228,17 +248,22 @@ async fn aac_parity() {
     let aac_lc = fetch_signal("aac_lc.mp4").await;
     prepare_webcodecs("mp4a.40.2", aac_lc).await;
 
-    let bytes = aac_lc;
-    let webcodecs = decode_aac(bytes, DecoderBackend::WebCodecs).await;
-    let symphonia = decode_aac(bytes, DecoderBackend::Symphonia).await;
+    thread::spawn_named("webcodecs-aac-parity", move || {
+        let bytes = aac_lc;
+        let webcodecs = decode_aac(bytes, DecoderBackend::WebCodecs);
+        let symphonia = decode_aac(bytes, DecoderBackend::Symphonia);
 
-    assert_common_parity("aac-lc", &webcodecs, &symphonia, AAC_FRAME_TOLERANCE);
-    tracing::info!(
-        webcodecs_frames = webcodecs.frames,
-        symphonia_frames = symphonia.frames,
-        frame_delta = webcodecs.frames.abs_diff(symphonia.frames),
-        "WebCodecs AAC-LC priming/tail frame-count probe"
-    );
+        assert_common_parity("aac-lc", &webcodecs, &symphonia, AAC_FRAME_TOLERANCE);
+        tracing::info!(
+            webcodecs_frames = webcodecs.frames,
+            symphonia_frames = symphonia.frames,
+            frame_delta = webcodecs.frames.abs_diff(symphonia.frames),
+            "WebCodecs AAC-LC priming/tail frame-count probe"
+        );
+    })
+    .join_async()
+    .await
+    .expect("WebCodecs scenario worker failed");
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
@@ -246,26 +271,31 @@ async fn he_aac_v1_decode() {
     let he_aac_v1 = fetch_signal("he_aac_v1.mp4").await;
     prepare_webcodecs("mp4a.40.5", he_aac_v1).await;
 
-    let decoded = decode_he_aac_v1(he_aac_v1).await;
+    thread::spawn_named("webcodecs-he-aac-v1-decode", move || {
+        let decoded = decode_he_aac_v1(he_aac_v1);
 
-    assert!(decoded.eof, "WebCodecs HE-AAC v1 must reach explicit EOF");
-    assert!(
-        decoded.non_empty_chunks > 0,
-        "WebCodecs HE-AAC v1 PCM must be non-empty"
-    );
-    assert!(
-        decoded.frames > 1_024,
-        "WebCodecs HE-AAC v1 decoded too few frames: {}",
-        decoded.frames
-    );
-    assert_eq!(decoded.spec.channels, EXPECTED_CHANNELS);
-    assert_eq!(decoded.spec.sample_rate.get(), EXPECTED_SAMPLE_RATE);
-    tracing::info!(
-        frames = decoded.frames,
-        channels = decoded.spec.channels,
-        sample_rate = decoded.spec.sample_rate.get(),
-        "WebCodecs HE-AAC v1 resolved output spec"
-    );
+        assert!(decoded.eof, "WebCodecs HE-AAC v1 must reach explicit EOF");
+        assert!(
+            decoded.non_empty_chunks > 0,
+            "WebCodecs HE-AAC v1 PCM must be non-empty"
+        );
+        assert!(
+            decoded.frames > 1_024,
+            "WebCodecs HE-AAC v1 decoded too few frames: {}",
+            decoded.frames
+        );
+        assert_eq!(decoded.spec.channels, EXPECTED_CHANNELS);
+        assert_eq!(decoded.spec.sample_rate.get(), EXPECTED_SAMPLE_RATE);
+        tracing::info!(
+            frames = decoded.frames,
+            channels = decoded.spec.channels,
+            sample_rate = decoded.spec.sample_rate.get(),
+            "WebCodecs HE-AAC v1 resolved output spec"
+        );
+    })
+    .join_async()
+    .await
+    .expect("WebCodecs scenario worker failed");
 }
 
 #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
@@ -273,33 +303,38 @@ async fn he_aac_v2_decode() {
     let he_aac_v2 = fetch_signal("he_aac_v2.mp4").await;
     prepare_webcodecs("mp4a.40.29", he_aac_v2).await;
 
-    let decoded = decode_he_aac_v2(he_aac_v2).await;
+    thread::spawn_named("webcodecs-he-aac-v2-decode", move || {
+        let decoded = decode_he_aac_v2(he_aac_v2);
 
-    assert!(decoded.eof, "WebCodecs HE-AAC v2 must reach explicit EOF");
-    assert!(
-        decoded.non_empty_chunks > 0,
-        "WebCodecs HE-AAC v2 PCM must be non-empty"
-    );
-    assert!(
-        decoded.frames > 1_024,
-        "WebCodecs HE-AAC v2 decoded too few frames: {}",
-        decoded.frames
-    );
-    assert_eq!(decoded.spec.channels, EXPECTED_CHANNELS);
-    assert_eq!(decoded.spec.sample_rate.get(), EXPECTED_SAMPLE_RATE);
-    tracing::info!(
-        frames = decoded.frames,
-        channels = decoded.spec.channels,
-        sample_rate = decoded.spec.sample_rate.get(),
-        "WebCodecs HE-AAC v2 resolved output spec"
-    );
+        assert!(decoded.eof, "WebCodecs HE-AAC v2 must reach explicit EOF");
+        assert!(
+            decoded.non_empty_chunks > 0,
+            "WebCodecs HE-AAC v2 PCM must be non-empty"
+        );
+        assert!(
+            decoded.frames > 1_024,
+            "WebCodecs HE-AAC v2 decoded too few frames: {}",
+            decoded.frames
+        );
+        assert_eq!(decoded.spec.channels, EXPECTED_CHANNELS);
+        assert_eq!(decoded.spec.sample_rate.get(), EXPECTED_SAMPLE_RATE);
+        tracing::info!(
+            frames = decoded.frames,
+            channels = decoded.spec.channels,
+            sample_rate = decoded.spec.sample_rate.get(),
+            "WebCodecs HE-AAC v2 resolved output spec"
+        );
+    })
+    .join_async()
+    .await
+    .expect("WebCodecs scenario worker failed");
 }
 
 async fn prepare_webcodecs(codec: &str, bytes: &'static [u8]) {
     PROBE_STARTED.call_once(|| spawn_webcodecs_probe(default_pools()));
     assert_browser_support(codec).await;
     for _ in 0..100 {
-        if webcodecs_runtime_ready(codec, bytes) {
+        if webcodecs_runtime_ready(codec, bytes).await {
             return;
         }
         time::sleep(Duration::from_millis(50)).await;
@@ -307,45 +342,51 @@ async fn prepare_webcodecs(codec: &str, bytes: &'static [u8]) {
     panic!("WebCodecs capability probe did not publish within 5 seconds");
 }
 
-fn webcodecs_runtime_ready(codec: &str, bytes: &'static [u8]) -> bool {
-    match codec {
-        "mp3" => DecoderFactory::create_with_probe(
-            Cursor::new(bytes.to_vec()),
-            Some("mp3"),
-            decoder_config(DecoderBackend::WebCodecs),
-        )
-        .is_ok(),
-        "flac" => DecoderFactory::create_with_probe(
-            Cursor::new(bytes.to_vec()),
-            Some("flac"),
-            decoder_config(DecoderBackend::WebCodecs),
-        )
-        .is_ok(),
-        "mp4a.40.2" => DecoderFactory::create_from_media_info(
-            Cursor::new(bytes),
-            &MediaInfo::builder()
-                .codec(AudioCodec::AacLc)
-                .container(ContainerFormat::Fmp4)
-                .sample_rate(EXPECTED_SAMPLE_RATE)
-                .channels(EXPECTED_CHANNELS)
-                .build(),
-            decoder_config(DecoderBackend::WebCodecs),
-        )
-        .is_ok(),
-        "mp4a.40.5" => DecoderFactory::create_from_media_info(
-            Cursor::new(bytes),
-            &aac_media_info(AudioCodec::AacHe),
-            decoder_config(DecoderBackend::WebCodecs),
-        )
-        .is_ok(),
-        "mp4a.40.29" => DecoderFactory::create_from_media_info(
-            Cursor::new(bytes),
-            &aac_media_info(AudioCodec::AacHeV2),
-            decoder_config(DecoderBackend::WebCodecs),
-        )
-        .is_ok(),
-        _ => false,
-    }
+async fn webcodecs_runtime_ready(codec: &str, bytes: &'static [u8]) -> bool {
+    let codec = codec.to_owned();
+    thread::spawn_named("webcodecs-capability-decoder", move || {
+        match codec.as_str() {
+            "mp3" => DecoderFactory::create_with_probe(
+                Cursor::new(bytes.to_vec()),
+                Some("mp3"),
+                decoder_config(DecoderBackend::WebCodecs),
+            )
+            .is_ok(),
+            "flac" => DecoderFactory::create_with_probe(
+                Cursor::new(bytes.to_vec()),
+                Some("flac"),
+                decoder_config(DecoderBackend::WebCodecs),
+            )
+            .is_ok(),
+            "mp4a.40.2" => DecoderFactory::create_from_media_info(
+                Cursor::new(bytes),
+                &MediaInfo::builder()
+                    .codec(AudioCodec::AacLc)
+                    .container(ContainerFormat::Fmp4)
+                    .sample_rate(EXPECTED_SAMPLE_RATE)
+                    .channels(EXPECTED_CHANNELS)
+                    .build(),
+                decoder_config(DecoderBackend::WebCodecs),
+            )
+            .is_ok(),
+            "mp4a.40.5" => DecoderFactory::create_from_media_info(
+                Cursor::new(bytes),
+                &aac_media_info(AudioCodec::AacHe),
+                decoder_config(DecoderBackend::WebCodecs),
+            )
+            .is_ok(),
+            "mp4a.40.29" => DecoderFactory::create_from_media_info(
+                Cursor::new(bytes),
+                &aac_media_info(AudioCodec::AacHeV2),
+                decoder_config(DecoderBackend::WebCodecs),
+            )
+            .is_ok(),
+            _ => false,
+        }
+    })
+    .join_async()
+    .await
+    .expect("WebCodecs capability decoder worker failed")
 }
 
 async fn assert_browser_support(codec: &str) {
@@ -417,28 +458,27 @@ fn create_aac_decoder(
     .unwrap_or_else(|error| panic!("create {backend} decoder for {codec:?} fMP4: {error}"))
 }
 
-async fn decode_file(bytes: &[u8], hint: &str, backend: DecoderBackend) -> DecodeSummary {
-    decode_to_eof(create_file_decoder(bytes, hint, backend), backend, hint).await
+fn decode_file(bytes: &[u8], hint: &str, backend: DecoderBackend) -> DecodeSummary {
+    decode_to_eof(create_file_decoder(bytes, hint, backend), backend, hint)
 }
 
-async fn decode_aac(bytes: &[u8], backend: DecoderBackend) -> DecodeSummary {
+fn decode_aac(bytes: &[u8], backend: DecoderBackend) -> DecodeSummary {
     decode_to_eof(
         create_aac_decoder(bytes, AudioCodec::AacLc, backend),
         backend,
         "aac-lc",
     )
-    .await
 }
 
-async fn decode_he_aac_v1(bytes: &[u8]) -> DecodeSummary {
-    decode_he_aac(bytes, AudioCodec::AacHe, "HE-AAC v1").await
+fn decode_he_aac_v1(bytes: &[u8]) -> DecodeSummary {
+    decode_he_aac(bytes, AudioCodec::AacHe, "HE-AAC v1")
 }
 
-async fn decode_he_aac_v2(bytes: &[u8]) -> DecodeSummary {
-    decode_he_aac(bytes, AudioCodec::AacHeV2, "HE-AAC v2").await
+fn decode_he_aac_v2(bytes: &[u8]) -> DecodeSummary {
+    decode_he_aac(bytes, AudioCodec::AacHeV2, "HE-AAC v2")
 }
 
-async fn decode_he_aac(bytes: &[u8], codec: AudioCodec, fixture: &str) -> DecodeSummary {
+fn decode_he_aac(bytes: &[u8], codec: AudioCodec, fixture: &str) -> DecodeSummary {
     let mut decoder = create_aac_decoder(bytes, codec, DecoderBackend::WebCodecs);
     let mut frames = 0usize;
     let mut non_empty_chunks = 0usize;
@@ -472,7 +512,6 @@ async fn decode_he_aac(bytes: &[u8], codec: AudioCodec, fixture: &str) -> Decode
                 break;
             }
         }
-        time::sleep(Duration::ZERO).await;
     }
 
     DecodeSummary {
@@ -484,7 +523,7 @@ async fn decode_he_aac(bytes: &[u8], codec: AudioCodec, fixture: &str) -> Decode
     }
 }
 
-async fn decode_to_eof(
+fn decode_to_eof(
     mut decoder: Box<dyn Decoder>,
     backend: DecoderBackend,
     fixture: &str,
@@ -520,7 +559,6 @@ async fn decode_to_eof(
                 break;
             }
         }
-        time::sleep(Duration::ZERO).await;
     }
 
     DecodeSummary {

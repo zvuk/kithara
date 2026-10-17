@@ -8,7 +8,6 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
-use kithara_config::{Config, ConfigOwner};
 use kithara_platform::{
     CancelGroup, CancelScope,
     sync::{
@@ -209,15 +208,25 @@ fn numeric_priority_is_descending_with_stable_id_tie_break() {
 
 #[kithara::test(flash(false))]
 fn priority_control_refreshes_the_single_mutable_priority_source() {
+    struct PriorityTask(Priority);
+
+    impl Task for PriorityTask {
+        fn priority(&self) -> Option<Priority> {
+            Some(self.0)
+        }
+
+        fn tick(&mut self) -> TickResult {
+            self.0 = Priority::new(3);
+            TickResult::Progress
+        }
+    }
+
     let mut slots = vec![
-        slot(1, Priority::new(1), FixedTask(TickResult::Done)),
+        slot(1, Priority::new(1), PriorityTask(Priority::new(1))),
         slot(2, Priority::new(2), FixedTask(TickResult::Done)),
     ];
-    slots[0].control.set_priority(Priority::new(3));
-    assert_eq!(
-        slots[0].control.config().values().priority,
-        Priority::new(3)
-    );
+    assert_eq!(slots[0].task.tick(), TickResult::Progress);
+    assert_eq!(slots[0].task.priority(), Some(Priority::new(3)));
     let mut needs_reorder = false;
 
     refresh_priorities(&mut slots, &mut needs_reorder);
@@ -632,6 +641,24 @@ fn a_pass_reports_its_outcome_to_the_observer() {
         "the pass outcome reaches the observer: {:?}",
         observer.0
     );
+}
+
+#[kithara::test(native, browser)]
+fn wake_allowance_uses_the_largest_park_budget() {
+    let worker = crate::Worker::new(crate::WorkerConfig::new());
+    for (wait, idle, backpressure) in [(3, 7, 11), (11, 3, 7), (7, 11, 3)] {
+        let dispatcher = worker.dispatcher(
+            DispatcherConfig::builder()
+                .name("wake-allowance-test")
+                .wait_timeout(Duration::from_millis(wait))
+                .idle_timeout(Duration::from_millis(idle))
+                .backpressure_poll_interval(Duration::from_millis(backpressure))
+                .build(),
+        );
+
+        assert_eq!(dispatcher.wake_allowance(), Duration::from_millis(11));
+        dispatcher.shutdown();
+    }
 }
 
 #[kithara::test(native, browser, flash(false))]

@@ -101,12 +101,13 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_signal::{SessionEpoch, SessionFrame};
+    use kithara_sync::SessionAnchor;
     use kithara_test_utils::kithara;
     use kithara_warp::{
         AssetAxis, AssetExtent, AssetFrame, Beat, BeatEvidence, BeatGridId, BeatGridQuery,
         BeatGridRevision, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, BeatMarker,
         BeatOrdinal, FrameUncertainty, MapAxis, MapPoint, MapPosition, MapSegment, SegmentFacts,
-        SegmentSet, SessionAnchor,
+        SegmentSet,
     };
 
     use super::{SessionBeat, SyncUnavailable, TrackBinding};

@@ -12,7 +12,7 @@ pub use detector::{BeatDetectError, BeatDetector};
 #[cfg(feature = "dsp")]
 pub use dsp::{SpectralBeats, Tempo, TempoError, TempoPatch, TempoPatchError};
 pub use grid::{
-    BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid,
+    BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, RawBeatGrid,
     SCHEMA_VERSION,
 };
 #[cfg(test)]

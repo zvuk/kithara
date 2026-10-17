@@ -8,5 +8,6 @@ mod common {
 
 mod drm_stream_integrity;
 mod hls_abr_variant_switch;
+mod saw_chunk;
 mod stress_chunk_integrity;
 mod stress_seek_random;

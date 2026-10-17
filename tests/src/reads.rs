@@ -9,6 +9,7 @@ use kithara::audio::{AudioRead, ReadOutcome};
 use kithara::platform::tokio::task::spawn_blocking;
 #[cfg(target_arch = "wasm32")]
 use kithara::platform::{thread, time::Duration};
+use kithara_test_utils::kithara as watchdog;
 
 /// Default audio read buffer; large enough to keep syscall overhead low but
 /// small enough to exercise the pipeline in short bursts.
@@ -39,16 +40,17 @@ where
 /// `Audio::read` is engine-aware blocking — it parks until the worker commits a
 /// chunk or the stream truly ends — so `ReadOutcome::Pending` is transient and
 /// we re-park (`continue`) rather than guess EOF from elapsed time. The pump
-/// terminates on the real `ReadOutcome::Eof`; the caller's test `timeout(...)`
-/// is the only backstop against a genuinely wedged pipeline.
+/// terminates on the real `ReadOutcome::Eof`; a watchdog catches a wedged pipeline.
 pub fn read_to_eof<R: AudioRead + ?Sized>(audio: &mut R) -> u64 {
     read_samples(audio, None)
 }
 
+#[watchdog::hang_watchdog]
 fn read_samples<R: AudioRead + ?Sized>(audio: &mut R, target: Option<u64>) -> u64 {
     let mut buf = vec![0.0f32; READ_BUF_SAMPLES];
     let mut total = 0u64;
     loop {
+        hang_tick!();
         if target.is_some_and(|target| total >= target) {
             return total;
         }
@@ -60,6 +62,7 @@ fn read_samples<R: AudioRead + ?Sized>(audio: &mut R, target: Option<u64>) -> u6
                     assert!(s.is_finite(), "non-finite sample at offset {total}");
                 }
                 total += n as u64;
+                hang_reset!();
             }
             Ok(ReadOutcome::Eof { .. }) => return total,
             Err(e) => panic!("decode error at offset {total}: {e}"),
@@ -104,12 +107,14 @@ impl ReadLimit {
 /// Native targets collapse to [`read_to_eof`]; wasm targets use the limit to
 /// survive cooperative pipeline starvation in the browser runner.
 #[cfg(target_arch = "wasm32")]
+#[watchdog::hang_watchdog]
 pub fn read_for_concurrency_check<R: AudioRead + ?Sized>(audio: &mut R, limit: ReadLimit) -> u64 {
     let mut buf = vec![0.0f32; READ_BUF_SAMPLES];
     let mut total = 0u64;
     let mut zero_reads = 0usize;
 
     while total < limit.min_samples && zero_reads < limit.max_zero_reads {
+        hang_tick!();
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Pending { .. }) => {
                 zero_reads += 1;
@@ -123,6 +128,7 @@ pub fn read_for_concurrency_check<R: AudioRead + ?Sized>(audio: &mut R, limit: R
                     assert!(sample.is_finite(), "non-finite sample at offset {total}");
                 }
                 total += n as u64;
+                hang_reset!();
             }
             Ok(ReadOutcome::Eof { .. }) => break,
             Err(e) => panic!("decode error at offset {total}: {e}"),

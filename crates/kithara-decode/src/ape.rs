@@ -101,18 +101,18 @@ where
         self.pcm_offset += samples * 2;
         let start = self.frame_offset;
         self.frame_offset += u64::try_from(frames)?;
-        Ok(DecoderChunkOutcome::Chunk(AudioChunk::new(
+        Ok(DecoderChunkOutcome::Chunk(Box::new(AudioChunk::new(
             AudioChunkInfo {
                 spec: self.spec,
+                media_origin: Some(Duration::ZERO),
                 timestamp: self.spec.duration_for(start)?,
                 end_timestamp: self.spec.duration_for(self.frame_offset)?,
                 frames: u32::try_from(frames)?,
                 frame_offset: start,
-                epoch: self.runtime.epoch,
                 ..AudioChunkInfo::default()
             },
             output,
-        )))
+        ))))
     }
 }
 
@@ -123,8 +123,16 @@ where
     fn spec(&self) -> AudioSpec {
         self.spec
     }
-    fn duration(&self) -> Option<Duration> {
-        Some(self.duration)
+    fn media_origin(&self) -> Option<Duration> {
+        Some(Duration::ZERO)
+    }
+
+    fn initial_pcm_origin(&self) -> Option<crate::PcmOrigin> {
+        Some(crate::PcmOrigin::new(Duration::ZERO, Duration::ZERO))
+    }
+
+    fn duration(&self) -> Option<crate::DecoderDuration> {
+        Some(crate::DecoderDuration::RawLength(self.duration))
     }
     fn update_byte_len(&self, _len: u64) {}
 
@@ -165,6 +173,10 @@ where
         }
     }
 
+    fn seek_prefix(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek(position)
+    }
+
     fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
         self.prepared = None;
         self.pcm.clear();
@@ -198,6 +210,7 @@ where
                     preroll,
                 },
                 DecoderSeekOutcome::PastEof { .. } => ReaderSeekSignal::PastEof,
+                DecoderSeekOutcome::Pending(_) => return Ok(outcome),
             });
         }
         Ok(outcome)

@@ -12,10 +12,10 @@ where
     S: HasPool<f32>,
 {
     match config.backend() {
-        #[cfg(feature = "stretch-signalsmith")]
+        #[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
         StretchKind::Signalsmith => backends::SignalsmithElastic::prepare(config)
             .map(|engine| Box::new(engine) as Box<dyn ElasticEngine>),
-        #[cfg(feature = "stretch-bungee")]
+        #[cfg(all(feature = "stretch-bungee", not(target_arch = "wasm32")))]
         StretchKind::Bungee => backends::BungeeElastic::prepare(config)
             .map(|engine| Box::new(engine) as Box<dyn ElasticEngine>),
         #[cfg(feature = "stretch-glide")]

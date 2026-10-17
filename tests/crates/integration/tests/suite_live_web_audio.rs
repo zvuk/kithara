@@ -31,11 +31,8 @@ use kithara::{
         time::{Duration, sleep},
         tokio::task,
     },
-    play::{
-        MixTapWriter, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource,
-        ResourceConfig, ResourceSrc,
-    },
-    queue::TrackId,
+    play::{MixTapWriter, PlayWorker, PlayWorkerConfig, PlayerFactory, ResourcePrep},
+    queue::{Queue, QueueConfig, Transition},
 };
 use kithara_integration_tests::{
     TestServerHelper,
@@ -105,61 +102,49 @@ fn stage_name(stage: u64) -> &'static str {
 fn spawn_player_worker(sender: wasm::HostSender<TestPools>, stage: Arc<AtomicU64>) {
     spawn_named("live-web-audio-player", move || {
         keep_worker_alive();
-        task::spawn(async move {
-            stage.store(1, Ordering::Relaxed);
-            let mut host = wasm::remote_host(sender);
-            let region = pools();
-            let worker = PlayWorker::new(PlayWorkerConfig::builder(region.clone()).build());
-            let player = PlayerImpl::new(
-                PlayerConfig::builder()
-                    .sample_rate(host.sample_rate())
-                    .worker(worker.clone())
-                    .build(),
-            );
-            let owner = host
-                .insert(player)
-                .expect("insert the player into the Host");
-            stage.store(2, Ordering::Relaxed);
-            let control = owner.control().clone();
-            control.set_crossfade_duration(0.0);
-
-            let server = TestServerHelper::new().await;
-            stage.store(3, Ordering::Relaxed);
-            let url = server.signal(SignalAsset::MP3_SINE440_60S);
-            let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
-                ResourceSrc::parse(url.as_str())
-                    .expect("the fixture URL parses as a resource source"),
-            )
-            .worker(worker)
-            .store(
-                AssetStore::builder(region)
-                    .backend(StorageBackend::Memory)
-                    .build(),
-            )
-            .build();
-            let mut resource = Resource::new(config)
-                .await
-                .expect("open the fixture as a product resource");
-            stage.store(4, Ordering::Relaxed);
-            resource.preload().await.expect("preload the fixture");
-            stage.store(5, Ordering::Relaxed);
-
-            control.insert(resource, TrackId(0), None);
-            control
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select the fixture for playback");
-            control.play();
-            stage.store(6, Ordering::Relaxed);
-
-            while control.tick().is_ok() {
-                sleep(WORKER_TICK).await;
-            }
-            stage.store(7, Ordering::Relaxed);
-        });
+        task::spawn(run_player_worker(sender, stage));
     });
 }
 
+#[kithara_test_utils::kithara::hang_watchdog]
+async fn run_player_worker(sender: wasm::HostSender<TestPools>, stage: Arc<AtomicU64>) {
+    stage.store(1, Ordering::Relaxed);
+    let mut host = wasm::remote_host(sender);
+    let region = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(region.clone()).build());
+    let store = AssetStore::builder(region)
+        .backend(StorageBackend::Memory)
+        .build();
+    stage.store(2, Ordering::Relaxed);
+    let server = TestServerHelper::new().await;
+    stage.store(3, Ordering::Relaxed);
+    let owner = open_deck(
+        &mut host,
+        &server,
+        &worker,
+        &store,
+        SignalAsset::MP3_SINE440_60S,
+    );
+    stage.store(5, Ordering::Relaxed);
+    let control = owner.control();
+    control.play();
+    stage.store(6, Ordering::Relaxed);
+    let mut position = control.position_seconds();
+    while !control.is_closed() {
+        hang_tick!();
+        sleep(WORKER_TICK).await;
+        let current = control.position_seconds();
+        if current != position {
+            position = current;
+            hang_reset!();
+        }
+    }
+    stage.store(7, Ordering::Relaxed);
+}
+
 /// One `requestAnimationFrame` turn, the cadence `tick_and_poll` documents.
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn next_frame(window: &web_sys::Window) {
     let promise = js_sys::Promise::new(&mut |resolve, _| {
         let frame = Closure::once_into_js(move |_: JsValue| {
@@ -169,7 +154,12 @@ async fn next_frame(window: &web_sys::Window) {
             .request_animation_frame(frame.unchecked_ref())
             .expect("schedule the next animation frame");
     });
-    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+    let mut budget = Duration::ZERO;
+    hang_park!(|remaining| budget = remaining);
+    kithara::platform::time::timeout(budget, wasm_bindgen_futures::JsFuture::from(promise))
+        .await
+        .expect("browser animation frame must arrive")
+        .expect("animation frame resolves");
 }
 
 /// Append what the tap holds, starting the window at the first audible frame.
@@ -193,8 +183,8 @@ fn first_audible_sample(samples: &[f32]) -> Option<usize> {
 }
 
 fn session_is_live(host: &Host<TestPools>) -> bool {
-    host.output_sample_rate()
-        .is_ok_and(|rates| rates.measured == Some(rates.requested))
+    let rates = host.output_sample_rate();
+    rates.measured == Some(rates.requested)
 }
 
 /// Dominant frequency of a mono window, taken from its rising zero crossings.
@@ -217,6 +207,7 @@ fn zero_crossing_hz(mono: &[f32], sample_rate: f64) -> f64 {
 }
 
 #[wasm_bindgen_test]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn live_web_audio_plays_at_session_rate() {
     init_diagnostics();
 
@@ -227,7 +218,6 @@ async fn live_web_audio_plays_at_session_rate() {
     )
     .expect("build the product web Host");
     let (sender, receiver) = wasm::worker_host_channel(&host).expect("open the Worker route");
-    wasm::warm_up_audio(&host).expect("warm up the audio context");
 
     let (pcm_tx, mut pcm_rx) = HeapRb::<f32>::new(TAP_CAPACITY).split();
     let drops = Arc::new(AtomicU64::new(0));
@@ -248,13 +238,19 @@ async fn live_web_audio_plays_at_session_rate() {
     let deadline = js_sys::Date::now() + AUDIO_BUDGET_MS;
     let mut opened = false;
     while js_sys::Date::now() < deadline && window.len() < target {
+        hang_tick!();
         wasm::tick_and_poll(&receiver);
         // Firewheel resumes a suspended `AudioContext` only from a document
         // interaction event, and the Worker installs that listener mid-run.
         let click = web_sys::Event::new("click").expect("build a click event");
         document.dispatch_event(&click).expect("dispatch the click");
         next_frame(&page).await;
-        tapped += collect_tap(&mut pcm_rx, &mut window);
+        let previous = window.len();
+        let collected = collect_tap(&mut pcm_rx, &mut window);
+        tapped += collected;
+        if window.len() > previous {
+            hang_reset!();
+        }
         frames_pumped += 1;
         // A session that reported its rate and then stopped has lost its stream,
         // and waiting out the budget would report silence instead of the drop.
@@ -268,9 +264,7 @@ async fn live_web_audio_plays_at_session_rate() {
     let frames = window.len() / CHANNELS;
     let dropped = drops.load(Ordering::Relaxed);
     let stage = stage_name(stage.load(Ordering::Relaxed));
-    let rates = host
-        .output_sample_rate()
-        .expect("read the session output rate");
+    let rates = host.output_sample_rate();
     assert_eq!(
         (rates.requested, rates.measured),
         (RATE.get(), Some(RATE.get())),
@@ -357,36 +351,25 @@ impl DeckPair {
     }
 }
 
-async fn open_deck(
+fn open_deck(
     host: &mut Host<TestPools>,
     server: &TestServerHelper,
     worker: &PlayWorker<TestPools>,
     store: &AssetStore<TestPools>,
     asset: SignalAsset,
-) -> HostOwned<PlayerImpl<TestPools>> {
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(host.sample_rate())
-            .worker(worker.clone())
+) -> HostOwned<Queue<TestPools>> {
+    let queue = Queue::new(
+        QueueConfig::with_factory(PlayerFactory)
+            .prep(ResourcePrep::builder().worker(worker.clone()).build())
+            .store(store.clone())
             .build(),
     );
-    let owner = host.insert(player).expect("insert the deck into the Host");
-    let control = owner.control().clone();
-    control.set_crossfade_duration(0.0);
+    let owner = host.insert(queue).expect("insert the deck into the Host");
+    let control = owner.control();
     let url = server.signal(asset);
-    let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
-        ResourceSrc::parse(url.as_str()).expect("the fixture URL parses as a resource source"),
-    )
-    .worker(worker.clone())
-    .store(store.clone())
-    .build();
-    let mut resource = Resource::new(config)
-        .await
-        .expect("open the fixture as a product resource");
-    resource.preload().await.expect("preload the fixture");
-    control.insert(resource, TrackId(0), None);
+    let track = control.append(url.as_str()).expect("append the fixture");
     control
-        .select_item(0, kithara::play::SelectionPlayback::Pause)
+        .select(track, Transition::None)
         .expect("select the fixture");
     owner
 }
@@ -394,57 +377,67 @@ async fn open_deck(
 fn spawn_deck_pair_worker(sender: wasm::HostSender<TestPools>, pair: Arc<DeckPair>) {
     spawn_named("live-web-audio-decks", move || {
         keep_worker_alive();
-        task::spawn(async move {
-            pair.stage.store(1, Ordering::Relaxed);
-            let mut host = wasm::remote_host(sender);
-            let region = pools();
-            let worker = PlayWorker::new(PlayWorkerConfig::builder(region.clone()).build());
-            let store = AssetStore::builder(region)
-                .backend(StorageBackend::Memory)
-                .build();
-            let server = TestServerHelper::new().await;
-            let mut decks = Vec::with_capacity(DECK_ASSETS.len());
-            for asset in DECK_ASSETS {
-                decks.push(open_deck(&mut host, &server, &worker, &store, asset).await);
-            }
-            pair.stage.store(2, Ordering::Relaxed);
-
-            let mut applied = DeckPair::UNAPPLIED;
-            loop {
-                let requested = pair.requested.load(Ordering::Acquire);
-                if requested != applied {
-                    let position = f32::from_bits(requested);
-                    let levels = [CrossfaderBus::A, CrossfaderBus::B]
-                        .map(|bus| crossfader_gain(bus, position).expect("a valid position"));
-                    host.apply_mix(
-                        decks
-                            .iter()
-                            .zip(levels)
-                            .map(|(deck, level)| deck.level(level)),
-                    )
-                    .expect("apply the crossfader batch");
-                    if applied == DeckPair::UNAPPLIED {
-                        for deck in &decks {
-                            deck.control().play();
-                        }
-                    }
-                    applied = requested;
-                    pair.applied.store(applied, Ordering::Release);
-                }
-                for (deck, position) in decks.iter().zip(&pair.positions) {
-                    if deck.control().tick().is_err() {
-                        pair.stage.store(3, Ordering::Relaxed);
-                        return;
-                    }
-                    let seconds = deck.control().position_seconds().unwrap_or_default();
-                    position.store(seconds.to_bits(), Ordering::Relaxed);
-                }
-                sleep(WORKER_TICK).await;
-            }
-        });
+        task::spawn(run_deck_pair_worker(sender, pair));
     });
 }
 
+#[kithara_test_utils::kithara::hang_watchdog]
+async fn run_deck_pair_worker(sender: wasm::HostSender<TestPools>, pair: Arc<DeckPair>) {
+    pair.stage.store(1, Ordering::Relaxed);
+    let mut host = wasm::remote_host(sender);
+    let region = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(region.clone()).build());
+    let store = AssetStore::builder(region)
+        .backend(StorageBackend::Memory)
+        .build();
+    let server = TestServerHelper::new().await;
+    let mut decks = Vec::with_capacity(DECK_ASSETS.len());
+    for asset in DECK_ASSETS {
+        decks.push(open_deck(&mut host, &server, &worker, &store, asset));
+    }
+    pair.stage.store(2, Ordering::Relaxed);
+
+    let mut applied = DeckPair::UNAPPLIED;
+    let mut positions = [None; 2];
+    loop {
+        hang_tick!();
+        let requested = pair.requested.load(Ordering::Acquire);
+        if requested != applied {
+            let position = f32::from_bits(requested);
+            let levels = [CrossfaderBus::A, CrossfaderBus::B]
+                .map(|bus| crossfader_gain(bus, position).expect("a valid position"));
+            for (deck, level) in decks.iter().zip(levels) {
+                deck.control()
+                    .set_level(level)
+                    .expect("set the crossfader level");
+            }
+            if applied == DeckPair::UNAPPLIED {
+                for deck in &decks {
+                    deck.control().play();
+                }
+            }
+            applied = requested;
+            pair.applied.store(applied, Ordering::Release);
+            hang_reset!();
+        }
+        for ((deck, position), previous) in decks.iter().zip(&pair.positions).zip(&mut positions) {
+            if deck.control().is_closed() {
+                pair.stage.store(3, Ordering::Relaxed);
+                return;
+            }
+            let current = deck.control().position_seconds();
+            if current != *previous {
+                *previous = current;
+                hang_reset!();
+            }
+            let seconds = current.unwrap_or_default();
+            position.store(seconds.to_bits(), Ordering::Relaxed);
+        }
+        sleep(WORKER_TICK).await;
+    }
+}
+
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn hear(
     receiver: &wasm::HostReceiver<TestPools>,
     tap: &mut HeapCons<f32>,
@@ -456,15 +449,21 @@ async fn hear(
     let target = frames * CHANNELS;
     let mut window: Vec<f32> = Vec::with_capacity(target);
     while js_sys::Date::now() < deadline && window.len() < target {
+        hang_tick!();
         wasm::tick_and_poll(receiver);
         let click = web_sys::Event::new("click").expect("build a click event");
         document.dispatch_event(&click).expect("dispatch the click");
         next_frame(&page).await;
+        let previous = window.len();
         collect_tap(tap, &mut window);
+        if window.len() > previous {
+            hang_reset!();
+        }
     }
     window
 }
 
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn until_applied(
     receiver: &wasm::HostReceiver<TestPools>,
     pair: &DeckPair,
@@ -473,8 +472,12 @@ async fn until_applied(
 ) {
     let page = web_sys::window().expect("the browser main thread owns a window");
     while js_sys::Date::now() < deadline && !pair.is_applied(position) {
+        hang_tick!();
         wasm::tick_and_poll(receiver);
         next_frame(&page).await;
+    }
+    if pair.is_applied(position) {
+        hang_reset!();
     }
     assert!(
         pair.is_applied(position),
@@ -503,7 +506,6 @@ async fn two_decks_in_one_host_follow_the_crossfader() {
     )
     .expect("build the product web Host");
     let (sender, receiver) = wasm::worker_host_channel(&host).expect("open the Worker route");
-    wasm::warm_up_audio(&host).expect("warm up the audio context");
 
     let (pcm_tx, mut pcm_rx) = HeapRb::<f32>::new(TAP_CAPACITY).split();
     let drops = Arc::new(AtomicU64::new(0));
@@ -528,9 +530,7 @@ async fn two_decks_in_one_host_follow_the_crossfader() {
     let at_b = pair.positions();
 
     let dropped = drops.load(Ordering::Relaxed);
-    let rates = host
-        .output_sample_rate()
-        .expect("read the session output rate");
+    let rates = host.output_sample_rate();
     assert_eq!(
         (rates.requested, rates.measured),
         (RATE.get(), Some(RATE.get())),
@@ -656,6 +656,8 @@ extern "C" {
     static IMPORT_META: ImportMeta;
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn reported_from_the_render_scope(probe_name: &str) -> String {
     let probe = js_sys::Function::new_with_args(
         "moduleUrl, wasmModule, wasmMemory, probeName",
@@ -673,11 +675,17 @@ async fn reported_from_the_render_scope(probe_name: &str) -> String {
         )
         .expect("start the worklet probe");
 
-    wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(pending))
-        .await
-        .expect("await the worklet probe")
-        .as_string()
-        .unwrap_or_default()
+    let mut budget = Duration::ZERO;
+    hang_park!(|remaining| budget = remaining);
+    kithara::platform::time::timeout(
+        budget,
+        wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(pending)),
+    )
+    .await
+    .expect("worklet probe must answer")
+    .expect("await the worklet probe")
+    .as_string()
+    .unwrap_or_default()
 }
 
 #[wasm_bindgen_test]

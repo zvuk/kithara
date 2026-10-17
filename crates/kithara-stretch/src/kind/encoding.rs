@@ -5,9 +5,9 @@ use super::StretchKind;
 impl From<StretchKind> for u8 {
     fn from(kind: StretchKind) -> Self {
         match kind {
-            #[cfg(feature = "stretch-signalsmith")]
+            #[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
             StretchKind::Signalsmith => 1,
-            #[cfg(feature = "stretch-bungee")]
+            #[cfg(all(feature = "stretch-bungee", not(target_arch = "wasm32")))]
             StretchKind::Bungee => 2,
             #[cfg(feature = "stretch-glide")]
             StretchKind::Glide => 3,
@@ -22,9 +22,9 @@ impl From<StretchKind> for u8 {
 impl From<u8> for StretchKind {
     fn from(value: u8) -> Self {
         match value {
-            #[cfg(feature = "stretch-signalsmith")]
+            #[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
             1 => Self::Signalsmith,
-            #[cfg(feature = "stretch-bungee")]
+            #[cfg(all(feature = "stretch-bungee", not(target_arch = "wasm32")))]
             2 => Self::Bungee,
             #[cfg(feature = "stretch-glide")]
             3 => Self::Glide,

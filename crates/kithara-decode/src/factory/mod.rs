@@ -17,5 +17,7 @@ mod segment;
 mod software;
 pub use config::{DecoderConfig, DecoderResamplerConfig};
 pub use inner::{DecoderBackend, DecoderFactory};
+#[cfg(apple_backend)]
+pub(crate) use probe::wav_data_range;
 #[cfg(feature = "symphonia")]
-pub(crate) use probe::skip_id3_tags;
+pub(crate) use probe::{skip_id3_tags, sniff_container_from_source, sniff_wav_format};

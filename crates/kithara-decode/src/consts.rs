@@ -68,6 +68,7 @@ pub(crate) const BOX_NAME: [u8; 4] = *b"name";
 pub(crate) const BOX_STBL: [u8; 4] = *b"stbl";
 pub(crate) const BOX_STSD: [u8; 4] = *b"stsd";
 pub(crate) const BOX_TRAK: [u8; 4] = *b"trak";
+pub(crate) const BOX_TKHD: [u8; 4] = *b"tkhd";
 pub(crate) const BOX_UDTA: [u8; 4] = *b"udta";
 
 /// Hard ceiling for `elst` entries to keep adversarial inputs

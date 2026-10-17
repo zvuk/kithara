@@ -5,9 +5,12 @@ use std::{
 };
 
 use kithara_platform::sync::Arc;
+use kithara_stream::{NotReadyCause, PendingReason, ReaderControl, StreamPending};
 use symphonia_core::io::MediaSource;
 
 /// Adapter that wraps a Read + Seek source as a Symphonia [`MediaSource`].
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 pub(crate) struct ReadSeekAdapter<R> {
     /// Dynamic byte length. Updated externally via `Arc<AtomicU64>`.
     /// 0 means unknown (returns None from `byte_len()`).
@@ -25,6 +28,10 @@ pub(crate) struct ReadSeekAdapter<R> {
     seek_enabled: Arc<AtomicBool>,
     inner: R,
     range: Option<Range<u64>>,
+    /// The source error follows the consumed prefix already returned by this adapter.
+    read_error: Option<io::Error>,
+    #[field(with, option_set_some, vis = "pub(crate)")]
+    control: Option<ReaderControl>,
 }
 
 impl<R: Seek> ReadSeekAdapter<R> {
@@ -50,6 +57,8 @@ impl<R: Seek> ReadSeekAdapter<R> {
             inner,
             byte_pos: Arc::new(AtomicU64::new(initial_pos)),
             range: None,
+            read_error: None,
+            control: None,
         }
     }
 
@@ -61,6 +70,7 @@ impl<R: Seek> ReadSeekAdapter<R> {
             ));
         }
         self.inner.seek(SeekFrom::Start(range.start))?;
+        self.read_error = None;
         self.byte_pos.store(range.start, Ordering::Release);
         self.range = Some(range);
         Ok(self)
@@ -99,11 +109,100 @@ impl<R: Read> Read for ReadSeekAdapter<R> {
             .min(buf.len())
         });
         let buf = &mut buf[..available];
-        let n = self.inner.read(buf)?;
-        if n > 0 {
-            self.byte_pos.fetch_add(n as u64, Ordering::Release);
+        if buf.is_empty() {
+            return Ok(0);
         }
-        Ok(n)
+        if let Some(error) = self.read_error.take() {
+            return Err(error);
+        }
+        let mut read = 0;
+        while read < buf.len() {
+            if self
+                .control
+                .as_ref()
+                .is_some_and(ReaderControl::is_cancelled)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    PendingReason::SessionRetired,
+                ));
+            }
+            let readiness = self
+                .control
+                .as_ref()
+                .map(|control| (control, control.revision()));
+            match self.inner.read(&mut buf[read..]) {
+                Ok(0) => break,
+                Ok(len) => {
+                    read += len;
+                    if let Some(control) = &self.control {
+                        control.clear_pending();
+                    }
+                }
+                Err(error) => {
+                    if resume_pending_read(readiness, &error)? {
+                        continue;
+                    }
+                    if read == 0 {
+                        return Err(error);
+                    }
+                    self.read_error = Some(error);
+                    break;
+                }
+            }
+        }
+        if read > 0 {
+            self.byte_pos.fetch_add(read as u64, Ordering::Release);
+        }
+        Ok(read)
+    }
+}
+
+fn resume_pending_read(
+    readiness: Option<(&ReaderControl, u64)>,
+    error: &io::Error,
+) -> io::Result<bool> {
+    if let Some((control, revision)) = readiness {
+        if let Some(reason) = pending_input(error) {
+            control.set_pending(reason);
+            if !control.wait(revision) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    PendingReason::SessionRetired,
+                ));
+            }
+            return Ok(true);
+        }
+        if error.kind() == io::ErrorKind::Interrupted
+            && error
+                .get_ref()
+                .is_none_or(|inner| !inner.is::<PendingReason>())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn pending_input(error: &io::Error) -> Option<PendingReason> {
+    if !matches!(
+        error.kind(),
+        io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+    ) {
+        return None;
+    }
+    let reason = error.get_ref().and_then(|inner| {
+        inner
+            .downcast_ref::<StreamPending>()
+            .map(StreamPending::reason)
+            .or_else(|| inner.downcast_ref::<PendingReason>().copied())
+    });
+    match reason {
+        Some(reason @ (PendingReason::NotReady(_) | PendingReason::Retry)) => Some(reason),
+        None if error.kind() == io::ErrorKind::WouldBlock => {
+            Some(PendingReason::NotReady(NotReadyCause::SourcePending))
+        }
+        _ => None,
     }
 }
 
@@ -123,10 +222,16 @@ impl<R: Seek> Seek for ReadSeekAdapter<R> {
                 io::Error::new(io::ErrorKind::InvalidInput, "seek outside input range")
             })?;
             let physical = self.inner.seek(SeekFrom::Start(target))?;
+            if !matches!(pos, SeekFrom::Current(0)) {
+                self.read_error = None;
+            }
             self.byte_pos.store(physical, Ordering::Release);
             return Ok(physical - range.start);
         }
         let new_pos = self.inner.seek(pos)?;
+        if !matches!(pos, SeekFrom::Current(0)) {
+            self.read_error = None;
+        }
         self.byte_pos.store(new_pos, Ordering::Release);
         Ok(new_pos)
     }
@@ -150,10 +255,118 @@ impl<R: Read + Seek + Send + Sync> MediaSource for ReadSeekAdapter<R> {
 mod tests {
     use std::io::Cursor;
 
+    use kithara_stream::PendingReason;
     use kithara_test_utils::kithara;
     use symphonia_core::io::MediaSource;
 
     use super::*;
+
+    struct PrefixErrorSource {
+        cursor: Cursor<Vec<u8>>,
+        error: Option<io::Error>,
+    }
+
+    impl Read for PrefixErrorSource {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.cursor.position() == 3
+                && let Some(error) = self.error.take()
+            {
+                return Err(error);
+            }
+            let len = buf.len().min(3);
+            self.cursor.read(&mut buf[..len])
+        }
+    }
+
+    impl Seek for PrefixErrorSource {
+        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+            self.cursor.seek(position)
+        }
+    }
+
+    fn prefix_error_adapter(
+        controlled: bool,
+        terminal: bool,
+    ) -> ReadSeekAdapter<PrefixErrorSource> {
+        let error = if terminal {
+            io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                io::Error::from_raw_os_error(5),
+            )
+        } else {
+            io::Error::new(io::ErrorKind::WouldBlock, PendingReason::Retry)
+        };
+        let source = PrefixErrorSource {
+            cursor: Cursor::new(vec![1, 2, 3, 4, 5, 6]),
+            error: Some(error),
+        };
+        let adapter = ReadSeekAdapter::new(source, None, true);
+        if controlled {
+            adapter.with_control(ReaderControl::new(None))
+        } else {
+            adapter
+        }
+    }
+
+    #[kithara::test]
+    fn short_reads_preserve_the_consumed_prefix_and_exact_deferred_error() {
+        for (controlled, terminal) in [(false, false), (false, true), (true, true)] {
+            for reposition in [false, true] {
+                let mut adapter = prefix_error_adapter(controlled, terminal);
+                let expected_error = adapter.inner.error.as_ref().expect("source error");
+                let expected_kind = expected_error.kind();
+                let expected_identity =
+                    std::ptr::from_ref(expected_error.get_ref().expect("owned error"));
+                let mut bytes = [0; 6];
+                assert_eq!(adapter.read(&mut bytes).expect("consumed prefix"), 3);
+                assert_eq!(&bytes[..3], &[1, 2, 3]);
+                assert_eq!(adapter.byte_pos_handle().load(Ordering::Acquire), 3);
+                assert_eq!(adapter.read(&mut []).expect("empty read"), 0);
+                assert!(adapter.seek(SeekFrom::Current(-4)).is_err());
+                assert_eq!(adapter.stream_position().expect("observed position"), 3);
+                if reposition {
+                    assert_eq!(adapter.seek(SeekFrom::Start(0)).expect("reposition"), 0);
+                    assert_eq!(adapter.read(&mut bytes).expect("repositioned bytes"), 6);
+                    assert_eq!(bytes, [1, 2, 3, 4, 5, 6]);
+                } else {
+                    let error = adapter.read(&mut bytes).expect_err("deferred source error");
+                    assert_eq!(error.kind(), expected_kind);
+                    assert!(std::ptr::eq(
+                        expected_identity,
+                        error.get_ref().expect("same owned error")
+                    ));
+                    if !terminal {
+                        assert_eq!(
+                            error
+                                .get_ref()
+                                .and_then(|error| error.downcast_ref::<PendingReason>()),
+                            Some(&PendingReason::Retry)
+                        );
+                    }
+                    assert_eq!(adapter.byte_pos_handle().load(Ordering::Acquire), 3);
+                    assert_eq!(adapter.read(&mut bytes).expect("remaining bytes"), 3);
+                    assert_eq!(&bytes[..3], &[4, 5, 6]);
+                }
+                assert_eq!(adapter.read(&mut bytes).expect("physical EOF"), 0);
+            }
+            let mut adapter = prefix_error_adapter(controlled, terminal);
+            let expected_error = adapter.inner.error.as_ref().expect("source error");
+            let expected_kind = expected_error.kind();
+            let expected_identity =
+                std::ptr::from_ref(expected_error.get_ref().expect("owned error"));
+            adapter.seek(SeekFrom::Start(3)).expect("error position");
+            let mut bytes = [0; 6];
+            let error = adapter.read(&mut bytes).expect_err("error before progress");
+            assert_eq!(error.kind(), expected_kind);
+            assert!(std::ptr::eq(
+                expected_identity,
+                error.get_ref().expect("same owned error")
+            ));
+            assert_eq!(adapter.byte_pos_handle().load(Ordering::Acquire), 3);
+            assert_eq!(adapter.read(&mut bytes).expect("released source"), 3);
+            assert_eq!(&bytes[..3], &[4, 5, 6]);
+        }
+    }
 
     #[kithara::test]
     fn ranged_input_keeps_seek_and_read_evidence_in_source_coordinates() {

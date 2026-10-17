@@ -1,281 +1,167 @@
-use std::{collections::HashMap, mem, num::NonZeroU32};
+use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
-use kithara_command::Live;
-use kithara_platform::sync::{Arc, Mutex};
-use kithara_play::{PlayError, player::PlayerControlSource};
-use kithara_sync::{
-    GroupState, SyncAdmission, SyncCapability, SyncError, SyncOperation, SyncRejected,
-};
-use kithara_warp::BeatGridId;
+use kithara_command::{Live, ScopedConfig};
+use kithara_platform::{maybe_send::MaybeSend, sync::Arc};
 
-use super::super::{HeldPlayer, Host, HostOwned, owner::SessionRuntime};
+#[cfg(feature = "offline")]
+use crate::host::{
+    HostConfig,
+    offline::{OfflineRuntime, StartedOffline},
+};
 use crate::{
-    HostSettings, PlayerMember,
+    HostCore, HostOwner, HostSettings, PlayError,
     rt::SessionOutput,
-    session::{HostDispatcher, HostProtocol, RootView, web::WebSessionState},
-    wasm::HostRoute,
+    session::{HostDispatcher, HostProtocol, HostRoot, RootView, web::WebSessionState},
+    wasm::{HostReceiver, HostRoute, HostSender},
 };
-type Resident = Box<dyn FnMut() -> Result<(), PlayError>>;
-type StartedPlatform<S> = (Arc<dyn HostDispatcher<S>>, Platform<S>);
 
-pub(in crate::host) struct Platform<S> {
-    remote_routes: Mutex<Vec<Arc<HostRoute<S>>>>,
-    remote_residents: Option<HashMap<BeatGridId, Resident>>,
-    web_state: Option<WebSessionState<S>>,
+pub(in crate::host) struct Platform<S, O: HostOwner<S>> {
+    pub(in crate::host) web_state: Option<WebSessionState<O>>,
+    web_route: Option<Arc<HostRoute<O::Command>>>,
+    marker: PhantomData<fn() -> S>,
 }
 
-impl<S> Platform<S> {
-    pub(in crate::host) fn close(platform: &mut Self, host_id: BeatGridId) {
-        for route in mem::take(&mut *platform.remote_routes.lock()) {
-            route.close();
-        }
-        if let Some(residents) = platform.remote_residents.take()
-            && !residents.is_empty()
-        {
-            let resident_count = residents.len();
-            for resident in residents.into_values() {
-                mem::forget(resident);
-            }
-            tracing::error!(
-                ?host_id,
-                resident_count,
-                "remote wasm Host dropped before its players detached; retaining residents"
-            );
-        }
-    }
+type StartedPlatform<S, O> = (
+    Arc<dyn HostDispatcher<<O as HostOwner<S>>::Command>>,
+    Platform<S, O>,
+);
 
-    fn close_resident(&mut self, id: BeatGridId) -> Result<(), PlayError> {
-        let resident = self
-            .remote_residents
-            .as_mut()
-            .and_then(|residents| residents.get_mut(&id))
-            .ok_or_else(|| PlayError::Internal("attached wasm player lost its owner".into()))?;
-        resident()
-    }
-
-    fn insert_resident(
-        &mut self,
-        id: BeatGridId,
-        resident: Resident,
-    ) -> Result<Option<Resident>, PlayError> {
-        self.remote_residents
-            .as_mut()
-            .ok_or_else(|| {
-                PlayError::Internal("wasm Worker resident registry is unavailable".into())
-            })
-            .map(|residents| residents.insert(id, resident))
-    }
-
-    #[cfg(feature = "offline")]
-    pub(in crate::host) fn offline() -> Result<Self, PlayError> {
-        if kithara_platform::thread::is_main_thread() {
-            return Err(PlayError::SessionCategoryUnsupported {
-                reason: "offline Host must run in a Web Worker".to_owned(),
-            });
-        }
-        Ok(Self::remote())
-    }
-
-    pub(in crate::host) fn owner(web_state: WebSessionState<S>) -> Self {
-        Self {
-            web_state: Some(web_state),
-            remote_routes: Mutex::default(),
-            remote_residents: None,
-        }
-    }
-
+impl<S, O: HostOwner<S>> Platform<S, O> {
     pub(in crate::host) fn realtime(
-        group: GroupState<PlayerMember>,
+        root: HostRoot,
         view: RootView,
-        _output_block_frames: Option<NonZeroU32>,
+        _block: Option<NonZeroU32>,
+        channel_config: ScopedConfig,
         output: SessionOutput,
         settings: Live<HostSettings, HostProtocol>,
-    ) -> Result<StartedPlatform<S>, PlayError>
+        layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
+    ) -> Result<StartedPlatform<S, O>, PlayError>
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        let (dispatcher, web_state) =
-            crate::session::web::spawn::<S>(group, view, output, settings)?;
-        Ok((dispatcher, Self::owner(web_state)))
-    }
-
-    fn release_on_session_gone<T>(
-        &mut self,
-        id: BeatGridId,
-        result: Result<T, PlayError>,
-    ) -> Result<T, PlayError> {
-        match result {
-            Err(error @ PlayError::SessionGone { .. }) => {
-                self.release_resident(id)?;
-                Err(error)
-            }
-            result => result,
-        }
-    }
-
-    fn release_resident(&mut self, id: BeatGridId) -> Result<(), PlayError> {
-        let resident = self
-            .remote_residents
-            .as_mut()
-            .and_then(|residents| residents.remove(&id))
-            .ok_or_else(|| {
-                PlayError::Internal("detached wasm player lost its Worker resident".into())
-            })?;
-        drop(resident);
-        Ok(())
-    }
-
-    fn remote() -> Self {
-        Self {
-            web_state: None,
-            remote_routes: Mutex::default(),
-            remote_residents: Some(HashMap::new()),
-        }
-    }
-
-    fn require_remote(&self) -> Result<(), PlayError> {
-        if self.remote_residents.is_some() {
-            return Ok(());
-        }
-        Err(PlayError::Internal(
-            "wasm players must be inserted from their owning Worker".into(),
+        let (dispatcher, state, route) = crate::session::web::spawn::<S, O>(
+            root,
+            view,
+            channel_config,
+            output,
+            settings,
+            layer,
+        )?;
+        Ok((
+            dispatcher,
+            Self {
+                web_state: Some(state),
+                web_route: Some(route),
+                marker: PhantomData,
+            },
         ))
     }
-
-    pub(in crate::host) fn transact(
-        _platform: &Self,
-        dispatcher: &Arc<dyn HostDispatcher<S>>,
-        operation: SyncOperation<PlayerMember>,
-    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-        if matches!(&operation, SyncOperation::Topology { .. }) {
-            return Err(SyncRejected::new(
-                SyncError::CapabilityUnavailable {
-                    capability: SyncCapability::Topology,
-                },
-                operation,
-            ));
-        }
-        dispatcher.transact(operation)
+    #[cfg(feature = "offline")]
+    pub(in crate::host) fn offline(
+        config: HostConfig<S>,
+        root: HostRoot,
+        view: RootView,
+        layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
+    ) -> Result<StartedOffline<S, O>, PlayError>
+    where
+        S: HasPool<f32> + Send + Sync + 'static,
+    {
+        let (dispatcher, runtime) = OfflineRuntime::new(config, root, view, layer)?;
+        Ok((
+            dispatcher,
+            Self {
+                web_state: None,
+                web_route: None,
+                marker: PhantomData,
+            },
+            runtime,
+        ))
     }
 }
 
-impl<S> Host<S>
+impl<S> crate::Host<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    /// Attaches and transfers one fully configured player or decorator into
-    /// this Host, then prepares its graph and initial slot before returning.
-    /// Audio-device setup may block; musical playback remains stopped.
-    ///
-    /// # Errors
-    /// Returns an error when binding, attachment, or graph preparation fails.
-    pub fn insert<P>(&mut self, mut player: P) -> Result<HostOwned<P>, PlayError>
-    where
-        P: PlayerControlSource<Schema = S>,
-    {
-        self.session.platform().require_remote()?;
-        let (attachment, control) = self.bind_player(&mut player)?;
-        let grid_id = attachment.id();
-        self.attach_member(PlayerMember::new(
-            attachment,
-            HeldPlayer::new(player.host_level()),
-        ))?;
-        let resident: Resident = Box::new(move || player.close());
-        if let Some(replaced) = self
-            .session
-            .platform_mut()
-            .insert_resident(grid_id, resident)?
-        {
-            mem::forget(replaced);
-            return Err(PlayError::Internal(
-                "wasm player residence changed during insertion".into(),
-            ));
-        }
-        let owned = self.owned::<P>(grid_id, control);
-        if let Err(error) = P::prepare_control(owned.control()) {
-            self.remove(&owned)?;
-            return Err(error);
-        }
-        Ok(owned)
+    pub(crate) fn browser_channel(&self) -> Result<(HostSender<S>, HostReceiver<S>), PlayError> {
+        let platform = self._session.platform();
+        let state = platform.web_state.as_ref().ok_or_else(|| {
+            PlayError::Internal("worker routing requires a local browser host".to_owned())
+        })?;
+        let route = platform.web_route.as_ref().ok_or(PlayError::Closed)?;
+        Ok((
+            HostSender {
+                id: self.id,
+                root_view: self.root_view.clone(),
+                postbox: route.postbox.clone(),
+            },
+            HostReceiver {
+                state: state.clone(),
+                route: route.clone(),
+            },
+        ))
     }
 
-    pub(crate) fn register_remote_route(&self, route: Arc<HostRoute<S>>) {
-        self.session.platform().remote_routes.lock().push(route);
-    }
-
-    pub(crate) fn remote(
-        id: BeatGridId,
-        root_view: RootView,
-        dispatcher: Arc<dyn HostDispatcher<S>>,
-    ) -> Self {
+    pub(crate) fn browser_remote(sender: HostSender<S>) -> Self {
         Self {
-            id,
-            root_view,
-            dispatcher,
+            dispatcher: crate::session::web::remote::<S, HostCore<S>>(sender.postbox),
+            id: sender.id,
+            root_view: sender.root_view,
+            _session: crate::host::owner::SessionRuntime::Realtime {
+                _platform: Platform {
+                    web_state: None,
+                    web_route: None,
+                    marker: PhantomData,
+                },
+            },
             owns_session: false,
-            session: SessionRuntime::realtime(Platform::remote()),
         }
-    }
-
-    pub(crate) fn remote_identity(&self) -> (BeatGridId, RootView) {
-        (self.id, self.root_view.clone())
-    }
-
-    /// Closes the lower runtime on the caller thread, then detaches its
-    /// canonical member after graph unregistration has completed.
-    ///
-    /// # Errors
-    /// Returns an error when close or canonical detachment fails.
-    pub fn remove<P>(&mut self, player: &HostOwned<P>) -> Result<(), PlayError>
-    where
-        P: PlayerControlSource<Schema = S>,
-    {
-        self.validate_removal(player)?;
-        self.remove_resident(player.id())
-    }
-
-    fn remove_resident(&mut self, id: BeatGridId) -> Result<(), PlayError> {
-        let close_result = self.session.platform_mut().close_resident(id);
-        self.session
-            .platform_mut()
-            .release_on_session_gone(id, close_result)?;
-        let detach_result = self.detach_member(id);
-        self.session
-            .platform_mut()
-            .release_on_session_gone(id, detach_result)?;
-        self.session.platform_mut().release_resident(id)
-    }
-
-    pub(crate) fn web_state(&self) -> Option<&WebSessionState<S>> {
-        self.session.platform().web_state.as_ref()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, num::NonZeroU32, rc::Rc};
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-    use delegate::delegate;
-    use kithara_audio::ConsumerWakeMode;
-    use kithara_platform::sync::Arc;
-    use kithara_play::{PlayError, SessionDispatcher};
-    use kithara_sync::{
-        GroupState, SyncAdmission, SyncGroup, SyncMember, SyncOperation, TopologyOperation,
+    use std::{
+        cell::{Cell, RefCell},
+        num::NonZeroU32,
+        rc::Rc,
+        task::Waker,
     };
-    use kithara_test_utils::{bufpool::TestPools, kithara};
-    use kithara_warp::BeatGridId;
 
-    use super::{Host, Platform, Resident, SessionRuntime};
-    use crate::{
-        HostSettings, PlayerMember,
-        host::owner::SessionRoot,
-        session::{
-            HostCmd, HostDispatcher, HostReply, Reply,
-            protocol::{HostDispatchError, SyncCmd},
-            tests::graph::{FixtureSession, fixture_member},
+    use kithara_command::Ticket;
+    use kithara_platform::{
+        sync::{Arc, Mutex},
+        time,
+        tokio::{
+            select,
+            task::{JoinHandle, spawn},
         },
     };
+    use kithara_play::{
+        DeckControl, DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, PlayWorkerConfig,
+        TrackReceipt,
+    };
+    use kithara_render::rt::DeckMixerConfig;
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
+
+    use crate::{
+        Host, HostCommand, HostCore, HostOwned, consts,
+        session::{
+            offline::mock,
+            protocol::{HostDispatchError, HostDispatcher, HostPostbox, not_taken},
+            tests::graph::state_for,
+            web::WebSessionState,
+        },
+        wasm::{HostRoute, HostSender},
+    };
+
+    type Command = HostCommand<TestPools, dyn HostedDeck<TestPools>>;
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Outcome {
@@ -284,175 +170,306 @@ mod tests {
         OtherError,
     }
 
-    struct ResidentProbe {
+    /// A deck that closes with a chosen outcome and counts its drains, ticks
+    /// and drops.
+    struct DeckProbe {
         close: Outcome,
+        detach: Outcome,
+        drains: Rc<Cell<usize>>,
         drops: Rc<RefCell<usize>>,
+        ticks: Rc<Cell<usize>>,
+        waker: Rc<RefCell<Option<Waker>>>,
+        worker: PlayWorker<TestPools>,
     }
 
-    impl Drop for ResidentProbe {
+    impl Drop for DeckProbe {
         fn drop(&mut self) {
             *self.drops.borrow_mut() += 1;
         }
     }
 
-    impl ResidentProbe {
-        fn close(&mut self) -> Result<(), PlayError> {
-            match self.close {
+    impl Outcome {
+        fn result(self) -> Result<(), PlayError> {
+            match self {
                 Outcome::Ok => Ok(()),
                 Outcome::SessionGone => Err(PlayError::SessionGone {
-                    reason: "fixture resident close",
+                    reason: "fixture deck close",
                 }),
-                Outcome::OtherError => {
-                    Err(PlayError::Internal("fixture resident close failed".into()))
-                }
+                Outcome::OtherError => Err(PlayError::Internal("fixture deck close failed".into())),
             }
         }
     }
 
-    fn resident(close: Outcome, drops: Rc<RefCell<usize>>) -> Resident {
-        let mut probe = ResidentProbe { close, drops };
-        Box::new(move || probe.close())
+    impl DeckControl for DeckProbe {
+        type Control = Rc<RefCell<Option<Waker>>>;
+
+        fn control(&self) -> Self::Control {
+            Rc::clone(&self.waker)
+        }
+    }
+
+    impl HostedDeck<TestPools> for DeckProbe {
+        fn worker(&self) -> Option<&PlayWorker<TestPools>> {
+            Some(&self.worker)
+        }
+
+        fn mixer_config(&self) -> DeckMixerConfig {
+            DeckMixerConfig::default()
+        }
+
+        fn close(&mut self, _out: &mut Outbox<'_, TestPools>) -> Result<(), PlayError> {
+            self.close.result()?;
+            self.detach.result()
+        }
+
+        fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {
+            self.drains.set(self.drains.get() + 1);
+        }
+
+        fn hold(&mut self, waker: Waker) {
+            *self.waker.borrow_mut() = Some(waker);
+        }
+
+        fn release(&mut self) {
+            self.waker.borrow_mut().take();
+        }
+
+        fn tick(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {
+            self.ticks.set(self.ticks.get() + 1);
+        }
+
+        fn settle(
+            &mut self,
+            _receipt: TrackReceipt<'_, TestPools>,
+            _pass: DeckPass<'_>,
+            _out: &mut Outbox<'_, TestPools>,
+        ) {
+        }
     }
 
     struct Dispatcher {
-        session: FixtureSession,
-        detach: Outcome,
-        root: RefCell<GroupState<PlayerMember>>,
+        postbox: HostPostbox<Command>,
+        state: WebSessionState<HostCore<TestPools>>,
+        route: Arc<HostRoute<Command>>,
+        clock: JoinHandle<()>,
     }
 
-    impl SessionDispatcher<TestPools> for Dispatcher {
-        delegate! {
-            to &self.session {
-                #[through(SessionDispatcher::<TestPools>)]
-                fn exec(&self, cmd: kithara_play::Cmd<TestPools>) -> Result<Reply, PlayError>;
-                #[through(SessionDispatcher::<TestPools>)]
-                fn consumer_wake_mode(&self) -> ConsumerWakeMode;
-            }
+    impl Drop for Dispatcher {
+        fn drop(&mut self) {
+            self.clock.abort();
+            self.route.close();
+            self.state.lock().take();
         }
     }
 
-    impl HostDispatcher<TestPools> for Dispatcher {
-        fn exec_host(
-            &self,
-            cmd: HostCmd<TestPools>,
-        ) -> Result<HostReply, HostDispatchError<TestPools>> {
-            let HostCmd::Sync(SyncCmd::TransactCurrent(operations)) = cmd else {
-                panic!("unexpected fixture Host command")
-            };
-            match self.detach {
-                Outcome::SessionGone => Err(HostDispatchError::before_send(
-                    PlayError::SessionGone {
-                        reason: "fixture detach",
-                    },
-                    HostCmd::Sync(SyncCmd::TransactCurrent(operations)),
-                )),
-                Outcome::OtherError => Ok(HostReply::Err(PlayError::Internal(
-                    "fixture detach failed".into(),
-                ))),
-                Outcome::Ok => {
-                    let mut root = self.root.borrow_mut();
-                    let base = root.topology().expect("fixture topology").stamp();
-                    Ok(HostReply::Admission(
-                        root.transact(SyncOperation::Topology { base, operations }),
-                    ))
-                }
-            }
+    impl HostDispatcher<Command> for Dispatcher {
+        fn dispatch(&self, cmd: Command) -> Result<Ticket<PlayError>, HostDispatchError> {
+            let ticket = self.postbox.post(cmd).map_err(not_taken)?;
+            self.route
+                .drain::<TestPools, HostCore<TestPools>>(&self.state);
+            Ok(ticket)
         }
+
+        fn shutdown(&self) {}
     }
 
-    fn fixture(
-        close: Outcome,
-        detach: Outcome,
-    ) -> (Host<TestPools>, BeatGridId, Rc<RefCell<usize>>) {
+    struct Fixture {
+        host: Host<TestPools>,
+        deck: HostOwned<DeckProbe>,
+        owner: Arc<Dispatcher>,
+        state: WebSessionState<HostCore<TestPools>>,
+        route: Arc<HostRoute<Command>>,
+        drains: Rc<Cell<usize>>,
+        drops: Rc<RefCell<usize>>,
+        ticks: Rc<Cell<usize>>,
+    }
+
+    fn fixture(close: Outcome, detach: Outcome) -> Fixture {
         let sample_rate = NonZeroU32::new(44_100).expect("fixture sample rate");
-        let SessionRoot {
-            id: host_id,
-            group: mut root,
-            view: root_view,
-        } = Host::<TestPools>::session_root(
-            HostSettings::builder().sample_rate(sample_rate).build(),
-        )
-        .expect("fixture Host session");
-        let resident_id = BeatGridId::allocate().expect("fixture resident grid id");
-        let base = root.topology().expect("fixture root topology").stamp();
-        let admission = root
-            .transact(SyncOperation::Topology {
-                base,
-                operations: Box::new([TopologyOperation::Attach {
-                    member: SyncMember::Group {
-                        alignment: None,
-                        group: Box::new(fixture_member(resident_id, sample_rate)),
-                    },
-                }]),
-            })
-            .expect("fixture resident attachment");
-        assert!(matches!(admission, SyncAdmission::TopologyChanged { .. }));
-
-        let dispatcher: Arc<dyn HostDispatcher<TestPools>> = Arc::new(Dispatcher {
-            detach,
-            session: FixtureSession,
-            root: RefCell::new(root),
+        let session = state_for(sample_rate, mock::start);
+        let root_view = session.root_view.clone();
+        let id = session.root.id();
+        let (postbox, mailbox) = kithara_command::mailbox();
+        let route = Arc::new(HostRoute::new(postbox.clone(), mailbox));
+        let state = Arc::new(Mutex::new(Some(HostCore::new(session, route.wake.clone()))));
+        let owner = Arc::new(Dispatcher {
+            postbox: postbox.clone(),
+            state: state.clone(),
+            route: route.clone(),
+            clock: spawn(clock(state.clone(), route.clone())),
         });
-        let drops = Rc::new(RefCell::new(0));
-        let mut platform = Platform::remote();
-        let replaced = platform
-            .insert_resident(resident_id, resident(close, Rc::clone(&drops)))
-            .expect("fixture resident registry");
-        assert!(replaced.is_none());
-        let host = Host {
+        let mut host = Host::browser_remote(HostSender {
+            id,
             root_view,
-            dispatcher,
-            id: host_id,
-            owns_session: false,
-            session: SessionRuntime::realtime(platform),
+            postbox,
+        });
+        host.dispatcher = owner.clone();
+        let drops = Rc::default();
+        let probe = DeckProbe {
+            close,
+            detach,
+            drains: Rc::default(),
+            drops: Rc::clone(&drops),
+            ticks: Rc::default(),
+            waker: Rc::default(),
+            worker: PlayWorker::new(PlayWorkerConfig::builder(pools()).build()),
         };
-        (host, resident_id, drops)
+        let drains = Rc::clone(&probe.drains);
+        let ticks = Rc::clone(&probe.ticks);
+        let deck = host.insert(probe).expect("fixture deck registration");
+        ticks.set(0);
+        Fixture {
+            host,
+            deck,
+            owner,
+            state,
+            route,
+            drains,
+            drops,
+            ticks,
+        }
     }
 
-    #[kithara::test(wasm, flash(false))]
-    fn successful_remove_releases_resident() {
-        let (mut host, resident, drops) = fixture(Outcome::Ok, Outcome::Ok);
+    #[kithara::hang_watchdog]
+    async fn clock(state: WebSessionState<HostCore<TestPools>>, route: Arc<HostRoute<Command>>) {
+        loop {
+            hang_tick!();
+            select! {
+                _ = route.wake.notified() => {},
+                _ = time::sleep(consts::SESSION_PUMP_INTERVAL) => {},
+            }
+            if !route.drain::<TestPools, HostCore<TestPools>>(&state) {
+                break;
+            }
+            hang_reset!();
+        }
+    }
 
-        host.remove_resident(resident).expect("remove resident");
+    #[kithara::test(flash(false))]
+    fn successful_remove_releases_the_deck() {
+        let Fixture {
+            mut host,
+            deck,
+            drops,
+            owner: _owner,
+            ..
+        } = fixture(Outcome::Ok, Outcome::Ok);
+
+        host.remove(&deck).expect("remove deck");
 
         assert_eq!(*drops.borrow(), 1);
     }
 
-    #[kithara::test(wasm, flash(false))]
+    #[kithara::test(flash(false))]
     #[case::closing(Outcome::SessionGone, Outcome::Ok)]
     #[case::detaching(Outcome::Ok, Outcome::SessionGone)]
-    fn session_gone_releases_resident(#[case] close: Outcome, #[case] detach: Outcome) {
-        let (mut host, resident, drops) = fixture(close, detach);
+    fn session_gone_releases_the_deck(#[case] close: Outcome, #[case] detach: Outcome) {
+        let Fixture {
+            mut host,
+            deck,
+            drops,
+            owner: _owner,
+            ..
+        } = fixture(close, detach);
 
         assert!(matches!(
-            host.remove_resident(resident),
+            host.remove(&deck),
             Err(PlayError::SessionGone { .. })
         ));
         assert_eq!(*drops.borrow(), 1);
     }
 
-    #[kithara::test(wasm, flash(false))]
-    fn other_errors_retain_resident() {
+    #[kithara::test(flash(false))]
+    #[kithara::hang_watchdog]
+    fn other_errors_retain_the_deck() {
         for (close, detach) in [
             (Outcome::OtherError, Outcome::Ok),
             (Outcome::Ok, Outcome::OtherError),
         ] {
-            let (mut host, resident, drops) = fixture(close, detach);
+            hang_tick!();
+            let Fixture {
+                mut host,
+                deck,
+                drops,
+                ticks,
+                owner: _owner,
+                ..
+            } = fixture(close, detach);
 
-            assert!(matches!(
-                host.remove_resident(resident),
-                Err(PlayError::Internal(_))
-            ));
+            assert!(matches!(host.remove(&deck), Err(PlayError::Internal(_))));
             assert_eq!(*drops.borrow(), 0);
-            assert!(
-                host.session
-                    .platform()
-                    .remote_residents
-                    .as_ref()
-                    .is_some_and(|residents| residents.contains_key(&resident))
-            );
+            assert!(host.root_view.holds(deck.id()));
+            assert_eq!(ticks.get(), 1, "the Host still holds the deck");
             drop(host);
             assert_eq!(*drops.borrow(), 0);
+            hang_reset!();
+        }
+    }
+
+    #[kithara::test]
+    fn a_wake_drains_a_worker_deck_before_it_returns() {
+        let Fixture {
+            deck,
+            drains,
+            state,
+            route,
+            owner: _owner,
+            ..
+        } = fixture(Outcome::Ok, Outcome::Ok);
+        let waker = deck.control().borrow().clone().expect("held deck waker");
+        assert_eq!(drains.get(), 1, "held, the deck runs what waited for it");
+
+        waker.wake_by_ref();
+        assert_eq!(drains.get(), 1, "the wake queues work for the owner");
+        route.drain::<TestPools, HostCore<TestPools>>(&state);
+
+        assert_eq!(
+            drains.get(),
+            2,
+            "a caller on the Worker reads its answer at the owner's next turn"
+        );
+        route.drain::<TestPools, HostCore<TestPools>>(&state);
+        assert_eq!(drains.get(), 2, "one wake queues exactly one drain");
+    }
+
+    #[kithara::test]
+    async fn the_worker_clock_ticks_a_held_deck_until_it_is_released() {
+        let Fixture {
+            mut host,
+            deck: released,
+            ticks,
+            owner: _owner,
+            ..
+        } = fixture(Outcome::Ok, Outcome::Ok);
+        wait_for_ticks(&ticks).await;
+        host.remove(&released)
+            .expect("the Host takes the deck back");
+        let at_release = ticks.get();
+        time::sleep(consts::SESSION_PUMP_INTERVAL * 3).await;
+
+        assert_eq!(
+            ticks.get(),
+            at_release,
+            "a released deck is no longer ticked"
+        );
+        drop(released);
+    }
+
+    #[kithara::hang_watchdog]
+    async fn wait_for_ticks(ticks: &Cell<usize>) {
+        let mut seen = ticks.get();
+        while ticks.get() < 2 {
+            hang_tick!();
+            time::timeout(
+                __hang_detector.remaining(),
+                time::sleep(consts::SESSION_PUMP_INTERVAL),
+            )
+            .await
+            .expect("owner clock watchdog");
+            if ticks.get() != seen {
+                seen = ticks.get();
+                hang_reset!();
+            }
         }
     }
 }

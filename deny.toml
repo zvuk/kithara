@@ -74,8 +74,8 @@ unknown-registry = "deny"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
-  # symphonia dev branch until 0.6 is released on crates.io
-  "https://github.com/pdeljanov/Symphonia.git",
+  # symphonia-core partial-read fix used by pending FLAC packet reads
+  "https://github.com/gerasim13/Symphonia",
   # bevy_seedling fork carrying firewheel-web-audio: a worklet thread stack size
   # and the firewheel 0.14 port, neither of which is released upstream
   "https://github.com/gerasim13/bevy_seedling",

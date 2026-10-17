@@ -16,10 +16,10 @@ use kithara::{
         CancelScope,
         sync::{Arc, Mutex},
         thread,
-        time::{Duration, Instant},
+        time::{Duration, WallInstant},
         tokio::task::spawn_blocking,
     },
-    play::Resource,
+    queue::Transition,
     record::{
         LiveRecorder, LiveRecordingConfig, LiveRecordingHandle, LiveRecordingReport,
         PartSinkFactory, RecordingConfig,
@@ -31,7 +31,8 @@ use kithara_app::recording::{AssetPartSink, AssetPartSinkError};
 use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     memory_asset_store,
-    offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
+    offline::{LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions},
+    waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::integration_fixtures::broadcast_tone;
 use url::Url;
@@ -69,46 +70,60 @@ impl PartSinkFactory for AssetFactory {
     }
 }
 
-fn tone_resource(broadcast_tone: Vec<f32>) -> Resource {
+fn tone_reader(broadcast_tone: Vec<f32>) -> TestPcmReader {
     let spec = AudioSpec::new(
         CHANNELS,
         NonZeroU32::new(OLD_RATE).expect("test rate is non-zero"),
     );
-    resource_from_reader(TestPcmReader::with_samples(spec, broadcast_tone))
+    TestPcmReader::with_samples(spec, broadcast_tone)
 }
 
 async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayer {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), OLD_RATE).await;
+    let id = TrackId::allocate();
+    let source = harness.pcm_deck(Box::new(tone_reader(broadcast_tone)));
+    let mut events = harness.player().subscribe();
     harness
-        .with_player(move |player| {
-            player.insert(tone_resource(broadcast_tone), TrackId::allocate(), None);
-            player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select tone");
+        .with_queue(move |queue| {
+            queue.append_with_id(id, source).expect("append tone");
+            queue.select(id, Transition::None).expect("select tone");
+            queue.play();
         })
         .await;
+    wait_for_loader_done_event(&mut events, harness.player(), id, LOCAL_LOAD_DEADLINE)
+        .await
+        .expect("tone is loaded before measuring the route handover");
     let _ = harness.render(BLOCK_FRAMES).await;
     let _ = harness.tick_and_drain().await;
     harness
 }
 
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn render_blocks(harness: &OfflinePlayer) -> Vec<f32> {
+    let _real_io = kithara::platform::flash::real_io();
     let mut rendered = Vec::with_capacity(BLOCKS_PER_RATE * BLOCK_FRAMES * usize::from(CHANNELS));
     for _ in 0..BLOCKS_PER_RATE {
+        hang_tick!();
         rendered.extend_from_slice(&harness.render(BLOCK_FRAMES).await);
         let _ = harness.tick_and_drain().await;
+        hang_reset!();
     }
     rendered
 }
 
+#[kithara_test_utils::kithara::hang_watchdog]
 fn wait_recording(handle: &LiveRecordingHandle) -> LiveRecordingReport {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = WallInstant::now() + Duration::from_secs(10);
     loop {
+        hang_tick!();
         if let Some(result) = handle.finish() {
             return result.expect("route recording finishes");
         }
-        assert!(Instant::now() < deadline, "route recording did not finish");
+        assert!(
+            WallInstant::now() < deadline,
+            "route recording did not finish"
+        );
         thread::yield_now();
     }
 }

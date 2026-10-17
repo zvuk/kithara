@@ -27,7 +27,7 @@ fn product(root: &Path, target: &str) -> Result<Features> {
             "kithara-ffi",
             "--no-default-features",
             "--features",
-            &device_features(BuildProfile::Release),
+            &device_features(BuildProfile::Release).replace("kithara-ffi/", ""),
             "--target",
             target,
             "--edges",

@@ -51,7 +51,8 @@ mod tests {
     }
 
     fn host() -> AppHost {
-        AppHost::new(HostConfig::builder().build()).expect("test host")
+        let pools = crate::pools::build(&crate::pools::PoolsSection::default()).expect("app pools");
+        AppHost::new(HostConfig::offline(pools).build()).expect("test host")
     }
 
     #[kithara::test]

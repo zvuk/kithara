@@ -31,12 +31,14 @@ kithara = { workspace = true, features = [
 ] }
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
+kithara-render = { workspace = true }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
 
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
 num-traits = { workspace = true }
+serde_json = { workspace = true }
 url = { workspace = true }
 
 [lints]

@@ -1,11 +1,15 @@
+//! Offline warp playback fixtures.
+
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::num::NonZeroU32;
 
 use kithara::{
-    audio::{AudioConfig, AudioControl, AudioSession, NoResamplerBackend},
+    audio::{AudioConfig, NoResamplerBackend},
     effects::AudioEffect,
+    events::TrackId,
     host::{HostConfig, HostSettings},
     platform::{
-        CancelToken,
         flash::real_io,
         sync::{
             Arc,
@@ -13,23 +17,26 @@ use kithara::{
         },
         time::{self, Duration, Instant},
     },
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig},
+    play::TrackConfig,
     queue::{Queue, QueueConfig, QueueEvent, TrackStatus, Transition},
     signal::AudioChunk,
-    stream::Stream,
     warp::{StretchKind, WarpConfig},
 };
 #[cfg(not(target_os = "android"))]
 use kithara_integration_tests::audio_artifact::write_audio_artifact;
 use kithara_integration_tests::{
-    bufpool_ext::{TestPools, pools},
+    bufpool_ext::pools,
     cochlea::{CochleaReport, assert_oracle_load_bearing, continuity_failures, percentile_f32},
     kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
-    offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
+    mock::InjectedFactory,
+    offline::{OfflinePlayer, OfflinePlayerOptions},
+    waits::wait_for_loader_done_event,
 };
-use kithara_test_fixtures::{assets::sine_wav_a440_6s, signal::goertzel_magnitude};
+use kithara_test_fixtures::{asset::Asset, assets::sine_wav_a440_6s, signal::goertzel_magnitude};
+use kithara_test_utils::kithara::hang_watchdog;
 use num_traits::ToPrimitive;
+#[cfg(not(target_os = "android"))]
 use serde::Serialize;
 
 use crate::consts::{
@@ -43,7 +50,6 @@ pub use crate::{
     active::run_active_stretch,
     fixtures::{marked_source_pcm, source_pcm},
 };
-
 struct LoadProbe {
     phase: AtomicU8,
 }
@@ -104,14 +110,17 @@ impl AudioEffect for BurstLoadEffect {
     /// host clock, so the contention the load player is here to create stays
     /// contention under flash as well as off it.
     #[kithara::flash(false)]
+    #[hang_watchdog]
     fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         self.blocks = self.blocks.saturating_add(1);
         if self.blocks.is_multiple_of(LOAD_INTERVAL_BLOCKS) {
             self.probe.observe_burst();
             let deadline = Instant::now() + LOAD_BURST;
             while Instant::now() < deadline {
+                hang_tick!();
                 std::hint::spin_loop();
             }
+            hang_reset!();
         }
         Some(chunk)
     }
@@ -278,16 +287,62 @@ fn audio_config(
         .build()
 }
 
-async fn wait_for_preload(audio: &RegisteredAudio<Stream<MemStream>, TestPools>) {
-    let gate = audio
-        .preload_gate()
-        .expect("worker-backed audio exposes a preload gate");
-    time::timeout(
-        Duration::from_secs(5),
-        gate.wait_for_epoch(audio.preload_epoch()),
+#[hang_watchdog]
+async fn passthrough_player(
+    asset: &Asset,
+    warp: WarpConfig,
+    effects: Vec<Box<dyn AudioEffect>>,
+) -> OfflinePlayer<InjectedFactory> {
+    let factory = InjectedFactory::default();
+    let player = OfflinePlayer::with_factory(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .warp(warp.clone())
+            .build(),
+        HostConfig::offline(pools())
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+                    .build(),
+            )
+            .build(),
+        factory.clone(),
     )
-    .await
-    .expect("audio preload gate must open");
+    .await;
+    let source = kithara_integration_tests::offline::asset_source(asset);
+    let load = kithara::play::mock::track_load(
+        audio_config(asset.bytes(), warp, effects),
+        Arc::from(source.as_str()),
+        player.worker().clone(),
+        NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"),
+        |worker, config, position, start, inbox| {
+            Box::pin(async move { worker.load(config, position, start, inbox).await })
+        },
+    );
+    let mut events = player.player().subscribe();
+    let id = TrackId::allocate();
+    factory.insert(id, load);
+    let id = player
+        .run(player.player(), move |queue| {
+            let id = queue
+                .append_with_id(id, source)
+                .expect("append explicit source fixture");
+            queue
+                .select(id, Transition::None)
+                .expect("select explicit source fixture");
+            id
+        })
+        .await;
+    let mut budget = Duration::ZERO;
+    hang_park!(|remaining: Duration| budget = remaining.min(Duration::from_secs(5)));
+    let loaded = wait_for_loader_done_event(&mut events, player.player(), id, budget).await;
+    hang_tick!();
+    loaded.expect("audio preload gate must open");
+    hang_reset!();
+    player
+        .run(player.player(), kithara::queue::QueueControl::play)
+        .await;
+    player
 }
 
 /// Render the source at the real device cadence and capture the result.
@@ -301,68 +356,23 @@ async fn wait_for_preload(audio: &RegisteredAudio<Stream<MemStream>, TestPools>)
 /// property of the machine. The burst load stays REAL: `BurstLoadEffect` spins
 /// on the producer thread, whose callstack never enters this guard.
 #[kithara::flash(true)]
+#[hang_watchdog]
 pub(super) async fn render_passthrough(
-    source: &[u8],
+    asset: &Asset,
     stretch: Option<(StretchKind, f32)>,
     with_load: bool,
 ) -> RealtimeCapture {
     let load_probe = Arc::new(LoadProbe::new());
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::builder(pools())
-            .cancel(CancelToken::never())
-            .build(),
-    );
-    let mut target_audio = worker
-        .load(audio_config(source, warp_config(stretch), Vec::new()))
-        .await
-        .expect("target audio construction");
-    wait_for_preload(&target_audio).await;
-    target_audio.preload().expect("target preload");
-
-    let mut load_audio = if with_load {
-        let mut audio = worker
-            .load(audio_config(
-                source,
+    let target = passthrough_player(asset, warp_config(stretch), Vec::new()).await;
+    let mut load = if with_load {
+        Some(
+            passthrough_player(
+                asset,
                 warp_config(None),
                 vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))],
-            ))
-            .await
-            .expect("load audio construction");
-        wait_for_preload(&audio).await;
-        audio.preload().expect("load preload");
-        Some(audio)
-    } else {
-        None
-    };
-
-    let target = OfflinePlayer::new(
-        HostConfig::offline(pools())
-            .settings(
-                HostSettings::builder()
-                    .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
-                    .build(),
             )
-            .build(),
-    )
-    .await;
-    target.set_fade_duration(0.0);
-    target
-        .load_and_fadein(resource_from_reader(target_audio))
-        .await;
-    let mut load = if let Some(audio) = load_audio.take() {
-        let player = OfflinePlayer::new(
-            HostConfig::offline(pools())
-                .settings(
-                    HostSettings::builder()
-                        .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
-                        .build(),
-                )
-                .build(),
+            .await,
         )
-        .await;
-        player.set_fade_duration(0.0);
-        player.load_and_fadein(resource_from_reader(audio)).await;
-        Some(player)
     } else {
         None
     };
@@ -372,13 +382,25 @@ pub(super) async fn render_passthrough(
     );
 
     let metrics_before_warmup = target.metrics();
-    for _ in 0..WARMUP_BLOCKS {
+    for block in 0..WARMUP_BLOCKS {
+        hang_tick!();
         let started = Instant::now();
         if let Some(player) = load.as_mut() {
             let _ = player.render(BLOCK_FRAMES).await;
         }
         let _ = target.render(BLOCK_FRAMES).await;
+        let metrics = target.metrics();
+        assert_eq!(
+            metrics.underruns(),
+            metrics_before_warmup.underruns(),
+            "no-SYNC warmup underrun: stretch={stretch:?}, with_load={with_load}, \
+             block={block}, output_frames={}..{}, before={metrics_before_warmup:?}, \
+             now={metrics:?}",
+            block * BLOCK_FRAMES,
+            (block + 1) * BLOCK_FRAMES,
+        );
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
+        hang_reset!();
     }
     let metrics_before_capture = target.metrics();
     let warmup_decode_errors = metrics_before_capture
@@ -389,13 +411,25 @@ pub(super) async fn render_passthrough(
         .saturating_sub(metrics_before_warmup.underruns());
     let mut pcm = Vec::with_capacity(CAPTURE_BLOCKS * BLOCK_FRAMES * usize::from(CHANNELS));
     load_probe.start_capture();
-    for _ in 0..CAPTURE_BLOCKS {
+    for block in 0..CAPTURE_BLOCKS {
+        hang_tick!();
         let started = Instant::now();
         if let Some(player) = load.as_mut() {
             let _ = player.render(BLOCK_FRAMES).await;
         }
         pcm.extend(target.render(BLOCK_FRAMES).await);
+        let metrics = target.metrics();
+        assert_eq!(
+            metrics.underruns(),
+            metrics_before_capture.underruns(),
+            "no-SYNC capture underrun: stretch={stretch:?}, with_load={with_load}, \
+             block={block}, output_frames={}..{}, before={metrics_before_capture:?}, \
+             now={metrics:?}",
+            (WARMUP_BLOCKS + block) * BLOCK_FRAMES,
+            (WARMUP_BLOCKS + block + 1) * BLOCK_FRAMES,
+        );
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
+        hang_reset!();
     }
     let load_observed_during_capture = load_probe.finish_capture();
     let metrics_after_capture = target.metrics();
@@ -413,9 +447,20 @@ pub(super) async fn render_passthrough(
         load_observed_during_capture,
     };
     if let Some(player) = load {
-        player.close().await;
+        let mut budget = Duration::ZERO;
+        hang_park!(|remaining| budget = remaining);
+        time::timeout(budget, player.close())
+            .await
+            .expect("load player shutdown watchdog");
+        hang_tick!();
+        hang_reset!();
     }
-    target.close().await;
+    let mut budget = Duration::ZERO;
+    hang_park!(|remaining| budget = remaining);
+    time::timeout(budget, target.close())
+        .await
+        .expect("player shutdown watchdog");
+    hang_tick!();
     capture
 }
 
@@ -424,6 +469,7 @@ pub(super) async fn render_passthrough(
 /// Carries the clock guard of [`render_passthrough`] for the same reason: the
 /// tick-and-render pair must not outrun the decode worker.
 #[kithara::flash(true)]
+#[hang_watchdog]
 async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -435,7 +481,9 @@ async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f3
     .await;
     let queue = harness
         .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
+            QueueConfig::builder()
+                .prep(harness.resource_prep().clone())
+                .build(),
         ))
         .await;
     let mut events = queue.subscribe::<QueueEvent>();
@@ -455,8 +503,16 @@ async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f3
             .await
             .expect("append local queue fixture");
         assert!(
-            time::timeout(Duration::from_secs(5), async {
-                while let Ok(envelope) = events.recv().await {
+            async {
+                loop {
+                    hang_tick!();
+                    let mut budget = Duration::ZERO;
+                    hang_park!(|remaining: Duration| budget = remaining.min(Duration::from_secs(5)));
+                    let event = time::timeout(budget, events.recv()).await;
+                    hang_tick!();
+                    let Ok(Ok(envelope)) = event else {
+                        break;
+                    };
                     if matches!(
                         envelope.event,
                         QueueEvent::TrackStatusChanged {
@@ -464,13 +520,13 @@ async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f3
                             status: TrackStatus::Loaded,
                         } if seen == id
                     ) {
+                        hang_reset!();
                         return true;
                     }
                 }
                 false
-            })
-            .await
-            .unwrap_or(false),
+            }
+            .await,
             "local queue fixture must load through the product loader"
         );
         id
@@ -485,6 +541,7 @@ async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f3
             / f64::from(SAMPLE_RATE),
     );
     for _ in 0..WARMUP_BLOCKS {
+        hang_tick!();
         let started = Instant::now();
         harness
             .run(&queue, kithara::queue::QueueControl::tick)
@@ -492,10 +549,12 @@ async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f3
             .expect("tick queue during warmup");
         let _ = harness.render(BLOCK_FRAMES).await;
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
+        hang_reset!();
     }
 
     let mut pcm = Vec::with_capacity(CAPTURE_BLOCKS * BLOCK_FRAMES * usize::from(CHANNELS));
     for _ in 0..CAPTURE_BLOCKS {
+        hang_tick!();
         let started = Instant::now();
         harness
             .run(&queue, kithara::queue::QueueControl::tick)
@@ -503,9 +562,15 @@ async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f3
             .expect("tick queue during capture");
         pcm.extend(harness.render(BLOCK_FRAMES).await);
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
+        hang_reset!();
     }
     drop(queue);
-    harness.close().await;
+    let mut budget = Duration::ZERO;
+    hang_park!(|remaining| budget = remaining);
+    time::timeout(budget, harness.close())
+        .await
+        .expect("queue harness shutdown watchdog");
+    hang_tick!();
     pcm
 }
 
@@ -755,12 +820,14 @@ pub async fn run_no_sync_passthrough(
     record_artifacts: bool,
 ) {
     let channels = usize::from(CHANNELS);
-    let baseline = render_passthrough(source, None, false).await;
+    let asset = sine_wav_a440_6s();
+    assert_eq!(asset.bytes(), source);
+    let baseline = render_passthrough(&asset, None, false).await;
     let baseline_report = CochleaReport::measure(&baseline.pcm, CHANNELS, SAMPLE_RATE);
     let baseline_source_fit = measure_quiet_sine(&baseline.pcm);
-    let unity = render_passthrough(source, Some((backend, 1.0)), false).await;
+    let unity = render_passthrough(&asset, Some((backend, 1.0)), false).await;
     let unity_report = CochleaReport::measure(&unity.pcm, CHANNELS, SAMPLE_RATE);
-    let loaded = render_passthrough(source, Some((backend, 1.0)), true).await;
+    let loaded = render_passthrough(&asset, Some((backend, 1.0)), true).await;
     let loaded_report = CochleaReport::measure(&loaded.pcm, CHANNELS, SAMPLE_RATE);
     let queue_baseline = render_queue_passthrough(None).await;
     let queue_unity = render_queue_passthrough(Some((backend, 1.0))).await;

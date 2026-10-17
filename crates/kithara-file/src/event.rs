@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use kithara_events::Event;
-use kithara_stream::{AudioCodec, ContainerFormat, SeekEpoch};
+use kithara_stream::{AudioCodec, ContainerFormat};
 
 /// Errors specific to the file stream layer (non-network, non-downloader).
 ///
@@ -56,11 +56,7 @@ pub enum FileReaderEvent {
     ReadProgress { position: u64, total: Option<u64> },
     /// Reader byte cursor jumped (driven by the decoder calling
     /// `Seek::seek` after a user-facing seek).
-    ReaderSeek {
-        from_offset: u64,
-        to_offset: u64,
-        seek_epoch: SeekEpoch,
-    },
+    ReaderSeek { from_offset: u64, to_offset: u64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -45,6 +45,7 @@ kithara-dsp = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
 kithara-signal = { workspace = true }
+kithara-sync = { workspace = true }
 kithara-test-utils = { workspace = true }
 kithara-waveform = { workspace = true }
 kithara-worker = { workspace = true }

@@ -196,6 +196,7 @@ mod tests {
         platform::{
             CancelToken,
             sync::{Arc, Mutex},
+            time::Duration,
             tokio::{sync::watch, task},
         },
     };
@@ -255,6 +256,7 @@ mod tests {
 
     fn revision(revision: u64, wave: Waveform) -> TrackArtifacts {
         TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token("fixture".into())
             .revision(revision)
             .source_sample_rate(NonZeroU32::new(44_100).expect("fixture rate is non-zero"))

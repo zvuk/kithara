@@ -2,10 +2,11 @@ use std::{convert::Infallible, fs, num::NonZeroU16, path::PathBuf};
 
 use axum::{Router, body::Body, routing::get};
 use futures::stream;
-use kithara_beat::{BeatGridModel, BeatGridState, GridBeat, Meter, RawBeatGrid, SCHEMA_VERSION};
+use kithara_beat::{BeatGridModel, BeatGridState, GridBeat, RawBeatGrid, SCHEMA_VERSION};
 use kithara_download::{Downloader, DownloaderConfig};
 use kithara_net::{Headers, HttpClient, NetOptions};
 use kithara_platform::CancelToken;
+use kithara_sync::Meter;
 use kithara_test_utils::{TestHttpServer, bufpool::pools as test_pools, kithara};
 use kithara_waveform::{Bucket, Waveform};
 use url::Url;

@@ -20,11 +20,13 @@ net:
   compression: [gzip, deflate]
   is_insecure: true
 
-# `kithara-play`'s own crate default is 1.0; this app has shipped with a
+# The queue's own crate default is 1.0; this app has shipped with a
 # longer 5-second crossfade since before this section existed, so it is
 # named explicitly here to keep that behavior.
-player:
-  crossfade_duration: 5.0
+queue:
+  settings:
+    crossfade:
+      duration: 5.0
 
 # Remote media identity used by the shared AssetStore. Rules are ordered and
 # use exact hosts, `*.domain` subdomains, or `*`. Only listed query parameters

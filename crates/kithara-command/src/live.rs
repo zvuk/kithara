@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use kithara_config::{ConfigOwner, LiveConfig};
 
-use crate::{Batch, Outcome, Protocol, Receipt, SendError, Sender, Seq, When};
+use crate::{Batch, Outcome, Port, Protocol, Receipt, SendError, Seq, When};
 
 /// A change in flight: the batch carrying it, its moment and the change.
 type InFlight<C, P> = (Seq, When<<P as Protocol>::Clock>, <C as LiveConfig>::Change);
@@ -52,9 +52,10 @@ impl<C: LiveConfig, P: Protocol> Live<C, P> {
     }
 
     /// Folds every copy in flight into the configuration in the order the
-    /// executor applies them, `(When, Seq)`, for a queue destroyed without
-    /// answering them. Returns whether there was a copy, so the configuration
-    /// may have changed.
+    /// executor applies them, `(When, Seq)`, for an owner about to destroy its
+    /// executor: the receipts a dropped inbox answers then carry no copy.
+    /// Returns whether there was a copy, so the configuration may have
+    /// changed.
     pub fn abandon(&mut self) -> bool {
         let abandoned = !self.in_flight.is_empty();
         self.in_flight
@@ -82,6 +83,19 @@ impl<C: LiveConfig, P: Protocol> Live<C, P> {
         self.in_flight.iter().copied()
     }
 
+    /// The configuration once every change in flight applies: the confirmed
+    /// one with them applied in the order the executor runs them.
+    #[must_use]
+    pub fn projected(&self) -> C {
+        let mut pending: Vec<_> = self.pending().collect();
+        pending.sort_by_key(|&(seq, when, _)| (when, seq));
+        let mut projected = self.config;
+        for (_, _, change) in pending {
+            projected.apply_change(change);
+        }
+        projected
+    }
+
     /// Checks `change` and sends it to apply at `when`: one batch with an
     /// empty basis and the single command `wrap` makes of it. A copy waits
     /// for the batch's receipt.
@@ -90,14 +104,15 @@ impl<C: LiveConfig, P: Protocol> Live<C, P> {
     ///
     /// Returns [`LiveError::Invalid`] when a field check refuses the change
     /// and [`LiveError::Send`] when the channel returns the batch.
-    pub fn send<W>(
+    pub fn send<S, W>(
         &mut self,
-        sender: &mut Sender<P>,
+        port: &mut S,
         when: When<P::Clock>,
         change: C::Change,
         wrap: W,
     ) -> Result<Seq, LiveError<C::Error, P>>
     where
+        S: Port<P> + ?Sized,
         W: FnOnce(C::Change) -> P::Command,
     {
         let change = C::check(change).map_err(LiveError::Invalid)?;
@@ -105,9 +120,14 @@ impl<C: LiveConfig, P: Protocol> Live<C, P> {
             basis: Vec::new(),
             commands: vec![wrap(change)],
         };
-        let seq = sender.send(when, batch).map_err(LiveError::Send)?;
-        self.in_flight.push_back((seq, when, change));
+        let seq = port.send(when, batch).map_err(LiveError::Send)?;
+        self.track(seq, when, change);
         Ok(seq)
+    }
+
+    /// Records a checked change carried by a batch the owner built and sent itself.
+    pub fn track(&mut self, seq: Seq, when: When<P::Clock>, change: C::Change) {
+        self.in_flight.push_back((seq, when, change));
     }
 
     /// Settles the copy of the change `receipt` answers: an applied change
@@ -115,7 +135,7 @@ impl<C: LiveConfig, P: Protocol> Live<C, P> {
     /// copy either way, or `None` when the batch carried no change of this
     /// configuration.
     ///
-    /// Settle receipts in the order [`Sender::receipts`] yields them: execution
+    /// Settle receipts in the order [`crate::Sender::receipts`] yields them: execution
     /// order, rather than send order. Reordering applied receipts can leave the
     /// configuration different from the executor's when changes share a field.
     pub fn settle(&mut self, receipt: &Receipt<P>) -> Option<SettledChange<C, P>> {
@@ -492,5 +512,132 @@ mod tests {
         assert!(matches!(refused, Err(LiveError::Invalid(Loud(11)))));
         assert!(executor.render(&mut inbox, 0).is_empty());
         assert_eq!(live.pending().count(), 0);
+    }
+
+    #[kithara::test]
+    fn projected_equals_the_config_with_nothing_in_flight() {
+        let mut live = mix();
+        live.apply(MixChange::Level(4)).expect("level in bounds");
+        assert_eq!(live.projected(), *live.config());
+    }
+
+    #[kithara::test]
+    fn projected_shows_pending_changes_in_execution_order_before_their_receipts() {
+        let (mut sender, _inbox) = pair(4);
+        let mut live = mix();
+        let confirmed = *live.config();
+        for (when, change) in [
+            (When::At(Frame(100)), MixChange::Level(1)),
+            (When::Next, MixChange::Level(5)),
+            (When::At(Frame(50)), MixChange::Muted(true)),
+        ] {
+            live.send(&mut sender, when, change, Part::Mix)
+                .expect("the channel has room");
+        }
+        assert_eq!(
+            live.projected(),
+            Mix {
+                muted: true,
+                level: 1,
+            }
+        );
+        assert_eq!(live.config(), &confirmed);
+        assert_eq!(live.pending().count(), 3);
+    }
+
+    #[kithara::test]
+    fn projected_drops_a_change_after_its_rejected_receipt_settles() {
+        let (mut sender, mut inbox) = pair(4);
+        let mut live = mix();
+        let confirmed = *live.config();
+        live.send(&mut sender, When::Next, MixChange::Level(5), Part::Mix)
+            .expect("the channel has room");
+        assert_eq!(live.projected().level(), 5);
+        refuse(&mut inbox, 0);
+        let receipt = sender.receipts().next().expect("the batch was answered");
+        assert_eq!(
+            receipt.outcome(),
+            &Outcome::Rejected(Rejection::Refused(()))
+        );
+        assert!(live.settle(&receipt).is_some());
+        assert_eq!(live.projected(), confirmed);
+        assert_eq!(live.config(), &confirmed);
+    }
+
+    #[kithara::test]
+    fn live_sends_through_root_scope_and_unsized_ports() {
+        let (mut sender, mut inbox) =
+            crate::scoped_channel::<Test, Test>(crate::ScopedConfig::builder().build());
+        let id = sender.open(0).expect("slot");
+        let mut root_live = mix();
+        let mut scope_live = mix();
+        let root_port: &mut dyn crate::Port<Test> = &mut sender;
+        let root_seq = root_live
+            .send(root_port, When::Next, MixChange::Level(2), Part::Mix)
+            .expect("root room");
+        let scope_seq = scope_live
+            .send(
+                &mut sender.scope(id).expect("scope"),
+                When::Next,
+                MixChange::Level(3),
+                Part::Mix,
+            )
+            .expect("scope room");
+        assert_eq!((root_live.level(), scope_live.level()), (0, 0));
+        sender.publish().expect("live");
+        inbox.drain();
+        inbox
+            .root()
+            .next_due(Frame(0), 64)
+            .expect("root due")
+            .apply(());
+        inbox
+            .scope(id)
+            .expect("scope")
+            .next_due(Frame(0), 64)
+            .expect("scope due")
+            .apply(());
+        let Some(crate::ScopedReceipt::Root(receipt)) = sender.receipt() else {
+            panic!("root")
+        };
+        assert_eq!(receipt.seq(), root_seq);
+        assert!(root_live.settle(&receipt).is_some());
+        let Some(crate::ScopedReceipt::Scope(reply_id, receipt)) = sender.receipt() else {
+            panic!("scope")
+        };
+        assert_eq!((reply_id, receipt.seq()), (id, scope_seq));
+        assert!(scope_live.settle(&receipt).is_some());
+        assert_eq!((root_live.level(), scope_live.level()), (2, 3));
+        assert!(sender.receipt().is_none());
+    }
+
+    #[kithara::test]
+    fn track_settles_owner_built_batches_without_changing_confirmed_config() {
+        let (mut sender, mut inbox) = pair(4);
+        let mut live = mix();
+        let seq = sender
+            .send(
+                When::Next,
+                crate::Batch {
+                    basis: Vec::new(),
+                    commands: vec![
+                        Part::Mix(MixChange::Level(4)),
+                        Part::Tone(ToneChange::Pitch(2)),
+                    ],
+                },
+            )
+            .expect("room");
+        live.track(seq, When::Next, MixChange::Level(4));
+        assert_eq!(live.level(), 0);
+        assert_eq!(live.projected().level(), 4);
+        assert!(matches!(live.pending().collect::<Vec<_>>().as_slice(),
+            [(tracked, When::Next, MixChange::Level(4))] if *tracked == seq));
+        inbox.drain();
+        inbox.next_due(Frame(0), 64).expect("due").apply(());
+        let receipt = sender.receipts().next().expect("answer");
+        assert!(live.settle(&receipt).is_some());
+        assert_eq!(live.level(), 4);
+        assert!(live.pending().next().is_none());
+        assert!(live.settle(&receipt).is_none(), "the copy settles once");
     }
 }

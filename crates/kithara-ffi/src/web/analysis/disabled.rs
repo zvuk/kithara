@@ -22,9 +22,9 @@ impl AnalysisRuns {
         Self
     }
 
-    pub(crate) const fn cancel(&mut self, _id: TrackId) {}
-
     pub(crate) const fn clear(&mut self) {}
+
+    pub(crate) const fn reconcile(&mut self, _queue: &FfiQueueControl) {}
 
     pub(crate) fn start_queued<F>(
         &mut self,

@@ -245,6 +245,7 @@ pub(crate) struct TestServerState {
     behaviors: RwLock<HashMap<String, Arc<BehaviorEntry>>>,
     segment_gates: GateMap<SegmentGate>,
     init_gates: GateMap<InitGate>,
+    media_playlist_gates: GateMap<Gate>,
     /// Per-`(hls token, variant, segment)` count of size-probe requests the
     /// server has served: every `HEAD` and every single-byte ranged
     /// `GET` (`Range: bytes=0-0`). Unlike the withhold gates this counter is
@@ -269,6 +270,7 @@ impl TestServerState {
             behaviors: RwLock::new(HashMap::new()),
             segment_gates: GateMap::default(),
             init_gates: GateMap::default(),
+            media_playlist_gates: GateMap::default(),
             size_probes: RwLock::new(HashMap::new()),
             network_mode: RwLock::new(NetworkMode::Online),
         })
@@ -349,6 +351,25 @@ impl TestServerState {
 
     pub(crate) fn init_gate(&self, hls_token: &str, variant: usize) -> Option<Arc<InitGate>> {
         get_gate(&self.init_gates, &init_gate_key(hls_token, variant))
+    }
+
+    pub(crate) fn register_media_playlist_gate(
+        &self,
+        hls_token: &str,
+        variant: usize,
+    ) -> Arc<Gate> {
+        register_gate(
+            &self.media_playlist_gates,
+            format!("{hls_token}|v{variant}"),
+            Gate::new(),
+        )
+    }
+
+    pub(crate) fn media_playlist_gate(&self, hls_token: &str, variant: usize) -> Option<Arc<Gate>> {
+        get_gate(
+            &self.media_playlist_gates,
+            &format!("{hls_token}|v{variant}"),
+        )
     }
 
     pub(crate) async fn delay_response(&self, hls_token: &str, duration: Duration) {

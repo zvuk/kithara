@@ -31,10 +31,16 @@ where
     /// Clears any parked read before applying a seek, since it belonged to the position the seek is
     /// abandoning.
     pub(crate) fn register_session_seek(&self, pos: u64, moved: bool) {
-        if !self.flow.reader.is_seek_active() {
-            self.retire_seek_projection_if_moved(pos);
-        }
         if moved {
+            if self
+                .seek
+                .alias
+                .load()
+                .is_some_and(|alias| !alias.covers_position(pos))
+            {
+                self.clear_seek_alias();
+                self.clear_exact_seek();
+            }
             self.flow.reader.clear_wait();
             self.set_exact_byte_seek_demand(pos);
         }

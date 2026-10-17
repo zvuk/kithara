@@ -4,7 +4,7 @@ use std::io::Cursor;
 
 use kithara::{
     decode::{DecoderBackend, DecoderConfig, DecoderFactory},
-    platform::time::Duration,
+    platform::{time::Duration, tokio::task::spawn_blocking},
     signal::AudioChunk,
 };
 use kithara_integration_tests::{
@@ -34,49 +34,86 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk(
     #[future(awt)] aac: (TestServerHelper, Vec<u8>),
 ) {
     let (_server, bytes) = aac;
-    let mut decoder = DecoderFactory::create_with_probe(
-        Cursor::new(bytes),
-        Some("aac"),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
-            .backend(DecoderBackend::Symphonia)
-            .pools(pools())
-            .build(),
-    )
-    .expect("probe AAC decoder");
+    spawn_blocking(move || {
+        let mut decoder = DecoderFactory::create_with_probe(
+            Cursor::new(bytes),
+            Some("aac"),
+            DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+                .backend(DecoderBackend::Symphonia)
+                .pools(pools())
+                .build(),
+        )
+        .expect("probe AAC decoder");
 
-    // What we pin: the FIRST non-empty chunk delivered by
-    // `next_chunk` (which skips empty chunks via the `frames == 0`
-    // `continue` in `ComposedDecoder::next_chunk_inner`) must carry
-    // real signal, not pure decoder-algorithmic silence.
-    //
-    // Without `outputDelay` handling, fdk-aac's first decoded frame
-    // is all zeros (~1685 frames of lookahead silence at AAC-LC).
-    // That zero-filled chunk slips through `frames == 0` because the
-    // sample count is non-zero — only the *values* are silent — so
-    // it surfaces as chunk 0 and the assertion below trips.
-    //
-    // With our `outputDelay` strip, the lookahead silence is dropped
-    // before the chunk is emitted and the first surfaced chunk
-    // starts with real sawtooth content.
-    let outcome = decoder.next_chunk().expect("decode chunk 0");
-    let chunk = AudioChunk::try_from(outcome).expect("chunk 0 must be a PCM chunk, not EOS");
-    assert!(
-        !chunk.samples.is_empty(),
-        "AAC chunk 0 must not be empty after priming strip",
-    );
+        // What we pin: the FIRST non-empty chunk delivered by
+        // `next_chunk` (which skips empty chunks via the `frames == 0`
+        // `continue` in `ComposedDecoder::next_chunk_inner`) must carry
+        // real signal, not pure decoder-algorithmic silence.
+        //
+        // Without `outputDelay` handling, fdk-aac's first decoded frame
+        // is all zeros (~1685 frames of lookahead silence at AAC-LC).
+        // That zero-filled chunk slips through `frames == 0` because the
+        // sample count is non-zero — only the *values* are silent — so
+        // it surfaces as chunk 0 and the assertion below trips.
+        //
+        // With our `outputDelay` strip, the lookahead silence is dropped
+        // before the chunk is emitted and the first surfaced chunk
+        // starts with real sawtooth content.
+        let outcome = decoder.next_chunk().expect("decode chunk 0");
+        let chunk = AudioChunk::try_from(outcome).expect("chunk 0 must be a PCM chunk, not EOS");
+        assert!(
+            !chunk.samples.is_empty(),
+            "AAC chunk 0 must not be empty after priming strip",
+        );
 
-    let max_abs = chunk
-        .samples
-        .iter()
-        .map(|sample| sample.abs())
-        .fold(0.0f32, f32::max);
-    assert!(
-        max_abs > 0.01,
-        "AAC chunk 0 max |sample| = {max_abs:.6} (expected > 0.01). \
-         fdk-aac algorithmic delay (`outputDelay`) not stripped — \
-         chunk 0 is full of decoder lookahead zeros. See \
-         crates/kithara-decode/src/symphonia/fdk.rs.",
-    );
+        let max_abs = chunk
+            .samples
+            .iter()
+            .map(|sample| sample.abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_abs > 0.01,
+            "AAC chunk 0 max |sample| = {max_abs:.6} (expected > 0.01). \
+             fdk-aac algorithmic delay (`outputDelay`) not stripped — \
+             chunk 0 is full of decoder lookahead zeros. See \
+             crates/kithara-decode/src/symphonia/fdk.rs.",
+        );
+    })
+    .await
+    .expect("raw decoder task completes");
+}
+
+/// fdk-aac's `outputDelay` is lookahead latency, not stripped signal: once
+/// it is dropped, the first PCM frame is the stream's first frame. That PCM
+/// keeps the first packet's time; labelling it later by the dropped count
+/// moves every position this backend reports against every other decoder
+/// of the same stream.
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+async fn aac_output_delay_keeps_the_first_pcm_at_the_first_packet(
+    #[future(awt)] aac: (TestServerHelper, Vec<u8>),
+) {
+    let (_server, bytes) = aac;
+    spawn_blocking(move || {
+        let mut decoder = DecoderFactory::create_with_probe(
+            Cursor::new(bytes),
+            Some("aac"),
+            DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+                .backend(DecoderBackend::Symphonia)
+                .pools(pools())
+                .build(),
+        )
+        .expect("probe AAC decoder");
+        let first = AudioChunk::try_from(decoder.next_chunk().expect("first decode"))
+            .expect("first PCM chunk");
+        let origin = decoder.initial_pcm_origin().expect("first PCM origin");
+
+        assert_eq!(first.meta.timestamp, Duration::ZERO);
+        assert_eq!(first.meta.frame_offset, 0);
+        assert_eq!(origin.position(), origin.comparison_base());
+        assert_eq!(decoder.timeline_gap_frames(), 0);
+    })
+    .await
+    .expect("raw decoder task completes");
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
@@ -84,44 +121,48 @@ async fn aac_seek_to_start_discards_previous_signal_history(
     #[future(awt)] aac: (TestServerHelper, Vec<u8>),
 ) {
     let (_server, bytes) = aac;
-    let mut decoder = DecoderFactory::create_with_probe(
-        Cursor::new(bytes),
-        Some("aac"),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
-            .backend(DecoderBackend::Symphonia)
-            .pools(pools())
-            .build(),
-    )
-    .expect("probe AAC decoder");
-    let first =
-        AudioChunk::try_from(decoder.next_chunk().expect("first decode")).expect("first PCM chunk");
-    for _ in 0..8 {
-        decoder.next_chunk().expect("advance decoder history");
-    }
-    for _ in 0..2 {
-        decoder.seek(Duration::ZERO).expect("seek to start");
-        let replay = AudioChunk::try_from(decoder.next_chunk().expect("decode after reset"))
-            .expect("replayed PCM chunk");
-        assert_eq!(
-            first.samples.len(),
-            replay.samples.len(),
-            "replayed chunk length"
-        );
-        let mismatch = first
-            .samples
-            .iter()
-            .zip(replay.samples.iter())
-            .enumerate()
-            .find(|(_, (a, b))| a != b);
-        let max_error = first
-            .samples
-            .iter()
-            .zip(replay.samples.iter())
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0_f32, f32::max);
-        assert!(
-            mismatch.is_none(),
-            "first differing sample: {mismatch:?}; max error {max_error}"
-        );
-    }
+    spawn_blocking(move || {
+        let mut decoder = DecoderFactory::create_with_probe(
+            Cursor::new(bytes),
+            Some("aac"),
+            DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+                .backend(DecoderBackend::Symphonia)
+                .pools(pools())
+                .build(),
+        )
+        .expect("probe AAC decoder");
+        let first = AudioChunk::try_from(decoder.next_chunk().expect("first decode"))
+            .expect("first PCM chunk");
+        for _ in 0..8 {
+            decoder.next_chunk().expect("advance decoder history");
+        }
+        for _ in 0..2 {
+            decoder.seek(Duration::ZERO).expect("seek to start");
+            let replay = AudioChunk::try_from(decoder.next_chunk().expect("decode after reset"))
+                .expect("replayed PCM chunk");
+            assert_eq!(
+                first.samples.len(),
+                replay.samples.len(),
+                "replayed chunk length"
+            );
+            let mismatch = first
+                .samples
+                .iter()
+                .zip(replay.samples.iter())
+                .enumerate()
+                .find(|(_, (a, b))| a != b);
+            let max_error = first
+                .samples
+                .iter()
+                .zip(replay.samples.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f32, f32::max);
+            assert!(
+                mismatch.is_none(),
+                "first differing sample: {mismatch:?}; max error {max_error}"
+            );
+        }
+    })
+    .await
+    .expect("raw decoder task completes");
 }

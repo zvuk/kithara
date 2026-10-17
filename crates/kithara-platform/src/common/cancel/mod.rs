@@ -1,4 +1,4 @@
-//! Propagate-down cancellation built on a `std`-only node tree.
+//! Propagate-down cancellation built on a backend-selected node tree.
 //! Cancellation drains local wakers before recursively firing weak children.
 
 mod group;

@@ -92,6 +92,7 @@ apple:xcframework:
     expire_in: 1 day
     paths:
       - apple/KitharaFFIInternal.xcframework
+      - apple/Sources/KitharaFFI/KitharaFFI.swift
 
 # The Swift package's own tests, which rebuild the framework in order to run.
 # What a review needs from this layer is the simulator suite on

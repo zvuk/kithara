@@ -53,7 +53,8 @@ pub(super) fn android_product_packages(
             target,
             "--no-default-features",
             "--features",
-            &super::super::device_features(crate::BuildProfile::Release),
+            &super::super::device_features(crate::BuildProfile::Release)
+                .replace(&format!("{product}/"), ""),
             "--edges",
             "normal",
             "--prefix",

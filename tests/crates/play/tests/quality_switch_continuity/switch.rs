@@ -8,10 +8,10 @@ use kithara::{
     events::{EventBus, EventReceiver},
     host::{HostConfig, HostSettings},
     platform::{
-        time::{Duration, Instant, sleep},
+        time::{Duration, Instant, WallInstant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -21,7 +21,7 @@ use kithara_integration_tests::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedAudioVariantOverride,
         PackagedSignal,
     },
-    offline::OfflinePlayer,
+    offline::{OfflinePlayer, OfflinePlayerOptions},
 };
 use kithara_test_utils::TestTempDir;
 use num_traits::ToPrimitive;
@@ -233,8 +233,9 @@ fn decoder_backend_kind(backend: DecoderBackend) -> DecoderBackendKind {
 pub(super) fn source_frame(position: f64, label: &str) -> i64 {
     let exact = position * f64::from(SAMPLE_RATE);
     let rounded = exact.round();
-    assert!(
-        (exact - rounded).abs() <= 1.0e-6,
+    assert_eq!(
+        position,
+        Duration::from_secs_f64(rounded / f64::from(SAMPLE_RATE)).as_secs_f64(),
         "{label} capture position is not an integer source frame: position={position:.12}s, frame={exact:.9}",
     );
     rounded
@@ -336,6 +337,8 @@ pub(super) fn assert_initial_decoder(
     assert_eq!(event.variant, Some(expected_variant), "{label} variant");
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn prepare_player(
     master_url: &url::Url,
     initial_variant: usize,
@@ -360,18 +363,14 @@ async fn prepare_player(
             .build(),
     )
     .initial_abr_mode(AbrMode::manual(initial_variant))
-    .block_on_underrun(matches!(consumer, Consumer::Reference))
     .events(bus)
     .build();
-    let resource = Resource::new(config)
-        .await
-        .unwrap_or_else(|error| panic!("open {label} resource: {error:?}"));
-    let abr = resource
-        .abr_handle()
-        .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
     // WHY: The fixture sine peaks at full scale, so its inter-sample reconstruction
     // can exceed a unity ceiling. Keep it below the limiter while measuring playback.
-    let mut player = OfflinePlayer::new(
+    let mut player = OfflinePlayer::with_options(
+        OfflinePlayerOptions::builder()
+            .block_on_underrun(matches!(consumer, Consumer::Reference))
+            .build(),
         HostConfig::offline(pools())
             .settings(
                 HostSettings::builder()
@@ -387,8 +386,22 @@ async fn prepare_player(
             .build(),
     )
     .await;
-    player.set_volume(0.9).expect("the player takes the volume");
-    player.load_and_fadein(resource).await;
+    player
+        .set_volume(0.9)
+        .await
+        .expect("the player takes the volume");
+    let id = player.load_config(config).await;
+    player
+        .render_until_current(
+            id,
+            BLOCK_FRAMES,
+            WallInstant::now() + kithara_integration_tests::offline::LOCAL_LOAD_DEADLINE,
+        )
+        .await;
+    let abr = player
+        .player()
+        .current_abr_handle()
+        .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
 
     // Render to a capture point fixed in *frames*, not to whichever frame the
     // warm-up happens to stop on. A cold start can hand back a short block, and
@@ -399,10 +412,12 @@ async fn prepare_player(
     // `capture_frame` whatever the pipeline did on the way there.
     let capture_frame = capture_frame_target();
     let mut pacer = Pacer::default();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = WallInstant::now() + Duration::from_secs(15);
     let mut active_blocks = 0usize;
     let mut decoder_events = drain_decoder_events(&mut events, 0);
     loop {
+        hang_tick!();
+        let before = player.position();
         let rendered = source_frame(player.position(), label);
         let remaining = capture_frame.saturating_sub(rendered);
         let request = usize::try_from(remaining)
@@ -411,6 +426,9 @@ async fn prepare_player(
         let block = consumer
             .render(&mut player, &mut pacer, request.max(1))
             .await;
+        if player.position() > before {
+            hang_reset!();
+        }
         decoder_events.extend(drain_decoder_events(&mut events, 0));
         if block
             .iter()
@@ -427,7 +445,7 @@ async fn prepare_player(
             break;
         }
         assert!(
-            Instant::now() <= deadline,
+            WallInstant::now() <= deadline,
             "timed out preparing {label}: initial={initial_variant}, current={:?}, position={:.3}",
             abr.current_variant_index(),
             player.position(),
@@ -485,6 +503,8 @@ pub(super) async fn render_paced(
     block
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 pub(super) async fn render_switch(
     master_url: &url::Url,
     transition: Transition,
@@ -508,12 +528,17 @@ pub(super) async fn render_switch(
     let mut applied_frame = None;
     let mut decoder_events = Vec::new();
     while samples.len() / usize::from(CHANNELS) < observation_frames {
+        hang_tick!();
+        let before = prepared.player.position();
         let rendered_frames = samples.len() / usize::from(CHANNELS);
         let remaining_frames = observation_frames.saturating_sub(rendered_frames);
         let render_frames = remaining_frames.min(BLOCK_FRAMES);
         samples.extend_from_slice(
             &render_paced(&mut prepared.player, &mut prepared.pacer, render_frames).await,
         );
+        if prepared.player.position() > before {
+            hang_reset!();
+        }
         let rendered_frames = samples.len() / usize::from(CHANNELS);
         decoder_events.extend(drain_decoder_events(&mut prepared.events, rendered_frames));
         if applied_frame.is_none() && prepared.abr.current_variant_index() == Some(transition.to) {
@@ -608,6 +633,8 @@ pub(super) async fn render_switch(
     result
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 pub(super) async fn render_no_switch_control(
     master_url: &url::Url,
     initial_variant: usize,
@@ -626,10 +653,13 @@ pub(super) async fn render_no_switch_control(
         .abr
         .set_mode(AbrMode::manual(initial_variant))
         .unwrap_or_else(|error| panic!("request inert {label} control: {error}"));
+    let underruns = prepared.player.metrics().underruns();
     let observation_frames = observation_frames();
     let mut samples = Vec::with_capacity(observation_frames * usize::from(CHANNELS));
     let mut decoder_events = Vec::new();
     while samples.len() / usize::from(CHANNELS) < observation_frames {
+        hang_tick!();
+        let before = prepared.player.position();
         let rendered_frames = samples.len() / usize::from(CHANNELS);
         let remaining_frames = observation_frames.saturating_sub(rendered_frames);
         let render_frames = remaining_frames.min(BLOCK_FRAMES);
@@ -638,6 +668,9 @@ pub(super) async fn render_no_switch_control(
                 .render(&mut prepared.player, &mut prepared.pacer, render_frames)
                 .await,
         );
+        if prepared.player.position() > before {
+            hang_reset!();
+        }
         decoder_events.extend(drain_decoder_events(
             &mut prepared.events,
             samples.len() / usize::from(CHANNELS),
@@ -657,10 +690,42 @@ pub(super) async fn render_no_switch_control(
         decoder_events.is_empty(),
         "{label} no-switch control must not recreate its decoder after Initial: {decoder_events:?}",
     );
+    assert_eq!(
+        prepared.player.metrics().underruns(),
+        underruns,
+        "{label} reference capture must wait for decoded PCM instead of zero-filling",
+    );
     let result = ControlRender {
         samples,
         capture_frame: prepared.capture_frame,
     };
     prepared.close().await;
     result
+}
+
+#[kithara::test]
+#[case::frame_2197(2_197, 0.049_818_594)]
+#[case::frame_44544(44_544, 1.010_068_027)]
+#[case::frame_44545(44_545, 1.010_090_703)]
+fn source_frame_preserves_the_public_nanosecond_position(
+    #[case] frame: i64,
+    #[case] position: f64,
+) {
+    assert_eq!(
+        Duration::from_secs_f64(
+            frame.to_f64().expect("fixture source frame fits f64") / f64::from(SAMPLE_RATE),
+        )
+        .as_secs_f64(),
+        position,
+    );
+    assert_eq!(source_frame(position, "quantised position"), frame);
+}
+
+#[kithara::test]
+#[case::quarter_frame(2_197.25)]
+#[case::half_frame(44_544.5)]
+#[should_panic(expected = "capture position is not an integer source frame")]
+fn source_frame_rejects_a_fractional_source_frame(#[case] frame: f64) {
+    let position = Duration::from_secs_f64(frame / f64::from(SAMPLE_RATE)).as_secs_f64();
+    source_frame(position, "fractional position");
 }

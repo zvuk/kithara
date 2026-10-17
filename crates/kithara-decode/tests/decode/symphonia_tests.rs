@@ -121,7 +121,9 @@ fn test_duration_available(tone_wav: &'static [u8]) {
     let duration = decoder.duration();
     assert!(duration.is_some());
 
-    let dur = duration.unwrap();
+    let Some(kithara_decode::DecoderDuration::RawLength(dur)) = duration else {
+        panic!("standalone WAV must declare a raw PCM length");
+    };
     assert!(dur.as_secs_f64() > 0.9 && dur.as_secs_f64() < 1.1);
 }
 

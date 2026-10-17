@@ -29,18 +29,15 @@ where
 {
     /// Last segment an inactive session may fetch while it is being built.
     ///
-    /// Derived from the same forward window
-    /// [`reader_is_ready`](Self::reader_is_ready) waits on, and floored at the
-    /// first planned segment, which is at or ahead of the
-    /// [header](Self::header_segment) — so every fetch readiness waits on stays
-    /// under the ceiling. One short of any of them deadlocks the transition.
+    /// Covers the planned forward window and the first segment; the header is
+    /// fetched separately before an init-bearing reader is transferred.
     pub(crate) fn construction_segment_end(&self, preparation: &VariantReaderPreparation) -> u32 {
         self.demand_segment_at_offset(self.forward_window(preparation).end.saturating_sub(1))
             .unwrap_or(preparation.first_segment)
             .max(preparation.first_segment)
     }
 
-    /// Byte window a session must be able to read before its decoder is built.
+    /// Media window planned while the decoder is being constructed.
     ///
     /// Named by *segment*, resolved to bytes on every call. Segment lengths
     /// start as placeholders and are replaced by the committed ones, which moves
@@ -63,7 +60,7 @@ where
     /// or `None` when the plan owes none.
     ///
     /// [`reader_is_ready`](Self::reader_is_ready) gates the handover on the
-    /// header range as well as the forward window, and a variant without an
+    /// header range, and a variant without an
     /// `EXT-X-MAP` keeps that header in its first segment — behind the tail the
     /// plan is aimed at, where nothing else would fetch it. A separate init is
     /// carried by [`PlannedFetch::Init`](crate::segment::PlannedFetch::Init)
@@ -144,27 +141,25 @@ where
         })
     }
 
-    /// A window this session waits on but has nothing queued for is the shape of a stall: nothing
-    /// is in flight or planned, and only another readiness poll re-drives the peer, which the
-    /// consumer cannot make while blocked here.
     pub(crate) fn reader_is_ready(
         &self,
         preparation: &VariantReaderPreparation,
     ) -> StreamResult<bool> {
-        let header_ready = if matches!(preparation.input, ReaderInput::InitOnly) {
-            let header = self.header_byte_range()?;
-            !header.is_empty() && self.reader_range_is_ready(header)?
-        } else {
-            true
+        let ready = match preparation.input {
+            ReaderInput::InitOnly => {
+                let header = self.header_byte_range()?;
+                !header.is_empty() && self.reader_range_is_ready(header)?
+            }
+            ReaderInput::Incremental => true,
+            _ => {
+                return Err(StreamError::Source(SourceError::Other(
+                    "unsupported decoder reader input".into(),
+                )));
+            }
         };
-        let forward = self.forward_window(preparation);
-        let forward_ready = self.reader_range_is_ready(forward.clone())?;
         trace!(
             variant = self.variant,
-            header_ready,
-            forward_ready,
-            forward_start = forward.start,
-            forward_end = forward.end,
+            ready,
             ceiling = self.construction_segment_end(preparation),
             init_loaded = self.init().is_some_and(|i| i.state().is_loaded()),
             init_downloading = self.init().is_some_and(|i| i.state().is_downloading()),
@@ -173,7 +168,7 @@ where
             queued = self.flow.queue.lock().len(),
             "variant reader readiness"
         );
-        Ok(header_ready && forward_ready)
+        Ok(ready)
     }
 
     fn reader_range_is_ready(&self, range: Range<u64>) -> StreamResult<bool> {

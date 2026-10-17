@@ -611,6 +611,7 @@ mod explorer {
                 "the dropped track becomes deck A's current one",
                 Rig::DEADLINE,
                 |rig| {
+                    crate::mock::render_rig(rig, 512);
                     rig.pump();
                 },
                 |rig| rig.queues[0].current().and_then(|track| track.url) == source,

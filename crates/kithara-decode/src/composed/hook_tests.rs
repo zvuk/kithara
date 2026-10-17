@@ -1,4 +1,7 @@
-use std::{num::NonZeroU32, sync::Mutex};
+use std::{
+    num::NonZeroU32,
+    sync::{Mutex, atomic::Ordering},
+};
 
 use kithara_platform::sync::Arc;
 use kithara_stream::{
@@ -78,7 +81,7 @@ impl StubDemuxer {
 }
 
 impl Demuxer for StubDemuxer {
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
         None
     }
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
@@ -101,6 +104,9 @@ impl Demuxer for StubDemuxer {
         Ok(self.seek.pop().unwrap_or(DemuxSeekOutcome::PastEof {
             duration: Duration::ZERO,
         }))
+    }
+    fn prepare_seek(&mut self) -> DecodeResult<Option<DemuxSeekOutcome>> {
+        Ok(self.seek.pop())
     }
     fn track_info(&self) -> &TrackInfo {
         &self.track
@@ -147,7 +153,10 @@ fn build(
     },
     "chunk"
 )]
-#[case::pending_signal(StubOutcome::Pending(PendingReason::SeekPending), "pending")]
+#[case::pending_signal(
+    StubOutcome::Pending(PendingReason::NotReady(NotReadyCause::SourcePending)),
+    "pending"
+)]
 fn next_chunk_emits_signal(
     #[case] outcome: StubOutcome,
     #[case] expected_signal: &str,
@@ -250,27 +259,138 @@ fn zero_frame_codec_yields_pending_before_demux_eof(
         preroll: crate::demuxer::PrerollHint::NotNeeded,
     },
     Duration::from_secs(1),
-    "landed"
+    "landed",
+    false
 )]
 #[case::past_eof(
     DemuxSeekOutcome::PastEof {
         duration: Duration::from_secs(10),
     },
     Duration::from_secs(15),
-    "past_eof"
+    "past_eof",
+    false
+)]
+#[case::pending_retry(
+    DemuxSeekOutcome::Pending(PendingReason::Retry),
+    Duration::from_secs(1),
+    "landed",
+    false
+)]
+#[case::pending_input(
+    DemuxSeekOutcome::Pending(PendingReason::NotReady(NotReadyCause::SourcePending)),
+    Duration::from_secs(1),
+    "landed",
+    false
+)]
+#[case::pending_prefix(
+    DemuxSeekOutcome::Pending(PendingReason::Retry),
+    Duration::from_secs(1),
+    "landed",
+    true
 )]
 fn seek_emits_signal(
     #[case] outcome: DemuxSeekOutcome,
     #[case] target: Duration,
     #[case] expected_signal: &str,
+    #[case] prefix: bool,
     trim_silence: Vec<f32>,
     zero_packet: &'static [u8],
 ) {
     let log = Arc::new(Mutex::new(CallLog::default()));
-    let demuxer = StubDemuxer::with_outcomes(zero_packet, Vec::new(), vec![outcome]);
-    let mut decoder = build(&trim_silence, demuxer, Arc::clone(&log));
-    let _ = decoder.seek(target).unwrap();
-    assert_eq!(log.lock().unwrap().seeks, vec![expected_signal]);
+    let pending = matches!(outcome, DemuxSeekOutcome::Pending(_));
+    let mut outcomes = vec![outcome];
+    if pending {
+        outcomes = vec![
+            DemuxSeekOutcome::Landed {
+                landed_at: Duration::ZERO,
+                landed_byte: Some(123),
+                preroll: crate::demuxer::PrerollHint::NotNeeded,
+            },
+            outcome,
+            outcome,
+        ];
+    }
+    if pending && prefix {
+        outcomes.push(outcome);
+    }
+    let demuxer = StubDemuxer::with_outcomes(zero_packet, Vec::new(), outcomes);
+    let codec = test_counting_codec::CountingCodec::new(
+        trim_silence,
+        AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
+        1,
+    );
+    let flushes = Arc::clone(&codec.flush_calls);
+    let mut decoder = ComposedDecoder::new(
+        demuxer,
+        codec,
+        DecoderRuntime {
+            hooks: Some(Box::new(LoggingHooks {
+                log: Arc::clone(&log),
+            })),
+            ..DecoderRuntime::for_test()
+        },
+    );
+    let _ = if prefix {
+        decoder.seek_prefix(target)
+    } else {
+        decoder.seek(target)
+    }
+    .expect("seek");
+    assert_eq!(flushes.load(Ordering::SeqCst), 1);
+    if let DemuxSeekOutcome::Pending(reason) = outcome {
+        if prefix {
+            assert_eq!(
+                decoder
+                    .seek_prefix(target)
+                    .expect("same-target replacement"),
+                DecoderSeekOutcome::Pending(reason)
+            );
+            assert_eq!(flushes.load(Ordering::SeqCst), 2);
+        }
+        assert!(log.lock().expect("calls").seeks.is_empty());
+        for _ in 0..2 {
+            decoder.prepare_next_chunk();
+            assert!(matches!(
+                decoder.next_chunk().expect("pending seek blocks PCM"),
+                DecoderChunkOutcome::Pending(actual) if actual == reason
+            ));
+            assert!(log.lock().expect("calls").seeks.is_empty());
+        }
+        assert_eq!(
+            decoder.demuxer.seek.len(),
+            2,
+            "PCM preparation cannot resolve a seek"
+        );
+        assert_eq!(
+            decoder.prepare_seek().expect("pending continuation"),
+            Some(DecoderSeekOutcome::Pending(reason))
+        );
+        assert!(log.lock().expect("calls").seeks.is_empty());
+        assert!(matches!(
+            decoder.prepare_seek().expect("terminal continuation"),
+            Some(DecoderSeekOutcome::Landed {
+                landed_byte: Some(123),
+                ..
+            })
+        ));
+        assert_eq!(
+            flushes.load(Ordering::SeqCst),
+            1 + u32::from(prefix),
+            "continuation cannot flush the codec"
+        );
+        match decoder.pending_seek_target.expect("original seek trim") {
+            state::SeekTrim::Nearest(actual) => {
+                assert!(!prefix);
+                assert_eq!(actual, target);
+            }
+            state::SeekTrim::Prefix(actual) => {
+                assert!(prefix);
+                assert_eq!(actual, target);
+            }
+        }
+    }
+    assert_eq!(decoder.prepare_seek().expect("settled continuation"), None);
+    assert_eq!(log.lock().expect("calls").seeks, vec![expected_signal]);
 }
 
 #[kithara::test]

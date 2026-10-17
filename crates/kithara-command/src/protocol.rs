@@ -29,6 +29,8 @@ pub enum When<T> {
     Next,
     /// This frame; a frame the executor already passed makes the batch late.
     At(T),
+    /// An event in the executor's stream names the moment. Ordered after every timed batch.
+    Deferred,
 }
 
 impl<T> Default for When<T> {

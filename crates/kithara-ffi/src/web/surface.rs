@@ -1,5 +1,5 @@
 use js_sys::{Function, Number, Object, Reflect};
-use kithara::platform::sync::Arc;
+use kithara::{events::TrackId, platform::sync::Arc};
 use num_traits::cast;
 use wasm_bindgen::prelude::*;
 
@@ -46,6 +46,8 @@ fn id_from_f64(raw: f64) -> Option<u64> {
 /// [`AudioPlayer`](crate::player::AudioPlayer) facade. Wraps the facade's
 /// `Inner` (the wasm engine) and adapts JS argument shapes (URLs, `f64`
 /// track ids, JS callback objects) onto the typed facade methods.
+/// Synchronous command results report bridge admission. The owner publishes
+/// confirmed state through getters and later refusals through Error events.
 #[wasm_bindgen]
 impl AudioPlayer {
     #[wasm_bindgen(js_name = actionAtItemEnd)]
@@ -184,10 +186,7 @@ impl AudioPlayer {
 
     pub(crate) fn item_by_id(&self, raw: f64) -> Option<Arc<AudioPlayerItem>> {
         let id = id_from_f64(raw)?;
-        self.inner
-            .items()
-            .into_iter()
-            .find(|item| item.track_id().as_u64() == id)
+        self.inner.item_for_command(TrackId::from(id))
     }
 
     #[wasm_bindgen(js_name = itemCount)]
@@ -241,7 +240,7 @@ impl AudioPlayer {
         .to_owned()
     }
 
-    /// Last playback-rate target accepted for delivery to the worker.
+    /// The playback rate published by the queue owner.
     #[wasm_bindgen(js_name = playingRate)]
     #[must_use]
     pub fn playing_rate_js(&self) -> f32 {
@@ -451,7 +450,7 @@ impl AudioPlayer {
     }
 
     /// # Errors
-    /// Returns a JS error for a rejected worker command.
+    /// Returns a JS error if the worker cannot admit the command.
     #[wasm_bindgen(js_name = setMuted)]
     pub fn set_muted_js(&self, muted: bool) -> Result<(), JsValue> {
         self.inner
@@ -490,16 +489,16 @@ impl AudioPlayer {
     }
 
     /// # Errors
-    /// Returns a JS error for a non-finite rate or a rejected worker command.
+    /// Returns a JS error for a non-finite rate or failed worker admission.
     #[wasm_bindgen(js_name = setPlayingRate)]
     pub fn set_playing_rate_js(&self, rate: f32) -> Result<(), JsValue> {
         self.inner
-            .try_set_playing_rate(rate)
+            .set_playing_rate(rate)
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     /// # Errors
-    /// Returns a JS error for a rejected worker command.
+    /// Returns a JS error if the worker cannot admit the command.
     #[wasm_bindgen(js_name = setVolume)]
     pub fn set_volume_js(&self, volume: f32) -> Result<(), JsValue> {
         self.inner

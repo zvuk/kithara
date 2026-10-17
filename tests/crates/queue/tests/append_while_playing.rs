@@ -20,13 +20,14 @@ async fn queue_append_while_playing_does_not_wait_for_host() {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::WAV_SINE440_60S);
     let src = ResourceSrc::parse(url.as_str()).expect("valid signal fixture URL");
+    let source = TrackSource::Config(Box::new(
+        ResourceConfig::for_src(src)
+            .store(AssetStore::builder(pools()).build())
+            .build(),
+    ));
     let second = harness
-        .control()
-        .append(TrackSource::Config(Box::new(
-            ResourceConfig::for_src(src)
-                .store(AssetStore::builder(pools()).build())
-                .build(),
-        )))
+        .run(move |q| q.append(source))
+        .await
         .expect("append while first track is playing");
     assert_ne!(second.as_u64(), first_id);
     harness.close().await;

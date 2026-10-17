@@ -1,17 +1,22 @@
+use std::num::NonZeroU32;
+
 use kithara::{
     abr::{AbrEvent, AbrReason},
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, NoResamplerBackend, ReadOutcome},
     download::{Downloader, DownloaderConfig},
     events::{EventBus, EventReceiver},
     hls::{AbrMode, Hls, HlsConfig},
+    host::{HostConfig, HostSettings},
     net::{HttpClient, NetOptions},
     platform::{
-        CancelToken, time,
-        time::{Duration, Instant},
+        CancelToken,
+        thread::paced_backoff,
+        time,
+        time::{Duration, Instant, WallInstant},
         tokio::task::spawn_blocking,
     },
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, Stream},
 };
 use kithara_integration_tests::{
@@ -19,13 +24,18 @@ use kithara_integration_tests::{
     bufpool_ext::{Pools, TestPools, pools},
     event::TestEvent,
     fixture_protocol::{DelayRule, PcmPattern},
-    output_continuity::CONTINUITY_SAMPLE_RATE,
+    mock::{LaneAudio, LaneLoader},
+    offline::OfflinePlayer,
+    output_continuity::{
+        CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
+        render_offline_window, render_until_audible,
+    },
 };
 use kithara_test_utils::{TestTempDir, pace};
 use tracing::info;
 use url::Url;
 
-pub(crate) fn packaged_switch_abr_mode() -> AbrMode {
+fn packaged_switch_abr_mode() -> AbrMode {
     auto(0)
 }
 
@@ -72,15 +82,15 @@ pub(crate) async fn create_packaged_abr_fixture() -> (TestServerHelper, Url) {
 /// that drives the read loop itself and handles [`ReadOutcome::Pending`] wants
 /// `false`; a caller that reads the rendered PCM back wants `true`, because a
 /// zero-filled range is indistinguishable from rendered silence.
-pub(crate) async fn open_packaged_hls_audio(
-    worker: &PlayWorker<TestPools>,
+async fn open_packaged_hls_audio(
+    loader: &mut LaneLoader<Hls<TestPools>, NoResamplerBackend, TestPools>,
     pools: &Pools,
     url: &Url,
     store: AssetStore<TestPools>,
     abr: AbrMode,
     bus: Option<EventBus>,
     block_on_underrun: bool,
-) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
+) -> LaneAudio<Stream<Hls<TestPools>>, TestPools> {
     let cancel = CancelToken::never();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
@@ -102,12 +112,15 @@ pub(crate) async fn open_packaged_hls_audio(
         .maybe_events(bus.clone())
         .build();
 
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .maybe_events(bus)
-        .block_on_underrun(block_on_underrun)
-        .build();
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .maybe_events(bus)
+            .build(),
+    )
+    .block_on_underrun(block_on_underrun)
+    .build();
 
-    let mut audio = worker
+    let mut audio = loader
         .load(config)
         .await
         .unwrap_or_else(|err| panic!("packaged ABR audio should open for {url}: {err}"));
@@ -115,17 +128,23 @@ pub(crate) async fn open_packaged_hls_audio(
     audio
 }
 
-pub(crate) async fn read_audio_some(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+async fn read_audio_some(
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     stage: &str,
 ) -> usize {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut buf = [0.0f32; 4096];
 
     loop {
+        hang_tick!();
         let _ = audio.preload();
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => return count.get(),
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                hang_reset!();
+                return count.get();
+            }
             Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while waiting for packaged ABR audio at stage={stage}");
@@ -145,6 +164,7 @@ pub(crate) async fn read_audio_some(
 /// This is the exact scenario from the production crash:
 /// `kithara-app` plays one MP3 plus the plain and encrypted HLS masters.
 /// ABR switches variant on HLS track → worker hangs → all tracks die.
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 pub(crate) async fn abr_switch_on_production_ladder_does_not_hang(
     temp_dir: TestTempDir,
     mixed_plain: (TestServerHelper, Url),
@@ -171,10 +191,14 @@ pub(crate) async fn abr_switch_on_production_ladder_does_not_hang(
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .block_on_underrun(true)
-        .build();
-    let mut audio = worker.load(config).await.expect("create audio");
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
+    )
+    .block_on_underrun(true)
+    .build();
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio");
     spawn_blocking(move || {
         let _ = audio.preload();
         let mut buf = vec![0f32; 4096];
@@ -182,12 +206,14 @@ pub(crate) async fn abr_switch_on_production_ladder_does_not_hang(
 
         let mut saw_eof = false;
         loop {
+            hang_tick!();
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => {
                     pace(Duration::from_millis(10));
                 }
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     total_samples += count.get() as u64;
+                    hang_reset!();
                     if total_samples >= 100_000 {
                         break;
                     }
@@ -211,6 +237,271 @@ pub(crate) async fn abr_switch_on_production_ladder_does_not_hang(
     .expect("read phase join");
 }
 
+/// A packaged ABR variant switch leaves no gap in the rendered PCM.
+///
+/// The seam window reads its own output back, so it renders over a reader that
+/// parks on an empty producer ring: a zero-filled underrun would otherwise
+/// arrive as silence the decoder never produced, and the measurement would read
+/// how promptly the machine scheduled the decode thread instead of what the
+/// switch did to the signal. With the park in place a silent block can only be
+/// decoded silence, so the run has no tolerance to spend.
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+pub(crate) async fn packaged_abr_switch_keeps_player_continuity(
+    temp_dir: TestTempDir,
+    create_packaged_abr_fixture: (TestServerHelper, Url),
+) {
+    let (_server, url) = create_packaged_abr_fixture;
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
+
+    let bus = EventBus::new(64);
+    let mut hls_rx = bus.subscribe();
+    let mut loader = LaneLoader::new(&worker).expect("packaged ABR lane loader");
+    let mut progress_audio = open_packaged_hls_audio(
+        &mut loader,
+        &pools,
+        &url,
+        store.clone(),
+        packaged_switch_abr_mode(),
+        Some(bus.clone()),
+        false,
+    )
+    .await;
+    let abr = progress_audio
+        .abr_handle()
+        .expect("packaged HLS audio must expose AbrHandle");
+    let mut progress_rx = progress_audio.event_bus().subscribe();
+    let mut progress_probe = PlaybackProgressProbe::default();
+    let mut switch_count = 0usize;
+    let mut switch_seen = false;
+    let mut total_samples = 0u64;
+    let mut post_switch_samples = 0u64;
+    let mut consumed = Duration::ZERO;
+    let mut reevaluated = false;
+    let mut buf = vec![0.0f32; 4096];
+    total_samples += read_audio_some(&mut progress_audio, "packaged_abr_warmup").await as u64;
+    progress_probe.drain(&mut progress_rx);
+    {
+        let _real_io = kithara::platform::flash::real_io();
+        let deadline = WallInstant::now() + Duration::from_secs(8);
+
+        while WallInstant::now() < deadline {
+            hang_tick!();
+            let _ = progress_audio.preload();
+            let read: usize = match progress_audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames {
+                    count, position, ..
+                }) => {
+                    if !switch_seen {
+                        time::sleep(position.saturating_sub(consumed)).await;
+                    }
+                    consumed = position;
+                    if !reevaluated && consumed >= Duration::from_secs(2) {
+                        abr.reevaluate();
+                        reevaluated = true;
+                    }
+                    hang_reset!();
+                    count.get()
+                }
+                Ok(ReadOutcome::Pending { .. }) => 0,
+                Ok(ReadOutcome::Eof { .. }) => {
+                    progress_probe.drain(&mut progress_rx);
+                    break;
+                }
+                Err(e) => panic!("decode error: {e}"),
+            };
+            progress_probe.drain(&mut progress_rx);
+            loop {
+                hang_tick!();
+                match hls_rx.try_recv().map(|env| env.event) {
+                    Ok(TestEvent::Abr(AbrEvent::VariantApplied { .. })) => {
+                        hang_reset!();
+                        switch_count += 1;
+                        switch_seen = true;
+                    }
+                    Ok(_) => {
+                        hang_reset!();
+                    }
+                    Err(_) => break,
+                }
+            }
+
+            if read == 0 {
+                spawn_blocking(|| paced_backoff(Duration::from_millis(10)))
+                    .await
+                    .expect("packaged ABR pending pace");
+                progress_probe.observe_idle();
+                continue;
+            }
+
+            total_samples += read as u64;
+            if switch_seen {
+                post_switch_samples += read as u64;
+            }
+            if switch_seen && progress_probe.progress_events >= 8 && post_switch_samples >= 16_384 {
+                break;
+            }
+        }
+    }
+    progress_probe.drain(&mut progress_rx);
+    progress_probe.observe_idle();
+
+    assert!(
+        switch_count > 0,
+        "packaged ABR fixture must switch variants"
+    );
+    assert!(
+        total_samples > 0,
+        "packaged ABR fixture must produce decoded output"
+    );
+    assert!(
+        post_switch_samples > 0,
+        "packaged ABR fixture produced no decoded output after the switch"
+    );
+    assert!(
+        progress_probe.progress_events >= 4,
+        "expected PlaybackProgress events during packaged ABR playback, got {}",
+        progress_probe.progress_events
+    );
+    assert_eq!(
+        progress_probe.regressions, 0,
+        "PlaybackProgress moved backward during packaged ABR playback"
+    );
+    assert!(
+        progress_probe.max_gap_between_events < Duration::from_millis(1_500),
+        "PlaybackProgress stalled for {:?} during packaged ABR playback",
+        progress_probe.max_gap_between_events
+    );
+
+    drop(progress_audio);
+
+    // Prime the shared store with EVERY segment of BOTH variants FIRST, on the
+    // blocking pool, so the offline render below decodes from cache: the V0
+    // segment delay rule would otherwise park the seam read past the render's
+    // `hang_timeout_secs`. Forcing each variant with a manual mode guarantees
+    // full coverage regardless of which path the offline render's `auto(0)` ABR
+    // then takes.
+    for variant in [0usize, 1usize] {
+        let warm_config = kithara::play::TrackConfig::for_audio(
+            AudioConfig::<Hls<TestPools>>::for_stream(
+                HlsConfig::for_url(url.clone())
+                    .store(store.clone())
+                    .pools(pools.clone())
+                    .initial_abr_mode(AbrMode::manual(variant))
+                    .download_batch_size(1)
+                    .build(),
+            )
+            .build(),
+        )
+        .block_on_underrun(true)
+        .build();
+        let warm_audio = loader
+            .load(warm_config)
+            .await
+            .unwrap_or_else(|e| panic!("packaged ABR warm audio (v{variant}) must open: {e}"));
+        #[kithara::flash(io)]
+        #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+        fn warm_packaged_audio(
+            mut warm_audio: LaneAudio<Stream<Hls<TestPools>>, TestPools>,
+            variant: usize,
+        ) -> u64 {
+            let _ = warm_audio.preload();
+            let mut buf = vec![0f32; 4096];
+            let mut total = 0u64;
+            loop {
+                hang_tick!();
+                match warm_audio.read(&mut buf) {
+                    Ok(ReadOutcome::Frames { count, .. }) => {
+                        total += count.get() as u64;
+                        hang_reset!();
+                    }
+                    Ok(ReadOutcome::Pending { .. }) => {
+                        hang_park!(|remaining: Duration| pace(
+                            remaining.min(Duration::from_micros(500))
+                        ));
+                    }
+                    Ok(ReadOutcome::Eof { .. }) => {
+                        hang_reset!();
+                        break;
+                    }
+                    Err(e) => panic!("packaged ABR warm decode error (v{variant}): {e}"),
+                }
+            }
+            total
+        }
+        let warmed = spawn_blocking(move || warm_packaged_audio(warm_audio, variant))
+            .await
+            .expect("packaged ABR warm read join");
+        assert!(
+            warmed > 0,
+            "packaged ABR warm pass (v{variant}) must decode the variant into the shared store"
+        );
+    }
+
+    let mut player = OfflinePlayer::new(
+        HostConfig::offline(pools.clone())
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(
+                        NonZeroU32::new(CONTINUITY_SAMPLE_RATE).expect("sample rate is non-zero"),
+                    )
+                    .build(),
+            )
+            .build(),
+    )
+    .await;
+    let cancel = kithara_test_utils::cancel_token();
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            cancel.child(),
+        ))
+        .abr_settings(abr_fast())
+        .cancel(cancel.child())
+        .build(),
+    );
+    let mut hls = kithara::hls::HlsConfigPatch::default();
+    hls.download_batch_size = Some(1);
+    let resource =
+        kithara::play::ResourceConfig::for_src(kithara::play::ResourceSrc::Url(url.clone()))
+            .store(store)
+            .downloader(downloader)
+            .cancel(cancel)
+            .initial_abr_mode(packaged_switch_abr_mode())
+            .hls(hls)
+            .build();
+    player
+        .load_and_fadein(kithara::queue::TrackSource::from(resource))
+        .await;
+    render_until_audible(
+        &mut player,
+        "packaged abr warmup",
+        CONTINUITY_BLOCK_FRAMES,
+        CONTINUITY_SAMPLE_RATE,
+    )
+    .await;
+    let seam = render_offline_window(
+        &mut player,
+        220,
+        "packaged abr seam window",
+        CONTINUITY_BLOCK_FRAMES,
+        CONTINUITY_SAMPLE_RATE,
+    )
+    .await;
+    assert_eq!(
+        seam.max_silence_run, 0,
+        "packaged ABR switch produced {} silent blocks ({seam})",
+        seam.max_silence_run
+    );
+    player.close().await;
+}
+
 #[derive(Debug)]
 struct CrossCodecReadStats {
     post_samples: u64,
@@ -219,9 +510,10 @@ struct CrossCodecReadStats {
     saw_eof: bool,
 }
 
-#[kithara::flash(true)]
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 fn read_manual_cross_codec_phase(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     hls_rx: &mut EventReceiver<TestEvent>,
     post_target: u64,
 ) -> CrossCodecReadStats {
@@ -238,7 +530,10 @@ fn read_manual_cross_codec_phase(
     let mut last_progress = Instant::now();
 
     while !manual_applied || stats.post_samples < post_target {
+        hang_tick!();
         while let Ok(event) = hls_rx.try_recv().map(|envelope| envelope.event) {
+            hang_tick!();
+            hang_reset!();
             if let TestEvent::Abr(AbrEvent::VariantApplied { to, reason, .. }) = event {
                 let transition = (to.get(), reason);
                 stats.applied_transitions.push(transition);
@@ -257,6 +552,7 @@ fn read_manual_cross_codec_phase(
             }) => {
                 let count = u64::try_from(count.get())
                     .unwrap_or_else(|error| panic!("read count does not fit u64: {error}"));
+                hang_reset!();
                 if manual_applied {
                     stats.post_samples += count;
                     last_progress = Instant::now();
@@ -355,11 +651,16 @@ pub(crate) async fn manual_cross_codec_switch_sustains_post_switch_playback(
     // post-switch decoder stall then parks forever, the virtual clock cannot
     // pass the hang budget, and the `KITHARA_HANG_TIMEOUT_SECS=5` watchdog fires
     // — the flash-correct enforcement of the "no >5 s stall" contract.
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .events(bus.clone())
-        .block_on_underrun(true)
-        .build();
-    let mut audio = worker.load(config).await.expect("create audio");
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .events(bus.clone())
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio");
 
     // Subscribe before any switch so `VariantApplied{to:3}` cannot be missed.
     // The post-switch read owns this receiver and drains it inline.
@@ -369,22 +670,30 @@ pub(crate) async fn manual_cross_codec_switch_sustains_post_switch_playback(
     // (44_100 × 2 × 0.2 = 17_640 frames) so AAC decoder is fully primed. The
     // blocking read must run off the test runtime thread: parking it here would
     // starve the HLS drive/fetch tasks that feed the worker.
-    let (mut audio, pre_samples) = spawn_blocking(move || {
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    fn warm_cross_codec_audio(
+        mut audio: LaneAudio<Stream<Hls<TestPools>>, TestPools>,
+    ) -> (LaneAudio<Stream<Hls<TestPools>>, TestPools>, u64) {
         let _ = audio.preload();
         let mut buf = vec![0f32; 4096];
         let mut pre = 0u64;
         while pre < 17_640 {
+            hang_tick!();
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { count, .. }) => pre += count.get() as u64,
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    pre += count.get() as u64;
+                    hang_reset!();
+                }
                 Ok(ReadOutcome::Pending { .. }) => {}
                 Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("decode error during AAC warmup: {e}"),
             }
         }
         (audio, pre)
-    })
-    .await
-    .expect("AAC warmup join");
+    }
+    let (mut audio, pre_samples) = spawn_blocking(move || warm_cross_codec_audio(audio))
+        .await
+        .expect("AAC warmup join");
     assert!(
         pre_samples >= 17_640,
         "AAC warmup must produce ≥17_640 frames before the cross-codec flip; \

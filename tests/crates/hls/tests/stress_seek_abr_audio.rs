@@ -3,13 +3,14 @@ use kithara::{
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::{DelayRule, PcmPattern},
+    mock::LaneAudio,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{
@@ -22,7 +23,10 @@ use tracing::info;
 
 use crate::{
     common::test_defaults::SawWav,
-    saw_chunk::{channel_mismatches, first_invalid_sample, phase_steps},
+    saw_chunk::{
+        channel_mismatches, check_fractional_saw, check_fractional_saw_controls,
+        first_invalid_sample, phase_steps,
+    },
 };
 
 mod consts {
@@ -91,7 +95,7 @@ fn assert_abr_size_probes(fixture: AbrAudioFixture, helper: &TestServerHelper, h
     }
 }
 
-type HlsAudio = RegisteredAudio<Stream<Hls<TestPools>>, TestPools>;
+type HlsAudio = LaneAudio<Stream<Hls<TestPools>>, TestPools>;
 
 /// Phase 1: read until the saw turns from ascending to descending, the ABR
 /// switch onto the low-bandwidth variant.
@@ -211,13 +215,21 @@ struct SeekTally {
     successful_reads: u64,
     channel_mismatches: u64,
     continuity_errors: u64,
+    first_continuity_error: Option<String>,
     direction_errors: u64,
 }
 
 impl SeekTally {
     /// Tally one post-seek chunk: valid samples, channels that agree, a saw
     /// that steps one frame at a time, and no ascending run after the switch.
-    fn record(&mut self, iteration: usize, pos_secs: f64, chunk: &[f32], channels: usize) {
+    fn record(
+        &mut self,
+        iteration: usize,
+        pos_secs: f64,
+        chunk: &[f32],
+        channels: usize,
+        source_span: kithara::signal::SourceSpan,
+    ) {
         if let Some((j, sample)) = first_invalid_sample(chunk) {
             panic!("invalid sample at seek #{iteration} offset {j}: {sample} (pos {pos_secs:.4}s)");
         }
@@ -231,16 +243,17 @@ impl SeekTally {
             }
         }
 
-        for (frame, prev_phase, curr_phase) in phase_steps(chunk, channels) {
-            if signal::phase::distance(prev_phase, curr_phase) != 1 {
-                self.continuity_errors += 1;
-                if self.continuity_errors <= 3 {
-                    info!(
-                        iteration,
-                        frame, prev_phase, curr_phase, pos_secs, "Continuity break"
-                    );
-                }
-            }
+        if let Err(error) = check_fractional_saw(
+            chunk,
+            channels,
+            source_span,
+            signal::Wave::SawtoothDescending,
+            Some(Duration::from_secs_f64(pos_secs)),
+        ) {
+            self.continuity_errors += 1;
+            self.first_continuity_error.get_or_insert_with(|| {
+                format!("seek {iteration}, requested={pos_secs:?}, span={source_span:?}: {error}")
+            });
         }
 
         let dir = detect_direction(chunk, channels);
@@ -267,6 +280,7 @@ fn random_seek_cycles(audio: &mut HlsAudio, buf: &mut [f32], channels: usize, ma
         consts::SEEK_ITERATIONS
     );
 
+    check_fractional_saw_controls();
     let mut rng = Xorshift64::new(0xAB25_5017_C400_0000);
     let mut tally = SeekTally::default();
 
@@ -276,12 +290,17 @@ fn random_seek_cycles(audio: &mut HlsAudio, buf: &mut [f32], channels: usize, ma
             .seek(Duration::from_secs_f64(pos_secs))
             .unwrap_or_else(|e| panic!("seek #{i} to {pos_secs:.4}s failed: {e}"));
 
-        let n = match audio.read(buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+        let (n, source_span) = match audio.read(buf) {
+            Ok(ReadOutcome::Frames {
+                count, source_span, ..
+            }) => (
+                count.get(),
+                source_span.expect("post-seek read has an exact source span"),
+            ),
             Ok(ReadOutcome::Pending { .. } | ReadOutcome::Eof { .. }) => continue,
             Err(e) => panic!("seek read error at iteration {i}: {e}"),
         };
-        tally.record(i, pos_secs, &buf[..n], channels);
+        tally.record(i, pos_secs, &buf[..n], channels, source_span);
 
         if (i + 1) % 50 == 0 {
             info!(iteration = i + 1, ?tally, "Progress");
@@ -301,8 +320,8 @@ fn random_seek_cycles(audio: &mut HlsAudio, buf: &mut [f32], channels: usize, ma
     );
     assert_eq!(
         tally.continuity_errors, 0,
-        "{} continuity breaks in decoded data",
-        tally.continuity_errors
+        "{} fractional saw content or geometry errors: {:?}",
+        tally.continuity_errors, tally.first_continuity_error
     );
     assert_eq!(
         tally.direction_errors, 0,
@@ -464,12 +483,14 @@ async fn stress_seek_abr_audio(
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .media_info(fixture.media_info())
-        .block_on_underrun(true)
-        .build();
-    let mut audio = worker
-        .load(config)
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .media_info(fixture.media_info())
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 

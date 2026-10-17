@@ -2,7 +2,7 @@ use kithara_platform::time::Duration;
 pub(crate) use kithara_stream::PrerollHint;
 use kithara_stream::{AudioCodec, PendingReason};
 
-use crate::{codec::CodecPriming, error::DecodeResult};
+use crate::{InputState, PrepareWait, codec::CodecPriming, error::DecodeResult};
 
 /// Container-side demuxer trait.
 ///
@@ -24,7 +24,7 @@ pub(crate) trait Demuxer: Send {
 
     /// Total duration if the container can compute one (HLS playlist
     /// total, mp4 `mvhd`, …); `None` for live or unbounded streams.
-    fn duration(&self) -> Option<Duration>;
+    fn duration(&self) -> Option<crate::DecoderDuration>;
 
     /// Pull the next demuxed frame, borrowing the bytes from internal
     /// demuxer state. The caller must consume the frame (typically by
@@ -47,11 +47,20 @@ pub(crate) trait Demuxer: Send {
     }
 
     /// Prepare container storage and metadata outside the real-time decode core.
+    /// Segment and variant queries describe this prepared packet before it is borrowed.
     ///
     /// # Errors
     /// Returns source, parser, or pool-budget failures encountered during preparation.
     fn prepare_frame(&mut self) -> DecodeResult<()> {
         Ok(())
+    }
+
+    fn prepare_frame_with_wait(&mut self, _wait: PrepareWait) -> DecodeResult<()> {
+        self.prepare_frame()
+    }
+
+    fn release_input(&mut self) -> InputState {
+        InputState::Idle
     }
 
     /// Seek to `target`, backing off by `priming` for codec warm-up when supported.
@@ -61,6 +70,35 @@ pub(crate) trait Demuxer: Send {
     /// # Errors
     /// Surfaces parser-level seek failures verbatim.
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome>;
+
+    fn seek_with_wait(
+        &mut self,
+        target: Duration,
+        priming: CodecPriming,
+        _wait: PrepareWait,
+    ) -> DecodeResult<DemuxSeekOutcome> {
+        self.seek(target, priming)
+    }
+
+    /// Continue an unresolved seek, returning its settlement once.
+    ///
+    /// # Errors
+    /// Returns source or parser failures from the same seek operation.
+    fn prepare_seek(&mut self) -> DecodeResult<Option<DemuxSeekOutcome>> {
+        Ok(None)
+    }
+
+    fn prepare_seek_with_wait(
+        &mut self,
+        _wait: PrepareWait,
+    ) -> DecodeResult<Option<DemuxSeekOutcome>> {
+        self.prepare_seek()
+    }
+
+    /// Raw packet coordinate of native media zero; absent when the translation is unknown.
+    fn media_origin(&self) -> Option<Duration> {
+        None
+    }
 
     /// Track-level metadata exposed by the container.
     fn track_info(&self) -> &TrackInfo;
@@ -73,7 +111,7 @@ pub(crate) struct TrackInfo {
     /// Audio codec carried by this track.
     pub(crate) codec: AudioCodec,
     /// Total track duration if available.
-    pub(crate) duration: Option<Duration>,
+    pub(crate) duration: Option<crate::DecoderDuration>,
     /// Container-level gapless metadata — populated by demuxers that
     /// can extract it without consuming the decoder (MP4 `iTunSMPB`
     /// or track `elst`, FLAC `padded_sample_count`, etc.). `None` when
@@ -114,6 +152,13 @@ pub(crate) struct Frame<'a> {
     pub(crate) pts: Duration,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PacketMetadata {
+    pub(crate) segment_index: Option<u32>,
+    pub(crate) variant_index: Option<usize>,
+    pub(crate) source_bytes: u64,
+}
+
 /// Result of a [`Demuxer::next_frame`] call.
 #[derive(Debug)]
 pub(crate) enum DemuxOutcome<'a> {
@@ -129,6 +174,8 @@ pub(crate) enum DemuxOutcome<'a> {
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub(crate) enum DemuxSeekOutcome {
+    /// Accepted seek with no landing coordinate yet; continue through `prepare_seek`.
+    Pending(PendingReason),
     /// Successfully landed inside the stream. `landed_at` is the
     /// authoritative target (≤ requested target). `landed_byte` is the
     /// optional byte-level cursor where playback continues.

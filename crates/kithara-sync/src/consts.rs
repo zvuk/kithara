@@ -1,9 +1,14 @@
-/// Time constant the tempo fixtures approach a new target with.
 #[cfg(test)]
-pub(crate) const SMOOTHING_SECONDS: f64 = 0.005;
+pub(crate) const BEATS_PER_SECOND: f64 = 2.0;
 
-/// The first session frame no caller can use.
 #[cfg(test)]
-pub(crate) const OPEN_END: i64 = i64::MAX;
+pub(crate) const FRAMES_PER_BEAT: i64 = 24_000;
 
-pub(crate) const SECONDS_PER_MINUTE: f64 = 60.0;
+#[cfg(test)]
+#[cfg(test)]
+pub(crate) const RATE: u32 = 48_000;
+
+pub(crate) const SMOOTH_SECONDS: f64 = 0.005;
+
+/// Lowest admissible media seconds consumed per output second.
+pub const MIN_SPEED: f32 = 0.05;

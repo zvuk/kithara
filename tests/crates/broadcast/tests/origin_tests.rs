@@ -121,7 +121,7 @@ async fn the_fetched_segments_decode_back_to_the_source_tone(origin_tone: Vec<f3
         stream.extend_from_slice(&bytes);
     }
 
-    let decoded = decode_adts_left(stream);
+    let decoded = decode_adts_left(stream).await;
     let expected = usize::try_from(SEGMENT_FRAMES * 4).expect("fits");
     assert!(
         decoded.len() >= expected / 2,
@@ -162,7 +162,7 @@ async fn stopping_leaves_a_fetchable_vod_tail(origin_tone: Vec<f32>) {
         .await
         .expect("the tail is fetchable");
 
-    let decoded = decode_adts_left(bytes.to_vec());
+    let decoded = decode_adts_left(bytes.to_vec()).await;
     assert_tone(
         &decoded[PRIMING_SKIP_FRAMES..],
         &format!("segment {joined}"),

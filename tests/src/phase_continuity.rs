@@ -4,20 +4,20 @@
 use std::f64::consts::{PI, TAU};
 
 use kithara::{
-    audio::{AudioControl, AudioRead, AudioSession, ReadOutcome},
+    audio::{AudioControl, AudioRead, ReadOutcome},
     events::EventBus,
     platform::{
         thread::paced_backoff,
         time::{Duration, sleep},
     },
-    play::RegisteredAudio,
+    signal::SourceSpan,
     stream::{Stream, StreamType},
 };
 use kithara_test_utils::Xorshift64;
 use num_traits::ToPrimitive;
 use tracing::{info, warn};
 
-use crate::bufpool_ext::TestPools;
+use crate::{bufpool_ext::TestPools, mock::LaneAudio};
 
 pub const SAMPLE_RATE: u32 = 44_100;
 pub const CHANNELS: u16 = 2;
@@ -36,12 +36,12 @@ pub const MIN_SIGNAL_AMP: f64 = 0.1;
 /// = 2.9 ms post-seek read budget — well within decoder warm-up.
 pub const READ_FRAMES_AFTER_SEEK: usize = 128;
 pub const READ_PENDING_RETRIES: usize = 4096;
+/// Retry budget for the post-seek segment readiness, in `READ_PENDING_POLL` steps.
+pub use crate::mock::PRELOAD_READY_RETRIES;
 /// Cadence between re-reads of a pending outcome, shared by both read twins
 /// and by the preload wait. One millisecond keeps `READ_PENDING_RETRIES`
 /// worth of retries (≈4 s) well inside every scan budget.
-pub const READ_PENDING_POLL: Duration = Duration::from_millis(1);
-/// Retry budget for the post-seek preload epoch, in `READ_PENDING_POLL` steps.
-pub const PRELOAD_READY_RETRIES: usize = 4096;
+pub use crate::mock::READ_PENDING_POLL;
 pub const E2E_SCAN_INTERVAL_FRAMES: u64 = SAMPLE_RATE as u64 / 8;
 pub const SAFETY_END_MARGIN_FRAMES: u64 = 4096;
 
@@ -131,17 +131,6 @@ pub fn measure_phase_rad_window(mono: &[f64], delta_rad: f64) -> (f64, f64) {
     (phase, amp)
 }
 
-fn read_block<T>(
-    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
-    buf: &mut [f32],
-    label: &str,
-) -> Option<usize>
-where
-    T: StreamType<Events = EventBus>,
-{
-    read_block_with_position(audio, buf, label).map(|(n, _)| n)
-}
-
 /// Pull one block, retrying while the decoder has nothing yet.
 ///
 /// The guard is what makes `READ_PENDING_RETRIES` a statement about the
@@ -154,11 +143,11 @@ where
 /// machine reports a starved decoder. The sibling `consumer_pace` below already
 /// carries the same guard.
 #[kithara::flash(true)]
-fn read_block_with_position<T>(
-    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
+fn read_block<T>(
+    audio: &mut LaneAudio<Stream<T>, TestPools>,
     buf: &mut [f32],
     label: &str,
-) -> Option<(usize, Duration)>
+) -> Option<(usize, SourceSpan)>
 where
     T: StreamType<Events = EventBus>,
 {
@@ -166,8 +155,13 @@ where
     loop {
         match audio.read(buf) {
             Ok(ReadOutcome::Frames {
-                count, position, ..
-            }) => return Some((count.get(), position)),
+                count, source_span, ..
+            }) => {
+                return Some((
+                    count.get(),
+                    source_span.expect("phase read has source geometry"),
+                ));
+            }
             Ok(ReadOutcome::Pending { .. }) => {
                 retries += 1;
                 assert!(
@@ -182,15 +176,7 @@ where
     }
 }
 
-fn start_frame_from_read_position(position: Duration, frames_read: u64) -> u64 {
-    let end_frame = (position.as_secs_f64() * f64::from(SAMPLE_RATE))
-        .round()
-        .to_u64()
-        .unwrap_or(0);
-    end_frame.saturating_sub(frames_read)
-}
-
-/// Async twin of [`read_block_with_position`]; same reason for the guard, and
+/// Async twin of [`read_block`]; same reason for the guard, and
 /// the same budget.
 ///
 /// The retry re-reads instead of awaiting `AudioEvent::OutputAvailable`.
@@ -202,17 +188,24 @@ fn start_frame_from_read_position(position: Duration, frames_read: u64) -> u64 {
 /// report as a timeout with no site attached.
 #[kithara::flash(true)]
 async fn read_block_async<T>(
-    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
+    audio: &mut LaneAudio<Stream<T>, TestPools>,
     buf: &mut [f32],
     label: &str,
-) -> Option<usize>
+) -> Option<(usize, SourceSpan)>
 where
     T: StreamType<Events = EventBus>,
 {
     let mut retries = 0usize;
     loop {
         match audio.read(buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => return Some(count.get()),
+            Ok(ReadOutcome::Frames {
+                count, source_span, ..
+            }) => {
+                return Some((
+                    count.get(),
+                    source_span.expect("phase read has source geometry"),
+                ));
+            }
             Ok(ReadOutcome::Pending { reason, .. }) => {
                 retries += 1;
                 assert!(
@@ -226,6 +219,62 @@ where
             Err(e) => panic!("{label}: read error: {e}"),
         }
     }
+}
+
+fn check_source_continuity(
+    previous: &mut Option<SourceSpan>,
+    span: SourceSpan,
+    frames: u64,
+    sine: SinePhaseSpec,
+    label: &str,
+) -> f64 {
+    assert_eq!(
+        span.output_frames(),
+        frames,
+        "{label}: PCM and geometry differ",
+    );
+    assert_eq!(
+        span.sample_rate().get(),
+        sine.sample_rate,
+        "{label}: source rate changed",
+    );
+    assert!(
+        span.is_affine(),
+        "{label}: phase scan requires an affine source clock"
+    );
+    let (start, denominator) = span.source_ratio_at(0).expect("source start");
+    let (end, end_denominator) = span.source_ratio_at(frames).expect("source end");
+    let expected_end = start
+        .checked_add(
+            u128::from(frames)
+                .checked_mul(denominator.get())
+                .expect("source advance"),
+        )
+        .expect("source endpoint");
+    assert_eq!(
+        end.checked_mul(denominator.get())
+            .expect("source endpoint ratio"),
+        expected_end
+            .checked_mul(end_denominator.get())
+            .expect("unity endpoint ratio"),
+        "{label}: source clock does not advance one frame per PCM frame",
+    );
+    if let Some(prior) = *previous {
+        let (prior_end, prior_denominator) = prior
+            .source_ratio_at(prior.output_frames())
+            .expect("previous source end");
+        assert_eq!(
+            prior_end
+                .checked_mul(denominator.get())
+                .expect("previous source endpoint ratio"),
+            start
+                .checked_mul(prior_denominator.get())
+                .expect("next source endpoint ratio"),
+            "{label}: source clock is discontinuous: {prior:?} -> {span:?}",
+        );
+    }
+    *previous = Some(span);
+    span.seconds_at(0).expect("exact source time")
 }
 
 #[kithara::flash(true)]
@@ -243,13 +292,17 @@ async fn consumer_pace(duration: Duration) {
 /// captures only the inter-scan glitch, which is what we audibly care
 /// about. The last scan slides forward after every check.
 pub fn check_against_previous(
-    last: &mut Option<(u64, f64)>,
-    consumed: u64,
+    last: &mut Option<(f64, f64)>,
+    source_seconds: f64,
     buf: &[f32],
     chan: usize,
     sine: SinePhaseSpec,
     label: &str,
 ) -> Option<PhaseDrift> {
+    let consumed = (source_seconds * f64::from(sine.sample_rate))
+        .round()
+        .to_u64()
+        .expect("phase diagnostic frame");
     let frames_in_buf = buf.len() / chan;
     if frames_in_buf < 2 {
         return None;
@@ -279,9 +332,9 @@ pub fn check_against_previous(
             info!(consumed, measured, amp, "{label} first scan");
             None
         }
-        Some((prev_frame, prev_phase)) => {
-            let frame_diff = consumed as i64 - prev_frame as i64;
-            let expected = wrap_pi(delta.mul_add(frame_diff as f64, prev_phase));
+        Some((prev_seconds, prev_phase)) => {
+            let expected =
+                wrap_pi((TAU * sine.freq_hz).mul_add(source_seconds - prev_seconds, prev_phase));
             let phase_diff = wrap_pi(measured - expected);
             let jump_samples = phase_diff / delta;
             if jump_samples.abs() > TOLERANCE_SAMPLES {
@@ -300,12 +353,12 @@ pub fn check_against_previous(
             }
         }
     };
-    *last = Some((consumed, measured));
+    *last = Some((source_seconds, measured));
     result
 }
 
 pub fn e2e_phase_scan<T>(
-    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
+    audio: &mut LaneAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_frames_truth: u64,
 ) -> Vec<PhaseDrift>
@@ -321,17 +374,26 @@ where
     let mut buf = vec![0.0_f32; want_samples];
     let mut consumed: u64 = 0;
     let mut next_scan_at: u64 = E2E_SCAN_INTERVAL_FRAMES;
-    let mut anchor: Option<(u64, f64)> = None;
+    let mut previous = None;
+    let mut anchor: Option<(f64, f64)> = None;
     let mut drifts: Vec<PhaseDrift> = Vec::new();
 
     while consumed < total_frames {
-        let Some(n) = read_block(audio, &mut buf, &format!("e2e@frame{consumed}")) else {
+        let Some((n, span)) = read_block(audio, &mut buf, &format!("e2e@frame{consumed}")) else {
             break;
         };
         let frames_this_read = (n / chan) as u64;
+        let source_seconds =
+            check_source_continuity(&mut previous, span, frames_this_read, sine, "e2e phase");
         if consumed >= next_scan_at
-            && let Some(drift) =
-                check_against_previous(&mut anchor, consumed, &buf[..n], chan, sine, "e2e phase")
+            && let Some(drift) = check_against_previous(
+                &mut anchor,
+                source_seconds,
+                &buf[..n],
+                chan,
+                sine,
+                "e2e phase",
+            )
         {
             drifts.push(drift);
         }
@@ -344,7 +406,7 @@ where
 }
 
 pub fn seek_phase_scan<T, F>(
-    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
+    audio: &mut LaneAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_secs: f64,
     seek_count: usize,
@@ -360,23 +422,28 @@ where
     let want_samples = READ_FRAMES_AFTER_SEEK * chan;
     let mut buf = vec![0.0_f32; want_samples];
     let mut rng = Xorshift64::new(rng_seed);
-    let mut anchor: Option<(u64, f64)> = None;
+    let mut anchor: Option<(f64, f64)> = None;
     let mut drifts: Vec<PhaseDrift> = Vec::new();
 
     for i in 0..seek_count {
         let pos_secs = rng.range_f64(0.5, max_seek_secs);
+        let requested = Duration::from_secs_f64(pos_secs);
         audio
-            .seek(Duration::from_secs_f64(pos_secs))
+            .seek(requested)
             .unwrap_or_else(|e| panic!("seek #{i} to {pos_secs:.3}s failed: {e}"));
         on_seek(i);
         let label = format!("seek#{i}@{pos_secs:.3}s");
-        let (n, position_after) =
-            read_block_with_position(audio, &mut buf, &label).unwrap_or_else(|| {
-                panic!("{label}: unexpected EOF immediately after seek");
-            });
-        let consumed = start_frame_from_read_position(position_after, (n / chan) as u64);
+        let (n, span) = read_block(audio, &mut buf, &label)
+            .unwrap_or_else(|| panic!("{label}: unexpected EOF immediately after seek"));
+        assert_eq!(
+            span.position_at(0),
+            Some(requested),
+            "{label}: wrong seek entry"
+        );
+        let source_seconds =
+            check_source_continuity(&mut None, span, (n / chan) as u64, sine, &label);
         if let Some(drift) =
-            check_against_previous(&mut anchor, consumed, &buf[..n], chan, sine, &label)
+            check_against_previous(&mut anchor, source_seconds, &buf[..n], chan, sine, &label)
         {
             drifts.push(drift);
         }
@@ -399,7 +466,7 @@ where
 /// (catches the "periodically swallowed fragment" glitch); a backward gap
 /// degenerates to a single post-seek window (catches the seek glitch).
 pub async fn scripted_phase_scan<T, S, F>(
-    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
+    audio: &mut LaneAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_frames_truth: u64,
     scenario: &[(S, f64)],
@@ -425,14 +492,15 @@ where
 
     let want_samples = READ_FRAMES_AFTER_SEEK * chan;
     let mut buf = vec![0.0_f32; want_samples];
-    let mut anchor: Option<(u64, f64)> = None;
+    let mut anchor: Option<(f64, f64)> = None;
     let mut drifts: Vec<PhaseDrift> = Vec::new();
 
     for (i, (payload, at_frac)) in scenario.iter().enumerate() {
         let seek_frame = frame_at(*at_frac);
         let seek_secs = seek_frame as f64 / f64::from(SAMPLE_RATE);
+        let requested = Duration::from_secs_f64(seek_secs);
         audio
-            .seek(Duration::from_secs_f64(seek_secs))
+            .seek(requested)
             .unwrap_or_else(|e| panic!("step #{i} seek to {seek_secs:.3}s failed: {e}"));
         switch(payload);
         wait_for_preload(audio, &format!("step #{i}")).await;
@@ -444,18 +512,33 @@ where
         let label = format!("step#{i}@{seek_secs:.3}s");
         let mut consumed = seek_frame;
         let mut next_scan_at = seek_frame;
+        let mut previous = None;
         loop {
-            let Some(n) = read_block_async(audio, &mut buf, &label).await else {
+            let Some((n, span)) = read_block_async(audio, &mut buf, &label).await else {
                 break;
             };
             if let Some(p) = pace {
                 consumer_pace(p).await;
             }
             let frames_this_read = (n / chan) as u64;
+            if previous.is_none() && !requested.is_zero() {
+                assert_eq!(
+                    span.position_at(0),
+                    Some(requested),
+                    "{label}: wrong seek entry"
+                );
+            }
+            let source_seconds =
+                check_source_continuity(&mut previous, span, frames_this_read, sine, &label);
             if consumed >= next_scan_at {
-                if let Some(drift) =
-                    check_against_previous(&mut anchor, consumed, &buf[..n], chan, sine, &label)
-                {
+                if let Some(drift) = check_against_previous(
+                    &mut anchor,
+                    source_seconds,
+                    &buf[..n],
+                    chan,
+                    sine,
+                    &label,
+                ) {
                     drifts.push(drift);
                 }
                 next_scan_at = next_scan_at.saturating_add(E2E_SCAN_INTERVAL_FRAMES);
@@ -469,33 +552,11 @@ where
     drifts
 }
 
-/// Wait for the producer to arm the post-seek preload epoch.
-///
-/// Bounded for the same reason the pending read is: an epoch that never arms
-/// is a pipeline stall, and the gate's own wait is unbounded, so the scan can
-/// only surface it as a timeout that names neither the step nor the epoch.
-#[kithara::flash(true)]
-async fn wait_for_preload<T>(audio: &RegisteredAudio<Stream<T>, TestPools>, label: &str)
-where
-    T: StreamType<Events = EventBus>,
-{
-    let Some(gate) = audio.preload_gate() else {
-        return;
-    };
-    let epoch = audio.preload_epoch();
-    let mut retries = 0usize;
-    while !gate.is_ready_for_epoch(epoch) {
-        retries += 1;
-        assert!(
-            retries < PRELOAD_READY_RETRIES,
-            "{label}: preload epoch {epoch} never armed within {PRELOAD_READY_RETRIES} polls",
-        );
-        sleep(READ_PENDING_POLL).await;
-    }
-}
+pub use crate::mock::wait_for_preload;
 
 #[cfg(test)]
 mod tests {
+    use std::num::{NonZeroU32, NonZeroU128};
 
     use kithara_test_fixtures::integration_fixtures::{
         phase_noise, phase_sine_anchor, phase_sine_dropped, phase_sine_jitter, phase_sine_measured,
@@ -580,15 +641,110 @@ mod tests {
         let spec = SinePhaseSpec::default_440();
         let pcm0 = phase_sine_anchor;
         let pcm_dropped = phase_sine_dropped;
-        let mut anchor: Option<(u64, f64)> = None;
+        let mut anchor: Option<(f64, f64)> = None;
         let chan = spec.channels as usize;
-        assert!(check_against_previous(&mut anchor, 1000, &pcm0, chan, spec, "t").is_none());
-        let drift = check_against_previous(&mut anchor, 2000, &pcm_dropped, chan, spec, "t")
-            .expect("should detect drift");
+        assert!(
+            check_against_previous(
+                &mut anchor,
+                1000.0 / f64::from(spec.sample_rate),
+                &pcm0,
+                chan,
+                spec,
+                "t",
+            )
+            .is_none()
+        );
+        let drift = check_against_previous(
+            &mut anchor,
+            2000.0 / f64::from(spec.sample_rate),
+            &pcm_dropped,
+            chan,
+            spec,
+            "t",
+        )
+        .expect("should detect drift");
         assert!(
             (drift.jump_samples - 2.0).abs() < 1e-3,
             "{}",
             drift.jump_samples
         );
+    }
+    #[kithara::test]
+    fn fractional_source_phase_keeps_pcm_and_clock_together() {
+        let sine = SinePhaseSpec {
+            channels: 1,
+            ..SinePhaseSpec::default_440()
+        };
+        let rate = NonZeroU32::new(sine.sample_rate).expect("sine rate");
+        let denominator = NonZeroU128::new(4).expect("quarter-frame clock");
+        let first = SourceSpan::try_from((4001, 4, denominator, rate, 16))
+            .expect("first fractional window");
+        let second = SourceSpan::try_from((8003, 4, denominator, rate, 16))
+            .expect("second fractional window");
+        let pcm_first = [
+            0xbe017fc5, 0xbd83373f, 0xbababef3, 0x3d7ac86e, 0x3dfd354d, 0x3e3e03dd, 0x3e7cadf9,
+            0x3e9d2cf9, 0x3ebb64e3, 0x3ed8e053, 0x3ef581a5, 0x3f089606, 0x3f15e1dc, 0x3f2296f2,
+            0x3f2ea884, 0x3f3a0a6b,
+        ]
+        .map(f32::from_bits);
+        let pcm_second = [
+            0xbe715a4b, 0xbe3288ba, 0xbde60733, 0xbd4c2b33, 0x3c52155d, 0x3d9a8087, 0x3e0d1180,
+            0x3e4c54db, 0x3e85655b, 0x3ea41a1e, 0x3ec229d7, 0x3edf7648, 0x3efbe1fb, 0x3f0ba82d,
+            0x3f18d2e7, 0x3f2563ed,
+        ]
+        .map(f32::from_bits);
+        let first_seconds = check_source_continuity(&mut None, first, 16, sine, "first");
+        let second_seconds = check_source_continuity(&mut None, second, 16, sine, "second");
+        let mut anchor = None;
+        assert!(
+            check_against_previous(&mut anchor, first_seconds, &pcm_first, 1, sine, "first")
+                .is_none()
+        );
+        let prior = anchor;
+        assert!(
+            check_against_previous(
+                &mut anchor,
+                second_seconds,
+                &pcm_second,
+                1,
+                sine,
+                "fractional",
+            )
+            .is_none()
+        );
+        anchor = prior;
+        let drift = check_against_previous(
+            &mut anchor,
+            second_seconds + 1.0 / f64::from(sine.sample_rate),
+            &pcm_second,
+            1,
+            sine,
+            "wrong coordinate",
+        )
+        .expect("one-frame source-clock error must remain visible");
+        assert!((drift.jump_samples + 1.0).abs() < 1e-3, "{drift}");
+    }
+
+    #[kithara::test]
+    fn source_clock_rejects_missing_or_repeated_frames_between_reads() {
+        let sine = SinePhaseSpec::default_440();
+        let rate = NonZeroU32::new(sine.sample_rate).expect("sine rate");
+        let denominator = NonZeroU128::new(4).expect("quarter-frame clock");
+        let first = SourceSpan::try_from((4001, 4, denominator, rate, 16))
+            .expect("first fractional window");
+        let next = SourceSpan::try_from((4065, 4, denominator, rate, 16))
+            .expect("adjacent fractional window");
+        check_source_continuity(&mut Some(first), next, 16, sine, "joined");
+        for origin in [4061, 4069] {
+            let wrong = SourceSpan::try_from((origin, 4, denominator, rate, 16))
+                .expect("shifted fractional window");
+            assert!(
+                std::panic::catch_unwind(|| {
+                    check_source_continuity(&mut Some(first), wrong, 16, sine, "wrong join");
+                })
+                .is_err(),
+                "a source jump must fail even when PCM follows the same jump",
+            );
+        }
     }
 }

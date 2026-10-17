@@ -269,6 +269,7 @@ fn own(grid: &BeatGridSnapshot, given: BeatGridStamp) -> Result<(), GridProjecti
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_sync::{SessionAnchor, SessionBeat};
     use kithara_test_utils::kithara;
     use num_traits::ToPrimitive;
 
@@ -278,7 +279,7 @@ mod tests {
         BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridSnapshot, BeatGridStamp,
         BeatGridState, BeatGridUnavailable, BeatGridView, BeatMarker, BeatOrdinal,
         FrameUncertainty, MapAxis, MapPoint, MapPosition, MapSegment, SegmentFacts, SegmentSet,
-        SessionAnchor, SessionAxis, SessionBeat, SessionEpoch, SessionFrame, consts,
+        SessionAxis, SessionEpoch, SessionFrame, consts,
     };
 
     fn sample_rate() -> NonZeroU32 {

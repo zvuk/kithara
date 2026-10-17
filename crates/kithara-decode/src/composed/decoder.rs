@@ -8,9 +8,9 @@ use kithara_stream::{
 };
 use kithara_test_utils::kithara;
 
-use super::{ComposedDecoder, DecoderRuntime, HeadStrip, Prefill, frames_to_trim};
+use super::{ComposedDecoder, DecoderRuntime, HeadStrip, PcmOriginState, Prefill, state::SeekTrim};
 use crate::{
-    BlenderProfile,
+    BlenderProfile, InputState, PcmOrigin, PrepareWait,
     codec::FrameCodec,
     consts,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
@@ -50,10 +50,10 @@ where
             codec,
             spec,
             duration,
+            origin: PcmOriginState::Observing(None),
             pools: runtime.pools,
             output: None,
             prefill: Prefill::Needed,
-            epoch: runtime.epoch,
             byte_len_handle: runtime.byte_len_handle,
             hooks: runtime.hooks,
             frame_offset: 0,
@@ -63,6 +63,12 @@ where
             head_strip: HeadStrip::default(),
             zero_frame_count: 0,
         }
+    }
+
+    fn source_media_origin(&self) -> Option<Duration> {
+        self.demuxer
+            .media_origin()?
+            .checked_sub(self.codec.media_time_rebase()?)
     }
 
     /// Build the output `AudioChunk` from a just-filled pool buffer plus
@@ -76,8 +82,13 @@ where
         buf: SampleBuffer,
         frames: u32,
         timestamp: Duration,
-        source_bytes: u64,
+        packet: crate::demuxer::PacketMetadata,
     ) -> AudioChunk {
+        if let PcmOriginState::Observing(packet) = self.origin {
+            self.origin = packet.map_or(PcmOriginState::Sealed, |packet| {
+                PcmOriginState::Captured(PcmOrigin::new(timestamp, timestamp.min(packet)))
+            });
+        }
         let live_spec = self.codec.spec();
         self.spec = live_spec;
 
@@ -101,16 +112,17 @@ where
         let meta = AudioChunkInfo {
             end_timestamp,
             timestamp,
+            media_origin: self.source_media_origin(),
             frames,
             frame_offset,
-            source_bytes,
-            segment_index: self.demuxer.current_segment_index(),
+            source_bytes: packet.source_bytes,
+            segment_index: packet.segment_index,
             source_byte_offset: None,
-            variant_index: self.demuxer.current_variant_index(),
+            variant_index: packet.variant_index,
             spec: live_spec,
-            epoch: self.epoch,
             render_revision: 0,
             mapping_revision: None,
+            ..AudioChunkInfo::default()
         };
         AudioChunk::new(meta, buf)
     }
@@ -121,36 +133,6 @@ where
         })??;
         self.output = Some(Ok(output));
         self.next_chunk_inner()
-    }
-
-    fn drain_codec_eof(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-        if !self
-            .codec
-            .needs_eof_drain(self.demuxer.track_info().sample_rate)
-        {
-            return Ok(DecoderChunkOutcome::Eof);
-        }
-
-        let mut buf = self.output.take().ok_or(DecodeError::InvalidData {
-            detail: "decoder output was not prepared",
-        })??;
-        let timestamp = self
-            .spec
-            .duration_for(self.frame_offset)
-            .unwrap_or(Duration::from_nanos(u64::MAX));
-        let frames = match self.codec.decode_frame(&[], timestamp, &[], &mut buf) {
-            Ok(frames) => frames,
-            Err(error) => {
-                self.output = Some(Ok(buf));
-                return Err(error);
-            }
-        };
-        if frames == 0 {
-            self.output = Some(Ok(buf));
-            return Ok(DecoderChunkOutcome::Eof);
-        }
-        let chunk = self.build_chunk(buf, frames, timestamp, 0);
-        Ok(DecoderChunkOutcome::Chunk(chunk))
     }
 
     fn emit_chunk_signal(&mut self, outcome: &DecoderChunkOutcome) {
@@ -166,6 +148,7 @@ where
 
     fn emit_seek_signal(&mut self, outcome: &DecoderSeekOutcome) {
         let signal = match outcome {
+            DecoderSeekOutcome::Pending(_) => return,
             DecoderSeekOutcome::Landed {
                 landed_byte,
                 preroll,
@@ -189,32 +172,72 @@ where
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             hang_tick!();
-            let frame = match self.demuxer.next_frame_prepared()? {
-                DemuxOutcome::Frame(frame) => frame,
-                DemuxOutcome::Pending(reason) => {
-                    return Ok(DecoderChunkOutcome::Pending(reason));
-                }
-                DemuxOutcome::Eof => return self.drain_codec_eof(),
+            let mut at_eof = false;
+            let needs_eof_drain = self
+                .codec
+                .needs_eof_drain(self.demuxer.track_info().sample_rate);
+            let mut packet = crate::demuxer::PacketMetadata {
+                segment_index: self.demuxer.current_segment_index(),
+                variant_index: self.demuxer.current_variant_index(),
+                source_bytes: 0,
+            };
+            let frame = if self.codec.has_output() {
+                None
+            } else {
+                Some(match self.demuxer.next_frame_prepared()? {
+                    DemuxOutcome::Frame(frame) => frame,
+                    DemuxOutcome::Pending(reason) => {
+                        return Ok(DecoderChunkOutcome::Pending(reason));
+                    }
+                    DemuxOutcome::Eof => {
+                        if !needs_eof_drain {
+                            return Ok(DecoderChunkOutcome::Eof);
+                        }
+                        at_eof = true;
+                        crate::demuxer::Frame {
+                            data: &[],
+                            packet_desc: &[],
+                            duration: Duration::ZERO,
+                            pts: self.spec.duration_for(self.frame_offset)?,
+                        }
+                    }
+                })
             };
             hang_reset!();
-            let frame_pts = frame.pts;
-            let frame_duration = frame.duration;
-            let frame_end = frame_pts.saturating_add(frame_duration);
-            let source_bytes = u64::try_from(frame.data.len()).unwrap_or(u64::MAX);
+            self.origin.observe_packet(frame, at_eof);
             let mut buf = self.output.take().ok_or(DecodeError::InvalidData {
                 detail: "decoder output was not prepared",
             })??;
-            let mut frames =
-                match self
-                    .codec
-                    .decode_frame(frame.data, frame_pts, frame.packet_desc, &mut buf)
-                {
-                    Ok(frames) => frames,
-                    Err(error) => {
-                        self.output = Some(Ok(buf));
-                        return Err(error);
-                    }
-                };
+            if let Some(frame) = frame {
+                packet.source_bytes = u64::try_from(frame.data.len()).unwrap_or(u64::MAX);
+            }
+            let result = match frame {
+                Some(frame) => self.codec.decode_frame(frame, packet, &mut buf),
+                None => self.codec.take_output(&mut buf),
+            };
+            let decoded = match result {
+                Ok(decoded) => decoded,
+                Err(error) => {
+                    self.output = Some(Ok(buf));
+                    return Err(error);
+                }
+            };
+            let mut frames = decoded.frames;
+            if at_eof && frames == 0 {
+                self.output = Some(Ok(buf));
+                return Ok(DecoderChunkOutcome::Eof);
+            }
+            let frame_pts = match frame {
+                Some(frame) => frame.pts,
+                None => self.codec.decoded_pts().ok_or(DecodeError::InvalidData {
+                    detail: "buffered codec output has no presentation timestamp",
+                })?,
+            };
+            let frame_duration = frame.map_or_else(
+                || self.codec.spec().duration_for(u64::from(frames)),
+                |frame| Ok(frame.duration),
+            )?;
+            let frame_end = frame_pts.saturating_add(frame_duration);
             let prior_head_strip = self.head_strip.frames();
             let decoded_pts = self.codec.decoded_pts();
             if decoded_pts.is_none() {
@@ -230,64 +253,15 @@ where
                 self.zero_frame_count = 0;
                 false
             };
-            let mut chunk_pts = if frames == 0 {
-                frame_pts
-            } else if let Some(decoded_pts) = decoded_pts {
-                decoded_pts
-            } else {
-                let stripped = self.head_strip.frames().saturating_sub(prior_head_strip);
-                frame_pts.saturating_add(
-                    self.codec
-                        .spec()
-                        .duration_for(stripped)
-                        .unwrap_or(Duration::MAX),
-                )
-            };
-            if let Some(target) = self.pending_seek_target {
-                let decoded_end = chunk_pts.saturating_add(
-                    self.codec
-                        .spec()
-                        .duration_for(u64::from(frames))
-                        .unwrap_or(Duration::from_nanos(u64::MAX)),
-                );
-                if (frames == 0 && frame_end <= target) || (frames > 0 && decoded_end <= target) {
-                    self.output = Some(Ok(buf));
-                    if zero_frame_budget_reached {
-                        return Ok(DecoderChunkOutcome::Pending(PendingReason::NotReady(
-                            NotReadyCause::SourcePending,
-                        )));
-                    }
-                    continue;
+            let mut chunk_pts = self.chunk_pts(frame_pts, frames, decoded_pts, prior_head_strip);
+            if self.trim_seek_chunk(&mut buf, &mut frames, &mut chunk_pts, frame_end)? {
+                self.output = Some(Ok(buf));
+                if zero_frame_budget_reached {
+                    return Ok(DecoderChunkOutcome::Pending(PendingReason::NotReady(
+                        NotReadyCause::SourcePending,
+                    )));
                 }
-                if frames > 0 && chunk_pts < target {
-                    let live_spec = self.codec.spec();
-                    let trim_frames_u64 =
-                        frames_to_trim(chunk_pts, target, live_spec.sample_rate.get())
-                            .min(u64::from(frames));
-                    let trim_frames = u32::try_from(trim_frames_u64).unwrap_or(frames);
-                    if trim_frames >= frames {
-                        self.output = Some(Ok(buf));
-                        continue;
-                    }
-                    if trim_frames > 0 {
-                        let channels = usize::from(live_spec.channels);
-                        let trim_samples = usize::try_from(trim_frames)
-                            .unwrap_or(0)
-                            .saturating_mul(channels);
-                        let total_samples = usize::try_from(frames)
-                            .unwrap_or(0)
-                            .saturating_mul(channels);
-                        if trim_samples < total_samples && trim_samples <= buf.len() {
-                            buf.copy_within(trim_samples..total_samples, 0);
-                            buf.truncate(total_samples - trim_samples);
-                            frames = frames.saturating_sub(trim_frames);
-                            chunk_pts = target;
-                        }
-                    }
-                }
-                if frames > 0 {
-                    self.pending_seek_target = None;
-                }
+                continue;
             }
             if frames == 0 {
                 self.output = Some(Ok(buf));
@@ -298,40 +272,87 @@ where
                 }
                 continue;
             }
-            let chunk = self.build_chunk(buf, frames, chunk_pts, source_bytes);
-            return Ok(DecoderChunkOutcome::Chunk(chunk));
+            let chunk = self.build_chunk(buf, frames, chunk_pts, decoded.metadata);
+            return Ok(DecoderChunkOutcome::Chunk(Box::new(chunk)));
         }
     }
 
-    fn seek_inner(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+    fn chunk_pts(
+        &self,
+        frame_pts: Duration,
+        frames: u32,
+        decoded_pts: Option<Duration>,
+        prior_head_strip: u64,
+    ) -> Duration {
+        if frames == 0 {
+            frame_pts
+        } else if let Some(decoded_pts) = decoded_pts {
+            decoded_pts
+        } else {
+            let stripped = self.head_strip.frames().saturating_sub(prior_head_strip);
+            frame_pts.saturating_add(
+                self.codec
+                    .spec()
+                    .duration_for(stripped)
+                    .unwrap_or(Duration::MAX),
+            )
+        }
+    }
+
+    fn seek_selected(
+        &mut self,
+        pos: Duration,
+        prefix: bool,
+        wait: PrepareWait,
+    ) -> DecodeResult<DecoderSeekOutcome> {
+        if !pos.is_zero() && matches!(self.origin, PcmOriginState::Observing(_)) {
+            self.origin = PcmOriginState::Sealed;
+        }
         let priming = self.codec.priming(self.demuxer.track_info().codec);
-        match self.demuxer.seek(pos, priming)? {
+        let outcome = self.demuxer.seek_with_wait(pos, priming, wait)?;
+        self.codec.flush()?;
+        self.head_strip = HeadStrip::default();
+        self.zero_frame_count = 0;
+        self.pending_seek_target = Some(if prefix {
+            SeekTrim::Prefix(pos)
+        } else {
+            SeekTrim::Nearest(pos)
+        });
+        if matches!(self.output, Some(Err(_))) {
+            self.output = None;
+        }
+        Ok(self.apply_seek_outcome(outcome))
+    }
+
+    fn apply_seek_outcome(&mut self, outcome: DemuxSeekOutcome) -> DecoderSeekOutcome {
+        self.prefill = match outcome {
+            DemuxSeekOutcome::Pending(reason) => Prefill::Seeking(reason),
+            DemuxSeekOutcome::Landed { .. } | DemuxSeekOutcome::PastEof { .. } => Prefill::Needed,
+        };
+        let outcome = match outcome {
+            DemuxSeekOutcome::Pending(reason) => DecoderSeekOutcome::Pending(reason),
             DemuxSeekOutcome::Landed {
                 landed_at,
                 landed_byte,
                 preroll,
             } => {
-                self.codec.flush()?;
-                self.head_strip = HeadStrip::default();
-                self.zero_frame_count = 0;
-                self.pending_seek_target = (landed_at < pos).then_some(pos);
                 self.frame_offset = self.spec.frame_at(landed_at).unwrap_or(u64::MAX);
                 self.resync_frame_offset_to_pts = true;
                 self.timeline_gap_frames = 0;
-                Ok(DecoderSeekOutcome::Landed {
+                DecoderSeekOutcome::Landed {
                     landed_byte,
                     landed_at,
                     preroll,
                     landed_frame: self.frame_offset,
-                })
+                }
             }
             DemuxSeekOutcome::PastEof { duration } => {
-                self.codec.flush()?;
-                self.head_strip = HeadStrip::default();
-                self.zero_frame_count = 0;
-                Ok(DecoderSeekOutcome::PastEof { duration })
+                self.pending_seek_target = None;
+                DecoderSeekOutcome::PastEof { duration }
             }
-        }
+        };
+        self.emit_seek_signal(&outcome);
+        outcome
     }
 }
 
@@ -345,8 +366,19 @@ where
         BlenderProfile::new(self.spec)
     }
 
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
         self.duration
+    }
+
+    fn media_origin(&self) -> Option<Duration> {
+        self.source_media_origin()
+    }
+
+    fn initial_pcm_origin(&self) -> Option<PcmOrigin> {
+        match self.origin {
+            PcmOriginState::Captured(origin) => Some(origin),
+            PcmOriginState::Observing(_) | PcmOriginState::Sealed => None,
+        }
     }
 
     fn flush_reader_signals(&mut self) {
@@ -360,6 +392,9 @@ where
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        if matches!(self.prefill, Prefill::Seeking(_)) {
+            return self.next_chunk_prepared();
+        }
         loop {
             self.prepare_next_chunk();
             match self.next_chunk_prepared()? {
@@ -370,6 +405,11 @@ where
     }
 
     fn next_chunk_prepared(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        if let Prefill::Seeking(reason) = self.prefill {
+            let outcome = DecoderChunkOutcome::Pending(reason);
+            self.emit_chunk_signal(&outcome);
+            return Ok(outcome);
+        }
         if matches!(self.prefill, Prefill::Buffered(_)) {
             let Prefill::Buffered(result) = std::mem::replace(&mut self.prefill, Prefill::Complete)
             else {
@@ -400,13 +440,19 @@ where
     }
 
     fn prepare_next_chunk(&mut self) {
-        if self.has_prepared_result() {
+        self.prepare_next_chunk_with_wait(PrepareWait::Wait);
+    }
+
+    fn prepare_next_chunk_with_wait(&mut self, wait: PrepareWait) {
+        if self.has_prepared_result() || matches!(self.prefill, Prefill::Seeking(_)) {
             return;
         }
         if matches!(self.prefill, Prefill::Buffered(_)) {
             self.prefill = Prefill::Needed;
         }
-        if let Err(error) = self.demuxer.prepare_frame() {
+        if !self.codec.has_output()
+            && let Err(error) = self.demuxer.prepare_frame_with_wait(wait)
+        {
             self.output = Some(Err(error));
             return;
         }
@@ -420,13 +466,45 @@ where
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
-        let outcome = self.seek_inner(pos)?;
-        self.prefill = Prefill::Needed;
-        if matches!(self.output, Some(Err(_))) {
-            self.output = None;
-        }
-        self.emit_seek_signal(&outcome);
-        Ok(outcome)
+        self.seek_selected(pos, false, PrepareWait::Wait)
+    }
+
+    fn seek_with_wait(
+        &mut self,
+        pos: Duration,
+        wait: PrepareWait,
+    ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_selected(pos, false, wait)
+    }
+
+    fn seek_prefix(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_selected(pos, true, PrepareWait::Wait)
+    }
+
+    fn seek_prefix_with_wait(
+        &mut self,
+        pos: Duration,
+        wait: PrepareWait,
+    ) -> DecodeResult<DecoderSeekOutcome> {
+        self.seek_selected(pos, true, wait)
+    }
+
+    fn prepare_seek(&mut self) -> DecodeResult<Option<DecoderSeekOutcome>> {
+        self.prepare_seek_with_wait(PrepareWait::Wait)
+    }
+
+    fn prepare_seek_with_wait(
+        &mut self,
+        wait: PrepareWait,
+    ) -> DecodeResult<Option<DecoderSeekOutcome>> {
+        Ok(self
+            .demuxer
+            .prepare_seek_with_wait(wait)?
+            .map(|outcome| self.apply_seek_outcome(outcome)))
+    }
+
+    fn release_input(&mut self) -> InputState {
+        self.demuxer.release_input()
     }
 
     fn spec(&self) -> AudioSpec {
@@ -470,7 +548,6 @@ impl DecoderRuntime<crate::test_pools::TestPools> {
     pub(crate) fn for_test() -> Self {
         Self {
             pools: crate::test_pools::pools(),
-            epoch: 0,
             byte_len_handle: None,
             hooks: None,
         }

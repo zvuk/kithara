@@ -1,25 +1,22 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroU128, NonZeroUsize};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_dsp::param::{MIN_SETTLE_RATIO, SmoothedParam, SmootherConfig};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SourceSpan};
 use kithara_stretch::{
     BackendCapabilities, ElasticBackendConfig, ElasticEngine, ElasticError, ElasticRequest,
-    StretchKind,
+    StretchKind, build_engine,
 };
+use kithara_sync::SpeedCurve;
 use kithara_test_macros as kithara;
-use num_traits::cast::AsPrimitive;
+use num_traits::AsPrimitive;
 use tracing::warn;
 
 use super::{
-    projection::{ProjectedQuantum, ProjectionState},
+    super::trajectory::{Fraction, Trajectory},
     target::PreparedTarget,
 };
-use crate::{
-    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, SpeedCurve, WarpConfig, WarpCursor,
-    WarpPlanSlot, consts,
-};
+use crate::{ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, WarpConfig, WarpRenderError};
 
 /// The speed a renderer renders at and the revision that set it.
 #[derive(Clone, Copy, Debug)]
@@ -31,7 +28,7 @@ pub(in crate::render) struct RateTarget {
 impl RateTarget {
     fn new(speed: f32, revision: u64) -> Self {
         Self {
-            speed: speed.max(consts::MIN_SPEED),
+            speed: speed.max(kithara_sync::MIN_SPEED),
             revision,
         }
     }
@@ -47,8 +44,8 @@ impl RateTarget {
 
 #[derive(Clone, Copy)]
 pub(in crate::render) struct PreparedQuantum {
+    pub(in crate::render) source_span: Option<SourceSpan>,
     pub(in crate::render) activation: Option<PreparedActivation>,
-    pub(in crate::render) projection: Option<ProjectedQuantum>,
     pub(in crate::render) rate: RateTarget,
     pub(in crate::render) speed: f32,
     pub(in crate::render) source_start: u64,
@@ -76,15 +73,18 @@ impl PreparedActivation {
 /// Unity speed without a region plan is a byte-identical passthrough.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
-    pub(in crate::render) plan_slot: Arc<WarpPlanSlot>,
+    pub(in crate::render) terminal_error: Option<ElasticError>,
+    pub(in crate::render) trajectory: Trajectory,
+    pub(in crate::render) mapped_render: bool,
+    pub(in crate::render) terminal_source_end: Option<u64>,
+    pub(in crate::render) projection: Option<super::projected::Projection>,
+    pub(in crate::render) retiring_target: Option<super::transition::RetiringTarget>,
     pub(in crate::render) spec: AudioSpec,
     pub(in crate::render) backends: ElasticBackendConfig,
     /// Maximum source frames admitted to one elastic render operation.
     pub(in crate::render) source_block_frames: NonZeroUsize,
     /// Latency-sized pooled output discarded while priming an inactive engine.
     pub(in crate::render) activation_scratch: Option<SampleBuffer>,
-    /// Renderer-owned applied speed, smoothed toward [`Self::rate`].
-    pub(in crate::render) applied_speed: Option<SmoothedParam>,
     /// Speed the last [`Self::set_speed`] set, with the revision stamped on
     /// every chunk rendered toward it.
     pub(in crate::render) rate: RateTarget,
@@ -124,7 +124,6 @@ pub struct WarpRenderer<S> {
     /// chunk takes this buffer; the consumed input becomes its replacement.
     pub(in crate::render) scratch: Option<SampleBuffer>,
     pub(in crate::render) pools: PoolRegion<S>,
-    pub(in crate::render) projection: ProjectionState,
     pub(in crate::render) context: RenderReader,
     /// Engine kind currently prepared by the scheduler shell.
     pub(in crate::render) current_kind: StretchKind,
@@ -143,8 +142,8 @@ pub struct WarpRenderer<S> {
     /// after a prime; the residency holds every frame from it on.
     pub(in crate::render) resident_feed: Option<u64>,
     pub(in crate::render) current_keylock: bool,
-    /// One scheduler-shell rebuild requested after a checked engine failure.
-    /// The intent is consumed even when preparation fails.
+    /// One scheduler-shell rebuild requested for a re-prime or after a checked
+    /// engine failure. The intent is consumed even when preparation fails.
     pub(in crate::render) rebuild_pending: bool,
     /// Reset requested by seek or a return to unity passthrough. The scheduler
     /// shell performs it outside the checked render core.
@@ -165,9 +164,6 @@ where
 {
     pub(in crate::render) const MAX_OUTPUT_FRAMES: usize = 163_840;
     pub(in crate::render) const OUTPUT_ROUNDING_MARGIN: f64 = 0.5;
-    /// Re-apply pitch to the backend only when it moves this much.
-    pub(in crate::render) const RATIO_EPS: f64 = 1e-4;
-
     /// Build the slot at the source `spec` from the construction values of `config`.
     pub(crate) fn new(
         config: &WarpConfig,
@@ -180,25 +176,38 @@ where
         let (current_kind, current_keylock) = Self::stretch_for(requested_kind, requested_keylock);
         let plan = config.region_plan().clone();
         let speed = config.speed();
-        let smooth_frames: f32 = config.rate_smooth_frames().get().as_();
-        let sample_rate: f32 = spec.sample_rate.get().as_();
-        let target = Self::prepare_target(
-            (current_kind, current_keylock),
-            config.backends(),
-            config.source_block_frames(),
-            spec,
-            &pools,
-            PreparedTarget::default(),
-            true,
-        )
+        let target = if plan.is_some()
+            && !current_kind
+                .capabilities()
+                .contains(BackendCapabilities::RATE)
+        {
+            Self::config_for(
+                current_kind,
+                config.backends(),
+                config.source_block_frames(),
+                spec,
+                &pools,
+            )
+            .and_then(build_engine)
+            .map(|engine| PreparedTarget {
+                engine: Some(engine),
+                ..PreparedTarget::default()
+            })
+        } else {
+            Self::prepare_target(config, spec, &pools, PreparedTarget::default(), true)
+        }
         .unwrap_or_else(|error| {
             warn!(%current_kind, %error, "time-stretch engine preparation failed");
             PreparedTarget::default()
         });
         Self {
+            terminal_error: None,
+            trajectory: Trajectory::new(speed),
+            mapped_render: false,
+            terminal_source_end: None,
+            projection: target.projection,
+            retiring_target: None,
             context,
-            plan_slot: Arc::clone(config.plan()),
-            projection: ProjectionState::new(config),
             residency: target.residency,
             committed: None,
             backends: config.backends(),
@@ -216,17 +225,6 @@ where
             source_block_frames: config.source_block_frames(),
             render_quantum_frames: config.render_quantum_frames(),
             prepared_quantum: None,
-            applied_speed: (config.rate_smooth_frames().get() > 1).then(|| {
-                SmoothedParam::new(
-                    speed,
-                    consts::SPEED_SMOOTHING_SPAN,
-                    SmootherConfig {
-                        smooth_seconds: smooth_frames / sample_rate * -MIN_SETTLE_RATIO.ln(),
-                        settle_ratio: MIN_SETTLE_RATIO,
-                    },
-                    spec.sample_rate,
-                )
-            }),
             applied_pitch: f64::NAN,
             rate: RateTarget::new(speed, 0),
             active: false,
@@ -251,19 +249,84 @@ where
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
+    /// Output latency of the installed engine, even before activation.
+    ///
+    /// Returns zero when no engine is installed. During a transition this is
+    /// the outgoing engine's latency; use [`Self::prepare_engine_latency`] for
+    /// the requested engine's after-state.
+    #[must_use]
+    pub fn engine_latency(&self) -> FrameCount {
+        if self.keylocked_unity() && !self.active {
+            return FrameCount::new(0);
+        }
+        FrameCount::new(self.engine.as_ref().map_or(0, |engine| {
+            let stages = self
+                .projection
+                .as_ref()
+                .map_or(1, |projection| projection.stages);
+            engine
+                .capabilities()
+                .latency()
+                .second()
+                .saturating_mul(stages)
+        }))
+    }
+
+    /// Prepare the requested engine and report its output latency.
+    ///
+    /// Retires an outgoing engine into the crossfade without emitting PCM or
+    /// advancing the rendered source frontier, then installs the target.
+    ///
+    /// # Errors
+    /// Returns [`WarpRenderError::NeedsService`] if previously queued unity
+    /// output must be consumed before applying the next batch, or the engine's
+    /// admission error if preparation fails.
+    pub fn prepare_engine_latency(
+        &mut self,
+        spec: AudioSpec,
+    ) -> Result<FrameCount, WarpRenderError> {
+        if self.terminal_error.is_some() {
+            return Err(WarpRenderError::Terminated);
+        }
+        self.prepare(spec);
+        if self.pending_unity_meta.is_some() {
+            return Err(WarpRenderError::NeedsService);
+        }
+        if self.reprime_pending || self.backend_transition_pending {
+            self.retire_for_reprime()?;
+            self.prepare(spec);
+        }
+        if self.transition_pending()
+            || self.stretch_target() != (self.current_kind, self.current_keylock)
+        {
+            return Err(WarpRenderError::NeedsService);
+        }
+        if self.engine.is_none() {
+            return Err(ElasticError::EnginePreparation("engine is unavailable").into());
+        }
+        if !self.active && self.projection.is_some() {
+            let stages = self.projection_stages()?;
+            if let Some(projection) = self.projection.as_mut() {
+                projection.stages = stages;
+            }
+        }
+        Ok(self.engine_latency())
+    }
+
     /// Whether the renderer can accept another source chunk without dropping it.
     #[must_use]
     pub fn accepts_input(&self) -> bool {
-        !self.transition_pending()
+        self.terminal_error.is_none()
+            && !self.transition_pending()
             && (self.unity_passthrough(self.rate.speed())
                 || (self.engine.is_some()
                     && self.pending_source.is_some()
                     && self.scratch.is_some()))
     }
 
-    /// Push `pitch` to the backend when it moved beyond `RATIO_EPS`.
+    /// Push each distinct pitch to the backend without rounding curve steps.
     pub(in crate::render) fn apply_pitch(&mut self, pitch: f64) -> Result<(), ElasticError> {
-        if !self.applied_pitch.is_nan() && (pitch - self.applied_pitch).abs() <= Self::RATIO_EPS {
+        if pitch.to_bits() == self.applied_pitch.to_bits() {
             return Ok(());
         }
         let engine = self
@@ -281,6 +344,31 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
         self.pending_meta = None;
         self.pending_unity_meta = None;
+    }
+
+    /// Reanchors physical render phase after applying any source discontinuity.
+    ///
+    /// # Errors
+    /// Returns an error when the retained trajectory cannot represent the phase.
+    pub fn reanchor_source(
+        &mut self,
+        meta: AudioChunkInfo,
+        position: (u128, NonZeroU128),
+    ) -> Result<(), WarpRenderError> {
+        self.rebase_source(meta);
+        self.trajectory
+            .reanchor(meta.frame_offset, meta.spec.sample_rate, position)?;
+        Ok(())
+    }
+
+    pub(in crate::render) fn rebase_source(&mut self, meta: AudioChunkInfo) {
+        if self
+            .residency
+            .as_ref()
+            .is_some_and(|resident| resident.end.is_some_and(|end| end != meta.frame_offset))
+        {
+            self.reset();
+        }
     }
 
     pub(in crate::render) fn clear_render_state(&mut self) {
@@ -306,6 +394,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.reprime_pending = false;
         self.resident_feed = None;
         self.region = None;
+        self.trajectory.reset();
+        self.mapped_render = false;
+        self.terminal_source_end = None;
+        self.retiring_target = None;
     }
 
     /// The single place a render becomes the committed one, so every committed
@@ -337,16 +429,33 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         snapshot: Option<RenderSnapshot>,
         output: &AudioChunk,
         applied_rate: f32,
-        target_rate: f32,
-        projection: Option<ProjectedQuantum>,
     ) {
         let output_frames = output.frames();
         let request_revision = output.meta.render_revision;
-        if projection.is_none()
-            && let Err(error) = self.advance_speed(target_rate, output_frames)
-        {
-            warn!(%error, "time-stretch speed smoothing failed");
-        }
+        let applied_rate: f32 = if let Some(span) = output.meta.source_span {
+            let rate = span
+                .source_ratio_at(0)
+                .zip(span.source_ratio_at(span.output_frames()))
+                .and_then(|(start, end)| {
+                    Fraction {
+                        numerator: end.0,
+                        denominator: end.1,
+                    }
+                    .sub(Fraction {
+                        numerator: start.0,
+                        denominator: start.1,
+                    })
+                })
+                .and_then(Fraction::as_f64);
+            let Some(rate) = rate else {
+                warn!("rendered source mapping rate is unrepresentable");
+                return;
+            };
+            let frames: f64 = span.output_frames().as_();
+            (rate / frames).as_()
+        } else {
+            applied_rate
+        };
         let Some(snapshot) = snapshot else {
             return;
         };
@@ -357,10 +466,15 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .map(crate::WarpMapRevision::from),
         );
         let Some((committed, session_frame, source_start, source_end)) =
-            self.next_render_snapshot(snapshot, output_frames, projection)
+            self.next_render_snapshot(snapshot, output_frames)
         else {
             return;
         };
+        kithara::probe_event!(
+            rate_smoothed,
+            frames = output_frames,
+            multiplier_bits = self.rate.speed().to_bits()
+        );
         kithara::probe_event!(
             rate_applied,
             request_revision,
@@ -378,12 +492,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         output: &AudioChunk,
     ) {
         let output_frames = output.frames();
-        let projection = self.projected_tail_cursor(output_frames);
-        if let Some(projection) = projection {
-            self.projection.cursor = Some(projection.end);
-            self.projection.output_frames =
-                self.projection.output_frames.saturating_add(output_frames);
-        }
         let Some(snapshot) = snapshot else {
             return;
         };
@@ -394,7 +502,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .map(crate::WarpMapRevision::from),
         );
         let Some((committed, output_start, source_start, _)) =
-            self.next_render_snapshot(snapshot, output_frames, projection)
+            self.next_render_snapshot(snapshot, output_frames)
         else {
             return;
         };
@@ -434,11 +542,13 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .saturating_add(backend_held)
             .saturating_add(self.primed_source_debt)
     }
+}
 
+impl<S: HasPool<f32>> WarpRenderer<S> {
     pub(in crate::render) fn meta_at_frame(
         meta: AudioChunkInfo,
         frame_offset: u64,
-    ) -> AudioChunkInfo {
+    ) -> Result<AudioChunkInfo, ElasticError> {
         let mut start = meta;
         let delta = frame_offset.abs_diff(meta.frame_offset);
         let span = meta
@@ -451,18 +561,29 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         } else {
             meta.timestamp.saturating_add(span)
         };
+        if let Some(basis) = meta.source_span {
+            let basis = basis.rebase_output(meta.frame_offset, frame_offset).ok_or(
+                ElasticError::EnginePreparation("input source geometry cannot be rebased"),
+            )?;
+            start.timestamp = basis
+                .position_at(0)
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            start.end_timestamp = basis
+                .position_at(basis.output_frames())
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            start.source_span = Some(basis);
+        }
         if delta > 0 {
             start.source_byte_offset = None;
             start.source_bytes = 0;
         }
-        start
+        Ok(start)
     }
 
-    fn next_render_snapshot(
+    pub(super) fn next_render_snapshot(
         &self,
         snapshot: RenderSnapshot,
         output_frames: usize,
-        projection: Option<ProjectedQuantum>,
     ) -> Option<(RenderSnapshot, i64, u64, u64)> {
         if !self.context.is_current(&snapshot) {
             return None;
@@ -480,20 +601,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 |previous| previous.frontier().source(),
             )
             .max(snapshot.frontier().source());
-        let committed = if let Some(quantum) = projection {
-            snapshot.mapped(WarpCursor::new(
-                quantum.end.revision(),
-                source_end,
-                quantum.end.output(),
-            ))
-        } else {
-            snapshot.advance(self.committed.as_ref(), source_end, output_frames)?
-        };
+        let committed = snapshot.advance(self.committed.as_ref(), source_end, output_frames)?;
         let output_frames = i64::try_from(output_frames).ok()?;
-        let output_start = match projection {
-            Some(quantum) => i64::from(quantum.output_start),
-            None => i64::from(committed.frontier().output()).checked_sub(output_frames)?,
-        };
+        let output_start = i64::from(committed.frontier().output()).checked_sub(output_frames)?;
         Some((committed, output_start, source_start, source_end))
     }
 
@@ -516,6 +626,57 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             admitted.saturating_sub(held_source_frames),
             meta.spec.sample_rate,
         ));
+    }
+
+    pub(in crate::render) fn map_output(
+        &mut self,
+        output: &mut AudioChunk,
+    ) -> Result<(), ElasticError> {
+        let span = output
+            .meta
+            .source_span
+            .ok_or(ElasticError::EnginePreparation(
+                "rendered output has no exact source mapping",
+            ))?
+            .with_render_revision(output.meta.render_revision)
+            .with_mapping_revision(output.meta.mapping_revision);
+        let published = if let Some(input) = self.last_input_meta
+            && let Some(basis) = input.source_span
+        {
+            basis.map_output_span(input.frame_offset, span).ok_or(
+                ElasticError::EnginePreparation("input source geometry cannot map rendered PCM"),
+            )?
+        } else {
+            span
+        };
+        output.meta.frame_offset = published.start();
+        output.meta.timestamp = published
+            .position_at(0)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        output.meta.end_timestamp = published
+            .position_at(published.output_frames())
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        output.meta.source_span = Some(published);
+        self.record_mapping(span)
+    }
+
+    pub(in crate::render) fn record_mapping(
+        &mut self,
+        span: SourceSpan,
+    ) -> Result<(), ElasticError> {
+        self.residency
+            .as_mut()
+            .ok_or(ElasticError::PoolCapacity)?
+            .remember_mapping(span)?;
+        self.trajectory.advance(span)?;
+        if let Some(plan) = self.plan.as_ref()
+            && plan.region_at(span.start()) != plan.region_at(span.end())
+        {
+            self.trajectory.snap_position()?;
+        }
+        self.rendered_source_end = Some((span.end(), span.sample_rate()));
+        self.rate = RateTarget::new(self.trajectory.speed()?, self.rate.revision());
+        Ok(())
     }
 
     /// Region covering `frame`, plus whether the playhead just crossed out
@@ -550,11 +711,11 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 
     /// Re-primes a running engine on this frame when the requested one differs
     /// from it, and drops a quantum prepared before.
-    fn retarget_engine(&mut self) {
+    pub(super) fn retarget_engine(&mut self) {
         let target = self.stretch_target();
         let changed = target != (self.current_kind, self.current_keylock);
         if target.0.capabilities().contains(BackendCapabilities::RATE) {
-            self.reprime_pending |= self.active && self.projection.active.is_none() && changed;
+            self.reprime_pending |= self.active && changed;
         } else {
             self.reprime_pending = false;
             self.backend_transition_pending |= self.active && changed;
@@ -586,38 +747,38 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// Render from the next prepared quantum on at the speed `curve` holds,
     /// stamping `revision` on every chunk rendered toward it. A quantum
     /// prepared before is dropped, so the next one is planned at this speed.
-    pub fn set_speed(&mut self, curve: SpeedCurve, revision: u64) {
-        let target = match curve {
-            SpeedCurve::Constant(speed) => RateTarget::new(speed, revision),
-        };
+    /// Replaces the remaining curve at the next output frame, preserving phase.
+    ///
+    /// # Errors
+    /// Rejects nonfinite or unsupported speeds, unordered steps, and mappings
+    /// that exceed the checked rational representation. Rejection changes no state.
+    pub fn set_speed(&mut self, curve: SpeedCurve, revision: u64) -> Result<(), WarpRenderError> {
+        let target = RateTarget::new(self.trajectory.replace(curve)?, revision);
         self.reprime_pending |= self.active
+            && (self.mapped_render || !self.unity_passthrough(target.speed()))
             && self
                 .stretch_target()
                 .0
                 .capabilities()
                 .contains(BackendCapabilities::RATE)
-            && self.projection.active.is_none()
-            && (target.speed() - self.rate.speed()).abs() > f32::EPSILON
-            && !self.unity_passthrough(target.speed())
             && self
                 .engine
                 .as_ref()
                 .is_some_and(|engine| engine.capabilities().latency().first() > 0);
         self.rate = target;
         self.prepared_quantum = None;
+        Ok(())
     }
 
-    pub(in crate::render) fn snap_speed(&mut self) {
-        if let Some(applied) = self.applied_speed.as_mut() {
-            applied.set_value(self.rate.speed());
-            applied.reset_to_target();
-        }
-        self.prepared_quantum = None;
+    /// Revision of the current speed law stamped on produced output.
+    #[must_use]
+    pub const fn render_revision(&self) -> u64 {
+        self.rate.revision()
     }
 
     /// The engine `kind` and `keylock` ask for: keylock only where the backend
     /// has it.
-    fn stretch_for(kind: StretchKind, keylock: bool) -> (StretchKind, bool) {
+    pub(super) fn stretch_for(kind: StretchKind, keylock: bool) -> (StretchKind, bool) {
         (
             kind,
             keylock && kind.capabilities().contains(BackendCapabilities::KEYLOCK),
@@ -637,64 +798,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 
     pub(in crate::render) fn unity_passthrough(&self, speed: f32) -> bool {
         !self.requires_staging()
-            || (self.projection.active.is_none()
-                && self.plan.is_none()
-                && (speed - 1.0).abs() <= f32::EPSILON)
+            || (self.plan.is_none() && self.trajectory.passthrough_speed(speed))
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use kithara_signal::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
-
-    use super::*;
-    use crate::{PresentationFrontier, RenderContext, Warp, WarpMapRevision, test_pools::pools};
-
-    #[kithara::test]
-    fn zero_source_advance_commits_a_render_interval() {
-        let spec = AudioSpec {
-            channels: consts::CH,
-            sample_rate: NonZeroU32::new(consts::SR).expect("fixture rate is non-zero"),
-        };
-        let config = WarpConfig::builder().speed(1.0).build();
-        let mut warp = Warp::new((), &config);
-        let publisher = warp.take_publisher().expect("test Warp owns its publisher");
-        let renderer = warp.renderer(spec, pools());
-        let revision = WarpMapRevision::first();
-        let source = 41;
-        let output = SessionFrame::new(1_000);
-        let context = RenderContext::new_linear(
-            OutputContext::new(
-                output..SessionFrame::new(2_000),
-                spec.sample_rate,
-                SessionEpoch::new(1),
-                Some(TransportRevision::first()),
-            )
-            .expect("fixture output range is valid"),
-            None,
-        )
-        .expect("fixture context is valid");
-        publisher.publish(
-            &context,
-            PresentationFrontier::builder()
-                .source(source)
-                .output(output)
-                .warp_map(revision)
-                .build(),
-        );
-        let snapshot = renderer.context.load().expect("published render snapshot");
-        let mut renderer = renderer;
-        renderer.rendered_source_end = Some((source, spec.sample_rate));
-
-        let (committed, output_start, source_start, source_end) = renderer
-            .next_render_snapshot(snapshot, 32, None)
-            .expect("an equal source frontier still commits emitted PCM");
-
-        assert_eq!(output_start, i64::from(output));
-        assert_eq!(source_start, source);
-        assert_eq!(source_end, source);
-        assert_eq!(committed.frontier().source(), source);
-        assert_eq!(committed.frontier().output(), SessionFrame::new(1_032));
-        assert_eq!(committed.frontier().warp_map(), Some(revision));
+    pub(in crate::render) fn keylocked_unity(&self) -> bool {
+        self.current_keylock && self.plan.is_none() && self.trajectory.constant_unity()
     }
 }

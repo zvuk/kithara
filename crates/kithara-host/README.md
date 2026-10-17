@@ -16,8 +16,8 @@
 
 `kithara-host` owns Kithara's multi-player session, shared Firewheel output
 graph, session transport, and platform audio backend. A player/deck remains in
-`kithara-play`; beat-grid and synchronization contracts remain in
-`kithara-warp`.
+`kithara-play`; pure synchronization values and laws belong to `kithara-sync`,
+while beat-map projection and rendering belong to `kithara-warp`.
 
 Callers fully construct a player or decorator and transfer that instance with
 `Host::insert`. The Host attaches its opaque session capability exactly once

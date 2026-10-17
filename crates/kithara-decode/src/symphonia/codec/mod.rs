@@ -1,10 +1,11 @@
 mod config;
 mod core;
-#[cfg(feature = "fdk-aac")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "fdk-aac"))]
 mod fdk;
 #[cfg(feature = "opus")]
 mod opus;
 mod registry;
+mod timing;
 
 pub(crate) use core::SymphoniaCodec;
 

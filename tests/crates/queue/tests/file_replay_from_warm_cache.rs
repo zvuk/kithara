@@ -11,13 +11,12 @@ use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
-    test_defaults::consts as shared,
     waits::{wait_for_loader_done, wait_for_position_at_least},
 };
 use kithara_test_fixtures::SignalAsset;
@@ -63,19 +62,16 @@ async fn build_session(cache_path: &Path) -> Session {
         })
         .flush_hub(Arc::clone(&flush_hub))
         .build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build(),
-    );
+    let player = kithara::play::ResourcePrep::builder()
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
+        .build();
     let queue = OfflineQueue::paced(
         HostConfig::offline(pools.clone()).build(),
         Queue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(player)
                 .store(store.clone())
                 .build(),
         ),

@@ -26,6 +26,7 @@ use kithara_signal::{AudioChunkInfo, AudioSpec};
     feature = "stretch-glide"
 ))]
 use kithara_stretch::StretchKind;
+use kithara_sync::SpeedCurve;
 use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 
@@ -36,7 +37,7 @@ use kithara_test_utils::kithara;
 ))]
 use super::{WarpRenderer, dominant_bin, expected_bin, flush_serviced, render_serviced};
 use super::{chunk, renderer, spec};
-use crate::{SpeedCurve, WarpConfig};
+use crate::WarpConfig;
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
@@ -52,7 +53,7 @@ use crate::{Warp, consts, test_pools::pools};
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-glide",
-    case::glide_slow(StretchKind::Glide, 0.5, 15)
+    case::glide_slow(StretchKind::Glide, 0.5, 17)
 )]
 #[cfg_attr(
     feature = "stretch-glide",
@@ -60,11 +61,11 @@ use crate::{Warp, consts, test_pools::pools};
 )]
 #[cfg_attr(
     feature = "stretch-glide",
-    case::glide_fast(StretchKind::Glide, 2.0, 63)
+    case::glide_fast(StretchKind::Glide, 2.0, 79)
 )]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith_slow(StretchKind::Signalsmith, 0.5, 15)
+    case::signalsmith_slow(StretchKind::Signalsmith, 0.5, 17)
 )]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -72,11 +73,11 @@ use crate::{Warp, consts, test_pools::pools};
 )]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith_fast(StretchKind::Signalsmith, 2.0, 63)
+    case::signalsmith_fast(StretchKind::Signalsmith, 2.0, 79)
 )]
 #[cfg_attr(
     feature = "stretch-bungee",
-    case::bungee_slow(StretchKind::Bungee, 0.5, 15)
+    case::bungee_slow(StretchKind::Bungee, 0.5, 17)
 )]
 #[cfg_attr(
     feature = "stretch-bungee",
@@ -84,7 +85,7 @@ use crate::{Warp, consts, test_pools::pools};
 )]
 #[cfg_attr(
     feature = "stretch-bungee",
-    case::bungee_fast(StretchKind::Bungee, 2.0, 63)
+    case::bungee_fast(StretchKind::Bungee, 2.0, 79)
 )]
 fn source_span_is_planned_from_the_output_quantum(
     #[case] backend: StretchKind,
@@ -100,10 +101,26 @@ fn source_span_is_planned_from_the_output_quantum(
     renderer.prepare(spec());
 
     let frames = renderer
-        .prepare_quantum(AudioChunkInfo::default(), 128, usize::MAX)
+        .prepare_source_window(
+            AudioChunkInfo {
+                spec: spec(),
+                ..Default::default()
+            },
+            128,
+            usize::MAX,
+        )
         .expect("test source span is plannable");
 
     assert_eq!(frames.get(), expected_source_frames);
+    assert_eq!(
+        renderer
+            .prepared_quantum
+            .expect("prepared output quantum")
+            .source_span
+            .expect("exact source mapping")
+            .output_frames(),
+        32
+    );
 }
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
@@ -141,7 +158,9 @@ fn live_activation_primes_from_passthrough_history(
     assert_eq!(&unity.samples[..], &source);
 
     let revision = 1;
-    renderer.set_speed(SpeedCurve::Constant(2.0), revision);
+    renderer
+        .set_speed(SpeedCurve::Constant(2.0), revision)
+        .expect("valid speed");
     let mut meta = AudioChunkInfo {
         frame_offset: u64::try_from(cue).expect("cue fits u64"),
         spec: spec(),
@@ -151,7 +170,7 @@ fn live_activation_primes_from_passthrough_history(
         ..AudioChunkInfo::default()
     };
     let input_frames = renderer
-        .prepare_quantum(meta, 128, usize::MAX)
+        .prepare_source_window(meta, 128, usize::MAX)
         .expect("activation quantum is plannable")
         .get();
     assert!(
@@ -193,16 +212,18 @@ fn a_speed_set_after_planning_replans_the_next_quantum(warp_sine: Vec<f32>) {
     let input = chunk(&pools, &warp_sine[..128 * 2]);
 
     renderer
-        .prepare_quantum(input.meta, input.frames(), usize::MAX)
+        .prepare_source_window(input.meta, input.frames(), usize::MAX)
         .expect("test source span is plannable");
-    renderer.set_speed(SpeedCurve::Constant(1.0), 2);
+    renderer
+        .set_speed(SpeedCurve::Constant(1.0), 2)
+        .expect("valid speed");
     let input = renderer
         .render_quantum(input)
         .break_value()
         .expect("the quantum planned before the speed is dropped");
 
     let frames = renderer
-        .prepare_quantum(input.meta, input.frames(), usize::MAX)
+        .prepare_source_window(input.meta, input.frames(), usize::MAX)
         .expect("test source span is plannable");
     assert_eq!(frames.get(), input.frames());
     let output = renderer
@@ -248,13 +269,19 @@ pub(super) fn vinyl(kind: StretchKind, speed: f32) -> WarpRenderer {
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
+#[kithara::hang_watchdog]
 fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
     let pools = fx.pools.clone();
     let mut out: Vec<f32> = Vec::new();
     let mut tail_frames = 0;
+    let mut source = 0;
     let block = 4096 * usize::from(consts::CH);
     for data in input.chunks(block) {
-        if let Some(c) = render_serviced(fx, chunk(&pools, data)) {
+        hang_tick!();
+        let mut input = chunk(&pools, data);
+        input.meta.frame_offset = source;
+        source += u64::try_from(input.frames()).expect("source frames fit u64");
+        if let Some(c) = render_serviced(fx, input) {
             assert_eq!(
                 c.spec().sample_rate.get(),
                 consts::SR,
@@ -263,8 +290,10 @@ fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
             assert_eq!(c.spec().channels, consts::CH);
             out.extend_from_slice(&c.samples);
         }
+        hang_reset!();
     }
     while let Some(c) = flush_serviced(fx) {
+        hang_tick!();
         // A non-empty flush chunk carries real audio, so its spec must stay
         // the source spec - never the `AudioChunkInfo::default()` sentinel (0
         // channels) that a `None` `last_input_meta` would otherwise yield.
@@ -276,6 +305,7 @@ fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
         );
         tail_frames += c.frames();
         out.extend_from_slice(&c.samples);
+        hang_reset!();
     }
     (out, tail_frames)
 }
@@ -442,7 +472,7 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(
 ) {
     const SOURCE_START: u64 = 10_000;
 
-    let mut renderer = keylocked(backend, consts::MIN_SPEED);
+    let mut renderer = keylocked(backend, kithara_sync::MIN_SPEED);
     let source_frames = renderer.source_block_frames.get();
     let pools = renderer.pools.clone();
     let source = warp_sine[..(source_frames) * 2].to_vec();
@@ -468,7 +498,14 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(
     );
 
     let mut frontiers = Vec::new();
-    while let Some(tail) = flush_serviced(&mut renderer) {
+    loop {
+        renderer.prepare(spec());
+        let Some(tail) = renderer
+            .drain((source_latency / 2).max(1))
+            .expect("bounded terminal drain")
+        else {
+            break;
+        };
         assert!(tail.frames() > 0, "terminal chunk carries real samples");
         frontiers.push(renderer.rendered_source_end());
         assert!(frontiers.len() < 64, "terminal drain must converge");
@@ -503,6 +540,7 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+#[kithara::hang_watchdog]
 fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let channels = usize::from(consts::CH);
     let mut fx = keylocked(backend, 0.5);
@@ -523,7 +561,12 @@ fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind, warp_sin
         }
     }
     while let Some(o) = flush_serviced(&mut fx) {
+        hang_tick!();
+        let frames = o.frames();
         emitted.push(o);
+        if frames > 0 {
+            hang_reset!();
+        }
     }
     assert!(!emitted.is_empty(), "stretch produced no output");
     for o in &emitted {
@@ -621,6 +664,7 @@ fn vinyl_speed_scales_duration_and_pitch(#[case] backend: StretchKind, warp_sine
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+#[kithara::hang_watchdog]
 fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let mut fx = renderer(
         &WarpConfig::builder()
@@ -634,15 +678,24 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp
     let unity = render_serviced(&mut fx, chunk(&pools, &block)).expect("unity bypass emits");
     assert_eq!(&unity.samples[..], &block[..], "unity phase bypasses");
 
-    fx.set_speed(SpeedCurve::Constant(0.5), 1);
+    fx.set_speed(SpeedCurve::Constant(0.5), 1)
+        .expect("valid speed");
     let mut stretched: Vec<f32> = Vec::new();
+    let mut source = 4096;
     for _ in 0..24 {
-        if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {
+        hang_tick!();
+        let mut input = chunk(&pools, &block);
+        input.meta.frame_offset = source;
+        source += u64::try_from(input.frames()).expect("source frames fit u64");
+        if let Some(c) = render_serviced(&mut fx, input) {
             stretched.extend_from_slice(&c.samples);
         }
+        hang_reset!();
     }
     while let Some(c) = flush_serviced(&mut fx) {
+        hang_tick!();
         stretched.extend_from_slice(&c.samples);
+        hang_reset!();
     }
     assert!(
         stretched.len() > block.len() * 24,
@@ -659,6 +712,7 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+#[kithara::hang_watchdog]
 fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let mut fx = renderer(
         &WarpConfig::builder()
@@ -671,10 +725,16 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_si
     let block = warp_sine[..(4096) * 2].to_vec();
 
     let mut vinyl_out: Vec<f32> = Vec::new();
+    let mut source = 0;
     for _ in 0..24 {
-        if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {
+        hang_tick!();
+        let mut input = chunk(&pools, &block);
+        input.meta.frame_offset = source;
+        source += u64::try_from(input.frames()).expect("source frames fit u64");
+        if let Some(c) = render_serviced(&mut fx, input) {
             vinyl_out.extend_from_slice(&c.samples);
         }
+        hang_reset!();
     }
     let vinyl_mono: Vec<f32> = vinyl_out
         .iter()
@@ -690,17 +750,26 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_si
     let mut stretched: Vec<f32> = Vec::new();
     fx.prepare(spec());
     while fx.transition_pending() {
+        hang_tick!();
         if let Some(output) = flush_serviced(&mut fx) {
             stretched.extend_from_slice(&output.samples);
+            hang_reset!();
         }
     }
     for _ in 0..24 {
-        if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {
+        hang_tick!();
+        let mut input = chunk(&pools, &block);
+        input.meta.frame_offset = source;
+        source += u64::try_from(input.frames()).expect("source frames fit u64");
+        if let Some(c) = render_serviced(&mut fx, input) {
             stretched.extend_from_slice(&c.samples);
         }
+        hang_reset!();
     }
     while let Some(c) = flush_serviced(&mut fx) {
+        hang_tick!();
         stretched.extend_from_slice(&c.samples);
+        hang_reset!();
     }
     let mono: Vec<f32> = stretched
         .iter()

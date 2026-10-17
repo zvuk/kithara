@@ -1,4 +1,4 @@
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU128, NonZeroUsize};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
@@ -7,22 +7,19 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
-        // The warmup budget below asks "have we waited long enough for a
-        // switch to show up" — a question about the caller's own wall clock.
-        // The alias is what asks it there: the flash rewriter matches
-        // `Instant::now` lexically, so a name it does not recognise keeps the
-        // platform clock unvirtualised. Measured on virtual time the budget
-        // expires while the run is still seconds of real work from a switch.
-        time::{Duration, Instant, Instant as RealInstant, sleep},
+        thread,
+        time::{Duration, WallInstant},
     },
     play::{PlayWorker, PlayWorkerConfig},
     signal::{AudioChunk, AudioChunkInfo},
-    stream::{AudioCodec, ContainerFormat, MediaInfo},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
+    mock::LaneAudio,
+    reads::blocking_audio,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{
@@ -31,9 +28,15 @@ use kithara_test_fixtures::hls_fixtures::{
 use kithara_test_fixtures::signal::{self, SignalDirection as Direction, detect_direction};
 use kithara_test_utils::{TestTempDir, Xorshift64};
 use num_traits::AsPrimitive;
-use tracing::{info, warn};
+use tracing::info;
 
-use crate::common::test_defaults::SawWav;
+use crate::{
+    common::test_defaults::SawWav,
+    saw_chunk::{
+        channel_mismatches, check_fractional_saw, check_fractional_saw_controls,
+        first_invalid_sample,
+    },
+};
 
 mod consts {
     use super::SawWav;
@@ -57,7 +60,11 @@ fn detect_chunk_direction(chunk: &AudioChunk) -> Direction {
 fn format_meta(meta: &AudioChunkInfo, pcm_len: usize) -> String {
     format!(
         "frame_offset={}, samples={}, segment={:?}, variant={:?}, epoch={}",
-        meta.frame_offset, pcm_len, meta.segment_index, meta.variant_index, meta.epoch
+        meta.frame_offset,
+        pcm_len,
+        meta.segment_index,
+        meta.variant_index,
+        meta.segment.get()
     )
 }
 
@@ -83,24 +90,33 @@ fn intra_chunk_breaks(chunk: &AudioChunk) -> usize {
     breaks
 }
 
-async fn next_chunk_with_timeout<R: AudioRead>(
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+fn next_chunk_with_timeout<R: AudioRead>(
     audio: &mut R,
     timeout: Duration,
     stage: &str,
 ) -> Option<AudioChunk> {
-    let deadline = Instant::now() + timeout;
+    let deadline = WallInstant::now() + timeout;
     loop {
+        hang_tick!();
         match AudioRead::next_chunk(audio) {
-            Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
-            Ok(ChunkOutcome::Eof { .. }) => return None,
+            Ok(ChunkOutcome::Chunk(chunk)) => {
+                hang_reset!();
+                return Some(*chunk);
+            }
+            Ok(ChunkOutcome::Eof { .. }) => {
+                hang_reset!();
+                return None;
+            }
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
         }
         assert!(
-            Instant::now() <= deadline,
+            WallInstant::now() <= deadline,
             "next_chunk timeout at stage='{stage}'"
         );
-        sleep(Duration::from_micros(500)).await;
+        thread::paced_backoff(Duration::from_micros(500));
     }
 }
 
@@ -155,6 +171,7 @@ async fn audio_server(
 )]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case] ephemeral: bool) {
     let server = audio_server;
     let segment_duration = server.spec().segment_duration_secs;
@@ -197,11 +214,23 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
-    let mut audio = worker
-        .load(config)
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 
+    let _ = blocking_audio(audio, move |audio| {
+        check_chunk_integrity(audio, segment_duration);
+    })
+    .await;
+}
+
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+fn check_chunk_integrity(
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
+    segment_duration: f64,
+) {
+    check_fractional_saw_controls();
     let spec = audio.spec();
     info!(
         sample_rate = spec.sample_rate,
@@ -213,12 +242,13 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
 
     info!("Phase 1: waiting for ABR switch (ascending -> descending) via chunks...");
 
-    let warmup_start = RealInstant::now();
+    let warmup_start = WallInstant::now();
     let warmup_timeout = Duration::from_secs(consts::WARMUP_TIMEOUT_SECS);
     let mut warmup_ascending = 0u64;
     let mut warmup_unknown = 0u64;
 
     loop {
+        hang_tick!();
         if warmup_start.elapsed() > warmup_timeout {
             panic!(
                 "ABR switch not detected within {}s (ascending={}, unknown={})",
@@ -229,18 +259,17 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
         }
 
         let Some(chunk) = next_chunk_with_timeout(
-            &mut audio,
+            audio,
             Duration::from_millis(consts::WARMUP_NEXT_CHUNK_TIMEOUT_MS),
             "phase1_warmup",
-        )
-        .await
-        else {
+        ) else {
             panic!(
                 "Hit EOF before ABR switch (ascending={}, unknown={})",
                 warmup_ascending, warmup_unknown
             );
         };
 
+        hang_reset!();
         let dir = detect_chunk_direction(&chunk);
         match dir {
             Direction::Ascending => {
@@ -281,26 +310,32 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
     let mut continuity_breaks = 0u64;
 
     for chunk_idx in 0..consts::POST_SWITCH_CHUNKS {
+        hang_tick!();
         let stage = format!("phase2_post_switch_chunk_{chunk_idx}");
         let Some(chunk) = next_chunk_with_timeout(
-            &mut audio,
+            audio,
             Duration::from_millis(consts::NEXT_CHUNK_TIMEOUT_MS),
             &stage,
-        )
-        .await
-        else {
+        ) else {
             panic!("next_chunk returned None at post-switch chunk {chunk_idx}",);
         };
+        hang_reset!();
 
         let frames = chunk.frames();
         let meta = &chunk.meta;
 
-        for (j, &sample) in chunk.samples.iter().enumerate() {
-            assert!(
-                sample.is_finite() && (-1.0..=1.0).contains(&sample),
+        if let Some((j, sample)) = first_invalid_sample(&chunk.samples) {
+            panic!(
                 "invalid sample in post-switch chunk {chunk_idx} offset {j}: {sample}\n  \
                  meta: {}",
                 format_meta(meta, chunk.samples.len()),
+            );
+        }
+        if meta.spec.channels == 2
+            && let Some((frame, left, right)) = channel_mismatches(&chunk.samples).next()
+        {
+            panic!(
+                "L/R mismatch in post-switch chunk {chunk_idx}, frame {frame}: left={left}, right={right}; meta={meta:?}"
             );
         }
 
@@ -334,7 +369,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
                         actual_offset = meta.frame_offset,
                         segment = ?meta.segment_index,
                         variant = ?meta.variant_index,
-                        epoch = meta.epoch,
+                        epoch = meta.segment.get(),
                         "CHUNK CONTINUITY BREAK (frame_offset)"
                     );
                 }
@@ -367,9 +402,11 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
     let mut inter_chunk_breaks = 0u64;
     let mut inter_sample_breaks = 0u64;
     let mut intra_breaks = 0u64;
+    let mut first_intra_error = None;
     let mut direction_errors = 0u64;
 
     for i in 0..consts::SEEK_ITERATIONS {
+        hang_tick!();
         let pos_secs = rng.range_f64(0.001, max_seek_secs);
         let position = Duration::from_secs_f64(pos_secs);
 
@@ -379,19 +416,19 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
         audio.preload().expect("preload must succeed");
 
         let mut prev_chunk_meta: Option<(AudioChunkInfo, usize)> = None;
-        let mut prev_last_sample: Option<f32> = None;
+        let mut previous_raw_end: Option<(u128, NonZeroU128)> = None;
 
         for c in 0..consts::CHUNKS_PER_SEEK {
+            hang_tick!();
             let stage = format!("phase3_seek_{i}_chunk_{c}");
             let Some(chunk) = next_chunk_with_timeout(
-                &mut audio,
+                audio,
                 Duration::from_millis(consts::NEXT_CHUNK_TIMEOUT_MS),
                 &stage,
-            )
-            .await
-            else {
+            ) else {
                 break;
             };
+            hang_reset!();
 
             let channels = chunk.meta.spec.channels as usize;
             let frames = chunk.frames();
@@ -406,19 +443,20 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
                 );
             }
 
-            let breaks = intra_chunk_breaks(&chunk);
-            if breaks > 0 {
-                intra_breaks += breaks as u64;
-                if intra_breaks <= 5 {
-                    info!(
-                        iteration = i,
-                        chunk_in_seq = c,
-                        breaks,
-                        meta = %format_meta(&meta, chunk.samples.len()),
-                        pos_secs,
-                        "Intra-chunk saw-tooth breaks"
-                    );
-                }
+            let span = meta
+                .source_span
+                .expect("post-seek PCM has an exact source span");
+            if let Err(error) = check_fractional_saw(
+                &chunk.samples,
+                channels,
+                span,
+                signal::Wave::SawtoothDescending,
+                (c == 0).then_some(position),
+            ) {
+                intra_breaks += 1;
+                first_intra_error.get_or_insert_with(|| {
+                    format!("seek {i}, chunk {c}, requested={position:?}, meta={meta:?}: {error}")
+                });
             }
 
             let dir = detect_chunk_direction(&chunk);
@@ -456,42 +494,20 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
                 }
             }
 
-            if let Some(prev_last) = prev_last_sample
-                && channels > 0
-                && !chunk.samples.is_empty()
-            {
-                let curr_first = chunk.samples[0];
-                let prev_phase = signal::phase::units(prev_last);
-                let curr_phase = signal::phase::units(curr_first);
-                let expected_asc = (prev_phase + 1) % signal::SAW_PERIOD;
-                let expected_desc = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
-                if curr_phase != expected_asc && curr_phase != expected_desc {
+            let raw_start = span.source_ratio_at(0).expect("post-seek raw origin");
+            if let Some((previous_numerator, previous_denominator)) = previous_raw_end {
+                let previous_cross = previous_numerator
+                    .checked_mul(raw_start.1.get())
+                    .expect("previous raw endpoint cross product");
+                let current_cross = raw_start
+                    .0
+                    .checked_mul(previous_denominator.get())
+                    .expect("current raw origin cross product");
+                if previous_cross != current_cross {
                     inter_sample_breaks += 1;
-                    if inter_sample_breaks <= 10 {
-                        info!(
-                            iteration = i,
-                            chunk_in_seq = c,
-                            prev_last_sample = prev_last,
-                            curr_first_sample = curr_first,
-                            prev_phase,
-                            curr_phase,
-                            expected_asc,
-                            expected_desc,
-                            prev_meta = %format_meta(
-                                &prev_chunk_meta.map(|(m, _)| m).unwrap_or_default(),
-                                0
-                            ),
-                            curr_meta = %format_meta(&meta, chunk.samples.len()),
-                            pos_secs,
-                            "INTER-CHUNK SAMPLE CONTINUITY BREAK"
-                        );
-                    }
                 }
             }
-
-            if channels > 0 && frames > 0 {
-                prev_last_sample = Some(chunk.samples[(frames - 1) * channels]);
-            }
+            previous_raw_end = span.source_ratio_at(frames as u64);
 
             prev_chunk_meta = Some((meta, frames));
             successful_reads += 1;
@@ -520,15 +536,13 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
         consts::SEEK_ITERATIONS
     );
 
-    if intra_breaks > 0 {
-        warn!(
-            intra_breaks,
-            "intra-chunk saw-tooth breaks detected (within tolerance of 1)"
-        );
-    }
-    assert!(
-        intra_breaks <= 1,
-        "{intra_breaks} intra-chunk saw-tooth breaks in decoded data (>1 tolerance)"
+    assert_eq!(
+        intra_breaks, 0,
+        "fractional saw content or geometry differs: {first_intra_error:?}"
+    );
+    assert_eq!(
+        inter_chunk_breaks, 0,
+        "post-seek physical chunk frame labels must be adjacent",
     );
     assert_eq!(
         inter_sample_breaks, 0,
@@ -553,17 +567,18 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
 
     let mut remaining_chunks = 0u64;
     let mut remaining_samples = 0u64;
+    hang_reset!();
     loop {
+        hang_tick!();
         let Some(chunk) = next_chunk_with_timeout(
-            &mut audio,
+            audio,
             Duration::from_millis(consts::NEXT_CHUNK_TIMEOUT_MS),
             "phase4_tail_drain",
-        )
-        .await
-        else {
+        ) else {
             break;
         };
         remaining_chunks += 1;
+        hang_reset!();
         remaining_samples += chunk.samples.len() as u64;
         for &sample in chunk.samples.iter() {
             assert!(

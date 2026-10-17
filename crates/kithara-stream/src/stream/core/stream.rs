@@ -2,14 +2,14 @@
 
 use std::{io, ops::Range};
 
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 
 use super::{super::format_change_segment_range, contract::StreamType};
 use crate::{
     DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor,
+    activity::{Activity, ActivityWriter},
     error::{SourceError, StreamResult},
     playhead::PlayheadWrite,
-    seek_state::{Activity, SeekControl, SeekObserve},
     source::{Source, VariantControl},
 };
 
@@ -65,6 +65,8 @@ impl<T: StreamType> Stream<T> {
 
     delegate::delegate! {
         to self.source {
+            /// Source-owned cancellation parent for opened decoder readers.
+            pub fn cancel_token(&self) -> Option<CancelToken>;
             /// Overall source readiness at current position.
             pub fn phase(&self) -> SourcePhase;
             /// Point-in-time readiness for a specific byte range.
@@ -91,26 +93,19 @@ impl<T: StreamType> Stream<T> {
             pub fn take_reader_event_sink(&mut self) -> Option<crate::BoxedEventSink>;
             /// Optional byte-map handle for segment-aware decoders.
             pub fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>>;
-            /// Optional control-plane hook that rebuilds the byte space for a seek before its epoch
-            /// is minted.
-            pub fn seek_prepare(&self) -> Option<Arc<dyn crate::SeekPrepare>>;
             /// Absolute byte-position set — used by [`Stream::seek`] callers
             /// and audio FSM landings. Forwards to the source's atomic cursor.
             pub fn set_position(&self, pos: u64);
-            /// Narrow activity handle — set/query the `PLAYING` flag.
+            /// Read-only playback-activity snapshot.
             #[must_use]
-            pub fn activity(&self) -> Arc<dyn Activity>;
+            pub fn activity(&self) -> Activity;
+            /// Transfer the sole publisher to the audio chain.
+            pub fn take_activity_writer(&mut self) -> Option<ActivityWriter>;
             /// Narrow mutating playhead handle — position + duration.
             #[must_use]
             pub fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
             /// Get current read position.
             pub fn position(&self) -> u64;
-            /// Narrow seek-control handle — begin / complete / `mark_pending`.
-            #[must_use]
-            pub fn seek_control(&self) -> Arc<dyn SeekControl>;
-            /// Narrow seek-observe handle — read seek state without mutation.
-            #[must_use]
-            pub fn seek_observe(&self) -> Arc<dyn SeekObserve>;
             /// Optional HLS-only variant-coordination handle — `Some` for adaptive
             /// sources (HLS), `None` otherwise.
             #[must_use]

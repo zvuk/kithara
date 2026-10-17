@@ -75,27 +75,41 @@ async fn build_fixture_url(kind: LocalSource, helper: &TestServerHelper) -> Url 
 /// empty buffer means (a live-playback window waits for the next event; a
 /// PAUSE window — where progress is silent by design — reads the frozen
 /// `Queue::position_seconds()` explicitly).
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 fn drain_latest_position(rx: &mut EventReceiver<TestEvent>) -> Option<f64> {
     let mut latest: Option<f64> = None;
     loop {
+        hang_tick!("local playback progress drain".to_owned());
         match rx.try_recv().map(|env| env.event) {
             Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                 latest = Some(Duration::from_millis(position_ms).as_secs_f64());
+                hang_reset!();
             }
-            Ok(_) | Err(TryRecvError::Lagged(_)) => {}
+            Ok(_) | Err(TryRecvError::Lagged(_)) => {
+                hang_reset!();
+            }
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
         }
     }
     latest
 }
 
+#[kithara_test_utils::kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn receive_progress(
     rx: &mut EventReceiver<TestEvent>,
     mut lagged: impl FnMut() -> Option<f64>,
 ) -> Result<f64, String> {
     loop {
-        match rx.recv().await.map(|env| env.event) {
+        hang_tick!("local track awaits sink PlaybackProgress".to_owned());
+        let received = timeout(__hang_detector.remaining(), rx.recv()).await;
+        let received = received.unwrap_or_else(|_| {
+            hang_tick!("local track awaits sink PlaybackProgress".to_owned());
+            panic!("local track progress did not arrive")
+        });
+        match received.map(|env| env.event) {
             Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                hang_reset!();
                 return Ok(Duration::from_millis(position_ms).as_secs_f64());
             }
             Ok(_) => {}
@@ -129,6 +143,7 @@ async fn next_progress_position(
 /// clock), then assert non-decreasing. Replaces a wall-clock sample loop
 /// whose REAL `sleep` would not park the engine. The fast-path seed keeps
 /// the first sample aligned with the current head.
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn sample_positions_via_progress(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
@@ -139,7 +154,12 @@ async fn sample_positions_via_progress(
     out.push(queue.position_seconds().unwrap_or(0.0));
     timeout(deadline, async {
         while out.len() < count {
+            hang_tick!(format!(
+                "local playback sampled {} of {count} positions",
+                out.len()
+            ));
             out.push(receive_progress(rx, || Some(queue.position_seconds().unwrap_or(0.0))).await?);
+            hang_reset!();
         }
         Ok::<(), String>(())
     })
@@ -210,6 +230,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], label: &str) {
         AbrMode::Auto(None)
     )
 )]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn local_track_plays_end_to_end(
     #[case] source: (LocalSource, TestServerHelper, Url),
     #[case] rng_seed: u64,
@@ -279,6 +300,7 @@ async fn local_track_plays_end_to_end(
         .expect("duration known after Loaded");
     let mut rng = Xorshift64::new(rng_seed);
     for i in 0..3 {
+        hang_tick!(format!("local track {label} exercises seek {i}"));
         let target = duration * rng.range_f64(0.05, 0.95);
         queue.run(move |q| q.seek(target)).await.expect("seek");
         // `before` / `after` come from the sink-truth events (the wait
@@ -291,6 +313,7 @@ async fn local_track_plays_end_to_end(
         let after = wait_for_position_event(&mut rx, &queue, before + 0.5, Duration::from_secs(5))
             .await
             .unwrap_or_else(|e| panic!("seek #{i} hang [{label}]: {e}"));
+        hang_reset!();
         assert!(
             after - before >= 0.5,
             "seek #{i} hang [{label}]: {before:.2}→{after:.2}"
@@ -318,28 +341,38 @@ async fn local_track_plays_end_to_end(
     // from before the seek landed.
     let _ = drain_latest_position(&mut rx);
 
-    // Sample the latest progress and cursor together on the render owner.
-    // Receiving an event alone does not keep it fresh while this task waits
-    // to be scheduled again.
-    let start_pos = next_progress_position(&mut rx, Duration::from_secs(10))
+    // Audio progress reports source admission; playback position comes from
+    // the queue's confirmed render snapshot, sampled with the render cursor.
+    next_progress_position(&mut rx, Duration::from_secs(10))
         .await
         .unwrap_or_else(|e| panic!("window start anchor [{label}]: {e}"));
     // Advance while the observer is delayed, as a contended runtime can do
     // between receiving an event and reading the render cursor.
     let observer_delay_frames = u64::from(queue.host().spec().await.sample_rate.get()) / 4;
     queue.host().render_forward(observer_delay_frames).await;
+    let control = queue.control();
     let ((start_pos, mut rx), cursor_start) = queue
         .host()
-        .observe(move || (drain_latest_position(&mut rx).unwrap_or(start_pos), rx))
+        .observe(move || {
+            let _ = drain_latest_position(&mut rx);
+            (
+                control.position_seconds().expect("playing track position"),
+                rx,
+            )
+        })
         .await;
     time::sleep(Duration::from_secs(2)).await;
     let _ = drain_latest_position(&mut rx);
-    let end_pos = next_progress_position(&mut rx, Duration::from_secs(10))
+    next_progress_position(&mut rx, Duration::from_secs(10))
         .await
         .unwrap_or_else(|e| panic!("window end anchor [{label}]: {e}"));
+    let control = queue.control();
     let (end_pos, cursor_end) = queue
         .host()
-        .observe(move || drain_latest_position(&mut rx).unwrap_or(end_pos))
+        .observe(move || {
+            let _ = drain_latest_position(&mut rx);
+            control.position_seconds().expect("playing track position")
+        })
         .await;
     assert_playhead_tracks_renderer(
         end_pos - start_pos,
@@ -356,31 +389,65 @@ async fn local_track_plays_end_to_end(
     queue.close().await;
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
+#[kithara_test_utils::kithara::flash(io)]
 async fn wait_for_queue_event<F>(
     rx: &mut EventReceiver<TestEvent>,
+    queue: &QueueControl<TestPools>,
+    ids: &[TrackId],
+    requested: &str,
     mut pred: F,
     deadline: Duration,
 ) -> Option<QueueEvent>
 where
     F: FnMut(&QueueEvent) -> bool,
 {
+    let mut progress = (queue.current_index(), queue.position_seconds());
     timeout(deadline, async {
         loop {
-            match rx.recv().await.map(|env| env.event) {
+            hang_tick!(format!(
+                "waiting for {requested}; {}",
+                playlist_snapshot(queue, ids)
+            ));
+            let received = timeout(__hang_detector.remaining(), rx.recv())
+                .await
+                .unwrap_or_else(|_| {
+                    hang_tick!(format!(
+                        "waiting for {requested}; {}",
+                        playlist_snapshot(queue, ids)
+                    ));
+                    panic!("local playlist made no progress while waiting for {requested}")
+                });
+            let next = (queue.current_index(), queue.position_seconds());
+            if next != progress {
+                progress = next;
+                hang_reset!();
+            }
+            match received.map(|env| env.event) {
                 Ok(TestEvent::Queue(ev)) => {
                     if pred(&ev) {
+                        hang_reset!();
                         return Some(ev);
                     }
                 }
-                Ok(_) => continue,
-                Err(RecvError::Lagged(_)) => {}
+                Ok(_) | Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return None,
             }
         }
     })
     .await
-    .ok()
-    .flatten()
+    .unwrap_or_else(|_| {
+        tracing::error!(
+            requested,
+            snapshot = %playlist_snapshot(queue, ids),
+            "local playlist wait reached its original overall cap"
+        );
+        hang_tick!(format!(
+            "waiting for {requested}; {}",
+            playlist_snapshot(queue, ids)
+        ));
+        None
+    })
 }
 
 fn playlist_snapshot(queue: &QueueControl<TestPools>, ids: &[TrackId]) -> String {
@@ -432,6 +499,7 @@ fn playlist_snapshot(queue: &QueueControl<TestPools>, ids: &[TrackId]) -> String
     case::apple(DecoderBackend::Apple)
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn local_queue_playlist_behavior(
     #[future(awt)] local_playlist: (TestServerHelper, Vec<Url>),
     #[case] backend: DecoderBackend,
@@ -466,6 +534,7 @@ async fn local_queue_playlist_behavior(
     let mut rx = queue.subscribe();
     let mut ids: Vec<TrackId> = Vec::with_capacity(urls.len());
     for u in &urls {
+        hang_tick!(format!("local playlist appends track {}", ids.len()));
         let cfg =
             ResourceConfig::for_src(ResourceSrc::parse(u.as_str()).expect("valid fixture URL"))
                 .downloader(downloader.clone())
@@ -483,6 +552,7 @@ async fn local_queue_playlist_behavior(
                 .await
                 .expect("append crossfade fixture track"),
         );
+        hang_reset!();
     }
 
     queue
@@ -548,6 +618,9 @@ async fn local_queue_playlist_behavior(
         .expect("advance local-track crossfade");
     let started = wait_for_queue_event(
         &mut rx,
+        &queue,
+        &ids,
+        "CrossfadeStarted",
         |ev| matches!(ev, QueueEvent::CrossfadeStarted { .. }),
         Duration::from_secs(10),
     )
@@ -562,6 +635,9 @@ async fn local_queue_playlist_behavior(
     }
     wait_for_queue_event(
         &mut rx,
+        &queue,
+        &ids,
+        "CurrentTrackChanged after crossfade",
         |ev| matches!(ev, QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == ids[1]),
         Duration::from_millis(
             num_traits::cast::<f64, u64>(f64::from(xf_duration) * 1000.0).unwrap_or(u64::MAX)
@@ -573,6 +649,7 @@ async fn local_queue_playlist_behavior(
 
     let mut per_track: Vec<(String, Result<(), String>)> = Vec::new();
     for i in 1..urls.len() {
+        hang_tick!(format!("local playlist exercises track {i}"));
         let url = urls[i].clone();
         let result: Result<(), String> =
             async {
@@ -593,7 +670,10 @@ async fn local_queue_playlist_behavior(
                         .await
                         .map_err(|e| format!("seek: {e}"))?;
                     wait_for_queue_event(
-                    &mut rx,
+                        &mut rx,
+                        &queue,
+                        &ids,
+                        "CurrentTrackChanged after natural EOF",
                     |ev| matches!(
                         ev,
                         QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == ids[i + 1]
@@ -612,6 +692,7 @@ async fn local_queue_playlist_behavior(
             }
             .await;
         per_track.push((url.to_string(), result));
+        hang_reset!();
     }
 
     let last_result: Result<(), String> = async {
@@ -625,6 +706,9 @@ async fn local_queue_playlist_behavior(
             .map_err(|e| format!("seek: {e}"))?;
         wait_for_queue_event(
             &mut rx,
+            &queue,
+            &ids,
+            "QueueEnded",
             |ev| matches!(ev, QueueEvent::QueueEnded),
             Duration::from_secs(5),
         )
@@ -678,6 +762,8 @@ async fn local_hls() -> (LocalSource, TestServerHelper, Url) {
 }
 
 #[kithara::fixture]
+#[kithara_test_utils::kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn local_playlist() -> (TestServerHelper, Vec<Url>) {
     let helper = TestServerHelper::new().await;
     let kinds = [
@@ -689,7 +775,9 @@ async fn local_playlist() -> (TestServerHelper, Vec<Url>) {
     ];
     let mut urls: Vec<Url> = Vec::with_capacity(kinds.len());
     for &k in &kinds {
+        hang_tick!(format!("local playlist prepares fixture {k:?}"));
         urls.push(build_fixture_url(k, &helper).await);
+        hang_reset!();
     }
 
     (helper, urls)

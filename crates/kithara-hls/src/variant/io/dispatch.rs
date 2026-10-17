@@ -12,11 +12,12 @@ use crate::{
     variant::{HlsVariant, PlanCtx, PlanRevision},
 };
 
-/// The cancel pair one dispatch rides. `fetch` covers owed work — inits,
-/// size demands, and segments inside the owed window; `lookahead` covers an
+/// The cancellation scopes one dispatch rides. `metadata` survives seek rearming;
+/// `fetch` covers owed work — inits and segments inside the owed window; `lookahead` covers an
 /// audible session's prefetches past it, so a variant transition can retire
 /// them without touching what playback waits on.
 pub(crate) struct DispatchTokens {
+    pub(crate) metadata: CancelToken,
     pub(crate) fetch: CancelToken,
     pub(crate) lookahead: CancelToken,
 }
@@ -80,21 +81,32 @@ where
         tokens: DispatchTokens,
     ) -> Vec<FetchCmd> {
         let DispatchTokens {
+            metadata,
             fetch: cancel,
             lookahead,
         } = tokens;
         let mut out: Vec<FetchCmd> = Vec::new();
         let mut deferred: Vec<(PlannedFetch, PlanRevision)> = Vec::new();
+        let wait_end = self.read_wait_end();
+        let wait_segment = wait_end
+            .and_then(|end| self.find_at_offset(end.saturating_sub(1)))
+            .map(|(segment, _, _)| segment);
+        self.prioritize_waiting_segment(wait_segment);
+        let construction_segment_end =
+            construction_segment_end.map(|end| end.max(wait_segment.unwrap_or(end)));
         let owed_through = audible
             .then(|| self.find_at_offset(position).map(|(seg_idx, _, _)| seg_idx))
-            .flatten();
+            .flatten()
+            .max(wait_segment);
         let owed = |seg_idx: u32| !audible || owed_through.is_some_and(|last| seg_idx <= last);
         let beyond_owed = |seg_idx: u32| {
             audible && owed_through.is_some_and(|last| seg_idx > last.saturating_add(1))
         };
         let mut remaining = budget;
-        self.dispatch_size_demands(ctx, &mut out, &mut remaining, &cancel);
-        let prefetch_base = position.max(self.prefetch_anchor());
+        self.dispatch_size_demands(ctx, &mut out, &mut remaining, &metadata);
+        let prefetch_base = position
+            .max(self.prefetch_anchor())
+            .max(wait_end.unwrap_or_default().saturating_sub(1));
         let prefetch_byte_cap = construction_segment_end
             .is_none()
             .then(|| {
@@ -124,7 +136,9 @@ where
                             break;
                         }
                         if let Some(cap) = prefetch_byte_cap
-                            && let Some(seg_off) = self.segment_byte_offset(seg_idx)
+                            && let Some(seg_off) = self
+                                .descriptor(seg_idx as usize)
+                                .map(|descriptor| descriptor.byte_range.start)
                             && seg_off > cap
                         {
                             resume_at = ctx
@@ -146,6 +160,7 @@ where
             let Some((planned, plan_revision)) = planned else {
                 break;
             };
+            hang_reset!();
             let entry = match planned {
                 PlannedFetch::Init => self.init(),
                 PlannedFetch::Segment(seg_idx) => self.segments.get(seg_idx as usize),
@@ -205,8 +220,22 @@ where
         out
     }
 
+    fn prioritize_waiting_segment(&self, wait_segment: Option<u32>) {
+        if let Some(segment) = wait_segment
+            && let Some(entry) = self.segments.get(segment as usize)
+            && !entry.state().is_loaded()
+            && !entry.state().is_failed()
+            && !entry.state().is_downloading()
+        {
+            let planned = PlannedFetch::Segment(segment);
+            let mut queue = self.flow.queue.lock();
+            if !queue.contains(&planned) {
+                queue.push_front(planned);
+            }
+        }
+    }
+
     #[kithara::probe(
-        seek_epoch = ctx.seek_epoch,
         segment_index = u64::from(seg_idx),
         variant = self.variant as u64
     )]
@@ -256,7 +285,9 @@ where
 
     fn segment_window_entry_byte(&self, ctx: &PlanCtx<S>, seg_idx: u32) -> Option<u64> {
         let window = look_ahead_segments(ctx)?;
-        self.segment_byte_offset(seg_idx.saturating_sub(window.saturating_sub(1)))
+        let entry = seg_idx.saturating_sub(window.saturating_sub(1));
+        self.descriptor(entry as usize)
+            .map(|descriptor| descriptor.byte_range.start)
     }
 
     /// Settle a claim whose resource could not be acquired, per
@@ -302,7 +333,6 @@ where
     let window = ctx.look_ahead_segments?;
     Some(u32::try_from(window.max(1)).unwrap_or(u32::MAX))
 }
-
 #[cfg(test)]
 mod tests {
     use std::{io, path::PathBuf};

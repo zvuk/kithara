@@ -710,6 +710,7 @@ cargo.packages = [
   "kithara-host",
   "kithara-host-tests",
   "kithara-integration-tests",
+  "kithara-link",
   "kithara-mp4",
   "kithara-mpa",
   "kithara-net",
@@ -828,8 +829,8 @@ cargo.profile = "test-release"
 
 
 [test.lanes.sync]
-owns = ["crates/kithara-sync/", "tests/crates/sync/"]
-cargo.packages = ["kithara-sync", "kithara-sync-tests"]
+owns = ["crates/kithara-sync/", "crates/kithara-link/", "tests/crates/sync/"]
+cargo.packages = ["kithara-sync", "kithara-link", "kithara-sync-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.warp]
@@ -843,9 +844,7 @@ default_backend = "none"
 owns = ["crates/kithara-render/"]
 cargo.packages = ["kithara-render"]
 cargo.profile = "test-release"
-# kithara-render steps its stage synchronously, so no test waits on a clock the
-# virtual one could drive, and its only package declares neither toggle.
-undeclared_toggles = ["flash", "no-block", "load"]
+undeclared_toggles = ["load"]
 
 # Each domain facade stays in `tests/`, but a branch selects it with the crate
 # that owns the production contract. The full workspace lane remains the
@@ -1223,15 +1222,15 @@ default_features = ["kithara-warp-tests/usdt"]
 default_flash = false
 owns = ["tests/crates/warp/tests/rate_response.rs"]
 
-[test.lanes.usdt-play-scheduler]
+[test.lanes.usdt-render-scheduler]
 undeclared_toggles = ["load"]
-cargo.packages = ["kithara-play"]
+cargo.packages = ["kithara-render"]
 cargo.profile = "test-release"
 cargo.lib = true
-runner.nextest.filter = "test(/worker::node::scheduler_tests::probed::/)"
-default_features = ["kithara-play/usdt"]
+runner.nextest.filter = "test(/worker::node::tests::scheduler_tests::probed::/)"
+default_features = ["kithara-render/usdt"]
 default_flash = false
-owns = ["crates/kithara-play/src/worker/node.rs"]
+owns = ["crates/kithara-render/src/worker/node/"]
 
 [test.lanes.usdt-hls]
 cargo.packages = ["kithara-hls-tests"]
@@ -1381,6 +1380,21 @@ pins = ".config/ci-pins.toml"
 "kithara-queue-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst" = "kithara-queue-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst_main"
 "kithara-integration-tests::suite_stress::kithara_play::hls_seek_middle_stress_long::" = "kithara-integration-tests::suite_stress::hls_seek_middle_stress_long::"
 "suite_stress::kithara_play::hls_seek_middle_stress_long::" = "kithara-integration-tests::suite_stress::hls_seek_middle_stress_long::"
+"suite_light::kithara_play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
+"kithara-integration-tests::suite_light::kithara_play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
+"suite_light::kithara_play::sync_listening::" = "kithara-sync-tests::sync::sync_listening::"
+"kithara-integration-tests::suite_light::kithara_play::sync_listening::" = "kithara-sync-tests::sync::sync_listening::"
+"suite_light::kithara_play::sync_oracle::" = "kithara-sync-tests::sync::sync_oracle::"
+"kithara-integration-tests::suite_light::kithara_play::sync_oracle::" = "kithara-sync-tests::sync::sync_oracle::"
+"suite_light::kithara_play::sync_product_matrix::" = "kithara-sync-tests::sync::sync_product_matrix::"
+"kithara-integration-tests::suite_light::kithara_play::sync_product_matrix::" = "kithara-sync-tests::sync::sync_product_matrix::"
+"suite_light::kithara_play::sync_runtime_oracles::" = "kithara-sync-tests::sync::sync_runtime_oracles::"
+"kithara-integration-tests::suite_light::kithara_play::sync_runtime_oracles::" = "kithara-sync-tests::sync::sync_runtime_oracles::"
+"kithara-play-tests::play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
+"kithara-play-tests::play::sync_listening::" = "kithara-sync-tests::sync::sync_listening::"
+"kithara-play-tests::play::sync_oracle::" = "kithara-sync-tests::sync::sync_oracle::"
+"kithara-play-tests::play::sync_product_matrix::" = "kithara-sync-tests::sync::sync_product_matrix::"
+"kithara-play-tests::play::sync_runtime_oracles::" = "kithara-sync-tests::sync::sync_runtime_oracles::"
 "kithara-integration-tests::suite_light::kithara_play::parameter_smoothing::queue_append_while_playing_does_not_wait_for_host" = "kithara-queue-tests::queue::append_while_playing::queue_append_while_playing_does_not_wait_for_host"
 "suite_light::kithara_play::parameter_smoothing::queue_append_while_playing_does_not_wait_for_host" = "kithara-queue-tests::queue::append_while_playing::queue_append_while_playing_does_not_wait_for_host"
 "kithara-integration-tests::suite_light::kithara_play::parameter_smoothing::failed_deck_preparation_releases_host_membership" = "kithara-host-tests::host::deck_membership::failed_deck_preparation_releases_host_membership"
@@ -1510,21 +1524,6 @@ pins = ".config/ci-pins.toml"
 "kithara-bufpool-tests::bufpool::" = "kithara-bufpool::bufpool::"
 "suite_light::kithara_play::rate_response::" = "kithara-warp-tests::warp_playback::rate_response::"
 "kithara-integration-tests::suite_light::kithara_play::rate_response::" = "kithara-warp-tests::warp_playback::rate_response::"
-"suite_light::kithara_play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
-"kithara-integration-tests::suite_light::kithara_play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
-"suite_light::kithara_play::sync_listening::" = "kithara-sync-tests::sync::sync_listening::"
-"kithara-integration-tests::suite_light::kithara_play::sync_listening::" = "kithara-sync-tests::sync::sync_listening::"
-"suite_light::kithara_play::sync_oracle::" = "kithara-sync-tests::sync::sync_oracle::"
-"kithara-integration-tests::suite_light::kithara_play::sync_oracle::" = "kithara-sync-tests::sync::sync_oracle::"
-"suite_light::kithara_play::sync_product_matrix::" = "kithara-sync-tests::sync::sync_product_matrix::"
-"kithara-integration-tests::suite_light::kithara_play::sync_product_matrix::" = "kithara-sync-tests::sync::sync_product_matrix::"
-"suite_light::kithara_play::sync_runtime_oracles::" = "kithara-sync-tests::sync::sync_runtime_oracles::"
-"kithara-integration-tests::suite_light::kithara_play::sync_runtime_oracles::" = "kithara-sync-tests::sync::sync_runtime_oracles::"
-"kithara-play-tests::play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
-"kithara-play-tests::play::sync_listening::" = "kithara-sync-tests::sync::sync_listening::"
-"kithara-play-tests::play::sync_oracle::" = "kithara-sync-tests::sync::sync_oracle::"
-"kithara-play-tests::play::sync_product_matrix::" = "kithara-sync-tests::sync::sync_product_matrix::"
-"kithara-play-tests::play::sync_runtime_oracles::" = "kithara-sync-tests::sync::sync_runtime_oracles::"
 "kithara-play-tests::play::rate_response::" = "kithara-warp-tests::warp_playback::rate_response::"
 "kithara-warp::warp::render::region_tests::" = "kithara-warp-tests::warp::region::"
 "suite_light::audio_artifact::" = "kithara-harness-tests::suite_light::audio_artifact::"
@@ -1679,6 +1678,7 @@ steps = [
     "wasm",
     "chrome",
     "webcodecs",
+    "include",
   ], label = "Chromium WebCodecs tests" },
 ]
 role = "gate"
@@ -1695,7 +1695,15 @@ label = "Web browser"
 os = "linux"
 tools = ["firefox", "geckodriver", "just"]
 program = "just"
-steps = [{ args = ["test", "wasm", "firefox"], label = "Firefox WASM tests" }]
+steps = [
+  { args = [
+    "test",
+    "wasm",
+    "firefox",
+    "all",
+    "include",
+  ], label = "Firefox WASM tests" },
+]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
 kinds_github = ["nightly"]
@@ -2501,10 +2509,10 @@ steps = [
   { args = [
     "test",
     "run",
-    "--lane=usdt-play-scheduler",
+    "--lane=usdt-render-scheduler",
     "--profile",
     "ci",
-  ], label = "USDT playback scheduler contracts", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT render scheduler contracts", env = { CARGO_BUILD_JOBS = "2" } },
   { args = [
     "test",
     "run",
@@ -2607,7 +2615,12 @@ os = "linux"
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "coverage-risk", path = "target/quality-lab/\ncoverage/" }
-steps = [{ args = ["quality", "coverage-risk"], label = "coverage risk" }]
+steps = [
+  { args = [
+    "quality",
+    "coverage-risk",
+  ], label = "coverage risk", env = { KITHARA_HANG_DUMP_DIR = "{root}/coverage/hang" } },
+]
 role = "quality"
 kinds = []
 kinds_github = ["nightly", "weekly"]
@@ -3029,7 +3042,15 @@ label = "Safari WASM"
 os = "macos"
 tools = ["cargo", "just"]
 program = "just"
-steps = [{ args = ["test", "wasm", "safari"], label = "Safari WASM tests" }]
+steps = [
+  { args = [
+    "test",
+    "wasm",
+    "safari",
+    "all",
+    "include",
+  ], label = "Safari WASM tests" },
+]
 role = "platforms"
 kinds = ["nightly"]
 timeout_minutes = 60

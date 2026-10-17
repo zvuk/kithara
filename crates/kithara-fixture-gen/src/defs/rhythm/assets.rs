@@ -5,6 +5,7 @@ use kithara_analysis::{
     AnalysisToken, BeatAnalysisConfig, BeatArtifact, BeatSnapshot, BeatState, RangeSet,
     TrackAnalysis,
 };
+use kithara_platform::time::Duration;
 use kithara_resampler::rubato::RubatoBackend;
 use kithara_test_macros as kithara;
 
@@ -17,6 +18,7 @@ mod consts {
     pub(super) const RHYTHM_LISTENING_FRAMES: u64 = 48_000 * 45;
     pub(super) const RHYTHM_LISTENING_LONG_FRAMES: u64 = 48_000 * 55;
     pub(super) const RHYTHM_LONG_FRAMES: u64 = 48_000 * 15;
+    pub(super) const SLOW_RHYTHM_FRAMES: u64 = 48_000 * 16;
 }
 
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]
@@ -46,6 +48,19 @@ mod consts {
 #[case::breakbeat_140_missing_beat(Style::Breakbeat, Control::MissingBeat)]
 fn rhythm_wav(style: Style, control: Control) -> Vec<u8> {
     score::wav(style, control)
+}
+
+#[kithara::asset(ext = "wav", content_type = "audio/wav")]
+#[case::ambient_dub_62_aligned(Style::AmbientDub)]
+#[case::trip_hop_74_aligned(Style::TripHop)]
+fn rhythm_wav_16s(style: Style) -> Vec<u8> {
+    score::wav_with_layout_at_origin_for_frames(
+        style,
+        Control::Aligned,
+        ChannelLayout::Stereo,
+        Origin::Pickup,
+        consts::SLOW_RHYTHM_FRAMES,
+    )
 }
 
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]
@@ -170,6 +185,27 @@ fn rhythm_expected_analysis(_inputs: &[&[u8]], style: Style, control: Control) -
     analysis_file(
         Some(BeatArtifact::from(score::truth(style, control))),
         consts::RHYTHM_FRAMES,
+        truth_rate(),
+    )
+}
+
+#[kithara::asset(
+    ext = "analysis",
+    content_type = "application/x-kithara-analysis",
+    format = analysis_format,
+    depends_on = ["rhythm_wav_16s_{case}"]
+)]
+#[case::ambient_dub_62_aligned(Style::AmbientDub)]
+#[case::trip_hop_74_aligned(Style::TripHop)]
+fn rhythm_expected_analysis_16s(_inputs: &[&[u8]], style: Style) -> Vec<u8> {
+    analysis_file(
+        Some(BeatArtifact::from(score::truth_at_origin_for_frames(
+            style,
+            Control::Aligned,
+            Origin::Pickup,
+            consts::SLOW_RHYTHM_FRAMES,
+        ))),
+        consts::SLOW_RHYTHM_FRAMES,
         truth_rate(),
     )
 }
@@ -389,6 +425,7 @@ pub(in crate::defs) fn analysis_file(
     let mut coverage = RangeSet::new();
     coverage.insert(0..frames);
     let analysis = TrackAnalysis::builder()
+        .media_origin(Duration::ZERO)
         .token(AnalysisToken::from("rhythm-fixture"))
         .revision(1)
         .source_sample_rate(sample_rate)

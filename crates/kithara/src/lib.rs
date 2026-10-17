@@ -2,7 +2,7 @@
 
 //! Unified facade for audio streaming and decoding through `Resource`.
 //! `ResourceConfig` combines a source with the caller's `AssetStore`, typed pools
-//! and `PlayWorker`. `Resource::new` opens decoded interleaved PCM through the
+//! and `PlayWorker`. `Resource::open` opens decoded interleaved PCM through the
 //! common `AudioReader` read/seek interface; `ReadOutcome` distinguishes frames,
 //! pending work and end of input.
 
@@ -24,6 +24,7 @@ pub mod waveform {
 #[cfg(feature = "beat")]
 pub mod beat {
     pub use kithara_beat::*;
+    pub use kithara_sync::Meter;
 }
 
 #[cfg(feature = "broadcast")]
@@ -96,9 +97,19 @@ pub mod signal {
     pub use kithara_signal::*;
 }
 
+#[cfg(feature = "sync")]
+pub mod sync {
+    pub use kithara_sync::*;
+}
+
 #[cfg(feature = "queue")]
 pub mod queue {
     pub use kithara_queue::*;
+}
+
+#[cfg(feature = "link")]
+pub mod link {
+    pub use kithara_link::*;
 }
 
 #[cfg(feature = "download")]
@@ -114,11 +125,6 @@ pub mod stream {
 #[cfg(feature = "stretch")]
 pub mod stretch {
     pub use kithara_stretch::*;
-}
-
-#[cfg(feature = "sync")]
-pub mod sync {
-    pub use kithara_sync::*;
 }
 
 #[cfg(feature = "ui")]
@@ -186,14 +192,17 @@ pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError, StretchKind};
 pub mod mock {
     #[cfg(feature = "audio")]
     pub use kithara_audio::mock::*;
-    #[cfg(feature = "beat")]
-    pub use kithara_beat::{BeatGridModel, BeatGridState, Meter};
     #[cfg(feature = "decode")]
     pub use kithara_decode::mock::*;
     #[cfg(feature = "play")]
     pub use kithara_play::mock::*;
     #[cfg(feature = "stream")]
     pub use kithara_stream::mock::*;
+    #[cfg(feature = "beat")]
+    pub use {
+        kithara_beat::{BeatGridModel, BeatGridState},
+        kithara_sync::Meter,
+    };
 }
 
 /// Prelude — flat imports for common types.
@@ -211,8 +220,6 @@ pub mod prelude {
         Audio, AudioConfig, AudioControl, AudioEvent, AudioRead, AudioReader, AudioSession,
         ResamplerQuality,
     };
-    #[cfg(feature = "beat")]
-    pub use kithara_beat::{BeatGridModel, BeatGridState, Meter};
     #[cfg(feature = "decode")]
     pub use kithara_decode::{DecodeError, DecodeResult, DecoderTrackInfo, TrackMetadata};
     #[cfg(feature = "download")]
@@ -227,9 +234,8 @@ pub mod prelude {
     pub use kithara_host::{Host, HostConfig, TransportEvent};
     #[cfg(feature = "play")]
     pub use kithara_play::{
-        ArtifactSource, EngineConfig, EngineImpl, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig,
-        PlaybackResamplerBackend, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,
-        ServiceClass, SourceType,
+        ArtifactSource, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend,
+        PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc, ServiceClass, SourceType,
     };
     #[cfg(feature = "queue")]
     pub use kithara_queue::{Queue, QueueConfig, QueueEvent, TrackEntry, TrackSource};
@@ -245,4 +251,9 @@ pub mod prelude {
     pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError, StretchKind};
     #[cfg(feature = "waveform")]
     pub use kithara_waveform::{Bucket, Waveform};
+    #[cfg(feature = "beat")]
+    pub use {
+        kithara_beat::{BeatGridModel, BeatGridState},
+        kithara_sync::Meter,
+    };
 }

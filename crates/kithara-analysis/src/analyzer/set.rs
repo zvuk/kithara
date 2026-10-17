@@ -72,6 +72,8 @@ where
             fingerprint: self.fingerprint_for(demand),
             settled: false,
             source_sample_rate: rate,
+            media_origin: None,
+            visible_origin: None,
             pools: self.pools.clone(),
         })
     }
@@ -200,13 +202,14 @@ where
     not(target_arch = "wasm32")
 ))]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::num::{NonZeroU32, NonZeroU64};
 
-    use kithara_platform::sync::Arc;
+    use kithara_platform::{sync::Arc, time::Duration};
     use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCoverage};
     use kithara_test_fixtures::analysis_fixtures::analysis_silence;
     use kithara_test_utils::kithara;
+    use kithara_waveform::Waveform;
     use num_traits::cast::ToPrimitive;
     use unimock::{MockFn, Unimock, matching};
 
@@ -238,6 +241,8 @@ mod tests {
                 spec: spec(),
                 frames: u32::try_from(frames).unwrap_or(0),
                 frame_offset: at,
+                media_origin: Some(Duration::ZERO),
+                visible_origin: Some(Duration::ZERO),
                 ..Default::default()
             },
             sample_buffer(pools, samples),
@@ -329,6 +334,8 @@ mod tests {
                 },
                 frames: 1024,
                 frame_offset: 0,
+                media_origin: Some(Duration::ZERO),
+                visible_origin: Some(Duration::ZERO),
                 ..Default::default()
             },
             sample_buffer(&pools, &analysis_silence[..2048]),
@@ -719,6 +726,200 @@ mod tests {
         assert_eq!(
             &read_back, settled,
             "what a server stores is what a client without an analyzer gets back"
+        );
+    }
+    #[kithara::test]
+    fn direct_intake_and_restore_keep_origins_separate_from_raw_coverage(
+        analysis_silence: Vec<f32>,
+    ) {
+        let pools = pools();
+        let builder = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone()).with_waveform(8);
+        let mut pass = builder
+            .build(
+                spec().sample_rate,
+                "origin-track".into(),
+                0,
+                AnalysisDemand::ALL,
+            )
+            .expect("analysis buffers fit");
+        let mut audio = chunk(&pools, &analysis_silence, 1024, 22_050);
+        audio.meta.media_origin = Some(Duration::from_nanos(25_056_689));
+        audio.meta.visible_origin = Some(Duration::from_nanos(11_995_465));
+        assert_eq!(
+            pass.push(&audio, &mut Extent::default(), None),
+            Ingest::Accepted
+        );
+        assert_eq!(pass.visible_origin(), audio.meta.visible_origin);
+        let chunk_frames = NonZeroU64::new(44_100).expect("resume chunk size is non-zero");
+        let progress = pass.progress(None, false, chunk_frames, Some(100_000));
+        assert_eq!(progress.analysis().media_origin(), audio.meta.media_origin);
+        assert_eq!(
+            progress.analysis().coverage().iter().collect::<Vec<_>>(),
+            [&(22_050..23_074)]
+        );
+        assert_eq!(progress.analysis().extent(), Some(100_000));
+        let mut restored = builder
+            .restore(&progress, chunk_frames)
+            .expect("the pass resumes");
+        assert_eq!(
+            restored.visible_origin(),
+            None,
+            "the persisted raw extent does not invent the visible basis"
+        );
+        let after = restored.snapshot(None, false, progress.analysis().extent());
+        assert_eq!(after.media_origin(), audio.meta.media_origin);
+        assert_eq!(after.coverage(), progress.analysis().coverage());
+        assert_eq!(
+            after.waveform().map(Waveform::buckets),
+            progress.analysis().waveform().map(Waveform::buckets)
+        );
+    }
+
+    #[kithara::test]
+    fn unknown_origin_intake_still_publishes_raw_waveform_and_coverage(analysis_silence: Vec<f32>) {
+        let pools = pools();
+        let mut pass = waveform_pass(pools.clone(), 8);
+        let mut audio = chunk(&pools, &analysis_silence, 1024, 529);
+        audio.meta.media_origin = None;
+        audio.meta.visible_origin = None;
+        assert_eq!(
+            pass.push(&audio, &mut Extent::default(), None),
+            Ingest::Accepted
+        );
+        let snapshot = pass.snapshot(None, false, Some(1553));
+        assert_eq!(snapshot.media_origin(), None);
+        assert_eq!(
+            snapshot.coverage().iter().collect::<Vec<_>>(),
+            [&(529..1553)]
+        );
+        assert_eq!(snapshot.extent(), Some(1553));
+        assert!(snapshot.waveform().is_some());
+    }
+
+    #[kithara::test]
+    fn conflicting_original_clock_facts_are_refused_before_artifact_ingest(
+        analysis_silence: Vec<f32>,
+    ) {
+        let pools = pools();
+        let mut pass = waveform_pass(pools.clone(), 8);
+        let mut extent = Extent::default();
+        let first = chunk(&pools, &analysis_silence, 1024, 22_050);
+        assert_eq!(pass.push(&first, &mut extent, None), Ingest::Accepted);
+        let before = pass.snapshot(None, false, None);
+        for (media_origin, visible_origin) in [
+            (Some(Duration::from_millis(25)), Some(Duration::ZERO)),
+            (Some(Duration::ZERO), Some(Duration::from_millis(12))),
+        ] {
+            let mut foreign = chunk(&pools, &analysis_silence, 1024, 44_100);
+            foreign.meta.media_origin = media_origin;
+            foreign.meta.visible_origin = visible_origin;
+            assert_eq!(pass.push(&foreign, &mut extent, None), Ingest::ForeignClock);
+            let after = pass.snapshot(None, false, None);
+            assert_eq!(after.media_origin(), before.media_origin());
+            assert_eq!(after.coverage(), before.coverage());
+            assert_eq!(
+                after.waveform().map(Waveform::buckets),
+                before.waveform().map(Waveform::buckets)
+            );
+            extent.prove_end(0);
+            assert_eq!(
+                extent.frames(),
+                Some(23_074),
+                "refused audio did not extend the raw frontier"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn producer_intake_keeps_original_facts_and_refuses_a_foreign_clock(
+        analysis_silence: Vec<f32>,
+    ) {
+        let pools = pools();
+        let mut pass = waveform_pass(pools.clone(), 8);
+        let mut extent = Extent::default();
+        let (mut writer, mut reader) =
+            crate::producer::ring::open(&pools, 64, 4).expect("ring fits");
+        let mut out = pools.get::<f32>();
+        let metadata = AudioChunkInfo {
+            media_origin: Some(Duration::from_nanos(25_056_689)),
+            visible_origin: Some(Duration::from_nanos(11_995_465)),
+            frame_offset: 22_050,
+            spec: spec(),
+            ..Default::default()
+        };
+        assert!(writer.push(&metadata, 4, analysis_silence[..4].iter().copied()));
+        let span = reader.pop(&mut out).expect("the first span is accepted");
+        assert_eq!(
+            pass.push_mono(&out, span, &mut extent, None),
+            Ingest::Accepted
+        );
+        let before = pass.snapshot(None, false, None);
+        assert_eq!(before.media_origin(), metadata.media_origin);
+        assert_eq!(
+            before.coverage().iter().collect::<Vec<_>>(),
+            [&(22_050..22_054)]
+        );
+        for media_origin in [None, Some(Duration::from_millis(50))] {
+            let info = AudioChunkInfo {
+                media_origin,
+                frame_offset: 44_100,
+                ..metadata
+            };
+            assert!(writer.push(&info, 4, analysis_silence[..4].iter().copied()));
+            let span = reader
+                .pop(&mut out)
+                .expect("the ring carries the source facts");
+            let expected = if media_origin.is_none() {
+                Ingest::Accepted
+            } else {
+                Ingest::ForeignClock
+            };
+            assert_eq!(pass.push_mono(&out, span, &mut extent, None), expected);
+            assert_eq!(
+                pass.snapshot(None, false, None).media_origin(),
+                metadata.media_origin
+            );
+        }
+        assert_eq!(
+            pass.snapshot(None, false, None)
+                .coverage()
+                .iter()
+                .collect::<Vec<_>>(),
+            [&(22_050..22_054), &(44_100..44_104)]
+        );
+    }
+
+    #[kithara::test]
+    fn a_foreign_visible_clock_cannot_supply_an_unknown_media_origin(analysis_silence: Vec<f32>) {
+        let pools = pools();
+        let mut pass = waveform_pass(pools.clone(), 8);
+        let mut first = chunk(&pools, &analysis_silence, 1024, 529);
+        first.meta.media_origin = None;
+        assert_eq!(
+            pass.push(&first, &mut Extent::default(), None),
+            Ingest::Accepted
+        );
+        let before = pass.snapshot(None, false, None);
+        let mut foreign = chunk(&pools, &analysis_silence, 1024, 22_050);
+        foreign.meta.media_origin = Some(Duration::from_nanos(25_056_689));
+        foreign.meta.visible_origin = Some(Duration::from_millis(12));
+        assert_eq!(
+            pass.push(&foreign, &mut Extent::default(), None),
+            Ingest::ForeignClock
+        );
+        assert_eq!(pass.snapshot(None, false, None).media_origin(), None);
+        assert_eq!(
+            pass.snapshot(None, false, None).coverage(),
+            before.coverage()
+        );
+        foreign.meta.visible_origin = first.meta.visible_origin;
+        assert_eq!(
+            pass.push(&foreign, &mut Extent::default(), None),
+            Ingest::Accepted
+        );
+        assert_eq!(
+            pass.snapshot(None, false, None).media_origin(),
+            foreign.meta.media_origin
         );
     }
 }

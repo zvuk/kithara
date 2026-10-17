@@ -8,7 +8,7 @@ use std::{
 
 use pin_project_lite::pin_project;
 
-pub use super::participant::{Participating, participate};
+pub use super::participant::{Participating, participate, participate_sync};
 use super::{
     ctx::{self, ModeSnapshot, flash_ambient, flash_enabled},
     system::{self, FLASH},

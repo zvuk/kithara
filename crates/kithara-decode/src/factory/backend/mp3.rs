@@ -3,10 +3,17 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::{
+    sync::Arc,
+    time::Duration,
+    tokio::{
+        sync::oneshot,
+        task::{spawn_blocking, yield_runnable},
+    },
+};
 use kithara_stream::{
-    AudioCodec, ContainerFormat, MediaInfo, NotReadyCause, PendingReason, SourcePhase,
-    StreamPending,
+    AudioCodec, ContainerFormat, MediaInfo, NotReadyCause, PendingReason, ReaderControl,
+    SourcePhase, StreamPending,
 };
 use kithara_test_fixtures::{assets::rhythm_mp3_deck_a_120bpm_48k, signal::rms};
 use kithara_test_utils::kithara;
@@ -132,6 +139,8 @@ fn mp3_in_wave_matches_elementary_audio_and_seeks_in_file_coordinates(#[case] ta
 struct Download {
     inner: Cursor<Vec<u8>>,
     ready: Arc<AtomicU64>,
+    control: ReaderControl,
+    demand: Option<oneshot::Sender<(u64, ReaderControl)>>,
 }
 
 impl Read for Download {
@@ -139,7 +148,13 @@ impl Read for Download {
         let pos = self.inner.position();
         let len = u64::try_from(self.inner.get_ref().len()).expect("fixture length fits u64");
         let want = u64::try_from(buf.len()).expect("request length fits u64");
-        if pos.saturating_add(want).min(len) > self.ready.load(Ordering::Acquire) {
+        let required = pos.saturating_add(want).min(len);
+        if required > self.ready.load(Ordering::Acquire) {
+            self.demand
+                .take()
+                .expect("the download is released after its first unavailable read")
+                .send((required, self.control.clone()))
+                .expect("report actual read demand to the download producer");
             return Err(io::Error::new(
                 ErrorKind::Interrupted,
                 StreamPending::new(
@@ -148,8 +163,6 @@ impl Read for Download {
                     buf.len(),
                     Some(len),
                     SourcePhase::Waiting,
-                    0,
-                    false,
                 ),
             ));
         }
@@ -213,34 +226,20 @@ fn mp3() -> MediaInfo {
         .build()
 }
 
-/// Lets the rest of the download arrive; a decoder that parks once it has is stuck, not waiting.
-fn release(ready: &AtomicU64) {
-    let arrived = ready.swap(u64::MAX, Ordering::AcqRel) == u64::MAX;
-    assert!(!arrived, "the decoder parks on bytes that have all arrived");
-}
-
-/// Decodes to EOF the way the pipeline drives a decoder: an interrupted seek is applied again
-/// once the source has the bytes, and a parked read is retried.
-fn decode(mut decoder: Box<dyn Decoder>, seek: Option<Duration>, ready: &AtomicU64) -> Decoded {
+fn decode(mut decoder: Box<dyn Decoder>, seek: Option<Duration>) -> Decoded {
     let mut start = None;
     let mut landed = 0;
     let mut landed_byte = None;
     if let Some(position) = seek {
-        let landed_frame = loop {
-            match decoder.seek(position) {
-                Ok(DecoderSeekOutcome::Landed {
-                    landed_frame,
-                    landed_byte: byte,
-                    ..
-                }) => {
-                    landed_byte = byte;
-                    break landed_frame;
-                }
-                Ok(outcome) => panic!("the seek lands inside the track: {outcome:?}"),
-                Err(error) if error.is_interrupted() => release(ready),
-                Err(error) => panic!("seek failed: {error}"),
-            }
+        let DecoderSeekOutcome::Landed {
+            landed_frame,
+            landed_byte: byte,
+            ..
+        } = decoder.seek(position).expect("seek awaits available input")
+        else {
+            panic!("the seek lands inside the track");
         };
+        landed_byte = byte;
         landed = usize::try_from(landed_frame).expect("landed frame fits usize");
     }
     let mut mono = Vec::new();
@@ -263,7 +262,9 @@ fn decode(mut decoder: Box<dyn Decoder>, seek: Option<Duration>, ready: &AtomicU
                         .map(|frame| frame.iter().sum::<f32>() / scale),
                 );
             }
-            DecoderChunkOutcome::Pending(_) => release(ready),
+            DecoderChunkOutcome::Pending(reason) => {
+                panic!("blocking decoder must await its input: {reason:?}");
+            }
             DecoderChunkOutcome::Eof => break,
         }
     }
@@ -283,25 +284,33 @@ fn reference(bytes: &[u8], seek: Option<Duration>) -> Decoded {
     let decoder =
         DecoderFactory::create_from_media_info(Cursor::new(bytes.to_vec()), &mp3(), config)
             .expect("symphonia MP3 decoder");
-    decode(decoder, seek, &AtomicU64::new(u64::MAX))
+    decode(decoder, seek)
 }
 
-fn streamed_apple(bytes: &[u8], seek: Option<Duration>) -> (Decoded, bool) {
+fn streamed_apple(
+    bytes: &[u8],
+    seek: Option<Duration>,
+    ready: &Arc<AtomicU64>,
+    control: ReaderControl,
+    demand: oneshot::Sender<(u64, ReaderControl)>,
+) -> (Decoded, bool) {
     let total = u64::try_from(bytes.len()).expect("fixture length fits u64");
-    let ready = Arc::new(AtomicU64::new(consts::READY_PREFIX));
     let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
         DecoderConfig::builder()
             .backend(DecoderBackend::Apple)
             .byte_len_handle(Arc::new(AtomicU64::new(total)))
+            .reader_control(control.clone())
             .pools(pools())
             .build();
     let source = Download {
         inner: Cursor::new(bytes.to_vec()),
-        ready: Arc::clone(&ready),
+        ready: Arc::clone(ready),
+        control,
+        demand: Some(demand),
     };
     let decoder = DecoderFactory::create_from_media_info(source, &mp3(), config)
         .expect("streamed Apple MP3 decoder");
-    let decoded = decode(decoder, seek, &ready);
+    let decoded = decode(decoder, seek);
     (decoded, ready.load(Ordering::Acquire) == u64::MAX)
 }
 
@@ -310,17 +319,40 @@ fn streamed_apple(bytes: &[u8], seek: Option<Duration>) -> (Decoded, bool) {
 #[kithara::test]
 #[case::seek_past_the_download(Some(consts::SEEK))]
 #[case::read_up_to_the_download(None)]
-fn streamed_apple_mp3_resumes_where_the_download_arrives(#[case] seek: Option<Duration>) {
-    let bytes = rhythm_mp3_deck_a_120bpm_48k().bytes();
-    let expected = reference(bytes, seek);
-    let (decoded, parked) = streamed_apple(bytes, seek);
+async fn streamed_apple_mp3_resumes_where_the_download_arrives(#[case] seek: Option<Duration>) {
+    let ready = Arc::new(AtomicU64::new(consts::READY_PREFIX));
+    let downloading = Arc::clone(&ready);
+    let (request, demand) = oneshot::channel();
+    let decoding = spawn_blocking(move || {
+        let bytes = rhythm_mp3_deck_a_120bpm_48k().bytes();
+        let total = u64::try_from(bytes.len()).expect("fixture length fits u64");
+        let expected = reference(bytes, seek);
+        let actual = streamed_apple(bytes, seek, &downloading, ReaderControl::new(None), request);
+        (expected, actual, total)
+    });
+    let (required, control) = demand.await.expect("native parser reaches missing bytes");
+    assert!(required > ready.load(Ordering::Acquire));
+    assert!(control.is_blocking(), "the native parser owns this input");
+    while control.pending_reason().is_none() {
+        assert!(!decoding.is_finished(), "decoding waits for the download");
+        yield_runnable().await;
+    }
+    assert_eq!(
+        control.pending_reason(),
+        Some(PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted)),
+        "the native parser retains the actual unavailable read"
+    );
+    assert!(!decoding.is_finished(), "decoding waits for the download");
+    let arrived = ready.swap(u64::MAX, Ordering::AcqRel) == u64::MAX;
+    assert!(!arrived, "the decoder parks on bytes that have all arrived");
+    control.notify();
+    let (expected, (decoded, parked), total) = decoding.await.expect("native MP3 decode worker");
 
     assert!(
         parked,
         "the decoder must reach bytes that are not there yet"
     );
     if seek.is_some() {
-        let total = u64::try_from(bytes.len()).expect("fixture length fits u64");
         assert!(
             decoded.landed_byte.is_some_and(|byte| byte < total),
             "a seek must name the byte it resumes from so the stream cursor follows it, got {:?}",

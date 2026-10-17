@@ -1,6 +1,6 @@
 use kithara::{
     play::{CrossfadeCurve, CrossfadeSettings, PlayError, TimeRange},
-    queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode, Transition},
+    queue::{ActionAtItemEnd, PlaybackOrder, QueueError, RepeatMode, Transition},
 };
 
 use super::{
@@ -17,9 +17,8 @@ impl From<PlayError> for FfiError {
                 reason: format!("position {position:?}"),
             },
             PlayError::EngineNotRunning => Self::EngineNotRunning,
-            err @ (PlayError::IndexOutOfRange { .. }
-            | PlayError::ItemConsumed { .. }
-            | PlayError::ArmIndexMismatch { .. }
+            err @ (PlayError::ItemConsumed { .. }
+            | PlayError::ArmedItemMismatch { .. }
             | PlayError::EqBandOutOfRange { .. }
             | PlayError::InvalidParameter { .. }) => Self::InvalidArgument {
                 reason: err.to_string(),
@@ -31,7 +30,19 @@ impl From<PlayError> for FfiError {
     }
 }
 
-#[cfg(feature = "uniffi")]
+impl From<QueueError> for FfiError {
+    fn from(err: QueueError) -> Self {
+        match err {
+            QueueError::Play(err) => err.into(),
+            QueueError::NotReady(_) => Self::NotReady,
+            err => Self::Internal {
+                description: err.to_string(),
+            },
+        }
+    }
+}
+
+#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
 impl From<uniffi::UnexpectedUniFFICallbackError> for FfiError {
     fn from(e: uniffi::UnexpectedUniFFICallbackError) -> Self {
         Self::Internal {
@@ -67,7 +78,8 @@ impl TryFrom<FfiCrossfadeSettings> for CrossfadeSettings {
                 });
             }
         };
-        Self::new(value.duration, curve, value.depth, value.position).map_err(FfiError::from)
+        Self::new(value.duration, curve, value.depth, value.position)
+            .map_err(|error| FfiError::from(PlayError::from(error)))
     }
 }
 

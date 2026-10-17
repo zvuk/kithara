@@ -17,6 +17,8 @@ use kithara::events::TrackId;
 uniffi::custom_type!(TrackId, u64, { remote });
 
 mod core;
+#[cfg(feature = "mock")]
+pub mod mock;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 pub mod player;

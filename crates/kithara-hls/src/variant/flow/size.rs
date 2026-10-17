@@ -82,7 +82,9 @@ where
     fn exact_byte_position_ready(&self, byte: u64) -> bool {
         self.layout
             .try_published(|| {
-                let ready = if self.sizes_complete() && self.exact_init_complete() {
+                let ready = if self.init_descriptor_at(byte).is_some() {
+                    self.exact_init_complete()
+                } else if self.sizes_complete() && self.exact_init_complete() {
                     true
                 } else {
                     self.find_at_offset(byte)
@@ -148,6 +150,12 @@ where
     }
 
     fn request_exact_prefix_for_byte(&self, byte: u64) {
+        if self.init_descriptor_at(byte).is_some() {
+            if !self.exact_init_complete() {
+                self.request_exact_size(SizeDemand::Init);
+            }
+            return;
+        }
         if let Some((segment, _, _)) = self.find_at_offset(byte) {
             self.request_exact_prefix_through(segment);
             return;

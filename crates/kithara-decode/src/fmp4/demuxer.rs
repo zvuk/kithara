@@ -1,6 +1,6 @@
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_stream::{AudioCodec, ByteMap, PendingReason, SegmentDescriptor};
+use kithara_stream::{AudioCodec, ByteMap, ConstructionGate, PendingReason};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -8,6 +8,7 @@ use super::{
     reader::{FillStatus, LiveRange, SegmentReadState, fill_segment_buffer},
 };
 use crate::{
+    PrepareWait,
     codec::{CodecPriming, access_unit_frames, seek_warmup_access_units},
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PrerollHint, TrackInfo},
     error::{DecodeError, DecodeResult},
@@ -21,6 +22,13 @@ struct SegmentCursor {
     variant_index: usize,
 }
 
+struct SegmentSeek {
+    target: Duration,
+    reach: Duration,
+    skip_to: Option<Duration>,
+    priming: CodecPriming,
+}
+
 struct DecodedFrames {
     frames: Vec<Fmp4Frame>,
     next_index: usize,
@@ -30,21 +38,11 @@ struct DecodedFrames {
 pub(crate) struct Fmp4SegmentDemuxer<S> {
     segments: Arc<dyn ByteMap>,
     source: BoxedSource,
+    construction_gate: Option<ConstructionGate>,
     init: Fmp4InitInfo,
     cursor: Option<SegmentCursor>,
     pending: Option<PendingReason>,
-    /// Decode time the landing segment must be advanced to after a seek.
-    ///
-    /// A segment is the smallest unit the layout can address, so a seek lands
-    /// on its first frame however far into it the target sits. Decoding the
-    /// frames in between only to drop them costs a whole segment of codec work
-    /// per seek and publishes nothing while it runs. The frame table parsed
-    /// with the segment already carries each frame's decode time, so the
-    /// cursor starts at the frame covering the target instead — backed off by
-    /// the codec's own declared pre-roll, which is what [`warmup_backoff`]
-    /// subtracts. Cleared by the first segment parsed after the seek.
-    seek_skip_to: Option<Duration>,
-    seek_target: Option<SegmentDescriptor>,
+    seek: Option<SegmentSeek>,
     /// Host pool region. Each segment cursor draws its read buffer
     /// from here and returns it on drop, so a steady-state decode loop
     /// recycles one high-water allocation instead of mallocing per
@@ -99,28 +97,59 @@ where
         EnsureCursor::Ready
     }
 
+    /// Fill and parse the cursor's segment. After a seek, a segment whose own
+    /// first frame starts after the seek reach hands the cursor to the
+    /// segment before it; the index only descends, so the walk ends at the
+    /// first segment.
     fn fill_cursor(&mut self) -> DecodeResult<FillStatus> {
-        let cursor = self
-            .cursor
-            .as_mut()
-            .expect("BUG: ensure_cursor must run before fill_cursor");
-        if cursor.frames.is_some() {
-            return Ok(FillStatus::Ready);
-        }
-        let segments = self.segments.as_ref();
-        let status = fill_segment_buffer(
-            &mut self.source,
-            &mut cursor.read,
-            LiveRange::Segment(segments, cursor.segment_index),
-        )?;
-        if matches!(status, FillStatus::Ready) {
+        loop {
+            let cursor = self
+                .cursor
+                .as_mut()
+                .expect("BUG: ensure_cursor must run before fill_cursor");
+            if cursor.frames.is_some() {
+                return Ok(FillStatus::Ready);
+            }
+            let segments = self.segments.as_ref();
+            let status = fill_segment_buffer(
+                &mut self.source,
+                &mut cursor.read,
+                LiveRange::Segment(segments, cursor.segment_index),
+            )?;
+            if matches!(status, FillStatus::Pending(_)) {
+                return Ok(status);
+            }
             let frames = parse_segment_frames(&self.init, &cursor.read.buffer)?;
-            let next_index = self.seek_skip_to.take().map_or(0, |skip| {
-                frame_at_or_before(&frames, skip, self.init.timescale)
+            let starts_late = self.seek.as_ref().is_some_and(|seek| {
+                frames.first().is_some_and(|frame| {
+                    ticks_to_duration(frame.decode_time, self.init.timescale) > seek.reach
+                })
             });
+            if starts_late
+                && let Some(earlier) = cursor
+                    .segment_index
+                    .checked_sub(1)
+                    .and_then(|index| segments.segment_at_index(index))
+            {
+                self.next_segment_index = cursor.segment_index;
+                *cursor = SegmentCursor {
+                    read: SegmentReadState::new(earlier.byte_range, self.pools.get::<u8>()),
+                    frames: None,
+                    segment_index: earlier.segment_index,
+                    variant_index: earlier.variant_index,
+                };
+                continue;
+            }
+            let next_index = self
+                .seek
+                .as_ref()
+                .and_then(|seek| seek.skip_to)
+                .map_or(0, |skip| {
+                    frame_at_or_before(&frames, skip, self.init.timescale)
+                });
             cursor.frames = Some(DecodedFrames { frames, next_index });
+            return Ok(status);
         }
-        Ok(status)
     }
 
     /// Parse the init segment selected by the source's [`kithara_stream::Source::byte_map`].
@@ -132,6 +161,7 @@ where
         mut source: BoxedSource,
         segments: Arc<dyn ByteMap>,
         pools: PoolRegion<S>,
+        construction_gate: Option<ConstructionGate>,
     ) -> DecodeResult<Self> {
         let init_range = segments.init_segment_range();
         if init_range.is_empty() {
@@ -154,12 +184,12 @@ where
             init,
             track_info,
             source,
+            construction_gate,
             segments,
             pools,
             next_segment_index: 0,
             cursor: None,
-            seek_target: None,
-            seek_skip_to: None,
+            seek: None,
             pending: Some(PendingReason::Retry),
         })
     }
@@ -177,21 +207,18 @@ impl<S> Demuxer for Fmp4SegmentDemuxer<S>
 where
     S: HasPool<u8> + Send + Sync,
 {
-    fn current_segment_index(&self) -> Option<u32> {
-        self.seek_target.as_ref().map_or_else(
-            || self.cursor.as_ref().map(|cursor| cursor.segment_index),
-            |desc| Some(desc.segment_index),
-        )
+    delegate::delegate! {
+        to self.cursor {
+            #[expr($.map(|cursor| cursor.segment_index))]
+            #[call(as_ref)]
+            fn current_segment_index(&self) -> Option<u32>;
+            #[expr($.map(|cursor| cursor.variant_index))]
+            #[call(as_ref)]
+            fn current_variant_index(&self) -> Option<usize>;
+        }
     }
 
-    fn current_variant_index(&self) -> Option<usize> {
-        self.seek_target.as_ref().map_or_else(
-            || self.cursor.as_ref().map(|cursor| cursor.variant_index),
-            |desc| Some(desc.variant_index),
-        )
-    }
-
-    fn duration(&self) -> Option<Duration> {
+    fn duration(&self) -> Option<crate::DecoderDuration> {
         self.track_info.duration
     }
 
@@ -202,9 +229,6 @@ where
 
     #[kithara::probe]
     fn next_frame_prepared(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
-        if self.seek_target.is_some() {
-            return Ok(DemuxOutcome::Pending(PendingReason::Retry));
-        }
         if let Some(reason) = self.pending {
             return Ok(DemuxOutcome::Pending(reason));
         }
@@ -230,13 +254,8 @@ where
     }
 
     fn prepare_frame(&mut self) -> DecodeResult<()> {
-        if let Some(desc) = self.seek_target.take() {
-            self.cursor = Some(SegmentCursor {
-                read: SegmentReadState::new(desc.byte_range, self.pools.get::<u8>()),
-                frames: None,
-                segment_index: desc.segment_index,
-                variant_index: desc.variant_index,
-            });
+        if self.seek.is_some() {
+            return Ok(());
         }
         loop {
             if self.cursor.as_ref().is_some_and(|cursor| {
@@ -279,6 +298,15 @@ where
     /// The seek target backs off by the SBR/PS pre-roll warmup before locating the covering
     /// segment.
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
+        self.seek_with_wait(target, priming, PrepareWait::Poll)
+    }
+
+    fn seek_with_wait(
+        &mut self,
+        target: Duration,
+        priming: CodecPriming,
+        wait: PrepareWait,
+    ) -> DecodeResult<DemuxSeekOutcome> {
         let seek_target =
             warmup_backoff(self.track_info.codec, self.track_info.sample_rate, &priming)
                 .map_or(target, |backoff| target.saturating_sub(backoff));
@@ -287,43 +315,97 @@ where
                 detail: "no segment covers the requested seek time",
             });
         };
-        if let Some(duration) = self.track_info.duration
+        if let Some(crate::DecoderDuration::MediaEnd(duration)) = self.track_info.duration
             && desc.decode_time >= duration
         {
-            self.seek_skip_to = None;
+            self.seek = None;
+            self.cursor = None;
+            self.pending = None;
+            self.next_segment_index = desc.segment_index.saturating_add(1);
             return Ok(DemuxSeekOutcome::PastEof { duration });
         }
-        let landed_byte = desc.byte_range.start;
-        let landed_at = desc.decode_time;
-        let segment_index = desc.segment_index;
-        self.next_segment_index = segment_index.saturating_add(1);
-        let preroll = match compute_preroll_byte(
-            &PrerollProbe {
-                landed_at,
-                target,
-                segment_index,
-            },
-            self.segments.as_ref(),
-            &priming,
-        ) {
-            Some(byte) => PrerollHint::Required(byte),
-            None if priming.byte_margin == 0 => PrerollHint::NotNeeded,
-            None if segment_index == 0 => PrerollHint::FirstSegment,
-            None => PrerollHint::NotNeeded,
-        };
         let skip_to = intra_segment_landing(
             seek_target,
             &priming,
             self.track_info.codec,
             self.track_info.sample_rate,
         );
-        self.seek_skip_to = skip_to.filter(|skip| *skip > landed_at);
-        self.seek_target = Some(desc);
-        Ok(DemuxSeekOutcome::Landed {
-            landed_at,
+        self.next_segment_index = desc.segment_index.saturating_add(1);
+        self.cursor = Some(SegmentCursor {
+            read: SegmentReadState::new(desc.byte_range, self.pools.get::<u8>()),
+            frames: None,
+            segment_index: desc.segment_index,
+            variant_index: desc.variant_index,
+        });
+        self.seek = Some(SegmentSeek {
+            target,
+            reach: seek_target,
+            skip_to: skip_to.filter(|skip| *skip > desc.decode_time),
+            priming,
+        });
+        self.prepare_seek_with_wait(wait)?
+            .ok_or(DecodeError::InvalidData {
+                detail: "fMP4 seek operation disappeared before resolution",
+            })
+    }
+
+    fn prepare_seek(&mut self) -> DecodeResult<Option<DemuxSeekOutcome>> {
+        self.prepare_seek_with_wait(PrepareWait::Poll)
+    }
+
+    fn prepare_seek_with_wait(
+        &mut self,
+        wait: PrepareWait,
+    ) -> DecodeResult<Option<DemuxSeekOutcome>> {
+        if self.seek.is_none() {
+            return Ok(None);
+        }
+        let gate = self.construction_gate.clone();
+        let _scope = gate
+            .as_ref()
+            .filter(|_| wait == PrepareWait::Poll)
+            .map(ConstructionGate::nonblocking);
+        match self.fill_cursor()? {
+            FillStatus::Pending(reason) => {
+                self.pending = Some(reason);
+                return Ok(Some(DemuxSeekOutcome::Pending(reason)));
+            }
+            FillStatus::Ready => self.pending = None,
+        }
+        let seek = self.seek.take().ok_or(DecodeError::InvalidData {
+            detail: "fMP4 seek operation disappeared after reading",
+        })?;
+        let cursor = self.cursor.as_ref().ok_or(DecodeError::InvalidData {
+            detail: "fMP4 seek cursor disappeared after reading",
+        })?;
+        let desc = self.segments.segment_at_index(cursor.segment_index).ok_or(
+            DecodeError::InvalidData {
+                detail: "resolved fMP4 seek segment is missing from the layout",
+            },
+        )?;
+        let preroll = match compute_preroll_byte(
+            &PrerollProbe {
+                landed_at: desc.decode_time,
+                target: seek.target,
+                segment_index: cursor.segment_index,
+            },
+            self.segments.as_ref(),
+            &seek.priming,
+        ) {
+            Some(byte) => PrerollHint::Required(byte),
+            None if seek.priming.byte_margin == 0 => PrerollHint::NotNeeded,
+            None if cursor.segment_index == 0 => PrerollHint::FirstSegment,
+            None => PrerollHint::NotNeeded,
+        };
+        Ok(Some(DemuxSeekOutcome::Landed {
+            landed_at: desc.decode_time,
+            landed_byte: Some(cursor.read.range.start),
             preroll,
-            landed_byte: Some(landed_byte),
-        })
+        }))
+    }
+
+    fn media_origin(&self) -> Option<Duration> {
+        Some(Duration::ZERO)
     }
 
     fn track_info(&self) -> &TrackInfo {
@@ -394,7 +476,7 @@ fn build_track_info(init: &Fmp4InitInfo, duration: Option<Duration>) -> TrackInf
     let extra_data = init.config.as_ref().to_vec();
     TrackInfo {
         extra_data,
-        duration,
+        duration: duration.map(crate::DecoderDuration::MediaEnd),
         codec: init.codec,
         sample_rate: init.sample_rate,
         channels: init.channels,
@@ -404,7 +486,7 @@ fn build_track_info(init: &Fmp4InitInfo, duration: Option<Duration>) -> TrackInf
 
 fn compute_duration(segments: &Arc<dyn ByteMap>) -> Option<Duration> {
     let last = segments.segment_at_time(Duration::from_secs(u64::MAX / 2))?;
-    Some(last.decode_time.saturating_add(last.duration))
+    last.decode_time.checked_add(last.duration)
 }
 
 /// Index of the first frame whose decode time covers `skip`.

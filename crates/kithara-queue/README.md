@@ -75,6 +75,11 @@ pool region. When no store is supplied, it builds the store from the exact
 `Queue::set_tracks` must run inside an active tokio runtime because the
 loader uses `tokio::spawn`.
 
+Use `QueueControl::append_at(source, Position::from_secs(32))` to load an item
+at an initial media position, including background preload. The entry keeps
+that position for fresh loads; seeking or resuming an already opened track
+continues to use its current playback position.
+
 `QueueConfig` owns the initial playback order, item-end action, and complete
 crossfade profile. Their runtime setters update that same queue-owned state;
 repeat remains a separate automatic-EOF rule, and `should_autoplay` applies

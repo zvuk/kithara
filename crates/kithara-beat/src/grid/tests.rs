@@ -1,9 +1,10 @@
 use std::num::NonZeroU16;
 
+use kithara_sync::Meter;
 use kithara_test_utils::kithara;
 
 use super::{
-    BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid,
+    BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, RawBeatGrid,
     SCHEMA_VERSION,
 };
 use crate::consts;
@@ -296,4 +297,47 @@ fn a_document_from_another_schema_is_refused() {
     let mut nameless = raw(Vec::new(), Vec::new());
     nameless.model_id = String::new();
     assert!(matches!(rejects(nameless), BeatGridError::ModelId));
+}
+
+#[kithara::test]
+fn checked_geometry_preserves_the_wire_beats_meter_and_tempo() {
+    let raw = RawBeatGrid {
+        meter: Some(Meter {
+            beats_per_bar: NonZeroU16::new(4).expect("meter"),
+            origin_beat_ordinal: 0,
+        }),
+        ..raw((0..8).map(beat).collect(), vec![downbeat(0), downbeat(4)])
+    };
+    let model = BeatGridModel::try_from(raw.clone()).expect("checked wire geometry");
+    assert_eq!(model.geometry().bpm(), raw.bpm);
+    assert_eq!(model.geometry().meter(), raw.meter);
+    assert_eq!(model.geometry().duration(), raw.duration);
+    let beats: Vec<_> = model
+        .geometry()
+        .beats()
+        .iter()
+        .map(|beat| (beat.at, beat.ordinal))
+        .collect();
+    let downbeats: Vec<_> = model
+        .geometry()
+        .downbeats()
+        .iter()
+        .map(|beat| (beat.at, beat.ordinal))
+        .collect();
+    assert_eq!(
+        beats,
+        raw.beats
+            .iter()
+            .map(|beat| (beat.at, beat.ordinal))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        downbeats,
+        raw.downbeats
+            .iter()
+            .map(|beat| (beat.at, beat.beat_ordinal))
+            .collect::<Vec<_>>()
+    );
+    let restored: RawBeatGrid = model.into();
+    assert_eq!(restored, raw);
 }

@@ -7,11 +7,7 @@ use kithara_platform::sync::Arc;
 use kithara_stream::PendingReason;
 use kithara_test_fixtures::{SignalAsset, assets::by_name};
 use kithara_test_utils::kithara;
-use symphonia::core::{
-    formats::{FormatOptions, FormatReader, probe::Hint},
-    io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
-    meta::MetadataOptions,
-};
+use symphonia::core::io::MediaSource;
 
 use crate::{
     demuxer::{DemuxOutcome, Demuxer},
@@ -29,7 +25,6 @@ impl Read for Source {
         self.reads.fetch_add(1, Ordering::Relaxed);
         let remaining = self.remaining.load(Ordering::Relaxed);
         if remaining == 0 {
-            self.remaining.store(usize::MAX, Ordering::Relaxed);
             return Err(io::ErrorKind::WouldBlock.into());
         }
         let len = out.len().min(remaining).min(53);
@@ -59,40 +54,45 @@ impl MediaSource for Source {
     }
 }
 
-fn reader(remaining: Arc<AtomicUsize>, reads: Arc<AtomicUsize>) -> Box<dyn FormatReader> {
-    reader_for(SignalAsset::M4A_SINE440_60S, remaining, reads)
+fn reader(remaining: Arc<AtomicUsize>, reads: Arc<AtomicUsize>) -> SymphoniaDemuxer {
+    reader_for(
+        SignalAsset::M4A_SINE440_60S,
+        remaining,
+        reads,
+        kithara_stream::ReaderControl::new(None),
+    )
 }
 
 fn reader_for(
     signal: SignalAsset,
     remaining: Arc<AtomicUsize>,
     reads: Arc<AtomicUsize>,
-) -> Box<dyn FormatReader> {
+    control: kithara_stream::ReaderControl,
+) -> SymphoniaDemuxer {
     let asset = by_name(signal.name()).expect("signal fixture");
     let source = Source {
         remaining,
         reads,
         cursor: Cursor::new(asset.bytes().to_vec()),
     };
-    let stream = MediaSourceStream::new(Box::new(source), MediaSourceStreamOptions::default());
-    let mut hint = Hint::new();
-    hint.with_extension(signal.ext());
-    symphonia::default::get_probe()
-        .probe(
-            &hint,
-            stream,
-            FormatOptions::default(),
-            MetadataOptions::default(),
-        )
-        .expect("signal probe")
+    SymphoniaDemuxer::open_file(
+        source,
+        super::FileOpen {
+            byte_len_handle: None,
+            byte_map: None,
+            container: kithara_stream::ContainerFormat::parse_extension(signal.ext()),
+            hint: Some(signal.ext().to_owned()),
+            control,
+        },
+    )
+    .expect("signal production bootstrap")
+    .0
 }
 
 #[kithara::test]
 fn mp4_prepared_frame_consumption_does_not_read_the_source() {
     let reads = Arc::new(AtomicUsize::new(0));
-    let format = reader(Arc::new(AtomicUsize::new(usize::MAX)), Arc::clone(&reads));
-    let mut demuxer =
-        SymphoniaDemuxer::from_reader_with_layout(format, None, None).expect("MP4 demuxer");
+    let mut demuxer = reader(Arc::new(AtomicUsize::new(usize::MAX)), Arc::clone(&reads));
     let before = reads.load(Ordering::Relaxed);
     for _ in 0..128 {
         demuxer.prepare_frame().expect("prepare packet");
@@ -117,35 +117,42 @@ fn mp4_prepared_frame_consumption_does_not_read_the_source() {
 #[kithara::test]
 #[case(SignalAsset::WAV_SINE440_60S)]
 #[case(SignalAsset::M4A_SINE440_60S)]
+#[kithara::hang_watchdog]
 fn packet_retry_preserves_bytes_and_timestamps_after_partial_read(#[case] signal: SignalAsset) {
     let remaining = Arc::new(AtomicUsize::new(usize::MAX));
-    let mut actual = SymphoniaDemuxer::from_reader_with_layout(
-        reader_for(
-            signal,
-            Arc::clone(&remaining),
-            Arc::new(AtomicUsize::new(0)),
-        ),
-        None,
-        None,
-    )
-    .expect("actual demuxer");
-    let mut expected = SymphoniaDemuxer::from_reader_with_layout(
-        reader_for(
-            signal,
-            Arc::new(AtomicUsize::new(usize::MAX)),
-            Arc::new(AtomicUsize::new(0)),
-        ),
-        None,
-        None,
-    )
-    .expect("reference demuxer");
+    let control = kithara_stream::ReaderControl::new(None);
+    let mut actual = reader_for(
+        signal,
+        Arc::clone(&remaining),
+        Arc::new(AtomicUsize::new(0)),
+        control.clone(),
+    );
+    let mut expected = reader_for(
+        signal,
+        Arc::new(AtomicUsize::new(usize::MAX)),
+        Arc::new(AtomicUsize::new(0)),
+        kithara_stream::ReaderControl::new(None),
+    );
     remaining.store(17, Ordering::Relaxed);
     let mut interrupted = false;
     let mut completed = 0;
-    for _ in 0..129 {
-        let packet = match actual.next_frame().expect("packet read") {
+    while completed < 128 {
+        hang_tick!();
+        actual
+            .prepare_frame_with_wait(crate::PrepareWait::Poll)
+            .expect("poll packet");
+        let packet = match actual.next_frame_prepared().expect("packet read") {
+            DemuxOutcome::Pending(
+                PendingReason::Retry
+                | PendingReason::NotReady(kithara_stream::NotReadyCause::OperationPending),
+            ) => {
+                kithara_platform::thread::yield_runnable();
+                continue;
+            }
             DemuxOutcome::Pending(_) => {
                 interrupted = true;
+                remaining.store(usize::MAX, Ordering::Relaxed);
+                control.notify();
                 continue;
             }
             DemuxOutcome::Frame(frame) => frame,

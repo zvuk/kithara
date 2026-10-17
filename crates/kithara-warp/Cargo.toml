@@ -20,7 +20,7 @@ default = []
 mock = []
 perf = ["kithara-stretch/perf"]
 usdt = ["dep:kithara-test-utils", "kithara-test-utils/usdt"]
-render = ["dep:kithara-bufpool", "dep:kithara-dsp"]
+render = ["dep:kithara-bufpool", "dep:kithara-dsp", "dep:kithara-test-utils"]
 stretch-signalsmith = ["kithara-stretch/stretch-signalsmith", "render"]
 stretch-bungee = ["kithara-stretch/stretch-bungee", "render"]
 stretch-glide = ["kithara-stretch/stretch-glide", "render"]
@@ -30,15 +30,15 @@ stretch-identity = ["kithara-stretch/stretch-identity", "render"]
 kithara-beat = { workspace = true }
 kithara-bufpool = { workspace = true, optional = true }
 kithara-config = { workspace = true }
-kithara-derive = { workspace = true, features = ["patch"] }
+kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-dsp = { workspace = true, optional = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-stretch = { workspace = true, default-features = false }
+kithara-sync = { workspace = true }
 kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["client-reqwest", "usdt", "tls-rustls"], optional = true }
+kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"], optional = true }
 
-arc-swap = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
@@ -57,7 +57,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 kithara-bufpool = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "tls-rustls"] }
-kithara-warp = { path = ".", default-features = false, features = ["usdt"] }
+kithara-warp = { path = ".", default-features = false, features = ["usdt", "stretch-identity", "stretch-glide", "stretch-signalsmith", "stretch-bungee"] }
 
 realfft = { workspace = true }
 serde_json = { workspace = true }

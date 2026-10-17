@@ -121,7 +121,7 @@ extension IntegrationRegressionsIOS {
         #expect(
             abs(completion.positionSeconds - target) <= frameDuration,
             """
-            \(shape.rawValue): seek epoch \(completion.epoch) landed at \
+            \(shape.rawValue): seek event \(completion.eventOrder) landed at \
             \(completion.positionSeconds)s for target \(target)s
             """
         )
@@ -180,6 +180,28 @@ extension IntegrationRegressionsIOS {
                 },
             "duration changed across the near-duration seek"
         )
+    }
+
+    @Test("Seek completion capture requires a new event after each issued seek")
+    func seekCompletionCaptureRequiresAnEventAfterArming() throws {
+        let completions = SeekCompletionCapture()
+        completions.record(.seekComplete(positionSeconds: 1))
+        #expect(completions.snapshot() == nil)
+
+        completions.armForNextSeek()
+        #expect(completions.snapshot() == nil)
+        completions.record(.seekComplete(positionSeconds: 186.9))
+        let first = try #require(completions.snapshot())
+        #expect(first.positionSeconds == 186.9)
+        completions.record(.seekComplete(positionSeconds: 2))
+        #expect(completions.snapshot()?.positionSeconds == first.positionSeconds)
+
+        completions.armForNextSeek()
+        #expect(completions.snapshot() == nil)
+        completions.record(.seekComplete(positionSeconds: 3))
+        let second = try #require(completions.snapshot())
+        #expect(second.positionSeconds == 3)
+        #expect(second.eventOrder > first.eventOrder)
     }
 
     private func reachedSeekFact(
@@ -266,45 +288,41 @@ private final class SeekBoundaryCapture: @unchecked Sendable {
 private final class SeekCompletionCapture: @unchecked Sendable {
     private struct Completion {
         let positionSeconds: TimeInterval
-        let epoch: UInt64
+        let eventOrder: UInt64
     }
 
     private let lock = NSLock()
-    private var latestEpoch: UInt64?
-    private var issuedAfterEpoch: UInt64?
+    private var eventOrder: UInt64 = 0
+    private var issuedAfterOrder: UInt64 = 0
     private var isArmed = false
     private var completion: Completion?
 
     func record(_ event: ItemEvent) {
-        guard case let .seekComplete(positionSeconds, epoch) = event else {
-            return
-        }
         lock.lock()
         defer { lock.unlock() }
 
-        if latestEpoch.map({ epoch > $0 }) ?? true {
-            latestEpoch = epoch
-        }
-        guard isArmed,
+        eventOrder += 1
+        guard case let .seekComplete(positionSeconds) = event,
+              isArmed,
               completion == nil,
-              issuedAfterEpoch.map({ epoch > $0 }) ?? true
+              eventOrder > issuedAfterOrder
         else {
             return
         }
-        completion = Completion(positionSeconds: positionSeconds, epoch: epoch)
+        completion = Completion(positionSeconds: positionSeconds, eventOrder: eventOrder)
     }
 
     func armForNextSeek() {
         lock.lock()
         defer { lock.unlock() }
-        issuedAfterEpoch = latestEpoch
+        issuedAfterOrder = eventOrder
         completion = nil
         isArmed = true
     }
 
-    func snapshot() -> (positionSeconds: TimeInterval, epoch: UInt64)? {
+    func snapshot() -> (positionSeconds: TimeInterval, eventOrder: UInt64)? {
         lock.lock()
         defer { lock.unlock() }
-        return completion.map { ($0.positionSeconds, $0.epoch) }
+        return completion.map { ($0.positionSeconds, $0.eventOrder) }
     }
 }

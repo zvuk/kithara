@@ -391,7 +391,10 @@ async fn track_plays_end_to_end(
         url,
     );
 
-    ctx.queue.remove(track_id).expect("remove");
+    ctx.queue
+        .run(move |q| q.remove(track_id))
+        .await
+        .expect("remove");
 }
 
 async fn wait_for_queue_event<F>(
@@ -443,10 +446,13 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     assert!(urls.len() >= 3, "need ≥3 tracks for scenario");
 
     ctx.queue
-        .set_crossfade_settings(kithara::play::CrossfadeSettings {
-            duration: 2.0,
-            ..Default::default()
+        .run(|q| {
+            q.set_crossfade_settings(kithara::play::CrossfadeSettings {
+                duration: 2.0,
+                ..Default::default()
+            })
         })
+        .await
         .expect("valid crossfade settings");
 
     let mut rx = ctx.queue.subscribe();
@@ -527,7 +533,8 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
     let xf_duration = ctx.queue.crossfade_settings().duration;
     ctx.queue
-        .next(Transition::Crossfade)
+        .run(|q| q.next(Transition::Crossfade))
+        .await
         .expect("advance real-playlist crossfade");
     let started = wait_for_queue_event(
         &mut rx,
@@ -608,8 +615,10 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
             .queue
             .duration_seconds()
             .ok_or_else(|| "duration unknown".to_string())?;
+        let target = (dur - 3.0).max(0.0);
         ctx.queue
-            .seek((dur - 3.0).max(0.0))
+            .run(move |q| q.seek(target))
+            .await
             .map_err(|e| format!("seek: {e}"))?;
         wait_for_queue_event(
             &mut rx,
@@ -652,6 +661,8 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
 // flash(false): real zvuk prod CDN/keyserver e2e; wall-clock latency IS the assertion.
 #[kithara::test(tokio)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
+#[kithara_test_utils::kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn prod_tracks_sequential_startup_latency() {
     kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
 
@@ -702,6 +713,7 @@ async fn prod_tracks_sequential_startup_latency() {
         Vec::with_capacity(TRACKS.len());
 
     for url in TRACKS {
+        hang_tick!(format!("production startup append {url}"));
         let mut rx = ctx.queue.subscribe();
         let source = build_track_source(url, ctx, DecoderBackend::Apple, AbrMode::Auto(None));
         let t0 = kithara::platform::time::Instant::now();
@@ -710,6 +722,7 @@ async fn prod_tracks_sequential_startup_latency() {
             .run(move |q| q.append(source))
             .await
             .expect("append Apple production track");
+        hang_reset!();
 
         let outcome: Result<(Duration, Duration), String> = async {
             wait_for_status(
@@ -721,22 +734,26 @@ async fn prod_tracks_sequential_startup_latency() {
             )
             .await
             .map_err(|e| format!("load: {e}"))?;
+            hang_reset!();
             let load_latency = t0.elapsed();
 
             ctx.queue
                 .run(move |q| q.select(track_id, Transition::None))
                 .await
                 .map_err(|e| format!("select: {e:?}"))?;
+            hang_reset!();
             wait_for_position_at_least(&ctx.queue, 0.1, Duration::from_secs(20))
                 .await
                 .map_err(|e| format!("first-audio: {e}"))?;
+            hang_reset!();
             let first_audio_latency = t0.elapsed();
 
             Ok((load_latency, first_audio_latency))
         }
         .await;
 
-        let _ = ctx.queue.remove(track_id);
+        let _ = ctx.queue.run(move |q| q.remove(track_id)).await;
+        hang_reset!();
         report.push((url, outcome));
     }
 
@@ -875,10 +892,13 @@ async fn hls_hands_over_to_mpeg_at_its_own_end(#[case] backend: DecoderBackend) 
 
     let ctx = shared_test_ctx().await;
     ctx.queue
-        .set_crossfade_settings(kithara::play::CrossfadeSettings {
-            duration: CROSSFADE_SECS,
-            ..Default::default()
+        .run(|q| {
+            q.set_crossfade_settings(kithara::play::CrossfadeSettings {
+                duration: CROSSFADE_SECS,
+                ..Default::default()
+            })
         })
+        .await
         .expect("valid crossfade settings");
 
     let mut rx = ctx.queue.subscribe();
@@ -949,6 +969,10 @@ async fn hls_hands_over_to_mpeg_at_its_own_end(#[case] backend: DecoderBackend) 
         seam.reason
     );
 
-    let _ = ctx.queue.remove(hls);
-    let _ = ctx.queue.remove(mpeg);
+    ctx.queue
+        .run(move |q| {
+            let _ = q.remove(hls);
+            let _ = q.remove(mpeg);
+        })
+        .await;
 }

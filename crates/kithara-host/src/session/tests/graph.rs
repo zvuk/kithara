@@ -1,236 +1,208 @@
 use std::num::NonZeroU32;
 
 use firewheel::FirewheelContext;
-use kithara_audio::ConsumerWakeMode;
-use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_command::Live;
+use kithara_bufpool::HasPool;
+use kithara_command::{Live, ScopeId, ScopedReceipt, When};
 use kithara_effects::LimiterConfig;
-use kithara_platform::sync::Arc;
-#[cfg(target_arch = "wasm32")]
-use kithara_play::player::Player;
-use kithara_play::{
-    PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding,
-    player::PlayerControlSource,
-};
-use kithara_signal::SessionEpoch;
-use kithara_sync::{
-    GroupState, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncMode, SyncOperation,
-    TopologyOperation,
-};
-#[cfg(test)]
+use kithara_events::EventBus;
+use kithara_play::{PlayError, SessionTransportSnapshot};
+use kithara_render::{bridge::scope_channels, rt::DeckMixerConfig};
 use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_warp::BeatGridId;
 
 use super::super::{
-    dispatch::{run_cmd, run_host_cmd},
-    protocol::{Cmd, HostCmd, HostReply, Reply, SessionDispatcher},
-    state::{RootView, SessionState},
+    dispatch::tick_session,
+    graph::{drop_idle_context, idle, install_deck, remove_deck},
+    protocol::SessionError,
+    queue::settle_receipt,
+    state::{HostRoot, RootView, SessionState},
+    transport::observe_commits,
 };
-use crate::{HostSettings, PlayerMember, host::HeldPlayer, rt::SessionOutput};
-/// Test-only owner for the real Host graph running on an injected backend.
-///
-/// The production Host surface never exposes its raw session state. This
-/// probe keeps existing deterministic backend tests on the same graph code.
-pub(crate) struct GraphSession<T, S> {
-    state: SessionState<T, S>,
+use crate::{HostSettings, HostSettingsChange, HostSettingsExec, rt::SessionOutput};
+
+pub(crate) struct GraphSession<T> {
+    state: SessionState<T, TestPools>,
+    scopes: Vec<(BeatGridId, ScopeId)>,
 }
 
-impl<T, S> GraphSession<T, S>
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    pub(crate) const DEFAULT_SAMPLE_RATE: NonZeroU32 =
-        match NonZeroU32::new(SessionState::<T, S>::DEFAULT_SAMPLE_RATE) {
-            Some(sample_rate) => sample_rate,
-            None => unreachable!(),
-        };
+impl<T> std::ops::Deref for GraphSession<T> {
+    type Target = SessionState<T, TestPools>;
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
 
-    #[must_use]
-    pub(crate) fn new<F>(start_stream_fn: F) -> Self
+impl<T> std::ops::DerefMut for GraphSession<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
+}
+
+impl<T> GraphSession<T> {
+    pub(crate) const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+        Some(rate) => rate,
+        None => unreachable!(),
+    };
+
+    pub(crate) fn new<F>(start: F) -> Self
     where
         F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
     {
-        Self::with_sample_rate(Self::DEFAULT_SAMPLE_RATE, start_stream_fn)
+        Self::with_sample_rate(Self::DEFAULT_SAMPLE_RATE, start)
+    }
+
+    pub(crate) fn with_sample_rate<F>(rate: NonZeroU32, start: F) -> Self
+    where
+        F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
+    {
+        Self {
+            state: state_for(rate, start),
+            scopes: Vec::new(),
+        }
     }
 
     pub(crate) fn ctx_mut(&mut self) -> Option<&mut FirewheelContext> {
         self.state.ctx.as_mut()
     }
 
-    #[must_use]
-    pub(crate) fn exec(&mut self, cmd: Cmd<S>) -> Reply {
-        if let Cmd::RegisterPlayer { grid_id, pools, .. } = &cmd
-            && self.state.root.with_group(*grid_id, |_| ()).is_none()
-        {
-            attach_player_with_id(&mut self.state, *grid_id, pools.clone());
-        }
-        run_cmd(&mut self.state, cmd)
+    pub(crate) fn tick(&mut self) -> Result<(), SessionError> {
+        self.state.begin_iteration();
+        tick_session(&mut self.state)?;
+        self.settle();
+        Ok(())
     }
 
-    #[must_use]
-    pub(crate) fn exec_host(&mut self, cmd: HostCmd<S>) -> HostReply {
-        run_host_cmd(&mut self.state, cmd)
+    pub(crate) fn install(&mut self, id: BeatGridId, bus: EventBus) -> Result<(), PlayError> {
+        super::super::state::ensure_ctx(&mut self.state)?;
+        let config = DeckMixerConfig::default();
+        let scope = self
+            .state
+            .channel
+            .as_mut()
+            .expect("graph channel")
+            .open(config.slots().get())
+            .expect("fixture scope");
+        let (_ends, inputs) = scope_channels(scope, config);
+        install_deck(&mut self.state, id, inputs, pools(), Some(bus))?;
+        self.scopes.push((id, scope));
+        Ok(())
+    }
+
+    pub(crate) fn remove(&mut self, id: BeatGridId) -> Result<(), PlayError> {
+        let index = self
+            .scopes
+            .iter()
+            .position(|(held, _)| *held == id)
+            .expect("installed graph scope");
+        let (_, scope) = self.scopes.remove(index);
+        self.state
+            .channel
+            .as_mut()
+            .expect("graph channel")
+            .close(scope)
+            .expect("live graph scope");
+        self.state
+            .channel
+            .as_mut()
+            .expect("graph channel")
+            .publish()
+            .expect("publish scope close");
+        remove_deck(&mut self.state, id)?;
+        if self.scopes.is_empty() {
+            idle(&mut self.state)?;
+            self.settle();
+            drop_idle_context(&mut self.state)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn configure(
+        &mut self,
+        change: HostSettingsChange,
+        at: When<kithara_signal::SessionFrame>,
+    ) -> Result<(), PlayError> {
+        self.state.begin_iteration();
+        self.state.exec(change, at, &mut ())?;
+        self.state
+            .channel
+            .as_mut()
+            .expect("graph channel")
+            .publish()
+            .map_err(|_| PlayError::Closed)
+    }
+
+    fn settle(&mut self) {
+        while let Some(receipt) = self
+            .state
+            .channel
+            .as_mut()
+            .and_then(kithara_command::ScopedSender::receipt)
+        {
+            if let ScopedReceipt::Root(receipt) = receipt {
+                settle_receipt(&mut self.state, &receipt);
+            }
+        }
     }
 
     pub(crate) fn stream_mut(&mut self) -> Option<&mut T> {
         self.state.stream.as_mut()
     }
 
-    #[must_use]
-    pub(crate) fn with_sample_rate<F>(sample_rate: NonZeroU32, start_stream_fn: F) -> Self
-    where
-        F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
-    {
-        Self {
-            state: state_for(sample_rate, start_stream_fn),
-        }
+    pub(crate) fn transport(&mut self) -> Option<SessionTransportSnapshot> {
+        self.settle();
+        committed_transport(&mut self.state)
+    }
+
+    pub(crate) fn view(&self) -> RootView {
+        self.state.root_view.clone()
     }
 }
 
-pub(crate) struct FixtureSession;
-
-impl<S> SessionDispatcher<S> for FixtureSession {
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
-    }
-
-    fn exec(&self, _cmd: Cmd<S>) -> Result<Reply, PlayError> {
-        Ok(Reply::Ok)
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn state<T, F>(start_stream_fn: F) -> SessionState<T, TestPools>
+pub(crate) fn state<T, F>(start: F) -> GraphSession<T>
 where
     F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 {
-    state_for(
-        GraphSession::<T, TestPools>::DEFAULT_SAMPLE_RATE,
-        start_stream_fn,
-    )
+    GraphSession::new(start)
 }
 
 pub(crate) fn state_for<T, F, S>(sample_rate: NonZeroU32, start_stream_fn: F) -> SessionState<T, S>
 where
     F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 {
-    let grid_id = BeatGridId::allocate().expect("fixture host grid id");
-    let root = GroupState::unavailable(
-        grid_id,
-        sample_rate,
-        SessionEpoch::new(0),
-        SyncMemberKind::Group,
-        SyncMode::Off,
-    );
+    let (root, root_view) = empty_root(sample_rate);
     let settings = HostSettings::builder().sample_rate(sample_rate).build();
-    let root_view = RootView::new(&root, settings);
     SessionState::new(
         root,
         root_view,
-        None,
-        None,
+        super::super::state::SessionBufferConfig::default(),
         SessionOutput::new(LimiterConfig::default()),
-        Live::new(settings).expect("the fixture settings are valid"),
+        Live::new(settings).expect("fixture settings"),
+        crate::HostConfig::<S>::builder()
+            .settings(settings)
+            .build()
+            .channel_config(),
         start_stream_fn,
     )
 }
 
-#[cfg(test)]
-pub(crate) fn attach_player<T>(state: &mut SessionState<T, TestPools>) -> BeatGridId {
-    let grid_id = BeatGridId::allocate().expect("fixture player grid id");
-    attach_player_with_id(state, grid_id, pools());
-    grid_id
-}
-
-#[cfg(test)]
-pub(crate) fn root_with_player(
-    sample_rate: NonZeroU32,
-) -> (GroupState<PlayerMember>, RootView, BeatGridId) {
-    let host_grid_id = BeatGridId::allocate().expect("fixture host grid id");
-    let mut root = GroupState::unavailable(
-        host_grid_id,
+pub(crate) fn empty_root(sample_rate: NonZeroU32) -> (HostRoot, RootView) {
+    let root = HostRoot::new(
+        BeatGridId::allocate().expect("fixture grid id"),
         sample_rate,
-        SessionEpoch::new(0),
-        SyncMemberKind::Group,
-        SyncMode::Off,
     );
-    let player_grid_id = BeatGridId::allocate().expect("fixture player grid id");
-    attach_member(&mut root, player_grid_id, pools(), sample_rate);
-    let root_view = RootView::new(
+    let view = RootView::new(
         &root,
         HostSettings::builder().sample_rate(sample_rate).build(),
     );
-    (root, root_view, player_grid_id)
+    (root, view)
 }
 
-fn attach_player_with_id<T, S>(
+pub(crate) fn committed_transport<T, S: HasPool<f32>>(
     state: &mut SessionState<T, S>,
-    grid_id: BeatGridId,
-    pools: PoolRegion<S>,
-) where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    let sample_rate = state.root_view.grid().axis().sample_rate();
-    attach_member(&mut state.root, grid_id, pools, sample_rate);
-    state.publish_root();
-}
-
-fn attach_member<S>(
-    root: &mut GroupState<PlayerMember>,
-    grid_id: BeatGridId,
-    pools: PoolRegion<S>,
-    sample_rate: NonZeroU32,
-) where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .grid_id(grid_id)
-            .sample_rate(sample_rate)
-            .worker(worker)
-            .build(),
-    );
-    let base = root.topology().expect("fixture host topology").stamp();
-    let admission = root
-        .transact(SyncOperation::Topology {
-            base,
-            operations: Box::new([TopologyOperation::Attach {
-                member: SyncMember::Group {
-                    alignment: None,
-                    group: Box::new(target_member(player, sample_rate)),
-                },
-            }]),
-        })
-        .expect("fixture player attachment");
-    assert!(matches!(admission, SyncAdmission::TopologyChanged { .. }));
-}
-
-#[cfg(all(test, target_arch = "wasm32"))]
-pub(crate) fn fixture_member(grid_id: BeatGridId, sample_rate: NonZeroU32) -> PlayerMember {
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .grid_id(grid_id)
-            .sample_rate(sample_rate)
-            .worker(worker)
-            .build(),
-    );
-    target_member(player, sample_rate)
-}
-
-/// The member the Host builds for `player` once it binds to a session at
-/// `sample_rate`.
-fn target_member<S>(mut player: PlayerImpl<S>, sample_rate: NonZeroU32) -> PlayerMember
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    let attachment = player
-        .attach_session(SessionBinding::new(Arc::new(FixtureSession), sample_rate))
-        .expect("fixture player binds its session");
-    #[cfg(not(target_arch = "wasm32"))]
-    let held = HeldPlayer::new(player);
-    #[cfg(target_arch = "wasm32")]
-    let held = HeldPlayer::new(player.host_level());
-    PlayerMember::new(attachment, held)
+) -> Option<SessionTransportSnapshot> {
+    observe_commits(state);
+    if state.reserved_session_grid.is_some() {
+        return None;
+    }
+    state.transport_observation.as_mut()?.read().snapshot()
 }

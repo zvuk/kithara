@@ -1,12 +1,14 @@
 use kithara_signal::AudioChunk;
 use smallvec::SmallVec;
 
-use crate::{GaplessInfo, GaplessTailCompensation, gapless::heuristic::SilenceTrimParams};
+use crate::{
+    DecodeResult, GaplessInfo, GaplessTailCompensation, gapless::heuristic::SilenceTrimParams,
+};
 
 /// Inline batch of chunks released by one `GaplessTrimmer` operation.
 pub type GaplessOutput = SmallVec<[AudioChunk; 2]>;
 use super::{
-    buffer::{BufferedChunks, chunk_frames, output_with, trim_leading},
+    buffer::{BufferedChunks, chunk_frames, output_with, trim_leading, validate_geometry},
     fade::{FadeInState, apply_fade_in},
     heuristic::HeuristicState,
 };
@@ -97,14 +99,15 @@ impl GaplessTrimmer {
         Self::default()
     }
 
-    #[must_use]
-    pub fn flush(&mut self) -> GaplessOutput {
+    /// # Errors
+    /// Returns invalid geometry when retained PCM cannot be mapped.
+    pub fn flush(&mut self) -> DecodeResult<GaplessOutput> {
         match &mut self.mode {
-            GaplessMode::Disabled => GaplessOutput::new(),
+            GaplessMode::Disabled => Ok(GaplessOutput::new()),
             GaplessMode::Fixed { .. } => {
                 let trailing_frames = self.compensated_trailing_frames();
-                self.tail_buffer.trim(trailing_frames);
-                self.tail_buffer.drain()
+                self.tail_buffer.trim(trailing_frames)?;
+                Ok(self.tail_buffer.drain())
             }
             GaplessMode::Heuristic(state) => {
                 state.flush(&mut self.tail_buffer, self.trailing_frames)
@@ -137,26 +140,28 @@ impl GaplessTrimmer {
         self.tail_buffer.clear();
     }
 
-    #[must_use]
-    pub fn push(&mut self, chunk: AudioChunk) -> GaplessOutput {
+    /// # Errors
+    /// Rejects mapped metadata whose extent differs from the supplied PCM.
+    pub fn push(&mut self, chunk: AudioChunk) -> DecodeResult<GaplessOutput> {
+        validate_geometry(&chunk)?;
         if matches!(self.mode, GaplessMode::Fixed { .. }) {
             self.input_frames_seen = self.input_frames_seen.saturating_add(chunk_frames(&chunk));
         }
         match &mut self.mode {
-            GaplessMode::Disabled => output_with(chunk),
+            GaplessMode::Disabled => Ok(output_with(chunk)),
             GaplessMode::Fixed {
                 leading_remaining,
                 fade_in,
             } => {
                 let Some(mut chunk) =
-                    trim_leading(chunk, leading_remaining).filter(|chunk| chunk_frames(chunk) > 0)
+                    trim_leading(chunk, leading_remaining)?.filter(|chunk| chunk_frames(chunk) > 0)
                 else {
-                    return GaplessOutput::new();
+                    return Ok(GaplessOutput::new());
                 };
                 apply_fade_in(fade_in, &mut chunk);
 
                 self.tail_buffer.push(chunk);
-                self.tail_buffer.release(self.trailing_frames)
+                Ok(self.tail_buffer.release(self.trailing_frames))
             }
             GaplessMode::Heuristic(state) => {
                 state.push(&mut self.tail_buffer, self.trailing_frames, chunk)

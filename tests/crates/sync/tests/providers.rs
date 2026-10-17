@@ -12,8 +12,17 @@ use kithara_test_fixtures::{
     },
 };
 
+const CROSS_STYLE: &[&str] = &[
+    "rhythm_wav_ambient_dub_62_aligned",
+    "rhythm_wav_downtempo_96_aligned",
+    "rhythm_wav_house_124_aligned",
+    "rhythm_wav_breakbeat_140_aligned",
+];
 pub(super) const LIBRARY: &[&str] = &["library_flac_song2", "library_flac_slowtechno"];
-
+/// Richie Hawtin - The Tunnel, a straight-kick track with a steady grid.
+pub(super) const TUNNEL: &[&str] = &["library_mp3_zvuk_27390231"];
+/// A straight 48 kHz techno track, the Tunnel's counterpart at the session rate.
+pub(super) const NEWTECHNO: &[&str] = &["library_flac_newtechno"];
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Provider {
     Synthetic,
@@ -24,6 +33,23 @@ pub(super) enum Provider {
     Mp3Distinct,
     HlsMp3(HlsProtection),
     Sweep,
+}
+
+impl Provider {
+    pub(super) const ALL: &[Self] = &[
+        Self::Synthetic,
+        Self::Rhythm(CROSS_STYLE),
+        Self::HlsSame(HlsProtection::Plain),
+        Self::HlsSame(HlsProtection::Drm),
+        Self::Library(LIBRARY),
+        Self::Library(TUNNEL),
+        Self::Library(NEWTECHNO),
+        Self::Mp3Same,
+        Self::Mp3Distinct,
+        Self::HlsMp3(HlsProtection::Plain),
+        Self::HlsMp3(HlsProtection::Drm),
+        Self::Sweep,
+    ];
 }
 
 #[derive(Clone, Copy, Debug)]

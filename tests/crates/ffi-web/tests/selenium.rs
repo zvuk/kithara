@@ -526,6 +526,7 @@ struct Snapshot {
     dur: Option<f64>,
     playlist: Vec<String>,
     pos: Option<f64>,
+    playing_rate: Option<f32>,
     /// Audio-thread process calls the session has served. The render callback
     /// runs inside an `AudioWorkletProcessor` no page script can see, so two
     /// snapshots that stand at the same count say the browser stopped calling
@@ -544,6 +545,7 @@ impl Default for Snapshot {
             dur: None,
             playlist: Vec::new(),
             pos: None,
+            playing_rate: None,
             rt_process_calls: None,
             rt_underruns: None,
             status: "<snapshot-unavailable>".to_string(),
@@ -771,6 +773,7 @@ impl WasmPlayerSelenium {
             };
             if (window.__player) {
                 out.pos = window.__player.currentTimeMs();
+                out.playingRate = window.__player.playingRate();
                 out.dur = window.__durationMs ?? 0;
                 out.rtProcessCalls = window.__player.rtProcessCalls();
                 out.rtUnderruns = window.__player.rtUnderruns();
@@ -1263,27 +1266,41 @@ impl WasmPlayerSelenium {
         time::sleep(Duration::from_millis(500)).await;
         let paused = self.snapshot().await;
         self.driver
+            .execute("window.__player.setPlayingRate(0);", Vec::<Value>::new())
+            .await
+            .map_err(|err| format!("paused target failed: {err}"))?;
+        self.wait_for(
+            "owner-published minimum playback speed",
+            self.config.wait_timeout,
+            consts::CHECK_INTERVAL,
+            |current| current.playing_rate == Some(kithara::play::MIN_SPEED),
+        )
+        .await?;
+        self.driver
             .execute(
-                "window.__player.setPlayingRate(0); \
-                 if (window.__player.playingRate() !== Math.fround(0.05)) return 'unclamped'; \
-                 window.__player.setPlayingRate(0.5); \
-                 try { window.__player.setPlayingRate(NaN); return 'accepted'; } \
-                 catch (_) { return window.__player.playingRate(); }",
+                "window.__player.setPlayingRate(0.5); \
+                 try { window.__player.setPlayingRate(NaN); return false; } \
+                 catch (_) { return true; }",
                 Vec::<Value>::new(),
             )
             .await
             .map_err(|err| format!("paused target or rejection failed: {err}"))?
-            .convert::<f64>()
-            .map_err(|err| format!("rejected rate readback failed: {err}"))
-            .and_then(|target| {
-                if (target - 0.5).abs() < f64::EPSILON {
+            .convert::<bool>()
+            .map_err(|err| format!("rejected rate result failed: {err}"))
+            .and_then(|rejected| {
+                if rejected {
                     Ok(())
                 } else {
-                    Err(format!(
-                        "invalid rate changed the submitted target: {target}"
-                    ))
+                    Err("non-numeric playback rate was accepted".into())
                 }
             })?;
+        self.wait_for(
+            "owner-published paused half-speed target",
+            self.config.wait_timeout,
+            consts::CHECK_INTERVAL,
+            |current| current.playing_rate == Some(0.5),
+        )
+        .await?;
         time::sleep(Duration::from_millis(500)).await;
         let paused_after = self.snapshot().await;
         if paused_after.pos.unwrap_or(0.0) - paused.pos.unwrap_or(0.0) > 100.0 {

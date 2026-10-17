@@ -199,10 +199,11 @@ mod tests {
             );
             assert_eq!(output, [0.25; 10]);
         }
-        let request = ElasticRequest::new(2, 2)
-            .expect("unity physical span")
-            .with_output_source_frames(1)
-            .expect("non-empty audible span");
+        let request = crate::elastic::with_output_source_frames(
+            ElasticRequest::new(2, 2).expect("unity physical span"),
+            1,
+        )
+        .expect("non-empty audible span");
         let mut output = [0.25; 4];
         assert_eq!(
             engine.process(request, &source[..4], &mut output),

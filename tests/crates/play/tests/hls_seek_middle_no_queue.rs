@@ -9,7 +9,7 @@ use kithara::{
         time::{Duration, sleep},
         tokio::task::yield_now,
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     SegmentGateHandle, TestServerHelper, fixture_protocol::DelayRule,
@@ -77,24 +77,26 @@ impl SeekScenario {
 }
 
 /// Render at least `min_blocks` blocks and return only once
-/// `player.position() >= until_position`. Between batches it yields a
-/// single virtual tick so the async HLS engine can fetch + decode the
-/// delayed segment; under the flash clock that tick advances virtual
-/// time without burning real wall time. The loop has no internal wall
-/// budget — the `#[kithara::test(... timeout(90s))]` attribute is the
-/// only safety bound, so the success path is always the real state
-/// (position) being reached rather than a collapsed timer expiring.
-#[kithara::flash(true)]
+/// `player.position() >= until_position`. Real-I/O pacing lets the HLS
+/// producer fetch and decode delayed segments between batches.
+/// The watchdog resets only when playback position advances.
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn render_until_position(player: &mut OfflinePlayer, min_blocks: u32, until_position: f64) {
     const BATCH: u32 = 16;
     const TICK_MS: u64 = 25;
     let mut rendered = 0u32;
     loop {
+        hang_tick!();
+        let before = player.position();
         let this = min_blocks.saturating_sub(rendered).clamp(1, BATCH);
         for _ in 0..this {
             let _ = player.render(consts::BLOCK_FRAMES).await;
         }
         rendered = rendered.saturating_add(this);
+        if player.position() > before {
+            hang_reset!();
+        }
         if player.position() >= until_position && rendered >= min_blocks {
             return;
         }
@@ -205,10 +207,6 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
         }
     };
 
-    let resource = Resource::new(cfg)
-        .await
-        .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
-
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
             .settings(
@@ -221,7 +219,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
             .build(),
     )
     .await;
-    player.load_and_fadein(resource).await;
+    player.load_config(cfg).await;
 
     let warmup_target = player.position() + consts::PRE_SEEK_RENDER_SECS;
     render_until_position(
@@ -240,7 +238,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
          (pos={pos_before_seek:.3}s, delay_ms={delay_ms})"
     );
 
-    player.seek(consts::SEEK_TARGET_SECS);
+    player.seek(consts::SEEK_TARGET_SECS).await;
     eprintln!(
         "[{label} delay_ms={delay_ms}] seek issued target={:.1}s epoch=1",
         consts::SEEK_TARGET_SECS

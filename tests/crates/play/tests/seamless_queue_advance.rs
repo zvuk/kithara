@@ -5,16 +5,25 @@ use std::num::NonZeroU32;
 use kithara::{
     decode::{GaplessMode, SilenceTrimParams},
     events::TrackId,
-    platform::time::{self, Duration, Instant},
-    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
+    platform::{
+        time::{self, Duration, Instant},
+        tokio::sync::broadcast::error::TryRecvError,
+    },
+    play::{PlayerEvent, ResourceConfig, ResourceSrc},
+    queue::{QueueControl, Transition},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
+    event::TestEvent,
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
-    offline::{OfflinePlayer, OfflinePlayerOptions, TimedPlayerEvent},
+    offline::{
+        OfflinePlayer, OfflinePlayerOptions, TimedPlayerEvent, append_source_loaded,
+        offline_queue_fixture_with_options,
+    },
 };
+use kithara_render::bridge::{DeckSnapshot, SlotState};
 use kithara_test_fixtures::signal::{deinterleave_left, goertzel_magnitude, max_silence_run};
 use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
@@ -67,20 +76,37 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(
         .crossfade_duration(0.0)
         .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
         .build();
-    let harness = OfflinePlayer::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE).await;
-    let first = create_gapless_hls_resource(harness.player(), &first_url, temp_dir.path()).await;
-    let second = create_gapless_hls_resource(harness.player(), &second_url, temp_dir.path()).await;
+    let (harness, queue) =
+        offline_queue_fixture_with_options(player_config, GAPLESS_SAMPLE_RATE).await;
+    let first = append_source_loaded(
+        &harness,
+        &queue,
+        gapless_hls_config(&first_url, temp_dir.path()),
+    )
+    .await;
+    let second = append_source_loaded(
+        &harness,
+        &queue,
+        gapless_hls_config(&second_url, temp_dir.path()),
+    )
+    .await;
 
-    load_queue(&harness, [first, second]).await;
-
-    let (rendered, events) = render_until_second_item_end(&harness).await;
+    let (rendered, events, _) = render_until_second_item_end(&harness, &queue, first, second).await;
+    assert!(
+        item_end_frame(&events, first).is_some(),
+        "first item must reach natural EOF; events={events:?}"
+    );
+    assert!(
+        item_end_frame(&events, second).is_some(),
+        "second item must reach natural EOF; events={events:?}"
+    );
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
     let sample_rate = usize::try_from(GAPLESS_SAMPLE_RATE).expect("sample rate fits usize");
 
     // Measure both track lengths from the rendered audio, not from the frame
-    // stamps of the end-of-item events. `render_until_second_item_end` only
-    // returns once both arrived, so their presence is already pinned; where
-    // they landed is not a track length. A notification is published by
+    // stamps of the end-of-item events. Both identities reached natural EOF,
+    // but where their notifications landed is not a track length. A notification
+    // is published by
     // whichever render block observed EOF, so its stamp is quantised to the
     // block grid, and this asset is an exact multiple of that grid: both
     // stamps normally sit one block late and the delta lands on the tolerance
@@ -127,7 +153,13 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(1),
+    tracing("kithara_play=info")
+)]
 async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(
     #[future(awt)] crossfade_sources: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -138,38 +170,28 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(
         .crossfade_duration(1.0)
         .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
         .build();
-    let harness = OfflinePlayer::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE).await;
-    let first = create_gapless_hls_resource(harness.player(), &first_url, temp_dir.path()).await;
-    let second = create_gapless_hls_resource(harness.player(), &second_url, temp_dir.path()).await;
+    let (harness, queue) =
+        offline_queue_fixture_with_options(player_config, GAPLESS_SAMPLE_RATE).await;
+    let first = append_source_loaded(
+        &harness,
+        &queue,
+        gapless_hls_config(&first_url, temp_dir.path()),
+    )
+    .await;
+    let second = append_source_loaded(
+        &harness,
+        &queue,
+        gapless_hls_config(&second_url, temp_dir.path()),
+    )
+    .await;
 
-    load_queue(&harness, [first, second]).await;
-
-    let (rendered, events) = render_until_second_item_end(&harness).await;
+    let (rendered, events, snapshots) =
+        render_until_second_item_end(&harness, &queue, first, second).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
     let sample_rate = usize::try_from(GAPLESS_SAMPLE_RATE).expect("sample rate fits usize");
 
-    let item1_end = nth_item_end_frame(&events, 0)
-        .expect("first item must emit ItemDidPlayToEnd before the queue completes");
-    let item2_activated = events
-        .iter()
-        .filter(|timed| matches!(&timed.event, PlayerEvent::CurrentItemChanged { .. }))
-        .nth(1)
-        .map(|timed| timed.frame_end)
-        .expect("CurrentItemChanged should fire when item-2 takes over");
-
-    assert!(
-        item2_activated < item1_end,
-        "item-2 must take over before item-1 reaches EOF for a real overlap; \
-         item2_activated={item2_activated}, item1_end={item1_end}, events={events:?}"
-    );
-
-    let overlap_start = item2_activated;
-    let overlap_end = item1_end.min(left.len());
-    assert!(
-        overlap_end > overlap_start,
-        "overlap window must be non-empty; \
-         overlap=[{overlap_start}..{overlap_end}), events={events:?}"
-    );
+    let (overlap_start, overlap_end) =
+        assert_crossfade_lifecycle(&snapshots, &events, first, second, &left);
 
     let leading_solo_start = overlap_start.saturating_sub(sample_rate / 2);
     let leading_solo_end = overlap_start;
@@ -219,7 +241,7 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(
     );
     assert!(
         overlap_880 >= solo_880 * 0.15,
-        "trailing frequency must be audible before the first item reaches EOF; \
+        "trailing frequency must be audible before the outgoing slot stops; \
          overlap_880={overlap_880:.3}, solo_880={solo_880:.3}, events={events:?}"
     );
 
@@ -233,46 +255,185 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(
     harness.close().await;
 }
 
-async fn create_gapless_hls_resource(
-    player: &kithara::play::player::PlayerControl<TestPools>,
-    master: &Url,
-    cache_dir: &std::path::Path,
-) -> Resource {
-    let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::<TestPools>::for_src(
+fn assert_crossfade_lifecycle(
+    snapshots: &[(usize, Option<TrackId>, DeckSnapshot)],
+    events: &[TimedPlayerEvent],
+    first: TrackId,
+    second: TrackId,
+    left: &[f32],
+) -> (usize, usize) {
+    let (_, _, first_playing) = snapshots
+        .iter()
+        .find(|(_, current, snapshot)| {
+            *current == Some(first)
+                && snapshot
+                    .slots
+                    .iter()
+                    .filter(|slot| slot.state == SlotState::Playing)
+                    .count()
+                    == 1
+        })
+        .expect("current first item must be the only Playing physical slot before handover");
+    let first_slot = first_playing
+        .slots
+        .iter()
+        .position(|slot| slot.state == SlotState::Playing)
+        .expect("first item has a Playing slot");
+    let item2_activated = events
+        .iter()
+        .find(|timed| {
+            matches!(
+                &timed.event,
+                PlayerEvent::CurrentItemChanged { item: Some(id) } if *id == second
+            )
+        })
+        .map(|timed| timed.frame_end)
+        .expect("CurrentItemChanged should fire when item-2 takes over");
+
+    let overlap_start = item2_activated;
+    let (_, _, both_playing) = snapshots
+        .iter()
+        .find(|(frame, current, snapshot)| {
+            *frame >= overlap_start
+                && *current == Some(second)
+                && snapshot.slots[first_slot].state == SlotState::Playing
+                && snapshot
+                    .slots
+                    .iter()
+                    .filter(|slot| slot.state == SlotState::Playing)
+                    .count()
+                    == 2
+                && snapshot
+                    .slots
+                    .iter()
+                    .filter(|slot| slot.state == SlotState::Playing)
+                    .all(|slot| slot.gain > 0.0)
+        })
+        .expect("both queue items must occupy Playing physical slots during the handover");
+    let second_slot = both_playing
+        .slots
+        .iter()
+        .enumerate()
+        .find(|(index, slot)| *index != first_slot && slot.state == SlotState::Playing)
+        .map(|(index, _)| index)
+        .expect("current second item has a distinct Playing slot");
+    let (outgoing_end, _, stopped) = snapshots
+        .iter()
+        .find(|(frame, current, snapshot)| {
+            let outgoing = &snapshot.slots[first_slot];
+            *frame > overlap_start
+                && *current == Some(second)
+                && ((outgoing.state == SlotState::Stopped && outgoing.gain == 0.0)
+                    || outgoing.state == SlotState::Ended)
+        })
+        .expect("outgoing slot must reach zero-gain Stopped or its actual natural Ended state");
+    if stopped.slots[first_slot].state == SlotState::Ended {
+        assert!(
+            item_end_frame(events, first).is_some(),
+            "an outgoing Ended slot must publish its own natural EOF; events={events:?}"
+        );
+    }
+    assert!(
+        snapshots.iter().any(|(frame, current, snapshot)| {
+            *frame > *outgoing_end
+                && *current == Some(second)
+                && snapshot.slots[first_slot].state == SlotState::Empty
+                && snapshot.slots[second_slot].state == SlotState::Playing
+        }),
+        "outgoing slot must be released while the second item keeps playing; events={events:?}"
+    );
+    let overlap_end = (*outgoing_end).min(left.len());
+    assert!(
+        overlap_end > overlap_start,
+        "overlap window bounded by the observed outgoing stop must be non-empty; \
+         endpoint is sampled at render-block precision; \
+         overlap=[{overlap_start}..{overlap_end}), events={events:?}"
+    );
+    assert_second_item_complete(snapshots, events, second, second_slot, left, overlap_end);
+
+    (overlap_start, overlap_end)
+}
+
+fn assert_second_item_complete(
+    snapshots: &[(usize, Option<TrackId>, DeckSnapshot)],
+    events: &[TimedPlayerEvent],
+    second: TrackId,
+    second_slot: usize,
+    left: &[f32],
+    overlap_end: usize,
+) {
+    let item2_end = item_end_frame(events, second)
+        .expect("the second item's own natural EOF must complete the queue");
+    let (_, _, ended) = snapshots
+        .iter()
+        .find(|(_, _, snapshot)| snapshot.slots[second_slot].state == SlotState::Ended)
+        .expect("second item's physical slot must reach natural EOF");
+    let ended = &ended.slots[second_slot];
+    let source = ended
+        .source
+        .expect("natural EOF retains terminal source facts");
+    assert!(
+        source.end_of_track,
+        "second item must consume its terminal packet"
+    );
+    assert_eq!(
+        ended
+            .mark
+            .expect("natural EOF retains a consumed mark")
+            .position
+            .checked_sub(
+                source
+                    .media_origin
+                    .expect("fixture source has a known media origin")
+            ),
+        Some(
+            source
+                .media_end
+                .expect("fixture source has a known media endpoint")
+        ),
+        "second item must reach the complete source endpoint"
+    );
+    let audible_end =
+        last_audible_frame(left).expect("second item must remain audible after overlap");
+    assert!(
+        audible_end > overlap_end && audible_end <= item2_end,
+        "second item must remain audible beyond the outgoing stop and finish by its own EOF; \
+         audible_end={audible_end}, overlap_end={overlap_end}, item2_end={item2_end}"
+    );
+    assert!(
+        left[item2_end..]
+            .iter()
+            .all(|sample| sample.abs() <= SILENCE_THRESHOLD),
+        "the unchanged post-roll must be silent after the second item's natural EOF"
+    );
+}
+
+fn gapless_hls_config(master: &Url, cache_dir: &std::path::Path) -> ResourceConfig<TestPools> {
+    ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(master.as_str()).expect("valid HLS master URL"),
     )
-    .store(store)
-    .build();
-    config = player
-        .prepare_config(config)
-        .expect("prepare seamless queue HLS resource config");
-    let mut resource = Resource::new(config)
-        .await
-        .expect("open HLS resource for seamless queue fixture");
-    let _ = resource.preload().await;
-    resource
+    .store(kithara_integration_tests::disk_asset_store(cache_dir))
+    .build()
 }
 
-async fn load_queue<const N: usize>(harness: &OfflinePlayer, items: [Resource; N]) {
-    harness
-        .with_player(move |player| {
-            player.reserve_slots(items.len());
-            for (index, resource) in items.into_iter().enumerate() {
-                player
-                    .replace_item(index, resource, TrackId::allocate())
-                    .expect("replace seamless fixture item");
-            }
-            player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
-        })
-        .await;
-}
-
+/// Renders through the second item's natural EOF and post-roll, recording
+/// player events and the physical slot state at each render-block endpoint.
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn render_until_second_item_end(
     harness: &OfflinePlayer,
-) -> (Vec<f32>, Vec<TimedPlayerEvent>) {
+    queue: &QueueControl<TestPools>,
+    first: TrackId,
+    second: TrackId,
+) -> (
+    Vec<f32>,
+    Vec<TimedPlayerEvent>,
+    Vec<(usize, Option<TrackId>, DeckSnapshot)>,
+) {
+    let mut rx = queue.subscribe();
+    harness
+        .run(queue, move |q| q.select(first, Transition::None))
+        .await
+        .expect("select the first queue item");
     let deadline = Instant::now() + Duration::from_secs(10);
     // Pace each rendered block at its real audio duration so the decode worker
     // stays ahead and the ring never underruns. Under flash a fixed sub-block
@@ -284,33 +445,61 @@ async fn render_until_second_item_end(
     let mut rendered = Vec::new();
     let mut rendered_frames = 0usize;
     let mut events = Vec::new();
+    let mut snapshots = Vec::new();
 
+    let mut post_roll = None;
+    let mut previous_position = queue.position_seconds();
+    let mut previous_states = Vec::new();
+
+    // WHY: The decode worker producing these blocks is uncounted real work.
+    let _real_io = kithara::platform::flash::real_io();
     loop {
+        hang_tick!(format!(
+            "position={previous_position:?}, frames={rendered_frames}, events={events:?}"
+        ));
+        let _ = harness.run(queue, QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES as usize).await;
+        let snapshot = harness.deck_snapshot();
+        let states: Vec<_> = snapshot.slots.iter().map(|slot| slot.state).collect();
+        if states != previous_states {
+            tracing::info!(target: "kithara_play", rendered_frames, slots = ?snapshot.slots, "queue handover slot states changed");
+            previous_states = states;
+        }
+        let position = queue.position_seconds();
+        if position != previous_position {
+            previous_position = position;
+            hang_reset!();
+        }
         rendered.extend_from_slice(&block);
         rendered_frames = rendered_frames.saturating_add(BLOCK_FRAMES as usize);
-        events.extend(
-            harness
-                .tick_and_drain()
-                .await
-                .into_iter()
-                .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
-        );
-
-        if count_item_end(&events) >= 2 {
-            for _ in 0..POST_ROLL_BLOCKS {
-                let block = harness.render(BLOCK_FRAMES as usize).await;
-                rendered.extend_from_slice(&block);
-                rendered_frames = rendered_frames.saturating_add(BLOCK_FRAMES as usize);
-                events.extend(
-                    harness
-                        .tick_and_drain()
-                        .await
-                        .into_iter()
-                        .map(|event| TimedPlayerEvent::new(rendered_frames, event)),
-                );
+        snapshots.push((
+            rendered_frames,
+            queue.current().map(|track| track.id),
+            snapshot,
+        ));
+        loop {
+            hang_tick!();
+            match rx.try_recv().map(|envelope| envelope.event) {
+                Ok(TestEvent::Player(event)) => {
+                    hang_reset!();
+                    events.push(TimedPlayerEvent::new(rendered_frames, event));
+                }
+                Ok(_) | Err(TryRecvError::Lagged(_)) => {
+                    hang_reset!();
+                }
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             }
-            return (rendered, events);
+        }
+
+        if post_roll.is_none() && item_end_frame(&events, second).is_some() {
+            post_roll = Some(POST_ROLL_BLOCKS);
+        }
+        if let Some(blocks) = post_roll.as_mut() {
+            if *blocks == 0 {
+                hang_reset!();
+                return (rendered, events, snapshots);
+            }
+            *blocks -= 1;
         }
 
         assert!(
@@ -321,18 +510,12 @@ async fn render_until_second_item_end(
     }
 }
 
-fn count_item_end(events: &[TimedPlayerEvent]) -> usize {
+fn item_end_frame(events: &[TimedPlayerEvent], id: TrackId) -> Option<usize> {
     events
         .iter()
-        .filter(|timed| matches!(&timed.event, PlayerEvent::ItemDidPlayToEnd { .. }))
-        .count()
-}
-
-fn nth_item_end_frame(events: &[TimedPlayerEvent], n: usize) -> Option<usize> {
-    events
-        .iter()
-        .filter(|timed| matches!(&timed.event, PlayerEvent::ItemDidPlayToEnd { .. }))
-        .nth(n)
+        .find(|timed| {
+            matches!(&timed.event, PlayerEvent::ItemDidPlayToEnd { item } if item.id() == id)
+        })
         .map(|timed| timed.frame_end)
 }
 

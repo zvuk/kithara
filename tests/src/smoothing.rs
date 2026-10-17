@@ -12,10 +12,7 @@ use kithara::{
     effects::{GainDb, eq::FilterKind},
     host::{HostConfig, HostSettings},
     platform::time::{self, Duration},
-    play::{
-        EqBandConfig, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
-        ResourceSrc,
-    },
+    play::{EqBandConfig, PlayWorker, PlayWorkerConfig, ResourceConfig, ResourcePrep, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_dsp::param::{MIN_SETTLE_RATIO, SmoothingFilterCoeff};
@@ -118,28 +115,31 @@ pub async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>, u64) {
         )
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(sample_rate)
-            .worker(worker)
-            .maybe_eq_layout(case.eq_layout.map(layout))
-            .block_on_underrun(true)
-            .build(),
-    );
-    let queue = Queue::new(QueueConfig::builder().player(player).build());
+    let prep = ResourcePrep::builder()
+        .worker(worker)
+        .block_on_underrun(true)
+        .build();
+    let queue = Queue::new(QueueConfig::builder().prep(prep).build());
     let harness = OfflineQueue::new(session, queue)
         .await
         .expect("create offline queue");
-    let deck = harness.control();
+    if let Some(eq_layout) = case.eq_layout {
+        harness
+            .run(move |deck| deck.set_eq_layout(layout(eq_layout)))
+            .await
+            .expect("configure sine queue EQ");
+    }
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::WAV_SINE440_60S);
     let src = ResourceSrc::parse(url.as_str()).expect("valid signal fixture URL");
-    let id = deck
-        .append(TrackSource::Config(Box::new(
-            ResourceConfig::for_src(src)
-                .store(AssetStore::builder(pools).build())
-                .build(),
-        )))
+    let source = TrackSource::Config(Box::new(
+        ResourceConfig::for_src(src)
+            .store(AssetStore::builder(pools).build())
+            .build(),
+    ));
+    let id = harness
+        .run(move |deck| deck.append(source))
+        .await
         .expect("append sine fixture");
     harness
         .run(move |deck| {

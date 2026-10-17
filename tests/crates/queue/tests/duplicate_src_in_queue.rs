@@ -1,27 +1,38 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 //! Two queue entries may name the same URL: a playlist that repeats a
-//! track, or one asset reachable under a single address. A player event
-//! must resolve to the entry that actually played. Resolving it by
-//! source alone answers with whichever entry holds that URL first,
+//! track, or one asset reachable under a single address. A source failure
+//! or natural EOF must resolve to the entry that actually played. Resolving
+//! it by source alone answers with whichever entry holds that URL first,
 //! which is the wrong track as soon as the second copy is the one
 //! playing.
 
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     assets::AssetStore,
-    audio::{AudioConfig, DecodeErrorKind, NoResamplerBackend, TrackFailureKind},
-    events::{SlotId, TrackId},
+    audio::{AudioConfig, NoResamplerBackend, TrackFailureKind},
+    events::TrackId,
     file::{File, FileConfig, FileSrc},
-    platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
-    play::{ItemRole, PlaybackFault, PlayerEvent, Resource, TrackRef},
+    host::{HostConfig, HostSettings},
+    platform::{
+        sync::Arc,
+        time::{Duration, WallInstant},
+        tokio::sync::broadcast::error::TryRecvError,
+    },
+    play::{ItemRole, PlaybackFault, PlayerEvent, TrackConfig},
     queue::{QueueControl, QueueEvent, TrackStatus, Transition},
+    warp::WarpConfig,
 };
 use kithara_integration_tests::{
     event::TestEvent,
     kithara,
-    offline::{OfflinePlayer, append_source_loaded, asset_source, offline_queue_fixture},
+    mock::InjectedFactory,
+    offline::{
+        OfflinePlayer, OfflinePlayerOptions, append_source_loaded, asset_source,
+        offline_queue_fixture,
+    },
+    waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::{asset::Asset, assets, signal::rms};
 use kithara_test_utils::cancel_token;
@@ -34,13 +45,22 @@ const BLOCK_FRAMES: usize = 512;
 const WARMUP_BLOCKS: usize = 64;
 const EOF_BLOCK_BUDGET: usize = 128;
 
+fn is_leading(role: &ItemRole) -> bool {
+    matches!(role, ItemRole::Leading(_))
+}
+
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn render_loop(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayer,
+    harness: &OfflinePlayer<
+        impl kithara::play::TrackFactory<TestPools, Track: Send> + Send + 'static,
+    >,
     block_budget: usize,
 ) -> Vec<f32> {
     let mut output = Vec::with_capacity(block_budget * BLOCK_FRAMES * 2);
     for block in 0..block_budget {
+        hang_tick!(format!("duplicate-source queue renders block {block}"));
         harness
             .run(queue, QueueControl::tick)
             .await
@@ -52,6 +72,7 @@ async fn render_loop(
             "master PCM must be finite in block {block}"
         );
         output.extend(samples);
+        hang_reset!();
     }
     output
 }
@@ -67,7 +88,6 @@ fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> TrackStatus {
 struct SecondCopyPlaying {
     harness: OfflinePlayer,
     queue: QueueControl<TestPools>,
-    source: String,
     first: TrackId,
     playing: TrackId,
 }
@@ -86,57 +106,38 @@ async fn fixture_playing_the_second_copy(track: &Asset) -> SecondCopyPlaying {
     SecondCopyPlaying {
         harness,
         queue,
-        source,
         first,
         playing,
     }
 }
 
 #[kithara::test(tokio, flash(false))]
-#[case::played_entry(true)]
-#[case::same_url_entry(false)]
-async fn a_failure_only_flags_the_entry_that_played(#[case] played_entry: bool) {
-    let SecondCopyPlaying {
-        harness,
-        queue,
-        source,
-        first,
-        playing,
-    } = fixture_playing_the_second_copy(&assets::constant_wav_loud_30s()).await;
-    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
-
-    harness
-        .player()
-        .bus()
-        .publish(TestEvent::Player(PlayerEvent::ItemDidFail {
-            item: ItemRole::Leading(TrackRef::new(playing, SlotId::new(0), Arc::from(source))),
-            fault: PlaybackFault::Source(TrackFailureKind::Decode {
-                kind: DecodeErrorKind::InvalidData,
-            }),
-        }));
-    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
-
-    let id = if played_entry { playing } else { first };
-    let status = status_of(&queue, id);
-    assert_eq!(
-        matches!(status, TrackStatus::Failed(_)),
-        played_entry,
-        "only the entry that played may be flagged: {status:?}"
-    );
-    drop(queue);
-    harness.close().await;
-}
-
-#[kithara::test(tokio, flash(false))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
     let asset = assets::constant_wav_loud_30s();
-    let SecondCopyPlaying {
-        harness,
-        queue,
-        source,
-        first,
-        playing,
-    } = fixture_playing_the_second_copy(&asset).await;
+    let factory = InjectedFactory::default();
+    let warp = WarpConfig::builder()
+        .render_quantum_frames(NonZeroUsize::new(BLOCK_FRAMES).expect("render quantum"))
+        .build();
+    let harness = OfflinePlayer::with_factory(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .warp(warp.clone())
+            .build(),
+        HostConfig::offline(crate::bufpool_ext::pools())
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("deck rate"))
+                    .build(),
+            )
+            .build(),
+        factory.clone(),
+    )
+    .await;
+    let queue = harness.player().clone();
+    let source = asset_source(&asset);
+    let first = TrackId::allocate();
+    let playing = TrackId::allocate();
     let source_cancel = cancel_token();
     let pools = harness.worker().pools().clone();
     let path = asset.path().expect("native WAV fixture path").to_owned();
@@ -145,31 +146,57 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
         .pools(pools)
         .cancel(source_cancel.clone())
         .build();
-    let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file)
-        .audio_buffer_chunks(2)
-        .preload_chunks(NonZeroUsize::MIN)
-        .block_on_underrun(true)
-        .build();
+    let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file).build();
     assert!(
         config.cancel().is_none(),
         "only the file source owns this cancellation"
     );
-    let mut resource =
-        Resource::from_stream_audio(config.into(), Arc::from(source.clone()), harness.worker())
-            .await
-            .expect("real file lane");
-    resource
-        .preload()
+    let track = TrackConfig::for_audio(config)
+        .audio_buffer_chunks(NonZeroUsize::new(2).expect("lane capacity"))
+        .preload_chunks(NonZeroUsize::MIN)
+        .block_on_underrun(true)
+        .warp(warp)
+        .build();
+    factory.insert(
+        playing,
+        kithara::play::mock::track_load(
+            track,
+            Arc::from(source.clone()),
+            harness.worker().clone(),
+            NonZeroU32::new(SAMPLE_RATE).expect("deck rate"),
+            |worker, config, position, start, inbox| {
+                Box::pin(async move { worker.load(config, position, start, inbox).await })
+            },
+        ),
+    );
+    let first_source = source.clone();
+    let first = harness
+        .run(&queue, move |q| q.append_with_id(first, first_source))
+        .await
+        .expect("first duplicate");
+    let playing_source = source.clone();
+    let playing = harness
+        .run(&queue, move |q| q.append_with_id(playing, playing_source))
+        .await
+        .expect("second duplicate");
+    let mut loaded = queue.subscribe::<TestEvent>();
+    harness
+        .run(&queue, move |player| {
+            player.select(playing, Transition::None)
+        })
+        .await
+        .expect("select the source-owned second copy");
+    wait_for_loader_done_event(&mut loaded, &queue, playing, Duration::from_secs(5))
         .await
         .expect("the real lane has produced PCM");
-    harness
-        .run(harness.player(), move |player| {
-            player
-                .replace_item(1, resource, playing)
-                .expect("replace selected queue entry");
-        })
-        .await;
     harness.run(&queue, QueueControl::play).await;
+    harness
+        .render_until_current(
+            playing,
+            BLOCK_FRAMES,
+            WallInstant::now() + Duration::from_secs(1),
+        )
+        .await;
     let samples = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     for (block, samples) in samples
         .as_chunks::<{ BLOCK_FRAMES * 2 }>()
@@ -184,11 +211,7 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
         );
     }
     assert_eq!(
-        harness
-            .player()
-            .rt_metrics()
-            .expect("the real source owns an active render slot")
-            .underruns(),
+        harness.metrics().underruns(),
         0,
         "the pre-cancellation render must not conceal producer starvation"
     );
@@ -202,7 +225,22 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
     );
     assert_eq!(queue.current().map(|entry| entry.id), Some(playing));
     assert_eq!(status_of(&queue, playing), TrackStatus::Consumed);
+    assert_ne!(
+        first, playing,
+        "repeated sources retain distinct item identities"
+    );
+    for id in [first, playing] {
+        assert_eq!(
+            queue.track(id).expect("duplicate entry").url.as_deref(),
+            Some(source.as_str()),
+            "both entries name the same source"
+        );
+    }
     let sibling_status = status_of(&queue, first);
+    assert!(
+        !matches!(sibling_status, TrackStatus::Failed(_)),
+        "the sibling must be healthy before the real source fails"
+    );
     let mut events = queue.subscribe::<TestEvent>();
 
     source_cancel.cancel();
@@ -222,9 +260,14 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
         "the failed final entry ends the queue"
     );
     let mut observed = Vec::new();
+    hang_reset!();
     loop {
+        hang_tick!("draining source cancellation events".to_owned());
         match events.try_recv() {
-            Ok(envelope) => observed.push(envelope.event),
+            Ok(envelope) => {
+                observed.push(envelope.event);
+                hang_reset!();
+            }
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             Err(TryRecvError::Lagged(skipped)) => panic!("lost {skipped} terminal events"),
         }
@@ -239,7 +282,7 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
     let [(item, actual)] = failures.as_slice() else {
         panic!("one real player failure must reach the queue: {failures:?}");
     };
-    assert!(item.is_leading());
+    assert!(is_leading(item));
     assert_eq!(item.track().id, playing);
     assert_eq!(item.track().src.as_ref(), source);
     assert_eq!(*actual, fault);
@@ -288,7 +331,6 @@ async fn second_entry_with_the_same_source_owns_its_real_eof() {
     let SecondCopyPlaying {
         harness,
         queue,
-        source: _source,
         first,
         playing,
     } = fixture_playing_the_second_copy(&assets::constant_wav_loud_0_5s()).await;

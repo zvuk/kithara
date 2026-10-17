@@ -5,6 +5,18 @@ use kithara_stream::AudioCodec;
 
 use crate::error::DecodeResult;
 
+#[derive(Debug)]
+pub(crate) struct DecodedPacket {
+    pub(crate) frames: u32,
+    pub(crate) metadata: crate::demuxer::PacketMetadata,
+}
+
+impl DecodedPacket {
+    pub(crate) const fn new(frames: u32, metadata: crate::demuxer::PacketMetadata) -> Self {
+        Self { frames, metadata }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct CodecPriming {
@@ -25,8 +37,8 @@ pub(crate) const fn access_unit_frames(codec: AudioCodec) -> u32 {
 }
 
 /// Access units needed to warm a mid-stream decode; zero for codecs without fixed units.
-/// AAC's four units cover its measured 1685-frame head strip plus 1024 overlap frames
-/// with margin (4096 total); MP3 needs two of its larger units.
+/// AAC's four units cover its two-unit SBR/PS pre-roll plus 1024 overlap frames with
+/// margin (4096 total); MP3 needs two of its larger units.
 pub(crate) const fn seek_warmup_access_units(codec: AudioCodec) -> u32 {
     match codec {
         AudioCodec::Mp3 => 2,
@@ -47,8 +59,8 @@ pub(crate) const fn seek_warmup_access_units(codec: AudioCodec) -> u32 {
 pub(crate) trait FrameCodec: Send + 'static {
     /// Decode one demuxed frame into `out` (interleaved f32, from the shared typed pool
     /// region); returns frames written, `0` for a consumed packet that produced no PCM
-    /// (warm-up / backpressure). `pts` is the demuxer presentation time (diagnostics
-    /// only). `packet_desc` carries opaque per-packet VBR metadata (Apple MP3/ALAC
+    /// (warm-up / backpressure). The frame retains its actual encoded presentation
+    /// interval. `packet_desc` carries opaque per-packet VBR metadata (Apple MP3/ALAC
     /// serialize an `AudioStreamPacketDescription`); empty for CBR.
     ///
     /// # Errors
@@ -58,13 +70,28 @@ pub(crate) trait FrameCodec: Send + 'static {
     /// exceed the pool's byte budget.
     fn decode_frame(
         &mut self,
-        frame_data: &[u8],
-        pts: Duration,
-        packet_desc: &[u8],
+        frame: crate::demuxer::Frame<'_>,
+        metadata: crate::demuxer::PacketMetadata,
         out: &mut SampleBuffer,
-    ) -> DecodeResult<u32>;
+    ) -> DecodeResult<DecodedPacket>;
+
+    /// Whether one decoded buffer still contains presentation intervals to emit.
+    fn has_output(&self) -> bool {
+        false
+    }
+
+    /// Emit the next buffered interval before another encoded frame is consumed.
+    fn take_output(&mut self, out: &mut SampleBuffer) -> DecodeResult<DecodedPacket> {
+        out.clear();
+        Ok(DecodedPacket::new(
+            0,
+            crate::demuxer::PacketMetadata::default(),
+        ))
+    }
 
     /// Codec-owned presentation time of the most recent non-empty PCM output.
+    /// A buffering codec may expose its input anchor before producing PCM; callers
+    /// use that value as a chunk position only when output is non-empty.
     /// `None` uses synchronous packet timing and infers leading strip from its duration.
     fn decoded_pts(&self) -> Option<Duration> {
         None
@@ -121,6 +148,11 @@ pub(crate) trait FrameCodec: Send + 'static {
 
     /// PCM output specification.
     fn spec(&self) -> AudioSpec;
+
+    /// Physical head duration removed while rebasing the emitted PCM clock.
+    fn media_time_rebase(&self) -> Option<Duration> {
+        Some(Duration::ZERO)
+    }
 
     /// Decoder-owned packet-time bias removed before the first PCM frame.
     fn timestamp_bias_frames(&self) -> u64 {

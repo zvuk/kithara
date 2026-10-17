@@ -30,13 +30,6 @@ pub use artifact::{
     AnalysisFingerprint, AnalysisToken, BeatArtifact, BeatGridUnavailable, BeatSnapshot, BeatState,
     ORDINAL_TOLERANCE_BEATS, TrackAnalysis,
 };
-/// The served beat-grid contract, re-exported from its owner so a consumer of
-/// a publication can name what [`TrackAnalysis::grid`] hands it. The types are
-/// `kithara-beat`'s own: a server reading a stored grid needs no analyzer.
-pub use kithara_beat::{
-    BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid,
-    SCHEMA_VERSION as GRID_SCHEMA_VERSION,
-};
 pub use kithara_blob::BlobError;
 /// Frame-range coverage, re-exported from its owners so a consumer can name
 /// what a publication reports without depending on the analyzer: the set it is
@@ -51,4 +44,14 @@ pub use producer::AnalysisProducer;
 pub use progress::AnalysisProgress;
 pub use rangemap::RangeSet;
 pub use worker::{AnalysisOpen, AnalysisPass, AnalysisWorker, AnalysisWorkerConfig};
+/// The served beat-grid contract, re-exported from its owner so a consumer of
+/// a publication can name what [`TrackAnalysis::grid`] hands it. The types are
+/// `kithara-beat`'s own: a server reading a stored grid needs no analyzer.
+pub use {
+    kithara_beat::{
+        BeatGridError, BeatGridModel, BeatGridState, GridBeat, GridDownbeat, RawBeatGrid,
+        SCHEMA_VERSION as GRID_SCHEMA_VERSION,
+    },
+    kithara_sync::Meter,
+};
 mod consts;

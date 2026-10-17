@@ -6,7 +6,7 @@ use kithara::{
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -14,6 +14,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_test_helpers::pin_abr_variant,
+    mock::LaneAudio,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{
@@ -93,7 +94,7 @@ fn freeze_active_variant(abr: &AbrHandle) -> usize {
     active
 }
 
-type HlsAudio = RegisteredAudio<Stream<Hls<TestPools>>, TestPools>;
+type HlsAudio = LaneAudio<Stream<Hls<TestPools>>, TestPools>;
 
 /// Phase 1: read until the saw changes direction, the ABR switch.
 fn warmup_until_switch(audio: &mut HlsAudio, buf: &mut [f32], channels: usize) {
@@ -504,11 +505,16 @@ async fn stress_seek_lifecycle_with_zero_reset(
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .media_info(wav_info)
-        .block_on_underrun(true)
-        .build();
-    let mut audio = worker.load(config).await.expect("create Audio pipeline");
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .media_info(wav_info)
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create Audio pipeline");
 
     let spec = audio.spec();
     info!(

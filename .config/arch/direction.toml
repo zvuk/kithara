@@ -26,6 +26,7 @@ crates = [
   "kithara-net",
   "kithara-ring",
   "kithara-signal",
+  "kithara-sync",
   "kithara-ui-capture",
   "kithara-ui-draw",
   "kithara-ui-input",
@@ -55,8 +56,8 @@ crates = ["kithara-audio", "kithara-effects", "kithara-warp"]
 
 [[layer]]
 index = 7
-name = "sync"
-crates = ["kithara-render", "kithara-sync"]
+name = "render"
+crates = ["kithara-render"]
 
 [[layer]]
 index = 8
@@ -66,20 +67,25 @@ crates = ["kithara-analysis", "kithara-play"]
 [[layer]]
 index = 9
 name = "queue"
-crates = ["kithara-queue"]
+crates = ["kithara-host", "kithara-queue"]
 
 [[layer]]
 index = 10
+name = "link"
+crates = ["kithara-link"]
+
+[[layer]]
+index = 11
 name = "ui"
 crates = ["kithara-ui"]
 
 [[layer]]
-index = 11
+index = 12
 name = "facade"
 crates = ["kithara"]
 
 [[layer]]
-index = 12
+index = 13
 name = "apps"
 crates = ["kithara-app", "kithara-ffi"]
 

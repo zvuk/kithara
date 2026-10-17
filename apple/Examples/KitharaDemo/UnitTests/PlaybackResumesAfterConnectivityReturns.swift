@@ -87,7 +87,7 @@ extension IntegrationRegressionsIOS {
             ) {
                 observation.terminalFailure != nil
                     || (
-                        observation.didEndUnderrun(epoch: underrun.epoch)
+                        observation.didEndUnderrun(eventOrder: underrun.eventOrder)
                             && player.currentAudioItem === item
                             && player.currentRate > 0
                             && player.currentTime >= resumeTarget
@@ -99,7 +99,7 @@ extension IntegrationRegressionsIOS {
                 "connectivity recovery published a terminal failure"
             )
             #expect(
-                observation.didEndUnderrun(epoch: underrun.epoch),
+                observation.didEndUnderrun(eventOrder: underrun.eventOrder),
                 "the active underrun did not end after connectivity returned"
             )
             #expect(player.currentAudioItem === item, "recovery replaced the current item")
@@ -112,6 +112,27 @@ extension IntegrationRegressionsIOS {
                 Issue.record("player status became failed after transient HTTP 503")
             }
         }
+    }
+
+    @Test("Connectivity recovery ends the current underrun, not an earlier one")
+    func connectivityRecoveryMatchesTheActiveUnderrun() throws {
+        let observation = ConnectivityRecoveryObservation()
+        observation.record(ItemEvent.underrunEnded(positionMs: 1_000))
+        observation.record(ItemEvent.underrunStarted(positionMs: 1_000))
+        let earlier = try #require(observation.activeUnderrun)
+        #expect(!observation.didEndUnderrun(eventOrder: earlier.eventOrder))
+        observation.record(ItemEvent.underrunEnded(positionMs: 1_000))
+        #expect(observation.didEndUnderrun(eventOrder: earlier.eventOrder))
+        #expect(observation.activeUnderrun == nil)
+
+        observation.record(ItemEvent.underrunStarted(positionMs: 1_000))
+        let current = try #require(observation.activeUnderrun)
+        #expect(current.eventOrder > earlier.eventOrder)
+        #expect(!observation.didEndUnderrun(eventOrder: current.eventOrder))
+        observation.record(ItemEvent.underrunEnded(positionMs: 1_000))
+        #expect(observation.didEndUnderrun(eventOrder: current.eventOrder))
+        #expect(observation.didEndUnderrun(eventOrder: earlier.eventOrder))
+        #expect(observation.activeUnderrun == nil)
     }
 
     private func withRestoredFixtureNetwork(
@@ -150,14 +171,15 @@ extension IntegrationRegressionsIOS {
 
 private struct ActiveConnectivityUnderrun: Sendable {
     let position: TimeInterval
-    let epoch: UInt64
+    let eventOrder: UInt64
 }
 
 private final class ConnectivityRecoveryObservation: @unchecked Sendable {
     private let lock = NSLock()
     private var retryExhausted503 = false
     private var currentUnderrun: ActiveConnectivityUnderrun?
-    private var endedUnderrunEpochs: Set<UInt64> = []
+    private var eventOrder: UInt64 = 0
+    private var endedUnderrunOrders: Set<UInt64> = []
     private var failure: String?
 
     var sawRetryExhausted503: Bool {
@@ -172,33 +194,34 @@ private final class ConnectivityRecoveryObservation: @unchecked Sendable {
         lock.withLock { failure }
     }
 
-    func didEndUnderrun(epoch: UInt64) -> Bool {
-        lock.withLock { endedUnderrunEpochs.contains(epoch) }
+    func didEndUnderrun(eventOrder: UInt64) -> Bool {
+        lock.withLock { endedUnderrunOrders.contains(eventOrder) }
     }
 
     func record(_ event: ItemEvent) {
         lock.withLock {
+            eventOrder += 1
             switch event {
             case let .downloadRetryExhausted(_, _, _, error):
                 if error.contains("503") {
                     retryExhausted503 = true
                 }
-            case let .underrunStarted(positionMs, epoch):
+            case let .underrunStarted(positionMs):
                 currentUnderrun = ActiveConnectivityUnderrun(
                     position: TimeInterval(positionMs) / 1_000,
-                    epoch: epoch
+                    eventOrder: eventOrder
                 )
-            case let .underrunEnded(_, epoch):
-                endedUnderrunEpochs.insert(epoch)
-                if currentUnderrun?.epoch == epoch {
+            case .underrunEnded:
+                if let underrun = currentUnderrun {
+                    endedUnderrunOrders.insert(underrun.eventOrder)
                     currentUnderrun = nil
                 }
             case .statusChanged(status: .failed):
                 recordFailure("item status failed")
             case .didFail:
                 recordFailure("item failed")
-            case let .trackFailed(reason, epoch):
-                recordFailure("track failed at epoch \(epoch): \(reason)")
+            case let .trackFailed(reason):
+                recordFailure("track failed: \(reason)")
             default:
                 break
             }

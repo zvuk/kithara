@@ -32,6 +32,7 @@ kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-dsp = { workspace = true, optional = true }
 kithara-platform = { workspace = true, optional = true }
+kithara-sync = { workspace = true }
 kithara-test-macros = { workspace = true }
 
 bon = { workspace = true }
