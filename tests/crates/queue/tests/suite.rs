@@ -23,7 +23,6 @@ mod play_before_the_load_lands;
 mod player_queue_api_regressions;
 mod playlist_stall_fails_load;
 mod select_after_eof;
-mod slow_open_loads;
 mod track_switch_race;
 mod user_simulation;
 mod zvuk_cipher_check;

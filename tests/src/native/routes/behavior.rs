@@ -34,7 +34,7 @@ async fn dispatch(
     Path(token): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    serve(&state, &token, &headers).await
+    serve(&state, &token, &headers)
 }
 
 async fn dispatch_nested(
@@ -42,17 +42,14 @@ async fn dispatch_nested(
     Path((token, _rest)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    serve(&state, &token, &headers).await
+    serve(&state, &token, &headers)
 }
 
-async fn serve(state: &TestServerState, token: &str, headers: &HeaderMap) -> Response {
+fn serve(state: &TestServerState, token: &str, headers: &HeaderMap) -> Response {
     let Some(behavior) = state.get_behavior(token) else {
         return (StatusCode::NOT_FOUND, "no such behavior").into_response();
     };
     state.bump_behavior(token);
-    if let Delivery::HeadersAfter { delay_ms } = behavior.delivery {
-        sleep(Duration::from_millis(delay_ms)).await;
-    }
     serve_content(&behavior, headers)
 }
 
@@ -77,7 +74,7 @@ fn delivery_response(
 ) -> Response {
     let total = bytes.len();
     let (body, accept_ranges, context) = match delivery {
-        Delivery::Range | Delivery::HeadersAfter { .. } => {
+        Delivery::Range => {
             return build_range_response(bytes, headers, true, true, content_type);
         }
         Delivery::Normal => {

@@ -55,7 +55,6 @@ impl DiskQueue {
         #[builder(default)] pacing: RenderPacing,
         crossfade_seconds: Option<f32>,
         max_concurrent_downloads: Option<usize>,
-        soft_timeout: Option<Duration>,
         max_concurrent_loads: Option<NonZeroUsize>,
         #[builder(default)] block_on_underrun: bool,
         #[builder(default)] net: NetOptions,
@@ -100,7 +99,6 @@ impl DiskQueue {
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(net, pools, CancelToken::never()))
                 .maybe_max_concurrent(max_concurrent_downloads)
-                .maybe_soft_timeout(soft_timeout)
                 .build(),
         );
         Self {

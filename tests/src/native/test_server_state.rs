@@ -48,12 +48,6 @@ pub enum Delivery {
         chunk: usize,
         delay_ms: u64,
     },
-    /// Hold every response for `delay_ms` before its headers, then answer as
-    /// [`Delivery::Range`]: the slow-origin shape where the request is
-    /// accepted but nothing comes back yet.
-    HeadersAfter {
-        delay_ms: u64,
-    },
 }
 
 /// How every data route answers while the server-wide outage switch is thrown.

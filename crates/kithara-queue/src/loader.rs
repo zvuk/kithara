@@ -511,6 +511,32 @@ mod tests {
         );
     }
 
+    #[kithara::test(tokio)]
+    async fn a_slow_watch_waits_out_a_quiet_bus() {
+        let _budget = kithara_test_utils::hang::override_timeout(Duration::from_millis(20));
+        let bus = EventBus::new(4);
+        let (postbox, _mailbox) = mailbox::<QueueCommand<TestPools>, QueueError>();
+        let load = CancelToken::never().child();
+        let mut watch = pin!(slow_transfer(
+            TrackId::allocate(),
+            load.clone(),
+            bus.subscribe(),
+            postbox
+        ));
+        bus.publish(DownloaderEvent::LoadSlow {
+            request_id: RequestId::new(NonZeroU64::MIN),
+            elapsed: Duration::ZERO,
+        });
+        assert!(
+            timeout(Duration::from_millis(60), watch.as_mut())
+                .await
+                .is_err(),
+            "a quiet bus is a load still in flight"
+        );
+        load.cancel();
+        watch.await;
+    }
+
     #[kithara::flash(io)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     async fn open(item: ResourceLoad<TestPools>) -> Result<(), LoadRefusal> {
