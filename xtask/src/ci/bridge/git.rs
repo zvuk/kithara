@@ -131,6 +131,27 @@ impl GitRepo {
         Ok(())
     }
 
+    /// Added text lines in the pull request, excluding unchanged moves.
+    pub(super) fn review_lines(&self, base: &str, head: &str) -> Result<u64> {
+        let numstat = self.run(
+            &[
+                "diff",
+                "--numstat",
+                "-z",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--find-renames",
+                "-l0",
+                "--merge-base",
+                base,
+                head,
+                "--",
+            ],
+            None,
+        )?;
+        added_lines(&numstat)
+    }
+
     /// What the pull request itself changed, measured from where it forked.
     ///
     /// `--merge-base` and not a plain two-dot diff: a branch that has not
@@ -404,6 +425,50 @@ fn checked(output: Output, label: &str) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
+fn added_lines(numstat: &[u8]) -> Result<u64> {
+    if numstat.is_empty() {
+        return Ok(0);
+    }
+    let mut records = numstat
+        .strip_suffix(&[0])
+        .context("git numstat is missing its final NUL")?
+        .split(|byte| *byte == 0);
+    let mut total = 0_u64;
+    while let Some(record) = records.next() {
+        let mut fields = record.splitn(3, |byte| *byte == b'\t');
+        let added = fields.next().context("git numstat is missing additions")?;
+        let deleted = fields.next().context("git numstat is missing deletions")?;
+        let path = fields.next().context("git numstat is missing a path")?;
+        if path.is_empty() {
+            for name in ["source", "destination"] {
+                if records.next().is_none_or(<[u8]>::is_empty) {
+                    bail!("git numstat is missing the {name} path of a rename");
+                }
+            }
+        }
+        let additions = if let (b"-", b"-") = (added, deleted) {
+            0
+        } else {
+            let additions = numstat_count(added)?;
+            numstat_count(deleted)?;
+            additions
+        };
+        total = total
+            .checked_add(additions)
+            .context("git numstat additions exceed u64")?;
+    }
+    Ok(total)
+}
+
+fn numstat_count(bytes: &[u8]) -> Result<u64> {
+    if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
+        bail!("git numstat returned an invalid line count");
+    }
+    str::from_utf8(bytes)?
+        .parse()
+        .context("git numstat line count exceeds u64")
+}
+
 /// Branch names out of an `ls-remote` listing, which answers `<sha>\t<ref>`.
 fn quarantine_heads(listing: &str) -> Vec<String> {
     listing
@@ -621,6 +686,105 @@ mod tests {
         match repo.judged_commit(base, head, restore_controls).unwrap() {
             Judged::Commit(sha) => sha,
             Judged::Conflict => panic!("these branches merge"),
+        }
+    }
+
+    fn commit_review(repo: &GitRepo, work: &Path) -> String {
+        git(work, &["add", "--all"]);
+        git(work, &["commit", "--quiet", "-m", "review fixture"]);
+        let head = head_of(work).unwrap();
+        repo.run(&["fetch", "--no-tags", work.to_str().unwrap(), &head], None)
+            .unwrap();
+        head
+    }
+
+    #[test]
+    fn review_lines_counts_the_5000_line_boundary() {
+        let (state, repo, _base, _product, base, _additive) = repository();
+        let work = state.path().join("work");
+        for count in [5000, 5001] {
+            fs::write(work.join("added\tlines\n.rs"), "added\n".repeat(count)).unwrap();
+            let head = commit_review(&repo, &work);
+            assert_eq!(repo.review_lines(&base, &head).unwrap(), count as u64);
+        }
+    }
+
+    #[test]
+    fn review_lines_does_not_charge_for_large_deletions() {
+        let (state, repo, _base, _product, _head, _additive) = repository();
+        let work = state.path().join("work");
+        fs::write(work.join("removed.rs"), "removed\n".repeat(100_000)).unwrap();
+        let base = commit_review(&repo, &work);
+        fs::remove_file(work.join("removed.rs")).unwrap();
+        let head = commit_review(&repo, &work);
+
+        assert_eq!(repo.review_lines(&base, &head).unwrap(), 0);
+    }
+
+    #[test]
+    fn review_lines_exempts_moves_but_counts_copies_as_added_code() {
+        let (state, repo, _base, _product, _head, _additive) = repository();
+        let work = state.path().join("work");
+        let original: String = (0..100_000).map(|line| format!("line {line}\n")).collect();
+        let source = work.join("source\tfile\n.rs");
+        fs::write(&source, &original).unwrap();
+        let base = commit_review(&repo, &work);
+        let moved = work.join("moved\tfile\n.rs");
+        fs::rename(&source, &moved).unwrap();
+        let head = commit_review(&repo, &work);
+        assert_eq!(repo.review_lines(&base, &head).unwrap(), 0);
+
+        fs::write(&moved, format!("{original}edited\n")).unwrap();
+        let head = commit_review(&repo, &work);
+        assert_eq!(repo.review_lines(&base, &head).unwrap(), 1);
+
+        let base = head;
+        let copy = work.join("copied\tfile\n.rs");
+        fs::copy(&moved, &copy).unwrap();
+        let head = commit_review(&repo, &work);
+        assert_eq!(repo.review_lines(&base, &head).unwrap(), 100_001);
+
+        fs::write(&copy, format!("{original}edited\ncopied edit\n")).unwrap();
+        let head = commit_review(&repo, &work);
+        assert_eq!(repo.review_lines(&base, &head).unwrap(), 100_002);
+    }
+
+    #[test]
+    fn review_lines_excludes_changes_merged_after_the_pull_request_forked() {
+        let (_state, repo, _base, _product, head, additive) = repository();
+
+        assert_eq!(repo.review_lines(&head, &additive).unwrap(), 3);
+    }
+
+    #[test]
+    fn numstat_counts_text_and_skips_binary_records_with_arbitrary_paths() {
+        assert_eq!(added_lines(b"").unwrap(), 0);
+        assert_eq!(
+            added_lines(b"4\t3\tpath\twith\nbytes\xff\0-\t-\t\0old\t\n\0new\t\n\0").unwrap(),
+            4
+        );
+    }
+
+    #[test]
+    fn malformed_numstat_and_overflow_fail_closed() {
+        let malformed: &[&[u8]] = &[
+            b"1\t0\tunterminated",
+            b"1\t0\0",
+            b"1\t0\t\0old\0",
+            b"1\t0\t\0\0new\0",
+            b"1\t0\t\0old\0\0",
+            b"-\t0\tpath\0",
+            b"0\t-\tpath\0",
+            b"+1\t0\tpath\0",
+            b"\t0\tpath\0",
+            b"1\tinvalid\tpath\0",
+            b"1\t0\tpath\0\0",
+            b"18446744073709551616\t0\tpath\0",
+            b"1\t18446744073709551616\tpath\0",
+            b"18446744073709551615\t0\tfirst\x001\t0\tsecond\0",
+        ];
+        for input in malformed {
+            assert!(added_lines(input).is_err(), "accepted {input:?}");
         }
     }
 

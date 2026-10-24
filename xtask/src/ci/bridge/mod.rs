@@ -1,4 +1,5 @@
 mod api;
+mod checks;
 mod command;
 mod control;
 mod git;

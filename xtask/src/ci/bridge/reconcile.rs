@@ -10,6 +10,7 @@ use tracing::{info, warn};
 
 use super::{
     api::{Github, Gitlab},
+    checks,
     command::BridgeConfig,
     git::{GitRepo, Judged},
     ledger::{DefaultBranchStatus, Ledger, LedgerEntry},
@@ -210,7 +211,7 @@ impl Bridge {
         for pull in &pulls {
             let verified_base =
                 verification_base(pull.scope, ledger.latest_base(&pull.head_sha)?, base_sha);
-            if let Err(error) = self.verify_pull(&ledger, pull, &verified_base) {
+            if let Err(error) = self.verify_pull(&ledger, pull, &verified_base, base_sha) {
                 warn!(
                     pull_number = pull.number,
                     head_sha = %pull.head_sha,
@@ -219,9 +220,22 @@ impl Bridge {
                     "GitLab verification tick failed without changing its verdict"
                 );
             }
-            let scope = ledger
-                .get(&pull.head_sha, &verified_base)?
-                .map_or(pull.scope, |entry| entry.scope);
+            let entry = ledger.get(&pull.head_sha, &verified_base)?;
+            let scope = entry.as_ref().map_or(pull.scope, |entry| entry.scope);
+            if let Err(error) = checks::report_pull(
+                &self.github,
+                &self.gitlab,
+                pull,
+                entry.as_ref().and_then(|entry| entry.pipeline_id),
+                scope,
+            ) {
+                warn!(
+                    pull_number = pull.number,
+                    head_sha = %pull.head_sha,
+                    %error,
+                    "pull-request job statuses could not be published"
+                );
+            }
             live.push(LiveVerification {
                 head_sha: pull.head_sha.clone(),
                 base_sha: verified_base,
@@ -243,10 +257,21 @@ impl Bridge {
         Ok(())
     }
 
-    fn verify_pull(&self, ledger: &Ledger, pull: &PullRequest, base_sha: &str) -> Result<()> {
+    fn verify_pull(
+        &self,
+        ledger: &Ledger,
+        pull: &PullRequest,
+        base_sha: &str,
+        target_sha: &str,
+    ) -> Result<()> {
         require_sha("GitHub pull request", &pull.head_sha)?;
-        self.repo
-            .fetch_pull_head(&self.github, pull.number, &pull.head_sha)?;
+        let review_lines = self
+            .repo
+            .fetch_pull_head(&self.github, pull.number, &pull.head_sha)
+            .and_then(|()| self.repo.review_lines(target_sha, &pull.head_sha));
+        self.github
+            .report_check_status(&pull.head_sha, &checks::review_size(&review_lines))?;
+        review_lines?;
         // A trusted author answers for the CI configuration the same way they
         // answer for the code, so their pull request is never rejected for
         // touching it. For everyone else the rule stands, and a contributor who

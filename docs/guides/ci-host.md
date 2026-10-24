@@ -152,77 +152,13 @@ PowerShell script. Windows runs last in the nightly chain.
 
 ## Repository bridge
 
-Copy `.config/bridge/config.example.toml` to
-`/Volumes/KitharaCI/services/bridge/config.toml`; it and the two tokens belong
-to UID 504 (`kithara-sync`), mode `0600`. The GitHub token needs
-`Contents: write`, `Pull requests: read` and `Commit statuses: write`.
-Validate with `ci bridge validate` (no network mutation), then
-`ci host mac activate-bridge`.
-`github_branch` and `gitlab_branch` are separate keys because the sides
-disagree — GitLab `develop`, GitHub `main` — and a swap is silent: GitHub
-answers an unknown base with an empty pull list.
-
-The daemon keeps running the executable that was installed, not the one on
-`develop`: a fix changes nothing until `ci host mac install-services`
-reinstalls it from a reviewed GitLab commit, then `activate-bridge` and
-`activate`. launchd keeps the definition it loaded, so skipping `activate`
-silently leaves the maintenance agents on the old cadence; `launchctl print`
-reports what is loaded.
-
-The bridge moves either default branch only by fast-forward, in whichever
-direction is behind, and never synthesizes a replacement commit or force-pushes
-a diverged branch.
-
-GitHub pull requests are verified before merge. While both default branches are
-equal, the bridge reserves the exact head and base pair, publishes one
-quarantine ref, and starts its GitLab pipeline; the result lands on the head
-commit under the status context `kithara/gitlab-verification`. The verifier is
-advisory by decision; merging stays the maintainer's call, so the status carries
-the risk. Every verdict names the default-branch commit it was judged against.
-When the default branch moves after a pass, the next tick sets the status to
-pending and says the earlier pass was against an older base. Each default-branch
-commit carries the verdict of its own GitLab pipeline under the same context;
-a commit that stops being the head is still watched until its pipeline finishes.
-Each status links to its pipeline. Once the default branch moves, the next attempt
-reserves against the new base with a new ref.
-
-A pipeline is judged on the child the dispatch stage triggers, never its parent,
-which reports `success` over a cancelled child. Divergence is fail-closed and
-opens one deduplicated GitLab incident. A rejection is recorded for the exact
-head and base pair and refused on sight; `ci bridge retry` is the only route to
-a rejudgement.
-
-A stopped run is not a verdict. A queue emptied by hand, an auto-cancel or a
-runner taken down leaves the branch unverified rather than rejected, so the
-bridge releases the pipeline and opens the next attempt; the following tick
-publishes a fresh ref and starts a run of its own. Only a run that reported
-takes `ci bridge retry` to be judged again.
-
-A verification branch is removed once nothing will name it again: its base has
-moved, or no open pull request stands on its head. Its queued run is cancelled
-first, because deleting the ref does not release the resource-group slot the run
-is holding.
+See [CI bridge and verdict](ci-bridge.md#repository-bridge) for repository
+synchronization, PR status publication and bridge deployment.
 
 ## The verdict
 
-Judged lanes set `allow_failure: true`; the verdict holds only failures absent
-from the default branch.
-
-The lane dispatcher clears expected reports before execution because build
-directories persist, then collects outputs in `.ci-artifacts/junit/`. A lane
-that cannot name a test leaves its own failure marker: GitLab exposes no
-needed-job status.
-
-Branch's only test producer, `apple-test`, writes its canonical plan's selected
-lane names to `.ci-artifacts/junit/apple-test.selection.json` before running it.
-Only valid `[]` proves no suite applies. Nonempty lists need its own report
-with test cases. Failure markers and invalid or failing XML retain their behavior;
-other pipeline kinds require reports or failure markers.
-
-Executors use their runner environment's `<shared cache root>/verdict/journal.json`
-as one Linux/macOS baseline. `main` and nightly runs record; branch, merge-request
-and quarantine runs check the last five recorded runs' union to absorb intermittent
-failures.
+See [CI bridge and verdict](ci-bridge.md#the-verdict) for lane reports and the
+shared regression journal.
 
 ## Object cache service
 

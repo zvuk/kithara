@@ -1,85 +1,28 @@
-use std::{fs, time::Duration};
+use std::fs;
 
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use reqwest::{
-    Method, Url,
-    blocking::{Client, RequestBuilder},
-};
-use serde_json::{Value, json};
+use reqwest::{Method, Url};
+use serde_json::Value;
 
 use super::{
-    command::BridgeConfig,
-    model::{PipelineObservation, PullRequest, Scope, pipeline_observation},
+    super::{
+        command::BridgeConfig,
+        model::{PipelineObservation, PullRequest, Scope, pipeline_observation},
+    },
+    http::{Api, Payload},
+    sources::pull_request,
 };
-use crate::{ci::run::PipelineKind, consts};
+use crate::ci::run::PipelineKind;
 
-enum Payload<'a> {
-    Json(&'a Value),
-    Form(&'a [(String, String)]),
-}
-
-struct Api {
-    client: Client,
-}
-
-impl Api {
-    fn new() -> Result<Self> {
-        let builder = Client::builder()
-            .timeout(Duration::from_secs(60))
-            .user_agent("kithara-git-bridge/1");
-        Ok(Self {
-            client: builder.build().context("building bridge HTTP client")?,
-        })
-    }
-
-    fn request(
-        &self,
-        method: &Method,
-        url: &Url,
-        authorization: (&str, &str),
-        payload: Option<&Payload<'_>>,
-    ) -> Result<Value> {
-        let mut request = self
-            .client
-            .request(method.clone(), url.clone())
-            .header(authorization.0, authorization.1);
-        request = match payload {
-            Some(Payload::Json(body)) => request.json(body),
-            Some(Payload::Form(form)) => request.form(form),
-            None => request,
-        };
-        response_json(request, method, url)
-    }
-}
-
-fn response_json(request: RequestBuilder, method: &Method, url: &Url) -> Result<Value> {
-    let response = request
-        .send()
-        .with_context(|| format!("{method} {url} failed"))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .with_context(|| format!("reading {method} {url} response"))?;
-    if !status.is_success() {
-        let detail = body.chars().take(4_096).collect::<String>();
-        bail!("{method} {url} failed with HTTP {status}: {detail}");
-    }
-    if body.trim().is_empty() {
-        Ok(Value::Null)
-    } else {
-        serde_json::from_str(&body).with_context(|| format!("parsing {method} {url} response"))
-    }
-}
-
-pub(super) struct Github {
-    config: BridgeConfig,
+pub(in crate::ci::bridge) struct Github {
+    pub(super) config: BridgeConfig,
     api: Api,
     token: String,
 }
 
 impl Github {
-    pub(super) fn new(config: &BridgeConfig) -> Result<Self> {
+    pub(in crate::ci::bridge) fn new(config: &BridgeConfig) -> Result<Self> {
         let token = read_secret(&config.github_token_file, "GitHub token")?;
         Ok(Self {
             config: config.clone(),
@@ -88,7 +31,7 @@ impl Github {
         })
     }
 
-    pub(super) fn head(&self) -> Result<String> {
+    pub(in crate::ci::bridge) fn head(&self) -> Result<String> {
         let response = self.request(
             &Method::GET,
             &format!(
@@ -100,7 +43,7 @@ impl Github {
         string_field(&response, &["object", "sha"], "GitHub branch SHA")
     }
 
-    pub(super) fn merged_pull_request(&self, sha: &str) -> Result<Option<u64>> {
+    pub(in crate::ci::bridge) fn merged_pull_request(&self, sha: &str) -> Result<Option<u64>> {
         let response = self.request(
             &Method::GET,
             &format!("/repos/{}/commits/{sha}/pulls", self.config.github_repo),
@@ -112,7 +55,7 @@ impl Github {
         Ok(merged_pull_number(pulls, sha, &self.config.github_branch))
     }
 
-    pub(super) fn open_pull_requests(&self) -> Result<Vec<PullRequest>> {
+    pub(in crate::ci::bridge) fn open_pull_requests(&self) -> Result<Vec<PullRequest>> {
         const PAGE_SIZE: usize = 100;
         let mut page = 1;
         let mut result = Vec::new();
@@ -145,27 +88,17 @@ impl Github {
         }
     }
 
-    pub(super) fn report_status(
-        &self,
-        sha: &str,
-        state: &str,
-        description: &str,
-        target_url: Option<&str>,
-    ) -> Result<()> {
-        self.request(
-            &Method::POST,
-            &format!("/repos/{}/statuses/{sha}", self.config.github_repo),
-            Some(&status_body(state, description, target_url)),
-        )?;
-        Ok(())
-    }
-
-    pub(super) fn git_header(&self) -> String {
+    pub(in crate::ci::bridge) fn git_header(&self) -> String {
         let basic = STANDARD.encode(format!("x-access-token:{}", self.token));
         format!("Authorization: Basic {basic}")
     }
 
-    fn request(&self, method: &Method, path: &str, body: Option<&Value>) -> Result<Value> {
+    pub(super) fn request(
+        &self,
+        method: &Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<Value> {
         let url = Url::parse(&format!("https://api.github.com{path}"))
             .with_context(|| format!("building GitHub API URL for {path}"))?;
         let payload = body.map(Payload::Json);
@@ -178,14 +111,14 @@ impl Github {
     }
 }
 
-pub(super) struct Gitlab {
-    config: BridgeConfig,
+pub(in crate::ci::bridge) struct Gitlab {
+    pub(super) config: BridgeConfig,
     api: Api,
     token: String,
 }
 
 impl Gitlab {
-    pub(super) fn new(config: &BridgeConfig) -> Result<Self> {
+    pub(in crate::ci::bridge) fn new(config: &BridgeConfig) -> Result<Self> {
         let token = read_secret(&config.gitlab_token_file, "GitLab token")?;
         Ok(Self {
             config: config.clone(),
@@ -194,7 +127,7 @@ impl Gitlab {
         })
     }
 
-    pub(super) fn head(&self) -> Result<String> {
+    pub(in crate::ci::bridge) fn head(&self) -> Result<String> {
         let response = self.request(
             &Method::GET,
             &format!("repository/branches/{}", self.config.gitlab_branch),
@@ -203,7 +136,7 @@ impl Gitlab {
         string_field(&response, &["commit", "id"], "GitLab branch SHA")
     }
 
-    pub(super) fn create_pipeline(
+    pub(in crate::ci::bridge) fn create_pipeline(
         &self,
         reference: &str,
         head_sha: &str,
@@ -218,7 +151,7 @@ impl Gitlab {
             .context("GitLab pipeline response has no numeric id")
     }
 
-    pub(super) fn verification_pipelines(
+    pub(in crate::ci::bridge) fn verification_pipelines(
         &self,
         reference: &str,
         head_sha: &str,
@@ -255,7 +188,7 @@ impl Gitlab {
         Ok(ids)
     }
 
-    pub(super) fn default_branch_pipeline(&self, sha: &str) -> Result<Option<u64>> {
+    pub(in crate::ci::bridge) fn default_branch_pipeline(&self, sha: &str) -> Result<Option<u64>> {
         let reference = &self.config.gitlab_branch;
         let mut url = self.project_url("pipelines")?;
         url.query_pairs_mut()
@@ -299,7 +232,7 @@ impl Gitlab {
     /// place in the resource group after the ref it names is gone, and on a
     /// runner that takes one job at a time that slot is the whole cost. A
     /// finished pipeline refuses the cancel, so only the unfinished are asked.
-    pub(super) fn cancel_pipelines(&self, reference: &str) -> Result<()> {
+    pub(in crate::ci::bridge) fn cancel_pipelines(&self, reference: &str) -> Result<()> {
         let mut url = self.project_url("pipelines")?;
         url.query_pairs_mut().append_pair("ref", reference);
         let response =
@@ -323,7 +256,7 @@ impl Gitlab {
         Ok(())
     }
 
-    pub(super) fn pipeline_observation(
+    pub(in crate::ci::bridge) fn pipeline_observation(
         &self,
         pipeline_id: u64,
         kind: PipelineKind,
@@ -338,14 +271,7 @@ impl Gitlab {
         if parent_status != "success" {
             return Ok(pipeline_observation(kind, parent_status, &[]));
         }
-        let bridges = self.request(
-            &Method::GET,
-            &format!("pipelines/{pipeline_id}/bridges"),
-            None,
-        )?;
-        let bridges = bridges
-            .as_array()
-            .context("GitLab bridges response was not an array")?;
+        let bridges = self.pipeline_bridges(pipeline_id)?;
         let children = bridges
             .iter()
             .map(|bridge| {
@@ -360,7 +286,7 @@ impl Gitlab {
         Ok(pipeline_observation(kind, parent_status, &children))
     }
 
-    pub(super) fn ensure_issue(&self, title: &str, description: &str) -> Result<()> {
+    pub(in crate::ci::bridge) fn ensure_issue(&self, title: &str, description: &str) -> Result<()> {
         let mut url = self.project_url("issues")?;
         url.query_pairs_mut()
             .append_pair("state", "opened")
@@ -386,12 +312,17 @@ impl Gitlab {
         Ok(())
     }
 
-    pub(super) fn git_header(&self) -> String {
+    pub(in crate::ci::bridge) fn git_header(&self) -> String {
         let basic = STANDARD.encode(format!("{}:{}", self.config.gitlab_username, self.token));
         format!("Authorization: Basic {basic}")
     }
 
-    fn request(&self, method: &Method, path: &str, payload: Option<&Payload<'_>>) -> Result<Value> {
+    pub(super) fn request(
+        &self,
+        method: &Method,
+        path: &str,
+        payload: Option<&Payload<'_>>,
+    ) -> Result<Value> {
         let url = self.project_url(path)?;
         self.api
             .request(method, &url, ("PRIVATE-TOKEN", &self.token), payload)
@@ -444,31 +375,6 @@ fn read_secret(path: &std::path::Path, label: &str) -> Result<String> {
     Ok(secret)
 }
 
-fn status_body(state: &str, description: &str, target_url: Option<&str>) -> Value {
-    let mut body = json!({
-        "state": state,
-        "context": consts::STATUS_CONTEXT,
-        "description": status_description(description),
-    });
-    if let Some(url) = target_url {
-        body["target_url"] = json!(url);
-    }
-    body
-}
-
-fn status_description(detail: &str) -> String {
-    const LIMIT: usize = 140;
-    let single_line = detail.split_whitespace().collect::<Vec<_>>().join(" ");
-    if single_line.chars().count() <= LIMIT {
-        return single_line;
-    }
-    single_line
-        .chars()
-        .take(LIMIT - 1)
-        .chain(std::iter::once('…'))
-        .collect()
-}
-
 fn merged_pull_number(pulls: &[Value], sha: &str, branch: &str) -> Option<u64> {
     pulls.iter().find_map(|pull| {
         let exact_commit = pull["merge_commit_sha"].as_str() == Some(sha);
@@ -477,23 +383,6 @@ fn merged_pull_number(pulls: &[Value], sha: &str, branch: &str) -> Option<u64> {
         (exact_commit && merged && exact_branch)
             .then(|| pull.get("number").and_then(Value::as_u64))
             .flatten()
-    })
-}
-
-fn pull_request(value: &Value) -> Result<PullRequest> {
-    let number = value["number"]
-        .as_u64()
-        .context("GitHub pull response has no numeric number")?;
-    let head_sha = string_field(value, &["head", "sha"], "GitHub pull head SHA")?;
-    let author = string_field(value, &["user", "login"], "GitHub pull author login")?;
-    let draft = value["draft"]
-        .as_bool()
-        .context("GitHub pull response has no draft flag")?;
-    Ok(PullRequest {
-        number,
-        head_sha,
-        scope: if draft { Scope::Draft } else { Scope::Full },
-        author,
     })
 }
 
@@ -535,7 +424,7 @@ fn require_variable(variables: &[Value], key: &str, expected: &str) -> Result<()
     }
 }
 
-fn string_field(value: &Value, path: &[&str], label: &str) -> Result<String> {
+pub(super) fn string_field(value: &Value, path: &[&str], label: &str) -> Result<String> {
     let mut current = value;
     for part in path {
         current = current
@@ -550,32 +439,9 @@ fn string_field(value: &Value, path: &[&str], label: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
-
-    #[test]
-    fn verification_status_body_normalizes_descriptions_and_includes_only_supplied_urls() {
-        let url = "https://gitlab.example/owner/repo/-/pipelines/42";
-        let body = status_body("pending", "  GitLab\n verification\t running  ", Some(url));
-
-        assert_eq!(body["state"], "pending");
-        assert_eq!(body["context"], "kithara/gitlab-verification");
-        assert_eq!(body["description"], "GitLab verification running");
-        assert_eq!(body["target_url"], url);
-
-        let body = status_body("failure", &"path ".repeat(80), None);
-        assert_eq!(
-            body["description"],
-            format!("{}…", "path ".repeat(27) + "path")
-        );
-        assert!(!body.as_object().unwrap().contains_key("target_url"));
-    }
-
-    #[test]
-    fn status_descriptions_fit_github() {
-        let described = status_description(&"path ".repeat(80));
-        assert_eq!(described.chars().count(), 140);
-        assert!(described.ends_with('…'));
-    }
 
     #[test]
     fn merged_provenance_requires_the_exact_commit_and_base() {
@@ -614,13 +480,15 @@ mod tests {
             pull_request(&json!({
                 "number": 427,
                 "draft": false,
-                "head": {"sha": head},
+                "head": {"sha": head, "ref": "feature", "repo": {"full_name": "octocat/kithara"}},
                 "user": {"login": "octocat"}
             }))
             .unwrap(),
             PullRequest {
                 number: 427,
                 head_sha: head.into(),
+                head_repository: Some("octocat/kithara".into()),
+                head_branch: "feature".into(),
                 scope: Scope::Full,
                 author: "octocat".into(),
             }
@@ -632,20 +500,34 @@ mod tests {
         let pull = pull_request(&json!({
             "number": 427,
             "draft": true,
-            "head": {"sha": "0123456789abcdef0123456789abcdef01234567"},
+            "head": {"sha": "0123456789abcdef0123456789abcdef01234567", "ref": "feature"},
             "user": {"login": "octocat"}
         }))
         .unwrap();
 
         assert_eq!(pull.scope, Scope::Draft);
+        assert_eq!(pull.head_repository, None);
         assert!(
             pull_request(&json!({
                 "number": 427,
-                "head": {"sha": "0123456789abcdef0123456789abcdef01234567"},
+                "head": {"sha": "0123456789abcdef0123456789abcdef01234567", "ref": "feature"},
                 "user": {"login": "octocat"}
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_deleted_fork_does_not_stop_other_pull_requests_from_being_observed() {
+        let pull = pull_request(&json!({
+            "number": 427,
+            "draft": false,
+            "head": {"sha": "a".repeat(40), "ref": "feature", "repo": null},
+            "user": {"login": "octocat"}
+        }))
+        .unwrap();
+        assert_eq!(pull.head_repository, None);
+        assert_eq!(pull.head_branch, "feature");
     }
 
     #[test]

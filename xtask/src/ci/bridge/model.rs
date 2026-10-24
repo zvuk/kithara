@@ -47,11 +47,21 @@ impl Scope {
 pub(super) struct PullRequest {
     pub(super) number: u64,
     pub(super) head_sha: String,
+    pub(super) head_repository: Option<String>,
+    pub(super) head_branch: String,
     /// Whether GitHub marks it a draft, which scopes its verification.
     pub(super) scope: Scope,
     /// GitHub login of whoever opened it, matched against the trusted authors
     /// the host configured.
     pub(super) author: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct CheckStatus {
+    pub(super) context: String,
+    pub(super) state: &'static str,
+    pub(super) description: String,
+    pub(super) target_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
