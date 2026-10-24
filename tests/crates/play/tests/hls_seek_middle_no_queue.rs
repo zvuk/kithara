@@ -12,10 +12,9 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
-    SegmentGateHandle, TestServerHelper, fixture_protocol::DelayRule,
-    hls_fixture::create_test_downloader, hls_server::packaged_ladder, offline::OfflinePlayer,
+    SegmentGateHandle, TestServerHelper, fixture_protocol::DelayRule, hls_server::packaged_ladder,
+    offline::OfflinePlayer,
 };
-use kithara_test_utils::temp_dir;
 
 use crate::{
     bufpool_ext::{TestPools, pools},
@@ -77,10 +76,9 @@ impl SeekScenario {
 }
 
 /// Render at least `min_blocks` blocks and return only once
-/// `player.position() >= until_position`. Real-I/O pacing lets the HLS
-/// producer fetch and decode delayed segments between batches.
+/// `player.position() >= until_position` on the modeled fixture clock.
 /// The watchdog resets only when playback position advances.
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn render_until_position(player: &mut OfflinePlayer, min_blocks: u32, until_position: f64) {
     const BATCH: u32 = 16;
@@ -187,9 +185,8 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
     let label = scenario.label();
     let master = hls.master_url();
 
-    let temp = temp_dir();
-    let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let downloader = create_test_downloader();
+    let store = kithara_integration_tests::memory_asset_store();
+    let downloader = helper.modeled_downloader();
 
     let cfg: ResourceConfig<TestPools> = {
         let builder =
@@ -277,5 +274,4 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
 
     player.close().await;
     drop(downloader);
-    drop(temp);
 }

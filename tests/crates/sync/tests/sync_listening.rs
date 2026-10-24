@@ -1,12 +1,9 @@
 #![cfg(not(target_os = "android"))]
 #![cfg(not(target_arch = "wasm32"))]
 
+use cochlea_features::{Audio, analyze_clipping, analyze_loudness};
 use kithara::platform::time::Duration;
-use kithara_integration_tests::{
-    cochlea::{CochleaReport, mix_loudness_failures},
-    grid::Start,
-    kithara,
-};
+use kithara_integration_tests::{cochlea::mix_loudness_failures, grid::Start, kithara};
 use num_traits::AsPrimitive;
 
 use super::sync_product_matrix::{
@@ -123,18 +120,24 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
             "sync_listening_mix_is_not_quieter_than_a_solo_deck: waiting for progress".to_owned()
         );
         let capture = render_solo(case, &provider, start, deck).await;
-        decks.push(CochleaReport::measure(
-            &capture.pcm,
-            CHANNELS,
-            case.sample_rate,
-        ));
+        decks.push(analyze_loudness(&Audio {
+            samples: capture.pcm,
+            channels: CHANNELS,
+            sample_rate: case.sample_rate,
+        }));
         hang_reset!();
     }
     let mix = render_mix(case, &provider, start, None).await;
-    let mix = CochleaReport::measure(&mix.pcm, CHANNELS, case.sample_rate);
+    let audio = Audio {
+        samples: mix.pcm,
+        channels: CHANNELS,
+        sample_rate: case.sample_rate,
+    };
+    let mix = analyze_loudness(&audio);
+    let clipping = analyze_clipping(&audio, mix.true_peak_dbtp);
     let mut failures = mix_loudness_failures(case.id(), &mix, &decks, LOUDNESS_TOLERANCE_LU);
-    if mix.clipped_samples > 0 || mix.true_peak_over_0dbtp {
-        failures.push(format!("{}: mix clips: {mix:?}", case.id()));
+    if clipping.clipped_samples > 0 || clipping.true_peak_over_0dbtp {
+        failures.push(format!("{}: mix clips: {clipping:?}", case.id()));
     }
     assert!(
         failures.is_empty(),
@@ -160,17 +163,23 @@ async fn record_sync_listening_wavs(
     for deck in 0..case.decks() {
         hang_tick!("record_sync_listening_wavs: waiting for progress".to_owned());
         let capture = render_solo(case, &provider, start, deck).await;
-        deck_reports.push(CochleaReport::measure(
-            &capture.pcm,
-            CHANNELS,
-            case.sample_rate,
-        ));
+        deck_reports.push(analyze_loudness(&Audio {
+            samples: capture.pcm,
+            channels: CHANNELS,
+            sample_rate: case.sample_rate,
+        }));
         failures.extend(capture.failures);
         hang_reset!();
     }
     for &target_bpm in targets {
         let mix = render_mix(case, &provider, start, target_bpm).await;
-        let mix_report = CochleaReport::measure(&mix.pcm, CHANNELS, case.sample_rate);
+        let audio = Audio {
+            samples: mix.pcm,
+            channels: CHANNELS,
+            sample_rate: case.sample_rate,
+        };
+        let mix_report = analyze_loudness(&audio);
+        let clipping = analyze_clipping(&audio, mix_report.true_peak_dbtp);
         failures.extend(mix.failures);
         failures.extend(mix_loudness_failures(
             case.id(),
@@ -178,8 +187,8 @@ async fn record_sync_listening_wavs(
             &deck_reports,
             LOUDNESS_TOLERANCE_LU,
         ));
-        if mix_report.clipped_samples > 0 || mix_report.true_peak_over_0dbtp {
-            failures.push(format!("{}: mix clips: {mix_report:?}", case.id()));
+        if clipping.clipped_samples > 0 || clipping.true_peak_over_0dbtp {
+            failures.push(format!("{}: mix clips: {clipping:?}", case.id()));
         }
         assert!(
             failures.is_empty(),

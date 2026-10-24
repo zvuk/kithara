@@ -4,6 +4,7 @@ use kithara::{
 };
 use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::PackagedSignal};
 use num_traits::ToPrimitive;
+use rustfft::{FftPlanner, num_complex::Complex};
 
 use super::{
     AAC_HIGH, AAC_LOW, BLOCK_FRAMES, CHANNELS, FLAC, Transition, fixture_with_signal,
@@ -33,6 +34,62 @@ const PROVENANCE_TRANSITIONS: [Transition; 6] = [
 struct LagCorrelation {
     lag_frames: isize,
     correlation: f64,
+}
+
+fn sliding_dot_products(window: &[f64], source: &[f64]) -> (Vec<f64>, f64) {
+    let fft_len = (window.len() + source.len() - 1).next_power_of_two();
+    let mut switched_spectrum = vec![Complex::default(); fft_len];
+    let mut source_spectrum = vec![Complex::default(); fft_len];
+    for (bin, sample) in switched_spectrum.iter_mut().zip(window.iter().rev()) {
+        bin.re = *sample;
+    }
+    for (bin, sample) in source_spectrum.iter_mut().zip(source) {
+        bin.re = *sample;
+    }
+    let mut planner = FftPlanner::<f64>::new();
+    let forward = planner.plan_fft_forward(fft_len);
+    forward.process(&mut switched_spectrum);
+    forward.process(&mut source_spectrum);
+    for (switched, source) in switched_spectrum.iter_mut().zip(source_spectrum) {
+        *switched *= source;
+    }
+    planner
+        .plan_fft_inverse(fft_len)
+        .process(&mut switched_spectrum);
+    let normalization = fft_len.to_f64().expect("FFT length fits f64");
+
+    // Bound both FFT roundoff and the original sequential dot product before
+    // selecting contenders. Exact dots settle every numerically ambiguous peak.
+    let gamma = |operations: u32| {
+        let error = f64::from(operations) * f64::EPSILON;
+        error / (1.0 - error)
+    };
+    let switched_l1 = window.iter().map(|sample| sample.abs()).sum::<f64>();
+    let source_l1 = source.iter().map(|sample| sample.abs()).sum::<f64>();
+    let source_peak = source.iter().map(|sample| sample.abs()).fold(0.0, f64::max);
+    // Allow 128 real rounding operations per stage for the three complex
+    // transforms, their twiddles, and the pointwise products.
+    let covariance_error = gamma(128 * fft_len.ilog2() + 16) * switched_l1 * source_l1
+        + gamma(u32::try_from(window.len()).expect("window fits u32")) * switched_l1 * source_peak;
+    let dots = switched_spectrum[window.len() - 1..source.len()]
+        .iter()
+        .map(|bin| bin.re / normalization)
+        .collect();
+    (dots, covariance_error)
+}
+
+fn source_prefix_sums(source: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let mut source_sums = Vec::with_capacity(source.len().saturating_add(1));
+    let mut source_square_sums = Vec::with_capacity(source.len().saturating_add(1));
+    source_sums.push(0.0);
+    source_square_sums.push(0.0);
+    for sample in source {
+        source_sums.push(source_sums.last().copied().unwrap_or_default() + sample);
+        source_square_sums
+            .push(source_square_sums.last().copied().unwrap_or_default() + sample * sample);
+    }
+
+    (source_sums, source_square_sums)
 }
 
 fn best_lag_correlation(switched: &[f32], source: &[f32], start_frame: usize) -> LagCorrelation {
@@ -78,18 +135,13 @@ fn best_lag_correlation(switched: &[f32], source: &[f32], start_frame: usize) ->
         .map(|sample| sample * sample)
         .sum::<f64>();
 
-    let mut source_sums = Vec::with_capacity(source_channel.len().saturating_add(1));
-    let mut source_square_sums = Vec::with_capacity(source_channel.len().saturating_add(1));
-    source_sums.push(0.0);
-    source_square_sums.push(0.0);
-    for sample in &source_channel {
-        source_sums.push(source_sums.last().copied().unwrap_or_default() + sample);
-        source_square_sums
-            .push(source_square_sums.last().copied().unwrap_or_default() + sample * sample);
-    }
+    let (source_sums, source_square_sums) = source_prefix_sums(&source_channel);
 
-    (-MAX_LAG_FRAMES..=MAX_LAG_FRAMES)
-        .map(|lag_frames| {
+    let source_span = &source_channel[earliest_source_frame..latest_source_end];
+    let (dots, covariance_error) = sliding_dot_products(&switched_centered, source_span);
+    let candidates = (-MAX_LAG_FRAMES..=MAX_LAG_FRAMES)
+        .enumerate()
+        .map(|(offset, lag_frames)| {
             let source_start = start_frame
                 .checked_add_signed(lag_frames)
                 .expect("validated lag keeps the source window in bounds");
@@ -99,6 +151,39 @@ fn best_lag_correlation(switched: &[f32], source: &[f32], start_frame: usize) ->
                 source_square_sums[source_end] - source_square_sums[source_start];
             let source_mean = source_sum / frame_count;
             let source_energy = (source_square_sum - source_sum * source_mean).max(0.0);
+            let covariance = dots[offset] - source_mean * switched_centered_sum;
+            let denominator = (switched_energy * source_energy).sqrt();
+            (
+                LagCorrelation {
+                    lag_frames,
+                    correlation: covariance / denominator,
+                },
+                covariance_error / denominator,
+            )
+        })
+        .collect::<Vec<_>>();
+    let lower_bound = candidates
+        .iter()
+        .filter(|(candidate, error)| candidate.correlation.is_finite() && error.is_finite())
+        .map(|(candidate, error)| (candidate.correlation - error).next_down())
+        .fold(f64::NEG_INFINITY, f64::max);
+    candidates
+        .into_iter()
+        .filter(|(candidate, error)| {
+            !candidate.correlation.is_finite()
+                || !error.is_finite()
+                || (candidate.correlation + error).next_up() >= lower_bound
+        })
+        .map(|(candidate, _)| {
+            let source_start = start_frame
+                .checked_add_signed(candidate.lag_frames)
+                .expect("validated lag keeps the source window in bounds");
+            let source_end = source_start + CORRELATION_FRAMES;
+            let source_sum = source_sums[source_end] - source_sums[source_start];
+            let source_mean = source_sum / frame_count;
+            let source_square_sum =
+                source_square_sums[source_end] - source_square_sums[source_start];
+            let source_energy = (source_square_sum - source_sum * source_mean).max(0.0);
             let covariance = switched_centered
                 .iter()
                 .zip(&source_channel[source_start..source_end])
@@ -107,7 +192,7 @@ fn best_lag_correlation(switched: &[f32], source: &[f32], start_frame: usize) ->
                 })
                 - source_mean * switched_centered_sum;
             LagCorrelation {
-                lag_frames,
+                lag_frames: candidate.lag_frames,
                 correlation: covariance / (switched_energy * source_energy).sqrt(),
             }
         })
@@ -250,4 +335,75 @@ async fn sweep_source() -> (TestServerHelper, CreatedHls) {
         .await
         .expect("create nonperiodic quality-switch fixture");
     (server, created)
+}
+
+#[kithara::test(native)]
+fn fft_correlation_numerical_equivalence() {
+    let frames = 16_384usize;
+    let channels = usize::from(CHANNELS);
+    let start = 4_096usize;
+    for shift in [-2_048isize, -5, -4, 0, 4, 5, 2_048] {
+        let signal = (0..frames)
+            .map(|i| {
+                let t = i.to_f64().expect("index fits f64");
+                (t * 0.17 + t * t * 0.000_013)
+                    .sin()
+                    .to_f32()
+                    .expect("signal sample fits f32")
+            })
+            .collect::<Vec<_>>();
+        let source = signal
+            .iter()
+            .flat_map(|sample| std::iter::repeat_n(*sample, channels))
+            .collect::<Vec<_>>();
+        let switched = (0..frames)
+            .flat_map(|i| {
+                let sample = i
+                    .checked_add_signed(shift)
+                    .and_then(|j| signal.get(j))
+                    .copied()
+                    .unwrap_or_default();
+                std::iter::repeat_n(sample, channels)
+            })
+            .collect::<Vec<_>>();
+        let best = best_lag_correlation(&switched, &source, start);
+        assert_eq!(best.lag_frames, shift);
+        assert_eq!(
+            best.lag_frames.abs() > MAX_ACCEPTED_LAG_FRAMES,
+            shift.abs() > MAX_ACCEPTED_LAG_FRAMES
+        );
+    }
+    let periodic = (0..frames)
+        .flat_map(|i| std::iter::repeat_n(if i % 2 == 0 { 1.0 } else { -1.0 }, channels))
+        .collect::<Vec<_>>();
+    let tied = best_lag_correlation(&periodic, &periodic, start);
+    assert_eq!(tied.lag_frames, MAX_LAG_FRAMES);
+    let noise = (0..frames)
+        .flat_map(|i| {
+            std::iter::repeat_n(
+                ((i * 7919 % 65521).to_f32().expect("noise sample fits f32") / 32760.5) - 1.0,
+                channels,
+            )
+        })
+        .collect::<Vec<_>>();
+    let unrelated = best_lag_correlation(&noise, &periodic, start);
+    assert!(unrelated.correlation < MIN_CORRELATION);
+    let perturbed = periodic
+        .iter()
+        .enumerate()
+        .map(|(i, sample)| {
+            let frame = (i / channels).to_f32().expect("frame fits f32");
+            *sample + 1e-3 * (frame * 0.17).sin()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        best_lag_correlation(&perturbed, &perturbed, start).lag_frames,
+        0
+    );
+    for value in [0.0, 1.0] {
+        let samples = vec![value; frames * channels];
+        let best = best_lag_correlation(&samples, &samples, start);
+        assert!(best.correlation.is_nan());
+        assert_eq!(best.lag_frames, MAX_LAG_FRAMES);
+    }
 }

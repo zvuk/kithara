@@ -85,7 +85,7 @@ async fn abr_escapes_stalled_initial_variant(
     #[case] backend: DecoderBackend,
     #[future(awt)] stalled_hls: (TestServerHelper, Url),
 ) {
-    let (_helper, url) = stalled_hls;
+    let (helper, url) = stalled_hls;
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let store = AssetStore::builder(pools.clone())
@@ -94,6 +94,7 @@ async fn abr_escapes_stalled_initial_variant(
         .build();
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(helper.modeled_downloader())
         .store(store)
         .pools(pools)
         .initial_abr_mode(auto(0))

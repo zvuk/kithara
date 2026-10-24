@@ -1,4 +1,4 @@
-use std::{num::NonZeroU32, path::PathBuf};
+use std::{collections::BTreeSet, num::NonZeroU32, path::PathBuf};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
@@ -193,18 +193,24 @@ pub(super) struct CapturedAudio {
 }
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
-async fn no_sync_real_media_matrix_is_continuous_and_unsynchronized(
-    #[future(awt)] real_media_sources: (TestServerHelper, Url, TestTempDir),
-) {
-    run_real_media_matrix(false, real_media_sources).await;
+#[case::mp3_one_44100(&CASES[0])]
+#[case::mp3_distinct_two_48000(&CASES[1])]
+#[case::mp3_alternating_four_44100(&CASES[2])]
+#[case::mp3_mono_one_48000(&CASES[3])]
+#[case::hls_one_48000(&CASES[4])]
+#[case::hls_mp3_distinct_two_44100(&CASES[5])]
+#[case::hls_mp3_alternating_four_48000(&CASES[6])]
+async fn no_sync_real_media_matrix_is_continuous_and_unsynchronized(#[case] case: &'static Case) {
+    let cases = std::slice::from_ref(case);
+    let sources = real_media_sources(cases).await;
+    run_real_media_matrix(false, sources, cases).await;
 }
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(360)))]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
-async fn record_no_sync_real_media_artifacts(
-    #[future(awt)] real_media_sources: (TestServerHelper, Url, TestTempDir),
-) {
-    run_real_media_matrix(true, real_media_sources).await;
+async fn record_no_sync_real_media_artifacts() {
+    let sources = real_media_sources(CASES).await;
+    run_real_media_matrix(true, sources, CASES).await;
 }
 
 /// The one body every HLS deck reads.
@@ -252,30 +258,41 @@ async fn hls_ladder_url(server: &TestServerHelper) -> Url {
         .master_url()
 }
 
-#[kithara::fixture]
-async fn real_media_sources() -> (TestServerHelper, Url, TestTempDir) {
-    let server = TestServerHelper::new().await;
-    let hls = hls_ladder_url(&server).await;
+async fn real_media_sources(cases: &[Case]) -> (Option<(TestServerHelper, Url)>, TestTempDir) {
+    let hls = if cases
+        .iter()
+        .any(|case| case.media.iter().any(|media| matches!(media, Media::Hls)))
+    {
+        let server = TestServerHelper::new().await;
+        let url = hls_ladder_url(&server).await;
+        Some((server, url))
+    } else {
+        None
+    };
     let dir = TestTempDir::new();
-    for case in CASES {
+    let mut materialized = BTreeSet::new();
+    for case in cases {
         for media in case.media {
-            if let Media::Mp3(asset) = media {
+            if let Media::Mp3(asset) = media
+                && materialized.insert(asset.name())
+            {
                 let _ = media_path(&dir, *asset);
             }
         }
     }
-    (server, hls, dir)
+    (hls, dir)
 }
 
 async fn run_real_media_matrix(
     record_artifacts: bool,
-    sources: (TestServerHelper, Url, TestTempDir),
+    sources: (Option<(TestServerHelper, Url)>, TestTempDir),
+    cases: &[Case],
 ) {
-    let (_server, hls, media_dir) = sources;
+    let (hls, media_dir) = sources;
     let mut failures = Vec::new();
-    for case in CASES {
+    for case in cases {
         failures.extend(
-            run_case(case, &hls, record_artifacts, &media_dir)
+            run_case(case, hls.as_ref(), record_artifacts, &media_dir)
                 .await
                 .into_iter()
                 .map(|failure| format!("{}: {failure}", case.label)),
@@ -290,7 +307,7 @@ async fn run_real_media_matrix(
 
 async fn run_case(
     case: &Case,
-    hls: &Url,
+    hls: Option<&(TestServerHelper, Url)>,
     record_artifacts: bool,
     media_dir: &TestTempDir,
 ) -> Vec<String> {
@@ -1108,7 +1125,7 @@ async fn prepare_deck(
     case: &Case,
     deck_index: usize,
     media: Media,
-    hls: &Url,
+    hls: Option<&(TestServerHelper, Url)>,
     media_dir: &TestTempDir,
     pool_region: &PoolRegion<TestPools>,
     host: &OfflineHostHarness<TestPools>,
@@ -1133,6 +1150,11 @@ async fn prepare_deck(
         .build();
     let player = Queue::new(
         QueueConfig::builder()
+            .mixer(
+                kithara::play::DeckMixerConfig::builder()
+                    .eq_bands(0)
+                    .build(),
+            )
             .prep(prep)
             .store(store)
             .track(
@@ -1158,7 +1180,7 @@ async fn prepare_deck(
             .to_str()
             .expect("temporary media path is UTF-8")
             .to_owned(),
-        Media::Hls => hls.to_string(),
+        Media::Hls => hls.expect("HLS case has a prepared ladder").1.to_string(),
     };
     let bus = EventBus::new(16_384);
     let events = bus.subscribe();

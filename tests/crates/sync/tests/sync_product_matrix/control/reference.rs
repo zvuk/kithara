@@ -1,6 +1,7 @@
 use kithara::{
     audio::{AudioObserveError, AudioObserver},
     bufpool::SampleBuffer,
+    download::Downloader,
     effects::LimiterConfig,
     play::{DeckMixSettings, Position, Settled},
     signal::{AudioChunk, AudioChunkInfo},
@@ -464,10 +465,8 @@ impl ControlCapture {
         let mut expected = Vec::with_capacity(self.pcm.len());
         for frame in 0..frames {
             let position = (origin + frame as u128 * rate.0, rate.1);
-            for channel in 0..usize::from(CHANNELS) {
-                expected.push(output_sample(
-                    source_sample(reference, position, self.rate, channel)? * CONTROL_GAIN,
-                )?);
+            for sample in source_samples(reference, position, self.rate, [0, 1])? {
+                expected.push(output_sample(sample * CONTROL_GAIN)?);
             }
         }
         compare_pcm(&self.pcm, &expected)?;
@@ -531,22 +530,36 @@ fn source_sample(
     speed: f32,
     channel: usize,
 ) -> Result<f32, String> {
+    source_samples(reference, position, speed, [channel]).map(|[sample]| sample)
+}
+
+fn source_samples<const N: usize>(
+    reference: &Audio,
+    position: (u128, u128),
+    speed: f32,
+    channels: [usize; N],
+) -> Result<[f32; N], String> {
     let source = i64::try_from(position.0 / position.1).map_err(|error| error.to_string())?;
-    let sample = |offset: i64| {
+    mapped_samples(position, f64::from(speed), |offset| {
         let frame = source
             .checked_add(offset)
             .and_then(|frame| usize::try_from(frame).ok());
-        frame
-            .and_then(|frame| frame.checked_mul(usize::from(reference.channels)))
-            .and_then(|index| index.checked_add(channel))
-            .and_then(|index| reference.samples.get(index))
-            .copied()
-            .filter(|sample| sample.is_finite())
-            .ok_or_else(|| {
-                format!("native source does not cover frame {source}+{offset}, channel {channel}")
-            })
-    };
-    mapped_sample(position, f64::from(speed), sample)
+        let mut samples = [0.0; N];
+        for (sample, channel) in samples.iter_mut().zip(channels) {
+            *sample = frame
+                .and_then(|frame| frame.checked_mul(usize::from(reference.channels)))
+                .and_then(|index| index.checked_add(channel))
+                .and_then(|index| reference.samples.get(index))
+                .copied()
+                .filter(|sample| sample.is_finite())
+                .ok_or_else(|| {
+                    format!(
+                        "native source does not cover frame {source}+{offset}, channel {channel}"
+                    )
+                })?;
+        }
+        Ok(samples)
+    })
 }
 
 fn mapped_sample(
@@ -634,10 +647,8 @@ fn check_content_guards(
                 origin * wrong_rate.1 + frame as u128 * wrong_rate.0 * rate.1,
                 rate.1 * wrong_rate.1,
             );
-            for channel in 0..channels {
-                wrong.push(output_sample(
-                    source_sample(reference, position, wrong_speed, channel)? * CONTROL_GAIN,
-                )?);
+            for sample in source_samples(reference, position, wrong_speed, [0, 1])? {
+                wrong.push(output_sample(sample * CONTROL_GAIN)?);
             }
         }
         if compare_pcm(&wrong, &expected[..window * channels]).is_ok() {
@@ -663,10 +674,8 @@ fn check_content_guards(
         let mut wrong = Vec::with_capacity(window * channels);
         for frame in 0..window {
             let position = (source_origin + frame as u128 * rate.0, rate.1);
-            for channel in 0..channels {
-                wrong.push(output_sample(
-                    source_sample(source, position, speed, channel)? * CONTROL_GAIN,
-                )?);
+            for sample in source_samples(source, position, speed, [0, 1])? {
+                wrong.push(output_sample(sample * CONTROL_GAIN)?);
             }
         }
         if compare_pcm(&wrong, &expected[..window * channels]).is_ok() {
@@ -721,6 +730,7 @@ fn check_content_guards(
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 pub(in super::super) async fn capture(
     source: String,
+    downloader: Downloader,
     sample_rate: u32,
     native_bpm: f64,
     target_bpm: f64,
@@ -737,6 +747,7 @@ pub(in super::super) async fn capture(
         .build();
     let harness = OfflinePlayer::with_factory(
         OfflinePlayerOptions::builder()
+            .eq_layout(Vec::new())
             .mix(DeckMixSettings::builder().level(CONTROL_GAIN).build())
             .crossfade_duration(0.0)
             .block_on_underrun(true)
@@ -757,6 +768,7 @@ pub(in super::super) async fn capture(
         .await
         .expect("control rate");
     let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("control source"))
+        .downloader(downloader)
         .store(memory_asset_store())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -918,6 +930,8 @@ pub(in super::super) async fn capture(
 }
 
 type DecodedChunk = (AudioChunkInfo, Arc<SampleBuffer>);
+type SourcePosition = (u128, std::num::NonZeroU128);
+type SampleResult<const N: usize> = Result<[f32; N], String>;
 
 #[derive(Clone, Default)]
 pub(in super::super) struct DecodedCapture {
@@ -1242,10 +1256,10 @@ impl DecodedCapture {
     fn samples_at<const N: usize>(
         &self,
         info: consumed::SourceIdentity,
-        position: (u128, std::num::NonZeroU128),
+        position: SourcePosition,
         speed: f64,
         channels: [usize; N],
-    ) -> Result<[f32; N], String> {
+    ) -> SampleResult<N> {
         let kernel = sampling::SampleKernel::new((position.0, position.1.get()), speed)?;
         self.samples_with_kernel(info, position, &kernel, channels)
     }
@@ -1253,10 +1267,10 @@ impl DecodedCapture {
     fn samples_with_kernel<const N: usize>(
         &self,
         info: consumed::SourceIdentity,
-        position: (u128, std::num::NonZeroU128),
+        position: SourcePosition,
         kernel: &sampling::SampleKernel,
         channels: [usize; N],
-    ) -> Result<[f32; N], String> {
+    ) -> SampleResult<N> {
         if self.rejected {
             return Err("decoder observer rejected or conflicted while capturing PCM".to_owned());
         }
@@ -1352,27 +1366,43 @@ impl DecodedCapture {
         Ok(witnessed_first..end)
     }
 
-    pub(in super::super) fn sample_at_domain(
+    pub(in super::super) fn samples_at_domain<const N: usize>(
         &self,
         info: consumed::SourceIdentity,
-        position: (u128, std::num::NonZeroU128),
+        position: SourcePosition,
         speed: f64,
-        channel: usize,
+        channels: [usize; N],
         domain: &std::ops::Range<u64>,
-    ) -> Result<f32, String> {
+    ) -> SampleResult<N> {
+        let mut sample = self.sampler_at_domain(info, channels, domain.clone())?;
+        sample(position, speed)
+    }
+
+    pub(in super::super) fn sampler_at_domain<const N: usize>(
+        &self,
+        info: consumed::SourceIdentity,
+        channels: [usize; N],
+        domain: std::ops::Range<u64>,
+    ) -> Result<impl FnMut(SourcePosition, f64) -> SampleResult<N> + '_, String> {
         if self.rejected || domain.is_empty() {
             return Err("bounded fixture sampler has no accepted source domain".to_owned());
         }
         let first = i64::try_from(domain.start).map_err(|error| error.to_string())?;
         let last = i64::try_from(domain.end - 1).map_err(|error| error.to_string())?;
-        let source =
-            i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
         let mut read = self.sampler(info);
-        mapped_sample((position.0, position.1.get()), speed, |offset| {
-            let frame = source
-                .checked_add(offset)
-                .ok_or_else(|| "fixture sample coordinate overflows".to_owned())?;
-            read(frame.clamp(first, last), channel)
+        Ok(move |position: SourcePosition, speed: f64| {
+            let source =
+                i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
+            mapped_samples((position.0, position.1.get()), speed, |offset| {
+                let frame = source
+                    .checked_add(offset)
+                    .ok_or_else(|| "fixture sample coordinate overflows".to_owned())?;
+                let mut samples = [0.0; N];
+                for (sample, channel) in samples.iter_mut().zip(channels) {
+                    *sample = read(frame.clamp(first, last), channel)?;
+                }
+                Ok(samples)
+            })
         })
     }
 
@@ -1839,6 +1869,59 @@ fn output_reference_keeps_the_limiter_sample_domain_and_strict_pcm_checks() {
 }
 
 #[kithara::test(native)]
+fn native_stereo_sampling_preserves_scalar_bits_and_coverage_errors() {
+    let values = [0.0, -0.0, f32::from_bits(1), -0.125, 0.75, f32::MAX];
+    let mut reference = Audio {
+        samples: (0..256).map(|i| values[i % values.len()]).collect(),
+        sample_rate: 48_000,
+        channels: CHANNELS,
+    };
+    for invalid in [
+        None,
+        Some(f32::NAN),
+        Some(f32::INFINITY),
+        Some(f32::NEG_INFINITY),
+    ] {
+        reference.samples[64] = invalid.unwrap_or(values[64 % values.len()]);
+        for position in [(0, 1), (65, 2), (129, 4), (128, 3), (127, 1), (128, 1)] {
+            for speed in [0.5_f32, 1.0, 1.25, 1.5, 8.0] {
+                let source = i64::try_from(position.0 / position.1).unwrap();
+                let mut expected = [0; 2];
+                let mut error = None;
+                for (channel, expected) in expected.iter_mut().enumerate() {
+                    let scalar = sampling::scalar_reference(position, f64::from(speed), |offset| {
+                        source
+                            .checked_add(offset)
+                            .and_then(|frame| usize::try_from(frame).ok())
+                            .and_then(|frame| frame.checked_mul(usize::from(reference.channels)))
+                            .and_then(|index| index.checked_add(channel))
+                            .and_then(|index| reference.samples.get(index))
+                            .copied()
+                            .filter(|sample| sample.is_finite())
+                            .ok_or_else(|| format!("native source does not cover frame {source}+{offset}, channel {channel}"))
+                    });
+                    match scalar {
+                        Ok(sample) => *expected = sample.to_bits(),
+                        Err(found) => {
+                            error = Some(found);
+                            break;
+                        }
+                    }
+                }
+                let actual = source_samples(&reference, position, speed, [0, 1]);
+                match (actual, error) {
+                    (Ok(actual), None) => assert_eq!(actual.map(f32::to_bits), expected),
+                    (Err(_), Some(_)) => {}
+                    (actual, error) => panic!(
+                        "native sampling differs for {position:?} at {speed}: {actual:?}, {error:?}"
+                    ),
+                }
+            }
+        }
+    }
+}
+
+#[kithara::test(native)]
 fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     let asset = kithara_test_fixtures::assets::by_name("sine_wav_a440_10000_frames")
         .expect("whole-track PCM fixture");
@@ -1879,6 +1962,9 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     };
     let denominator = std::num::NonZeroU128::new(4).expect("quarter-frame phase");
     let domain = 0..96;
+    let mut across_frames = capture
+        .sampler_at_domain(identity, [0, 1], domain.clone())
+        .expect("accepted persistent source domain");
     for (frame, speed) in [
         (0_i64, 1.25),
         (30, 0.5),
@@ -1888,6 +1974,11 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
         (32, 1.25),
         (63, 1.5),
         (95, 1.25),
+        (63, 0.5),
+        (0, 1.25),
+        (95, 1.0),
+        (31, 1.75),
+        (32, 1.75),
     ] {
         let numerator = u128::try_from(frame).expect("nonnegative frame") * 4 + 1;
         for channel in 0..usize::from(reference.channels) {
@@ -1896,9 +1987,22 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
             })
             .expect("independent per-tap lookup");
             let actual = capture
-                .sample_at_domain(identity, (numerator, denominator), speed, channel, &domain)
+                .samples_at_domain(
+                    identity,
+                    (numerator, denominator),
+                    speed,
+                    [channel],
+                    &domain,
+                )
                 .expect("covering chunk lookup");
-            assert_eq!(actual.to_bits(), expected.to_bits());
+            assert_eq!(actual[0].to_bits(), expected.to_bits());
+            let stereo = capture
+                .samples_at_domain(identity, (numerator, denominator), speed, [0, 1], &domain)
+                .expect("bounded stereo lookup");
+            assert_eq!(stereo[channel].to_bits(), expected.to_bits());
+            let persisted = across_frames((numerator, denominator), speed)
+                .expect("source lookup across forward and backward phase windows");
+            assert_eq!(persisted[channel].to_bits(), expected.to_bits());
             if (16..80).contains(&frame) {
                 let physical = capture
                     .sample_at(identity, (numerator, denominator), speed, channel)
@@ -2000,8 +2104,8 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     }
     assert_eq!(
         overlapping
-            .sample_at_domain(identity, (125, denominator), 1.5, 0, &domain)
-            .expect("covering overlapping source")
+            .samples_at_domain(identity, (125, denominator), 1.5, [0], &domain)
+            .expect("covering overlapping source")[0]
             .to_bits(),
         expected.to_bits(),
     );
@@ -2014,6 +2118,10 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
             .samples_at(identity, (125, denominator), 1.5, [0, 1])
             .expect("authoritative overlapping stereo");
         assert_eq!(stereo[channel].to_bits(), expected.to_bits());
+        let bounded = overlapping
+            .samples_at_domain(identity, (125, denominator), 1.5, [0, 1], &domain)
+            .expect("bounded authoritative overlapping stereo");
+        assert_eq!(bounded[channel].to_bits(), expected.to_bits());
     }
     overlapping
         .chunks
@@ -2021,6 +2129,19 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
         .expect("overlapping source chunk")
         .0
         .media_origin = Some(Duration::from_millis(1));
+    {
+        let mut invalid = overlapping
+            .sampler_at_domain(identity, [0], domain.clone())
+            .expect("declared domain remains nonempty");
+        for frame in [30_u64, 31, 32, 20, 63, 30] {
+            assert_eq!(
+                invalid((u128::from(frame) * 4, denominator), 1.0).map(|[sample]| sample.to_bits()),
+                overlapping
+                    .sample(identity, frame.try_into().unwrap(), 0)
+                    .map(f32::to_bits),
+            );
+        }
+    }
     assert!(
         mapped_sample((125, denominator.get()), 1.5, |offset| {
             overlapping.sample(identity, 31 + offset, 0)
@@ -2029,7 +2150,7 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     );
     assert!(
         overlapping
-            .sample_at_domain(identity, (125, denominator), 1.5, 0, &domain)
+            .samples_at_domain(identity, (125, denominator), 1.5, [0], &domain)
             .is_err()
     );
     assert!(
@@ -2048,7 +2169,7 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     );
     assert!(
         capture
-            .sample_at_domain(wrong_identity, (125, denominator), 1.5, 0, &domain)
+            .samples_at_domain(wrong_identity, (125, denominator), 1.5, [0], &domain)
             .is_err()
     );
     assert!(
@@ -2067,7 +2188,7 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     );
     assert!(
         capture
-            .sample_at_domain(wrong_identity, (125, denominator), 1.5, 0, &domain)
+            .samples_at_domain(wrong_identity, (125, denominator), 1.5, [0], &domain)
             .is_err()
     );
     let wrong_identity = consumed::SourceIdentity {
@@ -2081,12 +2202,12 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     );
     assert!(
         capture
-            .sample_at_domain(wrong_identity, (125, denominator), 1.5, 0, &domain)
+            .samples_at_domain(wrong_identity, (125, denominator), 1.5, [0], &domain)
             .is_err()
     );
     assert!(
         capture
-            .sample_at_domain(identity, (125, denominator), 1.5, 0, &(32..32))
+            .samples_at_domain(identity, (125, denominator), 1.5, [0], &(32..32))
             .is_err()
     );
     for channel in [0, 1] {
@@ -2105,6 +2226,11 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
                 assert!(
                     broken
                         .samples_at(identity, (129, denominator), speed, [0, 1])
+                        .is_err()
+                );
+                assert!(
+                    broken
+                        .samples_at_domain(identity, (129, denominator), speed, [0, 1], &domain)
                         .is_err()
                 );
             }
@@ -2127,6 +2253,11 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     assert!(
         missing_right
             .samples_at(identity, (380, denominator), 1.0, [0, 1])
+            .is_err()
+    );
+    assert!(
+        missing_right
+            .samples_at_domain(identity, (380, denominator), 1.0, [0, 1], &domain)
             .is_err()
     );
 }

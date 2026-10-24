@@ -303,18 +303,34 @@ struct EstimatedSegmentLayout {
 impl ByteMap for EstimatedSegmentLayout {
     fn segment_at_index(&self, index: u32) -> Option<SegmentDescriptor> {
         let mut segment = self.inner.segment_at_index(index)?;
-        if index == 0 && !self.committed.load(Ordering::Acquire) {
+        if !self.committed.load(Ordering::Acquire) {
+            if index > 0 {
+                segment.byte_range.start += 16;
+            }
             segment.byte_range.end += 16;
         }
         Some(segment)
     }
 
+    fn len(&self) -> Option<u64> {
+        self.inner
+            .len()
+            .map(|len| len + u64::from(!self.committed.load(Ordering::Acquire)) * 16)
+    }
+
+    fn segment_after_byte(&self, offset: u64) -> Option<SegmentDescriptor> {
+        (0..self.inner.segment_count()?)
+            .filter_map(|index| self.segment_at_index(index))
+            .find(|segment| segment.byte_range.start >= offset)
+    }
+
+    fn segment_at_time(&self, time: Duration) -> Option<SegmentDescriptor> {
+        self.segment_at_index(self.inner.segment_at_time(time)?.segment_index)
+    }
+
     delegate::delegate! {
         to self.inner {
             fn init_segment_range(&self) -> Range<u64>;
-            fn len(&self) -> Option<u64>;
-            fn segment_after_byte(&self, offset: u64) -> Option<SegmentDescriptor>;
-            fn segment_at_time(&self, time: Duration) -> Option<SegmentDescriptor>;
             fn segment_count(&self) -> Option<u32>;
         }
     }
@@ -393,6 +409,103 @@ fn assert_pending_preparation_recovers_after_shrink(
         }
     }
     panic!("committed segment must produce PCM within the preparation budget");
+}
+
+#[kithara::test]
+fn complete_flac_pcm_survives_live_segment_shrink(flac_three: (Vec<u8>, FakeSegmented)) {
+    let (blob, segmented) = flac_three;
+    let collect = |decoder: &mut dyn Decoder| {
+        let mut pcm = Vec::new();
+        let mut metadata = Vec::new();
+        for _ in 0..1_024 {
+            decoder.prepare_next_chunk();
+            match decoder
+                .next_chunk_prepared()
+                .expect("decode complete FLAC source")
+            {
+                DecoderChunkOutcome::Chunk(chunk) => {
+                    pcm.extend(chunk.samples.iter().map(|sample| sample.to_bits()));
+                    metadata.push(chunk.meta);
+                }
+                DecoderChunkOutcome::Pending(PendingReason::Retry) => {}
+                DecoderChunkOutcome::Pending(reason) => panic!("unexpected pending: {reason:?}"),
+                DecoderChunkOutcome::Eof => {
+                    assert!(!pcm.is_empty(), "complete source must produce PCM");
+                    return (pcm, metadata);
+                }
+            }
+        }
+        panic!("complete FLAC source must reach EOF");
+    };
+    let (mut reference, _, _) = make_decoder(blob.clone(), segmented.clone());
+    let expected = collect(&mut reference);
+    let mut segments = expected
+        .1
+        .iter()
+        .map(|chunk| chunk.segment_index)
+        .collect::<Vec<_>>();
+    segments.dedup();
+    assert_eq!(segments, [Some(0), Some(1), Some(2)]);
+
+    let current_end = segmented.segments[0].byte_range.end;
+    let available = Arc::new(AtomicU64::new(current_end));
+    let reads = Arc::new(Mutex::new(Vec::new()));
+    let source: BoxedSource = Box::new(InstrumentedSource {
+        inner: Cursor::new(blob),
+        reads: Arc::clone(&reads),
+        record: Arc::new(AtomicBool::new(true)),
+        available_end: Some(Arc::clone(&available)),
+        construction: None,
+    });
+    let layout = Arc::new(EstimatedSegmentLayout {
+        inner: segmented,
+        committed: AtomicBool::new(false),
+    });
+    let estimated_end = layout
+        .segment_at_index(0)
+        .expect("estimated segment")
+        .byte_range
+        .end;
+    assert_eq!(estimated_end, current_end + 16);
+    let byte_map: Arc<dyn ByteMap> = layout.clone();
+    let mut decoder = make_decoder_from_source(source, byte_map, pools(), None);
+    decoder.prepare_next_chunk();
+    assert_eq!(
+        reads.lock().expect("read log").last(),
+        Some(&(current_end..current_end))
+    );
+    reads.lock().expect("read log").clear();
+    assert!(matches!(
+        decoder.next_chunk_prepared().expect("uncommitted segment"),
+        DecoderChunkOutcome::Pending(PendingReason::NotReady(NotReadyCause::WaitBudgetExhausted))
+    ));
+    assert!(reads.lock().expect("read log").is_empty());
+    layout.committed.store(true, Ordering::Release);
+    let next = layout.segment_at_index(1).expect("next segment");
+    let following = layout.segment_at_index(2).expect("following segment");
+    assert!(estimated_end > next.byte_range.start);
+    assert!(estimated_end < following.byte_range.start);
+    available.store(u64::MAX, Ordering::Release);
+    let actual = collect(&mut decoder);
+    let mut segments = actual
+        .1
+        .iter()
+        .map(|chunk| chunk.segment_index)
+        .collect::<Vec<_>>();
+    segments.dedup();
+    assert_eq!(
+        segments,
+        [Some(0), Some(1), Some(2)],
+        "layout correction must not skip a segment"
+    );
+    assert_eq!(
+        actual.1, expected.1,
+        "layout correction must preserve every source interval"
+    );
+    assert_eq!(
+        actual.0, expected.0,
+        "layout correction must preserve every PCM bit"
+    );
 }
 
 #[kithara::test]

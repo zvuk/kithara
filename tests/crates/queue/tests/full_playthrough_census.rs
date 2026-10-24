@@ -810,8 +810,7 @@ fn trace_startup(census: &Census, firings: &[Firing], rendered: &[f32]) {
         "queue census startup receipts"
     );
     for record in observed
-        .timeline
-        .iter()
+        .timeline_evidence()
         .filter(|record| record["item"].as_u64() == Some(item))
         .take(24)
     {

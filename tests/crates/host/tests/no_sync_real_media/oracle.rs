@@ -1,3 +1,4 @@
+use cochlea_features::{Audio, analyze_loudness};
 use kithara_integration_tests::cochlea::CochleaReport;
 use serde::Serialize;
 
@@ -252,7 +253,11 @@ pub(super) fn measure_audio_level(
             true_peak_dbtp: None,
         };
     }
-    let report = CochleaReport::measure(samples, CHANNELS, sample_rate);
+    let report = analyze_loudness(&Audio {
+        samples: samples.to_vec(),
+        channels: CHANNELS,
+        sample_rate,
+    });
     AudioLevelReport {
         label: label.to_owned(),
         role,

@@ -319,16 +319,27 @@ fn clamp(mut text: String) -> String {
 
 struct FieldVisitor<'a>(&'a mut EventText);
 
+impl FieldVisitor<'_> {
+    fn write_field(
+        writer: &mut impl fmt::Write,
+        field: &Field,
+        value: &dyn fmt::Debug,
+    ) -> fmt::Result {
+        writer.write_str(" ")?;
+        if field.name() != "message" {
+            writer.write_str(field.name())?;
+            writer.write_str("=")?;
+        }
+        write!(writer, "{value:?}")
+    }
+}
+
 impl Visit for FieldVisitor<'_> {
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        if field.name() == "message" {
-            let _ = write!(self.0, " {value:?}");
-            return;
-        }
         if consts::FOLD_COUNTERS.contains(&field.name()) {
-            let _ = write!(LineOnly(self.0), " {name}={value:?}", name = field.name());
+            let _ = Self::write_field(&mut LineOnly(self.0), field, value);
         } else {
-            let _ = write!(self.0, " {name}={value:?}", name = field.name());
+            let _ = Self::write_field(self.0, field, value);
         }
     }
 }

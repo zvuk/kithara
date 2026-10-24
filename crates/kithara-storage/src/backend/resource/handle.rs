@@ -113,14 +113,6 @@ impl<D: DriverIo> Resource<Active, D> {
             /// cannot finalize.
             #[call(commit_inner)]
             pub(crate) fn commit_in_place(&self, final_len: Option<u64>) -> StorageResult<()>;
-            /// Finalize bytes without publishing a snapshot or readiness, for
-            /// a decorator that publishes the canonical resource itself.
-            ///
-            /// # Errors
-            /// Returns error if the resource is cancelled, failed, or the backend
-            /// cannot flush.
-            #[call(seal_inner)]
-            pub(crate) fn seal_in_place(&self, final_len: Option<u64>) -> StorageResult<()>;
             /// Notify the original observer after publishing the canonical
             /// backing resource and releasing the decorator's handover lock.
             #[call(notify_commit_inner)]
@@ -150,7 +142,7 @@ impl<D: DriverIo> Resource<Active, D> {
             /// # Errors
             /// Returns error if pending bytes cannot be flushed first.
             #[call(release_backing_inner)]
-            pub(crate) fn release_backing_in_place(&self) -> StorageResult<()>;
+            pub(crate) fn release_backing_in_place(&self, final_len: Option<u64>) -> StorageResult<()>;
             /// Reactivate without consuming, for a decorator that rewrites in place.
             ///
             /// # Errors

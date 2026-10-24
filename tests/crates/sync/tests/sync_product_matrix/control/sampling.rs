@@ -72,7 +72,7 @@ impl SampleKernel {
     }
 }
 
-fn scalar_reference(
+pub(super) fn scalar_reference(
     position: (u128, u128),
     speed: f64,
     mut sample: impl FnMut(i64) -> Result<f32, String>,

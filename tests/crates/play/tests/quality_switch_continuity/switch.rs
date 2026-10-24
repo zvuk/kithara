@@ -1,7 +1,8 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     abr::{AbrHandle, AbrMode},
+    assets::{AssetStore, StorageBackend},
     audio::{DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent},
     decode::DecoderBackend,
     effects::LimiterConfig,
@@ -16,7 +17,7 @@ use kithara::{
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder,
+    HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedAudioVariantOverride,
@@ -24,7 +25,6 @@ use kithara_integration_tests::{
     },
     offline::{OfflinePlayer, OfflinePlayerOptions},
 };
-use kithara_test_utils::TestTempDir;
 use num_traits::ToPrimitive;
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -35,6 +35,9 @@ pub(super) const BLOCK_FRAMES: usize = 512;
 pub(super) const SINE_HZ: f64 = 441.0;
 const SEGMENT_SECS: f64 = 0.5;
 const SEGMENTS_PER_VARIANT: usize = 16;
+const VARIANT_COUNT: usize = 3;
+// Each encoded variant can add one tail segment and has one init resource.
+pub(super) const FIXTURE_RESOURCE_CAPACITY: usize = VARIANT_COUNT * (SEGMENTS_PER_VARIANT + 2);
 pub(super) const REQUEST_AT_SECS: f64 = 0.5;
 pub(super) const ACTIVE_SAMPLE_THRESHOLD: f32 = 1.0e-3;
 pub(super) const ORACLE_RATIO: f32 = 3.0;
@@ -125,7 +128,6 @@ pub(super) struct Pacer {
 }
 
 pub(super) struct PreparedPlayer {
-    pub(super) _temp: TestTempDir,
     pub(super) player: OfflinePlayer,
     pub(super) abr: AbrHandle,
     pub(super) events: EventReceiver<TestEvent>,
@@ -136,7 +138,6 @@ pub(super) struct PreparedPlayer {
 impl PreparedPlayer {
     pub(super) async fn close(self) {
         let Self {
-            _temp,
             player,
             abr,
             events,
@@ -146,7 +147,6 @@ impl PreparedPlayer {
         drop(abr);
         drop(events);
         player.close().await;
-        drop(_temp);
     }
 }
 
@@ -181,7 +181,7 @@ pub(super) fn fixture() -> HlsFixtureBuilder {
 
 pub(super) fn fixture_with_signal(signal: PackagedSignal) -> HlsFixtureBuilder {
     HlsFixtureBuilder::new()
-        .variant_count(3)
+        .variant_count(VARIANT_COUNT)
         .variant_bandwidths(vec![64_000, 256_000, 768_000])
         .segments_per_variant(SEGMENTS_PER_VARIANT)
         .segment_duration_secs(SEGMENT_SECS)
@@ -341,7 +341,7 @@ pub(super) fn assert_initial_decoder(
     assert_eq!(event.variant, Some(expected_variant), "{label} variant");
 }
 
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn prepare_player(
     master_url: &url::Url,
@@ -353,13 +353,18 @@ async fn prepare_player(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let temp = TestTempDir::new();
     let bus = EventBus::new(1_024);
     let mut events = bus.subscribe();
+    let downloader = TestServerHelper::new().await.modeled_downloader();
+    let store = AssetStore::builder(pools())
+        .backend(StorageBackend::Memory)
+        .cache_capacity(NonZeroUsize::new(FIXTURE_RESOURCE_CAPACITY).expect("fixture resources"))
+        .build();
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
         ResourceSrc::parse(master_url.as_str()).expect("fixture master URL must be valid"),
     )
-    .store(kithara_integration_tests::disk_asset_store(temp.path()))
+    .store(store)
+    .downloader(downloader)
     .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
     .decoder(
         kithara::audio::AudioDecoderConfig::builder()
@@ -463,7 +468,6 @@ async fn prepare_player(
         "{label} warm-up must stop exactly on the capture frame",
     );
     PreparedPlayer {
-        _temp: temp,
         player,
         abr,
         events,
@@ -559,7 +563,7 @@ async fn a_queued_paced_render_keeps_a_full_callback_period() {
     );
 }
 
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 pub(super) async fn render_switch(
     master_url: &url::Url,
@@ -703,7 +707,7 @@ pub(super) async fn render_switch(
     result
 }
 
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 pub(super) async fn render_no_switch_control(
     master_url: &url::Url,

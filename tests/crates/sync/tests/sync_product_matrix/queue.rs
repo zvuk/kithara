@@ -596,59 +596,58 @@ fn reference(
         let mut recording = voice.decoded.lock();
         let decoded = recording.view();
         let span = interval.source;
-        // A frame's endpoint is the next frame's start, so each coordinate is
-        // projected once and carried into the following frame.
-        let mut carried = None;
-        for session in active {
-            let offset = u64::try_from(session - interval.start).expect("source offset");
-            let physical = carried.take().unwrap_or_else(|| {
-                let raw = span
-                    .source_ratio_at(offset)
-                    .expect("physical source coordinate");
-                interval
+        {
+            let mut sample_source = decoded
+                .sampler_at_domain(interval.identity, [0, 1], interval.physical_domain.clone())
+                .unwrap_or_else(|error| {
+                    panic!("source {:?} session {}: {error}", voice.item, active.start)
+                });
+            // A frame's endpoint is the next frame's start, so each coordinate is
+            // projected once and carried into the following frame.
+            let mut carried = None;
+            for session in active {
+                let offset = u64::try_from(session - interval.start).expect("source offset");
+                let physical = carried.take().unwrap_or_else(|| {
+                    let raw = span
+                        .source_ratio_at(offset)
+                        .expect("physical source coordinate");
+                    interval
+                        .physical_basis
+                        .output_ratio_at_source(interval.physical_origin, raw)
+                        .expect("actual decoded physical coordinate")
+                });
+                let next = span
+                    .source_ratio_at(offset + 1)
+                    .expect("physical source endpoint");
+                let endpoint = interval
                     .physical_basis
-                    .output_ratio_at_source(interval.physical_origin, raw)
-                    .expect("actual decoded physical coordinate")
-            });
-            let next = span
-                .source_ratio_at(offset + 1)
-                .expect("physical source endpoint");
-            let endpoint = interval
-                .physical_basis
-                .output_ratio_at_source(interval.physical_origin, next)
-                .expect("actual decoded physical endpoint");
-            carried = Some(endpoint);
-            let speed = super::control::physical_source_speed(physical, endpoint)
-                .expect("actual source speed");
-            let position = if shift == Some(interval.voice) {
-                (
-                    physical
-                        .0
-                        .checked_add(physical.1.get())
-                        .expect("negative control source shift"),
-                    physical.1,
-                )
-            } else {
-                physical
-            };
-            let gain = envelope(capture, voice.item, session, mixer);
-            let base = usize::try_from(session - domain.start).expect("reference offset") * 2;
-            for channel in 0..2 {
-                let sample = decoded
-                    .sample_at_domain(
-                        interval.identity,
-                        position,
-                        speed,
-                        channel,
-                        &interval.physical_domain,
+                    .output_ratio_at_source(interval.physical_origin, next)
+                    .expect("actual decoded physical endpoint");
+                carried = Some(endpoint);
+                let speed = super::control::physical_source_speed(physical, endpoint)
+                    .expect("actual source speed");
+                let position = if shift == Some(interval.voice) {
+                    (
+                        physical
+                            .0
+                            .checked_add(physical.1.get())
+                            .expect("negative control source shift"),
+                        physical.1,
                     )
-                    .unwrap_or_else(|error| {
-                        panic!("source {:?} session {session}: {error}", voice.item)
-                    });
-                if gain == 1.0 {
-                    expected[base + channel] += sample;
-                } else if gain != 0.0 {
-                    expected[base + channel] = sample.mul_add(gain, expected[base + channel]);
+                } else {
+                    physical
+                };
+                let gain = envelope(capture, voice.item, session, mixer);
+                let base = usize::try_from(session - domain.start).expect("reference offset") * 2;
+                let samples = sample_source(position, speed).unwrap_or_else(|error| {
+                    panic!("source {:?} session {session}: {error}", voice.item)
+                });
+                for (channel, sample) in samples.into_iter().enumerate() {
+                    if gain == 1.0 {
+                        expected[base + channel] += sample;
+                    } else if gain != 0.0 {
+                        expected[base + channel] = sample.mul_add(gain, expected[base + channel]);
+                    }
                 }
             }
         }
@@ -760,6 +759,7 @@ impl QueueMusic {
             AudioArtifactTap::from_env(&format!("{label}-{}-master", kind.label()), RATE, 2)
                 .expect("Master WAV export");
         let mixer = DeckMixerConfig::builder()
+            .eq_bands(0)
             .sample_rate(sample_rate)
             .slots(NonZeroUsize::new(2).expect("two actual reusable mixer slots"))
             .mix(DeckMixSettings::builder().level(CONTROL_GAIN).build())

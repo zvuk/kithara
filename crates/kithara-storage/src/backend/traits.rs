@@ -76,29 +76,21 @@ pub trait DriverIo: Send + Sync + 'static {
     /// Returns error only on a genuine backing-store read failure.
     fn read_committed(&self, offset: u64, buf: &mut [u8]) -> StorageResult<Option<usize>>;
 
-    /// Drop every handle this driver holds on its own path.
+    /// Flush the final prefix and drop every handle this driver holds on its own path.
+    /// `None` flushes all pending bytes; the caller owns any later truncation.
     ///
     /// A publisher that replaces the file underneath this driver — the
     /// atomic-chunked rename, the whole-payload atomic write — calls this
     /// first. Windows refuses to resize, rename, or replace a file while a
-    /// mapping of it is alive, so a driver that keeps one open after
-    /// [`Self::seal`] makes the publication that follows fail outright. The
-    /// driver reopens on its own at the next commit or write.
+    /// mapping of it is alive, so a driver that keeps one open makes the
+    /// publication that follows fail outright. The driver reopens on its own at the next commit or
+    /// write.
     ///
     /// # Errors
     ///
     /// Returns error if pending bytes cannot be flushed before the release.
-    fn release_backing(&self) -> StorageResult<()> {
+    fn release_backing(&self, _final_len: Option<u64>) -> StorageResult<()> {
         Ok(())
-    }
-
-    /// Flush bytes without publishing a snapshot that an imminent rename/reopen would discard.
-    /// Existing views keep their active mapping until replacement; the default delegates to [`Self::commit`].
-    ///
-    /// # Errors
-    /// Returns an error if written bytes cannot be flushed.
-    fn seal(&self, final_len: Option<u64>) -> StorageResult<()> {
-        self.commit(final_len)
     }
 
     /// Physical storage length (for `read_at` clamping).

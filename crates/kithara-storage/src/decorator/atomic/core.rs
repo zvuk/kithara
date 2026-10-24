@@ -72,7 +72,7 @@ impl<D: DriverIo> Atomic<D> {
                 .map_err(|e| crate::StorageError::Failed(format!("atomic write: {e}")))?;
 
             let _handover = self.handover.write();
-            self.inner.release_backing_in_place()?;
+            self.inner.release_backing_in_place(None)?;
 
             tmp.persist(&path)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic rename: {e}")))?;

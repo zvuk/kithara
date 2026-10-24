@@ -144,13 +144,11 @@ impl<D: DriverIo> ResourceCore<D> {
         Ok(())
     }
 
-    /// Finalize bytes without publishing availability or readiness. The
-    /// decorator calls [`Self::publish_commit_inner`] after publishing the
-    /// canonical backing resource, so observers and waiters cannot announce
-    /// a file that has not been renamed yet.
-    pub(super) fn seal_inner(&self, final_len: Option<u64>) -> StorageResult<()> {
+    /// Flush the final prefix without publishing readiness, then close the backing handles before
+    /// the decorator renames and reopens the canonical file.
+    pub(super) fn release_backing_inner(&self, final_len: Option<u64>) -> StorageResult<()> {
         self.check_health()?;
-        self.inner.driver.seal(final_len)
+        self.inner.driver.release_backing(final_len)
     }
 
     /// Whether dropping an uncommitted writer should mark the core failed.
@@ -184,9 +182,6 @@ impl<D: DriverIo> ResourceCore<D> {
         to self.inner.driver {
             #[call(path)]
             pub(super) fn path_inner(&self) -> Option<&Path>;
-            /// Drop the driver's handles on its path — see [`DriverIo::release_backing`].
-            #[call(release_backing)]
-            pub(super) fn release_backing_inner(&self) -> StorageResult<()>;
         }
     }
 }

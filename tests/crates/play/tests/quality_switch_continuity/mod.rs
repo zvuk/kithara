@@ -18,7 +18,6 @@ use kithara::{
     platform::time::{Duration, WallInstant},
 };
 use kithara_integration_tests::{HlsFixtureBuilder, offline::OfflinePlayer};
-use kithara_test_utils::TestTempDir;
 use switch::{
     AAC_HIGH, AAC_LOW, ACTIVE_SAMPLE_THRESHOLD, BLOCK_FRAMES, CHANNELS, COCHLEA_WINDOW_MS,
     ControlRender, DecoderObservation, FLAC, ORACLE_RATIO, ORACLE_SLACK, Pacer, PreparedPlayer,

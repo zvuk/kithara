@@ -1,13 +1,13 @@
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroUsize;
+
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     audio::AudioEvent,
-    download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
         time::{Duration, Instant, timeout},
         tokio::sync::broadcast::error::RecvError,
     },
@@ -180,7 +180,11 @@ enum Ladder {
     Encrypted,
 }
 
-async fn run_seek_scenario(ladders: &[Ladder], select_index: usize, temp: TestTempDir) {
+const LONG_SEGMENT_COUNT: usize = 20;
+const MULTI_VARIANT_COUNT: usize = 3;
+const MULTI_SEGMENT_COUNT: usize = 30;
+
+async fn run_seek_scenario(ladders: &[Ladder], select_index: usize, backend: StorageBackend) {
     let helper = TestServerHelper::new().await;
     let plain = helper
         .create_hls(packaged_ladder())
@@ -199,16 +203,23 @@ async fn run_seek_scenario(ladders: &[Ladder], select_index: usize, temp: TestTe
         })
         .collect();
 
-    let store = kithara_integration_tests::disk_asset_store(temp.path());
+    let capacity = matches!(&backend, StorageBackend::Memory).then(|| {
+        let resources = [&plain, &encrypted]
+            .iter()
+            .map(|fixture| {
+                let spec = fixture.spec();
+                spec.variant_count * (spec.segments_per_variant + 2)
+                    + usize::from(spec.encryption.is_some())
+            })
+            .sum();
+        NonZeroUsize::new(resources).expect("all fixture segments, init, muxed tails, and keys")
+    });
     let pools = pools();
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            pools.clone(),
-            CancelToken::never(),
-        ))
-        .build(),
-    );
+    let store = AssetStore::builder(pools.clone())
+        .backend(backend)
+        .maybe_cache_capacity(capacity)
+        .build();
+    let downloader = helper.modeled_downloader();
 
     let session = HostConfig::offline(pools.clone()).build();
     let player = kithara::play::ResourcePrep::builder()
@@ -326,12 +337,8 @@ async fn run_seek_scenario(ladders: &[Ladder], select_index: usize, temp: TestTe
 #[case::one_track(&[Ladder::Plain], 0)]
 #[case::first_of_two(&[Ladder::Plain, Ladder::Encrypted], 0)]
 #[case::second_of_two(&[Ladder::Plain, Ladder::Encrypted], 1)]
-async fn queue_seek_at_index(
-    temp_dir: TestTempDir,
-    #[case] ladders: &[Ladder],
-    #[case] index: usize,
-) {
-    run_seek_scenario(ladders, index, temp_dir).await;
+async fn queue_seek_at_index(#[case] ladders: &[Ladder], #[case] index: usize) {
+    run_seek_scenario(ladders, index, StorageBackend::Memory).await;
 }
 
 /// Two concurrent `Queue::append` calls for the exact same HLS URL
@@ -354,7 +361,14 @@ async fn queue_seek_at_index(
 )]
 #[ignore = "pins real regression — pending downloader request coalescer; unignore when single-flight layer lands"]
 async fn queue_seek_same_url_twice_index0(temp_dir: TestTempDir) {
-    run_seek_scenario(&[Ladder::Plain, Ladder::Plain], 0, temp_dir).await;
+    run_seek_scenario(
+        &[Ladder::Plain, Ladder::Plain],
+        0,
+        StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        },
+    )
+    .await;
 }
 
 /// Long-track variant: 20 segments × 4s = 80s, with a 150ms delay on
@@ -371,15 +385,20 @@ async fn queue_seek_long_cold_cache_far_segment(
     temp_dir: TestTempDir,
     #[future(awt)] long_hls: (TestServerHelper, Url),
 ) {
-    let (_helper, master) = long_hls;
+    let (helper, master) = long_hls;
 
     let DiskQueue {
         queue,
-        downloader,
-        store,
+        downloader: _,
+        store: _,
         ticker: tick_handle,
         ..
     } = DiskQueue::builder(temp_dir.path()).open().await;
+    let downloader = helper.modeled_downloader();
+    let store = AssetStore::builder(pools())
+        .backend(StorageBackend::Memory)
+        .cache_capacity(NonZeroUsize::new(LONG_SEGMENT_COUNT + 2).expect("all fixture resources"))
+        .build();
     let track_source = |url: &str| -> TrackSource<TestPools> {
         let cfg = ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid URL"))
             .downloader(downloader.clone())
@@ -463,15 +482,23 @@ async fn queue_seek_multi_variant_cold_far(
     temp_dir: TestTempDir,
     #[future(awt)] multi_hls: (TestServerHelper, Url),
 ) {
-    let (_helper, master) = multi_hls;
+    let (helper, master) = multi_hls;
 
     let DiskQueue {
         queue,
-        downloader,
-        store,
+        downloader: _,
+        store: _,
         ticker: tick_handle,
         ..
     } = DiskQueue::builder(temp_dir.path()).open().await;
+    let downloader = helper.modeled_downloader();
+    let store = AssetStore::builder(pools())
+        .backend(StorageBackend::Memory)
+        .cache_capacity(
+            NonZeroUsize::new(MULTI_VARIANT_COUNT * (MULTI_SEGMENT_COUNT + 2))
+                .expect("all fixture resources"),
+        )
+        .build();
     let track_source = |url: &str| -> TrackSource<TestPools> {
         let cfg = ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid URL"))
             .downloader(downloader.clone())
@@ -533,7 +560,7 @@ async fn long_hls() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()
         .variant_count(1)
-        .segments_per_variant(20)
+        .segments_per_variant(LONG_SEGMENT_COUNT)
         .segment_duration_secs(4.0)
         .variant_bandwidths(vec![1_280_000])
         .packaged_audio_aac_lc(44_100, 2)
@@ -553,8 +580,8 @@ async fn long_hls() -> (TestServerHelper, Url) {
 async fn multi_hls() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()
-        .variant_count(3)
-        .segments_per_variant(30)
+        .variant_count(MULTI_VARIANT_COUNT)
+        .segments_per_variant(MULTI_SEGMENT_COUNT)
         .segment_duration_secs(4.0)
         .variant_bandwidths(vec![1_800_000, 800_000, 300_000])
         .packaged_audio_aac_lc(44_100, 2)

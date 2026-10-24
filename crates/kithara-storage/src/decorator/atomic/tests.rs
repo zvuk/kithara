@@ -15,6 +15,8 @@ use kithara_platform::sync::Arc;
 use kithara_platform::thread;
 use kithara_platform::{CancelToken, time::Duration};
 #[cfg(not(target_arch = "wasm32"))]
+use kithara_test_utils::cancel_token;
+#[cfg(not(target_arch = "wasm32"))]
 use tempfile::TempDir;
 
 use super::core::Atomic;
@@ -23,7 +25,7 @@ use crate::{
     test_pools::{byte_buffer, pools, pools_with_budget},
 };
 #[cfg(not(target_arch = "wasm32"))]
-use crate::{MmapDriver, MmapOptions, OpenMode, ResourceRead};
+use crate::{MmapDriver, MmapOptions, OpenMode, ResourceRead, StorageError};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn create_mmap_resource(dir: &TempDir, name: &str) -> Atomic<MmapDriver> {
@@ -60,6 +62,39 @@ fn mmap_write_all_read_into_roundtrip() {
     let n = atomic.read_into(&mut buf).unwrap();
     assert_eq!(n, data.len());
     assert_eq!(&buf, data);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::test(timeout(Duration::from_secs(2)))]
+#[case::failed(false)]
+#[case::cancelled(true)]
+fn mmap_unhealthy_resource_is_rejected_before_replacing_the_file(#[case] cancelled: bool) {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("unhealthy.bin");
+    let cancel = cancel_token();
+    let atomic = Atomic::<MmapDriver>::open(
+        cancel.clone(),
+        MmapOptions::for_path(path.clone())
+            .mode(OpenMode::ReadWrite)
+            .build(),
+    )
+    .unwrap();
+    atomic.write_all(b"original").unwrap();
+    if cancelled {
+        cancel.cancel();
+    } else {
+        atomic.read_settled(|inner| inner.fail_in_place("replace refused".to_owned()));
+    }
+
+    let result = atomic.write_all(b"replacement");
+
+    if cancelled {
+        assert!(matches!(result, Err(StorageError::Cancelled)));
+    } else {
+        assert!(matches!(result, Err(StorageError::Failed(reason)) if reason == "replace refused"));
+    }
+    assert_eq!(fs::read(path).unwrap(), b"original");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 
 #[cfg(not(target_arch = "wasm32"))]

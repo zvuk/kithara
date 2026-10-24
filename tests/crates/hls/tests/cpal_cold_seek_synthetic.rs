@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroUsize;
+
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     audio::AudioEvent,
     decode::DecoderBackend,
     host::HostConfig,
@@ -12,13 +15,15 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     fixture_protocol::DelayRule,
-    hls_fixture::create_test_downloader,
     kithara,
     offline::{OfflineQueue, QueueTicker, RENDER_PACE},
     waits::{wait_for_loader_done, wait_for_position_at_least},
 };
 use kithara_test_utils::{bufpool::pools, temp_dir};
 use url::Url;
+
+const VARIANT_COUNT: usize = 3;
+const SEGMENT_COUNT: usize = 40;
 
 /// Cold-cache seek into a far segment over the offline backend.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
@@ -35,11 +40,17 @@ async fn cold_seek_far_segment_hls_offline(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let (_helper, master) = cold_hls;
+    let (helper, master) = cold_hls;
 
     let temp = temp_dir();
-    let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let downloader = create_test_downloader();
+    let store = AssetStore::builder(pools())
+        .backend(StorageBackend::Memory)
+        .cache_capacity(
+            NonZeroUsize::new(VARIANT_COUNT * (SEGMENT_COUNT + 2))
+                .expect("all fixture segments, init, and muxed tail"),
+        )
+        .build();
+    let downloader = helper.modeled_downloader();
 
     let player = kithara::play::ResourcePrep::builder()
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
@@ -143,8 +154,8 @@ async fn cold_seek_far_segment_hls_offline(
 async fn cold_hls() -> (TestServerHelper, Url) {
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()
-        .variant_count(3)
-        .segments_per_variant(40)
+        .variant_count(VARIANT_COUNT)
+        .segments_per_variant(SEGMENT_COUNT)
         .segment_duration_secs(4.0)
         .variant_bandwidths(vec![1_280_000, 2_560_000, 5_120_000])
         .packaged_audio_aac_lc(44_100, 2)

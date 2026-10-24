@@ -75,6 +75,14 @@ mod tests {
     use futures::TryStreamExt;
     #[cfg(feature = "flash")]
     use kithara::platform::time::{Instant, WallInstant};
+    #[cfg(all(feature = "all", feature = "flash"))]
+    use kithara::{
+        assets::{AssetStore, StorageBackend},
+        audio::AudioConfig,
+        download::{Downloader, DownloaderConfig},
+        hls::{Hls, HlsConfig},
+        play::{PlayWorker, PlayWorkerConfig, TrackConfig},
+    };
     use kithara::{
         net::{Headers, HttpClient, NetOptions, RangeSpec, RetryPolicy},
         platform::{CancelToken, sync::Arc, time::Duration},
@@ -343,6 +351,118 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(2));
         assert!(futures::poll!(delayed.as_mut()).is_pending());
         drop(real_body);
+        assert_eq!(delayed.await.unwrap().len(), 2048);
+        assert!(start.elapsed() >= Duration::from_secs(2));
+        assert!(wall.elapsed() < Duration::from_secs(1));
+    }
+
+    #[cfg(all(feature = "all", feature = "flash"))]
+    #[kithara::test(tokio, flash(true))]
+    #[case::real_first_complete(true, false)]
+    #[case::modeled_first_complete(false, false)]
+    #[case::real_first_cancel(true, true)]
+    #[case::modeled_first_cancel(false, true)]
+    async fn pending_real_loader_keeps_shared_clock_pacing(
+        #[case] real_first: bool,
+        #[case] cancel_load: bool,
+    ) {
+        let server = PrivateTestServer::start().await;
+        let helper = server.helper();
+        let fixture = helper
+            .create_hls(
+                HlsFixtureBuilder::new()
+                    .variant_count(1)
+                    .segments_per_variant(4)
+                    .segment_duration_secs(1.0)
+                    .packaged_audio_aac_lc(44_100, 2),
+            )
+            .await
+            .unwrap();
+        let gate = helper.register_init_gate(fixture.token(), 0);
+        let delayed_fixture =
+            helper
+                .create_hls(HlsFixtureBuilder::new().segment_size(2048).push_delay_rule(
+                    DelayRule {
+                        delay_ms: 2000,
+                        ..DelayRule::default()
+                    },
+                ))
+                .await
+                .unwrap();
+        let region = pools();
+        let cancel = cancel_token();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(region.clone()).build());
+        let downloader = Downloader::new(
+            DownloaderConfig::for_client(HttpClient::new(
+                options(Duration::from_secs(3)),
+                region.clone(),
+                cancel.child(),
+            ))
+            .cancel(cancel.child())
+            .build(),
+        );
+        let hls = HlsConfig::for_url(fixture.master_url())
+            .downloader(downloader)
+            .store(
+                AssetStore::builder(region.clone())
+                    .backend(StorageBackend::Memory)
+                    .build(),
+            )
+            .pools(region)
+            .cancel(cancel.child())
+            .initial_abr_mode(kithara::abr::AbrMode::manual(0))
+            .build();
+        let config = TrackConfig::for_audio(
+            AudioConfig::<Hls<_>>::for_stream(hls)
+                .cancel(cancel.clone())
+                .build(),
+        )
+        .block_on_underrun(true)
+        .build();
+        let modeled = helper.modeled_client(options(Duration::from_secs(3)), cancel_token());
+        let mut loading = Box::pin(crate::mock::load_audio(&worker, config));
+        let mut delayed = Box::pin(modeled.get_bytes(delayed_fixture.segment_url(0, 0), None));
+        let start = Instant::now();
+        let wall = WallInstant::now();
+        if real_first {
+            assert!(futures::poll!(loading.as_mut()).is_pending());
+            assert!(futures::poll!(delayed.as_mut()).is_pending());
+        } else {
+            assert!(futures::poll!(delayed.as_mut()).is_pending());
+            assert!(futures::poll!(loading.as_mut()).is_pending());
+        }
+        while gate.requested() == 0 {
+            assert!(
+                wall.elapsed() < Duration::from_secs(1),
+                "real init GET never arrived"
+            );
+            assert!(futures::poll!(loading.as_mut()).is_pending());
+            real_pause().await;
+        }
+        real_pause().await;
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(futures::poll!(loading.as_mut()).is_pending());
+        assert!(futures::poll!(delayed.as_mut()).is_pending());
+        if cancel_load {
+            cancel.cancel();
+            let refusal = loading.await.err().expect("cancelled load must refuse");
+            assert!(
+                matches!(&refusal, kithara_render::LoadRefusal::Cancelled),
+                "{refusal:?}"
+            );
+            gate.release();
+        } else {
+            gate.release();
+            let audio = loading.await.expect("real gated load completes");
+            let (audio, samples) =
+                crate::reads::blocking_audio(audio, crate::reads::read_to_eof).await;
+            assert!(
+                samples > 0,
+                "real load must produce finite PCM through natural EOF"
+            );
+            drop(audio);
+            cancel.cancel();
+        }
         assert_eq!(delayed.await.unwrap().len(), 2048);
         assert!(start.elapsed() >= Duration::from_secs(2));
         assert!(wall.elapsed() < Duration::from_secs(1));

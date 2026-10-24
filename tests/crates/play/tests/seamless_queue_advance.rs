@@ -25,7 +25,6 @@ use kithara_integration_tests::{
 };
 use kithara_render::bridge::{DeckSnapshot, SlotState};
 use kithara_test_fixtures::signal::{deinterleave_left, goertzel_magnitude, max_silence_run};
-use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 use crate::{
@@ -67,29 +66,21 @@ const TONE_SCAN_WINDOW: usize = BLOCK_FRAMES as usize;
 )]
 async fn seamless_queue_advance_gapless_when_crossfade_is_zero(
     #[future(awt)] gapless_sources: (TestServerHelper, [Url; 2]),
-    temp_dir: TestTempDir,
 ) {
-    let (_server, [first_url, second_url]) = gapless_sources;
+    let (server, [first_url, second_url]) = gapless_sources;
     let expected_visible_frames = crate::gapless_common::generated_aac_elst_visible_frames();
     let gapless_params = SilenceTrimParams::builder().trim_trailing(true).build();
     let player_config = OfflinePlayerOptions::builder()
+        .block_on_underrun(true)
         .crossfade_duration(0.0)
         .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
         .build();
     let (harness, queue) =
         offline_queue_fixture_with_options(player_config, GAPLESS_SAMPLE_RATE).await;
-    let first = append_source_loaded(
-        &harness,
-        &queue,
-        gapless_hls_config(&first_url, temp_dir.path()),
-    )
-    .await;
-    let second = append_source_loaded(
-        &harness,
-        &queue,
-        gapless_hls_config(&second_url, temp_dir.path()),
-    )
-    .await;
+    let first =
+        append_source_loaded(&harness, &queue, gapless_hls_config(&server, &first_url)).await;
+    let second =
+        append_source_loaded(&harness, &queue, gapless_hls_config(&server, &second_url)).await;
 
     let (rendered, events, _) = render_until_second_item_end(&harness, &queue, first, second).await;
     assert!(
@@ -162,28 +153,20 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(
 )]
 async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(
     #[future(awt)] crossfade_sources: (TestServerHelper, [Url; 2]),
-    temp_dir: TestTempDir,
 ) {
-    let (_server, [first_url, second_url]) = crossfade_sources;
+    let (server, [first_url, second_url]) = crossfade_sources;
     let gapless_params = SilenceTrimParams::builder().trim_trailing(true).build();
     let player_config = OfflinePlayerOptions::builder()
+        .block_on_underrun(true)
         .crossfade_duration(1.0)
         .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
         .build();
     let (harness, queue) =
         offline_queue_fixture_with_options(player_config, GAPLESS_SAMPLE_RATE).await;
-    let first = append_source_loaded(
-        &harness,
-        &queue,
-        gapless_hls_config(&first_url, temp_dir.path()),
-    )
-    .await;
-    let second = append_source_loaded(
-        &harness,
-        &queue,
-        gapless_hls_config(&second_url, temp_dir.path()),
-    )
-    .await;
+    let first =
+        append_source_loaded(&harness, &queue, gapless_hls_config(&server, &first_url)).await;
+    let second =
+        append_source_loaded(&harness, &queue, gapless_hls_config(&server, &second_url)).await;
 
     let (rendered, events, snapshots) =
         render_until_second_item_end(&harness, &queue, first, second).await;
@@ -408,11 +391,12 @@ fn assert_second_item_complete(
     );
 }
 
-fn gapless_hls_config(master: &Url, cache_dir: &std::path::Path) -> ResourceConfig<TestPools> {
+fn gapless_hls_config(server: &TestServerHelper, master: &Url) -> ResourceConfig<TestPools> {
     ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(master.as_str()).expect("valid HLS master URL"),
     )
-    .store(kithara_integration_tests::disk_asset_store(cache_dir))
+    .store(kithara_integration_tests::memory_asset_store())
+    .downloader(server.modeled_downloader())
     .build()
 }
 
@@ -451,8 +435,6 @@ async fn render_until_second_item_end(
     let mut previous_position = queue.position_seconds();
     let mut previous_states = Vec::new();
 
-    // WHY: The decode worker producing these blocks is uncounted real work.
-    let _real_io = kithara::platform::flash::real_io();
     loop {
         hang_tick!(format!(
             "position={previous_position:?}, frames={rendered_frames}, events={events:?}"

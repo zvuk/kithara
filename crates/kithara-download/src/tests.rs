@@ -24,7 +24,7 @@ use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, Notify},
     time::{self, Duration, Instant, WallInstant},
-    tokio::task::spawn as tokio_spawn,
+    tokio::task::{spawn as tokio_spawn, yield_now},
 };
 use kithara_test_utils::{TestHttpServer, bufpool::pools as test_pools, kithara, pace};
 use url::Url;
@@ -792,9 +792,7 @@ async fn peer_handle_downloader_cancel_cascades() {
 async fn max_concurrent_limits_inflight_connections() {
     const MAX_CONCURRENT: usize = 5;
     const TOTAL_REQUESTS: usize = 1000;
-    const HANDLER_DELAY_MS: u64 = 5;
-
-    let (server, in_flight) = spawn_in_flight_server(HANDLER_DELAY_MS).await;
+    let (server, in_flight) = spawn_in_flight_server().await;
     let url = server.url("/data");
 
     let config = DownloaderConfig {
@@ -828,10 +826,9 @@ async fn many_downloaders_global_peak_stays_bounded() {
     const NUM_DOWNLOADERS: usize = 20;
     const REQUESTS_PER_DL: usize = 30;
     const MAX_CONCURRENT_PER_DL: usize = 3;
-    const HANDLER_DELAY_MS: u64 = 20;
     const GLOBAL_PEAK_LIMIT: usize = NUM_DOWNLOADERS * MAX_CONCURRENT_PER_DL;
 
-    let (server, in_flight) = spawn_in_flight_server(HANDLER_DELAY_MS).await;
+    let (server, in_flight) = spawn_in_flight_server().await;
     let url = server.url("/data");
 
     let mut tasks = Vec::new();
@@ -877,9 +874,7 @@ async fn many_downloaders_global_peak_stays_bounded() {
 async fn poll_next_respects_max_concurrent() {
     const MAX_CONCURRENT: usize = 5;
     const TOTAL_CMDS: usize = 1000;
-    const HANDLER_DELAY_MS: u64 = 5;
-
-    let (server, in_flight) = spawn_in_flight_server(HANDLER_DELAY_MS).await;
+    let (server, in_flight) = spawn_in_flight_server().await;
     let url = server.url("/data");
 
     /// Peer that produces `remaining` HEAD commands via `poll_next`,
@@ -1289,8 +1284,8 @@ struct InFlight {
     peak: AtomicUsize,
 }
 
-/// Serve `/data` slowly, counting the requests in flight.
-async fn spawn_in_flight_server(delay_ms: u64) -> (TestHttpServer, Arc<InFlight>) {
+/// Yield after admission so other handlers can enter before this one replies.
+async fn spawn_in_flight_server() -> (TestHttpServer, Arc<InFlight>) {
     let in_flight = Arc::new(InFlight::default());
     let app = Router::new().route(
         "/data",
@@ -1301,7 +1296,7 @@ async fn spawn_in_flight_server(delay_ms: u64) -> (TestHttpServer, Arc<InFlight>
                 async move {
                     let current = in_flight.now.fetch_add(1, Ordering::SeqCst) + 1;
                     in_flight.peak.fetch_max(current, Ordering::SeqCst);
-                    time::sleep(Duration::from_millis(delay_ms)).await;
+                    yield_now().await;
                     in_flight.now.fetch_sub(1, Ordering::SeqCst);
                     "ok"
                 }

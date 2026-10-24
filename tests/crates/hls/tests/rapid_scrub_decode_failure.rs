@@ -1,18 +1,15 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroUsize;
+
 use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
     audio::AudioEvent,
-    download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
-    platform::{
-        CancelToken,
-        time::{Duration, Instant, sleep, timeout},
-    },
+    platform::time::{Duration, Instant, sleep, timeout},
     play::{PlayWorker, PlayWorkerConfig, PlayerEvent, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
@@ -32,6 +29,7 @@ use kithara_test_utils::{
 
 /// Track shape: 30 segments × 4 s = 120 s. Long enough that 50 % and
 /// 90 % targets land in distinct cold regions.
+const VARIANT_COUNT: usize = 4;
 const SEGMENT_COUNT_U32: u32 = 30;
 const SEGMENT_COUNT: usize = SEGMENT_COUNT_U32 as usize;
 const SEGMENT_DURATION_S: f64 = 4.0;
@@ -187,20 +185,15 @@ struct Harness {
 }
 
 impl Harness {
-    async fn setup(temp_dir: &TestTempDir, master_url: String) -> Self {
+    async fn setup(helper: &TestServerHelper, _temp_dir: &TestTempDir, master_url: String) -> Self {
         let pools = pools();
-        let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(
-                NetOptions::default(),
-                pools.clone(),
-                CancelToken::never(),
-            ))
-            .build(),
-        );
+        let downloader = helper.modeled_downloader();
         let store = AssetStore::builder(pools.clone())
-            .backend(StorageBackend::Disk {
-                root: temp_dir.path().to_path_buf(),
-            })
+            .backend(StorageBackend::Memory)
+            .cache_capacity(
+                NonZeroUsize::new(VARIANT_COUNT * (SEGMENT_COUNT + 2) + 1)
+                    .expect("all fixture segments, init, muxed tail, and key"),
+            )
             .build();
         let session = HostConfig::offline(pools.clone()).build();
         let player = kithara::play::ResourcePrep::builder()
@@ -363,8 +356,8 @@ async fn seek_into_cold_range_does_not_fail(
     #[case] first_ratio: f64,
     #[case] second_ratio: Option<f64>,
 ) {
-    let (_helper, master_url) = scrub_source;
-    let mut harness = Harness::setup(&temp_dir, master_url).await;
+    let (helper, master_url) = scrub_source;
+    let mut harness = Harness::setup(&helper, &temp_dir, master_url).await;
 
     let first_target = TRACK_DURATION_S * first_ratio;
     let first_tag = if second_ratio.is_some() {
@@ -422,8 +415,8 @@ async fn seek_drag_into_cold_range_does_not_fail(
     const DRAG_DURATION: Duration = Duration::from_millis(400);
     const DRAG_STEPS: usize = 8;
 
-    let (_helper, master_url) = scrub_source;
-    let mut harness = Harness::setup(&temp_dir, master_url).await;
+    let (helper, master_url) = scrub_source;
+    let mut harness = Harness::setup(&helper, &temp_dir, master_url).await;
     let final_target = TRACK_DURATION_S * final_ratio;
 
     harness
@@ -453,7 +446,7 @@ async fn scrub_source() -> (TestServerHelper, String) {
     // reason=UpSwitch from_variant=0 to_variant=3` fires
     // repeatedly mid-track.
     let builder = HlsFixtureBuilder::new()
-            .variant_count(4)
+            .variant_count(VARIANT_COUNT)
             .segments_per_variant(SEGMENT_COUNT)
             .segment_duration_secs(SEGMENT_DURATION_S)
             .variant_bandwidths(vec![300_000, 800_000, 1_800_000, 5_000_000])

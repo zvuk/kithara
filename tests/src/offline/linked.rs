@@ -88,6 +88,26 @@ pub struct LinkObservation {
     pub timeline: Vec<serde_json::Value>,
 }
 
+impl LinkObservation {
+    pub fn timeline_evidence(&self) -> impl Iterator<Item = serde_json::Value> + '_ {
+        self.timeline.iter().map(|entry| {
+            let mut entry = entry.clone();
+            for operation in ["SetSpeed", "Align"] {
+                if let Some(input) = entry["details"][operation]["speed"]["input"].as_u64() {
+                    let speed = self
+                        .speeds
+                        .get(usize::try_from(input).expect("speed input index"))
+                        .expect("an admitted command retains its exact curve");
+                    assert_eq!(entry["item"].as_u64(), Some(u64::from(speed.item)));
+                    entry["details"][operation]["speed"] =
+                        serde_json::Value::String(format!("{:?}", speed.curve));
+                }
+            }
+            entry
+        })
+    }
+}
+
 #[derive(Default)]
 pub struct LinkCapture {
     pub consumed: Vec<(
@@ -228,8 +248,25 @@ where
     }
 }
 
+fn speed_trace_evidence(
+    result: &Result<Option<Seq>, PlayError>,
+    curve: &kithara::sync::SpeedCurve,
+    input: usize,
+) -> serde_json::Value {
+    if matches!(result, Ok(Some(_))) {
+        serde_json::json!({"input": input})
+    } else {
+        serde_json::Value::String(format!("{curve:?}"))
+    }
+}
+
 impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
-    fn trace(&self, event: &str, details: &serde_json::Value, out: &Outbox<'_, S>) {
+    fn trace_entry(
+        &self,
+        event: &str,
+        details: &serde_json::Value,
+        out: &Outbox<'_, S>,
+    ) -> serde_json::Value {
         let snapshot = self.inner.snapshot();
         let pass = out.pass();
         let slot = pass.and_then(|pass| {
@@ -237,17 +274,26 @@ impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
                 .slot
                 .and_then(|slot| pass.deck.slots.get(usize::from(slot.get())).copied())
         });
-        self.observation.lock().timeline.push(serde_json::json!({
+        serde_json::json!({
             "event": event,
             "details": details,
             "item": u64::from(snapshot.item),
             "pass": pass.map(|pass| serde_json::json!({"now": i64::from(pass.now), "delivery": pass.delivery.get(), "sample_rate": pass.deck.sample_rate})),
             "slot": slot.map(|slot| format!("{slot:?}")),
             "track": format!("{snapshot:?}"),
-        }));
+        })
     }
 
-    fn trace_command(&self, command: &TrackCommand<S>, out: &Outbox<'_, S>) -> bool {
+    fn trace(&self, event: &str, details: &serde_json::Value, out: &Outbox<'_, S>) {
+        let entry = self.trace_entry(event, details, out);
+        self.observation.lock().timeline.push(entry);
+    }
+
+    fn trace_command(
+        &self,
+        command: &TrackCommand<S>,
+        out: &Outbox<'_, S>,
+    ) -> Option<serde_json::Value> {
         let details = match command {
             TrackCommand::Load { position, .. } => {
                 Some(serde_json::json!({"Load": {"position_ns": position.as_nanos().to_string()}}))
@@ -266,20 +312,15 @@ impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
             TrackCommand::Jump { to, at } => Some(
                 serde_json::json!({"Jump": {"to_ns": to.as_nanos().to_string(), "at": i64::from(*at)}}),
             ),
-            TrackCommand::Align { to, speed, at } => Some(
-                serde_json::json!({"Align": {"to_ns": to.as_nanos().to_string(), "speed": format!("{speed:?}"), "at": i64::from(*at)}}),
+            TrackCommand::Align { to, at, .. } => Some(
+                serde_json::json!({"Align": {"to_ns": to.as_nanos().to_string(), "speed": null, "at": i64::from(*at)}}),
             ),
-            TrackCommand::SetSpeed { speed, at } => Some(
-                serde_json::json!({"SetSpeed": {"speed": format!("{speed:?}"), "at": format!("{at:?}")}}),
-            ),
+            TrackCommand::SetSpeed { at, .. } => {
+                Some(serde_json::json!({"SetSpeed": {"speed": null, "at": format!("{at:?}")}}))
+            }
             _ => None,
         };
-        if let Some(details) = details {
-            self.trace("command", &details, out);
-            true
-        } else {
-            false
-        }
+        details.map(|details| self.trace_entry("command", &details, out))
     }
 
     fn native_seek(&self, command: &TrackCommand<S>) -> Option<(Position, TrackSnapshot)> {
@@ -293,6 +334,35 @@ impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
                 Some((*to, self.inner.snapshot()))
             }
             _ => None,
+        }
+    }
+
+    fn record_native_seek(
+        &self,
+        seq: Option<Seq>,
+        native: Option<(Position, TrackSnapshot)>,
+        origin: Option<LinkReceiptOrigin>,
+    ) {
+        if let Some(seq) = seq
+            && let Some((position, before)) = native
+            && let Some(curve) = self.inner.prepared_speed().cloned()
+        {
+            let mut observation = self.observation.lock();
+            let host_input = observation
+                .owner_inputs
+                .iter()
+                .rposition(|input| input.trajectory.is_some());
+            observation.cue_curves.push(LinkCue {
+                item: before.item,
+                seq,
+                position,
+                curve,
+                before,
+                consumed: None,
+                host_input,
+                native: origin,
+                segment: None,
+            });
         }
     }
 
@@ -520,57 +590,47 @@ where
             }
         });
         let result = self.inner.apply(command, out);
-        if traced {
-            self.trace("admission", &serde_json::json!(format!("{result:?}")), out);
+        if let Some(mut entry) = traced {
+            let admission =
+                self.trace_entry("admission", &serde_json::json!(format!("{result:?}")), out);
+            let mut observation = self.observation.lock();
+            if let Some((curve, ..)) = &speed {
+                let operation = if aligned { "Align" } else { "SetSpeed" };
+                entry["details"][operation]["speed"] =
+                    speed_trace_evidence(&result, curve, observation.speeds.len());
+            }
+            if let (
+                Ok(Some(seq)),
+                Some((curve, at, landing, before, consumed, sample_rate, planned)),
+            ) = (&result, speed)
+            {
+                let input = observation
+                    .owner_inputs
+                    .iter()
+                    .rposition(|input| input.item.is_none_or(|item| item == before.item));
+                let host_input = observation
+                    .owner_inputs
+                    .iter()
+                    .rposition(|input| input.trajectory.is_some());
+                observation.speeds.push(LinkSpeed {
+                    item: before.item,
+                    seq: *seq,
+                    curve,
+                    at,
+                    landing,
+                    before,
+                    consumed,
+                    sample_rate,
+                    input,
+                    host_input,
+                    planned,
+                });
+            }
+            observation.timeline.push(entry);
+            observation.timeline.push(admission);
         }
         let seq = result?;
-        if let Some(seq) = seq
-            && let Some((position, before)) = native
-            && let Some(curve) = self.inner.prepared_speed().cloned()
-        {
-            let mut observation = self.observation.lock();
-            let host_input = observation
-                .owner_inputs
-                .iter()
-                .rposition(|input| input.trajectory.is_some());
-            observation.cue_curves.push(LinkCue {
-                item: before.item,
-                seq,
-                position,
-                curve,
-                before,
-                consumed: None,
-                host_input,
-                native: seek_origin,
-                segment: None,
-            });
-        }
-        if let Some(seq) = seq
-            && let Some((curve, at, landing, before, consumed, sample_rate, planned)) = speed
-        {
-            let mut observation = self.observation.lock();
-            let input = observation
-                .owner_inputs
-                .iter()
-                .rposition(|input| input.item.is_none_or(|item| item == before.item));
-            let host_input = observation
-                .owner_inputs
-                .iter()
-                .rposition(|input| input.trajectory.is_some());
-            observation.speeds.push(LinkSpeed {
-                item: before.item,
-                seq,
-                curve,
-                at,
-                landing,
-                before,
-                consumed,
-                sample_rate,
-                input,
-                host_input,
-                planned,
-            });
-        }
+        self.record_native_seek(seq, native, seek_origin);
         if let Some(seq) = seq
             && let Some(origin) = seek_origin
         {
@@ -911,40 +971,38 @@ where
     }
 
     fn publish_pass(&self, pass: DeckPass<'_>) {
-        self.publish();
-        self.publish_consumed(pass);
+        self.publish_observation(pass, true);
     }
 
     fn publish_consumed(&self, pass: DeckPass<'_>) {
-        let consumed: Vec<_> = self
-            .inner
-            .tracks_active()
+        self.publish_observation(pass, false);
+    }
+
+    fn publish_observation(&self, pass: DeckPass<'_>, publish_tracks: bool) {
+        let tracks: Vec<_> = self.inner.tracks_active().map(Player::snapshot).collect();
+        let mut observation = self.observation.lock();
+        observation.consumed_rate = NonZeroU32::new(pass.deck.sample_rate);
+        observation.consumed = tracks
+            .iter()
             .filter_map(|track| {
-                let track = track.snapshot().track;
-                let slot = track.slot?;
+                let slot = track.track.slot?;
                 pass.deck
                     .slots
                     .get(usize::from(slot.get()))
                     .copied()
-                    .map(|snapshot| (track.item, snapshot))
+                    .map(|snapshot| (track.track.item, snapshot))
             })
             .collect();
-        let mut observation = self.observation.lock();
-        observation.consumed_rate = NonZeroU32::new(pass.deck.sample_rate);
-        let capturing = observation.capture.is_some();
-        observation.consumed = consumed;
-        if capturing {
-            let owners: Vec<_> = self
-                .inner
-                .tracks_active()
-                .filter_map(|track| {
-                    let track = track.snapshot().track;
-                    track.slot.map(|slot| (track.item, slot))
-                })
+        if observation.capture.is_some() {
+            let owners: Vec<_> = tracks
+                .iter()
+                .filter_map(|track| track.track.slot.map(|slot| (track.track.item, slot)))
                 .collect();
-            let consumed = observation.consumed.clone();
-            let capture = observation.capture.as_mut().expect("opt-in typed capture");
-            for (item, snapshot) in &consumed {
+            let LinkObservation {
+                consumed, capture, ..
+            } = &mut *observation;
+            let capture = capture.as_mut().expect("opt-in typed capture");
+            for (item, snapshot) in consumed.iter() {
                 let slot = &owners
                     .iter()
                     .find(|(owner, _)| owner == item)
@@ -978,7 +1036,9 @@ where
                 }
             }
         }
-        drop(observation);
+        if publish_tracks {
+            observation.tracks = tracks;
+        }
     }
 
     fn capture_native(&self, receipt: &TrackReceipt<'_, S>) {
@@ -1373,5 +1433,73 @@ where
             })
         })
         .await
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[kithara::test]
+    fn speed_trace_preserves_admitted_and_rejected_inputs() {
+        let (posts, _mailbox) = kithara_command::mailbox::<(), ()>();
+        let seq = posts.post(()).expect("real command identity").seq();
+        let curve = kithara::sync::SpeedCurve::ApproachSteps(
+            vec![(
+                0,
+                kithara::signal::ExponentialApproach::new(0.9, 1.1, 240.0)
+                    .expect("finite command curve"),
+            )]
+            .into(),
+        );
+        assert_eq!(
+            speed_trace_evidence(&Ok(Some(seq)), &curve, 7),
+            serde_json::json!({"input": 7})
+        );
+        for result in [Ok(None), Err(PlayError::Closed)] {
+            assert_eq!(
+                speed_trace_evidence(&result, &curve, 7),
+                serde_json::json!(format!("{curve:?}"))
+            );
+        }
+        let item = TrackId::allocate();
+        let track: ObservedTrack<crate::bufpool_ext::TestPools> =
+            ObservedFactory::new(Arc::new(Mutex::new(LinkObservation::default())))
+                .track(PlayerConfig {
+                    item,
+                    slot: None,
+                    settings: TrackSettings::default(),
+                })
+                .expect("diagnostic owner track");
+        let entry = serde_json::json!({
+            "event": "command", "item": u64::from(item),
+            "details": {"SetSpeed": {"speed": {"input": 0}}},
+        });
+        let observation = LinkObservation {
+            timeline: vec![entry.clone()],
+            speeds: vec![LinkSpeed {
+                item,
+                seq,
+                curve: curve.clone(),
+                at: When::Next,
+                landing: None,
+                before: track.snapshot(),
+                consumed: None,
+                sample_rate: None,
+                input: None,
+                host_input: None,
+                planned: None,
+            }],
+            ..LinkObservation::default()
+        };
+        let standalone = observation.timeline_evidence().collect::<Vec<_>>();
+        assert_eq!(
+            standalone[0]["details"]["SetSpeed"]["speed"],
+            serde_json::json!(format!("{curve:?}"))
+        );
+        assert_eq!(
+            observation.timeline[0], entry,
+            "diagnostic expansion does not mutate retained facts"
+        );
     }
 }

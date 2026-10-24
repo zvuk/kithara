@@ -214,7 +214,7 @@ where
 
 /// Wait for a matching event within `deadline`; lag is tolerated and a closed
 /// bus returns an error.
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 pub async fn wait_for_event(
     rx: &mut EventReceiver<TestEvent>,
     what: &str,
@@ -379,7 +379,7 @@ pub async fn wait_thread_count_quiesced(deadline: Duration) -> usize {
 /// `until_position = pre_pos + target_advance` for warmup and
 /// `until_position = seek_target + min_advance` for post-seek to discriminate a
 /// seek jump from render-driven progress.
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 pub async fn render_until_position(
     player: &mut OfflinePlayer,
@@ -436,6 +436,132 @@ mod tests {
 
     use super::*;
     use crate::{HlsFixtureBuilder, TestServerHelper, offline::OfflinePlayerOptions};
+
+    #[cfg(feature = "flash")]
+    #[kithara::test(tokio, multi_thread, flash(true))]
+    async fn modeled_render_progress_does_not_turn_fixture_delay_into_wall_time() {
+        use std::num::{NonZeroU32, NonZeroUsize};
+
+        use kithara::{
+            assets::{AssetStore, StorageBackend},
+            host::{HostConfig, HostSettings},
+            platform::time::Instant,
+            play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+        };
+        use kithara_test_utils::bufpool::pools;
+
+        use crate::fixture_protocol::DelayRule;
+
+        const RATE: u32 = 44_100;
+        const BLOCK: usize = 512;
+        let server = TestServerHelper::new().await;
+        let fixture = server
+            .create_hls(
+                HlsFixtureBuilder::new()
+                    .variant_count(1)
+                    .segments_per_variant(4)
+                    .segment_duration_secs(1.0)
+                    .packaged_audio_aac_lc(RATE, 2)
+                    .push_delay_rule(DelayRule {
+                        variant: Some(0),
+                        segment_eq: Some(1),
+                        delay_ms: 2_000,
+                        ..DelayRule::default()
+                    }),
+            )
+            .await
+            .expect("modeled render fixture");
+        let gate = server.register_segment_gate(fixture.token(), 0, 1);
+        let region = pools();
+        let resource = ResourceConfig::for_src(ResourceSrc::Url(fixture.master_url()))
+            .store(
+                AssetStore::builder(region.clone())
+                    .backend(StorageBackend::Memory)
+                    .build(),
+            )
+            .downloader(server.modeled_downloader())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(region.clone()).build(),
+            ))
+            .preload_chunks(NonZeroUsize::MIN)
+            .build();
+        let mut player = OfflinePlayer::with_options(
+            OfflinePlayerOptions::builder()
+                .block_on_underrun(true)
+                .build(),
+            HostConfig::offline(region)
+                .settings(
+                    HostSettings::builder()
+                        .sample_rate(NonZeroU32::new(RATE).expect("fixture rate"))
+                        .build(),
+                )
+                .build(),
+        )
+        .await;
+        player.load_config(resource).await;
+        let start = Instant::now();
+        let wall = WallInstant::now();
+        {
+            let mut waiting =
+                std::pin::pin!(render_until_position(&mut player, 20, 1.25, BLOCK, 5_000));
+            assert!(futures::poll!(waiting.as_mut()).is_pending());
+            gate.release();
+            waiting.await;
+        }
+        assert!(gate.requested() > 0);
+        assert!(player.position() >= 1.25);
+        assert!(start.elapsed() >= Duration::from_secs(2));
+        assert!(wall.elapsed() < Duration::from_secs(1));
+        player.close().await;
+    }
+
+    #[cfg(feature = "flash")]
+    #[kithara::test(tokio, multi_thread, flash(true))]
+    async fn modeled_event_wait_does_not_turn_fixture_delay_into_wall_time() {
+        use kithara::{
+            net::NetOptions,
+            platform::{CancelToken, time::Instant, tokio::task::spawn},
+        };
+
+        use crate::fixture_protocol::DelayRule;
+
+        let helper = TestServerHelper::new().await;
+        let fixture = helper
+            .create_hls(
+                HlsFixtureBuilder::new()
+                    .segment_size(2_048)
+                    .push_delay_rule(DelayRule {
+                        delay_ms: 2_000,
+                        ..DelayRule::default()
+                    }),
+            )
+            .await
+            .expect("modeled event fixture");
+        let client = helper.modeled_client(NetOptions::default(), CancelToken::never());
+        let url = fixture.segment_url(0, 0);
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
+        let id = TrackId::allocate();
+        let start = Instant::now();
+        let wall = WallInstant::now();
+        let request = spawn(async move {
+            let bytes = client
+                .get_bytes(url, None)
+                .await
+                .expect("modeled segment request");
+            assert_eq!(bytes.len(), 2_048);
+            bus.publish(QueueEvent::TrackStatusChanged {
+                id,
+                status: TrackStatus::Loaded,
+            });
+        });
+        wait_for_event(&mut events, "modeled request completion", |event| matches!(event,
+            TestEvent::Queue(QueueEvent::TrackStatusChanged { id: found, status: TrackStatus::Loaded }) if *found == id),
+            Duration::from_secs(5)).await.expect("modeled completion event");
+        request.await.expect("modeled request task");
+        assert!(start.elapsed() >= Duration::from_secs(2));
+        assert!(wall.elapsed() < Duration::from_secs(1));
+    }
 
     #[kithara::test(tokio)]
     async fn loader_completion_wins_when_its_notification_is_missing() {

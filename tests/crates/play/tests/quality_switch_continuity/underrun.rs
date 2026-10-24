@@ -205,19 +205,22 @@ async fn prepare_tiny_ring_player(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let temp = TestTempDir::new();
     let bus = EventBus::new(1_024);
     let mut events = bus.subscribe();
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
-        .backend(StorageBackend::Disk {
-            root: temp.path().to_path_buf(),
-        })
+        .backend(StorageBackend::Memory)
+        .cache_capacity(
+            std::num::NonZeroUsize::new(switch::FIXTURE_RESOURCE_CAPACITY)
+                .expect("fixture resources"),
+        )
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let downloader = TestServerHelper::new().await.modeled_downloader();
     let config =
         kithara::play::ResourceConfig::for_src(kithara::play::ResourceSrc::Url(master_url.clone()))
             .store(store)
+            .downloader(downloader)
             .worker(worker)
             .initial_abr_mode(AbrMode::manual(initial_variant))
             .decoder(
@@ -292,7 +295,6 @@ async fn prepare_tiny_ring_player(
     render_to_capture_frame(&mut player, &mut pacer, label).await;
     let capture_frame = source_frame(player.position(), label);
     PreparedPlayer {
-        _temp: temp,
         player,
         abr,
         events,

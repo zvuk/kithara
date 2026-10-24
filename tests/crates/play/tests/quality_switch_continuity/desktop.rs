@@ -20,6 +20,7 @@ use kithara_integration_tests::{
     fixture_protocol::DelayRule,
     offline::{OfflinePlayer, OfflinePlayerOptions},
 };
+use kithara_test_utils::TestTempDir;
 use num_traits::ToPrimitive;
 
 use super::*;

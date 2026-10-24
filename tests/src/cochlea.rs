@@ -1,6 +1,6 @@
 use cochlea_features::{
-    Audio, ProbeOpts, SegmentOpts, TempoOpts, TempoReport, analyze_clipping, analyze_loudness,
-    analyze_silence, count_silent_segments, detect_onsets, estimate_tempo,
+    Audio, LoudnessReport, ProbeOpts, SegmentOpts, TempoOpts, TempoReport, analyze_clipping,
+    analyze_loudness, analyze_silence, count_silent_segments, detect_onsets, estimate_tempo,
 };
 use serde::Serialize;
 
@@ -118,8 +118,8 @@ pub fn time_stretch_failures(
 #[must_use]
 pub fn mix_loudness_failures(
     label: &str,
-    mix: &CochleaReport,
-    decks: &[CochleaReport],
+    mix: &LoudnessReport,
+    decks: &[LoudnessReport],
     tolerance_lu: f64,
 ) -> Vec<String> {
     assert!(!decks.is_empty(), "mix loudness needs at least one deck");

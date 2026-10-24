@@ -764,16 +764,18 @@ async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load(
     let control = shared_worker_capture(SHARED_DEADLINE_CONTROL, &mixed_sources, &wrong).await;
     let candidate = shared_worker_capture(SHARED_DEADLINE, &mixed_sources, &wrong).await;
     let mut failures = Vec::new();
-    let supplemental = synchronization_failures(
-        "bound shared-worker load",
-        &[candidate.samples.as_slice()],
-        CHANNELS,
-        48_000,
-        SHARED_DEADLINE.final_bpm(),
-    );
-    eprintln!("ORACLE_SUPPLEMENTAL_PEAKS bound shared-worker load: {supplemental:?}");
     append_run_failures("control", &control, &mut failures);
     append_run_failures("candidate", &candidate, &mut failures);
+    if !failures.is_empty() {
+        let supplemental = synchronization_failures(
+            "bound shared-worker load",
+            &[candidate.samples.as_slice()],
+            CHANNELS,
+            48_000,
+            SHARED_DEADLINE.final_bpm(),
+        );
+        eprintln!("ORACLE_SUPPLEMENTAL_PEAKS bound shared-worker load: {supplemental:?}");
+    }
     assert!(
         failures.is_empty(),
         "bound shared-worker deadline contract failed:\n{}",

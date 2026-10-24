@@ -58,6 +58,154 @@ pub(crate) struct ProductHarness {
     metronome_delta_peak: f32,
 }
 
+#[cfg(not(target_os = "android"))]
+fn verify_speed_references(observation: &LinkObservation) {
+    for (index, entry) in observation.timeline.iter().enumerate() {
+        if entry["event"].as_str() != Some("command") {
+            continue;
+        }
+        for operation in ["SetSpeed", "Align"] {
+            let Some(input) = entry["details"][operation].get("speed") else {
+                continue;
+            };
+            let admission = &observation.timeline[index + 1];
+            assert_eq!(admission["event"].as_str(), Some("admission"));
+            let result = admission["details"].as_str().expect("command admission");
+            if let Some(input) = input["input"].as_u64() {
+                let speed = observation
+                    .speeds
+                    .get(usize::try_from(input).expect("speed input index"))
+                    .expect("admitted command retains its exact curve");
+                assert_eq!(entry["item"].as_u64(), Some(u64::from(speed.item)));
+                assert_eq!(result, format!("Ok(Some({:?}))", speed.seq));
+            } else {
+                assert!(
+                    input.is_string(),
+                    "unadmitted command retains its full curve"
+                );
+                assert!(
+                    !result.starts_with("Ok(Some("),
+                    "admitted command must reference its retained input"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn curve_evidence_key(curve: &kithara::sync::SpeedCurve) -> Vec<u64> {
+    use kithara::sync::SpeedCurve;
+    let approach = |value: kithara::signal::ExponentialApproach| {
+        [
+            value.initial().to_bits(),
+            value.target().to_bits(),
+            value.time_constant().to_bits(),
+        ]
+    };
+    match curve {
+        SpeedCurve::Constant(speed) => vec![0, u64::from(speed.to_bits())],
+        SpeedCurve::Approach(value) => {
+            let mut key = Vec::with_capacity(4);
+            key.push(1);
+            key.extend(approach(*value));
+            key
+        }
+        SpeedCurve::ApproachSteps(parts) => {
+            let mut key = Vec::with_capacity(1 + parts.len() * 4);
+            key.push(2);
+            for (frame, value) in parts.iter() {
+                key.push(*frame);
+                key.extend(approach(*value));
+            }
+            key
+        }
+        SpeedCurve::Ramp { to, frames } => vec![3, u64::from(to.to_bits()), frames.get()],
+        SpeedCurve::Steps(parts) => {
+            let mut key = Vec::with_capacity(1 + parts.len() * 2);
+            key.push(4);
+            for (frame, value) in parts.iter() {
+                key.extend([*frame, u64::from(value.to_bits())]);
+            }
+            key
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn curve_evidence(
+    curves: &mut std::collections::HashMap<Vec<u64>, usize>,
+    curve: &kithara::sync::SpeedCurve,
+) -> serde_json::Value {
+    let key = curve_evidence_key(curve);
+    let next = curves.len();
+    match curves.entry(key) {
+        std::collections::hash_map::Entry::Occupied(entry) => {
+            serde_json::json!({"curve": entry.get()})
+        }
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(next);
+            serde_json::json!({"curve": next, "definition": format!("{curve:?}")})
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+#[kithara::test]
+fn curve_evidence_references_preserve_every_exact_definition() {
+    use std::{collections::HashMap, num::NonZeroU64};
+
+    use kithara::{signal::ExponentialApproach, sync::SpeedCurve};
+
+    let approach = ExponentialApproach::new(1.0, 1.5, 240.0).expect("finite approach");
+    let signed_zero = ExponentialApproach::new(1.0, 1.5, -0.0).expect("signed zero approach");
+    let curves = [
+        SpeedCurve::Constant(0.0),
+        SpeedCurve::Constant(-0.0),
+        SpeedCurve::Constant(1.0),
+        SpeedCurve::Approach(approach),
+        SpeedCurve::Approach(signed_zero),
+        SpeedCurve::ApproachSteps(vec![(0, approach), (96, signed_zero)].into()),
+        SpeedCurve::ApproachSteps(vec![(0, approach), (97, signed_zero)].into()),
+        SpeedCurve::Ramp {
+            to: 1.0,
+            frames: NonZeroU64::new(96).expect("nonzero frames"),
+        },
+        SpeedCurve::Ramp {
+            to: 1.0,
+            frames: NonZeroU64::new(97).expect("nonzero frames"),
+        },
+        SpeedCurve::Steps(vec![(0, 1.0), (96, 1.5)].into()),
+        SpeedCurve::Steps(vec![(0, 1.0), (96, 1.25)].into()),
+    ];
+    let mut keys = HashMap::new();
+    let mut definitions = HashMap::new();
+    for (index, curve) in curves.iter().cycle().take(curves.len() * 3).enumerate() {
+        let evidence = curve_evidence(&mut keys, curve);
+        let id = evidence["curve"].as_u64().expect("curve reference");
+        if let Some(definition) = evidence.get("definition") {
+            assert!(index < curves.len(), "each definition is emitted once");
+            assert!(
+                definitions
+                    .insert(
+                        id,
+                        definition
+                            .as_str()
+                            .expect("full Debug definition")
+                            .to_owned()
+                    )
+                    .is_none()
+            );
+        }
+        assert_eq!(definitions[&id], format!("{curve:?}"));
+    }
+    assert_eq!(
+        keys.len(),
+        curves.len(),
+        "every distinct bit pattern stays distinct"
+    );
+    assert_eq!(definitions.len(), curves.len());
+}
+
 fn native_start_at(
     observation: &LinkObservation,
     item: TrackId,
@@ -172,6 +320,7 @@ fn segment_custody(
 
 fn linked_mixer() -> kithara::play::DeckMixerConfig {
     kithara::play::DeckMixerConfig::builder()
+        .eq_bands(0)
         .mix(
             kithara::play::DeckMixSettings::builder()
                 .level(super::control::CONTROL_GAIN)
@@ -422,6 +571,7 @@ impl ProductHarness {
                 ResourceSrc::parse(&source)
                     .unwrap_or_else(|error| panic!("{}: parse source {source}: {error}", case.id)),
             )
+            .downloader(prepared.1.modeled_downloader())
             .store(memory_asset_store())
             .initial_abr_mode(AbrMode::manual(0))
             .discriminator(format!("{}-{provider:?}-{index}", case.id))
@@ -1963,11 +2113,13 @@ impl ProductHarness {
                 "capture_markers",
                 serde_json::json!({"beats": beats, "downbeats": downbeats}),
             );
+            let mut curves = std::collections::HashMap::new();
             let observations: Vec<_> = self
                 .decks
                 .iter()
                 .map(|deck| {
                     deck.observe(|observation| {
+                        verify_speed_references(observation);
                         serde_json::json!({
                             "deck": u64::from(deck.id()),
                             "timeline": observation.timeline,
@@ -1980,6 +2132,7 @@ impl ProductHarness {
                             })).collect::<Vec<_>>(),
                             "speed_inputs": observation.speeds.iter().map(|speed| serde_json::json!({
                                 "item": u64::from(speed.item), "seq": speed.seq.get(), "at": format!("{:?}", speed.at),
+                                "curve": curve_evidence(&mut curves, &speed.curve),
                                 "input": speed.input, "host_input": speed.host_input, "planned": format!("{:?}", speed.planned),
                                 "landing": format!("{:?}", speed.landing), "consumed": format!("{:?}", speed.consumed),
                             })).collect::<Vec<_>>(),

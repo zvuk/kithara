@@ -178,10 +178,13 @@ impl DriverIo for MmapDriver {
         Ok(Some(to_read))
     }
 
-    fn release_backing(&self) -> StorageResult<()> {
+    fn release_backing(&self, final_len: Option<u64>) -> StorageResult<()> {
         let mut mmap_guard = self.mmap.lock();
         if let MmapState::Active(mmap) = &*mmap_guard {
-            mmap.flush()?;
+            match final_len.filter(|len| *len < mmap.len()) {
+                Some(len) => mmap.flush_range(0, len)?,
+                None => mmap.flush()?,
+            }
         }
         let displaced = self.committed.swap(None);
         *mmap_guard = MmapState::Empty;
@@ -192,32 +195,6 @@ impl DriverIo for MmapDriver {
         }
         retired.collect();
         drop(retired);
-        Ok(())
-    }
-
-    /// Flush the written pages and stop, keeping the active mapping. The
-    /// caller renames the file and reopens on its canonical path, so the
-    /// snapshot this would have published is dead on arrival — and the live
-    /// mapping is what serves readers until that reopen lands. A zero-length
-    /// or already-published resource has nothing to keep alive and takes the
-    /// ordinary commit path.
-    ///
-    /// Flushes only the written prefix rather than the whole mapping, since the reservation beyond
-    /// `final_len` is untouched and syncing it would cost more than the re-map this seal avoids.
-    fn seal(&self, final_len: Option<u64>) -> StorageResult<()> {
-        if final_len == Some(0) {
-            return self.commit(final_len);
-        }
-        let mmap_guard = self.mmap.lock();
-        let MmapState::Active(mmap) = &*mmap_guard else {
-            drop(mmap_guard);
-            return self.commit(final_len);
-        };
-        match final_len.filter(|len| *len < mmap.len()) {
-            Some(len) => mmap.flush_range(0, len)?,
-            None => mmap.flush()?,
-        }
-        drop(mmap_guard);
         Ok(())
     }
 

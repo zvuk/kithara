@@ -86,6 +86,30 @@ fn canonical_invisible_until_commit() {
 }
 
 #[kithara::test(timeout(Duration::from_secs(2)))]
+#[case::unknown(None, 64 * 1024)]
+#[case::prefix(Some(7), 7)]
+#[case::empty(Some(0), 0)]
+fn released_backing_is_published_at_the_requested_extent(
+    #[case] final_len: Option<u64>,
+    #[case] expected_len: u64,
+) {
+    let dir = TempDir::new().unwrap();
+    let (resource, canonical, tmp) = open_chunked(&dir, "final-extent.bin");
+    resource.write_at(0, b"payload-tail").unwrap();
+
+    resource.commit(final_len).unwrap();
+
+    assert!(!tmp.exists());
+    let bytes = fs::read(&canonical).unwrap();
+    assert_eq!(bytes.len() as u64, expected_len);
+    let prefix_len = bytes.len().min(12);
+    assert_eq!(&bytes[..prefix_len], &b"payload-tail"[..prefix_len]);
+    let mut observed = vec![0; prefix_len];
+    assert_eq!(resource.read_at(0, &mut observed).unwrap(), prefix_len);
+    assert_eq!(observed, bytes[..prefix_len]);
+}
+
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn drop_without_commit_cleans_tmp() {
     let dir = TempDir::new().unwrap();
     let (res, canonical, tmp) = open_chunked(&dir, "abandoned.bin");

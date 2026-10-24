@@ -2,7 +2,7 @@ use std::num::{NonZeroU32, NonZeroU64, NonZeroU128};
 
 use kithara_signal::ExponentialApproach;
 use kithara_sync::SpeedCurve;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{Xorshift64, kithara};
 
 use super::super::trajectory::{Fraction, Trajectory};
 
@@ -74,6 +74,120 @@ fn a_thousand_interrupted_ramps_keep_bounded_phase_and_are_bit_identical() {
     let second = interrupted_ramps();
     assert_eq!(first.len(), 1_000);
     assert_eq!(first, second);
+}
+
+fn scalar_reduced_fraction(numerator: u128, denominator: u128) -> Option<(u128, NonZeroU128)> {
+    let (mut common, mut remainder) = (numerator, denominator);
+    while remainder != 0 {
+        (common, remainder) = (remainder, common % remainder);
+    }
+    Some((
+        numerator.checked_div(common)?,
+        NonZeroU128::new(denominator.checked_div(common)?)?,
+    ))
+}
+
+fn scalar_lattice_fraction(
+    numerator: u128,
+    denominator: NonZeroU128,
+) -> Option<(u128, NonZeroU128)> {
+    let denominator = denominator.get();
+    let frames = u64::try_from(numerator / denominator).ok()?;
+    let mut remainder = numerator % denominator;
+    let mut fraction = 0;
+    for _ in 0..32 {
+        fraction <<= 1;
+        let complement = denominator - remainder;
+        if remainder >= complement {
+            remainder -= complement;
+            fraction += 1;
+        } else {
+            remainder += remainder;
+        }
+    }
+    if remainder >= denominator - remainder {
+        fraction += 1;
+    }
+    scalar_reduced_fraction(u128::from(frames) * (1u128 << 32) + fraction, 1u128 << 32)
+}
+
+#[kithara::test]
+fn fraction_reduction_and_lattice_rounding_preserve_scalar_bits_and_bounds() {
+    let check = |numerator, denominator| {
+        assert_eq!(
+            Fraction::new(numerator, denominator).map(|value| (value.numerator, value.denominator)),
+            scalar_reduced_fraction(numerator, denominator),
+        );
+        if let Some(denominator) = NonZeroU128::new(denominator) {
+            let value = Fraction {
+                numerator,
+                denominator,
+            };
+            assert_eq!(
+                value
+                    .on_lattice()
+                    .map(|value| (value.numerator, value.denominator)),
+                scalar_lattice_fraction(numerator, denominator),
+                "source fraction {numerator}/{denominator}",
+            );
+        }
+    };
+    for denominator in [0, 1, 3, 5, 44_100, u128::from(u64::MAX), u128::MAX] {
+        for numerator in [
+            0,
+            1,
+            2,
+            3,
+            u128::from(u64::MAX),
+            u128::from(u64::MAX) + 1,
+            u128::MAX,
+        ] {
+            check(numerator, denominator);
+        }
+    }
+    for bits in 0..u128::BITS {
+        let denominator = 1u128 << bits;
+        for numerator in [
+            0,
+            1,
+            denominator - 1,
+            denominator,
+            denominator.saturating_add(1),
+            u128::MAX,
+        ] {
+            check(numerator, denominator);
+        }
+        for whole in [
+            0,
+            u128::from(u64::MAX) - 1,
+            u128::from(u64::MAX),
+            u128::from(u64::MAX) + 1,
+        ] {
+            if let Some(origin) = whole.checked_mul(denominator) {
+                for fraction in [0, denominator / 2, denominator - 1] {
+                    if let Some(numerator) = origin.checked_add(fraction) {
+                        check(numerator, denominator);
+                    }
+                }
+            }
+        }
+        if bits > 32 {
+            let half = 1u128 << (bits - 33);
+            for numerator in [half - 1, half, half + 1] {
+                check(numerator, denominator);
+            }
+        }
+    }
+    let mut random = Xorshift64::new(0x1234_5678_abcd_ef01);
+    for bits in 0..4_096 {
+        let numerator = (u128::from(random.next_u64()) << 64) | u128::from(random.next_u64());
+        let denominator = if bits % 2 == 0 {
+            1u128 << (bits % 128)
+        } else {
+            (u128::from(random.next_u64()) << 64) | u128::from(random.next_u64()) | 1
+        };
+        check(numerator, denominator);
+    }
 }
 
 #[kithara::test]

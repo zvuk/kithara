@@ -61,6 +61,7 @@ async fn provider_tempo_controls_measure_without_sync(
             ));
             let (trace, captured) = super::control::capture(
                 source.clone(),
+                prepared.1.modeled_downloader(),
                 48_000,
                 native_bpm,
                 target,
@@ -79,7 +80,6 @@ async fn provider_tempo_controls_measure_without_sync(
                 kithara::platform::tokio::task::spawn_blocking(move || {
                     let label = analysis_label;
                     let source = analysis_source;
-                    let pcm = captured.pcm.as_slice();
                     let measured = reference.as_ref().map_or_else(
                         || captured.observed_content_failures(&wrong_source, &grid),
                         |reference| captured.source_content_failures(reference, &wrong_source, &grid),
@@ -94,19 +94,20 @@ async fn provider_tempo_controls_measure_without_sync(
                             "flight_probes": kithara_test_utils::flight::probes_tail(),
                         });
                         eprintln!("ORACLE_CONTROL_FAILURE {diagnostic}");
+                        let pcm = captured.pcm.as_slice();
+                        let supplemental = if has_score_markers {
+                            marked_synchronization_failures(&label, &[pcm], CHANNELS, 48_000, target)
+                        } else {
+                            synchronization_failures(&label, &[pcm], CHANNELS, 48_000, target)
+                        };
+                        eprintln!("ORACLE_SUPPLEMENTAL_PEAKS {label}: {supplemental:?}");
+                        let (markers, downbeats) =
+                            kithara_integration_tests::cochlea::marked_rhythm_markers(pcm, CHANNELS, 48_000);
+                        eprintln!(
+                            "ORACLE_PCM source={source} start={} markers={markers:?} downbeats={downbeats:?}",
+                            requested_start_seconds
+                        );
                     }
-                    let supplemental = if has_score_markers {
-                        marked_synchronization_failures(&label, &[pcm], CHANNELS, 48_000, target)
-                    } else {
-                        synchronization_failures(&label, &[pcm], CHANNELS, 48_000, target)
-                    };
-                    eprintln!("ORACLE_SUPPLEMENTAL_PEAKS {label}: {supplemental:?}");
-                    let (markers, downbeats) =
-                        kithara_integration_tests::cochlea::marked_rhythm_markers(pcm, CHANNELS, 48_000);
-                    eprintln!(
-                        "ORACLE_PCM source={source} start={} markers={markers:?} downbeats={downbeats:?}",
-                        requested_start_seconds
-                    );
                     (captured, reference, wrong_source, grid, measured)
                 })
                 .await
@@ -234,26 +235,28 @@ async fn run_with_decoder(
         tracks.push(pcm);
         hang_reset!();
     }
-    let track_slices = tracks.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    let label = format!("{} {provider:?}", case.id);
-    let supplemental = if provider.has_score_markers() {
-        marked_synchronization_failures(
-            &label,
-            &track_slices,
-            CHANNELS,
-            case.sample_rate,
-            case.ride.final_bpm(),
-        )
-    } else {
-        synchronization_failures(
-            &label,
-            &track_slices,
-            CHANNELS,
-            case.sample_rate,
-            case.ride.final_bpm(),
-        )
-    };
-    eprintln!("ORACLE_SUPPLEMENTAL_PEAKS {label}: {supplemental:?}");
+    if !request_failures.is_empty() {
+        let track_slices = tracks.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let label = format!("{} {provider:?}", case.id);
+        let supplemental = if provider.has_score_markers() {
+            marked_synchronization_failures(
+                &label,
+                &track_slices,
+                CHANNELS,
+                case.sample_rate,
+                case.ride.final_bpm(),
+            )
+        } else {
+            synchronization_failures(
+                &label,
+                &track_slices,
+                CHANNELS,
+                case.sample_rate,
+                case.ride.final_bpm(),
+            )
+        };
+        eprintln!("ORACLE_SUPPLEMENTAL_PEAKS {label}: {supplemental:?}");
+    }
     let failures = request_failures;
     assert!(
         failures.is_empty(),

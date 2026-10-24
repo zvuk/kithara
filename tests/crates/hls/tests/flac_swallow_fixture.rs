@@ -1,13 +1,13 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     abr::AbrMode,
+    assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
     host::{HostConfig, HostSettings},
     platform::{
-        flash::real_io,
         time,
         time::{Duration, Instant},
     },
@@ -17,16 +17,12 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::DelayRule,
-    hls_fixture::create_test_downloader,
     hls_server::aes128_encryption,
     offline::OfflinePlayer,
     swallow_detector::{assert_committed_reached, assert_no_committed_swallow},
     usdt_trace,
 };
-use kithara_test_utils::{
-    TestTempDir,
-    bufpool::{TestPools, pools},
-};
+use kithara_test_utils::bufpool::{TestPools, pools};
 use num_traits::AsPrimitive;
 use url::Url;
 
@@ -64,7 +60,7 @@ const MAX_COMMITTED_STEP_SECS: f64 = 0.5;
 const HEAD_OVER_ESTIMATE: usize = 600_000;
 
 /// Delay the FLAC top variant's segments from this index on so the reader
-/// hits `wait_range budget exceeded` under the real-time deadline — the
+/// hits `wait_range budget exceeded` under the playback deadline — the
 /// underrun condition the swallow needs.
 const DELAY_FROM_SEG: usize = 6;
 const SEGMENT_DELAY_MS: u64 = 700;
@@ -86,8 +82,7 @@ fn build_fixture() -> HlsFixtureBuilder {
         .encryption(aes128_encryption())
 }
 
-async fn play_realtime(player: &mut OfflinePlayer, windows: u64, window_secs: f64) {
-    let _real_io = real_io();
+async fn play_paced(player: &mut OfflinePlayer, windows: u64, window_secs: f64) {
     for _ in 0..windows {
         let started = Instant::now();
         for _ in 0..BLOCKS_PER_WINDOW {
@@ -102,7 +97,7 @@ async fn play_realtime(player: &mut OfflinePlayer, windows: u64, window_secs: f6
 
 /// Deterministic, credential-free mirror of `zvuk_prod_flac_swallow`. Repeats
 /// the reported user scenario on a local DRM fixture: pin the FLAC lossless
-/// top variant once (no seeks, no further ABR) and play it out in real time
+/// top variant once (no seeks, no further ABR) and play it out at playback pace
 /// through the real player loop offline.
 ///
 /// The bug: the source timeline's `committed_position` jumps forward by ~one
@@ -124,17 +119,24 @@ async fn flac_swallow_fixture(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let (_helper, master) = flac_source;
+    let (helper, master) = flac_source;
 
-    let temp = TestTempDir::new();
-    let downloader = create_test_downloader();
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+    let pools = pools();
+    let downloader = helper.modeled_downloader();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Memory)
+        .cache_capacity(
+            NonZeroUsize::new(VARIANT_COUNT * (SEGMENTS_PER_VARIANT + 2) + 1)
+                .expect("fixture resources"),
+        )
+        .build();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
 
     let cfg: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
             .downloader(downloader)
             .discriminator("t0")
-            .store(kithara_integration_tests::disk_asset_store(temp.path()))
+            .store(store)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
                     .backend(backend)
@@ -145,7 +147,7 @@ async fn flac_swallow_fixture(
             .build();
 
     let mut player = OfflinePlayer::new(
-        HostConfig::offline(pools())
+        HostConfig::offline(pools)
             .settings(
                 HostSettings::builder()
                     .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
@@ -160,16 +162,12 @@ async fn flac_swallow_fixture(
     let window_secs = window_frames / f64::from(OUT_RATE);
     let windows =
         num_traits::cast::<f64, u64>((PLAY_SECS / window_secs).ceil()).unwrap_or(u64::MAX);
-    // This reproduces a REAL-TIME-DEADLINE bug: the swallow only occurs when a
-    // delayed FLAC segment (700 ms real) is not ready by the player's real-time
-    // render deadline. Hold a `RealIoScope` across the playout so the virtual
-    // clock is paced to real time — the real segment delays and the real
-    // FLAC+DRM decode then interact with a real deadline exactly as in prod,
-    // instead of the virtual clock racing past the producer (which starves the
-    // worker so the track never plays). Off the `flash` feature this is a ZST
-    // no-op and the clock is already real.
+    // Fixture delivery and playback share the clock, so a delayed segment
+    // still misses the render deadline when flash advances it virtually.
     let trace = usdt_trace::scope();
-    play_realtime(&mut player, windows, window_secs).await;
+    let started = Instant::now();
+    play_paced(&mut player, windows, window_secs).await;
+    assert!(started.elapsed() >= Duration::from_secs_f64(PLAY_SECS));
     let records = trace.events();
 
     assert_committed_reached(&records, Duration::from_secs_f64(MIN_DELAYED_PLAYHEAD_SECS));

@@ -245,8 +245,6 @@ where
             })?;
         worker.wake();
         let receipt = {
-            // WHY: The worker's disk open runs outside Flash's counted async tasks.
-            let _real_io = kithara::platform::flash::real_io();
             let budget = __hang_detector.remaining();
             let answered = poll_fn(|context| {
                 hang_tick!(format!("dispatcher load {seq:?} has no answer"));

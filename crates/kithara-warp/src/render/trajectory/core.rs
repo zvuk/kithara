@@ -8,6 +8,9 @@ use num_traits::ToPrimitive;
 use super::{Fraction, Phase, Trajectory};
 
 pub(super) fn divisor(mut first: u128, mut second: u128) -> u128 {
+    if second.is_power_of_two() {
+        return 1u128 << first.trailing_zeros().min(second.trailing_zeros());
+    }
     while second != 0 {
         (first, second) = (second, first % second);
     }
@@ -68,22 +71,34 @@ impl Fraction {
         let scale = 1u128 << 32;
         let denominator = self.denominator.get();
         let frames = u64::try_from(self.numerator / denominator).ok()?;
-        let mut remainder = self.numerator % denominator;
-        let mut fraction = 0;
-        for _ in 0..32 {
-            fraction <<= 1;
-            let complement = denominator - remainder;
-            if remainder >= complement {
-                remainder -= complement;
-                fraction += 1;
+        let numerator = if denominator.is_power_of_two() {
+            let bits = denominator.trailing_zeros();
+            if bits <= 32 {
+                self.numerator.checked_mul(1u128 << (32 - bits))?
             } else {
-                remainder += remainder;
+                let bits = bits - 32;
+                let rounded = (self.numerator & ((1u128 << bits) - 1)) >= (1u128 << (bits - 1));
+                (self.numerator >> bits).checked_add(u128::from(rounded))?
             }
-        }
-        if remainder >= denominator - remainder {
-            fraction += 1;
-        }
-        Self::new(u128::from(frames) * scale + fraction, scale)
+        } else {
+            let mut remainder = self.numerator % denominator;
+            let mut fraction = 0;
+            for _ in 0..32 {
+                fraction <<= 1;
+                let complement = denominator - remainder;
+                if remainder >= complement {
+                    remainder -= complement;
+                    fraction += 1;
+                } else {
+                    remainder += remainder;
+                }
+            }
+            if remainder >= denominator - remainder {
+                fraction += 1;
+            }
+            u128::from(frames) * scale + fraction
+        };
+        Self::new(numerator, scale)
     }
 
     pub(in crate::render) fn new(numerator: u128, denominator: u128) -> Option<Self> {

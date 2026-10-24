@@ -2,11 +2,12 @@ use std::env;
 
 use axum::{Router, middleware, routing::get};
 use kithara::{
+    download::{Downloader, DownloaderConfig},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc},
 };
 use kithara_test_fixtures::{Mp3Shape, SignalAsset, assets::by_name};
-use kithara_test_utils::TestHttpServer;
+use kithara_test_utils::{TestHttpServer, cancel_token};
 use tower_http::cors::CorsLayer;
 use url::Url;
 
@@ -46,6 +47,17 @@ impl TestServerHelper {
             options,
             super::modeled::Transport::new(router(Arc::clone(&self.state)), self.base_url.origin()),
             cancel,
+        )
+    }
+
+    /// Download fixture media through the modeled router with the default HTTP policy.
+    #[must_use]
+    pub fn modeled_downloader(&self) -> Downloader {
+        Downloader::new(
+            DownloaderConfig::for_client(
+                self.modeled_client(NetOptions::default(), cancel_token()),
+            )
+            .build(),
         )
     }
 

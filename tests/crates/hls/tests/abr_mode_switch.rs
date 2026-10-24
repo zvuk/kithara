@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    num::NonZeroUsize,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -28,8 +29,8 @@ use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
-    mixed_plain,
-    mock::LaneAudio,
+    mixed_codec_ladder, mixed_plain,
+    mock::{LaneAudio, with_blocking_reads},
     reads::blocking_audio,
     waits::wait_for_event,
 };
@@ -44,6 +45,26 @@ use crate::common::test_defaults::SawWav;
 
 const D: SawWav = SawWav::DEFAULT;
 const MANUAL_GATE_SEGMENT: usize = 5;
+
+fn fixture_cache_capacity(fixtures: &[&CreatedHls]) -> NonZeroUsize {
+    let resources = fixtures
+        .iter()
+        .map(|fixture| {
+            let spec = fixture.spec();
+            // Include an init, a possible muxed tail, and the shared encryption key.
+            spec.variant_count
+                * (spec.segments_per_variant + 1 + usize::from(spec.packaged_audio.is_some()))
+                + usize::from(spec.encryption.is_some())
+        })
+        .sum();
+    NonZeroUsize::new(resources).expect("fixture resources")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::fixture]
+async fn retained_mixed() -> CreatedHls {
+    serve(mixed_codec_ladder()).await
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn wav_ladder(data: (Vec<u8>, Vec<u8>), bandwidths: Vec<u64>) -> HlsFixtureBuilder {
@@ -677,6 +698,7 @@ where
     S: StreamType + 'static,
     LaneAudio<Stream<S>, TestPools>: Send + 'static,
 {
+    audio = with_blocking_reads(audio);
     let read_label = label.to_owned();
     spawn_blocking(move || {
         let samples = read_phase_until(&mut audio, target_samples, &read_label, || true).samples;
@@ -842,7 +864,6 @@ async fn vod_manual_switch_affects_future_segments(
     let (server, gate) = manual_thirty_gated;
 
     let url = server.master_url();
-    let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -854,9 +875,8 @@ async fn vod_manual_switch_affects_future_segments(
     let collector = EventCollector::new(&bus);
 
     let store = AssetStore::builder(pools.clone())
-        .backend(StorageBackend::Disk {
-            root: temp_dir.path().to_path_buf(),
-        })
+        .backend(StorageBackend::Memory)
+        .cache_capacity(fixture_cache_capacity(&[&server]))
         .build();
     let hls_config = HlsConfig::for_url(url)
         .store(store)
@@ -1003,7 +1023,7 @@ async fn vod_manual_switch_affects_future_segments(
     );
 }
 
-#[kithara::flash(io)]
+#[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
 async fn wait_for_stalled_event(
     events: &mut EventReceiver<TestEvent>,
@@ -1050,7 +1070,6 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
     let (server, gate) = stalled_boundary;
 
     let url = server.master_url();
-    let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -1064,11 +1083,11 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
     let mut rescue_rx = bus.subscribe();
 
     let store = AssetStore::builder(pools.clone())
-        .backend(StorageBackend::Disk {
-            root: temp_dir.path().to_path_buf(),
-        })
+        .backend(StorageBackend::Memory)
+        .cache_capacity(fixture_cache_capacity(&[&server]))
         .build();
     let hls_config = HlsConfig::for_url(url)
+        .downloader(TestServerHelper::new().await.modeled_downloader())
         .store(store)
         .pools(pools.clone())
         .cancel(cancel)
@@ -1118,7 +1137,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
         "the gated V0 segment body must be parked before reading"
     );
 
-    let read = spawn(blocking_audio(audio, read_to_eof));
+    let read = spawn(blocking_audio(with_blocking_reads(audio), read_to_eof));
     let mut saw_escape = false;
     wait_for_stalled_event(
         &mut rescue_rx,
@@ -1204,17 +1223,16 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
     let url1 = server1.master_url();
     let url2 = server2.master_url();
 
-    let temp_dir = TestTempDir::new();
     let pools = pools();
+    let downloader = TestServerHelper::new().await.modeled_downloader();
     let worker = PlayWorker::new(
         PlayWorkerConfig::builder(pools.clone())
             .cancel(CancelToken::never())
             .build(),
     );
     let shared_store = AssetStore::builder(pools.clone())
-        .backend(StorageBackend::Disk {
-            root: temp_dir.path().to_path_buf(),
-        })
+        .backend(StorageBackend::Memory)
+        .cache_capacity(fixture_cache_capacity(&[&server1, &server2]))
         .build();
     let wav_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
@@ -1226,6 +1244,7 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
     let collector1 = EventCollector::new(&bus1);
 
     let hls1 = HlsConfig::for_url(url1.clone())
+        .downloader(downloader.clone())
         .store(shared_store.clone())
         .pools(pools.clone())
         .cancel(CancelToken::never())
@@ -1242,7 +1261,10 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
         .expect("track 1");
 
     let t1_samples = collector1
-        .finish_read(blocking_audio(audio1, read_to_eof).await, &bus1)
+        .finish_read(
+            blocking_audio(with_blocking_reads(audio1), read_to_eof).await,
+            &bus1,
+        )
         .await;
 
     let t1_segs = collector1.segments();
@@ -1265,6 +1287,7 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
     let collector2 = EventCollector::new(&bus2);
 
     let hls2 = HlsConfig::for_url(url2)
+        .downloader(downloader.clone())
         .store(shared_store.clone())
         .pools(pools.clone())
         .cancel(CancelToken::never())
@@ -1281,7 +1304,10 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
         .expect("track 2");
 
     let t2_samples = collector2
-        .finish_read(blocking_audio(audio2, read_to_eof).await, &bus2)
+        .finish_read(
+            blocking_audio(with_blocking_reads(audio2), read_to_eof).await,
+            &bus2,
+        )
         .await;
 
     let t2_segs = collector2.segments();
@@ -1303,6 +1329,7 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
     let collector3 = EventCollector::new(&bus3);
 
     let hls3 = HlsConfig::for_url(url1)
+        .downloader(downloader)
         .store(shared_store)
         .pools(pools.clone())
         .cancel(CancelToken::never())
@@ -1319,7 +1346,10 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
         .expect("track 1 replay");
 
     let t3_samples = collector3
-        .finish_read(blocking_audio(audio3, read_to_eof).await, &bus3)
+        .finish_read(
+            blocking_audio(with_blocking_reads(audio3), read_to_eof).await,
+            &bus3,
+        )
         .await;
 
     let t3_segs = collector3.segments();
@@ -1368,7 +1398,6 @@ async fn abr_switch_must_not_redownload_covered_segments(
     let (server, gate) = manual_thirty_gated;
 
     let url = server.master_url();
-    let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -1382,9 +1411,8 @@ async fn abr_switch_must_not_redownload_covered_segments(
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder(pools.clone())
-                .backend(StorageBackend::Disk {
-                    root: temp_dir.path().to_path_buf(),
-                })
+                .backend(StorageBackend::Memory)
+                .cache_capacity(fixture_cache_capacity(&[&server]))
                 .build(),
         )
         .pools(pools.clone())
@@ -1551,7 +1579,6 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant(
     let (server, setup_gate) = manual_ladder;
 
     let url = server.master_url();
-    let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -1565,9 +1592,8 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant(
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder(pools.clone())
-                .backend(StorageBackend::Disk {
-                    root: temp_dir.path().to_path_buf(),
-                })
+                .backend(StorageBackend::Memory)
+                .cache_capacity(fixture_cache_capacity(&[&server]))
                 .build(),
         )
         .pools(pools.clone())
@@ -1698,14 +1724,12 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant(
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
-async fn runtime_cross_codec_manual_switch_no_hang(
-    #[future(awt)] mixed_plain: (TestServerHelper, Url),
-) {
-    let (_server, url) = mixed_plain;
+async fn runtime_cross_codec_manual_switch_no_hang(#[future(awt)] retained_mixed: CreatedHls) {
+    let server = retained_mixed;
+    let url = server.master_url();
     // The mixed-codec ladder: variants 0..2 are AAC (mp4a.40.2), variant 3
     // is FLAC. Manual(3) forces the cross-codec path.
 
-    let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -1721,9 +1745,8 @@ async fn runtime_cross_codec_manual_switch_no_hang(
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder(pools.clone())
-                .backend(StorageBackend::Disk {
-                    root: temp_dir.path().to_path_buf(),
-                })
+                .backend(StorageBackend::Memory)
+                .cache_capacity(fixture_cache_capacity(&[&server]))
                 .build(),
         )
         .pools(pools.clone())
@@ -1826,7 +1849,6 @@ async fn runtime_manual_switch_works_when_all_segments_cached(
     let server = manual_six;
 
     let url = server.master_url();
-    let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -1849,9 +1871,8 @@ async fn runtime_manual_switch_works_when_all_segments_cached(
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder(pools.clone())
-                .backend(StorageBackend::Disk {
-                    root: temp_dir.path().to_path_buf(),
-                })
+                .backend(StorageBackend::Memory)
+                .cache_capacity(fixture_cache_capacity(&[&server]))
                 .build(),
         )
         .pools(pools.clone())
@@ -1966,7 +1987,6 @@ async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: 
         .register_init_gate(server.token(), 1);
 
     let url = server.master_url();
-    let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -1983,9 +2003,8 @@ async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: 
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder(pools.clone())
-                .backend(StorageBackend::Disk {
-                    root: temp_dir.path().to_path_buf(),
-                })
+                .backend(StorageBackend::Memory)
+                .cache_capacity(fixture_cache_capacity(&[&server]))
                 .build(),
         )
         .pools(pools.clone())
@@ -2100,7 +2119,6 @@ async fn runtime_manual_switch_works_after_cache_and_seek(#[future(awt)] manual_
     let server = manual_eight;
 
     let url = server.master_url();
-    let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -2116,9 +2134,8 @@ async fn runtime_manual_switch_works_after_cache_and_seek(#[future(awt)] manual_
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder(pools.clone())
-                .backend(StorageBackend::Disk {
-                    root: temp_dir.path().to_path_buf(),
-                })
+                .backend(StorageBackend::Memory)
+                .cache_capacity(fixture_cache_capacity(&[&server]))
                 .build(),
         )
         .pools(pools.clone())
@@ -2141,7 +2158,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek(#[future(awt)] manual_
         .media_info(wav_info)
         .build();
     let config = kithara::play::TrackConfig::for_audio(config)
-        .audio_buffer_chunks(std::num::NonZeroUsize::new(4).expect("four buffer chunks"))
+        .audio_buffer_chunks(NonZeroUsize::new(4).expect("four buffer chunks"))
         .build();
     let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
@@ -2274,7 +2291,6 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults(
     let server = first_boundary;
 
     let url = server.master_url();
-    let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -2289,9 +2305,8 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults(
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder(pools.clone())
-                .backend(StorageBackend::Disk {
-                    root: temp_dir.path().to_path_buf(),
-                })
+                .backend(StorageBackend::Memory)
+                .cache_capacity(fixture_cache_capacity(&[&server]))
                 .build(),
         )
         .pools(pools.clone())
@@ -2519,18 +2534,18 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof(
 )]
 async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     #[case] backend: DecoderBackend,
-    #[future(awt)] mixed_plain: (TestServerHelper, Url),
+    #[future(awt)] retained_mixed: CreatedHls,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let (_server, url) = mixed_plain;
+    let server = retained_mixed;
+    let url = server.master_url();
     // The mixed-codec ladder: variants 0..2 AAC (mp4a.40.2), variant 3 FLAC.
     // The duration of every variant ≈ 220 s. We start on the top AAC (v=2)
     // so we can downswitch to the bottom one (v=0) for the same-codec
     // scenario.
 
-    let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -2544,9 +2559,8 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder(pools.clone())
-                .backend(StorageBackend::Disk {
-                    root: temp_dir.path().to_path_buf(),
-                })
+                .backend(StorageBackend::Memory)
+                .cache_capacity(fixture_cache_capacity(&[&server]))
                 .build(),
         )
         .pools(pools.clone())
@@ -2563,9 +2577,10 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
                 .build(),
         )
         .build();
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create audio");
+    let mut audio = with_blocking_reads(audio);
 
     // Reader cadence is driven by decoded sample targets, not wall-clock
     // deadlines. Slower scheduling may add `Pending` and delay the outer test
@@ -2730,14 +2745,14 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
 async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     #[case] backend: DecoderBackend,
     #[case] target_variant: usize,
-    #[future(awt)] mixed_plain: (TestServerHelper, Url),
+    #[future(awt)] retained_mixed: CreatedHls,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let (_server, url) = mixed_plain;
+    let server = retained_mixed;
+    let url = server.master_url();
 
-    let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -2768,9 +2783,8 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder(pools.clone())
-                .backend(StorageBackend::Disk {
-                    root: temp_dir.path().to_path_buf(),
-                })
+                .backend(StorageBackend::Memory)
+                .cache_capacity(fixture_cache_capacity(&[&server]))
                 .build(),
         )
         .pools(pools.clone())
@@ -2790,7 +2804,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create audio");
-    audio = kithara_integration_tests::mock::with_blocking_reads(audio);
+    audio = with_blocking_reads(audio);
 
     let (mut audio, samples_phase1) = spawn_blocking(move || {
         let target_position = Duration::from_secs(50);

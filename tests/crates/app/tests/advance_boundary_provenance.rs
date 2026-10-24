@@ -991,13 +991,14 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
         last_ascending_end_frame,
     )
     .unwrap_or_else(|error| {
-        let timeline: Vec<_> = observation.lock().timeline[command_index..].iter()
+        let observed = observation.lock();
+        let timeline: Vec<_> = observed.timeline_evidence().skip(command_index)
             .filter(|entry| !matches!(
                 entry.get("event").and_then(|value| value.as_str()),
                 Some("entry" | "planned")
             ))
-            .cloned()
             .collect();
+        drop(observed);
         let after_applied: Vec<_> = capture.points.iter()
             .filter(|(frame, _)| capture.session_start + *frame as u64 >= applied_at)
             .take(8)

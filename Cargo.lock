@@ -5641,6 +5641,7 @@ dependencies = [
 name = "kithara-host-tests"
 version = "0.0.1-alpha5"
 dependencies = [
+ "cochlea-features",
  "delegate",
  "kithara",
  "kithara-command",
@@ -5931,6 +5932,7 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "num-traits",
+ "rustfft",
  "tracing",
  "url",
 ]
@@ -6240,6 +6242,7 @@ dependencies = [
 name = "kithara-sync-tests"
 version = "0.0.1-alpha5"
 dependencies = [
+ "cochlea-features",
  "delegate",
  "futures",
  "kithara",

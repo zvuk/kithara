@@ -165,6 +165,7 @@ mod tests {
     }
 
     use kithara_platform::{CancelToken, thread, time::Duration};
+    use kithara_test_utils::cancel_token;
     use tempfile::TempDir;
 
     use super::*;
@@ -439,7 +440,7 @@ mod tests {
         let old = Arc::downgrade(snapshot.as_ref().unwrap());
         drop(snapshot);
 
-        driver.release_backing().unwrap();
+        driver.release_backing(None).unwrap();
         assert!(
             old.upgrade().is_none(),
             "release must close a quiesced mapping"
@@ -457,7 +458,7 @@ mod tests {
         let reader = driver.committed.load();
         let old = Arc::downgrade(reader.as_ref().unwrap());
 
-        driver.release_backing().unwrap();
+        driver.release_backing(None).unwrap();
         drop(reader);
         assert!(
             old.upgrade().is_some(),
@@ -466,6 +467,59 @@ mod tests {
         driver.write_at(0, b"next", false).unwrap();
         driver.commit(Some(4)).unwrap();
         assert!(old.upgrade().is_none(), "next writer must close mapping");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[case::whole(None)]
+    #[case::prefix(Some(7))]
+    #[case::empty(Some(0))]
+    fn releasing_active_backing_preserves_bytes_without_truncating(#[case] final_len: Option<u64>) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("active-release.dat");
+        let (driver, _) = MmapDriver::open(
+            MmapOptions::for_path(path.clone())
+                .initial_len(64 * 1024)
+                .build(),
+        )
+        .unwrap();
+        driver.write_at(0, b"payload", false).unwrap();
+
+        driver.release_backing(final_len).unwrap();
+
+        assert_eq!(driver.storage_len(), 0);
+        assert_eq!(driver.committed_len(), None);
+        let bytes = fs::read(&path).unwrap();
+        assert_eq!(bytes.len(), 64 * 1024, "the publisher owns truncation");
+        assert_eq!(&bytes[..7], b"payload");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[case::failed(false)]
+    #[case::cancelled(true)]
+    fn backing_release_rejects_an_unhealthy_resource(#[case] cancelled: bool) {
+        let dir = TempDir::new().unwrap();
+        let cancel = cancel_token();
+        let resource: MmapResource = Resource::open(
+            cancel.clone(),
+            MmapOptions::for_path(dir.path().join("unhealthy-release.dat")).build(),
+        )
+        .unwrap();
+        resource.write_at(0, b"payload").unwrap();
+        if cancelled {
+            cancel.cancel();
+        } else {
+            resource.fail_in_place("release refused".to_owned());
+        }
+
+        let result = resource.release_backing_in_place(Some(7));
+
+        if cancelled {
+            assert!(matches!(result, Err(StorageError::Cancelled)));
+        } else {
+            assert!(
+                matches!(result, Err(StorageError::Failed(reason)) if reason == "release refused")
+            );
+        }
     }
 
     #[kithara::test]
@@ -539,20 +593,17 @@ mod tests {
         );
     }
 
-    /// Sealing finalizes the bytes without publishing a snapshot, because the
-    /// caller is about to rename the file and republish it itself. Until that
-    /// happens the live mapping is all a reader has, so it must keep serving.
     #[kithara::test(timeout(Duration::from_secs(1)))]
-    fn a_sealed_resource_still_serves_its_bytes() {
+    fn backing_release_preserves_bytes_without_publishing_readiness() {
         let dir = TempDir::new().unwrap();
         let res = create_resource_with_size(&dir, Some(64 * 1024));
         res.write_at(0, b"payload").unwrap();
 
-        res.seal_in_place(Some(7)).unwrap();
+        res.release_backing_in_place(Some(7)).unwrap();
 
-        let mut buf = [0u8; 7];
-        res.reader().read_at(0, &mut buf).unwrap();
-        assert_eq!(&buf, b"payload", "a sealed resource must stay readable");
+        assert_eq!(res.status(), ResourceStatus::Active);
+        let bytes = fs::read(dir.path().join("test.dat")).unwrap();
+        assert_eq!(&bytes[..7], b"payload");
     }
 
     /// A re-download starts a fresh generation in a rewrite temp file. It

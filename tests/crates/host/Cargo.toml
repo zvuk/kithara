@@ -25,12 +25,13 @@ apple-fused-src = ["kithara/apple-fused-src"]
 kithara = { workspace = true, features = ["usdt", "mock", "offline", "resample-rubato", "signal", "link"] }
 kithara-command = { workspace = true }
 kithara-config = { workspace = true }
-kithara-integration-tests = { workspace = true, features = ["all"] }
+kithara-integration-tests = { workspace = true, features = ["all", "link"] }
 kithara-render = { workspace = true }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
+cochlea-features = { workspace = true }
 delegate = { workspace = true }
 num-traits = { workspace = true }
 serde = { workspace = true }

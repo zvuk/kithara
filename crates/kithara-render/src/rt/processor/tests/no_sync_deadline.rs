@@ -19,7 +19,6 @@ use super::{
 use crate::worker::{PcmPacket, packet_tests::PacketRing};
 
 mod consts {
-    pub(in crate::rt) const BLOCK_FRAMES: [u32; 4] = [128, 256, 512, 1_024];
     /// Callbacks one census window covers. A mix that walked its track list per
     /// frame would fire the probe `block_frames` times per track per callback,
     /// and this window keeps even that history inside `usdt::MAX_EVENTS`, so
@@ -32,7 +31,6 @@ mod consts {
     /// the walk count is already exact inside a single window.
     pub(in crate::rt) const MEASURED_BLOCKS: usize = 4_096;
     pub(in crate::rt) const SAMPLE_RATE: u32 = 48_000;
-    pub(in crate::rt) const TRACK_COUNTS: [usize; 3] = [1, 2, 4];
     pub(in crate::rt) const TRACK_SECONDS: f64 = 300.0;
     pub(in crate::rt) const WARMUP_BLOCKS: usize = 512;
 }
@@ -57,7 +55,7 @@ fn spec() -> AudioSpec {
 
 fn processor(block_frames: u32) -> (DeadlineMixer, TestEnds) {
     let shape = StreamShape::new(non_zero(block_frames, "block frames"), spec().sample_rate);
-    let (mixer, ends) = mixer_with_shape(DeckMixerConfig::default(), 64, shape);
+    let (mixer, ends) = mixer_with_shape(DeckMixerConfig::builder().eq_bands(0).build(), 64, shape);
     (
         DeadlineMixer {
             mixer,
@@ -305,10 +303,22 @@ fn census(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4])
 /// to the `rt_block_budget` bench, which times this processor and asks the
 /// clock for no verdict.
 #[kithara::test(native, serial)]
-fn mixing_a_track_costs_the_same_however_many_tracks_play(deadline_tracks: [&'static [u8]; 4]) {
-    for block_frames in consts::BLOCK_FRAMES {
-        for tracks in consts::TRACK_COUNTS {
-            census(block_frames, tracks, deadline_tracks);
-        }
-    }
+#[case::frames128_tracks1(128, 1)]
+#[case::frames128_tracks2(128, 2)]
+#[case::frames128_tracks4(128, 4)]
+#[case::frames256_tracks1(256, 1)]
+#[case::frames256_tracks2(256, 2)]
+#[case::frames256_tracks4(256, 4)]
+#[case::frames512_tracks1(512, 1)]
+#[case::frames512_tracks2(512, 2)]
+#[case::frames512_tracks4(512, 4)]
+#[case::frames1024_tracks1(1_024, 1)]
+#[case::frames1024_tracks2(1_024, 2)]
+#[case::frames1024_tracks4(1_024, 4)]
+fn mixing_a_track_costs_the_same_however_many_tracks_play(
+    #[case] block_frames: u32,
+    #[case] tracks: usize,
+    deadline_tracks: [&'static [u8]; 4],
+) {
+    census(block_frames, tracks, deadline_tracks);
 }
