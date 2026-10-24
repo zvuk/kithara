@@ -40,14 +40,7 @@ schema_version = 1
 "crates/kithara-hls/src/stream/coord.rs::HlsCoord::new" = 1
 
 [fn_cyclomatic]
-"crates/kithara-analysis/src/archive/file.rs::AnalysisFile::parse" = 9
-"crates/kithara-analysis/src/archive/file.rs::Header::decode" = 8
-"crates/kithara-analysis/src/archive/file.rs::build_update" = 9
-"crates/kithara-analysis/src/beat/analyzer.rs::BeatAnalyzer::prepare_detection" = 2
-"crates/kithara-analysis/src/blob/track.rs::TrackAnalysis::try_from" = 16
-"crates/kithara-analysis/src/progress.rs::BeatResume::decode" = 4
 "crates/kithara-app/src/gui/ui/events.rs::deck_write" = 4
-"crates/kithara-beat/src/nn/inference.rs::BeatPredictor::predict" = 2
 "crates/kithara-broadcast/src/service/task.rs::BroadcastTask::process" = 3
 "crates/kithara-decode/src/android/codec.rs::AndroidCodec::read_output" = 1
 "crates/kithara-decode/src/ape.rs::ApeDecoder::prepare_chunk" = 1
@@ -69,8 +62,6 @@ schema_version = 1
 "crates/kithara-hls/src/variant/io/read.rs::HlsVariant::range_wait_phase_published" = 9
 "crates/kithara-host/src/host/offline.rs::OfflineRuntime::render" = 4
 "crates/kithara-host/src/session/transport/control.rs::prepare_route_restart" = 1
-"crates/kithara-mpa/src/demuxer.rs::MpaReader::seek_with_buffer" = 4
-"crates/kithara-mpa/src/tags.rs::try_read_info_tag_inner" = 22
 "crates/kithara-platform/src/flash/system/dump.rs::FlashInner::fmt" = 21
 "crates/kithara-platform/src/flash/system/sched.rs::Core::try_advance_once" = 2
 "crates/kithara-record/src/live/task.rs::RecordingTask::process" = 5

@@ -242,57 +242,74 @@ where
         let rate = self.runs.target_rate().to_f32().unwrap_or(1.0);
 
         for (start, mono) in self.runs.spans() {
-            let base = self.runs.offset_in_run(0, start);
-            let mut index = self.window_index(start, base);
-            loop {
-                let span = index.saturating_mul(self.hop_frames);
-                let offset = span.saturating_sub(base);
-                let Some(available) = mono.len().checked_sub(offset).filter(|left| *left > 0)
-                else {
-                    break;
-                };
+            let Some((range, window)) = self.select_span_window(start, mono.len(), trailing, rate)
+            else {
+                continue;
+            };
+            let input = mono.get(range)?;
+            let mut owned = match pools.get_with_len::<f32>(input.len()) {
+                Ok(owned) => owned,
+                Err(error) => {
+                    self.failure = Some(error.into());
+                    return None;
+                }
+            };
+            owned.copy_from_slice(input);
+            return Some(DetectRequest {
+                input: owned,
+                window,
+            });
+        }
+        None
+    }
 
-                let full = available >= self.ready_frames;
-                if !full && !trailing && available < self.min_frames {
-                    break;
-                }
-                let known = self.windows.contains_key(&index);
-                if !known || (full && self.short.contains(&index)) {
-                    let end = if full {
-                        offset.saturating_add(self.window_frames)
-                    } else {
-                        mono.len()
-                    };
-                    let input = mono.get(offset..end)?;
-                    let mut owned = match pools.get_with_len::<f32>(input.len()) {
-                        Ok(owned) => owned,
-                        Err(error) => {
-                            self.failure = Some(error.into());
-                            return None;
-                        }
-                    };
-                    owned.copy_from_slice(input);
-                    let keep = if full {
-                        self.hop_frames.saturating_sub(base.saturating_sub(span))
-                    } else {
-                        available
-                    };
-                    let offset_seconds = self.window_offset(start, base, span, rate);
-                    return Some(DetectRequest {
-                        input: owned,
-                        window: WindowMeta {
-                            full,
-                            index,
-                            keep_seconds: keep.to_f32().unwrap_or(f32::MAX) / rate,
-                            offset_seconds,
-                        },
-                    });
-                }
-                if !full {
-                    break;
-                }
-                index = index.saturating_add(1);
+    fn select_span_window(
+        &self,
+        start: u64,
+        frames: usize,
+        trailing: bool,
+        rate: f32,
+    ) -> Option<(Range<usize>, WindowMeta)> {
+        let base = self.runs.offset_in_run(0, start);
+        let mut index = self.window_index(start, base);
+        loop {
+            let span = index.saturating_mul(self.hop_frames);
+            let offset = span.saturating_sub(base);
+            let Some(available) = frames.checked_sub(offset).filter(|left| *left > 0) else {
+                break;
+            };
+
+            let full = available >= self.ready_frames;
+            if !full && !trailing && available < self.min_frames {
+                break;
             }
+            let known = self.windows.contains_key(&index);
+            if !known || (full && self.short.contains(&index)) {
+                let end = if full {
+                    offset.saturating_add(self.window_frames)
+                } else {
+                    frames
+                };
+                let keep = if full {
+                    self.hop_frames.saturating_sub(base.saturating_sub(span))
+                } else {
+                    available
+                };
+                let offset_seconds = self.window_offset(start, base, span, rate);
+                return Some((
+                    offset..end,
+                    WindowMeta {
+                        full,
+                        index,
+                        keep_seconds: keep.to_f32().unwrap_or(f32::MAX) / rate,
+                        offset_seconds,
+                    },
+                ));
+            }
+            if !full {
+                break;
+            }
+            index = index.saturating_add(1);
         }
         None
     }

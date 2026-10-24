@@ -58,12 +58,12 @@ wasm BROWSER="chrome" SUITE="all" REAL_AUDIO_ROUTE="exclude":
         exit 2
         ;;
     esac
-    # The browser talks to a fixture server that runs on this machine, and the
-    # runner looks for it beside itself — for every wasm test binary, not just
-    # the integration suite. Nothing in a wasm build produces a host binary, so
-    # without this the run dies with "failed to start test_server ... No such
-    # file or directory".
-    cargo build -p kithara-integration-tests --features all --bin test_server
+    # Build the runner and its sibling fixture server together so running WASM
+    # tests does not start another host Cargo build.
+    cargo build -p kithara-integration-tests --features all --bin test_server --bin wasm_test_runner
+    host_target_dir="$(cargo metadata --format-version=1 --no-deps | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+    export PATH="$host_target_dir/debug:$PATH"
+    export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm_test_runner
     WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
       cargo "+$toolchain" test --profile test-release \
       --target wasm32-unknown-unknown \
