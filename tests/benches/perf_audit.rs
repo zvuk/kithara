@@ -285,7 +285,11 @@ fn bench_analysis_worker(c: &mut Criterion) {
     let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .build();
-    let play_worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let play_worker = PlayWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .runtime(Some(rt.handle().clone()))
+            .build(),
+    );
     let builder = AnalyzerBuilder::<PlaybackResamplerBackend, TestPools>::new(pools.clone())
         .with_beat_config(BeatAnalysisConfig::default())
         .with_beat()

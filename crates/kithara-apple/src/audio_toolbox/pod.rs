@@ -45,7 +45,8 @@ where
     T: ApplePod,
 {
     let mut out = vec![0_u8; size_of::<T>()];
-    debug_assert!(pod_write_to_slice(value, &mut out));
+    let written = pod_write_to_slice(value, &mut out);
+    debug_assert!(written);
     out
 }
 
