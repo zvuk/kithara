@@ -55,26 +55,7 @@ impl SourceResidency {
             return Ok(());
         }
         if self.end.is_none() {
-            self.origin = Some(meta.frame_offset);
-            let prefix = self
-                .history_frames
-                .min(usize::try_from(meta.frame_offset).unwrap_or(usize::MAX));
-            self.start =
-                i64::try_from(meta.frame_offset).map_err(|_| ElasticError::SampleCountOverflow)?;
-            if meta.frame_offset == 0 {
-                let history = self
-                    .history_frames
-                    .min(self.samples.capacity() / channels - frames);
-                self.start =
-                    -i64::try_from(history).map_err(|_| ElasticError::SampleCountOverflow)?;
-                self.samples
-                    .ensure_len(history * channels)
-                    .map_err(|_| ElasticError::PoolCapacity)?;
-                self.samples.fill(0.0);
-            } else if prefix == 0 {
-                self.samples.clear();
-            }
-            self.end = Some(meta.frame_offset);
+            self.begin_at(meta, frames, channels)?;
         }
         let expected = self.end.ok_or(ElasticError::EmptySource)?;
         if expected != meta.frame_offset {
@@ -95,6 +76,34 @@ impl SourceResidency {
                 .checked_add(u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?)
                 .ok_or(ElasticError::SampleCountOverflow)?,
         );
+        Ok(())
+    }
+
+    fn begin_at(
+        &mut self,
+        meta: AudioChunkInfo,
+        frames: usize,
+        channels: usize,
+    ) -> Result<(), ElasticError> {
+        self.origin = Some(meta.frame_offset);
+        let prefix = self
+            .history_frames
+            .min(usize::try_from(meta.frame_offset).unwrap_or(usize::MAX));
+        self.start =
+            i64::try_from(meta.frame_offset).map_err(|_| ElasticError::SampleCountOverflow)?;
+        if meta.frame_offset == 0 {
+            let history = self
+                .history_frames
+                .min(self.samples.capacity() / channels - frames);
+            self.start = -i64::try_from(history).map_err(|_| ElasticError::SampleCountOverflow)?;
+            self.samples
+                .ensure_len(history * channels)
+                .map_err(|_| ElasticError::PoolCapacity)?;
+            self.samples.fill(0.0);
+        } else if prefix == 0 {
+            self.samples.clear();
+        }
+        self.end = Some(meta.frame_offset);
         Ok(())
     }
 

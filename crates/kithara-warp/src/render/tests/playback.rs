@@ -340,20 +340,24 @@ fn run_vinyl(warp_sine: &[f32], kind: StretchKind, speed: f32, in_frames: usize)
     render(&mut vinyl(kind, speed), &input)
 }
 
-/// Half playback speed -> stretch 2.0 -> ~double duration, pitch held.
+/// Slowed playback -> stretched exact timeline, pitch held.
 /// Shared across every compiled-in backend.
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-fn assert_half_speed_contract(warp_sine: &[f32], kind: StretchKind) {
+fn assert_half_speed_contract(
+    warp_sine: &[f32],
+    kind: StretchKind,
+    speed: f32,
+    expected_timeline: usize,
+) {
     let channels = usize::from(consts::CH);
     let in_frames = usize::try_from(consts::SR).unwrap() * 2; // 2 s
-    let (out, tail_frames) = run_keylocked_with_tail(warp_sine, kind, 0.5, in_frames);
+    let (out, tail_frames) = run_keylocked_with_tail(warp_sine, kind, speed, in_frames);
     let out_frames = out.len() / channels;
     let timeline_frames = out_frames - tail_frames;
-    let expected_timeline = in_frames * 2;
 
     assert_eq!(
         timeline_frames, expected_timeline,
-        "{kind:?}: exact half-speed timeline"
+        "{kind:?}: exact timeline at speed {speed}"
     );
     assert!(tail_frames > 0, "{kind:?}: terminal history is drained");
 
@@ -394,8 +398,10 @@ fn assert_unity_contract(warp_sine: &[f32], kind: StretchKind) {
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn half_speed_and_unity_contracts(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
-    assert_half_speed_contract(&warp_sine, backend);
+fn exact_timeline_and_unity_contracts(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
+    let in_frames = usize::try_from(consts::SR).unwrap() * 2;
+    assert_half_speed_contract(&warp_sine, backend, 0.5, in_frames * 2);
+    assert_half_speed_contract(&warp_sine, backend, 0.75, in_frames * 4 / 3);
     assert_unity_contract(&warp_sine, backend);
 }
 

@@ -362,7 +362,6 @@ where
         let mut input = Self::meta_at_frame(meta, feed).ok()?;
         input.frames = u32::try_from(frames).unwrap_or(u32::MAX);
         self.last_input_meta = Some(input);
-        let landing = prepared.and_then(|quantum| quantum.landing_frames);
         let residency = self.residency.take();
         let rendered = residency
             .as_ref()
@@ -376,14 +375,7 @@ where
                 let range = i64::try_from(feed)
                     .map_err(|_| ElasticError::SampleCountOverflow)
                     .and_then(|feed| resident.range(feed, end, channels))?;
-                self.render_active(
-                    input,
-                    &resident.samples[range],
-                    speed,
-                    channels,
-                    frames,
-                    landing,
-                )
+                self.render_active(input, &resident.samples[range], speed, channels, frames)
             });
         self.residency = residency;
         let rendered =
@@ -813,15 +805,6 @@ where
                 return None;
             }
             return Some(output);
-        }
-        if let Some(prepared) = prepared
-            && let Err(error) = self.activate_prepared_quantum(&chunk, prepared)
-        {
-            warn!(%error, "time-stretch activation failed; dropping chunk");
-            self.retire_engine();
-            self.clear_render_state();
-            self.defer_scratch(Some(chunk.samples));
-            return None;
         }
         self.process_active(chunk, speed, prepared)
     }

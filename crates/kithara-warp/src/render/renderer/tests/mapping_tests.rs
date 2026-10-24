@@ -230,7 +230,6 @@ fn finite_projection_clips_a_quantum_before_resolving_past_the_recording() {
     let projection = prepared.source_span.expect("projected quantum");
     assert_eq!(projection.output_frames(), 32);
     assert_eq!(projection.end(), 8_820_000);
-    assert_eq!(prepared.landing_frames, Some(32));
     assert_eq!(prepared.source_start, start);
     assert_eq!(
         projection
@@ -283,7 +282,6 @@ fn terminal_projection_recomputes_both_endpoints_and_keeps_the_selected_rate() {
     assert_eq!(projection.start(), 0);
     assert_eq!(projection.output_frames(), 64);
     assert_eq!(projection.end(), 96);
-    assert_eq!(terminal.landing_frames, Some(64));
     assert_eq!(
         projection
             .source_ratio_at(64)

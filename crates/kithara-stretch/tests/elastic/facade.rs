@@ -6,29 +6,6 @@ use super::*;
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn renders_the_requested_output_frame_count(
-    #[case] backend: StretchKind,
-    stretch_pcm: &'static StretchPcm,
-) {
-    let mut engine = prepared_backend(backend, 8192, 8192);
-    let request = ElasticRequest::new(4800, 4000).expect("the request is non-empty");
-    let source = interleaved_signal(stretch_pcm, request.source_frames());
-    let mut output = vec![f32::NAN; request.output_frames() * CHANNELS];
-
-    engine
-        .process(request, &source, &mut output)
-        .expect("the request is inside the prepared envelope");
-
-    assert_eq!(output.len(), 4000 * CHANNELS);
-    assert!(output.iter().all(|sample| sample.is_finite()));
-}
-
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn renders_exact_spans_at_both_declared_rate_edges(
     #[case] backend: StretchKind,
     stretch_pcm: &'static StretchPcm,

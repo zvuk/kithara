@@ -992,6 +992,58 @@ fn reset_discards_pending_span_before_new_timeline(
     assert_eq!(&output.samples[..], &expected);
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn a_deferred_reset_renders_like_a_fresh_renderer(
+    #[case] backend: StretchKind,
+    warp_sine: Vec<f32>,
+) {
+    const BLOCK_FRAMES: usize = 4096;
+    const SEEK_FRAME: usize = 40_960;
+    let config = WarpConfig::builder()
+        .speed(0.75)
+        .keylock(true)
+        .backend(backend)
+        .build();
+    let channels = usize::from(consts::CH);
+    let render_at = |fx: &mut WarpRenderer, frame: usize| {
+        let start = frame * channels;
+        let mut input = chunk(
+            &fx.pools,
+            &warp_sine[start..start + BLOCK_FRAMES * channels],
+        );
+        input.meta.frame_offset = u64::try_from(frame).expect("source frame fits u64");
+        render_serviced(fx, input)
+    };
+
+    let mut seeked = renderer(&config);
+    for frame in (0..4).map(|block| block * BLOCK_FRAMES) {
+        render_at(&mut seeked, frame);
+    }
+    seeked.reset();
+    seeked.prepare(spec());
+    let after_reset =
+        render_at(&mut seeked, SEEK_FRAME).expect("the first block after the seek renders");
+    let fresh = render_at(&mut renderer(&config), SEEK_FRAME)
+        .expect("a fresh renderer renders the same block");
+
+    assert_eq!(after_reset.frames(), fresh.frames());
+    let mismatch = after_reset
+        .samples
+        .iter()
+        .zip(fresh.samples.iter())
+        .position(|(actual, expected)| actual.to_bits() != expected.to_bits());
+    assert_eq!(
+        mismatch, None,
+        "the first block after a reset carries no earlier stream history"
+    );
+}
+
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",

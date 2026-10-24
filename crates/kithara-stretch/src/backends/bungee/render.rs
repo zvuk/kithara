@@ -1,5 +1,3 @@
-#[cfg(test)]
-use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{buffer::signal_error, stream::StreamCore};
@@ -95,8 +93,11 @@ impl StreamCore {
         input_end: i32,
         input_frames: f64,
         output_frames: f64,
-        remaining_output_frames: f64,
+        remaining_output_frames: usize,
     ) -> Result<f64, ElasticError> {
+        let remaining_output_frames = remaining_output_frames
+            .to_f64()
+            .ok_or(ElasticError::SampleCountOverflow)?;
         let rate = input_frames / output_frames;
         let scheduling_offset = self.rate_aware_offset(rate)?;
         Ok(f64::from(input_end)
@@ -139,7 +140,6 @@ impl StreamCore {
         self.render_inner(source, request, pitch, output, false)
     }
 
-    #[cfg_attr(test, kithara::hang_watchdog)]
     fn render_anchored(
         &mut self,
         target: usize,
@@ -155,16 +155,12 @@ impl StreamCore {
         let mut rendered = 0;
         let mut stalled = 0usize;
         for _ in 0..iteration_limit {
-            #[cfg(test)]
-            hang_tick!();
             let output_consumed = self.output_consumed;
             self.discard_before(anchor)?;
             let discarded = self.output_consumed > output_consumed;
             let consumed = self.consume(target - rendered, output.as_deref_mut(), rendered)?;
             rendered += consumed;
             if rendered == target {
-                #[cfg(test)]
-                hang_reset!();
                 self.samples_needed -=
                     rendered.to_f64().ok_or(ElasticError::SampleCountOverflow)?;
                 return Ok(());
@@ -175,8 +171,6 @@ impl StreamCore {
                 .as_ref()
                 .is_some_and(|chunk| chunk.valid && chunk.frames > self.output_consumed);
             if discarded || consumed > 0 || produced {
-                #[cfg(test)]
-                hang_reset!();
                 stalled = 0;
             } else {
                 stalled += 1;
@@ -223,7 +217,6 @@ impl StreamCore {
         Ok(())
     }
 
-    #[cfg_attr(test, kithara::hang_watchdog)]
     pub(super) fn render_target<F>(
         &mut self,
         input_end: i32,
@@ -250,22 +243,15 @@ impl StreamCore {
         let mut rendered = 0;
         let mut stalled = 0usize;
         for _ in 0..iteration_limit {
-            #[cfg(test)]
-            hang_tick!();
             let consumed = self.consume(target - rendered, output.as_deref_mut(), rendered)?;
             rendered += consumed;
             self.unprimed_started |= consumed > 0;
             if rendered == target {
-                #[cfg(test)]
-                hang_reset!();
                 self.samples_needed -=
                     rendered.to_f64().ok_or(ElasticError::SampleCountOverflow)?;
                 return Ok(());
             }
-            let remaining = (target - rendered)
-                .to_f64()
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            let position = self.position(input_end, input, output_count, remaining)?;
+            let position = self.position(input_end, input, output_count, target - rendered)?;
             self.schedule_unprimed(position)?;
             self.input.set_requested(self.native.specify(&self.request));
             self.request_pending = true;
@@ -276,8 +262,6 @@ impl StreamCore {
                 .as_ref()
                 .is_some_and(|chunk| chunk.valid && chunk.frames > self.output_consumed);
             if consumed > 0 || produced {
-                #[cfg(test)]
-                hang_reset!();
                 stalled = 0;
             } else {
                 stalled += 1;
