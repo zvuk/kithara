@@ -2,6 +2,41 @@
 
 use std::{env, process};
 
+use anyhow::{Context, Result, bail, ensure};
+use reqwest::Url;
+
+/// The credential-free Git repository named by the current CI job.
+pub(crate) fn source_repository(var: &dyn Fn(&str) -> Option<String>) -> Result<Option<Url>> {
+    let value = if let Some(project) = var("CI_PROJECT_URL") {
+        format!(
+            "{}.git",
+            project.trim_end_matches('/').trim_end_matches(".git")
+        )
+    } else {
+        match (var("GITHUB_SERVER_URL"), var("GITHUB_REPOSITORY")) {
+            (Some(server), Some(repository)) => {
+                format!("{}/{repository}.git", server.trim_end_matches('/'))
+            }
+            (None, None) => return Ok(None),
+            _ => bail!("CI Git source requires GITHUB_SERVER_URL and GITHUB_REPOSITORY"),
+        }
+    };
+    repository_url(&value).map(Some)
+}
+
+/// Git credentials stay in the transport environment, outside manifests and evidence.
+pub(crate) fn repository_url(value: &str) -> Result<Url> {
+    let url = Url::parse(value).context("invalid Git repository URL")?;
+    ensure!(
+        url.password().is_none()
+            && (url.username().is_empty() || url.scheme() == "ssh")
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "Git repository URL must not contain credentials, a query, or a fragment"
+    );
+    Ok(url)
+}
+
 /// Whether this process runs inside a GitLab CI job.
 pub(crate) fn is_gitlab() -> bool {
     gitlab_in(&|name| env::var(name).ok())
@@ -72,6 +107,46 @@ mod tests {
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| (*value).to_owned())
         }
+    }
+
+    #[test]
+    fn source_repository_uses_job_context_with_blank_cache_flags() {
+        for (pairs, expected) in [
+            (
+                vec![("CI_PROJECT_URL", "https://gitlab.example/group/repo")],
+                "https://gitlab.example/group/repo.git",
+            ),
+            (
+                vec![
+                    ("GITHUB_ACTIONS", ""),
+                    ("GITHUB_SERVER_URL", "https://github.example"),
+                    ("GITHUB_REPOSITORY", "owner/repo"),
+                ],
+                "https://github.example/owner/repo.git",
+            ),
+        ] {
+            assert_eq!(
+                source_repository(&environment(&pairs))
+                    .unwrap()
+                    .unwrap()
+                    .as_str(),
+                expected
+            );
+        }
+        assert!(source_repository(&environment(&[])).unwrap().is_none());
+        assert!(source_repository(&environment(&[("GITHUB_REPOSITORY", "owner/repo")])).is_err());
+    }
+
+    #[test]
+    fn repository_credentials_never_enter_consumer_evidence() {
+        for url in [
+            "https://token@github.example/owner/repo.git",
+            "ssh://git:secret@github.example/owner/repo.git",
+            "https://github.example/owner/repo.git?token=secret",
+        ] {
+            assert!(repository_url(url).is_err());
+        }
+        assert!(repository_url("ssh://git@github.example/owner/repo.git").is_ok());
     }
 
     #[test]

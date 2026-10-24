@@ -49,6 +49,7 @@ linux:test:
       junit: .ci-artifacts/junit/linux-test-simulated-clock.xml
     paths:
       - .ci-artifacts/junit/
+      - target/hang/external-test-runtime-*/
 
 linux:coverage:
   extends:

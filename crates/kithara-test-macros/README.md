@@ -74,6 +74,24 @@ A bare `#[kithara::probe]` is a marker probe (cheap auto-fields only); parenthes
 
 ## Integration
 
-Used by workspace tests (`tests/`, crate-local integration tests) to keep one test annotation model across native + wasm targets.
+Use the `kithara_test_utils::kithara` re-export in independent consumers as well as
+workspace tests. With test-utils default features disabled, plain, parameterized,
+fixture, serialized, and current-thread async tests need no direct Tokio or
+`serial_test` dependency.
+
+Mock expansion requires test-utils `mock` and direct `unimock` (`0.6`, feature
+`std`). Native `multi_thread` tests additionally require
+`kithara-platform/tokio-rt-multi-thread`. Generated wasm wrappers require direct
+`wasm-bindgen-test` (`=0.3.70`) and test-utils `subscriber` on `wasm32`; compiling
+those wrappers does not establish browser execution.
+
+Hang helpers become no-ops when test-utils `hang` is disabled. The explicit
+`timeout(...)` flag works separately from watchdog progress checks;
+`hang_timeout_secs(N)` sets the budget of watchdogs entered inside a test. USDT
+disabled builds require no DTrace tools. Test-utils' empty `client-*` and `tls-*`
+compatibility features do not forward HTTP backends or introduce `kithara-events`.
+
+See the [runtime consumer requirements](../kithara-test-utils/README.md#independent-consumers)
+for the dependency declarations and independent fixture.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-macros) for detailed contracts, invariants, and internals.

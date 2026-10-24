@@ -1,6 +1,10 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := "../.."
 
+# This consumer owns its lockfile and builds outside the product workspace.
+external-runtime:
+    just _xtask external-runtime
+
 # Run workspace tests via the xtask/nextest harness. Use `just test run ...`
 
 # when passing lane selectors, package filters, or nextest expressions.

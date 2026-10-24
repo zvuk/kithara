@@ -23,7 +23,7 @@ use kithara_test_utils::kithara;
 
 #[kithara::test(tokio, timeout(std::time::Duration::from_secs(10)))]
 async fn smoke() {
-    // test body — protected by the hang watchdog (default-on)
+    // An explicit timeout also applies with default features disabled.
 }
 ```
 
@@ -82,13 +82,13 @@ emits the same probe records through `tracing`.
 
 <tr><td><code>usdt</code></td><td>no</td><td>Enables USDT probe emission: native DTrace on macOS and <code>tracing</code> on other targets (otherwise no-op)</td></tr>
 
-<tr><td><code>client-reqwest</code></td><td>no</td><td>Forward the reqwest HTTP backend through <code>kithara-events</code></td></tr>
+<tr><td><code>client-reqwest</code></td><td>no</td><td>Empty compatibility feature; selects no HTTP or TLS dependencies</td></tr>
 
-<tr><td><code>client-wreq</code></td><td>no</td><td>Forward the wreq HTTP backend through <code>kithara-events</code></td></tr>
+<tr><td><code>client-wreq</code></td><td>no</td><td>Empty compatibility feature; selects no HTTP or TLS dependencies</td></tr>
 
-<tr><td><code>tls-rustls</code></td><td>no</td><td>Forward rustls TLS selection through <code>kithara-events</code></td></tr>
+<tr><td><code>tls-rustls</code></td><td>no</td><td>Empty compatibility feature; selects no HTTP or TLS dependencies</td></tr>
 
-<tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection through <code>kithara-events</code></td></tr>
+<tr><td><code>tls-native</code></td><td>no</td><td>Empty compatibility feature; selects no HTTP or TLS dependencies</td></tr>
 
 </table>
 
@@ -96,7 +96,48 @@ Consumer crates enable `usdt` only when they need real USDT emission.
 
 ## Integration
 
-Consumed by every crate's `[dev-dependencies]`. The macros it re-exports work on native and `wasm32` targets transparently.
+Consumed by workspace `[dev-dependencies]` and independent native/wasm test suites.
+
+### Independent consumers
+
+The minimal native consumer needs only `kithara-test-utils` with default features
+disabled. Plain tests, `#[case]` parameterization, fixture injection, `serial`, and
+current-thread async tests use its re-exported runtime. Generated serialization
+wrappers require no direct `serial_test` dependency.
+
+```toml
+[dev-dependencies]
+kithara-test-utils = { git = "https://github.com/zvuk/kithara", rev = "<tested-commit>", default-features = false }
+```
+
+Use the same tested commit for all Kithara dependencies. Optional capabilities
+have these additional requirements:
+
+| Capability | Consumer requirements |
+| --- | --- |
+| Trait mocks | Enable test-utils `mock`; add direct `unimock = { version = "0.6", features = ["std"] }` because generated attributes refer to `::unimock` |
+| Native `#[kithara::test(tokio, multi_thread)]` | Add direct `kithara-platform` with `tokio-rt-multi-thread` enabled |
+| Hang watchdog | Enable test-utils `hang`; use `#[kithara::hang_watchdog]` and its progress checks |
+| Wasm wrappers | Add target-specific `wasm-bindgen-test = "=0.3.70"` and enable test-utils `subscriber` on `wasm32` |
+
+With `hang` disabled, hang helpers are no-ops. An explicit test `timeout(...)`
+is a separate timeout mechanism; it does not prove an active hang watchdog.
+`hang_timeout_secs(N)` sets the budget for watchdog helpers called inside the
+test. With `usdt` disabled, native consumers need no DTrace or USDT tooling.
+
+The [external fixture](tests/fixtures/external-runtime/Cargo.toml) owns an
+independent workspace. The runner prepares its lockfile outside the checkout
+and records the exact lock used throughout the matrix. Its minimal, mock, multithread, hang, and
+config/derive modes run separately from the product workspace. The negative
+watchdog test is ignored during normal runs and invoked only in a child process
+with an independent deadline. Wasm wrapper checks establish compilation only;
+browser execution remains separate acceptance evidence.
+
+Run `just test external-runtime` for the full matrix. To verify a published git
+revision, set `KITHARA_EXTERNAL_RUNTIME_REV` to its full SHA and
+`KITHARA_EXTERNAL_RUNTIME_GIT_URL` to its repository URL without credentials.
+The runner prepares dependencies, then repeats tests with locked offline resolution.
+CI pins the consumer to the checked-out revision automatically.
 
 ### Integration tests live elsewhere
 

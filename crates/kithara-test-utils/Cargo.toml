@@ -25,7 +25,6 @@ no-block = ["kithara-platform/no-block"]
 # with it. Native builds always carry the subscriber.
 subscriber = ["dep:tracing-subscriber", "dep:tracing-wasm"]
 usdt = ["dep:usdt"]
-# HTTP backend forwarding.
 client-reqwest = []
 client-wreq = []
 tls-rustls = []

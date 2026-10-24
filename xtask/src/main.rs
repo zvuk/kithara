@@ -8,6 +8,7 @@ mod apple_docgen;
 mod child;
 mod ci;
 mod config;
+mod external_runtime;
 mod job;
 mod mutants;
 mod parity;
@@ -64,6 +65,8 @@ enum Command {
     },
     /// Dedicated `GitLab` CI automation.
     Ci(CiArgs),
+    /// Verify the independent test-runtime consumer.
+    ExternalRuntime,
     /// Publish all public crates to crates.io in dependency order.
     Publish(PublishArgs),
     /// Run explicitly scoped mutation suites.
@@ -127,6 +130,7 @@ fn work() -> anyhow::Result<()> {
         Command::Apple { command } => apple::run(command, &ctx),
         Command::Wasm { command } => wasm::run(command, &ctx),
         Command::Ci(ref args) => ci::run(args, &ctx),
+        Command::ExternalRuntime => external_runtime::run(&ctx),
         Command::Publish(ref args) => publish::run(args, &ctx),
         Command::Mutants(ref args) => mutants::run(args, &ctx),
         Command::Parity(ref args) => parity::run(args, &ctx),
@@ -153,6 +157,16 @@ mod tests {
     #[test]
     fn self_cache_command_is_available_to_just_transport() {
         assert!(Cli::try_parse_from(["xtask", "self-cache", "probe"]).is_ok());
+    }
+
+    #[test]
+    fn external_runtime_has_a_direct_xtask_command() {
+        assert!(matches!(
+            Cli::try_parse_from(["xtask", "external-runtime"])
+                .unwrap()
+                .command,
+            Command::ExternalRuntime
+        ));
     }
 
     /// `.cargo/config.toml` aliases `cargo xtask` to `cargo run --package xtask`,

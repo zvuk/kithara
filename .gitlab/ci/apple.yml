@@ -51,6 +51,7 @@ apple:test:
       junit: .ci-artifacts/junit/apple-test.xml
     paths:
       - .ci-artifacts/junit/
+      - target/hang/external-test-runtime-*/
 
 # The same suite with the clock left real. It owns a second target directory,
 # so it is another whole build of the workspace, and what it guards is the

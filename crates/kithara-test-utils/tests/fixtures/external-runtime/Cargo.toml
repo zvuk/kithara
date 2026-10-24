@@ -1,0 +1,28 @@
+
+[workspace]
+resolver = "2"
+[package]
+name = "external-test-runtime"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[features]
+default = []
+mock = ["dep:unimock", "kithara-test-utils/mock"]
+multithread = ["dep:kithara-platform", "kithara-platform/tokio-rt-multi-thread"]
+hang = ["kithara-test-utils/hang"]
+devtools = ["dep:kithara-config", "dep:kithara-derive"]
+
+[dependencies]
+kithara-config = { path = "../../../../kithara-config", optional = true }
+kithara-derive = { path = "../../../../kithara-derive", features = ["config"], optional = true }
+kithara-test-utils = { path = "../../..", default-features = false }
+unimock = { version = "0.6", features = ["std"], optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-platform = { path = "../../../../kithara-platform", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+kithara-test-utils = { path = "../../..", default-features = false, features = ["subscriber"] }
+wasm-bindgen-test = "=0.3.70"

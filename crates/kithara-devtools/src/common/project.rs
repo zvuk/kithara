@@ -34,6 +34,7 @@ pub struct ProjectConfig {
     pub architecture: ArchitectureConfig,
     pub audit_clippy: AuditClippyConfig,
     pub ci_report: CiReportConfig,
+    pub format: FormatConfig,
     pub health: HealthConfig,
     pub lint_exclude: LintExcludeConfig,
     pub orphans: OrphansConfig,
@@ -48,6 +49,15 @@ pub struct ProjectConfig {
     pub tools: crate::common::tools::ToolsConfig,
     #[serde(default, rename = "workspace-scan")]
     pub workspace_scan: WorkspaceScan,
+}
+
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
+pub struct FormatConfig {
+    /// Repository-relative Cargo manifests outside the main workspace.
+    pub extra_manifests: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
@@ -1242,6 +1252,9 @@ impl ProjectConfig {
     }
 
     fn validate(&self) -> Result<()> {
+        for manifest in &self.format.extra_manifests {
+            validate_relative_path("format.extra_manifests", manifest)?;
+        }
         for pattern in self
             .architecture
             .filters
@@ -1410,6 +1423,32 @@ mod architecture_tests {
             read_error.to_string(),
             format!("read idioms config: {}", temp.path().display())
         );
+    }
+
+    #[test]
+    fn formatting_extra_manifests_require_safe_relative_paths() {
+        let config = load(
+            r#"
+[format]
+extra_manifests = ["fixtures/consumer/Cargo.toml"]
+"#,
+        )
+        .expect("extra manifest config");
+        assert_eq!(
+            config.format.extra_manifests,
+            ["fixtures/consumer/Cargo.toml"]
+        );
+
+        for manifest in [
+            "",
+            "/outside/Cargo.toml",
+            "../Cargo.toml",
+            "fixtures/../Cargo.toml",
+        ] {
+            let error = load(&format!("[format]\nextra_manifests = [{manifest:?}]\n"))
+                .expect_err("unsafe manifest path");
+            assert!(error.to_string().contains("format.extra_manifests"));
+        }
     }
 
     /// `workers` clamps into `1..=max_parallelism`, and `usize::clamp` panics

@@ -5,6 +5,11 @@
 [project]
 name = "kithara"
 
+[format]
+extra_manifests = [
+  "crates/kithara-test-utils/tests/fixtures/external-runtime/Cargo.toml",
+]
+
 [workspace-scan]
 # Cargo build output can also live below an individual crate (for example the
 # multi-target FFI builds). Generated bindings are not workspace source.
@@ -1027,14 +1032,7 @@ owns = [
   "crates/kithara-platform/tests/flash_",
 ]
 default_flash = false
-# `kithara-net` refuses to compile without an HTTP backend, and the backend in
-# turn refuses to compile without a TLS one; nothing in this package selection
-# turns either on, because in the product suite both arrive from `kithara`,
-# which is not built here. This lane names the same pair `kithara-net` takes as
-# its own default.
 default_features = [
-  "kithara-test-utils/client-reqwest",
-  "kithara-test-utils/tls-rustls",
   "kithara-platform/flash",
   "kithara-platform/tokio-rt-multi-thread",
   "kithara-test-utils/flash",
@@ -2156,6 +2154,10 @@ steps = [
     "ci",
     "--timings",
   ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  { args = [
+    "test",
+    "external-runtime",
+  ], label = "Independent test runtime at checked-out revision", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
@@ -2939,6 +2941,10 @@ steps = [
     "--profile",
     "ci",
   ] } },
+  { args = [
+    "test",
+    "external-runtime",
+  ], label = "Independent test runtime at checked-out revision" },
 ]
 role = "platforms"
 kinds = [
