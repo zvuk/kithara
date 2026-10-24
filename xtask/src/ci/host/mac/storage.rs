@@ -946,12 +946,9 @@ impl<'a> HostStorage<'a> {
         let label = "measure the largest CI trees";
         info!(step = label, "starting");
         let started = Instant::now();
-        let output = self
-            .process
-            .command("du")
-            .args(["-k", "-d", "2"])
-            .args(&roots)
-            .output();
+        let mut command = self.process.command("du");
+        command.args(["-k", "-d", "2"]).args(&roots);
+        let output = crate::child::output(&mut command, None, consts::CONTROL_TIMEOUT);
         info!(
             step = label,
             seconds = started.elapsed().as_secs_f64(),
@@ -1961,6 +1958,68 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&asked).unwrap(),
             format!("-k\n-d\n2\n{}\n", root.display())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_blocked_holder_diagnostic_is_reaped_and_allows_the_next_cleanup() {
+        use nix::{
+            errno::Errno,
+            sys::wait::{WaitPidFlag, waitpid},
+            unistd::Pid,
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let pid_file = root.join("du.pid");
+        install_script(
+            &bin.join("du"),
+            &format!(
+                "#!/bin/sh\necho $$ > '{}'\nexec sleep 30\n",
+                pid_file.display()
+            ),
+        );
+        let mut cfg = config(root);
+        cfg.host.brew_root = root.join("brew");
+        let mut search = OsString::from(&bin);
+        search.push(":");
+        search.push(std::env::var_os("PATH").unwrap_or_default());
+        let process = Process::new(root, BTreeMap::from([(OsString::from("PATH"), search)]));
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([consts::FREE_AGGRESSIVE; 4]);
+
+        let started = Instant::now();
+        let error = storage.cleanup().unwrap_err().to_string();
+        assert!(started.elapsed() < consts::CONTROL_TIMEOUT + Duration::from_secs(5));
+        assert!(
+            error.contains("trees this pass could not measure"),
+            "{error}"
+        );
+        let pid = fs::read_to_string(pid_file)
+            .unwrap()
+            .trim()
+            .parse::<i32>()
+            .unwrap();
+        assert_eq!(
+            waitpid(Pid::from_raw(pid), Some(WaitPidFlag::WNOHANG)),
+            Err(Errno::ECHILD)
+        );
+
+        install_script(
+            &bin.join("du"),
+            &format!(
+                "#!/bin/sh\nprintf '1\\t{}/logs/bridge\\n'\n",
+                root.display()
+            ),
+        );
+        storage.set_available_sequence([consts::FREE_AGGRESSIVE; 4]);
+        let error = storage.cleanup().unwrap_err().to_string();
+        assert!(
+            error.contains(&format!("{}=1024", root.join("logs/bridge").display())),
+            "{error}"
         );
     }
 
