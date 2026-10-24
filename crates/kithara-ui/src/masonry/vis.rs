@@ -28,6 +28,14 @@ impl VisDeclaration {
     }
 
     fn prepare(self, scale: f64, target: [u32; 2]) -> Option<PreparedDraw> {
+        let (origin, resolution, clipped) = self.physical_rect(scale, target)?;
+        Some(PreparedDraw {
+            uniforms: Uniforms::new(self.frame, origin, resolution),
+            scissor: scissor(clipped)?,
+        })
+    }
+
+    fn physical_rect(self, scale: f64, target: [u32; 2]) -> Option<([f32; 2], [f32; 2], [f64; 4])> {
         if !scale.is_finite() || scale <= 0.0 || target[0] == 0 || target[1] == 0 {
             return None;
         }
@@ -60,17 +68,18 @@ impl VisDeclaration {
         if clipped[2] <= clipped[0] || clipped[3] <= clipped[1] {
             return None;
         }
-        let x0 = clipped[0].round().to_u32()?;
-        let y0 = clipped[1].round().to_u32()?;
-        let x1 = clipped[2].round().to_u32()?;
-        let y1 = clipped[3].round().to_u32()?;
-        let width = x1.checked_sub(x0)?;
-        let height = y1.checked_sub(y0)?;
-        (width > 0 && height > 0).then_some(PreparedDraw {
-            uniforms: Uniforms::new(self.frame, origin, resolution),
-            scissor: [x0, y0, width, height],
-        })
+        Some((origin, resolution, clipped))
     }
+}
+
+fn scissor(clipped: [f64; 4]) -> Option<[u32; 4]> {
+    let x0 = clipped[0].round().to_u32()?;
+    let y0 = clipped[1].round().to_u32()?;
+    let x1 = clipped[2].round().to_u32()?;
+    let y1 = clipped[3].round().to_u32()?;
+    let width = x1.checked_sub(x0)?;
+    let height = y1.checked_sub(y0)?;
+    (width > 0 && height > 0).then_some([x0, y0, width, height])
 }
 
 fn physical_f32(value: f64) -> Option<f32> {

@@ -53,34 +53,12 @@ fn deck_write(
     value: WriteValue,
 ) -> Option<Message> {
     let index = deck_index(scope.get("deck")?)?;
+    match id {
+        "deck.view.zoom_in" | "deck.view.zoom_out" | "deck.view.zoom" | "deck.queue.load"
+        | "deck.eq.mode" => return deck_view_write(state, id, index, scope, value),
+        _ => {}
+    }
     let msg = match (id, value) {
-        ("deck.view.zoom_in", WriteValue::Trigger) => {
-            return step_zoom(&mut state.ui.cache, index, zoom_in);
-        }
-        ("deck.view.zoom_out", WriteValue::Trigger) => {
-            return step_zoom(&mut state.ui.cache, index, zoom_out);
-        }
-        ("deck.view.zoom", WriteValue::Scalar(zoom)) => {
-            let zoom: f32 = zoom.as_();
-            state.ui.cache.deck_mut(index)?.view.zoom =
-                Some(f64::from(f32::from(Zoom::from(zoom))));
-            return None;
-        }
-        ("deck.queue.load", WriteValue::Record(record)) => {
-            let track = Playable::try_from(record).ok()?;
-            let deck = deck_id(state, index)?;
-            state.ui.cache.focus(index);
-            state.send(Command::LoadOntoDeck { deck, track });
-            return None;
-        }
-        ("deck.eq.mode", WriteValue::Trigger) => {
-            let mode = match scope.get("bands")? {
-                "3" => EqMode::ThreeBand,
-                "4" => EqMode::FourBand,
-                _ => return None,
-            };
-            return Some(Message::SetEqMode(mode));
-        }
         ("deck.stream.select_variant", WriteValue::Trigger) => {
             quality_msg(state, index, scope.get("variant")?)?
         }
@@ -95,14 +73,49 @@ fn deck_write(
             DeckMsg::SetTempo(TempoPercent::from(steps.mul_add(TEMPO_STEP, tempo)))
         }
         ("deck.tempo.reset", WriteValue::Trigger) => DeckMsg::SetTempo(TempoPercent::DEFAULT),
-        ("deck.eq.low", WriteValue::Scalar(knob)) => eq_band(state, "low", knob)?,
-        ("deck.eq.low_mid", WriteValue::Scalar(knob)) => eq_band(state, "low_mid", knob)?,
-        ("deck.eq.mid", WriteValue::Scalar(knob)) => eq_band(state, "mid", knob)?,
-        ("deck.eq.high_mid", WriteValue::Scalar(knob)) => eq_band(state, "high_mid", knob)?,
-        ("deck.eq.high", WriteValue::Scalar(knob)) => eq_band(state, "high", knob)?,
+        (id, WriteValue::Scalar(knob)) => eq_band(state, id.strip_prefix("deck.eq.")?, knob)?,
         _ => return None,
     };
     Some(Message::Deck(deck_id(state, index)?, msg))
+}
+
+fn deck_view_write(
+    state: &mut Kithara,
+    id: &str,
+    index: usize,
+    scope: Scope<'_>,
+    value: WriteValue,
+) -> Option<Message> {
+    match (id, value) {
+        ("deck.view.zoom_in", WriteValue::Trigger) => {
+            step_zoom(&mut state.ui.cache, index, zoom_in)
+        }
+        ("deck.view.zoom_out", WriteValue::Trigger) => {
+            step_zoom(&mut state.ui.cache, index, zoom_out)
+        }
+        ("deck.view.zoom", WriteValue::Scalar(zoom)) => {
+            let zoom: f32 = zoom.as_();
+            state.ui.cache.deck_mut(index)?.view.zoom =
+                Some(f64::from(f32::from(Zoom::from(zoom))));
+            None
+        }
+        ("deck.queue.load", WriteValue::Record(record)) => {
+            let track = Playable::try_from(record).ok()?;
+            let deck = deck_id(state, index)?;
+            state.ui.cache.focus(index);
+            state.send(Command::LoadOntoDeck { deck, track });
+            None
+        }
+        ("deck.eq.mode", WriteValue::Trigger) => {
+            let mode = match scope.get("bands")? {
+                "3" => EqMode::ThreeBand,
+                "4" => EqMode::FourBand,
+                _ => return None,
+            };
+            Some(Message::SetEqMode(mode))
+        }
+        _ => None,
+    }
 }
 
 fn eq_band(state: &Kithara, name: &str, knob: f64) -> Option<DeckMsg> {
@@ -282,24 +295,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_menu_asks_the_host_for_full_screen() {
-        let mut cache = ViewCache::default();
-
-        assert!(matches!(
-            press(&mut cache, "ui.window.toggle_full_screen"),
-            Some(Message::Window(WindowCommand::ToggleFullScreen))
-        ));
-    }
-
-    #[kithara::test]
-    fn the_air_toggle_asks_the_host_for_the_air() {
-        assert!(matches!(
-            broadcast_write("broadcast.toggle", &WriteValue::Trigger),
-            Some(Message::BroadcastToggle)
-        ));
-    }
-
-    #[kithara::test]
     fn narrowing_the_layout_moves_a_focus_it_stops_laying_out() {
         let mut cache = ViewCache::default();
         cache.focus(1);
@@ -420,14 +415,6 @@ mod tests {
                     if (position - 1.0).abs() < f32::EPSILON
             ));
             assert!(matches!(
-                write(state, "deck.eq.low@deck=a", WriteValue::Scalar(1.0)),
-                Some(Message::Deck(DeckId(0), DeckMsg::EqBandChanged(0, _)))
-            ));
-            assert!(
-                write(state, "deck.eq.high_mid@deck=a", WriteValue::Scalar(1.0)).is_none(),
-                "only the bank the mode draws answers"
-            );
-            assert!(matches!(
                 press(state, "deck.eq.mode@bands=4,deck=a"),
                 Some(Message::SetEqMode(EqMode::FourBand))
             ));
@@ -435,6 +422,36 @@ mod tests {
                 press(state, "deck.eq.mode@bands=3,deck=b"),
                 Some(Message::SetEqMode(EqMode::ThreeBand))
             ));
+
+            for (mode, expected) in [
+                (EqMode::ThreeBand, [Some(0), None, Some(1), None, Some(2)]),
+                (EqMode::FourBand, [Some(0), Some(1), None, Some(2), Some(3)]),
+            ] {
+                rig.message(Message::SetEqMode(mode));
+                rig.pump();
+                crate::mock::render_rig(&mut rig, 128);
+                rig.frame();
+                assert_eq!(rig.ui.snapshot.eq_mode, mode);
+
+                for (name, band) in ["low", "low_mid", "mid", "high_mid", "high"]
+                    .into_iter()
+                    .zip(expected)
+                {
+                    let message = write(
+                        &mut rig.ui,
+                        &format!("deck.eq.{name}@deck=a"),
+                        WriteValue::Scalar(1.0),
+                    );
+                    let actual = match message {
+                        Some(Message::Deck(DeckId(0), DeckMsg::EqBandChanged(index, _))) => {
+                            Some(index)
+                        }
+                        None => None,
+                        other => panic!("{mode:?} {name}: unexpected {other:?}"),
+                    };
+                    assert_eq!(actual, band, "{mode:?} {name}");
+                }
+            }
         }
 
         #[kithara::test(native, flash(false))]

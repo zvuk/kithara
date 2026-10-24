@@ -668,6 +668,35 @@ fn padding_shrinks_vertical_measurement_limits_and_offsets_the_child() {
 }
 
 #[kithara::test]
+fn compressed_cross_fill_is_measured_before_fills_share_the_remainder() {
+    let case = Case::horizontal(
+        Size::new(100.0, 50.0),
+        Length::Fill,
+        Length::Shrink,
+        vec![
+            TestItem::fixed(20.0, 12.0),
+            TestItem::new(
+                Size::new(Length::Shrink, Length::Fill),
+                Size::new(30.0, 1.0),
+            ),
+            TestItem::fill(1),
+        ],
+    );
+
+    let (distribution, _) = case.run();
+
+    assert_eq!(distribution.size, Size::new(100.0, 12.0));
+    assert_eq!(
+        placements(&distribution),
+        vec![
+            item(Point::ORIGIN, Size::new(20.0, 12.0)),
+            item(Point::new(20.0, 0.0), Size::new(30.0, 12.0)),
+            item(Point::new(50.0, 0.0), Size::new(50.0, 5.0)),
+        ]
+    );
+}
+
+#[kithara::test]
 fn cross_fill_with_fixed_main_is_measured_after_cross_compression() {
     let case = Case::horizontal(
         Size::new(100.0, 50.0),

@@ -83,55 +83,61 @@ pub(crate) fn resolve(input: Input<'_>, measure: &mut impl Measure) -> Distribut
     let total_spacing = spacing * gap_count;
     let max_cross = cross(axis, limits.max());
     let compression = limits.compression();
-    let (main_compress, cross_compress) = pack(axis, compression.width, compression.height);
-    let (compress_x, compress_y) = pack(axis, main_compress, false);
-    let child_compression = Size::new(compress_x, compress_y);
-    let mut some_fill_cross = false;
-    let mut cross_extent = if cross_compress { 0.0 } else { max_cross };
-    let mut available = main(axis, limits.max()) - total_spacing;
-    for (index, item) in items.iter_mut().enumerate() {
-        let declared = item.declared;
-        let fill_main_weight = item.main_weight(axis);
-        let fill_cross_factor = cross_fill_factor(axis, declared);
+    let (_, cross_compress) = pack(axis, compression.width, compression.height);
+    let mut pass = Pass {
+        some_fill_cross: false,
+        available: main(axis, limits.max()) - total_spacing,
+        cross_extent: if cross_compress { 0.0 } else { max_cross },
+    };
+    pass.measure_non_fill(axis, &limits, &mut items, measure);
+    pass.measure_cross_fill(axis, &limits, &mut items, measure);
+    pass.distribute_fill(axis, &limits, &mut items, measure);
+    let main_extent = pass.place(axis, padding, spacing, align_items, &mut items);
 
-        if (main_compress || fill_main_weight == 0.0) && (!cross_compress || fill_cross_factor == 0)
-        {
-            let (max_width, max_height) = pack(
-                axis,
-                available,
-                if fill_cross_factor == 0 {
-                    max_cross
-                } else {
-                    cross_extent
-                },
-            );
-            let child_limits = Limits::with_compression(
-                Size::ZERO,
-                Size::new(max_width, max_height),
-                child_compression,
-            );
-            let size = measure.measure(index, &child_limits);
+    let (intrinsic_width, intrinsic_height) = pack(axis, main_extent, pass.cross_extent);
+    let size = limits
+        .resolve(width, height, Size::new(intrinsic_width, intrinsic_height))
+        .expand(padding);
 
-            available -= main(axis, size);
-            cross_extent = cross_extent.max(cross(axis, size));
-            item.size = size;
-        } else {
-            some_fill_cross = some_fill_cross || fill_cross_factor != 0;
-        }
-    }
+    Distribution { size, items }
+}
 
-    if cross_compress && some_fill_cross {
+struct Pass {
+    some_fill_cross: bool,
+    available: f32,
+    cross_extent: f32,
+}
+
+impl Pass {
+    fn measure_non_fill(
+        &mut self,
+        axis: Axis,
+        limits: &Limits,
+        items: &mut [Item],
+        measure: &mut impl Measure,
+    ) {
+        let max_cross = cross(axis, limits.max());
+        let compression = limits.compression();
+        let (main_compress, cross_compress) = pack(axis, compression.width, compression.height);
+        let (compress_x, compress_y) = pack(axis, main_compress, false);
+        let child_compression = Size::new(compress_x, compress_y);
         for (index, item) in items.iter_mut().enumerate() {
             let declared = item.declared;
-            let (main_size, cross_size) = pack(axis, declared.width, declared.height);
+            let fill_main_weight = item.main_weight(axis);
+            let fill_cross_factor = cross_fill_factor(axis, declared);
 
-            if (main_compress || item.main_weight(axis) == 0.0) && cross_size.fill_factor() != 0 {
-                if let Length::Fixed(main_extent) = main_size {
-                    available -= main_extent;
-                    continue;
-                }
-
-                let (max_width, max_height) = pack(axis, available, cross_extent);
+            if (main_compress || fill_main_weight == 0.0)
+                && (!cross_compress || fill_cross_factor == 0)
+            {
+                let (max_width, max_height) = pack(
+                    axis,
+                    self.available,
+                    if fill_cross_factor == 0 {
+                        max_cross
+                    } else {
+                        self.cross_extent
+                    },
+                );
                 let child_limits = Limits::with_compression(
                     Size::ZERO,
                     Size::new(max_width, max_height),
@@ -139,97 +145,155 @@ pub(crate) fn resolve(input: Input<'_>, measure: &mut impl Measure) -> Distribut
                 );
                 let size = measure.measure(index, &child_limits);
 
-                available -= main(axis, size);
-                cross_extent = cross_extent.max(cross(axis, size));
+                self.available -= main(axis, size);
+                self.cross_extent = self.cross_extent.max(cross(axis, size));
                 item.size = size;
+            } else {
+                self.some_fill_cross = self.some_fill_cross || fill_cross_factor != 0;
             }
         }
     }
 
-    let remaining = available.max(0.0);
+    fn measure_cross_fill(
+        &mut self,
+        axis: Axis,
+        limits: &Limits,
+        items: &mut [Item],
+        measure: &mut impl Measure,
+    ) {
+        let compression = limits.compression();
+        let (main_compress, cross_compress) = pack(axis, compression.width, compression.height);
+        let (compress_x, compress_y) = pack(axis, main_compress, false);
+        let child_compression = Size::new(compress_x, compress_y);
+        if cross_compress && self.some_fill_cross {
+            for (index, item) in items.iter_mut().enumerate() {
+                let declared = item.declared;
+                let (main_size, cross_size) = pack(axis, declared.width, declared.height);
 
-    if !main_compress {
-        let allocated_main = fluid::allocate(&items, axis, remaining);
-        for (index, (item, allocation)) in items.iter_mut().zip(allocated_main).enumerate() {
-            let declared = item.declared;
-            let fill_main_weight = item.main_weight(axis);
-            let fill_cross_factor = cross_fill_factor(axis, declared);
+                if (main_compress || item.main_weight(axis) == 0.0) && cross_size.fill_factor() != 0
+                {
+                    if let Length::Fixed(main_extent) = main_size {
+                        self.available -= main_extent;
+                        continue;
+                    }
 
-            if fill_main_weight != 0.0 {
-                let max_main = if allocation.extent().is_nan() {
-                    f32::INFINITY
-                } else {
-                    allocation.extent()
-                };
-                let min_main = if max_main.is_infinite() {
-                    0.0
-                } else {
-                    max_main
-                };
-                let (min_width, min_height) = pack(axis, min_main, 0.0);
-                let (max_width, max_height) = pack(
-                    axis,
-                    max_main,
-                    if fill_cross_factor == 0 {
-                        max_cross
+                    let (max_width, max_height) = pack(axis, self.available, self.cross_extent);
+                    let child_limits = Limits::with_compression(
+                        Size::ZERO,
+                        Size::new(max_width, max_height),
+                        child_compression,
+                    );
+                    let size = measure.measure(index, &child_limits);
+
+                    self.available -= main(axis, size);
+                    self.cross_extent = self.cross_extent.max(cross(axis, size));
+                    item.size = size;
+                }
+            }
+        }
+    }
+
+    fn distribute_fill(
+        &mut self,
+        axis: Axis,
+        limits: &Limits,
+        items: &mut [Item],
+        measure: &mut impl Measure,
+    ) {
+        let max_cross = cross(axis, limits.max());
+        let compression = limits.compression();
+        let (main_compress, cross_compress) = pack(axis, compression.width, compression.height);
+        let (compress_x, compress_y) = pack(axis, main_compress, false);
+        let child_compression = Size::new(compress_x, compress_y);
+        let remaining = self.available.max(0.0);
+
+        if !main_compress {
+            let allocated_main = fluid::allocate(items, axis, remaining);
+            for (index, (item, allocation)) in items.iter_mut().zip(allocated_main).enumerate() {
+                let declared = item.declared;
+                let fill_main_weight = item.main_weight(axis);
+                let fill_cross_factor = cross_fill_factor(axis, declared);
+
+                if fill_main_weight != 0.0 {
+                    let max_main = if allocation.extent().is_nan() {
+                        f32::INFINITY
                     } else {
-                        cross_extent
-                    },
-                );
-                let child_limits = Limits::with_compression(
-                    Size::new(min_width, min_height),
-                    Size::new(max_width, max_height),
-                    child_compression,
-                );
+                        allocation.extent()
+                    };
+                    let min_main = if max_main.is_infinite() {
+                        0.0
+                    } else {
+                        max_main
+                    };
+                    let (min_width, min_height) = pack(axis, min_main, 0.0);
+                    let (max_width, max_height) = pack(
+                        axis,
+                        max_main,
+                        if fill_cross_factor == 0 {
+                            max_cross
+                        } else {
+                            self.cross_extent
+                        },
+                    );
+                    let child_limits = Limits::with_compression(
+                        Size::new(min_width, min_height),
+                        Size::new(max_width, max_height),
+                        child_compression,
+                    );
+                    let size = measure.measure(index, &child_limits);
+
+                    self.cross_extent = self.cross_extent.max(cross(axis, size));
+                    item.size = size;
+                }
+            }
+        }
+
+        if cross_compress && self.some_fill_cross {
+            for (index, item) in items.iter_mut().enumerate() {
+                let declared = item.declared;
+                let (main_size, cross_size) = pack(axis, declared.width, declared.height);
+
+                if cross_size.fill_factor() == 0 {
+                    continue;
+                }
+
+                let Length::Fixed(main_extent) = main_size else {
+                    continue;
+                };
+                let (max_width, max_height) = pack(axis, main_extent, self.cross_extent);
+                let child_limits = Limits::new(Size::ZERO, Size::new(max_width, max_height));
                 let size = measure.measure(index, &child_limits);
 
-                cross_extent = cross_extent.max(cross(axis, size));
+                self.cross_extent = self.cross_extent.max(cross(axis, size));
                 item.size = size;
             }
         }
     }
 
-    if cross_compress && some_fill_cross {
-        for (index, item) in items.iter_mut().enumerate() {
-            let declared = item.declared;
-            let (main_size, cross_size) = pack(axis, declared.width, declared.height);
+    fn place(
+        &self,
+        axis: Axis,
+        padding: Padding,
+        spacing: f32,
+        align_items: Alignment,
+        items: &mut [Item],
+    ) -> f32 {
+        let pad = pack(axis, padding.left, padding.top);
+        let mut main_offset = pad.0;
 
-            if cross_size.fill_factor() == 0 {
-                continue;
+        for (index, item) in items.iter_mut().enumerate() {
+            if index > 0 {
+                main_offset += spacing;
             }
 
-            let Length::Fixed(main_extent) = main_size else {
-                continue;
-            };
-            let (max_width, max_height) = pack(axis, main_extent, cross_extent);
-            let child_limits = Limits::new(Size::ZERO, Size::new(max_width, max_height));
-            let size = measure.measure(index, &child_limits);
-
-            cross_extent = cross_extent.max(cross(axis, size));
-            item.size = size;
-        }
-    }
-
-    let pad = pack(axis, padding.left, padding.top);
-    let mut main_offset = pad.0;
-
-    for (index, item) in items.iter_mut().enumerate() {
-        if index > 0 {
-            main_offset += spacing;
+            let (x, y) = pack(axis, main_offset, pad.1);
+            item.offset = Point::new(x, y);
+            align(item, axis, align_items, self.cross_extent);
+            main_offset += main(axis, item.size);
         }
 
-        let (x, y) = pack(axis, main_offset, pad.1);
-        item.offset = Point::new(x, y);
-        align(item, axis, align_items, cross_extent);
-        main_offset += main(axis, item.size);
+        main_offset - pad.0
     }
-
-    let (intrinsic_width, intrinsic_height) = pack(axis, main_offset - pad.0, cross_extent);
-    let size = limits
-        .resolve(width, height, Size::new(intrinsic_width, intrinsic_height))
-        .expand(padding);
-
-    Distribution { size, items }
 }
 
 fn cross_fill_factor(axis: Axis, size: Size<Length>) -> u16 {
