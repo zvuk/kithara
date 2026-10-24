@@ -6,8 +6,7 @@ use std::{
 };
 
 use kithara_decode::{
-    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, GaplessMode,
-    GaplessProfile, PcmOrigin,
+    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, GaplessMode, GaplessProfile, PcmOrigin,
 };
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
@@ -120,29 +119,15 @@ impl DecoderGeneration {
         mode: GaplessMode,
         physical: Option<Duration>,
         decoded_end: Option<Duration>,
-        physical_reconciled: bool,
     ) -> Option<Duration> {
         let declared = self.decoder.duration();
-        let (physical, origin) = match declared {
-            Some(kithara_decode::DecoderDuration::RawLength(raw))
-                if matches!(mode, GaplessMode::SilenceTrim(_))
-                    && self.gapless_profile.gapless().is_none()
-                    && !physical_reconciled =>
-            {
-                (
-                    Some(raw),
-                    self.decoder.initial_pcm_origin().map(PcmOrigin::position),
-                )
-            }
-            _ => (physical, self.visible_origin),
-        };
         let content_shift = self.undeclared_priming(mode)?;
         crate::pipeline::gapless::media_end(
             declared,
             self.gapless_profile,
             mode,
             physical,
-            origin,
+            self.visible_origin,
             self.media_origin,
             decoded_end,
         )
@@ -296,7 +281,7 @@ impl DecoderGeneration {
     }
 
     fn comparison_base_frames(&self) -> Option<u64> {
-        let spec = self.blender_profile().spec();
+        let spec = self.spec();
         if self
             .visible_origin
             .is_some_and(|origin| spec.frame_at(origin).is_err())
@@ -317,7 +302,7 @@ impl DecoderGeneration {
                     ResumeTarget::Position(_) | ResumeTarget::Render(_) => None,
                 })
         };
-        self.blender_profile().spec().sample_rate == other.blender_profile().spec().sample_rate
+        self.spec().sample_rate == other.spec().sample_rate
             && retained_source(self) == retained_source(other)
     }
 
@@ -426,7 +411,7 @@ impl DecoderGeneration {
             pub(crate) const fn comparison_base(&self) -> Option<Duration>;
         }
         to self.decoder {
-            pub(crate) fn blender_profile(&self) -> BlenderProfile;
+            pub(crate) fn spec(&self) -> AudioSpec;
             #[call(as_ref)]
             pub(crate) fn decoder(&self) -> &dyn Decoder;
             #[call(as_mut)]

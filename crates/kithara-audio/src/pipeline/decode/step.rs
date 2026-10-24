@@ -31,11 +31,7 @@ pub(crate) fn tick<T: StreamType>(
         if let Some(error) = core.take_stage_error() {
             return decode_failed(core, error, &ctx);
         }
-        match core.next_output(
-            &mut *ctx.cursor,
-            ctx.physical_duration,
-            ctx.physical_reconciled,
-        ) {
+        match core.next_output(&mut *ctx.cursor, ctx.physical_duration) {
             Ok(Some(chunk)) => return DecodeAction::Produced(Box::new(Fetch::data(chunk))),
             Ok(None) => {}
             Err(error) => return decode_failed(core, error, &ctx),
@@ -109,11 +105,7 @@ fn finish_exhausted<T: StreamType>(
     if let Err(error) = core.finish_active() {
         return decode_failed(core, error, ctx);
     }
-    match core.next_output_unheld(
-        &mut *ctx.cursor,
-        ctx.physical_duration,
-        ctx.physical_reconciled,
-    ) {
+    match core.next_output_unheld(&mut *ctx.cursor, ctx.physical_duration) {
         Ok(Some(chunk)) => return DecodeAction::Produced(Box::new(Fetch::data(chunk))),
         Ok(None) => {}
         Err(error) => return decode_failed(core, error, ctx),

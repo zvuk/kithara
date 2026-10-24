@@ -353,8 +353,7 @@ async fn rebuilding_decoder_completion_waits_for_shell_routing() {
 
 #[kithara::test(tokio)]
 async fn rebuild_prepares_generation_profiles_before_rt_install() {
-    let RebuildFixture { mut source, .. } =
-        test_source_with_mode(1, GaplessMode::SilenceTrim(SilenceTrimParams::default())).await;
+    let RebuildFixture { mut source, .. } = test_source_with_mode(1, GaplessMode::MediaOnly).await;
     let profile_reads = Arc::new(AtomicU64::new(0));
     let factory_reads = profile_reads.clone();
     source.factory = DecoderFactory::new(

@@ -54,15 +54,6 @@ pub use resampler::{
 };
 pub use trim::{
     trim_codec_priming_drops_leading_frames_and_fades_in,
-    trim_codec_priming_metadata_takes_precedence_when_combined, trim_ramp, trim_seek, trim_silence,
-    trim_silence_trim_above_threshold_preserves_audio,
-    trim_silence_trim_below_threshold_is_trimmed,
-    trim_silence_trim_does_not_introduce_click_at_boundary,
-    trim_silence_trim_min_frames_boundary_at_min, trim_silence_trim_min_frames_boundary_under_min,
-    trim_silence_trim_no_op_with_immediate_content,
-    trim_silence_trim_preserves_quiet_intro_below_threshold_then_above,
-    trim_silence_trim_scan_window_exhausted_preserves_audio,
-    trim_silence_trim_trailing_disabled_by_default, trim_silence_trim_trailing_enabled,
-    trim_stereo_quiet, trim_stereo_silence, trim_trailing_sine,
+    trim_codec_priming_metadata_takes_precedence_when_combined, trim_ramp, trim_silence,
 };
 pub use warp::{warp_clicks, warp_constant, warp_nominal_clicks, warp_pair, warp_sine};

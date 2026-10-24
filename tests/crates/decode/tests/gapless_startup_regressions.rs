@@ -3,7 +3,7 @@
 use std::{num::NonZeroU32, path::Path};
 
 use kithara::{
-    decode::{GaplessMode, SilenceTrimParams},
+    decode::GaplessMode,
     platform::time::{self, Duration, Instant},
     play::{ResourceConfig, ResourceSrc},
     stream::AudioCodec,
@@ -45,7 +45,6 @@ const AUDIBLE_SAMPLE_THRESHOLD: f32 = 1.0e-3;
 #[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 #[case(GaplessMode::MediaOnly)]
 #[case(GaplessMode::CodecPriming)]
-#[case(GaplessMode::SilenceTrim(SilenceTrimParams::default()))]
 async fn gapless_modes_do_not_block_network_startup_until_full_cache(
     #[future(awt)] startup_source: (TestServerHelper, Url, Vec<SegmentGateHandle>),
     #[case] gapless_mode: GaplessMode,

@@ -237,7 +237,7 @@ fn observed_incoming_origin_keeps_the_shared_gap_after_promotion() {
         Some(36)
     );
 
-    let rate = active.blender_profile().spec().sample_rate;
+    let rate = active.spec().sample_rate;
     let mut decode = ActiveDecode::new(active, GaplessMode::MediaOnly, None, &pools)
         .expect("generation owner scratch");
     let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));

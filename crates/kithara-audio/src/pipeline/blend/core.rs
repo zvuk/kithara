@@ -1,5 +1,4 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
-use kithara_decode::BlenderProfile;
 use kithara_signal::{AudioChunk, AudioSpec};
 
 use crate::consts;
@@ -16,19 +15,19 @@ enum JoinState {
 }
 
 pub(crate) struct GaplessBlender {
-    active: BlenderProfile,
-    prepared: BlenderProfile,
+    active: AudioSpec,
+    prepared: AudioSpec,
     join: JoinState,
     outgoing: SampleBuffer,
     prepared_outgoing: SampleBuffer,
 }
 
 impl GaplessBlender {
-    pub(crate) fn new<S>(active: BlenderProfile, pools: &PoolRegion<S>) -> Result<Self, PoolError>
+    pub(crate) fn new<S>(active: AudioSpec, pools: &PoolRegion<S>) -> Result<Self, PoolError>
     where
         S: HasPool<f32>,
     {
-        let samples = join_samples(active.spec());
+        let samples = join_samples(active);
         let outgoing = pools.get_with_len::<f32>(samples)?;
         let prepared_outgoing = pools.get_with_len::<f32>(samples)?;
         Ok(Self {
@@ -74,7 +73,7 @@ impl GaplessBlender {
         self.swap_prepared();
         self.join = JoinState::Active {
             frame: 0,
-            frames: join_frames(self.active.spec()),
+            frames: join_frames(self.active),
         };
     }
 
@@ -83,32 +82,31 @@ impl GaplessBlender {
     }
 
     pub(crate) fn join_frame_count(&self) -> u64 {
-        u64::from(join_frames(self.active.spec()))
+        u64::from(join_frames(self.active))
     }
 
-    pub(crate) fn prepare_active(&mut self, active: BlenderProfile) -> Result<(), PoolError> {
+    pub(crate) fn prepare_active(&mut self, active: AudioSpec) -> Result<(), PoolError> {
         self.prepared_outgoing.clear();
-        self.prepared_outgoing
-            .ensure_len(join_samples(active.spec()))?;
+        self.prepared_outgoing.ensure_len(join_samples(active))?;
         self.prepared = active;
         Ok(())
     }
 
     pub(crate) fn prepare_join(&mut self, copy_outgoing: impl FnOnce(&mut [f32]) -> bool) -> bool {
-        if !self.is_steady() || self.active.spec() != self.prepared.spec() {
+        if !self.is_steady() || self.active != self.prepared {
             return false;
         }
         copy_outgoing(&mut self.prepared_outgoing)
     }
 
     pub(crate) fn process_active(&mut self, mut chunk: AudioChunk) -> AudioChunk {
-        debug_assert_eq!(chunk.spec(), self.active.spec());
+        debug_assert_eq!(chunk.spec(), self.active);
         self.apply_join(&mut chunk);
         chunk
     }
 
-    pub(crate) fn replace_active(&mut self, active: BlenderProfile) {
-        if self.active.spec() == active.spec() {
+    pub(crate) fn replace_active(&mut self, active: AudioSpec) {
+        if self.active == active {
             self.active = active;
             self.join = JoinState::Steady;
             return;

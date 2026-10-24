@@ -25,30 +25,8 @@ pub(crate) const REQUIRED_INPUT: ReaderInput = ReaderInput::InitOnly;
 pub(crate) const FLAC_STREAMINFO_BYTES: usize = 34;
 pub(crate) const FOURCC_FLAC: u32 = 0x664c_6143;
 
-/// Length of the click-suppression fade-in applied after every
-/// heuristic trim (silence or codec-priming). 3 ms is short
-/// enough to be inaudible as a transient but long enough to mask
-/// the level discontinuity at the trim boundary.
+/// Length of the click-suppression fade after codec-priming trim.
 pub(crate) const FADE_IN_DURATION_MS: u64 = 3;
-
-/// Length of the click-suppression fade-out applied to the very
-/// end of the buffered audio after a heuristic trailing-silence
-/// trim. Mirror of `FADE_IN_DURATION_MS` for the trailing side;
-/// same reasoning (mask any sub-sample boundary mismatch left by
-/// the trim search).
-pub(crate) const FADE_OUT_DURATION_MS: u64 = 3;
-
-/// Window length (in milliseconds) used by the trailing silence
-/// search. Per-sample threshold tests false-positive on zero-
-/// crossings of any periodic signal — at 800 Hz a sine passes
-/// below `1e-3` for ~3 frames every cycle, which the old
-/// algorithm classified as silence and ate into audible content.
-/// A 10 ms window contains many full cycles of typical audio and
-/// integrates over them to get a stable energy estimate; it also
-/// averages out lossy-codec quantisation noise floors (AAC
-/// commonly sits around -50..-60 dB in quiet regions) so a real
-/// silent suffix is recognised reliably.
-pub(crate) const TRAILING_SILENCE_WINDOW_MS: u64 = 10;
 
 pub(crate) const BOX_DATA: [u8; 4] = *b"data";
 pub(crate) const BOX_EDTS: [u8; 4] = *b"edts";

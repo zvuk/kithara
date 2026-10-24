@@ -3,8 +3,6 @@
 mod buffer;
 mod core;
 mod fade;
-mod heuristic;
-mod silence;
 #[cfg(test)]
 mod tests;
 

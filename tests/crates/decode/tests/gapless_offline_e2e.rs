@@ -3,7 +3,7 @@
 use kithara_integration_tests::mock::gapless::*;
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-async fn single_track_silence_trim_strips_leading_priming(
+async fn single_track_media_only_strips_leading_priming(
     temp_dir: TestTempDir,
     #[future(awt)] primed: (TestServerHelper, CreatedHls),
 ) {
@@ -12,7 +12,7 @@ async fn single_track_silence_trim_strips_leading_priming(
             .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless(true)
-            .gapless_mode(silence_trim_with_trailing())
+            .gapless_mode(GaplessMode::MediaOnly)
             .build(),
         GAPLESS_SAMPLE_RATE,
     )
@@ -59,7 +59,7 @@ async fn single_track_silence_trim_strips_leading_priming(
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
-async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(
+async fn two_tracks_gapless_no_click_with_media_only_zero_crossfade(
     temp_dir: TestTempDir,
     #[future(awt)] trimmed: (TestServerHelper, CreatedHls),
     #[future(awt)] trimmed_next: (TestServerHelper, CreatedHls),
@@ -70,7 +70,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(
             .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless(true)
-            .gapless_mode(silence_trim_with_trailing())
+            .gapless_mode(GaplessMode::MediaOnly)
             .build(),
         GAPLESS_SAMPLE_RATE,
     )
@@ -142,7 +142,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(
             .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless(true)
-            .gapless_mode(silence_trim_with_trailing())
+            .gapless_mode(GaplessMode::MediaOnly)
             .build(),
         GAPLESS_SAMPLE_RATE,
     )
@@ -245,17 +245,8 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(
         "fixture must keep the selected one-frame-deficit search geometry"
     );
 
-    let probe_harness = OfflinePlayer::with_sample_rate(
-        OfflinePlayerOptions::builder()
-            .block_on_underrun(true)
-            .crossfade_duration(0.0)
-            .gapless(true)
-            .gapless_mode(silence_trim_with_trailing())
-            .build(),
-        FUSED_FIXTURE_DEVICE_RATE,
-    )
-    .await;
-    let probe = create_apple_fused_resource(&probe_harness, &apple_probe.1, temp_dir.path()).await;
+    let probe_worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+    let probe = create_apple_fused_resource(&probe_worker, &apple_probe.1, temp_dir.path()).await;
     let probe = kithara_integration_tests::mock::open_resource(&probe)
         .await
         .expect("open Apple fused probe");
@@ -265,7 +256,7 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(
         "visible length must be the scaled ratio rounded either way: got {}, expected {floor_frames} or {ceil_frames}",
         probe.output_frames
     );
-    probe_harness.close().await;
+    drop(probe_worker);
 
     let pending_decision = render_apple_fused_deficit_seam(
         &apple_first.1,
@@ -312,14 +303,14 @@ async fn render_apple_fused_deficit_seam(
             .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless(true)
-            .gapless_mode(silence_trim_with_trailing())
+            .gapless_mode(GaplessMode::MediaOnly)
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
     )
     .await;
 
-    let first = create_apple_fused_resource(&harness, first_source, cache_dir).await;
-    let second = create_apple_fused_resource(&harness, second_source, cache_dir).await;
+    let first = create_apple_fused_resource(harness.worker(), first_source, cache_dir).await;
+    let second = create_apple_fused_resource(harness.worker(), second_source, cache_dir).await;
 
     let [first_id, _second_id] = load_tagged_queue(&harness, [first, second]).await;
 
@@ -400,175 +391,6 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(
         sample_rate / 10,
         "Disabled mode must pass through full decoded PCM (no leading/trailing trim)",
         &events,
-    );
-    harness.close().await;
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_metadata(
-    temp_dir: TestTempDir,
-    #[future(awt)] untagged_primed: (TestServerHelper, CreatedHls),
-) {
-    let harness = OfflinePlayer::with_sample_rate(
-        OfflinePlayerOptions::builder()
-            .block_on_underrun(true)
-            .crossfade_duration(0.0)
-            .gapless(true)
-            .gapless_mode(silence_trim_with_trailing())
-            .build(),
-        GAPLESS_SAMPLE_RATE,
-    )
-    .await;
-
-    let resource = create_resource(&harness, &untagged_primed.1, temp_dir.path()).await;
-
-    let [only] = load_tagged_queue(&harness, [resource]).await;
-
-    let (rendered, events) = render_until_item_end(&harness, only).await;
-    let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
-
-    let head_rms = rms(&left, 0, AAC_FRAME_SAMPLES.min(left.len()));
-    assert!(
-        head_rms > 0.2,
-        "head RMS too low — heuristic SilenceTrim did not strip leading silence: \
-         head_rms={head_rms:.4}, events={events:?}"
-    );
-    harness.close().await;
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
-    temp_dir: TestTempDir,
-    #[future(awt)] untagged_trimmed: (TestServerHelper, CreatedHls),
-    #[future(awt)] untagged_trimmed_next: (TestServerHelper, CreatedHls),
-) {
-    let harness = OfflinePlayer::with_sample_rate(
-        OfflinePlayerOptions::builder()
-            .block_on_underrun(true)
-            .crossfade_duration(0.0)
-            .gapless(true)
-            .gapless_mode(silence_trim_with_trailing())
-            .build(),
-        GAPLESS_SAMPLE_RATE,
-    )
-    .await;
-
-    let first = create_resource(&harness, &untagged_trimmed.1, temp_dir.path()).await;
-    let second = create_resource(&harness, &untagged_trimmed_next.1, temp_dir.path()).await;
-
-    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]).await;
-
-    let (rendered, events) = render_until_item_end(&harness, second_id).await;
-    let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
-
-    let item1_end = timed_event_frame_end(&events, |event| {
-        matches!(
-            event,
-            PlayerEvent::ItemDidPlayToEnd { item } if item.id() == first_id
-        )
-    })
-    .expect("first item must emit ItemDidPlayToEnd");
-
-    let search_start = item1_end.saturating_sub(BLOCK_FRAMES * 2);
-    let search_end = item1_end.saturating_add(BLOCK_FRAMES * 2).min(left.len());
-    let max_silence = max_silence_run(&left, search_start, search_end, SILENCE_THRESHOLD);
-    assert!(
-        max_silence < BLOCK_FRAMES,
-        "boundary silence run must stay below one render block ({BLOCK_FRAMES} frames), \
-         got {max_silence} frames in [{search_start}..{search_end}); events={events:?}",
-    );
-
-    if item1_end > 0 && item1_end < left.len() {
-        let step = (left[item1_end] - left[item1_end - 1]).abs();
-        assert!(
-            step < 0.5,
-            "boundary discontinuity {step:.3} too large with heuristic SilenceTrim; \
-             item1_end={item1_end}, events={events:?}"
-        );
-    }
-
-    let win = (GAPLESS_SAMPLE_RATE as usize) / 100;
-    let probe_lookback = (GAPLESS_SAMPLE_RATE as usize) / 20;
-    if item1_end >= probe_lookback && item1_end + probe_lookback + win <= left.len() {
-        let mag_body_before = goertzel_magnitude(
-            &left[item1_end - probe_lookback..item1_end - probe_lookback + win],
-            SINE_HZ,
-            GAPLESS_SAMPLE_RATE,
-        );
-        let mag_body_after = goertzel_magnitude(
-            &left[item1_end + probe_lookback..item1_end + probe_lookback + win],
-            SINE_HZ,
-            GAPLESS_SAMPLE_RATE,
-        );
-        let ratio = (mag_body_after / mag_body_before.max(f64::MIN_POSITIVE))
-            .max(mag_body_before / mag_body_after.max(f64::MIN_POSITIVE));
-        assert!(
-            ratio < 1.5,
-            "body-level magnitude differs too much across the boundary \
-             (heuristic ate audible content somewhere): \
-             before={mag_body_before:.2}, after={mag_body_after:.2}, ratio={ratio:.2}; \
-             events={events:?}"
-        );
-    }
-    harness.close().await;
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
-async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(
-    temp_dir: TestTempDir,
-    #[future(awt)] untagged_trimmed: (TestServerHelper, CreatedHls),
-) {
-    let harness = OfflinePlayer::with_sample_rate(
-        OfflinePlayerOptions::builder()
-            .block_on_underrun(true)
-            .crossfade_duration(0.0)
-            .gapless(true)
-            .gapless_mode(silence_trim_with_trailing())
-            .build(),
-        GAPLESS_SAMPLE_RATE,
-    )
-    .await;
-
-    let resource = create_resource(&harness, &untagged_trimmed.1, temp_dir.path()).await;
-    let [only] = load_tagged_queue(&harness, [resource]).await;
-
-    let (rendered, events) = render_until_item_end(&harness, only).await;
-    let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
-
-    let item_end = timed_event_frame_end(&events, |event| {
-        matches!(
-            event,
-            PlayerEvent::ItemDidPlayToEnd { item } if item.id() == only
-        )
-    })
-    .expect("ItemDidPlayToEnd must fire");
-
-    let body_window = AAC_FRAME_SAMPLES * 4;
-    let body_end = item_end.saturating_sub(GAPLESS_SAMPLE_RATE as usize / 100);
-    let body_start = body_end.saturating_sub(body_window);
-    let body_rms = rms(&left, body_start, body_end);
-    assert!(
-        body_rms > 0.2,
-        "body RMS unexpectedly low — heuristic likely chewed audible content: \
-         body_rms={body_rms:.4}"
-    );
-
-    let tail_window = (GAPLESS_SAMPLE_RATE as usize) / 1000;
-    let tail_start = item_end.saturating_sub(tail_window);
-    let tail_end = item_end.min(left.len());
-    let tail_peak = left[tail_start..tail_end]
-        .iter()
-        .map(|s| s.abs())
-        .fold(0.0_f32, f32::max);
-    let body_peak = left[body_start..body_end]
-        .iter()
-        .map(|s| s.abs())
-        .fold(0.0_f32, f32::max);
-    assert!(
-        tail_peak < body_peak * 0.6,
-        "trailing fade-out did not attenuate the edge: \
-         tail_peak={tail_peak:.4}, body_peak={body_peak:.4}, ratio={:.2}",
-        tail_peak / body_peak.max(f32::MIN_POSITIVE),
     );
     harness.close().await;
 }

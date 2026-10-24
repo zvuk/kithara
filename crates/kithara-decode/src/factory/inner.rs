@@ -125,7 +125,6 @@ impl DecoderFactory {
             codec: media_info.codec,
             container: media_info.container,
             extension: None,
-            mime: None,
         };
 
         Self::create(source, &hint, config)

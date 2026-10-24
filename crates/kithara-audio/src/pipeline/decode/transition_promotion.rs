@@ -19,8 +19,8 @@ impl ActiveDecode {
                 .generation
                 .align_timeline_gap(self.active.timeline_gap());
         }
-        let incoming_profile = prepared.generation.blender_profile();
-        if self.active.blender_profile().spec() != incoming_profile.spec()
+        let incoming_profile = prepared.generation.spec();
+        if self.active.spec() != incoming_profile
             || !self.active.has_same_source_basis(&prepared.generation)
             || self.active.media_origin() != prepared.generation.media_origin()
             || self.active.comparison_origin(self.gapless_mode())

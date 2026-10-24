@@ -339,7 +339,7 @@ impl super::core::ActiveDecode {
         else {
             return Some(generation);
         };
-        self.prepare_incoming_profile(generation.blender_profile());
+        self.prepare_incoming_profile(generation.spec());
         self.incoming = Some(IncomingDecode::Priming {
             transition,
             generation,
@@ -357,7 +357,7 @@ impl super::core::ActiveDecode {
             return None;
         };
         let origin = self.active.comparison_origin(self.gapless_mode())?;
-        let active_rate = self.active.blender_profile().spec().sample_rate.get();
+        let active_rate = self.active.spec().sample_rate.get();
         content_time(rate, frame, active_rate, origin)
     }
 
@@ -374,7 +374,7 @@ impl super::core::ActiveDecode {
         let gapless_mode = self.gapless_mode();
         Some(IncomingPreparation {
             frontier,
-            outgoing_spec: self.active.blender_profile().spec(),
+            outgoing_spec: self.active.spec(),
             outgoing_profile: self.active.gapless_profile(),
             outgoing_gap: self.active.timeline_gap(),
             outgoing_origin: self.active.comparison_origin(gapless_mode)?,

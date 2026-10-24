@@ -8,10 +8,8 @@ use super::core::GaplessOutput;
 use crate::{DecodeError, DecodeResult};
 
 /// Buffered PCM and its frame count have one owner through trimming and release.
-#[derive(Debug, Default, fieldwork::Fieldwork)]
-#[fieldwork(get, vis = "pub(super)")]
+#[derive(Debug, Default)]
 pub(super) struct BufferedChunks {
-    #[field(get_mut, deref = "[AudioChunk]")]
     chunks: SmallVec<[AudioChunk; 4]>,
     frames: u64,
 }

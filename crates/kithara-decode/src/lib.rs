@@ -45,15 +45,13 @@ pub use error::{DecodeError, DecodeResult, ErrorClass};
 pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory, DecoderResamplerConfig};
 pub use gapless::{
     GaplessInfo, GaplessMode, GaplessOutput, GaplessTailCompensation, GaplessTrimmer,
-    SilenceTrimParams, probe_mp4_gapless,
+    probe_mp4_gapless,
 };
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome, InputState,
     LandingClock, PrepareWait,
 };
-pub use types::{
-    BlenderProfile, DecoderDuration, DecoderTrackInfo, GaplessProfile, PcmOrigin, TrackMetadata,
-};
+pub use types::{DecoderDuration, DecoderTrackInfo, GaplessProfile, PcmOrigin, TrackMetadata};
 #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
 pub use webcodecs::probe::spawn_webcodecs_probe;
 mod consts;

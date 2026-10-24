@@ -41,9 +41,6 @@ impl GaplessStage {
             GaplessMode::CodecPriming => profile
                 .gapless()
                 .map_or_else(|| resolve_codec_priming(profile), from_info),
-            GaplessMode::SilenceTrim(params) => profile
-                .gapless()
-                .map_or_else(|| GaplessTrimmer::silence_trim(params), from_info),
             _ => GaplessTrimmer::disabled(),
         };
         Self {
@@ -148,7 +145,6 @@ pub(crate) fn visible_origin(
             || profile.default_priming_frames(),
             |info| info.leading_frames,
         ),
-        GaplessMode::SilenceTrim(_) => profile.gapless()?.leading_frames,
         _ => return None,
     };
     if leading == 0 {
@@ -166,7 +162,7 @@ pub(crate) fn visible_origin(
 
 /// Returns the PCM duration downstream of exact metadata trim.
 ///
-/// Heuristic trim keeps the raw duration until EOF reconciles the timeline.
+/// `MediaOnly` without reported counts keeps the raw duration until EOF.
 #[must_use]
 pub(crate) fn visible_duration(
     declared: Option<DecoderDuration>,

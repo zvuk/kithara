@@ -1,16 +1,13 @@
 use kithara_signal::AudioChunk;
 use smallvec::SmallVec;
 
-use crate::{
-    DecodeResult, GaplessInfo, GaplessTailCompensation, gapless::heuristic::SilenceTrimParams,
-};
+use crate::{DecodeResult, GaplessInfo, GaplessTailCompensation};
 
 /// Inline batch of chunks released by one `GaplessTrimmer` operation.
 pub type GaplessOutput = SmallVec<[AudioChunk; 2]>;
 use super::{
     buffer::{BufferedChunks, chunk_frames, output_with, trim_leading, validate_geometry},
     fade::{FadeInState, apply_fade_in},
-    heuristic::HeuristicState,
 };
 
 /// Stateful PCM trimmer that applies one track's gapless contract.
@@ -22,15 +19,7 @@ pub struct GaplessTrimmer {
     tail_compensation: Option<GaplessTailCompensation>,
     tail_buffer: BufferedChunks,
     input_frames_seen: u64,
-    /// Tail hold-back size. Reused for two purposes:
-    ///   - in `Fixed` mode it is the metadata-driven trailing trim,
-    ///   - in `Heuristic` mode it is `scan_window_frames` so we always
-    ///     have enough buffered tail for the EOF silence search.
-    ///
-    /// The two roles never collide — only one mode is active per
-    /// trimmer instance — but watch out when reading the buffer
-    /// helpers below: `trailing_frames` does not always mean "frames
-    /// to drop", sometimes it just means "minimum buffered tail".
+    /// Metadata-driven trailing trim held until EOF.
     trailing_frames: u64,
 }
 
@@ -45,7 +34,6 @@ enum GaplessMode {
         /// metadata-driven trim — that boundary is sample-exact.
         fade_in: Option<FadeInState>,
     },
-    Heuristic(Box<HeuristicState>),
 }
 
 impl GaplessTrimmer {
@@ -109,15 +97,10 @@ impl GaplessTrimmer {
                 self.tail_buffer.trim(trailing_frames)?;
                 Ok(self.tail_buffer.drain())
             }
-            GaplessMode::Heuristic(state) => {
-                state.flush(&mut self.tail_buffer, self.trailing_frames)
-            }
         }
     }
 
-    /// Drop seek-sensitive state. Both heuristic search and pending fade-in are abandoned: after a
-    /// seek we land mid-track and trying to "trim leading silence" or apply a fade-in there would
-    /// corrupt audible content.
+    /// Drop leading trim and the codec-priming fade after a seek.
     ///
     /// Call outside the non-blocking produce core: releasing a pooled buffer can deallocate
     /// when its shard is full.
@@ -130,9 +113,6 @@ impl GaplessTrimmer {
             } => {
                 *leading_remaining = 0;
                 *fade_in = None;
-            }
-            GaplessMode::Heuristic(state) => {
-                state.notify_seek();
             }
         }
         self.tail_compensation = None;
@@ -163,23 +143,6 @@ impl GaplessTrimmer {
                 self.tail_buffer.push(chunk);
                 Ok(self.tail_buffer.release(self.trailing_frames))
             }
-            GaplessMode::Heuristic(state) => {
-                state.push(&mut self.tail_buffer, self.trailing_frames, chunk)
-            }
-        }
-    }
-
-    /// Build a silence-scan trimmer. Trim boundaries are inferred by
-    /// scanning samples; a fade-in is applied after the boundary is
-    /// found to mask the level jump.
-    #[must_use]
-    pub fn silence_trim(params: SilenceTrimParams) -> Self {
-        Self {
-            trailing_frames: params.scan_window_frames,
-            mode: GaplessMode::Heuristic(Box::new(HeuristicState::new(params))),
-            tail_buffer: BufferedChunks::default(),
-            tail_compensation: None,
-            input_frames_seen: 0,
         }
     }
 }

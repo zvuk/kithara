@@ -35,34 +35,6 @@ mod consts {
 #[case::trim_silence(vec![0.0; 4096])]
 #[case::trim_codec_priming_drops_leading_frames_and_fades_in(vec![1.0_f32; 276])]
 #[case::trim_codec_priming_metadata_takes_precedence_when_combined(vec![0.5_f32; 200])]
-#[case::trim_silence_trim_below_threshold_is_trimmed({ let mut pcm = vec![0.0003_f32; 300];
-    pcm.extend(std::iter::repeat_n(0.5, 100)); pcm })]
-#[case::trim_silence_trim_above_threshold_preserves_audio(vec![3.16e-3_f32; 300])]
-#[case::trim_silence_trim_preserves_quiet_intro_below_threshold_then_above({ let mut pcm = vec![0.0003_f32; 200];
-    pcm.extend(std::iter::repeat_n(0.001_8, 200)); pcm })]
-#[case::trim_silence_trim_min_frames_boundary_under_min({ let mut pcm = vec![0.0_f32; 31];
-    pcm.extend(std::iter::repeat_n(0.5, 64)); pcm })]
-#[case::trim_silence_trim_min_frames_boundary_at_min({ let mut pcm = vec![0.0_f32; 32];
-    pcm.extend(std::iter::repeat_n(0.5, 64)); pcm })]
-#[case::trim_silence_trim_scan_window_exhausted_preserves_audio(vec![0.0_f32; 300])]
-#[case::trim_silence_trim_no_op_with_immediate_content(vec![0.5_f32; 256])]
-#[case::trim_silence_trim_trailing_disabled_by_default({ let mut pcm = vec![0.5_f32; 64];
-    pcm.extend(std::iter::repeat_n(0.0, 64)); pcm })]
-#[case::trim_silence_trim_trailing_enabled({ let mut pcm = vec![0.5_f32; 256];
-    pcm.extend(std::iter::repeat_n(0.0, 480)); pcm })]
-#[case::trim_trailing_sine({     let mut pcm = Vec::with_capacity((4_800u32 + 480u32) as usize);
-    for n in 0..4_800u32 {
-        let t = f64::from(n) / f64::from(48_000u32);
-        let s: f64 = 0.5 * (2.0 * std::f64::consts::PI * 800.0 * t).sin();
-        pcm.push(AsPrimitive::<f32>::as_(s));
-    }
-    pcm.extend(std::iter::repeat_n(0.0, 480u32 as usize));
- pcm })]
-#[case::trim_seek(vec![0.0, 0.0, 3.0, 4.0])]
-#[case::trim_stereo_silence(vec![0.0; 64])]
-#[case::trim_stereo_quiet(vec![0.0, 2.0e-3])]
-#[case::trim_silence_trim_does_not_introduce_click_at_boundary({ let mut pcm = vec![0.0_f32; 64];
-    pcm.extend(std::iter::repeat_n(1.0, 256)); pcm })]
 #[case::accelerate_ramp(vec![0.0, 1.0, 2.0, 3.0])]
 #[case::accelerate_wave(vec![0.0, 1.0, 0.0, -1.0, 0.0])]
 #[case::limiter_peak(vec![2.0_f32; 8])]

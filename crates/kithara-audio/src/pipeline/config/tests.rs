@@ -1,7 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use kithara_assets::{AssetStore, StorageBackend};
-    use kithara_decode::{GaplessMode, SilenceTrimParams};
     use kithara_file::{FileConfig, FileSrc};
     use kithara_resampler::NoResamplerBackend;
     use kithara_stream::{ContainerFormat, MediaInfo};
@@ -9,7 +8,7 @@ mod native {
     use unimock::Unimock;
 
     use crate::{
-        pipeline::config::{AudioConfig, AudioDecoderConfig},
+        pipeline::config::AudioConfig,
         test_pools::{TestPools, pools},
     };
 
@@ -59,25 +58,5 @@ mod native {
             config.media_info().and_then(|info| info.container),
             Some(ContainerFormat::Wav)
         );
-    }
-
-    #[kithara::test]
-    #[case::codec_priming(GaplessMode::CodecPriming)]
-    #[case::silence_trim(GaplessMode::SilenceTrim(
-        SilenceTrimParams::builder()
-            .threshold_db(50.0)
-            .min_trim_frames(128)
-            .scan_window_frames(2_048)
-            .trim_trailing(true)
-            .build()
-    ))]
-    fn audio_config_carries_the_decoder_gapless_mode(#[case] mode: GaplessMode) {
-        let config = AudioConfig::<kithara_file::File<TestPools>, NoResamplerBackend>::for_stream(
-            file_config(),
-        )
-        .decoder(AudioDecoderConfig::builder().gapless_mode(mode).build())
-        .build();
-
-        assert_eq!(config.decoder().gapless_mode(), mode);
     }
 }

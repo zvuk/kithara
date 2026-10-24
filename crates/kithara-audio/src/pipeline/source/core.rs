@@ -224,7 +224,6 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             self.decode.gapless_mode(),
             self.playhead.duration(),
             decoded_end,
-            self.duration_reconciled,
         )
     }
     fn discontinuity(&self) -> Option<crate::SourceDiscontinuity> {
@@ -331,7 +330,6 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             DecodeCtx {
                 cursor: &mut self.resume,
                 physical_duration: self.playhead.duration(),
-                physical_reconciled: self.duration_reconciled,
                 stream: &self.shared_stream,
                 emit: Some(&self.emit),
             },

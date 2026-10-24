@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_bufpool::PoolConfig;
-use kithara_decode::{DecodeError, DecoderChunkOutcome, GaplessMode, SilenceTrimParams};
+use kithara_decode::{DecodeError, DecoderChunkOutcome, GaplessMode};
 use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{
     sync::{Arc, Mutex},

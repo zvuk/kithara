@@ -1,43 +1,6 @@
 use super::*;
 
 #[kithara::fixture]
-pub async fn untagged_trimmed() -> (TestServerHelper, CreatedHls) {
-    gapless_source(
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        Some(AAC_GAPLESS_TRAILING_DELAY),
-        0,
-        GaplessEncoding::None,
-    )
-    .await
-}
-
-#[kithara::fixture]
-pub async fn untagged_trimmed_next() -> (TestServerHelper, CreatedHls) {
-    gapless_source(
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        Some(AAC_GAPLESS_TRAILING_DELAY),
-        u64::try_from(expected_visible_frames(
-            AAC_GAPLESS_ENCODER_DELAY,
-            AAC_GAPLESS_TRAILING_DELAY,
-        ))
-        .expect("visible frames fit u64"),
-        GaplessEncoding::None,
-    )
-    .await
-}
-
-#[kithara::fixture]
-pub async fn untagged_primed() -> (TestServerHelper, CreatedHls) {
-    gapless_source(
-        Some(AAC_GAPLESS_ENCODER_DELAY),
-        None,
-        0,
-        GaplessEncoding::None,
-    )
-    .await
-}
-
-#[kithara::fixture]
 pub async fn trimmed() -> (TestServerHelper, CreatedHls) {
     gapless_source(
         Some(AAC_GAPLESS_ENCODER_DELAY),

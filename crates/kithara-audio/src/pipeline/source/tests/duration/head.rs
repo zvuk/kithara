@@ -397,80 +397,6 @@ async fn first_nonzero_seek_after_original_pipeline_output_retains_its_origin() 
 }
 
 #[kithara::test(tokio)]
-#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn heuristic_trim_refines_from_the_original_output_it_actually_emits() {
-    let mut extent = extent(Some(Duration::from_secs(60)), 700, false);
-    extent.gapless = None;
-    extent.media_origin = Some(Duration::from_millis(700));
-    let mode = GaplessMode::SilenceTrim(
-        SilenceTrimParams::builder()
-            .threshold_db(60.0)
-            .min_trim_frames(1)
-            .scan_window_frames(64)
-            .build(),
-    );
-    let mut source = physical_source_with_mode(extent, mode).await;
-    assert_eq!(source.media_end(), None);
-    let first = first_chunk(&mut source);
-    assert_eq!(first.meta.frame_offset, 711);
-    assert_eq!(first.meta.timestamp, Duration::from_millis(711));
-    assert_eq!(
-        source.decode.active().visible_origin(),
-        Some(first.meta.timestamp)
-    );
-    assert_eq!(source.playhead.duration(), Some(Duration::from_secs(60)));
-    assert_eq!(source.media_end(), Some(Duration::from_secs(60)));
-    assert_eq!(first.meta.media_end, Some(Duration::from_secs(60)));
-    let mut served = u64::from(first.meta.frames);
-    let mut endpoint = first.meta.timestamp
-        + first
-            .spec()
-            .duration_for(u64::from(first.meta.frames))
-            .expect("first extent");
-    loop {
-        hang_tick!();
-        source.prepare_deferred();
-        match source.step_track() {
-            TrackStep::Produced(fetch) => {
-                let chunk = produced_data(fetch);
-                assert!(chunk.samples.iter().all(|sample| sample.is_finite()));
-                assert_eq!(chunk.meta.timestamp, endpoint);
-                assert_eq!(chunk.meta.media_end, Some(Duration::from_secs(60)));
-                served += u64::from(chunk.meta.frames);
-                endpoint = chunk.meta.timestamp
-                    + chunk
-                        .spec()
-                        .duration_for(u64::from(chunk.meta.frames))
-                        .expect("actual extent");
-                hang_reset!();
-            }
-            TrackStep::Eof => break,
-            TrackStep::StateChanged | TrackStep::Blocked(_) => source.finish_deferred(),
-            TrackStep::Failed(failure) => panic!("heuristic source failed: {failure:?}"),
-        }
-    }
-    assert_eq!(served, 989);
-    assert_eq!(endpoint, Duration::from_millis(1_700));
-    assert_eq!(source.playhead.duration(), Some(Duration::from_millis(989)));
-    assert_eq!(source.media_end(), Some(Duration::from_secs(1)));
-    assert_eq!(
-        source
-            .decode
-            .active()
-            .visible_origin()
-            .and_then(|origin| origin.checked_add(source.playhead.duration()?)),
-        Some(endpoint)
-    );
-    source
-        .seek(Duration::from_millis(1_000))
-        .expect("raw seek after measured heuristic EOF");
-    assert_eq!(source.media_end(), Some(Duration::from_secs(1)));
-    let replay = first_chunk(&mut source);
-    assert_eq!(replay.meta.media_end, Some(Duration::from_secs(1)));
-    assert_eq!(source.playhead.duration(), Some(Duration::from_millis(989)));
-}
-
-#[kithara::test(tokio)]
 #[case::cancelled(crate::TrackFailureKind::SourceCancelled)]
 #[case::failed(crate::TrackFailureKind::Render)]
 async fn failed_source_after_original_pcm_never_publishes_an_eof_length(
@@ -490,4 +416,16 @@ async fn failed_source_after_original_pcm_never_publishes_an_eof_length(
         source.decode.active().visible_origin(),
         Some(original.meta.timestamp)
     );
+}
+
+#[kithara::test(tokio)]
+#[case::media_only(GaplessMode::MediaOnly)]
+#[case::codec_priming(GaplessMode::CodecPriming)]
+async fn a_raw_length_endpoint_follows_the_visible_origin_before_any_output(
+    #[case] mode: GaplessMode,
+) {
+    let mut extent = extent(Some(Duration::from_secs(60)), 700, true);
+    extent.media_origin = Some(Duration::from_millis(700));
+    let source = physical_source_with_mode(extent, mode).await;
+    assert_eq!(source.media_end(), Some(Duration::from_millis(59_969)));
 }

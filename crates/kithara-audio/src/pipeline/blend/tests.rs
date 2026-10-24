@@ -1,6 +1,5 @@
 use std::num::NonZeroU32;
 
-use kithara_decode::BlenderProfile;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_fixtures::unit_fixtures::{
@@ -41,7 +40,7 @@ fn chunk(pools: &Pools, spec: AudioSpec, samples: &[f32]) -> AudioChunk {
     )
 }
 
-fn blender(pools: &Pools, profile: BlenderProfile) -> GaplessBlender {
+fn blender(pools: &Pools, profile: AudioSpec) -> GaplessBlender {
     GaplessBlender::new(profile, pools).expect("blender scratch fits test pools")
 }
 
@@ -57,7 +56,7 @@ fn single_input_blender_is_bit_exact(blend_identity: Vec<f32>) {
         .iter()
         .map(|sample| sample.to_bits())
         .collect::<Vec<_>>();
-    let mut blender = blender(&pools, BlenderProfile::new(spec));
+    let mut blender = blender(&pools, spec);
 
     let output = blender.process_active(input);
 
@@ -79,14 +78,14 @@ fn replacing_active_profile_accepts_the_new_spec(blend_multichannel: Vec<f32>) {
     let pools = pools();
     let initial = spec(2, 44_100);
     let replacement = spec(6, 48_000);
-    let mut blender = blender(&pools, BlenderProfile::new(initial));
+    let mut blender = blender(&pools, initial);
 
     blender
-        .prepare_active(BlenderProfile::new(replacement))
+        .prepare_active(replacement)
         .expect("replacement scratch fits test pools");
     let capacities_before = blender.buffer_capacities();
     let prepared_capacity = blender.buffer_capacities().1;
-    blender.replace_active(BlenderProfile::new(replacement));
+    blender.replace_active(replacement);
     let capacities_after = blender.buffer_capacities();
 
     let output = blender.process_active(chunk(&pools, replacement, &blend_multichannel));
@@ -107,7 +106,7 @@ fn replacing_active_profile_accepts_the_new_spec(blend_multichannel: Vec<f32>) {
 fn high_rate_join_uses_the_full_forty_milliseconds() {
     let pools = pools();
     let spec = spec(2, 384_000);
-    let blender = blender(&pools, BlenderProfile::new(spec));
+    let blender = blender(&pools, spec);
 
     assert_eq!(blender.join_frame_count(), 15_360);
 }
@@ -129,9 +128,9 @@ fn real_outgoing_pcm_is_blended_for_the_full_linear_join(
         .take(JOIN_FRAMES.saturating_mul(channels))
         .collect::<Vec<_>>();
     let incoming = blend_incoming;
-    let mut blender = blender(&pools, BlenderProfile::new(spec));
+    let mut blender = blender(&pools, spec);
     blender
-        .prepare_active(BlenderProfile::new(spec))
+        .prepare_active(spec)
         .expect("join scratch fits test pools");
     assert!(blender.prepare_join(|tail| {
         tail.copy_from_slice(&outgoing);
@@ -176,7 +175,7 @@ fn reset_cancels_an_active_join(
 ) {
     let pools = pools();
     let spec = spec(2, 44_100);
-    let mut blender = blender(&pools, BlenderProfile::new(spec));
+    let mut blender = blender(&pools, spec);
     let outgoing = blend_outgoing_constant
         .into_iter()
         .cycle()
@@ -187,7 +186,7 @@ fn reset_cancels_an_active_join(
         )
         .collect::<Vec<_>>();
     blender
-        .prepare_active(BlenderProfile::new(spec))
+        .prepare_active(spec)
         .expect("join scratch fits test pools");
     assert!(blender.prepare_join(|tail| {
         tail.copy_from_slice(&outgoing);

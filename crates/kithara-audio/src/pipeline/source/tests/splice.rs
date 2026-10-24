@@ -1113,7 +1113,7 @@ mod buffered_readiness {
             fixture
                 .source
                 .decode
-                .prepare_replacement_profile(generation.blender_profile());
+                .prepare_replacement_profile(generation.spec());
             assert!(fixture.source.decode.take_stage_error().is_none());
             drop(fixture.source.decode.replace_active(generation));
             fixture.source.decode.reset();

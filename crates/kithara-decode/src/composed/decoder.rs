@@ -10,13 +10,12 @@ use kithara_test_utils::kithara;
 
 use super::{ComposedDecoder, DecoderRuntime, HeadStrip, PcmOriginState, Prefill, state::SeekTrim};
 use crate::{
-    BlenderProfile, InputState, PcmOrigin, PrepareWait,
+    InputState, PcmOrigin, PrepareWait,
     codec::FrameCodec,
     consts,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
     error::{DecodeError, DecodeResult},
     traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
-    types::TrackMetadata,
 };
 
 impl HeadStrip {
@@ -378,10 +377,6 @@ where
     C: FrameCodec,
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    fn blender_profile(&self) -> BlenderProfile {
-        BlenderProfile::new(self.spec)
-    }
-
     fn duration(&self) -> Option<crate::DecoderDuration> {
         self.duration
     }
@@ -401,10 +396,6 @@ where
         if let Some(hooks) = self.hooks.as_mut() {
             hooks.flush();
         }
-    }
-
-    fn metadata(&self) -> TrackMetadata {
-        TrackMetadata::default()
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {

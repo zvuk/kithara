@@ -5,7 +5,9 @@ use std::{
 };
 
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_decode::{Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig};
+use kithara_decode::{
+    Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig, TrackMetadata,
+};
 use kithara_events::{DeferredBus, EventBus, EventReceiver, EventSet};
 use kithara_platform::{
     CancelScope,
@@ -146,7 +148,7 @@ impl<T: StreamType<Events = EventBus>> Audio<Stream<T>> {
         let initial = create_initial_decoder(reader, info.clone(), factory.clone(), rate).await?;
         let spec = initial.spec();
         let track_info = initial.track_info();
-        let metadata = initial.metadata();
+        let metadata = TrackMetadata::default();
         let codec = info.as_ref().and_then(|info| info.codec);
         let profile = initial.gapless_profile(codec);
         let mode = deps.decoder.gapless_mode();

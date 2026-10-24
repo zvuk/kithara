@@ -20,8 +20,6 @@ pub(crate) struct ProbeHint {
     pub(crate) container: Option<ContainerFormat>,
     /// File extension hint (e.g., "mp3", "aac").
     pub(crate) extension: Option<String>,
-    /// MIME type hint (e.g., "audio/mpeg", "audio/flac").
-    pub(crate) mime: Option<String>,
 }
 
 /// Resolve `(codec, container)` from a probe hint.
@@ -299,8 +297,7 @@ fn is_mp4_prefix(prefix: &[u8]) -> bool {
 /// Priority:
 /// 1. Direct codec hint
 /// 2. Extension mapping
-/// 3. MIME type mapping
-/// 4. Container format hint (can suggest likely codec)
+/// 3. Container format hint (can suggest likely codec)
 pub(super) fn probe_codec(hint: &ProbeHint) -> DecodeResult<AudioCodec> {
     hint.codec
         .or_else(|| {
@@ -308,23 +305,8 @@ pub(super) fn probe_codec(hint: &ProbeHint) -> DecodeResult<AudioCodec> {
                 .as_ref()
                 .and_then(|ext| AudioCodec::parse_extension(ext))
         })
-        .or_else(|| {
-            hint.mime
-                .as_ref()
-                .and_then(|mime| AudioCodec::parse_mime(mime))
-        })
-        .or_else(|| {
-            hint.mime
-                .as_ref()
-                .and_then(|mime| container_from_mime(mime))
-                .and_then(codec_from_container)
-        })
         .or_else(|| hint.container.and_then(codec_from_container))
         .ok_or(DecodeError::ProbeFailed)
-}
-
-pub(super) fn container_from_mime(mime: &str) -> Option<ContainerFormat> {
-    ContainerFormat::parse_mime(mime)
 }
 
 /// Map an MP4 `stsd` sample-entry tag to a codec. The `.m4a`/`.mp4`
@@ -407,29 +389,6 @@ mod tests {
             .expect("set caller position");
         assert_eq!(sniff_container_from_source(&mut source), expected);
         assert_eq!(source.stream_position().expect("caller position"), 3);
-    }
-
-    #[kithara::test]
-    fn test_probe_hint_default() {
-        let hint = ProbeHint::default();
-        assert!(hint.codec.is_none());
-        assert!(hint.container.is_none());
-        assert!(hint.extension.is_none());
-        assert!(hint.mime.is_none());
-    }
-
-    #[kithara::test]
-    fn test_probe_hint_with_all_fields() {
-        let hint = ProbeHint {
-            codec: Some(AudioCodec::Flac),
-            container: Some(ContainerFormat::Ogg),
-            extension: Some("flac".into()),
-            mime: Some("audio/flac".into()),
-        };
-        assert_eq!(hint.codec, Some(AudioCodec::Flac));
-        assert_eq!(hint.container, Some(ContainerFormat::Ogg));
-        assert_eq!(hint.extension, Some("flac".into()));
-        assert_eq!(hint.mime, Some("audio/flac".into()));
     }
 
     #[kithara::test]
@@ -517,21 +476,6 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case("audio/mpeg", AudioCodec::Mp3)]
-    #[case("audio/flac", AudioCodec::Flac)]
-    #[case("audio/aac", AudioCodec::AacLc)]
-    #[case("audio/vorbis", AudioCodec::Vorbis)]
-    #[case("audio/opus", AudioCodec::Opus)]
-    fn test_probe_from_mime(#[case] mime: &str, #[case] expected: AudioCodec) {
-        let hint = ProbeHint {
-            mime: Some(mime.into()),
-            ..Default::default()
-        };
-        let codec = probe_codec(&hint).expect("BUG: should probe successfully");
-        assert_eq!(codec, expected);
-    }
-
-    #[kithara::test]
     #[case(ContainerFormat::MpegAudio, AudioCodec::Mp3)]
     fn test_probe_from_container(#[case] container: ContainerFormat, #[case] expected: AudioCodec) {
         let hint = ProbeHint {
@@ -543,61 +487,22 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_probe_priority_codec_over_extension() {
-        let hint = ProbeHint {
-            codec: Some(AudioCodec::Flac),
-            extension: Some("mp3".into()),
-            ..Default::default()
-        };
+    #[case::codec_over_extension(ProbeHint { codec: Some(AudioCodec::Flac), extension: Some("mp3".into()), ..Default::default() }, AudioCodec::Flac)]
+    #[case::extension_over_container(ProbeHint { extension: Some("flac".into()), container: Some(ContainerFormat::MpegAudio), ..Default::default() }, AudioCodec::Flac)]
+    fn test_probe_priority(#[case] hint: ProbeHint, #[case] expected: AudioCodec) {
         let codec = probe_codec(&hint).expect("BUG: should probe successfully");
-        assert_eq!(codec, AudioCodec::Flac);
-    }
-
-    #[kithara::test]
-    fn test_probe_priority_extension_over_mime() {
-        let hint = ProbeHint {
-            extension: Some("flac".into()),
-            mime: Some("audio/mpeg".into()),
-            ..Default::default()
-        };
-        let codec = probe_codec(&hint).expect("BUG: should probe successfully");
-        assert_eq!(codec, AudioCodec::Flac);
+        assert_eq!(codec, expected);
     }
 
     #[kithara::test]
     #[case(ProbeHint { container: Some(ContainerFormat::Mp4), ..Default::default() })]
     #[case(ProbeHint { container: Some(ContainerFormat::Ogg), ..Default::default() })]
     #[case(ProbeHint { container: Some(ContainerFormat::Wav), ..Default::default() })]
-    #[case(ProbeHint { mime: Some("audio/wav".into()), ..Default::default() })]
     #[case(ProbeHint::default())]
     #[case(ProbeHint { extension: Some("xyz".into()), ..Default::default() })]
-    #[case(ProbeHint { mime: Some("application/octet-stream".into()), ..Default::default() })]
     #[case(ProbeHint { container: Some(ContainerFormat::Mkv), ..Default::default() })]
     fn test_probe_fails_for_insufficient_hints(#[case] hint: ProbeHint) {
         let result = probe_codec(&hint);
         assert!(matches!(result, Err(DecodeError::ProbeFailed)));
-    }
-
-    #[kithara::test]
-    #[case("audio/mpeg", Some(ContainerFormat::MpegAudio))]
-    #[case("audio/aac", Some(ContainerFormat::Adts))]
-    #[case("audio/mp4", Some(ContainerFormat::Mp4))]
-    #[case("audio/x-m4a", Some(ContainerFormat::Mp4))]
-    #[case("audio/flac", Some(ContainerFormat::Flac))]
-    #[case("audio/ogg", Some(ContainerFormat::Ogg))]
-    #[case("text/plain", None)]
-    fn test_container_from_mime_case(
-        #[case] mime: &str,
-        #[case] expected: Option<ContainerFormat>,
-    ) {
-        assert_eq!(container_from_mime(mime), expected);
-    }
-
-    #[kithara::test]
-    #[case("text/plain")]
-    #[case("")]
-    #[case("video/mp4")]
-    fn test_codec_from_mime_unknown_returns_none(#[case] mime: &str) {
-        assert!(AudioCodec::parse_mime(mime).is_none());
     }
 }

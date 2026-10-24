@@ -7,7 +7,7 @@ mod mp4;
 mod probe;
 mod trimmer;
 
-pub use heuristic::{GaplessMode, SilenceTrimParams};
+pub use heuristic::GaplessMode;
 pub use info::{GaplessInfo, GaplessTailCompensation};
 #[cfg(feature = "symphonia")]
 pub(crate) use mp4::derive_from_edit;

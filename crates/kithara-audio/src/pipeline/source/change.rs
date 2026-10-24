@@ -384,8 +384,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             generation.seal_visible_origin(self.decode.gapless_mode());
         }
         let old_spec = self.decode.output_spec();
-        self.decode
-            .prepare_replacement_profile(generation.blender_profile());
+        self.decode.prepare_replacement_profile(generation.spec());
         if let Some(error) = self.decode.take_stage_error() {
             return Err(error);
         }

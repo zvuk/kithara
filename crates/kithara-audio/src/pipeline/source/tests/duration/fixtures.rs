@@ -3,7 +3,6 @@ pub(super) use std::num::NonZeroU32;
 pub(super) use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
 pub(super) use kithara_decode::{
     DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessInfo, GaplessMode,
-    SilenceTrimParams,
 };
 pub(super) use kithara_platform::{sync::Arc, time::Duration};
 pub(super) use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};

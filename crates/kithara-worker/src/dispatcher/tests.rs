@@ -848,6 +848,7 @@ mod native {
 
     impl Task for PanicTask {
         fn tick(&mut self) -> TickResult {
+            kithara_test_utils::hang::suppress_expected_panic_dumps();
             panic!("test task panic");
         }
     }
