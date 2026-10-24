@@ -16,6 +16,7 @@ use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::PackagedSignal,
+    hls_fixture::create_test_downloader,
     hls_server::aes128_encryption,
     phase_continuity::{CHANNELS, FREQ_HZ, SAMPLE_RATE, SinePhaseSpec, scripted_phase_scan},
 };
@@ -186,6 +187,7 @@ async fn run_case_paced(
     };
     let initial_mode = scenario.first().map_or_else(AbrMode::default, |&(m, _)| m);
     let hls_config = HlsConfig::for_url(created.master_url())
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools.clone())
         .cancel(cancel)

@@ -34,7 +34,7 @@ where
     })?;
     let track = match SourceType::detect(&config.src)? {
         SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
-            let audio = config.clone().build_file_config(&worker, None);
+            let audio = config.clone().build_file_config(None);
             Either::Left(config.build_track_config(audio))
         }
         SourceType::HlsStream(_) => {

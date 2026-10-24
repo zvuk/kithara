@@ -4,10 +4,9 @@ use kithara_assets::{
     AcquisitionResult, AssetReader, AssetResource, AssetSource, AssetStore, AssetsError, ReadSide,
     ResourceAttachment, ResourceKey,
 };
-use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_download::{Downloader, DownloaderConfig};
+use kithara_bufpool::HasPool;
+use kithara_download::Downloader;
 use kithara_events::EventBus;
-use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::sleep, tokio};
 use kithara_storage::StorageError;
 use kithara_stream::{PlayheadState, SourceError as StreamSourceError, StreamType};
@@ -140,19 +139,6 @@ where
     scope.key(&resource).map_err(SourceError::from)
 }
 
-fn default_downloader<S>(cancel: &CancelToken, pools: PoolRegion<S>) -> Downloader
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    let cancel_for_dl = cancel.child();
-    let client = HttpClient::new(NetOptions::default(), pools, cancel_for_dl.child());
-    Downloader::new(
-        DownloaderConfig::for_client(client)
-            .cancel(cancel_for_dl)
-            .build(),
-    )
-}
-
 impl<S> RemoteFileOpen<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
@@ -254,6 +240,11 @@ where
         config: Arc<FileConfig<S>>,
         cancel: CancelToken,
     ) -> Result<FileSource<S>, SourceError> {
+        let downloader = config
+            .downloader
+            .clone()
+            .ok_or(SourceError::NoDownloader)
+            .inspect_err(|error| publish_open_error(config.bus.as_ref(), error))?;
         let backend = &config.store;
         let key = remote_key(
             backend,
@@ -277,20 +268,14 @@ where
                 tracing::debug!("file already cached, skipping download");
                 Ok(cached_source(reader, bus, cancel.child(), config))
             }
-            AcquisitionResult::Pending(attachment) => {
-                let downloader = config
-                    .downloader
-                    .clone()
-                    .unwrap_or_else(|| default_downloader(&cancel, config.pools.clone()));
-                Ok(RemoteFileOpen {
-                    config,
-                    coord,
-                    cancel,
-                    downloader,
-                    bus,
-                }
-                .into_source(attachment))
+            AcquisitionResult::Pending(attachment) => Ok(RemoteFileOpen {
+                config,
+                coord,
+                cancel,
+                downloader,
+                bus,
             }
+            .into_source(attachment)),
             _ => Err(SourceError::UnexpectedAcquisitionState),
         }
     }
@@ -434,8 +419,18 @@ mod tests {
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
         let config = FileConfig::for_src(FileSrc::Remote(remote_url))
+            .downloader(Downloader::new({
+                let config =
+                    kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+                        kithara_net::NetOptions::default(),
+                        pools.clone(),
+                        CancelToken::never(),
+                    ));
+                #[cfg(not(target_arch = "wasm32"))]
+                let config = config.runtime(tokio::runtime::Handle::current());
+                config.build()
+            }))
             .store(waiting_store)
-            .pools(pools)
             .cancel(cancel.clone())
             .events(bus)
             .build();

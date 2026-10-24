@@ -12,6 +12,7 @@ use kithara::{
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_fixtures::{assets, fixtures::tone_mp3, headerless_bitrate_change};
 
@@ -184,12 +185,12 @@ async fn audio_file_mp3_decodes_with_duration(
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let file_config = FileConfig::for_src(url.clone().into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools)
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .decoder(
@@ -274,12 +275,12 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let file_config = FileConfig::for_src(handle.child_url("track.mp3").into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools)
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .decoder(
@@ -355,12 +356,12 @@ async fn headerless_mp3_whose_bitrate_changes_plays_past_its_opening_estimate(
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let file_config = FileConfig::for_src(handle.child_url("track.mp3").into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools)
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .decoder(
@@ -415,12 +416,12 @@ async fn mp3_duration_correct_before_decode(tone_mp3: &'static [u8], #[case] hin
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let file_config = FileConfig::for_src(url.clone().into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools)
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .maybe_hint(hint.map(String::from))
@@ -456,12 +457,12 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe(tone_mp3: &
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let file_config = FileConfig::for_src(handle.url().into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools)
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config).build();
     let audio = kithara_integration_tests::mock::load_audio(&worker, config)

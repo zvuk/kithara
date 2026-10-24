@@ -37,6 +37,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_fixtures::{
     SignalAsset,
@@ -362,6 +363,7 @@ fn open_deck(
         QueueConfig::with_factory(PlayerFactory)
             .prep(ResourcePrep::builder().worker(worker.clone()).build())
             .store(store.clone())
+            .downloader(create_test_downloader())
             .build(),
     );
     let owner = host.insert(queue).expect("insert the deck into the Host");

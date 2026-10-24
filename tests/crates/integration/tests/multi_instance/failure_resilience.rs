@@ -17,6 +17,7 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     mock::LaneAudio,
 };
 use kithara_test_fixtures::integration_fixtures::concurrent_wav;
@@ -97,6 +98,7 @@ async fn create_hls_audio(
     let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {

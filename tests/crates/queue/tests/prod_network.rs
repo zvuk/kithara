@@ -71,7 +71,11 @@ fn build_prod_ctx() -> ProdCtx {
     let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
     let client = HttpClient::new(net, pools.clone(), CancelToken::never());
-    let downloader = Downloader::new(DownloaderConfig::for_client(client.clone()).build());
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(client.clone())
+            .runtime(kithara::platform::tokio::runtime::Handle::current())
+            .build(),
+    );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
     let document = prod_document();

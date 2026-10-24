@@ -19,6 +19,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     event::TestEvent,
+    hls_fixture::create_test_downloader,
     memory_asset_store,
     mock::{LaneAudio, load_audio, wait_for_preload},
     reads::blocking_audio,
@@ -101,6 +102,7 @@ pub(super) async fn open_reference(
     let bus = kithara::events::EventBus::new(16_384);
     if hls {
         let stream = HlsConfig::for_url(url::Url::parse(src).expect("HLS source URL"))
+            .downloader(create_test_downloader())
             .store(memory_asset_store())
             .pools(worker.pools().clone())
             .events(bus)
@@ -121,7 +123,6 @@ pub(super) async fn open_reference(
     } else {
         let stream = FileConfig::for_src(kithara::file::FileSrc::Local(src.into()))
             .store(memory_asset_store())
-            .pools(worker.pools().clone())
             .events(bus)
             .build();
         let config = TrackConfig::for_audio(

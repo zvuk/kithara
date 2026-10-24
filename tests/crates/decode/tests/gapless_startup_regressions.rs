@@ -13,6 +13,7 @@ use kithara_integration_tests::{
     fixture_protocol::{
         DelayRule, GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
+    hls_fixture::create_test_downloader,
     offline::{OfflinePlayer, OfflinePlayerOptions},
 };
 use kithara_test_utils::{TestTempDir, bufpool::TestPools, temp_dir};
@@ -114,6 +115,7 @@ async fn create_delayed_gapless_hls_resource(
     ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(master.as_str()).expect("valid HLS master URL"),
     )
+    .downloader(create_test_downloader())
     .store(store)
     .build()
 }

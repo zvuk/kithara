@@ -355,6 +355,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
             pools.clone(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .build(),
     );
     let store = kithara_integration_tests::disk_asset_store(temp.path());

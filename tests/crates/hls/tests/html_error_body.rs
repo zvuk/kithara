@@ -9,6 +9,7 @@ use kithara::{
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 
@@ -30,6 +31,7 @@ async fn html_body_rejected_before_caching(temp_dir: TestTempDir) {
         })
         .build();
     let config = HlsConfig::for_url(handle.url())
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(CancelToken::never())

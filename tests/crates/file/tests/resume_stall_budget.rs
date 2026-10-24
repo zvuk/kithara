@@ -131,6 +131,7 @@ async fn zero_progress_resume_loop_fails_terminally() {
             pools.clone(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .cancel(cancel.clone())
         .build(),
     );
@@ -148,7 +149,6 @@ async fn zero_progress_resume_loop_fails_terminally() {
                 })
                 .build(),
         )
-        .pools(pools)
         .cancel(cancel)
         .look_ahead_bytes(consts::TOTAL as u64)
         .downloader(downloader)

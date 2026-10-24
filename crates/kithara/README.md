@@ -58,6 +58,7 @@ let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
 let config: ResourceConfig<AppPools> =
     ResourceConfig::for_src(ResourceSrc::parse("https://example.com/song.mp3")?)
         .store(AssetStore::builder(pools).build())
+        .downloader(downloader.clone())
         .worker(worker)
         .build();
 let mut resource = Resource::new(config).await?;

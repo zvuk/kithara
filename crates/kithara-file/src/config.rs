@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use kithara_assets::AssetStore;
-use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_bufpool::HasPool;
 use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_download::Downloader;
@@ -61,7 +61,7 @@ where
     /// Optional cache discriminator.
     #[config(skip = "transferred to the asset scope", patch(skip))]
     pub discriminator: Option<String>,
-    /// Shared downloader (created lazily if not provided).
+    /// Required for remote sources; ignored for local files.
     #[config(
         skip = "retained downloader handle has no patch representation",
         patch(skip)
@@ -81,12 +81,6 @@ where
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     #[config(value)]
     pub(crate) look_ahead_bytes: Option<u64>,
-    /// Buffer-pool facade shared with storage and fallback transport.
-    #[config(
-        skip = "retained buffer pools have no patch representation",
-        patch(skip)
-    )]
-    pub(crate) pools: PoolRegion<S>,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[config(value, builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY))]
     pub(crate) event_channel_capacity: usize,
@@ -125,10 +119,7 @@ mod tests {
     #[case(test_src())]
     #[case(FileSrc::Local(PathBuf::from("/tmp/song.mp3")))]
     fn test_file_config_for_src_preserves_source(#[case] src: FileSrc) {
-        let config = FileConfig::for_src(src.clone())
-            .store(test_store())
-            .pools(pools())
-            .build();
+        let config = FileConfig::for_src(src.clone()).store(test_store()).build();
 
         assert_eq!(config.src, src);
         assert!(config.bus.is_none());
@@ -140,10 +131,7 @@ mod tests {
 
     #[kithara::test]
     fn test_with_store() {
-        let config = FileConfig::for_src(test_src())
-            .store(test_store())
-            .pools(pools())
-            .build();
+        let config = FileConfig::for_src(test_src()).store(test_store()).build();
 
         assert!(config.bus.is_none());
     }
@@ -185,12 +173,7 @@ mod tests {
         #[case] apply: fn(TestConfig) -> TestConfig,
         #[case] check: fn(&TestConfig) -> bool,
     ) {
-        let config = apply(
-            FileConfig::for_src(test_src())
-                .store(test_store())
-                .pools(pools())
-                .build(),
-        );
+        let config = apply(FileConfig::for_src(test_src()).store(test_store()).build());
         assert!(check(&config));
     }
 
@@ -201,7 +184,6 @@ mod tests {
 
         let config = FileConfig::for_src(test_src())
             .store(test_store())
-            .pools(pools())
             .cancel(cancel)
             .events(bus)
             .build();
@@ -216,7 +198,6 @@ mod tests {
     fn test_with_discriminator_sets_discriminator(#[case] name: &str) {
         let config = FileConfig::for_src(test_src())
             .store(test_store())
-            .pools(pools())
             .discriminator(name)
             .build();
         assert_eq!(config.discriminator.as_deref(), Some(name));
@@ -224,10 +205,7 @@ mod tests {
 
     #[kithara::test]
     fn test_debug_impl() {
-        let config = FileConfig::for_src(test_src())
-            .store(test_store())
-            .pools(pools())
-            .build();
+        let config = FileConfig::for_src(test_src()).store(test_store()).build();
         let debug_str = format!("{:?}", config);
 
         assert!(debug_str.contains("FileConfig"));
@@ -238,7 +216,6 @@ mod tests {
         let bus = EventBus::new(32);
         let config = FileConfig::for_src(test_src())
             .store(test_store())
-            .pools(pools())
             .events(bus)
             .build();
 
@@ -266,7 +243,6 @@ mod document_tests {
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools())
         .build()
     }
 

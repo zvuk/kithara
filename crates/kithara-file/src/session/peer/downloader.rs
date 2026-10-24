@@ -513,7 +513,6 @@ mod tests {
                         .backend(StorageBackend::Memory)
                         .build(),
                 )
-                .pools(pools())
                 .reader_event_capacity(16)
                 .build(),
             );

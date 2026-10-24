@@ -8,7 +8,7 @@ use kithara_derive::Patch;
 use kithara_download::Downloader;
 use kithara_drm::KeyProcessorRegistry;
 use kithara_events::EventBus;
-use kithara_net::{Headers, NetOptions};
+use kithara_net::Headers;
 use kithara_platform::CancelToken;
 use url::Url;
 
@@ -80,13 +80,6 @@ where
         patch(skip)
     )]
     pub(crate) keys: KeyOptions,
-    /// HTTP options for the client built when no [`downloader`](HlsConfig::downloader) is supplied.
-    /// An injected downloader owns its client and ignores these options; defaults are [`NetOptions::default`].
-    /// Documents skip this wiring because embedders inject a downloader. Its resilient body owns
-    /// inactivity timeout and retries, including terminal settlement of a withheld-body fetch.
-    #[config(skip = "transferred to the HTTP client", builder(default), patch(skip))]
-    #[debug(skip)]
-    pub(crate) net_options: NetOptions,
     /// Base URL for resolving relative playlist/segment URLs.
     #[config(skip = "transferred to the playlist cache", patch(skip))]
     pub(crate) base_url: Option<Url>,
@@ -103,10 +96,10 @@ where
     /// Optional cache discriminator.
     #[config(skip = "transferred to the asset scope", patch(skip))]
     pub(crate) discriminator: Option<String>,
-    /// Shared downloader (created lazily if not provided).
+    /// Shared downloader used for every request of this stream.
     #[config(skip = "transferred to the HLS stream", patch(skip))]
     #[debug(skip)]
-    pub(crate) downloader: Option<Downloader>,
+    pub(crate) downloader: Downloader,
     /// Additional HTTP headers to include in all requests.
     #[config(skip = "transferred to network requests", patch(skip))]
     pub(crate) headers: Option<Headers>,
@@ -173,6 +166,15 @@ mod document_tests {
                 .parse()
                 .expect("a literal URL parses"),
         )
+        .downloader(kithara_download::Downloader::new(
+            kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+                kithara_net::NetOptions::default(),
+                pools(),
+                kithara_platform::CancelToken::never(),
+            ))
+            .runtime(kithara_platform::tokio::runtime::Handle::current())
+            .build(),
+        ))
         .store(
             AssetStore::builder(pools())
                 .backend(StorageBackend::Memory)
@@ -187,13 +189,13 @@ mod document_tests {
     /// the baked value with `~`, which types to `None` the same way an absent
     /// key does. The default is part of that contract rather than an
     /// implementation detail.
-    #[kithara::test(native, flash(false))]
-    fn a_silent_document_probes_with_head() {
+    #[kithara::test(tokio, native, flash(false))]
+    async fn a_silent_document_probes_with_head() {
         assert_eq!(config().size_probe_method, SizeProbeMethod::Head);
     }
 
-    #[kithara::test(native, flash(false))]
-    fn a_document_sets_the_batch_size_and_leaves_the_window() {
+    #[kithara::test(tokio, native, flash(false))]
+    async fn a_document_sets_the_batch_size_and_leaves_the_window() {
         let patch: HlsConfigPatch =
             serde_yaml_ng::from_str("download_batch_size: 6\n").expect("the document types");
         // Seeded off the crate default so a merge that reset every unnamed
@@ -210,8 +212,8 @@ mod document_tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
-    fn an_already_optional_knob_takes_a_bare_number_from_the_document() {
+    #[kithara::test(tokio, native, flash(false))]
+    async fn an_already_optional_knob_takes_a_bare_number_from_the_document() {
         let patch: HlsConfigPatch =
             serde_yaml_ng::from_str("look_ahead_bytes: 5000000\n").expect("the document types");
         let mut config = config();
@@ -228,18 +230,6 @@ mod document_tests {
             config.event_channel_capacity, 4_096,
             "a silent field must keep its value"
         );
-    }
-
-    /// The proof `net_options` is absent from the document rather than parsed
-    /// and dropped: an embedder that reaches a document injects its own
-    /// downloader, which makes the field dead, so naming it must fail loudly.
-    #[kithara::test(native, flash(false))]
-    fn a_net_options_key_is_refused() {
-        let error =
-            serde_yaml_ng::from_str::<HlsConfigPatch>("net_options:\n  is_insecure: true\n")
-                .expect_err("net options belong to the embedder's own `net` section");
-
-        assert!(error.to_string().contains("net_options"), "{error}");
     }
 
     /// The per-call wiring is not reachable from a document either.

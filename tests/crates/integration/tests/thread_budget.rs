@@ -1,5 +1,4 @@
 #![cfg(not(target_arch = "wasm32"))]
-
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     audio::{AudioConfig, AudioControl},
@@ -14,6 +13,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     hls_server::{packaged_ladder, packaged_ladder_encrypted},
     kithara,
     waits::wait_thread_count_quiesced,
@@ -98,6 +98,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
         })
         .build();
     let hls_config = HlsConfig::for_url(hls.master_url())
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools.clone())
         .cancel(cancel.clone())
@@ -168,6 +169,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .build();
 
     let hls_config = HlsConfig::for_url(hls.master_url())
+        .downloader(create_test_downloader())
         .store(shared_store.clone())
         .pools(pools.clone())
         .cancel(cancel.clone())
@@ -182,6 +184,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .expect("open first shared-worker track");
 
     let hls_config2 = HlsConfig::for_url(hls.master_url())
+        .downloader(create_test_downloader())
         .store(shared_store.clone())
         .pools(pools.clone())
         .cancel(cancel.clone())
@@ -194,6 +197,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .expect("open second shared-worker track");
 
     let drm_config = HlsConfig::for_url(drm.master_url())
+        .downloader(create_test_downloader())
         .store(shared_store)
         .pools(pools)
         .cancel(cancel.clone())

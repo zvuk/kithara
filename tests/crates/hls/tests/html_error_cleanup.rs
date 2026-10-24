@@ -16,6 +16,7 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
@@ -127,6 +128,7 @@ async fn html_playlist_failure_leaves_no_orphan_cache_files(
         })
         .build();
     let config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(cancel.clone())
@@ -183,6 +185,7 @@ async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
         })
         .build();
     let config = HlsConfig::for_url(master.url())
+        .downloader(create_test_downloader())
         .events(bus.clone())
         .store(store)
         .pools(pools)

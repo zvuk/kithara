@@ -16,6 +16,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     mixed_encrypted, mixed_plain,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -341,6 +342,7 @@ async fn drm_stream_byte_integrity(
     };
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(cancel.clone())

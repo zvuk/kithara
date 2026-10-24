@@ -12,6 +12,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, abr_fast, auto,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     mixed_encrypted, mixed_plain,
     mock::LaneAudio,
 };
@@ -116,6 +117,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -204,6 +206,7 @@ async fn seek_sequence_from_log_real_stream(
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {

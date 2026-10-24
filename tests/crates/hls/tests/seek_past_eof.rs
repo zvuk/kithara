@@ -11,6 +11,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 
@@ -73,6 +74,7 @@ async fn seek_beyond_head_total_within_actual_total(
         })
         .build();
     let config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(cancel_token)

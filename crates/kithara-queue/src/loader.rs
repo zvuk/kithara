@@ -3,7 +3,7 @@ use std::{error::Error as StdError, io::Error};
 use kithara_assets::AssetStore;
 use kithara_audio::AudioObserver;
 use kithara_bufpool::HasPool;
-use kithara_download::DownloaderEvent;
+use kithara_download::{Downloader, DownloaderEvent};
 use kithara_events::{Envelope, EventReceiver, RecvError, ScopeLabel, TrackId};
 use kithara_net::NetError;
 use kithara_platform::{
@@ -35,6 +35,7 @@ where
 {
     prep: ResourcePrep<S>,
     store: AssetStore<S>,
+    downloader: Option<Downloader>,
     /// Where the tasks beside each load run; `None` fails every load.
     runtime: Option<RuntimeHandle>,
     /// Where a task beside a load reports to the queue.
@@ -48,12 +49,14 @@ where
     pub(crate) fn new(
         prep: ResourcePrep<S>,
         store: AssetStore<S>,
+        downloader: Option<Downloader>,
         runtime: Option<RuntimeHandle>,
         postbox: QueuePostbox<S>,
     ) -> Self {
         Self {
             prep,
             store,
+            downloader,
             runtime,
             postbox,
         }
@@ -66,7 +69,7 @@ where
 {
     /// Build a [`ResourceConfig`] for the given [`TrackSource`].
     ///
-    /// - [`TrackSource::Uri`] uses the queue store; other resource options
+    /// - [`TrackSource::Uri`] uses the queue store and downloader; other options
     ///   keep their defaults. Callers wanting custom behavior build a
     ///   configured [`ResourceConfig`] and pass it via
     ///   [`TrackSource::Config`].
@@ -87,6 +90,7 @@ where
                     .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?;
                 ResourceConfig::for_src(src)
                     .store(self.store.clone())
+                    .maybe_downloader(self.downloader.clone())
                     .build()
             }
             TrackSource::Config(boxed) => *boxed,
@@ -316,7 +320,13 @@ mod tests {
             .backend(StorageBackend::Memory)
             .build();
         (
-            Loader::new(prep, store, RuntimeHandle::try_current().ok(), postbox),
+            Loader::new(
+                prep,
+                store,
+                None,
+                RuntimeHandle::try_current().ok(),
+                postbox,
+            ),
             mailbox,
         )
     }

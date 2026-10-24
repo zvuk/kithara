@@ -13,6 +13,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     fixture_protocol::DelayRule,
+    hls_fixture::create_test_downloader,
     mock::LaneAudio,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -96,6 +97,7 @@ async fn abr_auto_switch_during_playback(
     let mut events_rx = bus.subscribe::<TestEvent>();
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {

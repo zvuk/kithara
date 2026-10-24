@@ -14,6 +14,7 @@ use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::PcmPattern,
+    hls_fixture::create_test_downloader,
     mock::LaneAudio,
     usdt_trace::{self, ProbeEvent},
 };
@@ -706,6 +707,7 @@ async fn stress_seek_audio_hls(
         .build();
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(cancel)

@@ -457,6 +457,7 @@ fn a_speed_change_on_the_current_track_withdraws_a_sent_automatic_transition(#[c
 fn selected_second() -> (TestQueue, TrackId, TrackId) {
     let config = QueueConfig {
         factory: SnapshotFactory,
+        downloader: None,
         mixer: DeckMixerConfig::default(),
         settings: QueueSettings::default(),
         preload_lead: Duration::from_millis(3_500),

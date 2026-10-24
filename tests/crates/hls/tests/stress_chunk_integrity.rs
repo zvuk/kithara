@@ -18,6 +18,7 @@ use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
+    hls_fixture::create_test_downloader,
     mock::LaneAudio,
     reads::blocking_audio,
 };
@@ -201,6 +202,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
     };
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(cancel)

@@ -19,6 +19,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DataMode,
+    hls_fixture::create_test_downloader,
     mock::{LaneAudio, wait_for_preload},
 };
 use kithara_test_fixtures::signal;
@@ -74,6 +75,7 @@ fn stress_pipeline_config(url: Url) -> (PlayWorker<TestPools>, AudioConfig<Hls<T
     let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .events(bus)
         .store(
             AssetStore::builder(pools.clone())

@@ -878,7 +878,6 @@ fn buffered_audio_track(
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools.clone())
         .events(bus)
         .build();
     let audio = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file).build();

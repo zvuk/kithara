@@ -386,7 +386,6 @@ mod tests {
                     .backend(StorageBackend::Memory)
                     .build(),
             )
-            .pools(pools.clone())
             .build();
         let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(stream).build();
         let mut audio = Audio::prepare(config, Arc::new(NoopWorkerWake), pools)

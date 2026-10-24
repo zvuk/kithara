@@ -47,6 +47,7 @@ fn new_downloader(pools: Pools) -> Downloader {
             pools,
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .build(),
     )
 }

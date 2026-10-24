@@ -25,9 +25,15 @@ callers. This crate and its tests do not depend on stream, File/HLS, or the faca
 use kithara_download::{Downloader, DownloaderConfig};
 
 // Reuse an application-owned HTTP client and register protocol peers.
-let downloader = Downloader::new(DownloaderConfig::for_client(client).build());
+let downloader = Downloader::new(
+    DownloaderConfig::for_client(client)
+        .runtime(runtime.handle().clone())
+        .build(),
+);
 let handle = downloader.register(peer, None);
 ```
+
+Native builders require a runtime handle; wasm runs the loop on a Web Worker.
 
 Pass `Some(bus)` at registration to observe every transfer from the peer's first
 request. The event destination remains fixed for the registration's lifetime.

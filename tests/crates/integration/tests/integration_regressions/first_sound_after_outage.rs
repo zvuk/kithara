@@ -72,6 +72,7 @@ async fn first_sound_arrives_after_an_outage_before_playback(
         .build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .runtime(kithara::platform::tokio::runtime::Handle::current())
             .build(),
     );
     let player = kithara::play::ResourcePrep::builder()

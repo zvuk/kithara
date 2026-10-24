@@ -20,6 +20,7 @@ pub(super) use kithara::{
     play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_integration_tests::hls_fixture::create_test_downloader;
 pub(super) use kithara_integration_tests::{
     Content, CreatedHls, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::PackagedSignal,
@@ -125,6 +126,7 @@ pub(super) fn resource_config(
     worker: PlayWorker<TestPools>,
 ) -> ResourceConfig<TestPools> {
     ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).unwrap())
+        .downloader(create_test_downloader())
         .store(store)
         .maybe_hint(hint)
         .worker(worker)
@@ -165,6 +167,7 @@ pub(super) async fn warm_hls_worker(
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
     let hls_config = HlsConfig::for_url(url.clone())
+        .downloader(create_test_downloader())
         .store(store)
         .pools(worker.pools().clone())
         .build();
@@ -228,6 +231,7 @@ pub(super) async fn read_hls_stream_some(
     pools: &Pools,
 ) -> usize {
     let config = HlsConfig::for_url(url.clone())
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools.clone())
         .build();
@@ -287,6 +291,7 @@ pub(super) async fn open_packaged_hls_audio(
     backend: DecoderBackend,
 ) -> kithara_integration_tests::mock::LaneAudio<Stream<Hls<TestPools>>, TestPools> {
     let hls = HlsConfig::for_url(url.clone())
+        .downloader(create_test_downloader())
         .events(kithara::events::EventBus::default())
         .store(store)
         .pools(worker.pools().clone())

@@ -6,7 +6,6 @@
 //! analysis-worker decode), not a bare `Resource`.
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
-
 use std::{
     num::NonZeroU32,
     sync::atomic::{AtomicUsize, Ordering},
@@ -27,7 +26,7 @@ use kithara_app::{
     pools::{AppPools, AppResourceConfig, AppStore, AppWorker, PoolsSection, build},
     waveform::TrackAnalysisRunner,
 };
-use kithara_integration_tests::mock::LaneAudio;
+use kithara_integration_tests::{hls_fixture::create_test_downloader, mock::LaneAudio};
 use kithara_test_fixtures::integration_fixtures::audio_wav_44100;
 use kithara_test_utils::TestHttpServer;
 
@@ -85,6 +84,7 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
     // Waveform analysis consumer (whole-file) of the shared store.
     let waveform_cfg =
         AppResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("waveform url"))
+            .downloader(create_test_downloader())
             .store(store.clone())
             .worker(worker.clone())
             .build();
@@ -95,8 +95,8 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
     let player_cfg = kithara::play::TrackConfig::for_audio(
         AudioConfig::<File<AppPools>>::for_stream(
             FileConfig::for_src(FileSrc::Remote(url.clone()))
+                .downloader(create_test_downloader())
                 .store(store)
-                .pools(pools.clone())
                 .build(),
         )
         .build(),

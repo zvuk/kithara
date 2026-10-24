@@ -2343,8 +2343,8 @@ async fn arm_next_idempotent_for_same_index() {
     );
 }
 
-#[kithara::test]
-fn arm_next_returns_none_for_empty_slot() {
+#[kithara::test(tokio)]
+async fn arm_next_returns_none_for_empty_slot() {
     let (mut queue, mut deck, _dir) = empty_queue();
     let result = with_outbox(&mut queue, &mut deck, |queue, out| {
         queue.next_target(
@@ -2410,8 +2410,8 @@ async fn commit_next_index_mismatch_returns_typed_error() {
     assert_eq!(rig.queue.current, Some(rig.ids[0]));
 }
 
-#[kithara::test]
-fn commit_next_without_arm_returns_not_ready() {
+#[kithara::test(tokio)]
+async fn commit_next_without_arm_returns_not_ready() {
     let (mut queue, mut deck, _dir) = empty_queue();
     let error = with_outbox(&mut queue, &mut deck, |queue, out| {
         queue.send_transition(0, SessionFrame::new(128), out)

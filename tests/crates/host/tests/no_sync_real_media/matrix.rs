@@ -13,8 +13,9 @@ use kithara::{
     warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, fixture_protocol::PackagedSignal, memory_asset_store,
-    offline::OfflineHostHarness, usdt_trace,
+    HlsFixtureBuilder, TestServerHelper, fixture_protocol::PackagedSignal,
+    hls_fixture::create_test_downloader, memory_asset_store, offline::OfflineHostHarness,
+    usdt_trace,
 };
 #[cfg(not(target_os = "android"))]
 use kithara_integration_tests::{audio_artifact::write_audio_artifact, cochlea::CochleaReport};
@@ -1166,6 +1167,7 @@ async fn prepare_deck(
         kithara::play::ResourceConfig::for_src(
             kithara::play::ResourceSrc::parse(&src).expect("real media source"),
         )
+        .downloader(create_test_downloader())
         .store(memory_asset_store())
         .events(bus)
         .initial_abr_mode(AbrMode::manual(0))

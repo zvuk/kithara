@@ -213,7 +213,6 @@ async fn stress_random_seek_read_synthetic_wav(#[future(awt)] wav_file: NamedTem
                 })
                 .build(),
         )
-        .pools(pools.clone())
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint("wav".to_string())

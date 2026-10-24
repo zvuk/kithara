@@ -143,6 +143,7 @@ async fn played_tracks_land_in_the_disk_cache(tone_mp3: &'static [u8], temp_dir:
             pools.clone(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .build(),
     );
     let player = kithara::play::ResourcePrep::builder()

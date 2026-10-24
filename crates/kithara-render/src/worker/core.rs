@@ -383,7 +383,6 @@ mod tests {
                         .backend(StorageBackend::Memory)
                         .build(),
                 )
-                .pools(play.pools().clone())
                 .build();
             AudioConfig::<File<_>, NoResamplerBackend>::for_stream(file).build()
         };

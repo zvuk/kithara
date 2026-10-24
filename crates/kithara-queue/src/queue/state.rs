@@ -81,6 +81,7 @@ where
             Loader::new(
                 prep.clone(),
                 store,
+                config.downloader.clone(),
                 config
                     .runtime
                     .clone()

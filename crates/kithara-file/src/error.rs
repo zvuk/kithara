@@ -7,6 +7,10 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum SourceError {
+    /// A remote file has no injected downloader.
+    #[error("a remote file source requires a Downloader")]
+    NoDownloader,
+
     #[error("Network error: {0}")]
     Net(#[from] NetError),
 
@@ -30,7 +34,7 @@ impl From<SourceError> for StreamSourceError {
             SourceError::Storage(e) => Self::Storage(e),
             SourceError::Assets(e) => Self::other(e),
             SourceError::InvalidPath(s) => Self::InvalidPath(s),
-            SourceError::UnexpectedAcquisitionState => Self::other(err),
+            SourceError::NoDownloader | SourceError::UnexpectedAcquisitionState => Self::other(err),
         }
     }
 }

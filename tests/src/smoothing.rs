@@ -21,6 +21,7 @@ use kithara_test_fixtures::SignalAsset;
 use crate::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     offline::OfflineQueue,
 };
 
@@ -134,6 +135,7 @@ pub async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>, u64) {
     let src = ResourceSrc::parse(url.as_str()).expect("valid signal fixture URL");
     let source = TrackSource::Config(Box::new(
         ResourceConfig::for_src(src)
+            .downloader(create_test_downloader())
             .store(AssetStore::builder(pools).build())
             .build(),
     ));

@@ -20,6 +20,7 @@ use kithara_integration_tests::{
     CreatedHls, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
+    hls_fixture::create_test_downloader,
     hls_server::{abr_binary_ladder, test_pattern_hls},
 };
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
@@ -50,6 +51,7 @@ async fn test_driver_seek_after_playlist_finished(
         })
         .build();
     let config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(cancel_token)
@@ -120,6 +122,7 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: Canc
         .build();
 
     let config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(cancel_token)

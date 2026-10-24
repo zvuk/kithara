@@ -23,6 +23,7 @@ use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
+    hls_fixture::create_test_downloader,
     mock::LaneAudio,
 };
 use kithara_test_fixtures::SignalAsset;
@@ -46,6 +47,7 @@ async fn open_test_audio(
 ) -> Option<LaneAudio<Stream<File<TestPools>>, TestPools>> {
     let pools = pools();
     let file_config = FileConfig::for_src(url.clone().into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -53,7 +55,6 @@ async fn open_test_audio(
                 })
                 .build(),
         )
-        .pools(pools.clone())
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint(url.path().rsplit_once('.').unwrap().1.to_owned())
@@ -1607,6 +1608,7 @@ async fn a_seek_onto_a_decoded_chunk_start_never_reuses_its_identity_for_other_p
     let identities = Arc::new(Mutex::new(Identities::default()));
     let pools = pools();
     let file_config = FileConfig::for_src(url.clone().into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -1614,7 +1616,6 @@ async fn a_seek_onto_a_decoded_chunk_start_never_reuses_its_identity_for_other_p
                 })
                 .build(),
         )
-        .pools(pools.clone())
         .build();
     let config = AudioConfig::<File<TestPools>, PlaybackResamplerBackend>::for_stream(file_config)
         .hint(url.path().rsplit_once('.').unwrap().1.to_owned())

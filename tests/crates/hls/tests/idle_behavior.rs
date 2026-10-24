@@ -20,6 +20,7 @@ use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
+    hls_fixture::create_test_downloader,
     hls_server::packaged_hls,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -74,6 +75,7 @@ async fn idle_does_not_panic_hang_detector(
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let hls_config = HlsConfig::for_url(hls.master_url())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -169,6 +171,7 @@ async fn idle_prefetch_is_capped(
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {

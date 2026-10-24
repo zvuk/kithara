@@ -258,7 +258,6 @@ async fn real_audio(cancel: kithara_platform::CancelToken) -> FileAudio {
         .expect("native WAV fixture path");
     let stream = kithara_file::FileConfig::for_src(kithara_file::FileSrc::Local(path.to_owned()))
         .store(AssetStore::builder(pools.clone()).build())
-        .pools(pools.clone())
         .cancel(cancel.clone())
         .build();
     let config = AudioConfig::<_, NoResamplerBackend>::for_stream(stream)

@@ -1,4 +1,3 @@
-#[cfg(not(target_arch = "wasm32"))]
 use std::{fs, path::Path};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -22,6 +21,8 @@ use kithara::{
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::bufpool_ext::TestPools;
 use kithara_integration_tests::bufpool_ext::pools;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_integration_tests::hls_fixture::create_test_downloader;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::{CreatedHls, HlsFixtureBuilder, TestServerHelper};
 #[cfg(not(target_arch = "wasm32"))]
@@ -148,6 +149,7 @@ async fn ephemeral_pipeline_no_disk_writes(#[future(awt)] audio_server: CreatedH
     );
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)

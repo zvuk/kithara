@@ -207,6 +207,7 @@ async fn run_seek_scenario(ladders: &[Ladder], select_index: usize, temp: TestTe
             pools.clone(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .build(),
     );
 

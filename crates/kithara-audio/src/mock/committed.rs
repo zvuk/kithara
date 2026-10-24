@@ -22,7 +22,6 @@ pub(crate) async fn prepared_audio() -> Audio<Stream<File<TestPools>>> {
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools.clone())
         .build();
     let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(stream).build();
     Audio::prepare(config, Arc::new(NoopWorkerWake), pools)

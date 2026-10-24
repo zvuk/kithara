@@ -99,6 +99,7 @@ impl QueueBridge {
                 )
                 .settings(crate::web::worker::queue_settings())
                 .store(resources.store.clone())
+                .downloader(resources.downloader.clone())
                 .build(),
         );
         let control = queue.control();

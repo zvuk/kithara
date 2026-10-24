@@ -96,6 +96,7 @@ fn test_cache(scope: TestAssetScope) -> TestPlaylistCache {
             crate::test_pools::pools(),
             CancelToken::never(),
         ))
+        .runtime(kithara_platform::tokio::runtime::Handle::current())
         .build(),
     );
     let handle = downloader.register(

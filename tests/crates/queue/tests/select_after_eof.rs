@@ -12,6 +12,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
+    hls_fixture::create_test_downloader,
     offline::{
         OfflinePlayer, OfflinePlayerOptions, append_loaded, offline_queue_fixture,
         offline_queue_fixture_with_options,
@@ -169,7 +170,14 @@ async fn seek_updates_cached_position_optimistically() {
 /// A again must reload the retained product source and restart playback.
 #[kithara::test(tokio, flash(false))]
 async fn reselect_finished_track_restarts_when_next_track_never_loads() {
-    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
+    let (harness, queue) = offline_queue_fixture_with_options(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .downloader(create_test_downloader())
+            .build(),
+        SAMPLE_RATE,
+    )
+    .await;
     let source_a = assets::constant_wav_three_0_4s();
     let id_a = append_loaded(&harness, &queue, &source_a).await;
     let server = TestServerHelper::new().await;
@@ -305,7 +313,14 @@ async fn play_button_marks_current_loaded_track_consumed() {
 async fn reselect_playing_track_cancels_pending_switch() {
     const WARMUP_BLOCKS: usize = 64;
 
-    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
+    let (harness, queue) = offline_queue_fixture_with_options(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .downloader(create_test_downloader())
+            .build(),
+        SAMPLE_RATE,
+    )
+    .await;
     let source_a = assets::constant_wav_three_5s();
     let id_a = append_loaded(&harness, &queue, &source_a).await;
     let server = TestServerHelper::new().await;

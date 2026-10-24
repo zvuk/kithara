@@ -7,7 +7,9 @@ use kithara::{
     queue::TrackSource,
 };
 use kithara_integration_tests::{
-    TestServerHelper, kithara,
+    TestServerHelper,
+    hls_fixture::create_test_downloader,
+    kithara,
     smoothing::{SmoothingCase, sine_queue},
 };
 use kithara_test_fixtures::SignalAsset;
@@ -22,6 +24,7 @@ async fn queue_append_while_playing_does_not_wait_for_host() {
     let src = ResourceSrc::parse(url.as_str()).expect("valid signal fixture URL");
     let source = TrackSource::Config(Box::new(
         ResourceConfig::for_src(src)
+            .downloader(create_test_downloader())
             .store(AssetStore::builder(pools()).build())
             .build(),
     ));

@@ -3,7 +3,6 @@
 //! open + shared analysis-worker thread) and assert the source-analysis
 //! contract.
 #![cfg(not(target_arch = "wasm32"))]
-
 use std::num::NonZeroU32;
 
 use kithara::{
@@ -16,7 +15,9 @@ use kithara_app::{
     pools::{AppPools, AppResourceConfig, AppStore, AppWorker, Pools, PoolsSection, build},
     waveform::{TrackAnalysis, TrackAnalysisRunner},
 };
-use kithara_integration_tests::{TestServerHelper, served_silence};
+use kithara_integration_tests::{
+    TestServerHelper, hls_fixture::create_test_downloader, served_silence,
+};
 use url::Url;
 
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
@@ -74,6 +75,7 @@ async fn runner_silent_wav_yields_all_zero_envelope(
     let config = ResourceConfig::<AppPools>::for_src(
         ResourceSrc::parse(url.as_str()).expect("silence URL must build a ResourceConfig"),
     )
+    .downloader(create_test_downloader())
     .store(memory_store(pools.clone()))
     .worker(worker(pools.clone()))
     .build();
@@ -110,6 +112,7 @@ async fn runner_returns_nothing_when_cancelled_upfront(
     let config = ResourceConfig::<AppPools>::for_src(
         ResourceSrc::parse(url.as_str()).expect("silence URL must build a ResourceConfig"),
     )
+    .downloader(create_test_downloader())
     .store(memory_store(pools.clone()))
     .worker(worker(pools.clone()))
     .build();

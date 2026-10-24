@@ -17,6 +17,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 #[cfg(not(target_os = "linux"))]
@@ -183,6 +184,7 @@ async fn test_hls_playback_rss_within_budget(
             })
             .build();
         let hls_config = HlsConfig::for_url(url.clone())
+            .downloader(create_test_downloader())
             .store(store)
             .pools(pools.clone())
             .initial_abr_mode(auto(0))
@@ -258,6 +260,7 @@ async fn test_hls_playback_no_rss_leak(
         })
         .build();
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools.clone())
         .initial_abr_mode(auto(0))

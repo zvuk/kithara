@@ -11,6 +11,7 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     mock::LaneAudio,
     reads::{ReadLimit, read_for_concurrency_check},
 };
@@ -59,6 +60,7 @@ async fn create_hls_audio(
     let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {

@@ -28,6 +28,7 @@ use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
+    hls_fixture::create_test_downloader,
     mixed_plain,
     mock::LaneAudio,
     reads::blocking_audio,
@@ -859,6 +860,7 @@ async fn vod_manual_switch_affects_future_segments(
         })
         .build();
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools.clone())
         .cancel(cancel)
@@ -1069,6 +1071,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
         })
         .build();
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools.clone())
         .cancel(cancel)
@@ -1226,6 +1229,7 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
     let collector1 = EventCollector::new(&bus1);
 
     let hls1 = HlsConfig::for_url(url1.clone())
+        .downloader(create_test_downloader())
         .store(shared_store.clone())
         .pools(pools.clone())
         .cancel(CancelToken::never())
@@ -1265,6 +1269,7 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
     let collector2 = EventCollector::new(&bus2);
 
     let hls2 = HlsConfig::for_url(url2)
+        .downloader(create_test_downloader())
         .store(shared_store.clone())
         .pools(pools.clone())
         .cancel(CancelToken::never())
@@ -1303,6 +1308,7 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
     let collector3 = EventCollector::new(&bus3);
 
     let hls3 = HlsConfig::for_url(url1)
+        .downloader(create_test_downloader())
         .store(shared_store)
         .pools(pools.clone())
         .cancel(CancelToken::never())
@@ -1380,6 +1386,7 @@ async fn abr_switch_must_not_redownload_covered_segments(
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -1563,6 +1570,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant(
     let collector = Arc::new(EventCollector::new(&bus));
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -1719,6 +1727,7 @@ async fn runtime_cross_codec_manual_switch_no_hang(
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -1847,6 +1856,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached(
     // correct no-op — the assertion below would be waiting for a switch the
     // user never asked for.
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -1981,6 +1991,7 @@ async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: 
     let mut hold_rx = bus.subscribe();
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -2114,6 +2125,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek(#[future(awt)] manual_
     // Manual(0) initial so Auto-decision doesn't fire an UpSwitch/
     // DownSwitch that races against the explicit Manual(1) below.
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -2287,6 +2299,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults(
 
     // Crucially: NO `with_settings(abr_fast())` — production defaults.
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -2400,6 +2413,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof(
     let collector = EventCollector::new(&bus);
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -2542,6 +2556,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     let collector = Arc::new(EventCollector::new(&bus));
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -2766,6 +2781,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     });
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {

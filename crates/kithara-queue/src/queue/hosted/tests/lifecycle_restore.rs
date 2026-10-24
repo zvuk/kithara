@@ -68,8 +68,8 @@ fn advance_stops_at_end() {
     assert_eq!(current, Some(ids[1]));
 }
 
-#[kithara::test]
-fn insert_and_remove_preserve_resource() {
+#[kithara::test(tokio)]
+async fn insert_and_remove_preserve_resource() {
     let (mut queue, _, _dir) = empty_queue();
     let id = TrackId::allocate();
     queue.insert_entry(
@@ -265,10 +265,10 @@ async fn player_advance_through_queue() {
     assert_eq!(queue.control().current_index(), Some(2));
 }
 
-#[kithara::test]
+#[kithara::test(tokio)]
 #[case(false, 2)]
 #[case(true, 3)]
-fn player_insert_scenarios(#[case] insert_at_position: bool, #[case] expected_count: usize) {
+async fn player_insert_scenarios(#[case] insert_at_position: bool, #[case] expected_count: usize) {
     let (mut queue, mut rig, dir) = empty_queue();
     for _ in 0..2 {
         apply(
@@ -513,8 +513,8 @@ async fn replacing_current_item_re_announces_on_next_play() {
     assert_eq!(queue.tracks.records().len(), 2);
 }
 
-#[kithara::test]
-fn select_item_out_of_range_returns_typed_error() {
+#[kithara::test(tokio)]
+async fn select_item_out_of_range_returns_typed_error() {
     let (mut queue, mut rig, _dir) = empty_queue();
     let id = TrackId::from(5_u64);
     let err = with_outbox(&mut queue, &mut rig, |queue, out| {
@@ -532,8 +532,8 @@ fn select_item_out_of_range_returns_typed_error() {
     assert_eq!(queue.tracks.records().len(), 0);
 }
 
-#[kithara::test]
-fn checked_crossfade_update_respects_closed_owner() {
+#[kithara::test(tokio)]
+async fn checked_crossfade_update_respects_closed_owner() {
     let (mut queue, mut rig, _dir) = empty_queue();
     let settings = crate::CrossfadeSettings {
         duration: 2.0,
@@ -719,8 +719,8 @@ async fn an_inserted_resource_adopts_the_session_wake_mode() {
     .expect("an admitted source keeps reader events off the audio callback bus");
 }
 
-#[kithara::test]
-fn close_waits_for_an_admitted_operation() {
+#[kithara::test(tokio)]
+async fn close_waits_for_an_admitted_operation() {
     let (mut queue, mut rig, _dir) = empty_queue();
     let id = TrackId::allocate();
     let postbox = queue.postbox.clone();
@@ -760,9 +760,9 @@ fn close_waits_for_an_admitted_operation() {
     assert!(matches!(queue.ensure_open(), Err(PlayError::Closed)));
 }
 
-#[kithara::test]
+#[kithara::test(tokio)]
 #[kithara::hang_watchdog]
-fn drop_does_not_wait_for_an_admitted_operation() {
+async fn drop_does_not_wait_for_an_admitted_operation() {
     let (mut queue, _, _dir) = empty_queue();
     let observer = queue.shutdown.child();
     let postbox = queue.postbox.clone();
@@ -837,8 +837,8 @@ async fn player_lifecycle_admits_only_one_concurrent_close() {
     assert!(queue.shutdown.is_cancelled());
 }
 
-#[kithara::test]
-fn prepare_config_per_track_cancel_is_child_of_player_master() {
+#[kithara::test(tokio)]
+async fn prepare_config_per_track_cancel_is_child_of_player_master() {
     let (queue, _, dir) = empty_queue();
     let prepared = queue
         .config
@@ -904,8 +904,8 @@ fn prepare_config_preserves_caller_supplied_master(cancel_token: CancelToken) {
     assert!(observer.is_cancelled());
 }
 
-#[kithara::test]
-fn prebound_session_rejects_a_player_built_for_another_sample_rate() {
+#[kithara::test(tokio)]
+async fn prebound_session_rejects_a_player_built_for_another_sample_rate() {
     let (queue, _, dir) = empty_queue();
     let output =
         kithara_play::SessionOutputView::new(NonZeroU32::new(48_000).expect("session rate"));

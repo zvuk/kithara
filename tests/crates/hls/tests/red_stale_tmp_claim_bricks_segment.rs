@@ -38,6 +38,7 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_utils::TestTempDir;
 
@@ -181,6 +182,7 @@ impl Fixture {
             .join(key.rel_path().expect("relative resource path"));
 
         let config = HlsConfig::for_url(master_url)
+            .downloader(create_test_downloader())
             .store(store)
             .pools(pools)
             .cancel(CancelToken::never())

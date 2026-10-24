@@ -86,6 +86,7 @@ async fn build_session(cache_path: &Path) -> Session {
             pools,
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .build(),
     );
     Session {

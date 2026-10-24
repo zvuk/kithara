@@ -2471,35 +2471,41 @@ impl QueueLaw {
                     "Queue forward ledger loses consumed coverage at {frontier}"
                 ));
             }
-            for frame in from..=to {
-                let expected_frame = SessionFrame::new(frame);
+            let mut cursor = from;
+            while cursor < to {
                 let index = self
                     .spans
-                    .partition_point(|(at, _)| {
-                        *at < expected_frame
-                            || *at == self.start
-                            || *at == expected_frame && frame != stop
-                    })
+                    .partition_point(|(at, _)| i64::from(*at) <= cursor)
                     .checked_sub(1)
                     .ok_or_else(|| "Queue consumed span precedes its expected law".to_owned())?;
                 let (origin, law) = self.spans[index];
+                let end = self
+                    .spans
+                    .get(index + 1)
+                    .map_or(to, |(at, _)| to.min(i64::from(*at)));
                 let expected = law
-                    .source_ratio_at(
-                        expected_frame
-                            .frames_since(origin)
-                            .ok_or_else(|| "Queue expected endpoint reverses".to_owned())?,
+                    .for_output_range(
+                        u64::try_from(cursor - i64::from(origin))
+                            .map_err(|error| error.to_string())?
+                            ..u64::try_from(end - i64::from(origin))
+                                .map_err(|error| error.to_string())?,
                     )
-                    .ok_or_else(|| "Queue expected endpoint has no source coordinate".to_owned())?;
+                    .ok_or_else(|| "Queue expected law loses consumed coverage".to_owned())?;
                 let observed = span
-                    .source_ratio_at(
-                        u64::try_from(frame - start).map_err(|error| error.to_string())?,
+                    .for_output_range(
+                        u64::try_from(cursor - start).map_err(|error| error.to_string())?
+                            ..u64::try_from(end - start).map_err(|error| error.to_string())?,
                     )
-                    .ok_or_else(|| "Queue consumed span loses an exact coordinate".to_owned())?;
+                    .ok_or_else(|| "Queue consumed span loses its exact mapping".to_owned())?
+                    .with_mapping_revision(None)
+                    .with_render_revision(0);
+                // Exact analytic bases prove every coordinate, including slice endpoints.
                 if observed != expected {
                     return Err(format!(
-                        "Queue forward law at frame {frame}: consumed {observed:?}, expected {expected:?}"
+                        "Queue forward law over frames {cursor}..{end}: consumed {observed:?}, expected {expected:?}"
                     ));
                 }
+                cursor = end;
             }
             frames += u64::try_from(to - from).map_err(|error| error.to_string())?;
             frontier = to;
@@ -2573,6 +2579,63 @@ impl QueueLaw {
             "law_basis": "declared cue, native Start, public Host trajectory and correction intent"}),
         )
     }
+}
+
+#[kithara::test(native, timeout(Duration::from_secs(2)))]
+fn queue_forward_law_checks_large_spans_across_analytic_boundaries() {
+    let rate = NonZeroU32::new(48_000).expect("source rate");
+    let frames = 1_000_000_000;
+    let curve = ExponentialApproach::new(1.0, 1.0, 0.0).expect("constant source law");
+    let span = SourceSpan::approaching(0, NonZeroU128::MIN, curve, 0, rate, frames)
+        .expect("large exact source map");
+    let ArtifactSource::Value(model) = synthetic_grid() else {
+        panic!("declared source grid");
+    };
+    let law = QueueLaw {
+        anchor: SelectedBinding {
+            media: Duration::ZERO,
+            source_beat: 0.0,
+            host_beat: 0.0,
+            frame: SessionFrame::new(0),
+        },
+        spans: vec![
+            (SessionFrame::new(0), span.for_output_range(0..64).unwrap()),
+            (
+                SessionFrame::new(64),
+                span.for_output_range(64..frames).unwrap(),
+            ),
+        ],
+        curves: vec![],
+        deadlines: vec![],
+        axes: (0.0, 1.0, 1.0),
+        host: TempoTrajectory::new(
+            TempoStep {
+                frame: SessionFrame::new(0),
+                beat: SessionBeat::default(),
+                tempo: Tempo::new(120.0).expect("Host tempo"),
+            },
+            NonZeroU16::new(4).expect("Host meter"),
+            rate,
+        ),
+        source: source_with_duration(&model, rate, None).expect("bounded source grid"),
+        start: SessionFrame::new(0),
+        end: SessionFrame::new(frames.try_into().unwrap()),
+    };
+    let evidence = law.check_spans(&[(0, span)]).expect("complete exact map");
+    assert_eq!(evidence["exact_forward_frames"], frames);
+    let shifted = span
+        .scaled_from(
+            (0, NonZeroU128::MIN),
+            (1, NonZeroU128::MIN),
+            (1, NonZeroU128::MIN),
+        )
+        .expect("one-frame displaced source");
+    assert!(law.check_spans(&[(0, shifted)]).is_err());
+    assert!(law.check_spans(&[(1, span)]).is_err());
+    assert!(
+        law.check_spans(&[(0, span.for_output_range(0..frames - 1).unwrap())])
+            .is_err()
+    );
 }
 
 fn physical_phase(position: (u128, NonZeroU128)) -> Result<(u128, NonZeroU128), String> {

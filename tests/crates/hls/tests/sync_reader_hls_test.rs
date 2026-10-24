@@ -9,6 +9,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     hls_server::abr_binary_ladder,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -31,6 +32,7 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
         .build();
 
     let config = HlsConfig::for_url(url.clone())
+        .downloader(create_test_downloader())
         .cancel(cancel_token.clone())
         .store(store)
         .pools(pools)

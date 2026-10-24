@@ -81,6 +81,7 @@ async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
             pools(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .cancel(cancel.clone())
         .build(),
     );
@@ -124,6 +125,7 @@ async fn registry_leaks_peer_without_teardown_when_handle_is_self_stored()
             pools(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .cancel(cancel.clone())
         .build(),
     );

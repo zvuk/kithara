@@ -30,6 +30,7 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, SegmentGateHandle, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     mock::LaneAudio,
     usdt_trace::{self, ProbeEvent},
 };
@@ -117,6 +118,7 @@ async fn forward_into_withheld_segment_waits_and_resumes(
         .cache_capacity(NonZeroUsize::new(SEGMENT_COUNT + 10).expect("nonzero"))
         .build();
     let hls_config = HlsConfig::for_url(server.master_url())
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(cancel)

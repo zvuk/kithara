@@ -67,7 +67,6 @@ fn test_wav_config(
                 })
                 .build(),
         )
-        .pools(worker.pools().clone())
         .build();
     let config = AudioConfig::<kithara::file::File<TestPools>>::for_stream(file_config)
         .hint("wav".to_string())

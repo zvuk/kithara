@@ -29,7 +29,10 @@ use kithara::{
     },
     stream::Stream,
 };
-use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
+};
 use kithara_test_utils::TestHttpServer;
 
 const TOTAL: usize = 4096;
@@ -126,12 +129,12 @@ async fn a_forward_seek_is_served_by_a_range_request() {
     let pools = pools();
 
     let config = FileConfig::for_src(server.url("/audio.mp3").into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools)
         .build();
     let mut stream = Stream::<File<TestPools>>::new(config)
         .await

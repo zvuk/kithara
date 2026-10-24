@@ -24,7 +24,7 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     queue::{TrackSource, Transition},
 };
-use kithara_integration_tests::offline::OfflinePlayer;
+use kithara_integration_tests::{hls_fixture::create_test_downloader, offline::OfflinePlayer};
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tracing::debug;
 
@@ -175,6 +175,7 @@ async fn live_remote_resource_decodes_with_duration(
         .build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .runtime(kithara::platform::tokio::runtime::Handle::current())
             .build(),
     );
     let config: ResourceConfig<TestPools> =
@@ -302,6 +303,7 @@ async fn player_mp3_duration_matches_app_flow(
     let player = harness.player();
     let config: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(url).unwrap())
+            .downloader(create_test_downloader())
             .worker(harness.worker().clone())
             .store(store)
             .decoder(

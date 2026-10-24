@@ -10,6 +10,7 @@ use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::{DelayRule, PcmPattern},
+    hls_fixture::create_test_downloader,
     mock::LaneAudio,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -472,6 +473,7 @@ async fn stress_seek_abr_audio(
     );
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {

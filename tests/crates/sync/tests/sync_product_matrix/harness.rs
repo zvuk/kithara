@@ -422,6 +422,7 @@ impl ProductHarness {
                 ResourceSrc::parse(&source)
                     .unwrap_or_else(|error| panic!("{}: parse source {source}: {error}", case.id)),
             )
+            .downloader(kithara_integration_tests::hls_fixture::create_test_downloader())
             .store(memory_asset_store())
             .initial_abr_mode(AbrMode::manual(0))
             .discriminator(format!("{}-{provider:?}-{index}", case.id))

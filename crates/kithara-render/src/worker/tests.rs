@@ -16,7 +16,6 @@ fn file_config() -> FileConfig<TestPools> {
             .backend(StorageBackend::Memory)
             .build(),
     )
-    .pools(pools)
     .build()
 }
 

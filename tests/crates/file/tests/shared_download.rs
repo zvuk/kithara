@@ -2,7 +2,6 @@
 #![forbid(unsafe_code)]
 
 //! Proves two consumers join one active `AssetStore` download and issue one GET.
-
 use std::{
     convert::Infallible,
     io::{self, Read},
@@ -29,7 +28,10 @@ use kithara::{
     },
     stream::Stream,
 };
-use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
+};
 use kithara_test_utils::TestHttpServer;
 
 const BODY: &[u8] = b"0123456789abcdefghijABCDEFGHIJ0123456789abcdefghijABCDEFGHIJ";
@@ -130,8 +132,8 @@ async fn follower_joins_active_download_without_second_get() {
         .build();
 
     let waveform_cfg = FileConfig::for_src(url.clone().into())
+        .downloader(create_test_downloader())
         .store(store.clone())
-        .pools(pools.clone())
         .build();
     let waveform = Stream::<File<TestPools>>::new(waveform_cfg)
         .await
@@ -142,8 +144,8 @@ async fn follower_joins_active_download_without_second_get() {
         .expect("request handler remains alive");
 
     let player_cfg = FileConfig::for_src(url.into())
+        .downloader(create_test_downloader())
         .store(store)
-        .pools(pools)
         .look_ahead_bytes(16)
         .build();
     let player = Stream::<File<TestPools>>::new(player_cfg)
@@ -201,8 +203,8 @@ async fn immediate_read_exceeds_zero_look_ahead_without_stalling() {
         .backend(StorageBackend::Memory)
         .build();
     let config = FileConfig::for_src(server.url("/audio.mp3").into())
+        .downloader(create_test_downloader())
         .store(store)
-        .pools(pools)
         .look_ahead_bytes(0)
         .build();
     let stream = Stream::<File<TestPools>>::new(config)

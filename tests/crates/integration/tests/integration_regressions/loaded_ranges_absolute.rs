@@ -93,6 +93,7 @@ async fn progressive_download_fills_the_buffer_bar(tone_mp3: &'static [u8], temp
             pools.clone(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .build(),
     );
     let store = AssetStore::builder(pools.clone())

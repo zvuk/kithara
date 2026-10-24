@@ -359,6 +359,7 @@ async fn build_queue(
             pools,
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .build(),
     );
     (queue, downloader, store)

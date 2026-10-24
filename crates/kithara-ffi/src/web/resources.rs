@@ -2,9 +2,11 @@ use std::{collections::HashMap, num::NonZeroUsize};
 
 use kithara::{
     assets::StorageBackend,
+    download::{Downloader, DownloaderConfig},
     drm::{KeyRequest, KeyRequestFactory},
     hls::KeyOptions,
-    platform::sync::Arc,
+    net::{HttpClient, NetOptions},
+    platform::{CancelScope, sync::Arc},
     play::{
         PlayWorkerConfig, ResourceSrc,
         policy::{DomainKeyPolicy, DomainKeyRule},
@@ -28,6 +30,7 @@ pub(super) mod consts {
 #[derive(Clone)]
 pub(in crate::web) struct ResourceBuilder {
     pub(super) store: FfiStore,
+    pub(super) downloader: Downloader,
     pub(super) worker: FfiWorker,
     headers: HashMap<String, String>,
     keys: KeyOptions,
@@ -35,7 +38,18 @@ pub(in crate::web) struct ResourceBuilder {
 
 impl ResourceBuilder {
     pub(super) fn new(pools: Pools) -> Self {
+        let scope = CancelScope::new(None);
+        let downloader = Downloader::new(
+            DownloaderConfig::for_client(HttpClient::new(
+                NetOptions::default(),
+                pools.clone(),
+                scope.token().child(),
+            ))
+            .cancel(scope.token())
+            .build(),
+        );
         Self {
+            downloader,
             store: FfiStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .cache_capacity(consts::ASSET_CACHE_CAPACITY)
@@ -89,6 +103,7 @@ impl ResourceBuilder {
             .keys(self.keys.clone())
             .maybe_headers(headers.map(Into::into))
             .store(self.store.clone())
+            .downloader(self.downloader.clone())
             .worker(self.worker.clone())
             .build())
     }

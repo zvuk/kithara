@@ -195,6 +195,7 @@ impl Harness {
                 pools.clone(),
                 CancelToken::never(),
             ))
+            .runtime(kithara::platform::tokio::runtime::Handle::current())
             .build(),
         );
         let store = AssetStore::builder(pools.clone())

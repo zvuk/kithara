@@ -32,6 +32,7 @@ use kithara_integration_tests::{
 use kithara_integration_tests::{
     TestServerHelper, abr_switch_trigger, auto,
     bufpool_ext::{Pools, TestPools, pools},
+    hls_fixture::create_test_downloader,
     mixed_encrypted, mixed_plain,
     mock::LaneAudio,
 };
@@ -133,6 +134,7 @@ fn switch_trigger_downloader(pools: &Pools, cancel: &CancelToken) -> Downloader 
             pools.clone(),
             cancel.child(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .abr_settings(abr_switch_trigger())
         .cancel(cancel.child())
         .build(),
@@ -342,6 +344,7 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
         .build();
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools.clone())
         .initial_abr_mode(auto(0))
@@ -686,6 +689,7 @@ async fn live_real_stream_seek_resume_native(
         .build();
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools.clone())
         .initial_abr_mode(auto(0))
@@ -959,6 +963,7 @@ async fn live_ephemeral_small_cache_playback(
         .build();
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools.clone())
         .initial_abr_mode(auto(0))
@@ -1059,6 +1064,7 @@ async fn live_ephemeral_small_cache_seek_stress(
             .build();
 
         let hls_config = HlsConfig::for_url(url)
+            .downloader(create_test_downloader())
             .store(store)
             .pools(pools.clone())
             .initial_abr_mode(auto(0))

@@ -228,14 +228,7 @@ impl Downloader {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn spawn_run(inner: Arc<DownloaderInner>, rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
-        let Some(handle) = inner
-            .config
-            .runtime
-            .clone()
-            .or_else(|| tokio::runtime::Handle::try_current().ok())
-        else {
-            return;
-        };
+        let handle = inner.config.runtime.clone();
         task::spawn_on(&handle, Self::run(inner, rx));
     }
 

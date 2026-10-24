@@ -18,6 +18,7 @@ use kithara_integration_tests::{
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
+    hls_fixture::create_test_downloader,
     offline::{
         OfflinePlayer, OfflinePlayerOptions, TimedPlayerEvent, append_source_loaded,
         offline_queue_fixture_with_options,
@@ -412,6 +413,7 @@ fn gapless_hls_config(master: &Url, cache_dir: &std::path::Path) -> ResourceConf
     ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(master.as_str()).expect("valid HLS master URL"),
     )
+    .downloader(create_test_downloader())
     .store(kithara_integration_tests::disk_asset_store(cache_dir))
     .build()
 }

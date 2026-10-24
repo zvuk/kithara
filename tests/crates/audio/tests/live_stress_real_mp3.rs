@@ -21,6 +21,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     mock::LaneAudio,
     served_mp3,
 };
@@ -400,8 +401,8 @@ async fn live_stress_real_mp3_seek_read_cache(
     let bus = EventBus::default();
     let events_task = spawn(observe_transfers(&bus));
     let file_config = FileConfig::for_src(url.into())
+        .downloader(create_test_downloader())
         .store(store)
-        .pools(pools.clone())
         .events(bus)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());

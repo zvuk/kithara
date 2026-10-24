@@ -73,7 +73,7 @@ impl AppConfig {
         let compute_threads = thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
         let mut worker_config = WorkerConfig::new()
             .with_cancel(shutdown.child())
-            .with_runtime(runtime)
+            .with_runtime(runtime.clone())
             .with_max_compute_tasks(compute_threads)
             .with_owned_pool(OwnedPoolConfig::new(compute_threads, "kithara-compute"));
         worker_config.apply(document.worker());
@@ -94,7 +94,12 @@ impl AppConfig {
         };
         #[cfg(not(feature = "broadcast"))]
         let broadcast = AppBroadcastConfig::default();
-        let mut downloader_config = DownloaderConfig::for_client(net.clone()).build();
+        let mut downloader_config = {
+            let config = DownloaderConfig::for_client(net.clone());
+            #[cfg(not(target_arch = "wasm32"))]
+            let config = config.runtime(runtime);
+            config.build()
+        };
         downloader_config.apply(document.downloader());
         let downloader = Downloader::new(downloader_config);
         let mut flush_policy = FlushPolicy::default();

@@ -7,6 +7,7 @@ use ::kithara::{
 };
 use kithara_integration_tests::{
     TestServerHelper,
+    hls_fixture::create_test_downloader,
     offline::{OfflinePlayer, OfflinePlayerOptions, TimedPlayerEvent},
 };
 use kithara_test_fixtures::SignalAsset;
@@ -49,6 +50,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(
             ResourceConfig::<TestPools>::for_src(
                 ResourceSrc::parse(url.as_str()).expect("valid signal fixture URL"),
             )
+            .downloader(create_test_downloader())
             .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
             .build(),
         ))

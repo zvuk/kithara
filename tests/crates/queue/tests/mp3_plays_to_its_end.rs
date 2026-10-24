@@ -22,6 +22,7 @@ use kithara::{
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     event::TestEvent,
+    hls_fixture::create_test_downloader,
     kithara,
     offline::{OfflinePlayer, OfflinePlayerOptions},
     waits::wait_for_loader_done_event,
@@ -102,6 +103,7 @@ async fn play_queue(
     let mut tracks = Vec::with_capacity(2);
     for (index, source) in sources.into_iter().enumerate() {
         let config = ResourceConfig::<TestPools>::for_src(source)
+            .downloader(create_test_downloader())
             .store(kithara_integration_tests::disk_asset_store(
                 temp_dir.path().join(format!("track{index}")),
             ))

@@ -79,6 +79,7 @@ impl ThresholdRig {
         let mut rig = Self {
             queue: Queue::new(
                 QueueConfig::builder()
+                    .downloader(crate::mock::downloader())
                     .prep(prep)
                     .store(
                         AssetStore::builder(pools())
@@ -868,6 +869,7 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
         .build();
     let mut queue = Queue::new(
         QueueConfig::builder()
+            .downloader(crate::mock::downloader())
             .prep(prep)
             .store(
                 AssetStore::builder(pools())

@@ -7,9 +7,12 @@ use kithara::{
         sync::Arc,
         thread,
         time::{Duration, WallInstant},
-        tokio::sync::{
-            mpsc::{self, UnboundedReceiver},
-            watch,
+        tokio::{
+            runtime::Runtime,
+            sync::{
+                mpsc::{self, UnboundedReceiver},
+                watch,
+            },
         },
     },
     ui::render::{ControlAction, Published, ReadValue, Reads, Walk},
@@ -38,7 +41,7 @@ pub(crate) struct Rig {
     pub(crate) rendered_frames: u64,
     #[cfg(not(feature = "broadcast"))]
     states: Vec<Arc<kithara::platform::sync::Mutex<crate::state::UiState>>>,
-    _runtime: kithara::platform::tokio::runtime::Runtime,
+    _runtime: Runtime,
 }
 
 impl Rig {
@@ -63,6 +66,7 @@ impl Rig {
 
     #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
     fn build(
+        runtime: Runtime,
         config: &AppConfig,
         mut host: AppHost,
         broadcast: Broadcaster,
@@ -99,7 +103,6 @@ impl Rig {
         let deck_tokens = decks.iter().map(Deck::cancel_child).collect();
         let (sender, commands) = mpsc::unbounded_channel();
         let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
-        let runtime = test_fixture::runtime();
         let boot = test_fixture::boot(
             runtime.handle(),
             config,
@@ -160,7 +163,7 @@ impl Rig {
     pub(crate) fn on_air() -> Self {
         use kithara::worker::{Worker, WorkerConfig};
 
-        let config = test_fixture::config();
+        let (runtime, config) = test_fixture::runtime_and_config();
         let broadcast = AppBroadcastConfig::builder(
             Worker::new(WorkerConfig::new()),
             config.worker.pools().clone(),
@@ -169,7 +172,7 @@ impl Rig {
         .build();
         let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
             .expect("test host");
-        Self::with_host(&config, host, Broadcaster::new(broadcast))
+        Self::with_host(runtime, &config, host, Broadcaster::new(broadcast))
     }
 
     #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
@@ -203,19 +206,25 @@ impl Rig {
 
     #[cfg(not(feature = "broadcast"))]
     pub(crate) fn playback() -> Self {
-        let config = test_fixture::config();
+        let (runtime, config) = test_fixture::runtime_and_config();
         let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
             .expect("test host");
         Self::with_host(
+            runtime,
             &config,
             host,
             Broadcaster::new(AppBroadcastConfig::default()),
         )
     }
 
-    fn with_host(config: &AppConfig, host: AppHost, broadcast: Broadcaster) -> Self {
+    fn with_host(
+        runtime: Runtime,
+        config: &AppConfig,
+        host: AppHost,
+        broadcast: Broadcaster,
+    ) -> Self {
         let (analysis, _) = AnalysisHandle::channel(watch::channel(Arc::default()).1);
-        Self::build(config, host, broadcast, analysis.clone(), |deck| {
+        Self::build(runtime, config, host, broadcast, analysis.clone(), |deck| {
             StateController::new(
                 deck.queue.control().clone(),
                 deck.cancel_child(),
@@ -325,12 +334,13 @@ impl Rig {
     }
 
     pub(crate) fn offline_with(configure: impl FnOnce(&mut AppConfig)) -> Self {
-        let mut config = test_fixture::config();
+        let (runtime, mut config) = test_fixture::runtime_and_config();
         configure(&mut config);
         let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
             .expect("test host");
         let mut states = Vec::new();
         let mut rig = Self::build(
+            runtime,
             &config,
             host,
             Broadcaster::new(AppBroadcastConfig::default()),

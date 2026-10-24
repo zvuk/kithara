@@ -48,7 +48,11 @@ fn waveform() -> Waveform {
 
 fn downloader() -> Downloader {
     let client = HttpClient::new(NetOptions::default(), test_pools(), CancelToken::never());
-    Downloader::new(DownloaderConfig::for_client(client).build())
+    Downloader::new(
+        DownloaderConfig::for_client(client)
+            .runtime(kithara_platform::tokio::runtime::Handle::current())
+            .build(),
+    )
 }
 
 /// A source the tests point an artifact at, written into the scratch

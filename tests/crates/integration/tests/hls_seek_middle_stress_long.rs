@@ -284,6 +284,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(
             pools(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .build(),
     );
 
@@ -433,6 +434,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(
             pools.clone(),
             shutdown_token.child(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .build(),
     );
     let player = kithara::play::ResourcePrep::builder()

@@ -88,6 +88,19 @@ fn ctx_over(
         ),
         config: Arc::new(
             HlsConfig::for_url(Url::parse("https://example.com/master.m3u8").expect("master url"))
+                .downloader(kithara_download::Downloader::new({
+                    let config = kithara_download::DownloaderConfig::for_client(
+                        kithara_net::HttpClient::new(
+                            kithara_net::NetOptions::default(),
+                            crate::test_pools::pools(),
+                            CancelToken::never(),
+                        ),
+                    );
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let config =
+                        config.runtime(kithara_platform::tokio::runtime::Handle::current());
+                    config.build()
+                }))
                 .store(store.clone())
                 .pools(crate::test_pools::pools())
                 .download_batch_size(prefetch_budget)
@@ -96,8 +109,8 @@ fn ctx_over(
     }
 }
 
-#[kithara::test]
-fn variant_keeps_the_stream_config_instance() {
+#[kithara::test(tokio)]
+async fn variant_keeps_the_stream_config_instance() {
     let ctx = test_ctx(7);
     let variant = make_var(0, 0, &[100], &ctx);
 
@@ -219,8 +232,8 @@ fn make_playlist_state(
     }]))
 }
 
-#[kithara::test]
-fn media_info_carries_playlist_container() {
+#[kithara::test(tokio)]
+async fn media_info_carries_playlist_container() {
     let ctx = test_ctx(1);
     let playlist_state =
         make_playlist_state(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4), 1);
@@ -284,8 +297,8 @@ fn placeholder_size_uses_duration_as_route_geometry() {
     );
 }
 
-#[kithara::test]
-fn cache_complete_publishes_once_after_full_commit() {
+#[kithara::test(tokio)]
+async fn cache_complete_publishes_once_after_full_commit() {
     let ctx = test_ctx(3);
     let mut events = ctx.bus.subscribe();
     let v = VariantParts {
@@ -337,8 +350,8 @@ fn cache_complete_publishes_once_after_full_commit() {
     assert_eq!(cache_complete_count, 1);
 }
 
-#[kithara::test]
-fn range_ready_clamps_tail_seek_alias_to_eof() {
+#[kithara::test(tokio)]
+async fn range_ready_clamps_tail_seek_alias_to_eof() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: None,
@@ -375,8 +388,8 @@ fn range_ready_clamps_tail_seek_alias_to_eof() {
     );
 }
 
-#[kithara::test]
-fn segment_aware_seek_alias_routes_tail_by_segment_index() {
+#[kithara::test(tokio)]
+async fn segment_aware_seek_alias_routes_tail_by_segment_index() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: None,
@@ -395,8 +408,8 @@ fn segment_aware_seek_alias_routes_tail_by_segment_index() {
     assert_eq!(v.find_at_offset(anchor + 200), None);
 }
 
-#[kithara::test]
-fn segment_aware_seek_descriptors_keep_the_readers_coordinates_after_prefix_growth() {
+#[kithara::test(tokio)]
+async fn segment_aware_seek_descriptors_keep_the_readers_coordinates_after_prefix_growth() {
     let ctx = test_ctx(3);
     let variant = VariantParts {
         init: None,
@@ -443,10 +456,10 @@ fn segment_aware_seek_descriptors_keep_the_readers_coordinates_after_prefix_grow
     assert_eq!(variant.segment_byte_offset(2), Some(300));
 }
 
-#[kithara::test]
+#[kithara::test(tokio)]
 #[case::byte_window(Some(150), None, 250)]
 #[case::segment_window(None, Some(2), 300)]
-fn dispatch_windows_follow_seek_alias_after_prefix_growth(
+async fn dispatch_windows_follow_seek_alias_after_prefix_growth(
     #[case] byte_window: Option<u64>,
     #[case] segment_window: Option<usize>,
     #[case] resume_byte: u64,
@@ -483,8 +496,8 @@ fn dispatch_windows_follow_seek_alias_after_prefix_growth(
     assert!(variant.take_prefetch_resume_at(resume_byte));
 }
 
-#[kithara::test]
-fn segment_aware_byte_seek_retires_stale_time_alias() {
+#[kithara::test(tokio)]
+async fn segment_aware_byte_seek_retires_stale_time_alias() {
     let ctx = test_ctx(3);
     let variant = VariantParts {
         init: None,
@@ -518,16 +531,16 @@ fn segment_aware_byte_seek_retires_stale_time_alias() {
     assert!(!seek_projection_is_live(&variant));
 }
 
-#[kithara::test]
-fn position_starts_at_zero() {
+#[kithara::test(tokio)]
+async fn position_starts_at_zero() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400], &ctx);
     let session = active_session(&v, &ctx, 0);
     assert_eq!(session.position(), 0);
 }
 
-#[kithara::test]
-fn descriptor_at_byte_uses_the_find_at_offset_range() {
+#[kithara::test(tokio)]
+async fn descriptor_at_byte_uses_the_find_at_offset_range() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
 
@@ -542,8 +555,8 @@ fn descriptor_at_byte_uses_the_find_at_offset_range() {
     );
 }
 
-#[kithara::test]
-fn reset_to_full_range_uses_live_init_size() {
+#[kithara::test(tokio)]
+async fn reset_to_full_range_uses_live_init_size() {
     let ctx = test_ctx(3);
     let v = make_var(0, 600, &[400, 400], &ctx);
 
@@ -561,8 +574,8 @@ fn reset_to_full_range_uses_live_init_size() {
     );
 }
 
-#[kithara::test]
-fn advance_increments_position() {
+#[kithara::test(tokio)]
+async fn advance_increments_position() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400], &ctx);
     let session = active_session(&v, &ctx, 0);
@@ -572,8 +585,8 @@ fn advance_increments_position() {
     assert_eq!(session.position(), 100);
 }
 
-#[kithara::test]
-fn set_position_overrides_cursor() {
+#[kithara::test(tokio)]
+async fn set_position_overrides_cursor() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400], &ctx);
     let session = active_session(&v, &ctx, 0);
@@ -582,24 +595,24 @@ fn set_position_overrides_cursor() {
     assert_eq!(session.position(), 1234);
 }
 
-#[kithara::test]
-fn find_at_offset_inside_init_prefix_is_none() {
+#[kithara::test(tokio)]
+async fn find_at_offset_inside_init_prefix_is_none() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400], &ctx);
     assert!(v.find_at_offset(0).is_none());
     assert!(v.find_at_offset(199).is_none());
 }
 
-#[kithara::test]
-fn demand_segment_at_offset_inside_init_prefix_is_segment_zero() {
+#[kithara::test(tokio)]
+async fn demand_segment_at_offset_inside_init_prefix_is_segment_zero() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400], &ctx);
     assert_eq!(v.demand_segment_at_offset(0), Some(0));
     assert_eq!(v.demand_segment_at_offset(199), Some(0));
 }
 
-#[kithara::test]
-fn reader_warmup_starting_in_init_prefix_rebuilds_from_segment_zero() {
+#[kithara::test(tokio)]
+async fn reader_warmup_starting_in_init_prefix_rebuilds_from_segment_zero() {
     let ctx = test_ctx(3);
     let v = make_var(0, 48, &[64, 64, 64], &ctx);
     let profile = ReaderProfile::new(
@@ -625,8 +638,8 @@ fn reader_warmup_starting_in_init_prefix_rebuilds_from_segment_zero() {
     );
 }
 
-#[kithara::test]
-fn find_at_offset_at_init_size_returns_segment_zero() {
+#[kithara::test(tokio)]
+async fn find_at_offset_at_init_size_returns_segment_zero() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400], &ctx);
     let (idx, byte_offset, _) = v.find_at_offset(200).expect("hit");
@@ -634,8 +647,8 @@ fn find_at_offset_at_init_size_returns_segment_zero() {
     assert_eq!(byte_offset, 200);
 }
 
-#[kithara::test]
-fn find_at_offset_mid_segment_binary_search() {
+#[kithara::test(tokio)]
+async fn find_at_offset_mid_segment_binary_search() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[400, 400, 400, 400], &ctx);
     let (idx, _, _) = v.find_at_offset(550).expect("mid-segment");
@@ -646,8 +659,8 @@ fn find_at_offset_mid_segment_binary_search() {
     assert_eq!(idx, 3);
 }
 
-#[kithara::test]
-fn find_at_offset_reflects_post_commit_size_shrink() {
+#[kithara::test(tokio)]
+async fn find_at_offset_reflects_post_commit_size_shrink() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[400, 400, 400, 400], &ctx);
 
@@ -678,8 +691,8 @@ fn find_at_offset_reflects_post_commit_size_shrink() {
 /// `total_bytes()` is a lock-free `AtomicU64` snapshot (RT produce-core read).
 /// It must still track every write-lock mutation — a post-commit size shrink
 /// republishes the cached total.
-#[kithara::test]
-fn total_bytes_lock_free_tracks_commit() {
+#[kithara::test(tokio)]
+async fn total_bytes_lock_free_tracks_commit() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
     assert_eq!(v.total_bytes(), 200 + 400 * 4, "init + 4 media segments");
@@ -699,8 +712,8 @@ fn total_bytes_lock_free_tracks_commit() {
 /// frame, so it can never resize the offset table (resize needs the
 /// exclusive lock). Verify repeated lookups stay self-consistent across
 /// the whole virtual range.
-#[kithara::test]
-fn find_at_offset_is_stable_over_repeated_lookups() {
+#[kithara::test(tokio)]
+async fn find_at_offset_is_stable_over_repeated_lookups() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[400, 400, 400, 400], &ctx);
 
@@ -718,22 +731,22 @@ fn find_at_offset_is_stable_over_repeated_lookups() {
     );
 }
 
-#[kithara::test]
-fn total_bytes_includes_init_and_segments() {
+#[kithara::test(tokio)]
+async fn total_bytes_includes_init_and_segments() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
     assert_eq!(v.total_bytes(), 200 + 400 * 4);
 }
 
-#[kithara::test]
-fn init_byte_range_present_when_size_positive() {
+#[kithara::test(tokio)]
+async fn init_byte_range_present_when_size_positive() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[], &ctx);
     assert_eq!(v.init_byte_range(), 0..200);
 }
 
-#[kithara::test]
-fn init_byte_range_empty_when_size_zero() {
+#[kithara::test(tokio)]
+async fn init_byte_range_empty_when_size_zero() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[], &ctx);
     assert!(v.init_byte_range().is_empty());
@@ -743,8 +756,8 @@ fn init_byte_range_empty_when_size_zero() {
 /// separate init URL) is exactly a `None` init slot (old `VariantInit::NotApplicable`):
 /// no separate init resource, no `about:blank` acquire, and `rebuild` never
 /// enqueues `PlannedFetch::Init`.
-#[kithara::test]
-fn variant_init_not_applicable_no_acquire() {
+#[kithara::test(tokio)]
+async fn variant_init_not_applicable_no_acquire() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[400, 400], &ctx);
     assert!(
@@ -775,8 +788,8 @@ fn variant_init_not_applicable_no_acquire() {
 /// `init_size > 0` (fMP4 `#EXT-X-MAP` with a known size) is a present
 /// `Some(Segment::Init)`: a real, separately-fetched init segment that is
 /// enqueued first and acquired exactly as before.
-#[kithara::test]
-fn variant_init_pending_for_fmp4() {
+#[kithara::test(tokio)]
+async fn variant_init_pending_for_fmp4() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400], &ctx);
     let Some(entry @ Segment::Init(_)) = v.init() else {
@@ -805,8 +818,8 @@ fn variant_init_pending_for_fmp4() {
 /// So a present `Some(Segment::Init)` constructed with `init_size > 0` stays
 /// present even after a commit shrink — the `Option<Segment>` discriminant is
 /// equivalent to the old dynamic `init_size() > 0` check at every later read.
-#[kithara::test]
-fn variant_init_pending_stays_pending_after_commit_shrink() {
+#[kithara::test(tokio)]
+async fn variant_init_pending_stays_pending_after_commit_shrink() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400], &ctx);
 
@@ -829,8 +842,8 @@ fn variant_init_pending_stays_pending_after_commit_shrink() {
 /// a `None` init slot drops the init: `read_at(0)` then routes to the media
 /// loop and serves segment 0's container where the demuxer expects `ftyp`
 /// ("`re_mp4`: ftyp not found"), or the reader wedges ("no progress").
-#[kithara::test]
-fn init_with_url_but_unknown_size_is_pending() {
+#[kithara::test(tokio)]
+async fn init_with_url_but_unknown_size_is_pending() {
     let ctx = test_ctx(3);
     let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
     let playlist = PlaylistState::new(vec![VariantState {
@@ -856,8 +869,8 @@ fn init_with_url_but_unknown_size_is_pending() {
 /// so hands the demuxer segment 0's container where the init's `ftyp` belongs
 /// ("`re_mp4`: ftyp not found"). The read is held pending until the init sizes
 /// the prefix.
-#[kithara::test]
-fn read_at_zero_holds_pending_while_init_unsized() {
+#[kithara::test(tokio)]
+async fn read_at_zero_holds_pending_while_init_unsized() {
     let ctx = test_ctx(3);
     let init_url: Url = "https://example.com/init.mp4".parse().expect("valid url");
     let init = Some(Segment::Init(InitSegment {
@@ -923,8 +936,8 @@ fn read_at_zero_holds_pending_while_init_unsized() {
     );
 }
 
-#[kithara::test]
-fn descriptor_at_time_clamps_to_last() {
+#[kithara::test(tokio)]
+async fn descriptor_at_time_clamps_to_last() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
     let d = v
@@ -937,10 +950,10 @@ fn descriptor_at_time_clamps_to_last() {
     assert_eq!(d.segment_index, 2);
 }
 
-#[kithara::test]
+#[kithara::test(tokio)]
 #[case::unknown_size(0)]
 #[case::sized(256)]
-fn failed_init_prevents_loaded_media_from_satisfying_the_read(#[case] init_size: u64) {
+async fn failed_init_prevents_loaded_media_from_satisfying_the_read(#[case] init_size: u64) {
     let ctx = test_ctx(3);
     let init = if init_size == 0 {
         Some(make_placeholder_init(0, &ctx.scope))
@@ -990,8 +1003,8 @@ fn failed_init_prevents_loaded_media_from_satisfying_the_read(#[case] init_size:
     ));
 }
 
-#[kithara::test]
-fn an_unsized_init_keeps_its_own_reader_demand() {
+#[kithara::test(tokio)]
+async fn an_unsized_init_keeps_its_own_reader_demand() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: Some(make_placeholder_init(0, &ctx.scope)),
@@ -1028,8 +1041,8 @@ fn an_unsized_init_keeps_its_own_reader_demand() {
     assert!(init.state().is_reader_demanded());
 }
 
-#[kithara::test]
-fn seek_point_at_time_returns_bounds_and_clamps() {
+#[kithara::test(tokio)]
+async fn seek_point_at_time_returns_bounds_and_clamps() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
     let (idx, start, end) = v
@@ -1047,8 +1060,8 @@ fn seek_point_at_time_returns_bounds_and_clamps() {
     assert_eq!(end, Duration::from_secs(6));
 }
 
-#[kithara::test]
-fn descriptor_after_byte_finds_next_segment() {
+#[kithara::test(tokio)]
+async fn descriptor_after_byte_finds_next_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
     let d = v.descriptor_after_byte(50).expect("descriptor");
@@ -1057,8 +1070,8 @@ fn descriptor_after_byte_finds_next_segment() {
     assert_eq!(d.segment_index, 1);
 }
 
-#[kithara::test]
-fn rebuild_refills_queue_without_touching_session_cancel() {
+#[kithara::test(tokio)]
+async fn rebuild_refills_queue_without_touching_session_cancel() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100; 6], &ctx);
     push_planned(&v, 0);
@@ -1074,8 +1087,8 @@ fn rebuild_refills_queue_without_touching_session_cancel() {
     assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5]);
 }
 
-#[kithara::test]
-fn segment_aware_rebuild_at_time_prefetches_seek_preroll_segment() {
+#[kithara::test(tokio)]
+async fn segment_aware_rebuild_at_time_prefetches_seek_preroll_segment() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: None,
@@ -1106,8 +1119,8 @@ fn segment_aware_rebuild_at_time_prefetches_seek_preroll_segment() {
     );
 }
 
-#[kithara::test]
-fn segment_aware_seek_time_anchor_leaves_the_fetch_plan_to_the_peer() {
+#[kithara::test(tokio)]
+async fn segment_aware_seek_time_anchor_leaves_the_fetch_plan_to_the_peer() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: None,
@@ -1138,8 +1151,8 @@ fn segment_aware_seek_time_anchor_leaves_the_fetch_plan_to_the_peer() {
     assert_eq!(v.prefetch_anchor(), 100);
 }
 
-#[kithara::test]
-fn segment_aware_rebuild_with_decoder_probe_fetches_recreate_preroll_segment() {
+#[kithara::test(tokio)]
+async fn segment_aware_rebuild_with_decoder_probe_fetches_recreate_preroll_segment() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
@@ -1159,8 +1172,8 @@ fn segment_aware_rebuild_with_decoder_probe_fetches_recreate_preroll_segment() {
     );
 }
 
-#[kithara::test]
-fn exact_size_rebuild_at_time_starts_at_target_segment() {
+#[kithara::test(tokio)]
+async fn exact_size_rebuild_at_time_starts_at_target_segment() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: None,
@@ -1187,8 +1200,8 @@ fn exact_size_rebuild_at_time_starts_at_target_segment() {
     );
 }
 
-#[kithara::test]
-fn exact_size_rebuild_with_decoder_probe_starts_tail_at_target_segment() {
+#[kithara::test(tokio)]
+async fn exact_size_rebuild_with_decoder_probe_starts_tail_at_target_segment() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
@@ -1204,8 +1217,8 @@ fn exact_size_rebuild_with_decoder_probe_starts_tail_at_target_segment() {
     assert_eq!(queue_seg_indices(&v), vec![0, 2, 3, 4]);
 }
 
-#[kithara::test]
-fn incoming_reader_preparation_keeps_the_landing_fetch_anchor() {
+#[kithara::test(tokio)]
+async fn incoming_reader_preparation_keeps_the_landing_fetch_anchor() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
@@ -1238,8 +1251,8 @@ fn incoming_reader_preparation_keeps_the_landing_fetch_anchor() {
     assert_eq!(v.prefetch_anchor(), 248);
 }
 
-#[kithara::test]
-fn an_init_less_reader_plans_the_header_segment_behind_its_tail() {
+#[kithara::test(tokio)]
+async fn an_init_less_reader_plans_the_header_segment_behind_its_tail() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: None,
@@ -1265,8 +1278,8 @@ fn an_init_less_reader_plans_the_header_segment_behind_its_tail() {
     assert_eq!(queue_seg_indices(&v), vec![0, 1, 2, 3, 4]);
 }
 
-#[kithara::test]
-fn a_map_bearing_reader_leaves_the_header_to_its_init_fetch() {
+#[kithara::test(tokio)]
+async fn a_map_bearing_reader_leaves_the_header_to_its_init_fetch() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
@@ -1288,8 +1301,8 @@ fn a_map_bearing_reader_leaves_the_header_to_its_init_fetch() {
     assert_eq!(queue_seg_indices(&v), vec![1, 2, 3, 4]);
 }
 
-#[kithara::test]
-fn incoming_session_leads_with_the_landing_and_skips_everything_before_it() {
+#[kithara::test(tokio)]
+async fn incoming_session_leads_with_the_landing_and_skips_everything_before_it() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
@@ -1343,8 +1356,8 @@ fn incoming_session_leads_with_the_landing_and_skips_everything_before_it() {
     );
 }
 
-#[kithara::test]
-fn incoming_session_dispatches_only_the_decoder_construction_window() {
+#[kithara::test(tokio)]
+async fn incoming_session_dispatches_only_the_decoder_construction_window() {
     let ctx = test_ctx(10);
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
@@ -1427,8 +1440,8 @@ fn incoming_session_dispatches_only_the_decoder_construction_window() {
 
 /// Init-only construction waits for its header; media read-ahead remains part
 /// of the fetch plan and is consumed after the reader is transferred.
-#[kithara::test]
-fn incoming_session_is_ready_once_its_construction_fetches_land() {
+#[kithara::test(tokio)]
+async fn incoming_session_is_ready_once_its_construction_fetches_land() {
     let ctx = test_ctx(10);
     let v = VariantParts {
         init: make_init(48, &ctx.scope),
@@ -1499,8 +1512,8 @@ fn incoming_session_is_ready_once_its_construction_fetches_land() {
     );
 }
 
-#[kithara::test]
-fn dispatch_emits_init_first_then_segments_under_budget() {
+#[kithara::test(tokio)]
+async fn dispatch_emits_init_first_then_segments_under_budget() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400, 400], &ctx);
     let init_url = v.init().expect("init is present").url().clone();
@@ -1520,8 +1533,8 @@ fn dispatch_emits_init_first_then_segments_under_budget() {
     }
 }
 
-#[kithara::test]
-fn dispatch_respects_budget() {
+#[kithara::test(tokio)]
+async fn dispatch_respects_budget() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100; 10], &ctx);
     v.rebuild(&ctx, 0);
@@ -1531,8 +1544,8 @@ fn dispatch_respects_budget() {
     assert_eq!(queue_seg_indices(&v), vec![3, 4, 5, 6, 7, 8, 9]);
 }
 
-#[kithara::test]
-fn dispatch_respects_segment_lookahead_cap() {
+#[kithara::test(tokio)]
+async fn dispatch_respects_segment_lookahead_cap() {
     let mut ctx = test_ctx(10);
     ctx.look_ahead_segments = Some(2);
     let v = make_var(0, 0, &[100; 6], &ctx);
@@ -1545,8 +1558,8 @@ fn dispatch_respects_segment_lookahead_cap() {
     assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5]);
 }
 
-#[kithara::test]
-fn dispatch_skips_non_missing_segments() {
+#[kithara::test(tokio)]
+async fn dispatch_skips_non_missing_segments() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);
     v.segments()[1].state().mark_loaded();
@@ -1560,8 +1573,8 @@ fn dispatch_skips_non_missing_segments() {
     assert!(v.segments()[1].state().is_loaded());
 }
 
-#[kithara::test]
-fn dispatch_requeues_orphaned_downloading_segment() {
+#[kithara::test(tokio)]
+async fn dispatch_requeues_orphaned_downloading_segment() {
     // Root C seek-rebuild race: a seek re-queues the target segment while an
     // old (now-orphaned) prefetch still holds it `Downloading`. `dispatch`
     // pops the segment then fails `try_claim` (slot is Downloading) — it must
@@ -1616,8 +1629,8 @@ fn dispatch_requeues_orphaned_downloading_segment() {
     );
 }
 
-#[kithara::test]
-fn a_dropped_claim_returns_its_fetch_to_the_plan() {
+#[kithara::test(tokio)]
+async fn a_dropped_claim_returns_its_fetch_to_the_plan() {
     // The Drop safety net reverts the slot to Missing, but dispatch popped
     // the plan entry when it sent the fetch: without a requeue the segment
     // is never asked for again and the reader hangs on a gap nobody owns.
@@ -1639,8 +1652,8 @@ fn a_dropped_claim_returns_its_fetch_to_the_plan() {
     assert!(v.flow.queue.planned(PlannedFetch::Segment(0)));
 }
 
-#[kithara::test]
-fn a_seek_supersedes_claims_from_the_previous_plan() {
+#[kithara::test(tokio)]
+async fn a_seek_supersedes_claims_from_the_previous_plan() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: None,
@@ -1678,8 +1691,8 @@ fn a_seek_supersedes_claims_from_the_previous_plan() {
     );
 }
 
-#[kithara::test]
-fn a_noop_rebuild_disowns_a_cancelled_fetch() {
+#[kithara::test(tokio)]
+async fn a_noop_rebuild_disowns_a_cancelled_fetch() {
     // A rebuild that changes nothing (the queue already matches the plan)
     // still claims plan ownership: the fetch the triggering rearm cancelled
     // settles into a superseded plan and stays off it, instead of
@@ -1703,8 +1716,8 @@ fn a_noop_rebuild_disowns_a_cancelled_fetch() {
     assert!(!v.flow.queue.planned(PlannedFetch::Segment(0)));
 }
 
-#[kithara::test]
-fn phase_at_reports_waiting_demand_for_claimed_segment() {
+#[kithara::test(tokio)]
+async fn phase_at_reports_waiting_demand_for_claimed_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
     let claim = v.segments()[0]
@@ -1723,8 +1736,8 @@ fn phase_at_reports_waiting_demand_for_claimed_segment() {
     assert_eq!(v.phase_at(0..16), SourcePhase::Waiting);
 }
 
-#[kithara::test]
-fn phase_at_reports_waiting_demand_for_queued_segment() {
+#[kithara::test(tokio)]
+async fn phase_at_reports_waiting_demand_for_queued_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
 
@@ -1745,8 +1758,8 @@ fn claim_segment_zero(v: &Arc<HlsVariant>, ctx: &PlanCtx) -> FetchClaim<Download
         .expect("segment claim")
 }
 
-#[kithara::test]
-fn a_parked_wait_files_demand_on_the_claimed_segment() {
+#[kithara::test(tokio)]
+async fn a_parked_wait_files_demand_on_the_claimed_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
     let _claim = claim_segment_zero(&v, &ctx);
@@ -1763,8 +1776,8 @@ fn a_parked_wait_files_demand_on_the_claimed_segment() {
     );
 }
 
-#[kithara::test]
-fn a_phase_query_leaves_demand_unfiled() {
+#[kithara::test(tokio)]
+async fn a_phase_query_leaves_demand_unfiled() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
     let _claim = claim_segment_zero(&v, &ctx);
@@ -1777,8 +1790,8 @@ fn a_phase_query_leaves_demand_unfiled() {
     );
 }
 
-#[kithara::test]
-fn a_settled_slot_answers_no_demand() {
+#[kithara::test(tokio)]
+async fn a_settled_slot_answers_no_demand() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
     let claim = claim_segment_zero(&v, &ctx);
@@ -1799,8 +1812,8 @@ fn a_settled_slot_answers_no_demand() {
     );
 }
 
-#[kithara::test]
-fn a_readiness_poll_leaves_demand_unfiled() {
+#[kithara::test(tokio)]
+async fn a_readiness_poll_leaves_demand_unfiled() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[64 * 1_024, 64 * 1_024], &ctx);
     let profile = ReaderProfile::new(
@@ -1851,8 +1864,8 @@ fn a_readiness_poll_leaves_demand_unfiled() {
     );
 }
 
-#[kithara::test]
-fn a_planned_segment_is_owed_not_escalated() {
+#[kithara::test(tokio)]
+async fn a_planned_segment_is_owed_not_escalated() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
     push_planned(&v, 0);
@@ -1931,8 +1944,8 @@ fn init_url() -> Url {
 /// A file-like container reaches a seek target by adding byte lengths up, so
 /// it must learn the ones it does not know — the init and the segments before
 /// the landing, and none past it.
-#[kithara::test]
-fn an_exact_seek_probes_the_unknown_prefix_and_nothing_else() {
+#[kithara::test(tokio)]
+async fn an_exact_seek_probes_the_unknown_prefix_and_nothing_else() {
     let probed = exact_seek_probe_urls(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav), false);
 
     assert_eq!(
@@ -1949,8 +1962,8 @@ fn an_exact_seek_probes_the_unknown_prefix_and_nothing_else() {
 /// A length already known is not worth a request. This is the run the stress
 /// lane keeps hitting: a warm-up that committed every body leaves the seek
 /// nothing to ask, and that silence is the contract, not a lost race.
-#[kithara::test]
-fn an_exact_seek_over_known_sizes_probes_nothing() {
+#[kithara::test(tokio)]
+async fn an_exact_seek_over_known_sizes_probes_nothing() {
     let probed = exact_seek_probe_urls(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav), true);
 
     assert!(probed.is_empty(), "nothing left to learn: {probed:?}");
@@ -1958,17 +1971,17 @@ fn an_exact_seek_over_known_sizes_probes_nothing() {
 
 /// A container whose ranges are addressed by segment index never needs a byte
 /// length, so the same seek raises no demand at all.
-#[kithara::test]
-fn an_exact_seek_on_a_segment_addressed_container_probes_nothing() {
+#[kithara::test(tokio)]
+async fn an_exact_seek_on_a_segment_addressed_container_probes_nothing() {
     let probed = exact_seek_probe_urls(Some(AudioCodec::Flac), Some(ContainerFormat::Fmp4), false);
 
     assert!(probed.is_empty(), "fMP4 resolves by index: {probed:?}");
 }
 
-#[kithara::test]
+#[kithara::test(tokio)]
 #[case::known_init(true)]
 #[case::unknown_init(false)]
-fn exact_byte_seek_inside_init_does_not_wait_for_media_sizes(#[case] init_known: bool) {
+async fn exact_byte_seek_inside_init_does_not_wait_for_media_sizes(#[case] init_known: bool) {
     let ctx = test_ctx(10);
     let variant = VariantParts {
         init: if init_known {
@@ -2050,8 +2063,8 @@ fn publish_exact_size_while_paused(
     })
 }
 
-#[kithara::test]
-fn exact_seek_completion_corrects_the_session_cursor_before_first_read() {
+#[kithara::test(tokio)]
+async fn exact_seek_completion_corrects_the_session_cursor_before_first_read() {
     let (v, session, _stale_anchor) = exact_seek_session();
 
     v.apply_resolved_size(SizeDemand::Segment(0), 100);
@@ -2061,8 +2074,8 @@ fn exact_seek_completion_corrects_the_session_cursor_before_first_read() {
     assert_eq!(session.position(), 200);
 }
 
-#[kithara::test]
-fn exact_seek_completion_invalidates_a_stale_session_read_snapshot() {
+#[kithara::test(tokio)]
+async fn exact_seek_completion_invalidates_a_stale_session_read_snapshot() {
     let (v, session, stale_anchor) = exact_seek_session();
     let observed = session.position();
     assert_eq!(observed, stale_anchor);
@@ -2082,8 +2095,8 @@ fn exact_seek_completion_invalidates_a_stale_session_read_snapshot() {
     assert_eq!(session.position(), 201);
 }
 
-#[kithara::test]
-fn exact_seek_metadata_gate_publishes_the_resolved_alias_before_opening() {
+#[kithara::test(tokio)]
+async fn exact_seek_metadata_gate_publishes_the_resolved_alias_before_opening() {
     let (v, session, stale_anchor) = exact_seek_session();
 
     v.apply_resolved_size(SizeDemand::Segment(0), 100);
@@ -2096,8 +2109,8 @@ fn exact_seek_metadata_gate_publishes_the_resolved_alias_before_opening() {
     assert_eq!(session.position(), 200);
 }
 
-#[kithara::test]
-fn exact_seek_projection_tracks_size_revisions_until_reader_moves() {
+#[kithara::test(tokio)]
+async fn exact_seek_projection_tracks_size_revisions_until_reader_moves() {
     let (v, session, _stale_anchor) = exact_seek_session();
     v.apply_resolved_size(SizeDemand::Segment(2), 100);
     v.apply_resolved_size(SizeDemand::Segment(0), 100);
@@ -2114,8 +2127,8 @@ fn exact_seek_projection_tracks_size_revisions_until_reader_moves() {
     assert_eq!(session.position(), 250);
 }
 
-#[kithara::test]
-fn exact_seek_projection_retires_after_the_first_consumed_byte() {
+#[kithara::test(tokio)]
+async fn exact_seek_projection_retires_after_the_first_consumed_byte() {
     let (v, session, _stale_anchor) = exact_seek_session();
     v.apply_resolved_size(SizeDemand::Segment(2), 100);
     v.apply_resolved_size(SizeDemand::Segment(0), 100);
@@ -2135,8 +2148,8 @@ fn exact_seek_projection_retires_after_the_first_consumed_byte() {
     assert!(!seek_projection_is_live(&v));
 }
 
-#[kithara::test]
-fn late_rebuild_at_time_does_not_reopen_consumed_exact_seek_projection() {
+#[kithara::test(tokio)]
+async fn late_rebuild_at_time_does_not_reopen_consumed_exact_seek_projection() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         segments: (0..4)
@@ -2177,8 +2190,8 @@ fn late_rebuild_at_time_does_not_reopen_consumed_exact_seek_projection() {
     assert!(!seek_projection_is_live(&v));
 }
 
-#[kithara::test]
-fn exact_seek_gate_stays_closed_until_exact_layout_is_published() {
+#[kithara::test(tokio)]
+async fn exact_seek_gate_stays_closed_until_exact_layout_is_published() {
     let (v, session, stale_anchor) = exact_seek_session();
     v.apply_resolved_size(SizeDemand::Segment(2), 100);
     v.apply_resolved_size(SizeDemand::Segment(0), 100);
@@ -2205,8 +2218,8 @@ fn exact_seek_gate_stays_closed_until_exact_layout_is_published() {
     assert_eq!(session.position(), 200);
 }
 
-#[kithara::test]
-fn exact_byte_gate_stays_closed_until_exact_layout_is_published() {
+#[kithara::test(tokio)]
+async fn exact_byte_gate_stays_closed_until_exact_layout_is_published() {
     let (v, _session, _stale_anchor) = exact_seek_session();
     let observed_byte = 400;
     v.clear_exact_seek();
@@ -2233,8 +2246,8 @@ fn exact_byte_gate_stays_closed_until_exact_layout_is_published() {
     assert_eq!(v.exact_byte_metadata_phase(), None);
 }
 
-#[kithara::test]
-fn exact_init_gate_stays_closed_until_layout_is_published() {
+#[kithara::test(tokio)]
+async fn exact_init_gate_stays_closed_until_layout_is_published() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: Some(make_placeholder_init(256, &ctx.scope)),
@@ -2270,8 +2283,8 @@ fn exact_init_gate_stays_closed_until_layout_is_published() {
     assert_eq!(v.exact_byte_metadata_phase(), None);
 }
 
-#[kithara::test]
-fn eof_gate_rejects_a_torn_layout_publication() {
+#[kithara::test(tokio)]
+async fn eof_gate_rejects_a_torn_layout_publication() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: None,
@@ -2310,8 +2323,8 @@ fn eof_gate_rejects_a_torn_layout_publication() {
     assert_ne!(v.phase_at(250..251), SourcePhase::Eof);
 }
 
-#[kithara::test]
-fn ready_gate_rejects_a_torn_layout_publication() {
+#[kithara::test(tokio)]
+async fn ready_gate_rejects_a_torn_layout_publication() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: None,
@@ -2351,8 +2364,8 @@ fn ready_gate_rejects_a_torn_layout_publication() {
     assert_ne!(v.phase_at(range), SourcePhase::Ready);
 }
 
-#[kithara::test]
-fn range_gate_rejects_eof_ready_cross_publication() {
+#[kithara::test(tokio)]
+async fn range_gate_rejects_eof_ready_cross_publication() {
     let ctx = test_ctx(3);
     let v = VariantParts {
         init: None,
@@ -2390,8 +2403,8 @@ fn range_gate_rejects_eof_ready_cross_publication() {
     assert_eq!(phase, SourcePhase::WaitingDemand);
 }
 
-#[kithara::test]
-fn exact_session_seek_uses_the_session_cursor_to_detect_movement() {
+#[kithara::test(tokio)]
+async fn exact_session_seek_uses_the_session_cursor_to_detect_movement() {
     let ctx = test_ctx(3);
     let segments: Vec<Segment> = (0..10)
         .map(|idx| make_placeholder_seg(idx, 64, &ctx.scope))
@@ -2423,8 +2436,8 @@ fn exact_session_seek_uses_the_session_cursor_to_detect_movement() {
     );
 }
 
-#[kithara::test]
-fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
+#[kithara::test(tokio)]
+async fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
     let ctx = test_ctx(3);
     let segments: Vec<Segment> = (0..10)
         .map(|idx| make_placeholder_seg(idx, 64, &ctx.scope))
@@ -2482,8 +2495,8 @@ fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
     }
 }
 
-#[kithara::test]
-fn on_evict_returns_minus_one_for_init() {
+#[kithara::test(tokio)]
+async fn on_evict_returns_minus_one_for_init() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[100, 100, 100], &ctx);
     let init = v.init().expect("init is present");
@@ -2499,8 +2512,8 @@ fn on_evict_returns_minus_one_for_init() {
     );
 }
 
-#[kithara::test]
-fn reader_demand_replans_a_prefix_outside_the_forward_window() {
+#[kithara::test(tokio)]
+async fn reader_demand_replans_a_prefix_outside_the_forward_window() {
     let ctx = test_ctx(3);
     let variant = make_var(0, 0, &[100; 6], &ctx);
     variant.rebuild(&ctx, 3);
@@ -2515,8 +2528,8 @@ fn reader_demand_replans_a_prefix_outside_the_forward_window() {
     assert_eq!(commands[0].url(), variant.segments()[0].url());
 }
 
-#[kithara::test]
-fn on_evict_returns_seg_idx_for_segment() {
+#[kithara::test(tokio)]
+async fn on_evict_returns_seg_idx_for_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
     v.segments()[1].state().mark_loaded();
@@ -2526,8 +2539,8 @@ fn on_evict_returns_seg_idx_for_segment() {
     assert!(!v.segments()[1].state().is_loaded());
 }
 
-#[kithara::test]
-fn on_evict_returns_none_for_foreign_asset() {
+#[kithara::test(tokio)]
+async fn on_evict_returns_none_for_foreign_asset() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100], &ctx);
     let foreign: Url = "https://other.example.com/x.m4s".parse().expect("url");
@@ -2539,16 +2552,16 @@ fn on_evict_returns_none_for_foreign_asset() {
     assert_eq!(res, None);
 }
 
-#[kithara::test]
-fn rebuild_fills_forward_window_from_seg() {
+#[kithara::test(tokio)]
+async fn rebuild_fills_forward_window_from_seg() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100; 10], &ctx);
     v.rebuild(&ctx, 2);
     assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5, 6, 7, 8, 9]);
 }
 
-#[kithara::test]
-fn rebuild_keeps_the_satisfied_plan_when_queued_prefix_is_cached() {
+#[kithara::test(tokio)]
+async fn rebuild_keeps_the_satisfied_plan_when_queued_prefix_is_cached() {
     let ctx = test_ctx(3);
     let variant = make_var(0, 0, &[100; 10], &ctx);
     for segment in variant.segments() {
@@ -2578,8 +2591,8 @@ fn rebuild_keeps_the_satisfied_plan_when_queued_prefix_is_cached() {
 /// its "dispatch skips them" argument does not cover them, because nothing
 /// says a segment behind the target is loaded. Returning early there keeps
 /// dispatching prefix fetches after a seek has moved past them.
-#[kithara::test]
-fn rebuild_drops_prefix_fetches_when_forward_window_is_cached() {
+#[kithara::test(tokio)]
+async fn rebuild_drops_prefix_fetches_when_forward_window_is_cached() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100; 10], &ctx);
     for segment in v.segments().iter().skip(8) {
@@ -2593,15 +2606,15 @@ fn rebuild_drops_prefix_fetches_when_forward_window_is_cached() {
     assert_eq!(queue_seg_indices(&v), vec![8, 9]);
 }
 
-#[kithara::test]
-fn skeleton_types_instantiate() {
+#[kithara::test(tokio)]
+async fn skeleton_types_instantiate() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[], &ctx);
     assert_eq!(v.num_segments(), 0);
 }
 
-#[kithara::test]
-fn dispatch_drm_segment_routes_through_with_ctx() {
+#[kithara::test(tokio)]
+async fn dispatch_drm_segment_routes_through_with_ctx() {
     let ctx = test_ctx(3);
     let init = make_init(0, &ctx.scope);
     let url: Url = "https://example.com/seg0.m4s".parse().expect("valid url");
@@ -2638,8 +2651,8 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     );
 }
 
-#[kithara::test]
-fn dropped_fetch_cmd_reverts_segment_to_missing() {
+#[kithara::test(tokio)]
+async fn dropped_fetch_cmd_reverts_segment_to_missing() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100], &ctx);
     push_planned(&v, 0);
@@ -2658,8 +2671,8 @@ fn dropped_fetch_cmd_reverts_segment_to_missing() {
     );
 }
 
-#[kithara::test]
-fn positions_of_two_sessions_are_independent_after_flip() {
+#[kithara::test(tokio)]
+async fn positions_of_two_sessions_are_independent_after_flip() {
     let ctx = test_ctx(3);
     let v_old = make_var(0, 0, &[400; 20], &ctx);
     let v_new = make_var(1, 0, &[800; 20], &ctx);
@@ -2678,8 +2691,8 @@ fn positions_of_two_sessions_are_independent_after_flip() {
     assert_eq!(new_session.position(), v_new_seg10_offset + 123);
 }
 
-#[kithara::test]
-fn position_advances_are_strictly_monotonic() {
+#[kithara::test(tokio)]
+async fn position_advances_are_strictly_monotonic() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100], &ctx);
     let session = active_session(&v, &ctx, 0);
@@ -2696,8 +2709,8 @@ fn position_advances_are_strictly_monotonic() {
     assert_eq!(observed, sorted);
 }
 
-#[kithara::test]
-fn dispatch_cmd_cancel_shares_cancellation_with_session() {
+#[kithara::test(tokio)]
+async fn dispatch_cmd_cancel_shares_cancellation_with_session() {
     let ctx = test_ctx(5);
     let v = make_var(0, 0, &[100, 100], &ctx);
     let root = CancelToken::root();
@@ -2720,8 +2733,8 @@ fn dispatch_cmd_cancel_shares_cancellation_with_session() {
     }
 }
 
-#[kithara::test]
-fn session_flip_cancels_old_and_keeps_new_live() {
+#[kithara::test(tokio)]
+async fn session_flip_cancels_old_and_keeps_new_live() {
     let ctx = test_ctx(3);
     let v_old = make_var(0, 0, &[100; 20], &ctx);
     let v_new = make_var(1, 0, &[200; 20], &ctx);
@@ -2752,8 +2765,8 @@ fn session_flip_cancels_old_and_keeps_new_live() {
     assert_eq!(new_session.position(), v_new_seg7_offset);
 }
 
-#[kithara::test]
-fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
+#[kithara::test(tokio)]
+async fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100; 20], &ctx);
     v.segments()[10].state().mark_loaded();
@@ -2777,8 +2790,8 @@ fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
 /// per its on-core/off-core context), not this method's. The old
 /// implementation slept 2ms per spin and looped until the 10ms budget elapsed;
 /// the probe must now return in well under that.
-#[kithara::test]
-fn wait_range_probes_without_sleeping() {
+#[kithara::test(tokio)]
+async fn wait_range_probes_without_sleeping() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400], &ctx);
 
@@ -2802,8 +2815,8 @@ fn wait_range_probes_without_sleeping() {
 /// The flush short-circuit remains reachable and immediate after the
 /// non-blocking-pull conversion: a flushing seek state yields `Interrupted`
 /// without spinning on the budget signal.
-#[kithara::test]
-fn wait_range_flush_short_circuits_without_sleeping() {
+#[kithara::test(tokio)]
+async fn wait_range_flush_short_circuits_without_sleeping() {
     let ctx = test_ctx(3);
     let variant = make_var(0, 200, &[400], &ctx);
     let session = active_session(&variant, &ctx, 0);
@@ -2834,8 +2847,8 @@ fn seg_idx_by_url(v: &HlsVariant, url: &Url) -> u32 {
 /// its owed window — the playing segment and the next. The look-ahead it
 /// would otherwise queue is what starves the incoming construction. A latch
 /// inside the playing segment adds nothing to that window.
-#[kithara::test]
-fn dispatch_owed_stops_after_the_next_segment() {
+#[kithara::test(tokio)]
+async fn dispatch_owed_stops_after_the_next_segment() {
     let ctx = test_ctx(8);
     let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
     v.rebuild(&ctx, 0);
@@ -2855,8 +2868,8 @@ fn dispatch_owed_stops_after_the_next_segment() {
 /// transition builds, the outgoing must still fetch every segment up to the
 /// latch even when the prefetch segment window is narrower — the splice
 /// cannot land without those bytes.
-#[kithara::test]
-fn dispatch_owed_overrides_the_segment_lookahead_cap() {
+#[kithara::test(tokio)]
+async fn dispatch_owed_overrides_the_segment_lookahead_cap() {
     let mut ctx = test_ctx(10);
     ctx.look_ahead_segments = Some(2);
     let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
@@ -2880,8 +2893,8 @@ fn dispatch_owed_overrides_the_segment_lookahead_cap() {
 
 /// Same debt against the byte-sized prefetch window: bytes the splice still
 /// needs dispatch even when they lie past `look_ahead_bytes`.
-#[kithara::test]
-fn dispatch_owed_overrides_the_byte_lookahead_cap() {
+#[kithara::test(tokio)]
+async fn dispatch_owed_overrides_the_byte_lookahead_cap() {
     let mut ctx = test_ctx(10);
     Arc::get_mut(&mut ctx.config)
         .expect("unshared test config")
@@ -2910,8 +2923,8 @@ fn dispatch_owed_overrides_the_byte_lookahead_cap() {
 /// can park its reads segments ahead of the byte cursor. Starving those
 /// fetches parks the outgoing decoder forever, and the incoming prime waits
 /// on its frontier just as long.
-#[kithara::test]
-fn dispatch_owed_reaches_the_transition_latch() {
+#[kithara::test(tokio)]
+async fn dispatch_owed_reaches_the_transition_latch() {
     let ctx = test_ctx(8);
     let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
     v.rebuild(&ctx, 0);
@@ -2939,8 +2952,8 @@ fn dispatch_owed_reaches_the_transition_latch() {
 /// cap forever (the `phase_continuity` livelock: `queue_head=27 cap=26`). The
 /// range the reader waits on is what the splice still consumes, so the owed
 /// window must run through it.
-#[kithara::test]
-fn dispatch_owed_covers_the_range_the_reader_waits_on() {
+#[kithara::test(tokio)]
+async fn dispatch_owed_covers_the_range_the_reader_waits_on() {
     let ctx = test_ctx(8);
     let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
     v.rebuild(&ctx, 0);
@@ -2975,8 +2988,8 @@ fn dispatch_owed_covers_the_range_the_reader_waits_on() {
 /// A session seek retires the parked-read debt: the wait belonged to reads
 /// the seek abandoned, and dragging it forward would hold look-ahead capacity
 /// against the new position.
-#[kithara::test]
-fn a_session_seek_clears_the_parked_read_debt() {
+#[kithara::test(tokio)]
+async fn a_session_seek_clears_the_parked_read_debt() {
     let ctx = test_ctx(8);
     let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
     v.rebuild(&ctx, 0);
@@ -3005,8 +3018,8 @@ fn a_session_seek_clears_the_parked_read_debt() {
 /// Retiring the look-ahead burns the tokens of fetches past the owed window,
 /// so the downloader frees their slots instead of finishing bytes the latched
 /// cut already declared dead.
-#[kithara::test]
-fn retire_lookahead_burns_fetches_beyond_the_owed_window() {
+#[kithara::test(tokio)]
+async fn retire_lookahead_burns_fetches_beyond_the_owed_window() {
     let ctx = test_ctx(8);
     let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
     v.rebuild(&ctx, 0);
@@ -3034,8 +3047,8 @@ fn retire_lookahead_burns_fetches_beyond_the_owed_window() {
 
 /// The owed window survives a look-ahead retire: the reader is still
 /// consuming those bytes and cancelling them would underrun the splice.
-#[kithara::test]
-fn retire_lookahead_spares_the_owed_window() {
+#[kithara::test(tokio)]
+async fn retire_lookahead_spares_the_owed_window() {
     let ctx = test_ctx(8);
     let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
     v.rebuild(&ctx, 0);
@@ -3061,8 +3074,8 @@ fn retire_lookahead_spares_the_owed_window() {
     }
 }
 
-#[kithara::test]
-fn lookahead_registry_releases_completed_fetches_across_seeks() {
+#[kithara::test(tokio)]
+async fn lookahead_registry_releases_completed_fetches_across_seeks() {
     let ctx = test_ctx(4);
     let variant = make_var(0, 0, &[100; 32], &ctx);
     let cancel = CancelToken::never();
@@ -3104,8 +3117,8 @@ fn lookahead_registry_releases_completed_fetches_across_seeks() {
 /// A recoverably failed fetch re-enters the plan in plan order, not at the
 /// front: dispatch caps read the queue head, and a far look-ahead entry
 /// parked there would wall off every nearer segment behind it.
-#[kithara::test]
-fn requeue_planned_reenters_in_plan_order() {
+#[kithara::test(tokio)]
+async fn requeue_planned_reenters_in_plan_order() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100, 100, 100], &ctx);
     v.rebuild(&ctx, 0);
@@ -3179,8 +3192,8 @@ fn settle_seg(v: &Arc<HlsVariant>, ctx: &PlanCtx, idx: u32, len: u64) {
     claim.into_loaded(len);
 }
 
-#[kithara::test]
-fn post_seek_prefix_settle_does_not_move_the_frame() {
+#[kithara::test(tokio)]
+async fn post_seek_prefix_settle_does_not_move_the_frame() {
     let (ctx, v, session, anchor) = drifting_seek_session();
 
     // A stale in-flight prefix fetch (planned before the seek — a rebuild
@@ -3203,8 +3216,8 @@ fn post_seek_prefix_settle_does_not_move_the_frame() {
     );
 }
 
-#[kithara::test]
-fn eof_mints_at_the_anchored_frame_end_despite_a_late_prefix_settle() {
+#[kithara::test(tokio)]
+async fn eof_mints_at_the_anchored_frame_end_despite_a_late_prefix_settle() {
     let (ctx, v, session, anchor) = drifting_seek_session();
 
     // The planned tail (readahead 9, target 10, last 11) settles exact...
@@ -3235,8 +3248,8 @@ fn eof_mints_at_the_anchored_frame_end_despite_a_late_prefix_settle() {
     );
 }
 
-#[kithara::test]
-fn post_seek_readahead_settle_preserves_the_consumed_target_cursor() {
+#[kithara::test(tokio)]
+async fn post_seek_readahead_settle_preserves_the_consumed_target_cursor() {
     let (ctx, variant, session, anchor) = drifting_seek_session();
     settle_seg(&variant, &ctx, 10, 100);
     session.advance(64);
@@ -3261,8 +3274,8 @@ fn post_seek_readahead_settle_preserves_the_consumed_target_cursor() {
     ));
 }
 
-#[kithara::test]
-fn the_next_space_re_mint_applies_the_deferred_prefix_settle() {
+#[kithara::test(tokio)]
+async fn the_next_space_re_mint_applies_the_deferred_prefix_settle() {
     let (ctx, v, _session, _anchor) = drifting_seek_session();
 
     settle_seg(&v, &ctx, 1, 600);
@@ -3299,8 +3312,8 @@ fn settle_init(v: &Arc<HlsVariant>, ctx: &PlanCtx, len: u64) {
     claim.into_loaded(len);
 }
 
-#[kithara::test]
-fn an_init_settle_lands_immediately_while_a_seek_tail_is_live() {
+#[kithara::test(tokio)]
+async fn an_init_settle_lands_immediately_while_a_seek_tail_is_live() {
     // Init reads gate on the size being exact, so the freeze must never
     // park an init settle: a parked init starves the demuxer probe of an
     // ABR pending variant, which deadlocks before activation could drain
@@ -3336,8 +3349,8 @@ fn an_init_settle_lands_immediately_while_a_seek_tail_is_live() {
     );
 }
 
-#[kithara::test]
-fn an_exact_size_revision_parks_and_fails_the_skip_formula() {
+#[kithara::test(tokio)]
+async fn an_exact_size_revision_parks_and_fails_the_skip_formula() {
     // Fully exact fMP4 track (canonical-complete layout) with a live seek
     // tail: a revision settle of an already-exact prefix size (DRM-style
     // plaintext length over a byterange seed) parks while the size atom
@@ -3381,8 +3394,8 @@ fn an_exact_size_revision_parks_and_fails_the_skip_formula() {
     );
 }
 
-#[kithara::test]
-fn a_settle_after_the_space_re_mint_applies_immediately() {
+#[kithara::test(tokio)]
+async fn a_settle_after_the_space_re_mint_applies_immediately() {
     let (ctx, v, _session, _anchor) = drifting_seek_session();
 
     // The re-mint retires the seek tail together with the frozen space...
@@ -3413,8 +3426,8 @@ fn write_seg_bytes(v: &Arc<HlsVariant>, ctx: &PlanCtx, idx: u32, len: u64) {
     writer.commit(Some(len)).expect("commit segment");
 }
 
-#[kithara::test]
-fn reading_waits_for_available_segment_bytes_before_opening_storage() {
+#[kithara::test(tokio)]
+async fn reading_waits_for_available_segment_bytes_before_opening_storage() {
     let ctx = test_ctx(1);
     let v = VariantParts {
         init: None,
@@ -3451,8 +3464,8 @@ fn reading_waits_for_available_segment_bytes_before_opening_storage() {
     assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7]);
 }
 
-#[kithara::test]
-fn reading_across_segment_boundary_opens_each_resource_once() {
+#[kithara::test(tokio)]
+async fn reading_across_segment_boundary_opens_each_resource_once() {
     let ctx = test_ctx(2);
     let v = make_var(0, 0, &[64, 64], &ctx);
     for index in 0..2 {
@@ -3475,8 +3488,8 @@ fn reading_across_segment_boundary_opens_each_resource_once() {
 }
 
 /// A chunked run over one slot opens its resource once.
-#[kithara::test]
-fn reading_a_segment_in_chunks_opens_its_resource_once() {
+#[kithara::test(tokio)]
+async fn reading_a_segment_in_chunks_opens_its_resource_once() {
     let ctx = test_ctx(1);
     let v = make_var(0, 0, &[64], &ctx);
     write_seg_bytes(&v, &ctx, 0, 64);
@@ -3504,8 +3517,8 @@ fn reading_a_segment_in_chunks_opens_its_resource_once() {
 }
 
 /// A `NotFound` while the fetch is in flight must not be held.
-#[kithara::test]
-fn a_read_before_the_bytes_land_does_not_stick() {
+#[kithara::test(tokio)]
+async fn a_read_before_the_bytes_land_does_not_stick() {
     let ctx = test_ctx(1);
     let v = make_var(0, 0, &[64], &ctx);
     settle_seg(&v, &ctx, 0, 64);
@@ -3527,8 +3540,8 @@ fn a_read_before_the_bytes_land_does_not_stick() {
 }
 
 /// Eviction takes the bytes away under the reader.
-#[kithara::test]
-fn an_evicted_slot_is_opened_again() {
+#[kithara::test(tokio)]
+async fn an_evicted_slot_is_opened_again() {
     let ctx = test_ctx(1);
     let v = make_var(0, 0, &[64], &ctx);
     write_seg_bytes(&v, &ctx, 0, 64);
@@ -3555,8 +3568,8 @@ fn an_evicted_slot_is_opened_again() {
 /// The peer drains evictions on its own thread, so the eviction a commit triggers
 /// can reach the slot before that fetch settles; a loaded slot over dropped bytes
 /// is skipped by dispatch, and a reader parked on it waits forever.
-#[kithara::test]
-fn an_eviction_that_overtakes_the_settle_keeps_the_segment_owed() {
+#[kithara::test(tokio)]
+async fn an_eviction_that_overtakes_the_settle_keeps_the_segment_owed() {
     let ctx = evicting_ctx();
     let v = make_var(0, 0, &[64, 64], &ctx);
     let session = active_session(&v, &ctx, 0);
@@ -3583,8 +3596,8 @@ fn an_eviction_that_overtakes_the_settle_keeps_the_segment_owed() {
 /// Eviction leaves an in-flight slot to its claim, so a cancelled fetch must settle
 /// it itself: bytes another writer committed meanwhile make it loaded, not a
 /// `Downloading` slot with no fetch behind it.
-#[kithara::test]
-fn a_cancelled_fetch_settles_a_segment_another_writer_committed() {
+#[kithara::test(tokio)]
+async fn a_cancelled_fetch_settles_a_segment_another_writer_committed() {
     let ctx = test_ctx(1);
     let v = make_var(0, 0, &[64], &ctx);
     let root = CancelToken::root();
@@ -3622,8 +3635,8 @@ fn disk_ctx(root: &std::path::Path) -> PlanCtx {
 }
 
 /// A ready gate over a pending read is a loop with no exit.
-#[kithara::test]
-fn a_ready_gate_never_outruns_the_bytes() {
+#[kithara::test(tokio)]
+async fn a_ready_gate_never_outruns_the_bytes() {
     let dir = tempfile::tempdir().expect("tempdir");
 
     let path = {

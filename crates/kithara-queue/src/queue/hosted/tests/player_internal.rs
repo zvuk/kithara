@@ -169,6 +169,7 @@ async fn a_selected_resource_adopts_the_session_wake_mode() {
         kithara_test_fixtures::assets::fixed_constant_wav_cd_half_4096().bytes(),
     );
     let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("fixture URI"))
+        .downloader(crate::mock::downloader())
         .store(store)
         .build();
     let prepared = prep.prepare(config, &output).expect("prepared source");

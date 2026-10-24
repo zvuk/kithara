@@ -11,6 +11,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
 };
 
 #[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(1))]
@@ -30,6 +31,7 @@ async fn size_probe_resolves_exact_offsets() {
         .backend(StorageBackend::Memory)
         .build();
     let config = HlsConfig::for_url(hls.master_url())
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .initial_abr_mode(AbrMode::manual(0))

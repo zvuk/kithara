@@ -6,6 +6,7 @@ use kithara::{
     signal::{AudioChunk, AudioChunkInfo},
 };
 use kithara_integration_tests::{
+    hls_fixture::create_test_downloader,
     offline::{OfflinePlayer, OfflinePlayerOptions, linked::LinkReceiptOrigin},
     pcm_oracle::Audio,
 };
@@ -757,6 +758,7 @@ pub(in super::super) async fn capture(
         .await
         .expect("control rate");
     let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("control source"))
+        .downloader(create_test_downloader())
         .store(memory_asset_store())
         .initial_abr_mode(AbrMode::manual(0))
         .build();

@@ -106,6 +106,7 @@ async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn Std
             pools,
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .cancel(cancel.clone())
         .build(),
     );
@@ -163,6 +164,7 @@ async fn red_hls_source_drop_leaks_peer(
             pools.clone(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .cancel(CancelToken::never())
         .build(),
     );

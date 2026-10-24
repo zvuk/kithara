@@ -1,6 +1,5 @@
 //! Offline render through the product graph, measured the same way on the
 //! browser and on native.
-
 use kithara::{
     assets::{AssetStore, StorageBackend},
     host::{HostConfig, HostSettings, Tap},
@@ -10,6 +9,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     offline::{OfflinePlayer, OfflineWorker},
 };
 use kithara_test_fixtures::{
@@ -51,6 +51,7 @@ async fn playing_worker() -> OfflineWorker {
                 ResourceSrc::parse(url.as_str())
                     .expect("the fixture URL parses as a resource source"),
             )
+            .downloader(create_test_downloader())
             .worker(player.worker().clone())
             .store(
                 AssetStore::builder(region)

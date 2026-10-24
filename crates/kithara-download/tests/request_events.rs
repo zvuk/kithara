@@ -14,6 +14,7 @@ use kithara_platform::{
     CancelToken,
     sync::{Arc, Notify},
     time::{self, Duration, Instant},
+    tokio::runtime::Handle,
 };
 use kithara_test_utils::{TestHttpServer, bufpool::pools, cancel_token, kithara};
 
@@ -119,7 +120,11 @@ async fn request_events_stay_with_their_request_and_peer(#[case] method: &str) {
         )
         .build();
     let client = HttpClient::new(options, pools(), cancel_token());
-    let downloader = Downloader::new(DownloaderConfig::for_client(client).build());
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(client)
+            .runtime(Handle::current())
+            .build(),
+    );
     let bus_a = EventBus::new(64);
     let bus_b = EventBus::new(64);
     let mut events_a = bus_a.subscribe::<Events>();

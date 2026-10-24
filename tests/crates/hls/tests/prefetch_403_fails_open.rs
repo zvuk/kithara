@@ -12,6 +12,7 @@ use kithara_integration_tests::{
     CreatedHls, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::{HlsRouteKind, HttpErrorRule},
+    hls_fixture::create_test_downloader,
     hls_server::packaged_ladder_encrypted,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -34,6 +35,7 @@ async fn prefetch_403_returns_err_quickly(
         })
         .build();
     let config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(CancelToken::never())

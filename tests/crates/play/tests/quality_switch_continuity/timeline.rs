@@ -7,7 +7,7 @@ use num_traits::ToPrimitive;
 
 use super::{
     AAC_HIGH, AAC_LOW, BLOCK_FRAMES, CHANNELS, FLAC, Transition, fixture_with_signal,
-    observation_frames, render_no_switch_control, render_switch,
+    observation_frames, render_no_switch_control, render_switch, switch::MAX_SWITCH_FRAMES,
 };
 
 const SWEEP_START_HZ: f64 = 80.0;
@@ -123,14 +123,27 @@ fn best_lag_correlation(switched: &[f32], source: &[f32], start_frame: usize) ->
     timeout(Duration::from_secs(20)),
     hang_timeout_secs(3)
 )]
-#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
-#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::symphonia_pair_0(DecoderBackend::Symphonia, 0..2),
+    case::symphonia_pair_1(DecoderBackend::Symphonia, 2..4),
+    case::symphonia_pair_2(DecoderBackend::Symphonia, 4..6)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::android_pair_0(DecoderBackend::default(), 0..2),
+    case::android_pair_1(DecoderBackend::default(), 2..4),
+    case::android_pair_2(DecoderBackend::default(), 4..6)
+)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
+    case::apple_pair_0(DecoderBackend::Apple, 0..2),
+    case::apple_pair_1(DecoderBackend::Apple, 2..4),
+    case::apple_pair_2(DecoderBackend::Apple, 4..6)
 )]
 async fn decoder_recreation_preserves_sweep_timeline_against_no_switch_control(
     #[case] backend: DecoderBackend,
+    #[case] transitions: std::ops::Range<usize>,
     #[future(awt)] sweep_source: (TestServerHelper, CreatedHls),
 ) {
     let (_server, created) = sweep_source;
@@ -167,7 +180,7 @@ async fn decoder_recreation_preserves_sweep_timeline_against_no_switch_control(
     }
 
     let mut failures = Vec::new();
-    for &[first, second] in PROVENANCE_TRANSITIONS.as_chunks::<2>().0 {
+    for &[first, second] in PROVENANCE_TRANSITIONS[transitions].as_chunks::<2>().0 {
         let (first_switched, second_switched) = join!(
             render_switch(&master_url, first, backend),
             render_switch(&master_url, second, backend),
@@ -237,6 +250,15 @@ async fn decoder_recreation_preserves_sweep_timeline_against_no_switch_control(
         "decoder recreation changed sweep provenance for backend {backend:?}:\n{}",
         failures.join("\n"),
     );
+}
+
+#[kithara::test]
+fn the_latest_accepted_switch_leaves_room_for_the_full_correlation_window() {
+    let latest_end = MAX_SWITCH_FRAMES
+        + POST_BOUNDARY_GUARD_FRAMES
+        + CORRELATION_FRAMES
+        + usize::try_from(MAX_LAG_FRAMES).expect("positive lag range fits usize");
+    assert!(latest_end <= observation_frames());
 }
 
 #[kithara::fixture]

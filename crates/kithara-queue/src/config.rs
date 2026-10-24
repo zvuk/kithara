@@ -4,6 +4,7 @@ use kithara_assets::AssetStore;
 use kithara_bufpool::HasPool;
 use kithara_config::Config;
 use kithara_derive::Patch;
+use kithara_download::Downloader;
 use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle as RuntimeHandle};
 use kithara_play::{
     CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError, DeckMixerConfig,
@@ -31,8 +32,8 @@ pub struct QueueSettings {
 /// The one parameter a [`Queue`](crate::Queue) is built from.
 ///
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
-/// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
-/// retains its own store.
+/// store and downloader. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
+/// retains its own store and downloader.
 #[derive(Patch, Config)]
 #[config(debug, builder(start_fn(name = with_factory), state_mod(vis = "pub")), fields(value))]
 #[patch(fallible)]
@@ -84,6 +85,10 @@ where
     /// from its prep worker's pools.
     #[config(skip = "injected asset store", patch(skip), debug(skip))]
     pub(crate) store: Option<AssetStore<S>>,
+
+    /// Shared downloader for bare URI tracks; caller-built configs keep their own.
+    #[config(skip = "injected downloader", patch(skip), debug(skip))]
+    pub(crate) downloader: Option<Downloader>,
 
     /// Background loads the queue keeps open at once: appended tracks opened
     /// ahead of a selection and held off the deck. Tracks beyond it stay

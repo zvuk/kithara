@@ -787,7 +787,6 @@ async fn assert_source_end_resume_endpoint() {
     let file = FileConfig::for_src(FileSrc::Local(path))
         .store(AssetStore::builder(pools.clone()).build())
         .extension("wav")
-        .pools(pools.clone())
         .build();
     let config = AudioConfig::<File<TestPools>, crate::PlaybackResamplerBackend>::for_stream(file)
         .hint("wav".to_owned())

@@ -104,7 +104,9 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, pools(), CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools(), CancelToken::never()))
+            .runtime(kithara::platform::tokio::runtime::Handle::current())
+            .build(),
     );
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());

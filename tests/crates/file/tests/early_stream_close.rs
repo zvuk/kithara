@@ -1,5 +1,4 @@
 #![cfg(not(target_arch = "wasm32"))]
-
 use std::{
     fs,
     io::{Read, Seek, SeekFrom},
@@ -25,6 +24,7 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_utils::TestTempDir;
 
@@ -113,6 +113,7 @@ async fn file_stream_closes_early_seek_still_works() {
             pools.clone(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .cancel(cancel_token.clone())
         .build(),
     );
@@ -131,7 +132,6 @@ async fn file_stream_closes_early_seek_still_works() {
                 })
                 .build(),
         )
-        .pools(pools)
         .cancel(cancel_token)
         .look_ahead_bytes(256_000)
         .downloader(dl)
@@ -258,6 +258,7 @@ async fn partial_cache_resume_works() {
     let bus1 = EventBus::new(64);
     let mut rx1 = bus1.subscribe();
     let config1 = FileConfig::for_src(FileSrc::Remote(url.clone()))
+        .downloader(create_test_downloader())
         .events(bus1)
         .store(
             AssetStore::builder(pools.clone())
@@ -266,7 +267,6 @@ async fn partial_cache_resume_works() {
                 })
                 .build(),
         )
-        .pools(pools.clone())
         .cancel(cancel1.clone())
         .look_ahead_bytes(256_000)
         .build();
@@ -304,6 +304,7 @@ async fn partial_cache_resume_works() {
 
     let cancel2 = CancelToken::never();
     let config2 = FileConfig::for_src(FileSrc::Remote(url))
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -311,7 +312,6 @@ async fn partial_cache_resume_works() {
                 })
                 .build(),
         )
-        .pools(pools)
         .cancel(cancel2.clone())
         .look_ahead_bytes(256_000)
         .build();

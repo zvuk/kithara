@@ -10,8 +10,8 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    CreatedHls, HlsFixtureBuilder, TestServerHelper, offline::OfflinePlayer,
-    output_continuity::render_offline_window,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper, hls_fixture::create_test_downloader,
+    offline::OfflinePlayer, output_continuity::render_offline_window,
 };
 use kithara_test_fixtures::{fixtures::tone_mp3, integration_fixtures::saw_segments};
 use kithara_test_utils::temp_dir;
@@ -113,6 +113,7 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
         let u = hls_url.clone();
         async move {
             kithara::play::ResourceConfig::for_src(kithara::play::ResourceSrc::Url(u))
+                .downloader(create_test_downloader())
                 .store(s)
                 .worker(w)
                 .hint("wav")

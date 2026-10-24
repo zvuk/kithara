@@ -13,6 +13,7 @@ async fn admission_fills_unset_metadata_from_the_decoder(cancel_token: CancelTok
         let config = ResourceConfig::for_src(
             ResourceSrc::parse(fixture_uri(dir.path(), "entry.wav")).expect("fixture URI"),
         )
+        .downloader(crate::mock::downloader())
         .store(queue.config.store.as_ref().expect("fixture store").clone())
         .metadata(TrackMetadata {
             title: title.map(Into::into),

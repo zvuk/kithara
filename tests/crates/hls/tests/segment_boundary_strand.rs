@@ -45,6 +45,7 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, SegmentGateHandle, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     test_defaults::SawWav,
 };
 use kithara_test_fixtures::{
@@ -130,6 +131,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous(
     let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {

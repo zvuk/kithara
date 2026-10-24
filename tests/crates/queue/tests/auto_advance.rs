@@ -2,6 +2,7 @@
 
 use kithara::{
     self,
+    download::Downloader,
     events::{EventReceiver, TrackId},
     platform::{sync::Arc, time::Duration},
     play::PlayError,
@@ -13,6 +14,7 @@ use kithara::{
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     event::TestEvent,
+    hls_fixture::create_test_downloader,
     offline::{
         LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions, append_loaded, asset_source,
     },
@@ -1555,11 +1557,15 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
     harness.close().await;
 }
 
-async fn autoplay_queue(harness: &OfflinePlayer) -> QueueControl<TestPools> {
+async fn autoplay_queue(
+    harness: &OfflinePlayer,
+    downloader: Option<Downloader>,
+) -> QueueControl<TestPools> {
     harness
         .insert_control(Queue::new(
             QueueConfig::builder()
                 .prep(harness.resource_prep().clone())
+                .maybe_downloader(downloader)
                 .should_autoplay(true)
                 .settings(
                     kithara::queue::QueueSettings::builder()
@@ -1594,7 +1600,7 @@ async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
         SAMPLE_RATE,
     )
     .await;
-    let queue = autoplay_queue(&harness).await;
+    let queue = autoplay_queue(&harness, Some(create_test_downloader())).await;
     let mut events: EventReceiver<TestEvent> = queue.subscribe();
 
     let server = TestServerHelper::new().await;
@@ -1672,7 +1678,7 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
         SAMPLE_RATE,
     )
     .await;
-    let queue = autoplay_queue(&harness).await;
+    let queue = autoplay_queue(&harness, None).await;
     let solo = assets::constant_wav_three_0_4s();
     let id = append_loaded(&harness, &queue, &solo).await;
 

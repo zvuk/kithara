@@ -11,6 +11,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     hls_test_helpers::pin_abr_variant,
 };
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
@@ -53,6 +54,7 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
         })
         .build();
     let config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(cancel_token)

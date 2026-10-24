@@ -45,6 +45,7 @@ impl DurationRig {
         Self {
             queue: Queue::new(
                 QueueConfig::builder()
+                    .downloader(crate::mock::downloader())
                     .prep(prep)
                     .store(store)
                     .mixer(config)

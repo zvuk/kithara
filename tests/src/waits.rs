@@ -451,8 +451,13 @@ mod tests {
             .await
             .expect("HLS fixture");
         let init = helper.register_init_gate(fixture.token(), 0);
-        let harness =
-            OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), 44_100).await;
+        let harness = OfflinePlayer::with_sample_rate(
+            OfflinePlayerOptions::builder()
+                .downloader(crate::hls_fixture::create_test_downloader())
+                .build(),
+            44_100,
+        )
+        .await;
         let url = fixture.master_url().to_string();
         let id = harness
             .with_queue(move |queue| {

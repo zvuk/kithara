@@ -111,6 +111,7 @@ async fn commands_still_work_after_a_switch_storm(tone_mp3: &'static [u8], temp_
             pools.clone(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .build(),
     );
     let store = AssetStore::builder(pools.clone())

@@ -22,6 +22,7 @@ use ::kithara::{
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_fixtures::SignalAsset;
 use kithara_test_utils::kithara;
@@ -89,12 +90,12 @@ async fn initial_visible_duration_matches_the_built_ruler_before_eof(#[case] ass
     }
 
     let file = FileConfig::for_src(url.into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools.clone())
         .build();
     let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file)
         .hint(asset.ext().to_owned())
@@ -319,12 +320,12 @@ async fn assert_complete_aac_presentation(asset: SignalAsset, bytes: &[u8], url:
 
     let pool = pools();
     let file = FileConfig::for_src(url.into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pool.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pool.clone())
         .build();
     let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file)
         .hint("m4a".to_owned())
@@ -403,12 +404,12 @@ async fn preloaded_original_pcm_preserves_its_origin_through_the_first_raw_seek(
     let server = TestServerHelper::new().await;
     let pools = pools();
     let file = FileConfig::for_src(server.signal(asset).into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools.clone())
         .build();
     let bus = EventBus::default();
     let mut decoder_events = bus.subscribe::<DecoderEvent>();
@@ -439,12 +440,12 @@ async fn preloaded_original_pcm_preserves_its_origin_through_the_first_raw_seek(
     assert_eq!(actual, ObservedBackend::Android);
     let mut audio_events = audio.events::<AudioEvent>();
     let reference_file = FileConfig::for_src(server.signal(asset).into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(kithara_integration_tests::bufpool_ext::pools())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(kithara_integration_tests::bufpool_ext::pools())
         .build();
     let reference_config =
         AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(reference_file)

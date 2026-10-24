@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-
 use kithara::{
     assets::{AssetStore, StorageBackend},
     download::DownloaderEvent,
@@ -15,6 +14,7 @@ use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 
@@ -96,6 +96,7 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
     let cancel = CancelToken::never();
     let pools = pools();
     let config = FileConfig::for_src(handle.url().into())
+        .downloader(create_test_downloader())
         .events(bus.clone())
         .store(
             AssetStore::builder(pools.clone())
@@ -104,7 +105,6 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
                 })
                 .build(),
         )
-        .pools(pools)
         .cancel(cancel.clone())
         .build();
 
@@ -149,6 +149,7 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     let cancel = CancelToken::never();
     let pools = pools();
     let config = FileConfig::for_src(handle.url().into())
+        .downloader(create_test_downloader())
         .events(bus.clone())
         .store(
             AssetStore::builder(pools.clone())
@@ -157,7 +158,6 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
                 })
                 .build(),
         )
-        .pools(pools)
         .cancel(cancel.clone())
         .build();
 

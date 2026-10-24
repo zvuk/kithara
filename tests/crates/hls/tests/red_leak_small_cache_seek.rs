@@ -20,6 +20,7 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     hls_server::test_pattern_hls,
 };
 
@@ -74,6 +75,7 @@ async fn build_small_cache_stream(hls: &CreatedHls, cancel: CancelToken) -> Stre
         .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
         .build();
     let config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(cancel)

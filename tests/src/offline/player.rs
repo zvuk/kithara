@@ -3,6 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara::{
     audio::AudioReader,
     decode::GaplessMode,
+    download::Downloader,
     effects::eq::EqBandConfig,
     events::{EventReceiver, TrackId},
     host::{DeckControl, HostConfig, HostOwned, HostSettings},
@@ -52,6 +53,7 @@ pub struct OfflinePlayer<F: TrackFactory<TestPools> = PlayerFactory> {
 pub struct OfflinePlayerOptions {
     #[builder(default = CrossfadeSettings::default().duration)]
     crossfade_duration: f32,
+    downloader: Option<Downloader>,
     #[builder(default)]
     gapless: bool,
     eq_layout: Option<Vec<EqBandConfig>>,
@@ -166,6 +168,7 @@ where
                 .mixer(DeckMixerConfig::builder().mix(options.mix).build())
                 .settings(settings)
                 .store(memory_asset_store())
+                .maybe_downloader(options.downloader)
                 .build(),
         );
         let events = queue.control().subscribe();

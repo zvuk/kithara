@@ -11,6 +11,7 @@ use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DataMode,
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_utils::TestTempDir;
 use tracing::info;
@@ -90,6 +91,7 @@ async fn startup_issues_no_eager_size_probe_storm(
     );
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {

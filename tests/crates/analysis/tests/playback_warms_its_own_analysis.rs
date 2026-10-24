@@ -67,6 +67,7 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays(
             pools.clone(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .build(),
     );
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))

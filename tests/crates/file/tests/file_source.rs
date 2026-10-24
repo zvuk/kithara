@@ -1,6 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
-
 use std::{
     fs,
     io::{self, Read, Seek, SeekFrom},
@@ -15,6 +14,7 @@ use kithara::{
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
@@ -39,6 +39,7 @@ fn audio_behavior(helper: &TestServerHelper, content_type: Option<&'static str>)
 fn disk_file_config(url: Url, root: &std::path::Path) -> FileConfig<TestPools> {
     let pools = pools();
     FileConfig::for_src(url.into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -46,7 +47,6 @@ fn disk_file_config(url: Url, root: &std::path::Path) -> FileConfig<TestPools> {
                 })
                 .build(),
         )
-        .pools(pools)
         .build()
 }
 

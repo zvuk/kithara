@@ -12,6 +12,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_utils::{TestTempDir, Xorshift64};
 
@@ -53,6 +54,7 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
         .cache_capacity(NonZeroUsize::new(256).unwrap())
         .build();
     let config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(CancelToken::never())
@@ -169,6 +171,7 @@ async fn ephemeral_small_cache_reads_entire_stream() {
         .cache_capacity(NonZeroUsize::new(5).expect("5 > 0"))
         .build();
     let config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(CancelToken::never())

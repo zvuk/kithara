@@ -230,6 +230,7 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
             pools.clone(),
             CancelToken::never(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .build(),
     );
 

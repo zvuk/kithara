@@ -1,5 +1,4 @@
 #![cfg(not(target_arch = "wasm32"))]
-
 use std::io::Read;
 
 use kithara::{
@@ -17,6 +16,7 @@ use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
+    hls_fixture::create_test_downloader,
     kithara,
 };
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
@@ -46,6 +46,7 @@ async fn abr_mode_storm_does_not_wedge_loading(
         })
         .build();
     let config = HlsConfig::for_url(server.master_url())
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(cancel_token)

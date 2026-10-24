@@ -115,7 +115,12 @@ pub fn create_test_net() -> HttpClient {
 
 /// Create a private test [`Downloader`] with a fresh cancel token.
 pub fn create_test_downloader() -> Downloader {
-    Downloader::new(DownloaderConfig::for_client(create_test_net()).build())
+    Downloader::new({
+        let config = DownloaderConfig::for_client(create_test_net());
+        #[cfg(not(target_arch = "wasm32"))]
+        let config = config.runtime(kithara::platform::tokio::runtime::Handle::current());
+        config.build()
+    })
 }
 
 /// Create a private test [`PeerHandle`] via `Downloader::register`.
@@ -131,11 +136,12 @@ fn create_test_peer_handle(pools: &Pools) -> PeerHandle {
     impl Peer for TestPeer {}
     let cancel = CancelToken::never();
     let client = HttpClient::new(NetOptions::default(), pools.clone(), CancelToken::never());
-    let dl = Downloader::new(
-        DownloaderConfig::for_client(client)
-            .cancel(cancel.child())
-            .build(),
-    );
+    let dl = Downloader::new({
+        let config = DownloaderConfig::for_client(client).cancel(cancel.child());
+        #[cfg(not(target_arch = "wasm32"))]
+        let config = config.runtime(kithara::platform::tokio::runtime::Handle::current());
+        config.build()
+    });
     dl.register(
         Arc::new(TestPeer {
             cancel: cancel.clone(),

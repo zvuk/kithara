@@ -180,7 +180,6 @@ fn bench_gapless_trim(c: &mut Criterion) {
                             .backend(StorageBackend::Memory)
                             .build(),
                     )
-                    .pools(pools.clone())
                     .build();
                 let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
                     .hint("mp3".to_string())
@@ -217,12 +216,10 @@ async fn analyze_track(
     play_worker: &PlayWorker<TestPools>,
     file_path: &Path,
     store: &AssetStore<TestPools>,
-    pools: &Pools,
     token: &AnalysisToken,
 ) -> AnalysisProgress {
     let file_config = FileConfig::for_src(file_path.to_path_buf().into())
         .store(store.clone())
-        .pools(pools.clone())
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint("mp3".to_owned())
@@ -298,7 +295,6 @@ fn bench_analysis_worker(c: &mut Criterion) {
         &play_worker,
         &file_path,
         &store,
-        &pools,
         &token,
     ));
     let source_frames = assert_complete_analysis(&analysis_worker, &warm);
@@ -318,7 +314,6 @@ fn bench_analysis_worker(c: &mut Criterion) {
                     &play_worker,
                     black_box(&file_path),
                     &store,
-                    &pools,
                     &token,
                 ));
                 assert_complete_analysis(&analysis_worker, &progress);

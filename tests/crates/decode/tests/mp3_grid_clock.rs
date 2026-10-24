@@ -246,7 +246,6 @@ async fn original_and_sought_markers_expose_the_raw_media_basis(
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools.clone())
         .build();
     let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file)
         .hint("mp3".to_owned())

@@ -32,10 +32,8 @@ where
     /// Build an `AudioConfig<File<S>>` from this resource configuration.
     pub(crate) fn build_file_config(
         self,
-        worker: &PlayWorker<S>,
         observer: Option<Box<dyn AudioObserver>>,
     ) -> AudioConfig<kithara_file::File<S>, B> {
-        let pools = worker.pools().clone();
         let (file_src, derived_hint) = match self.src {
             ResourceSrc::Url(ref url) => {
                 (FileSrc::Remote(url.clone()), derive_remote_file_hint(url))
@@ -57,7 +55,6 @@ where
             .maybe_headers(self.headers.clone())
             .maybe_discriminator(self.discriminator.clone())
             .maybe_extension(extension.clone())
-            .pools(pools)
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
             .build();
@@ -88,10 +85,13 @@ where
                 });
             }
         };
+        let downloader = self.downloader.ok_or(DecodeError::InvalidData {
+            detail: "a remote ResourceConfig requires a Downloader",
+        })?;
         let mut hls_config = HlsConfig::for_url(url)
             .store(self.store.clone())
             .keys(self.keys)
-            .maybe_downloader(self.downloader)
+            .downloader(downloader)
             .initial_abr_mode(self.initial_abr_mode)
             .maybe_headers(self.headers)
             .maybe_discriminator(self.discriminator)
@@ -150,6 +150,17 @@ mod tests {
 
     fn config(source: &str) -> ResourceConfig<TestPools> {
         ResourceConfig::for_src(ResourceSrc::parse(source).expect("valid test source"))
+            .downloader(kithara_download::Downloader::new({
+                let config =
+                    kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+                        kithara_net::NetOptions::default(),
+                        pools(),
+                        kithara_platform::CancelToken::never(),
+                    ));
+                #[cfg(not(target_arch = "wasm32"))]
+                let config = config.runtime(kithara_platform::tokio::runtime::Handle::current());
+                config.build()
+            }))
             .store(AssetStore::builder(pools()).build())
             .build()
     }
@@ -159,8 +170,8 @@ mod tests {
     /// this one, so a caller going through `PlayerConfig` could not set it at
     /// all. Carrying the HLS patch whole closes that gap for every knob the
     /// crate declares, now and later.
-    #[kithara::test]
-    fn an_hls_knob_the_resource_never_declared_reaches_the_built_config() {
+    #[kithara::test(tokio)]
+    async fn an_hls_knob_the_resource_never_declared_reaches_the_built_config() {
         let mut config = config("https://example.com/live.m3u8");
         config.hls.download_batch_size = Some(6);
 
@@ -173,12 +184,12 @@ mod tests {
 
     /// The same for the file branch: `reader_event_capacity` is a
     /// `kithara-file` knob `ResourceConfig` never mirrored.
-    #[kithara::test]
-    fn a_file_knob_the_resource_never_declared_reaches_the_built_config() {
+    #[kithara::test(tokio)]
+    async fn a_file_knob_the_resource_never_declared_reaches_the_built_config() {
         let mut config = config("https://example.com/song.mp3");
         config.file.reader_event_capacity = Some(512);
 
-        let built = config.build_file_config(&worker(), None);
+        let built = config.build_file_config(None);
 
         assert_eq!(built.stream().values().reader_event_capacity, 512);
     }
@@ -186,12 +197,12 @@ mod tests {
     /// The per-call `hint` still lands as the file source's extension: it is
     /// per-call input, read by the decoder as well, so it stays on
     /// `ResourceConfig` and is mapped into `FileConfig::extension` once here.
-    #[kithara::test]
-    fn the_per_call_hint_becomes_the_file_extension() {
+    #[kithara::test(tokio)]
+    async fn the_per_call_hint_becomes_the_file_extension() {
         let mut config = config("https://example.com/track/stream");
         config.hint = Some("flac".to_owned());
 
-        let built = config.build_file_config(&worker(), None);
+        let built = config.build_file_config(None);
 
         assert_eq!(built.hint(), Some("flac"));
     }
@@ -199,12 +210,12 @@ mod tests {
     /// A document-named `extension` backs the per-call hint rather than being
     /// dropped: nothing more specific names one for a URL that carries no
     /// extension and no caller hint.
-    #[kithara::test]
-    fn a_document_extension_stands_when_nothing_more_specific_names_one() {
+    #[kithara::test(tokio)]
+    async fn a_document_extension_stands_when_nothing_more_specific_names_one() {
         let mut config = config("https://example.com/track/stream");
         config.file.extension = Some("wav".to_owned());
 
-        let built = config.build_file_config(&worker(), None);
+        let built = config.build_file_config(None);
 
         assert_eq!(built.hint(), Some("wav"));
     }
@@ -212,23 +223,23 @@ mod tests {
     /// The per-call hint describes this very track, so it outranks a
     /// document's blanket `file.extension` rather than losing to whichever
     /// merge ran last.
-    #[kithara::test]
-    fn the_per_call_hint_outranks_a_document_extension() {
+    #[kithara::test(tokio)]
+    async fn the_per_call_hint_outranks_a_document_extension() {
         let mut config = config("https://example.com/track/stream");
         config.hint = Some("flac".to_owned());
         config.file.extension = Some("wav".to_owned());
 
-        let built = config.build_file_config(&worker(), None);
+        let built = config.build_file_config(None);
 
         assert_eq!(built.hint(), Some("flac"));
     }
 
-    #[kithara::test]
-    fn the_source_extension_outranks_a_document_extension() {
+    #[kithara::test(tokio)]
+    async fn the_source_extension_outranks_a_document_extension() {
         let mut config = config("https://example.com/song.mp3");
         config.file.extension = Some("wav".to_owned());
 
-        let built = config.build_file_config(&worker(), None);
+        let built = config.build_file_config(None);
 
         assert_eq!(built.hint(), Some("mp3"));
     }
@@ -247,6 +258,17 @@ mod tests {
         let mut config = ResourceConfig::<TestPools>::for_src(
             ResourceSrc::parse(source).expect("valid test source"),
         )
+        .downloader(kithara_download::Downloader::new({
+            let config =
+                kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+                    kithara_net::NetOptions::default(),
+                    pools(),
+                    kithara_platform::CancelToken::never(),
+                ));
+            #[cfg(not(target_arch = "wasm32"))]
+            let config = config.runtime(kithara_platform::tokio::runtime::Handle::current());
+            config.build()
+        }))
         .store(
             AssetStore::builder(pools())
                 .backend(StorageBackend::Memory)
@@ -271,7 +293,7 @@ mod tests {
         writer.write_at(0, &bytes).expect("seed cached file bytes");
         writer.commit(Some(4)).expect("commit cached file bytes");
 
-        let built = config.build_file_config(&worker(), None);
+        let built = config.build_file_config(None);
         let mut stream =
             kithara_stream::Stream::<kithara_file::File<TestPools>>::new(built.stream().clone())
                 .await
@@ -288,8 +310,8 @@ mod tests {
     /// `preload_chunks` is both a document key and read in production, so the
     /// value a document names has to survive the whole way to the built HLS
     /// pipeline.
-    #[kithara::test]
-    fn the_document_preload_count_reaches_the_built_hls_config() {
+    #[kithara::test(tokio)]
+    async fn the_document_preload_count_reaches_the_built_hls_config() {
         let mut config = config("https://example.com/live.m3u8");
         config.preload_chunks = NonZeroUsize::new(9);
 
@@ -303,12 +325,12 @@ mod tests {
     }
 
     /// The file branch reads the same field from the same place.
-    #[kithara::test]
-    fn the_document_preload_count_reaches_the_built_file_config() {
+    #[kithara::test(tokio)]
+    async fn the_document_preload_count_reaches_the_built_file_config() {
         let mut config = config("https://example.com/song.mp3");
         config.preload_chunks = NonZeroUsize::new(9);
 
-        let audio = config.clone().build_file_config(&worker(), None);
+        let audio = config.clone().build_file_config(None);
         let built = config.build_track_config(audio);
 
         assert_eq!(built.preload_chunks().get(), 9);
@@ -318,8 +340,8 @@ mod tests {
     /// while `ResourceConfig` forwarded individual audio fields one by one:
     /// it never mirrored this one. Carrying the audio patch whole closes that
     /// gap, the same collapse `hls` and `file` already went through.
-    #[kithara::test]
-    fn an_audio_knob_the_resource_never_declared_reaches_the_built_config() {
+    #[kithara::test(tokio)]
+    async fn an_audio_knob_the_resource_never_declared_reaches_the_built_config() {
         let mut config = config("https://example.com/live.m3u8");
         config.audio_buffer_chunks = NonZeroUsize::new(24);
 
@@ -337,8 +359,8 @@ mod tests {
     /// suite that reads its own rendered PCM opts in through it; were the field
     /// dropped here the opt-in would compile and read as a zero-filled range
     /// indistinguishable from rendered silence.
-    #[kithara::test]
-    fn the_underrun_block_choice_reaches_the_built_hls_config() {
+    #[kithara::test(tokio)]
+    async fn the_underrun_block_choice_reaches_the_built_hls_config() {
         let mut config = config("https://example.com/live.m3u8");
         config.block_on_underrun = true;
 
@@ -352,12 +374,12 @@ mod tests {
     }
 
     /// The file branch reads the same field from the same place.
-    #[kithara::test]
-    fn the_underrun_block_choice_reaches_the_built_file_config() {
+    #[kithara::test(tokio)]
+    async fn the_underrun_block_choice_reaches_the_built_file_config() {
         let mut config = config("https://example.com/song.mp3");
         config.block_on_underrun = true;
 
-        let audio = config.clone().build_file_config(&worker(), None);
+        let audio = config.clone().build_file_config(None);
         let built = config.build_track_config(audio);
 
         assert!(built.block_on_underrun());

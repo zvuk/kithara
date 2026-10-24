@@ -46,8 +46,8 @@ fn pools() -> Pools {
     build(&PoolsSection::default()).unwrap_or_else(|error| panic!("app pool region: {error}"))
 }
 
-#[kithara::test(native, flash(false))]
-fn each_subsystem_of_the_composition_root_stays_inside_its_budget() {
+#[kithara::test(tokio, native, flash(false))]
+async fn each_subsystem_of_the_composition_root_stays_inside_its_budget() {
     let shutdown = CancelToken::root();
 
     let (pools, pool_heap) = memory::measure(pools);
@@ -67,7 +67,11 @@ fn each_subsystem_of_the_composition_root_stays_inside_its_budget() {
     let (downloader, downloader_heap) = memory::measure(|| {
         let net = NetOptions::builder().build();
         let client = HttpClient::new(net, pools.clone(), shutdown.child());
-        Downloader::new(DownloaderConfig::for_client(client).build())
+        Downloader::new(
+            DownloaderConfig::for_client(client)
+                .runtime(kithara::platform::tokio::runtime::Handle::current())
+                .build(),
+        )
     });
 
     for (subsystem, heap, budget_kib) in [

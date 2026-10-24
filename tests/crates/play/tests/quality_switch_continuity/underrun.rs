@@ -7,7 +7,9 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
     queue::ItemEvent,
 };
-use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::DelayRule};
+use kithara_integration_tests::{
+    CreatedHls, TestServerHelper, fixture_protocol::DelayRule, hls_fixture::create_test_downloader,
+};
 use kithara_render::bridge::DeckSnapshot;
 
 use super::*;
@@ -217,6 +219,7 @@ async fn prepare_tiny_ring_player(
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let config =
         kithara::play::ResourceConfig::for_src(kithara::play::ResourceSrc::Url(master_url.clone()))
+            .downloader(create_test_downloader())
             .store(store)
             .worker(worker)
             .initial_abr_mode(AbrMode::manual(initial_variant))

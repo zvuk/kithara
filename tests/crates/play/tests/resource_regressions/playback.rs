@@ -1,3 +1,5 @@
+use kithara_integration_tests::hls_fixture::create_test_downloader;
+
 use super::*;
 
 /// One crossfade of each kind on a shared worker leaves no silence gap.
@@ -61,6 +63,7 @@ async fn stress_offline_crossfade_no_gaps(
         let u = hls_url.clone();
         async move {
             ResourceConfig::for_src(ResourceSrc::Url(u))
+                .downloader(create_test_downloader())
                 .store(s)
                 .worker(w)
                 .hint("wav")
@@ -238,6 +241,7 @@ async fn local_resource_decodes_with_duration(
     let store = asset_store(&temp_dir, true, &region);
     let config: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid URL"))
+            .downloader(create_test_downloader())
             .store(store)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()

@@ -361,7 +361,7 @@ mod tests {
     async fn the_read_tree_answers_every_key_the_renderer_asks_for(short_wav: String) {
         const DERIVED: [&str; 1] = ["deck.playback.position_normalized"];
 
-        let config = test_fixture::config();
+        let config = test_fixture::config(&Handle::current());
         let (host, queue) = fixtures::queue_off().await;
         let mut source = build_resource_config(&short_wav, &config).expect("fixture source");
         source.set_metadata(TrackMetadata {

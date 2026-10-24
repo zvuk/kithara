@@ -301,9 +301,12 @@ pub(crate) fn app_config(cancel: &CancelToken, store: AppStore) -> AppConfig {
     let net = HttpClient::new(NetOptions::builder().build(), pools, cancel.child());
     AppConfig::builder()
         .drm(AppDrm::new(DomainKeyPolicy::new(Vec::new())))
-        .downloader(Downloader::new(
-            DownloaderConfig::for_client(net.clone()).build(),
-        ))
+        .downloader(Downloader::new({
+            let config = DownloaderConfig::for_client(net.clone());
+            #[cfg(not(target_arch = "wasm32"))]
+            let config = config.runtime(Handle::current());
+            config.build()
+        }))
         .net(net)
         .shutdown(cancel.child())
         .worker(worker)

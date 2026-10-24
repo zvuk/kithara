@@ -18,6 +18,7 @@ use kithara_integration_tests::{
     cochlea::percentile_f32,
     event::TestEvent,
     fixture_protocol::DelayRule,
+    hls_fixture::create_test_downloader,
     offline::{OfflinePlayer, OfflinePlayerOptions},
 };
 use num_traits::ToPrimitive;
@@ -239,6 +240,7 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     let config = ResourceConfig::for_src(
         ResourceSrc::parse(master_url.as_str()).expect("fixture master URL must be valid"),
     )
+    .downloader(create_test_downloader())
     .store(kithara_integration_tests::disk_asset_store(temp.path()))
     .decoder(decoder)
     .initial_abr_mode(AbrMode::manual(AAC_HIGH))

@@ -15,8 +15,9 @@ use std::num::NonZeroUsize;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioConfig,
+    download::{Downloader, DownloaderConfig},
     hls::{Hls, HlsConfig},
-    net::{NetOptions, RetryPolicy},
+    net::{HttpClient, NetOptions, RetryPolicy},
     platform::{
         CancelToken,
         sync::Arc,
@@ -83,7 +84,11 @@ fn audio_config(
         .pools(pools.clone())
         .cancel(cancel.clone())
         .initial_abr_mode(auto(0))
-        .net_options(net)
+        .downloader(Downloader::new(
+            DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), cancel.child()))
+                .runtime(tokio::runtime::Handle::current())
+                .build(),
+        ))
         .build();
     let wav_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))

@@ -3,8 +3,13 @@ use std::num::NonZeroUsize;
 use kithara_assets::{AcquisitionResult, AssetResource, AssetStore, StorageBackend, WriteSide};
 use kithara_audio::AudioObserverSlot;
 use kithara_command::{ScopedReceipt, Seq};
+use kithara_download::{Downloader, DownloaderConfig};
 use kithara_events::TrackId;
-use kithara_platform::time::{Duration, timeout};
+use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::{
+    CancelToken,
+    time::{Duration, timeout},
+};
 use kithara_play::{
     DeckMixSettings, DeckMixerConfig, DeckPart, DeckPass, HostedDeck, Outbox, PlayWorker,
     PlayWorkerConfig, Player, ResourceConfig, ResourceLoad, ResourcePrep, ResourceSrc,
@@ -15,6 +20,17 @@ pub(crate) use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_test_utils::{TestTempDir, kithara};
 
 use crate::{Queue, QueueCommand, QueueConfig, TrackSource};
+
+pub(crate) fn downloader() -> Downloader {
+    let config = DownloaderConfig::for_client(HttpClient::new(
+        NetOptions::default(),
+        pools(),
+        CancelToken::never(),
+    ));
+    #[cfg(not(target_arch = "wasm32"))]
+    let config = config.runtime(kithara_platform::tokio::runtime::Handle::current());
+    Downloader::new(config.build())
+}
 
 pub(crate) fn fixture_uri(directory: &std::path::Path, name: &str) -> String {
     let namespace = directory.file_name().expect("fixture namespace");
@@ -145,6 +161,7 @@ pub(crate) async fn loaded_fixture(
         kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
     );
     let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("fixture URI"))
+        .downloader(downloader())
         .store(store)
         .build();
     let prepared = prep
@@ -391,6 +408,7 @@ pub(crate) fn queue_with_load_settings(
     );
     let mut queue = Queue::new(
         QueueConfig::builder()
+            .downloader(downloader())
             .prep(prep)
             .store(store)
             .max_concurrent_loads(max_concurrent_loads)

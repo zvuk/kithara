@@ -17,6 +17,7 @@ use kithara_integration_tests::phase_continuity::FREQ_HZ;
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{Pools, TestPools, pools},
+    hls_fixture::create_test_downloader,
     mock::LaneAudio,
     phase_continuity::{
         CHANNELS, MIN_SIGNAL_AMP, PhaseDrift, READ_FRAMES_AFTER_SEEK, READ_PENDING_RETRIES,
@@ -106,8 +107,8 @@ async fn run_case(
     };
 
     let file_config = FileConfig::for_src(url.into())
+        .downloader(create_test_downloader())
         .store(store)
-        .pools(pools.clone())
         .build();
     // Park on ring underrun: the offline scan needs no wall-clock pacing.
     let audio_config = kithara::play::TrackConfig::for_audio(
@@ -194,7 +195,6 @@ async fn local_run_case(source: (SignalAsset, TestTempDir, PathBuf), backend: De
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools.clone())
         .build();
     let audio_config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .decoder(
@@ -267,7 +267,6 @@ async fn local_apple_fused_run_case(source: (SignalAsset, TestTempDir, PathBuf))
                 .backend(StorageBackend::Memory)
                 .build(),
         )
-        .pools(pools.clone())
         .build();
     let audio_config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .decoder(
@@ -405,8 +404,8 @@ async fn decode_pcm_seconds(source: ServedSignal, backend: DecoderBackend, secs:
         .backend(StorageBackend::Memory)
         .build();
     let file_config = FileConfig::for_src(url.into())
+        .downloader(create_test_downloader())
         .store(store)
-        .pools(pools.clone())
         .build();
     // Park on ring underrun instead of spinning on Pending.
     let audio_config = kithara::play::TrackConfig::for_audio(
@@ -702,8 +701,8 @@ async fn bit_rate_e2e_does_not_hang(#[case] source: ServedSignal) {
         .backend(StorageBackend::Memory)
         .build();
     let file_config = FileConfig::for_src(url.into())
+        .downloader(create_test_downloader())
         .store(store)
-        .pools(pools.clone())
         .build();
     let audio_config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .decoder(
@@ -1028,8 +1027,8 @@ async fn build_aac_sine_audio(
         .backend(StorageBackend::Memory)
         .build();
     let file_config = FileConfig::for_src(url.into())
+        .downloader(create_test_downloader())
         .store(store)
-        .pools(pools.clone())
         .build();
     // Park on ring underrun: covers both the cold and seeked handles.
     let audio_config = kithara::play::TrackConfig::for_audio(

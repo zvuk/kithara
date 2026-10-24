@@ -11,6 +11,7 @@ mod hls_timeline {
     use kithara_integration_tests::{
         CreatedHls, HlsFixtureBuilder, TestServerHelper,
         bufpool_ext::{TestPools, pools},
+        hls_fixture::create_test_downloader,
     };
     use kithara_test_fixtures::assets::sized_wav_timeline_saw_2mb;
     use kithara_test_utils::TestTempDir;
@@ -54,6 +55,7 @@ mod hls_timeline {
         let pools = pools();
 
         let hls_config = HlsConfig::for_url(url)
+            .downloader(create_test_downloader())
             .store(
                 AssetStore::builder(pools.clone())
                     .backend(StorageBackend::Disk {

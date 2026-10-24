@@ -76,6 +76,7 @@ async fn transient_failure_does_not_kill_the_track(
         .build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .runtime(kithara::platform::tokio::runtime::Handle::current())
             .build(),
     );
     let store = AssetStore::builder(pools.clone())

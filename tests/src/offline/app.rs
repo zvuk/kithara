@@ -98,7 +98,12 @@ pub async fn app_queue(document: Config) -> AppQueueFixture {
     let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
     let client = HttpClient::new(net, pools.clone(), CancelToken::never());
-    let downloader = Downloader::new(DownloaderConfig::for_client(client.clone()).build());
+    let downloader = Downloader::new({
+        let config = DownloaderConfig::for_client(client.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        let config = config.runtime(tokio::runtime::Handle::current());
+        config.build()
+    });
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
     let store = AssetStore::builder(pools.clone())
@@ -129,6 +134,7 @@ pub async fn app_queue(document: Config) -> AppQueueFixture {
             QueueConfig::builder()
                 .prep(prep)
                 .store(config.store.clone())
+                .downloader(config.downloader.clone())
                 .build(),
         ),
         RENDER_PACE,

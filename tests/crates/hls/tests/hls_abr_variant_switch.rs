@@ -16,6 +16,7 @@ use kithara_integration_tests::{
     CreatedHls, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
+    hls_fixture::create_test_downloader,
     hls_server::abr_binary_ladder,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -62,6 +63,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
         .build();
 
     let config = HlsConfig::for_url(url.clone())
+        .downloader(create_test_downloader())
         .cancel(cancel_token.clone())
         .events(bus)
         .store(store)
@@ -174,6 +176,7 @@ async fn test_basic_multi_segment_reading(
         .build();
 
     let config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .cancel(cancel_token.clone())
         .store(store)
         .pools(pools)
@@ -247,6 +250,7 @@ async fn test_abr_variant_switch_with_seek_backward(
         .build();
 
     let config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .cancel(cancel_token.clone())
         .events(bus)
         .store(store)

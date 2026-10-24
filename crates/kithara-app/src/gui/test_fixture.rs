@@ -11,7 +11,7 @@ use kithara::{
         CancelToken,
         sync::Arc,
         tokio::{
-            runtime::Handle,
+            runtime::{Builder, Handle, Runtime},
             sync::mpsc::{self, UnboundedSender},
         },
     },
@@ -39,7 +39,7 @@ use crate::{
     theme::Palette,
 };
 
-pub(super) fn config() -> AppConfig {
+pub(super) fn config(runtime: &Handle) -> AppConfig {
     let shutdown = CancelToken::root();
     let pools = pools::build(&PoolsSection::default()).expect("valid app pool policy");
     let worker = AppWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
@@ -48,7 +48,12 @@ pub(super) fn config() -> AppConfig {
         pools.clone(),
         shutdown.child(),
     );
-    let downloader = Downloader::new(DownloaderConfig::for_client(net.clone()).build());
+    let downloader = Downloader::new({
+        let config = DownloaderConfig::for_client(net.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        let config = config.runtime(runtime.clone());
+        config.build()
+    });
     let store = AppStore::builder(pools)
         .backend(StorageBackend::Memory)
         .build();
@@ -63,11 +68,21 @@ pub(super) fn config() -> AppConfig {
         .build()
 }
 
-pub(super) fn runtime() -> kithara::platform::tokio::runtime::Runtime {
-    kithara::platform::tokio::runtime::Builder::new_current_thread()
+pub(super) fn runtime() -> Runtime {
+    Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("test runtime builds")
+}
+
+pub(super) fn runtime_and_config() -> (Runtime, AppConfig) {
+    let runtime = Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("test engine runtime builds");
+    let config = config(runtime.handle());
+    (runtime, config)
 }
 
 pub(super) fn boot(
@@ -280,7 +295,7 @@ pub(super) mod retained {
     use arc_swap::ArcSwap;
     use kithara_app_library::{BranchNode, Endpoint, Registration, SECTIONS, SourcePage};
 
-    use super::{Calls, Probe, boot, config};
+    use super::{Calls, Probe, boot};
     use crate::{engine::EngineSnapshot, gui::retained::Studio};
 
     impl Probe {
@@ -338,10 +353,10 @@ pub(super) mod retained {
         size: (u32, u32),
         check: impl FnOnce(&mut Ui<'_, Studio>),
     ) {
-        let runtime = super::runtime();
+        let (runtime, config) = super::runtime_and_config();
         let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
         let (commands, _receiver) = mpsc::unbounded_channel();
-        let boot = boot(runtime.handle(), &config(), snapshots, commands, plugins);
+        let boot = boot(runtime.handle(), &config, snapshots, commands, plugins);
         let package = Rc::clone(&boot.ui.package);
         let mut ui = Ui::new(
             Studio::new(boot),

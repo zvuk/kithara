@@ -52,6 +52,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
+    hls_fixture::create_test_downloader,
 };
 use url::Url;
 
@@ -94,6 +95,7 @@ async fn abr_escapes_stalled_initial_variant(
         .build();
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .initial_abr_mode(auto(0))

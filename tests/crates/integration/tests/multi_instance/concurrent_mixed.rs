@@ -15,6 +15,7 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     reads::{ReadLimit, read_for_concurrency_check},
 };
 use kithara_test_fixtures::{SignalAsset, integration_fixtures::concurrent_wav};
@@ -46,6 +47,7 @@ async fn spawn_file_instance(
 ) -> JoinHandle<InstanceResult> {
     let pools = pools();
     let file_config = FileConfig::for_src(url.into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -53,7 +55,6 @@ async fn spawn_file_instance(
                 })
                 .build(),
         )
-        .pools(pools.clone())
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint(("mp3").to_string())
@@ -100,6 +101,7 @@ async fn spawn_hls_instance(
     let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {

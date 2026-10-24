@@ -143,7 +143,6 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
     let path = asset.path().expect("native WAV fixture path").to_owned();
     let file = FileConfig::for_src(FileSrc::Local(path))
         .store(AssetStore::builder(pools.clone()).build())
-        .pools(pools)
         .cancel(source_cancel.clone())
         .build();
     let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file).build();

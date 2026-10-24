@@ -38,19 +38,18 @@ let store = AssetStore::builder(pools.clone()).build();
 // Remote HTTP source
 let config = FileConfig::for_src(FileSrc::Remote(url))
     .store(store.clone())
-    .pools(pools.clone())
+    .downloader(downloader.clone())
     .build();
 let stream = Stream::<File<AppPools>>::new(config).await?;
 
 // Local file source
 let local = FileConfig::for_src(FileSrc::Local(path))
     .store(store)
-    .pools(pools)
     .build();
 let stream = Stream::<File<AppPools>>::new(local).await?;
 ```
 
-`FileConfig<S>` is a [`bon`](https://crates.io/crates/bon) builder. Start with `FileConfig::for_src(src)`, set the required shared asset store with `.store(store)` and its matching region with `.pools(pools)`, then call `.build()`. Both values use the same schema `S`; cloned regions retain one shared hard budget. The same chain accepts non-default wiring such as downloader, cache discriminator, and cancel token, plus the streaming knobs — extension hint, event and reader channel capacities, tmp-claim poll interval, look-ahead cap — as setters of their own.
+`FileConfig<S>` is a [`bon`](https://crates.io/crates/bon) builder. Start with `FileConfig::for_src(src)` and set the shared asset store with `.store(store)`. Remote sources also require `.downloader(downloader)`, including fully cached files; local sources ignore it. The chain accepts cache discriminator, cancel token, extension hint, event and reader channel capacities, tmp-claim poll interval, and look-ahead cap as setters of their own.
 
 Subscribe to `FileEvent` for lifecycle and non-network errors, `FileReaderEvent` for reader progress and seeks, and `DownloaderEvent` for HTTP request lifecycle. Each uses a separate bounded topic on the same event bus.
 
@@ -62,7 +61,7 @@ Subscribe to `FileEvent` for lifecycle and non-network errors, `FileReaderEvent`
 
 <tr><td><code>File&lt;S&gt;</code></td><td>struct (marker)</td><td>Zero-sized type implementing <code>StreamType</code> for one pool schema</td></tr>
 
-<tr><td><code>FileConfig&lt;S&gt;</code></td><td>struct (bon-builder)</td><td>Source, event-bus, downloader, asset store, pool region, cancel token</td></tr>
+<tr><td><code>FileConfig&lt;S&gt;</code></td><td>struct (bon-builder)</td><td>Source, event-bus, downloader, asset store, cancel token</td></tr>
 
 <tr><td><code>FileSrc</code></td><td>enum</td><td><code>Local(PathBuf)</code> for direct disk playback, <code>Remote(Url)</code> for HTTP streaming</td></tr>
 

@@ -11,6 +11,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     memory_asset_store,
 };
 use kithara_test_fixtures::signal::ascending_phase_replays;
@@ -47,6 +48,7 @@ async fn nonuniform_gapless_hls_is_continuous_at_every_boundary(
 ) {
     let pools = pools();
     let hls = HlsConfig::for_url(server.url(path))
+        .downloader(create_test_downloader())
         .store(memory_asset_store())
         .pools(pools.clone())
         .cancel(CancelToken::never())

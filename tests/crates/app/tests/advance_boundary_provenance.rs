@@ -1,5 +1,4 @@
 #![cfg(not(target_arch = "wasm32"))]
-
 use std::{num::NonZeroU32, ops::Range, path::Path};
 
 use kithara::{
@@ -22,6 +21,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
     fixture_protocol::PcmPattern,
+    hls_fixture::create_test_downloader,
     offline::{
         LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions, append_source_loaded,
         linked::{LinkObservation, LinkReceiptOrigin, ObservedFactory},
@@ -1536,6 +1536,7 @@ fn hls_source(url: &Url, cache_dir: &Path) -> TrackSource<TestPools> {
     let config = ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(url.as_str()).expect("valid HLS master URL"),
     )
+    .downloader(create_test_downloader())
     .store(store)
     .build();
     TrackSource::Config(Box::new(config))

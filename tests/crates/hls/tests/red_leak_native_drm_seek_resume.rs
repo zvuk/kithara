@@ -194,6 +194,7 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
             pools.clone(),
             cancel.clone(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .cancel(cancel)
         .build(),
     );

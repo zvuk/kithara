@@ -12,6 +12,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     mock::LaneAudio,
 };
 use kithara_test_fixtures::integration_fixtures::origin_tone;
@@ -42,6 +43,7 @@ async fn the_production_client_plays_the_stopped_broadcast(origin_tone: Vec<f32>
         .build();
     let master = Url::parse(origin.handle.url()).expect("the handle reports a URL");
     let hls_config = HlsConfig::for_url(master)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools.clone())
         .cancel(CancelToken::never())

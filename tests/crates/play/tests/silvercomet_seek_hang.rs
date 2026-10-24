@@ -84,7 +84,9 @@ async fn render_and_collect(
 fn fresh_downloader() -> Downloader {
     let net = NetOptions::builder().is_insecure(true).build();
     Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, pools(), CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools(), CancelToken::never()))
+            .runtime(kithara::platform::tokio::runtime::Handle::current())
+            .build(),
     )
 }
 

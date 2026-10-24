@@ -18,6 +18,7 @@ use kithara::{
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 
@@ -100,6 +101,7 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
         })
         .build();
     let config = HlsConfig::for_url(master.url())
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(cancel.clone())
@@ -163,4 +165,61 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
         segments[consts::HTML_SEGMENT_INDEX].request_count() >= 1,
         "rigged html segment was never requested — test fixture broken",
     );
+}
+
+#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(2)))]
+async fn cancelling_one_stream_keeps_the_shared_downloader_serving() {
+    use kithara::{
+        hls::AbrMode,
+        platform::{CancelScope, tokio::task::yield_now},
+    };
+    use kithara_integration_tests::hls_server::abr_binary_ladder;
+
+    let helper = TestServerHelper::new().await;
+    let first = helper
+        .create_hls(abr_binary_ladder(false, Duration::ZERO))
+        .await
+        .expect("first ladder");
+    let second = helper
+        .create_hls(abr_binary_ladder(false, Duration::ZERO))
+        .await
+        .expect("second ladder");
+    let gate = helper.register_segment_gate(second.token(), 0, 0);
+    let downloader = create_test_downloader();
+    let scope = CancelScope::new(None);
+    let region = pools();
+    let config = |url, cancel| {
+        HlsConfig::for_url(url)
+            .downloader(downloader.clone())
+            .store(
+                AssetStore::builder(region.clone())
+                    .backend(StorageBackend::Memory)
+                    .build(),
+            )
+            .pools(region.clone())
+            .cancel(cancel)
+            .initial_abr_mode(AbrMode::manual(0))
+            .build()
+    };
+    let stream_a = Stream::<Hls<TestPools>>::new(config(first.master_url(), scope.token()))
+        .await
+        .expect("first stream");
+    let mut stream_b =
+        Stream::<Hls<TestPools>>::new(config(second.master_url(), CancelToken::never()))
+            .await
+            .expect("second stream");
+    let read = task::spawn_blocking(move || {
+        let mut bytes = Vec::new();
+        stream_b
+            .read_to_end(&mut bytes)
+            .expect("second stream reads after sibling cancellation");
+        bytes
+    });
+    while gate.requested() == 0 {
+        yield_now().await;
+    }
+    scope.cancel();
+    drop(stream_a);
+    gate.release();
+    assert!(read.await.expect("reader joins").len() >= 500_000);
 }

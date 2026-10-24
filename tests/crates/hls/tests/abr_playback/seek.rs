@@ -23,6 +23,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     fixture_protocol::DelayRule,
+    hls_fixture::create_test_downloader,
     mixed_codec_ladder,
     mock::LaneAudio,
 };
@@ -62,6 +63,7 @@ pub(crate) async fn stream_continues_after_seek(
         AbrMode::manual(0)
     };
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -177,6 +179,7 @@ pub(crate) async fn fixed_variant_on_production_ladder_plays_without_hang(
             .build(),
     );
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -251,6 +254,7 @@ pub(crate) async fn seek_after_eof_mmap_produces_samples(
             .build(),
     );
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -344,6 +348,7 @@ pub(crate) async fn mp3_stream_continues_after_seek(
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let file_config = FileConfig::for_src(url.into())
+        .downloader(create_test_downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -351,7 +356,6 @@ pub(crate) async fn mp3_stream_continues_after_seek(
                 })
                 .build(),
         )
-        .pools(pools.clone())
         .build();
     let config = kithara::play::TrackConfig::for_audio(
         AudioConfig::<File<TestPools>>::for_stream(file_config)
@@ -606,6 +610,7 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
             pools.clone(),
             cancel.child(),
         ))
+        .runtime(kithara::platform::tokio::runtime::Handle::current())
         .abr_settings(
             kithara::abr::AbrSettings::builder()
                 .initial_throughput_bps(Some(top_bandwidth * 2))

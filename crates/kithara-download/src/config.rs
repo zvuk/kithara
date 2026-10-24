@@ -2,7 +2,9 @@ use kithara_abr::{AbrSettings, AbrSettingsPatch};
 use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_net::HttpClient;
-use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::tokio::runtime::Handle;
+use kithara_platform::{CancelToken, time::Duration};
 
 /// Configuration for [`Downloader`](super::Downloader).
 #[derive(Clone, Config, Patch)]
@@ -42,12 +44,10 @@ pub struct DownloaderConfig {
     /// `CancelScope` seam lives in [`Downloader::new`](super::Downloader::new).
     #[config(skip = "composed into the downloader cancel scope", patch(skip))]
     pub(crate) cancel: Option<CancelToken>,
-    /// Tokio runtime handle for the download loop.
-    ///
-    /// - `Some(handle)` — the loop runs as a task on this runtime.
-    /// - `None` — spawns as a task on the current runtime via `task::spawn`.
+    /// Tokio runtime on which the download loop runs.
+    #[cfg(not(target_arch = "wasm32"))]
     #[config(skip = "runtime resource retained by the downloader", patch(skip))]
-    pub(crate) runtime: Option<Handle>,
+    pub(crate) runtime: Handle,
     /// Maximum number of concurrent in-flight fetch commands.
     #[config(builder(default = 5))]
     pub(crate) max_concurrent: usize,
@@ -78,13 +78,14 @@ mod tests {
         HttpClient::new(NetOptions::default(), test_pools(), CancelToken::never())
     }
 
-    #[kithara::test(native, flash(false))]
-    fn a_patch_writes_only_the_concurrency_it_names() {
+    #[kithara::test(tokio, native, flash(false))]
+    async fn a_patch_writes_only_the_concurrency_it_names() {
         let patch: DownloaderConfigPatch =
             serde_yaml_ng::from_str("max_concurrent: 8\n").expect("the document types");
         // Seeded away from the built default of 2s, so the assertion below can
         // tell "left alone" from "reset to the default".
         let mut config = DownloaderConfig::for_client(client())
+            .runtime(kithara_platform::tokio::runtime::Handle::current())
             .soft_timeout(Duration::from_secs(9))
             .build();
 
@@ -98,8 +99,8 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
-    fn a_nested_abr_patch_reaches_the_downloader() {
+    #[kithara::test(tokio, native, flash(false))]
+    async fn a_nested_abr_patch_reaches_the_downloader() {
         let settings: DownloaderConfigPatch =
             serde_yaml_ng::from_str("abr_settings:\n  min_switch_interval: 45s\n")
                 .expect("the document types");
@@ -107,6 +108,7 @@ mod tests {
         // assertion can tell "left alone" from "the nested struct was rebuilt
         // from `Default`" — the failure a nested apply is most likely to have.
         let mut config = DownloaderConfig::for_client(client())
+            .runtime(kithara_platform::tokio::runtime::Handle::current())
             .abr_settings(AbrSettings::builder().down_hysteresis_ratio(0.55).build())
             .build();
 

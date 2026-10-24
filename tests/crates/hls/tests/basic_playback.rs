@@ -20,7 +20,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     fixture_protocol::InitMode,
-    hls_fixture::HlsStreamBuilder,
+    hls_fixture::{HlsStreamBuilder, create_test_downloader},
     hls_server::{test_pattern_hls, test_pattern_ladder},
 };
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
@@ -62,6 +62,7 @@ async fn test_basic_hls_playback(
         })
         .build();
     let config = HlsConfig::for_url(test_stream_url.clone())
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(cancel_token)
@@ -155,6 +156,7 @@ async fn test_hls_invalid_url_handling(
             })
             .build();
         let config = HlsConfig::for_url(url)
+            .downloader(create_test_downloader())
             .store(store)
             .pools(pools)
             .cancel(cancel_token)

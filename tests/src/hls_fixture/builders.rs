@@ -9,7 +9,10 @@ use kithara::{
 };
 use url::Url;
 
-use crate::bufpool_ext::{TestPools, pools};
+use crate::{
+    bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
+};
 
 /// Builder for creating `Stream<Hls>` in integration tests.
 ///
@@ -90,6 +93,7 @@ impl HlsStreamBuilder {
             .build();
 
         let config = HlsConfig::for_url(master_url)
+            .downloader(create_test_downloader())
             .store(store_opts)
             .pools(pools)
             .cancel(cancel)

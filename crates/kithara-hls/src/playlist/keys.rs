@@ -860,14 +860,16 @@ mod tests {
         registry: Option<KeyProcessorRegistry>,
         store: &TestAssetStore,
     ) -> TestKeyStore {
-        let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(
+        let downloader = Downloader::new({
+            let config = DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::default(),
                 crate::test_pools::pools(),
                 network_cancel,
-            ))
-            .build(),
-        );
+            ));
+            #[cfg(not(target_arch = "wasm32"))]
+            let config = config.runtime(kithara_platform::tokio::runtime::Handle::current());
+            config.build()
+        });
         let handle = downloader.register(
             Arc::new(MockPeer {
                 cancel: CancelToken::never(),

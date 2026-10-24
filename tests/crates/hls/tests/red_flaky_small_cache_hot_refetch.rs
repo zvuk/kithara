@@ -12,6 +12,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
 };
 use kithara_test_utils::pace;
 use tracing::info;
@@ -54,6 +55,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(
         .build();
 
     let hls_config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .initial_abr_mode(auto(0))

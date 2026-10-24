@@ -15,6 +15,7 @@ use kithara::{
 use kithara_command::{Seq, When};
 use kithara_integration_tests::{
     grid::Start,
+    hls_fixture::create_test_downloader,
     kithara, memory_asset_store,
     offline::linked::{LinkProbeCommand, LinkVerdict},
 };
@@ -248,6 +249,7 @@ async fn prepare_incoming(
         .url
         .expect("fixture URL");
     let source = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("fixture source"))
+        .downloader(create_test_downloader())
         .store(memory_asset_store())
         .initial_abr_mode(AbrMode::manual(0))
         .build();

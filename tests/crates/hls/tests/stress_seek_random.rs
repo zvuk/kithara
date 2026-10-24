@@ -15,6 +15,7 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    hls_fixture::create_test_downloader,
     hls_server::aes128_encryption,
 };
 use kithara_test_utils::{TestTempDir, Xorshift64};
@@ -273,6 +274,7 @@ async fn stress_random_seek_read_hls(
         .build();
 
     let config = HlsConfig::for_url(url)
+        .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
         .cancel(cancel)

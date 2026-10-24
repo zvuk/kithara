@@ -91,6 +91,7 @@ async fn stalled_master_playlist_fails_load(
     let pools = pools();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .runtime(kithara::platform::tokio::runtime::Handle::current())
             .build(),
     );
 

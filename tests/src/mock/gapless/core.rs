@@ -41,6 +41,7 @@ pub use kithara_test_utils::{
 };
 
 use super::consts::*;
+use crate::hls_fixture::create_test_downloader;
 pub use crate::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::{
@@ -121,6 +122,7 @@ pub async fn create_resource(
     ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
+    .downloader(create_test_downloader())
     .store(crate::disk_asset_store(cache_dir))
     .build()
 }
@@ -145,6 +147,7 @@ pub async fn create_apple_fused_resource(
     ResourceConfig::for_src(
         ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
+    .downloader(create_test_downloader())
     .store(store)
     .host_sample_rate(NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("device rate"))
     .block_on_underrun(true)

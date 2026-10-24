@@ -60,7 +60,7 @@ impl Resource {
             Arc::new(kithara_render::StreamWake::new(wake));
         Ok(match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => Self::from_reader(
-                Audio::prepare(config.build_file_config(&worker, None), wake, pools).await?,
+                Audio::prepare(config.build_file_config(None), wake, pools).await?,
                 Some(src),
             ),
             SourceType::HlsStream(_) => Self::from_reader(
@@ -232,10 +232,10 @@ where
     fn config_geometry(
         config: &ResourceConfig<S, B>,
     ) -> Result<(FrameCount, FrameCount), PlayError> {
-        let worker = config.worker.as_ref().ok_or_else(|| {
+        config.worker.as_ref().ok_or_else(|| {
             PlayError::Internal("ResourceConfig requires an explicit PlayWorker".into())
         })?;
-        let audio = config.clone().build_file_config(worker, None);
+        let audio = config.clone().build_file_config(None);
         let track = config.build_track_config(audio);
         let ring_depth = geometry(track.warp(), track.audio_buffer_chunks())?;
         let rate = config.host_sample_rate.ok_or_else(|| {
@@ -260,7 +260,7 @@ where
         let cancel = config.cancel.clone();
         let (receiver, lane, latency) = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
-                let audio = config.clone().build_file_config(&worker, Some(observer));
+                let audio = config.clone().build_file_config(Some(observer));
                 let track = config.build_track_config(audio);
                 let (receiver, lane, latency) = worker.load(track, position, start, inbox).await?;
                 (
@@ -1248,6 +1248,19 @@ mod tests {
         );
         let load = |src: ResourceSrc, track: CancelToken| {
             let mut config: ResourceConfig<TestPools> = ResourceConfig::for_src(src)
+                .downloader(kithara_download::Downloader::new({
+                    let config = kithara_download::DownloaderConfig::for_client(
+                        kithara_net::HttpClient::new(
+                            kithara_net::NetOptions::default(),
+                            pools.clone(),
+                            CancelToken::never(),
+                        ),
+                    );
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let config =
+                        config.runtime(kithara_platform::tokio::runtime::Handle::current());
+                    config.build()
+                }))
                 .store(
                     AssetStore::builder(pools.clone())
                         .backend(StorageBackend::Memory)

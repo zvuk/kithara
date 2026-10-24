@@ -508,8 +508,8 @@ mod tests {
         error.get_ref()?.downcast_ref::<PendingReason>().copied()
     }
 
-    #[kithara::test]
-    fn a_retired_session_reads_as_an_interrupt_carrying_its_reason() {
+    #[kithara::test(tokio)]
+    async fn a_retired_session_reads_as_an_interrupt_carrying_its_reason() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         let session = coord.active_session();
         let mut reader = HlsSessionReader::open(
@@ -548,8 +548,8 @@ mod tests {
         );
     }
 
-    #[kithara::test]
-    fn demand_probe_does_not_take_transition_lock() {
+    #[kithara::test(tokio)]
+    async fn demand_probe_does_not_take_transition_lock() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
@@ -558,8 +558,8 @@ mod tests {
         assert!(coord.sessions.transition_demand_in_flight(transition));
     }
 
-    #[kithara::test]
-    fn published_sessions_are_reclaimed_by_writer_after_readers_release() {
+    #[kithara::test(tokio)]
+    async fn published_sessions_are_reclaimed_by_writer_after_readers_release() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
