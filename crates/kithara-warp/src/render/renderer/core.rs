@@ -4,8 +4,8 @@ use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SourceSpan};
 use kithara_stretch::{
-    BackendCapabilities, ElasticBackendConfig, ElasticEngine, ElasticError, ElasticRequest,
-    StretchKind, build_engine,
+    BackendCapabilities, ElasticBackendConfig, ElasticEngine, ElasticError, StretchKind,
+    build_engine,
 };
 use kithara_sync::SpeedCurve;
 use kithara_test_macros as kithara;
@@ -45,28 +45,11 @@ impl RateTarget {
 #[derive(Clone, Copy)]
 pub(in crate::render) struct PreparedQuantum {
     pub(in crate::render) source_span: Option<SourceSpan>,
-    pub(in crate::render) activation: Option<PreparedActivation>,
     pub(in crate::render) rate: RateTarget,
     pub(in crate::render) speed: f32,
     pub(in crate::render) source_start: u64,
     pub(in crate::render) active_frames: usize,
     pub(in crate::render) frames: usize,
-    /// Output frames a quantum that ends on a scheduled frame renders exactly.
-    pub(in crate::render) landing_frames: Option<usize>,
-}
-
-#[derive(Clone, Copy)]
-pub(in crate::render) struct PreparedActivation {
-    pub(in crate::render) warm: ElasticRequest,
-    pub(in crate::render) history_frames: usize,
-}
-
-impl PreparedActivation {
-    pub(in crate::render) fn prefix_frames(self) -> Result<usize, ElasticError> {
-        self.history_frames
-            .checked_add(self.warm.source_frames())
-            .ok_or(ElasticError::SampleCountOverflow)
-    }
 }
 
 /// Source-timeline exact-span time-stretch driven by its render lane.

@@ -329,74 +329,33 @@ where
         let channels = usize::from(self.spec.channels.max(1));
 
         let (kind, keylock) = self.stretch_target();
-        let entering_unity = spec == self.spec
-            && (self.active || self.pending_frames(channels) > 0)
-            && self.unity_passthrough(self.rate.speed());
+        let entering_unity =
+            self.holds_stream_at(spec, channels) && self.unity_passthrough(self.rate.speed());
         if entering_unity {
             self.service_scratch();
             return;
         }
         let backend_changed = kind != self.current_kind || keylock != self.current_keylock;
-        if backend_changed
-            && spec == self.spec
-            && (self.active || self.pending_frames(channels) > 0)
-        {
+        if backend_changed && self.holds_stream_at(spec, channels) {
             self.backend_transition_pending = true;
             self.service_scratch();
             return;
         }
         if backend_changed || spec != self.spec || self.rebuild_pending {
-            drop(self.deferred_scratch.take());
-            if spec != self.spec
-                || (self.rebuild_pending && self.retiring_target.is_none() && self.engine.is_none())
-            {
-                self.clear_render_state();
-            }
-            self.rebuild_pending = false;
-            let mut reusable = PreparedTarget {
-                projection: self.projection.take(),
-                residency: self.residency.take(),
-                activation_scratch: self.activation_scratch.take(),
-                engine: self.engine.take(),
-                pending_source: self.pending_source.take(),
-                scratch: self.scratch.take(),
-            };
-            if spec != self.spec {
-                reusable = PreparedTarget::default();
-            }
-            let config = crate::WarpConfig::builder()
-                .backend(kind)
-                .keylock(keylock)
-                .backends(self.backends)
-                .source_block_frames(self.source_block_frames)
-                .maybe_region_plan(self.plan.clone())
-                .build();
-            let target =
-                Self::prepare_target(&config, spec, &self.pools, reusable, spec != self.spec)
-                    .unwrap_or_else(|error| {
-                        warn!(%kind, %error, "time-stretch engine preparation failed");
-                        PreparedTarget::default()
-                    });
-            self.residency = target.residency;
-            self.projection = target.projection;
-            self.activation_scratch = target.activation_scratch;
-            self.engine = target.engine;
-            self.pending_source = target.pending_source;
-            self.scratch = target.scratch;
-            self.current_kind = kind;
-            self.current_keylock = keylock;
-            self.applied_pitch = f64::NAN;
-            self.spec = spec;
-            self.reset_pending = false;
-            let latency = self.engine_latency().get();
-            if let Some(target) = self.retiring_target.as_mut() {
-                target.extend(latency);
-            }
+            self.rebuild_target(spec, kind, keylock);
             return;
         }
 
         self.service_scratch();
+        self.apply_deferred_reset();
+    }
+}
 
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
+    fn apply_deferred_reset(&mut self) {
         if !self.reset_pending {
             return;
         }
@@ -407,6 +366,58 @@ where
             warn!(%error, "time-stretch deferred reset failed");
             self.engine = None;
             self.rebuild_pending = true;
+        }
+    }
+
+    fn holds_stream_at(&self, spec: AudioSpec, channels: usize) -> bool {
+        spec == self.spec && (self.active || self.pending_frames(channels) > 0)
+    }
+
+    fn rebuild_target(&mut self, spec: AudioSpec, kind: StretchKind, keylock: bool) {
+        drop(self.deferred_scratch.take());
+        if spec != self.spec
+            || (self.rebuild_pending && self.retiring_target.is_none() && self.engine.is_none())
+        {
+            self.clear_render_state();
+        }
+        self.rebuild_pending = false;
+        let mut reusable = PreparedTarget {
+            projection: self.projection.take(),
+            residency: self.residency.take(),
+            activation_scratch: self.activation_scratch.take(),
+            engine: self.engine.take(),
+            pending_source: self.pending_source.take(),
+            scratch: self.scratch.take(),
+        };
+        if spec != self.spec {
+            reusable = PreparedTarget::default();
+        }
+        let config = crate::WarpConfig::builder()
+            .backend(kind)
+            .keylock(keylock)
+            .backends(self.backends)
+            .source_block_frames(self.source_block_frames)
+            .maybe_region_plan(self.plan.clone())
+            .build();
+        let target = Self::prepare_target(&config, spec, &self.pools, reusable, spec != self.spec)
+            .unwrap_or_else(|error| {
+                warn!(%kind, %error, "time-stretch engine preparation failed");
+                PreparedTarget::default()
+            });
+        self.residency = target.residency;
+        self.projection = target.projection;
+        self.activation_scratch = target.activation_scratch;
+        self.engine = target.engine;
+        self.pending_source = target.pending_source;
+        self.scratch = target.scratch;
+        self.current_kind = kind;
+        self.current_keylock = keylock;
+        self.applied_pitch = f64::NAN;
+        self.spec = spec;
+        self.reset_pending = false;
+        let latency = self.engine_latency().get();
+        if let Some(target) = self.retiring_target.as_mut() {
+            target.extend(latency);
         }
     }
 }

@@ -1,8 +1,7 @@
 use kithara_bufpool::HasPool;
-use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount};
+use kithara_signal::{AudioChunkInfo, FrameCount};
 use kithara_stretch::ElasticError;
 use kithara_test_macros as kithara;
-use num_traits::ToPrimitive;
 
 use super::{
     core::{PreparedQuantum, WarpRenderer},
@@ -13,129 +12,6 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
-    /// Prime the engine from the residency so its first output is the source
-    /// frame presented last; the engine then reads on from the residency.
-    pub(in crate::render) fn activate_prepared_quantum(
-        &mut self,
-        chunk: &AudioChunk,
-        prepared: PreparedQuantum,
-    ) -> Result<(), ElasticError> {
-        let Some(activation) = prepared.activation else {
-            return Ok(());
-        };
-        let prefix_frames = activation.prefix_frames()?;
-        let (cue, sample_rate) = self
-            .rendered_source_end
-            .unwrap_or((chunk.meta.frame_offset, chunk.meta.spec.sample_rate));
-        if chunk.meta.spec.sample_rate != sample_rate {
-            return Err(ElasticError::DiscontinuousSource {
-                expected: cue.to_f64().ok_or(ElasticError::SampleCountOverflow)?,
-                actual: chunk
-                    .meta
-                    .frame_offset
-                    .to_f64()
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            });
-        }
-        if chunk.frames() != prepared.frames {
-            return Err(ElasticError::SourceFrameLimit {
-                frames: chunk.frames(),
-                limit: prepared.frames,
-            });
-        }
-
-        let channels = usize::from(self.spec.channels.max(1));
-        let history_samples = activation
-            .history_frames
-            .checked_mul(channels)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let discard_samples = activation
-            .warm
-            .output_frames()
-            .checked_mul(channels)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let lookahead_end = cue
-            .checked_add(
-                u64::try_from(activation.history_frames)
-                    .map_err(|_| ElasticError::SampleCountOverflow)?,
-            )
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let prefix_end = cue
-            .checked_add(
-                u64::try_from(prefix_frames).map_err(|_| ElasticError::SampleCountOverflow)?,
-            )
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let pitch = if self.current_keylock {
-            1.0
-        } else {
-            f64::from(prepared.rate.speed())
-        };
-        self.apply_pitch(pitch)?;
-
-        let residency = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
-        let history_start = i64::try_from(cue)
-            .ok()
-            .and_then(|cue| cue.checked_sub(i64::try_from(activation.history_frames).ok()?))
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let range = residency.range(history_start.max(residency.start), cue, channels)?;
-        let resident_history = &residency.samples[range];
-        let history = if resident_history.len() == history_samples {
-            resident_history
-        } else {
-            let history = self
-                .pending_source
-                .as_mut()
-                .ok_or(ElasticError::PoolCapacity)?;
-            history
-                .ensure_len(history_samples)
-                .map_err(|_| ElasticError::PoolCapacity)?;
-            let missing = history_samples
-                .checked_sub(resident_history.len())
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            history[..missing].fill(0.0);
-            history[missing..].copy_from_slice(resident_history);
-            history.as_ref()
-        };
-        let resident_from = |start: u64, end: u64| {
-            i64::try_from(start)
-                .map_err(|_| ElasticError::SampleCountOverflow)
-                .and_then(|start| residency.range(start, end, channels))
-        };
-        let lookahead = &residency.samples[resident_from(cue, lookahead_end)?];
-        let warm = &residency.samples[resident_from(lookahead_end, prefix_end)?];
-        let scratch = self
-            .activation_scratch
-            .as_mut()
-            .ok_or(ElasticError::EnginePreparation(
-                "activation scratch is unavailable",
-            ))?;
-        scratch
-            .ensure_len(discard_samples)
-            .map_err(|_| ElasticError::PoolCapacity)?;
-        kithara::probe_event!(
-            prime_activation,
-            request_revision = prepared.rate.revision(),
-            target_rate_bits = prepared.rate.speed().to_bits(),
-            source_frames = activation.warm.source_frames(),
-            output_frames = activation.warm.output_frames()
-        );
-        self.engine
-            .as_mut()
-            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-            .prime(activation.warm, history, lookahead, warm, scratch)?;
-        scratch.clear();
-
-        self.clear_pending_source();
-        self.output_start_meta = Some(Self::meta_at_frame(chunk.meta, cue)?);
-        self.resident_feed = Some(prefix_end);
-        self.source_frames_admitted =
-            u64::try_from(prefix_frames).map_err(|_| ElasticError::SampleCountOverflow)?;
-        self.primed_source_debt = u64::try_from(activation.warm.source_frames())
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-        self.active = true;
-        Ok(())
-    }
-
     /// Select source demand up to the next output quantum's mapped endpoint.
     /// Filter and engine lookahead remain in the separately prepared source window.
     ///
@@ -259,13 +135,11 @@ where
         let frames = frames.max(active_frames);
         Ok(PreparedQuantum {
             source_span: Some(span),
-            activation: None,
             rate: self.rate,
             speed: 1.0,
             source_start: meta.frame_offset,
             active_frames,
             frames,
-            landing_frames: Some(outputs),
         })
     }
 
@@ -316,13 +190,11 @@ where
         let frames = frames.max(active_frames);
         Ok(PreparedQuantum {
             source_span: Some(span),
-            activation: None,
             rate: self.rate,
             speed: self.trajectory.speed()?,
             source_start: meta.frame_offset,
             active_frames,
             frames,
-            landing_frames: Some(outputs),
         })
     }
 
@@ -345,7 +217,7 @@ where
     fn terminal_span(
         span: kithara_signal::SourceSpan,
         end: u64,
-    ) -> Option<(kithara_signal::SourceSpan, usize)> {
+    ) -> Option<kithara_signal::SourceSpan> {
         let mut outputs = span.output_frames();
         while outputs > 0 {
             hang_tick!();
@@ -356,10 +228,7 @@ where
             outputs -= 1;
             hang_reset!();
         }
-        Some((
-            span.for_output_range(0..outputs)?,
-            usize::try_from(outputs).ok()?,
-        ))
+        span.for_output_range(0..outputs)
     }
 
     /// Shrink a prepared source span at true EOF without sampling controls again.
@@ -374,22 +243,14 @@ where
             .checked_add(u64::try_from(frames).ok()?)?;
         self.terminal_source_end = Some(end);
         if let Some(span) = prepared.source_span {
-            let (span, outputs) = Self::terminal_span(span, end)?;
-            prepared.source_span = Some(span);
-            prepared.landing_frames = Some(outputs);
+            prepared.source_span = Some(Self::terminal_span(span, end)?);
         }
         let shrink = prepared.frames - frames;
-        if shrink > 0 && prepared.source_span.is_none() {
-            prepared.landing_frames = None;
-        }
         prepared.frames = frames;
         prepared.active_frames = match prepared.source_span {
             Some(span) => source_demand(span, prepared.source_start).ok()?.min(frames),
             None if prepared.active_frames > shrink => prepared.active_frames - shrink,
-            None => {
-                prepared.activation = None;
-                frames
-            }
+            None => frames,
         };
         self.prepared_quantum = Some(prepared);
         Some(FrameCount::new(frames))

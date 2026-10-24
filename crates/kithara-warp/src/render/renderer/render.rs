@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use kithara_bufpool::HasPool;
 use kithara_signal::{AudioChunkInfo, FrameCount, SampleCount, SourceSpan};
 use kithara_stretch::{ElasticCapabilities, ElasticError, ElasticRequest};
@@ -144,33 +146,6 @@ where
         Ok((output_frames, exact - emitted))
     }
 
-    /// The output of a quantum's last request when the quantum ends on a
-    /// scheduled frame: what `emitted` leaves of `landing`, with the exact
-    /// output it does not cover carried as the remainder.
-    fn landing_output_frames(
-        source_frames: usize,
-        stretch: f64,
-        remainder: f64,
-        landing: usize,
-        emitted: usize,
-    ) -> Result<(usize, f64), ElasticError> {
-        let output = landing
-            .checked_sub(emitted)
-            .filter(|output| *output > 0)
-            .ok_or(ElasticError::OutputFrameLimit {
-                frames: emitted,
-                limit: landing,
-            })?;
-        let exact = source_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?
-            .mul_add(stretch, remainder);
-        Ok((
-            output,
-            exact - output.to_f64().ok_or(ElasticError::SampleCountOverflow)?,
-        ))
-    }
-
     fn quantized_source_span(
         frames: usize,
         pending_frames: usize,
@@ -256,12 +231,27 @@ where
     }
 }
 
+struct ActiveBlock {
+    meta: AudioChunkInfo,
+    frame: u64,
+    channels: usize,
+    pending_frames: usize,
+    sub: usize,
+    request_span: Option<usize>,
+    output_frames: usize,
+    next_remainder: f64,
+}
+
+impl ActiveBlock {
+    fn defers(&self) -> bool {
+        self.output_frames == 0 || self.request_span.is_none()
+    }
+}
+
 impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
-    /// Render `frames` source frames; with `landing`, the last engine request
-    /// emits exactly what is left of that many output frames.
     pub(in crate::render) fn render_active(
         &mut self,
         meta: AudioChunkInfo,
@@ -269,7 +259,6 @@ where
         speed: f32,
         channels: usize,
         frames: usize,
-        landing: Option<usize>,
     ) -> Result<(), ElasticError> {
         let base = 1.0 / f64::from(speed);
         let pitch = if self.current_keylock {
@@ -293,107 +282,37 @@ where
                 .as_ref()
                 .map(|engine| engine.capabilities())
                 .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
-            let source_limit =
-                Self::source_block_limit(stretch, capabilities, capabilities.max_output_frames())?;
             let remaining = usize::try_from(span).unwrap_or(frames - consumed);
             let pending_frames = self.pending_frames(channels);
-            let available =
-                source_limit
-                    .checked_sub(pending_frames)
-                    .ok_or(ElasticError::SourceFrameLimit {
-                        frames: pending_frames,
-                        limit: source_limit,
-                    })?;
-            if available == 0 {
-                return Err(ElasticError::InvalidRate(stretch.recip()));
-            }
+            let available = Self::available_source(stretch, capabilities, pending_frames)?;
             let sub = Self::balanced_source_block(remaining, available);
-            let landing = landing.filter(|_| consumed + sub == frames);
-            let request_span = if landing.is_some() {
-                Some(sub)
-            } else {
-                Self::quantized_source_span(
-                    sub,
-                    pending_frames,
-                    stretch,
-                    self.output_remainder,
-                    capabilities,
-                    capabilities.max_output_frames(),
-                )?
-            };
+            let request_span = Self::quantized_source_span(
+                sub,
+                pending_frames,
+                stretch,
+                self.output_remainder,
+                capabilities,
+                capabilities.max_output_frames(),
+            )?;
             let sub = request_span.unwrap_or(sub);
             let (output_frames, next_remainder) =
-                self.request_output_frames(sub, stretch, landing, channels)?;
+                Self::output_frames(sub, stretch, self.output_remainder)?;
+            let block = ActiveBlock {
+                meta,
+                frame,
+                channels,
+                pending_frames,
+                sub,
+                request_span,
+                output_frames,
+                next_remainder,
+            };
             let part = &samples[consumed * channels..(consumed + sub) * channels];
-            if output_frames == 0 || request_span.is_none() {
-                self.append_pending_source(part, meta, frame)?;
-                self.output_remainder = next_remainder
-                    + output_frames
-                        .to_f64()
-                        .ok_or(ElasticError::SampleCountOverflow)?;
-                consumed += sub;
-                frame = frame.saturating_add(
-                    u64::try_from(sub).map_err(|_| ElasticError::SampleCountOverflow)?,
-                );
-                continue;
+            if block.defers() {
+                self.defer_pending_source(part, &block)?;
+            } else {
+                self.process_block(part, &block, capabilities.max_output_frames())?;
             }
-            if output_frames > capabilities.max_output_frames() {
-                return Err(ElasticError::OutputFrameLimit {
-                    frames: output_frames,
-                    limit: capabilities.max_output_frames(),
-                });
-            }
-            let source_frames = pending_frames
-                .checked_add(sub)
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            let output_frames = FrameCount::new(output_frames);
-            let request = ElasticRequest::new(source_frames, output_frames.get())?;
-            let output_samples = output_frames
-                .get()
-                .checked_mul(channels)
-                .map(SampleCount::new)
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            let start = self.scratch.as_deref().map_or(0, <[f32]>::len);
-            let end = start
-                .checked_add(output_samples.get())
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            if pending_frames > 0 {
-                self.append_pending_source(part, meta, frame)?;
-            }
-            self.start_active_output(meta, frame, pending_frames, start)?;
-            let scratch = self
-                .scratch
-                .as_mut()
-                .ok_or(ElasticError::EnginePreparation(
-                    "output scratch is unavailable",
-                ))?;
-            if end > scratch.capacity() {
-                return Err(ElasticError::OutputFrameLimit {
-                    frames: end / channels,
-                    limit: scratch.capacity() / channels,
-                });
-            }
-            scratch
-                .ensure_len(end)
-                .map_err(|_| ElasticError::PoolCapacity)?;
-            let source = self
-                .pending_source
-                .as_deref()
-                .filter(|_| pending_frames > 0)
-                .unwrap_or(part);
-            let engine = self
-                .engine
-                .as_mut()
-                .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
-            if let Err(error) = engine.process(request, source, &mut scratch[start..end]) {
-                scratch.truncate(start);
-                return Err(error);
-            }
-            if pending_frames > 0 {
-                self.clear_pending_source();
-            }
-            self.output_remainder = next_remainder;
-            self.active = true;
             consumed += sub;
             frame = frame
                 .saturating_add(u64::try_from(sub).map_err(|_| ElasticError::SampleCountOverflow)?);
@@ -422,24 +341,6 @@ where
             };
         }
         Ok(())
-    }
-
-    /// Output frames one engine request emits for `sub` source frames and the
-    /// remainder it leaves; a `landing` request emits what is left of it.
-    fn request_output_frames(
-        &self,
-        sub: usize,
-        stretch: f64,
-        landing: Option<usize>,
-        channels: usize,
-    ) -> Result<(usize, f64), ElasticError> {
-        landing.map_or_else(
-            || Self::output_frames(sub, stretch, self.output_remainder),
-            |landing| {
-                let emitted = self.scratch.as_deref().map_or(0, <[f32]>::len) / channels;
-                Self::landing_output_frames(sub, stretch, self.output_remainder, landing, emitted)
-            },
-        )
     }
 
     fn terminal_next_meta(
@@ -573,6 +474,133 @@ where
             self.output_remainder = 0.0;
         }
         self.active = true;
+        Ok(())
+    }
+}
+
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
+    fn available_source(
+        stretch: f64,
+        capabilities: ElasticCapabilities,
+        pending_frames: usize,
+    ) -> Result<usize, ElasticError> {
+        let source_limit =
+            Self::source_block_limit(stretch, capabilities, capabilities.max_output_frames())?;
+        let available =
+            source_limit
+                .checked_sub(pending_frames)
+                .ok_or(ElasticError::SourceFrameLimit {
+                    frames: pending_frames,
+                    limit: source_limit,
+                })?;
+        if available == 0 {
+            return Err(ElasticError::InvalidRate(stretch.recip()));
+        }
+        Ok(available)
+    }
+
+    fn block_output(&self, block: &ActiveBlock) -> Result<Range<usize>, ElasticError> {
+        let output_samples = block
+            .output_frames
+            .checked_mul(block.channels)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let start = self.scratch.as_deref().map_or(0, <[f32]>::len);
+        let end = start
+            .checked_add(output_samples)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        Ok(start..end)
+    }
+
+    fn block_request(
+        block: &ActiveBlock,
+        max_output_frames: usize,
+    ) -> Result<ElasticRequest, ElasticError> {
+        if block.output_frames > max_output_frames {
+            return Err(ElasticError::OutputFrameLimit {
+                frames: block.output_frames,
+                limit: max_output_frames,
+            });
+        }
+        let source_frames = block
+            .pending_frames
+            .checked_add(block.sub)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        ElasticRequest::new(source_frames, block.output_frames)
+    }
+
+    fn defer_pending_source(
+        &mut self,
+        part: &[f32],
+        block: &ActiveBlock,
+    ) -> Result<(), ElasticError> {
+        self.append_pending_source(part, block.meta, block.frame)?;
+        self.output_remainder = block.next_remainder
+            + block
+                .output_frames
+                .to_f64()
+                .ok_or(ElasticError::SampleCountOverflow)?;
+        Ok(())
+    }
+
+    fn process_block(
+        &mut self,
+        part: &[f32],
+        block: &ActiveBlock,
+        max_output_frames: usize,
+    ) -> Result<(), ElasticError> {
+        let request = Self::block_request(block, max_output_frames)?;
+        let output = self.block_output(block)?;
+        if block.pending_frames > 0 {
+            self.append_pending_source(part, block.meta, block.frame)?;
+        }
+        self.start_active_output(block.meta, block.frame, block.pending_frames, output.start)?;
+        self.render_block(part, block, request, output)?;
+        if block.pending_frames > 0 {
+            self.clear_pending_source();
+        }
+        self.output_remainder = block.next_remainder;
+        self.active = true;
+        Ok(())
+    }
+
+    fn render_block(
+        &mut self,
+        part: &[f32],
+        block: &ActiveBlock,
+        request: ElasticRequest,
+        Range { start, end }: Range<usize>,
+    ) -> Result<(), ElasticError> {
+        let scratch = self
+            .scratch
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation(
+                "output scratch is unavailable",
+            ))?;
+        if end > scratch.capacity() {
+            return Err(ElasticError::OutputFrameLimit {
+                frames: end / block.channels,
+                limit: scratch.capacity() / block.channels,
+            });
+        }
+        scratch
+            .ensure_len(end)
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        let source = self
+            .pending_source
+            .as_deref()
+            .filter(|_| block.pending_frames > 0)
+            .unwrap_or(part);
+        let engine = self
+            .engine
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
+        if let Err(error) = engine.process(request, source, &mut scratch[start..end]) {
+            scratch.truncate(start);
+            return Err(error);
+        }
         Ok(())
     }
 }

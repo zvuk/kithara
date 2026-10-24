@@ -1,11 +1,23 @@
-#[cfg(test)]
-use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::stream::StreamCore;
 use crate::{ElasticDrain, ElasticError};
 
 impl StreamCore {
+    fn advance_tail_grain(&mut self) -> Result<(), ElasticError> {
+        if self.anchor.is_some() {
+            self.schedule_anchored(true)?;
+        } else {
+            if !self.request_pending {
+                self.native.next(&mut self.request);
+                self.input.set_requested(self.native.specify(&self.request));
+                self.request_pending = true;
+            }
+            self.synthesise(true, true)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn clear(&mut self) {
         self.anchor = None;
         self.cue_grain_pending = false;
@@ -18,6 +30,24 @@ impl StreamCore {
         self.request_pending = false;
         self.samples_needed = 0.0;
         self.unprimed_started = false;
+    }
+
+    fn consume_tail(
+        &mut self,
+        source_end: f64,
+        output: &mut [f32],
+        capacity: usize,
+        drained: usize,
+    ) -> Result<usize, ElasticError> {
+        if let Some(anchor) = self.anchor {
+            self.discard_before(anchor)?;
+        }
+        self.consume_to_end(
+            source_end,
+            capacity.saturating_sub(drained),
+            Some(output),
+            drained,
+        )
     }
 
     fn consume_to_end(
@@ -127,7 +157,6 @@ impl StreamCore {
         self.input.end()
     }
 
-    #[cfg_attr(test, kithara::hang_watchdog)]
     pub(super) fn terminal_tail(
         &mut self,
         output: &mut [f32],
@@ -137,33 +166,15 @@ impl StreamCore {
         let mut drained = 0usize;
         let mut stalled = 0usize;
         for grain in 0..=Self::TERMINAL_GRAIN_LIMIT {
-            #[cfg(test)]
-            hang_tick!();
-            if let Some(anchor) = self.anchor {
-                self.discard_before(anchor)?;
-            }
-            let consumed = self.consume_to_end(
-                source_end,
-                capacity.saturating_sub(drained),
-                Some(output),
-                drained,
-            )?;
+            let consumed = self.consume_tail(source_end, output, capacity, drained)?;
             drained = drained
                 .checked_add(consumed)
                 .ok_or(ElasticError::SampleCountOverflow)?;
-            if consumed > 0 {
-                #[cfg(test)]
-                hang_reset!();
-            }
             if self
                 .output_position()
                 .is_some_and(|position| position >= source_end)
             {
-                if self.request_pending {
-                    self.synthesise(true, true)?;
-                }
-                self.flush_invalid()?;
-                self.clear();
+                self.discard()?;
                 return Ok(ElasticDrain::new(drained, true));
             }
             if drained == capacity {
@@ -175,20 +186,9 @@ impl StreamCore {
             let previous_end = self.output_chunk.as_ref().and_then(|chunk| {
                 (chunk.valid && chunk.frames > 0 && chunk.end.is_finite()).then_some(chunk.end)
             });
-            if self.anchor.is_some() {
-                self.schedule_anchored(true)?;
-            } else {
-                if !self.request_pending {
-                    self.native.next(&mut self.request);
-                    self.input.set_requested(self.native.specify(&self.request));
-                    self.request_pending = true;
-                }
-                self.synthesise(true, true)?;
-            }
+            self.advance_tail_grain()?;
             if self.output_advances(previous_end) {
                 stalled = 0;
-                #[cfg(test)]
-                hang_reset!();
             } else {
                 stalled += 1;
             }

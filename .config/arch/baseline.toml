@@ -75,20 +75,10 @@ schema_version = 1
 "crates/kithara-platform/src/flash/system/sched.rs::Core::try_advance_once" = 2
 "crates/kithara-record/src/live/task.rs::RecordingTask::process" = 5
 "crates/kithara-storage/src/backend/mmap/io.rs::MmapDriver::commit" = 11
-"crates/kithara-stretch/src/backends/bungee/buffer.rs::InputBuffer::analyse" = 1
-"crates/kithara-stretch/src/backends/bungee/buffer.rs::InputBuffer::append" = 5
-"crates/kithara-stretch/src/backends/bungee/drain.rs::StreamCore::terminal_tail" = 5
-"crates/kithara-stretch/src/backends/bungee/prime.rs::StreamCore::prime" = 9
-"crates/kithara-stretch/src/backends/bungee/render.rs::StreamCore::render_target" = 1
-"crates/kithara-stretch/src/elastic/span.rs::ElasticSpanPlan::new" = 2
 "crates/kithara-ui/src/engine/router.rs::Router::handle" = 1
 "crates/kithara-ui/src/hosts/solve/flex.rs::resolve" = 13
 "crates/kithara-ui/src/iced/tree/host.rs::Host::update" = 14
 "crates/kithara-ui/src/masonry/vis.rs::VisDeclaration::prepare" = 7
-"crates/kithara-warp/src/render/renderer/activation.rs::WarpRenderer::activate_prepared_quantum" = 15
-"crates/kithara-warp/src/render/renderer/render.rs::WarpRenderer::render_active" = 18
-"crates/kithara-warp/src/render/renderer/residency.rs::SourceResidency::append" = 1
-"crates/kithara-warp/src/render/renderer/target.rs::WarpRenderer::service_target" = 13
 
 [generic_param_count]
 "crates/kithara-net/src/retry.rs::RetryNet::retry_loop" = 1

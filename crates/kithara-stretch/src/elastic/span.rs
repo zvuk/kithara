@@ -158,15 +158,7 @@ impl ElasticSpanPlan {
     where
         I: IntoIterator<Item = ElasticSpan>,
     {
-        let mut continuous = SmallVec::<[ElasticSpan; consts::MAX_SPANS]>::new();
-        for span in spans {
-            if continuous.len() == consts::MAX_SPANS {
-                return Err(ElasticError::SpanLimit {
-                    limit: consts::MAX_SPANS,
-                });
-            }
-            continuous.push(span);
-        }
+        let continuous = collect_spans(spans)?;
         let first = continuous
             .first()
             .copied()
@@ -202,14 +194,7 @@ impl ElasticSpanPlan {
                 maximum_rate,
                 direction,
             )?;
-            let source_frames = usize::try_from(boundary.abs_diff(end))
-                .map_err(|_| ElasticError::SpanArithmeticOverflow)?;
-            if source_frames > capabilities.max_source_frames() {
-                return Err(ElasticError::SourceFrameLimit {
-                    frames: source_frames,
-                    limit: capabilities.max_source_frames(),
-                });
-            }
+            let source_frames = segment_source_frames(boundary, end, capabilities)?;
             segments.push(ElasticSpanRequest {
                 request: ElasticRequest::new(source_frames, span.output_frames)?,
                 source_start: boundary,
@@ -314,6 +299,37 @@ impl PhasePlan {
             Err(ElasticError::SpanArithmeticOverflow)
         }
     }
+}
+
+fn collect_spans<I: IntoIterator<Item = ElasticSpan>>(
+    spans: I,
+) -> Result<SmallVec<[ElasticSpan; consts::MAX_SPANS]>, ElasticError> {
+    let mut continuous = SmallVec::<[ElasticSpan; consts::MAX_SPANS]>::new();
+    for span in spans {
+        if continuous.len() == consts::MAX_SPANS {
+            return Err(ElasticError::SpanLimit {
+                limit: consts::MAX_SPANS,
+            });
+        }
+        continuous.push(span);
+    }
+    Ok(continuous)
+}
+
+fn segment_source_frames(
+    boundary: i64,
+    end: i64,
+    capabilities: ElasticCapabilities,
+) -> Result<usize, ElasticError> {
+    let source_frames = usize::try_from(boundary.abs_diff(end))
+        .map_err(|_| ElasticError::SpanArithmeticOverflow)?;
+    if source_frames > capabilities.max_source_frames() {
+        return Err(ElasticError::SourceFrameLimit {
+            frames: source_frames,
+            limit: capabilities.max_source_frames(),
+        });
+    }
+    Ok(source_frames)
 }
 
 fn validate_spans(

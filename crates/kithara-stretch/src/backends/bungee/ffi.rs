@@ -1,7 +1,11 @@
 use std::{cell::Cell, marker::PhantomData, ptr::NonNull, slice};
 
-use bungee_sys::{BungeeStretcher, InputChunk, OutputChunk, Request, SampleRates, stretcher};
+#[cfg(not(test))]
+use bungee_sys::stretcher;
+use bungee_sys::{BungeeStretcher, InputChunk, OutputChunk, Request, SampleRates};
 
+#[cfg(test)]
+use super::native_double as stretcher;
 use crate::{BungeeConfig, ElasticError};
 
 #[derive(Clone, Copy)]
@@ -21,17 +25,8 @@ pub(super) struct NativeOutput {
 
 pub(super) struct NativeStretcher {
     inner: NonNull<BungeeStretcher>,
-    channels: usize,
-    #[cfg(test)]
-    fault: Option<NativeFault>,
     not_sync: PhantomData<Cell<()>>,
-}
-
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum NativeFault {
-    Analyse,
-    Synthesise,
+    channels: usize,
 }
 
 // SAFETY: the native handle has unique ownership and every operation requires
@@ -65,19 +60,11 @@ impl NativeStretcher {
             channels: usize::try_from(channels).map_err(|_| {
                 ElasticError::EnginePreparation("Bungee channel count is out of range")
             })?,
-            #[cfg(test)]
-            fault: None,
             not_sync: PhantomData,
         })
     }
 
     pub(super) fn analyse(&mut self, input: AnalysisInput<'_>) -> Result<(), ElasticError> {
-        #[cfg(test)]
-        if self.take_fault(NativeFault::Analyse) {
-            return Err(ElasticError::EnginePreparation(
-                "injected Bungee analysis failure",
-            ));
-        }
         let required = planar_len(self.channels, input.channel_stride)?;
         if input.samples.len() < required {
             return Err(ElasticError::EnginePreparation(
@@ -156,11 +143,6 @@ impl NativeStretcher {
         })
     }
 
-    #[cfg(test)]
-    pub(super) fn fail_next(&mut self, fault: NativeFault) {
-        self.fault = Some(fault);
-    }
-
     pub(super) fn is_flushed(&self) -> bool {
         stretcher::is_flushed(self.inner.as_ptr()) != 0
     }
@@ -192,12 +174,6 @@ impl NativeStretcher {
         destination_stride: usize,
     ) -> Result<NativeOutput, ElasticError> {
         let output = self.synthesise_native();
-        #[cfg(test)]
-        if self.take_fault(NativeFault::Synthesise) {
-            return Err(ElasticError::EnginePreparation(
-                "injected Bungee synthesis failure",
-            ));
-        }
         self.copy_native_output(&output, destination, destination_stride)
     }
 
@@ -210,16 +186,6 @@ impl NativeStretcher {
         };
         stretcher::synthesise_grain(self.inner.as_ptr(), &mut output);
         output
-    }
-
-    #[cfg(test)]
-    fn take_fault(&mut self, fault: NativeFault) -> bool {
-        if self.fault == Some(fault) {
-            self.fault = None;
-            true
-        } else {
-            false
-        }
     }
 }
 

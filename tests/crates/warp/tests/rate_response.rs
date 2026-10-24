@@ -217,7 +217,6 @@ fn response_events(trace: &Scope) -> Vec<ProbeEvent> {
         "rate_applied",
         "pcm_consumed",
         "render_committed",
-        "prime_activation",
         "chunk_admitted",
     ]
     .into_iter()
@@ -384,13 +383,11 @@ fn assert_response(
     }
     let onset = first_target_onset(samples, acknowledged.start, case.target_tone)
         .unwrap_or_else(|| panic!("{backend} never produced the target tone"));
-    let primed = revision_probe(events, "prime_activation", "request_revision", revision)
-        .map(|event| (event.field("source_frames"), event.field("output_frames")));
     let audible = (onset + acknowledged.start).saturating_sub(acknowledged.end);
     let responded = audible.saturating_sub(queued);
     println!(
         "rate response: {backend} smooth={} audible={audible} queued={queued} \
-         responded={responded} primed={primed:?}",
+         responded={responded}",
         case.smooth_frames
     );
     let observed_end = new_rate_start.saturating_add(
@@ -407,8 +404,7 @@ fn assert_response(
         responded <= case.smooth_frames + TARGET_WINDOW_FRAMES,
         "{backend} took {responded} output frames to make revision {revision} audible once the \
          {queued} frames rendered at the old rate had drained; the ramp is {} frames and the \
-         detector resolves an onset no finer than {TARGET_WINDOW_FRAMES}; audible={audible} \
-         primed={primed:?}",
+         detector resolves an onset no finer than {TARGET_WINDOW_FRAMES}; audible={audible}",
         case.smooth_frames
     );
 }
@@ -693,11 +689,9 @@ fn assert_strict_response(
     }
     let onset = first_target_onset(samples, command_frame, case.target_tone)
         .unwrap_or_else(|| panic!("{backend} never produced the target tone"));
-    let primed = revision_probe(events, "prime_activation", "request_revision", revision)
-        .map(|event| (event.field("source_frames"), event.field("output_frames")));
     assert!(
         onset <= case.response_budget_frames,
-        "{backend} target tone began after {onset} frames; applied after {applied_response}; presented after {presented_response}; budget is {}; primed={primed:?}",
+        "{backend} target tone began after {onset} frames; applied after {applied_response}; presented after {presented_response}; budget is {}",
         case.response_budget_frames
     );
 }

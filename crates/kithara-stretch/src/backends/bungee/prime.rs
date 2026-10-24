@@ -1,5 +1,3 @@
-#[cfg(test)]
-use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::stream::StreamCore;
@@ -57,17 +55,13 @@ impl StreamCore {
         Ok(())
     }
 
-    #[cfg_attr(test, kithara::hang_watchdog)]
-    pub(super) fn prime(
+    fn load_prime_input(
         &mut self,
         source_history: &[f32],
         source_lookahead: &[f32],
         request: ElasticRequest,
         source: &[f32],
-        pitch: f64,
-        discarded_output: &mut [f32],
     ) -> Result<(), ElasticError> {
-        self.discard()?;
         let channels = usize::from(self.output.spec().channels);
         let history_frames = source_history
             .len()
@@ -83,7 +77,62 @@ impl StreamCore {
         self.input.append(Some(source_history), history_frames)?;
         self.input.append(Some(source_lookahead), history_frames)?;
         self.input.append(Some(source), request.source_frames())?;
+        Ok(())
+    }
 
+    pub(super) fn prime(
+        &mut self,
+        source_history: &[f32],
+        source_lookahead: &[f32],
+        request: ElasticRequest,
+        source: &[f32],
+        pitch: f64,
+        discarded_output: &mut [f32],
+    ) -> Result<(), ElasticError> {
+        self.discard()?;
+        self.load_prime_input(source_history, source_lookahead, request, source)?;
+        let grain_count = self.schedule_preroll(request, pitch)?;
+
+        let mut discarded_frames = 0;
+        for grain in 0..grain_count {
+            self.input.set_requested(self.native.specify(&self.request));
+            self.request_pending = true;
+            self.synthesise(true, false)?;
+            self.discard_pre_cue(
+                discarded_output,
+                request.output_frames(),
+                &mut discarded_frames,
+            )?;
+            if grain + 1 < grain_count {
+                self.native.next(&mut self.request);
+            }
+        }
+        if discarded_frames != request.output_frames() {
+            return Err(ElasticError::EnginePreparation(
+                "Bungee preroll did not produce the declared discard span",
+            ));
+        }
+
+        self.native.next(&mut self.request);
+        self.request.position = 0.0;
+        self.request.reset = 0;
+        self.output_chunk = None;
+        self.output_consumed = 0;
+        self.request_pending = false;
+        self.samples_needed = 0.0;
+        self.anchor = Some(0.0);
+        self.audible_source_end = 0;
+        self.audible_output_end = 0;
+        self.grain_output_position = 0.0;
+        self.cue_grain_pending = true;
+        Ok(())
+    }
+
+    fn schedule_preroll(
+        &mut self,
+        request: ElasticRequest,
+        pitch: f64,
+    ) -> Result<usize, ElasticError> {
         let playback_rate = request.source_frames_per_output()?;
         self.request.position = 0.0;
         self.request.speed = playback_rate;
@@ -122,47 +171,6 @@ impl StreamCore {
             .ok_or(ElasticError::SampleCountOverflow)?;
         self.request.position = -input_hop * grain_count_f64;
         self.request.reset = 1;
-
-        let mut discarded_frames = 0;
-        for grain in 0..grain_count {
-            #[cfg(test)]
-            hang_tick!();
-            #[cfg(test)]
-            let previous_discarded = discarded_frames;
-            self.input.set_requested(self.native.specify(&self.request));
-            self.request_pending = true;
-            self.synthesise(true, false)?;
-            self.discard_pre_cue(
-                discarded_output,
-                request.output_frames(),
-                &mut discarded_frames,
-            )?;
-            #[cfg(test)]
-            if discarded_frames > previous_discarded {
-                hang_reset!();
-            }
-            if grain + 1 < grain_count {
-                self.native.next(&mut self.request);
-            }
-        }
-        if discarded_frames != request.output_frames() {
-            return Err(ElasticError::EnginePreparation(
-                "Bungee preroll did not produce the declared discard span",
-            ));
-        }
-
-        self.native.next(&mut self.request);
-        self.request.position = 0.0;
-        self.request.reset = 0;
-        self.output_chunk = None;
-        self.output_consumed = 0;
-        self.request_pending = false;
-        self.samples_needed = 0.0;
-        self.anchor = Some(0.0);
-        self.audible_source_end = 0;
-        self.audible_output_end = 0;
-        self.grain_output_position = 0.0;
-        self.cue_grain_pending = true;
-        Ok(())
+        Ok(grain_count)
     }
 }

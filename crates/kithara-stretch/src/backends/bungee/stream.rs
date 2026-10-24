@@ -108,7 +108,12 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{ElasticRequest, backends::bungee::ffi::NativeFault, consts, test_pools::pools};
+    use crate::{
+        ElasticRequest,
+        backends::bungee::native_double::{self, NativeFault},
+        consts,
+        test_pools::pools,
+    };
 
     fn signal(pcm: &StretchPcm, frames: usize, offset: usize) -> Vec<f32> {
         pcm.bungee[offset * consts::CHANNELS..(offset + frames) * consts::CHANNELS].to_vec()
@@ -272,23 +277,30 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::analyse(NativeFault::Analyse)]
-    #[case::synthesise(NativeFault::Synthesise)]
+    #[case::analyse(
+        NativeFault::Analyse,
+        ElasticError::EnginePreparation("Bungee requested an oversized input grain")
+    )]
+    #[case::synthesise(
+        NativeFault::Synthesise,
+        ElasticError::EnginePreparation("Bungee reported a negative output frame count")
+    )]
     fn native_failure_clears_the_request_and_remains_reusable(
         #[case] fault: NativeFault,
+        #[case] expected: ElasticError,
         stretch_pcm: &'static StretchPcm,
     ) {
         const QUANTUM: usize = 64;
 
         let mut core = anchored_core(stretch_pcm);
-        core.native.fail_next(fault);
+        native_double::fail_next(fault);
         let source = signal(stretch_pcm, QUANTUM, consts::CONTEXT_FRAMES * 3);
         let request = ElasticRequest::new(QUANTUM, QUANTUM).expect("unity request");
         let mut output = vec![f32::NAN; QUANTUM * consts::CHANNELS];
 
-        assert!(
-            core.render(Some(&source), request, 1.0, Some(&mut output))
-                .is_err(),
+        assert_eq!(
+            core.render(Some(&source), request, 1.0, Some(&mut output)),
+            Err(expected),
             "the injected native failure must cross the stream boundary"
         );
         assert!(
