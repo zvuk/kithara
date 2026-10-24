@@ -7,6 +7,39 @@
 use kithara_test_dylib as _;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod mutex_bounds {
+    use std::rc::Rc;
+
+    use kithara_platform::sync::Mutex;
+
+    const _: bool = {
+        trait AmbiguousIfSend<A> {
+            const CHECK: bool;
+        }
+        impl<T: ?Sized> AmbiguousIfSend<()> for T {
+            const CHECK: bool = true;
+        }
+        impl<T: ?Sized + Send> AmbiguousIfSend<u8> for T {
+            const CHECK: bool = true;
+        }
+        <Mutex<Rc<()>> as AmbiguousIfSend<_>>::CHECK
+    };
+
+    const _: bool = {
+        trait AmbiguousIfSync<A> {
+            const CHECK: bool;
+        }
+        impl<T: ?Sized> AmbiguousIfSync<()> for T {
+            const CHECK: bool = true;
+        }
+        impl<T: ?Sized + Sync> AmbiguousIfSync<u8> for T {
+            const CHECK: bool = true;
+        }
+        <Mutex<Rc<()>> as AmbiguousIfSync<_>>::CHECK
+    };
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 mod clock {
     use kithara_platform::{
         thread,

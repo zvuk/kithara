@@ -2,12 +2,7 @@
 
 use std::ops::Range;
 
-use kithara_platform::{
-    CancelToken,
-    maybe_send::{MaybeSend, MaybeSync},
-    sync::Arc,
-    time::Duration,
-};
+use kithara_platform::{CancelToken, maybe_send::MaybeSync, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
 
@@ -61,7 +56,7 @@ pub struct SourceSeekAnchor {
 /// Methods take `&mut self` to allow sources to maintain internal state
 /// (e.g., progress tracking, segment index updates).
 #[kithara::mock(api = SourceMock)]
-pub trait Source: MaybeSend + MaybeSync + 'static {
+pub trait Source: Send + MaybeSync + 'static {
     /// Source-owned cancellation parent for independent decoder readers.
     fn cancel_token(&self) -> Option<CancelToken> {
         None

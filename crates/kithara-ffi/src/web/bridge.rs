@@ -1,4 +1,4 @@
-use std::sync::{LazyLock, OnceLock};
+use std::{cell::RefCell, sync::OnceLock};
 
 use kithara::{
     host::{HostConfig, wasm},
@@ -27,15 +27,17 @@ struct HostChannel {
     pools: Pools,
 }
 
-fn host_channel() -> &'static Mutex<Option<HostChannel>> {
-    static CHANNEL: LazyLock<Mutex<Option<HostChannel>>> = LazyLock::new(|| Mutex::new(None));
-    &CHANNEL
+thread_local! {
+    static CHANNEL: RefCell<Option<HostChannel>> = const { RefCell::new(None) };
 }
 
 fn ensure_host_channel() -> Result<(wasm::HostSender<FfiPools>, Pools), JsValue> {
-    let mut guard = host_channel().lock();
-    if let Some(channel) = guard.as_ref() {
-        return Ok((channel.sender.clone(), channel.pools.clone()));
+    if let Some(channel) = CHANNEL.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map(|channel| (channel.sender.clone(), channel.pools.clone()))
+    }) {
+        return Ok(channel);
     }
 
     let pools = build_pools()
@@ -45,11 +47,13 @@ fn ensure_host_channel() -> Result<(wasm::HostSender<FfiPools>, Pools), JsValue>
     let (sender, receiver) = wasm::worker_host_channel(&host)
         .map_err(|error| JsValue::from_str(&format!("host channel failed: {error}")))?;
     play_wasm::spawn_webcodecs_probe(pools.clone());
-    *guard = Some(HostChannel {
-        receiver,
-        _host: host,
-        pools: pools.clone(),
-        sender: sender.clone(),
+    CHANNEL.with(|slot| {
+        *slot.borrow_mut() = Some(HostChannel {
+            receiver,
+            _host: host,
+            pools: pools.clone(),
+            sender: sender.clone(),
+        })
     });
     Ok((sender, pools))
 }
@@ -59,10 +63,12 @@ pub(crate) fn initialize() -> Result<(), JsValue> {
 }
 
 pub(crate) fn tick_and_poll() {
-    let guard = host_channel().lock();
-    if let Some(channel) = guard.as_ref() {
-        wasm::tick_and_poll(&channel.receiver);
-    }
+    thread::assert_main_thread(concat!(module_path!(), "::tick_and_poll"));
+    CHANNEL.with(|slot| {
+        if let Some(channel) = slot.borrow().as_ref() {
+            wasm::tick_and_poll(&channel.receiver);
+        }
+    });
 }
 
 struct Engine {

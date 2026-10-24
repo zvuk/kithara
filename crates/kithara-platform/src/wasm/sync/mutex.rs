@@ -36,11 +36,6 @@ impl<T: Default> Default for Mutex<T> {
     }
 }
 
-// SAFETY: browser is single-threaded; a `Mutex` value never crosses threads.
-unsafe impl<T> Send for Mutex<T> {}
-// SAFETY: same — no concurrent access on the single browser thread.
-unsafe impl<T> Sync for Mutex<T> {}
-
 /// The inner guard is `pub(crate)` because the condvar implementation needs the raw guard.
 pub struct MutexGuard<'a, T>(pub(crate) Guard<'a, T>);
 
@@ -58,4 +53,37 @@ impl<T> DerefMut for MutexGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         &mut self.0
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use super::Mutex;
+
+    const _: bool = {
+        trait AmbiguousIfSend<A> {
+            const CHECK: bool;
+        }
+        impl<T: ?Sized> AmbiguousIfSend<()> for T {
+            const CHECK: bool = true;
+        }
+        impl<T: ?Sized + Send> AmbiguousIfSend<u8> for T {
+            const CHECK: bool = true;
+        }
+        <Mutex<Rc<()>> as AmbiguousIfSend<_>>::CHECK
+    };
+
+    const _: bool = {
+        trait AmbiguousIfSync<A> {
+            const CHECK: bool;
+        }
+        impl<T: ?Sized> AmbiguousIfSync<()> for T {
+            const CHECK: bool = true;
+        }
+        impl<T: ?Sized + Sync> AmbiguousIfSync<u8> for T {
+            const CHECK: bool = true;
+        }
+        <Mutex<Rc<()>> as AmbiguousIfSync<_>>::CHECK
+    };
 }

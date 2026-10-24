@@ -125,9 +125,8 @@ mod tests {
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
     use std::{
-        cell::{Cell, RefCell},
         num::NonZeroU32,
-        rc::Rc,
+        sync::atomic::{AtomicUsize, Ordering},
         task::Waker,
     };
 
@@ -175,16 +174,16 @@ mod tests {
     struct DeckProbe {
         close: Outcome,
         detach: Outcome,
-        drains: Rc<Cell<usize>>,
-        drops: Rc<RefCell<usize>>,
-        ticks: Rc<Cell<usize>>,
-        waker: Rc<RefCell<Option<Waker>>>,
+        drains: Arc<AtomicUsize>,
+        drops: Arc<AtomicUsize>,
+        ticks: Arc<AtomicUsize>,
+        waker: Arc<Mutex<Option<Waker>>>,
         worker: PlayWorker<TestPools>,
     }
 
     impl Drop for DeckProbe {
         fn drop(&mut self) {
-            *self.drops.borrow_mut() += 1;
+            self.drops.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -201,10 +200,10 @@ mod tests {
     }
 
     impl DeckControl for DeckProbe {
-        type Control = Rc<RefCell<Option<Waker>>>;
+        type Control = Arc<Mutex<Option<Waker>>>;
 
         fn control(&self) -> Self::Control {
-            Rc::clone(&self.waker)
+            Arc::clone(&self.waker)
         }
     }
 
@@ -223,19 +222,19 @@ mod tests {
         }
 
         fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {
-            self.drains.set(self.drains.get() + 1);
+            self.drains.fetch_add(1, Ordering::SeqCst);
         }
 
         fn hold(&mut self, waker: Waker) {
-            *self.waker.borrow_mut() = Some(waker);
+            *self.waker.lock() = Some(waker);
         }
 
         fn release(&mut self) {
-            self.waker.borrow_mut().take();
+            self.waker.lock().take();
         }
 
         fn tick(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {
-            self.ticks.set(self.ticks.get() + 1);
+            self.ticks.fetch_add(1, Ordering::SeqCst);
         }
 
         fn settle(
@@ -279,9 +278,9 @@ mod tests {
         owner: Arc<Dispatcher>,
         state: WebSessionState<HostCore<TestPools>>,
         route: Arc<HostRoute<Command>>,
-        drains: Rc<Cell<usize>>,
-        drops: Rc<RefCell<usize>>,
-        ticks: Rc<Cell<usize>>,
+        drains: Arc<AtomicUsize>,
+        drops: Arc<AtomicUsize>,
+        ticks: Arc<AtomicUsize>,
     }
 
     fn fixture(close: Outcome, detach: Outcome) -> Fixture {
@@ -304,20 +303,20 @@ mod tests {
             postbox,
         });
         host.dispatcher = owner.clone();
-        let drops = Rc::default();
+        let drops = Arc::default();
         let probe = DeckProbe {
             close,
             detach,
-            drains: Rc::default(),
-            drops: Rc::clone(&drops),
-            ticks: Rc::default(),
-            waker: Rc::default(),
+            drains: Arc::default(),
+            drops: Arc::clone(&drops),
+            ticks: Arc::default(),
+            waker: Arc::default(),
             worker: PlayWorker::new(PlayWorkerConfig::builder(pools()).build()),
         };
-        let drains = Rc::clone(&probe.drains);
-        let ticks = Rc::clone(&probe.ticks);
+        let drains = Arc::clone(&probe.drains);
+        let ticks = Arc::clone(&probe.ticks);
         let deck = host.insert(probe).expect("fixture deck registration");
-        ticks.set(0);
+        ticks.store(0, Ordering::SeqCst);
         Fixture {
             host,
             deck,
@@ -357,7 +356,7 @@ mod tests {
 
         host.remove(&deck).expect("remove deck");
 
-        assert_eq!(*drops.borrow(), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
 
     #[kithara::test(flash(false))]
@@ -376,7 +375,7 @@ mod tests {
             host.remove(&deck),
             Err(PlayError::SessionGone { .. })
         ));
-        assert_eq!(*drops.borrow(), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
 
     #[kithara::test(flash(false))]
@@ -397,11 +396,15 @@ mod tests {
             } = fixture(close, detach);
 
             assert!(matches!(host.remove(&deck), Err(PlayError::Internal(_))));
-            assert_eq!(*drops.borrow(), 0);
+            assert_eq!(drops.load(Ordering::SeqCst), 0);
             assert!(host.root_view.holds(deck.id()));
-            assert_eq!(ticks.get(), 1, "the Host still holds the deck");
+            assert_eq!(
+                ticks.load(Ordering::SeqCst),
+                1,
+                "the Host still holds the deck"
+            );
             drop(host);
-            assert_eq!(*drops.borrow(), 0);
+            assert_eq!(drops.load(Ordering::SeqCst), 0);
             hang_reset!();
         }
     }
@@ -416,20 +419,32 @@ mod tests {
             owner: _owner,
             ..
         } = fixture(Outcome::Ok, Outcome::Ok);
-        let waker = deck.control().borrow().clone().expect("held deck waker");
-        assert_eq!(drains.get(), 1, "held, the deck runs what waited for it");
+        let waker = deck.control().lock().clone().expect("held deck waker");
+        assert_eq!(
+            drains.load(Ordering::SeqCst),
+            1,
+            "held, the deck runs what waited for it"
+        );
 
         waker.wake_by_ref();
-        assert_eq!(drains.get(), 1, "the wake queues work for the owner");
+        assert_eq!(
+            drains.load(Ordering::SeqCst),
+            1,
+            "the wake queues work for the owner"
+        );
         route.drain::<TestPools, HostCore<TestPools>>(&state);
 
         assert_eq!(
-            drains.get(),
+            drains.load(Ordering::SeqCst),
             2,
             "a caller on the Worker reads its answer at the owner's next turn"
         );
         route.drain::<TestPools, HostCore<TestPools>>(&state);
-        assert_eq!(drains.get(), 2, "one wake queues exactly one drain");
+        assert_eq!(
+            drains.load(Ordering::SeqCst),
+            2,
+            "one wake queues exactly one drain"
+        );
     }
 
     #[kithara::test]
@@ -444,11 +459,11 @@ mod tests {
         wait_for_ticks(&ticks).await;
         host.remove(&released)
             .expect("the Host takes the deck back");
-        let at_release = ticks.get();
+        let at_release = ticks.load(Ordering::SeqCst);
         time::sleep(consts::SESSION_PUMP_INTERVAL * 3).await;
 
         assert_eq!(
-            ticks.get(),
+            ticks.load(Ordering::SeqCst),
             at_release,
             "a released deck is no longer ticked"
         );
@@ -456,9 +471,9 @@ mod tests {
     }
 
     #[kithara::hang_watchdog]
-    async fn wait_for_ticks(ticks: &Cell<usize>) {
-        let mut seen = ticks.get();
-        while ticks.get() < 2 {
+    async fn wait_for_ticks(ticks: &AtomicUsize) {
+        let mut seen = ticks.load(Ordering::SeqCst);
+        while ticks.load(Ordering::SeqCst) < 2 {
             hang_tick!();
             time::timeout(
                 __hang_detector.remaining(),
@@ -466,8 +481,8 @@ mod tests {
             )
             .await
             .expect("owner clock watchdog");
-            if ticks.get() != seen {
-                seen = ticks.get();
+            if ticks.load(Ordering::SeqCst) != seen {
+                seen = ticks.load(Ordering::SeqCst);
                 hang_reset!();
             }
         }

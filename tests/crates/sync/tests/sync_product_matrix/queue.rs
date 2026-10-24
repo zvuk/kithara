@@ -942,7 +942,7 @@ impl QueueMusic {
     }
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-    async fn run(&mut self) -> CapturedMusic {
+    async fn run(&mut self, startup_frames: usize) -> CapturedMusic {
         let wall = Instant::now();
         let mut reported = wall;
         let mut starts_seen = 0;
@@ -950,6 +950,17 @@ impl QueueMusic {
         let mut render_time = Duration::ZERO;
         let mut data = CapturedMusic::default();
         self.start_clock(&mut data).await;
+        for offset in (0..startup_frames).step_by(BLOCK - 1) {
+            self.render_block((startup_frames - offset).min(BLOCK - 1), &mut data)
+                .await;
+            hang_reset!();
+        }
+        self.deck.observe(|o| {
+            assert!(
+                o.capture.as_ref().expect("capture").starts.is_empty(),
+                "startup callbacks precede every source Start"
+            );
+        });
         hang_reset!();
         let source_count: f64 = self.kind.sources().len().as_();
         let max_frames: u64 = match self.kind {
@@ -969,15 +980,29 @@ impl QueueMusic {
         let mut postroll = None;
         let mut next_beat = None;
         loop {
+            let (starts, first_start) = self.deck.observe(|o| {
+                let capture = o.capture.as_ref().expect("capture");
+                (
+                    capture.starts.len(),
+                    capture.starts.first().map(|(_, _, at, _)| *at),
+                )
+            });
             hang_tick!(format!(
                 "queue321: real Host frame {}, starts {}, grids {}",
                 self.host.position(),
-                self.deck
-                    .observe(|o| o.capture.as_ref().expect("capture").starts.len()),
+                starts,
                 data.answered.len()
             ));
+            let origin = first_start.map_or(0, |at| {
+                u64::try_from(frame(at)).expect("native Start is nonnegative")
+            });
+            let elapsed = self
+                .host
+                .position()
+                .checked_sub(origin)
+                .expect("native Start precedes the current Host frame");
             assert!(
-                self.host.position() <= max_frames,
+                elapsed <= max_frames,
                 "the fixed Queue scenario must finish within its declared frame bound"
             );
             let control = self.deck.control().clone();
@@ -2751,7 +2776,12 @@ fn output_contract(
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-async fn capture_music(kind: MusicCase, key_lock: bool, tracks: &[(&str, Start)]) {
+async fn capture_music(
+    kind: MusicCase,
+    key_lock: bool,
+    tracks: &[(&str, Start)],
+    startup_seconds: u32,
+) {
     let _trace = usdt_trace::scope();
     let wall = Instant::now();
     tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_begin");
@@ -2771,7 +2801,9 @@ async fn capture_music(kind: MusicCase, key_lock: bool, tracks: &[(&str, Start)]
     case.append_sources(tracks).await;
     tracing::info!(target: "kithara_test::sync::queue321", phase = "render_begin",
         wall_s = wall.elapsed().as_secs_f64(), frame = case.host.position());
-    let mut data = case.run().await;
+    let startup_frames = usize::try_from(u64::from(RATE) * u64::from(startup_seconds))
+        .expect("startup frames fit usize");
+    let mut data = case.run(startup_frames).await;
     if key_lock {
         check_keylock_music(&mut case, data).await;
         return;
@@ -2982,6 +3014,7 @@ async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overla
             ("rhythm_wav_trip_hop_74_aligned", Start::Seconds(0.0)),
             ("rhythm_wav_breakbeat_140_aligned", Start::Seconds(0.0)),
         ],
+        0,
     )
     .await;
 }
@@ -2999,19 +3032,27 @@ async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overla
     ("library_flac_newtechno", Start::Seconds(0.0)),
     ("library_flac_ryabina", Start::Seconds(0.0)),
     ("library_flac_song1", Start::Seconds(0.0)),
-])]
+], 0)]
 #[case::keylock_with_offsets(true, &[
     ("library_flac_song2", Start::Seconds(0.0)),
     ("library_flac_slowtechno", Start::Seconds(0.0)),
     ("library_flac_newtechno", NEWTECHNO_PHRASE),
     ("library_flac_ryabina", Start::Beat(96)),
     ("library_flac_song1", Start::Beat(64)),
-])]
+], 0)]
+#[case::keylock_after_silent_clock(true, &[
+    ("library_flac_song2", Start::Seconds(0.0)),
+    ("library_flac_slowtechno", Start::Seconds(0.0)),
+    ("library_flac_newtechno", NEWTECHNO_PHRASE),
+    ("library_flac_ryabina", Start::Beat(96)),
+    ("library_flac_song1", Start::Beat(64)),
+], 60)]
 async fn one_queue_crossfades_five_real_tracks_through_four_public_next_requests(
     #[case] key_lock: bool,
     #[case] tracks: &[(&str, Start)],
+    #[case] startup_seconds: u32,
 ) {
-    capture_music(MusicCase::RealNext, key_lock, tracks).await;
+    capture_music(MusicCase::RealNext, key_lock, tracks, startup_seconds).await;
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]

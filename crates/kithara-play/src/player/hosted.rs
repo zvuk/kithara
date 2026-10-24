@@ -1,6 +1,5 @@
 use std::task::Waker;
 
-use kithara_platform::maybe_send::MaybeSend;
 use kithara_render::{bridge::DeckSnapshot, rt::DeckMixerConfig};
 use kithara_signal::{FrameCount, SessionFrame};
 
@@ -19,7 +18,7 @@ pub trait DeckControl {
 /// [`HostedDeck::mixer_config`], lends the deck an [`Outbox`] over that mixer
 /// and the dispatcher for each pass, and hands it every receipt and event of
 /// its slots.
-pub trait HostedDeck<S>: MaybeSend + 'static {
+pub trait HostedDeck<S>: Send + 'static {
     /// The worker and typed pools shared by the deck's resource loads.
     fn worker(&self) -> Option<&PlayWorker<S>>;
 

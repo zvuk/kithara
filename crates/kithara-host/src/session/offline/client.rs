@@ -1,5 +1,7 @@
 use kithara_bufpool::SampleBuffer;
 use kithara_command::Ticket;
+#[cfg(target_arch = "wasm32")]
+use kithara_platform::sync::Notify;
 use kithara_platform::{
     maybe_send::MaybeSend,
     sync::{Arc, Mutex, mpsc},
@@ -92,7 +94,7 @@ impl<C: MaybeSend + 'static> DeckInbox for OfflineSessionClient<C> {
     fn waker(self: Arc<Self>, message: DeckMsg) -> std::task::Waker {
         std::task::Waker::from(Arc::new(OfflineDeckWake {
             cmd_tx: self.cmd_tx.clone(),
-            control: self.control.clone(),
+            notify: self.control.notify().clone(),
             message,
         }))
     }
@@ -101,7 +103,7 @@ impl<C: MaybeSend + 'static> DeckInbox for OfflineSessionClient<C> {
 #[cfg(target_arch = "wasm32")]
 struct OfflineDeckWake {
     cmd_tx: Arc<Mutex<mpsc::Sender<OfflineMsg>>>,
-    control: OfflineTaskRoute,
+    notify: Arc<Notify>,
     message: DeckMsg,
 }
 
@@ -118,7 +120,7 @@ impl std::task::Wake for OfflineDeckWake {
             .send(OfflineMsg::Deck(self.message))
             .is_ok()
         {
-            self.control.wake();
+            self.notify.notify_one();
         }
     }
 }

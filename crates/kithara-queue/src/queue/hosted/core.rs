@@ -3,7 +3,7 @@ use std::{num::NonZeroU32, task::Waker};
 use kithara_bufpool::HasPool;
 use kithara_command::{Batch, Outcome, Receipt, Rejection, Seq};
 use kithara_events::{SlotId, TrackId};
-use kithara_platform::{maybe_send::MaybeSend, sync::Arc};
+use kithara_platform::sync::Arc;
 use kithara_play::{
     DeckEvent, DeckMixerConfig, DeckPass, DeckProtocol, DeckRefusal, DispatcherProtocol,
     HostedDeck, ItemRole, LoadRefusal, Outbox, OutputSnapshot, PlayError, PlayWorker,
@@ -393,8 +393,8 @@ where
 impl<S, F> HostedDeck<S> for Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S> + MaybeSend + 'static,
-    F::Track: MaybeSend + 'static,
+    F: TrackFactory<S> + Send + 'static,
+    F::Track: Send + 'static,
 {
     fn mixer_config(&self) -> DeckMixerConfig {
         self.config.mixer
