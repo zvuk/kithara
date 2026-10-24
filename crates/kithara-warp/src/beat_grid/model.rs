@@ -173,24 +173,34 @@ impl ModelGridView {
         }
     }
 
+    fn evidence_at(&self, frame: f64) -> Option<BeatEvidence> {
+        let rate = f64::from(self.axis.sample_rate().get());
+        // Checked marker times stay ordered after scaling by a positive rate.
+        let index = self
+            .raw
+            .beats
+            .partition_point(|beat| beat.at * rate < frame);
+        self.raw
+            .beats
+            .get(index)
+            .filter(|beat| beat.at * rate == frame)
+            .map(|beat| {
+                if beat.confidence.is_some() {
+                    BeatEvidence::Observed
+                } else {
+                    BeatEvidence::Interpolated
+                }
+            })
+    }
+
     fn frame_evidence(&self, frame: f64, frames: &RangeInclusive<f64>) -> BeatEvidence {
-        let evidence_at = |frame| {
-            self.raw
-                .beats
-                .iter()
-                .find(|beat| beat.at * f64::from(self.axis.sample_rate().get()) == frame)
-                .map(|beat| {
-                    if beat.confidence.is_some() {
-                        BeatEvidence::Observed
-                    } else {
-                        BeatEvidence::Interpolated
-                    }
-                })
-        };
-        if let Some(evidence) = evidence_at(frame) {
+        if let Some(evidence) = self.evidence_at(frame) {
             return evidence;
         }
-        match (evidence_at(*frames.start()), evidence_at(*frames.end())) {
+        match (
+            self.evidence_at(*frames.start()),
+            self.evidence_at(*frames.end()),
+        ) {
             (Some(BeatEvidence::Observed), Some(BeatEvidence::Observed)) => BeatEvidence::Observed,
             (Some(_), Some(_)) => BeatEvidence::Interpolated,
             _ => BeatEvidence::Extrapolated,
@@ -213,14 +223,9 @@ impl ModelGridView {
         {
             return BeatEvidence::Extrapolated;
         }
-        let at = |frame| {
-            self.raw
-                .beats
-                .iter()
-                .find(|beat| beat.at * f64::from(self.axis.sample_rate().get()) == frame)
-                .and_then(|beat| beat.confidence)
-        };
-        if at(*frames.start()).is_some() && at(*frames.end()).is_some() {
+        if self.evidence_at(*frames.start()) == Some(BeatEvidence::Observed)
+            && self.evidence_at(*frames.end()) == Some(BeatEvidence::Observed)
+        {
             BeatEvidence::Observed
         } else {
             BeatEvidence::Interpolated
@@ -573,6 +578,60 @@ mod tests {
             panic!("the span between two heard beats answers");
         };
         assert_eq!(observed, BeatEvidence::Observed);
+    }
+
+    #[kithara::test]
+    fn long_served_grids_preserve_marker_and_interval_evidence() {
+        let beats: Vec<_> = (0..2_048_u16)
+            .map(|index| GridBeat {
+                at: 0.123_456_789 + f64::from(index) * 0.5,
+                ordinal: i64::from(index),
+                confidence: [Some(1.0), None, Some(0.0)][usize::from(index) % 3],
+            })
+            .collect();
+        for sample_rate in [44_100, 48_000] {
+            let grid = grid(served(beats.clone()), bounded(sample_rate, 1_025.0));
+            let scale = f64::from(sample_rate);
+            for beat in &beats {
+                let expected = if beat.confidence.is_some() {
+                    BeatEvidence::Observed
+                } else {
+                    BeatEvidence::Interpolated
+                };
+                assert_eq!(
+                    beat_at_estimate(&grid, beat.at * scale),
+                    BeatGridQuery::Resolved(expected),
+                    "marker {} at rate {sample_rate}",
+                    beat.ordinal,
+                );
+            }
+            for pair in beats.windows(2) {
+                let frame = (pair[0].at * scale + pair[1].at * scale) / 2.0;
+                let position = MapPoint::new(
+                    grid.stamp(),
+                    MapPosition::Asset(AssetFrame::new(frame).expect("finite midpoint")),
+                );
+                let expected = if pair.iter().all(|beat| beat.confidence.is_some()) {
+                    BeatEvidence::Observed
+                } else {
+                    BeatEvidence::Interpolated
+                };
+                assert_eq!(
+                    beat_at_estimate(&grid, frame),
+                    BeatGridQuery::Resolved(expected)
+                );
+                let BeatGridQuery::Resolved(tempo) = grid.tempo_at(position) else {
+                    panic!("a prepared interval resolves its tempo");
+                };
+                assert_eq!(tempo.evidence(), expected);
+            }
+            for frame in [0.0, 1_024.5 * scale] {
+                assert_eq!(
+                    beat_at_estimate(&grid, frame),
+                    BeatGridQuery::Resolved(BeatEvidence::Extrapolated),
+                );
+            }
+        }
     }
 
     fn beat_at_estimate(grid: &BeatGridSnapshot, frame: f64) -> BeatGridQuery<BeatEvidence> {

@@ -45,7 +45,8 @@ where
     T: ApplePod,
 {
     let mut out = vec![0_u8; size_of::<T>()];
-    debug_assert!(pod_write_to_slice(value, &mut out));
+    let written = pod_write_to_slice(value, &mut out);
+    debug_assert!(written);
     out
 }
 
@@ -66,4 +67,17 @@ where
         );
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::pod_to_vec;
+
+    #[kithara::test(native)]
+    fn pod_to_vec_returns_the_value_bytes() {
+        let value = 0x0102_0304_0506_0708_u64;
+        assert_eq!(pod_to_vec(&value), value.to_ne_bytes());
+    }
 }

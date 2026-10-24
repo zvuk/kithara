@@ -4,9 +4,10 @@ use kithara_test_fixtures::unit_fixtures::{accelerate_ramp, accelerate_wave};
 use kithara_test_utils::kithara;
 
 use super::{
-    BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, correlate_f32,
-    deinterleave_pair_f32, downmix_pair_f32, interleave_pair_f32, linear_interpolate_f32,
-    max_magnitude_f32, multiply_f32, quadratic_interpolate_f32, sum_squares_f32,
+    BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, add_f32, affine_f32,
+    correlate_f32, deinterleave_pair_f32, downmix_pair_f32, interleave_pair_f32,
+    linear_interpolate_f32, max_magnitude_f32, multiply_f32, quadratic_interpolate_f32,
+    scale_add_f32, sub_f32, sum_squares_f32,
 };
 
 const SPECIALS: [f32; 8] = [
@@ -302,4 +303,48 @@ fn sum_squares_adds_the_square_of_every_sample() {
         sum_squares_f32(&[1.0, f32::NAN]).is_nan(),
         "a NaN carries through"
     );
+}
+
+#[kithara::test(native)]
+fn affine_scales_then_offsets_every_sample() {
+    let mut x = [0.5_f32, -1.0, 2.0, 0.0];
+    let expected = x.map(|value| value * -2.0 + 1.0);
+    assert_eq!(affine_f32(&mut x, -2.0, 1.0), 4);
+    assert_eq!(bits(x), bits(expected));
+    assert_eq!(affine_f32(&mut [], -2.0, 1.0), 0, "an empty slice");
+}
+
+#[kithara::test(native)]
+fn sub_takes_the_second_slice_from_the_common_prefix() {
+    let mut x = [1.0_f32, 0.5, -2.0, UNWRITTEN];
+    let y = [0.25_f32, 1.5, -3.0];
+    let expected = [1.0 - 0.25, 0.5 - 1.5, -2.0 - -3.0, UNWRITTEN];
+    assert_eq!(sub_f32(&mut x, &y), 3);
+    assert_eq!(bits(x), bits(expected));
+    assert_eq!(sub_f32(&mut x[..2], &y), 2, "the shorter minuend");
+    assert_eq!(sub_f32(&mut x, &[]), 0, "an empty subtrahend");
+}
+
+#[kithara::test(native)]
+fn scale_add_accumulates_the_scaled_common_prefix() {
+    let x = [1.0_f32, -0.5, 4.0, 8.0];
+    let mut acc = [0.25_f32, 1.0, -1.0];
+    let expected = [0.25 + 1.0 * 0.5, 1.0 + -0.5 * 0.5, -1.0 + 4.0 * 0.5];
+    assert_eq!(scale_add_f32(&x, 0.5, &mut acc), 3);
+    assert_eq!(bits(acc), bits(expected));
+    assert_eq!(scale_add_f32(&[], 0.5, &mut acc), 0, "an empty source");
+    assert_eq!(bits(acc), bits(expected), "an empty source writes nothing");
+}
+
+#[kithara::test(native)]
+fn add_accumulates_the_common_prefix() {
+    let mut acc = [0.25_f32, 1.0, UNWRITTEN];
+    assert_eq!(add_f32(&[1.0, -0.5], &mut acc), 2);
+    assert_eq!(bits(acc), bits([0.25 + 1.0, 1.0 + -0.5, UNWRITTEN]));
+    assert_eq!(
+        add_f32(&[1.0, 2.0, 3.0, 4.0], &mut acc[..1]),
+        1,
+        "the shorter sum"
+    );
+    assert_eq!(add_f32(&[], &mut acc), 0, "an empty source");
 }

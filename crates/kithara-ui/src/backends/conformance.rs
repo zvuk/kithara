@@ -326,9 +326,10 @@ fn through_vello(list: &DrawList) -> Vec<u8> {
 
 #[kithara::test]
 fn vello_paints_what_a_clip_contains() {
+    let rgba = through_vello(&clipped());
     assert!(
-        clip_is_on_top(&through_vello(&clipped())),
-        "the Vello backend painted its own geometry over what the clip contained"
+        clip_is_on_top(&rgba),
+        "the Vello backend painted its own geometry over what the clip contained: rgba={rgba:02x?}"
     );
 }
 

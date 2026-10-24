@@ -1,8 +1,9 @@
 use std::{num::NonZeroU32, ops::Range};
 
+use kithara_dsp::fade::{self, FadeCurve};
 use num_traits::{ToPrimitive, cast};
 
-use crate::CrossfadeSettings;
+use crate::{CrossfadeSettings, consts::FADE_CHUNK};
 
 #[derive(Clone, Copy, Debug)]
 enum Direction {
@@ -77,24 +78,102 @@ impl TrackFade {
         let output_r = &mut output_r_slice[0][range.clone()];
         let input_l = &scratch_bufs[0][range.clone()];
         let input_r = &scratch_bufs[1][range];
+        // From the fade's last frame on, every frame holds the final gain:
+        // unity or silence.
+        let last = self.frames.saturating_sub(1);
+        let fading = usize::try_from(last.saturating_sub(self.frame))
+            .unwrap_or(usize::MAX)
+            .min(output_l.len());
+        let (output_l, settled_l) = output_l.split_at_mut(fading);
+        let (output_r, settled_r) = output_r.split_at_mut(fading);
+        let (input_l, unity_l) = input_l.split_at(fading);
+        let (input_r, unity_r) = input_r.split_at(fading);
+        if !settled_l.is_empty() && self.gain_at(last) == 1.0 {
+            kithara_dsp::add(unity_l, settled_l);
+            kithara_dsp::add(unity_r, settled_r);
+        }
         for (index, ((out_l, out_r), (in_l, in_r))) in output_l
-            .iter_mut()
-            .zip(output_r.iter_mut())
-            .zip(input_l.iter().zip(input_r))
+            .chunks_mut(FADE_CHUNK)
+            .zip(output_r.chunks_mut(FADE_CHUNK))
+            .zip(input_l.chunks(FADE_CHUNK).zip(input_r.chunks(FADE_CHUNK)))
             .enumerate()
         {
-            let frame = self
-                .frame
-                .saturating_add(u64::try_from(index).unwrap_or(u64::MAX));
-            let gain = self.gain_at(frame);
-            if gain == 1.0 {
-                *out_l += in_l;
-                *out_r += in_r;
-            } else if gain != 0.0 {
-                *out_l = in_l.mul_add(gain, *out_l);
-                *out_r = in_r.mul_add(gain, *out_r);
+            let offset = u64::try_from(index.saturating_mul(FADE_CHUNK)).unwrap_or(u64::MAX);
+            let mut gain = [0.0; FADE_CHUNK];
+            let gain = &mut gain[..out_l.len()];
+            self.fading_gains(self.frame.saturating_add(offset), gain);
+            kithara_dsp::mul_add(in_l, gain, out_l);
+            kithara_dsp::mul_add(in_r, gain, out_r);
+        }
+    }
+
+    /// The gains of the frames from `first`, all before the fade's last
+    /// frame: `gain_at`'s operations in the same order.
+    fn fading_gains(&self, first: u64, gain: &mut [f32]) {
+        match self.direction {
+            Direction::In => {
+                self.crossfade(first, gain);
+                kithara_dsp::affine(gain, 1.0 - self.from, self.from);
+            }
+            Direction::Out => {
+                self.crossfade(first, gain);
+                kithara_dsp::affine(gain, self.from, 0.0);
+            }
+            Direction::DeclickOut => {
+                let first = cast::<u64, f32>(first.saturating_add(1)).unwrap_or(f32::MAX);
+                let frames = cast::<u64, f32>(self.frames).unwrap_or(f32::MAX);
+                kithara_dsp::ramp(gain, first, 1.0);
+                kithara_dsp::div(gain, frames);
+                kithara_dsp::affine(gain, -1.0, 1.0);
+                kithara_dsp::affine(gain, self.from, 0.0);
             }
         }
+    }
+
+    /// The side of `CrossfadeSettings::gains` this fade sounds for the frames
+    /// from `first`: the incoming gain on the way in, the outgoing one on the
+    /// way out.
+    fn crossfade(&self, first: u64, gain: &mut [f32]) {
+        let frames = gain.len();
+        self.positions(first, gain);
+        let mut outgoing = [0.0; FADE_CHUNK];
+        let mut incoming = [0.0; FADE_CHUNK];
+        fade::gains(
+            FadeCurve::from(self.settings.curve),
+            gain,
+            &mut outgoing[..frames],
+            &mut incoming[..frames],
+        );
+        let selected = if matches!(self.direction, Direction::In) {
+            &incoming[..frames]
+        } else {
+            &outgoing[..frames]
+        };
+        for (position, &selected) in gain.iter_mut().zip(selected.iter()) {
+            let (out, into) = FadeCurve::Linear.compute_gains_0_to_1(*position);
+            let linear = if matches!(self.direction, Direction::In) {
+                into
+            } else {
+                out
+            };
+            *position = self.settings.depth.mul_add(selected - linear, linear);
+        }
+    }
+
+    /// The curve position `u` of the frames from `first`, mapped through the
+    /// pivot with `CrossfadeSettings::gains`' IEEE operations in the same
+    /// order, so every `u` is bit-identical to the law's.
+    fn positions(&self, first: u64, u: &mut [f32]) {
+        let first = cast::<u64, f32>(first).unwrap_or(f32::MAX);
+        let last = cast::<u64, f32>(self.frames.saturating_sub(1)).unwrap_or(f32::MAX);
+        let position = self.settings.position;
+        kithara_dsp::ramp(u, first, 1.0);
+        kithara_dsp::div(u, last);
+        let (rising, falling) = u.split_at_mut(u.partition_point(|&x| x <= position));
+        kithara_dsp::div(rising, 2.0 * position);
+        kithara_dsp::affine(falling, 1.0, -position);
+        kithara_dsp::div(falling, 2.0 * (1.0 - position));
+        kithara_dsp::affine(falling, 1.0, 0.5);
     }
 
     pub(super) fn advance(&mut self, frames: usize) {

@@ -68,7 +68,7 @@ impl IsolatorEq {
         })
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn process_sample(&mut self, input: f32) -> f32 {
         let input = sanitize_sample(input);
         self.gains.tick();

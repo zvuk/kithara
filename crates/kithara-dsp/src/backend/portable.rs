@@ -1,13 +1,13 @@
-use std::ops::{Add, Mul};
+use std::ops::{Add, Mul, Sub};
 
 use fearless_simd::{Level, dispatch, prelude::*};
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use super::cascade::Cascade;
 pub(crate) use super::interpolate::interpolate;
-use super::simd::padded;
 #[cfg(feature = "spectrum")]
 use super::simd::zip_map;
+use super::simd::{padded, update};
 #[cfg(all(feature = "spectrum", not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) use super::spectrum::{Dft, Work, correlate};
 
@@ -184,4 +184,47 @@ pub(crate) fn sum_squares(samples: &[f32]) -> f32 {
 #[inline(always)]
 pub(super) fn sum_squares_kernel<S: Simd>(simd: S, samples: &[f32]) -> f32 {
     dot(simd, samples, samples)
+}
+
+pub(crate) fn affine(samples: &mut [f32], scale: f32, offset: f32) -> usize {
+    dispatch!(Level::new(), simd => affine_kernel(simd, samples, scale, offset))
+}
+
+#[inline(always)]
+pub(super) fn affine_kernel<S: Simd>(
+    simd: S,
+    samples: &mut [f32],
+    scale: f32,
+    offset: f32,
+) -> usize {
+    let (scale, offset) = (S::f32s::splat(simd, scale), S::f32s::splat(simd, offset));
+    update(simd, samples, [], |x, []| x.mul_add_precise(scale, offset))
+}
+
+pub(crate) fn sub(x: &mut [f32], y: &[f32]) -> usize {
+    dispatch!(Level::new(), simd => sub_kernel(simd, x, y))
+}
+
+#[inline(always)]
+pub(super) fn sub_kernel<S: Simd>(simd: S, x: &mut [f32], y: &[f32]) -> usize {
+    update(simd, x, [y], |x, [y]| x.sub(y))
+}
+
+pub(crate) fn scale_add(x: &[f32], gain: f32, acc: &mut [f32]) -> usize {
+    dispatch!(Level::new(), simd => scale_add_kernel(simd, x, gain, acc))
+}
+
+#[inline(always)]
+pub(super) fn scale_add_kernel<S: Simd>(simd: S, x: &[f32], gain: f32, acc: &mut [f32]) -> usize {
+    let gain = S::f32s::splat(simd, gain);
+    update(simd, acc, [x], |acc, [x]| x.mul_add_precise(gain, acc))
+}
+
+pub(crate) fn add(x: &[f32], acc: &mut [f32]) -> usize {
+    dispatch!(Level::new(), simd => add_kernel(simd, x, acc))
+}
+
+#[inline(always)]
+pub(super) fn add_kernel<S: Simd>(simd: S, x: &[f32], acc: &mut [f32]) -> usize {
+    update(simd, acc, [x], |acc, [x]| acc.add(x))
 }

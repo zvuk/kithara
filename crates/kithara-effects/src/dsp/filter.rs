@@ -85,7 +85,6 @@ impl CrossoverFilters {
         })
     }
 
-    #[inline(always)]
     pub(crate) fn process(&mut self, input: f32, gains: impl Fn(usize) -> f32) -> f32 {
         let mut high = input;
         for index in 0..self.lowpass.len() {

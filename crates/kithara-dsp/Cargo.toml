@@ -59,3 +59,7 @@ workspace = true
 name = "kernels"
 harness = false
 required-features = ["spectrum"]
+
+[[bench]]
+name = "vector_fade"
+harness = false

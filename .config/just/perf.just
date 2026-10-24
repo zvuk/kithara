@@ -61,6 +61,7 @@ bench MODE="build":
     targets=(
       "kithara-beat:spectral:dsp"
       "kithara-dsp:kernels:spectrum"
+      "kithara-dsp:vector_fade:"
       "kithara-integration-tests:abr_estimator:"
       "kithara-integration-tests:bufpool:"
       "kithara-integration-tests:perf_audit:"

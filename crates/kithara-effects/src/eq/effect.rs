@@ -1,4 +1,3 @@
-use fearless_simd::{Level, Simd, dispatch};
 use kithara_bufpool::{HasPool, PoolError};
 use kithara_signal::AudioChunk;
 
@@ -7,7 +6,6 @@ use crate::{AudioEffect, GainDb};
 
 #[non_exhaustive]
 pub struct EqEffect {
-    level: Level,
     eq_l: IsolatorEq,
     eq_r: IsolatorEq,
     bands: Vec<EqBandConfig>,
@@ -33,7 +31,6 @@ impl EqEffect {
         let eq_l = IsolatorEq::new(config, &bands, sample_rate)?;
         let eq_r = IsolatorEq::new(config, &bands, sample_rate)?;
         Ok(Self {
-            level: Level::new(),
             eq_l,
             eq_r,
             bands,
@@ -86,7 +83,14 @@ impl AudioEffect for EqEffect {
             return Some(chunk);
         }
 
-        dispatch!(self.level, simd => render_interleaved(simd, self, &mut chunk.samples, channels));
+        let samples = &mut chunk.samples;
+
+        for frame in samples.chunks_exact_mut(channels) {
+            frame[0] = self.eq_l.process_sample(frame[0]);
+            if channels >= 2 {
+                frame[1] = self.eq_r.process_sample(frame[1]);
+            }
+        }
 
         Some(chunk)
     }
@@ -97,16 +101,6 @@ impl AudioEffect for EqEffect {
         }
         self.eq_l.reset();
         self.eq_r.reset();
-    }
-}
-
-#[inline(always)]
-fn render_interleaved<S: Simd>(_simd: S, eq: &mut EqEffect, samples: &mut [f32], channels: usize) {
-    for frame in samples.chunks_exact_mut(channels) {
-        frame[0] = eq.eq_l.process_sample(frame[0]);
-        if channels >= 2 {
-            frame[1] = eq.eq_r.process_sample(frame[1]);
-        }
     }
 }
 

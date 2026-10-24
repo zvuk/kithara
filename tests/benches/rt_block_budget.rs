@@ -39,7 +39,7 @@ use kithara_integration_tests::{
     mock::PcmDeck,
 };
 use kithara_render::{
-    LaneProtocol, LaneStart, LaneTask,
+    CrossfadeCurve, CrossfadeSettings, LaneProtocol, LaneStart, LaneTask,
     bridge::{
         DeckEnds, DeckPart, DeckProtocol, Fade, SessionInbox, Slot, SlotState, scope_channels,
     },
@@ -53,6 +53,12 @@ use kithara_test_fixtures::integration_fixtures::benchmark_half;
 mod consts {
     pub(super) const BLOCK_FRAMES: u32 = 128;
     pub(super) const CHANNELS: u16 = 2;
+    /// Longer than the warm-up and measured blocks together, 22 000 blocks
+    /// of 128 frames at 48 kHz (about 58.7 s), so every measured block of
+    /// the crossfade lane mixes through the fade law.
+    pub(super) const CROSSFADE_SECONDS: f32 = 120.0;
+    pub(super) const CROSSFADE_DEPTH: f32 = 0.7;
+    pub(super) const CROSSFADE_POSITION: f32 = 0.3;
     pub(super) const MEASURED_BLOCKS: usize = 20_000;
     pub(super) const SAMPLE_RATE: u32 = 48_000;
     pub(super) const TRACK_COUNTS: [usize; 3] = [1, 2, 4];
@@ -60,8 +66,42 @@ mod consts {
     pub(super) const WARMUP_BLOCKS: usize = 2_000;
 }
 
+/// What the tracks of a lane mix through on every measured block.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Lane {
+    /// A declick that settles before the warm-up ends: a unity mix.
+    Settled,
+    /// One equal-power crossfade that spans every warm-up and measured block.
+    Crossfade,
+}
+
+impl Lane {
+    fn fade(self) -> Fade {
+        match self {
+            Self::Settled => Fade::Declick,
+            Self::Crossfade => Fade::Crossfade(
+                CrossfadeSettings::new(
+                    consts::CROSSFADE_SECONDS,
+                    CrossfadeCurve::EqualPower,
+                    consts::CROSSFADE_DEPTH,
+                    consts::CROSSFADE_POSITION,
+                )
+                .expect("bench crossfade settings"),
+            ),
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Settled => "settled",
+            Self::Crossfade => "active crossfade",
+        }
+    }
+}
+
 struct Measurement {
     durations: Vec<Duration>,
+    lane: Lane,
     peak: f32,
     tracks: usize,
 }
@@ -106,7 +146,7 @@ struct BenchMixer {
 }
 
 #[kithara_test_utils::kithara::hang_watchdog]
-async fn processor(count: usize) -> BenchMixer {
+async fn processor(count: usize, lane: Lane) -> BenchMixer {
     let config = DeckMixerConfig::default();
     let (mut control, inbox) = scoped_channel(
         ScopedConfig::builder()
@@ -160,7 +200,7 @@ async fn processor(count: usize) -> BenchMixer {
             keylock: false,
             backend: StretchKind::default(),
         };
-        let (pcm, lane, _) = {
+        let (pcm, task, _) = {
             let _real_io = kithara::platform::flash::real_io();
             kithara::platform::time::timeout(
                 __hang_detector.remaining(),
@@ -190,10 +230,10 @@ async fn processor(count: usize) -> BenchMixer {
         });
         commands.push(DeckPart::Start {
             slot,
-            fade: Fade::Declick,
+            fade: lane.fade(),
         });
         sources.push(source);
-        lanes.push(Box::new(lane) as Box<dyn LaneTask + Send>);
+        lanes.push(Box::new(task) as Box<dyn LaneTask + Send>);
         senders.push(sender);
     }
     control
@@ -301,9 +341,22 @@ fn peak_of(samples: &[f32]) -> f32 {
     samples.iter().fold(0.0_f32, |acc, s| acc.max(s.abs()))
 }
 
-fn measure(tracks: usize) -> Measurement {
+/// Whether every live slot's envelope sits strictly between silence and
+/// unity, so its last mixed frame went through the fade law.
+fn every_slot_fading(mixer: &mut BenchMixer) -> bool {
+    mixer
+        .deck
+        .snapshot
+        .read()
+        .slots
+        .iter()
+        .filter(|slot| slot.state != SlotState::Empty)
+        .all(|slot| slot.gain > 0.0 && slot.gain < 1.0)
+}
+
+fn measure(tracks: usize, lane: Lane) -> Measurement {
     let runtime = tokio::runtime::Runtime::new().expect("bench runtime");
-    let mut processor = runtime.block_on(processor(tracks));
+    let mut processor = runtime.block_on(processor(tracks, lane));
     let _runtime = runtime.enter();
 
     let frames = block_frames();
@@ -314,6 +367,7 @@ fn measure(tracks: usize) -> Measurement {
         render_block(&mut processor, &mut out_l, &mut out_r);
     }
 
+    let fading_before = every_slot_fading(&mut processor);
     let before = processor.deck.snapshot.read().metrics;
     let mut durations = Vec::with_capacity(consts::MEASURED_BLOCKS);
     let mut peak = 0.0_f32;
@@ -323,6 +377,12 @@ fn measure(tracks: usize) -> Measurement {
         black_box(&out_l);
     }
     let after = processor.deck.snapshot.read().metrics;
+    if lane == Lane::Crossfade {
+        assert!(
+            fading_before && every_slot_fading(&mut processor),
+            "the crossfade must span every measured block"
+        );
+    }
 
     let live = processor
         .deck
@@ -351,6 +411,7 @@ fn measure(tracks: usize) -> Measurement {
     durations.sort_unstable();
     Measurement {
         durations,
+        lane,
         peak,
         tracks,
     }
@@ -389,14 +450,18 @@ fn main() {
         consts::WARMUP_BLOCKS,
     );
     println!(
-        "{:>7}  {:>22}  {:>22}  {:>22}",
-        "tracks", "p50", "p99", "max"
+        "{:>16}  {:>7}  {:>22}  {:>22}  {:>22}",
+        "lane", "tracks", "p50", "p99", "max"
     );
 
-    for count in consts::TRACK_COUNTS {
-        let measurement = measure(count);
+    for (lane, count) in [Lane::Settled, Lane::Crossfade]
+        .into_iter()
+        .flat_map(|lane| consts::TRACK_COUNTS.map(|count| (lane, count)))
+    {
+        let measurement = measure(count, lane);
         println!(
-            "{:>7}  {:>22}  {:>22}  {:>22}",
+            "{:>16}  {:>7}  {:>22}  {:>22}  {:>22}",
+            measurement.lane.label(),
             measurement.tracks,
             cell(measurement.percentile(50), budget),
             cell(measurement.percentile(99), budget),

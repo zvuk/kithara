@@ -7,6 +7,7 @@ use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 #[cfg(feature = "spectrum")]
 use kithara_dsp::spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase};
 use kithara_dsp::{
+    fade::{self, FadeCurve},
     filter::{Biquad, Coefficients, Hertz, Type},
     interp::{InterpError, Interpolation, interpolate},
 };
@@ -174,6 +175,40 @@ fn sum_squares_never_allocates() {
             kithara_dsp::sum_squares(&samples).to_bits(),
             64.0_f32.to_bits()
         );
+    });
+}
+
+#[kithara::test(native)]
+fn elementwise_kernels_and_fade_gains_never_allocate() {
+    let input = vec![0.25_f32; FRAMES];
+    let mut acc = vec![0.0_f32; FRAMES];
+    let mut positions = vec![0.0_f32; FRAMES];
+    let mut outgoing = vec![0.0_f32; FRAMES];
+    let mut incoming = vec![0.0_f32; FRAMES];
+    assert_no_alloc(|| {
+        assert_eq!(kithara_dsp::ramp(&mut positions, 0.0, 1.0), FRAMES);
+        assert_eq!(kithara_dsp::div(&mut positions, 1_023.0), FRAMES);
+        assert_eq!(kithara_dsp::affine(&mut acc, 0.5, 0.25), FRAMES);
+        assert_eq!(kithara_dsp::sub(&mut acc, &input), FRAMES);
+        assert_eq!(kithara_dsp::scale_add(&input, 0.5, &mut acc), FRAMES);
+        assert_eq!(kithara_dsp::mul_add(&input, &input, &mut acc), FRAMES);
+        assert_eq!(kithara_dsp::add(&input, &mut acc), FRAMES);
+        for curve in [
+            FadeCurve::EqualPower3dB,
+            FadeCurve::EqualPower6dB,
+            FadeCurve::SquareRoot,
+            FadeCurve::Linear,
+        ] {
+            assert_eq!(
+                fade::gains(curve, &positions, &mut outgoing, &mut incoming),
+                FRAMES
+            );
+            for frame in [0, FRAMES / 2, FRAMES - 1] {
+                let (a, b) = fade::gains_at(curve, positions[frame]);
+                assert_eq!(a.to_bits(), outgoing[frame].to_bits());
+                assert_eq!(b.to_bits(), incoming[frame].to_bits());
+            }
+        }
     });
 }
 

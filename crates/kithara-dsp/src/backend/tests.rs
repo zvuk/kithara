@@ -1,14 +1,18 @@
 use std::{num::NonZeroUsize, ops::Range};
 
 use fearless_simd::{Level, dispatch};
-use kithara_test_fixtures::portable::{harmonics, sawtooth, sine_440};
+use kithara_test_fixtures::{
+    portable::{harmonics, sawtooth, sine_440},
+    signal::Wave,
+};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::accelerate;
-use super::{cascade, portable, simd, strided};
+use super::{cascade, fade, portable, simd, strided};
 use crate::{
+    fade::FadeCurve,
     filter::{Coefficients, Hertz, Type},
     interp::{InterpError, Interpolation},
 };
@@ -658,6 +662,11 @@ fn peak_matches_the_scalar_maximum_on_every_backend() {
 #[cfg(feature = "spectrum")]
 type Multiply = fn(&[f32], &[f32], &mut [f32]) -> usize;
 type SumSquares = fn(&[f32]) -> f32;
+type WithScalars = fn(&mut [f32], f32, f32) -> usize;
+type Sub = fn(&mut [f32], &[f32]) -> usize;
+type ScaleAdd = fn(&[f32], f32, &mut [f32]) -> usize;
+type MulAdd = fn(&[f32], &[f32], &mut [f32]) -> usize;
+type Accumulate = fn(&[f32], &mut [f32]) -> usize;
 
 /// One backend's element-wise kernels, so every check runs the same matrix
 /// on each.
@@ -666,6 +675,10 @@ struct Vectors {
     #[cfg(feature = "spectrum")]
     multiply: Multiply,
     sum_squares: SumSquares,
+    affine: WithScalars,
+    sub: Sub,
+    scale_add: ScaleAdd,
+    add: Accumulate,
 }
 
 fn vectors() -> Vec<Vectors> {
@@ -675,12 +688,20 @@ fn vectors() -> Vec<Vectors> {
             #[cfg(feature = "spectrum")]
             multiply: portable::multiply,
             sum_squares: portable::sum_squares,
+            affine: portable::affine,
+            sub: portable::sub,
+            scale_add: portable::scale_add,
+            add: portable::add,
         },
         Vectors {
             name: "portable-fallback",
             #[cfg(feature = "spectrum")]
             multiply: |a, b, output| dispatch!(Level::fallback(), simd => portable::multiply_kernel(simd, a, b, output)),
             sum_squares: |samples| dispatch!(Level::fallback(), simd => portable::sum_squares_kernel(simd, samples)),
+            affine: |samples, scale, offset| dispatch!(Level::fallback(), simd => portable::affine_kernel(simd, samples, scale, offset)),
+            sub: |x, y| dispatch!(Level::fallback(), simd => portable::sub_kernel(simd, x, y)),
+            scale_add: |x, gain, acc| dispatch!(Level::fallback(), simd => portable::scale_add_kernel(simd, x, gain, acc)),
+            add: |x, acc| dispatch!(Level::fallback(), simd => portable::add_kernel(simd, x, acc)),
         },
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         Vectors {
@@ -688,8 +709,36 @@ fn vectors() -> Vec<Vectors> {
             #[cfg(feature = "spectrum")]
             multiply: accelerate::multiply,
             sum_squares: accelerate::sum_squares,
+            affine: accelerate::affine,
+            sub: accelerate::sub,
+            scale_add: accelerate::scale_add,
+            add: accelerate::add,
         },
     ])
+}
+
+/// The `ramp` kernel at the native and the fallback level: one kernel on
+/// every platform.
+fn ramps() -> [(&'static str, WithScalars); 2] {
+    [
+        ("native", simd::ramp),
+        (
+            "fallback",
+            |output, start, step| dispatch!(Level::fallback(), simd => simd::ramp_kernel(simd, output, start, step)),
+        ),
+    ]
+}
+
+/// The `mul_add` kernel at the native and the fallback level: one kernel on
+/// every platform.
+fn mul_adds() -> [(&'static str, MulAdd); 2] {
+    [
+        ("native", simd::mul_add),
+        (
+            "fallback",
+            |x, y, acc| dispatch!(Level::fallback(), simd => simd::mul_add_kernel(simd, x, y, acc)),
+        ),
+    ]
 }
 
 /// Equal bits, or both `NaN`: a `NaN` payload is the backend's to choose.
@@ -893,5 +942,454 @@ fn every_interpolation_backend_rounds_once_on_a_cancelling_window() {
                 );
             }
         }
+    }
+}
+
+/// `got` within `ulps` steps of the exact `want`, or both `NaN`.
+fn within_ulps(got: f32, want: f64, ulps: usize) -> bool {
+    let (mut low, mut high) = (got, got);
+    for _ in 0..ulps {
+        (low, high) = (low.next_down(), high.next_up());
+    }
+    (got.is_nan() && want.is_nan()) || (f64::from(low)..=f64::from(high)).contains(&want)
+}
+
+/// `values` with the special-value table shifted by one slot, so a binary
+/// kernel meets every special against its neighbour, not against itself.
+fn shifted(mut values: Vec<f32>) -> Vec<f32> {
+    let shift = values.len().min(1);
+    values.rotate_left(shift);
+    values
+}
+
+/// `size` signal slots followed by two `UNWRITTEN` slots, so a kernel
+/// that writes past its prefix shows.
+fn padded_signal(size: usize, prepared: &[f32]) -> Vec<f32> {
+    let mut values = signal(size, prepared);
+    values.extend([UNWRITTEN; 2]);
+    values
+}
+
+/// Asserts the returned count, every value of the prefix through `holds`,
+/// and the untouched slots past it.
+fn assert_prefix(
+    context: &str,
+    count: usize,
+    output: &[f32],
+    size: usize,
+    holds: impl Fn(usize, f32) -> bool,
+) {
+    assert_eq!(count, size, "{context}: count");
+    let (head, tail) = output.split_at(size);
+    for (index, got) in head.iter().enumerate() {
+        assert!(holds(index, *got), "{context}: {got} at {index}");
+    }
+    assert!(
+        tail.iter()
+            .all(|value| value.to_bits() == UNWRITTEN.to_bits()),
+        "{context}: wrote past {size}"
+    );
+}
+
+fn float(value: usize) -> f32 {
+    value.to_f32().expect("test indices are finite")
+}
+
+/// Integer ramps are exact at every level, from every special start.
+#[kithara::test]
+fn ramp_counts_exactly_at_every_level() {
+    for (name, ramp) in ramps() {
+        for start in SPECIALS.into_iter().chain([5.0, -7.0]) {
+            for step in [1.0, -3.0] {
+                for size in SIZES {
+                    for offset in OFFSETS {
+                        let mut output =
+                            vec![UNWRITTEN; size.saturating_add(offset).saturating_add(2)];
+                        let region = output.split_at_mut(offset).1;
+                        let (head, _) = region.split_at_mut(size);
+                        let count = ramp(head, start, step);
+                        assert_prefix(
+                            &format!("{name}: {start} by {step}, size {size}, offset {offset}"),
+                            count,
+                            region,
+                            size,
+                            |slot, got| same(got, start + float(slot) * step),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn div_matches_ieee_division_at_every_level() {
+    let fallback = |samples: &mut [f32], divisor: f32| dispatch!(Level::fallback(), simd => simd::div_kernel(simd, samples, divisor));
+    for (name, div) in [
+        ("native", simd::div as fn(&mut [f32], f32) -> usize),
+        ("fallback", fallback),
+    ] {
+        for divisor in [3.0, -0.7].into_iter().chain(SPECIALS) {
+            for size in SIZES {
+                for offset in OFFSETS {
+                    let input = padded_signal(size.saturating_add(offset), sine_440());
+                    let mut output = input.clone();
+                    let region = output.split_at_mut(offset).1;
+                    let count = div(region.split_at_mut(size).0, divisor);
+                    let input = input.split_at(offset).1;
+                    assert_prefix(
+                        &format!("{name}: / {divisor}, size {size}, offset {offset}"),
+                        count,
+                        region,
+                        size,
+                        |slot, got| input.get(slot).is_some_and(|x| same(got, x / divisor)),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn affine_rounds_within_one_ulp_on_every_backend() {
+    for row in vectors() {
+        let name = row.name;
+        for (scale, offset_value) in [(0.75, -0.25), (-3.0, 0.5)] {
+            for size in SIZES {
+                for offset in OFFSETS {
+                    let input = padded_signal(size.saturating_add(offset), sine_440());
+                    let mut output = input.clone();
+                    let region = output.split_at_mut(offset).1;
+                    let count = (row.affine)(region.split_at_mut(size).0, scale, offset_value);
+                    let input = input.split_at(offset).1;
+                    assert_prefix(
+                        &format!("{name}: ·{scale} + {offset_value}, size {size}, offset {offset}"),
+                        count,
+                        region,
+                        size,
+                        |slot, got| {
+                            input.get(slot).is_some_and(|x| {
+                                let exact = f64::from(*x)
+                                    .mul_add(f64::from(scale), f64::from(offset_value));
+                                within_ulps(got, exact, 1)
+                            })
+                        },
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn sub_rounds_within_one_ulp_on_every_backend() {
+    for row in vectors() {
+        let name = row.name;
+        for size in SIZES {
+            for offset in OFFSETS {
+                let x = padded_signal(size.saturating_add(offset), sine_440());
+                let y = shifted(signal(size.saturating_add(offset), sawtooth()));
+                let mut output = x.clone();
+                let region = output.split_at_mut(offset).1;
+                let count = (row.sub)(region, y.split_at(offset).1);
+                let (x, y) = (x.split_at(offset).1, y.split_at(offset).1);
+                assert_prefix(
+                    &format!("{name}: size {size}, offset {offset}"),
+                    count,
+                    region,
+                    size,
+                    |slot, got| {
+                        let (Some(x), Some(y)) = (x.get(slot), y.get(slot)) else {
+                            return false;
+                        };
+                        within_ulps(got, f64::from(*x) - f64::from(*y), 1)
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn scale_add_rounds_within_one_ulp_on_every_backend() {
+    for row in vectors() {
+        let name = row.name;
+        for gain in [0.7, -1.5] {
+            for size in SIZES {
+                for offset in OFFSETS {
+                    let x = shifted(signal(size.saturating_add(offset), sine_440()));
+                    let acc = padded_signal(size.saturating_add(offset), sawtooth());
+                    let mut output = acc.clone();
+                    let region = output.split_at_mut(offset).1;
+                    let count = (row.scale_add)(x.split_at(offset).1, gain, region);
+                    let (x, acc) = (x.split_at(offset).1, acc.split_at(offset).1);
+                    assert_prefix(
+                        &format!("{name}: ·{gain}, size {size}, offset {offset}"),
+                        count,
+                        region,
+                        size,
+                        |slot, got| {
+                            let (Some(x), Some(acc)) = (x.get(slot), acc.get(slot)) else {
+                                return false;
+                            };
+                            within_ulps(
+                                got,
+                                f64::from(*x).mul_add(f64::from(gain), f64::from(*acc)),
+                                1,
+                            )
+                        },
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn mul_add_rounds_within_one_ulp_at_every_level() {
+    let descending: Vec<_> = (0..sawtooth().len())
+        .map(|frame| f32::from(Wave::SawtoothDescending.sample(frame, RATE)) / 32_768.0)
+        .collect();
+    for (name, mul_add) in mul_adds() {
+        for size in SIZES {
+            for offset in OFFSETS {
+                let x = signal(size.saturating_add(offset), sine_440());
+                let y = shifted(signal(
+                    size.saturating_add(offset).saturating_add(1),
+                    &descending,
+                ));
+                let acc = padded_signal(size.saturating_add(offset), sawtooth());
+                let mut output = acc.clone();
+                let region = output.split_at_mut(offset).1;
+                let count = mul_add(x.split_at(offset).1, y.split_at(offset).1, region);
+                let (x, y, acc) = (
+                    x.split_at(offset).1,
+                    y.split_at(offset).1,
+                    acc.split_at(offset).1,
+                );
+                assert_prefix(
+                    &format!("{name}: size {size}, offset {offset}"),
+                    count,
+                    region,
+                    size,
+                    |slot, got| {
+                        let (Some(x), Some(y), Some(acc)) =
+                            (x.get(slot), y.get(slot), acc.get(slot))
+                        else {
+                            return false;
+                        };
+                        within_ulps(
+                            got,
+                            f64::from(*x).mul_add(f64::from(*y), f64::from(*acc)),
+                            1,
+                        )
+                    },
+                );
+            }
+        }
+    }
+}
+
+/// `(1 + 2⁻¹²)·(1 + 2⁻¹²) − (1 + 2⁻¹¹)` is exactly 2⁻²⁴, but the product
+/// rounded alone cancels to `0.0`: a kernel that rounds the product before
+/// the add loses the whole result.
+const CANCELLING_TRIPLE: [f32; 3] = [1.000_244_1, 1.000_244_1, -1.000_488_3];
+
+#[kithara::test]
+fn every_multiply_add_rounds_once_on_a_cancelling_triple() {
+    let [x, y, acc] = CANCELLING_TRIPLE;
+    let exact = f64::from(x).mul_add(f64::from(y), f64::from(acc));
+    let assert_rounds_once = |context: &str, output: &[f32]| {
+        for (index, got) in output.iter().enumerate() {
+            assert!(within_ulps(*got, exact, 1), "{context}: {got} at {index}");
+        }
+    };
+    for size in SIZES {
+        for row in vectors() {
+            let name = row.name;
+            let mut affine = vec![x; size];
+            (row.affine)(&mut affine, y, acc);
+            assert_rounds_once(&format!("{name}: affine, size {size}"), &affine);
+            let mut scale_add = vec![acc; size];
+            (row.scale_add)(&vec![x; size], y, &mut scale_add);
+            assert_rounds_once(&format!("{name}: scale_add, size {size}"), &scale_add);
+        }
+        for (name, mul_add) in mul_adds() {
+            let mut output = vec![acc; size];
+            mul_add(&vec![x; size], &vec![y; size], &mut output);
+            assert_rounds_once(&format!("{name}: mul_add, size {size}"), &output);
+        }
+    }
+}
+
+#[kithara::test]
+fn add_rounds_within_one_ulp_on_every_backend() {
+    for row in vectors() {
+        let name = row.name;
+        for size in SIZES {
+            for offset in OFFSETS {
+                let x = shifted(signal(size.saturating_add(offset), sine_440()));
+                let acc = padded_signal(size.saturating_add(offset), sawtooth());
+                let mut output = acc.clone();
+                let region = output.split_at_mut(offset).1;
+                let count = (row.add)(x.split_at(offset).1, region);
+                let (x, acc) = (x.split_at(offset).1, acc.split_at(offset).1);
+                assert_prefix(
+                    &format!("{name}: size {size}, offset {offset}"),
+                    count,
+                    region,
+                    size,
+                    |slot, got| {
+                        let (Some(x), Some(acc)) = (x.get(slot), acc.get(slot)) else {
+                            return false;
+                        };
+                        within_ulps(got, f64::from(*acc) + f64::from(*x), 1)
+                    },
+                );
+            }
+        }
+    }
+}
+
+/// A target shorter than its inputs bounds the prefix on every backend.
+#[kithara::test]
+fn a_short_target_bounds_every_elementwise_kernel() {
+    let input = signal(9, sine_440());
+    for row in vectors() {
+        let name = row.name;
+        let mut target = [0.0_f32; 5];
+        assert_eq!((row.sub)(&mut target, &input), 5, "{name}: sub");
+        assert_eq!(
+            (row.scale_add)(&input, 0.5, &mut target),
+            5,
+            "{name}: scale_add"
+        );
+        assert_eq!((row.add)(&input, &mut target), 5, "{name}: add");
+    }
+    for (name, mul_add) in mul_adds() {
+        let mut target = [0.0_f32; 5];
+        assert_eq!(mul_add(&input, &input, &mut target), 5, "{name}: mul_add");
+    }
+}
+
+/// Edges first, then a band just below the incoming edge where the cosine
+/// side tends to zero, then an even grid over `[−1/8, 9/8]`.
+fn fade_positions() -> Vec<f32> {
+    const GRID: u16 = 4_096;
+    let start = 0.000_01_f32;
+    let end = 0.999_99_f32;
+    let edges = [
+        0.0,
+        -0.0,
+        start,
+        start.next_up(),
+        start.next_down(),
+        end,
+        end.next_down(),
+        end.next_up(),
+        1.0,
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    let band = core::iter::successors(Some(end.next_down()), |u: &f32| {
+        Some(u.next_down()).filter(|u| *u > 0.999_98)
+    });
+    let grid = (0..=GRID).map(|step| (f32::from(step) / f32::from(GRID)).mul_add(1.25, -0.125));
+    edges.into_iter().chain(band).chain(grid).collect()
+}
+
+/// `(outgoing, incoming)` of `curve` at `u` in `f64`, at the angle firewheel
+/// rounds to `f32`.
+fn exact_gains(curve: FadeCurve, u: f32) -> (f64, f64) {
+    let angle = f64::from(core::f32::consts::FRAC_PI_2 * u);
+    let u = f64::from(u);
+    match curve {
+        FadeCurve::EqualPower3dB => (angle.cos(), angle.sin()),
+        FadeCurve::EqualPower6dB => (angle.cos().powi(2), angle.sin().powi(2)),
+        FadeCurve::SquareRoot => ((1.0 - u).sqrt(), u.sqrt()),
+        FadeCurve::Linear => (1.0 - u, u),
+    }
+}
+
+/// Whether `got` is the outgoing (or incoming) gain of `curve` at `u`:
+/// exact at the edges, within the curve's level between them.
+fn gain_holds(curve: FadeCurve, outgoing: bool, u: f32, got: f32) -> bool {
+    // At an edge, whether this side is the one at full level.
+    let full = if u <= 0.000_01 {
+        Some(outgoing)
+    } else if u >= 0.999_99 {
+        Some(!outgoing)
+    } else {
+        None
+    };
+    full.map_or_else(
+        || {
+            let (from, to) = exact_gains(curve, u);
+            within_ulps(got, if outgoing { from } else { to }, gain_ulps(curve))
+        },
+        |full| got.to_bits() == f32::from(u8::from(full)).to_bits(),
+    )
+}
+
+/// The spec's precision level per curve: 2 ulp for sin/cos, 1 for the rest.
+fn gain_ulps(curve: FadeCurve) -> usize {
+    match curve {
+        FadeCurve::EqualPower3dB | FadeCurve::EqualPower6dB => 2,
+        FadeCurve::SquareRoot | FadeCurve::Linear => 1,
+    }
+}
+
+const CURVES: [FadeCurve; 4] = [
+    FadeCurve::EqualPower3dB,
+    FadeCurve::EqualPower6dB,
+    FadeCurve::SquareRoot,
+    FadeCurve::Linear,
+];
+
+type Gains = fn(FadeCurve, &[f32], &mut [f32], &mut [f32]) -> usize;
+
+#[kithara::test]
+fn fade_gains_track_the_f64_curves_at_every_level() {
+    let fallback: Gains = |curve, positions, outgoing, incoming| dispatch!(Level::fallback(), simd => fade::gains_kernel(simd, curve, positions, outgoing, incoming));
+    let positions = fade_positions();
+    for (name, gains) in [("native", fade::gains as Gains), ("fallback", fallback)] {
+        for curve in CURVES {
+            for size in SIZES.into_iter().chain([positions.len()]) {
+                for offset in OFFSETS {
+                    let Some(window) = positions.get(offset..offset.saturating_add(size)) else {
+                        continue;
+                    };
+                    let mut outgoing = vec![UNWRITTEN; size.saturating_add(2)];
+                    let mut incoming = outgoing.clone();
+                    let count = gains(curve, window, &mut outgoing, &mut incoming);
+                    let context = format!("{name}: {curve:?}, size {size}, offset {offset}");
+                    for (side, output) in [(true, &outgoing), (false, &incoming)] {
+                        assert_prefix(
+                            &format!("{context}, outgoing {side}"),
+                            count,
+                            output,
+                            size,
+                            |slot, got| {
+                                window
+                                    .get(slot)
+                                    .is_some_and(|u| gain_holds(curve, side, *u, got))
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        let mut short = [UNWRITTEN; 3];
+        assert_eq!(
+            gains(
+                FadeCurve::Linear,
+                &positions,
+                &mut [UNWRITTEN; 8],
+                &mut short
+            ),
+            3,
+            "{name}: the shortest side bounds the prefix"
+        );
     }
 }

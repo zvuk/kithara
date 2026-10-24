@@ -1,6 +1,5 @@
 use core::{fmt, num::NonZeroU32};
 
-use fearless_simd::{Level, Simd, dispatch};
 use kithara_bufpool::{HasPool, PoolError};
 use kithara_dsp::{
     fade::FadeCurve,
@@ -82,7 +81,6 @@ impl LayoutUpdate {
 
 /// A stereo equaliser whose band layout changes by crossing over from the layout it replaces.
 pub struct StereoEq {
-    level: Level,
     active: Option<Box<EqLayout>>,
     retiring: Option<Box<EqLayout>>,
     update: Option<LayoutUpdate>,
@@ -95,7 +93,6 @@ impl StereoEq {
     #[must_use]
     pub fn new<S>(config: &EqConfig<S>, sample_rate: NonZeroU32) -> Self {
         Self {
-            level: Level::new(),
             active: None,
             retiring: None,
             update: None,
@@ -183,9 +180,13 @@ impl StereoEq {
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         self.advance();
         if let Some(active) = self.active.as_deref_mut() {
-            dispatch!(self.level, simd => render_stereo(
-                simd, active, self.retiring.as_deref_mut(), &mut self.crossover, left, right
-            ));
+            render_stereo(
+                active,
+                self.retiring.as_deref_mut(),
+                &mut self.crossover,
+                left,
+                right,
+            );
         }
     }
 
@@ -207,9 +208,7 @@ impl StereoEq {
     }
 }
 
-#[inline(always)]
-fn render_stereo<S: Simd>(
-    _simd: S,
+fn render_stereo(
     active: &mut EqLayout,
     mut retiring: Option<&mut EqLayout>,
     crossover: &mut MixDSP,

@@ -67,8 +67,7 @@ impl AppleResamplerInputState {
         let frames = validate_input(input, self.channels, chunk_size)?;
         for (staged, source) in self.staged.iter_mut().zip(input.iter()) {
             staged.clear();
-            staged.ensure_len(source.len())?;
-            staged[..source.len()].copy_from_slice(source);
+            staged.try_extend_from_slice(source)?;
         }
         self.frames = frames;
         self.offset = 0;

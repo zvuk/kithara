@@ -91,6 +91,16 @@ unsafe extern "C" {
 
     pub(super) fn vDSP_svesq(a: *const f32, ia: VdspStride, c: *mut f32, n: VdspLength);
 
+    pub(super) fn vDSP_vadd(
+        a: *const f32,
+        ia: VdspStride,
+        b: *const f32,
+        ib: VdspStride,
+        c: *mut f32,
+        ic: VdspStride,
+        n: VdspLength,
+    );
+
     pub(super) fn vDSP_vasm(
         a: *const f32,
         ia: VdspStride,
@@ -130,6 +140,38 @@ unsafe extern "C" {
         ic: VdspStride,
         n: VdspLength,
         m: VdspLength,
+    );
+
+    pub(super) fn vDSP_vsma(
+        a: *const f32,
+        ia: VdspStride,
+        b: *const f32,
+        c: *const f32,
+        ic: VdspStride,
+        d: *mut f32,
+        id: VdspStride,
+        n: VdspLength,
+    );
+
+    pub(super) fn vDSP_vsmsa(
+        a: *const f32,
+        ia: VdspStride,
+        b: *const f32,
+        c: *const f32,
+        d: *mut f32,
+        id: VdspStride,
+        n: VdspLength,
+    );
+
+    /// `c = a − b`, with the subtrahend first, as vDSP declares it.
+    pub(super) fn vDSP_vsub(
+        b: *const f32,
+        ib: VdspStride,
+        a: *const f32,
+        ia: VdspStride,
+        c: *mut f32,
+        ic: VdspStride,
+        n: VdspLength,
     );
 
     pub(super) fn vDSP_ztoc(

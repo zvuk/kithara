@@ -1,4 +1,4 @@
-use kithara_dsp::fade::FadeCurve;
+use kithara_dsp::fade::{self, FadeCurve};
 pub use kithara_play::{
     SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo, TempoError,
     TransportRevision,
@@ -36,7 +36,7 @@ pub fn crossfader_gain(bus: CrossfaderBus, position: f32) -> Result<f32, PlayErr
     if !position.is_finite() || !(0.0..=1.0).contains(&position) {
         return Err(PlayError::MixPosition { position });
     }
-    let (a, b) = FadeCurve::EqualPower3dB.compute_gains_0_to_1(position);
+    let (a, b) = fade::gains_at(FadeCurve::EqualPower3dB, position);
     Ok(match bus {
         CrossfaderBus::Bypass => 1.0,
         CrossfaderBus::A => a,

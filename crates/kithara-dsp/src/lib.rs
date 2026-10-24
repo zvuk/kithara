@@ -5,6 +5,8 @@
 //! `interp` supplies fractional sampling and rate ramps, and feature-gated
 //! `spectrum` supplies Hann-windowed real FFT, bin magnitude/phase and
 //! autocorrelation. `sum_squares` reduces energy; `downmix` averages channels.
+//! Element-wise kernels (`ramp`, `div`, `affine`, `sub`, `scale_add`,
+//! `mul_add`, `add`) and `fade::gains` compose vector fades.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::indexing_slicing,
@@ -36,4 +38,4 @@ pub use backend::sanitize;
 pub use layout::{
     deinterleave_channel_major, deinterleave_variable, downmix, interleave_channel_major,
 };
-pub use vector::sum_squares;
+pub use vector::{add, affine, div, mul_add, ramp, scale_add, sub, sum_squares};
