@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod eq;
+
 use std::{
     fs,
     hint::black_box,
@@ -478,6 +480,7 @@ criterion_group!(
     bench_resampler_process,
     bench_audio_file_new_and_read,
     bench_hls_stream_seek_read,
-    bench_layout
+    bench_layout,
+    eq::bench
 );
 criterion_main!(benches);

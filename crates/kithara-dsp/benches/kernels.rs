@@ -8,7 +8,7 @@ use std::{
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_dsp::{
-    filter::{Biquad, Coefficients, Hertz, Type},
+    filter::{Biquad, Coefficients, Crossover, Hertz, Type},
     interp::{Interpolation, interpolate},
     spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase},
 };
@@ -297,6 +297,42 @@ fn biquad_decay(c: &mut Criterion) {
     group.finish();
 }
 
+fn crossover(c: &mut Criterion) {
+    let mut group = c.benchmark_group("crossover");
+    for frames in [7, 128, 255, 256, 257, 1024] {
+        group.throughput(Throughput::Elements(
+            u64::try_from(frames).expect("frame count fits u64"),
+        ));
+        for frequencies in [
+            &[250.0, 2_500.0][..],
+            &[
+                100.0, 250.0, 500.0, 1_000.0, 2_000.0, 4_000.0, 6_000.0, 9_000.0, 12_000.0,
+            ][..],
+        ] {
+            let mut filter = Crossover::new(frequencies, 48_000.0);
+            let mut bands = vec![vec![0.0; frames]; frequencies.len() + 1];
+            for (label, input) in [
+                ("tone", tone(frames)),
+                ("quiet", vec![f32::MIN_POSITIVE; frames]),
+                ("pathological", vec![f32::MAX; frames]),
+            ] {
+                group.bench_with_input(
+                    BenchmarkId::new(format!("{}band_{label}", bands.len()), frames),
+                    &frames,
+                    |b, _| {
+                        b.iter(|| {
+                            let count = filter.split(black_box(&input), black_box(&mut bands));
+                            black_box(&bands);
+                            count
+                        });
+                    },
+                );
+            }
+        }
+    }
+    group.finish();
+}
+
 fn interp(c: &mut Criterion) {
     const FRAMES: usize = 1_024;
     let window: Vec<f32> = std::iter::successors(Some(0.0_f32), |phase| Some(phase + 0.05))
@@ -347,6 +383,7 @@ criterion_group!(
     downmix,
     biquad,
     biquad_decay,
+    crossover,
     interp,
     spectrum,
     bins,

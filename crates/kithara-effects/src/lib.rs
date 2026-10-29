@@ -6,7 +6,6 @@
 mod chain;
 mod contract;
 mod drain;
-mod dsp;
 pub mod eq;
 mod gain_db;
 mod limiter;

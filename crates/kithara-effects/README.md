@@ -74,7 +74,8 @@ fn boost_low_band<S>(config: &EqConfig<S>, sample_rate: u32, channels: u16) {
 
 `kithara-play` builds a per-track effect chain and the band layouts its deck
 takes; `kithara-render` runs a `StereoEq` on every deck; `kithara-host` puts
-`LimiterNode` on the session bus. Reusable DSP building
-blocks stay private under `src/dsp/` until they become `kithara-dsp`.
+`LimiterNode` on the session bus. EQ uses `kithara-dsp::filter::Crossover` for
+LR4/allpass filtering and fused block accumulation; effects retains gain smoothing,
+bypass/silence policy and layout transitions.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-effects) for detailed contracts, invariants, and internals.

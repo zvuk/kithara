@@ -5216,7 +5216,6 @@ dependencies = [
 name = "kithara-effects"
 version = "0.0.1-alpha5"
 dependencies = [
- "biquad",
  "bon",
  "delegate",
  "derive-where",

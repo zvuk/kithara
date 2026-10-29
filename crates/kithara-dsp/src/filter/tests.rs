@@ -174,6 +174,21 @@ fn an_empty_range_keeps_the_state() {
 }
 
 #[kithara::test]
+fn reset_clears_history_and_keeps_the_design() {
+    let mut filter = built(1_000.0);
+    let mut warmup = stereo(256);
+    filter.process(&mut warmup, 0..256).expect("shape matches");
+    filter.reset();
+    let mut actual = stereo(256);
+    let mut expected = actual.clone();
+    filter.process(&mut actual, 0..256).expect("shape matches");
+    built(1_000.0)
+        .process(&mut expected, 0..256)
+        .expect("shape matches");
+    assert_eq!(bits(&actual), bits(&expected));
+}
+
+#[kithara::test]
 fn samples_outside_the_range_keep_their_bits() {
     let mut filter = built(1_000.0);
     let original = stereo(64);

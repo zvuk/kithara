@@ -198,7 +198,7 @@ allowed_files = [
 # `kithara_dsp::param` facade re-exports the primitive.
 patterns = ["SmoothingFilter", "one_pole", "OnePole", "smoothing_coeff"]
 allowed_files = [
-  "crates/kithara-effects/src/dsp/gain.rs",
+  "crates/kithara-effects/src/eq/gain.rs",
   "crates/kithara-dsp/src/param.rs",
 ]
 exempt_crates = ["kithara-test-utils", "kithara-test-macros", "xtask"]

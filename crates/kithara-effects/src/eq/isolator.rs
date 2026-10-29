@@ -1,23 +1,23 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{HasPool, PoolError};
+use kithara_bufpool::{HasPool, PoolError, SampleBuffer};
 use kithara_dsp::{
     fade::FadeCurve,
+    filter::Crossover,
     param::{Mix, MixDSP},
 };
 use kithara_signal::sanitize_sample;
 use num_traits::cast::AsPrimitive;
 
-use super::{EqBandConfig, EqConfig};
-use crate::{
-    GainDb,
-    dsp::{filter::CrossoverFilters, gain::GainBank},
-};
+use super::{EqBandConfig, EqConfig, gain::GainBank};
+use crate::{GainDb, consts::EQ_BLOCK_FRAMES};
 
 /// Single-channel isolator crossover EQ.
 #[non_exhaustive]
 pub struct IsolatorEq {
-    filters: CrossoverFilters,
+    filters: Crossover,
+    bands: Vec<SampleBuffer>,
+    gain_blocks: Vec<SampleBuffer>,
     gains: GainBank,
     bypass: MixDSP,
     silence: MixDSP,
@@ -59,7 +59,13 @@ impl IsolatorEq {
         Ok(Self {
             bypass: MixDSP::new(bypass, FadeCurve::Linear, config.smoothing(), rate),
             silence: MixDSP::new(silence, FadeCurve::Linear, config.smoothing(), rate),
-            filters: CrossoverFilters::new(config.pools(), crossover_freqs, sample_rate)?,
+            filters: Crossover::new(&crossover_freqs, sample_rate),
+            bands: (0..if bands.len() > 1 { bands.len() } else { 0 })
+                .map(|_| config.pools().get_with_len::<f32>(EQ_BLOCK_FRAMES))
+                .collect::<Result<_, _>>()?,
+            gain_blocks: (0..bands.len())
+                .map(|_| config.pools().get_with_len::<f32>(EQ_BLOCK_FRAMES))
+                .collect::<Result<_, _>>()?,
             gains: GainBank::new(
                 bands.iter().map(EqBandConfig::gain_db),
                 sample_rate,
@@ -70,16 +76,56 @@ impl IsolatorEq {
 
     #[inline]
     pub fn process_sample(&mut self, input: f32) -> f32 {
-        let input = sanitize_sample(input);
-        self.gains.tick();
-        let mut output = [match self.gains.len() {
-            0 => input,
-            1 => sanitize_sample(input * self.gains.linear(0)),
-            _ => sanitize_sample(self.filters.process(input, |band| self.gains.linear(band))),
-        }];
-        self.bypass.mix_dry_into_wet_mono(&[input], &mut output, 1);
-        self.silence.mix_dry_into_wet_mono(&[0.0], &mut output, 1);
-        sanitize_sample(output[0])
+        let mut output = [0.0];
+        self.process_block::<1>(&[input], &mut output);
+        output[0]
+    }
+
+    /// Processes the common input/output prefix; the remaining output stays untouched.
+    pub fn process(&mut self, input: &[f32], output: &mut [f32]) -> usize {
+        let count = input.len().min(output.len());
+        for (input, output) in input[..count]
+            .chunks(EQ_BLOCK_FRAMES)
+            .zip(output[..count].chunks_mut(EQ_BLOCK_FRAMES))
+        {
+            self.process_block::<EQ_BLOCK_FRAMES>(input, output);
+        }
+        count
+    }
+
+    fn process_block<const N: usize>(&mut self, input: &[f32], output: &mut [f32]) {
+        let frames = input.len();
+        let mut dry = [0.0; N];
+        for (dry, &input) in dry.iter_mut().zip(input) {
+            *dry = sanitize_sample(input);
+        }
+        self.gains.fill(&mut self.gain_blocks, frames);
+        let mut wet = [0.0; N];
+        match self.gains.len() {
+            0 => wet[..frames].copy_from_slice(&dry[..frames]),
+            1 => {
+                for ((wet, dry), gain) in wet
+                    .iter_mut()
+                    .zip(dry)
+                    .zip(self.gain_blocks[0].iter())
+                    .take(frames)
+                {
+                    *wet = dry * gain;
+                }
+            }
+            _ => {
+                self.filters.split(&dry[..frames], &mut self.bands);
+                for (band, gains) in self.bands.iter().zip(&self.gain_blocks) {
+                    kithara_dsp::mul_add(&band[..frames], &gains[..frames], &mut wet[..frames]);
+                }
+            }
+        }
+        for ((output, dry), wet) in output.iter_mut().zip(dry).zip(wet) {
+            let mut wet = [sanitize_sample(wet)];
+            self.bypass.mix_dry_into_wet_mono(&[dry], &mut wet, 1);
+            self.silence.mix_dry_into_wet_mono(&[0.0], &mut wet, 1);
+            *output = sanitize_sample(wet[0]);
+        }
     }
 
     pub fn reset(&mut self) {

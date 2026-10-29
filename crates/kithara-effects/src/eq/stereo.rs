@@ -7,7 +7,7 @@ use kithara_dsp::{
 };
 
 use super::{EqBandConfig, EqConfig, IsolatorEq};
-use crate::GainDb;
+use crate::{GainDb, consts::EQ_BLOCK_FRAMES};
 
 /// One band layout built for both channels of a stereo signal. It is built off the audio
 /// thread, so taking it in allocates nothing there.
@@ -215,27 +215,39 @@ fn render_stereo(
     left: &mut [f32],
     right: &mut [f32],
 ) {
-    for (left, right) in left.iter_mut().zip(right.iter_mut()) {
-        let (dry_left, dry_right) = (*left, *right);
-        let mut wet_left = [active.left.process_sample(dry_left)];
-        let mut wet_right = [active.right.process_sample(dry_right)];
-        if !crossover.has_settled() {
-            let (from_left, from_right) = match retiring.as_deref_mut() {
-                Some(retiring) => (
-                    retiring.left.process_sample(dry_left),
-                    retiring.right.process_sample(dry_right),
-                ),
-                None => (dry_left, dry_right),
-            };
-            crossover.mix_dry_into_wet_stereo(
-                &[from_left],
-                &[from_right],
-                &mut wet_left,
-                &mut wet_right,
-                1,
-            );
+    let frames = left.len().min(right.len());
+    for (left, right) in left[..frames]
+        .chunks_mut(EQ_BLOCK_FRAMES)
+        .zip(right[..frames].chunks_mut(EQ_BLOCK_FRAMES))
+    {
+        let frames = left.len();
+        let mut wet_left = [0.0; EQ_BLOCK_FRAMES];
+        let mut wet_right = [0.0; EQ_BLOCK_FRAMES];
+        active.left.process(left, &mut wet_left[..frames]);
+        active.right.process(right, &mut wet_right[..frames]);
+        for ((left, right), (wet_left, wet_right)) in left
+            .iter_mut()
+            .zip(right.iter_mut())
+            .zip(wet_left.iter_mut().zip(wet_right.iter_mut()))
+        {
+            if !crossover.has_settled() {
+                let (from_left, from_right) = match retiring.as_deref_mut() {
+                    Some(retiring) => (
+                        retiring.left.process_sample(*left),
+                        retiring.right.process_sample(*right),
+                    ),
+                    None => (*left, *right),
+                };
+                crossover.mix_dry_into_wet_stereo(
+                    &[from_left],
+                    &[from_right],
+                    std::slice::from_mut(wet_left),
+                    std::slice::from_mut(wet_right),
+                    1,
+                );
+            }
+            *left = *wet_left;
+            *right = *wet_right;
         }
-        *left = wet_left[0];
-        *right = wet_right[0];
     }
 }

@@ -320,6 +320,7 @@ required-features = ["perf"]
 
 [[bench]]
 name = "refactor_hotpaths"
+path = "benches/refactor_hotpaths/main.rs"
 harness = false
 
 [[bench]]

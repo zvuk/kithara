@@ -88,6 +88,7 @@ fn biquad_never_allocates_after_construction() {
             .process(&mut planes, 0..FRAMES / 2)
             .expect("shape matches");
         lookahead.copy_state(&filter).expect("same shape");
+        filter.reset();
         lookahead
             .process(&mut planes, FRAMES / 2..FRAMES)
             .expect("shape matches");
@@ -103,6 +104,19 @@ fn biquad_never_allocates_after_construction() {
         filter
             .process(&mut planes, 0..FRAMES)
             .expect("silence resets");
+    });
+}
+
+#[kithara::test(native)]
+fn crossover_never_allocates_after_construction() {
+    let mut filter = kithara_dsp::filter::Crossover::new(&[250.0, 2_500.0], 48_000.0);
+    let input = [0.25; FRAMES];
+    let mut bands = vec![vec![0.0; FRAMES]; 3];
+    assert_no_alloc(|| {
+        assert_eq!(filter.split(&input, &mut bands), FRAMES);
+        filter.reset();
+        filter.update_sample_rate(44_100.0);
+        assert_eq!(filter.split(&input, &mut bands), FRAMES);
     });
 }
 

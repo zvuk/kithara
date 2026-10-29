@@ -1,11 +1,24 @@
 use std::num::NonZeroU32;
 
+use firewheel::{
+    clock::InstantSamples,
+    dsp::{buffer::ConstSequentialBuffer, declick::DeclickValues},
+    log::{RealtimeLoggerConfig, realtime_logger},
+    node::{
+        AudioNodeProcessor, NUM_SCRATCH_BUFFERS, ProcBuffers, ProcExtra, ProcStore, ProcessStatus,
+    },
+};
 use kithara_audio::{TrackFailureKind, mock::TEST_PCM_DEFAULT_VALUE};
 use kithara_command::Outcome;
+use kithara_effects::{
+    GainDb,
+    eq::{EqConfig, EqLayout, generate_log_spaced_bands},
+};
 use kithara_platform::time::Duration;
-use kithara_signal::{AudioSpec, SegmentId};
+use kithara_signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use kithara_test_utils::kithara;
+use kithara_warp::RenderContext;
 
 use super::{
     TestMixer,
@@ -13,8 +26,10 @@ use super::{
 };
 use crate::{
     CrossfadeSettings,
-    bridge::{DeckPart, Fade, RtMetricsSnapshot, Slot},
-    rt::DeckMixerConfig,
+    bridge::{DeckEqChange, DeckPart, Fade, RtMetricsSnapshot, Slot},
+    mock::TestSessionInbox,
+    rt::{DeckMixerConfig, install_render_context, publish_render_context},
+    test_pools::pools,
     worker::{PcmPacket, packet_tests::PacketRing},
 };
 
@@ -171,6 +186,108 @@ fn a_crossfade_into_a_stalled_track_underruns_instead_of_waiting(constant_half: 
 fn a_healthy_track_reports_no_trouble(constant_half: &'static [u8]) {
     let (processor, _control, _) = render_loaded_blocks(healthy_track(constant_half, "ok.mp3"), 1);
     assert_eq!(metrics(&processor), RtMetricsSnapshot::default());
+}
+
+#[kithara::test]
+fn moving_non_flat_eq_and_layout_swaps_are_realtime_safe(constant_half: &'static [u8]) {
+    let (TestMixer { mut mixer, inbox }, mut control) = processor();
+    let slot = Slot::new(0);
+    attach(
+        &mut control,
+        slot,
+        healthy_track(constant_half, "eq.mp3"),
+        false,
+    );
+    push(
+        &mut control,
+        DeckPart::Start {
+            slot,
+            fade: Fade::Crossfade(crossfade(0.0)),
+        },
+    );
+    let mut store = ProcStore::with_capacity(2);
+    assert!(store.insert(inbox).is_ok(), "install the session inbox");
+    install_render_context(&mut store).expect("install render context");
+    let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
+    let mut extra = ProcExtra {
+        logger,
+        store,
+        scratch_buffers: ConstSequentialBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(block_len()),
+        declick_values: DeclickValues::new(NonZeroU32::new(16).expect("declick frames")),
+    };
+    let mut info = super::proc_info();
+    info.frames = block_len();
+    info.sample_rate = spec().sample_rate;
+    info.sample_rate_recip = f64::from(SAMPLE_RATE).recip();
+    let mut left = vec![0.0; block_len()];
+    let mut right = vec![0.0; block_len()];
+    let mut frame = 0_i64;
+    let config = EqConfig::builder(pools()).build();
+    for count in [3, 10, 3] {
+        let bands = generate_log_spaced_bands(count);
+        let layout = EqLayout::new(&config, &bands, spec().sample_rate).expect("prepared layout");
+        push(
+            &mut control,
+            DeckPart::Eq(DeckEqChange::Layout(Box::new(layout))),
+        );
+        for band in 0..count {
+            push(
+                &mut control,
+                DeckPart::Eq(DeckEqChange::Gain {
+                    band,
+                    gain: GainDb::from(if band % 2 == 0 { -6.0 } else { 3.0 }),
+                }),
+            );
+        }
+        for _ in 0..64 {
+            extra
+                .store
+                .try_get_mut::<TestSessionInbox>()
+                .expect("session inbox")
+                .0
+                .drain();
+            let end = frame + i64::from(BLOCK_FRAMES);
+            let context = RenderContext::new_linear(
+                OutputContext::new(
+                    SessionFrame::new(frame)..SessionFrame::new(end),
+                    spec().sample_rate,
+                    SessionEpoch::new(0),
+                    None,
+                )
+                .expect("output range"),
+                None,
+            )
+            .expect("linear render context");
+            publish_render_context(&mut extra.store, context).expect("publish render context");
+            info.clock_samples = InstantSamples(frame);
+            info.last_marker_instant = InstantSamples(frame);
+            let mut outputs = [left.as_mut_slice(), right.as_mut_slice()];
+            assert!(matches!(
+                mixer.process(
+                    &info,
+                    ProcBuffers {
+                        inputs: &[],
+                        outputs: &mut outputs
+                    },
+                    &mut extra,
+                ),
+                ProcessStatus::OutputsModified
+            ));
+            assert!(left.iter().chain(&right).all(|sample| sample.is_finite()));
+            assert!(peak(&left) > 0.0, "non-flat EQ must render audio");
+            legacy_fixture::applied(&mut control);
+            frame = end;
+        }
+        assert_eq!(mixer.deck.metrics.snapshot(), RtMetricsSnapshot::default());
+        let snapshot = control.ends.deck.snapshot.read();
+        assert_eq!(snapshot.eq.bands(), count);
+        for band in 0..count {
+            assert_eq!(
+                snapshot.eq.gain(band),
+                Some(GainDb::from(if band % 2 == 0 { -6.0 } else { 3.0 }))
+            );
+        }
+    }
 }
 
 #[kithara::test]

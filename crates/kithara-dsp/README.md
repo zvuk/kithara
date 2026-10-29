@@ -24,7 +24,9 @@ same backends; `downmix` folds interleaved frames to mono and `sum_squares`
 reduces a slice. The FFT, the bin kernels and the autocorrelation build only
 with the `spectrum` feature, off by default, so a build that runs no analysis
 compiles no FFT; `spectrum::FftLen` and `SpectrumError` are always
-available. No kernel panics; only `filter::Biquad::new`,
+available. `filter::Crossover` splits mono blocks into LR4 bands with allpass
+compensation using the EQ's exact f32 recurrence and sample-local denormal reset.
+No kernel panics; only `filter::Biquad::new`, `filter::Crossover::new`,
 `spectrum::Fft::new` and, off Apple, `Fft::spectrum` allocate.
 `Fft::spectrum` takes its sample planes, and `spectrum::Autocorrelation::new`
 its padding, from the caller's `kithara-bufpool` region; off Apple the complex
@@ -72,6 +74,8 @@ assert_eq!(samples, [0.0, 0.5]);
 <tr><td><code>filter::Biquad</code></td><td>Biquad sections in cascade over planar channels; <code>new</code> allocates, <code>retune</code>, <code>process</code>, <code>settle</code> and <code>copy_state</code> do not, and silence resets the state</td></tr>
 
 <tr><td><code>filter::Coefficients</code></td><td>The <code>biquad</code> crate's RBJ cookbook designs (with <code>Type</code>, <code>Hertz</code> and <code>Errors</code>), re-exported as the one import path</td></tr>
+
+<tr><td><code>filter::Crossover</code></td><td>Mono LR4/allpass state; <code>split</code> writes ascending bands over the common slice prefix, while reset and rate changes clear history without allocation</td></tr>
 
 <tr><td><code>interp::interpolate</code></td><td>Reads a window at fractional positions with an <code>interp::Interpolation</code> method (linear, quadratic, Hermite, Watte); a position outside the window is an error and leaves the output untouched</td></tr>
 

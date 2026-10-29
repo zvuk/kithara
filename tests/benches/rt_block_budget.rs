@@ -18,6 +18,7 @@ use firewheel::{
 };
 use kithara::{
     audio::{AudioConfig, mock::TestPcmReader},
+    effects::GainDb,
     file::{File, FileConfig, FileSrc},
     platform::{
         sync::Arc,
@@ -41,7 +42,8 @@ use kithara_integration_tests::{
 use kithara_render::{
     CrossfadeCurve, CrossfadeSettings, LaneProtocol, LaneStart, LaneTask,
     bridge::{
-        DeckEnds, DeckPart, DeckProtocol, Fade, SessionInbox, Slot, SlotState, scope_channels,
+        DeckEnds, DeckEqChange, DeckPart, DeckProtocol, Fade, SessionInbox, Slot, SlotState,
+        scope_channels,
     },
     rt::{
         DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context,
@@ -73,12 +75,13 @@ enum Lane {
     Settled,
     /// One equal-power crossfade that spans every warm-up and measured block.
     Crossfade,
+    NonFlatEq,
 }
 
 impl Lane {
     fn fade(self) -> Fade {
         match self {
-            Self::Settled => Fade::Declick,
+            Self::Settled | Self::NonFlatEq => Fade::Declick,
             Self::Crossfade => Fade::Crossfade(
                 CrossfadeSettings::new(
                     consts::CROSSFADE_SECONDS,
@@ -95,6 +98,7 @@ impl Lane {
         match self {
             Self::Settled => "settled",
             Self::Crossfade => "active crossfade",
+            Self::NonFlatEq => "non-flat EQ",
         }
     }
 }
@@ -235,6 +239,14 @@ async fn processor(count: usize, lane: Lane) -> BenchMixer {
         lanes.push(Box::new(task) as Box<dyn LaneTask + Send>);
         senders.push(sender);
     }
+    if lane == Lane::NonFlatEq {
+        for band in 0..config.eq_bands() {
+            commands.push(DeckPart::Eq(DeckEqChange::Gain {
+                band,
+                gain: eq_gain(band),
+            }));
+        }
+    }
     control
         .scope(scope)
         .expect("bench scope")
@@ -340,6 +352,18 @@ fn peak_of(samples: &[f32]) -> f32 {
     samples.iter().fold(0.0_f32, |acc, s| acc.max(s.abs()))
 }
 
+fn eq_gain(band: usize) -> GainDb {
+    GainDb::from(if band == 0 { -6.0 } else { 3.0 })
+}
+
+fn assert_non_flat_eq(mixer: &mut BenchMixer) {
+    let snapshot = mixer.deck.snapshot.read();
+    assert!(snapshot.eq.bands() > 1, "the lane must run a crossover");
+    for band in 0..snapshot.eq.bands() {
+        assert_eq!(snapshot.eq.gain(band), Some(eq_gain(band)));
+    }
+}
+
 /// Whether every live slot's envelope sits strictly between silence and
 /// unity, so its last mixed frame went through the fade law.
 fn every_slot_fading(mixer: &mut BenchMixer) -> bool {
@@ -365,6 +389,12 @@ fn measure(tracks: usize, lane: Lane) -> Measurement {
     for _ in 0..consts::WARMUP_BLOCKS {
         render_block(&mut processor, &mut out_l, &mut out_r);
     }
+    if lane == Lane::NonFlatEq {
+        assert_non_flat_eq(&mut processor);
+        let settled = out_l.clone();
+        render_block(&mut processor, &mut out_l, &mut out_r);
+        assert_eq!(out_l, settled, "measure only the settled non-flat EQ");
+    }
 
     let fading_before = every_slot_fading(&mut processor);
     let before = processor.deck.snapshot.read().metrics;
@@ -376,6 +406,9 @@ fn measure(tracks: usize, lane: Lane) -> Measurement {
         black_box(&out_l);
     }
     let after = processor.deck.snapshot.read().metrics;
+    if lane == Lane::NonFlatEq {
+        assert_non_flat_eq(&mut processor);
+    }
     if lane == Lane::Crossfade {
         assert!(
             fading_before && every_slot_fading(&mut processor),
@@ -453,7 +486,7 @@ fn main() {
         "lane", "tracks", "p50", "p99", "max"
     );
 
-    for (lane, count) in [Lane::Settled, Lane::Crossfade]
+    for (lane, count) in [Lane::Settled, Lane::Crossfade, Lane::NonFlatEq]
         .into_iter()
         .flat_map(|lane| consts::TRACK_COUNTS.map(|count| (lane, count)))
     {

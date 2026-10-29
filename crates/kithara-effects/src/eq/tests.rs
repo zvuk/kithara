@@ -1,7 +1,8 @@
 use kithara_test_utils::kithara;
 
-use super::*;
+use super::{oracle::IsolatorEq as ScalarIsolator, *};
 use crate::{
+    GainDb,
     consts::TEST_RATE,
     eq::{EqConfig, generate_log_spaced_bands},
     test_pools::{pools, pools_with_budget},
@@ -88,14 +89,19 @@ fn stereo_blocks_match_scalar_filters_through_gain_moves(#[case] count: usize) {
             rate,
             Box::new(EqLayout::new(&config, &bands, rate).expect("stereo test layout")),
         );
-        let mut scalar_left = IsolatorEq::new(&config, &bands, rate.get()).expect("left filter");
-        let mut scalar_right = IsolatorEq::new(&config, &bands, rate.get()).expect("right filter");
-        for (block, frames) in [0, 1, 7, 127, 1024, 4096].into_iter().enumerate() {
+        let mut scalar_left =
+            ScalarIsolator::new(&config, &bands, rate.get()).expect("left filter");
+        let mut scalar_right =
+            ScalarIsolator::new(&config, &bands, rate.get()).expect("right filter");
+        for (block, frames) in [0, 1, 7, 127, 1024, 4096, 255, 256, 257]
+            .into_iter()
+            .enumerate()
+        {
             for band in 0..count {
                 let gain = match (block + band) % 3 {
-                    0 => crate::GainDb::MAX,
-                    1 => crate::GainDb::MIN,
-                    _ => crate::GainDb::DEFAULT,
+                    0 => GainDb::MAX,
+                    1 => GainDb::MIN,
+                    _ => GainDb::DEFAULT,
                 };
                 actual.set_gain(band, gain);
                 scalar_left.set_gain(band, gain);
@@ -146,5 +152,131 @@ fn stereo_blocks_match_scalar_filters_through_gain_moves(#[case] count: usize) {
                 "right count{count} rate{rate} block{block}"
             );
         }
+    }
+}
+
+#[kithara::test]
+fn isolator_reset_and_retune_match_the_pre_move_scalar_state() {
+    let config = EqConfig::builder(pools()).build();
+    for count in [0, 1, 3, 10] {
+        let bands = generate_log_spaced_bands(count);
+        let mut actual = IsolatorEq::new(&config, &bands, 48_000).expect("isolator");
+        let mut expected = ScalarIsolator::new(&config, &bands, 48_000).expect("oracle");
+        for rate in [48_000, 44_100, 0] {
+            actual.update_sample_rate(rate);
+            expected.update_sample_rate(rate);
+            for band in 0..count {
+                let gain = if band % 2 == 0 {
+                    GainDb::MAX
+                } else {
+                    GainDb::MIN
+                };
+                actual.set_gain(band, gain);
+                expected.set_gain(band, gain);
+            }
+            for input in [0.25, -0.5, 1.0, f32::MAX, f32::NAN, -0.0, f32::from_bits(1)]
+                .into_iter()
+                .chain(std::iter::repeat_n(0.0, 4096))
+            {
+                assert_eq!(
+                    actual.process_sample(input).to_bits(),
+                    expected.process_sample(input).to_bits()
+                );
+            }
+            actual.reset();
+            expected.reset();
+            for input in [0.25, -0.5, 1.0, 0.0] {
+                assert_eq!(
+                    actual.process_sample(input).to_bits(),
+                    expected.process_sample(input).to_bits()
+                );
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn a_layout_transition_preserves_pcm_and_the_retired_filters_final_state() {
+    let config = EqConfig::builder(pools()).build();
+    let old_bands = generate_log_spaced_bands(3);
+    let new_bands = generate_log_spaced_bands(10);
+    let mut old_left = ScalarIsolator::new(&config, &old_bands, TEST_RATE.get()).expect("old left");
+    let mut old_right =
+        ScalarIsolator::new(&config, &old_bands, TEST_RATE.get()).expect("old right");
+    let mut new_left = ScalarIsolator::new(&config, &new_bands, TEST_RATE.get()).expect("new left");
+    let mut new_right =
+        ScalarIsolator::new(&config, &new_bands, TEST_RATE.get()).expect("new right");
+    let mut actual = StereoEq::with_layout(&config, TEST_RATE, layout(3));
+    actual.set_gain(0, GainDb::MAX);
+    old_left.set_gain(0, GainDb::MAX);
+    old_right.set_gain(0, GainDb::MAX);
+    actual.take_layout(layout(10));
+    actual.set_gain(2, GainDb::MIN);
+    new_left.set_gain(2, GainDb::MIN);
+    new_right.set_gain(2, GainDb::MIN);
+    let mut mix = kithara_dsp::param::MixDSP::new(
+        kithara_dsp::param::Mix::FULLY_DRY,
+        kithara_dsp::fade::FadeCurve::Linear,
+        config.smoothing(),
+        TEST_RATE,
+    );
+    mix.set_mix(
+        kithara_dsp::param::Mix::FULLY_WET,
+        kithara_dsp::fade::FadeCurve::Linear,
+    );
+    for frames in [0, 1, 7, 255, 256, 257, 8192] {
+        let mut left: Vec<_> = [0.25, -0.5, f32::NAN, -0.0, f32::MIN_POSITIVE]
+            .into_iter()
+            .cycle()
+            .take(frames)
+            .collect();
+        let mut right = vec![0.125; frames + 3];
+        let mut expected_left = left.clone();
+        let mut expected_right = right.clone();
+        for (left, right) in expected_left.iter_mut().zip(&mut expected_right) {
+            let dry = (*left, *right);
+            let mut wet_left = [new_left.process_sample(*left)];
+            let mut wet_right = [new_right.process_sample(*right)];
+            if !mix.has_settled() {
+                let from_left = old_left.process_sample(dry.0);
+                let from_right = old_right.process_sample(dry.1);
+                mix.mix_dry_into_wet_stereo(
+                    &[from_left],
+                    &[from_right],
+                    &mut wet_left,
+                    &mut wet_right,
+                    1,
+                );
+            }
+            *left = wet_left[0];
+            *right = wet_right[0];
+        }
+        actual.process(&mut left, &mut right);
+        assert_eq!(
+            left.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+            expected_left
+                .iter()
+                .map(|x| x.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            right.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+            expected_right
+                .iter()
+                .map(|x| x.to_bits())
+                .collect::<Vec<_>>()
+        );
+    }
+    assert!(mix.has_settled());
+    actual.take_layout(layout(3));
+    actual.process(&mut [], &mut []);
+    let mut retired = actual
+        .take_layout(layout(2))
+        .expect("the first layout is returned");
+    for input in [0.25, -0.5, 0.0] {
+        assert_eq!(
+            retired.left.process_sample(input).to_bits(),
+            old_left.process_sample(input).to_bits()
+        );
     }
 }

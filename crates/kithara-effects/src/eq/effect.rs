@@ -2,7 +2,7 @@ use kithara_bufpool::{HasPool, PoolError};
 use kithara_signal::AudioChunk;
 
 use super::{EqBandConfig, EqConfig, IsolatorEq};
-use crate::{AudioEffect, GainDb};
+use crate::{AudioEffect, GainDb, consts::EQ_BLOCK_FRAMES};
 
 #[non_exhaustive]
 pub struct EqEffect {
@@ -85,10 +85,28 @@ impl AudioEffect for EqEffect {
 
         let samples = &mut chunk.samples;
 
-        for frame in samples.chunks_exact_mut(channels) {
-            frame[0] = self.eq_l.process_sample(frame[0]);
+        for chunk in samples.chunks_mut(channels * EQ_BLOCK_FRAMES) {
+            let frames = chunk.len() / channels;
+            let mut left = [0.0; EQ_BLOCK_FRAMES];
+            let mut right = [0.0; EQ_BLOCK_FRAMES];
+            for (index, frame) in chunk.chunks_exact(channels).enumerate() {
+                left[index] = frame[0];
+                if channels >= 2 {
+                    right[index] = frame[1];
+                }
+            }
+            let mut wet_left = [0.0; EQ_BLOCK_FRAMES];
+            let mut wet_right = [0.0; EQ_BLOCK_FRAMES];
+            self.eq_l.process(&left[..frames], &mut wet_left[..frames]);
             if channels >= 2 {
-                frame[1] = self.eq_r.process_sample(frame[1]);
+                self.eq_r
+                    .process(&right[..frames], &mut wet_right[..frames]);
+            }
+            for (index, frame) in chunk.chunks_exact_mut(channels).enumerate() {
+                frame[0] = wet_left[index];
+                if channels >= 2 {
+                    frame[1] = wet_right[index];
+                }
             }
         }
 
@@ -116,7 +134,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{super::*, *};
-    use crate::test_pools::{Pools, pools, sample_buffer};
+    use crate::{
+        eq::oracle::IsolatorEq as ScalarIsolator,
+        test_pools::{Pools, pools, sample_buffer},
+    };
 
     struct EqFixture;
 
@@ -545,18 +566,26 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case(0)]
-    #[case(1)]
-    #[case(2)]
-    #[case(3)]
-    #[case(4)]
-    fn eq_blocks_preserve_extra_channels_and_incomplete_tails(#[case] channels: u16) {
+    #[case(0, 1)]
+    #[case(1, 1)]
+    #[case(2, 1)]
+    #[case(3, 1)]
+    #[case(4, 1)]
+    #[case(0, 97)]
+    #[case(1, 97)]
+    #[case(2, 97)]
+    #[case(3, 97)]
+    #[case(4, 97)]
+    fn eq_blocks_preserve_extra_channels_and_incomplete_tails(
+        #[case] channels: u16,
+        #[case] repeats: usize,
+    ) {
         let pools = pools();
         let bands = generate_log_spaced_bands(3);
         let config = EqConfig::builder(pools.clone()).build();
         let mut actual = make_eq(&pools, bands.clone(), 44_100, channels);
-        let mut scalar_left = IsolatorEq::new(&config, &bands, 44_100).expect("left filter");
-        let mut scalar_right = IsolatorEq::new(&config, &bands, 44_100).expect("right filter");
+        let mut scalar_left = ScalarIsolator::new(&config, &bands, 44_100).expect("left filter");
+        let mut scalar_right = ScalarIsolator::new(&config, &bands, 44_100).expect("right filter");
         actual.set_gain(0, GainDb::MAX);
         scalar_left.set_gain(0, GainDb::MAX);
         scalar_right.set_gain(0, GainDb::MAX);
@@ -572,9 +601,10 @@ mod tests {
             0.375,
             0.125,
             0.5,
-        ];
+        ]
+        .repeat(repeats);
         for _ in 0..3 {
-            let mut expected = samples;
+            let mut expected = samples.clone();
             if channels != 0 {
                 for frame in expected.chunks_exact_mut(usize::from(channels)) {
                     frame[0] = scalar_left.process_sample(frame[0]);

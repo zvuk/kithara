@@ -1,6 +1,7 @@
 mod band;
 mod config;
 mod effect;
+mod gain;
 mod isolator;
 mod stereo;
 
@@ -12,3 +13,6 @@ pub use stereo::{EqLayout, StereoEq};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod oracle;

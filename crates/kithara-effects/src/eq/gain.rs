@@ -1,4 +1,4 @@
-use std::{num::NonZeroU32, ops::Index};
+use std::{num::NonZeroU32, ops::DerefMut};
 
 use kithara_dsp::param::{
     DEFAULT_GAIN_SPAN, SmootherConfig, SmoothingFilter, SmoothingFilterCoeff,
@@ -94,10 +94,24 @@ impl GainBank {
         }
     }
 
-    pub(crate) fn tick(&mut self) {
-        for gain in &mut self.gains {
-            gain.smooth(self.coeff, self.smoothing.settle_ratio);
+    pub(crate) fn fill<P: DerefMut<Target = [f32]>>(
+        &mut self,
+        planes: &mut [P],
+        frames: usize,
+    ) -> usize {
+        let Some(planes) = planes.get_mut(..self.gains.len()) else {
+            return 0;
+        };
+        let frames = planes
+            .iter()
+            .fold(frames, |frames, plane| frames.min(plane.len()));
+        for (gain, plane) in self.gains.iter_mut().zip(planes) {
+            for sample in plane.iter_mut().take(frames) {
+                gain.smooth(self.coeff, self.smoothing.settle_ratio);
+                *sample = gain.current();
+            }
         }
+        frames
     }
 
     pub(crate) fn update_sample_rate(&mut self, sample_rate: f32) {
@@ -107,9 +121,6 @@ impl GainBank {
     delegate::delegate! {
         to self.gains {
             pub(crate) const fn len(&self) -> usize;
-            #[expr($.current())]
-            #[call(index)]
-            pub(crate) fn linear(&self, band: usize) -> f32;
             #[expr($.map(SmoothedGain::target))]
             #[call(get)]
             pub(crate) fn target(&self, band: usize) -> Option<GainDb>;
@@ -140,10 +151,53 @@ mod tests {
         let mut bank = GainBank::new([GainDb::default()].into_iter(), 0.0, smoothing);
         bank.set(0, GainDb::MAX);
 
-        for _ in 0..1 << 12 {
-            bank.tick();
-        }
+        let mut output = [vec![0.0; 1 << 12]];
+        assert_eq!(bank.fill(&mut output, 1 << 12), 1 << 12);
+        assert_eq!(output[0].last().copied(), Some(GainDb::MAX.linear()));
+    }
 
-        assert_eq!(bank.linear(0), GainDb::MAX.linear());
+    #[kithara::test]
+    fn gain_blocks_match_individual_ticks_including_settlement_and_short_tails() {
+        let smoothing = SmootherConfig {
+            smooth_seconds: 0.01,
+            settle_ratio: 0.0001,
+        };
+        let mut bank = GainBank::new(
+            [GainDb::DEFAULT, GainDb::MIN].into_iter(),
+            48_000.0,
+            smoothing,
+        );
+        let mut reference = [
+            SmoothedGain::new(GainDb::DEFAULT),
+            SmoothedGain::new(GainDb::MIN),
+        ];
+        for target in [GainDb::MAX, GainDb::MIN, GainDb::DEFAULT] {
+            for (index, gain) in reference.iter_mut().enumerate() {
+                bank.set(index, target);
+                gain.set_target(target);
+            }
+            for frames in [0, 1, 7, 255, 256, 257, 8192] {
+                let mut planes = [vec![f32::NAN; frames + 3], vec![f32::NAN; frames]];
+                assert_eq!(bank.fill(&mut planes, frames + 3), frames);
+                for frame in 0..frames {
+                    for (plane, gain) in planes.iter().zip(&mut reference) {
+                        gain.smooth(bank.coeff, smoothing.settle_ratio);
+                        assert_eq!(plane[frame].to_bits(), gain.current().to_bits());
+                    }
+                }
+                assert!(planes[0][frames..].iter().all(|x| x.is_nan()));
+                assert!(
+                    bank.gains
+                        .iter()
+                        .zip(&reference)
+                        .all(|(a, b)| a.current().to_bits() == b.current().to_bits())
+                );
+            }
+            assert!(
+                bank.gains
+                    .iter()
+                    .all(|gain| gain.current().to_bits() == target.linear().to_bits())
+            );
+        }
     }
 }
