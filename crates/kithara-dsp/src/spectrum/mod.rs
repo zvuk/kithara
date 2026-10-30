@@ -14,8 +14,11 @@ mod tests;
 #[cfg(feature = "spectrum")]
 pub use autocorrelation::Autocorrelation;
 #[cfg(feature = "spectrum")]
-pub use bins::{magnitude, phase};
+pub use bins::{magnitude, phase, prediction_difference};
 pub use error::SpectrumError;
 #[cfg(feature = "spectrum")]
 pub use fft::{Fft, Spectrum};
 pub use len::FftLen;
+
+#[cfg(all(test, feature = "spectrum"))]
+mod prediction_tests;

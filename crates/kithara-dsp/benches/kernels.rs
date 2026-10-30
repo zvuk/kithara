@@ -10,7 +10,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use kithara_dsp::{
     filter::{Biquad, Coefficients, Hertz, Type},
     interp::{Interpolation, interpolate},
-    spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase},
+    spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase, prediction_difference},
 };
 use kithara_test_utils::bufpool::pools;
 use num_traits::ToPrimitive;
@@ -211,6 +211,36 @@ fn bins(c: &mut Criterion) {
     group.finish();
 }
 
+fn prediction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("prediction_difference");
+    group.sample_size(20);
+    for size in [1, 3, 17, 64, 513, 1024] {
+        let re = tone(size);
+        let im: Vec<f32> = re.iter().rev().copied().collect();
+        let mut observed = vec![0.0; size];
+        let mut angle = vec![0.0; size];
+        magnitude(&re, &im, &mut observed);
+        phase(&re, &im, &mut angle);
+        let mut magnitude = vec![0.0; size + 1];
+        let mut phase = vec![0.0; size + 1];
+        let mut step = vec![0.0; size + 1];
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter(|| {
+                prediction_difference(
+                    [black_box(&re), black_box(&im)],
+                    [black_box(&observed), black_box(&angle)],
+                    [
+                        black_box(&mut magnitude),
+                        black_box(&mut phase),
+                        black_box(&mut step),
+                    ],
+                )
+            });
+        });
+    }
+    group.finish();
+}
+
 fn autocorrelation(c: &mut Criterion) {
     let region = pools();
     let mut group = c.benchmark_group("autocorrelation");
@@ -350,6 +380,7 @@ criterion_group!(
     interp,
     spectrum,
     bins,
+    prediction,
     autocorrelation
 );
 criterion_main!(benches);

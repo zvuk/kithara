@@ -1,5 +1,5 @@
 use std::{
-    f32::consts::{FRAC_PI_2, FRAC_PI_4, PI},
+    f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU},
     ops::{Add, Div, Mul, Sub},
 };
 
@@ -69,4 +69,31 @@ fn atan2<S: Simd>(simd: S, y: S::f32s, x: S::f32s) -> S::f32s {
         .simd_lt(zero)
         .select(S::f32s::splat(simd, PI).sub(angle), angle);
     angle.copysign(y)
+}
+
+/// Scalar transcendentals and ordered accumulation preserve the consumer's bits.
+pub(crate) fn prediction_difference(
+    [re, im]: [&[f32]; 2],
+    [observed, angle]: [&[f32]; 2],
+    [magnitude, phase, phase_step]: [&mut [f32]; 3],
+) -> f32 {
+    let mut total = 0.0;
+    for ((((re, im), (observed, angle)), (magnitude, phase)), step) in re
+        .iter()
+        .zip(im)
+        .zip(observed.iter().zip(angle))
+        .zip(magnitude.iter_mut().zip(phase.iter_mut()))
+        .zip(phase_step.iter_mut())
+    {
+        let (sin, cos) = wrap(*phase + *step).sin_cos();
+        total += (re - *magnitude * cos).hypot(im - *magnitude * sin);
+        *step = wrap(angle - *phase);
+        *phase = *angle;
+        *magnitude = *observed;
+    }
+    total
+}
+
+fn wrap(angle: f32) -> f32 {
+    angle - TAU * (angle / TAU).round()
 }

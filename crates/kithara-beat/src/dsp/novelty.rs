@@ -84,27 +84,12 @@ impl Frames {
         let (re, im) = (self.spectrum.re(), self.spectrum.im());
         let _ = spectrum::magnitude(re, im, &mut self.observed);
         let _ = spectrum::phase(re, im, &mut self.angle);
-        let mut total = 0.0;
-        for ((((re, im), (observed, angle)), (magnitude, phase)), step) in re
-            .iter()
-            .zip(im)
-            .zip(self.observed.iter().zip(self.angle.iter()))
-            .zip(self.magnitude.iter_mut().zip(self.phase.iter_mut()))
-            .zip(self.phase_step.iter_mut())
-        {
-            let (sin, cos) = wrap(*phase + *step).sin_cos();
-            total += (re - *magnitude * cos).hypot(im - *magnitude * sin);
-            *step = wrap(angle - *phase);
-            *phase = *angle;
-            *magnitude = *observed;
-        }
-        total
+        spectrum::prediction_difference(
+            [re, im],
+            [&self.observed, &self.angle],
+            [&mut self.magnitude, &mut self.phase, &mut self.phase_step],
+        )
     }
-}
-
-fn wrap(angle: f32) -> f32 {
-    let turn = std::f32::consts::TAU;
-    angle - turn * (angle / turn).round()
 }
 
 #[cfg(test)]
@@ -119,7 +104,7 @@ mod tests {
         test_pools::pools,
     };
 
-    fn peaks(curve: &[f32]) -> Vec<usize> {
+    pub(super) fn peaks(curve: &[f32]) -> Vec<usize> {
         let ceiling = curve.iter().copied().fold(0.0f32, f32::max);
         (1..curve.len().saturating_sub(1))
             .filter(|&i| {
@@ -171,5 +156,173 @@ mod tests {
             curve.iter().all(|&v| v == 0.0),
             "silence has no spectral change"
         );
+    }
+}
+
+#[cfg(test)]
+mod oracle {
+    use std::f32::consts::TAU;
+
+    use kithara_test_fixtures::unit_fixtures::{click_silence_4s, clicks_120_4s};
+    use kithara_test_utils::kithara;
+
+    use super::{Frames, Novelty, consts, spectrum, tests::peaks};
+    use crate::test_pools::pools;
+
+    // Retain the original zipped loop: bounds checks can split the paired sin_cos call.
+    fn difference(
+        re: &[f32],
+        im: &[f32],
+        observed: &[f32],
+        angle: &[f32],
+        state: &mut [Vec<f32>; 3],
+    ) -> f32 {
+        let [magnitudes, phases, phase_steps] = state;
+        let mut total = 0.0_f32;
+        for ((((re, im), (observed, angle)), (magnitude, phase)), step) in re
+            .iter()
+            .zip(im)
+            .zip(observed.iter().zip(angle))
+            .zip(magnitudes.iter_mut().zip(phases.iter_mut()))
+            .zip(phase_steps.iter_mut())
+        {
+            let (sin, cos) = wrap(*phase + *step).sin_cos();
+            total += (re - *magnitude * cos).hypot(im - *magnitude * sin);
+            *step = wrap(angle - *phase);
+            *phase = *angle;
+            *magnitude = *observed;
+        }
+        total
+    }
+
+    fn wrap(angle: f32) -> f32 {
+        angle - TAU * (angle / TAU).round()
+    }
+
+    fn bits(values: &[f32]) -> Vec<u32> {
+        values.iter().map(|v| v.to_bits()).collect()
+    }
+
+    fn reference(mono: &[f32]) -> Vec<f32> {
+        if mono.len() < consts::FRAMES_FRAME {
+            return Vec::new();
+        }
+        let owner = Novelty::new(pools()).expect("supported FFT");
+        let bins = consts::NOVELTY_FFT.bins();
+        let mut work = Frames {
+            spectrum: owner.fft.spectrum(&owner.pools).expect("spectrum fits"),
+            observed: owner.pools.get_with_len::<f32>(bins).expect("plane fits"),
+            angle: owner.pools.get_with_len::<f32>(bins).expect("plane fits"),
+            magnitude: owner.pools.get_with_len::<f32>(bins).expect("plane fits"),
+            phase: owner.pools.get_with_len::<f32>(bins).expect("plane fits"),
+            phase_step: owner.pools.get_with_len::<f32>(bins).expect("plane fits"),
+        };
+        let mut spectrum = owner
+            .fft
+            .spectrum(&owner.pools)
+            .expect("oracle spectrum fits");
+        let mut observed = vec![0.0; bins];
+        let mut angle = vec![0.0; bins];
+        let mut state = std::array::from_fn(|_| vec![0.0; bins]);
+        let frames = (mono.len() - consts::FRAMES_FRAME) / consts::NOVELTY_STRIDE + 2;
+        let mut coarse = Vec::new();
+        for index in 0..frames {
+            let at = index * consts::NOVELTY_STRIDE;
+            let end = (at + consts::FRAMES_FRAME).min(mono.len());
+            let frame = &mono[at..end];
+            for (actual, expected) in [&work.magnitude, &work.phase, &work.phase_step]
+                .into_iter()
+                .zip(&state)
+            {
+                assert_eq!(bits(actual), bits(expected), "frame {index}: prior state");
+            }
+            owner.fft.forward(frame, &mut spectrum).expect("frame fits");
+            spectrum::magnitude(spectrum.re(), spectrum.im(), &mut observed);
+            spectrum::phase(spectrum.re(), spectrum.im(), &mut angle);
+            let expected = difference(spectrum.re(), spectrum.im(), &observed, &angle, &mut state);
+            let actual = work.difference(&owner.fft, frame);
+            let planes = [
+                ("real", work.spectrum.re(), spectrum.re()),
+                ("imaginary", work.spectrum.im(), spectrum.im()),
+                ("magnitude", &work.observed, &observed),
+                ("phase", &work.angle, &angle),
+            ];
+            for (name, actual_plane, expected_plane) in planes {
+                assert_eq!(actual_plane.len(), expected_plane.len());
+                let first_difference = actual_plane
+                    .iter()
+                    .zip(expected_plane)
+                    .enumerate()
+                    .find_map(|(bin, (actual, expected))| {
+                        (actual.to_bits() != expected.to_bits()).then_some((
+                            bin,
+                            actual.to_bits(),
+                            expected.to_bits(),
+                        ))
+                    });
+                assert_eq!(first_difference, None, "frame {index}: {name} input plane");
+            }
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "frame {index}, {} samples: {actual} vs {expected}",
+                mono.len()
+            );
+            for (actual, expected) in [&work.magnitude, &work.phase, &work.phase_step]
+                .into_iter()
+                .zip(&state)
+            {
+                assert_eq!(
+                    bits(actual),
+                    bits(expected),
+                    "frame {index}: entire history plane"
+                );
+            }
+            coarse.push(expected);
+        }
+        let before = [&work.magnitude, &work.phase, &work.phase_step].map(|s| bits(s));
+        assert_eq!(
+            work.difference(&owner.fft, &vec![1.0; consts::FRAMES_FRAME + 1])
+                .to_bits(),
+            0
+        );
+        assert_eq!(
+            before,
+            [&work.magnitude, &work.phase, &work.phase_step].map(|s| bits(s))
+        );
+        let mut curve = Vec::new();
+        for pair in coarse.windows(2) {
+            curve.push(pair[0]);
+            curve.push((pair[0] + pair[1]) / 2.0);
+        }
+        curve.push(*coarse.last().expect("at least two frames"));
+        curve
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn complete_curves_and_frame_history_match_scalar_law(
+        clicks_120_4s: Vec<f32>,
+        click_silence_4s: Vec<f32>,
+    ) {
+        let owner = Novelty::new(pools()).expect("supported FFT");
+        let tone: Vec<f32> = std::iter::successors(Some(0.0_f32), |phase| Some(phase + 0.17))
+            .take(4097)
+            .map(f32::sin)
+            .collect();
+        for pcm in [
+            &clicks_120_4s[..],
+            &click_silence_4s,
+            &tone,
+            &tone[..1023],
+            &tone[..1024],
+            &tone[..1537],
+        ] {
+            let expected = reference(pcm);
+            for _ in 0..2 {
+                let actual = owner.curve(pcm).expect("curve fits");
+                assert_eq!(bits(&actual), bits(&expected));
+                assert_eq!(peaks(&actual), peaks(&expected));
+            }
+        }
     }
 }

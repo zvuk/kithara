@@ -5,7 +5,9 @@ use std::num::NonZeroUsize;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 #[cfg(feature = "spectrum")]
-use kithara_dsp::spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase};
+use kithara_dsp::spectrum::{
+    Autocorrelation, Fft, FftLen, magnitude, phase, prediction_difference,
+};
 use kithara_dsp::{
     fade::{self, FadeCurve},
     filter::{Biquad, Coefficients, Hertz, Type},
@@ -222,6 +224,28 @@ fn downmix_never_allocates_at_any_channel_count() {
                 kithara_dsp::downmix(&interleaved, channels, &mut mono),
                 FRAMES
             );
+        }
+    });
+}
+
+#[cfg(feature = "spectrum")]
+#[kithara::test(native)]
+fn spectral_prediction_never_allocates() {
+    let re = vec![0.25; FRAMES / 2 + 1];
+    let im = vec![-0.5; re.len()];
+    let observed = vec![0.75; re.len()];
+    let angle = vec![0.17; re.len()];
+    let mut magnitude = vec![0.0; re.len()];
+    let mut phase = vec![0.0; re.len()];
+    let mut step = vec![0.0; re.len()];
+    assert_no_alloc(|| {
+        for _ in 0..3 {
+            let total = prediction_difference(
+                [&re, &im],
+                [&observed, &angle],
+                [&mut magnitude, &mut phase, &mut step],
+            );
+            assert!(total.is_finite());
         }
     });
 }
