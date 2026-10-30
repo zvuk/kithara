@@ -151,6 +151,7 @@ fn generic_regions_keep_exact_peaks_and_state_across_varying_blocks() {
     shape::<2, 2, 4>();
     shape::<9, 2, 3>();
     shape::<17, 7, 9>();
+    shape::<17, 17, 9>();
 
     let mut no_channels = Fir::<3, 2, 0, 0>::new([[1.0; 3]; 2]);
     let mut raw = [2.0];

@@ -1,4 +1,4 @@
-use fearless_simd::Simd;
+use fearless_simd::prelude::*;
 
 use super::Fir;
 use crate::envelope::PeakHold;
@@ -46,7 +46,7 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
     #[inline(always)]
     pub(super) fn process_kernel<S: Simd>(
         &mut self,
-        _simd: S,
+        simd: S,
         channel: usize,
         raw: &[f32],
         current: &[f32],
@@ -68,11 +68,13 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
         {
             *peak = sample.abs().max(0.0);
             let future = future.as_slice();
-            let ahead = Self::interval(&self.taps, &history[HISTORY.min(1)..], sample, future, 0);
+            let past = &history[HISTORY.min(1)..];
+            let ahead = Self::interval(simd, &self.taps, past, sample, future, 0);
             let behind = if *valid {
                 *shared
             } else {
                 Self::interval(
+                    simd,
                     &self.taps,
                     history,
                     sample,
@@ -94,7 +96,8 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
     }
 
     #[inline(always)]
-    fn interval(
+    fn interval<S: Simd>(
+        simd: S,
         taps: &[[f32; TAPS]; PHASES],
         past: &[f32],
         current: f32,
@@ -114,34 +117,30 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
             return 0.0;
         }
         let mut peak = 0.0_f32;
-        for branch in taps {
-            let mut sum = 0.0_f32;
-            let mut coefficients = branch.iter();
-            for _ in 0..padding {
-                let Some(&coefficient) = coefficients.next() else {
-                    break;
-                };
-                sum = coefficient.mul_add(0.0, sum);
+        let zero = S::f32s::splat(simd, 0.0);
+        for phases in taps.chunks(S::f32s::LEN) {
+            let active = S::f32s::from_fn(simd, |lane| f32::from(u8::from(lane < phases.len())))
+                .simd_gt(zero);
+            let mut sums = zero;
+            let samples = std::iter::repeat_n(0.0, padding)
+                .chain(past.iter().copied())
+                .chain(std::iter::once(current))
+                .chain(future.iter().copied())
+                .chain(std::iter::repeat(held));
+            for (tap, sample) in samples.take(TAPS).enumerate() {
+                let coefficients = S::f32s::from_fn(simd, |lane| {
+                    phases
+                        .get(lane)
+                        .and_then(|branch| branch.get(tap))
+                        .copied()
+                        .unwrap_or(0.0)
+                });
+                let sample = active.select(S::f32s::splat(simd, sample), zero);
+                sums = coefficients.mul_add_precise(sample, sums);
             }
-            for &sample in past {
-                let Some(&coefficient) = coefficients.next() else {
-                    break;
-                };
-                sum = coefficient.mul_add(sample, sum);
+            for &sum in sums.as_slice().iter().take(phases.len()) {
+                peak = peak.max(sum.abs());
             }
-            if let Some(&coefficient) = coefficients.next() {
-                sum = coefficient.mul_add(current, sum);
-            }
-            for &sample in future {
-                let Some(&coefficient) = coefficients.next() else {
-                    break;
-                };
-                sum = coefficient.mul_add(sample, sum);
-            }
-            for &coefficient in coefficients {
-                sum = coefficient.mul_add(held, sum);
-            }
-            peak = peak.max(sum.abs());
         }
         peak
     }
