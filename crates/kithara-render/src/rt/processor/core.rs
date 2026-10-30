@@ -201,7 +201,7 @@ impl<E: SessionInbox> DeckMixer<E> {
                 .deck
                 .tracks
                 .iter_mut()
-                .filter_map(|(_, track)| track.frames_until_boundary(at))
+                .filter_map(|(_, track)| track.frames_until_boundary(at, context.is_some()))
                 .fold((frames - cursor).min(command_frames), usize::min)
                 .max(1);
             let end = cursor.saturating_add(span).min(frames);

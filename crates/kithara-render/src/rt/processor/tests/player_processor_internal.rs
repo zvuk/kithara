@@ -348,6 +348,72 @@ async fn render_audio_handover_fills_tail_from_next_playing_track(constant_half:
     );
 }
 
+#[kithara::test(native, tokio)]
+async fn a_delayed_final_packet_stitches_its_successor_inside_the_same_block() {
+    use kithara_test_utils::wait_until;
+
+    use crate::worker::{
+        PcmPacket,
+        packet_tests::{PacketRing, chunk},
+        scheduler::StreamWake,
+    };
+
+    let (mut processor, mut control) = make_processor();
+    let leading = Slot::new(0);
+    let successor = Slot::new(1);
+    let spec = AudioSpec::new(2, RATE);
+    let wake = kithara_worker::Wake::default();
+    let packets = PacketRing::with_wake(
+        spec,
+        Duration::from_secs(1),
+        8,
+        8,
+        true,
+        StreamWake::new(wake.clone()),
+    );
+    attach(
+        &mut control,
+        leading,
+        legacy_fixture::from_packets("delayed", packets),
+        false,
+    );
+    attach(
+        &mut control,
+        successor,
+        create_duration_player_resource("successor", Duration::from_secs(1)),
+        false,
+    );
+    block(&mut processor);
+    legacy_fixture::start(&mut processor, leading);
+    legacy_fixture::chain(&mut control, leading, successor);
+    let mut leading_packets = control.packets.remove(0);
+    assert_eq!(kithara_worker::mock::wake_state(&wake).0, 0);
+    let rendered = kithara_platform::tokio::task::spawn_blocking(move || {
+        render(&mut processor, MAX_BLOCK_FRAMES as usize)
+    });
+    wait_until(
+        Duration::from_secs(5),
+        "renderer requests its missing PCM",
+        || kithara_worker::mock::wake_state(&wake).0 > 0,
+    )
+    .await
+    .expect("offline renderer requests the producer before it can proceed");
+    let mut final_packet = chunk(spec, SegmentId::FIRST, 0, 0, &[0.5; 614 * 2]);
+    final_packet.meta.end_of_track = true;
+    leading_packets.push(PcmPacket::Chunk(Box::new(final_packet)));
+    let mut terminal = chunk(spec, SegmentId::FIRST, 614, 614, &[]);
+    terminal.meta.end_of_track = true;
+    leading_packets.push(PcmPacket::Chunk(Box::new(terminal)));
+    let (sounded, left, right) = rendered.await.expect("renderer completes");
+    assert!(sounded);
+    assert!(
+        left.iter()
+            .chain(&right)
+            .all(|sample| (*sample - 0.5).abs() < f32::EPSILON),
+        "the successor fills the same block after the delayed final packet"
+    );
+}
+
 #[kithara::test(tokio)]
 async fn render_audio_handover_promotes_preloading_track_without_silence(
     constant_half: &'static [u8],
