@@ -9,7 +9,7 @@ use std::{
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_dsp::{
     filter::{Biquad, Coefficients, Hertz, Type},
-    interp::{Interpolation, interpolate},
+    interp::{Interpolation, interpolate, interpolate_frame, weighted_frames},
     spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase},
 };
 use kithara_test_utils::bufpool::pools;
@@ -340,6 +340,45 @@ fn interp(c: &mut Criterion) {
     group.finish();
 }
 
+fn source_frames(c: &mut Criterion) {
+    let mut group = c.benchmark_group("source_frames");
+    for channels in [1_usize, 2, 4, 6, 9] {
+        let samples = vec![0.25; channels * 33];
+        let offsets = std::array::from_fn::<_, 33, _>(|tap| tap * channels);
+        let weights = [0.125; 33];
+        let mut frame = vec![0.0; channels];
+        let mut sums = vec![0.0; channels];
+        group.throughput(Throughput::Elements(
+            u64::try_from(channels).expect("channels"),
+        ));
+        group.bench_function(BenchmarkId::new("interpolate", channels), |b| {
+            b.iter(|| {
+                interpolate_frame(
+                    black_box(&samples[..channels]),
+                    black_box(&samples[channels..2 * channels]),
+                    black_box(0.531_589_7),
+                    &mut frame,
+                );
+                black_box(&frame);
+            });
+        });
+        group.bench_function(BenchmarkId::new("weighted", channels), |b| {
+            b.iter(|| {
+                weighted_frames(
+                    black_box(&samples),
+                    black_box(&offsets),
+                    black_box(&weights),
+                    channels,
+                    &mut sums,
+                )
+                .expect("resolved taps");
+                black_box(&sums);
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     kernels,
@@ -348,6 +387,7 @@ criterion_group!(
     biquad,
     biquad_decay,
     interp,
+    source_frames,
     spectrum,
     bins,
     autocorrelation

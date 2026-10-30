@@ -75,6 +75,10 @@ assert_eq!(samples, [0.0, 0.5]);
 
 <tr><td><code>interp::interpolate</code></td><td>Reads a window at fractional positions with an <code>interp::Interpolation</code> method (linear, quadratic, Hermite, Watte); a position outside the window is an error and leaves the output untouched</td></tr>
 
+<tr><td><code>interp::interpolate_frame</code></td><td>Interpolates the common channel prefix of two resolved frames with a separate f64 fraction; integer phase copies exact bits, including signed zero</td></tr>
+
+<tr><td><code>interp::weighted_frames</code></td><td>Accumulates checked frame offsets and f64 weights in tap order into caller-owned f64 scratch, without fusion, normalization or allocation; invalid shapes leave output untouched</td></tr>
+
 <tr><td><code>interp::RateRamp</code></td><td>Read rate moving linearly to a target; places a block of positions in closed form and lands on the target exactly</td></tr>
 
 <tr><td><code>spectrum::FftLen</code></td><td>An FFT length <code>f·2ⁿ</code>, <code>f</code> in {1, 3, 5, 15}, <code>n ≥ 4</code>: the lengths vDSP's real DFT runs, held on every backend</td></tr>
@@ -104,5 +108,8 @@ planes. `kithara-beat`'s spectral detector reads novelty from `spectrum::Fft`,
 `kithara-analysis`'s producer and its beat analyzer downmix through `downmix`.
 The build target picks the backend at compile time; on x86 the SIMD level is
 detected once per process, so a call costs one load before the kernel runs.
+
+Warp uses the scalar frame operations for its mapped source-window arithmetic;
+source coordinates, residency, tap selection and normalization remain in Warp.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-dsp) for detailed contracts, invariants, and internals.

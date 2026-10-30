@@ -9,7 +9,7 @@ use kithara_dsp::spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase};
 use kithara_dsp::{
     fade::{self, FadeCurve},
     filter::{Biquad, Coefficients, Hertz, Type},
-    interp::{InterpError, Interpolation, interpolate},
+    interp::{InterpError, Interpolation, interpolate, interpolate_frame, weighted_frames},
 };
 #[cfg(feature = "spectrum")]
 use kithara_test_utils::bufpool::pools;
@@ -25,6 +25,36 @@ const TWELVE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(11);
 const PLANE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(FRAMES + 7);
 #[cfg(feature = "spectrum")]
 const LAGS: NonZeroUsize = NonZeroUsize::MIN.saturating_add(511);
+
+#[kithara::test(native)]
+fn source_frame_operations_never_allocate() {
+    let samples = [0.25; 6 * 33];
+    let offsets = std::array::from_fn::<_, 33, _>(|tap| tap * 6);
+    let weights = [0.125; 33];
+    let mut interpolated = [7.0; 6];
+    let mut weighted = [7.0; 6];
+    assert_no_alloc(|| {
+        for channels in [1, 2, 4, 6] {
+            for fraction in [0.0, 0.5, 1.0_f64.next_down()] {
+                assert_eq!(
+                    interpolate_frame(
+                        &samples[..channels],
+                        &samples[6..6 + channels],
+                        fraction,
+                        &mut interpolated
+                    ),
+                    channels
+                );
+            }
+            weighted_frames(&samples, &offsets, &weights, channels, &mut weighted)
+                .expect("resolved taps");
+            assert_eq!(
+                weighted_frames(&samples, &[usize::MAX], &[1.0], channels, &mut weighted),
+                Err(InterpError::InvalidShape)
+            );
+        }
+    });
+}
 
 #[kithara::test(native)]
 fn layout_and_sanitize_never_allocate() {
