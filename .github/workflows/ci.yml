@@ -10,28 +10,28 @@ on:
       required_lanes:
         description: Space-separated additional required lane names, or all.
         type: string
-        default: ''
+        default: ""
       fixture-refresh:
         description: >-
           Comma-separated fixture names, or producing-function names, to
           produce again instead of reading from the store. Leave unset on
           ordinary runs and dispatch once with it set when a format change
           has to replace what the store already answers for.
-        default: ''
+        default: ""
         type: string
   workflow_dispatch:
     inputs:
       required_lanes:
         description: Space-separated additional required lane names, or all.
         type: string
-        default: ''
+        default: ""
       fixture-refresh:
         description: >-
           Comma-separated fixture names, or producing-function names, to
           produce again instead of reading from the store. Leave unset on
           ordinary runs and dispatch once with it set when a format change
           has to replace what the store already answers for.
-        default: ''
+        default: ""
         type: string
 
 env:

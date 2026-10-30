@@ -184,25 +184,24 @@ fn ordered_intervals_and_complete_state_match_the_scalar_base() {
                         .collect();
                     for start in (0..frames).step_by(256) {
                         let end = frames.min(start.checked_add(256).unwrap());
+                        let raw = raw_channel.get(start..).unwrap();
+                        let samples = current.get(start..end).unwrap();
                         assert_eq!(
                             detector.process(
                                 channel,
-                                raw_channel.get(start..).unwrap(),
-                                current.get(start..end).unwrap(),
+                                raw,
+                                samples,
                                 actual.get_mut(start..end).unwrap()
                             ),
                             end.checked_sub(start).unwrap()
                         );
-                        assert_eq!(
-                            dispatch!(Level::fallback(), simd => fallback.process_kernel(
-                                simd,
-                                channel,
-                                raw_channel.get(start..).unwrap(),
-                                current.get(start..end).unwrap(),
-                                fallback_peaks.get_mut(start..end).unwrap(),
-                            )),
-                            end.checked_sub(start).unwrap()
-                        );
+                        let output = fallback_peaks.get_mut(start..end).unwrap();
+                        let processed = if fallback.reconstruct {
+                            dispatch!(Level::fallback(), simd => fallback.process_kernel(simd, channel, raw, samples, output))
+                        } else {
+                            fallback.process(channel, raw, samples, output)
+                        };
+                        assert_eq!(processed, end.checked_sub(start).unwrap());
                     }
                     assert_eq!(bits(fallback_peaks), bits(actual.iter().copied()));
                     assert_eq!(

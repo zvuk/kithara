@@ -1327,3 +1327,20 @@ fn a_provisioning_run_on_the_default_branch_reaches_the_mac_roll_out_alone() {
         "no admitting rule answers before the refusal"
     );
 }
+
+#[test]
+fn shared_linux_images_use_the_installed_host_tool() {
+    let config = GitlabConfig::load(workspace_root());
+    let script = config.definition("linux:image")["script"]
+        .as_sequence()
+        .expect("image maintenance commands");
+    let commands: Vec<&str> = script.iter().filter_map(Value::as_str).collect();
+    assert_eq!(
+        commands,
+        [
+            "\"$KITHARA_CI_HOST_BINARY\" ci host mac build-linux-image",
+            "\"$KITHARA_CI_HOST_BINARY\" ci host mac smoke-linux",
+        ],
+        "shared images use the deployed binary and its embedded Dockerfile"
+    );
+}

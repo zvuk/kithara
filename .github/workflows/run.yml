@@ -21,7 +21,7 @@ on:
           entries that still answer to their name and only a deliberate run
           replaces them. Dispatch the pipeline once with this set, and leave
           it unset afterwards.
-        default: ''
+        default: ""
         type: string
       kind:
         description: >-
@@ -38,13 +38,13 @@ on:
           running an empty matrix; a name another role owns leaves this one
           with nothing to do, because the dispatcher hands the same list to
           each.
-        default: ''
+        default: ""
         type: string
       narrow:
         description: >-
           Nextest filterset every lane's test suite is narrowed to. Empty
           narrows nothing.
-        default: ''
+        default: ""
         type: string
 
 # Not inherited from the caller: a called workflow gets its own environment.

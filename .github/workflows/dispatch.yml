@@ -19,14 +19,14 @@ on:
     # between 06:02 and 07:11, inside the morning's pushes.
     #
     # The night: every lane whose membership names `nightly`.
-    - cron: '17 1 * * *'
+    - cron: "17 1 * * *"
     # The week: the lanes that cost hours - Miri, the deep assessment - and
     # would owe the machine a night it needs for lanes that answer faster.
-    - cron: '17 8 * * 6'
+    - cron: "17 8 * * 6"
     # The month: the stress tier that repeats every lane a repeat can count.
     # It is the repeated run's cadence alone; the night and the week already
     # run everything else.
-    - cron: '17 3 1 * *'
+    - cron: "17 3 1 * *"
   workflow_dispatch:
     inputs:
       kind:
@@ -40,13 +40,13 @@ on:
           selection. This is how one subtask is started on its own. `all`
           asks for a full run: every lane that some full kind schedules.
         type: string
-        default: ''
+        default: ""
       narrow:
         description: >-
           Nextest filterset every test suite of the run is narrowed to. A lane
           with no suite refuses it, so name the lanes to narrow in `only`.
         type: string
-        default: ''
+        default: ""
       mutants:
         description: >-
           Run every mutation suite. They cost hours and run only when asked

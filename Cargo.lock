@@ -5121,6 +5121,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "which",
+ "yaml_serde",
 ]
 
 [[package]]

@@ -63,23 +63,6 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
         let mut future = raw.iter();
         let mut samples = current.iter();
         let mut output = peaks.iter_mut();
-        if !self.reconstruct {
-            while let (Some(_), Some(&sample), Some(peak)) =
-                (future.next(), samples.next(), output.next())
-            {
-                *peak = sample.abs().max(0.0);
-            }
-            if len > 0 {
-                let retained = HISTORY.min(len);
-                history.copy_within(retained.., 0);
-                let (_, retained_history) = history.split_at_mut(HISTORY.saturating_sub(retained));
-                let (processed, _) = current.split_at(len);
-                let (_, retained_current) = processed.split_at(len.saturating_sub(retained));
-                retained_history.copy_from_slice(retained_current);
-                *valid = true;
-            }
-            return len;
-        }
         while let (Some(_), Some(&sample), Some(peak)) =
             (future.next(), samples.next(), output.next())
         {

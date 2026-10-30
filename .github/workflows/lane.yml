@@ -26,7 +26,7 @@ on:
           entries that still answer to their name and only a deliberate run
           replaces them. Dispatch the pipeline once with this set, and leave
           it unset afterwards.
-        default: ''
+        default: ""
         type: string
       kind:
         description: Pipeline kind the lane runs under, for `xtask ci lane --kind`.
@@ -45,11 +45,11 @@ on:
         type: boolean
       artifact-name:
         description: Name of the artifact to upload, when the lane leaves one.
-        default: ''
+        default: ""
         type: string
       artifact-path:
         description: Path the artifact is collected from. Empty uploads nothing.
-        default: ''
+        default: ""
         type: string
       artifact-when:
         description: >-
@@ -61,17 +61,17 @@ on:
         description: >-
           Name of an artifact this lane downloads before it runs, when it
           depends on one lane's output. Empty downloads nothing.
-        default: ''
+        default: ""
         type: string
       runner:
         description: Stable runner label for a lane-owned persistent build cache.
-        default: ''
+        default: ""
         type: string
       narrow:
         description: >-
           Nextest filterset the lane's test suite is narrowed to. Empty narrows
           nothing; a lane with no suite refuses one.
-        default: ''
+        default: ""
         type: string
 
 # Not inherited from the caller: a called workflow gets its own environment.

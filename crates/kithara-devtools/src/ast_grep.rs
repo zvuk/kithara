@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    path::Path,
     process::{Command, Output, Stdio},
 };
 
@@ -9,10 +10,8 @@ use serde::Deserialize;
 
 use crate::{
     Ctx,
-    common::{
-        exclude::{cfg_test_byte_ranges, cfg_test_module_globs},
-        report::print_check_block,
-    },
+    ast_rules::{Rules, excluded_globs, filter_file_paths, source_paths, test_module_globs},
+    common::{exclude::cfg_test_byte_ranges, report::print_check_block, walker::matches_any},
     util::ensure_clean_tree,
     verdict::NotClean,
 };
@@ -100,27 +99,50 @@ fn add_exclude_globs(cmd: &mut Command, ctx: &Ctx) {
     for pat in &project.lint_exclude.runtime_paths() {
         cmd.arg("--globs").arg(format!("!{pat}"));
     }
-    for pat in cfg_test_module_globs(&ctx.root) {
+    for pat in test_module_globs(ctx) {
         cmd.arg("--globs").arg(format!("!{pat}"));
     }
 }
 
+fn add_source_globs(cmd: &mut Command, ctx: &Ctx) {
+    for pattern in &ctx.config.workspace_scan.exclude {
+        cmd.arg("--globs").arg(format!("!{pattern}"));
+    }
+}
+
 fn run_native(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
+    let rules = Rules::load(ctx)?;
+    let paths = filter_file_paths(ctx, &source_paths(ctx, &args.paths)?, false)?;
+    if args.fix {
+        let root = std::fs::canonicalize(&ctx.root)?;
+        for path in &paths {
+            ensure!(
+                std::fs::canonicalize(ctx.root.join(path))?.starts_with(&root),
+                "ast-grep --fix path is outside its workspace: {}",
+                path.display(),
+            );
+        }
+    }
+    if paths.is_empty() {
+        return Ok(());
+    }
     let mut cmd = Command::new(ctx.config.tools.program("ast-grep"));
     cmd.current_dir(&ctx.root)
         .arg("scan")
         .arg("--config")
-        .arg("sgconfig.yml")
+        .arg(rules.config())
         .arg("--report-style")
         .arg("short");
     add_exclude_globs(&mut cmd, ctx);
+    add_source_globs(&mut cmd, ctx);
     if args.strict {
         cmd.arg("--warning");
     }
     if args.fix {
         cmd.arg("--update-all");
     }
-    for p in &args.paths {
+    cmd.arg("--");
+    for p in &paths {
         cmd.arg(p);
     }
     let status = cmd.status()?;
@@ -141,7 +163,7 @@ fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) -> Result
         let rule_id = m
             .metadata
             .and_then(|metadata| metadata.category)
-            .unwrap_or(m.rule_id);
+            .unwrap_or_else(|| m.rule_id.clone());
         let entry = by_rule.entry(rule_id.clone()).or_insert_with(|| RuleGroup {
             severity: m.severity.clone(),
             message: m.message.clone(),
@@ -152,10 +174,11 @@ fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) -> Result
             "inconsistent severity for ast-grep category {rule_id}",
         );
         entry.hits.push(Hit {
-            byte_offset: m.range.byte_offset.start,
             file: m.file,
-            line: m.range.start.line + 1,
+            rule_id: m.rule_id,
             column: m.range.start.column + 1,
+            line: m.range.start.line + 1,
+            byte_offset: m.range.byte_offset.start,
         });
     }
     Ok(())
@@ -177,10 +200,15 @@ fn parse_output(output: &Output, by_rule: &mut BTreeMap<String, RuleGroup>) -> R
     parse_into(stdout, by_rule)
 }
 
-fn exclude_test_hits(groups: &mut BTreeMap<String, RuleGroup>, ctx: &Ctx) {
+fn exclude_test_hits(groups: &mut BTreeMap<String, RuleGroup>, ctx: &Ctx) -> Result<()> {
+    let excludes = excluded_globs(ctx, false)?;
     let mut ranges_by_file: BTreeMap<String, Option<Vec<std::ops::Range<usize>>>> = BTreeMap::new();
     for group in groups.values_mut() {
         group.hits.retain(|hit| {
+            let path = Path::new(&hit.file);
+            if matches_any(&excludes, path.strip_prefix(&ctx.root).unwrap_or(path)) {
+                return false;
+            }
             let ranges = ranges_by_file.entry(hit.file.clone()).or_insert_with(|| {
                 let source = std::fs::read_to_string(ctx.root.join(&hit.file)).ok()?;
                 cfg_test_byte_ranges(&source)
@@ -191,6 +219,7 @@ fn exclude_test_hits(groups: &mut BTreeMap<String, RuleGroup>, ctx: &Ctx) {
         });
     }
     groups.retain(|_, group| !group.hits.is_empty());
+    Ok(())
 }
 
 /// Runs a second pass for hard-correctness rules that must also see tests: the main scan applies
@@ -198,49 +227,71 @@ fn exclude_test_hits(groups: &mut BTreeMap<String, RuleGroup>, ctx: &Ctx) {
 /// exclude globs, replacing its prod-only group.
 fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
     let project = &ctx.config;
+    let rules = Rules::load(ctx)?;
+    let paths = filter_file_paths(ctx, &source_paths(ctx, &args.paths)?, true)?;
+    let production_paths = filter_file_paths(ctx, &paths, false)?;
 
     let mut cmd = Command::new(ctx.config.tools.program("ast-grep"));
     cmd.current_dir(&ctx.root)
         .arg("scan")
         .arg("--config")
-        .arg("sgconfig.yml")
+        .arg(rules.config())
         .arg("--include-metadata")
         .arg("--json=stream");
     add_exclude_globs(&mut cmd, ctx);
+    add_source_globs(&mut cmd, ctx);
     if args.strict {
         cmd.arg("--warning");
     }
-    for p in &args.paths {
+    cmd.arg("--");
+    for p in &production_paths {
         cmd.arg(p);
     }
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    let output = cmd.output()?;
     let mut by_rule: BTreeMap<String, RuleGroup> = BTreeMap::new();
-    parse_output(&output, &mut by_rule)?;
-    exclude_test_hits(&mut by_rule, ctx);
+    if !production_paths.is_empty() {
+        let output = cmd.output()?;
+        parse_output(&output, &mut by_rule)?;
+        exclude_test_hits(&mut by_rule, ctx)?;
+    }
 
     for rule_id in &project.lint_exclude.scan_all_rules {
-        let rule_file = format!(".config/ast-grep/{rule_id}.yml");
+        if paths.is_empty() {
+            break;
+        }
+        let selected = rules.rule(rule_id)?;
+        let filter = selected
+            .iter()
+            .map(|id| regex::escape(id))
+            .collect::<Vec<_>>()
+            .join("|");
         let mut rule_cmd = Command::new(ctx.config.tools.program("ast-grep"));
         rule_cmd
             .current_dir(&ctx.root)
             .arg("scan")
-            .arg("--rule")
-            .arg(&rule_file)
+            .arg("--config")
+            .arg(rules.config())
+            .arg("--filter")
+            .arg(format!("^(?:{filter})$"))
             .arg("--include-metadata")
             .arg("--json=stream");
         if args.strict {
             rule_cmd.arg("--warning");
         }
-        for p in &args.paths {
+        add_source_globs(&mut rule_cmd, ctx);
+        rule_cmd.arg("--");
+        for p in &paths {
             rule_cmd.arg(p);
         }
         rule_cmd.stdout(Stdio::piped());
         rule_cmd.stderr(Stdio::piped());
         let rule_out = rule_cmd.output()?;
-        by_rule.remove(rule_id);
+        for group in by_rule.values_mut() {
+            group.hits.retain(|hit| !selected.contains(&hit.rule_id));
+        }
+        by_rule.retain(|_, group| !group.hits.is_empty());
         parse_output(&rule_out, &mut by_rule)?;
     }
 
@@ -275,10 +326,11 @@ struct RuleGroup {
 }
 
 struct Hit {
-    byte_offset: usize,
     file: String,
+    rule_id: String,
     column: u32,
     line: u32,
+    byte_offset: usize,
 }
 
 fn severity_rank(s: &str) -> u8 {
@@ -415,6 +467,28 @@ mod tests {
     }
 
     #[test]
+    fn standalone_context_scans_its_root_without_cargo_metadata() {
+        let (root, ctx, mut args) = grouped_fixture("pub struct Value;", "error");
+        fs::write(
+            root.path().join("standalone.rs"),
+            "fn value() -> u32 { 42 }",
+        )
+        .expect("standalone source");
+        args.paths.clear();
+        let error = run_grouped(&args, &ctx).expect_err("root finding remains");
+        assert_eq!(
+            error
+                .downcast_ref::<crate::verdict::NotClean>()
+                .expect("lint verdict")
+                .findings,
+            Some(1),
+        );
+        fs::write(root.path().join("standalone.rs"), "pub struct Value;")
+            .expect("corrected source");
+        run_grouped(&args, &ctx).expect("corrected standalone source");
+    }
+
+    #[test]
     fn grouped_scan_keeps_production_hits_on_shared_lines_and_inside_functions() {
         for source in [
             "#[cfg(test)] fn fixture() -> u32 { 42 } fn production() -> u32 { 42 }",
@@ -497,6 +571,25 @@ mod tests {
             "fn production() -> u32 { 43 }",
         );
         assert!(run_grouped(&args, &ctx).is_ok());
+    }
+
+    #[test]
+    fn native_fixer_rejects_files_outside_its_workspace() {
+        let (root, ctx, mut args) = grouped_fixture("", "error");
+        let outside = tempdir().expect("outside workspace");
+        let file = outside.path().join("outside.rs");
+        fs::write(&file, "fn production() -> u32 { 42 }").expect("outside source");
+        let rule = root.path().join(".config/ast-grep/context.yml");
+        let text = fs::read_to_string(&rule).expect("rule");
+        fs::write(&rule, format!("{text}fix: '43'\n")).expect("fix rule");
+        args.fix = true;
+        args.paths = vec![file.to_string_lossy().into_owned()];
+        let error = super::run_native(&args, &ctx).expect_err("foreign file cannot be fixed");
+        assert!(error.to_string().contains("outside"));
+        assert_eq!(
+            fs::read_to_string(file).expect("unchanged"),
+            "fn production() -> u32 { 42 }"
+        );
     }
 
     fn rule_hits_at(rule_file: &str, relative_path: &str, source: &str) -> usize {

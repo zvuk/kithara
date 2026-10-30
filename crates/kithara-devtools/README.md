@@ -86,6 +86,28 @@ Quality Lab intentionally keeps a separate, **required**
 path. The ownership rules, the schema's strictness, and what each section is
 allowed to declare are in [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-devtools).
 
+### AST configuration
+
+AST rule definitions belong to the caller's ordinary `sgconfig.yml` and its
+native `ruleDirs` / `utilDirs`. This crate supplies execution and diagnostic
+handling; it contains no embedded rule collection. Kithara keeps every maintained
+rule source in root `.config/ast-grep`.
+
+The default source scope follows Cargo targets and their modules; a standalone
+`Ctx::new` scans its root without Cargo metadata. Explicit paths override that
+scope. `[ast-grep].default_roots` owns the caller's AST domain independently of
+Rust-only scan roots. `[lint_exclude]` owns test/tooling exclusions, while
+`scan_all_rules` resolves identities and report categories from the same native
+configuration. Unknown or duplicate identities fail explicitly. Strict mode
+promotes warning diagnostics; execution errors and existing fix safeguards stay
+in force.
+
+An external consumer prepares any selected canonical rule exports explicitly
+and supplies its own ordinary scan configuration. Generated exports retain the
+source revision and content provenance; they are build artifacts, not another
+maintained rule library. Exchange results with the exact source revision,
+selected IDs, executable pin and consumer scope.
+
 ## Key Types
 
 `CoreCommand` groups the shared commands into a few families:

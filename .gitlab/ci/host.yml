@@ -1,26 +1,9 @@
 # Repairs the host needs on itself, reachable from the pipeline rather than
 # only over ssh.
 
-# The Linux runner runs `kithara-ci:linux-latest`, and this job is what points
-# that tag at the image the commit pins. Every Linux job waits for it.
-#
-# Before, the runner named the pinned tag itself, so a pin bump broke every
-# Linux job until someone logged in and rebuilt the image by hand; a colima
-# restart, which recreates the VM, did the same. Now the job builds the pinned
-# image only when the host lacks it and otherwise just moves the tag, which
-# takes seconds, so it runs on every pipeline and the lane repairs itself.
-#
-# `pins` come from the checkout the job already has, so the image is tagged
-# with whatever the commit pins.
-#
-# It takes the macOS shell runner, not the release one: the release runner
-# serves protected refs only, so a quarantine or merge-request pipeline — the
-# ones that most need the image — left this job pending until it was dropped.
-# The macOS runner is the same `kithara-ci` account on the same host and
-# already runs the change's code, so it grants the change nothing new.
-#
-# A provisioning run leaves it out: the roll-out builds the image itself, and
-# a tag moved underneath it fails the digest check its runner step makes.
+# Shared images use the installed host bundle. A checkout may predate its
+# pins schema; neither its executable nor its Dockerfile owns host state.
+# Device affinity serializes the floating-tag and digest transaction.
 linux:image:
   extends: .apple-device-job
   stage: linux
@@ -31,8 +14,8 @@ linux:image:
       when: never
     - when: on_success
   script:
-    - just ci host mac build-linux-image docker/ci.Dockerfile
-    - just ci host mac smoke-linux
+    - '"$KITHARA_CI_HOST_BINARY" ci host mac build-linux-image'
+    - '"$KITHARA_CI_HOST_BINARY" ci host mac smoke-linux'
 
 # The same roll-out on the Mac mini, opted into by starting a pipeline on the
 # default branch with `KITHARA_PROVISION` set to `1`, from "Run pipeline" or the
@@ -42,8 +25,7 @@ linux:image:
 #
 # The default branch only. Provisioning writes to the machine that serves every
 # lane, and a merge-request or quarantine ref carries code no one has reviewed
-# yet; `linux:image` above is what those refs get, and it only ever builds an
-# image from pins the ref already ran under.
+# yet. Other refs use the installed host bundle through `linux:image`.
 host:provision:
   extends: .macos-job
   stage: linux

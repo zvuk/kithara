@@ -51,7 +51,29 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
         current: &[f32],
         peaks: &mut [f32],
     ) -> usize {
-        dispatch!(Level::new(), simd => self.process_kernel(simd, channel, raw, current, peaks))
+        if self.reconstruct {
+            return dispatch!(Level::new(), simd => self.process_kernel(simd, channel, raw, current, peaks));
+        }
+        let (Some(history), Some(valid)) = (
+            self.history.get_mut(channel),
+            self.shared_valid.get_mut(channel),
+        ) else {
+            return 0;
+        };
+        let len = raw.len().min(current.len()).min(peaks.len());
+        for (peak, &sample) in peaks.iter_mut().zip(current).take(raw.len()) {
+            *peak = sample.abs().max(0.0);
+        }
+        if len > 0 {
+            let retained = HISTORY.min(len);
+            history.copy_within(retained.., 0);
+            let (_, retained_history) = history.split_at_mut(HISTORY.saturating_sub(retained));
+            let (processed, _) = current.split_at(len);
+            let (_, retained_current) = processed.split_at(len.saturating_sub(retained));
+            retained_history.copy_from_slice(retained_current);
+            *valid = true;
+        }
+        len
     }
 
     /// Forget all input and interval state, preserving the coefficients.

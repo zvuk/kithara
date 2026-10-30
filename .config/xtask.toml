@@ -15,6 +15,9 @@ default_roots = ["crates"]
 # multi-target FFI builds). Generated bindings are not workspace source.
 exclude = ["target/**", "**/target/**"]
 
+[ast-grep]
+default_roots = ["."]
+
 [architecture.filters]
 exclude_crates = [
   "kithara-devtools-trace-format",
