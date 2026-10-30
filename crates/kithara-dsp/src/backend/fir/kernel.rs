@@ -43,6 +43,7 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
             });
     }
 
+    #[inline(never)]
     pub(super) fn process_kernel<S: Simd>(
         &mut self,
         simd: S,
