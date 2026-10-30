@@ -282,6 +282,7 @@ kithara = { workspace = true, features = ["download", "android"] }
 kithara-render = { workspace = true }
 kithara-test-dylib = { workspace = true }
 
+audioadapter-buffers = { workspace = true }
 criterion = { workspace = true }
 
 [lints]

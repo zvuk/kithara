@@ -1,5 +1,3 @@
-//! Firewheel nodes that put an effect on a session bus.
-
 use core::num::{NonZeroU32, NonZeroUsize};
 
 use firewheel::{
@@ -80,9 +78,6 @@ impl AudioNodeProcessor for LimiterProcessor {
         self.limiter = Self::build_limiter(stream_info.sample_rate, self.config);
     }
 
-    /// Resets the limiter's detector history on a silence block; otherwise it would carry the audio
-    /// from before the silence into whatever starts after it, and telling it the stream broke keeps
-    /// the next onset judged as an onset.
     #[kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,
@@ -97,11 +92,6 @@ impl AudioNodeProcessor for LimiterProcessor {
         buffers.outputs[0][..info.frames].copy_from_slice(&buffers.inputs[0][..info.frames]);
         buffers.outputs[1][..info.frames].copy_from_slice(&buffers.inputs[1][..info.frames]);
 
-        if info.in_silence_mask.all_channels_silent(Self::STEREO.get()) {
-            self.limiter.reset();
-            return ProcessStatus::OutputsModifiedWithMask(MaskType::Silence(info.in_silence_mask));
-        }
-
         let Some((out_l_slice, rest)) = buffers.outputs.split_first_mut() else {
             return ProcessStatus::Bypass;
         };
@@ -114,6 +104,106 @@ impl AudioNodeProcessor for LimiterProcessor {
         ];
         self.limiter.process_planar(&mut channels);
 
-        ProcessStatus::OutputsModified
+        if info.in_silence_mask.all_channels_silent(Self::STEREO.get()) {
+            ProcessStatus::OutputsModifiedWithMask(MaskType::Silence(info.in_silence_mask))
+        } else {
+            ProcessStatus::OutputsModified
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::time::Duration;
+
+    use firewheel::{
+        clock::InstantSamples,
+        dsp::{buffer::ConstSequentialBuffer, declick::DeclickValues},
+        log::{RealtimeLoggerConfig, realtime_logger},
+        mask::{ConnectedMask, ConstantMask, SilenceMask},
+        node::{NUM_SCRATCH_BUFFERS, ProcStore, StreamStatus},
+    };
+
+    use super::*;
+
+    #[kithara::test(native, flash(false))]
+    fn silent_blocks_preserve_the_same_limiter_lifecycle() {
+        const FRAMES: usize = 16;
+        let rate = NonZeroU32::new(48_000).unwrap();
+        let config = LimiterConfig::default();
+        let mut processor = LimiterProcessor::new(rate, config);
+        let mut reference = PeakLimiter::new(rate, LimiterProcessor::STEREO, config).unwrap();
+        let (logger, _receiver) = realtime_logger(RealtimeLoggerConfig::default());
+        let mut extra = ProcExtra {
+            logger,
+            store: ProcStore::with_capacity(0),
+            scratch_buffers: ConstSequentialBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(FRAMES),
+            declick_values: DeclickValues::new(NonZeroU32::new(16).unwrap()),
+        };
+        let mut info = ProcInfo {
+            sample_rate: rate,
+            frames: FRAMES,
+            in_silence_mask: SilenceMask::default(),
+            out_silence_mask: SilenceMask::default(),
+            in_constant_mask: ConstantMask::default(),
+            out_constant_mask: ConstantMask::default(),
+            in_connected_mask: ConnectedMask::default(),
+            out_connected_mask: ConnectedMask::default(),
+            total_cpu_seconds_recip: 1.0,
+            process_to_playback_delay: None,
+            did_just_unbypass: false,
+            last_marker_instant: InstantSamples(0),
+            sample_rate_recip: f64::from(rate.get()).recip(),
+            clock_samples: InstantSamples(0),
+            duration_since_stream_start: Duration::ZERO,
+            stream_status: StreamStatus::empty(),
+            dropped_frames: 0,
+        };
+
+        // Authored planar f32 at 48 kHz: attack, two silent blocks, then a quiet
+        // onset. The adapter must preserve the owner's PCM exactly (zero tolerance).
+        for (block, value) in [4.0, 0.0, 0.0, 0.25].into_iter().enumerate() {
+            let left = [value; FRAMES];
+            let right = [value * 0.5; FRAMES];
+            let mut expected_left = left;
+            let mut expected_right = right;
+            reference.process_planar(&mut [&mut expected_left, &mut expected_right]);
+            if block == 3 {
+                assert!(expected_left[0] > 0.0 && expected_left[0] < value);
+            }
+            info.in_silence_mask = if value == 0.0 {
+                SilenceMask::new_all_silent(2)
+            } else {
+                SilenceMask::default()
+            };
+            let mut actual_left = [0.0; FRAMES];
+            let mut actual_right = [0.0; FRAMES];
+            let status = processor.process(
+                &info,
+                ProcBuffers {
+                    inputs: &[&left, &right],
+                    outputs: &mut [&mut actual_left, &mut actual_right],
+                },
+                &mut extra,
+            );
+            assert_eq!(
+                actual_left.map(f32::to_bits),
+                expected_left.map(f32::to_bits),
+                "left block {block}"
+            );
+            assert_eq!(
+                actual_right.map(f32::to_bits),
+                expected_right.map(f32::to_bits),
+                "right block {block}"
+            );
+            let expected_status = if value == 0.0 {
+                ProcessStatus::OutputsModifiedWithMask(MaskType::Silence(
+                    SilenceMask::new_all_silent(2),
+                ))
+            } else {
+                ProcessStatus::OutputsModified
+            };
+            assert_eq!(status, expected_status, "status block {block}");
+        }
     }
 }
