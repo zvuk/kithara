@@ -193,6 +193,7 @@ fn elementwise_kernels_and_fade_gains_never_allocate() {
         assert_eq!(kithara_dsp::scale_add(&input, 0.5, &mut acc), FRAMES);
         assert_eq!(kithara_dsp::mul_add(&input, &input, &mut acc), FRAMES);
         assert_eq!(kithara_dsp::add(&input, &mut acc), FRAMES);
+        assert_eq!(kithara_dsp::multiply_in_place(&mut acc, &input), FRAMES);
         for curve in [
             FadeCurve::EqualPower3dB,
             FadeCurve::EqualPower6dB,
@@ -223,5 +224,50 @@ fn downmix_never_allocates_at_any_channel_count() {
                 FRAMES
             );
         }
+    });
+}
+
+#[kithara::test(native)]
+fn fir_history_peak_linking_and_envelope_never_allocate() {
+    let mut detector = kithara_dsp::filter::Fir::<17, 7, 2, 9>::new([[0.125; 17]; 7]);
+    let mut envelope = kithara_dsp::envelope::AttackRelease::new(0.999);
+    let mut left = [2.0; 600];
+    let mut right = [-2.0; 607];
+    let mut peaks = [0.0; 600];
+    let mut linked = peaks;
+    assert_no_alloc(|| {
+        for frames in [600, 1, 0, 7, 255, 256, 257, 1, 0, 600] {
+            detector.begin_block(&[&mut left[..frames], &mut right[..frames + 7]], 0.98);
+            linked.fill(0.0);
+            assert_eq!(
+                detector.process(0, &left[..frames], &left[..frames], &mut peaks[..frames]),
+                frames
+            );
+            assert_eq!(
+                kithara_dsp::envelope::PeakHold::link(&peaks[..frames], &mut linked[..frames]),
+                frames
+            );
+            assert_eq!(
+                detector.process(
+                    1,
+                    &right[..frames + 7],
+                    &right[..frames],
+                    &mut peaks[..frames]
+                ),
+                frames
+            );
+            assert_eq!(
+                kithara_dsp::envelope::PeakHold::link(&peaks[..frames], &mut linked[..frames]),
+                frames
+            );
+            for target in &mut linked[..frames] {
+                *target = if *target > 0.98 { 0.98 / *target } else { 1.0 };
+            }
+            assert_eq!(envelope.process(&mut linked[..frames]), frames);
+            kithara_dsp::multiply_in_place(&mut left[..frames], &linked[..frames]);
+            kithara_dsp::multiply_in_place(&mut right[..frames], &linked[..frames]);
+        }
+        detector.reset();
+        envelope.reset();
     });
 }

@@ -50,3 +50,9 @@ pub fn mul_add(x: &[f32], y: &[f32], acc: &mut [f32]) -> usize {
 pub fn add(x: &[f32], acc: &mut [f32]) -> usize {
     platform::add(x, acc)
 }
+
+/// `samples[i] *= gains[i]`, correctly rounded without FMA or sanitization,
+/// over the common prefix; returns its length and leaves the tail untouched.
+pub fn multiply_in_place(samples: &mut [f32], gains: &[f32]) -> usize {
+    platform::multiply_in_place(samples, gains)
+}

@@ -18,7 +18,9 @@ Vector DSP kernels over planar `f32` slices. The layout functions match
 `fast_interleave` for `f32`: Apple builds run the stereo pair on Accelerate,
 every other target runs it on `fearless_simd` at the best SIMD level the CPU
 reports, and other channel counts take a bit-exact strided copy. `filter`
-runs multichannel biquad cascades, `interp` reads a window at fractional
+runs multichannel biquad cascades and ordered polyphase FIR reconstruction,
+`envelope` supplies interval peak linking and release-before-clamp gains,
+`interp` reads a window at fractional
 positions and `spectrum` takes the real FFT of a Hann-windowed frame on the
 same backends; `downmix` folds interleaved frames to mono and `sum_squares`
 reduces a slice. The FFT, the bin kernels and the autocorrelation build only
@@ -70,6 +72,14 @@ assert_eq!(samples, [0.0, 0.5]);
 <tr><td><code>sum_squares</code></td><td>Sum of the squares of a slice; an empty slice is <code>+0.0</code></td></tr>
 
 <tr><td><code>filter::Biquad</code></td><td>Biquad sections in cascade over planar channels; <code>new</code> allocates, <code>retune</code>, <code>process</code>, <code>settle</code> and <code>copy_state</code> do not, and silence resets the state</td></tr>
+
+<tr><td><code>filter::Fir</code></td><td>Ordered fused polyphase reconstruction, bounded input history and shared adjacent intervals; sanitized current and raw future slices remain separate, including held tails</td></tr>
+
+<tr><td><code>envelope::AttackRelease</code></td><td>Immediate attack and fused exponential release toward unity, released before the target clamp</td></tr>
+
+<tr><td><code>envelope::PeakHold</code></td><td>Stateless interval maximum and common-prefix channel peak linking</td></tr>
+
+<tr><td><code>multiply_in_place</code></td><td>Ordinary IEEE product over a common prefix, preserving the longer tail without implicit sanitization</td></tr>
 
 <tr><td><code>filter::Coefficients</code></td><td>The <code>biquad</code> crate's RBJ cookbook designs (with <code>Type</code>, <code>Hertz</code> and <code>Errors</code>), re-exported as the one import path</td></tr>
 

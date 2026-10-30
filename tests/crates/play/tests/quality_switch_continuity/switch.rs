@@ -5,7 +5,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent},
     decode::DecoderBackend,
-    effects::LimiterConfig,
+    effects::{Ceiling, LimiterConfig},
     events::{EventBus, EventReceiver},
     host::{HostConfig, HostSettings},
     platform::{
@@ -388,12 +388,7 @@ async fn prepare_player(
                     .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
                     .build(),
             )
-            .limiter(
-                LimiterConfig::builder()
-                    .ceiling(1.0)
-                    .build()
-                    .expect("a unity ceiling is a valid limiter policy"),
-            )
+            .limiter(LimiterConfig::builder().ceiling(Ceiling::MAX).build())
             .build(),
     )
     .await;

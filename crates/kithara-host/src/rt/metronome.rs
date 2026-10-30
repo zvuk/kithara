@@ -537,7 +537,7 @@ mod tests {
 
     /// The default limiter ceiling a Host's metronome clicks under.
     fn ceiling() -> f32 {
-        LimiterConfig::default().ceiling()
+        f32::from(LimiterConfig::default().ceiling())
     }
 
     fn config(level: f32, duck: f32) -> MetronomeConfig {

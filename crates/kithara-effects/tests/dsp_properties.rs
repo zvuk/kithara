@@ -6,7 +6,7 @@ use std::{
 };
 
 use kithara_effects::{
-    AudioEffect, GainDb, LimiterConfig, PeakLimiter,
+    AudioEffect, Ceiling, GainDb, LimiterConfig, PeakLimiter, ReleaseMs,
     eq::{EqConfig, EqEffect, generate_log_spaced_bands},
 };
 use kithara_resampler::{
@@ -96,10 +96,9 @@ fn limiter_with_ceiling(ceiling: f32) -> PeakLimiter {
         NonZeroU32::new(u32::from(HOST_RATE)).expect("host rate is non-zero"),
         NonZeroUsize::new(2).expect("stereo is non-zero"),
         LimiterConfig::builder()
-            .ceiling(ceiling)
-            .release_ms(LIMITER_RELEASE_MS)
-            .build()
-            .expect("limiter constants are valid"),
+            .ceiling(Ceiling::try_from(ceiling).expect("limiter ceiling"))
+            .release_ms(ReleaseMs::try_from(LIMITER_RELEASE_MS).expect("limiter release"))
+            .build(),
     )
     .expect("a stereo limiter fits the detector")
 }

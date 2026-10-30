@@ -21,6 +21,6 @@ impl SessionOutput {
 
     /// The metronome whose click `config` shapes, under the limiter's ceiling.
     pub(crate) fn metronome(self, config: MetronomeConfig) -> MetronomeNode {
-        MetronomeNode::new(config, self.limiter.ceiling())
+        MetronomeNode::new(config, f32::from(self.limiter.ceiling()))
     }
 }
