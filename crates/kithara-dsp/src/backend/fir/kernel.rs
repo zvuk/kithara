@@ -119,25 +119,24 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
                 let mut peak = 0.0_f32;
                 for phases in taps.chunks(f32x8::<S>::LEN) {
                     let mut sums = f32x8::splat(simd, 0.0);
-                    let samples = std::iter::repeat_n(0.0, padding)
-                        .chain(past.iter().copied())
-                        .chain(std::iter::once(current))
-                        .chain(future.iter().copied())
-                        .chain(std::iter::repeat(held));
-                    samples.take(TAPS).enumerate().for_each(
-                        #[inline(always)]
-                        |(tap, sample)| {
-                            let coefficients = f32x8::from_fn(simd, |lane| {
-                                phases
-                                    .get(lane)
-                                    .map_or(0.0, |branch| branch.get(tap).copied().unwrap_or(0.0))
-                            });
-                            let sample = f32x8::from_fn(simd, |lane| {
-                                phases.get(lane).map_or(0.0, |_| sample)
-                            });
-                            sums = coefficients.mul_add_precise(sample, sums);
-                        },
-                    );
+                    for tap in 0..TAPS {
+                        let sample = match tap.checked_sub(padding) {
+                            None => 0.0,
+                            Some(slot) if slot <= past.len() => *past.get(slot).unwrap_or(&current),
+                            Some(slot) => future
+                                .get(slot.saturating_sub(past.len()).saturating_sub(1))
+                                .copied()
+                                .unwrap_or(held),
+                        };
+                        let coefficients = f32x8::from_fn(simd, |lane| {
+                            phases
+                                .get(lane)
+                                .map_or(0.0, |branch| branch.get(tap).copied().unwrap_or(0.0))
+                        });
+                        let sample =
+                            f32x8::from_fn(simd, |lane| phases.get(lane).map_or(0.0, |_| sample));
+                        sums = coefficients.mul_add_precise(sample, sums);
+                    }
                     for &sum in sums.as_slice().iter().take(phases.len()) {
                         peak = peak.max(sum.abs());
                     }
