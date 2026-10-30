@@ -399,6 +399,20 @@ fn xtask_config() -> toml::Value {
     .expect("xtask config is valid TOML")
 }
 
+#[test]
+fn both_hosts_restore_lint_builds_after_local_eviction() {
+    let config = xtask_config();
+    for name in ["apple-lint", "linux-lint"] {
+        assert_eq!(
+            ci_lanes(&config)[name]
+                .get("target_snapshot")
+                .and_then(toml::Value::as_str),
+            Some(name),
+            "{name} must restore build-script output as well as compiler entries"
+        );
+    }
+}
+
 /// On GitHub a push with a pull request ready for review is a `merge-request`
 /// pipeline and any other push a `branch` one. They differ in how much of the
 /// suite a lane runs, never in which lanes run: a ready pull request that also

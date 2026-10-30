@@ -1,0 +1,14 @@
+[package]
+name = "kithara-ci-bootstrap"
+version = "0.0.1-alpha5"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

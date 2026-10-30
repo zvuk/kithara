@@ -4977,6 +4977,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-ci-bootstrap"
+version = "0.0.1-alpha5"
+dependencies = [
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "kithara-command"
 version = "0.0.1-alpha5"
 dependencies = [
@@ -13036,6 +13044,7 @@ dependencies = [
  "glob",
  "hex",
  "humantime",
+ "kithara-ci-bootstrap",
  "kithara-devtools",
  "nix",
  "plist",

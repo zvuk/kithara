@@ -39,6 +39,20 @@ fn main() -> ExitCode {
         })
         .unwrap_or_default();
     let args: Vec<String> = env::args().skip(1).collect();
+    if role == "kithara-ci-bootstrap" {
+        return match kithara_ci_bootstrap::run(env::args_os().skip(1)) {
+            Ok(status) => ExitCode::from(
+                status
+                    .code()
+                    .and_then(|code| u8::try_from(code).ok())
+                    .unwrap_or(1),
+            ),
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let first = args.first().map_or("", String::as_str);
     let scenario = env::var(consts::SCENARIO).unwrap_or_default();
 

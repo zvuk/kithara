@@ -2888,7 +2888,7 @@ fn the_windows_lane_runs_the_backend_the_platform_ships() {
         .expect("the lane runs the suite");
 
     assert_eq!(
-        tests, "bash .config/ci/compiler-cache.sh windows-test just test run --net-backend=none",
+        tests, "just ci cache-exec windows-test just test run --net-backend=none",
         "the suite takes the default backend, which this guest cannot build"
     );
 }

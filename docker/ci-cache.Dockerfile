@@ -22,6 +22,7 @@ COPY .cargo/config.toml .cargo/config.toml
 COPY crates crates
 COPY tests tests
 COPY xtask xtask
+COPY docker/ci.Dockerfile docker/ci.Dockerfile
 RUN --mount=type=cache,target=/build/target \
     --mount=type=secret,id=cache_env,required=true \
     --mount=type=secret,id=kache_host,required=true \

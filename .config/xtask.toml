@@ -644,6 +644,7 @@ cargo.exclude = [
   "kithara-devtools",
   "kithara-devtools-trace-format",
   "xtask",
+  "kithara-ci-bootstrap",
   "kithara-test-utils",
   "kithara-test-macros",
   "kithara-ffi-web-tests",
@@ -1003,7 +1004,12 @@ owns = [
   "crates/kithara-devtools-trace-format/",
   "crates/kithara-devtools/",
 ]
-cargo.packages = ["kithara-devtools-trace-format", "kithara-devtools", "xtask"]
+cargo.packages = [
+  "kithara-devtools-trace-format",
+  "kithara-devtools",
+  "xtask",
+  "kithara-ci-bootstrap",
+]
 cargo.profile = "test-release"
 runner.nextest.ignore_default_filter = true
 # These crates declare no `flash` feature — the virtual clock is a property of
@@ -2381,6 +2387,7 @@ timeout_minutes = 90
 # Sources are platform-independent, so one object serves both fleets.
 [ext.ci.lanes.linux-lint]
 cache_group = "linux"
+target_snapshot = "linux-lint"
 label = "Linux"
 os = "linux"
 tools = ["cargo", "just"]
@@ -2846,6 +2853,7 @@ timeout_minutes = 90
 # wrong Xcode has to fail in the job that would have used it.
 [ext.ci.lanes.apple-lint]
 cache_group = "macos"
+target_snapshot = "apple-lint"
 publishes_sources = true
 label = "Apple"
 os = "macos"

@@ -88,6 +88,7 @@ members = [
     "tests/crates/warp",
     "tests/fuzz",
     "xtask",
+    "xtask/bootstrap",
 ]
 default-members = [
     "crates/kithara",
@@ -300,6 +301,7 @@ kithara-beat = { path = "crates/kithara-beat", version = "0.0.1-alpha5" }
 kithara-blob = { path = "crates/kithara-blob", version = "0.0.1-alpha5" }
 kithara-broadcast = { path = "crates/kithara-broadcast", version = "0.0.1-alpha5", default-features = false }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha5" }
+kithara-ci-bootstrap = { path = "xtask/bootstrap", version = "0.0.1-alpha5" }
 kithara-command = { path = "crates/kithara-command", version = "0.0.1-alpha5" }
 kithara-config = { path = "crates/kithara-config", version = "0.0.1-alpha5" }
 kithara-core-test-fixtures = { path = "tests/crates/core" }
@@ -600,6 +602,14 @@ windows-sys = "0.61"
 # already builds this exact version, so it costs no extra compilation.
 winit = "0.30"
 wreq = "=6.0.0-rc.31"
+
+# Source lint gates run from the cached dev binary and spend most CPU in analysis and parsing.
+[profile.dev.package.kithara-devtools]
+opt-level = 2
+[profile.dev.package.syn]
+opt-level = 2
+[profile.dev.package.proc-macro2]
+opt-level = 2
 
 # Optimise CPU-heavy audio dependencies in debug builds so the audio
 # worker thread can keep up with real-time playback.  Without this,

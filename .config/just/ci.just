@@ -103,3 +103,8 @@ cache ENV_FILE *ARGS:
 [positional-arguments]
 cache-verify *ARGS:
     just _xtask ci cache verify "$@"
+
+# Compile outside a declared lane with the same required RustFS policy.
+[positional-arguments]
+cache-exec PHASE +ARGS:
+    just _xtask ci cache exec "$@"

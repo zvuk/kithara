@@ -2,7 +2,7 @@
 name = "xtask"
 version = "0.0.1-alpha5"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 publish = false
 # `.cargo/config.toml` aliases `cargo xtask` to `cargo run --package xtask`, which
@@ -11,6 +11,7 @@ publish = false
 default-run = "xtask"
 
 [dependencies]
+kithara-ci-bootstrap = { workspace = true }
 kithara-devtools = { workspace = true }
 
 anyhow = { workspace = true }

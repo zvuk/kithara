@@ -119,23 +119,7 @@ impl KacheJob {
 }
 
 pub(crate) fn require_remote(stats: &str) -> Result<()> {
-    let stats: serde_json::Value = serde_json::from_str(stats)
-        .context("reading the compiler cache's effective remote policy")?;
-    ensure!(
-        stats["remote"]
-            .as_str()
-            .is_some_and(|remote| remote.starts_with("s3://") && remote.len() > 5),
-        "CI compilation requires the scoped RustFS S3 backend"
-    );
-    ensure!(
-        stats["daemon_connected"] == true,
-        "the compiler cache daemon is unavailable"
-    );
-    ensure!(
-        stats["daemon_remote_readonly"] == false,
-        "CI compilation requires a writable RustFS cache daemon"
-    );
-    Ok(())
+    kithara_ci_bootstrap::require_remote(stats).map_err(Into::into)
 }
 
 pub(crate) fn reclaim_local_stores(config: &CiConfig, process: &Process) -> Result<()> {

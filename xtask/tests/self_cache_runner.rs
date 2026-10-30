@@ -78,12 +78,8 @@ esac
             .context("resolve repository root")?;
         fs::copy(repository.join("justfile"), &justfile)?;
         fs::copy(
-            repository.join(".config/ci/compiler-cache.sh"),
-            root.join(".config/ci/compiler-cache.sh"),
-        )?;
-        fs::copy(
-            repository.join("xtask/bootstrap_lease.rs"),
-            root.join("xtask/bootstrap_lease.rs"),
+            env!("CARGO_BIN_EXE_fake-tool"),
+            fake_bin.join("kithara-ci-bootstrap"),
         )?;
         let module_source = repository.join(".config/just");
         let module_target = root.join(".config/just");
@@ -112,6 +108,22 @@ esac
             &fake_bin.join("cargo"),
             r#"#!/bin/sh
 set -eu
+case "$*" in
+  *'-p kithara-ci-bootstrap'*)
+    driver_target=; driver_host=
+    while test "$#" -gt 0; do
+      case "$1" in
+        --target-dir) driver_target=$2; shift ;;
+        --target) driver_host=$2; shift ;;
+      esac
+      shift
+    done
+    if test -n "${KACHE_RUNTIME_DIR-}"; then mkdir -p "$KACHE_RUNTIME_DIR"; fi
+    mkdir -p "$driver_target/$driver_host/debug"
+    cp "$(command -v kithara-ci-bootstrap)" "$driver_target/$driver_host/debug/kithara-ci-bootstrap"
+    exit 0
+    ;;
+esac
 printf '%s\n' "$*" >> "$SELF_CACHE_CARGO_LOG"
 printf 'target=%s\n' "${CARGO_TARGET_DIR-}" >> "$SELF_CACHE_CARGO_LOG"
 exit 97
@@ -371,6 +383,22 @@ esac
             &self.fake_bin.join("cargo"),
             r#"#!/bin/sh
 set -eu
+case "$*" in
+  *'-p kithara-ci-bootstrap'*)
+    driver_target=; driver_host=
+    while test "$#" -gt 0; do
+      case "$1" in
+        --target-dir) driver_target=$2; shift ;;
+        --target) driver_host=$2; shift ;;
+      esac
+      shift
+    done
+    if test -n "${KACHE_RUNTIME_DIR-}"; then mkdir -p "$KACHE_RUNTIME_DIR"; fi
+    mkdir -p "$driver_target/$driver_host/debug"
+    cp "$(command -v kithara-ci-bootstrap)" "$driver_target/$driver_host/debug/kithara-ci-bootstrap"
+    exit 0
+    ;;
+esac
 printf '%s\n' "$*" >> "$SELF_CACHE_CARGO_LOG"
 while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
 [ "$#" -gt 0 ] || { printf 'fixture cargo received no run arguments\n' >&2; exit 2; }
@@ -991,6 +1019,22 @@ esac
             &fixture.bootstrap_cargo,
             r#"#!/bin/sh
 set -eu
+case "$*" in
+  *'-p kithara-ci-bootstrap'*)
+    driver_target=; driver_host=
+    while test "$#" -gt 0; do
+      case "$1" in
+        --target-dir) driver_target=$2; shift ;;
+        --target) driver_host=$2; shift ;;
+      esac
+      shift
+    done
+    if test -n "${KACHE_RUNTIME_DIR-}"; then mkdir -p "$KACHE_RUNTIME_DIR"; fi
+    mkdir -p "$driver_target/$driver_host/debug"
+    cp "$(command -v kithara-ci-bootstrap)" "$driver_target/$driver_host/debug/kithara-ci-bootstrap"
+    exit 0
+    ;;
+esac
 printf '%s\n' "$*" >> "$SELF_CACHE_CARGO_LOG"
 printf '%s\n' "$SELF_CACHE_BOOTSTRAP_ARTIFACT"
 "#,
@@ -1030,6 +1074,22 @@ fn concurrent_public_stale_refreshes_build_once() -> Result<()> {
         &fixture.bootstrap_cargo,
         r#"#!/bin/sh
 set -eu
+case "$*" in
+  *'-p kithara-ci-bootstrap'*)
+    driver_target=; driver_host=
+    while test "$#" -gt 0; do
+      case "$1" in
+        --target-dir) driver_target=$2; shift ;;
+        --target) driver_host=$2; shift ;;
+      esac
+      shift
+    done
+    if test -n "${KACHE_RUNTIME_DIR-}"; then mkdir -p "$KACHE_RUNTIME_DIR"; fi
+    mkdir -p "$driver_target/$driver_host/debug"
+    cp "$(command -v kithara-ci-bootstrap)" "$driver_target/$driver_host/debug/kithara-ci-bootstrap"
+    exit 0
+    ;;
+esac
 printf '%s\n' "$*" >> "$SELF_CACHE_CARGO_LOG"
 sleep 0.2
 printf '%s\n' "$SELF_CACHE_BOOTSTRAP_ARTIFACT"
@@ -1247,40 +1307,27 @@ fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
 }
 
 #[test]
-fn ci_bootstrap_lease_passes_the_selected_compiler_to_the_cache() -> Result<()> {
+fn ci_bootstrap_driver_owns_the_target_lease() -> Result<()> {
     let fixture = Fixture::new()?;
-    let selected = fixture.fake_bin.join("selected compiler");
-    let log = fixture._temp.path().join("compiler.log");
-    write_executable(&fixture.fake_bin.join("rustc"), "#!/bin/sh\nexit 96\n")?;
-    write_executable(
-        &fixture.fake_bin.join("rustup"),
-        "#!/bin/sh\nset -eu\ntest \"$*\" = 'which rustc'\nprintf '%s\\n' \"$SELECTED_RUSTC\"\n",
-    )?;
-    write_executable(
-        &selected,
-        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$0\" > \"$SELF_CACHE_COMPILER_LOG\"\nwhile test \"$1\" != -o; do shift; done\nprintf '#!/bin/sh\\nexit 0\\n' > \"$2\"\nchmod +x \"$2\"\n",
-    )?;
+    fixture.install_fake_transport()?;
     let output = fixture
-        .just_command(&fixture.root, &["_xtask", "--help"])?
+        .just_command(&fixture.root, &["_xtask", "exit-status", "0"])?
         .env("CI_JOB_ID", "42")
         .env("KITHARA_XTASK_TARGET", &fixture.target)
-        .env("SELECTED_RUSTC", &selected)
-        .env("SELF_CACHE_COMPILER_LOG", &log)
+        .env_remove("KACHE_RUNTIME_DIR")
         .env("TMPDIR", fixture._temp.path())
         .output()?;
     assert_success(&output);
-    assert_eq!(
-        fs::read_to_string(log)?,
-        format!("{}\n", selected.display())
-    );
+    assert!(fixture.target.join(".kithara-job-lease").is_file());
+    assert!(!fixture.target.join(".kithara-job-heartbeat").exists());
     Ok(())
 }
 
 #[test]
-fn a_cached_ci_worker_refreshes_a_checkout_without_its_wrapper_script() -> Result<()> {
+fn a_cached_ci_worker_refreshes_a_checkout_without_its_bootstrap_driver() -> Result<()> {
     let fixture = Fixture::new()?;
     assert_success(&fixture.bootstrap()?);
-    fs::remove_file(fixture.root.join(".config/ci/compiler-cache.sh"))?;
+    assert!(!fixture.root.join("xtask/bootstrap").exists());
     fs::write(
         fixture.root.join("xtask/src/main.rs"),
         "fn main() { changed(); }\n",

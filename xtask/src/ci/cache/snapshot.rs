@@ -16,11 +16,12 @@ use tempfile::NamedTempFile;
 use tracing::info;
 
 use super::{current_client_environment, require_success};
+use crate::consts;
 
 struct Snapshot;
 
 impl Snapshot {
-    const SCHEMA: &str = "kithara-target-snapshot-v3";
+    const SCHEMA: &str = "kithara-target-snapshot-v4";
     const PREFIX: &str = "target-snapshots";
 
     fn object(fingerprint: &str, checksum: &str) -> String {
@@ -123,6 +124,13 @@ pub(crate) fn restore_for_lane(
     cargo_home: &Path,
     rc: &Path,
 ) -> Result<Option<String>> {
+    if target.is_dir() {
+        require_target(target, false)?;
+        if !target_is_empty(target)? {
+            info!(path = %target.display(), "retained warm target directory");
+            return Ok(None);
+        }
+    }
     let fingerprint = fingerprint(key, "cargo", "host", root, cargo_home)?;
     let restored = restore(target, &fingerprint, rc)?;
     Ok(snapshot_to_publish(fingerprint, restored))
@@ -329,13 +337,14 @@ fn publish(target: &Path, fingerprint: &str, rc: &Path) -> Result<()> {
     let archive = NamedTempFile::new().context("create target snapshot archive")?;
     run_command(
         Command::new("tar")
-            .args(["--create", "--zstd", "--file"])
+            .args(["--create", "--format=pax", "--zstd", "--file"])
             .arg(archive.path())
-            .arg("--exclude=.kithara-ci-lease")
+            .arg(format!("--exclude={}", lease::FILE))
             .arg(format!(
                 "--exclude={heartbeat}",
                 heartbeat = lease::HEARTBEAT
             ))
+            .arg(format!("--exclude={}", consts::SOURCES_RECORD))
             .arg("--directory")
             .arg(target)
             .arg("."),
@@ -394,19 +403,25 @@ fn require_target(target: &Path, may_create: bool) -> Result<()> {
     ensure!(target.is_dir(), "target snapshot path is not a directory");
     if may_create {
         ensure!(
-            fs::read_dir(target)?.all(|entry| {
-                let Ok(entry) = entry else {
-                    return false;
-                };
-                matches!(
-                    entry.file_name().to_str(),
-                    Some(name) if name == lease::FILE || name == lease::HEARTBEAT
-                ) && entry.file_type().is_ok_and(|file_type| file_type.is_file())
-            }),
+            target_is_empty(target)?,
             "target snapshot restore requires an empty private target directory except its live job markers"
         );
     }
     Ok(())
+}
+
+fn target_is_empty(target: &Path) -> Result<bool> {
+    for entry in fs::read_dir(target)? {
+        let entry = entry?;
+        if !matches!(
+            entry.file_name().to_str(),
+            Some(name) if name == lease::FILE || name == lease::HEARTBEAT || name == consts::SOURCES_RECORD
+        ) || !entry.file_type()?.is_file()
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn validate_fingerprint(value: &str) -> Result<()> {
@@ -450,6 +465,16 @@ fn verify_archive(archive: &Path) -> Result<()> {
                     .all(|component| matches!(component, Component::CurDir | Component::Normal(_))),
             "target snapshot archive contains unsafe path {}",
             path.display()
+        );
+        let relative: PathBuf = path
+            .components()
+            .filter(|part| *part != Component::CurDir)
+            .collect();
+        ensure!(
+            ![lease::FILE, lease::HEARTBEAT, consts::SOURCES_RECORD]
+                .iter()
+                .any(|name| relative == Path::new(name)),
+            "snapshot archive contains live build ownership metadata"
         );
     }
     Ok(())
@@ -496,6 +521,7 @@ struct Client {
     endpoint: String,
     environment: BTreeMap<String, String>,
     program: PathBuf,
+    configuration: tempfile::TempDir,
 }
 
 impl Client {
@@ -517,6 +543,7 @@ impl Client {
             endpoint,
             environment,
             program: program.to_owned(),
+            configuration: tempfile::tempdir().context("create snapshot client configuration")?,
         })
     }
 
@@ -529,14 +556,22 @@ impl Client {
             .environment
             .get("AWS_SECRET_ACCESS_KEY")
             .context("cache secret missing")?;
-        let output = Command::new(&self.program)
+        let command = || {
+            let mut command = Command::new(&self.program);
+            command
+                .env("HOME", self.configuration.path())
+                .env("XDG_CONFIG_HOME", self.configuration.path())
+                .env("APPDATA", self.configuration.path());
+            command
+        };
+        let output = command()
             .args(["alias", "set", "snapshot", &self.endpoint, key, secret])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .output()
             .context("configure snapshot storage client")?;
         require_success(&output, "configure snapshot storage client")?;
-        Ok(Command::new(&self.program))
+        Ok(command())
     }
 
     /// Only an object that is not there reads as absent. A lookup the store
@@ -706,6 +741,7 @@ mod tests {
             endpoint: String::new(),
             environment: BTreeMap::new(),
             program: PathBuf::from("rc"),
+            configuration: tempfile::tempdir().expect("private snapshot client configuration"),
         };
 
         assert_eq!(
@@ -792,8 +828,49 @@ mod tests {
         require_target(&target, true).unwrap();
         fs::write(target.join(lease::FILE), "held").unwrap();
         fs::write(target.join(lease::HEARTBEAT), "alive").unwrap();
+        fs::write(target.join(consts::SOURCES_RECORD), "live claim").unwrap();
 
         assert!(require_target(&target, true).is_ok());
+    }
+
+    #[test]
+    fn a_warm_lane_keeps_its_build_without_contacting_the_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("artifact"), "warm").unwrap();
+
+        assert_eq!(
+            restore_for_lane(
+                "lint",
+                &target,
+                directory.path(),
+                directory.path(),
+                Path::new("no-client")
+            )
+            .expect("a warm build needs no remote restore"),
+            None
+        );
+        assert_eq!(fs::read(target.join("artifact")).unwrap(), b"warm");
+    }
+
+    #[test]
+    fn an_archive_cannot_replace_live_build_ownership() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in [lease::FILE, lease::HEARTBEAT, consts::SOURCES_RECORD] {
+            fs::write(directory.path().join(name), "foreign owner").unwrap();
+            let archive = directory.path().join("snapshot.tar");
+            let status = Command::new("tar")
+                .args(["--create", "--zstd", "--file"])
+                .arg(&archive)
+                .arg("--directory")
+                .arg(directory.path())
+                .arg(name)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            assert!(verify_archive(&archive).is_err(), "{name}");
+        }
     }
 
     #[test]
@@ -869,6 +946,7 @@ esac
                 ("AWS_SECRET_ACCESS_KEY".to_owned(), "secret".to_owned()),
             ]),
             program,
+            configuration: tempfile::tempdir().expect("private snapshot client configuration"),
         }
     }
 
@@ -927,6 +1005,77 @@ esac
         assert_eq!(
             fs::read(read.join("registry/cache/dependency.crate")).unwrap(),
             b"crate"
+        );
+    }
+
+    #[test]
+    fn an_evicted_lane_restores_its_outputs_and_keeps_its_live_lease() {
+        const CHILD: &str = "KITHARA_TARGET_LAYER_TEST";
+        let Some(directory) = env::var_os(CHILD).map(PathBuf::from) else {
+            let directory = tempfile::tempdir().unwrap();
+            let output = Command::new(env::current_exe().unwrap())
+                .args(["--exact", "ci::cache::snapshot::client_tests::an_evicted_lane_restores_its_outputs_and_keeps_its_live_lease", "--nocapture"])
+                .env(CHILD, directory.path())
+                .env("SCCACHE_BUCKET", "kithara-review")
+                .env("SCCACHE_ENDPOINT", "http://cache:9000")
+                .env("AWS_ACCESS_KEY_ID", "key")
+                .env("AWS_SECRET_ACCESS_KEY", "secret")
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let rc = rc(&directory);
+        let root = directory.join("checkout");
+        fs::create_dir_all(root.join(".config")).unwrap();
+        fs::write(root.join("Cargo.lock"), "version = 4\n").unwrap();
+        fs::write(root.join(".config/ci-pins.toml"), "pins").unwrap();
+        let target = directory.join("target");
+        fs::create_dir_all(&target).unwrap();
+        let home = directory.join("cargo");
+        fs::write(target.join(consts::SOURCES_RECORD), "initial claim").unwrap();
+        let fingerprint = restore_for_lane("lint", &target, &root, &home, &rc)
+            .unwrap()
+            .expect("an empty store needs a publisher");
+        let output = target.join("debug/build/dependency/out/generated.rs");
+        fs::create_dir_all(output.parent().unwrap()).unwrap();
+        fs::write(&output, "pub const VALUE: u8 = 7;").unwrap();
+        filetime::set_file_mtime(
+            &output,
+            filetime::FileTime::from_unix_time(1_600_000_000, 123_456_789),
+        )
+        .unwrap();
+        let modified = fs::metadata(&output).unwrap().modified().unwrap();
+        fs::write(target.join(lease::FILE), "old lease").unwrap();
+        fs::write(target.join(lease::HEARTBEAT), "old heartbeat").unwrap();
+        publish_for_lane(&target, &fingerprint, &rc).unwrap();
+
+        fs::remove_dir_all(&target).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join(lease::FILE), "live lease").unwrap();
+        fs::write(target.join(lease::HEARTBEAT), "live heartbeat").unwrap();
+        fs::write(target.join(consts::SOURCES_RECORD), "current claim").unwrap();
+        assert_eq!(
+            restore_for_lane("lint", &target, &root, &home, &rc).unwrap(),
+            None
+        );
+        assert_eq!(
+            fs::read_to_string(&output).unwrap(),
+            "pub const VALUE: u8 = 7;"
+        );
+        assert_eq!(fs::metadata(&output).unwrap().modified().unwrap(), modified);
+        assert_eq!(fs::read(target.join(lease::FILE)).unwrap(), b"live lease");
+        assert_eq!(
+            fs::read(target.join(lease::HEARTBEAT)).unwrap(),
+            b"live heartbeat"
+        );
+        assert_eq!(
+            fs::read(target.join(consts::SOURCES_RECORD)).unwrap(),
+            b"current claim"
         );
     }
 

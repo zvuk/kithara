@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     env,
+    ffi::OsString,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
@@ -171,6 +172,12 @@ enum CacheCommand {
     Verify { env_file: Option<PathBuf> },
     /// Retain bounded observations for a compilation phase outside a lane.
     Record { phase: String },
+    /// Run a compilation phase with a verified, isolated `RustFS` daemon.
+    Exec {
+        phase: String,
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        arguments: Vec<OsString>,
+    },
     /// Restore and publish immutable trusted Cargo target snapshots.
     Snapshot(SnapshotArgs),
 }
@@ -237,6 +244,15 @@ pub(crate) fn run(args: &CacheArgs) -> Result<()> {
         CacheCommand::Serve => serve::run(),
         CacheCommand::Verify { env_file } => verify::run(env_file.as_deref()),
         CacheCommand::Record { phase } => evidence::record(phase),
+        CacheCommand::Exec { phase, arguments } => {
+            let status = kithara_ci_bootstrap::run(
+                [OsString::from("cache"), phase.into()]
+                    .into_iter()
+                    .chain(arguments.iter().cloned()),
+            )?;
+            ensure!(status.success(), "compilation phase failed: {status}");
+            Ok(())
+        }
         CacheCommand::Snapshot(args) => snapshot::run(args),
     }
 }

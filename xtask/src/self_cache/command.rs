@@ -300,24 +300,7 @@ fn cargo_build_command(root: &Path, release: bool) -> Command {
     let cargo = env::var_os("XTASK_SELF_CACHE_CARGO")
         .or_else(|| env::var_os("CARGO"))
         .unwrap_or_else(|| "cargo".into());
-    let mut command = if (["CI_JOB_ID", "GITHUB_RUN_ID"]
-        .iter()
-        .any(|name| env::var_os(name).is_some_and(|value| !value.is_empty())))
-        && env::var_os("KACHE_RUNTIME_DIR").is_none()
-    {
-        let mut command = Command::new("bash");
-        command
-            .args([
-                "-c",
-                include_str!("../../../.config/ci/compiler-cache.sh"),
-                "--",
-                "bootstrap-refresh",
-            ])
-            .arg(cargo);
-        command
-    } else {
-        Command::new(cargo)
-    };
+    let mut command = Command::new(cargo);
     command
         .args(["run", "--locked", "--manifest-path"])
         .arg(root.join("Cargo.toml"))
@@ -340,27 +323,45 @@ fn run_cargo_build<F>(root: &Path, command: &mut Command, wait: F) -> Result<()>
 where
     F: FnOnce(&mut Child) -> Result<ExitStatus>,
 {
-    let mut child = command
-        .spawn()
-        .context("launch Cargo for xtask self-cache refresh")?;
-    let stdout = child
-        .stdout
-        .take()
-        .context("capture xtask self-cache build output")?;
-    let reader = thread::spawn(move || read_bounded_output(stdout, consts::BUILD_OUTPUT_LIMIT));
-    let status = wait(&mut child);
-    let output = reader
-        .join()
-        .map_err(|_| anyhow::anyhow!("xtask self-cache output reader panicked"))?;
-    let status = status?;
-    let output = output?;
-    ensure!(
-        status.success(),
-        "xtask self-cache refresh build failed: {status}"
-    );
-    let artifact = parse_artifact(root, &output)?;
-    println!("{}", artifact.display());
-    Ok(())
+    let cache = if env::var_os("KACHE_RUNTIME_DIR").is_none() {
+        kithara_ci_bootstrap::CompilerCache::enter()?
+    } else {
+        None
+    };
+    if let Some(cache) = &cache {
+        cache.apply(command);
+    }
+    let result = (|| {
+        let mut child = command
+            .spawn()
+            .context("launch Cargo for xtask self-cache refresh")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("capture xtask self-cache build output")?;
+        let reader = thread::spawn(move || read_bounded_output(stdout, consts::BUILD_OUTPUT_LIMIT));
+        let status = wait(&mut child);
+        let output = reader
+            .join()
+            .map_err(|_| anyhow::anyhow!("xtask self-cache output reader panicked"))?;
+        let status = status?;
+        let output = output?;
+        ensure!(
+            status.success(),
+            "xtask self-cache refresh build failed: {status}"
+        );
+        let artifact = parse_artifact(root, &output)?;
+        println!("{}", artifact.display());
+        Ok(())
+    })();
+    if let Some(cache) = cache {
+        cache.record(std::ffi::OsStr::new("bootstrap-refresh"));
+        let stopped = cache.finish();
+        if result.is_ok() {
+            stopped?;
+        }
+    }
+    result
 }
 
 fn artifact(root: &Path) -> Result<()> {

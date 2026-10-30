@@ -234,8 +234,8 @@ fn restore_target_layer(
         Ok(None) => {
             process.note_cache(
                 "target snapshot",
-                "restored",
-                format!("{key} unpacked in {took}"),
+                "reused",
+                format!("{key} ready in {took}"),
             );
         }
         Ok(Some(fingerprint)) => {

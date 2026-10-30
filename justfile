@@ -10,7 +10,7 @@ sccache := `command -v sccache >/dev/null 2>&1 && printf sccache || true`
 # checkout's path, so worktrees on one machine reuse what each other built; a
 # machine that has it caches with it and hands sccache what it cannot cache.
 kache := `command -v kache >/dev/null 2>&1 && printf kache || true`
-export RUSTC_WRAPPER := if kache == "" { sccache } else { kache }
+export RUSTC_WRAPPER := if env_var_or_default("CI_JOB_ID", "") + env_var_or_default("GITHUB_RUN_ID", "") != "" { "kache" } else { if kache == "" { sccache } else { kache } }
 export KACHE_FALLBACK := if kache == "" { "" } else { sccache }
 
 # cc-rs puts kache in front of a build script's C compile on its own; a CMake
@@ -87,6 +87,8 @@ mod perf ".config/just/perf.just"
 mod platform ".config/just/platform.just"
 mod release ".config/just/release.just"
 mod ci ".config/just/ci.just"
+bootstrap_temp := if os_family() == "windows" { '${TMP:-$TEMP}' } else { '${TMPDIR:-/tmp}' }
+
 mod tooling ".config/just/tooling.just"
 
 # Human-facing overview. Agents use the exact paths documented in AGENTS.md.
@@ -115,7 +117,7 @@ _desktop-ready:
 [no-exit-message]
 [positional-arguments]
 _xtask *ARGS:
-    @if [[ -z "${KITHARA_XTASK_TARGET:-}" ]]; then exec just _xtask-unleased "$@"; fi; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; trap 'rm -f "$helper" "$helper.exe"' EXIT; if [[ -n "${CI_JOB_ID:-}${GITHUB_RUN_ID:-}" ]]; then bash .config/ci/compiler-cache.sh bootstrap-lease kache "$(rustup which rustc)" --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; else rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; fi; "$helper" "$KITHARA_XTASK_TARGET" just _xtask-unleased "$@"
+    @if [[ -z "${KITHARA_XTASK_TARGET:-}" ]]; then exec just _xtask-unleased "$@"; fi; host=$(rustc --print host-tuple); runtime=$(mktemp -d "{{ bootstrap_temp }}/kithara-bootstrap.XXXXXX"); env -u KACHE_SOCKET_PATH GITHUB_ACTIONS= GITLAB_CI= KACHE_RUNTIME_DIR="$runtime" KACHE_DAEMON_IDLE_TIMEOUT=180 cargo build --quiet --locked --manifest-path "$PWD/Cargo.toml" --target-dir "$PWD/.ci-bootstrap" --target "$host" -p kithara-ci-bootstrap; exec "$PWD/.ci-bootstrap/$host/debug/kithara-ci-bootstrap{{ if os_family() == "windows" { ".exe" } else { "" } }}" --bootstrap-runtime "$runtime" lease "$KITHARA_XTASK_TARGET" bootstrap just _xtask-unleased "$@"
 
 [no-exit-message]
 [positional-arguments]
@@ -155,7 +157,7 @@ _xtask-self-target:
 [positional-arguments]
 [private]
 _xtask-bootstrap *ARGS:
-    @target=$(just _xtask-self-target) || exit $?; export CARGO_TARGET_DIR="$target"; exec bash .config/ci/compiler-cache.sh bootstrap cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
+    @target=$(just _xtask-self-target) || exit $?; export CARGO_TARGET_DIR="$target"; host=$(rustc --print host-tuple); runtime=$(mktemp -d "{{ bootstrap_temp }}/kithara-bootstrap.XXXXXX"); env -u KACHE_SOCKET_PATH GITHUB_ACTIONS= GITLAB_CI= KACHE_RUNTIME_DIR="$runtime" KACHE_DAEMON_IDLE_TIMEOUT=180 cargo build --quiet --locked --manifest-path "$PWD/Cargo.toml" --target-dir "$PWD/.ci-bootstrap" --target "$host" -p kithara-ci-bootstrap; exec "$PWD/.ci-bootstrap/$host/debug/kithara-ci-bootstrap{{ if os_family() == "windows" { ".exe" } else { "" } }}" --bootstrap-runtime "$runtime" cache bootstrap cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
 
 # The pointer to the active generation lives beside the generations it names,
 # inside the Git directory. A CI runner cleans the working tree before every
