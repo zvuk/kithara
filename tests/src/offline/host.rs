@@ -432,11 +432,14 @@ where
         answer
     }
 
-    /// Runs a blocking control call outside the session executor.
+    /// Runs controls on the native owner or a blocking browser worker.
     pub async fn run<R>(&self, f: impl FnOnce() -> R + Send + 'static) -> R
     where
         R: Send + 'static,
     {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.call(move |_| f()).await;
+        #[cfg(target_arch = "wasm32")]
         kithara::platform::tokio::task::spawn_blocking(f)
             .await
             .expect("offline control call completes")
