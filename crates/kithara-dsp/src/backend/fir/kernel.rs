@@ -60,8 +60,13 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
             return 0;
         };
         let len = raw.len().min(current.len()).min(peaks.len());
+        let mut future = raw.iter();
+        let mut samples = current.iter();
+        let mut output = peaks.iter_mut();
         if !self.reconstruct {
-            for (&sample, peak) in current.iter().zip(peaks).take(len) {
+            while let (Some(_), Some(&sample), Some(peak)) =
+                (future.next(), samples.next(), output.next())
+            {
                 *peak = sample.abs().max(0.0);
             }
             if len > 0 {
@@ -75,9 +80,9 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
             }
             return len;
         }
-        let mut future = raw.iter();
-        for (&sample, peak) in current.iter().zip(peaks).take(len) {
-            let _ = future.next();
+        while let (Some(_), Some(&sample), Some(peak)) =
+            (future.next(), samples.next(), output.next())
+        {
             *peak = sample.abs().max(0.0);
             let future = future.as_slice();
             let ahead = Self::interval(&self.taps, &history[HISTORY.min(1)..], sample, future, 0);
@@ -125,30 +130,25 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
             // Zero samples yield zero or NaN sums; both fold to a positive-zero peak.
             return 0.0;
         }
-        let mut sums = [0.0_f32; PHASES];
-        for tap in 0..TAPS {
-            let sample = match tap.checked_sub(padding) {
-                None => 0.0,
-                Some(offset) if offset == past.len() => current,
-                Some(offset) => past
-                    .get(offset)
-                    .or_else(|| {
-                        offset
-                            .checked_sub(past.len())
-                            .and_then(|index| index.checked_sub(1))
-                            .and_then(|index| future.get(index))
-                    })
-                    .copied()
-                    .unwrap_or(held),
-            };
-            for (branch, sum) in taps.iter().zip(&mut sums) {
-                if let Some(&coefficient) = branch.get(tap) {
-                    *sum = coefficient.mul_add(sample, *sum);
-                }
-            }
-        }
         let mut peak = 0.0_f32;
-        for &sum in &sums {
+        for branch in taps {
+            let mut sum = 0.0_f32;
+            let mut zeros = 0..padding;
+            let mut history = past.iter();
+            let mut middle = Some(current);
+            let mut following = future.iter();
+            for &coefficient in branch {
+                let sample = if zeros.next().is_some() {
+                    0.0
+                } else if let Some(&sample) = history.next() {
+                    sample
+                } else if let Some(sample) = middle.take() {
+                    sample
+                } else {
+                    following.next().copied().unwrap_or(held)
+                };
+                sum = coefficient.mul_add(sample, sum);
+            }
             peak = peak.max(sum.abs());
         }
         peak
