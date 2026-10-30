@@ -44,6 +44,7 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
     /// including any unprocessed tail; beyond it, the last raw sample is held.
     /// `current` supplies the preprocessed samples recorded once in history.
     /// Internal chunks retain the shared interval. Invalid channels return zero.
+    #[inline]
     pub fn process(
         &mut self,
         channel: usize,
