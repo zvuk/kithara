@@ -86,7 +86,7 @@ fn read_expected(path: &Path) -> Result<BTreeSet<TestId>> {
     Ok(expected)
 }
 
-pub(super) fn inventory_args(caller: &[String]) -> Result<Vec<String>> {
+pub(crate) fn inventory_args(caller: &[String]) -> Result<Vec<String>> {
     const FLAGS: &[&str] = &[
         "--no-run",
         "--fail-fast",

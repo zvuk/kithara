@@ -19,7 +19,7 @@ use crate::test::validate_inventory_case_count;
 use crate::{
     common::project::{StressEvidenceConfig, StressRenderBudgets},
     consts,
-    junit::{CaseTiming, parse_junit_report},
+    junit::{CaseTiming, JunitReport, parse_junit_report},
     test::{TestId, parse_inventory},
     verdict::NotClean,
 };
@@ -377,6 +377,16 @@ pub(crate) fn validate_primary_evidence(
     expected_count: usize,
     budgets: &StressRenderBudgets,
 ) -> Result<()> {
+    read_primary_evidence(inventory_path, junit_path, expected_count, budgets).map(|_| ())
+}
+
+/// Reads complete, failure-free inventory-correlated repetition evidence.
+pub(crate) fn read_primary_evidence(
+    inventory_path: &Path,
+    junit_path: &Path,
+    expected_count: usize,
+    budgets: &StressRenderBudgets,
+) -> Result<(BTreeSet<TestId>, JunitReport)> {
     validate_expected_count(expected_count)?;
     let inventory = read_inventory(inventory_path).map_err(primary_evidence_finding)?;
     let xml = read_bounded_utf8(junit_path, consts::MAX_JUNIT_BYTES, "stress JUnit")
@@ -394,7 +404,7 @@ pub(crate) fn validate_primary_evidence(
     let failed = junit.cases.iter().filter(|case| case.failed).count();
     let flaky = junit.cases.iter().filter(|case| case.flaky).count();
     if report.incomplete.is_none() && failed == 0 && flaky == 0 {
-        Ok(())
+        Ok((inventory, junit))
     } else {
         println!(
             "stress run evidence: complete={complete}, failed cases={failed}, retried cases={flaky}",
@@ -414,7 +424,7 @@ fn primary_evidence_finding(error: impl Display) -> anyhow::Error {
     NotClean::reported("stress run evidence")
 }
 
-fn validate_correlation_metadata(junit: &crate::junit::JunitReport) -> Result<(), String> {
+fn validate_correlation_metadata(junit: &JunitReport) -> Result<(), String> {
     if junit.run_id.as_deref().is_none_or(str::is_empty) {
         return Err("nextest JUnit root uuid is missing".to_owned());
     }
@@ -2841,7 +2851,7 @@ seek landed short of the requested frame
 
     #[test]
     fn correlation_metadata_rejects_missing_or_malformed_attempt_times() {
-        let mut report = crate::junit::JunitReport {
+        let mut report = JunitReport {
             run_id: Some("run".to_owned()),
             timestamp: Some("2026-08-13T12:00:00Z".to_owned()),
             cases: vec![case("seek", 0, false, 0.1)],
