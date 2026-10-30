@@ -1251,6 +1251,139 @@ fn add_rounds_within_one_ulp_on_every_backend() {
     }
 }
 
+type Crossfade = fn(&[f32], &mut [f32], NonZeroUsize, usize, usize) -> usize;
+
+fn crossfades() -> [(&'static str, Crossfade); 3] {
+    [
+        ("native", simd::crossfade_linear),
+        (
+            "fallback",
+            |old, output, channels, first, frames| dispatch!(Level::fallback(), simd => simd::crossfade_linear_kernel(simd, old, output, channels, first, frames)),
+        ),
+        ("public", crate::crossfade_linear),
+    ]
+}
+
+#[kithara::test]
+fn crossfade_linear_preserves_identity_and_integer_frame_gains() {
+    let u32_edge = usize::try_from(u32::MAX).expect("u32 fits usize");
+    for (name, crossfade) in crossfades() {
+        for size in SIZES {
+            for offset in OFFSETS {
+                for channels in [
+                    stride(1),
+                    stride(2),
+                    stride(3),
+                    stride(4),
+                    stride(5),
+                    stride(6),
+                    stride(8),
+                    stride(16),
+                ] {
+                    for first in [
+                        0,
+                        1,
+                        (1 << 24) - 3,
+                        (1 << 24) + 1,
+                        (1 << 31) + 1,
+                        u32_edge.saturating_sub(1024),
+                        u32_edge.saturating_sub(3),
+                        u32_edge.saturating_add(1),
+                        usize::MAX,
+                    ] {
+                        let frames = (1 << 24) + 137;
+                        let count = size / channels;
+                        let len = count.saturating_mul(channels.get());
+                        for shared in [false, true] {
+                            let old = signal(size.saturating_add(offset), sine_440());
+                            let old = old.split_at(offset).1;
+                            let input = if shared {
+                                old.to_vec()
+                            } else {
+                                shifted(old.to_vec())
+                            };
+                            let mut output = vec![UNWRITTEN; offset];
+                            output.extend_from_slice(&input);
+                            output.extend([UNWRITTEN; 2]);
+                            let written = crossfade(
+                                old,
+                                output.split_at_mut(offset).1,
+                                channels,
+                                first,
+                                frames,
+                            );
+                            assert_eq!(written, count, "{name}, size={size}, channels={channels}");
+                            let (prefix, output) = output.split_at(offset);
+                            let (signal, suffix) = output.split_at(size);
+                            let (processed, remainder) = signal.split_at(len);
+                            assert!(prefix.iter().all(|x| x.to_bits() == UNWRITTEN.to_bits()));
+                            assert_eq!(
+                                bits(remainder),
+                                bits(input.get(len..).expect("input tail"))
+                            );
+                            assert!(suffix.iter().all(|x| x.to_bits() == UNWRITTEN.to_bits()));
+                            for (index, ((&got, &old), &incoming)) in
+                                processed.iter().zip(old).zip(&input).enumerate()
+                            {
+                                if old.to_bits() == incoming.to_bits() {
+                                    assert_eq!(
+                                        got.to_bits(),
+                                        incoming.to_bits(),
+                                        "{name}: mask at {index}"
+                                    );
+                                } else {
+                                    let numerator = u128::try_from(first)
+                                        .expect("usize fits u128")
+                                        .checked_add(
+                                            u128::try_from(index / channels)
+                                                .expect("frame fits u128"),
+                                        )
+                                        .expect("two usize values fit u128");
+                                    let gain =
+                                        numerator.to_f32().expect("sum is finite") / float(frames);
+                                    let expected = old.mul_add(1.0 - gain, incoming * gain);
+                                    assert!(
+                                        same(got, expected),
+                                        "{name}: law at {index}, got={got}, expected={expected}"
+                                    );
+                                }
+                            }
+                            let mut split = input.clone();
+                            let split_at = (count / 2).saturating_mul(channels.get());
+                            let (head, tail) = split.split_at_mut(split_at);
+                            let (old_head, old_tail) = old.split_at(split_at);
+                            crossfade(old_head, head, channels, first, frames);
+                            if let Some(next) = first.checked_add(split_at / channels) {
+                                crossfade(old_tail, tail, channels, next, frames);
+                                assert_eq!(
+                                    bits(split.get(..len).expect("processed split")),
+                                    bits(processed),
+                                    "{name}: split"
+                                );
+                            }
+                        }
+                        let mut gains = vec![1.0; size.saturating_add(2)];
+                        crossfade(&vec![0.0; size], &mut gains, channels, first, frames);
+                        for (index, &gain) in gains.iter().take(len).enumerate() {
+                            let numerator = u128::try_from(first)
+                                .expect("usize fits u128")
+                                .checked_add(
+                                    u128::try_from(index / channels).expect("frame fits u128"),
+                                )
+                                .expect("two usize values fit u128");
+                            assert_eq!(
+                                gain.to_bits(),
+                                (numerator.to_f32().expect("finite") / float(frames)).to_bits(),
+                                "{name}: gain at {index}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A target shorter than its inputs bounds the prefix on every backend.
 #[kithara::test]
 fn a_short_target_bounds_every_elementwise_kernel() {
@@ -1269,6 +1402,27 @@ fn a_short_target_bounds_every_elementwise_kernel() {
     for (name, mul_add) in mul_adds() {
         let mut target = [0.0_f32; 5];
         assert_eq!(mul_add(&input, &input, &mut target), 5, "{name}: mul_add");
+    }
+    for (name, crossfade) in crossfades() {
+        let mut target = [0.0_f32; 5];
+        assert_eq!(
+            crossfade(&input, &mut target, stride(2), 1, 7),
+            2,
+            "{name}: short output"
+        );
+        let mut target = [0.25_f32; 9];
+        assert_eq!(
+            crossfade(
+                input.get(..5).expect("short input"),
+                &mut target,
+                stride(2),
+                1,
+                7
+            ),
+            2,
+            "{name}: short outgoing"
+        );
+        assert_eq!(target[4..], [0.25; 5]);
     }
 }
 

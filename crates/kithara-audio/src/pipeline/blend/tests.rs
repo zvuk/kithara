@@ -122,12 +122,16 @@ fn real_outgoing_pcm_is_blended_for_the_full_linear_join(
     let pools = pools();
     let spec = spec(2, 44_100);
     let channels = usize::from(spec.channels);
-    let outgoing = blend_outgoing
+    let mut outgoing = blend_outgoing
         .into_iter()
         .cycle()
         .take(JOIN_FRAMES.saturating_mul(channels))
         .collect::<Vec<_>>();
     let incoming = blend_incoming;
+    for frame in (0..JOIN_FRAMES).step_by(3) {
+        let start = frame * channels;
+        outgoing[start..start + channels].copy_from_slice(&incoming[start..start + channels]);
+    }
     let mut blender = blender(&pools, spec);
     blender
         .prepare_active(spec)
@@ -157,8 +161,11 @@ fn real_outgoing_pcm_is_blended_for_the_full_linear_join(
         let outgoing_gain = 1.0 - incoming_gain;
         for channel in 0..channels {
             let sample = frame * channels + channel;
-            let expected =
-                outgoing[sample].mul_add(outgoing_gain, incoming[sample] * incoming_gain);
+            let expected = if outgoing[sample].to_bits() == incoming[sample].to_bits() {
+                incoming[sample]
+            } else {
+                outgoing[sample].mul_add(outgoing_gain, incoming[sample] * incoming_gain)
+            };
             assert_eq!(output[sample].to_bits(), expected.to_bits());
         }
     }

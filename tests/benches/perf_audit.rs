@@ -3,7 +3,7 @@
 use std::{
     fs,
     hint::black_box,
-    num::{NonZeroU32, NonZeroU64},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::Path,
 };
 
@@ -11,24 +11,40 @@ use criterion::{
     BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
 };
 use kithara::{
+    abr::{AbrEvent, AbrReason},
     analysis::{
         AnalysisDemand, AnalysisFile, AnalysisFileSpec, AnalysisProgress, AnalysisToken,
         AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder, BeatAnalysisConfig,
     },
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioRead, ReadOutcome},
+    audio::{AudioConfig, AudioRead, AudioSession, ReadOutcome},
+    events::EventBus,
     file::{File, FileConfig},
+    hls::{AbrMode, Hls, HlsConfig, HlsEvent},
     platform::{
         time::Duration,
-        tokio::runtime::{Builder, Runtime},
+        tokio::{
+            runtime::{Builder, Runtime},
+            task::spawn,
+        },
     },
     play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
     stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine},
+    sync::SpeedCurve,
     warp::{Warp, WarpConfig, WarpRenderer},
 };
-use kithara_integration_tests::bufpool_ext::{Pools, TestPools, pools};
-use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+use kithara_integration_tests::{
+    CreatedHls, HlsFixtureBuilder, TestServerHelper,
+    bufpool_ext::{Pools, TestPools, pools},
+    event::TestEvent,
+    hls_fixture::create_test_downloader,
+    reads::{blocking_audio, read_until_samples},
+    waits::wait_for_event,
+};
+use kithara_test_fixtures::{assets::signal_mp3_track_sine440_187s, hls_fixtures::hls_saw_6};
+use kithara_test_utils::{test::setup_tracing, wait_until};
 use num_traits::ToPrimitive;
 use tempfile::TempDir;
 
@@ -511,8 +527,222 @@ fn bench_stretch_process(c: &mut Criterion) {
     group.finish();
 }
 
+async fn quality_switch(helper: &TestServerHelper, server: &CreatedHls) -> usize {
+    let gate = helper.register_segment_gate(server.token(), 0, 2);
+    let pools = pools();
+    let bus = EventBus::new(8192);
+    let mut events = bus.subscribe::<TestEvent>();
+    let stream = HlsConfig::for_url(server.master_url())
+        .downloader(create_test_downloader())
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Memory)
+                .cache_capacity(NonZeroUsize::new(16).expect("fixture resources"))
+                .build(),
+        )
+        .pools(pools.clone())
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::manual(0))
+        .look_ahead_bytes(600_000)
+        .build();
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(stream)
+        .media_info(
+            MediaInfo::builder()
+                .codec(AudioCodec::Pcm)
+                .container(ContainerFormat::Wav)
+                .build(),
+        )
+        .events(bus)
+        .build();
+    let config = kithara::play::TrackConfig::for_audio(config)
+        .block_on_underrun(true)
+        .build();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("HLS audio");
+    let (audio, warmup) = blocking_audio(audio, |audio| read_until_samples(audio, 8192)).await;
+    assert!(warmup > 0, "V0 must produce audio before the command");
+    wait_until(Duration::from_secs(20), "V0 gated request", || {
+        gate.requested() > 0
+    })
+    .await
+    .expect("V0 must reach the gate before the command");
+    audio
+        .abr_handle()
+        .expect("HLS ABR")
+        .set_mode(AbrMode::manual(1))
+        .expect("quality target");
+    let read = spawn(blocking_audio(audio, |audio| {
+        let mut buf = [0.0; 8192];
+        let mut total = 0;
+        for _ in 0..consts::DECODE_READ_LIMIT {
+            match audio.read(&mut buf).expect("HLS read") {
+                ReadOutcome::Frames { count, .. } => total += count.get(),
+                ReadOutcome::Pending { .. } => {}
+                ReadOutcome::Eof { .. } => return (total, true),
+            }
+        }
+        (total, false)
+    }));
+    let mut applied = false;
+    wait_for_event(
+        &mut events,
+        "quality switch before EOF",
+        |event| {
+            if matches!(event, TestEvent::Hls(HlsEvent::SegmentReadStart { variant: 1, segment_index: 2, .. })) {
+                gate.release();
+            }
+            applied |= matches!(event, TestEvent::Abr(AbrEvent::VariantApplied { from, to, reason }) if from.get() == 0 && to.get() == 1 && *reason == AbrReason::ManualOverride);
+            applied
+        },
+        Duration::from_secs(20),
+    ).await.expect("the quality switch must apply before EOF");
+    gate.release();
+    let (_audio, (tail, eof)) = read.await.expect("HLS read joins");
+    let total = usize::try_from(warmup).expect("warmup count") + tail;
+    assert!(
+        eof && applied && total > 0,
+        "one quality switch must complete before EOF"
+    );
+    total
+}
+
+fn bench_quality_switch(c: &mut Criterion) {
+    setup_tracing();
+    let rt = make_runtime();
+    let (helper, server) = rt.block_on(async {
+        let helper = TestServerHelper::new().await;
+        let (init, pcm) = hls_saw_6();
+        let server = helper
+            .create_hls(
+                HlsFixtureBuilder::new()
+                    .variant_count(2)
+                    .segments_per_variant(6)
+                    .segment_size(200_000)
+                    .segment_duration_secs(50_000.0 / 44_100.0)
+                    .custom_data_per_variant(vec![pcm.into(); 2])
+                    .init_data_per_variant(vec![init.into(); 2])
+                    .codecs("wav".to_owned())
+                    .variant_bandwidths(vec![5_000_000, 1_000_000]),
+            )
+            .await
+            .expect("quality-switch fixture");
+        (helper, server)
+    });
+    let mut group = c.benchmark_group("audit_quality_switch");
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(4));
+    group.bench_function("manual_hls_join", |b| {
+        b.iter(|| black_box(rt.block_on(quality_switch(&helper, &server))));
+    });
+    group.finish();
+}
+
+fn bench_warp_transition(c: &mut Criterion) {
+    let pools = pools();
+    let pcm = make_pcm(65_536);
+    let spec = make_chunk(&pools, &pcm[..2]).spec();
+    let mut group = c.benchmark_group("audit_warp_transition");
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(4));
+    group.bench_function("mapped_and_replacement", |b| {
+        b.iter_batched(
+            || {
+                Warp::new(
+                    (),
+                    &WarpConfig::builder()
+                        .speed(0.5)
+                        .keylock(true)
+                        .backend(StretchKind::Signalsmith)
+                        .build(),
+                )
+                .renderer(spec, pools.clone())
+            },
+            |mut renderer| {
+                let mut source = 0;
+                let mut produced = 0;
+                for block in 0..12 {
+                    if block == 4 {
+                        renderer.set_keylock(false);
+                    }
+                    if block == 8 {
+                        renderer.set_keylock(true);
+                    }
+                    renderer.prepare(spec);
+                    renderer
+                        .prepare_engine_latency(spec)
+                        .expect("transition service");
+                    let meta = AudioChunkInfo {
+                        spec,
+                        frame_offset: source,
+                        ..AudioChunkInfo::default()
+                    };
+                    let frames = renderer
+                        .prepare_source_window(meta, 65_536, 256)
+                        .expect("mapped window")
+                        .get();
+                    let mut input = make_chunk(&pools, &pcm[..frames * consts::CHANNELS]);
+                    input.meta = AudioChunkInfo {
+                        frames: u32::try_from(frames).expect("window size"),
+                        ..meta
+                    };
+                    let output = renderer
+                        .render_quantum(input)
+                        .continue_value()
+                        .expect("prepared quantum")
+                        .expect("mapped output");
+                    produced += output.frames();
+                    source += u64::try_from(frames).expect("source advance");
+                    black_box(output);
+                }
+                drop(renderer);
+                let mut replacement = Warp::new(
+                    (),
+                    &WarpConfig::builder()
+                        .speed(0.5)
+                        .keylock(true)
+                        .backend(StretchKind::Signalsmith)
+                        .build(),
+                )
+                .renderer(spec, pools.clone());
+                black_box(
+                    replacement
+                        .render(make_chunk(&pools, &pcm[..8192]))
+                        .continue_value()
+                        .expect("unprepared source"),
+                );
+                replacement.prepare(spec);
+                replacement.set_keylock(false);
+                replacement
+                    .set_speed(SpeedCurve::Constant(1.0), 1)
+                    .expect("unity replacement rate");
+                replacement
+                    .prepare_engine_latency(spec)
+                    .expect("replacement service");
+                let mut input = make_chunk(&pools, &pcm[8192..8320]);
+                input.meta.frame_offset = 4096;
+                let output = replacement
+                    .render(input)
+                    .continue_value()
+                    .expect("replacement input")
+                    .expect("replacement output");
+                black_box((produced, output));
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_quality_switch,
+    bench_warp_transition,
     bench_gapless_trim,
     bench_analysis_worker,
     bench_stretch_prepare,
