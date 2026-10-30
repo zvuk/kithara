@@ -3,6 +3,7 @@ use core::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
+use arrayvec::ArrayVec;
 use bon::bon;
 use kithara_config::Config;
 use kithara_dsp::{
@@ -68,11 +69,9 @@ pub struct PeakLimiter {
     config: LimiterConfig,
     envelope: AttackRelease,
     channels: usize,
-    scratch: [[f32; Self::CHUNK_FRAMES]; 3],
 }
 
 impl PeakLimiter {
-    /// Frames covered by one reusable scratch prefix.
     const CHUNK_FRAMES: usize = 256;
 
     /// Channels the detector keeps history for. The limiter links its channels into one
@@ -128,7 +127,6 @@ impl PeakLimiter {
             detector: Fir::new(taps),
             envelope: AttackRelease::new(release_coeff),
             channels: channels.get(),
-            scratch: [[0.0; Self::CHUNK_FRAMES]; 3],
         })
     }
 
@@ -143,9 +141,8 @@ impl PeakLimiter {
         argument.sin() / argument * window
     }
 
-    /// Apply linked gains to the common channel prefix without allocating.
-    /// Sanitized current samples and untouched future samples remain separate
-    /// until reconstruction has recorded the pre-gain history.
+    /// Apply linked gains to the common prefix without allocation.
+    /// Keep sanitized current and raw future separate until pre-gain history is recorded.
     pub fn process_planar(&mut self, channels: &mut [&mut [f32]]) {
         debug_assert_eq!(channels.len(), self.channels);
         debug_assert!(self.channels <= Self::DETECTOR_CHANNELS);
@@ -156,12 +153,16 @@ impl PeakLimiter {
             .unwrap_or(0);
         let ceiling = f32::from(self.ceiling());
         let reconstruct = self.detector.begin_block(channels, ceiling);
-        let [linked, current, peaks] = &mut self.scratch;
         for start in (0..frames).step_by(Self::CHUNK_FRAMES) {
             let end = frames.min(start + Self::CHUNK_FRAMES);
             let count = end - start;
-            let linked = &mut linked[..count];
-            let peaks = &mut peaks[..count];
+            let mut linked = ArrayVec::<f32, { Self::CHUNK_FRAMES }>::new();
+            let mut current = ArrayVec::new();
+            let mut peaks = ArrayVec::new();
+            for plane in [&mut linked, &mut peaks] {
+                plane.extend(std::iter::repeat_n(0.0, count));
+            }
+            let [linked, current, peaks] = [&mut linked, &mut current, &mut peaks];
             if !reconstruct {
                 for (index, channel) in channels.iter_mut().enumerate() {
                     sanitize(&mut channel[start..end]);
@@ -182,12 +183,9 @@ impl PeakLimiter {
                 }
                 continue;
             }
-            let current = &mut current[..count];
-            linked.fill(0.0);
             for (index, channel) in channels.iter_mut().enumerate() {
-                for (sample, &raw) in current.iter_mut().zip(&channel[start..end]) {
-                    *sample = sanitize_sample(raw);
-                }
+                current.clear();
+                current.extend(channel[start..end].iter().copied().map(sanitize_sample));
                 let processed = self
                     .detector
                     .process(index, &channel[start..], current, peaks);
@@ -195,17 +193,16 @@ impl PeakLimiter {
                 PeakHold::link(peaks, linked);
                 channel[start..end].copy_from_slice(current);
             }
-            let gains = linked;
-            for peak in gains.iter_mut() {
+            for peak in linked.iter_mut() {
                 *peak = if *peak > ceiling {
                     ceiling / *peak
                 } else {
                     1.0
                 };
             }
-            self.envelope.process(gains);
+            self.envelope.process(linked);
             for channel in channels.iter_mut() {
-                multiply_in_place(&mut channel[start..end], gains);
+                multiply_in_place(&mut channel[start..end], linked);
             }
         }
     }

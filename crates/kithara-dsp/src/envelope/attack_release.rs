@@ -1,7 +1,6 @@
 use crate::backend;
 
-/// Immediate attack to a smaller target, exponential release toward unity.
-/// The fused release runs before the clamp, so recovery cannot exceed a target.
+/// Immediate attack and fused exponential release toward unity before clamping to the target.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct AttackRelease {
@@ -16,8 +15,7 @@ impl AttackRelease {
         Self { gain: 1.0, release }
     }
 
-    /// Replace each target by its gain, in order. Returns the slice length.
-    /// Coefficients and targets are not sanitized or clamped to a domain.
+    /// Replace targets with ordered gains; return their count. No sanitization or domain clamp.
     pub fn process(&mut self, targets: &mut [f32]) -> usize {
         backend::attack_release(self.release, &mut self.gain, targets)
     }

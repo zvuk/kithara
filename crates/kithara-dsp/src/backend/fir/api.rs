@@ -1,8 +1,7 @@
 use fearless_simd::{Level, dispatch};
 
-/// Ordered polyphase reconstruction with preprocessed input history.
-/// `HISTORY - 1` taps precede each interval's base. The caller supplies the
-/// current samples separately from raw future input; no samples are sanitized.
+/// Ordered polyphase reconstruction from separate preprocessed current/history and raw future.
+/// `HISTORY - 1` taps precede each interval's base; no samples are sanitized.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Fir<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTORY: usize>
@@ -29,21 +28,17 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
         }
     }
 
-    /// Invalidate held-tail intervals at an external block boundary, and prove
-    /// whether reconstruction can exceed `threshold`. Complete channel tails
-    /// and history participate; a non-finite sample prevents quiet pruning.
+    /// Return whether reconstruction can exceed `threshold`, invalidating held-tail intervals.
+    /// Complete channel tails/history and non-finite samples participate in the bound.
     /// Call once per external block, never at internal processing boundaries.
-    /// Returns whether reconstruction is required for this block.
     pub fn begin_block(&mut self, channels: &[&mut [f32]], threshold: f32) -> bool {
         dispatch!(Level::new(), simd => self.begin_block_kernel(simd, channels, threshold));
         self.reconstruct
     }
 
-    /// Write sample/adjacent-interval peaks for one channel's common prefix.
-    /// `raw` starts at this chunk and includes the remaining external block,
-    /// including any unprocessed tail; beyond it, the last raw sample is held.
-    /// `current` supplies the preprocessed samples recorded once in history.
-    /// Internal chunks retain the shared interval. Invalid channels return zero.
+    /// Write common-prefix sample/adjacent-interval peaks; invalid channels return zero.
+    /// `raw` starts at this chunk, includes the external tail, then holds its last sample.
+    /// Preprocessed `current` enters history once; internal chunks keep the shared interval.
     #[inline]
     pub fn process(
         &mut self,

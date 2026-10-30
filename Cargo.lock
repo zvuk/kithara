@@ -5217,6 +5217,7 @@ dependencies = [
 name = "kithara-effects"
 version = "0.0.1-alpha5"
 dependencies = [
+ "arrayvec",
  "assert_no_alloc",
  "biquad",
  "bon",

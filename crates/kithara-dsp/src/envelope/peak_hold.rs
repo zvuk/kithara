@@ -9,8 +9,7 @@ impl PeakHold {
         intervals.iter().copied().fold(0.0_f32, f32::max)
     }
 
-    /// Link peaks into `output` over the common prefix, leaving its tail alone.
-    /// Uses scalar `f32::max` semantics, including `NaN` values and signed zeros.
+    /// Link common-prefix peaks with scalar `f32::max` (NaNs/signed zeros); preserve the output tail.
     pub fn link(peaks: &[f32], output: &mut [f32]) -> usize {
         let len = peaks.len().min(output.len());
         for (output, peak) in output.iter_mut().zip(peaks) {

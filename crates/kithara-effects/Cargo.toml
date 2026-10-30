@@ -29,6 +29,7 @@ kithara-signal = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 
+arrayvec = { workspace = true }
 biquad = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
