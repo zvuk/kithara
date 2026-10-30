@@ -365,12 +365,23 @@ impl Lane {
         chunk.meta.lane_frame = self.state.cursor.frame;
         let channels = usize::from(chunk.spec().channels.max(1));
         if let Some(jump) = &self.state.jump {
-            for (offset, frame) in chunk.samples.chunks_exact_mut(channels).enumerate() {
-                let offset = u64::try_from(offset).unwrap_or(u64::MAX);
-                let gain = jump.gain(self.state.cursor.frame.saturating_add(offset));
-                for sample in frame {
-                    *sample *= gain;
+            let whole = chunk.samples.len() / channels * channels;
+            let mut gains = [0.0; crate::consts::FADE_CHUNK];
+            for (block, samples) in chunk.samples[..whole]
+                .chunks_mut(crate::consts::FADE_CHUNK)
+                .enumerate()
+            {
+                let start = block * crate::consts::FADE_CHUNK;
+                let end = start + samples.len();
+                for frame in start / channels..=(end - 1) / channels {
+                    let offset = u64::try_from(frame).unwrap_or(u64::MAX);
+                    let gain = jump.gain(self.state.cursor.frame.saturating_add(offset));
+                    let from = (frame * channels).saturating_sub(start);
+                    let to = ((frame + 1) * channels).min(end) - start;
+                    gains[from..to].fill(gain);
                 }
+                let gains = &gains[..samples.len()];
+                kithara_dsp::multiply_in_place(samples, gains);
             }
         }
         let frames = u64::try_from(chunk.frames()).unwrap_or(u64::MAX);
@@ -773,6 +784,94 @@ mod tests {
             assert!(receipts.iter().any(|receipt| matches!(receipt.outcome(),
                 kithara_command::Outcome::Applied { data, .. } if data.ready.is_none())));
             assert!(!lane.is_preloaded());
+        }
+    }
+
+    #[kithara::test]
+    fn jump_stamping_matches_scalar_pcm_and_cursor_for_interleaved_channels() {
+        for (channels, shapes) in [
+            (1, &[(0, 0), (1, 0), (257, 0), (513, 0)][..]),
+            (2, &[(0, 0), (1, 0), (257, 0), (513, 0), (0, 1), (1, 1)][..]),
+            (3, &[(0, 0), (1, 0), (257, 0), (513, 0), (0, 2), (1, 2)][..]),
+            (
+                6,
+                &[(0, 0), (1, 0), (257, 0), (513, 0), (0, 5), (257, 5)][..],
+            ),
+            (257, &[(0, 0), (1, 0), (2, 0), (0, 256), (1, 256)][..]),
+        ] {
+            let spec = AudioSpec::new(channels, NonZeroU32::new(48_000).expect("rate"));
+            let channels = usize::from(spec.channels);
+            for frames in [0, 1, 513, (1 << 24) + 9] {
+                for up in [false, true] {
+                    for &(length, trailing) in shapes {
+                        let (_sender, inbox) = channel(ChannelConfig::builder().build());
+                        let mut lane =
+                            Lane::new(inbox, NonZeroUsize::MIN, crate::consts::DEFAULT_DECLICK);
+                        let start = 17_u64;
+                        let at = start + if frames > 1 << 24 { 1 << 24 } else { 0 };
+                        lane.state.cursor.frame = at;
+                        lane.state.jump = Some(if up {
+                            Jump::Up {
+                                to: None,
+                                start,
+                                frames,
+                            }
+                        } else {
+                            Jump::Down {
+                                to: Duration::ZERO,
+                                start,
+                                frames,
+                                gain: 0.75,
+                            }
+                        });
+                        let samples: Vec<_> = [0.25_f32, -0.0, -0.75]
+                            .into_iter()
+                            .cycle()
+                            .take(length * channels + trailing)
+                            .collect();
+                        let mut expected = samples.clone();
+                        for (offset, frame) in expected.chunks_exact_mut(channels).enumerate() {
+                            let position =
+                                at.saturating_add(u64::try_from(offset).expect("offset"));
+                            let progress =
+                                position.saturating_sub(start).to_f32().expect("position")
+                                    / frames.max(1).to_f32().expect("frames");
+                            let gain = if up {
+                                progress.min(1.0)
+                            } else {
+                                0.75 * (1.0 - progress.min(1.0))
+                            };
+                            for sample in frame {
+                                *sample *= gain;
+                            }
+                        }
+                        let mut chunk = crate::worker::packet_tests::chunk(
+                            spec,
+                            SegmentId::FIRST,
+                            at,
+                            0,
+                            &samples,
+                        );
+                        lane.stamp(&mut chunk);
+                        assert_eq!(
+                            chunk
+                                .samples
+                                .iter()
+                                .map(|x| x.to_bits())
+                                .collect::<Vec<_>>(),
+                            expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+                        );
+                        let end = at + u64::try_from(length).expect("length");
+                        assert_eq!(lane.cursor().frame, end);
+                        assert_eq!(chunk.meta.lane_frame, at);
+                        assert_eq!(
+                            lane.state.jump.is_none(),
+                            up && end.saturating_sub(start)
+                                >= u64::try_from(frames).expect("frames")
+                        );
+                    }
+                }
+            }
         }
     }
 

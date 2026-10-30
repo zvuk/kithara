@@ -6,8 +6,8 @@ use kithara_test_utils::kithara;
 use super::{
     BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, add_f32, affine_f32,
     correlate_f32, deinterleave_pair_f32, downmix_pair_f32, interleave_pair_f32,
-    linear_interpolate_f32, max_magnitude_f32, multiply_f32, quadratic_interpolate_f32,
-    scale_add_f32, sub_f32, sum_squares_f32,
+    linear_interpolate_f32, max_magnitude_f32, multiply_f32, multiply_in_place_f32,
+    quadratic_interpolate_f32, scale_add_f32, sub_f32, sum_squares_f32,
 };
 
 const SPECIALS: [f32; 8] = [
@@ -263,6 +263,48 @@ fn multiply_writes_the_product_of_the_common_prefix() {
     );
     assert_eq!(bits(output), bits([3.0, -1.0, -1.0, UNWRITTEN]));
     assert_eq!(multiply_f32(&[], &[1.0], &mut output), 0);
+}
+
+#[kithara::test]
+fn in_place_multiply_uses_the_short_side_count() {
+    let mut values = [1.5, -2.0, 4.0, UNWRITTEN];
+    assert_eq!(multiply_in_place_f32(&mut values, &[2.0, 0.5]), 2);
+    assert_eq!(values, [3.0, -1.0, 4.0, UNWRITTEN]);
+    assert_eq!(multiply_in_place_f32(&mut values[..1], &[2.0, 3.0]), 1);
+    assert_eq!(values, [6.0, -1.0, 4.0, UNWRITTEN]);
+    assert_eq!(multiply_in_place_f32(&mut values, &[]), 0);
+    assert_eq!(values, [6.0, -1.0, 4.0, UNWRITTEN]);
+}
+
+#[kithara::test(native)]
+fn singleton_multiply_preserves_ieee_prefix_and_tails() {
+    for sample in SPECIALS.into_iter().chain([0.7, -1.5]) {
+        for gain in SPECIALS.into_iter().chain([0.7, -1.5]) {
+            for (sample_count, gain_count) in [(1, 1), (1, 3), (3, 1)] {
+                let mut samples = [sample, -0.0, f32::from_bits(0x7F80_0001)];
+                let before = samples;
+                let gains = [gain, -9.0, f32::INFINITY];
+                let expected = sample * gain;
+                assert_eq!(
+                    multiply_in_place_f32(&mut samples[..sample_count], &gains[..gain_count]),
+                    1
+                );
+                if expected.is_nan() {
+                    assert!(samples[0].is_nan());
+                } else {
+                    assert_eq!(samples[0].to_bits(), expected.to_bits());
+                }
+                assert_eq!(samples[1].to_bits(), before[1].to_bits());
+                assert_eq!(samples[2].to_bits(), before[2].to_bits());
+            }
+        }
+    }
+    let mut samples = [-0.0, f32::from_bits(0x7F80_0001)];
+    let before = bits(samples);
+    assert_eq!(multiply_in_place_f32(&mut samples, &[]), 0);
+    assert_eq!(bits(samples), before);
+    assert_eq!(multiply_in_place_f32(&mut samples[..0], &[f32::NAN]), 0);
+    assert_eq!(bits(samples), before);
 }
 
 #[kithara::test(native)]

@@ -18,3 +18,5 @@ pub(crate) use inbox::OfflineInbox;
 pub(crate) use inbox::SessionInboxReturnNode;
 pub(crate) use node::install;
 pub(crate) use process::{Span, TransportState, applied_spans};
+#[cfg(test)]
+pub(crate) use tests::ducking_store;

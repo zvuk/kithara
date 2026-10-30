@@ -38,4 +38,6 @@ pub use backend::sanitize;
 pub use layout::{
     deinterleave_channel_major, deinterleave_variable, downmix, interleave_channel_major,
 };
-pub use vector::{add, affine, div, mul_add, ramp, scale_add, sub, sum_squares};
+pub use vector::{
+    add, affine, div, mul_add, multiply_in_place, ramp, scale_add, scale_in_place, sub, sum_squares,
+};

@@ -33,7 +33,7 @@ use super::{
     },
 };
 use crate::{
-    api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
+    api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, Tempo, TransportRevision},
     consts,
     host::{HostSettings, HostSettingsChange, HostSettingsExec},
     session::{
@@ -138,6 +138,26 @@ fn proc_extra() -> (
         observation_output,
         queue,
     )
+}
+
+pub(crate) fn ducking_store(changes: &[(usize, SessionDuckingMode)], frames: usize) -> ProcStore {
+    let (mut extra, _observation, mut queue) = proc_extra();
+    for &(frame, mode) in changes {
+        queue
+            .send(
+                When::At(SessionFrame::new(i64::try_from(frame).expect("frame"))),
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![HostPart::Settings(HostSettingsChange::Ducking(mode))],
+                },
+            )
+            .expect("ducking command");
+    }
+    queue.publish().expect("publish ducking commands");
+    let mut info = proc_info_at(0);
+    info.frames = frames;
+    process_transport(&info, &mut extra.store).expect("apply ducking spans");
+    extra.store
 }
 
 fn process_node(processor: &mut SessionTransportProcessor, info: &ProcInfo, extra: &mut ProcExtra) {
