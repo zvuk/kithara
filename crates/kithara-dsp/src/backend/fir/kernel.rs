@@ -133,21 +133,30 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
         let mut peak = 0.0_f32;
         for branch in taps {
             let mut sum = 0.0_f32;
-            let mut zeros = 0..padding;
-            let mut history = past.iter();
-            let mut middle = Some(current);
-            let mut following = future.iter();
-            for &coefficient in branch {
-                let sample = if zeros.next().is_some() {
-                    0.0
-                } else if let Some(&sample) = history.next() {
-                    sample
-                } else if let Some(sample) = middle.take() {
-                    sample
-                } else {
-                    following.next().copied().unwrap_or(held)
+            let mut coefficients = branch.iter();
+            for _ in 0..padding {
+                let Some(&coefficient) = coefficients.next() else {
+                    break;
+                };
+                sum = coefficient.mul_add(0.0, sum);
+            }
+            for &sample in past {
+                let Some(&coefficient) = coefficients.next() else {
+                    break;
                 };
                 sum = coefficient.mul_add(sample, sum);
+            }
+            if let Some(&coefficient) = coefficients.next() {
+                sum = coefficient.mul_add(current, sum);
+            }
+            for &sample in future {
+                let Some(&coefficient) = coefficients.next() else {
+                    break;
+                };
+                sum = coefficient.mul_add(sample, sum);
+            }
+            for &coefficient in coefficients {
+                sum = coefficient.mul_add(held, sum);
             }
             peak = peak.max(sum.abs());
         }
