@@ -2,7 +2,6 @@
 pub(crate) mod accelerate;
 #[cfg(feature = "spectrum")]
 mod bins;
-#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 mod cascade;
 mod fade;
 mod interpolate;

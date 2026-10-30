@@ -58,6 +58,7 @@ use crate::{LaneCommand, LaneFrame, LaneProtocol, LaneSetup};
 
 mod consts;
 mod doubles;
+mod filter;
 mod flow;
 mod lane;
 mod packets;

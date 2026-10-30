@@ -132,21 +132,6 @@ pub(super) fn downmix_pair_kernel<S: Simd>(simd: S, input: &[f32], mono: &mut [f
     frames
 }
 
-pub(crate) fn peak(samples: &[f32]) -> f32 {
-    dispatch!(Level::new(), simd => peak_kernel(simd, samples))
-}
-
-#[inline(always)]
-pub(super) fn peak_kernel<S: Simd>(simd: S, samples: &[f32]) -> f32 {
-    let mut blocks = samples.chunks_exact(S::f32s::LEN);
-    let mut peak = S::f32s::splat(simd, 0.0);
-    for block in &mut blocks {
-        peak = peak.max(S::f32s::from_slice(simd, block).abs());
-    }
-    peak.max(padded(simd, blocks.remainder()).abs())
-        .reduce_max()
-}
-
 #[cfg(feature = "spectrum")]
 pub(crate) fn multiply(a: &[f32], b: &[f32], output: &mut [f32]) -> usize {
     dispatch!(Level::new(), simd => multiply_kernel(simd, a, b, output))

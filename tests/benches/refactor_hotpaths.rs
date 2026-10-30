@@ -46,6 +46,8 @@ use kithara_test_utils::TestHttpServer;
 use tempfile::TempDir;
 use url::Url;
 
+mod filter_chain;
+
 mod consts {
     pub(super) const HLS_SEGMENT_COUNT: usize = 6;
     pub(super) const HLS_SEGMENT_SIZE: usize = 96_000;
@@ -484,6 +486,7 @@ criterion_group!(
     bench_resampler_process,
     bench_audio_file_new_and_read,
     bench_hls_stream_seek_read,
-    bench_layout
+    bench_layout,
+    filter_chain::bench
 );
 criterion_main!(benches);

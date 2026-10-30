@@ -33,6 +33,7 @@ pub use kithara_audio::SeekOutcome;
 pub use kithara_effects::{
     EffectChange, EffectConfig, EffectTarget, GainDb,
     eq::{EqBandConfig, EqBandConfigChange, EqBandConfigControl},
+    filter::{FilterSettings, FilterSettingsChange, FilterSettingsControl},
 };
 pub use kithara_net::Headers;
 pub use kithara_render::{

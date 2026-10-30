@@ -20,6 +20,190 @@ const BLOCK_FRAMES: usize = 512;
 const BLOCKS: usize = 20;
 pub(super) const ROOMY_CAPACITY: usize = 65_536;
 
+/// The fixed half-scale 44.1 kHz PCM fixture reaches the low-shelf DC plateau
+/// after 4096 frames of filter history. The 0.5 dB bound rejects dry and zero PCM.
+#[kithara::test(tokio)]
+async fn configured_filter_controls_and_lifecycle_reach_public_host_tap() {
+    use std::num::{NonZeroU32, NonZeroUsize};
+
+    use kithara::{
+        assets::AssetStore,
+        effects::{
+            EffectConfig, GainDb,
+            eq::{EqBandConfig, EqBandConfigControl},
+            filter::{
+                Cutoff, FilterSettings, FilterSettingsChange, FilterSettingsControl, Kind, Q,
+            },
+        },
+        play::{ResourceConfig, ResourceSrc},
+        signal::SessionFrame,
+        warp::WarpConfig,
+    };
+    use kithara_command::When;
+    use kithara_config::Configure;
+
+    let options = OfflinePlayerOptions::builder()
+        .block_on_underrun(false)
+        .output_block_frames(NonZeroU32::new(64).expect("nonzero callback size"))
+        .warp(
+            WarpConfig::builder()
+                .render_quantum_frames(NonZeroUsize::new(64).expect("nonzero quantum"))
+                .build(),
+        )
+        .build();
+    let harness = OfflinePlayer::with_sample_rate(options, SAMPLE_RATE).await;
+    let settings = FilterSettings::builder()
+        .kind(Kind::LowShelf)
+        .cutoff_hz(Cutoff::checked(1_000.0).expect("admitted cutoff"))
+        .gain_db(GainDb::checked(-6.0).expect("admitted shelf gain"))
+        .build()
+        .expect("valid shelf settings");
+    let config = ResourceConfig::for_src(
+        ResourceSrc::parse(asset_source(&assets::fixed_constant_wav_cd_half_44100()))
+            .expect("fixture URI parses"),
+    )
+    .store(AssetStore::builder(harness.worker().pools().clone()).build())
+    .preload_chunks(NonZeroUsize::MIN)
+    .audio_buffer_chunks(NonZeroUsize::new(2).expect("nonzero buffer chunks"))
+    .effects(vec![
+        EffectConfig::Filter(settings),
+        EffectConfig::Equalizer(vec![EqBandConfig::default()]),
+    ])
+    .build();
+    let harness = load_source(harness, TrackSource::Config(Box::new(config))).await;
+    let _ = render_effect_window(&harness, 4096).await;
+    let wrong_control = harness.with_queue(|queue| queue.eq_band(0, 0)).await;
+    assert!(matches!(
+        wrong_control,
+        Err(kithara::queue::QueueError::Play(
+            PlayError::InvalidConfiguration { .. }
+        ))
+    ));
+    let next_control = harness
+        .with_queue(|queue| queue.eq_band(1, 0))
+        .await
+        .expect("following equalizer retains its chain index");
+    assert_eq!(next_control.gain_db(), GainDb::DEFAULT);
+    let mut tap = harness
+        .host()
+        .attach_tap(Tap::Master, ROOMY_CAPACITY)
+        .await
+        .expect("master tap attaches");
+    let output = render_effect_window(&harness, BLOCK_FRAMES).await;
+    assert_eq!(output.len(), BLOCK_FRAMES * 2);
+    assert_eq!(tap.drain(), output);
+    assert_eq!(tap.drops(), 0);
+    for sample in output {
+        assert!(sample.is_finite());
+        let measured_db = 20.0 * (f64::from(sample) / 0.5).log10();
+        assert!(
+            (measured_db + 6.0).abs() <= 0.5,
+            "{measured_db} dB shelf plateau"
+        );
+    }
+    assert_eq!(harness.metrics().underruns(), 0);
+    let mut underruns = underrun::Underruns::new(&harness);
+    let control = harness
+        .with_queue(|queue| queue.filter(0))
+        .await
+        .expect("configured track has a filter control");
+    assert_eq!(control.settings(), settings);
+    let start = harness.host().position();
+    let target = start + 512 + 17;
+    harness
+        .run(&control, move |effect| {
+            effect.configure(
+                FilterSettingsChange::GainDb(GainDb::MIN),
+                When::At(SessionFrame::new(
+                    i64::try_from(target).expect("target fits session frame"),
+                )),
+            )
+        })
+        .await
+        .expect("future filter step is admitted");
+    assert_eq!(control.gain_db(), settings.gain_db());
+    let take = render_effect_window(&harness, 4096).await;
+    let cut = usize::try_from(target - start).expect("capture offset fits usize") * 2;
+    assert_eq!(tap.drain(), take);
+    assert_eq!(tap.drops(), 0);
+    assert!(take.iter().all(|sample| sample.is_finite()));
+    for sample in &take[..cut] {
+        let measured_db = 20.0 * (f64::from(*sample) / 0.5).log10();
+        assert!((measured_db + 6.0).abs() <= 0.5);
+    }
+    // At 512-768 frames the shared 62 ms law is still between both DC plateaus.
+    assert!(
+        take[cut + 1024..cut + 1536]
+            .iter()
+            .all(|sample| *sample > 0.05 && *sample < 0.12)
+    );
+    for sample in &take[take.len() - 512..] {
+        let measured_db = 20.0 * (f64::from(*sample) / 0.5).log10();
+        assert!((measured_db + 24.0).abs() <= 0.5);
+    }
+    assert_eq!(control.gain_db(), GainDb::MIN);
+    let cutoff = Cutoff::checked(800.0 + 1.0e-10).expect("f64 cutoff target");
+    let q = Q::checked(std::f64::consts::FRAC_1_SQRT_2 + 1.0e-12).expect("f64 Q target");
+    harness
+        .run(&control, move |effect| effect.set_cutoff_hz(cutoff))
+        .await
+        .expect("cutoff step is admitted");
+    harness
+        .run(&control, move |effect| effect.set_q(q))
+        .await
+        .expect("Q step is admitted");
+    let _ = render_effect_window(&harness, 4096).await;
+    assert_eq!(control.cutoff_hz(), cutoff);
+    assert_eq!(control.q(), q);
+    assert_eq!(harness.metrics().underruns(), 0);
+    underruns.checkpoint(harness.metrics(), true, "configured filter manual control");
+    assert_eq!(tap.drops(), 0);
+    drop(tap);
+
+    harness
+        .with_queue(|queue| queue.seek(0.0))
+        .await
+        .expect("public seek is admitted");
+    let first = render_effect_window(&harness, 64).await;
+    assert!(first.iter().all(|sample| sample.is_finite()));
+    underruns.checkpoint(harness.metrics(), false, "first filter seek callback");
+    let after_seek = render_effect_window(&harness, 4096).await;
+    for sample in &after_seek[after_seek.len() - 512..] {
+        let measured_db = 20.0 * (f64::from(*sample) / 0.5).log10();
+        assert!((measured_db + 24.0).abs() <= 0.5);
+    }
+    assert_eq!(control.gain_db(), GainDb::MIN);
+    assert_eq!(control.cutoff_hz(), cutoff);
+    assert_eq!(control.q(), q);
+    underruns.checkpoint(harness.metrics(), true, "filter reset retains targets");
+    let drained = render_effect_window(
+        &harness,
+        usize::try_from(SAMPLE_RATE).expect("fixture rate"),
+    )
+    .await;
+    assert!(
+        drained[drained.len() - 512..]
+            .iter()
+            .all(|sample| *sample == 0.0)
+    );
+    underruns.checkpoint(harness.metrics(), true, "finite filter drain");
+    harness
+        .with_queue(kithara::queue::QueueControl::clear)
+        .await
+        .expect("queue clears");
+    let stale = harness
+        .run(&control, |effect| effect.set_gain_db(GainDb::MAX))
+        .await;
+    assert!(
+        matches!(
+            stale,
+            Err(kithara::queue::QueueError::Play(PlayError::NotReady))
+        ),
+        "retired filter handle must refuse: {stale:?}"
+    );
+    harness.close().await;
+}
+
 #[cfg(not(rtsan))]
 #[kithara::test(tokio)]
 async fn public_effect_config_controls_reach_only_the_bound_track_at_the_due_frame() {

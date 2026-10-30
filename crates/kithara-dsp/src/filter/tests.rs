@@ -174,6 +174,47 @@ fn an_empty_range_keeps_the_state() {
 }
 
 #[kithara::test]
+fn reset_clears_history_and_keeps_the_design() {
+    let mut filter = built(1_000.0);
+    let mut warmup = stereo(256);
+    filter.process(&mut warmup, 0..256).expect("shape matches");
+    filter.reset();
+    let mut actual = stereo(256);
+    let mut expected = actual.clone();
+    filter.process(&mut actual, 0..256).expect("shape matches");
+    built(1_000.0)
+        .process(&mut expected, 0..256)
+        .expect("shape matches");
+    assert_eq!(bits(&actual), bits(&expected));
+}
+
+#[kithara::test]
+fn reset_restarts_the_quiet_frame_sequence() {
+    let mut filter = Biquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("filter builds");
+    filter
+        .retune(
+            0,
+            Coefficients {
+                b0: 1.0,
+                b1: 0.5,
+                b2: 0.0,
+                a1: 0.0,
+                a2: 0.0,
+            },
+        )
+        .expect("exact FIR");
+    let amplitude = f32::from_bits(0x3000_0000);
+    filter
+        .process(&mut [vec![amplitude]], 0..1)
+        .expect("one quiet frame");
+    filter.reset();
+    let mut actual = vec![vec![amplitude, 0.0, 0.0]];
+    filter.process(&mut actual, 0..3).expect("fresh sequence");
+    let expected = vec![vec![amplitude, amplitude / 2.0, 0.0]];
+    assert_eq!(bits(&actual), bits(&expected));
+}
+
+#[kithara::test]
 fn samples_outside_the_range_keep_their_bits() {
     let mut filter = built(1_000.0);
     let original = stereo(64);
@@ -204,4 +245,111 @@ fn a_mismatched_shape_is_an_error() {
     assert_eq!(filter.retune(1, low_pass(1_000.0)), Err(FilterError::Shape));
     assert_eq!(filter.settle(&[0.0]), Err(FilterError::Shape));
     assert_eq!(filter.copy_state(&other), Err(FilterError::Shape));
+}
+
+#[kithara::test]
+#[case(1)]
+#[case(3)]
+fn recursive_samples_and_state_do_not_depend_on_chunk_boundaries(#[case] channels: usize) {
+    const FRAMES: usize = 257;
+    let source = sine_440()
+        .get(..FRAMES)
+        .expect("fixture covers requested frames")
+        .to_vec();
+    for sections in [1, 2] {
+        let build = || {
+            let mut filter = Biquad::new(
+                NonZeroUsize::new(channels).expect("positive channels"),
+                NonZeroUsize::new(sections).expect("positive sections"),
+            )
+            .expect("filter builds");
+            for (section, cutoff) in [1_000.0, 6_000.0].into_iter().take(sections).enumerate() {
+                filter
+                    .retune(section, low_pass(cutoff))
+                    .expect("valid section");
+            }
+            filter
+        };
+        let mut whole = build();
+        let mut expected = vec![source.clone(); channels];
+        whole
+            .process(&mut expected, 0..FRAMES)
+            .expect("whole input");
+        let mut expected_suffix = vec![vec![0.125; 17]; channels];
+        whole
+            .process(&mut expected_suffix, 0..17)
+            .expect("following state");
+        for chunk in [1, 7, 97] {
+            let mut split = build();
+            let mut actual = vec![source.clone(); channels];
+            for start in (0..FRAMES).step_by(chunk) {
+                let end = start
+                    .checked_add(chunk)
+                    .expect("fixture chunk endpoint fits usize")
+                    .min(FRAMES);
+                split.process(&mut actual, start..end).expect("input chunk");
+            }
+            assert_eq!(
+                bits(&actual),
+                bits(&expected),
+                "{channels}ch/{sections}sec/{chunk}frames"
+            );
+            let mut suffix = vec![vec![0.125; 17]; channels];
+            split.process(&mut suffix, 0..17).expect("following state");
+            assert_eq!(bits(&suffix), bits(&expected_suffix), "following state");
+        }
+    }
+}
+
+#[kithara::test]
+#[case::quiet_threshold(0x3000_0000)]
+#[case::memory_floor(0x0d00_0000)]
+fn quiet_fir_history_is_independent_of_chunk_boundaries(#[case] amplitude_bits: u32) {
+    let build = || {
+        let mut filter = Biquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("filter builds");
+        filter
+            .retune(
+                0,
+                Coefficients {
+                    b0: 1.0,
+                    b1: 0.5,
+                    b2: 0.0,
+                    a1: 0.0,
+                    a2: 0.0,
+                },
+            )
+            .expect("exact FIR");
+        filter
+    };
+    let amplitude = f32::from_bits(amplitude_bits);
+    let input = vec![vec![amplitude, amplitude, 0.0]];
+    let mut expected = input.clone();
+    build().process(&mut expected, 0..3).expect("whole input");
+    for chunk in [1, 2] {
+        let mut split = build();
+        let mut actual = input.clone();
+        for start in (0_usize..3).step_by(chunk) {
+            let end = start
+                .checked_add(chunk)
+                .expect("fixture chunk endpoint fits usize")
+                .min(3);
+            split.process(&mut actual, start..end).expect("quiet chunk");
+        }
+        assert_eq!(bits(&actual), bits(&expected));
+    }
+    let mut seeded = build();
+    seeded
+        .process(&mut [vec![amplitude]], 0..1)
+        .expect("one quiet frame");
+    let mut copied = build();
+    copied.copy_state(&seeded).expect("same shape");
+    let mut expected = vec![vec![amplitude, 0.0]];
+    let mut actual = expected.clone();
+    seeded
+        .process(&mut expected, 0..2)
+        .expect("source continuation");
+    copied
+        .process(&mut actual, 0..2)
+        .expect("copied continuation");
+    assert_eq!(bits(&actual), bits(&expected));
 }

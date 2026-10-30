@@ -5,25 +5,28 @@ use std::{
 
 use fearless_simd::{Level, dispatch, prelude::*};
 
-use crate::filter::FilterError;
+use crate::{
+    consts::{SECTION_MEMORY, SILENT_PEAK},
+    filter::FilterError,
+};
 
 mod consts {
     /// A section that passes its input through.
     pub(super) const IDENTITY: [f32; 5] = [1.0, 0.0, 0.0, 0.0, 0.0];
     /// Section memory below this on every entry restarts from zero at the
-    /// end of a call, before its free decay reaches subnormals.
+    /// end of each sample, before its free decay reaches subnormals.
     pub(super) const FLUSH_FLOOR: f32 = 1.0e-30;
 }
 
 /// Direct form I sections run on every channel, `S::f32s::LEN` channels per
 /// vector. Channel `c`, section `s` keeps `[x1, x2, y1, y2]` at
-/// `state[c × sections + s]`. A call ends by zeroing every section memory
-/// that has fallen below `1e-30`, so a silent channel beside a playing one
-/// stops ringing before subnormals.
+/// `state[c × sections + s]`. Sample-local retirement makes the state
+/// independent of caller chunk boundaries.
 pub(crate) struct Cascade {
     channels: NonZeroUsize,
     coefficients: Box<[[f32; 5]]>,
     state: Box<[[f32; 4]]>,
+    quiet_frames: usize,
 }
 
 impl Cascade {
@@ -36,6 +39,7 @@ impl Cascade {
             channels,
             coefficients: vec![consts::IDENTITY; sections.get()].into_boxed_slice(),
             state: vec![[0.0; 4]; states].into_boxed_slice(),
+            quiet_frames: 0,
         })
     }
 
@@ -70,6 +74,7 @@ impl Cascade {
 
     pub(crate) fn reset(&mut self) {
         self.state.fill([0.0; 4]);
+        self.quiet_frames = 0;
     }
 
     pub(crate) fn copy_state_from(&mut self, source: &Self) -> Result<(), FilterError> {
@@ -77,6 +82,7 @@ impl Cascade {
             return Err(FilterError::Shape);
         }
         self.state.copy_from_slice(&source.state);
+        self.quiet_frames = source.quiet_frames;
         Ok(())
     }
 }
@@ -93,30 +99,37 @@ pub(super) fn cascade_kernel<S: Simd, P: DerefMut<Target = [f32]>>(
     let Cascade {
         coefficients,
         state,
+        quiet_frames,
         ..
     } = cascade;
     let lanes = S::f32s::LEN;
     let sections = coefficients.len();
     let zero = S::f32s::splat(simd, 0.0);
-    for (group, states) in planes
-        .chunks_mut(lanes)
-        .zip(state.chunks_mut(lanes.saturating_mul(sections)))
-    {
-        for (section, &[b0, b1, b2, a1, a2]) in coefficients.iter().enumerate() {
-            let [b0, b1, b2, na1, na2] =
-                [b0, b1, b2, -a1, -a2].map(|value| S::f32s::splat(simd, value));
-            let [mut x1, mut x2, mut y1, mut y2] = [zero; 4];
-            for (lane, channel) in states.chunks(sections).enumerate() {
-                let Some(delay) = channel.get(section) else {
-                    continue;
-                };
-                for (vector, value) in [&mut x1, &mut x2, &mut y1, &mut y2].into_iter().zip(delay) {
-                    if let Some(slot) = vector.as_mut_slice().get_mut(lane) {
-                        *slot = *value;
+    for frame in range {
+        let input_peak = planes
+            .iter()
+            .filter_map(|plane| plane.get(frame))
+            .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+        for (group, states) in planes
+            .chunks_mut(lanes)
+            .zip(state.chunks_mut(lanes.saturating_mul(sections)))
+        {
+            for (section, &[b0, b1, b2, a1, a2]) in coefficients.iter().enumerate() {
+                let [b0, b1, b2, na1, na2] =
+                    [b0, b1, b2, -a1, -a2].map(|value| S::f32s::splat(simd, value));
+                let [mut x1, mut x2, mut y1, mut y2] = [zero; 4];
+                for (lane, channel) in states.chunks(sections).enumerate() {
+                    let Some(delay) = channel.get(section) else {
+                        continue;
+                    };
+                    for (vector, value) in
+                        [&mut x1, &mut x2, &mut y1, &mut y2].into_iter().zip(delay)
+                    {
+                        if let Some(slot) = vector.as_mut_slice().get_mut(lane) {
+                            *slot = *value;
+                        }
                     }
                 }
-            }
-            for frame in range.clone() {
                 let mut x = zero;
                 for (slot, plane) in x.as_mut_slice().iter_mut().zip(group.iter()) {
                     *slot = plane.get(frame).copied().unwrap_or(0.0);
@@ -131,17 +144,29 @@ pub(super) fn cascade_kernel<S: Simd, P: DerefMut<Target = [f32]>>(
                         *slot = *sample;
                     }
                 }
-            }
-            for (lane, channel) in states.chunks_mut(sections).enumerate() {
-                if let Some(delay) = channel.get_mut(section) {
-                    let memory = [x1, x2, y1, y2]
-                        .map(|vector| vector.as_slice().get(lane).copied().unwrap_or(0.0));
-                    let ringing = memory
-                        .iter()
-                        .any(|value| value.abs() >= consts::FLUSH_FLOOR);
-                    *delay = if ringing { memory } else { [0.0; 4] };
+                for (lane, channel) in states.chunks_mut(sections).enumerate() {
+                    if let Some(delay) = channel.get_mut(section) {
+                        let memory = [x1, x2, y1, y2]
+                            .map(|vector| vector.as_slice().get(lane).copied().unwrap_or(0.0));
+                        let ringing = memory
+                            .iter()
+                            .any(|value| value.abs() >= consts::FLUSH_FLOOR);
+                        *delay = if ringing { memory } else { [0.0; 4] };
+                    }
                 }
             }
+        }
+        let peak = planes
+            .iter()
+            .filter_map(|plane| plane.get(frame))
+            .fold(input_peak, |peak, sample| peak.max(sample.abs()));
+        *quiet_frames = if peak <= SILENT_PEAK {
+            quiet_frames.saturating_add(1).min(SECTION_MEMORY)
+        } else {
+            0
+        };
+        if *quiet_frames == SECTION_MEMORY {
+            state.fill([0.0; 4]);
         }
     }
 }

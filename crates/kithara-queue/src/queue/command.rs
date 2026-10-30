@@ -189,7 +189,8 @@ where
                     .position(|active| {
                         let snapshot = active.track.snapshot();
                         let snapshot = snapshot.as_ref();
-                        snapshot.item == item
+                        active.role != Role::Leaving
+                            && snapshot.item == item
                             && snapshot.effects.iter().any(|effect| effect.lane() == lane)
                     })
                     .ok_or(PlayError::NotReady)?;

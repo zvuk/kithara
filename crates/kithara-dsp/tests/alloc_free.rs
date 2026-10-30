@@ -88,6 +88,7 @@ fn biquad_never_allocates_after_construction() {
             .process(&mut planes, 0..FRAMES / 2)
             .expect("shape matches");
         lookahead.copy_state(&filter).expect("same shape");
+        filter.reset();
         lookahead
             .process(&mut planes, FRAMES / 2..FRAMES)
             .expect("shape matches");

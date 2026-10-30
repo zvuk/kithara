@@ -97,7 +97,10 @@ impl AudioEffect for EqEffect {
         target: EffectTarget,
         change: EffectChange,
     ) -> Result<(), EffectRefusal> {
-        let (EffectTarget::EqBand { band, .. }, EffectChange::EqBand(change)) = (target, change);
+        let (EffectTarget::EqBand { band, .. }, EffectChange::EqBand(change)) = (target, change)
+        else {
+            return Err(EffectRefusal);
+        };
         if self.target_gain(band).is_none() {
             return Err(EffectRefusal);
         }

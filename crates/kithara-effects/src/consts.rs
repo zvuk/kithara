@@ -3,6 +3,7 @@ use kithara_dsp::param::{MIN_SETTLE_RATIO, SmootherConfig};
 
 pub(crate) const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
 pub(crate) const NYQUIST_FACTOR: f32 = 2.0;
+pub(crate) const FILTER_BLOCK_FRAMES: usize = 256;
 
 pub(crate) const PASSTHROUGH: Coefficients<f32> = Coefficients {
     a1: 0.0,

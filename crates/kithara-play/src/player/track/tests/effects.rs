@@ -78,7 +78,9 @@ fn effect_source(
 
 fn confirmed_gain(track: &Track) -> GainDb {
     let snapshot = track.snapshot();
-    let EffectSnapshot::Equalizer { bands, .. } = &snapshot.effects[0];
+    let EffectSnapshot::Equalizer { bands, .. } = &snapshot.effects[0] else {
+        panic!("configured track retains its equalizer");
+    };
     bands[0].config().gain_db()
 }
 

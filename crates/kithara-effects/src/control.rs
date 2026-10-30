@@ -4,6 +4,7 @@ use kithara_signal::AudioSpec;
 use crate::{
     AudioEffect,
     eq::{EqBandConfig, EqBandConfigChange, EqConfig, EqEffect},
+    filter::{self, FilterConfig, FilterEffect, FilterSettings, FilterSettingsChange},
 };
 
 /// Construction intent prepared once in the track's audio format.
@@ -11,6 +12,7 @@ use crate::{
 #[non_exhaustive]
 pub enum EffectConfig {
     Equalizer(Vec<EqBandConfig>),
+    Filter(FilterSettings),
 }
 
 /// Construction failure before an effect enters audio production.
@@ -25,6 +27,15 @@ pub enum EffectPrepareError {
     Filter(#[from] kithara_dsp::filter::FilterError),
 }
 
+impl From<filter::PrepareError> for EffectPrepareError {
+    fn from(error: filter::PrepareError) -> Self {
+        match error {
+            filter::PrepareError::Filter(error) => Self::Filter(error),
+            filter::PrepareError::Pool(error) => Self::Pool(error),
+        }
+    }
+}
+
 /// One chain entry, transferred to its producer before playback.
 #[non_exhaustive]
 pub enum EffectSetup {
@@ -36,7 +47,7 @@ impl EffectSetup {
     /// Prepare an entry outside checked audio production.
     /// # Errors
     /// Returns the effect's format or pool admission failure.
-    pub fn prepare<S: HasPool<f32>>(
+    pub fn prepare<S: HasPool<f32> + Send + Sync + 'static>(
         self,
         spec: AudioSpec,
         pools: &PoolRegion<S>,
@@ -52,6 +63,10 @@ impl EffectSetup {
                 }
                 Ok(effect)
             }
+            Self::Config(EffectConfig::Filter(settings)) => Ok(Box::new(FilterEffect::new(
+                spec,
+                FilterConfig::from((pools.clone(), settings)),
+            )?)),
             Self::Config(EffectConfig::Equalizer(bands)) => Ok(Box::new(EqEffect::new(
                 &EqConfig::builder(pools.clone()).build(),
                 bands,
@@ -67,6 +82,7 @@ impl EffectSetup {
 #[non_exhaustive]
 pub enum EffectTarget {
     EqBand { effect: usize, band: usize },
+    Filter { effect: usize },
 }
 
 impl EffectTarget {
@@ -74,7 +90,7 @@ impl EffectTarget {
     #[must_use]
     pub const fn effect(self) -> usize {
         match self {
-            Self::EqBand { effect, .. } => effect,
+            Self::EqBand { effect, .. } | Self::Filter { effect } => effect,
         }
     }
 }
@@ -84,6 +100,13 @@ impl EffectTarget {
 #[non_exhaustive]
 pub enum EffectChange {
     EqBand(EqBandConfigChange),
+    Filter(FilterSettingsChange),
+}
+
+impl From<FilterSettingsChange> for EffectChange {
+    fn from(change: FilterSettingsChange) -> Self {
+        Self::Filter(change)
+    }
 }
 
 impl From<EqBandConfigChange> for EffectChange {

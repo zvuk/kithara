@@ -20,6 +20,11 @@ the DJ isolator, the stereo equaliser a deck runs, the peak limiter, and the
 Firewheel node that puts the limiter on a session bus. It does not decode
 audio, own player or session state, or reach the network.
 
+`filter::FilterEffect` prepares a high-pass, low-pass, low-shelf or high-shelf
+response from `FilterConfig`, using the DSP owner's biquad. Its parameters are
+fixed at construction; reset clears channel history and retains those settings.
+Processing preserves chunk metadata and flush emits no additional tail samples.
+
 ## Usage
 
 ```rust

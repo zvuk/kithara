@@ -20,6 +20,5 @@ pub(crate) const SETTLE_CHUNK: usize = 64;
 pub(crate) const SETTLE_FLOOR_LOG2: f64 = -24.0;
 /// Biquad input and output peaks at or below this reset the state.
 pub(crate) const SILENT_PEAK: f32 = 1.0e-9;
-/// Frames a biquad section remembers: a quiet call proves the state silent
-/// only when it covers them.
+/// Consecutive quiet frames before biquad state retirement.
 pub(crate) const SECTION_MEMORY: usize = 2;

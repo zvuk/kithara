@@ -3,7 +3,8 @@ use kithara_command::When;
 use kithara_config::{Configure, LiveConfig};
 use kithara_events::TrackId;
 use kithara_play::{
-    EffectChange, EffectConfigView, EffectSnapshot, EffectTarget, EqBandConfig, LaneId, PlayError,
+    EffectChange, EffectConfigView, EffectSnapshot, EffectTarget, EqBandConfig, FilterSettings,
+    LaneId, PlayError,
 };
 use kithara_signal::SessionFrame;
 
@@ -28,6 +29,27 @@ impl<S> QueueControl<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
+    /// Bind to the fixed filter in the current track's effect chain.
+    /// # Errors
+    /// Refuses an unloaded track or an entry that is not a filter.
+    pub fn filter(&self, effect: usize) -> Result<EffectControl<S, FilterSettings>, QueueError> {
+        let snapshot = self.view.read();
+        let track = snapshot.track.as_ref().ok_or(PlayError::NotReady)?;
+        let Some(EffectSnapshot::Filter { lane, settings }) = track.effects.get(effect) else {
+            return Err(PlayError::InvalidConfiguration {
+                reason: "filter is not installed".into(),
+            }
+            .into());
+        };
+        Ok(EffectControl {
+            queue: self.clone(),
+            item: track.item,
+            lane: *lane,
+            target: EffectTarget::Filter { effect },
+            view: settings.clone(),
+        })
+    }
+
     /// Bind to a band of the current track without changing its settings.
     /// # Errors
     /// Refuses an unloaded track or an absent effect or band.

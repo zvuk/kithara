@@ -9,6 +9,7 @@ mod control;
 mod drain;
 mod dsp;
 pub mod eq;
+pub mod filter;
 mod gain_db;
 mod limiter;
 pub mod node;

@@ -1,7 +1,9 @@
 use arc_swap::ArcSwap;
 use kithara_command::{Live, Outcome, Receipt, Seq, When};
 use kithara_config::{ConfigOwner, LiveConfig};
-use kithara_effects::{EffectChange, EffectConfig, EffectTarget, eq::EqBandConfig};
+use kithara_effects::{
+    EffectChange, EffectConfig, EffectTarget, eq::EqBandConfig, filter::FilterSettings,
+};
 use kithara_platform::sync::Arc;
 use kithara_render::{LaneCommand, LaneFrame, LaneId, LaneProtocol};
 use kithara_signal::SessionFrame;
@@ -42,6 +44,10 @@ pub enum EffectSnapshot {
         lane: LaneId,
         bands: Arc<[EffectConfigView<EqBandConfig>]>,
     },
+    Filter {
+        lane: LaneId,
+        settings: EffectConfigView<FilterSettings>,
+    },
 }
 
 impl EffectSnapshot {
@@ -49,7 +55,7 @@ impl EffectSnapshot {
     #[must_use]
     pub const fn lane(&self) -> LaneId {
         match self {
-            Self::Equalizer { lane, .. } => *lane,
+            Self::Equalizer { lane, .. } | Self::Filter { lane, .. } => *lane,
         }
     }
 }
@@ -58,6 +64,10 @@ enum EffectState {
     Equalizer {
         bands: Vec<Live<EqBandConfig, LaneProtocol>>,
         views: Arc<[EffectConfigView<EqBandConfig>]>,
+    },
+    Filter {
+        live: Live<FilterSettings, LaneProtocol>,
+        view: EffectConfigView<FilterSettings>,
     },
 }
 
@@ -68,21 +78,32 @@ impl TrackEffects {
     pub(super) fn new(configs: &[EffectConfig]) -> Result<Self, PlayError> {
         let mut states: Vec<EffectState> = Vec::with_capacity(configs.len());
         for config in configs {
-            let EffectConfig::Equalizer(bands) = config else {
-                return Err(PlayError::InvalidConfiguration {
-                    reason: "unsupported effect construction".into(),
-                });
-            };
-            let views = bands.iter().copied().map(EffectConfigView::new).collect();
-            let bands = bands
-                .iter()
-                .copied()
-                .map(|band| match Live::new(band) {
-                    Ok(live) => live,
-                    Err(never) => match never {},
-                })
-                .collect();
-            states.push(EffectState::Equalizer { bands, views });
+            match config {
+                EffectConfig::Equalizer(bands) => {
+                    let views = bands.iter().copied().map(EffectConfigView::new).collect();
+                    let bands = bands
+                        .iter()
+                        .copied()
+                        .map(|band| match Live::new(band) {
+                            Ok(live) => live,
+                            Err(never) => match never {},
+                        })
+                        .collect();
+                    states.push(EffectState::Equalizer { bands, views });
+                }
+                EffectConfig::Filter(settings) => states.push(EffectState::Filter {
+                    live: match Live::new(*settings) {
+                        Ok(live) => live,
+                        Err(never) => match never {},
+                    },
+                    view: EffectConfigView::new(*settings),
+                }),
+                _ => {
+                    return Err(PlayError::InvalidConfiguration {
+                        reason: "unsupported effect construction".into(),
+                    });
+                }
+            }
         }
         Ok(Self(states))
     }
@@ -96,6 +117,10 @@ impl TrackEffects {
                     lane,
                     bands: Arc::clone(views),
                 },
+                EffectState::Filter { view, .. } => EffectSnapshot::Filter {
+                    lane,
+                    settings: view.clone(),
+                },
             })
             .collect()
     }
@@ -107,6 +132,11 @@ impl TrackEffects {
                 EffectTarget::EqBand { band, .. },
                 EffectChange::EqBand(_),
             ) if bands.get(band).is_some() => Ok(()),
+            (
+                Some(EffectState::Filter { .. }),
+                EffectTarget::Filter { .. },
+                EffectChange::Filter(_),
+            ) => Ok(()),
             _ => Err(PlayError::InvalidConfiguration {
                 reason: format!("effect target {target:?} is not installed"),
             }),
@@ -133,6 +163,11 @@ impl TrackEffects {
                     })?;
                 live.track(seq, when, change);
             }
+            (
+                Some(EffectState::Filter { live, .. }),
+                EffectTarget::Filter { .. },
+                EffectChange::Filter(change),
+            ) => live.track(seq, when, change),
             _ => {
                 return Err(PlayError::InvalidConfiguration {
                     reason: format!("effect target {target:?} is not installed"),
@@ -144,9 +179,13 @@ impl TrackEffects {
 
     pub(super) fn settle(&mut self, receipt: &Receipt<LaneProtocol>) {
         for state in &mut self.0 {
-            let EffectState::Equalizer { bands, views } = state;
-            for (live, view) in bands.iter_mut().zip(views.iter()) {
-                view.settle(live, receipt);
+            match state {
+                EffectState::Equalizer { bands, views } => {
+                    for (live, view) in bands.iter_mut().zip(views.iter()) {
+                        view.settle(live, receipt);
+                    }
+                }
+                EffectState::Filter { live, view } => view.settle(live, receipt),
             }
         }
     }

@@ -33,6 +33,7 @@ biquad = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
+derive_more = { workspace = true }
 fearless_simd = { workspace = true }
 fieldwork = { workspace = true }
 firewheel = { workspace = true }
