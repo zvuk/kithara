@@ -429,6 +429,7 @@ firewheel = { version = "0.14.0", default-features = false, features = ["schedul
 firewheel-core = { version = "0.14.0", default-features = false, features = ["std", "serde"] }
 firewheel-web-audio = { version = "0.6.0", default-features = false }
 flate2 = "1.1.10"
+foldhash = { version = "0.2", default-features = false }
 fs4 = "1.1.0"
 futures = "0.3.34"
 

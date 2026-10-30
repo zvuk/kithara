@@ -6225,6 +6225,7 @@ dependencies = [
  "delegate",
  "derive_more",
  "fieldwork",
+ "foldhash 0.2.0",
  "kithara-derive",
  "kithara-platform",
  "kithara-signal",

@@ -1,9 +1,10 @@
 use std::{
     fmt,
-    hash::{DefaultHasher, Hash, Hasher},
+    hash::{BuildHasher, Hash, Hasher},
     num::NonZeroU64,
 };
 
+use foldhash::fast::FixedState;
 use kithara_platform::sync::Arc;
 use kithara_signal::ExponentialApproach;
 
@@ -28,7 +29,7 @@ impl fmt::Debug for SpeedCurve {
             Self::Constant(speed) => f.debug_tuple("Constant").field(speed).finish(),
             Self::Approach(approach) => f.debug_tuple("Approach").field(approach).finish(),
             Self::ApproachSteps(steps) => {
-                let mut hasher = DefaultHasher::new();
+                let mut hasher = FixedState::default().build_hasher();
                 "ApproachSteps".hash(&mut hasher);
                 steps.len().hash(&mut hasher);
                 for (offset, approach) in steps.iter() {
@@ -55,7 +56,7 @@ impl fmt::Debug for SpeedCurve {
                 .field("frames", frames)
                 .finish(),
             Self::Steps(steps) => {
-                let mut hasher = DefaultHasher::new();
+                let mut hasher = FixedState::default().build_hasher();
                 "Steps".hash(&mut hasher);
                 steps.len().hash(&mut hasher);
                 for (offset, speed) in steps.iter() {
