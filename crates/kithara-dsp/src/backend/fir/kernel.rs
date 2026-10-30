@@ -1,4 +1,4 @@
-use fearless_simd::prelude::*;
+use fearless_simd::{f32x8, prelude::*};
 
 use super::Fir;
 use crate::envelope::PeakHold;
@@ -95,7 +95,6 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
         len
     }
 
-    #[inline(always)]
     fn interval<S: Simd>(
         simd: S,
         taps: &[[f32; TAPS]; PHASES],
@@ -104,44 +103,47 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
         future: &[f32],
         padding: usize,
     ) -> f32 {
-        if TAPS == 0 || PHASES == 0 {
-            return 0.0;
-        }
         let held = future.last().copied().unwrap_or(current);
-        if current == 0.0
-            && held == 0.0
-            && past.iter().all(|&sample| sample == 0.0)
-            && future.iter().take(TAPS).all(|&sample| sample == 0.0)
+        if TAPS.min(PHASES) == 0
+            || (current == 0.0
+                && held == 0.0
+                && past.iter().all(|&sample| sample == 0.0)
+                && future.iter().take(TAPS).all(|&sample| sample == 0.0))
         {
             // Zero samples yield zero or NaN sums; both fold to a positive-zero peak.
             return 0.0;
         }
-        let mut peak = 0.0_f32;
-        let zero = S::f32s::splat(simd, 0.0);
-        for phases in taps.chunks(S::f32s::LEN) {
-            let active = S::f32s::from_fn(simd, |lane| f32::from(u8::from(lane < phases.len())))
-                .simd_gt(zero);
-            let mut sums = zero;
-            let samples = std::iter::repeat_n(0.0, padding)
-                .chain(past.iter().copied())
-                .chain(std::iter::once(current))
-                .chain(future.iter().copied())
-                .chain(std::iter::repeat(held));
-            for (tap, sample) in samples.take(TAPS).enumerate() {
-                let coefficients = S::f32s::from_fn(simd, |lane| {
-                    phases
-                        .get(lane)
-                        .and_then(|branch| branch.get(tap))
-                        .copied()
-                        .unwrap_or(0.0)
-                });
-                let sample = active.select(S::f32s::splat(simd, sample), zero);
-                sums = coefficients.mul_add_precise(sample, sums);
-            }
-            for &sum in sums.as_slice().iter().take(phases.len()) {
-                peak = peak.max(sum.abs());
-            }
-        }
-        peak
+        simd.vectorize(
+            #[inline(always)]
+            || {
+                let mut peak = 0.0_f32;
+                for phases in taps.chunks(f32x8::<S>::LEN) {
+                    let mut sums = f32x8::splat(simd, 0.0);
+                    let samples = std::iter::repeat_n(0.0, padding)
+                        .chain(past.iter().copied())
+                        .chain(std::iter::once(current))
+                        .chain(future.iter().copied())
+                        .chain(std::iter::repeat(held));
+                    samples.take(TAPS).enumerate().for_each(
+                        #[inline(always)]
+                        |(tap, sample)| {
+                            let coefficients = f32x8::from_fn(simd, |lane| {
+                                phases
+                                    .get(lane)
+                                    .map_or(0.0, |branch| branch.get(tap).copied().unwrap_or(0.0))
+                            });
+                            let sample = f32x8::from_fn(simd, |lane| {
+                                phases.get(lane).map_or(0.0, |_| sample)
+                            });
+                            sums = coefficients.mul_add_precise(sample, sums);
+                        },
+                    );
+                    for &sum in sums.as_slice().iter().take(phases.len()) {
+                        peak = peak.max(sum.abs());
+                    }
+                }
+                peak
+            },
+        )
     }
 }
