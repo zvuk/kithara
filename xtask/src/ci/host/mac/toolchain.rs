@@ -6,11 +6,17 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use kithara_devtools::common::tools::ToolsConfig;
 use reqwest::blocking::Client;
 use sha2::{Digest, Sha256};
 use tracing::info;
 
-use crate::ci::{config::CiConfig, process::Process};
+use crate::ci::{
+    cache::client_environment,
+    config::CiConfig,
+    kache::{self, KacheJob},
+    process::Process,
+};
 
 pub(super) struct ToolchainInstaller<'a> {
     config: &'a CiConfig,
@@ -238,16 +244,80 @@ impl<'a> ToolchainInstaller<'a> {
     fn install_cargo_tools(&self) -> Result<()> {
         let home = self.ci_home();
         let cargo = home.join(".cargo/bin/cargo");
-        for (package, version) in &self.config.pins.cargo_tools {
-            let mut command = self.process.command(&cargo);
-            command
-                .env("CARGO_HOME", home.join(".cargo"))
-                .env("RUSTUP_HOME", home.join(".rustup"))
-                .args(["install", "--locked", "--version", version, package]);
-            self.process
-                .run_command(&mut command, "install pinned Cargo tool")?;
-        }
-        Ok(())
+        let version = self.config.pins.cargo_tool_version("kache")?;
+        let temporary = tempfile::tempdir()?;
+        let archive = temporary.path().join("kache.tar.gz");
+        download(
+            &format!(
+                "https://github.com/kunobi-ninja/kache/releases/download/v{version}/kache-aarch64-apple-darwin.tar.gz"
+            ),
+            &archive,
+        )?;
+        verify_sha256(&archive, &self.config.pins.kache_macos_arm64_sha256)?;
+        let mut extract = self.process.command("/usr/bin/tar");
+        extract
+            .arg("-xzf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(home.join(".cargo/bin"))
+            .arg("kache");
+        self.process
+            .run_command(&mut extract, "install the pinned compiler-cache binary")?;
+        let environment = client_environment(
+            self.config
+                .host
+                .sccache_s3_env_file
+                .as_deref()
+                .context("tool installation requires scoped RustFS credentials")?,
+        )?;
+        let host = temporary.path().join("host.toml");
+        fs::write(
+            &host,
+            kache::host_config(
+                &environment,
+                &self
+                    .config
+                    .host
+                    .host_root
+                    .join("cache/bootstrap/macos-aarch64/kache"),
+                &self.config.host.sccache_size,
+            )?,
+        )?;
+        let job = KacheJob::prepare(temporary.path().join("job"), None)?;
+        let tools = ToolsConfig::default();
+        let mut vars = environment
+            .into_iter()
+            .map(|(key, value)| (key.into(), value.into()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        vars.extend(
+            job.environment(&tools)
+                .map(|(key, value)| (key.into(), value)),
+        );
+        vars.insert("KACHE_HOST_CONFIG".into(), host.into_os_string());
+        vars.insert(
+            "PATH".into(),
+            std::env::join_paths(std::iter::once(home.join(".cargo/bin")).chain(
+                std::env::split_paths(&self.process.environment_var("PATH").unwrap_or_default()),
+            ))?,
+        );
+        let process = Process::new(self.process.root(), vars);
+        let result = (|| {
+            job.verify_remote(&process, &tools)?;
+            for (package, version) in &self.config.pins.cargo_tools {
+                if package == "kache" {
+                    continue;
+                }
+                let mut command = process.command(&cargo);
+                command
+                    .env("CARGO_HOME", home.join(".cargo"))
+                    .env("RUSTUP_HOME", home.join(".rustup"))
+                    .args(["install", "--locked", "--version", version, package]);
+                process.run_command(&mut command, "install pinned Cargo tool")?;
+            }
+            Ok(())
+        })();
+        job.stop(&process, &tools);
+        result
     }
 
     fn install_android(&self) -> Result<()> {

@@ -49,5 +49,5 @@ verdict:
   artifacts:
     when: always
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - .ci-artifacts/junit/

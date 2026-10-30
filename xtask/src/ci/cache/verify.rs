@@ -1,41 +1,94 @@
 use std::{
     collections::BTreeMap,
-    fs,
+    env, fs,
     path::Path,
-    process::{Command, Output, Stdio},
+    process::{Command, Stdio},
 };
 
 use anyhow::{Context, Result, ensure};
+use kithara_devtools::common::tools::ToolsConfig;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tracing::info;
 
-use super::client_environment;
+use super::{client_environment, current_client_environment};
+use crate::ci::kache::{self, KacheJob, LocalStore};
 
 struct Probe {
     root: TempDir,
     environment: BTreeMap<String, String>,
+    clients: [KacheJob; 2],
 }
 
 impl Probe {
-    fn client(&self, server: &str) -> Command {
-        let mut command = Command::new("sccache");
+    fn new(environment: BTreeMap<String, String>) -> Result<Self> {
+        let root = tempfile::Builder::new().prefix("ci-cache-").tempdir()?;
+        let clients = ["a", "b"].map(|name| {
+            KacheJob::prepare(
+                root.path().join(name),
+                Some(LocalStore {
+                    directory: &root.path().join(format!("store-{name}")),
+                    max_size: "1G",
+                }),
+            )
+        });
+        let [a, b] = clients;
+        fs::write(
+            root.path().join("host.toml"),
+            kache::host_config(&environment, &root.path().join("unused"), "1G")?,
+        )?;
+        Ok(Self {
+            root,
+            environment,
+            clients: [a?, b?],
+        })
+    }
+
+    fn client(&self, index: usize) -> Command {
+        let mut command = Command::new("kache");
+        command.env_clear();
+        for key in [
+            "PATH",
+            "HOME",
+            "USERPROFILE",
+            "RUSTUP_HOME",
+            "CARGO_HOME",
+            "SYSTEMROOT",
+            "TEMP",
+            "TMP",
+        ] {
+            if let Some(value) = env::var_os(key) {
+                command.env(key, value);
+            }
+        }
         command
             .envs(&self.environment)
-            .env(
-                "SCCACHE_SERVER_UDS",
-                self.root.path().join(format!("{server}.sock")),
-            )
-            .env("SCCACHE_DIR", self.root.path().join("local"))
-            .env(
-                "SCCACHE_S3_KEY_PREFIX",
-                format!("verification{}/", self.root.path().display()),
-            );
+            .env("KACHE_HOST_CONFIG", self.root.path().join("host.toml"))
+            .envs(self.clients[index].environment(&ToolsConfig::default()));
         command
     }
 
-    fn build(&self, server: &str, name: &str) -> Result<()> {
+    fn stats(&self, index: usize, full: bool) -> Result<Value> {
+        let mut command = self.client(index);
+        command.args(["stats", "--json"]);
+        if full {
+            command.arg("--full");
+        }
+        let output = command
+            .output()
+            .context("read independent kache statistics")?;
+        ensure!(
+            output.status.success(),
+            "kache statistics failed: {}",
+            output.status
+        );
+        serde_json::from_slice(&output.stdout).context("read kache statistics JSON")
+    }
+
+    fn build(&self, index: usize, name: &str) -> Result<()> {
         let output = self
-            .client(server)
+            .client(index)
             .args([
                 "rustc",
                 "--crate-name",
@@ -45,127 +98,108 @@ impl Probe {
                 "--emit=dep-info,metadata,link",
                 "--out-dir",
             ])
-            .arg(self.root.path().join("out"))
-            .arg(self.root.path().join(format!("{name}.rs")))
+            .arg(self.root.path().join(format!("out-{index}")))
+            .arg(self.root.path().join("probe.rs"))
             .output()
-            .context("run compiler-cache probe")?;
-        require_success(&output)
+            .context("run independent kache compiler probe")?;
+        ensure!(
+            output.status.success(),
+            "kache compiler probe failed: {}",
+            output.status
+        );
+        Ok(())
+    }
+
+    fn stop(&self, index: usize) -> Result<()> {
+        let status = self
+            .client(index)
+            .args(["daemon", "stop"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        ensure!(status.success(), "kache probe could not drain its uploads");
+        Ok(())
     }
 }
 
 impl Drop for Probe {
     fn drop(&mut self) {
-        for server in ["a", "b"] {
-            let _ = self
-                .client(server)
-                .arg("--stop-server")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+        for index in 0..2 {
+            let _ = self.stop(index);
         }
     }
 }
 
-fn require_success(output: &Output) -> Result<()> {
+fn require_remote_hit(stats: &Value) -> Result<()> {
+    kache::require_remote(&stats.to_string())?;
     ensure!(
-        output.status.success(),
-        "compiler-cache probe failed: {}",
-        output.status
+        stats["local_hits"] == 0
+            && stats["misses"] == 0
+            && stats["remote_hits"].as_u64().unwrap_or(0)
+                + stats["prefetch_hits"].as_u64().unwrap_or(0)
+                == 1,
+        "independent kache consumer did not restore exactly one remote entry"
     );
     Ok(())
 }
 
-fn require_counter(stats: &str, name: &str, expected: usize) -> Result<()> {
-    let count = stats
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix(name)
-                .and_then(|value| value.trim().parse::<usize>().ok())
-        })
-        .with_context(|| format!("sccache did not report {name}"))?;
-    ensure!(
-        count == expected,
-        "{name}: expected {expected}, observed {count}"
-    );
-    Ok(())
-}
-
-pub(super) fn run(env_file: &Path) -> Result<()> {
-    let probe = Probe {
-        root: tempfile::Builder::new()
-            .prefix("ci-cache-")
-            .tempdir_in("/tmp")?,
-        environment: client_environment(env_file)?,
+pub(super) fn run(env_file: Option<&Path>) -> Result<()> {
+    let environment = match env_file {
+        Some(path) => client_environment(path)?,
+        None => current_client_environment()?,
     };
-    fs::create_dir(probe.root.path().join("out"))?;
-    for name in ["seed", "target"] {
-        fs::write(
-            probe.root.path().join(format!("{name}.rs")),
-            "pub fn value() -> u64 { 42 }",
-        )?;
+    let probe = Probe::new(environment)?;
+    let nonce = hex::encode(Sha256::digest(
+        probe.root.path().as_os_str().as_encoded_bytes(),
+    ));
+    let name = format!("rustfs_probe_{}", &nonce[..16]);
+    fs::write(
+        probe.root.path().join("probe.rs"),
+        format!("pub fn value() -> &'static str {{ \"{nonce}\" }}"),
+    )?;
+    for index in 0..2 {
+        fs::create_dir(probe.root.path().join(format!("out-{index}")))?;
+        kache::require_remote(&probe.stats(index, false)?.to_string())?;
     }
-    probe.build("b", "seed")?;
-    probe.build("a", "target")?;
-    probe.build("b", "target")?;
-    let output = probe.client("b").arg("--show-stats").output()?;
-    require_success(&output)?;
-    let stats = String::from_utf8(output.stdout)?;
-    for (name, count) in [
-        ("Cache hits ", 1),
-        ("Compilations ", 1),
-        ("Cache read errors ", 0),
-        ("Cache write errors ", 0),
-    ] {
-        require_counter(&stats, name, count)?;
-    }
+    probe.build(0, &name)?;
+    let producer = probe.stats(0, false)?;
     ensure!(
-        stats
-            .lines()
-            .any(|line| line.starts_with("Cache location") && line.contains("s3,")),
-        "probe did not use the S3 backend"
+        producer["misses"] == 1 && producer["local_hits"] == 0 && producer["remote_hits"] == 0,
+        "kache producer did not compile one fresh cache entry"
     );
-    info!(%stats, "independent cache clients reused a write without restart");
+    probe.stop(0)?;
+    probe.build(1, &name)?;
+    let consumer = probe.stats(1, false)?;
+    require_remote_hit(&consumer)?;
+    let full = probe.stats(1, true)?;
+    ensure!(
+        full["network"]["downloads_ok"].as_u64().unwrap_or(0) > 0,
+        "kache consumer reported no successful remote download"
+    );
+    info!(
+        producer_misses = 1,
+        consumer_remote_hits = 1,
+        consumer_local_hits = 0,
+        "independent compiler stores shared an entry through RustFS"
+    );
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
+    use serde_json::json;
 
     use super::*;
 
     #[test]
-    fn cache_probe_rejects_process_environment_injection() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("cache.env");
-        fs::write(&path, "PATH=/tmp").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(client_environment(&path).is_err());
-        fs::write(&path, "SCCACHE_BUCKET=one\nSCCACHE_BUCKET=two").unwrap();
-        assert!(client_environment(&path).is_err());
-        fs::write(&path, "SCCACHE_BUCKET=one\\two").unwrap();
-        assert!(client_environment(&path).is_err());
-    }
-
-    #[test]
-    fn misses_cannot_satisfy_the_cache_hit_check() {
-        assert!(
-            require_counter(
-                "Cache hits 0
-Compilations 2",
-                "Cache hits ",
-                1
-            )
-            .is_err()
-        );
-        assert!(
-            require_counter(
-                "Cache hits 1
-Cache hits (Rust) 1",
-                "Cache hits ",
-                1
-            )
-            .is_ok()
-        );
+    fn a_local_hit_cannot_prove_remote_reuse() {
+        let remote = json!({"remote":"s3://scope/kache", "daemon_connected":true,
+            "daemon_remote_readonly":false,"local_hits":0,"misses":0,"remote_hits":1,"prefetch_hits":0});
+        assert!(require_remote_hit(&remote).is_ok());
+        for (field, value) in [("local_hits", 1), ("misses", 1), ("remote_hits", 0)] {
+            let mut invalid = remote.clone();
+            invalid[field] = json!(value);
+            assert!(require_remote_hit(&invalid).is_err());
+        }
     }
 }

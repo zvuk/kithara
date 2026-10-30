@@ -40,11 +40,19 @@ jobs:
       # The guest carries the toolchain and says where its libraries are in
       # its own environment, so this installs and sets nothing.
       - name: Check the workspace
-        run: just check
+        run: bash .config/ci/compiler-cache.sh windows-check just check
 
       # The default backend is `wreq`, which the Apple desktop app ships and
       # Windows does not. Asking for it here builds BoringSSL through cmake,
       # which the guest has no more than it has the product that would use it,
       # so the lane names the backend the platform actually carries.
       - name: Run tests
-        run: just test run --net-backend=none
+        run: bash .config/ci/compiler-cache.sh windows-test just test run --net-backend=none
+
+      - name: Upload compiler-cache evidence
+        if: ${{ always() && hashFiles(format('.ci-artifacts/cache/github-{0}-{1}-*.json', github.run_id, github.run_attempt)) != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compiler-cache-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json
+          if-no-files-found: error

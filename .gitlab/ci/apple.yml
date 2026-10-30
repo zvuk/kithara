@@ -16,7 +16,7 @@ apple:lint:
     when: always
     expire_in: 30 days
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - target/quality-report.md
       - target/trait-mock-audit.md
       - target/rstest-audit.md
@@ -51,7 +51,7 @@ apple:test:
     reports:
       junit: .ci-artifacts/junit/apple-test.xml
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - .ci-artifacts/junit/
 
 # The same suite with the clock left real. It owns a second target directory,
@@ -76,7 +76,7 @@ apple:test-flash-off:
     reports:
       junit: .ci-artifacts/junit/apple-test-flash-off.xml
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - .ci-artifacts/junit/
 
 apple:xcframework:
@@ -94,7 +94,7 @@ apple:xcframework:
     when: always
     expire_in: 1 day
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - apple/KitharaFFIInternal.xcframework
       - apple/Sources/KitharaFFI/KitharaFFI.swift
 
@@ -118,7 +118,7 @@ apple:swift-test:
     reports:
       junit: .ci-artifacts/junit/apple-swift-test.xml
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - .ci-artifacts/junit/
 
 apple:ios:
@@ -157,7 +157,7 @@ apple:ios-test:
     reports:
       junit: .ci-artifacts/junit/apple-ios-test.xml
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - .ci-artifacts/junit/
 
 apple:safari:

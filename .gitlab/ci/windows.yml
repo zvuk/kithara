@@ -16,13 +16,13 @@
     reports:
       junit: target/nextest/ci/junit.xml
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - target/nextest/ci/junit.xml
 
 windows:arm64:
   extends: .windows-suite
   script:
-    - cargo run --locked -p xtask -- ci run windows-arm64
+    - just ci run windows-arm64
 
 # Off on this host, not gone. The guest is ARM64, so the suite ran under
 # emulation and reported on it as much as on the commit; an x86 executor runs
@@ -32,7 +32,7 @@ windows:x64:
   rules:
     - if: $KITHARA_WINDOWS_X64_SUITE == "1"
   script:
-    - cargo run --locked -p xtask -- ci run windows-x64
+    - just ci run windows-x64
 
 # Compiles the workspace and everything it tests with, runs none of it. Whether
 # the target still builds is a question this host answers cheaply: the native
@@ -40,4 +40,4 @@ windows:x64:
 windows:x64-build:
   extends: .windows-lane
   script:
-    - cargo run --locked -p xtask -- ci run windows-x64-build
+    - just ci run windows-x64-build

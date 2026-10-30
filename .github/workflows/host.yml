@@ -34,4 +34,4 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Provision this machine
-        run: cargo run --locked -p xtask -- ci host provision
+        run: just ci host provision

@@ -1308,7 +1308,7 @@ flash = false
 backend = "apple"
 
 [ext.xtask.cache]
-extra_inputs = []
+extra_inputs = ["docker/ci.Dockerfile"]
 keep_generations = 2
 generation_grace_secs = 3600
 

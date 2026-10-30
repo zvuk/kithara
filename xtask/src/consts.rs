@@ -322,6 +322,8 @@ pub(crate) const KACHE_DIR: &str = "kache";
 pub(crate) const KACHE_MOUNT: &str = "/cache/kache";
 pub(crate) const KACHE_HOST_FILE: &str = "host.toml";
 pub(crate) const KACHE_STORE: &str = "store";
+pub(crate) const KACHE_LOCAL_ROOT_ENV: &str = "KITHARA_CI_COMPILER_CACHE_ROOT";
+pub(crate) const KACHE_CONTAINER_ROOT: &str = "/tmp/kithara-ci/compiler-cache";
 /// The host file a Mac host's container runner names: the same remote and
 /// store, spelled as the container reaches them.
 pub(crate) const KACHE_DOCKER_HOST_FILE: &str = "host-docker.toml";
@@ -396,6 +398,7 @@ pub(crate) const PRIVATE_BLOCKS: [&str; 3] = ["172.16.0.0/12", "10.0.0.0/8", "19
 
 /// A mode only its owner may read and write.
 pub(crate) const OWNER_ONLY: u32 = 0o600;
+pub(crate) const OWNER_DIRECTORY: u32 = 0o700;
 
 /// A mode anyone may read and run, and only its owner may write.
 pub(crate) const EXECUTABLE: u32 = 0o755;
@@ -931,7 +934,7 @@ pub(crate) const GUEST_PROVISION_SCRIPT: &str = ".config/windows/provision.ps1";
 pub(crate) const GUEST_BUILD_TOOLS_URL: &str = "https://aka.ms/vs/17/release/vs_buildtools.exe";
 
 /// The tools the lane needs on a guest beyond the toolchain.
-pub(crate) const GUEST_CARGO_TOOLS: [&str; 2] = ["cargo-nextest", "just"];
+pub(crate) const GUEST_CARGO_TOOLS: [&str; 3] = ["cargo-nextest", "just", "sccache"];
 
 /// Where the Linux host's services live.
 pub(crate) const SERVICE_SYSTEMD_ROOT: &str = "/etc/systemd/system";

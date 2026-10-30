@@ -60,6 +60,10 @@ pub(crate) struct CiPins {
     /// The `CoreSimulator` device type the simulator lane creates its device
     /// from. It has to ship with `expected_xcode_version`.
     pub(crate) ios_simulator_device_type: String,
+    pub(crate) kache_linux_amd64_sha256: String,
+    pub(crate) kache_linux_arm64_sha256: String,
+    pub(crate) kache_macos_arm64_sha256: String,
+    pub(crate) kache_windows_amd64_sha256: String,
     pub(crate) linux_base_digest: String,
     pub(crate) linux_android_image: String,
     pub(crate) linux_android_runner_image: String,
@@ -192,6 +196,22 @@ impl CiPins {
 
     fn validate_hashes(&self) -> Result<()> {
         for (name, digest) in [
+            (
+                "kache_linux_amd64_sha256",
+                self.kache_linux_amd64_sha256.as_str(),
+            ),
+            (
+                "kache_linux_arm64_sha256",
+                self.kache_linux_arm64_sha256.as_str(),
+            ),
+            (
+                "kache_macos_arm64_sha256",
+                self.kache_macos_arm64_sha256.as_str(),
+            ),
+            (
+                "kache_windows_amd64_sha256",
+                self.kache_windows_amd64_sha256.as_str(),
+            ),
             (
                 "actions_runner_linux_amd64_sha256",
                 self.actions_runner_linux_amd64_sha256.as_str(),

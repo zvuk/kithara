@@ -218,11 +218,11 @@ where
         self.member.control().clone()
     }
 
-    /// Issues a control call from the host owner thread, as the app would.
-    pub async fn run<R>(&self, f: impl FnOnce(&P::Control) -> R + MaybeSend + 'static) -> R
+    /// Awaits a blocking control call outside the session executor.
+    pub async fn run<R>(&self, f: impl FnOnce(&P::Control) -> R + Send + 'static) -> R
     where
-        P::Control: Clone + MaybeSend + 'static,
-        R: MaybeSend + 'static,
+        P::Control: Clone + Send + 'static,
+        R: Send + 'static,
     {
         let control = self.control();
         self.host.run(move || f(&control)).await
@@ -432,13 +432,14 @@ where
         answer
     }
 
-    /// Runs a control call on the owner thread, the way product callers issue
-    /// it from the app thread rather than from a runtime worker.
-    pub async fn run<R>(&self, f: impl FnOnce() -> R + MaybeSend + 'static) -> R
+    /// Runs a blocking control call outside the session executor.
+    pub async fn run<R>(&self, f: impl FnOnce() -> R + Send + 'static) -> R
     where
-        R: MaybeSend + 'static,
+        R: Send + 'static,
     {
-        self.call(move |_| f()).await
+        kithara::platform::tokio::task::spawn_blocking(f)
+            .await
+            .expect("offline control call completes")
     }
 
     /// Samples an observation and the render cursor between completed blocks.

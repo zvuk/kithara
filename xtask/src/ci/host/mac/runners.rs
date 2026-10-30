@@ -345,6 +345,21 @@ impl<'a> RunnerManager<'a> {
             .into_iter()
             .flatten()
             .chain(shell_kache)
+            .chain([
+                (
+                    consts::KACHE_LOCAL_ROOT_ENV.to_owned(),
+                    self.config
+                        .host
+                        .host_root
+                        .join("cache")
+                        .display()
+                        .to_string(),
+                ),
+                (
+                    "SCCACHE_CACHE_SIZE".to_owned(),
+                    self.config.host.sccache_size.clone(),
+                ),
+            ])
             .map(|(name, value)| format!(", \"{name}={value}\""))
             .collect::<String>();
         let docker_sccache_s3 = sccache_environment
@@ -352,6 +367,16 @@ impl<'a> RunnerManager<'a> {
             .into_iter()
             .flatten()
             .chain(docker_kache)
+            .chain([
+                (
+                    consts::KACHE_LOCAL_ROOT_ENV.to_owned(),
+                    consts::KACHE_CONTAINER_ROOT.to_owned(),
+                ),
+                (
+                    "SCCACHE_CACHE_SIZE".to_owned(),
+                    self.config.host.sccache_size.clone(),
+                ),
+            ])
             .map(|(name, value)| format!(", \"{name}={value}\""))
             .collect::<String>();
         let macos = tokens
@@ -360,7 +385,7 @@ impl<'a> RunnerManager<'a> {
             .zip(1..)
             .map(|(token, number)| {
                 format!(
-                    "[[runners]]\n  name = \"kithara-mac-mini-macos-{number}\"\n  url = \"{url}\"\n  token = \"{token}\"\n  limit = 1\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-macos-{number}-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n"
+                    "[[runners]]\n  name = \"kithara-mac-mini-macos-{number}\"\n  url = \"{url}\"\n  token = \"{token}\"\n  limit = 1\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"KITHARA_CI_PINS={root}/services/pins.toml\", \"KITHARA_CI_HOST_BINARY={root}/toolchains/shared-bin/kithara-ci\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-macos-{number}-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n"
                 )
             })
             .collect::<String>();
@@ -369,8 +394,8 @@ impl<'a> RunnerManager<'a> {
              [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={cache}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\", \"{cargo_build_jobs}\"{docker_sccache_s3}]\n\
              [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\", \"{container_builds}:{builds}/workspaces/gitlab:rw\"]\n\n\
              {macos}\
-             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-android-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-release-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n",
+             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"KITHARA_CI_PINS={root}/services/pins.toml\", \"KITHARA_CI_HOST_BINARY={root}/toolchains/shared-bin/kithara-ci\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-android-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
+             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"KITHARA_CI_PINS={root}/services/pins.toml\", \"KITHARA_CI_HOST_BINARY={root}/toolchains/shared-bin/kithara-ci\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-release-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n",
             tokens.linux,
             docker_host(home, &self.config.host.colima_profile),
             tokens.android,
@@ -526,18 +551,30 @@ impl<'a> RunnerManager<'a> {
             return Ok(Vec::new());
         };
         let shared = self.kache_root();
-        let inside = self.config.host.cache_root_linux.join(consts::KACHE_DIR);
         let size = &self.config.host.sccache_size;
         Ok(vec![
             (
                 shared.join(consts::KACHE_HOST_FILE),
-                kache::host_config(&environment, &shared.join(consts::KACHE_STORE), size)?,
+                kache::host_config(
+                    &environment,
+                    &self
+                        .config
+                        .host
+                        .host_root
+                        .join("cache/bootstrap")
+                        .join(format!("macos-{}", std::env::consts::ARCH))
+                        .join(consts::KACHE_DIR),
+                    size,
+                )?,
             ),
             (
                 shared.join(consts::KACHE_DOCKER_HOST_FILE),
                 kache::host_config(
                     &docker_client_environment(environment),
-                    &inside.join(consts::KACHE_STORE),
+                    &Path::new(consts::KACHE_CONTAINER_ROOT)
+                        .join("bootstrap")
+                        .join(format!("linux-{}", std::env::consts::ARCH))
+                        .join(consts::KACHE_DIR),
                     size,
                 )?,
             ),
@@ -552,7 +589,7 @@ impl<'a> RunnerManager<'a> {
             .join(consts::KACHE_DIR)
     }
 
-    fn store_environment(&self) -> Result<Option<BTreeMap<String, String>>> {
+    pub(super) fn store_environment(&self) -> Result<Option<BTreeMap<String, String>>> {
         self.config
             .host
             .sccache_s3_env_file
@@ -595,7 +632,7 @@ pub(super) fn docker_host(home: &Path, profile: &str) -> String {
     format!("unix://{}", docker_socket(home, profile).display())
 }
 
-fn docker_client_environment(
+pub(super) fn docker_client_environment(
     mut environment: BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     if let Some(endpoint) = environment.get_mut("SCCACHE_ENDPOINT") {
@@ -1230,7 +1267,41 @@ mod tests {
                 .all(|roots| roots[0] == roots[1]),
             "all shell registrations must contend on one host-global slot root"
         );
+        let deployed_inputs = [
+            (
+                "KITHARA_CI_PINS=",
+                config.host.host_root.join("services/pins.toml"),
+            ),
+            (
+                "KITHARA_CI_HOST_BINARY=",
+                config
+                    .host
+                    .host_root
+                    .join("toolchains/shared-bin/kithara-ci"),
+            ),
+        ];
         for runner in runners {
+            let environment = runner["environment"].as_array().unwrap();
+            for (prefix, path) in &deployed_inputs {
+                let values: Vec<&str> = environment
+                    .iter()
+                    .filter_map(toml::Value::as_str)
+                    .filter(|entry| entry.starts_with(prefix))
+                    .collect();
+                if runner["executor"].as_str() == Some("shell") {
+                    assert_eq!(
+                        values,
+                        [format!("{prefix}{}", path.display())],
+                        "{} must use deployed host inputs",
+                        runner["name"]
+                    );
+                } else {
+                    assert!(
+                        values.is_empty(),
+                        "the guest cannot read host service paths"
+                    );
+                }
+            }
             assert!(
                 runner["environment"]
                     .as_array()
@@ -1303,13 +1374,21 @@ mod tests {
             let (named, store, endpoint) = if docker {
                 (
                     inside.join(consts::KACHE_DOCKER_HOST_FILE),
-                    inside.join(consts::KACHE_STORE),
+                    Path::new(consts::KACHE_CONTAINER_ROOT)
+                        .join("bootstrap")
+                        .join(format!("linux-{}", std::env::consts::ARCH))
+                        .join(consts::KACHE_DIR),
                     "http://host.docker.internal:19000",
                 )
             } else {
                 (
                     shared.join(consts::KACHE_HOST_FILE),
-                    shared.join(consts::KACHE_STORE),
+                    config
+                        .host
+                        .host_root
+                        .join("cache/bootstrap")
+                        .join(format!("macos-{}", std::env::consts::ARCH))
+                        .join(consts::KACHE_DIR),
                     "http://127.0.0.1:19000",
                 )
             };
@@ -1339,6 +1418,35 @@ mod tests {
             );
             assert_eq!(file["cache"]["remote"]["endpoint"].as_str(), Some(endpoint));
             assert_eq!(file["cache"]["remote"]["bucket"].as_str(), Some("cache"));
+        }
+    }
+
+    #[test]
+    fn bootstrap_compiler_stores_belong_to_their_execution_kernel() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let config = scoped_config(directory.path());
+        let process = Process::new(Path::new("/"), BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        for (path, contents) in manager.kache_host_files().expect("host files") {
+            let config: toml::Value = toml::from_str(&contents).expect("host configuration");
+            let store = Path::new(
+                config["cache"]["local_store"]
+                    .as_str()
+                    .expect("local store"),
+            );
+            if path.file_name() == Some(OsStr::new(consts::KACHE_DOCKER_HOST_FILE)) {
+                assert!(
+                    !store.starts_with(&manager.config.host.cache_root_linux),
+                    "the container's SQLite index must not live on the host's virtiofs share"
+                );
+            } else {
+                assert!(
+                    store
+                        .components()
+                        .any(|part| part.as_os_str().to_string_lossy().starts_with("macos-")),
+                    "a native bootstrap must not open the guest's SQLite index"
+                );
+            }
         }
     }
 

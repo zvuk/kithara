@@ -31,6 +31,8 @@ ARG GITLEAKS_ARM64_SHA256
 ARG GITLEAKS_VERSION
 ARG JUST_VERSION
 ARG KACHE_VERSION
+ARG KACHE_AMD64_SHA256
+ARG KACHE_ARM64_SHA256
 ARG LOCKBUD_REV
 ARG LOCKBUD_TOOLCHAIN
 ARG MD_FORMATTER_VERSION
@@ -172,16 +174,27 @@ RUN rustup component add clippy llvm-tools-preview rust-analyzer rust-src rustfm
  && ln -s "${RUSTUP_HOME}/toolchains/${NIGHTLY_TOOLCHAIN}-${host}" \
       "${RUSTUP_HOME}/toolchains/nightly-${host}"
 
+RUN arch=$(dpkg --print-architecture) \
+ && case "$arch" in amd64) target=x86_64-unknown-linux-musl; sha="$KACHE_AMD64_SHA256" ;; arm64) target=aarch64-unknown-linux-musl; sha="$KACHE_ARM64_SHA256" ;; *) exit 1 ;; esac \
+ && curl -fsSL "https://github.com/kunobi-ninja/kache/releases/download/v${KACHE_VERSION}/kache-${target}.tar.gz" -o /tmp/kache.tar.gz \
+ && echo "$sha  /tmp/kache.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/kache.tar.gz -C /usr/local/bin kache \
+ && rm /tmp/kache.tar.gz
+
 FROM ci-base AS tool-builder
 
 # Install CI-only Cargo executables away from Cargo's own home. The final
 # image copies only these binaries, leaving the registry and install target in
 # this disposable build stage.
-ENV CARGO_INSTALL_ROOT=/opt/kithara-ci-tools CARGO_TARGET_DIR=/tmp/cargo-install-target
+ENV CARGO_INSTALL_ROOT=/opt/kithara-ci-tools CARGO_BUILD_JOBS=2
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=secret,id=cache_env,required=true \
+    --mount=type=secret,id=kache_host,required=true \
+    --mount=type=cache,target=/tmp/kithara-kache/store \
+    --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/tmp/cargo-install-target \
+    . /run/secrets/cache_env; trap 'kache daemon stop >&2' EXIT; \
+    kache stats --json | grep -Eq '"remote"[[:space:]]*:[[:space:]]*"s3://' && \
     cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${AST_GREP_VERSION}" ast-grep \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_CRAP_VERSION}" cargo-crap \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_DENY_VERSION}" cargo-deny \
@@ -200,7 +213,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_WORKSPACE_UNUSED_PUB_VERSION}" \
       cargo-workspace-unused-pub \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${JUST_VERSION}" just \
- && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${KACHE_VERSION}" kache \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${MD_FORMATTER_VERSION}" md-formatter \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${SCCACHE_VERSION}" sccache \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${SIMILARITY_RS_VERSION}" similarity-rs \
@@ -216,9 +228,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # at a pinned commit and built by the same nightly it links `rustc_driver`
 # against — the one `KITHARA_LOCKBUD_TOOLCHAIN` names. The repository holds test
 # fixtures that are packages too, which is why the package is named explicitly.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=secret,id=cache_env,required=true \
+    --mount=type=secret,id=kache_host,required=true \
+    --mount=type=cache,target=/tmp/kithara-kache/store \
+    --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/tmp/cargo-install-target \
+    . /run/secrets/cache_env; trap 'kache daemon stop >&2' EXIT; \
+    kache stats --json | grep -Eq '"remote"[[:space:]]*:[[:space:]]*"s3://' && \
     cargo "+${LOCKBUD_TOOLCHAIN}" install --root "${CARGO_INSTALL_ROOT}" --locked \
       --git https://github.com/BurtonQin/lockbud --rev "${LOCKBUD_REV}" lockbud
 
@@ -289,3 +305,6 @@ RUN curl -fsSL -o /tmp/monkeys-audio.zip "${MONKEYS_AUDIO_SOURCE_URL}" \
  && rm -rf /tmp/monkeys-audio /tmp/monkeys-audio.zip
 
 ENV MONKEYS_AUDIO_DIR=/usr/local
+
+# Cached CMake build scripts retain Cargo's compiler-launcher path.
+RUN ln -s /usr/local/bin/kache /usr/local/cargo/bin/kache

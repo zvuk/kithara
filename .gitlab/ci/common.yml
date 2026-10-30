@@ -33,6 +33,7 @@
     - kithara-android
 
 .windows-job:
+  extends: .builds-beside-checkout
   variables:
     # Beside the pins and the runner token, the way the macOS host keeps them.
     KITHARA_CI_HOST_CONFIG: C:/KitharaCI/services/mac-host.toml

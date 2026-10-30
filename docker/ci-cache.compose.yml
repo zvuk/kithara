@@ -15,6 +15,8 @@ services:
         CACHE_CLIENT_IMAGE: ${KITHARA_CACHE_CLIENT_IMAGE:?use just ci cache to load ci-pins.toml}
         RUST_VERSION: ${KITHARA_RUST_VERSION:?use just ci cache to load ci-pins.toml}
         RUST_BASE_DIGEST: ${KITHARA_RUST_DIGEST:?use just ci cache to load ci-pins.toml}
+        CI_IMAGE: ${KITHARA_CI_IMAGE:?use just ci cache to load ci-pins.toml}
+      secrets: [cache_env, kache_host]
     container_name: kithara-ci-cache
     # The host's environment whole: a scope sized apart names its quota as
     # CACHE_BUCKET_QUOTA_<SCOPE>, a name this file cannot list.
@@ -58,3 +60,9 @@ networks:
   ci:
     external: true
     name: ${CACHE_NETWORK:?set existing CI network}
+
+secrets:
+  cache_env:
+    file: ${KITHARA_BUILD_CACHE_ENV:-/dev/null}
+  kache_host:
+    file: ${KITHARA_BUILD_KACHE_HOST:-/dev/null}

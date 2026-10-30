@@ -49,7 +49,8 @@ ENV PATH=${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platfo
 #
 # Booting an AVD writes back into it, so what the build creates is handed to the
 # account the job runs as rather than kept by the one that created it.
-RUN image="system-images;android-${ANDROID_PLATFORM_VERSION};google_apis;$(dpkg --print-architecture | sed 's/^amd64$/x86_64/;s/^arm64$/arm64-v8a/')" \
+RUN export JAVA_TOOL_OPTIONS="-Dsun.net.client.defaultConnectTimeout=30000 -Dsun.net.client.defaultReadTimeout=120000" \
+ && image="system-images;android-${ANDROID_PLATFORM_VERSION};google_apis;$(dpkg --print-architecture | sed 's/^amd64$/x86_64/;s/^arm64$/arm64-v8a/')" \
  && yes | sdkmanager --licenses > /dev/null \
  && sdkmanager \
       "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" \
@@ -69,10 +70,14 @@ RUN image="system-images;android-${ANDROID_PLATFORM_VERSION};google_apis;$(dpkg 
 # scripts of vendored C libraries do not: they read this variable and stop.
 ENV ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=secret,id=cache_env,required=true \
+    --mount=type=secret,id=kache_host,required=true \
+    --mount=type=cache,target=/tmp/kithara-kache/store \
+    --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/tmp/cargo-install-target \
-    CARGO_TARGET_DIR=/tmp/cargo-install-target \
+    . /run/secrets/cache_env; trap 'kache daemon stop >&2' EXIT; \
+    kache stats --json | grep -Eq '"remote"[[:space:]]*:[[:space:]]*"s3://' && \
+    CARGO_BUILD_JOBS=2 \
     cargo install --locked --version "${CARGO_NDK_VERSION}" cargo-ndk \
  && rustup target add \
       aarch64-linux-android \

@@ -19,7 +19,7 @@ linux:secrets:
     when: always
     expire_in: 30 days
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - gitleaks-report.json
 
 linux:check:
@@ -49,7 +49,7 @@ linux:test:
     reports:
       junit: .ci-artifacts/junit/linux-test-simulated-clock.xml
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - .ci-artifacts/junit/
 
 linux:coverage:
@@ -75,5 +75,5 @@ linux:coverage:
         coverage_format: cobertura
         path: coverage/cobertura.xml
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - coverage/

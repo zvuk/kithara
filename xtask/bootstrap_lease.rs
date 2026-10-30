@@ -2,12 +2,13 @@ use std::{
     env,
     fs::{self, File, OpenOptions},
     io,
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     process::{self, Command, ExitStatus},
     thread,
     time::{Duration, Instant, SystemTime},
 };
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 mod consts {
     use super::Duration;
@@ -108,12 +109,52 @@ fn take(directory: &Path, lease: &Path) -> io::Result<File> {
 }
 
 /// Whether the open `file` is still the one at `path`.
+#[cfg(unix)]
 fn still_at(file: &File, path: &Path) -> io::Result<bool> {
     let held = file.metadata()?;
     match fs::metadata(path) {
         Ok(current) => Ok(current.dev() == held.dev() && current.ino() == held.ino()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(windows)]
+fn still_at(file: &File, path: &Path) -> io::Result<bool> {
+    match File::open(path) {
+        Ok(current) => Ok(windows::identity(file)? == windows::identity(&current)?),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(windows)]
+mod windows {
+    use std::{ffi::c_void, fs::File, io, mem::MaybeUninit, os::windows::io::AsRawHandle};
+
+    #[repr(C)]
+    #[derive(PartialEq, Eq)]
+    pub(super) struct FileIdentity {
+        volume: u64,
+        id: [u8; 16],
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        #[link_name = "GetFileInformationByHandleEx"]
+        fn file_information(handle: *mut c_void, class: u32, output: *mut c_void, size: u32) -> i32;
+    }
+
+    pub(super) fn identity(file: &File) -> io::Result<FileIdentity> {
+        let mut identity = MaybeUninit::<FileIdentity>::uninit();
+        let size = u32::try_from(std::mem::size_of::<FileIdentity>()).map_err(io::Error::other)?;
+        // FileIdInfo writes a FILE_ID_INFO into this buffer while the file holds the handle.
+        let success = unsafe { file_information(file.as_raw_handle(), 18, identity.as_mut_ptr().cast(), size) };
+        if success == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // A successful FileIdInfo query initialized the complete FILE_ID_INFO.
+        Ok(unsafe { identity.assume_init() })
     }
 }
 

@@ -2884,11 +2884,11 @@ fn the_windows_lane_runs_the_backend_the_platform_ships() {
     let tests = steps
         .iter()
         .filter_map(|step| step.get("run").and_then(Value::as_str))
-        .find(|run| run.starts_with("just test"))
+        .find(|run| run.split_whitespace().any(|arg| arg == "windows-test"))
         .expect("the lane runs the suite");
 
     assert_eq!(
-        tests, "just test run --net-backend=none",
+        tests, "bash .config/ci/compiler-cache.sh windows-test just test run --net-backend=none",
         "the suite takes the default backend, which this guest cannot build"
     );
 }

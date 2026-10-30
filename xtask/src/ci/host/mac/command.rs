@@ -1,10 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    ffi::OsString,
-    path::{Path, PathBuf},
-    thread,
-    time::Duration,
-};
+use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, thread, time::Duration};
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
@@ -19,7 +13,7 @@ use super::{
     windows::{Boot, WindowsHost},
 };
 use crate::{
-    ci::{config::CiConfig, host::provision::Provision, image::ImageCommand, process::Process},
+    ci::{config::CiConfig, host::provision::Provision, process::Process},
     consts,
 };
 
@@ -56,10 +50,7 @@ enum MacCommand {
     /// Prepare a throwaway macOS guest before `GitLab` Runner starts.
     GuestPrepare,
     /// Build and pin the Linux runner image.
-    BuildLinuxImage {
-        /// Dockerfile used to build the pinned Linux image.
-        dockerfile: PathBuf,
-    },
+    BuildLinuxImage,
     /// Verify the pinned Linux runner image and its required tools.
     SmokeLinux,
     /// Boot the Android emulator and verify it reaches a ready state.
@@ -99,9 +90,9 @@ pub(in crate::ci::host) fn provision(provision: &Provision<'_>) -> Result<()> {
     );
     let process = Process::new(&std::env::current_dir()?, vars);
     let runners = RunnerManager::new(&config, &process);
-    runners.configure()?;
-    runners.build_linux_image(Path::new(ImageCommand::Toolchain.dockerfile()))?;
+    runners.build_linux_image()?;
     runners.smoke_linux()?;
+    runners.configure()?;
     runners.activate()?;
     info!(platform = "mac", "host provisioned from this commit");
     Ok(())
@@ -136,9 +127,7 @@ pub(crate) fn run(args: &MacArgs) -> Result<()> {
         MacCommand::ConfigureRunners => RunnerManager::new(&config, &process).configure(),
         MacCommand::Activate => RunnerManager::new(&config, &process).activate(),
         MacCommand::GuestPrepare => RunnerManager::new(&config, &process).prepare_guest(),
-        MacCommand::BuildLinuxImage { dockerfile } => {
-            RunnerManager::new(&config, &process).build_linux_image(dockerfile)
-        }
+        MacCommand::BuildLinuxImage => RunnerManager::new(&config, &process).build_linux_image(),
         MacCommand::SmokeLinux => RunnerManager::new(&config, &process).smoke_linux(),
         MacCommand::SmokeAndroid => RunnerManager::new(&config, &process).smoke_android(),
         MacCommand::RunMacosRunner => RunnerManager::new(&config, &process).run_macos_runner(),
@@ -236,7 +225,7 @@ mod tests {
             ["configure-runners"].as_slice(),
             ["activate"].as_slice(),
             ["guest-prepare"].as_slice(),
-            ["build-linux-image", "docker/ci.Dockerfile"].as_slice(),
+            ["build-linux-image"].as_slice(),
             ["smoke-linux"].as_slice(),
             ["smoke-android"].as_slice(),
             ["run-macos-runner"].as_slice(),

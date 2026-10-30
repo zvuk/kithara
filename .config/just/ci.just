@@ -101,5 +101,5 @@ cache ENV_FILE *ARGS:
 
 # Prove reuse between two independent compiler-cache daemons.
 [positional-arguments]
-cache-verify ENV_FILE:
+cache-verify *ARGS:
     just _xtask ci cache verify "$@"

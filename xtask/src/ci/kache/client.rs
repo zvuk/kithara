@@ -10,8 +10,10 @@ use anyhow::{Context, Result, ensure};
 use kithara_devtools::common::tools::ToolsConfig;
 use tracing::{info, warn};
 
-use super::{config::CiConfig, environment::CacheTrust, process::Process};
-use crate::consts;
+use crate::{
+    ci::{config::CiConfig, environment::CacheTrust, process::Process},
+    consts,
+};
 
 /// The kache one CI job compiles through.
 ///
@@ -97,9 +99,43 @@ impl KacheJob {
         }
     }
 
+    pub(crate) fn verify_remote(&self, process: &Process, tools: &ToolsConfig) -> Result<()> {
+        let mut command = process.command(tools.program("kache"));
+        command
+            .env("KACHE_CONFIG", self.config())
+            .args(["stats", "--json"]);
+        let stats = process.capture_bounded_command(
+            &mut command,
+            "verify the compiler cache remote",
+            Duration::from_secs(60),
+            consts::CACHE_EVIDENCE_INPUT_LIMIT,
+        )?;
+        require_remote(&stats)
+    }
+
     fn config(&self) -> PathBuf {
         self.directory.join("config.toml")
     }
+}
+
+pub(crate) fn require_remote(stats: &str) -> Result<()> {
+    let stats: serde_json::Value = serde_json::from_str(stats)
+        .context("reading the compiler cache's effective remote policy")?;
+    ensure!(
+        stats["remote"]
+            .as_str()
+            .is_some_and(|remote| remote.starts_with("s3://") && remote.len() > 5),
+        "CI compilation requires the scoped RustFS S3 backend"
+    );
+    ensure!(
+        stats["daemon_connected"] == true,
+        "the compiler cache daemon is unavailable"
+    );
+    ensure!(
+        stats["daemon_remote_readonly"] == false,
+        "CI compilation requires a writable RustFS cache daemon"
+    );
+    Ok(())
 }
 
 pub(crate) fn reclaim_local_stores(config: &CiConfig, process: &Process) -> Result<()> {
@@ -109,8 +145,12 @@ pub(crate) fn reclaim_local_stores(config: &CiConfig, process: &Process) -> Resu
     }
     let cache = cache.canonicalize().context("resolving host cache root")?;
     let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
-    for trust in CacheTrust::ALL {
-        let scope = cache.join(trust.as_str());
+    for scope in CacheTrust::ALL
+        .into_iter()
+        .map(CacheTrust::as_str)
+        .chain(["bootstrap"])
+    {
+        let scope = cache.join(scope);
         if !scope.is_dir() {
             continue;
         }
@@ -243,6 +283,23 @@ mod tests {
     use std::{collections::BTreeMap, ffi::OsStr};
 
     use super::*;
+
+    #[test]
+    fn ci_requires_a_connected_writable_s3_cache() {
+        let ready = serde_json::json!({"remote":"s3://scope/kache", "daemon_connected":true, "daemon_remote_readonly":false});
+        assert!(require_remote(&ready.to_string()).is_ok());
+        for (field, value) in [
+            ("remote", serde_json::Value::Null),
+            ("remote", serde_json::json!("filesystem://local")),
+            ("daemon_connected", serde_json::json!(false)),
+            ("daemon_remote_readonly", serde_json::json!(true)),
+            ("daemon_remote_readonly", serde_json::Value::Null),
+        ] {
+            let mut invalid = ready.clone();
+            invalid[field] = value;
+            assert!(require_remote(&invalid.to_string()).is_err(), "{field}");
+        }
+    }
 
     #[cfg(unix)]
     fn maintenance_process(root: &Path) -> Process {

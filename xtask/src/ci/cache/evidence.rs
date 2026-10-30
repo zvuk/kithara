@@ -33,18 +33,21 @@ pub(in crate::ci) fn report_path(process: &Process, lane: &str) -> Result<PathBu
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')),
         "invalid cache evidence lane"
     );
-    let number = |name: &str| -> Result<u64> {
-        let value = process
+    let configured = |name: &str| {
+        process
             .environment_var(name)
-            .context("missing cache evidence job identity")?;
+            .filter(|value| !value.is_empty())
+    };
+    let number = |name: &str| -> Result<u64> {
+        let value = configured(name).context("missing cache evidence job identity")?;
         Ok(value
             .to_str()
             .context("invalid cache evidence job identity")?
             .parse()?)
     };
-    let key = if process.environment_var("CI_JOB_ID").is_some() {
-        format!("gitlab-{}", number("CI_JOB_ID")?)
-    } else if process.environment_var("GITHUB_RUN_ID").is_some() {
+    let key = if configured("CI_JOB_ID").is_some() {
+        format!("gitlab-{}-{lane}", number("CI_JOB_ID")?)
+    } else if configured("GITHUB_RUN_ID").is_some() {
         format!(
             "github-{}-{}-{lane}",
             number("GITHUB_RUN_ID")?,
@@ -57,6 +60,25 @@ pub(in crate::ci) fn report_path(process: &Process, lane: &str) -> Result<PathBu
         .root()
         .join(".ci-artifacts/cache")
         .join(format!("{key}.json")))
+}
+
+pub(super) fn record(phase: &str) -> Result<()> {
+    let root = std::env::current_dir()?;
+    let tools = kithara_devtools::common::project::ProjectConfig::load(&root)?.tools;
+    let process = Process::new(&root, std::collections::BTreeMap::new());
+    let primary = process.capture_bounded(
+        tools.program("kache"),
+        &["stats", "--json"],
+        "kache statistics",
+        consts::CACHE_EVIDENCE_INPUT_LIMIT,
+    );
+    let fallback = process.capture_bounded(
+        tools.program("sccache"),
+        &["--show-stats"],
+        "sccache statistics",
+        consts::CACHE_EVIDENCE_INPUT_LIMIT,
+    );
+    retain(&process, &tools, &primary, &fallback, phase)
 }
 
 /// Retain only typed observations before the caller stops its cache daemon.
@@ -193,6 +215,9 @@ fn observations(
             "schema_version": primary["schema_version"].as_u64(),
             "counts": numbers(&primary, "local_hits prefetch_hits remote_hits dups misses total_elapsed_ms hit_elapsed_ms miss_elapsed_ms time_saved_ms"),
             "daemon_connected": primary["daemon_connected"].as_bool(),
+            "remote_s3": primary["remote"].as_str().map(|remote| remote.starts_with("s3://")),
+            "remote_sha256": primary["remote"].as_str().map(|remote| hex::encode(Sha256::digest(remote.as_bytes()))),
+            "daemon_remote_readonly": primary["daemon_remote_readonly"].as_bool(),
             "disk": numbers(&primary["disk"], "store_bytes store_limit_bytes disk_private_bytes cloned_into_targets_bytes snapshot_retained_bytes"),
             "gc": numbers(&primary["gc"], "entries_evicted bytes_freed duration_ms entries_pinned entries_unreclaimable bytes_held entries_failed entries_locked entries_busy_snapshot entries_recent_prefiltered entries_import_pinned"),
             "gc_scope": "latest_store_observation",
@@ -314,6 +339,25 @@ fn history(process: &Process) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleared_ci_identities_select_local_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let process = Process::new(
+            root.path(),
+            std::collections::BTreeMap::from([
+                ("CI_JOB_ID".into(), "".into()),
+                ("GITHUB_RUN_ID".into(), "".into()),
+            ]),
+        );
+        assert_eq!(
+            report_path(&process, "test").unwrap(),
+            root.path().join(format!(
+                ".ci-artifacts/cache/local-{}-test.json",
+                std::process::id()
+            ))
+        );
+    }
 
     #[test]
     fn cache_evidence_drops_secrets_even_in_known_fields() {
@@ -461,7 +505,10 @@ mod tests {
         fs::create_dir_all(producer_path.parent().unwrap()).unwrap();
         fs::write(&producer_path, "upstream report").unwrap();
         let consumer_path = report_path(&consumer, "apple-test").unwrap();
-        assert_eq!(consumer_path.file_name().unwrap(), "gitlab-2.json");
+        assert_eq!(
+            consumer_path.file_name().unwrap(),
+            "gitlab-2-apple-test.json"
+        );
         assert_ne!(producer_path, consumer_path);
         assert!(
             !consumer_path.exists(),

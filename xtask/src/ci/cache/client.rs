@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Subcommand};
 
-use super::{super::config::CiPins, serve, snapshot, snapshot::SnapshotArgs, verify};
+use super::{super::config::CiPins, evidence, serve, snapshot, snapshot::SnapshotArgs, verify};
 use crate::{ci::host::mac::read_secret, consts};
 
 /// Everything else a client is told, fixed by how a scope is provisioned.
@@ -148,6 +148,9 @@ fn complete_client_environment(
 
 #[derive(Debug, Args)]
 pub(crate) struct CacheArgs {
+    /// Scoped credentials for compiling the cache service image.
+    #[arg(long, env = "KITHARA_CI_CACHE_ENV_FILE")]
+    cache_env_file: Option<PathBuf>,
     #[command(subcommand)]
     command: CacheCommand,
 }
@@ -165,7 +168,9 @@ enum CacheCommand {
     /// under its budget by last use.
     Serve,
     /// Verify cache reuse between two independent compiler daemons.
-    Verify { env_file: PathBuf },
+    Verify { env_file: Option<PathBuf> },
+    /// Retain bounded observations for a compilation phase outside a lane.
+    Record { phase: String },
     /// Restore and publish immutable trusted Cargo target snapshots.
     Snapshot(SnapshotArgs),
 }
@@ -193,19 +198,45 @@ pub(crate) fn run(args: &CacheArgs) -> Result<()> {
             arguments,
         } => {
             let pins = CiPins::load(Path::new(consts::PINS_PATH))?;
-            let status = compose(env_file)?
+            let secrets = if arguments
+                .iter()
+                .any(|arg| matches!(arg.as_str(), "build" | "up" | "create" | "run"))
+            {
+                let environment = match args.cache_env_file.as_deref() {
+                    Some(path) => client_environment(path)?,
+                    None => current_client_environment()?,
+                };
+                Some(crate::ci::kache::BuildSecrets::new(&environment)?)
+            } else {
+                None
+            };
+            let mut command = compose(env_file)?;
+            if let Some(secrets) = &secrets {
+                command
+                    .env(
+                        "KITHARA_BUILD_CACHE_ENV",
+                        secrets.directory().join("environment"),
+                    )
+                    .env(
+                        "KITHARA_BUILD_KACHE_HOST",
+                        secrets.directory().join("host.toml"),
+                    );
+            }
+            let status = command
                 .args(arguments)
                 .env("KITHARA_CACHE_SERVER_IMAGE", &pins.cache_server_image)
                 .env("KITHARA_CACHE_CLIENT_IMAGE", &pins.cache_client_image)
                 .env("KITHARA_RUST_VERSION", &pins.stable_toolchain)
                 .env("KITHARA_RUST_DIGEST", &pins.linux_base_digest)
+                .env("KITHARA_CI_IMAGE", &pins.linux_image)
                 .status()
                 .context("run cache Compose")?;
             ensure!(status.success(), "cache Compose exited with {status}");
             Ok(())
         }
         CacheCommand::Serve => serve::run(),
-        CacheCommand::Verify { env_file } => verify::run(env_file),
+        CacheCommand::Verify { env_file } => verify::run(env_file.as_deref()),
+        CacheCommand::Record { phase } => evidence::record(phase),
         CacheCommand::Snapshot(args) => snapshot::run(args),
     }
 }

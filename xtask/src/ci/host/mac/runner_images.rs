@@ -9,22 +9,16 @@ use super::{
         RunnerManager, Tokens, docker_host, path_text, read_trimmed, require_macos, write_secure,
     },
 };
-use crate::{ci::image::linux_build_args, consts};
+use crate::{
+    ci::{image::linux_build_args, kache::BuildSecrets},
+    consts,
+};
 
 impl RunnerManager<'_> {
-    /// Makes the image this commit pins the one every Linux job runs.
-    ///
-    /// The runner names `LINUX_LATEST_IMAGE`, not the pin, so a pin bump no
-    /// longer strands the lane on an image nobody built by hand: the pipeline
-    /// runs this first, and it builds the pinned image only when the host does
-    /// not have it yet. When it does, this only moves the floating tag, which
-    /// takes seconds, so the step is cheap enough to run on every pipeline.
-    pub(super) fn build_linux_image(&self, dockerfile: &Path) -> Result<()> {
+    /// Activates the configured Linux image, building from the embedded Dockerfile if absent.
+    pub(super) fn build_linux_image(&self) -> Result<()> {
         require_macos()?;
         self.require_ci_user()?;
-        if !dockerfile.is_file() {
-            bail!("missing Linux CI Dockerfile: {}", dockerfile.display());
-        }
         let home = self.ci_home();
         let digest = match self.linux_image_digest(&home) {
             Ok(digest) => {
@@ -33,7 +27,7 @@ impl RunnerManager<'_> {
             }
             Err(error) => {
                 info!(image = self.config.pins.linux_image, %error, "pinned Linux CI image missing, building");
-                self.build_pinned_linux_image(&home, dockerfile)?;
+                self.build_pinned_linux_image(&home)?;
                 self.linux_image_digest(&home)?
             }
         };
@@ -63,7 +57,12 @@ impl RunnerManager<'_> {
         Ok(())
     }
 
-    fn build_pinned_linux_image(&self, home: &Path, dockerfile: &Path) -> Result<()> {
+    fn build_pinned_linux_image(&self, home: &Path) -> Result<()> {
+        let environment = super::runners::docker_client_environment(
+            self.store_environment()?
+                .context("image compilation requires scoped RustFS credentials")?,
+        );
+        let secrets = BuildSecrets::new(&environment)?;
         let context = self
             .config
             .host
@@ -78,6 +77,15 @@ impl RunnerManager<'_> {
         fs::create_dir(&context)
             .with_context(|| format!("creating Docker build context {}", context.display()))?;
         let result = (|| {
+            let dockerfile = context.join("Dockerfile");
+            fs::write(
+                &dockerfile,
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../docker/ci.Dockerfile"
+                )),
+            )
+            .context("writing the embedded Linux CI Dockerfile")?;
             let mut command = self.process.command(self.config.host.brew_tool("docker"));
             command
                 .env(
@@ -88,7 +96,7 @@ impl RunnerManager<'_> {
                     "buildx",
                     "build",
                     "--file",
-                    path_text(dockerfile)?,
+                    path_text(&dockerfile)?,
                     "--load",
                     "--platform",
                     "linux/arm64",
@@ -101,6 +109,7 @@ impl RunnerManager<'_> {
             for (name, value) in linux_build_args(&self.config.pins)? {
                 command.arg("--build-arg").arg(format!("{name}={value}"));
             }
+            secrets.apply(&mut command);
             command.arg(path_text(&context)?);
             self.process
                 .run_command(&mut command, "build pinned Linux CI image")
@@ -544,6 +553,51 @@ mod tests {
                 .expect("the pin carries a tag"),
             consts::LINUX_LATEST_IMAGE
         );
+    }
+
+    #[test]
+    fn a_cold_image_build_needs_no_checkout_dockerfile() {
+        use std::{collections::BTreeMap, os::unix::fs::PermissionsExt};
+
+        let directory = tempfile::tempdir().expect("image build directory");
+        let mut config = crate::ci::config::fixture();
+        config.host.host_root = directory.path().join("host");
+        config.host.brew_root = directory.path().join("brew");
+        let scratch = config.host.host_root.join("workspaces/tmp");
+        let checkout = directory.path().join("old-checkout");
+        let observed = directory.path().join("observed.Dockerfile");
+        let docker = config.host.brew_tool("docker");
+        for path in [&scratch, &checkout, docker.parent().unwrap()] {
+            fs::create_dir_all(path).expect("image build directories");
+        }
+        fs::write(
+            &docker,
+            "#!/bin/sh\nset -eu\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --file ]; then\n    cp \"$2\" \"$DOCKERFILE_COPY\"\n    exit 0\n  fi\n  shift\ndone\nexit 42\n",
+        )
+        .expect("Docker command fixture");
+        fs::set_permissions(&docker, fs::Permissions::from_mode(0o755)).unwrap();
+        let credentials = directory.path().join("cache.env");
+        fs::write(
+            &credentials,
+            "SCCACHE_BUCKET=cache\nSCCACHE_ENDPOINT=http://127.0.0.1:19000\nAWS_ACCESS_KEY_ID=key\nAWS_SECRET_ACCESS_KEY=secret\n",
+        )
+        .unwrap();
+        fs::set_permissions(&credentials, fs::Permissions::from_mode(0o600)).unwrap();
+        config.host.sccache_s3_env_file = Some(credentials);
+        let process = crate::ci::process::Process::new(
+            &checkout,
+            BTreeMap::from([("DOCKERFILE_COPY".into(), observed.clone().into_os_string())]),
+        );
+        let manager = RunnerManager::new(&config, &process);
+        manager
+            .build_pinned_linux_image(&manager.ci_home())
+            .unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("docker/ci.Dockerfile");
+        assert_eq!(fs::read(observed).unwrap(), fs::read(source).unwrap());
+        assert!(fs::read_dir(scratch).unwrap().next().is_none());
     }
 
     #[test]

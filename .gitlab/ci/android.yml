@@ -13,7 +13,7 @@ android:build:
     when: always
     expire_in: 1 day
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - android/lib/build/generated/jniLibs
       - android/lib/build/generated/uniffi/kotlin
 
@@ -38,7 +38,7 @@ android:test:
       junit:
         - .ci-artifacts/junit/android-test.xml
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - target/android-test/
       - .ci-artifacts/junit/
     exclude:

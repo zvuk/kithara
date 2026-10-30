@@ -776,7 +776,7 @@ fn each_independent_store_has_a_default_branch_source_publisher() {
 fn cache_evidence_uploads_only_the_current_job_even_when_it_fails() {
     let config = GitlabConfig::load(workspace_root());
     let default = &config.definition("default")["artifacts"];
-    let target = ".ci-artifacts/cache/gitlab-$CI_JOB_ID.json";
+    let target = ".ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json";
     for (name, _) in config.lane_jobs() {
         let artifact = config
             .effective_value(&name, "artifacts")

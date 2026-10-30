@@ -300,7 +300,24 @@ fn cargo_build_command(root: &Path, release: bool) -> Command {
     let cargo = env::var_os("XTASK_SELF_CACHE_CARGO")
         .or_else(|| env::var_os("CARGO"))
         .unwrap_or_else(|| "cargo".into());
-    let mut command = Command::new(cargo);
+    let mut command = if (["CI_JOB_ID", "GITHUB_RUN_ID"]
+        .iter()
+        .any(|name| env::var_os(name).is_some_and(|value| !value.is_empty())))
+        && env::var_os("KACHE_RUNTIME_DIR").is_none()
+    {
+        let mut command = Command::new("bash");
+        command
+            .args([
+                "-c",
+                include_str!("../../../.config/ci/compiler-cache.sh"),
+                "--",
+                "bootstrap-refresh",
+            ])
+            .arg(cargo);
+        command
+    } else {
+        Command::new(cargo)
+    };
     command
         .args(["run", "--locked", "--manifest-path"])
         .arg(root.join("Cargo.toml"))
@@ -311,6 +328,8 @@ fn cargo_build_command(root: &Path, release: bool) -> Command {
     command
         .args(["--", "self-cache", "artifact"])
         .current_dir(root)
+        .env("GITHUB_ACTIONS", "")
+        .env("GITLAB_CI", "")
         .env("CARGO_TARGET_DIR", layout::target_dir(root))
         .stdin(Stdio::null())
         .stdout(Stdio::piped());
@@ -575,6 +594,21 @@ mod tests {
             !command.get_args().any(|arg| arg == "--quiet"),
             "the build's progress must reach the log: {command:?}"
         );
+    }
+
+    #[test]
+    fn bootstrap_compilation_uses_the_scope_credentials_for_remote_writes() {
+        let command = cargo_build_command(std::path::Path::new("/repo"), false);
+        let environment = command
+            .get_envs()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for key in ["GITHUB_ACTIONS", "GITLAB_CI"] {
+            assert_eq!(
+                environment.get(std::ffi::OsStr::new(key)),
+                Some(&Some(std::ffi::OsStr::new(""))),
+                "bootstrap must use the same scoped remote-write policy as the lane"
+            );
+        }
     }
 
     fn fixture() -> Result<(tempfile::TempDir, PathBuf, PathBuf, XtaskCacheConfig)> {
