@@ -2985,6 +2985,67 @@ async fn dispatch_owed_covers_the_range_the_reader_waits_on() {
     );
 }
 
+#[kithara::test(tokio, native, hang_timeout_secs(1))]
+#[case::init_start(0)]
+#[case::init_tail(43)]
+async fn an_init_prefix_reader_keeps_media_lookahead_cancellable(#[case] position: u64) {
+    let ctx = test_ctx(4);
+    let variant = make_var(0, 44, &[100; 3], &ctx);
+    variant.rebuild(&ctx, 0);
+    let session = HlsSession::active(
+        CancelToken::root(),
+        ctx.signal.clone(),
+        0,
+        Arc::clone(&variant),
+        position,
+    );
+    assert!(variant.init_descriptor_at(position).is_some());
+    let mut commands = session.dispatch(&ctx, 4);
+    assert_eq!(commands.len(), 4);
+    let mut stale = commands.pop().expect("last media lookahead");
+    assert_eq!(stale.url(), variant.segments()[2].url());
+    for token in session.take_retired_lookahead(Duration::ZERO) {
+        token.cancel();
+    }
+    assert!(
+        stale.cancel().expect("lookahead token").is_cancelled(),
+        "init bytes must not make later media fetches unretirable"
+    );
+    assert!(commands.iter().all(|command| {
+        !command
+            .cancel()
+            .expect("init or owed media token")
+            .is_cancelled()
+    }));
+
+    let waiting = session.wait_range(244..344, Some(Duration::ZERO), None);
+    assert!(matches!(
+        waiting,
+        Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+    ));
+    stale
+        .take_on_complete()
+        .expect("cancelled fetch completion")(0, None, Some(&kithara_net::NetError::Cancelled));
+    let mut next = session.dispatch_owed(&ctx, 4, Duration::ZERO);
+    assert_eq!(next.len(), 1, "new reader debt survives stale completion");
+    let command = next.first_mut().expect("owed successor");
+    assert_eq!(command.url(), variant.segments()[2].url());
+    assert!(!command.cancel().expect("successor token").is_cancelled());
+    command.take_writer().expect("body writer")(&[9; 100]).expect("body delivery");
+    command.take_on_complete().expect("fetch completion")(100, None, None);
+    assert_eq!(
+        session
+            .wait_range(244..344, Some(Duration::ZERO), None)
+            .expect("ready bytes"),
+        WaitOutcome::Ready
+    );
+    let mut bytes = [0; 100];
+    let read = variant.read_at(244, &mut bytes).expect("successor bytes");
+    assert!(matches!(read, ReadOutcome::Bytes(length) if length.get() == 100));
+    assert_eq!(bytes, [9; 100]);
+    drop(stale);
+}
+
 /// A session seek retires the parked-read debt: the wait belonged to reads
 /// the seek abandoned, and dragging it forward would hold look-ahead capacity
 /// against the new position.
