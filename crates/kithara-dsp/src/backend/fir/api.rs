@@ -67,10 +67,9 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
         if len > 0 {
             let retained = HISTORY.min(len);
             history.copy_within(retained.., 0);
-            let (_, retained_history) = history.split_at_mut(HISTORY.saturating_sub(retained));
-            let (processed, _) = current.split_at(len);
-            let (_, retained_current) = processed.split_at(len.saturating_sub(retained));
-            retained_history.copy_from_slice(retained_current);
+            for (slot, &sample) in history.iter_mut().rev().zip(current.iter().take(len).rev()) {
+                *slot = sample;
+            }
             *valid = true;
         }
         len
