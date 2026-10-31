@@ -132,11 +132,10 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
                                 .copied()
                                 .unwrap_or(held),
                         };
-                        let coefficients = f32x8::from_fn(simd, |lane| {
-                            phases
-                                .get(lane)
-                                .map_or(0.0, |branch| branch.get(tap).copied().unwrap_or(0.0))
-                        });
+                        let mut coefficients = f32x8::splat(simd, 0.0);
+                        for (target, branch) in coefficients.as_mut_slice().iter_mut().zip(phases) {
+                            *target = branch.get(tap).copied().unwrap_or(0.0);
+                        }
                         let sample =
                             f32x8::from_fn(simd, |lane| phases.get(lane).map_or(0.0, |_| sample));
                         sums = coefficients.mul_add_precise(sample, sums);

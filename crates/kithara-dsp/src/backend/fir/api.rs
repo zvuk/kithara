@@ -61,11 +61,10 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
             *peak = sample.abs().max(0.0);
         }
         if len > 0 {
-            let retained = HISTORY.min(len);
-            history.copy_within(retained.., 0);
-            let (_, target) = history.split_at_mut(HISTORY.saturating_sub(retained));
+            history.copy_within(HISTORY.min(len).., 0);
+            let (_, target) = history.split_at_mut(HISTORY.saturating_sub(len));
             let (source, _) = current.split_at(len);
-            target.copy_from_slice(source.split_at(len.saturating_sub(retained)).1);
+            target.copy_from_slice(source.split_at(len.saturating_sub(HISTORY)).1);
             *valid = true;
         }
         len
