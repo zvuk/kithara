@@ -34,6 +34,22 @@ pub struct SourceSpan {
     render_revision: u64,
 }
 
+/// Raw source coordinate to physical output coordinate for one affine
+/// [`SourceSpan`], built once by [`SourceSpan::source_inverse`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceInverse(Affine);
+
+impl SourceInverse {
+    /// Reduced output coordinate of a raw source position.
+    ///
+    /// Negative output coordinates and overflow return `None`.
+    #[must_use]
+    pub fn output_at(self, position: (u128, NonZeroU128)) -> Option<(u128, NonZeroU128)> {
+        let position = self.0.apply(Ratio::new(position.0, position.1)?)?;
+        Some((position.numerator, position.denominator))
+    }
+}
+
 fn fractional_nanos(numerator: u128, denominator: u128) -> u32 {
     let mut remainder = 0;
     let mut nanos = 0;
@@ -160,15 +176,12 @@ impl SourceSpan {
         ))
     }
 
-    /// Inverts an affine source coordinate around its physical output origin.
+    /// Inverse of an affine source mapping around its physical output origin,
+    /// for converting many raw source coordinates through one span.
     ///
-    /// Nonlinear mappings, negative output coordinates and overflow return `None`.
+    /// Nonlinear mappings and overflow return `None`.
     #[must_use]
-    pub fn output_ratio_at_source(
-        self,
-        output_origin: u64,
-        position: (u128, NonZeroU128),
-    ) -> Option<(u128, NonZeroU128)> {
+    pub fn source_inverse(self, output_origin: u64) -> Option<SourceInverse> {
         let Mapping::Rational(Rational {
             numerator,
             denominator,
@@ -179,15 +192,25 @@ impl SourceSpan {
             return None;
         };
         let step = NonZeroU128::new(step)?;
-        let inverse = Affine {
+        Some(SourceInverse(Affine {
             scale: Ratio::new(denominator.get(), step)?,
             offset: Offset::difference(
                 Ratio::new(u128::from(output_origin), NonZeroU128::MIN)?,
                 Ratio::new(numerator, step)?,
             )?,
-        };
-        let position = inverse.apply(Ratio::new(position.0, position.1)?)?;
-        Some((position.numerator, position.denominator))
+        }))
+    }
+
+    /// Inverts an affine source coordinate around its physical output origin.
+    ///
+    /// Nonlinear mappings, negative output coordinates and overflow return `None`.
+    #[must_use]
+    pub fn output_ratio_at_source(
+        self,
+        output_origin: u64,
+        position: (u128, NonZeroU128),
+    ) -> Option<(u128, NonZeroU128)> {
+        self.source_inverse(output_origin)?.output_at(position)
     }
 
     /// Publishes a physical span through this affine input's source clock.
@@ -574,14 +597,20 @@ mod tests {
                         assert_eq!(origin.mul(reciprocal), Ratio::new(numerator, step));
                     }
                     for output_origin in [0, u64::MAX] {
+                        let inverse = span.source_inverse(output_origin);
                         for position_numerator in values {
                             for &position_denominator in &denominators {
                                 let position = (position_numerator, position_denominator);
+                                let expected =
+                                    original_output_ratio_at_source(span, output_origin, position);
                                 assert_eq!(
                                     span.output_ratio_at_source(output_origin, position),
-                                    original_output_ratio_at_source(span, output_origin, position),
+                                    expected,
                                     "span={span:?}, output_origin={output_origin}, position={position:?}",
                                 );
+                                if let Some(inverse) = inverse {
+                                    assert_eq!(inverse.output_at(position), expected);
+                                }
                             }
                         }
                     }
@@ -693,6 +722,11 @@ mod tests {
         )
         .expect("approach");
         let zero = SourceSpan::try_from((0, 0, NonZeroU128::MIN, rate, 1)).expect("zero step");
+        for span in [ramp, approach, zero] {
+            for output_origin in [0, u64::MAX] {
+                assert_eq!(span.source_inverse(output_origin), None);
+            }
+        }
         for span in [
             ramp,
             approach,
