@@ -10,9 +10,9 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use kithara_dsp::{
     filter::{Biquad, Coefficients, Hertz, Type},
     interp::{Interpolation, interpolate},
-    spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase},
+    spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase, prediction_difference},
 };
-use kithara_test_utils::bufpool::pools;
+use kithara_test_utils::{bufpool::pools, kithara_platform::time::Duration};
 use num_traits::ToPrimitive;
 use realfft::{RealToComplex, RealToComplexEven};
 
@@ -211,6 +211,105 @@ fn bins(c: &mut Criterion) {
     group.finish();
 }
 
+fn prediction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("prediction_difference");
+    group.sample_size(20);
+    for size in [1, 3, 17, 64, 513, 1024] {
+        let re = tone(size);
+        let im: Vec<f32> = re.iter().rev().copied().collect();
+        let mut history: [Vec<f32>; 4] = std::array::from_fn(|_| vec![0.0; size + 1]);
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter(|| {
+                prediction_difference(
+                    [black_box(&re), black_box(&im)],
+                    black_box(&mut history).each_mut().map(Vec::as_mut_slice),
+                )
+            });
+        });
+    }
+    group.finish();
+}
+
+fn scalar_phase(re: &[f32], im: &[f32], output: &mut [f32]) -> usize {
+    let len = re.len().min(im.len()).min(output.len());
+    for ((x, y), slot) in re.iter().zip(im).zip(output) {
+        *slot = y.atan2(*x);
+    }
+    len
+}
+
+fn phase_shapes(c: &mut Criterion) {
+    type Kernel = fn(&[f32], &[f32], &mut [f32]) -> usize;
+    let mut cases: Vec<_> = [0, 1, 2, 7, 255, 256, 257, 512, 513, 1025]
+        .into_iter()
+        .map(|len| (format!("exact-{len}"), [len; 3], [0; 3]))
+        .collect();
+    for len in [7, 513, 1025] {
+        for (name, offsets) in [("re", [1, 0, 0]), ("im", [0, 2, 0]), ("out", [0, 0, 3])] {
+            cases.push((format!("offset-{name}-{len}"), [len; 3], offsets));
+        }
+    }
+    for (name, lengths) in [
+        ("re", [513, 515, 516]),
+        ("im", [515, 513, 516]),
+        ("out", [515, 516, 513]),
+    ] {
+        cases.push((format!("prefix-{name}-513"), lengths, [1, 2, 3]));
+    }
+    let mut group = c.benchmark_group("dsp_phase");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(1));
+    for (name, [nr, ni, no], [r, i, o]) in cases {
+        let mut re = vec![0.0; r];
+        re.extend(tone(nr));
+        let mut im = vec![0.0; i];
+        im.extend(tone(ni).into_iter().rev());
+        let mut output = vec![f32::MIN; no + o + 1];
+        let len = nr.min(ni).min(no);
+        group.throughput(Throughput::Elements(
+            u64::try_from(len).expect("bin count fits u64"),
+        ));
+        for (operation, kernel) in [
+            ("phase", phase as Kernel),
+            ("scalar_atan2", scalar_phase as Kernel),
+            ("magnitude_control", magnitude as Kernel),
+        ] {
+            output.fill(f32::MIN);
+            assert_eq!(kernel(&re[r..], &im[i..], &mut output[o..o + no]), len);
+            for ((real, imaginary), got) in re[r..].iter().zip(&im[i..]).zip(&output[o..o + len]) {
+                let (want, tolerance) = if operation == "magnitude_control" {
+                    let want = real.hypot(*imaginary);
+                    (want, 2.0 * f32::EPSILON * want)
+                } else {
+                    (imaginary.atan2(*real), 1e-6)
+                };
+                assert!(
+                    (got - want).abs() <= tolerance,
+                    "{operation}/{name}: {got} differs from scalar {want}"
+                );
+            }
+            assert!(
+                output[..o]
+                    .iter()
+                    .chain(&output[o + len..])
+                    .all(|x| *x == f32::MIN)
+            );
+            group.bench_function(BenchmarkId::new(operation, &name), |b| {
+                b.iter(|| {
+                    black_box(kernel(
+                        black_box(&re[r..]),
+                        black_box(&im[i..]),
+                        black_box(&mut output[o..o + no]),
+                    ));
+                    black_box(&output);
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
 fn autocorrelation(c: &mut Criterion) {
     let region = pools();
     let mut group = c.benchmark_group("autocorrelation");
@@ -350,6 +449,8 @@ criterion_group!(
     interp,
     spectrum,
     bins,
+    phase_shapes,
+    prediction,
     autocorrelation
 );
 criterion_main!(benches);

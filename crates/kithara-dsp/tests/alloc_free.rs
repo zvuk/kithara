@@ -5,7 +5,9 @@ use std::num::NonZeroUsize;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 #[cfg(feature = "spectrum")]
-use kithara_dsp::spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase};
+use kithara_dsp::spectrum::{
+    Autocorrelation, Fft, FftLen, magnitude, phase, prediction_difference,
+};
 use kithara_dsp::{
     fade::{self, FadeCurve},
     filter::{Biquad, Coefficients, Hertz, Type},
@@ -157,6 +159,22 @@ fn spectrum_never_allocates_after_construction() {
 
 #[cfg(feature = "spectrum")]
 #[kithara::test(native)]
+fn phase_never_allocates_for_prefixes_and_offsets() {
+    let re = [0.75_f32; FRAMES + 5];
+    let im = [-0.25_f32; FRAMES + 5];
+    let mut output = [0.0_f32; FRAMES + 5];
+    assert_no_alloc(|| {
+        for len in [0, 1, 2, 7, 255, 256, 257, 512, 513, 1025] {
+            assert_eq!(
+                phase(&re[1..len + 1], &im[2..len + 3], &mut output[3..]),
+                len
+            );
+        }
+    });
+}
+
+#[cfg(feature = "spectrum")]
+#[kithara::test(native)]
 fn autocorrelation_never_allocates_after_construction() {
     let mut acf = Autocorrelation::new(LAGS, &pools()).expect("the padding fits the region");
     let frame = vec![0.25_f32; LAGS.get()];
@@ -222,6 +240,21 @@ fn downmix_never_allocates_at_any_channel_count() {
                 kithara_dsp::downmix(&interleaved, channels, &mut mono),
                 FRAMES
             );
+        }
+    });
+}
+
+#[cfg(feature = "spectrum")]
+#[kithara::test(native)]
+fn spectral_prediction_never_allocates() {
+    let re = vec![0.25; FRAMES / 2 + 1];
+    let im = vec![-0.5; re.len()];
+    let mut history: [Vec<f32>; 4] = std::array::from_fn(|_| vec![0.0; re.len()]);
+    assert_no_alloc(|| {
+        for _ in 0..3 {
+            let total =
+                prediction_difference([&re, &im], history.each_mut().map(Vec::as_mut_slice));
+            assert!(total.is_finite());
         }
     });
 }
