@@ -3,7 +3,7 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    effects::LimiterConfig,
+    effects::{Ceiling, LimiterConfig},
     host::{
         HostConfig, HostSettings, HostSettingsChange, HostSettingsControl, MetronomeConfig,
         MetronomeConfigChange, MetronomeConfigControl, Tap,
@@ -817,9 +817,8 @@ async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling
     let session = HostConfig::offline(pools())
         .limiter(
             LimiterConfig::builder()
-                .ceiling(consts::LOUD_CEILING)
-                .build()
-                .expect("limiter ceiling"),
+                .ceiling(Ceiling::try_from(consts::LOUD_CEILING).expect("limiter ceiling"))
+                .build(),
         )
         .settings(
             HostSettings::builder()

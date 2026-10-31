@@ -422,6 +422,20 @@ async fn limiter_holds_the_ceiling_when_players_overload_the_sum() {
         );
     }
     assert_near(peak(&rendered), CEILING, "limiter holds the ceiling");
+    let mut master = harness
+        .host
+        .attach_tap(Tap::Master, super::mix_tap::ROOMY_CAPACITY)
+        .await
+        .expect("tap the overloaded master chain");
+    let output = harness.render_block().await;
+    let tapped = master.drain();
+    assert_eq!(tapped, output, "the master tap carries the limited mix");
+    assert_eq!(master.drops(), 0);
+    assert_near(
+        peak(&tapped),
+        CEILING,
+        "overloaded tap is audible and bounded",
+    );
     harness.close().await;
 }
 

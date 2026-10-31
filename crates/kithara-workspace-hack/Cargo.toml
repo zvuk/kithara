@@ -15,6 +15,7 @@ publish = false
 
 ### BEGIN HAKARI SECTION
 [dependencies]
+arrayvec = { version = "0.7" }
 audioadapter-buffers = { version = "5" }
 bitflags = { version = "2", default-features = false, features = ["serde"] }
 crossbeam-utils = { version = "0.8" }
@@ -51,6 +52,7 @@ uuid = { version = "1", features = ["v4", "v5"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 
 [build-dependencies]
+arrayvec = { version = "0.7" }
 audioadapter-buffers = { version = "5" }
 bitflags = { version = "2", default-features = false, features = ["serde"] }
 crossbeam-utils = { version = "0.8" }
@@ -91,7 +93,6 @@ zerocopy = { version = "0.8", default-features = false, features = ["derive", "s
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 aho-corasick = { version = "1" }
-arrayvec = { version = "0.7" }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -136,7 +137,6 @@ zeroize = { version = "1", features = ["derive"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 aho-corasick = { version = "1" }
-arrayvec = { version = "0.7" }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -183,7 +183,6 @@ zeroize = { version = "1", features = ["derive"] }
 
 [target.x86_64-apple-darwin.dependencies]
 aho-corasick = { version = "1" }
-arrayvec = { version = "0.7" }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -229,7 +228,6 @@ tracing = { version = "0.1", default-features = false, features = ["log"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
 aho-corasick = { version = "1" }
-arrayvec = { version = "0.7" }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -277,7 +275,6 @@ tracing = { version = "0.1", default-features = false, features = ["log"] }
 
 [target.aarch64-apple-darwin.dependencies]
 aho-corasick = { version = "1" }
-arrayvec = { version = "0.7" }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -323,7 +320,6 @@ tracing = { version = "0.1", default-features = false, features = ["log"] }
 
 [target.aarch64-apple-darwin.build-dependencies]
 aho-corasick = { version = "1" }
-arrayvec = { version = "0.7" }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -429,7 +425,6 @@ tracing = { version = "0.1", default-features = false, features = ["log"] }
 
 [target.aarch64-linux-android.dependencies]
 aho-corasick = { version = "1" }
-arrayvec = { version = "0.7" }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -469,7 +464,6 @@ tracing = { version = "0.1", default-features = false, features = ["log"] }
 
 [target.aarch64-linux-android.build-dependencies]
 aho-corasick = { version = "1" }
-arrayvec = { version = "0.7" }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -511,7 +505,6 @@ tracing = { version = "0.1", default-features = false, features = ["log"] }
 
 [target.x86_64-linux-android.dependencies]
 aho-corasick = { version = "1" }
-arrayvec = { version = "0.7" }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -551,7 +544,6 @@ tracing = { version = "0.1", default-features = false, features = ["log"] }
 
 [target.x86_64-linux-android.build-dependencies]
 aho-corasick = { version = "1" }
-arrayvec = { version = "0.7" }
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
@@ -592,7 +584,6 @@ tower = { version = "0.5", default-features = false, features = ["log", "make", 
 tracing = { version = "0.1", default-features = false, features = ["log"] }
 
 [target.wasm32-unknown-unknown.dependencies]
-arrayvec = { version = "0.7" }
 bevy_platform = { version = "0.19", default-features = false, features = ["std", "web"] }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 firewheel = { version = "0.14", default-features = false, features = ["wasm-bindgen"] }
@@ -613,7 +604,6 @@ wasm-bindgen-futures = { version = "0.4" }
 web-sys = { version = "0.3", features = ["AbortController", "AbortSignal", "AudioBuffer", "AudioBufferSourceNode", "AudioContext", "AudioContextOptions", "AudioContextState", "AudioData", "AudioDataCopyToOptions", "AudioDecoder", "AudioDecoderConfig", "AudioDecoderInit", "AudioDecoderSupport", "AudioDestinationNode", "AudioParam", "AudioSampleFormat", "AudioWorklet", "AudioWorkletGlobalScope", "AudioWorkletNode", "AudioWorkletNodeOptions", "BlobPropertyBag", "BroadcastChannel", "CanvasRenderingContext2d", "CssStyleDeclaration", "DedicatedWorkerGlobalScope", "Document", "DomException", "DomRect", "EncodedAudioChunk", "EncodedAudioChunkInit", "EncodedAudioChunkType", "ErrorEvent", "File", "FileList", "FileReader", "FocusEvent", "FormData", "Headers", "HtmlCanvasElement", "HtmlImageElement", "HtmlInputElement", "HtmlVideoElement", "ImageBitmap", "ImageBitmapOptions", "ImageBitmapRenderingContext", "ImageData", "IntersectionObserver", "IntersectionObserverEntry", "KeyboardEvent", "MediaDevices", "MediaQueryList", "MediaStream", "MediaStreamAudioSourceNode", "MediaStreamAudioSourceOptions", "MediaStreamConstraints", "MessageChannel", "MessageEvent", "MessagePort", "Navigator", "NodeList", "OffscreenCanvas", "OrientationLockType", "OrientationType", "PageTransitionEvent", "Performance", "PermissionState", "PermissionStatus", "Permissions", "PointerEvent", "PremultiplyAlpha", "QueuingStrategy", "ReadableByteStreamController", "ReadableStream", "ReadableStreamByobReader", "ReadableStreamByobRequest", "ReadableStreamDefaultController", "ReadableStreamDefaultReader", "ReadableStreamGetReaderOptions", "ReadableStreamReadResult", "ReadableStreamReaderMode", "ReadableStreamType", "ReadableWritablePair", "ReferrerPolicy", "Request", "RequestCache", "RequestCredentials", "RequestInit", "RequestMode", "ResizeObserver", "ResizeObserverBoxOptions", "ResizeObserverEntry", "ResizeObserverOptions", "ResizeObserverSize", "Response", "Screen", "ScreenOrientation", "ServiceWorkerGlobalScope", "StreamPipeOptions", "TransformStream", "TransformStreamDefaultController", "Transformer", "UnderlyingSink", "UnderlyingSource", "Url", "VideoFrame", "VisibilityState", "WheelEvent", "Window", "Worker", "WorkerNavigator", "WritableStream", "WritableStreamDefaultController", "WritableStreamDefaultWriter", "console"] }
 
 [target.wasm32-unknown-unknown.build-dependencies]
-arrayvec = { version = "0.7" }
 bevy_platform = { version = "0.19", default-features = false, features = ["std", "web"] }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 firewheel = { version = "0.14", default-features = false, features = ["wasm-bindgen"] }

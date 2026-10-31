@@ -9,3 +9,4 @@ pub use ::biquad::{Coefficients, Errors, Hertz, Type};
 pub use error::FilterError;
 
 pub use self::biquad::Biquad;
+pub use crate::backend::Fir;

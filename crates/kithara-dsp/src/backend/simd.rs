@@ -234,3 +234,20 @@ pub(super) fn zip_map<S: Simd, F: Fn(S::f32s, S::f32s) -> S::f32s>(
     }
     len
 }
+
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
+pub(crate) fn multiply_in_place(samples: &mut [f32], gains: &[f32]) -> usize {
+    dispatch!(Level::new(), simd => multiply_in_place_kernel(simd, samples, gains))
+}
+
+#[inline(always)]
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
+pub(super) fn multiply_in_place_kernel<S: Simd>(
+    simd: S,
+    samples: &mut [f32],
+    gains: &[f32],
+) -> usize {
+    update(simd, samples, [gains], |x, [gain]| {
+        std::ops::Mul::mul(x, gain)
+    })
+}

@@ -653,7 +653,7 @@ fn reference(
         }
         drop(recording);
     }
-    let ceiling = kithara::effects::LimiterConfig::default().ceiling();
+    let ceiling = f32::from(kithara::effects::LimiterConfig::default().ceiling());
     for sample in &mut expected {
         *sample *= CONTROL_GAIN;
         assert!(

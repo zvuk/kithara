@@ -3,37 +3,37 @@ use core::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
+use arrayvec::ArrayVec;
 use bon::bon;
-use fearless_simd::{Level, Simd, dispatch};
 use kithara_config::Config;
+use kithara_dsp::{
+    envelope::{AttackRelease, PeakHold},
+    filter::Fir,
+    multiply_in_place, sanitize,
+};
 use kithara_signal::sanitize_sample;
 use num_traits::ToPrimitive;
 
+use super::{Ceiling, ReleaseMs};
 use crate::consts;
 
-/// Configuration rejected by [`LimiterConfig`] or [`PeakLimiter::new`].
+/// Channel count rejected by [`PeakLimiter::new`].
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum LimiterError {
-    #[error("limiter ceiling {ceiling} is not finite in (0.0, 1.0]")]
-    Ceiling { ceiling: f32 },
-
-    #[error("limiter release {release_ms} ms is not finite and positive")]
-    Release { release_ms: f32 },
-
     #[error("limiter carries {channels} channels, more than the {limit} the detector tracks")]
     Channels { channels: usize, limit: usize },
 }
 
 /// Output ceiling and gain recovery of one [`PeakLimiter`].
-#[derive(Clone, Copy, Debug, PartialEq, Config)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Config)]
 #[config(builder(existing), owner_access, fields(value, get(copy)))]
 #[non_exhaustive]
 pub struct LimiterConfig {
-    /// Linear peak the output never exceeds, in `(0.0, 1.0]`.
-    ceiling: f32,
+    /// Linear peak the output never exceeds.
+    ceiling: Ceiling,
     /// Milliseconds the gain takes to recover toward unity.
-    release_ms: f32,
+    release_ms: ReleaseMs,
 }
 
 #[bon]
@@ -44,27 +44,12 @@ impl LimiterConfig {
         finish_fn(vis = "pub")
     )]
     fn new(
-        #[builder(default = consts::DEFAULT_CEILING)] ceiling: f32,
-        #[builder(default = consts::DEFAULT_RELEASE_MS)] release_ms: f32,
-    ) -> Result<Self, LimiterError> {
-        if !ceiling.is_finite() || ceiling <= 0.0 || ceiling > 1.0 {
-            return Err(LimiterError::Ceiling { ceiling });
-        }
-        if !release_ms.is_finite() || release_ms <= 0.0 {
-            return Err(LimiterError::Release { release_ms });
-        }
-        Ok(Self {
+        #[builder(default)] ceiling: Ceiling,
+        #[builder(default)] release_ms: ReleaseMs,
+    ) -> Self {
+        Self {
             ceiling,
             release_ms,
-        })
-    }
-}
-
-impl Default for LimiterConfig {
-    fn default() -> Self {
-        Self {
-            ceiling: consts::DEFAULT_CEILING,
-            release_ms: consts::DEFAULT_RELEASE_MS,
         }
     }
 }
@@ -75,28 +60,20 @@ impl Default for LimiterConfig {
 #[config_owner(config)]
 #[non_exhaustive]
 pub struct PeakLimiter {
-    level: Level,
-    /// The last `DETECTOR_HALF_WIDTH` input samples of every channel, oldest first, so a
-    /// detector window reaching before the block still reads the signal as it entered the
-    /// limiter rather than as it left.
-    history: [[f32; Self::DETECTOR_HALF_WIDTH + 1]; Self::DETECTOR_CHANNELS],
-    /// The peak the previous frame already reconstructed for the interval it shares with
-    /// this one. Both frames read the same untouched input there, so the sum is identical
-    /// and computing it twice buys nothing.
-    shared_peak: [f32; Self::DETECTOR_CHANNELS],
-    /// Polyphase windowed-sinc taps for the inter-sample phases, phase-major.
-    taps: [f32; (Self::DETECTOR_PHASES - 1) * Self::DETECTOR_TAPS],
-    /// Whether [`Self::shared_peak`] describes the interval behind the next frame. It does
-    /// not at the start of a block, where that interval was last judged against a held
-    /// tail rather than the samples that actually followed.
-    shared_valid: bool,
+    detector: Fir<
+        { Self::DETECTOR_TAPS },
+        { Self::DETECTOR_PHASES - 1 },
+        { Self::DETECTOR_CHANNELS },
+        { Self::DETECTOR_HALF_WIDTH + 1 },
+    >,
     config: LimiterConfig,
-    envelope: f32,
-    release_coeff: f32,
+    envelope: AttackRelease,
     channels: usize,
 }
 
 impl PeakLimiter {
+    const CHUNK_FRAMES: usize = 256;
+
     /// Channels the detector keeps history for. The limiter links its channels into one
     /// gain, so a block wider than a small surround layout has no caller here; the extra
     /// channels would silently lose their inter-sample peaks, so `new` rejects them.
@@ -124,7 +101,7 @@ impl PeakLimiter {
         channels: NonZeroUsize,
         config: LimiterConfig,
     ) -> Result<Self, LimiterError> {
-        let release_ms = config.release_ms();
+        let release_ms = f32::from(config.release_ms());
         if channels.get() > Self::DETECTOR_CHANNELS {
             return Err(LimiterError::Channels {
                 channels: channels.get(),
@@ -135,46 +112,22 @@ impl PeakLimiter {
         let samples = release_ms / consts::MS_PER_SEC * sample_rate.get().to_f32().unwrap_or(1.0);
         let release_coeff = (-1.0 / samples).exp();
 
-        let mut taps = [0.0_f32; (Self::DETECTOR_PHASES - 1) * Self::DETECTOR_TAPS];
-        for (index, coefficient) in taps.iter_mut().enumerate() {
-            let phase = index / Self::DETECTOR_TAPS + 1;
-            let tap = index % Self::DETECTOR_TAPS;
-            let offset =
-                phase.to_f32().unwrap_or(0.0) / Self::DETECTOR_PHASES.to_f32().unwrap_or(1.0);
-            let position =
-                tap.to_f32().unwrap_or(0.0) - Self::DETECTOR_HALF_WIDTH.to_f32().unwrap_or(0.0);
-            *coefficient = Self::detector_tap(offset - position);
-        }
+        let taps = std::array::from_fn(|phase: usize| {
+            std::array::from_fn(|tap: usize| {
+                let offset = (phase + 1).to_f32().unwrap_or(0.0)
+                    / Self::DETECTOR_PHASES.to_f32().unwrap_or(1.0);
+                let position =
+                    tap.to_f32().unwrap_or(0.0) - Self::DETECTOR_HALF_WIDTH.to_f32().unwrap_or(0.0);
+                Self::detector_tap(offset - position)
+            })
+        });
 
         Ok(Self {
-            level: Level::new(),
             config,
-            release_coeff,
-            taps,
-            envelope: 1.0,
+            detector: Fir::new(taps),
+            envelope: AttackRelease::new(release_coeff),
             channels: channels.get(),
-            history: [[0.0; Self::DETECTOR_HALF_WIDTH + 1]; Self::DETECTOR_CHANNELS],
-            shared_peak: [0.0; Self::DETECTOR_CHANNELS],
-            shared_valid: false,
         })
-    }
-
-    /// Peak of both reconstructed intervals touching `frame`. The one behind it is bounded
-    /// by this gain as much as by the previous frame's, and only the smaller of the two
-    /// keeps its crest under the ceiling. Within a block the previous frame already
-    /// reconstructed that interval from the same untouched input, so it is reused.
-    #[inline(always)]
-    fn advance_detector(&mut self, block: &[f32], channel: usize, frame: usize) -> f32 {
-        let ahead = self.inter_sample_peak(block, channel, frame, frame as isize);
-        let behind = if self.shared_valid {
-            self.shared_peak.get(channel).copied().unwrap_or(0.0)
-        } else {
-            self.inter_sample_peak(block, channel, frame, frame as isize - 1)
-        };
-        if let Some(shared) = self.shared_peak.get_mut(channel) {
-            *shared = ahead;
-        }
-        ahead.max(behind)
     }
 
     /// Hann-windowed sinc evaluated `distance` input samples away from a tap.
@@ -188,140 +141,76 @@ impl PeakLimiter {
         argument.sin() / argument * window
     }
 
-    /// Largest magnitude the reconstruction reaches between `base` and the sample after it
-    /// on one channel; `base` indexes `block` and may name the frame before `frame`.
-    /// Everything before `frame` comes from the input history, because the block already
-    /// carries the gain applied to those frames and feeding that back would make the
-    /// detector chase itself; samples past the block end hold the last one, because the
-    /// stream continues into the next block and reading silence there would modulate the
-    /// gain at every block boundary.
-    #[inline(always)]
-    fn inter_sample_peak(&self, block: &[f32], channel: usize, frame: usize, base: isize) -> f32 {
-        let Some(history) = self.history.get(channel) else {
-            return 0.0;
-        };
-        let mut peak = 0.0_f32;
-        for branch in self.taps.as_chunks::<{ Self::DETECTOR_TAPS }>().0 {
-            let mut sum = 0.0_f32;
-            for (tap, coefficient) in branch.iter().enumerate() {
-                let position = base + tap as isize - Self::DETECTOR_HALF_WIDTH as isize;
-                let sample = if position < frame as isize {
-                    let age = frame as isize - position;
-                    usize::try_from(Self::DETECTOR_HALF_WIDTH as isize + 1 - age)
-                        .ok()
-                        .and_then(|slot| history.get(slot).copied())
-                        .unwrap_or(0.0)
-                } else {
-                    usize::try_from(position)
-                        .ok()
-                        .and_then(|index| block.get(index).or_else(|| block.last()).copied())
-                        .unwrap_or(0.0)
-                };
-                sum = coefficient.mul_add(sample, sum);
-            }
-            peak = peak.max(sum.abs());
-        }
-        peak
-    }
-
-    /// The ordered positive FMA sum bounds every signed reconstruction of this block.
-    #[inline(always)]
-    fn reconstruction_can_limit(&self, channels: &[&mut [f32]]) -> bool {
-        let maximum = channels
-            .iter()
-            .flat_map(|channel| channel.iter())
-            .chain(self.history.iter().take(self.channels).flatten())
-            .fold(0.0_f32, |maximum, &sample| {
-                maximum.max(if sample.is_finite() {
-                    sample.abs()
-                } else {
-                    f32::INFINITY
-                })
-            });
-        maximum > self.ceiling()
-            || self
-                .taps
-                .as_chunks::<{ Self::DETECTOR_TAPS }>()
-                .0
-                .iter()
-                .any(|branch| {
-                    branch.iter().fold(0.0_f32, |sum, coefficient| {
-                        coefficient.abs().mul_add(maximum, sum)
-                    }) > self.ceiling()
-                })
-    }
-
-    /// Apply the limiter in place to a planar block, linking channels by frame peak. Each sample is
-    /// guarded before the peak is taken, so the envelope only ever sees a finite peak. Allocates
-    /// nothing, locks nothing, performs no I/O.
+    /// Apply linked gains to the common prefix without allocation.
+    /// Keep sanitized current and raw future separate until pre-gain history is recorded.
     pub fn process_planar(&mut self, channels: &mut [&mut [f32]]) {
-        dispatch!(self.level, simd => self.process_planar_with_simd(simd, channels));
-    }
-
-    #[inline(always)]
-    fn process_planar_with_simd<S: Simd>(&mut self, _simd: S, channels: &mut [&mut [f32]]) {
         debug_assert_eq!(channels.len(), self.channels);
         debug_assert!(self.channels <= Self::DETECTOR_CHANNELS);
-
-        let frames = channels.iter().map(|c| c.len()).min().unwrap_or(0);
-        self.shared_valid = false;
-        let reconstruct = frames > 0 && self.reconstruction_can_limit(channels);
-
-        for frame in 0..frames {
-            let mut peak = 0.0_f32;
-            for (index, channel) in channels.iter_mut().enumerate() {
-                let sample = sanitize_sample(channel[frame]);
-                channel[frame] = sample;
-                peak = peak.max(sample.abs());
-                if reconstruct {
-                    peak = peak.max(self.advance_detector(channel, index, frame));
+        let frames = channels
+            .iter()
+            .map(|channel| channel.len())
+            .min()
+            .unwrap_or(0);
+        let ceiling = f32::from(self.ceiling());
+        let reconstruct = self.detector.begin_block(channels, ceiling);
+        for start in (0..frames).step_by(Self::CHUNK_FRAMES) {
+            let end = frames.min(start + Self::CHUNK_FRAMES);
+            let count = end - start;
+            let mut linked = ArrayVec::<f32, { Self::CHUNK_FRAMES }>::new();
+            let mut current = ArrayVec::new();
+            let mut peaks = ArrayVec::new();
+            for plane in [&mut linked, &mut peaks] {
+                plane.extend(std::iter::repeat_n(0.0, count));
+            }
+            let [linked, current, peaks] = [&mut linked, &mut current, &mut peaks];
+            if !reconstruct {
+                for (index, channel) in channels.iter_mut().enumerate() {
+                    sanitize(&mut channel[start..end]);
+                    let processed = self.detector.process(
+                        index,
+                        &channel[start..],
+                        &channel[start..end],
+                        peaks,
+                    );
+                    peaks[processed..].fill(0.0);
                 }
+                linked.fill(1.0);
+                self.envelope.process(linked);
+                if linked.iter().any(|&gain| gain != 1.0) {
+                    for channel in channels.iter_mut() {
+                        multiply_in_place(&mut channel[start..end], linked);
+                    }
+                }
+                continue;
             }
-            for (index, channel) in channels.iter().enumerate() {
-                self.push_history(index, channel[frame]);
+            for (index, channel) in channels.iter_mut().enumerate() {
+                current.clear();
+                current.extend(channel[start..end].iter().copied().map(sanitize_sample));
+                let processed = self
+                    .detector
+                    .process(index, &channel[start..], current, peaks);
+                peaks[processed..].fill(0.0);
+                PeakHold::link(peaks, linked);
+                channel[start..end].copy_from_slice(current);
             }
-
-            self.shared_valid = true;
-
-            let gain = self.step(peak);
+            for peak in linked.iter_mut() {
+                *peak = if *peak > ceiling {
+                    ceiling / *peak
+                } else {
+                    1.0
+                };
+            }
+            self.envelope.process(linked);
             for channel in channels.iter_mut() {
-                channel[frame] *= gain;
+                multiply_in_place(&mut channel[start..end], linked);
             }
         }
     }
 
-    /// Record one input sample as the newest detector history for its channel.
-    fn push_history(&mut self, channel: usize, sample: f32) {
-        if let Some(history) = self.history.get_mut(channel) {
-            history.copy_within(1.., 0);
-            if let Some(newest) = history.last_mut() {
-                *newest = sample;
-            }
-        }
-    }
-
-    /// Reset the gain envelope to unity and forget the detector history.
+    /// Reset the gain envelope to unity and forget detector history.
     pub fn reset(&mut self) {
-        self.envelope = 1.0;
-        self.history = [[0.0; Self::DETECTOR_HALF_WIDTH + 1]; Self::DETECTOR_CHANNELS];
-        self.shared_peak = [0.0; Self::DETECTOR_CHANNELS];
-        self.shared_valid = false;
-    }
-
-    /// Releases before clamping: the reverse order lets the recovered gain overshoot the ceiling
-    /// for one frame.
-    #[inline]
-    fn step(&mut self, peak: f32) -> f32 {
-        let required = if peak > self.ceiling() {
-            self.ceiling() / peak
-        } else {
-            1.0
-        };
-        self.envelope = (1.0 - self.envelope).mul_add(-self.release_coeff, 1.0);
-        if required < self.envelope {
-            self.envelope = required;
-        }
-        self.envelope
+        self.envelope.reset();
+        self.detector.reset();
     }
 }
 
@@ -335,17 +224,16 @@ mod tests {
     };
     use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{super::scalar, *};
 
     fn limiter(sample_rate: u32, release_ms: f32) -> PeakLimiter {
         PeakLimiter::new(
             NonZeroU32::new(sample_rate).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             LimiterConfig::builder()
-                .ceiling(consts::CEILING)
-                .release_ms(release_ms)
-                .build()
-                .unwrap(),
+                .ceiling(Ceiling::try_from(consts::CEILING).unwrap())
+                .release_ms(ReleaseMs::try_from(release_ms).unwrap())
+                .build(),
         )
         .unwrap()
     }
@@ -355,44 +243,34 @@ mod tests {
         limiter.process_planar(&mut chans);
     }
 
-    fn reconstruct_every_frame(limiter: &mut PeakLimiter, channels: &mut [&mut [f32]]) {
-        let frames = channels
-            .iter()
-            .map(|channel| channel.len())
-            .min()
-            .unwrap_or(0);
-        limiter.shared_valid = false;
-        for frame in 0..frames {
-            let mut peak = 0.0_f32;
-            for (index, channel) in channels.iter_mut().enumerate() {
-                let sample = sanitize_sample(channel[frame]);
-                channel[frame] = sample;
-                peak = peak.max(sample.abs());
-                peak = peak.max(limiter.advance_detector(channel, index, frame));
-            }
-            for (index, channel) in channels.iter().enumerate() {
-                limiter.push_history(index, channel[frame]);
-            }
-            limiter.shared_valid = true;
-            let gain = limiter.step(peak);
-            for channel in channels.iter_mut() {
-                channel[frame] *= gain;
-            }
-        }
-    }
-
     #[kithara::test(native, flash(false))]
     fn bounded_blocks_preserve_pcm_and_following_attack_and_release() {
-        let values = [0.0_f32, -0.0, 0.02, -0.03, 0.1, -0.2, 0.4, -0.1];
+        let values = [
+            0.0_f32,
+            -0.0,
+            0.02,
+            -0.03,
+            0.1,
+            -0.2,
+            0.4,
+            -0.1,
+            0.98,
+            0.98_f32.next_up(),
+        ];
         for channel_count in [1, 2, 8] {
-            for frames in [0, 1, 7, 17, 127] {
+            for frames in [0, 1, 7, 17, 127, 255, 256, 257, 600] {
                 let mut actual = PeakLimiter::new(
                     NonZeroU32::new(48_000).unwrap(),
                     NonZeroUsize::new(channel_count).unwrap(),
                     LimiterConfig::default(),
                 )
                 .unwrap();
-                let mut reference = actual.clone();
+                let mut reference = scalar::ScalarLimiter::new(
+                    NonZeroU32::new(48_000).unwrap(),
+                    NonZeroUsize::new(actual.channels).unwrap(),
+                    actual.config,
+                )
+                .unwrap();
                 for (stage, scale) in [0.25, 8.0, 0.25, 1.0, 0.01, 0.99, 2.0, 0.1]
                     .into_iter()
                     .enumerate()
@@ -417,8 +295,7 @@ mod tests {
                             .map(Vec::as_mut_slice)
                             .collect::<Vec<_>>(),
                     );
-                    reconstruct_every_frame(
-                        &mut reference,
+                    reference.process_planar(
                         &mut expected
                             .iter_mut()
                             .map(Vec::as_mut_slice)
@@ -429,15 +306,81 @@ mod tests {
                     {
                         assert_eq!(actual.to_bits(), expected.to_bits());
                     }
-                    assert_eq!(actual.envelope.to_bits(), reference.envelope.to_bits());
-                    for (actual, expected) in actual
-                        .history
-                        .iter()
-                        .flatten()
-                        .zip(reference.history.iter().flatten())
-                    {
-                        assert_eq!(actual.to_bits(), expected.to_bits());
-                    }
+                }
+            }
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn varying_block_sizes_preserve_history_and_untouched_tails() {
+        for channels in [1, 2, 8] {
+            let rate = NonZeroU32::new(48_000).unwrap();
+            let channels = NonZeroUsize::new(channels).unwrap();
+            let config = LimiterConfig::default();
+            let mut actual = PeakLimiter::new(rate, channels, config).unwrap();
+            let mut reference = scalar::ScalarLimiter::new(rate, channels, config).unwrap();
+            for (stage, frames) in [600_usize, 1, 0, 7, 257, 1, 256, 0, 255, 7, 600]
+                .into_iter()
+                .enumerate()
+            {
+                let mut input: Vec<Vec<f32>> = (0..channels.get())
+                    .map(|channel| {
+                        (0..frames + channel)
+                            .map(|frame| {
+                                if stage % 4 == 3 && frame >= frames / 2 {
+                                    *[f32::NAN, f32::INFINITY, f32::NEG_INFINITY]
+                                        .get(channel % 3)
+                                        .unwrap()
+                                } else {
+                                    let sample = *[0.0, -0.0, 0.125, -0.5, 1.0, -1.0]
+                                        .get((frame + channel) % 6)
+                                        .unwrap();
+                                    sample * if stage % 4 == 0 { 2.0 } else { 0.02 }
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect();
+                let original = input.clone();
+                let mut expected = input.clone();
+                actual.process_planar(
+                    &mut input.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>(),
+                );
+                reference.process_planar(
+                    &mut expected
+                        .iter_mut()
+                        .map(Vec::as_mut_slice)
+                        .collect::<Vec<_>>(),
+                );
+                for ((actual, expected), original) in input.iter().zip(&expected).zip(&original) {
+                    assert_eq!(
+                        actual
+                            .iter()
+                            .map(|sample| sample.to_bits())
+                            .collect::<Vec<_>>(),
+                        expected
+                            .iter()
+                            .map(|sample| sample.to_bits())
+                            .collect::<Vec<_>>()
+                    );
+                    assert_eq!(
+                        actual
+                            .get(frames..)
+                            .unwrap()
+                            .iter()
+                            .map(|sample| sample.to_bits())
+                            .collect::<Vec<_>>(),
+                        original
+                            .get(frames..)
+                            .unwrap()
+                            .iter()
+                            .map(|sample| sample.to_bits())
+                            .collect::<Vec<_>>()
+                    );
+                }
+                if stage == 5 {
+                    actual.reset();
+                    reference.reset();
                 }
             }
         }
@@ -447,16 +390,18 @@ mod tests {
     fn an_unprocessed_channel_tail_still_controls_the_detector() {
         for tail in [2.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let mut actual = limiter(48_000, 50.0);
-            let mut reference = actual.clone();
+            let mut reference = scalar::ScalarLimiter::new(
+                NonZeroU32::new(48_000).unwrap(),
+                NonZeroUsize::new(actual.channels).unwrap(),
+                actual.config,
+            )
+            .unwrap();
             let mut left = [0.1];
             let mut right = [0.1, tail];
             let mut expected_left = left;
             let mut expected_right = right;
             run(&mut actual, &mut left, &mut right);
-            reconstruct_every_frame(
-                &mut reference,
-                &mut [&mut expected_left, &mut expected_right],
-            );
+            reference.process_planar(&mut [&mut expected_left, &mut expected_right]);
             for (actual, expected) in left
                 .iter()
                 .chain(&right)
@@ -464,15 +409,26 @@ mod tests {
             {
                 assert_eq!(actual.to_bits(), expected.to_bits());
             }
-            assert_eq!(actual.envelope.to_bits(), reference.envelope.to_bits());
-            for (actual, expected) in actual
-                .history
-                .iter()
-                .flatten()
-                .zip(reference.history.iter().flatten())
-            {
-                assert_eq!(actual.to_bits(), expected.to_bits());
-            }
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn reset_restores_the_scalar_lifecycle() {
+        let mut actual = limiter(48_000, 50.0);
+        let mut reference = scalar::ScalarLimiter::new(
+            NonZeroU32::new(48_000).unwrap(),
+            NonZeroUsize::new(2).unwrap(),
+            actual.config,
+        )
+        .unwrap();
+        for drive in [2.0, 0.1] {
+            let mut input = [[drive; 257]; 2];
+            let mut expected = input;
+            actual.process_planar(&mut input.each_mut().map(|channel| &mut channel[..]));
+            reference.process_planar(&mut expected.each_mut().map(|channel| &mut channel[..]));
+            assert_eq!(input, expected);
+            actual.reset();
+            reference.reset();
         }
     }
 
@@ -758,28 +714,14 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn invalid_config_is_rejected() {
-        let config = |ceiling: f32, release_ms: f32| {
-            LimiterConfig::builder()
-                .ceiling(ceiling)
-                .release_ms(release_ms)
-                .build()
-        };
-        assert!(config(0.0, 50.0).is_err());
-        assert!(config(1.5, 50.0).is_err());
-        assert!(config(f32::NAN, 50.0).is_err());
-        assert!(config(consts::CEILING, 0.0).is_err());
-        assert!(config(consts::CEILING, -5.0).is_err());
-        assert!(config(consts::CEILING, f32::INFINITY).is_err());
-    }
-
-    #[kithara::test(native, flash(false))]
     fn a_configured_ceiling_bounds_the_output(limiter_attack: Vec<f32>) {
         let ceiling = 0.5;
         let mut lim = PeakLimiter::new(
             NonZeroU32::new(44_100).unwrap(),
             NonZeroUsize::new(2).unwrap(),
-            LimiterConfig::builder().ceiling(ceiling).build().unwrap(),
+            LimiterConfig::builder()
+                .ceiling(Ceiling::try_from(ceiling).unwrap())
+                .build(),
         )
         .unwrap();
         let mut left = limiter_attack.clone();

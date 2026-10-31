@@ -3,9 +3,9 @@ use std::path::Path;
 use kithara_fixture_media::signal::Wave;
 
 pub(super) fn generate(output: &Path) {
-    let held = kithara_fixture_media::signal::metronome_held(
+    let held = kithara_fixture_media::signal::metronome_held(f32::from(
         kithara_effects::LimiterConfig::default().ceiling(),
-    );
+    ));
     write_pcm(
         output,
         "host_metronome_tone",

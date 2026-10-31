@@ -18,7 +18,8 @@ Vector DSP kernels over planar `f32` slices. The layout functions match
 `fast_interleave` for `f32`: Apple builds run the stereo pair on Accelerate,
 every other target runs it on `fearless_simd` at the best SIMD level the CPU
 reports, and other channel counts take a bit-exact strided copy. `filter`
-runs multichannel biquad cascades, `interp` reads a window at fractional
+runs multichannel biquad cascades and ordered FIR reconstruction; `envelope` links
+interval peaks and releases gains before clamping. `interp` reads a window at fractional
 positions and `spectrum` takes the real FFT of a Hann-windowed frame on the
 same backends; `downmix` folds interleaved frames to mono and `sum_squares`
 reduces a slice. The FFT, the bin kernels and the autocorrelation build only

@@ -3,7 +3,7 @@
 use std::{
     fs,
     hint::black_box,
-    num::{NonZeroU32, NonZeroU64},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::Path,
 };
 
@@ -17,6 +17,7 @@ use kithara::{
     },
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead, ReadOutcome},
+    effects::{LimiterConfig, PeakLimiter},
     file::{File, FileConfig},
     platform::{
         time::Duration,
@@ -511,12 +512,88 @@ fn bench_stretch_process(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_limiter_detector(c: &mut Criterion) {
+    let mut group = c.benchmark_group("limiter_detector");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+    for (frames, tail) in [
+        (1, 0),
+        (7, 0),
+        (128, 0),
+        (255, 0),
+        (256, 0),
+        (257, 0),
+        (257, 7),
+        (600, 0),
+    ] {
+        for (label, amplitude) in [("quiet", 0.125), ("overloaded", 2.0)] {
+            let input: [Vec<f32>; 2] = std::array::from_fn(|channel| {
+                [1.0, -0.5, 0.75, -1.0, 0.25, -0.75, 0.5]
+                    .into_iter()
+                    .cycle()
+                    .skip(channel)
+                    .take(frames + channel * tail)
+                    .map(|sample| sample * amplitude)
+                    .collect()
+            });
+            let mut limiter = PeakLimiter::new(
+                NonZeroU32::new(48_000).expect("bench rate"),
+                NonZeroUsize::new(2).expect("stereo"),
+                LimiterConfig::default(),
+            )
+            .expect("stereo detector");
+            let [mut left, mut right] = input.clone();
+            limiter.process_planar(&mut [&mut left, &mut right]);
+            let reduced = [&left, &right]
+                .into_iter()
+                .zip(&input)
+                .any(|(output, input)| {
+                    output
+                        .iter()
+                        .zip(input)
+                        .take(frames)
+                        .any(|(output, input)| output.abs() < input.abs())
+                });
+            assert_eq!(
+                reduced,
+                label == "overloaded",
+                "bench must exercise its named path"
+            );
+            assert!(left.iter().chain(&right).any(|sample| sample.abs() > 0.0));
+            group.throughput(Throughput::Elements(
+                u64::try_from(frames * 2).expect("bench count"),
+            ));
+            let shape = if tail == 0 {
+                frames.to_string()
+            } else {
+                format!("{frames}+{tail}")
+            };
+            group.bench_function(BenchmarkId::new(label, shape), |b| {
+                b.iter_batched_ref(
+                    || (limiter.clone(), input.clone()),
+                    |(limiter, [left, right])| {
+                        limiter.process_planar(&mut [
+                            black_box(left.as_mut_slice()),
+                            black_box(right.as_mut_slice()),
+                        ]);
+                        black_box((left.as_slice(), right.as_slice()));
+                    },
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_gapless_trim,
     bench_analysis_worker,
     bench_stretch_prepare,
     bench_stretch_backends,
-    bench_stretch_process
+    bench_stretch_process,
+    bench_limiter_detector
 );
 criterion_main!(benches);
