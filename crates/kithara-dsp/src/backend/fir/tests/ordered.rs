@@ -89,7 +89,15 @@ fn ordered_intervals_and_complete_state_match_the_scalar_base() {
             let mut fallback = detector.clone();
             let mut history = [[0.0_f32; 9]; 8];
             let mut shared = [0.0_f32; 8];
-            for scale in [0.01, 2.0, 0.98, 0.001] {
+            for (scale, threshold) in [0.01, 2.0, 0.98, 0.001]
+                .map(|scale| (scale, 0.98))
+                .into_iter()
+                .chain(
+                    [f32::NAN, f32::INFINITY, f32::NEG_INFINITY].map(|threshold| (0.98, threshold)),
+                )
+                .chain([-1.0, -0.0, 0.0, 0.001].map(|threshold| (0.0, threshold)))
+                .chain([(0.8, 0.98)])
+            {
                 let mut raw: Vec<Vec<f32>> = (0..channels)
                     .map(|channel| {
                         (0..frames.checked_add(channel).unwrap())
@@ -111,12 +119,12 @@ fn ordered_intervals_and_complete_state_match_the_scalar_base() {
                 let mut expected = raw.clone();
                 detector.begin_block(
                     &raw.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>(),
-                    0.98,
+                    threshold,
                 );
                 dispatch!(Level::fallback(), simd => fallback.begin_block_kernel(
                     simd,
                     &raw.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>(),
-                    0.98,
+                    threshold,
                 ));
                 let maximum = expected
                     .iter()
@@ -130,11 +138,11 @@ fn ordered_intervals_and_complete_state_match_the_scalar_base() {
                         })
                     });
                 let reconstruct = frames > 0
-                    && (maximum > 0.98
+                    && (maximum > threshold
                         || taps.iter().any(|branch| {
                             branch.iter().fold(0.0_f32, |sum, coefficient| {
                                 coefficient.abs().mul_add(maximum, sum)
-                            }) > 0.98
+                            }) > threshold
                         }));
                 assert_eq!(detector.reconstruct, reconstruct);
                 for channel in 0..channels {
@@ -244,6 +252,15 @@ fn behind_interval_and_external_boundary_are_load_bearing() {
     detector.process(0, &raw, &[raw[0]], &mut peaks);
     assert_eq!(peaks[0].to_bits(), behind.to_bits());
     assert_ne!(peaks[0].to_bits(), ahead.to_bits());
+
+    for channels in [Vec::new(), vec![raw.as_mut_slice(), &mut []]] {
+        detector.shared_valid.fill(true);
+        let mut expected = detector.clone();
+        expected.shared_valid.fill(false);
+        expected.reconstruct = false;
+        assert!(!detector.begin_block(&channels, f32::NEG_INFINITY));
+        assert_state(&detector, &expected);
+    }
 
     let mut complete = Detector::new(taps);
     let mut truncated = complete.clone();

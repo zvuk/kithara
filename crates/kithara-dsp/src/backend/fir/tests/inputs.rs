@@ -12,22 +12,16 @@ fn indexed_process<const TAPS: usize, const HISTORY: usize>(
     let history = detector.history.first_mut().unwrap();
     let shared = detector.shared_peak.first_mut().unwrap();
     let valid = detector.shared_valid.first_mut().unwrap();
+    let taps = &detector.taps;
     for (frame, (&sample, peak)) in current.iter().zip(output).take(count).enumerate() {
         *peak = sample.abs().max(0.0);
         if detector.reconstruct {
-            let ahead =
-                indexed_interval(&detector.taps, history, raw, sample, frame, frame as isize);
+            let ahead = indexed_interval(taps, history, raw, sample, frame, frame as isize);
             let behind = if *valid {
                 *shared
             } else {
-                indexed_interval(
-                    &detector.taps,
-                    history,
-                    raw,
-                    sample,
-                    frame,
-                    (frame as isize).checked_sub(1).unwrap(),
-                )
+                let base = (frame as isize).checked_sub(1).unwrap();
+                indexed_interval(taps, history, raw, sample, frame, base)
             };
             *shared = ahead;
             *peak = peak.max(0.0_f32.max(ahead).max(behind));
@@ -69,6 +63,18 @@ fn assert_state<const TAPS: usize, const HISTORY: usize>(
     assert_eq!(actual.reconstruct, expected.reconstruct);
 }
 
+fn assert_process<const TAPS: usize, const HISTORY: usize>(
+    (actual, expected): (&mut Fir<TAPS, 2, 1, HISTORY>, &mut Fir<TAPS, 2, 1, HISTORY>),
+    (raw, current): (&[f32], &[f32]),
+    (output, wanted): (&mut [f32], &mut [f32]),
+) {
+    let count = raw.len().min(current.len()).min(output.len());
+    assert_eq!(actual.process(0, raw, current, output), count);
+    assert_eq!(indexed_process(expected, raw, current, wanted), count);
+    assert_ieee(output, wanted);
+    assert_state(actual, expected);
+}
+
 fn uncleaned_current<const HISTORY: usize>() {
     let taps = [[0.25; 17], [-0.125; 17]];
     let mut actual = Fir::<17, 2, 1, HISTORY>::new(taps);
@@ -88,17 +94,8 @@ fn uncleaned_current<const HISTORY: usize>() {
         -0.0,
     ];
     for stage in 0..3 {
-        let current: [f32; 11] = std::array::from_fn(|frame| {
-            *values
-                .get(
-                    frame
-                        .checked_add(stage)
-                        .unwrap()
-                        .checked_rem(values.len())
-                        .unwrap(),
-                )
-                .unwrap()
-        });
+        let mut current = values;
+        current.rotate_left(stage);
         let mut raw: [f32; 14] =
             std::array::from_fn(|frame| *[2.0, -3.0, 4.0, -5.0, 6.0].get(frame % 5).unwrap());
         actual.begin_block(&[&mut raw], 0.98);
@@ -112,13 +109,10 @@ fn uncleaned_current<const HISTORY: usize>() {
             let raw = raw.get(start..).unwrap();
             let mut output = [f32::MIN; 9];
             let mut wanted = output;
-            assert_eq!(actual.process(0, raw, input, &mut output), count);
-            assert_eq!(
-                indexed_process(&mut expected, raw, input, &mut wanted),
-                count
-            );
-            assert_ieee(&output, &wanted);
-            assert_state(&actual, &expected);
+            let samples = (raw, input);
+            let detectors = (&mut actual, &mut expected);
+            let outputs = (&mut output[..], &mut wanted[..]);
+            assert_process(detectors, samples, outputs);
             for &sample in input {
                 if HISTORY > 0 {
                     history.copy_within(1.., 0);
@@ -149,13 +143,10 @@ fn prefixes<const HISTORY: usize>(threshold: f32) {
     assert_eq!(actual.reconstruct, threshold == 0.98);
     let mut output = [0.0; 4];
     let mut wanted = output;
-    assert_eq!(actual.process(0, &raw, &current, &mut output), 4);
-    assert_eq!(
-        indexed_process(&mut expected, &raw, &current, &mut wanted),
-        4
-    );
-    assert_ieee(&output, &wanted);
-    assert_state(&actual, &expected);
+    let samples = (raw.as_slice(), current.as_slice());
+    let detectors = (&mut actual, &mut expected);
+    let outputs = (&mut output[..], &mut wanted[..]);
+    assert_process(detectors, samples, outputs);
     for boundary in [false, true] {
         if boundary {
             actual.begin_block(&[&mut raw], threshold);
@@ -183,22 +174,14 @@ fn prefixes<const HISTORY: usize>(threshold: f32) {
         let mut wanted = output;
         let raw = raw.get(..raw_len).unwrap();
         let current = current.get(..current_len).unwrap();
-        let count = raw_len.min(current_len).min(output_len);
-        assert_eq!(
-            actual.process(0, raw, current, output.get_mut(..output_len).unwrap()),
-            count
+        let samples = (raw, current);
+        let detectors = (&mut actual, &mut expected);
+        let outputs = (
+            output.get_mut(..output_len).unwrap(),
+            wanted.get_mut(..output_len).unwrap(),
         );
-        assert_eq!(
-            indexed_process(
-                &mut expected,
-                raw,
-                current,
-                wanted.get_mut(..output_len).unwrap()
-            ),
-            count
-        );
+        assert_process(detectors, samples, outputs);
         assert_ieee(&output, &wanted);
-        assert_state(&actual, &expected);
     }
 }
 
@@ -243,15 +226,13 @@ fn zero_windows<const HISTORY: usize>() {
                 let end = frames.min(start.checked_add(7).unwrap());
                 let raw = raw.get(start..).unwrap();
                 let current = current.get(start..end).unwrap();
-                assert_eq!(
-                    actual.process(0, raw, current, output.get_mut(start..end).unwrap()),
-                    indexed_process(
-                        &mut expected,
-                        raw,
-                        current,
-                        wanted.get_mut(start..end).unwrap()
-                    )
+                let samples = (raw, current);
+                let detectors = (&mut actual, &mut expected);
+                let outputs = (
+                    output.get_mut(start..end).unwrap(),
+                    wanted.get_mut(start..end).unwrap(),
                 );
+                assert_process(detectors, samples, outputs);
             }
             assert_ieee(&output, &wanted);
             assert_state(&actual, &expected);

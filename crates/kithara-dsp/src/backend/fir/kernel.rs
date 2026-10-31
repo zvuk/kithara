@@ -24,23 +24,27 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
             self.reconstruct = false;
             return;
         }
-        let maximum = channels
+        let mut maximum = 0.0_f32;
+        for &sample in channels
             .iter()
             .flat_map(|channel| channel.iter())
             .chain(self.history.iter().take(channels.len()).flatten())
-            .fold(0.0_f32, |maximum, &sample| {
-                maximum.max(if sample.is_finite() {
-                    sample.abs()
-                } else {
-                    f32::INFINITY
-                })
+        {
+            maximum = maximum.max(if sample.is_finite() {
+                sample.abs()
+            } else {
+                f32::INFINITY
             });
-        self.reconstruct = maximum > threshold
-            || self.taps.iter().any(|branch| {
-                branch.iter().fold(0.0_f32, |sum, coefficient| {
-                    coefficient.abs().mul_add(maximum, sum)
-                }) > threshold
-            });
+            if maximum > threshold {
+                self.reconstruct = true;
+                return;
+            }
+        }
+        self.reconstruct = self.taps.iter().any(|branch| {
+            branch.iter().fold(0.0_f32, |sum, coefficient| {
+                coefficient.abs().mul_add(maximum, sum)
+            }) > threshold
+        });
     }
 
     #[inline(never)]
