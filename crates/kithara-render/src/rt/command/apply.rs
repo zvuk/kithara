@@ -60,7 +60,7 @@ impl Deck {
                 item_id,
                 pcm,
                 segment,
-            } => Some(self.replace_track(slot, item_id, pcm, segment, context_valid)),
+            } => Some(self.replace_track(slot, item_id, pcm, segment, seq, context_valid)),
             DeckPart::Chain { from, to } => Some(self.chain_tracks(from, to)),
             DeckPart::Mix(change) => {
                 self.mix.apply_change(change);
@@ -75,6 +75,23 @@ impl Deck {
                 .render
                 .take_eq_layout(layout)
                 .map(|layout| DeckPart::Returned(Returned::Eq(layout))),
+            DeckPart::GainProgram {
+                slot,
+                binding,
+                authority,
+                program,
+            } => {
+                self.tracks
+                    .at_mut(slot)
+                    .expect("validated output target")
+                    .begin_output(seq, program.curve(), at);
+                Some(DeckPart::GainProgram {
+                    slot,
+                    binding,
+                    authority,
+                    program,
+                })
+            }
             DeckPart::Returned(returned) => Some(DeckPart::Returned(returned)),
         }
     }
@@ -113,7 +130,7 @@ impl Deck {
     ) -> Option<DeckPart> {
         #[cfg(not(feature = "usdt"))]
         let _ = (at, seq);
-        let track = self.track(pcm, segment, item_id);
+        let track = self.track(pcm, segment, item_id, seq);
         match self.tracks.put(slot, track) {
             Ok(()) => {
                 #[cfg(feature = "usdt")]
@@ -199,9 +216,10 @@ impl Deck {
         item_id: TrackId,
         pcm: Box<PlayerResource>,
         segment: SegmentId,
+        seq: Seq,
         context_valid: bool,
     ) -> DeckPart {
-        let mut track = self.track(pcm, segment, item_id);
+        let mut track = self.track(pcm, segment, item_id, seq);
         track.start(Fade::Declick);
         track.snap_gate();
         match self.tracks.replace(slot, track) {
@@ -228,12 +246,14 @@ impl Deck {
         pcm: Box<PlayerResource>,
         segment: SegmentId,
         item_id: TrackId,
+        seq: Seq,
     ) -> PlayerTrack {
         PlayerTrack::builder()
             .item_id(item_id)
             .sample_rate(self.sample_rate)
             .declick(self.declick)
             .segment(segment)
+            .attachment(seq)
             .build(pcm)
     }
 
@@ -252,10 +272,9 @@ impl Deck {
         };
         if seq == due.seq() {
             answer_stop(&mut due.commands_mut()[remaining..], slot, resume);
-        } else if due
-            .committed_mut(seq)
-            .is_some_and(|commands| answer_stop(commands, slot, resume))
-        {
+        } else if due.committed_mut(seq).is_some_and(|commands| {
+            answer_stop(commands, slot, resume) && self.output_finished(commands, seq)
+        }) {
             due.complete(seq, ());
         }
     }

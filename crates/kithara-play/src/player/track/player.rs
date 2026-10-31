@@ -48,6 +48,7 @@ impl<S> Player<S> for PlayerImpl<S> {
             return Err(PlayError::Lane(failure));
         }
         match command {
+            TrackCommand::GainProgram(program) => self.gain_program(program, out),
             TrackCommand::Load { item, position } => self.load(item, position, out),
             command @ (TrackCommand::Play { .. }
             | TrackCommand::Pause { .. }
@@ -81,7 +82,9 @@ impl<S> Player<S> for PlayerImpl<S> {
                 seq,
                 outcome,
                 batch,
-            } if batch.basis.iter().any(|&(slot, _)| Some(slot) == self.slot) => {
+            } if batch.basis.iter().any(|&(slot, _)| Some(slot) == self.slot)
+                || batch.commands.iter().any(|part| matches!(part,
+                    DeckPart::GainProgram { slot, binding, .. } if Some(*slot) == self.slot && binding.item() == self.item)) => {
                 let attaching = self.attaching.is_some_and(|attach| attach.seq == Some(seq));
                 let adopting = self.adopting.iter().any(|adopt| adopt.seq == seq);
                 let playback = self.playback_commands.iter().position(|operation| {
@@ -144,6 +147,7 @@ impl<S> Player<S> for PlayerImpl<S> {
 
     fn snapshot(&self) -> TrackSnapshot {
         TrackSnapshot {
+            output: self.output,
             effects: self.effects.snapshot(self.lane_id),
             item: self.item,
             slot: self.slot,

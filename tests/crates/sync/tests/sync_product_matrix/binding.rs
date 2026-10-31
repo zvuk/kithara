@@ -4316,6 +4316,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
     let wrong_seq = posts.post(()).expect("different command identity").seq();
     let track = kithara::link::LinkedSnapshot {
         track: kithara::play::TrackSnapshot {
+            output: kithara::play::SlotOutputSnapshot::default(),
             effects: Vec::new(),
             item,
             slot: None,
@@ -4458,6 +4459,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     };
     let mark = start.mark.expect("consumed mark");
     let before = kithara::play::TrackSnapshot {
+        output: kithara::play::SlotOutputSnapshot::default(),
         effects: Vec::new(),
         item,
         slot: None,

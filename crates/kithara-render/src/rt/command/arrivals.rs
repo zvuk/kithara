@@ -48,11 +48,21 @@ impl Deck {
             due.refuse(reason);
             return;
         }
+        if !context_valid
+            && due
+                .commands()
+                .iter()
+                .any(|part| matches!(part, DeckPart::GainProgram { .. }))
+        {
+            due.refuse(DeckRefusal::AxisRestarted);
+            return;
+        }
         let at = due.at();
         let seq = due.seq();
         let length = due.commands().len();
         for remaining in (0..length).rev() {
             let part = due.commands_mut().remove(0);
+            self.interrupt_output(&mut due, &part);
             if let Some(slot) = shifted_slot(&part) {
                 self.interrupt_stop(&mut due, slot, remaining);
             }
@@ -64,6 +74,10 @@ impl Deck {
             .commands()
             .iter()
             .any(|part| matches!(part, DeckPart::Stop { .. }))
+            || self
+                .tracks
+                .slots()
+                .any(|slot| self.tracks.at(slot).and_then(PlayerTrack::output_program) == Some(seq))
         {
             due.commit();
         } else {
@@ -142,6 +156,7 @@ impl Deck {
             }
             let seq = due.seq();
             let part = due.commands_mut().remove(0);
+            self.interrupt_output(&mut due, &part);
             match &part {
                 DeckPart::Chain { from, to } => {
                     self.interrupt_stop(&mut due, *from, 0);
@@ -172,6 +187,7 @@ impl Deck {
     }
 
     pub(in crate::rt) fn validate(&mut self, commands: &[DeckPart]) -> Result<(), DeckRefusal> {
+        self.validate_output_programs(commands)?;
         for (entry, slot) in self.held.iter_mut().zip(self.tracks.slots()) {
             *entry = self.tracks.at(slot).map(PlayerTrack::segment);
         }
@@ -233,7 +249,10 @@ impl Deck {
                         }
                     }
                 }
-                DeckPart::Mix(_) | DeckPart::Eq(_) | DeckPart::Returned(_) => {}
+                DeckPart::Mix(_)
+                | DeckPart::Eq(_)
+                | DeckPart::GainProgram { .. }
+                | DeckPart::Returned(_) => {}
             }
         }
         Ok(())

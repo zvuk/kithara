@@ -40,9 +40,10 @@ pub use kithara_render::{
     DispatcherProtocol, EngineLoad, EngineLoadSnapshot, InvalidCrossfade, LaneId, LoadRefusal,
     PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
     bridge::{
-        DeckEqChange, DeckEvent, DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol,
-        DeckRefusal, DeckSnapshot, EqSnapshot, FadeDir, MixTapWriter, PlaybackFault, Returned,
-        RtMetricsSnapshot, Slot, SlotSnapshot,
+        CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckMixSettings,
+        DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, EqSnapshot,
+        FadeDir, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault, Returned,
+        RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot,
     },
     dispatch,
     rt::{

@@ -14,7 +14,9 @@ use ringbuf::{
     traits::{Consumer, Split},
 };
 
-use super::super::{PcmConsumer, PlayerResource, PlayerTrack, RtSink, TrackReadOutcome};
+use super::super::{
+    PcmConsumer, PlayerResource, PlayerTrack, RtSink, TrackBuffers, TrackReadOutcome,
+};
 use crate::{
     bridge::{DeckEvent, Fade, RtMetrics, Slot},
     mock::pcm_fixture::{PcmFixture, chunk},
@@ -78,11 +80,14 @@ fn a_blocking_read_waits_for_the_lane_instead_of_underrunning() {
     let mut sink = RtSink::new(&mut events, &metrics, Slot::new(0), start);
     let outcome = track.render(
         Some(&context),
-        &mut [&mut left, &mut right],
-        &mut [&mut bus_left, &mut bus_right],
+        TrackBuffers {
+            scratch: &mut [&mut left, &mut right],
+            bus: &mut [&mut bus_left, &mut bus_right],
+        },
         0..2,
         &mut 16,
         &mut sink,
+        None,
     );
     assert!(matches!(outcome, TrackReadOutcome::Full { frames: 2, .. }));
     assert_eq!(left, [0.7, 0.8]);
@@ -150,11 +155,14 @@ async fn underrun_edges_emit_once_per_starvation_window() {
         assert!(matches!(
             track.render(
                 Some(&context),
-                &mut [&mut left, &mut right],
-                &mut [&mut bus_left, &mut bus_right],
+                TrackBuffers {
+                    scratch: &mut [&mut left, &mut right],
+                    bus: &mut [&mut bus_left, &mut bus_right]
+                },
                 0..2,
                 &mut 16,
-                &mut sink
+                &mut sink,
+                None,
             ),
             TrackReadOutcome::Full { frames: 0, .. }
         ));
@@ -181,11 +189,14 @@ async fn underrun_edges_emit_once_per_starvation_window() {
     assert!(matches!(
         track.render(
             Some(&context),
-            &mut [&mut left, &mut right],
-            &mut [&mut bus_left, &mut bus_right],
+            TrackBuffers {
+                scratch: &mut [&mut left, &mut right],
+                bus: &mut [&mut bus_left, &mut bus_right]
+            },
             0..2,
             &mut 16,
-            &mut sink
+            &mut sink,
+            None,
         ),
         TrackReadOutcome::Full { frames: 2, .. }
     ));
@@ -198,11 +209,14 @@ async fn underrun_edges_emit_once_per_starvation_window() {
     assert!(matches!(
         track.render(
             Some(&context),
-            &mut [&mut left, &mut right],
-            &mut [&mut bus_left, &mut bus_right],
+            TrackBuffers {
+                scratch: &mut [&mut left, &mut right],
+                bus: &mut [&mut bus_left, &mut bus_right]
+            },
             0..2,
             &mut 16,
             &mut sink,
+            None,
         ),
         TrackReadOutcome::Full { frames: 0, .. }
     ));

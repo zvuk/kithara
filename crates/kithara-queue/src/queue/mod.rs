@@ -2,6 +2,7 @@
 
 mod command;
 mod effect;
+mod gain;
 mod handle;
 mod hosted;
 mod lifecycle;

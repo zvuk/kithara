@@ -445,7 +445,10 @@ pub(crate) fn slots(part: &DeckPart) -> impl Iterator<Item = Slot> {
         | DeckPart::Adopt { slot, .. }
         | DeckPart::Replace { slot, .. } => (Some(slot), None),
         DeckPart::Chain { from, to } => (Some(from), Some(to)),
-        DeckPart::Mix(_) | DeckPart::Eq(_) | DeckPart::Returned(_) => (None, None),
+        DeckPart::Mix(_)
+        | DeckPart::Eq(_)
+        | DeckPart::GainProgram { .. }
+        | DeckPart::Returned(_) => (None, None),
     };
     first.into_iter().chain(second)
 }
@@ -507,7 +510,8 @@ impl<S> TrackReceipt<'_, S> {
     #[must_use]
     pub fn names(&self, slot: Slot) -> bool {
         match self {
-            Self::Deck { batch, .. } => batch.basis.iter().any(|&(named, _)| named == slot),
+            Self::Deck { batch, .. } => batch.basis.iter().any(|&(named, _)| named == slot)
+                || batch.commands.iter().any(|part| matches!(part, DeckPart::GainProgram { slot: named, .. } if *named == slot)),
             Self::Event(
                 DeckEvent::Ended { slot: named, .. }
                 | DeckEvent::Failed { slot: named, .. }

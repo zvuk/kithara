@@ -25,6 +25,7 @@ pub(in crate::rt) fn shifted_slot(part: &DeckPart) -> Option<Slot> {
         | DeckPart::Adopt { slot, .. }
         | DeckPart::Replace { slot, .. } => Some(*slot),
         DeckPart::Fade { .. }
+        | DeckPart::GainProgram { .. }
         | DeckPart::Chain { .. }
         | DeckPart::Mix(_)
         | DeckPart::Eq(_)

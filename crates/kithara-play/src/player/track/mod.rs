@@ -1,6 +1,7 @@
 mod admission;
 mod core;
 mod effects;
+mod gain;
 mod geometry;
 mod load;
 mod player;
