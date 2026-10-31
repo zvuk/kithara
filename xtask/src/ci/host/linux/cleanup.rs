@@ -211,6 +211,9 @@ fn target_dirs(host: &LinuxHost) -> Result<Vec<PathBuf>> {
     dirs.extend(build_cache::previous_build_roots(
         &lanes.join(consts::PREVIOUS_CACHE_ROOT),
     )?);
+    dirs.extend(build_cache::build_roots(
+        &host.cache_root.join("workspaces"),
+    )?);
     dirs.push(lanes);
     Ok(dirs)
 }
@@ -353,6 +356,14 @@ mod tests {
                 }
             }
         }
+
+        let checkout = host.cache_root.join("workspaces/stress/subject");
+        let target = checkout.join("target-stress");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(checkout.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::write(target.join(".rustc_info.json"), "{}").unwrap();
+        fs::write(target.join(kithara_devtools::lease::FILE), "").unwrap();
+        expected.insert(target);
 
         let budgeted: BTreeSet<PathBuf> = target_dirs(&host)
             .expect("the budget's directories are listed")
