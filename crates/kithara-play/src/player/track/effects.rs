@@ -1,9 +1,12 @@
 use arc_swap::ArcSwap;
 use kithara_command::{Live, Outcome, Receipt, Seq, When};
 use kithara_config::{ConfigOwner, LiveConfig};
-use kithara_effects::{EffectChange, EffectConfig, EffectTarget, eq::EqBandConfig};
+use kithara_effects::{
+    EffectChange, EffectConfig, EffectTarget,
+    eq::{EqBandConfig, EqBandConfigChange},
+};
 use kithara_platform::sync::Arc;
-use kithara_render::{LaneCommand, LaneFrame, LaneId, LaneProtocol};
+use kithara_render::{LaneCommand, LaneFrame, LaneId, LaneProtocol, bridge::EffectProgram};
 use kithara_signal::SessionFrame;
 
 use super::core::PlayerImpl;
@@ -149,18 +152,54 @@ impl TrackEffects {
                 view.settle(live, receipt);
             }
         }
+        if matches!(receipt.outcome(), Outcome::Applied { .. }) {
+            for command in &receipt.batch().commands {
+                if let LaneCommand::EffectProgram {
+                    program,
+                    applied: Some(EffectChange::EqBand(EqBandConfigChange::GainDb(gain))),
+                } = command
+                {
+                    let EffectTarget::EqBand { effect, band } = program.parameter().target() else {
+                        continue;
+                    };
+                    if let Some(EffectState::Equalizer { bands, views }) = self.0.get_mut(effect)
+                        && let (Some(live), Some(view)) = (bands.get_mut(band), views.get(band))
+                    {
+                        match live.apply(EqBandConfigChange::GainDb(*gain)) {
+                            Ok(()) => view.0.store(Arc::new(*live.config())),
+                            Err(never) => match never {},
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
 impl<S> PlayerImpl<S> {
-    pub(super) fn configure_effect(
+    pub(super) fn effect_program(
         &mut self,
         lane: LaneId,
-        target: EffectTarget,
-        change: EffectChange,
-        at: When<SessionFrame>,
+        program: EffectProgram,
         out: &Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
+        self.effect_ready(lane)?;
+        self.effects.admit(
+            program.parameter().target(),
+            EffectChange::EqBand(EqBandConfigChange::GainDb(crate::GainDb::DEFAULT)),
+        )?;
+        let when = self.lane_when(When::At(program.start()), out)?;
+        self.send_lane(
+            LaneCommand::EffectProgram {
+                program,
+                applied: None,
+            },
+            when,
+        )
+        .map(Some)
+    }
+
+    fn effect_ready(&self, lane: LaneId) -> Result<(), PlayError> {
         if self.lane_id != Some(lane)
             || self.lane.is_none()
             || self.releasing
@@ -171,6 +210,18 @@ impl<S> PlayerImpl<S> {
         {
             return Err(PlayError::NotReady);
         }
+        Ok(())
+    }
+
+    pub(super) fn configure_effect(
+        &mut self,
+        lane: LaneId,
+        target: EffectTarget,
+        change: EffectChange,
+        at: When<SessionFrame>,
+        out: &Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError> {
+        self.effect_ready(lane)?;
         self.effects.admit(target, change)?;
         let when = self.lane_when(at, out)?;
         let seq = self.send_lane(LaneCommand::ConfigureEffect { target, change }, when)?;

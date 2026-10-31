@@ -90,3 +90,29 @@ where
         self.view.config()
     }
 }
+
+impl<S> EffectControl<S, EqBandConfig>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    /// Prepare a dB trajectory for this bound band's installed effect.
+    /// # Errors
+    /// Refuses malformed curves, stale identity, an unreachable start or full capacity.
+    pub fn gain_program(&self, knots: Vec<kithara_play::ParameterKnot>) -> Result<(), QueueError> {
+        let EffectTarget::EqBand { effect, band } = self.target else {
+            return Err(PlayError::NotReady.into());
+        };
+        let program = kithara_play::EffectProgram::new(
+            kithara_play::EffectParameter::EqGain { effect, band },
+            knots,
+        )
+        .map_err(|error| PlayError::InvalidConfiguration {
+            reason: error.to_string(),
+        })?;
+        self.queue.call(QueueCommand::EffectProgram {
+            item: self.item,
+            lane: self.lane,
+            program,
+        })
+    }
+}

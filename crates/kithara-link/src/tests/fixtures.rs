@@ -261,6 +261,7 @@ impl Player<TestPools> for ScriptedTrack {
             TrackCommand::Release => Command::Release,
             TrackCommand::Supersede
             | TrackCommand::GainProgram(_)
+            | TrackCommand::EffectProgram { .. }
             | TrackCommand::ConfigureEffect { .. }
             | TrackCommand::Fade { .. }
             | TrackCommand::PlayAfter { .. }

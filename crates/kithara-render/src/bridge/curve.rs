@@ -1,4 +1,4 @@
-use kithara_dsp::param::CurveShape;
+use kithara_dsp::curve::CurveShape;
 use kithara_signal::SessionFrame;
 use num_traits::ToPrimitive;
 
@@ -48,6 +48,14 @@ pub enum ParameterCurveError {
 #[non_exhaustive]
 pub(crate) struct ParameterCurve {
     knots: Box<[ParameterKnot]>,
+}
+
+pub(super) struct ParameterSegment {
+    pub(super) left: f64,
+    pub(super) right: f64,
+    pub(super) shape: CurveShape,
+    pub(super) position: u64,
+    pub(super) duration: u64,
 }
 
 impl ParameterCurve {
@@ -103,6 +111,16 @@ impl ParameterCurve {
     /// Exact knot and held values return equal endpoints, without interpolation.
     #[must_use]
     pub(crate) fn segment_at(&self, elapsed: u64) -> (f64, f64, f64) {
+        let segment = self.segment(elapsed);
+        if segment.duration == 0 || segment.position == 0 {
+            return (segment.left, segment.left, 0.0);
+        }
+        let time = segment.position.to_f64().expect("u64 is finite in f64")
+            / segment.duration.to_f64().expect("u64 is finite in f64");
+        (segment.left, segment.right, segment.shape.progress(time))
+    }
+
+    pub(super) fn segment(&self, elapsed: u64) -> ParameterSegment {
         let start = self.start();
         let index = self.knots.partition_point(|knot| {
             knot.at
@@ -114,19 +132,29 @@ impl ParameterCurve {
             .get(index.saturating_sub(1))
             .expect("first knot has offset zero");
         let left_at = left.at.frames_since(start).expect("ordered program");
-        let Some(right) = self.knots.get(index) else {
-            return (left.value, left.value, 0.0);
-        };
-        if elapsed == left_at {
-            return (left.value, left.value, 0.0);
-        }
-        let duration = right.at.frames_since(left.at).expect("ordered segment");
-        let time = elapsed
-            .saturating_sub(left_at)
-            .to_f64()
-            .expect("u64 is finite in f64")
-            / duration.to_f64().expect("u64 is finite in f64");
-        (left.value, right.value, left.shape.progress(time))
+        self.knots.get(index).map_or(
+            ParameterSegment {
+                left: left.value,
+                right: left.value,
+                shape: left.shape,
+                position: 0,
+                duration: 0,
+            },
+            |right| ParameterSegment {
+                left: left.value,
+                right: right.value,
+                shape: left.shape,
+                position: elapsed - left_at,
+                duration: right.at.frames_since(left.at).expect("ordered segment"),
+            },
+        )
+    }
+
+    pub(crate) fn next_offset(&self, elapsed: u64) -> Option<u64> {
+        self.knots
+            .iter()
+            .filter_map(|knot| knot.at.frames_since(self.start()))
+            .find(|offset| *offset > elapsed)
     }
 }
 

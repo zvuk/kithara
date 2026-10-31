@@ -2,7 +2,10 @@ use kithara_bufpool::{HasPool, PoolError};
 use kithara_signal::{AudioChunk, AudioSpec};
 
 use super::{EqBandConfig, EqBandConfigChange, EqConfig, IsolatorEq};
-use crate::{AudioEffect, EffectChange, EffectPrepareError, EffectRefusal, EffectTarget, GainDb};
+use crate::{
+    AudioEffect, EffectAutomation, EffectChange, EffectParameter, EffectPrepareError,
+    EffectRefusal, EffectTarget, GainDb,
+};
 
 #[non_exhaustive]
 pub struct EqEffect {
@@ -71,6 +74,53 @@ impl EqEffect {
 }
 
 impl AudioEffect for EqEffect {
+    fn preserves_frames(&self) -> bool {
+        true
+    }
+
+    fn admits_automation(
+        &self,
+        parameter: EffectParameter,
+        values: std::ops::RangeInclusive<f64>,
+    ) -> bool {
+        let EffectParameter::EqGain { band, .. } = parameter;
+        self.target_gain(band).is_some()
+            && parameter.change(*values.start()).is_ok()
+            && parameter.change(*values.end()).is_ok()
+    }
+
+    fn process_automated(
+        &mut self,
+        mut chunk: AudioChunk,
+        controls: &[EffectAutomation],
+        effect_index: usize,
+    ) -> Result<AudioChunk, EffectRefusal> {
+        for (offset, frame) in chunk
+            .samples
+            .chunks_exact_mut(usize::from(self.channels))
+            .enumerate()
+        {
+            for control in controls
+                .iter()
+                .filter(|control| control.parameter().target().effect() == effect_index)
+            {
+                let EffectParameter::EqGain { band, .. } = control.parameter();
+                let EffectChange::EqBand(EqBandConfigChange::GainDb(gain)) = control.change(offset);
+                self.bands
+                    .get_mut(band)
+                    .expect("admitted EQ band remains installed")
+                    .set_gain_db(gain);
+                self.eq_l.apply_explicit(band, gain);
+                self.eq_r.apply_explicit(band, gain);
+            }
+            frame[0] = self.eq_l.process_sample(frame[0]);
+            if self.channels >= 2 {
+                frame[1] = self.eq_r.process_sample(frame[1]);
+            }
+        }
+        Ok(chunk)
+    }
+
     fn service_deferred(&mut self, spec: AudioSpec) -> Result<(), EffectPrepareError> {
         if spec.channels == 0 {
             return Err(EffectPrepareError::Shape);

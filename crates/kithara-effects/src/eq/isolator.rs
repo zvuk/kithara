@@ -72,6 +72,26 @@ impl IsolatorEq {
     pub fn process_sample(&mut self, input: f32) -> f32 {
         let input = sanitize_sample(input);
         self.gains.tick();
+        if self.gains.has_explicit() {
+            self.bypass.set_mix(
+                if self.gains.all_current(1.0) {
+                    Mix::FULLY_DRY
+                } else {
+                    Mix::FULLY_WET
+                },
+                FadeCurve::Linear,
+            );
+            self.silence.set_mix(
+                if self.gains.len() > 0 && self.gains.all_current(0.0) {
+                    Mix::FULLY_DRY
+                } else {
+                    Mix::FULLY_WET
+                },
+                FadeCurve::Linear,
+            );
+            self.bypass.reset_to_target();
+            self.silence.reset_to_target();
+        }
         let mut output = [match self.gains.len() {
             0 => input,
             1 => sanitize_sample(input * self.gains.linear(0)),
@@ -104,6 +124,20 @@ impl IsolatorEq {
         self.update_mix();
     }
 
+    delegate::delegate! {
+        to self.gains {
+            #[must_use]
+            #[call(len)]
+            pub const fn band_count(&self) -> usize;
+            #[must_use]
+            #[call(target)]
+            pub fn target_gain(&self, band: usize) -> Option<GainDb>;
+            #[cfg(test)]
+            pub(crate) fn is_smoothing(&self) -> bool;
+            pub(crate) fn apply_explicit(&mut self, band: usize, gain_db: GainDb);
+        }
+    }
+
     fn update_mix(&mut self) {
         let all =
             |target| (0..self.gains.len()).all(|band| self.gains.target(band) == Some(target));
@@ -133,19 +167,6 @@ impl IsolatorEq {
         self.gains.update_sample_rate(sample_rate);
         self.filters.update_sample_rate(sample_rate);
     }
-
-    delegate::delegate! {
-        to self.gains {
-            #[must_use]
-            #[call(len)]
-            pub const fn band_count(&self) -> usize;
-            #[must_use]
-            #[call(target)]
-            pub fn target_gain(&self, band: usize) -> Option<GainDb>;
-            #[cfg(test)]
-            pub(crate) fn is_smoothing(&self) -> bool;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -156,6 +177,22 @@ mod tests {
 
     use super::*;
     use crate::test_pools::{pools, pools_with_budget};
+
+    #[kithara::test]
+    fn explicit_floor_does_not_mute_another_band_still_smoothing() {
+        let config = EqConfig::builder(pools()).build();
+        let mut eq = IsolatorEq::new(
+            &config,
+            &super::super::band::generate_log_spaced_bands(2),
+            48_000,
+        )
+        .unwrap();
+        eq.set_gain(1, GainDb::MIN);
+        eq.apply_explicit(0, GainDb::MIN);
+        assert_ne!(eq.process_sample(0.25), 0.0);
+        assert_eq!(eq.target_gain(0), Some(GainDb::MIN));
+        assert_eq!(eq.target_gain(1), Some(GainDb::MIN));
+    }
 
     #[kithara::test]
     fn a_decaying_tail_never_leaks_denormals(eq_impulse: Vec<f32>) {

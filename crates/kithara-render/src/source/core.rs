@@ -9,7 +9,7 @@ use kithara_audio::{
     TrackFailureKind, TrackStep, WaitingReason,
 };
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_effects::{AudioEffect, EffectDrain, EffectDrainStep, apply_effects, reset_effects};
+use kithara_effects::{AudioEffect, EffectDrain, EffectDrainStep, reset_effects};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_warp::WarpRenderError;
@@ -541,6 +541,7 @@ where
             }
             Ok(EffectDrainStep::Progress) => TrackStep::StateChanged,
             Ok(EffectDrainStep::Exhausted) => {
+                self.lane.cancel_programs(self.warp.engine_latency());
                 self.drain_state = DrainState::Exhausted;
                 TrackStep::Eof
             }
@@ -613,7 +614,10 @@ where
     }
 
     fn apply_chain(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        match apply_effects(&mut self.effects, chunk) {
+        match self
+            .lane
+            .apply_effects(&mut self.effects, chunk, self.warp.engine_latency())
+        {
             Ok(output) => output,
             Err(error) => {
                 tracing::error!(%error, "effect input was not admitted");
@@ -722,6 +726,7 @@ where
     }
 
     fn reset_renderers(&mut self) {
+        self.lane.cancel_programs(self.warp.engine_latency());
         self.warp.reset();
         reset_effects(&mut self.effects);
     }

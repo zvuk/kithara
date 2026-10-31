@@ -160,7 +160,7 @@ impl<S> PlayerImpl<S> {
         }
         self.lane_commands
             .iter()
-            .filter(|operation| operation.applied() != Some(false))
+            .filter(|operation| operation.changes_time() && operation.applied() != Some(false))
             .find(|operation| match operation.when {
                 When::At(frame) => {
                     frame.segment == resume.lane.segment && frame.frame > resume.lane.frame

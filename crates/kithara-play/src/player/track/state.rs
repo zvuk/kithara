@@ -21,6 +21,10 @@ pub type Position = Duration;
 
 /// What a track is told to do.
 pub enum TrackCommand<S> {
+    EffectProgram {
+        lane: kithara_render::LaneId,
+        program: kithara_render::bridge::EffectProgram,
+    },
     GainProgram(kithara_render::bridge::SlotGainProgram),
     ConfigureEffect {
         lane: kithara_render::LaneId,
@@ -195,6 +199,13 @@ pub(super) struct LaneOperation {
 }
 
 impl LaneOperation {
+    pub(super) fn changes_time(&self) -> bool {
+        !matches!(
+            self.command,
+            LaneCommand::EffectProgram { .. } | LaneCommand::ConfigureEffect { .. }
+        )
+    }
+
     pub(super) fn applied(&self) -> Option<bool> {
         self.verdict.map(|verdict| verdict.is_ok())
     }

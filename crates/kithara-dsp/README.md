@@ -87,6 +87,8 @@ assert_eq!(samples, [0.0, 0.5]);
 
 <tr><td><code>fade::FadeCurve</code></td><td>firewheel's fade curve, re-exported as the one import path</td></tr>
 
+<tr><td><code>curve::CurveShape</code></td><td>Clock-free Hold, Linear and bounded Cubic progression in f64</td></tr>
+
 <tr><td><code>param::*</code></td><td>firewheel's parameter smoother, smoothing filter and A/B mix, re-exported as the one import path</td></tr>
 
 </table>

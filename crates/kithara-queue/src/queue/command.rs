@@ -61,6 +61,11 @@ where
         item: TrackId,
         program: kithara_play::SlotGainProgram,
     },
+    EffectProgram {
+        item: TrackId,
+        lane: kithara_play::LaneId,
+        program: kithara_play::EffectProgram,
+    },
     ConfigureEffect {
         item: TrackId,
         lane: kithara_play::LaneId,
@@ -196,13 +201,32 @@ where
                     .apply(TrackCommand::GainProgram(program), out)
                     .map_err(Into::into)
             }
-            QueueCommand::ConfigureEffect {
-                item,
-                lane,
-                target,
-                change,
-                at,
-            } => {
+            command @ (QueueCommand::ConfigureEffect { .. }
+            | QueueCommand::EffectProgram { .. }) => {
+                let (item, lane, command) = match command {
+                    QueueCommand::ConfigureEffect {
+                        item,
+                        lane,
+                        target,
+                        change,
+                        at,
+                    } => (
+                        item,
+                        lane,
+                        TrackCommand::ConfigureEffect {
+                            lane,
+                            target,
+                            change,
+                            at,
+                        },
+                    ),
+                    QueueCommand::EffectProgram {
+                        item,
+                        lane,
+                        program,
+                    } => (item, lane, TrackCommand::EffectProgram { lane, program }),
+                    _ => unreachable!("effect command dispatch"),
+                };
                 let index = self
                     .active
                     .position(|active| {
@@ -216,15 +240,7 @@ where
                     .get_mut(index)
                     .ok_or(PlayError::NotReady)?
                     .track
-                    .apply(
-                        TrackCommand::ConfigureEffect {
-                            lane,
-                            target,
-                            change,
-                            at,
-                        },
-                        out,
-                    )
+                    .apply(command, out)
                     .map_err(Into::into)
             }
             QueueCommand::NotifyInterruption(kind) => {

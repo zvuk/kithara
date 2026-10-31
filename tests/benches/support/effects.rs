@@ -352,3 +352,163 @@ pub(super) fn configured_route(c: &mut Criterion) {
     });
     group.finish();
 }
+
+pub(super) fn curves(c: &mut Criterion) {
+    use kithara::effects::{
+        EffectAutomation, EffectParameter, apply_automated_effects, eq::EqBandConfig,
+    };
+    use kithara_dsp::curve::CurveShape;
+    use num_traits::ToPrimitive;
+
+    let region = pools();
+    let mut group = c.benchmark_group("effect_curves");
+    group.sample_size(20);
+    for frames in [13_u16, 256] {
+        for kind in 0..3 {
+            let (label, shape) = match kind {
+                0 => ("hold", CurveShape::HOLD),
+                1 => ("linear", CurveShape::LINEAR),
+                _ => ("cubic", CurveShape::cubic(0.0, 1.0).expect("S shape")),
+            };
+            let eq = EqEffect::new(
+                &EqConfig::builder(region.clone()).build(),
+                vec![EqBandConfig::default()],
+                RATE,
+                2,
+            )
+            .expect("pool fits a one-band EQ");
+            let mut effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(eq)];
+            let input = vec![0.5; usize::from(frames) * 2];
+            let mut chunk = Some(AudioChunk::new(
+                AudioChunkInfo {
+                    spec: spec(),
+                    ..Default::default()
+                },
+                sample_buffer(&region, &input),
+            ));
+            let controls = [EffectAutomation::new(
+                EffectParameter::EqGain { effect: 0, band: 0 },
+                -12.0,
+                6.0,
+                shape,
+                0,
+                u64::from(frames),
+            )
+            .expect("prepared segment")];
+            let expected: Vec<_> = (0..frames)
+                .flat_map(|at| {
+                    let time = f64::from(at) / f64::from(frames);
+                    let progress = match kind {
+                        0 => 0.0,
+                        1 => time,
+                        _ => 3.0 * time * time - 2.0 * time * time * time,
+                    };
+                    let gain_db = (-12.0 + 18.0 * progress).to_f32().expect("EQ range");
+                    [0.5 * 10.0_f32.powf(gain_db / 20.0); 2]
+                })
+                .collect();
+            group.bench_function(format!("chain_{label}/{frames}"), |b| {
+                b.iter(|| {
+                    let mut pcm = chunk.take().expect("frame-preserving chain");
+                    pcm.samples.copy_from_slice(black_box(&input));
+                    chunk = apply_automated_effects(&mut effects, pcm, black_box(&controls))
+                        .expect("admitted parameter block");
+                    black_box(&chunk);
+                });
+                assert_eq!(
+                    chunk.as_ref().expect("output chunk").samples.as_ref(),
+                    expected
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
+pub(super) fn curve_host(c: &mut Criterion) {
+    use kithara::{
+        effects::eq::{EqBandConfig, EqBandConfigControl},
+        play::{CurveShape, ParameterKnot},
+    };
+    use num_traits::ToPrimitive;
+
+    let rt = super::make_runtime();
+    let harness = rt.block_on(async {
+        let (harness, uri) = player_fixture().await;
+        let config = ResourceConfig::for_src(ResourceSrc::parse(uri).expect("fixture URI"))
+            .store(AssetStore::builder(harness.worker().pools().clone()).build())
+            .preload_chunks(NonZeroUsize::MIN)
+            .audio_buffer_chunks(NonZeroUsize::new(2).expect("buffer chunks"))
+            .effects(vec![EffectConfig::Equalizer(vec![EqBandConfig::default()])])
+            .build();
+        harness.load_config(config).await;
+        let _ = harness.render(WARM_FRAMES).await;
+        harness
+    });
+    let control = rt
+        .block_on(harness.with_queue(|queue| queue.eq_band(0, 0)))
+        .expect("bound EQ field");
+    let mut last = Vec::new();
+    {
+        let mut group = c.benchmark_group("effect_curves");
+        group.sample_size(20);
+        group.bench_function("public_host_cubic/1024", |b| {
+            b.iter_batched(
+                || {
+                    rt.block_on(async {
+                        harness
+                            .run(&control, |control| control.set_gain_db(GainDb::DEFAULT))
+                            .await
+                            .expect("manual unity target");
+                        let _ = harness.render(WARM_FRAMES).await;
+                        prepare_window(&harness).await;
+                    });
+                },
+                |()| {
+                    last = rt.block_on(async {
+                        let start = harness.host().position() + 529;
+                        let knots = vec![
+                            ParameterKnot::new(
+                                SessionFrame::new(i64::try_from(start).expect("session frame")),
+                                0.0,
+                                CurveShape::cubic(0.0, 1.0).expect("S shape"),
+                            )
+                            .expect("first knot"),
+                            ParameterKnot::new(
+                                SessionFrame::new(
+                                    i64::try_from(start + 128).expect("session frame"),
+                                ),
+                                -12.0,
+                                CurveShape::HOLD,
+                            )
+                            .expect("final knot"),
+                        ];
+                        harness
+                            .run(&control, move |control| control.gain_program(knots))
+                            .await
+                            .expect("reachable curve");
+                        harness.render(1024).await
+                    });
+                    black_box(&last);
+                },
+                BatchSize::PerIteration,
+            );
+            assert_eq!(last.len(), 2048);
+            for (at, channels) in last.as_chunks::<2>().0.iter().enumerate() {
+                let db = if at < 529 {
+                    0.0
+                } else if at >= 657 {
+                    -12.0
+                } else {
+                    let time = (at - 529).to_f64().expect("local frame") / 128.0;
+                    -12.0 * (3.0 * time * time - 2.0 * time * time * time)
+                };
+                let db = db.to_f32().expect("EQ range");
+                assert_eq!(*channels, [0.5 * 10.0_f32.powf(db / 20.0); 2], "frame {at}");
+            }
+            assert_eq!(control.gain_db(), GainDb::from(-12.0));
+        });
+        group.finish();
+    }
+    rt.block_on(harness.close());
+}

@@ -3,6 +3,7 @@
 
 //! Channel and master audio effects.
 
+mod automation;
 mod chain;
 mod contract;
 mod control;
@@ -13,7 +14,8 @@ mod gain_db;
 mod limiter;
 pub mod node;
 
-pub use chain::{apply_effects, held_source_frames, reset_effects};
+pub use automation::{EffectAutomation, EffectParameter};
+pub use chain::{apply_automated_effects, apply_effects, held_source_frames, reset_effects};
 pub use contract::AudioEffect;
 #[cfg(any(test, feature = "mock"))]
 pub use contract::AudioEffectMock;

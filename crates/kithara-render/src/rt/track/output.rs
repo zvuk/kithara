@@ -199,7 +199,7 @@ impl PlayerTrack {
 
 #[cfg(test)]
 mod tests {
-    use kithara_dsp::param::CurveShape;
+    use kithara_dsp::curve::CurveShape;
     use kithara_test_utils::kithara;
 
     use super::*;

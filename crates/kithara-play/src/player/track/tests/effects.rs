@@ -10,10 +10,10 @@ use kithara_test_utils::bufpool::sample_buffer;
 use super::*;
 use crate::EffectSnapshot;
 
-const FRAMES: u32 = 96;
+pub(super) const FRAMES: u32 = 96;
 const AT: u64 = 17;
 
-fn input(region: &PoolRegion<TestPools>, frames: u32) -> AudioChunk {
+pub(super) fn input(region: &PoolRegion<TestPools>, frames: u32) -> AudioChunk {
     let spec = AudioSpec::new(2, mock::SAMPLE_RATE);
     AudioChunk::new(
         AudioChunkInfo {
@@ -26,7 +26,18 @@ fn input(region: &PoolRegion<TestPools>, frames: u32) -> AudioChunk {
     )
 }
 
-async fn configured_track(rig: &mut Rig) -> (Track, Inbox<LaneProtocol>) {
+pub(super) async fn configured_track(rig: &mut Rig) -> (Track, Inbox<LaneProtocol>) {
+    configured_track_with(
+        rig,
+        vec![EffectConfig::Equalizer(vec![EqBandConfig::default()])],
+    )
+    .await
+}
+
+pub(super) async fn configured_track_with(
+    rig: &mut Rig,
+    effects: Vec<EffectConfig>,
+) -> (Track, Inbox<LaneProtocol>) {
     let resource =
         ResourceConfig::for_src(ResourceSrc::parse("https://example.com/effect.wav").unwrap())
             .store(AssetStore::builder(pools()).build())
@@ -34,38 +45,52 @@ async fn configured_track(rig: &mut Rig) -> (Track, Inbox<LaneProtocol>) {
                 crate::PlayWorkerConfig::builder(pools()).build(),
             ))
             .host_sample_rate(mock::SAMPLE_RATE)
-            .effects(vec![EffectConfig::Equalizer(vec![EqBandConfig::default()])])
+            .effects(effects)
             .build();
     let item = ResourceLoad::new(resource, Box::new(AudioObserverSlot::default().relay()));
     loaded_with_item(rig, A, "configured EQ", item).await
 }
 
-fn effect_source(
+pub(super) fn effect_source(
     inbox: Inbox<LaneProtocol>,
     region: &PoolRegion<TestPools>,
 ) -> kithara_render::WarpSource<kithara_render::mock::ScriptedSource, TestPools> {
+    effect_source_with(inbox, region, 13, 1)
+}
+
+pub(super) fn effect_source_with(
+    inbox: Inbox<LaneProtocol>,
+    region: &PoolRegion<TestPools>,
+    quantum: usize,
+    count: usize,
+) -> kithara_render::WarpSource<kithara_render::mock::ScriptedSource, TestPools> {
     let spec = AudioSpec::new(2, mock::SAMPLE_RATE);
-    let eq = EqEffect::new(
-        &EqConfig::builder(region.clone()).build(),
-        vec![EqBandConfig::default()],
-        spec.sample_rate.get(),
-        spec.channels,
-    )
-    .unwrap();
+    let effects = (0..count)
+        .map(|_| {
+            let eq = EqEffect::new(
+                &EqConfig::builder(region.clone()).build(),
+                vec![EqBandConfig::default()],
+                spec.sample_rate.get(),
+                spec.channels,
+            )
+            .unwrap();
+            Box::new(eq) as Box<dyn AudioEffect>
+        })
+        .collect();
     let raw = kithara_render::mock::ScriptedSource::new([TrackStep::Produced(Fetch::data(input(
         region, FRAMES,
     )))]);
     let warp = kithara_warp::Warp::new(
         (),
         &kithara_warp::WarpConfig::builder()
-            .render_quantum_frames(std::num::NonZeroUsize::new(13).unwrap())
+            .render_quantum_frames(std::num::NonZeroUsize::new(quantum).unwrap())
             .build(),
     );
     kithara_render::WarpSource::new(
         raw,
         warp.renderer(spec, region.clone()),
-        vec![Box::new(eq)],
-        kithara_effects::EffectDrain::new(1, region).unwrap(),
+        effects,
+        kithara_effects::EffectDrain::new(count, region).unwrap(),
         spec,
         region.clone(),
         kithara_render::LaneSetup {
@@ -76,7 +101,7 @@ fn effect_source(
     )
 }
 
-fn confirmed_gain(track: &Track) -> GainDb {
+pub(super) fn confirmed_gain(track: &Track) -> GainDb {
     let snapshot = track.snapshot();
     let EffectSnapshot::Equalizer { bands, .. } = &snapshot.effects[0];
     bands[0].config().gain_db()

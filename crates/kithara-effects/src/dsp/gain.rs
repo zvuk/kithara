@@ -14,6 +14,7 @@ struct SmoothedGain {
     target: GainDb,
     filter: SmoothingFilter,
     target_linear: f32,
+    explicit: bool,
 }
 
 impl SmoothedGain {
@@ -23,6 +24,7 @@ impl SmoothedGain {
             target,
             filter: SmoothingFilter::new(linear),
             target_linear: linear,
+            explicit: false,
         }
     }
 
@@ -38,6 +40,7 @@ impl SmoothedGain {
     }
 
     fn set_target(&mut self, target: GainDb) {
+        self.explicit = false;
         if target == self.target {
             return;
         }
@@ -47,6 +50,9 @@ impl SmoothedGain {
 
     #[inline]
     fn smooth(&mut self, coeff: SmoothingFilterCoeff, settle_ratio: f32) {
+        if self.explicit {
+            return;
+        }
         self.filter.process(self.target_linear, coeff);
         self.filter
             .try_settle(self.target_linear, DEFAULT_GAIN_SPAN, settle_ratio);
@@ -62,6 +68,34 @@ pub(crate) struct GainBank {
 }
 
 impl GainBank {
+    pub(crate) fn apply_explicit(&mut self, band: usize, value: GainDb) {
+        if let Some(gain) = self.gains.get_mut(band) {
+            gain.target = value;
+            gain.target_linear = value.linear();
+            gain.filter = SmoothingFilter::new(gain.target_linear);
+            gain.explicit = true;
+        }
+    }
+
+    delegate::delegate! {
+        to self.gains {
+            pub(crate) const fn len(&self) -> usize;
+            #[expr($.current())]
+            #[call(index)]
+            pub(crate) fn linear(&self, band: usize) -> f32;
+            #[expr($.map(SmoothedGain::target))]
+            #[call(get)]
+            pub(crate) fn target(&self, band: usize) -> Option<GainDb>;
+            #[expr($.any(|gain| gain.explicit))]
+            #[call(iter)]
+            pub(crate) fn has_explicit(&self) -> bool;
+        }
+    }
+
+    pub(crate) fn all_current(&self, target: f32) -> bool {
+        self.gains.iter().all(|gain| gain.current() == target)
+    }
+
     pub(crate) fn new(
         gains_db: impl Iterator<Item = GainDb>,
         sample_rate: f32,
@@ -109,18 +143,6 @@ impl GainBank {
     pub(crate) fn update_sample_rate(&mut self, sample_rate: f32) {
         self.coeff = smoothing_coeff(sample_rate, self.smoothing);
     }
-
-    delegate::delegate! {
-        to self.gains {
-            pub(crate) const fn len(&self) -> usize;
-            #[expr($.current())]
-            #[call(index)]
-            pub(crate) fn linear(&self, band: usize) -> f32;
-            #[expr($.map(SmoothedGain::target))]
-            #[call(get)]
-            pub(crate) fn target(&self, band: usize) -> Option<GainDb>;
-        }
-    }
 }
 
 fn smoothing_coeff(sample_rate: f32, smoothing: SmootherConfig) -> SmoothingFilterCoeff {
@@ -134,6 +156,35 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    #[kithara::test]
+    fn explicit_gain_holds_exactly_and_manual_continues_from_it() {
+        let smoothing = SmootherConfig::default();
+        let mut bank = GainBank::new([GainDb::DEFAULT; 2].into_iter(), 48_000.0, smoothing);
+        bank.set(1, GainDb::MIN);
+        let mut unrelated = SmoothingFilter::new(1.0);
+        let coeff = smoothing_coeff(48_000.0, smoothing);
+        for _ in 0..19 {
+            bank.apply_explicit(0, GainDb::MAX);
+            bank.tick();
+            unrelated.process(0.0, coeff);
+            unrelated.try_settle(0.0, DEFAULT_GAIN_SPAN, smoothing.settle_ratio);
+            assert_eq!(bank.linear(0), GainDb::MAX.linear());
+            assert_eq!(bank.linear(1), unrelated.z1);
+        }
+        for _ in 0..7 {
+            bank.tick();
+            assert_eq!(bank.linear(0), GainDb::MAX.linear());
+        }
+        let mut manual = SmoothingFilter::new(GainDb::MAX.linear());
+        bank.set(0, GainDb::MIN);
+        for _ in 0..19 {
+            bank.tick();
+            manual.process(0.0, coeff);
+            manual.try_settle(0.0, DEFAULT_GAIN_SPAN, smoothing.settle_ratio);
+            assert_eq!(bank.linear(0), manual.z1);
+        }
+    }
 
     /// `IsolatorEq::new` takes a plain `u32`, so a caller can hand the bank a
     /// rate no filter can be built from. The band still has to arrive.

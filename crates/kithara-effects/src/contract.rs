@@ -1,6 +1,9 @@
 use kithara_signal::{AudioChunk, AudioSpec};
 
-use crate::{EffectChange, EffectPrepareError, EffectRefusal, EffectTarget};
+use crate::{
+    EffectAutomation, EffectChange, EffectParameter, EffectPrepareError, EffectRefusal,
+    EffectTarget,
+};
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
@@ -9,6 +12,34 @@ mod kithara {
 /// Audio processing effect in the chain (transforms decoded-audio chunks).
 #[kithara::mock(api = AudioEffectMock)]
 pub trait AudioEffect: Send + 'static {
+    /// Whether every input frame produces exactly one output frame, with no flush PCM.
+    fn preserves_frames(&self) -> bool {
+        false
+    }
+
+    /// Whether the installed state admits explicit values for this field.
+    fn admits_automation(
+        &self,
+        parameter: EffectParameter,
+        values: std::ops::RangeInclusive<f64>,
+    ) -> bool {
+        let _ = (parameter, values);
+        false
+    }
+
+    /// Process one frame-preserving block without target smoothing.
+    /// # Errors
+    /// Unsupported stages refuse; admission must precede any processing.
+    fn process_automated(
+        &mut self,
+        chunk: AudioChunk,
+        controls: &[EffectAutomation],
+        effect_index: usize,
+    ) -> Result<AudioChunk, EffectRefusal> {
+        let _ = (chunk, controls, effect_index);
+        Err(EffectRefusal)
+    }
+
     /// Apply one prepared field without clearing history or allocating.
     /// # Errors
     /// Refuses unsupported targets or contextual bounds without changing state.

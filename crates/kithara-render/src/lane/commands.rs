@@ -64,7 +64,7 @@ impl Lane {
         let declick_frames = self.declick_frames(spec.sample_rate).get();
         loop {
             let deferred = self.deferred_ready();
-            let Some(due) = next_due(&mut self.inbox, &mut self.state, deferred)? else {
+            let Some(mut due) = next_due(&mut self.inbox, &mut self.state, deferred)? else {
                 break;
             };
             if !admits_effect_batch(due.commands()) {
@@ -74,10 +74,27 @@ impl Lane {
             if changed == LaneChange::None {
                 changed = LaneChange::Controls;
             }
+            if matches!(due.commands(), [LaneCommand::EffectProgram { .. }]) {
+                match self
+                    .state
+                    .start_program(&mut due, chain, warp.engine_latency())
+                {
+                    Ok(()) => {
+                        due.commit();
+                    }
+                    Err(failure) => due.refuse(failure),
+                }
+                continue;
+            }
             let at = due.at();
-            let effects =
-                self.state
-                    .execute_commands(&due, source, warp, deferred, declick_frames, chain)?;
+            let effects = self.state.execute_commands(
+                &mut due,
+                source,
+                warp,
+                deferred,
+                declick_frames,
+                chain,
+            )?;
             let CommandEffects {
                 segment,
                 requested_entry,
@@ -120,8 +137,25 @@ impl Lane {
                 drop(self.inbox.resume(seq, self.state.cursor, self.state.cursor));
             }
         }
+        self.finish_source_commands(changed, source, warp, spec)
+    }
+
+    fn finish_source_commands<T, S>(
+        &mut self,
+        mut changed: LaneChange,
+        source: &mut T,
+        warp: &mut WarpRenderer<S>,
+        spec: AudioSpec,
+    ) -> Result<LaneChange, TrackFailureKind>
+    where
+        T: AudioSource<Chunk = AudioChunk>,
+        S: HasPool<f32>,
+    {
         if self.land_jump(source, warp, spec)? {
             changed = LaneChange::Source;
+        }
+        if changed == LaneChange::Source {
+            self.cancel_programs(warp.engine_latency());
         }
         Ok(changed)
     }
@@ -129,9 +163,12 @@ impl Lane {
 
 fn admits_effect_batch(commands: &[LaneCommand]) -> bool {
     commands.len() == 1
-        || commands
-            .iter()
-            .all(|command| !matches!(command, LaneCommand::ConfigureEffect { .. }))
+        || commands.iter().all(|command| {
+            !matches!(
+                command,
+                LaneCommand::ConfigureEffect { .. } | LaneCommand::EffectProgram { .. }
+            )
+        })
 }
 
 #[derive(Default)]
@@ -187,7 +224,7 @@ impl LaneState {
 
     fn execute_commands<T, S>(
         &mut self,
-        due: &Due<'_, super::LaneProtocol>,
+        due: &mut Due<'_, super::LaneProtocol>,
         source: &mut T,
         warp: &mut WarpRenderer<S>,
         deferred: bool,
@@ -201,7 +238,8 @@ impl LaneState {
         let revision = due.seq().get();
         let at = due.at();
         let mut effects = CommandEffects::default();
-        for command in due.commands() {
+        for index in 0..due.commands().len() {
+            let command = &due.commands()[index];
             tracing::debug!(
                 seq = revision,
                 actual_apply_segment = at.segment.get(),
@@ -213,6 +251,7 @@ impl LaneState {
             );
             match command {
                 LaneCommand::ConfigureEffect { target, change } => {
+                    let parameter = kithara_effects::EffectParameter::from_change(*target, *change);
                     if chain
                         .get_mut(target.effect())
                         .is_none_or(|effect| effect.configure(*target, *change).is_err())
@@ -220,6 +259,10 @@ impl LaneState {
                         effects.refusal = Some(CommandRefusal::Effect);
                         break;
                     }
+                    self.cancel_parameter(parameter, due, warp.engine_latency());
+                }
+                LaneCommand::EffectProgram { .. } => {
+                    unreachable!("program admission precedes scalar dispatch")
                 }
                 LaneCommand::SetSpeed(curve) => warp
                     .set_speed(curve.clone(), revision)

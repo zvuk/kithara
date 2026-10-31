@@ -359,6 +359,8 @@ impl<S> PlayerImpl<S> {
         let lane = self.lane.as_mut().ok_or(PlayError::NotReady)?;
         let seq = Outbox::<S>::lane(lane, when, commands.clone())?;
         self.lane_commands
+            .retain(|operation| operation.changes_time() || operation.applied().is_none());
+        self.lane_commands
             .extend(commands.into_iter().map(|command| {
                 tracing::debug!(
                     item = u64::from(self.item),

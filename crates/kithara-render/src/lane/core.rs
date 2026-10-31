@@ -15,6 +15,8 @@ use kithara_sync::SpeedCurve;
 use kithara_warp::{StretchKind, WarpRenderError, WarpRenderer};
 use num_traits::ToPrimitive;
 
+#[path = "automation.rs"]
+mod automation;
 #[path = "commands.rs"]
 mod commands;
 
@@ -33,6 +35,10 @@ pub struct LaneFrame {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum LaneCommand {
+    EffectProgram {
+        program: crate::bridge::EffectProgram,
+        applied: Option<kithara_effects::EffectChange>,
+    },
     ConfigureEffect {
         target: kithara_effects::EffectTarget,
         change: kithara_effects::EffectChange,
@@ -188,6 +194,7 @@ pub(crate) struct Lane {
 }
 
 struct LaneState {
+    programs: [Option<automation::RunningEffect>; crate::bridge::EffectProgram::MAX_ACTIVE],
     cursor: LaneFrame,
     position: Option<Duration>,
     preload_chunks: NonZeroUsize,
@@ -209,6 +216,7 @@ impl Lane {
         Self {
             inbox,
             state: LaneState {
+                programs: [None; crate::bridge::EffectProgram::MAX_ACTIVE],
                 cursor: LaneFrame::default(),
                 position: None,
                 preload_chunks,
@@ -355,6 +363,7 @@ impl Lane {
             .map_or(usize::MAX, |frames| {
                 usize::try_from(frames).unwrap_or(usize::MAX)
             });
+        let due = due.min(self.program_limit());
         self.state.jump.map_or(due, |jump| {
             due.min(jump.output_limit(self.state.cursor.frame))
         })

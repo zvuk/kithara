@@ -31,7 +31,7 @@ pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
 pub use kithara_effects::{
-    EffectChange, EffectConfig, EffectTarget, GainDb,
+    EffectChange, EffectConfig, EffectParameter, EffectTarget, GainDb,
     eq::{EqBandConfig, EqBandConfigChange, EqBandConfigControl},
 };
 pub use kithara_net::Headers;
@@ -41,9 +41,9 @@ pub use kithara_render::{
     PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
     bridge::{
         CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckMixSettings,
-        DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, EqSnapshot,
-        FadeDir, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault, Returned,
-        RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot,
+        DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, EffectProgram,
+        EqSnapshot, FadeDir, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault,
+        Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot,
     },
     dispatch,
     rt::{

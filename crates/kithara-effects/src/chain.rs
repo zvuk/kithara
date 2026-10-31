@@ -1,6 +1,59 @@
 use kithara_signal::AudioChunk;
+use kithara_test_utils::kithara;
 
-use crate::{AudioEffect, EffectPrepareError};
+use crate::{AudioEffect, EffectAutomation, EffectPrepareError};
+
+/// Apply explicit frame values through the same frame-preserving chain.
+/// # Errors
+/// Refuses unsupported parameters, values, formats or geometry before processing.
+#[kithara::rtsan_forbid_blocking]
+pub fn apply_automated_effects(
+    effects: &mut [Box<dyn AudioEffect>],
+    mut chunk: AudioChunk,
+    controls: &[EffectAutomation],
+) -> Result<Option<AudioChunk>, EffectPrepareError> {
+    check_geometry(&chunk)?;
+    for effect in &*effects {
+        check_input(&**effect, &chunk)?;
+        if !effect.preserves_frames() {
+            return Err(EffectPrepareError::Shape);
+        }
+    }
+    for control in controls {
+        if !control.admits_frames(chunk.frames())
+            || effects
+                .get(control.parameter().target().effect())
+                .is_none_or(|effect| {
+                    !effect.admits_automation(control.parameter(), control.value_range())
+                })
+        {
+            return Err(EffectPrepareError::Shape);
+        }
+    }
+    let frames = chunk.frames();
+    let spec = chunk.spec();
+    for (index, effect) in effects.iter_mut().enumerate() {
+        if controls
+            .iter()
+            .any(|control| control.parameter().target().effect() == index)
+        {
+            chunk = effect
+                .process_automated(chunk, controls, index)
+                .map_err(|_| EffectPrepareError::Shape)?;
+        } else {
+            let Some(output) = effect.process(chunk) else {
+                return Err(EffectPrepareError::Shape);
+            };
+            chunk = output;
+        }
+        check_geometry(&chunk)?;
+        if chunk.frames() != frames || chunk.spec() != spec {
+            return Err(EffectPrepareError::Shape);
+        }
+    }
+    check_geometry(&chunk)?;
+    Ok(Some(chunk))
+}
 
 pub(crate) fn check_geometry(chunk: &AudioChunk) -> Result<(), EffectPrepareError> {
     let channels = usize::from(chunk.spec().channels);
@@ -66,6 +119,59 @@ mod tests {
 
     use super::*;
     use crate::EffectDrain;
+
+    #[kithara::test]
+    fn automated_chain_refuses_undeclared_frame_axes_before_any_stage_processes() {
+        use kithara_dsp::curve::CurveShape;
+
+        use crate::EffectParameter;
+        let region = pools();
+        let mut effects: Vec<Box<dyn AudioEffect>> = vec![
+            Box::new(Unprocessed),
+            Box::new(Tail {
+                spec: spec(2),
+                output: None,
+            }),
+        ];
+        let chunk = AudioChunk::new(
+            AudioChunkInfo {
+                spec: spec(2),
+                ..Default::default()
+            },
+            sample_buffer(&region, &[0.25; 16]),
+        );
+        let control = EffectAutomation::new(
+            EffectParameter::EqGain { effect: 0, band: 0 },
+            0.0,
+            -12.0,
+            CurveShape::LINEAR,
+            0,
+            80,
+        )
+        .unwrap();
+        assert!(matches!(
+            apply_automated_effects(&mut effects, chunk, &[control]),
+            Err(EffectPrepareError::Shape)
+        ));
+    }
+
+    struct Unprocessed;
+
+    impl AudioEffect for Unprocessed {
+        fn preserves_frames(&self) -> bool {
+            true
+        }
+        fn process(&mut self, _: AudioChunk) -> Option<AudioChunk> {
+            panic!("a later stage must refuse before this stage processes PCM");
+        }
+        fn flush(&mut self) -> Option<AudioChunk> {
+            None
+        }
+        fn held_source_frames(&self) -> u64 {
+            0
+        }
+        fn reset(&mut self) {}
+    }
 
     struct Tail {
         spec: AudioSpec,
