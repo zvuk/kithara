@@ -194,7 +194,9 @@ async fn audio_server(
     native,
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(1),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
+    tracing(
+        "hls_heavy::stress_chunk_integrity=info,kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug"
+    )
 )]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
