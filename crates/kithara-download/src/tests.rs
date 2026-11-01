@@ -437,6 +437,73 @@ async fn downloader_shutdown_cancels_queued_commands() {
     }
 }
 
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn a_new_peer_is_polled_while_fetch_capacity_is_full() {
+    let url = Url::parse("http://example.test/queued").expect("valid test URL");
+    let cancel = CancelToken::never();
+    let gate = CompletionGate::new(2);
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let dl = Downloader::new(DownloaderConfig {
+        cancel: Some(cancel.clone()),
+        max_concurrent: 0,
+        ..test_config()
+    });
+    let first = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(vec![cancellation_cmd(&url, &gate, &errors)])),
+        yielded: Notify::default(),
+    });
+    let _first_handle = dl.register(first.clone(), None);
+    first.yielded.notified().await;
+
+    let second = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(vec![cancellation_cmd(&url, &gate, &errors)])),
+        yielded: Notify::default(),
+    });
+    let _second_handle = dl.register(second.clone(), None);
+    second.yielded.notified().await;
+
+    cancel.cancel();
+    gate.wait().await;
+    assert_eq!(gate.done.load(Ordering::SeqCst), 2);
+    assert!(matches!(
+        errors.lock().as_slice(),
+        [Some(FetchError::Cancelled), Some(FetchError::Cancelled)]
+    ));
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn a_cancelled_queued_fetch_settles_without_capacity() {
+    let url = Url::parse("http://example.test/queued").expect("valid test URL");
+    let epoch = CancelToken::never();
+    let gate = CompletionGate::new(1);
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let mut command = cancellation_cmd(&url, &gate, &errors);
+    command.cancel = Some(epoch.clone());
+    let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(vec![command])),
+        yielded: Notify::default(),
+    });
+    let dl = Downloader::new(DownloaderConfig {
+        max_concurrent: 0,
+        ..test_config()
+    });
+    let _handle = dl.register(peer.clone(), None);
+    peer.yielded.notified().await;
+
+    epoch.cancel();
+    let _new_handle = dl.register(Arc::new(MockPeer::new()), None);
+    gate.wait().await;
+
+    assert_eq!(gate.done.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        errors.lock().as_slice(),
+        [Some(FetchError::Cancelled)]
+    ));
+}
+
 /// A downloader with no parent cancel is shut down by its last handle: the loop
 /// must not keep itself alive, or it strands every command it still queues and
 /// keeps its client and ABR controller for the life of the runtime.

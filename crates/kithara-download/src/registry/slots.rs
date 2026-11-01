@@ -119,6 +119,11 @@ impl Slots {
         for slot_idx in 0..consts::SLOT_COUNT {
             for slot_entry in take(&mut self.slots[slot_idx]) {
                 let cmd = &slot_entry.cmd;
+                if cmd.cancel.is_cancelled() {
+                    let SlotEntry { cmd, peer_cancel } = slot_entry;
+                    crate::batch::deliver_cancelled_with_event(cmd, &peer_cancel);
+                    continue;
+                }
                 let Some(peer_idx) = cmd.peer else {
                     self.slots[slot_idx].push_back(slot_entry);
                     continue;
