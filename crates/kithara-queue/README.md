@@ -87,6 +87,11 @@ only to the first load.
 
 ## Key Types
 
+`QueueControl::eq_band(effect, band)` returns a Config control bound to the loaded
+track. Import `kithara_play::EqBandConfigControl` for generated gain setters, or
+use `Configure` with `When<SessionFrame>` for a timed step. Retired handles refuse
+writes and retain their last confirmed settings.
+
 [`Queue<S>`] owns a `PlayerImpl<S>` (from `kithara-play`) and composes it with:
 
 - an ordered `Vec<TrackEntry>` indexed by stable [`TrackId`]s,

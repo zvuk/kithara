@@ -302,7 +302,7 @@ mod tests {
             let job = observed
                 .statuses
                 .iter()
-                .find(|status| status.context == "GitLab / apple:test")
+                .find(|status| status.context.starts_with("GitLab / apple:test ["))
                 .unwrap();
             assert_eq!(job.state, expected_job, "{job_status}");
         }
@@ -331,7 +331,7 @@ mod tests {
             let manual = observed
                 .statuses
                 .iter()
-                .find(|status| status.context == "GitLab / deep:rtsan")
+                .find(|status| status.context.starts_with("GitLab / deep:rtsan ["))
                 .unwrap();
             assert_eq!(manual.state, expected);
             assert_eq!(manual.description, "manual");

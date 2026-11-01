@@ -11,7 +11,7 @@ use crate::{
     analysis::AnalysisService,
     broadcast::Broadcaster,
     config::AppConfig,
-    deck::{Deck, DeckId, DeckSet},
+    deck::DeckSet,
     pools::AppHost,
     sources::build_sources,
     state::StateController,
@@ -20,24 +20,19 @@ use crate::{
 
 pub(crate) fn build(
     config: AppConfig,
-    mut host: AppHost,
+    host: AppHost,
     snapshots: Arc<ArcSwap<EngineSnapshot>>,
 ) -> Result<Engine, EngineError> {
-    let decks = vec![
-        Deck::build(DeckId(0), &config, &mut host)?,
-        Deck::build(DeckId(1), &config, &mut host)?,
-    ];
-    let mut session = DeckSet::new(host, decks);
-    session.commit(session.mix().clone())?;
-
     let base_worker = config
         .base_worker
         .clone()
         .ok_or(EngineError::Missing("base worker"))?;
+
     let mut dispatcher = DispatcherConfig::builder()
         .name("kithara-analysis-persistence")
         .build();
     dispatcher.apply(config.dispatcher.clone());
+
     let persistence = AnalysisPersistence::new(
         AnalysisPersistenceConfig::builder()
             .worker(base_worker)
@@ -50,29 +45,29 @@ pub(crate) fn build(
             .task(TaskConfig::new())
             .build(),
     )?;
+
     let (analysis, handle) = AnalysisService::new(&config, persistence, config.shutdown.child());
     task::spawn(analysis.run());
 
-    if let Some(first) = session.decks().first() {
-        first.queue.set_tracks(build_sources(&config))?;
+    let mut session = DeckSet::new(&config, host, |queue, cancel, grids| {
+        StateController::new(
+            queue.control().clone(),
+            cancel.child(),
+            handle.clone(),
+            grids,
+        )
+    })?;
+    session.send_levels()?;
+
+    if let Some(first) = session.records().first() {
+        first.queue().set_tracks(build_sources(&config))?;
     }
+
     let broadcast = config
         .broadcast
         .clone()
         .map(Broadcaster::new)
         .ok_or(EngineError::Missing("broadcast service"))?;
-    Ok(Engine::new(
-        session,
-        config,
-        broadcast,
-        snapshots,
-        handle.clone(),
-        |deck| {
-            StateController::new(
-                deck.queue.control().clone(),
-                deck.cancel_child(),
-                handle.clone(),
-            )
-        },
-    ))
+
+    Ok(Engine::new(session, config, broadcast, snapshots, handle))
 }

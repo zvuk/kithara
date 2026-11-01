@@ -178,6 +178,11 @@ pub(super) fn build(
     .with_context(|| format!("lock {subject}"))?;
     let lease = kithara_devtools::lease::hold(target)
         .with_context(|| format!("lease xtask build directory {}", target.display()))?;
+    if crate::ci::ci_in(var)
+        && let Err(error) = crate::ci::collect_garbage(target, consts::GARBAGE_WINDOW)
+    {
+        warn!(%error, path = %target.display(), "xtask build units could not be collected");
+    }
     Ok(BuildLock {
         _sources: claim_beside_alias(checkout, target, var)?,
         _lock: lock,
@@ -641,6 +646,44 @@ mod tests {
             FileLock::try_exclusive(lease),
             Err(TryLockError::WouldBlock)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn entering_an_xtask_build_collects_superseded_cargo_units() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let target = temp.path().join("target");
+        let profile = target.join("debug");
+        fs::create_dir_all(profile.join("deps"))?;
+        let old = "1111111111111111";
+        let current = "2222222222222222";
+        for (hash, age) in [(old, 3 * consts::DAY), (current, Duration::ZERO)] {
+            let unit = profile.join(".fingerprint").join(format!("xtask-{hash}"));
+            fs::create_dir_all(&unit)?;
+            fs::write(
+                unit.join("bin-xtask.json"),
+                r#"{"features":"[]","deps":[]}"#,
+            )?;
+            let fingerprint = unit.join("bin-xtask");
+            fs::write(&fingerprint, hash)?;
+            fs::File::options()
+                .write(true)
+                .open(fingerprint)?
+                .set_modified(SystemTime::now() - age)?;
+            fs::write(profile.join("deps").join(format!("xtask-{hash}")), "binary")?;
+        }
+
+        let _build = super::build(temp.path(), &target, &|name| {
+            (name == "CI").then(|| OsString::from("true"))
+        })?;
+
+        assert!(!profile.join("deps").join(format!("xtask-{old}")).exists());
+        assert!(
+            profile
+                .join("deps")
+                .join(format!("xtask-{current}"))
+                .is_file()
+        );
         Ok(())
     }
 

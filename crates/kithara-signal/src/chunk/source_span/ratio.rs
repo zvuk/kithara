@@ -63,6 +63,32 @@ impl Ratio {
         NonZeroU128::new(quotient(first.get(), common).checked_mul(second.get())?)
     }
 
+    /// Combines coprime fractions over their least common denominator. Only the
+    /// shared factor of the denominators can divide the combined numerator, so
+    /// the result is reduced by a divisor of that factor instead of the whole
+    /// common denominator.
+    fn combine(self, other: Self, numerator: fn(u128, u128) -> Option<u128>) -> Option<Self> {
+        let shared = NonZeroU128::new(divisor(self.denominator.get(), other.denominator.get()))?;
+        let combined = numerator(
+            self.numerator
+                .checked_mul(quotient(other.denominator.get(), shared))?,
+            other
+                .numerator
+                .checked_mul(quotient(self.denominator.get(), shared))?,
+        )?;
+        if combined == 0 {
+            return Self::new(0, NonZeroU128::MIN);
+        }
+        let reduction = NonZeroU128::new(divisor(combined, shared.get()))?;
+        Some(Self {
+            numerator: quotient(combined, reduction),
+            denominator: NonZeroU128::new(
+                quotient(self.denominator.get(), shared)
+                    .checked_mul(quotient(other.denominator.get(), reduction))?,
+            )?,
+        })
+    }
+
     pub(super) fn add(self, other: Self) -> Option<Self> {
         if other.numerator == 0 {
             return Some(self);
@@ -70,22 +96,14 @@ impl Ratio {
         if self.numerator == 0 {
             return Some(other);
         }
-        let denominator = Self::common(self.denominator, other.denominator)?;
-        Self::new(
-            self.at(denominator)?.checked_add(other.at(denominator)?)?,
-            denominator,
-        )
+        self.combine(other, u128::checked_add)
     }
 
     pub(super) fn sub(self, other: Self) -> Option<Self> {
         if other.numerator == 0 {
             return Some(self);
         }
-        let denominator = Self::common(self.denominator, other.denominator)?;
-        Self::new(
-            self.at(denominator)?.checked_sub(other.at(denominator)?)?,
-            denominator,
-        )
+        self.combine(other, u128::checked_sub)
     }
 
     pub(super) fn mul(self, other: Self) -> Option<Self> {
@@ -250,6 +268,65 @@ mod tests {
                     euclid(first, second),
                     "first={first}, second={second}",
                 );
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn shared_factor_sums_match_full_common_denominator_reduction() {
+        let reference = |first: Ratio, second: Ratio, add: bool| {
+            let denominator = Ratio::common(first.denominator, second.denominator)?;
+            let (first, second) = (first.at(denominator)?, second.at(denominator)?);
+            let numerator = if add {
+                first.checked_add(second)?
+            } else {
+                first.checked_sub(second)?
+            };
+            Ratio::new(numerator, denominator)
+        };
+        let mut components = vec![
+            1,
+            2,
+            3,
+            1 << 32,
+            3 << 31,
+            44_100,
+            48_000,
+            44_100 << 32,
+            u128::from(u64::MAX),
+            u128::MAX >> 1,
+            u128::MAX,
+        ];
+        let mut state = 0x2545_F491_4F6C_DD1D_9E37_79B9_7F4A_7C15_u128;
+        for _ in 0..24 {
+            state = state
+                .wrapping_mul(0x2360_ED05_1FC6_5DA4_4385_DF64_9FCC_F645)
+                .wrapping_add(0x5851_F42D_4C95_7F2D_1405_7B7E_F767_814F);
+            components.push((state >> (state % 125)).max(1));
+        }
+        let ratios: Vec<_> = components
+            .iter()
+            .flat_map(|&numerator| {
+                components.iter().filter_map(move |&denominator| {
+                    Ratio::new(numerator, NonZeroU128::new(denominator)?)
+                })
+            })
+            .step_by(7)
+            .collect();
+        for &first in &ratios {
+            for &second in &ratios {
+                for add in [true, false] {
+                    let combined = if add {
+                        first.add(second)
+                    } else {
+                        first.sub(second)
+                    };
+                    if let Some(expected) = reference(first, second, add) {
+                        assert_eq!(combined, Some(expected), "{first:?} {second:?} add={add}");
+                    } else if let Some(value) = combined {
+                        assert_eq!(divisor(value.numerator, value.denominator.get()), 1);
+                    }
+                }
             }
         }
     }

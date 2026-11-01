@@ -268,7 +268,7 @@ impl Bridge {
         let review_lines = self
             .repo
             .fetch_pull_head(&self.github, pull.number, &pull.head_sha)
-            .and_then(|()| self.repo.review_lines(target_sha, &pull.head_sha));
+            .and_then(|()| self.repo.review_size(target_sha, &pull.head_sha));
         self.github
             .report_check_status(&pull.head_sha, &checks::review_size(&review_lines))?;
         review_lines?;

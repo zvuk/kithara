@@ -79,49 +79,65 @@ impl BeatPredictor {
         }
 
         let full_time = mel.shape[1];
-        let border = as_usize(consts::BORDER_SIZE);
-
         let mut beat_logits = pools.get_with_len::<f32>(full_time)?;
         beat_logits.fill(-1000.0);
         let mut downbeat_logits = pools.get_with_len::<f32>(full_time)?;
         downbeat_logits.fill(-1000.0);
 
+        let mut logits = (beat_logits, downbeat_logits);
         for start in generate_starts(full_time).rev() {
-            let chunk = extract_chunk(mel, start, pools)?;
-            let chunk_time = chunk.shape[1];
+            self.predict_chunk(mel, start, pools, &mut logits)?;
+        }
 
-            let mut outputs = match &self.model {
-                PredictorModel::Cpu(model) => model.run(&[("spectrogram", &chunk)], pools)?,
-                #[cfg(feature = "cuda")]
-                PredictorModel::Cuda(model) => model.run(&chunk, pools)?,
-            };
+        Ok(logits)
+    }
 
-            let beat = extract_output(&mut outputs, "beat", "beat_logits")?;
-            let downbeat = extract_output(&mut outputs, "downbeat", "downbeat_logits")?;
-            if beat.data.len() != chunk_time || downbeat.data.len() != chunk_time {
-                return Err(BeatError::Inference {
-                    reason: format!(
-                        "expected {chunk_time} beat/downbeat logits, got {}/{}",
-                        beat.data.len(),
-                        downbeat.data.len()
-                    ),
-                });
-            }
+    fn predict_chunk<S>(
+        &self,
+        mel: &Tensor,
+        start: i64,
+        pools: &PoolRegion<S>,
+        logits: &mut (SampleBuffer, SampleBuffer),
+    ) -> Result<(), BeatError>
+    where
+        S: HasPool<f32>,
+    {
+        let full_time = mel.shape[1];
+        let border = as_usize(consts::BORDER_SIZE);
+        let chunk = extract_chunk(mel, start, pools)?;
+        let chunk_time = chunk.shape[1];
 
-            let valid_beat = &beat.data[border..chunk_time - border];
-            let valid_downbeat = &downbeat.data[border..chunk_time - border];
+        let mut outputs = match &self.model {
+            PredictorModel::Cpu(model) => model.run(&[("spectrogram", &chunk)], pools)?,
+            #[cfg(feature = "cuda")]
+            PredictorModel::Cuda(model) => model.run(&chunk, pools)?,
+        };
 
-            let write_start = as_usize(start + consts::BORDER_SIZE);
-            for (i, (&b, &d)) in valid_beat.iter().zip(valid_downbeat.iter()).enumerate() {
-                let dest = write_start + i;
-                if dest < full_time {
-                    beat_logits[dest] = b;
-                    downbeat_logits[dest] = d;
-                }
+        let beat = extract_output(&mut outputs, "beat", "beat_logits")?;
+        let downbeat = extract_output(&mut outputs, "downbeat", "downbeat_logits")?;
+        if beat.data.len() != chunk_time || downbeat.data.len() != chunk_time {
+            return Err(BeatError::Inference {
+                reason: format!(
+                    "expected {chunk_time} beat/downbeat logits, got {}/{}",
+                    beat.data.len(),
+                    downbeat.data.len()
+                ),
+            });
+        }
+
+        let valid_beat = &beat.data[border..chunk_time - border];
+        let valid_downbeat = &downbeat.data[border..chunk_time - border];
+
+        let write_start = as_usize(start + consts::BORDER_SIZE);
+        for (i, (&b, &d)) in valid_beat.iter().zip(valid_downbeat.iter()).enumerate() {
+            let dest = write_start + i;
+            if dest < full_time {
+                logits.0[dest] = b;
+                logits.1[dest] = d;
             }
         }
 
-        Ok((beat_logits, downbeat_logits))
+        Ok(())
     }
 }
 

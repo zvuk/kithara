@@ -115,7 +115,9 @@ mod tests {
     }
 
     fn quarantined() -> Vec<String> {
-        crate::arch::config::TokioDepQuarantineThreshold::default().quarantined
+        ["tokio", "tokio-util", "tokio-stream"]
+            .map(String::from)
+            .to_vec()
     }
 
     #[test]

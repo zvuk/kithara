@@ -26,6 +26,48 @@ enum ScopeToken {
     NonCratePath(PathBuf),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Member {
+    name: String,
+    directory: PathBuf,
+    sources: Vec<PathBuf>,
+    readme: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CargoScope {
+    root: PathBuf,
+    members: Vec<Member>,
+}
+
+impl CargoScope {
+    fn members_for_path<'a>(&'a self, path: &'a Path) -> impl Iterator<Item = &'a Member> {
+        let path = if path.is_absolute() {
+            path.strip_prefix(&self.root).ok()
+        } else {
+            Some(path.strip_prefix("./").unwrap_or(path))
+        };
+        let declared = path.is_some_and(|path| {
+            self.members
+                .iter()
+                .any(|member| member.readme.as_deref() == Some(path))
+        });
+        let owner = path.and_then(|path| {
+            self.members
+                .iter()
+                .filter(|member| path.starts_with(&member.directory))
+                .max_by_key(|member| member.directory.components().count())
+        });
+        self.members.iter().filter(move |member| {
+            if declared {
+                member.readme.as_deref() == path
+            } else {
+                owner.is_some_and(|owner| member.name == owner.name)
+            }
+        })
+    }
+}
+
 fn classify_token(
     tok: &str,
     workspace_root: &Path,
@@ -55,8 +97,7 @@ fn classify_token(
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct Scope {
-    /// Crate names from `--crate <name>`. Resolved against
-    /// `<workspace>/crates/<name>/`.
+    /// Crate names from `--crate <name>`, resolved against Cargo membership.
     pub(crate) crates: Vec<String>,
     /// Additional roots used by checks whose policy covers workspace source
     /// outside the historical `crates/` default.
@@ -67,6 +108,7 @@ pub struct Scope {
     /// Tells `flags_for(Clippy|Fmt)` to fall back to workspace-wide because
     /// those tools don't accept arbitrary path scoping.
     pub(crate) has_noncrate_path: bool,
+    cargo: Option<CargoScope>,
 }
 
 impl Scope {
@@ -77,12 +119,67 @@ impl Scope {
             paths,
             has_noncrate_path: false,
             extra_roots: Vec::new(),
+            cargo: None,
         }
+    }
+
+    /// Bind package selection to Cargo identity without widening explicit paths.
+    #[must_use]
+    pub(crate) fn with_metadata(mut self, metadata: &Metadata) -> Self {
+        let root = metadata.workspace_root.as_std_path();
+        let members = metadata
+            .workspace_packages()
+            .into_iter()
+            .filter_map(|package| {
+                let directory = package.manifest_path.as_std_path().parent()?;
+                let mut sources = package
+                    .targets
+                    .iter()
+                    .map(|target| {
+                        let source = target.src_path.as_std_path();
+                        source.strip_prefix(root).unwrap_or(source).to_path_buf()
+                    })
+                    .collect::<Vec<_>>();
+                sources.sort();
+                sources.dedup();
+                Some(Member {
+                    name: package.name.to_string(),
+                    directory: directory
+                        .strip_prefix(root)
+                        .unwrap_or(directory)
+                        .to_path_buf(),
+                    sources,
+                    readme: package.readme.as_ref().and_then(|readme| {
+                        directory
+                            .join(readme)
+                            .canonicalize()
+                            .ok()
+                            .map(|path| path.strip_prefix(root).unwrap_or(&path).to_path_buf())
+                    }),
+                })
+            })
+            .collect();
+        self.cargo = Some(CargoScope {
+            root: root.to_path_buf(),
+            members,
+        });
+        self
     }
 
     /// Crate names extracted from `crates/<name>[/...]` paths. Used by
     /// clippy/fmt flag emission to convert path scope to `-p NAME`.
     fn crate_names_from_paths(&self) -> Vec<String> {
+        if let Some(cargo) = &self.cargo {
+            return self
+                .paths
+                .iter()
+                .flat_map(|path| {
+                    cargo
+                        .members_for_path(path)
+                        .map(|member| member.name.clone())
+                })
+                .collect();
+        }
         self.paths
             .iter()
             .filter_map(|p| {
@@ -169,7 +266,20 @@ impl Scope {
         let mut out = Vec::new();
         let mut seen: Vec<String> = Vec::new();
         for c in &self.crates {
-            let p = format!("crates/{c}{crate_suffix}");
+            let directory = match &self.cargo {
+                Some(cargo) => {
+                    let Some(member) = cargo.members.iter().find(|member| member.name == *c) else {
+                        continue;
+                    };
+                    if member.directory.as_os_str().is_empty() {
+                        ".".to_owned()
+                    } else {
+                        member.directory.display().to_string()
+                    }
+                }
+                None => format!("crates/{c}"),
+            };
+            let p = format!("{directory}{crate_suffix}");
             if !seen.contains(&p) {
                 seen.push(p.clone());
                 out.push(p);
@@ -216,17 +326,40 @@ impl Scope {
         if self.is_empty() {
             return true;
         }
-        self.crates
-            .iter()
-            .any(|c| key.starts_with(&format!("crates/{c}/")) || key.contains(c.as_str()))
-            || self.paths.iter().any(|p| {
-                let prefix = p
-                    .strip_prefix("./")
-                    .unwrap_or(p)
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                key.starts_with(&format!("{prefix}/")) || key == prefix
-            })
+        let subject = key.split(':').next().unwrap_or(key);
+        self.crates.iter().any(|c| {
+            if let Some((source, _)) = key.split_once(" -> ") {
+                return source == c;
+            }
+            self.cargo.as_ref().map_or_else(
+                || subject == c || subject.starts_with(&format!("crates/{c}/")),
+                |cargo| {
+                    cargo
+                        .members
+                        .iter()
+                        .find(|member| member.name == subject)
+                        .map_or_else(
+                            || {
+                                cargo
+                                    .members_for_path(Path::new(subject))
+                                    .any(|member| member.name == *c)
+                            },
+                            |member| member.name == *c,
+                        )
+                },
+            )
+        }) || self.paths.iter().any(|p| {
+            let prefix = p
+                .strip_prefix("./")
+                .unwrap_or(p)
+                .to_string_lossy()
+                .replace('\\', "/");
+            key.starts_with(&format!("{prefix}/"))
+                || key == prefix
+                || key
+                    .strip_prefix(prefix.as_str())
+                    .is_some_and(|suffix| suffix.starts_with(':'))
+        })
     }
 
     /// Resolve a list of user-supplied scope tokens (typically from
@@ -257,12 +390,31 @@ impl Scope {
         Ok(scope)
     }
 
-    /// Roots to walk. Empty scope → `<root>/crates` (the legacy default,
-    /// preserves current xtask behavior). Non-empty → one entry per crate
-    /// or path, resolved against `workspace_root`.
+    /// Cargo-bound scopes walk declared target roots; explicit paths remain exact.
+    /// An unbound scope uses the standalone `crates/` layout.
     #[must_use]
     pub fn roots(&self, workspace_root: &Path) -> Vec<PathBuf> {
-        if self.is_empty() {
+        self.roots_with_defaults(workspace_root, &[])
+    }
+
+    pub(crate) fn roots_with_defaults(
+        &self,
+        workspace_root: &Path,
+        defaults: &[PathBuf],
+    ) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = if self.is_empty() && !defaults.is_empty() {
+            defaults
+                .iter()
+                .map(|path| workspace_root.join(path))
+                .collect()
+        } else if let Some(cargo) = &self.cargo {
+            cargo
+                .members
+                .iter()
+                .filter(|member| self.is_empty() || self.crates.contains(&member.name))
+                .flat_map(|member| member.sources.iter().map(|source| cargo.root.join(source)))
+                .collect()
+        } else if self.is_empty() {
             let mut out = vec![workspace_root.join("crates")];
             out.extend(self.extra_roots.iter().map(|root| {
                 let normalized = root.strip_prefix("./").unwrap_or(root);
@@ -273,11 +425,12 @@ impl Scope {
                 }
             }));
             return out;
-        }
-        let mut out = Vec::new();
-        for c in &self.crates {
-            out.push(workspace_root.join("crates").join(c));
-        }
+        } else {
+            self.crates
+                .iter()
+                .map(|c| workspace_root.join("crates").join(c))
+                .collect()
+        };
         for p in &self.paths {
             let normalized = p.strip_prefix("./").unwrap_or(p);
             let abs = if normalized.is_absolute() {
@@ -299,15 +452,46 @@ impl Scope {
         out
     }
 
+    pub(crate) fn root_targets(&self) -> Vec<PathBuf> {
+        self.cargo
+            .iter()
+            .flat_map(|cargo| {
+                cargo
+                    .members
+                    .iter()
+                    .filter(|member| self.is_empty() || self.crates.contains(&member.name))
+                    .flat_map(|member| member.sources.iter().map(|source| cargo.root.join(source)))
+                    .filter(|source| source.is_file())
+            })
+            .collect()
+    }
+
     /// Extend an otherwise empty scope with workspace test and build-tool
     /// roots. Explicit scopes remain exact and are never widened.
     #[must_use]
+    #[cfg(feature = "lint")]
     pub(crate) fn with_workspace_sources(mut self) -> Self {
         if self.is_empty() {
             self.extra_roots = vec![PathBuf::from("tests"), PathBuf::from("xtask")];
         }
         self
     }
+}
+
+/// Resolve file ownership by the most-specific Cargo workspace member directory.
+#[cfg(feature = "lint")]
+pub(crate) fn package_for_path<'a>(metadata: &'a Metadata, path: &Path) -> Option<&'a Package> {
+    metadata
+        .workspace_packages()
+        .into_iter()
+        .filter(|package| {
+            package
+                .manifest_path
+                .as_std_path()
+                .parent()
+                .is_some_and(|directory| path.starts_with(directory))
+        })
+        .max_by_key(|package| package.manifest_path.components().count())
 }
 
 /// Filter cargo-metadata workspace packages by scope.
@@ -334,6 +518,29 @@ pub fn packages_in_scope<'a>(metadata: &'a Metadata, scope: &Scope) -> Vec<&'a P
 mod tests {
     use super::*;
     use crate::common::project::ProjectConfig;
+
+    #[test]
+    fn explicit_file_scope_keeps_item_and_line_diagnostics() {
+        let scope = Scope::new(Vec::new(), vec!["src/lib.rs".into()]);
+        for key in ["src/lib.rs", "src/lib.rs::Thing", "src/lib.rs:5:2::Thing"] {
+            assert!(scope.key_in_scope(key), "{key}");
+        }
+        for key in [
+            "src/lib_extra.rs::Thing",
+            "src/lib.rst:5",
+            "other/src/lib.rs",
+        ] {
+            assert!(!scope.key_in_scope(key), "{key}");
+        }
+    }
+
+    #[test]
+    fn dependency_edge_scope_belongs_to_its_source_package() {
+        let scope = Scope::new(vec!["engine".into()], Vec::new());
+        assert!(scope.key_in_scope("engine -> output"));
+        assert!(!scope.key_in_scope("output -> engine"));
+        assert!(!scope.key_in_scope("engine-extra -> output"));
+    }
 
     #[test]
     fn empty_scope_roots_default_to_crates_dir() {

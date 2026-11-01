@@ -114,5 +114,46 @@ mod tests {
             AnalysisProgress::try_from((bytes.as_slice(), &AnalysisFingerprint::default())),
             Err(BlobError::Corrupt)
         ));
+
+        for (name, runs, windows, valid) in [
+            ("valid beat state", &[(0, 2), (3, 4)][..], &[0, 1][..], true),
+            ("overlapping runs", &[(0, 2), (1, 4)][..], &[][..], false),
+            ("empty run", &[(2, 2)][..], &[][..], false),
+            ("descending windows", &[][..], &[1, 0][..], false),
+        ] {
+            let mut beat = Vec::new();
+            let mut writer = Writer::new(&mut beat);
+            writer.write_bool(false);
+            writer.write_len(runs.len());
+            for &(start, end) in runs {
+                writer.write_u64(start);
+                writer.write_u64(end);
+                writer.write_samples(&[0.5]);
+            }
+            writer.write_len(1);
+            writer.write_u64(0);
+            writer.write_u64(8);
+            writer.write_len(windows.len());
+            for &index in windows {
+                writer.write_u64(index);
+                writer.write_len(0);
+                writer.write_len(0);
+            }
+            writer.write_len(0);
+
+            let progress = AnalysisProgress::new(
+                analysis(false),
+                Some(AnalysisResume::capture(NonZeroU64::MIN, None, Some(&beat))),
+            );
+            let mut bytes = Vec::new();
+            progress.write_to(&mut bytes).expect("encodes");
+            let decoded =
+                AnalysisProgress::try_from((bytes.as_slice(), &AnalysisFingerprint::default()));
+            if valid {
+                assert!(decoded.is_ok(), "{name}: {decoded:?}");
+            } else {
+                assert!(matches!(decoded, Err(BlobError::Corrupt)), "{name}");
+            }
+        }
     }
 }

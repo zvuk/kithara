@@ -1041,6 +1041,77 @@ fn a_padded_measuring_row_reads_its_bands_against_the_declared_box() {
     );
 }
 
+/// What a paragraph the column below sets says: more than its 120 wide box
+/// holds on one line.
+const PARAGRAPH: &str = "a paragraph longer than the narrow column it stands in";
+
+/// A paragraph that wraps takes the height of every line it wraps to, and
+/// what follows it stands below its last line rather than over it. The
+/// retained host is held to the same in the application suite.
+#[kithara::test]
+fn a_wrapping_paragraph_takes_the_height_of_its_lines() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "paragraph.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "paragraph",
+            root: Module(instance: "demo", source: "paragraph.kmodule.ron", size: (w: Fill, h: Fill)))"#,
+    );
+    resolver.insert(
+        "paragraph.kmodule.ron",
+        &format!(
+            r#"(schema: "kithara.module", version: 1, id: "paragraph", chrome: Plain,
+            root: Column(id: "column", size: (w: Fixed(120.0), h: Fill), gap: 0.0, pad: 0.0, children: [
+                Text(id: "paragraph", size: (w: Fill, h: Shrink), style: Body, label: "{PARAGRAPH}"),
+                Spacer(id: "after", size: Some((w: Fixed(10.0), h: Fixed(10.0)))),
+            ]))"#
+        ),
+    );
+    let ui = compile(
+        "paragraph.klayout.ron",
+        &resolver,
+        &kithara_ui::mock::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .expect("the paragraph document must compile");
+    let skin = fixture_skin();
+    let laid_out = dump(
+        "paragraph.klayout.ron",
+        &ui,
+        &FixtureReads::default(),
+        &skin,
+        &headless_renderer(),
+        Size::new(300.0, 200.0),
+    );
+    let rect = |path: &str| {
+        laid_out
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(path)?.strip_prefix(' '))
+            .unwrap_or_else(|| panic!("{path} must be laid out"))
+            .split(' ')
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let mut text = TextContext::new().unwrap();
+    let lines = text.shape(PARAGRAPH, skin.text.body, Some(120.0));
+
+    assert!(
+        lines.height() > text.shape(PARAGRAPH, skin.text.body, None).height(),
+        "the paragraph must not fit the column on one line"
+    );
+    let height = format!("{:.3}", lines.height());
+    assert_eq!(
+        (
+            rect("demo/paragraph")[3].as_str(),
+            rect("demo/after")[1].as_str()
+        ),
+        (height.as_str(), height.as_str()),
+        "a wrapped paragraph must take the height of its lines, and push what follows below them"
+    );
+}
+
 #[kithara::test]
 fn committed_layout_fixture_corpus_needs_no_fallback_face() {
     let mut context = TextContext::new().unwrap();

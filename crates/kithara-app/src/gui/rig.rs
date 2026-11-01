@@ -1,7 +1,7 @@
 use arc_swap::ArcSwap;
 use iced::window::Id;
 use kithara::{
-    host::HostConfig,
+    host::{HostConfig, HostOwned},
     platform::{
         CancelToken,
         sync::Arc,
@@ -24,10 +24,10 @@ use crate::{
     analysis::AnalysisHandle,
     broadcast::Broadcaster,
     config::{AppBroadcastConfig, AppConfig},
-    deck::{Deck, DeckId, DeckSet},
+    deck::{self, DeckSet, EqMode},
     engine::{Engine, EngineSnapshot, Envelope},
-    pools::{AppHost, AppQueueControl},
-    state::StateController,
+    pools::{AppHost, AppQueue, AppQueueControl},
+    state::{GridPost, StateController},
 };
 
 pub(crate) struct Rig {
@@ -40,7 +40,10 @@ pub(crate) struct Rig {
     pub(crate) shutdown: CancelToken,
     pub(crate) rendered_frames: u64,
     #[cfg(not(feature = "broadcast"))]
-    states: Vec<Arc<kithara::platform::sync::Mutex<crate::state::UiState>>>,
+    states: Vec<(
+        kithara::host::DeckId,
+        Arc<kithara::platform::sync::Mutex<crate::state::UiState>>,
+    )>,
     _runtime: Runtime,
 }
 
@@ -68,39 +71,36 @@ impl Rig {
     fn build(
         runtime: Runtime,
         config: &AppConfig,
-        mut host: AppHost,
+        host: AppHost,
         broadcast: Broadcaster,
         analysis: AnalysisHandle,
-        model: impl FnMut(&Deck) -> StateController,
+        mut model: impl FnMut(&HostOwned<AppQueue>, &CancelToken, GridPost) -> StateController,
     ) -> Self {
-        let decks: Vec<Deck> = (0..2)
-            .map(|index| {
-                Deck::build(DeckId(index), config, &mut host).expect("host accepts the test deck")
-            })
-            .collect();
+        let mut deck_tokens = Vec::new();
+        let mut session = DeckSet::new(config, host, |queue, cancel, grids| {
+            deck_tokens.push(cancel.child());
+            model(queue, cancel, grids)
+        })
+        .expect("host accepts the test decks");
+
         if config.eq_bands > 3 {
-            for deck in &decks {
-                hang_tick!();
-                hang_park!(|_| {
-                    deck.queue
-                        .control()
-                        .set_eq_layout(
-                            crate::deck::EqMode::ThreeBand
-                                .layout(&[kithara::effects::GainDb::default(); 3]),
-                        )
-                        .expect("the fixture starts in three-band mode");
-                });
-                hang_reset!();
-            }
-            crate::mock::render_host(&mut host, 0..128, &config.shutdown)
+            hang_park!(|_| {
+                assert!(
+                    session.set_eq_mode(EqMode::FourBand, EqMode::ThreeBand),
+                    "the fixture starts in three-band mode"
+                );
+            });
+            hang_reset!();
+            crate::mock::render_host(deck::mock::host(&mut session), 0..128, &config.shutdown)
                 .expect("the initial EQ layout renders");
             hang_reset!();
         }
-        let queues = decks
+
+        let queues = session
+            .records()
             .iter()
-            .map(|deck| deck.queue.control().clone())
+            .map(|record| record.queue().clone())
             .collect();
-        let deck_tokens = decks.iter().map(Deck::cancel_child).collect();
         let (sender, commands) = mpsc::unbounded_channel();
         let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
         let boot = test_fixture::boot(
@@ -110,15 +110,16 @@ impl Rig {
             sender,
             Vec::new(),
         );
+
         let engine = Engine::new(
-            DeckSet::new(host, decks),
+            session,
             config.clone(),
             broadcast,
             Arc::clone(&snapshots),
             analysis,
-            model,
         );
         let ui = Kithara::mounted(boot, Id::unique());
+
         Self {
             _runtime: runtime,
             snapshots,
@@ -132,6 +133,16 @@ impl Rig {
             shutdown: config.shutdown.clone(),
             rendered_frames: if config.eq_bands > 3 { 128 } else { 0 },
         }
+    }
+
+    /// The host id of the deck the engine published under `letter`.
+    #[cfg(not(feature = "broadcast"))]
+    pub(crate) fn deck(&self, letter: &str) -> kithara::host::DeckId {
+        self.snapshots
+            .load()
+            .lettered(letter)
+            .map(|deck| deck.id)
+            .expect("the engine publishes the deck")
     }
 
     pub(crate) fn close_window(&mut self) {
@@ -161,18 +172,7 @@ impl Rig {
     /// without depending on a device.
     #[cfg(feature = "broadcast")]
     pub(crate) fn on_air() -> Self {
-        use kithara::worker::{Worker, WorkerConfig};
-
-        let (runtime, config) = test_fixture::runtime_and_config();
-        let broadcast = AppBroadcastConfig::builder(
-            Worker::new(WorkerConfig::new()),
-            config.worker.pools().clone(),
-        )
-        .cancel(config.shutdown.child())
-        .build();
-        let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
-            .expect("test host");
-        Self::with_host(runtime, &config, host, Broadcaster::new(broadcast))
+        Self::playback()
     }
 
     #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
@@ -204,16 +204,21 @@ impl Rig {
         applied
     }
 
-    #[cfg(not(feature = "broadcast"))]
     pub(crate) fn playback() -> Self {
+        Self::playback_with(AnalysisHandle::channel(watch::channel(Arc::default()).1).0)
+    }
+
+    /// A playback rig whose decks ask `analysis` for their tracks.
+    pub(crate) fn playback_with(analysis: AnalysisHandle) -> Self {
         let (runtime, config) = test_fixture::runtime_and_config();
-        let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
+        let host = crate::pools::host(HostConfig::offline(config.worker.pools().clone()).build())
             .expect("test host");
         Self::with_host(
             runtime,
             &config,
             host,
-            Broadcaster::new(AppBroadcastConfig::default()),
+            Broadcaster::new(idle_broadcast(&config)),
+            analysis,
         )
     }
 
@@ -222,15 +227,24 @@ impl Rig {
         config: &AppConfig,
         host: AppHost,
         broadcast: Broadcaster,
+        analysis: AnalysisHandle,
     ) -> Self {
-        let (analysis, _) = AnalysisHandle::channel(watch::channel(Arc::default()).1);
-        Self::build(runtime, config, host, broadcast, analysis.clone(), |deck| {
-            StateController::new(
-                deck.queue.control().clone(),
-                deck.cancel_child(),
-                analysis.clone(),
-            )
-        })
+        let decks = analysis.clone();
+        Self::build(
+            runtime,
+            config,
+            host,
+            broadcast,
+            analysis,
+            move |queue, cancel, grids| {
+                StateController::new(
+                    queue.control().clone(),
+                    cancel.child(),
+                    decks.clone(),
+                    grids,
+                )
+            },
+        )
     }
 
     #[cfg(not(feature = "broadcast"))]
@@ -250,13 +264,19 @@ impl Rig {
     }
 
     #[cfg(not(feature = "broadcast"))]
-    pub(crate) fn shows(&mut self, id: DeckId, change: impl FnOnce(&mut crate::state::UiState)) {
-        change(&mut self.states[id.0].lock());
+    pub(crate) fn shows(&mut self, letter: &str, change: impl FnOnce(&mut crate::state::UiState)) {
+        let id = self.deck(letter);
+        let (_, state) = self
+            .states
+            .iter()
+            .find(|(deck, _)| *deck == id)
+            .expect("the rig models the deck");
+
+        change(&mut state.lock());
         self.engine.publish();
         self.ui.refresh();
     }
 
-    #[cfg(not(feature = "broadcast"))]
     pub(crate) fn text(&self, key: &str) -> Option<String> {
         let root = ReadRoot::new(&self.ui);
         match Walk::new(&root).get(key) {
@@ -336,8 +356,9 @@ impl Rig {
     pub(crate) fn offline_with(configure: impl FnOnce(&mut AppConfig)) -> Self {
         let (runtime, mut config) = test_fixture::runtime_and_config();
         configure(&mut config);
-        let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
+        let host = crate::pools::host(HostConfig::offline(config.worker.pools().clone()).build())
             .expect("test host");
+
         let mut states = Vec::new();
         let mut rig = Self::build(
             runtime,
@@ -345,15 +366,19 @@ impl Rig {
             host,
             Broadcaster::new(AppBroadcastConfig::default()),
             AnalysisHandle::channel(watch::channel(Arc::default()).1).0,
-            |deck| {
-                let queue = deck.queue.control().clone();
+            |queue, cancel, _grids| {
                 let state = Arc::new(kithara::platform::sync::Mutex::new(
-                    crate::state::UiState::new(&queue),
+                    crate::state::UiState::new(queue.control()),
                 ));
-                states.push(Arc::clone(&state));
-                crate::state::test_fixture::controller_on(queue, deck.cancel_child(), state)
+                states.push((queue.id(), Arc::clone(&state)));
+                crate::state::test_fixture::controller_on(
+                    queue.control().clone(),
+                    cancel.child(),
+                    state,
+                )
             },
         );
+
         rig.states = states;
         rig
     }
@@ -366,4 +391,21 @@ impl Rig {
         );
         self.pump();
     }
+}
+
+#[cfg(feature = "broadcast")]
+fn idle_broadcast(config: &AppConfig) -> AppBroadcastConfig {
+    use kithara::worker::{Worker, WorkerConfig};
+
+    AppBroadcastConfig::builder(
+        Worker::new(WorkerConfig::new()),
+        config.worker.pools().clone(),
+    )
+    .cancel(config.shutdown.child())
+    .build()
+}
+
+#[cfg(not(feature = "broadcast"))]
+fn idle_broadcast(_config: &AppConfig) -> AppBroadcastConfig {
+    AppBroadcastConfig::default()
 }

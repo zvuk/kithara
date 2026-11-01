@@ -2,6 +2,8 @@ use std::{collections::BTreeSet, fs, path::Path};
 
 use serde_yaml_ng::{Mapping, Value};
 
+mod deps_deny;
+
 const MERGE_REQUEST_KIND: &str = "merge-request";
 /// How a job on a host that carries `just` runs a lane.
 const JUST_LANE: &str = "just ci run ";
@@ -625,13 +627,7 @@ fn the_branch_verdict_expects_only_the_apple_test_producer() {
 #[test]
 fn judged_jobs_stage_only_checkout_cleaned_verdict_evidence() {
     let root = workspace_root();
-    for file in [
-        "apple.yml",
-        "android.yml",
-        "linux.yml",
-        "web.yml",
-        "verdict.yml",
-    ] {
+    for file in ["apple.yml", "android.yml", "verdict.yml"] {
         let document = yaml(root.join(".gitlab/ci").join(file));
         let jobs = mapping(&document, "a CI lane document");
         for (name, definition) in jobs {
@@ -738,7 +734,7 @@ fn macos_review_jobs_can_use_either_native_registration() {
         ["kithara-macos", "kithara-macos-1"],
         ["kithara-macos", "kithara-macos-2"],
     ];
-    for job in ["apple:lint", "apple:test", "verdict"] {
+    for job in ["apple:lint", "apple:test", "apple:xcframework", "verdict"] {
         let tags = config.effective_value(job, "tags").expect("job has tags");
         let tags = tags.as_sequence().expect("job tags are a sequence");
         assert!(!tags.is_empty(), "`{job}` must select the native pool");
@@ -749,6 +745,55 @@ fn macos_review_jobs_can_use_either_native_registration() {
                 "`{job}` cannot use free registration {registration:?}: {tags:?}"
             );
         }
+    }
+}
+
+#[test]
+fn each_independent_store_has_a_default_branch_source_publisher() {
+    let lanes = lane_catalog(workspace_root());
+    let gitlab = GitlabConfig::load(workspace_root());
+    for (name, os) in [("apple-lint", "macos"), ("linux-lint", "linux")] {
+        assert_eq!(lanes[name]["publishes_sources"].as_bool(), Some(true));
+        assert_eq!(lanes[name]["os"].as_str(), Some(os));
+    }
+    assert!(gitlab.admitted_kinds("apple:lint").contains("main"));
+    assert!(
+        lanes["linux-lint"]["kinds_github"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|kind| kind.as_str() == Some("main"))
+    );
+}
+
+#[test]
+fn cache_evidence_uploads_only_the_current_job_even_when_it_fails() {
+    let config = GitlabConfig::load(workspace_root());
+    let default = &config.definition("default")["artifacts"];
+    let target = ".ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json";
+    for (name, _) in config.lane_jobs() {
+        let artifact = config
+            .effective_value(&name, "artifacts")
+            .unwrap_or_else(|| default.clone());
+        let paths = artifact["paths"].as_sequence().expect("artifact paths");
+        assert!(
+            paths.iter().any(|path| path.as_str() == Some(target)),
+            "{name}: missing current-job cache report"
+        );
+        assert!(
+            !paths
+                .iter()
+                .any(|path| path
+                    .as_str()
+                    .is_some_and(|path| path == ".ci-artifacts/cache/"
+                        || path == ".ci-artifacts/cache/job.json")),
+            "{name}: uploads inherited cache reports"
+        );
+        assert_eq!(
+            artifact["when"].as_str(),
+            Some("always"),
+            "{name}: loses failure evidence"
+        );
     }
 }
 
@@ -1257,8 +1302,7 @@ fn a_provisioning_run_on_the_default_branch_reaches_the_mac_roll_out_alone() {
         "a provisioning run carries the roll-out alone, found {beside:?}"
     );
 
-    // A platform request riding the same run would start a second child whose
-    // Linux image job moves the tag underneath the roll-out.
+    // Provisioning must not race a second child using the services it replaces.
     let platforms = dispatch["dispatch:platforms"]["rules"]
         .as_sequence()
         .expect("platform dispatch rules");
@@ -1274,5 +1318,54 @@ fn a_provisioning_run_on_the_default_branch_reaches_the_mac_roll_out_alone() {
             .iter()
             .all(|rule| rule.get("when").and_then(Value::as_str) == Some("never")),
         "no admitting rule answers before the refusal"
+    );
+}
+
+#[test]
+fn mac_pipeline_requires_no_linux_guest() {
+    let config = GitlabConfig::load(workspace_root());
+    for job in config.job_names() {
+        assert!(
+            !job.starts_with("linux:") && !job.starts_with("web:"),
+            "{job} requires the retired guest"
+        );
+    }
+    assert!(!config.job_names().any(|job| job == ".linux-job"));
+    assert!(
+        config.definition(".deps-job")["extends"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|base| base.as_str() == Some(".macos-job"))
+    );
+}
+
+#[test]
+fn native_dependency_audits_retain_the_linux_fleet_and_host_cache() {
+    let lanes = lane_catalog(workspace_root());
+    for name in [
+        "deps-deny",
+        "deps-unused",
+        "deps-shear",
+        "deps-features-full",
+        "deps-semver",
+    ] {
+        assert_eq!(lanes[name]["cache_group"].as_str(), Some("host"));
+        let os: Vec<&str> = lanes[name]["os"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect();
+        assert_eq!(os, ["macos", "linux"]);
+    }
+    assert_eq!(
+        lanes["linux-coverage"]["kinds_github"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>(),
+        ["nightly"]
     );
 }

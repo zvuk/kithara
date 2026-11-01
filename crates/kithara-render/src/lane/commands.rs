@@ -3,6 +3,7 @@ use std::task::{Context, Poll};
 use kithara_audio::{AudioSource, TrackFailureKind};
 use kithara_bufpool::HasPool;
 use kithara_command::{Due, Inbox, Seq};
+use kithara_effects::AudioEffect;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioSpec, FrameCount, SegmentId};
 use kithara_sync::SpeedCurve;
@@ -39,11 +40,20 @@ impl Lane {
         Ok(())
     }
 
+    fn deferred_ready(&self) -> bool {
+        self.state.ended
+            && self
+                .inbox
+                .frames_until_due(self.state.cursor)
+                .is_none_or(|frames| frames > 0)
+    }
+
     pub(crate) fn execute_due<T, S>(
         &mut self,
         source: &mut T,
         warp: &mut WarpRenderer<S>,
         spec: AudioSpec,
+        chain: &mut [Box<dyn AudioEffect>],
     ) -> Result<LaneChange, TrackFailureKind>
     where
         T: AudioSource<Chunk = AudioChunk>,
@@ -53,21 +63,21 @@ impl Lane {
         let mut changed = LaneChange::None;
         let declick_frames = self.declick_frames(spec.sample_rate).get();
         loop {
-            let deferred = self.state.ended
-                && self
-                    .inbox
-                    .frames_until_due(self.state.cursor)
-                    .is_none_or(|frames| frames > 0);
+            let deferred = self.deferred_ready();
             let Some(due) = next_due(&mut self.inbox, &mut self.state, deferred)? else {
                 break;
             };
+            if !admits_effect_batch(due.commands()) {
+                due.refuse(TrackFailureKind::Render);
+                continue;
+            }
             if changed == LaneChange::None {
                 changed = LaneChange::Controls;
             }
             let at = due.at();
             let effects =
                 self.state
-                    .execute_commands(&due, source, warp, deferred, declick_frames)?;
+                    .execute_commands(&due, source, warp, deferred, declick_frames, chain)?;
             let CommandEffects {
                 segment,
                 requested_entry,
@@ -79,8 +89,8 @@ impl Lane {
                 changed = LaneChange::Source;
             }
             if let Some(failure) = refusal {
-                due.refuse(failure);
-                return Err(failure);
+                failure.refuse(due)?;
+                continue;
             }
             let next_spec = source.prepare_deferred().unwrap_or(spec);
             let latency = warp
@@ -117,13 +127,40 @@ impl Lane {
     }
 }
 
+fn admits_effect_batch(commands: &[LaneCommand]) -> bool {
+    commands.len() == 1
+        || commands
+            .iter()
+            .all(|command| !matches!(command, LaneCommand::ConfigureEffect { .. }))
+}
+
 #[derive(Default)]
 struct CommandEffects {
     segment: Option<SegmentId>,
     requested_entry: Option<Duration>,
     restored_same: bool,
     cancelled_deferred: Option<Seq>,
-    refusal: Option<TrackFailureKind>,
+    refusal: Option<CommandRefusal>,
+}
+
+enum CommandRefusal {
+    Effect,
+    Source(TrackFailureKind),
+}
+
+impl CommandRefusal {
+    fn refuse(self, due: Due<'_, super::LaneProtocol>) -> Result<(), TrackFailureKind> {
+        match self {
+            Self::Effect => {
+                due.refuse(TrackFailureKind::Render);
+                Ok(())
+            }
+            Self::Source(failure) => {
+                due.refuse(failure);
+                Err(failure)
+            }
+        }
+    }
 }
 
 impl LaneState {
@@ -155,6 +192,7 @@ impl LaneState {
         warp: &mut WarpRenderer<S>,
         deferred: bool,
         declick_frames: usize,
+        chain: &mut [Box<dyn AudioEffect>],
     ) -> Result<CommandEffects, TrackFailureKind>
     where
         T: AudioSource<Chunk = AudioChunk>,
@@ -174,6 +212,15 @@ impl LaneState {
                 "lane command executing"
             );
             match command {
+                LaneCommand::ConfigureEffect { target, change } => {
+                    if chain
+                        .get_mut(target.effect())
+                        .is_none_or(|effect| effect.configure(*target, *change).is_err())
+                    {
+                        effects.refusal = Some(CommandRefusal::Effect);
+                        break;
+                    }
+                }
                 LaneCommand::SetSpeed(curve) => warp
                     .set_speed(curve.clone(), revision)
                     .map_err(|_| TrackFailureKind::Render)?,
@@ -241,7 +288,7 @@ impl LaneState {
         let from = match restored {
             Some((_, Some(position))) => position,
             Some((_, None)) => {
-                effects.refusal = Some(TrackFailureKind::Render);
+                effects.refusal = Some(CommandRefusal::Source(TrackFailureKind::Render));
                 return Ok(());
             }
             None => from,

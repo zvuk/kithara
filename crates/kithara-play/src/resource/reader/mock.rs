@@ -73,6 +73,7 @@ where
         .map(|depth| (depth, config.declick_frames(sample_rate)));
     let channel_worker = worker.clone();
     ResourceLoad {
+        effects: Vec::new(),
         opener: Box::new(move |position, start, inbox| {
             Box::pin(async move {
                 let pools = worker.pools().clone();

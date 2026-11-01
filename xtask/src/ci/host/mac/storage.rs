@@ -11,10 +11,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+#[cfg(unix)]
+use kithara_devtools::lock::FileLock;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use super::runners::{docker_host, docker_socket};
 #[cfg(test)]
 use crate::ci::process::Recording;
 use crate::{
@@ -22,6 +23,7 @@ use crate::{
         build_cache,
         config::CiConfig,
         environment::{CacheTrust, scratch_root},
+        kache,
         process::Process,
     },
     consts,
@@ -163,6 +165,9 @@ impl<'a> HostStorage<'a> {
     }
 
     pub(super) fn preflight(&self) -> Result<()> {
+        if let Err(error) = self.cleanup() {
+            warn!(%error, "pre-job cleanup failed; checking current host capacity");
+        }
         let free = self.free_bytes()?;
         let (pressure, volume) = self.worst_pressure()?;
         match pressure {
@@ -191,6 +196,17 @@ impl<'a> HostStorage<'a> {
     }
 
     pub(super) fn cleanup(&self) -> Result<()> {
+        #[cfg(unix)]
+        let _cleanup = match FileLock::try_exclusive(
+            fs::File::open(&self.host_root).context("opening the host cleanup root")?,
+        ) {
+            Ok(lock) => lock,
+            Err(fs4::TryLockError::WouldBlock) => {
+                info!("another host cleanup is running; leaving it owned by its caller");
+                return Ok(());
+            }
+            Err(fs4::TryLockError::Error(error)) => return Err(error.into()),
+        };
         // The worst single volume, not the sum: adding a second volume's bytes
         // to the first and comparing that against thresholds calibrated for the
         // first reads every machine with a guest volume as full, and the branch
@@ -213,12 +229,7 @@ impl<'a> HostStorage<'a> {
         self.prune_host_files("logs", 14 * Self::DAY)?;
         self.rotate_logs()?;
         self.prune_retired_caches(7 * Self::DAY)?;
-
-        let build_roots = build_cache::budget_roots(
-            &self.build_root.join("workspaces/gitlab"),
-            &self.host_root.join("cache"),
-        )?;
-        build_cache::enforce_budget(&build_roots, self.config.host.build_cache_budget_bytes()?)?;
+        let build_roots = self.prune_build_caches()?;
 
         // Cargo targets are the largest reproducible caches and already have a
         // bounded owner. Re-read pressure after enforcing that budget so a
@@ -238,19 +249,8 @@ impl<'a> HostStorage<'a> {
             Pressure::Normal => {}
         }
 
-        self.prune_docker_build_cache(self.config.host.docker_build_cache_budget_bytes()?);
-        // Unconditional, and after the pruning above, because the guest frees
-        // blocks on its own schedule and holds them until asked. Its root
-        // filesystem is mounted `discard` and stays at a gigabyte, but the data
-        // disk carrying `/var/lib/docker` is not, so every layer Docker deletes
-        // stays allocated in a file this volume pays for. One trim on a machine
-        // that had drifted to 44 GB free returned 63 of them in seconds — too
-        // cheap to hold back for a threshold, and holding it back is what let
-        // the drift reach refusal five times.
-        self.trim_linux_guest();
-
         // The warm builds go last. Every step above takes stale state, a
-        // compiler cache or Docker's; an evicted build costs the next job of
+        // compiler cache; an evicted build costs the next job of
         // its lane a cold build of the workspace. Spent first, they went on every
         // `Aggressive` pass while the steps after them would have covered the
         // shortfall alone.
@@ -312,6 +312,18 @@ impl<'a> HostStorage<'a> {
             );
         }
         Ok(())
+    }
+
+    fn prune_build_caches(&self) -> Result<Vec<PathBuf>> {
+        if let Err(error) = kache::reclaim_local_stores(self.config, self.process) {
+            warn!(%error, "local compiler stores could not be collected");
+        }
+        let roots = build_cache::budget_roots(
+            &self.build_root.join("workspaces/gitlab"),
+            &self.host_root.join("cache"),
+        )?;
+        build_cache::enforce_budget(&roots, self.config.host.build_cache_budget_bytes()?)?;
+        Ok(roots)
     }
 
     pub(super) fn health(&self) -> Result<()> {
@@ -856,63 +868,6 @@ impl<'a> HostStorage<'a> {
             .any(|vm| vm.name == consts::JOB_VM_NAME && vm.running)
     }
 
-    /// Hold the guest's build cache to `budget` bytes, least recently used
-    /// first. Its disk is a sparse file this volume pays for, so a cache that
-    /// grows unbounded between passes is space no other step can reach.
-    fn prune_docker_build_cache(&self, budget: u64) {
-        let home = self.host_root.join("home").join(&self.config.host.ci_user);
-        let socket = docker_socket(&home, &self.config.host.colima_profile);
-        let docker = self.config.host.brew_tool("docker");
-        if !socket.exists() || !docker.is_file() {
-            return;
-        }
-        let mut command = self.process.command(docker);
-        command
-            .env(
-                "DOCKER_HOST",
-                docker_host(&home, &self.config.host.colima_profile),
-            )
-            .args(["builder", "prune", "--force", "--max-used-space"])
-            .arg(budget.to_string());
-        if let Err(error) = self
-            .process
-            .run_command(&mut command, "Docker build cache cleanup")
-        {
-            warn!(%error, "Docker cache cleanup failed");
-        }
-    }
-
-    /// Hand the guest's freed blocks back to the volume.
-    ///
-    /// Pruning inside the guest returns nothing here on its own: the data disk
-    /// is a sparse file that grows to its high-water mark and keeps every block
-    /// it has ever written. Measured on 2026-08-11 it held 77 GB for 25 GB of
-    /// images and build cache — fifty gigabytes of blocks the guest had already
-    /// released. A discard returns these blocks without destroying the runtime.
-    fn trim_linux_guest(&self) {
-        let colima = self.config.host.brew_tool("colima");
-        if !colima.is_file() {
-            return;
-        }
-        let home = self.host_root.join("home").join(&self.config.host.ci_user);
-        let mut command = self.process.command(colima);
-        command.env("COLIMA_HOME", home.join(".colima")).args([
-            "ssh",
-            "--profile",
-            self.config.host.colima_profile.as_str(),
-            "--",
-            "sudo",
-            "fstrim",
-            "-a",
-        ]);
-        if let Err(error) = self
-            .process
-            .run_command(&mut command, "return the Linux guest's freed blocks")
-        {
-            warn!(%error, "could not trim the Linux guest's disk");
-        }
-    }
-
     fn is_removable(&self, target: &Path) -> bool {
         is_removable_under(&self.host_root, target, &self.config.host.removable_roots)
             || is_removable_under(&self.build_root, target, &["workspaces"])
@@ -1176,6 +1131,126 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_collects_local_compiler_stores_before_budgeting_builds() {
+        let directory = tempfile::tempdir().unwrap();
+        let cfg = config(directory.path());
+        let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+        let stores = [
+            format!("cache/trusted/{platform}/kache"),
+            format!("cache/quarantine/{platform}/kache"),
+            "cache/kache/store".to_owned(),
+            "cache/trusted/another-platform/kache".to_owned(),
+        ];
+        for relative in &stores {
+            let store = directory.path().join(relative);
+            fs::create_dir_all(&store).unwrap();
+            fs::write(store.join("index.db"), "owned by kache").unwrap();
+        }
+        let process = Process::recording(
+            directory.path(),
+            Recording::default().with_reply(
+                &["kache", "gc"],
+                r#"{"success":true,"skipped":false,"disk":{"store_bytes":3600000000,"store_limit_bytes":4000000000}}"#,
+            ),
+        );
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([consts::FREE_NORMAL; 3]);
+
+        storage.cleanup().unwrap();
+
+        let recorded = process.recorded().unwrap();
+        let collections = recorded
+            .steps()
+            .iter()
+            .filter(|step| step.args == ["gc"])
+            .collect::<Vec<_>>();
+        assert_eq!(collections.len(), 2);
+        assert!(
+            collections
+                .iter()
+                .all(|step| { step.env.get("KACHE_LOCAL_ONLY").map(String::as_str) == Some("1") })
+        );
+        for relative in &stores {
+            assert_eq!(
+                fs::read_to_string(directory.path().join(relative).join("index.db")).unwrap(),
+                "owned by kache"
+            );
+        }
+    }
+
+    #[test]
+    fn preflight_reclaims_before_its_final_capacity_check() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["cache", "logs", "toolchains", "vm", "workspaces"] {
+            fs::create_dir_all(directory.path().join(name)).unwrap();
+        }
+        let stale = scratch_entry(directory.path(), "trusted", 4 * HostStorage::DAY);
+        let live = scratch_entry(directory.path(), "review", Duration::from_secs(60));
+        let cfg = config(directory.path());
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([0, 61, 61, 61]);
+
+        storage.preflight().unwrap();
+
+        assert!(!stale.exists(), "preflight must run the existing cleanup");
+        assert!(live.exists(), "the existing retention policy still applies");
+    }
+
+    #[test]
+    fn preflight_uses_fresh_capacity_after_a_cleanup_error() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["cache", "logs", "toolchains", "vm", "workspaces"] {
+            fs::create_dir_all(directory.path().join(name)).unwrap();
+        }
+        let cfg = config(directory.path());
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        // Cleanup cannot restore its soft floor, but admission has its own floor.
+        storage.set_available_sequence([30, 30, 30, 30, 61]);
+        storage.preflight().unwrap();
+
+        storage.set_available_sequence([0; 6]);
+        let error = storage.preflight().unwrap_err();
+        assert!(error.to_string().contains("is full"), "{error:#}");
+
+        fs::remove_dir(directory.path().join("toolchains")).unwrap();
+        storage.set_available_sequence([61; 4]);
+        let error = storage.preflight().unwrap_err();
+        assert!(
+            error.to_string().contains("missing CI directory"),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preflight_leaves_peer_cleanup_owned_and_reclaims_after_its_release() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["cache", "logs", "toolchains", "vm", "workspaces"] {
+            fs::create_dir_all(directory.path().join(name)).unwrap();
+        }
+        let stale = scratch_entry(directory.path(), "trusted", 4 * HostStorage::DAY);
+        let open = || fs::File::open(directory.path()).unwrap();
+        let peer = FileLock::try_exclusive(open()).unwrap();
+        let cfg = config(directory.path());
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([61; 5]);
+
+        storage.preflight().unwrap();
+        assert!(stale.exists(), "a peer owns this cleanup pass");
+        assert!(matches!(
+            FileLock::try_exclusive(open()),
+            Err(fs4::TryLockError::WouldBlock)
+        ));
+
+        drop(peer);
+        storage.preflight().unwrap();
+        assert!(!stale.exists(), "a released lock must not suppress cleanup");
+    }
+
+    #[test]
     fn reported_open_files_survive_lsof_search_errors() {
         let directory = tempfile::tempdir().unwrap();
         let lsof = install_double(directory.path(), "lsof");
@@ -1249,74 +1324,6 @@ mod tests {
         assert_eq!(storage.pressure_of(&half(15)), Pressure::Reject);
     }
 
-    /// A tempdir has more than the sixty bytes this config calls a floor, so the
-    /// run below is `Normal` — the pressure that used to skip the trim entirely.
-    #[test]
-    fn the_guest_is_trimmed_even_with_nothing_under_pressure() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut cfg = config(directory.path());
-        cfg.host.brew_root = directory.path().join("brew");
-        install_double(&cfg.host.brew_root.join("bin"), "colima");
-        let process = Process::recording(directory.path(), Recording::default());
-        {
-            let storage = HostStorage::for_test(&cfg, &process).unwrap();
-            assert_eq!(storage.worst_pressure().unwrap().0, Pressure::Normal);
-            storage.cleanup().unwrap();
-        }
-
-        let recording = process.recorded().expect("a recording process records");
-        let arguments = recording
-            .steps()
-            .iter()
-            .find(|step| step.label == "return the Linux guest's freed blocks")
-            .map(|step| step.args.join(" "))
-            .expect("the guest was never asked for anything");
-        assert!(
-            arguments.contains("fstrim"),
-            "cleanup asked the guest for {arguments} instead of a trim"
-        );
-    }
-
-    /// Held to a size on every pass, and before the trim that hands what it
-    /// frees back to the volume. An age keeps whatever one busy week wrote,
-    /// however large, and was only asked for once the volume was already short.
-    #[test]
-    fn every_pass_holds_the_docker_build_cache_to_its_size_before_the_trim() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut cfg = config(directory.path());
-        cfg.host.brew_root = directory.path().join("brew");
-        install_double(&cfg.host.brew_root.join("bin"), "docker");
-        install_double(&cfg.host.brew_root.join("bin"), "colima");
-        let home = directory.path().join("home").join(&cfg.host.ci_user);
-        let socket = docker_socket(&home, &cfg.host.colima_profile);
-        fs::create_dir_all(socket.parent().unwrap()).unwrap();
-        fs::write(&socket, b"").unwrap();
-        let process = Process::recording(directory.path(), Recording::default());
-        {
-            let storage = HostStorage::for_test(&cfg, &process).unwrap();
-            assert_eq!(storage.worst_pressure().unwrap().0, Pressure::Normal);
-            storage.cleanup().unwrap();
-        }
-
-        let recording = process.recorded().expect("a recording process records");
-        let steps = recording.steps();
-        let position = |label: &str| steps.iter().position(|step| step.label == label);
-        let prune = position("Docker build cache cleanup")
-            .expect("a pass with nothing under pressure left the Docker build cache unbounded");
-        let budget = cfg
-            .host
-            .docker_build_cache_budget_bytes()
-            .unwrap()
-            .to_string();
-        assert_eq!(
-            steps[prune].args,
-            ["builder", "prune", "--force", "--max-used-space", &budget]
-        );
-        let trim =
-            position("return the Linux guest's freed blocks").expect("the guest was trimmed");
-        assert!(prune < trim, "the trim ran before the prune it hands back");
-    }
-
     #[cfg(unix)]
     #[test]
     fn reject_cleanup_preserves_shared_runtime() {
@@ -1370,7 +1377,7 @@ mod tests {
         let states = agent_states_from(consts::CRASH_LOOP_LISTING, &host.always_on_agents);
 
         assert_eq!(states.get("gitlab-runner"), Some(&"running"));
-        assert_eq!(states.get("colima"), Some(&"running"));
+        assert!(!states.contains_key("colima"));
     }
 
     /// An agent nobody ever loaded is as unable to take work as one that keeps
@@ -1380,11 +1387,7 @@ mod tests {
         let host = fixture().host;
 
         assert_eq!(
-            agent_states_from(
-                "82778\t0\tcom.zvuk.kithara-ci.gitlab-runner\n",
-                &host.always_on_agents
-            )
-            .get("colima"),
+            agent_states_from("", &host.always_on_agents).get("gitlab-runner"),
             Some(&"not-loaded")
         );
     }

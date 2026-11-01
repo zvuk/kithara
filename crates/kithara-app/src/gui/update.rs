@@ -3,6 +3,7 @@ use iced::{
     window::{Direction, Mode},
 };
 use kithara::{
+    host::DeckId,
     platform::time::Duration,
     ui::render::{WindowCommand, WindowEdge},
 };
@@ -15,10 +16,7 @@ use super::{
     subscription::subscription_config,
     ui,
 };
-use crate::{
-    deck::DeckId,
-    engine::{AppCmd, Command, DeckCmd},
-};
+use crate::engine::{AppCmd, Command, DeckCmd};
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
@@ -41,6 +39,14 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         }
         Message::Deck(id, msg) => {
             handle_deck(state, id, &msg);
+            Task::none()
+        }
+        Message::SetTempo(tempo) => {
+            state.send(Command::App(AppCmd::SetTempo(tempo)));
+            Task::none()
+        }
+        Message::StepTempo(steps) => {
+            state.send(Command::App(AppCmd::StepTempo(steps)));
             Task::none()
         }
         Message::SetEqMode(mode) => {
@@ -128,13 +134,16 @@ const fn direction(edge: WindowEdge) -> Option<Direction> {
 
 /// A deck the app no longer lays out keeps its queue but stops playing.
 fn pause_hidden_decks(state: &mut Kithara) {
+    let shown = state.ui.cache.layout().letters();
+
     let hidden: Vec<DeckId> = state
         .snapshot
         .decks
         .iter()
-        .skip(state.ui.cache.laid_out_decks())
+        .filter(|deck| !shown.contains(&deck.letter))
         .map(|deck| deck.id)
         .collect();
+
     for id in hidden {
         state.send(Command::Deck {
             cmd: DeckCmd::Pause,
@@ -145,9 +154,10 @@ fn pause_hidden_decks(state: &mut Kithara) {
 
 fn delete_focused_track(state: &mut Kithara) {
     let focus = state.ui.cache.focus_deck();
-    let Some(id) = state.snapshot.decks.get(focus).map(|deck| deck.id) else {
+    let Some(id) = state.snapshot.lettered(focus).map(|deck| deck.id) else {
         return;
     };
+
     handle_deck(state, id, &DeckMsg::DeleteTrack);
 }
 
@@ -183,6 +193,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        analysis::fixtures::long_wav,
         deck::EqMode,
         engine::Envelope,
         gui::{rig::Rig, ui::cache::DeckLayout},
@@ -242,6 +253,7 @@ mod tests {
         let rig = OffThread::spawn("app-host", || Ok::<_, Infallible>(Rig::offline()))
             .await
             .expect("rig fixture is infallible");
+
         rig.call(|rig| {
             apply(
                 rig,
@@ -253,24 +265,24 @@ mod tests {
             assert_eq!(rig.snapshots.load().mix.position, 1.0);
             assert_eq!(rig.ui.snapshot.mix.position, 1.0);
 
-            apply(
-                rig,
-                Message::Deck(DeckId(0), DeckMsg::SetTempo(80.0.into())),
-            );
-            let deck = rig.ui.snapshot.deck(DeckId(0)).expect("deck A");
+            let (a, b) = (rig.deck("a"), rig.deck("b"));
+            apply(rig, Message::Deck(a, DeckMsg::SetTempo(80.0.into())));
+            let deck = rig.ui.snapshot.deck(a).expect("deck A");
             assert_eq!(f32::from(deck.tempo), 50.0);
 
             let queue = rig.queues[0].clone();
             queue.append("https://example.test/pending.mp3").unwrap();
-            rig.shows(DeckId(0), |deck| {
+            rig.shows("a", |deck| {
                 deck.tracks = queue.tracks();
                 deck.current_track_index = Some(0);
             });
+
             apply(rig, Message::DeleteFocusedTrack);
             assert!(queue.tracks().is_empty());
 
             rig.ui.ui.cache.set_layout(DeckLayout::Single);
             rig.message(Message::PauseHiddenDecks);
+
             let queued: Vec<Envelope> =
                 std::iter::from_fn(|| rig.commands.try_recv().ok()).collect();
             assert!(
@@ -278,11 +290,11 @@ mod tests {
                     queued.as_slice(),
                     [Envelope {
                         command: Command::Deck {
-                            deck: DeckId(1),
+                            deck,
                             cmd: DeckCmd::Pause,
                         },
                         ..
-                    }]
+                    }] if *deck == b
                 ),
                 "only the hidden deck is paused: {queued:?}"
             );
@@ -299,14 +311,71 @@ mod tests {
                 1
             );
             assert_eq!(update(&mut rig.ui, Message::Tick).units(), 0);
+
             apply(rig, Message::BroadcastToggle);
             apply(rig, Message::BroadcastToggle);
+
             assert_eq!(
                 update(&mut rig.ui, Message::WindowCloseRequested).units(),
                 1
             );
         })
         .await;
+
+        rig.close().await;
+    }
+
+    #[kithara::test(native, tokio, flash(false))]
+    async fn a_play_press_follows_the_queue(long_wav: String) {
+        let rig = OffThread::spawn("app-host", || Ok::<_, Infallible>(Rig::offline()))
+            .await
+            .expect("rig fixture is infallible");
+
+        rig.call(move |rig| {
+            let queue = rig.queues[0].clone();
+            queue
+                .append(long_wav.as_str())
+                .expect("deck A takes the track");
+            queue.play();
+
+            rig.until(
+                "the queue plays",
+                Rig::DEADLINE,
+                |_| {},
+                |_| queue.is_playing(),
+            );
+
+            rig.shows("a", |deck| deck.playing = false);
+            assert!(!rig.flag("deck.playback.playing@deck=a"));
+
+            rig.send("deck-a/play", ControlAction::Activate);
+            assert!(
+                !rig.flag("deck.playback.playing@deck=a"),
+                "the play control draws the published playback state"
+            );
+
+            rig.pump();
+            rig.until(
+                "the press pauses the playing queue",
+                Rig::DEADLINE,
+                |_| {},
+                |_| !queue.is_playing(),
+            );
+
+            rig.shows("a", |deck| deck.playing = true);
+            assert!(rig.flag("deck.playback.playing@deck=a"));
+
+            rig.send("deck-a/play", ControlAction::Activate);
+            rig.pump();
+            rig.until(
+                "the press plays the paused queue",
+                Rig::DEADLINE,
+                |_| {},
+                |_| queue.is_playing(),
+            );
+        })
+        .await;
+
         rig.close().await;
     }
 
@@ -314,11 +383,12 @@ mod tests {
     #[kithara::hang_watchdog]
     fn eq_mode_changes_every_deck_as_one_transaction() {
         let mut rig = Rig::offline();
+
         let initial = [
             [-6.0f32, 2.0, 5.0].map(GainDb::from),
             [1.0f32, 3.0, 7.0].map(GainDb::from),
         ];
-        for (id, gains) in [DeckId(0), DeckId(1)].into_iter().zip(initial) {
+        for (id, gains) in [rig.deck("a"), rig.deck("b")].into_iter().zip(initial) {
             hang_tick!();
             for (band, gain) in gains.into_iter().enumerate() {
                 hang_tick!();
@@ -335,6 +405,7 @@ mod tests {
 
         apply_eq(&mut rig, Message::SetEqMode(EqMode::FourBand));
         assert_eq!(rig.ui.snapshot.eq_mode, EqMode::FourBand);
+
         for ((deck, queue), gains) in rig.ui.snapshot.decks.iter().zip(&rig.queues).zip(initial) {
             let expected = vec![gains[0], gains[1], gains[1], gains[2]];
             assert_eq!(deck.eq_bands, expected);
@@ -344,6 +415,7 @@ mod tests {
         apply_eq(&mut rig, Message::SetEqMode(EqMode::FourBand));
         apply_eq(&mut rig, Message::SetEqMode(EqMode::ThreeBand));
         assert_eq!(rig.ui.snapshot.eq_mode, EqMode::ThreeBand);
+
         for ((deck, queue), gains) in rig.ui.snapshot.decks.iter().zip(&rig.queues).zip(initial) {
             assert_eq!(deck.eq_bands, gains);
             assert_eq!(queue.eq_band_count(), 3);

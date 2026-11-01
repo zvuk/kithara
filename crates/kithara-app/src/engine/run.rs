@@ -55,7 +55,6 @@ mod tests {
 
     use crate::{
         analysis::fixtures::{short_wav, tone_mp3},
-        deck::DeckId,
         engine::{Command, DeckCmd, Envelope, MixCmd, serve},
         gui::rig::Rig,
     };
@@ -65,11 +64,14 @@ mod tests {
         let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline()))
             .await
             .expect("rig fixture is infallible");
+
         rig.call(|rig| {
             let echoed = rig.applied_seq();
+            let a = rig.deck("a");
 
             rig.send("mixer/xfade", ControlAction::SetScalar(1.0));
             rig.send("deck-a/play", ControlAction::Activate);
+
             for _ in 0..3 {
                 rig.frame();
             }
@@ -96,17 +98,18 @@ mod tests {
                         },
                         Envelope {
                             command: Command::Deck {
-                                deck: DeckId(0),
-                                cmd: DeckCmd::Play,
+                                deck,
+                                cmd: DeckCmd::TogglePlay,
                             },
                             ..
                         },
-                    ] if (*position - 1.0).abs() < f32::EPSILON
+                    ] if (*position - 1.0).abs() < f32::EPSILON && *deck == a
                 ),
                 "every message queued its intent, in order"
             );
         })
         .await;
+
         rig.close().await;
     }
 

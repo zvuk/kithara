@@ -15,20 +15,59 @@ impl Github {
         repository: &str,
         sha: &str,
     ) -> Result<Vec<Value>> {
+        self.source_entries(
+            repository,
+            sha,
+            &format!("actions/runs?head_sha={sha}&per_page=100"),
+            Some("workflow_runs"),
+        )
+    }
+
+    pub(in crate::ci::bridge) fn source_statuses(
+        &self,
+        repository: &str,
+        sha: &str,
+    ) -> Result<Vec<Value>> {
+        self.source_entries(
+            repository,
+            sha,
+            &format!("commits/{sha}/statuses?per_page=100"),
+            None,
+        )
+    }
+
+    pub(in crate::ci::bridge) fn source_check_runs(
+        &self,
+        repository: &str,
+        sha: &str,
+    ) -> Result<Vec<Value>> {
+        self.source_entries(
+            repository,
+            sha,
+            &format!("commits/{sha}/check-runs?filter=all&per_page=100"),
+            Some("check_runs"),
+        )
+    }
+
+    fn source_entries(
+        &self,
+        repository: &str,
+        sha: &str,
+        path: &str,
+        field: Option<&str>,
+    ) -> Result<Vec<Value>> {
         if !simple_repository(repository) || !validate_sha(sha) {
-            bail!("invalid GitHub workflow repository or head SHA");
+            bail!("invalid GitHub source repository or head SHA");
         }
         paginated(
             |page| {
                 self.request(
                     &Method::GET,
-                    &format!(
-                        "/repos/{repository}/actions/workflows/ci.yml/runs?head_sha={sha}&per_page=100&page={page}"
-                    ),
+                    &format!("/repos/{repository}/{path}&page={page}"),
                     None,
                 )
             },
-            Some("workflow_runs"),
+            field,
         )
     }
 

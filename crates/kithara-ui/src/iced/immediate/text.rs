@@ -201,7 +201,8 @@ impl IcedWidget<Published, Theme, Renderer> for Painted<'_> {
     fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> Node {
         let state = tree.state.downcast_mut::<PaintState<Words>>();
         let (width, height) = state.shaped(self.skin.text_resources.as_ref(), |text| {
-            TextAtom::new(&self.content, self.role, self.padding_x, self.skin).measure(text)
+            TextAtom::new(&self.content, self.role, self.padding_x, self.skin)
+                .measure(text, limits.max().width)
         });
         Node::new(limits.resolve(Length::Shrink, Length::Fill, Size::new(width, height)))
     }

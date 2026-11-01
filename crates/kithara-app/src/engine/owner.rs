@@ -1,7 +1,6 @@
 use arc_swap::ArcSwap;
 use kithara::{
-    abr::{AbrHandle, AbrMode},
-    effects::{GainDb, eq::EqBandConfig},
+    host::{DeckId, HostSettingsControl, api::Tempo},
     platform::{
         sync::Arc,
         time::Duration,
@@ -10,23 +9,20 @@ use kithara::{
             task,
         },
     },
-    queue::Transition,
 };
 use kithara_app_library::Playable;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use super::{
     command::{AppCmd, Command, DeckCmd, Envelope, MixCmd},
-    settings::DeckSettings,
-    snapshot::{BroadcastPhase, DeckSnapshot, EngineSnapshot},
+    snapshot::{BroadcastPhase, EngineSnapshot},
 };
 use crate::{
     analysis::AnalysisHandle,
     broadcast::Broadcaster,
     catalog,
     config::AppConfig,
-    deck::{Deck, DeckId, DeckSet, EqMode, TempoPercent},
-    state::StateController,
+    deck::{DeckRecord, DeckSet, EqMode},
 };
 
 #[derive(fieldwork::Fieldwork)]
@@ -41,21 +37,8 @@ pub(crate) struct Engine {
     #[field(get = is_shut_down, vis = "pub(super)", copy)]
     has_shut_down: bool,
     drain: Option<UnboundedReceiver<Option<Duration>>>,
-    decks: Vec<EngineDeck>,
     applied_seq: u64,
-}
-
-struct EngineDeck {
-    controller: StateController,
-    settings: DeckSettings,
-}
-
-struct EqModeChange<'a> {
-    controller: &'a StateController,
-    id: DeckId,
-    gains: Vec<GainDb>,
-    next: Vec<EqBandConfig>,
-    previous: Vec<EqBandConfig>,
+    accepted_tempo: Tempo,
 }
 
 impl Engine {
@@ -65,32 +48,21 @@ impl Engine {
         broadcast: Broadcaster,
         snapshots: Arc<ArcSwap<EngineSnapshot>>,
         analysis: AnalysisHandle,
-        mut controller: impl FnMut(&Deck) -> StateController,
     ) -> Self {
-        let decks = session
-            .decks()
-            .iter()
-            .map(|deck| {
-                let controller = controller(deck);
-                let settings = DeckSettings::new(controller.queue().eq_band_count());
-                EngineDeck {
-                    controller,
-                    settings,
-                }
-            })
-            .collect();
+        let accepted_tempo = session.host().tempo();
         let engine = Self {
+            accepted_tempo,
             broadcast,
             analysis,
             config,
             session,
-            decks,
             snapshots,
             eq_mode: EqMode::default(),
             has_shut_down: false,
             drain: None,
             applied_seq: 0,
         };
+
         engine.publish();
         engine
     }
@@ -108,16 +80,15 @@ impl Engine {
     fn apply_app(&mut self, cmd: AppCmd) {
         match cmd {
             AppCmd::SetEqMode(mode) => self.set_eq_mode(mode),
+            AppCmd::SetTempo(tempo) => self.set_tempo(tempo),
+            AppCmd::StepTempo(steps) => self.step_tempo(steps),
             AppCmd::BroadcastToggle => self.toggle_broadcast(),
             AppCmd::Shutdown => self.shut_down(),
         }
     }
 
     fn apply_deck(&mut self, id: DeckId, cmd: DeckCmd) {
-        let eq_mode = self.eq_mode;
-        if let Some(deck) = self.deck_mut(id) {
-            deck.apply(cmd, eq_mode);
-        }
+        self.session.apply(id, cmd, self.eq_mode);
     }
 
     fn apply_mix(&mut self, cmd: MixCmd) {
@@ -151,16 +122,6 @@ impl Engine {
         }
     }
 
-    fn deck(&self, id: DeckId) -> Option<&EngineDeck> {
-        self.session.position(id).and_then(|at| self.decks.get(at))
-    }
-
-    fn deck_mut(&mut self, id: DeckId) -> Option<&mut EngineDeck> {
-        self.session
-            .position(id)
-            .and_then(|at| self.decks.get_mut(at))
-    }
-
     fn finish_drain(&mut self) {
         let Some(drain) = self.drain.as_mut() else {
             return;
@@ -175,12 +136,12 @@ impl Engine {
     }
 
     fn load(&self, id: DeckId, track: &Playable) {
-        let Some(deck) = self.deck(id) else {
+        let Some(record) = self.session.record(id) else {
             return;
         };
-        let queue = deck.controller.queue();
-        if let Err(e) = catalog::load_onto(queue, track, &self.config) {
-            error!(source = %track.source, deck = id.0, error = %e, "load onto deck failed");
+
+        if let Err(e) = catalog::load_onto(record.queue(), track, &self.config) {
+            error!(source = %track.source, deck = %id, error = %e, "load onto deck failed");
         }
     }
 
@@ -188,68 +149,26 @@ impl Engine {
         self.snapshots.store(Arc::new(self.snapshot()));
     }
 
-    fn rollback_eq_mode(changes: &[EqModeChange<'_>]) {
-        for change in changes.iter().rev() {
-            if let Err(err) = change
-                .controller
-                .queue()
-                .set_eq_layout(change.previous.clone())
-            {
-                error!(
-                    deck = change.id.0,
-                    error = ?err,
-                    "rollback shared EQ layout failed"
-                );
-            }
+    fn set_eq_mode(&mut self, mode: EqMode) {
+        if self.eq_mode != mode && self.session.set_eq_mode(self.eq_mode, mode) {
+            self.eq_mode = mode;
         }
     }
 
-    fn set_eq_mode(&mut self, mode: EqMode) {
-        let current_mode = self.eq_mode;
-        if current_mode == mode {
-            return;
+    fn set_tempo(&mut self, tempo: Tempo) {
+        match self.session.host().set_tempo(tempo) {
+            Ok(()) => self.accepted_tempo = tempo,
+            Err(error) => error!(?tempo, %error, "host tempo refused"),
         }
+    }
 
-        let mut changes: Vec<EqModeChange<'_>> = Vec::new();
-        for (deck, engine_deck) in self.session.decks().iter().zip(&self.decks) {
-            let current = &engine_deck.settings.eq_bands;
-            let Some(gains) = current_mode.remap(mode, current) else {
-                error!(
-                    deck = deck.id.0,
-                    current = ?current_mode,
-                    requested = ?mode,
-                    bands = current.len(),
-                    "EQ mode state does not match its band layout"
-                );
-                return;
-            };
-            changes.push(EqModeChange {
-                id: deck.id,
-                controller: &engine_deck.controller,
-                previous: current_mode.layout(current),
-                next: mode.layout(&gains),
-                gains,
-            });
-        }
+    fn step_tempo(&mut self, steps: f32) {
+        const STEP_BPM: f64 = 0.1;
 
-        for (applied, change) in changes.iter().enumerate() {
-            if let Err(err) = change.controller.queue().set_eq_layout(change.next.clone()) {
-                error!(
-                    deck = change.id.0,
-                    requested = ?mode,
-                    error = ?err,
-                    "set shared EQ layout failed"
-                );
-                Self::rollback_eq_mode(&changes[..applied]);
-                return;
-            }
+        let bpm = f64::from(steps).mul_add(STEP_BPM, f64::from(self.accepted_tempo));
+        if let Ok(tempo) = Tempo::new(bpm) {
+            self.set_tempo(tempo);
         }
-
-        let gains: Vec<Vec<GainDb>> = changes.into_iter().map(|change| change.gains).collect();
-        for (deck, gains) in self.decks.iter_mut().zip(gains) {
-            deck.settings.eq_bands = gains;
-        }
-        self.eq_mode = mode;
     }
 
     fn shut_down(&mut self) {
@@ -257,29 +176,24 @@ impl Engine {
             let elapsed = stop.drain();
             self.complete_stop(Some(elapsed));
         }
+
         self.session.close();
-        self.decks.clear();
         self.has_shut_down = true;
     }
 
     fn snapshot(&self) -> EngineSnapshot {
-        let decks = self
-            .session
-            .decks()
-            .iter()
-            .zip(&self.decks)
-            .map(|(deck, engine_deck)| {
-                engine_deck
-                    .controller
-                    .read(|state| DeckSnapshot::new(deck.id, state, &engine_deck.settings))
-            })
-            .collect();
         EngineSnapshot {
             track_bpms: Arc::clone(&self.analysis.bpms()),
-            decks,
+            decks: self
+                .session
+                .records()
+                .iter()
+                .map(DeckRecord::snapshot)
+                .collect(),
             broadcast: BroadcastPhase::new(&self.broadcast),
             eq_mode: self.eq_mode,
-            mix: self.session.mix().clone(),
+            mix: *self.session.mix(),
+            tempo: self.session.host().tempo(),
             applied_seq: self.applied_seq,
         }
     }
@@ -287,8 +201,9 @@ impl Engine {
     pub(crate) fn tick(&mut self) {
         self.broadcast.poll(self.session.host());
         self.finish_drain();
-        for deck in &self.decks {
-            deck.controller.refresh_continuous();
+
+        for record in self.session.records() {
+            record.refresh();
         }
     }
 
@@ -304,90 +219,6 @@ impl Engine {
     }
 }
 
-impl EngineDeck {
-    fn apply(&mut self, cmd: DeckCmd, eq_mode: EqMode) {
-        let queue = self.controller.queue();
-        match cmd {
-            DeckCmd::Play => queue.play(),
-            DeckCmd::Pause => queue.pause(),
-            DeckCmd::Next => {
-                if let Err(error) = queue.next(Transition::Crossfade) {
-                    error!(%error, "advance to next track failed");
-                }
-            }
-            DeckCmd::Prev => {
-                if let Err(error) = queue.previous(Transition::Crossfade) {
-                    error!(%error, "return to previous track failed");
-                }
-            }
-            DeckCmd::SeekFraction(fraction) => self.seek(fraction),
-            DeckCmd::SetEqGain { layout, band, gain } if layout == eq_mode => {
-                self.set_eq_gain(band, gain);
-            }
-            DeckCmd::SetEqGain { layout, band, .. } => {
-                debug!(
-                    ?layout,
-                    ?eq_mode,
-                    band,
-                    "EQ gain for a replaced band layout rejected"
-                );
-            }
-            DeckCmd::RemoveTrack(track) => {
-                if let Err(e) = queue.remove(track) {
-                    error!(?track, error = %e, "remove failed");
-                }
-            }
-            DeckCmd::SetTempo(tempo) => self.set_tempo(tempo),
-            DeckCmd::SetQuality(variant) => self.set_quality(variant),
-        }
-    }
-
-    /// Resolves the fraction against the queue's own duration: the mirrored
-    /// UI state catches up only on the next tick, and a track whose duration
-    /// arrived in between would otherwise seek to its start.
-    fn seek(&self, fraction: f64) {
-        let queue = self.controller.queue();
-        let Some(duration) = queue.duration_seconds() else {
-            debug!(fraction, "seek dropped: the track has no duration yet");
-            return;
-        };
-        let target = fraction.clamp(0.0, 1.0) * duration.max(0.0);
-        if let Err(e) = queue.seek(target) {
-            error!("seek failed: {e:?}");
-        }
-    }
-
-    fn set_eq_gain(&mut self, band: usize, gain: GainDb) {
-        let Some(slot) = self.settings.eq_bands.get_mut(band) else {
-            return;
-        };
-        *slot = gain;
-        if let Err(e) = self.controller.queue().set_eq_gain(band, f32::from(gain)) {
-            debug!(band, db = f32::from(gain), error = ?e, "set EQ gain deferred");
-        }
-    }
-
-    /// Keeps `tempo` only once the deck took its speed.
-    fn set_tempo(&mut self, tempo: TempoPercent) {
-        match self.controller.queue().set_rate(tempo.speed()) {
-            Ok(()) => self.settings.tempo = tempo,
-            Err(e) => error!(speed = tempo.speed(), error = %e, "tempo refused"),
-        }
-    }
-
-    fn set_quality(&self, variant: Option<usize>) {
-        let handle = self.controller.queue().current_abr_handle();
-        let requested = variant.map_or(AbrMode::Auto(None), AbrMode::manual);
-        if let Some(handle) = &handle
-            && let Err(error) = handle.set_mode(requested)
-        {
-            error!("abr mode failed: {error:?}");
-        }
-        let mode = handle.as_ref().and_then(AbrHandle::mode);
-        self.controller.mutate(|state| state.abr_mode = mode);
-    }
-}
-
 impl Drop for Engine {
     fn drop(&mut self) {
         self.broadcast.release(self.session.host());
@@ -397,6 +228,10 @@ impl Drop for Engine {
 #[cfg(all(test, feature = "mock", feature = "gui"))]
 pub(crate) mod mock {
     use crate::gui::rig::Rig;
+
+    pub(crate) fn host(rig: &mut Rig) -> &mut crate::pools::AppHost {
+        crate::deck::mock::host(&mut rig.engine.session)
+    }
 
     pub(crate) fn render(rig: &mut Rig, frames: u64) {
         let host = crate::deck::mock::host(&mut rig.engine.session);
@@ -419,12 +254,9 @@ mod tests {
     };
     use kithara_test_utils::{kithara, off_thread::OffThread};
 
-    use crate::{analysis::fixtures::tone_mp3, gui::rig::Rig};
     #[cfg(not(feature = "broadcast"))]
-    use crate::{
-        deck::DeckId,
-        engine::{Command, DeckCmd, Envelope},
-    };
+    use crate::engine::{Command, DeckCmd, Envelope};
+    use crate::{analysis::fixtures::tone_mp3, gui::rig::Rig};
 
     fn close(rig: &mut Rig) {
         rig.close_window();
@@ -504,6 +336,7 @@ mod tests {
         let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline()))
             .await
             .expect("rig fixture is infallible");
+
         rig.call(move |rig| {
             let id = rig.queues[0]
                 .append(tone_mp3.as_str())
@@ -511,23 +344,27 @@ mod tests {
             rig.queues[0]
                 .select(id, ::kithara::queue::Transition::None)
                 .expect("deck A loads the selected track while paused");
+
             let queue_tick = |rig: &mut Rig| {
                 let _ = rig.queues[0].tick();
                 crate::mock::render_rig(rig, 512);
             };
+
             rig.until(
                 "the queue learns the duration",
                 Rig::DEADLINE,
                 queue_tick,
                 |rig| rig.queues[0].duration_seconds().is_some(),
             );
+
             let duration = rig.queues[0]
                 .duration_seconds()
                 .expect("the queue knows the duration");
 
+            let deck = rig.deck("a");
             rig.engine.apply(Envelope {
                 command: Command::Deck {
-                    deck: DeckId(0),
+                    deck,
                     cmd: DeckCmd::SeekFraction(0.9),
                 },
                 seq: 1,
@@ -545,6 +382,7 @@ mod tests {
             );
         })
         .await;
+
         rig.close().await;
     }
 
@@ -552,10 +390,11 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_rung_picked_on_a_deck_without_a_ladder_publishes_the_ladder_mode() {
         let mut rig = Rig::offline();
+        let deck = rig.deck("a");
 
         rig.engine.apply(Envelope {
             command: Command::Deck {
-                deck: DeckId(0),
+                deck,
                 cmd: DeckCmd::SetQuality(Some(1)),
             },
             seq: 1,
@@ -563,7 +402,7 @@ mod tests {
         rig.engine.publish();
 
         let published = rig.snapshots.load();
-        let stream = &published.deck(DeckId(0)).expect("deck A").stream;
+        let stream = &published.deck(deck).expect("deck A").stream;
         assert_eq!(
             (stream.selected, stream.is_auto),
             (None, true),

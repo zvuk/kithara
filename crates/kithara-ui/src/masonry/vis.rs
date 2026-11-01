@@ -28,14 +28,14 @@ impl VisDeclaration {
     }
 
     fn prepare(self, scale: f64, target: [u32; 2]) -> Option<PreparedDraw> {
-        let (origin, resolution, clipped) = self.physical_rect(scale, target)?;
+        let (uniforms, clipped) = self.physical_rect(scale, target)?;
         Some(PreparedDraw {
-            uniforms: Uniforms::new(self.frame, origin, resolution),
+            uniforms,
             scissor: scissor(clipped)?,
         })
     }
 
-    fn physical_rect(self, scale: f64, target: [u32; 2]) -> Option<([f32; 2], [f32; 2], [f64; 4])> {
+    fn physical_rect(self, scale: f64, target: [u32; 2]) -> Option<(Uniforms, [f64; 4])> {
         if !scale.is_finite() || scale <= 0.0 || target[0] == 0 || target[1] == 0 {
             return None;
         }
@@ -68,7 +68,7 @@ impl VisDeclaration {
         if clipped[2] <= clipped[0] || clipped[3] <= clipped[1] {
             return None;
         }
-        Some((origin, resolution, clipped))
+        Some((Uniforms::new(self.frame, origin, resolution), clipped))
     }
 }
 

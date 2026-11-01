@@ -88,6 +88,7 @@ where
                 color: self.skin.rgba(role.color),
                 lit: None,
                 text: Box::new(TextContext::from(self.skin.text_resources.as_ref())),
+                room: f32::INFINITY,
             }),
             Size::new(Length::Fill, Length::Fixed(metrics.footer_height)),
             Vec::new(),

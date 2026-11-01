@@ -10,6 +10,7 @@ use super::{
     selection::{requested, select_lane, validate_config},
 };
 use crate::{
+    Ctx,
     common::project::{ProjectConfig, TestCommandConfig},
     retried::Evidence,
     touched::{self, Touched},
@@ -29,15 +30,10 @@ pub struct TestArgs {
     pub(crate) args: Vec<String>,
 }
 
-pub(crate) fn run(args: &TestArgs) -> Result<()> {
-    /// Where the test command is run from, and so where every path it reads
-    /// or judges is anchored.
-    const ROOT: &str = ".";
-
+pub(crate) fn run(args: &TestArgs, ctx: &Ctx) -> Result<()> {
     let request = TestRequest::parse(&args.args)?;
-    let root = Path::new(ROOT);
-    let project = ProjectConfig::load(root)?;
-    let test = &project.test;
+    let root = &ctx.root;
+    let test = &ctx.config.test;
 
     let base = touched::base_branch(&|name| std::env::var_os(name));
     let plan = plan(test, root, &request, &base)?;
@@ -171,6 +167,7 @@ pub(super) fn execute(
     lane_name: &str,
     command: &mut Command,
 ) -> Result<()> {
+    command.current_dir(root);
     let evidence = Evidence::of(root, test, command)?;
     evidence.clear();
     let status = command.status().with_context(|| {

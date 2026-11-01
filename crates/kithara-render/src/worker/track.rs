@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use kithara_audio::{AudioConfig, ResamplerBackend};
 use kithara_config::{Config, Patch};
 use kithara_dsp::param::SmootherConfig;
-use kithara_effects::AudioEffect;
+use kithara_effects::EffectSetup;
 use kithara_platform::sync::Arc;
 use kithara_stream::StreamType;
 use kithara_warp::WarpConfig;
@@ -59,7 +59,7 @@ where
         patch(skip)
     )]
     #[field(get)]
-    pub(crate) effects: Vec<Box<dyn AudioEffect>>,
+    pub(crate) effects: Vec<EffectSetup>,
     /// Resident Warp resources and live temporal controls.
     #[config(skip = "transferred to the warp lane", builder(default = WarpConfig::builder().build()), patch(skip))]
     #[field(get)]

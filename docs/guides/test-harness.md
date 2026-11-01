@@ -56,9 +56,11 @@ artifacts. An unguarded run keeps its existing behavior.
 A flake is judged from stress evidence, never from reading code or from local
 repeat loops.
 
-1. Start from the newest stress report on `main` (the nightly run's
-  `stress-evidence-*` artifact): the failure rate per mode, the symptom
-  clusters, and the flight events that only failing attempts carry.
+1. Start from the newest available stress report (`stress-evidence-*`
+  artifact): the failure rate per mode, the symptom clusters, and the flight
+  events that only failing attempts carry. Check its subject revision; if no
+  report covers the revision under investigation, request a focused manual
+  run as below. Daily Dispatch runs do not produce stress reports.
 1. Reproduce the one test, not the sweep. Dispatch the Stress workflow with
   `filter` naming the test, `mode` set to
   `reproduction-load-flash-on reproduction-load-flash-off`, and a `count` of

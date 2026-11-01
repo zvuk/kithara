@@ -51,6 +51,9 @@ pub(crate) enum Leaf {
         /// the one it shows otherwise. Text that named no flag keeps none.
         lit: Option<TextFaces>,
         text: Box<TextContext>,
+        /// The widest box the last layout offered, which is the room the text
+        /// wraps in until the next one.
+        room: f32,
     },
     Custom {
         widget: Box<dyn CustomWidget<Action = HostAction>>,
@@ -210,13 +213,16 @@ impl Leaf {
                 role,
                 padding_x,
                 text,
+                room,
                 ..
             } => {
+                *room = limits.max().width;
                 if content.is_empty() {
                     return Size::ZERO;
                 }
-                let run = text.shape(content, *role, None);
-                Size::new(run.width() + *padding_x * 2.0, run.height())
+                let (width, height) =
+                    role.measure(text, content, (*room - *padding_x * 2.0).max(0.0));
+                Size::new(width + *padding_x * 2.0, height)
             }
             Self::Custom { widget, text, .. } => {
                 let mut text = TextMeasurer::new(text);
@@ -345,13 +351,16 @@ impl Leaf {
         }
     }
 
+    /// The size this text takes in the room the last layout gave it, so that
+    /// words which wrap to another line ask for a layout even where their one
+    /// line is no wider than before.
     pub(crate) fn text_size(&mut self) -> Option<Size> {
-        if !matches!(self, Self::Text { .. }) {
+        let &mut Self::Text { room, .. } = self else {
             return None;
-        }
+        };
         Some(self.measure(crate::hosts::solve::Limits::new(
             Size::ZERO,
-            Size::new(f32::INFINITY, f32::INFINITY),
+            Size::new(room, f32::INFINITY),
         )))
     }
 

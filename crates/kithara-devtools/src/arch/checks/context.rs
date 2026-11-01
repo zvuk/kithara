@@ -153,7 +153,9 @@ impl<'a> Context<'a> {
         workspace_root: &'a Path,
         scope: &'a Scope,
     ) -> Self {
-        let mut sources = Scope::default().with_workspace_sources();
+        let mut sources = Scope::default()
+            .with_metadata(metadata)
+            .with_workspace_sources();
         sources.extra_roots.extend(scope.roots(workspace_root));
         sources.extra_roots.extend(
             metadata

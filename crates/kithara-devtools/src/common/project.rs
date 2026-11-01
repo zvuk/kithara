@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
@@ -32,8 +32,11 @@ pub(crate) fn load_optional_config<T: Default + DeserializeOwned>(
 #[config(builder(none), fields(nested))]
 pub struct ProjectConfig {
     pub architecture: ArchitectureConfig,
+    #[serde(rename = "ast-grep")]
+    pub ast_grep: AstGrepConfig,
     pub audit_clippy: AuditClippyConfig,
     pub ci_report: CiReportConfig,
+    pub clippy: ClippyConfig,
     pub health: HealthConfig,
     pub lint_exclude: LintExcludeConfig,
     pub orphans: OrphansConfig,
@@ -48,6 +51,16 @@ pub struct ProjectConfig {
     pub tools: crate::common::tools::ToolsConfig,
     #[serde(default, rename = "workspace-scan")]
     pub workspace_scan: WorkspaceScan,
+}
+
+/// Source scope for the workspace's own ast-grep configuration.
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
+pub struct AstGrepConfig {
+    /// Retain an AST domain that also covers non-Rust project files.
+    pub default_roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
@@ -226,6 +239,16 @@ pub struct AuditClippyConfig {
     pub lints: Vec<String>,
 }
 
+/// Product features included by the project's native Clippy gate.
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
+pub struct ClippyConfig {
+    /// Apple-only product surfaces need an explicit gate on their build host.
+    pub macos_features: Vec<String>,
+}
+
 /// How much of each measurement the consolidated CI report inlines before it
 /// sends the reader to the artifact it was rendered from.
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
@@ -258,11 +281,13 @@ impl Default for CiReportConfig {
     }
 }
 
-/// Workspace-wide Rust file scan exclusions.
+/// Workspace-wide Rust source selection.
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
 #[config(builder(none), fields(value))]
 pub struct WorkspaceScan {
+    /// Empty selects Cargo target roots; explicit lint scopes override these roots.
+    pub default_roots: Vec<PathBuf>,
     pub exclude: Vec<String>,
     /// Directories a scope token may name outside `crates/`. A token whose
     /// first component is one of these resolves to a workspace path rather
@@ -274,6 +299,7 @@ pub struct WorkspaceScan {
 impl Default for WorkspaceScan {
     fn default() -> Self {
         Self {
+            default_roots: Vec::new(),
             exclude: Vec::new(),
             top_level_dirs: default_top_level_dirs(),
         }

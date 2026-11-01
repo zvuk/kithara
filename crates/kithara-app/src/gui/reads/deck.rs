@@ -8,10 +8,7 @@ use super::value::{Value, impl_child_node};
 use crate::{
     deck::{EqMode, TempoPercent},
     engine::DeckSnapshot,
-    gui::{
-        deck::consts::TEMPO_RANGE,
-        ui::{cache::DeckCache, scope::deck_index},
-    },
+    gui::{deck::consts::TEMPO_RANGE, ui::cache::DeckCache},
     state::AbrVariant,
 };
 
@@ -26,7 +23,12 @@ impl<'a> DecksNode<'a> {
     }
 
     fn deck(self, scope: Scope<'_>) -> Option<DeckNode<'a>> {
-        self.decks.get(deck_index(scope.get("deck")?)?).copied()
+        let letter = scope.get("deck")?;
+
+        self.decks
+            .iter()
+            .find(|deck| deck.shown.letter == letter)
+            .copied()
     }
 }
 
@@ -118,6 +120,7 @@ impl_child_node!(PlaybackNode<'a>, |this, segment, _scope| {
             cues: &[],
         }),
         "playing" => ReadValue::Bool(this.shown.playing),
+        "synced" => ReadValue::Bool(this.shown.synced),
         "position_secs" => ReadValue::Scalar(this.shown.position.max(0.0)),
         "duration_secs" => ReadValue::Scalar(this.shown.duration.max(0.0)),
         "position_normalized" => ReadValue::Scalar(this.normalized()),

@@ -60,7 +60,7 @@ struct PathFormatCommand<'a> {
 
 pub(crate) fn run(args: &FormatArgs, ctx: &Ctx) -> Result<()> {
     if !args.check {
-        ensure_clean_tree(args.allow_dirty, "format")?;
+        ensure_clean_tree(&ctx.root, args.allow_dirty, "format")?;
     }
 
     for target in selected_targets(args) {

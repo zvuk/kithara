@@ -76,6 +76,7 @@ apple MODE="xcframework" *ARGS:
     set -uo pipefail
     mode=$1
     shift
+    derived_data="$PWD/apple/Examples/KitharaDemo/build/DerivedData"
 
     ios_destination() {
       if [[ -n "${KITHARA_IOS_DESTINATION:-}" ]]; then
@@ -111,7 +112,8 @@ apple MODE="xcframework" *ARGS:
         # found for architecture x86_64` against a framework that never
         # claimed to have them.
         KITHARA_LOCAL_DEV=1 xcodebuild -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
-            -scheme "$scheme" -destination "$destination" ARCHS=arm64 build
+            -scheme "$scheme" -destination "$destination" \
+            -derivedDataPath "$derived_data" ARCHS=arm64 build
         ;;
       test)
         destination=$(ios_destination) || exit 1
@@ -150,6 +152,7 @@ apple MODE="xcframework" *ARGS:
             -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
             -scheme KitharaDemoUnitTests_iOS \
             -destination "$destination" \
+            -derivedDataPath "$derived_data" \
             -resultBundlePath "$bundle" \
             ARCHS=arm64 \
             SWIFT_ENABLE_EXPLICIT_MODULES=NO
@@ -182,6 +185,7 @@ apple MODE="xcframework" *ARGS:
             -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
             -scheme KitharaDemoUnitTests_iOS \
             -destination "$destination" \
+            -derivedDataPath "$derived_data" \
             ARCHS=arm64 \
             SWIFT_ENABLE_EXPLICIT_MODULES=NO || exit 1
         selection=(-only-testing:KitharaDemoUnitTests_iOS/IntegrationRegressionsIOS)
@@ -198,6 +202,7 @@ apple MODE="xcframework" *ARGS:
             -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
             -scheme KitharaDemoUnitTests_iOS \
             -destination "$destination" \
+            -derivedDataPath "$derived_data" \
             "${selection[@]}" \
           > "$log" 2>&1 || rc=1
         grep -E '✔ Test "|✘ Test "|↳ ' "$log" || true

@@ -69,6 +69,10 @@ impl ProbeEvent {
 
 struct State {
     recorded: Option<Arc<Notify>>,
+    /// [`Scope::wait_for`] calls parked on `recorded`. A firing signals only
+    /// while one waits: under the virtual clock every signal takes the
+    /// scheduler lock, and the hot probes fire once per scheduler pass.
+    waiting: usize,
     events: Vec<ProbeEvent>,
     /// Probe names seen by this process. Bounded by the probe call sites, and
     /// kept across scopes so each name is interned once.
@@ -150,6 +154,7 @@ static STATE: Mutex<State> = Mutex::new(State {
     events: Vec::new(),
     probes: BTreeMap::new(),
     recorded: None,
+    waiting: 0,
 });
 static SCOPE: Mutex<()> = Mutex::new(());
 /// Thread that owns the live recording and the handle nested scopes join,
@@ -200,6 +205,7 @@ pub fn scope() -> Scope {
         state.events = Vec::new();
         state.probes = BTreeMap::new();
         state.recorded = Some(Arc::clone(&recorded));
+        state.waiting = 0;
     }
     *lock(&NESTING) = Some((here, Arc::clone(&recorded)));
     ARMED.store(true, Ordering::Release);
@@ -327,13 +333,16 @@ impl Scope {
     {
         loop {
             let recorded = self.recorded.notified();
-            if holds(&lock(&STATE).events) {
-                return;
-            }
-            if timeout(__hang_detector.remaining(), recorded)
-                .await
-                .is_err()
             {
+                let mut state = lock(&STATE);
+                if holds(&state.events) {
+                    return;
+                }
+                state.waiting += 1;
+            }
+            let woken = timeout(__hang_detector.remaining(), recorded).await;
+            lock(&STATE).waiting -= 1;
+            if woken.is_err() {
                 hang_tick!(Self::unsatisfied_wait());
             } else {
                 hang_tick!();
@@ -380,9 +389,9 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
             len: 0,
         };
         let mut state = lock(&STATE);
-        let Some(recorded) = state.recorded.clone() else {
+        if state.recorded.is_none() {
             return;
-        };
+        }
         event.record(&mut FieldVisitor {
             state: &mut state,
             visitor: &mut visitor,
@@ -413,8 +422,11 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
         if fired <= MAX_EVENTS {
             state.events.push(recorded_event);
         }
+        let waiter = state.recorded.clone().filter(|_| state.waiting > 0);
         drop(state);
-        recorded.notify_one();
+        if let Some(recorded) = waiter {
+            recorded.notify_one();
+        }
     }
 }
 

@@ -522,6 +522,7 @@ fn the_bar_reveals_its_telemetry_as_the_window_widens() {
                 ((1250.0, None), "bar/brand"),
                 ((0.0, None), "bar/drag"),
                 ((1120.0, None), "bar/cpu-block"),
+                ((0.0, None), "bar/before-master"),
                 ((0.0, None), "bar/broadcast-block"),
                 ((0.0, None), "bar/before-settings"),
                 ((0.0, None), "bar/window-block"),
@@ -575,19 +576,24 @@ fn every_walker_reaches_the_nodes_the_documents_declare() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
         let dual = layout == DeckLayout::Dual;
+
         for (walker, found, floor) in [
             (
                 "controls",
                 controls(&ui).len(),
                 if dual { 213 } else { 156 },
             ),
-            ("surfaces", surfaces(&ui).len(), layout.decks()),
+            ("surfaces", surfaces(&ui).len(), layout.letters().len()),
             (
                 "pressables",
                 pressables(&ui).len(),
                 if dual { 47 } else { 36 },
             ),
-            ("drop_targets", drop_targets(&ui).len(), layout.decks()),
+            (
+                "drop_targets",
+                drop_targets(&ui).len(),
+                layout.letters().len(),
+            ),
             ("guarded_by", guarded_by(&ui, "ui.module.hidden").len(), 4),
             (
                 "optional_modules",
@@ -850,10 +856,11 @@ fn every_eq_bank_carries_its_pointer_menu() {
 
 #[kithara::test]
 fn hosted_studio_controls_claimed_by_the_engine_keep_descriptor_shapes() {
-    const SINGLE_HOSTED_CLAIMS: [(&str, &str); 15] = [
+    const SINGLE_HOSTED_CLAIMS: [(&str, &str); 16] = [
         ("deck-a/next", "activation"),
         ("deck-a/play", "activation"),
         ("deck-a/prev", "activation"),
+        ("deck-a/sync", "activation"),
         ("deck-a/wave", "hero-wave"),
         ("deck-a/zoom-in", "activation"),
         ("deck-a/zoom-out", "activation"),
@@ -868,16 +875,18 @@ fn hosted_studio_controls_claimed_by_the_engine_keep_descriptor_shapes() {
         ("overview/a/wave", "wave"),
     ];
 
-    const DUAL_HOSTED_CLAIMS: [(&str, &str); 31] = [
+    const DUAL_HOSTED_CLAIMS: [(&str, &str); 33] = [
         ("deck-a/next", "activation"),
         ("deck-a/play", "activation"),
         ("deck-a/prev", "activation"),
+        ("deck-a/sync", "activation"),
         ("deck-a/wave", "hero-wave"),
         ("deck-a/zoom-in", "activation"),
         ("deck-a/zoom-out", "activation"),
         ("deck-b/next", "activation"),
         ("deck-b/play", "activation"),
         ("deck-b/prev", "activation"),
+        ("deck-b/sync", "activation"),
         ("deck-b/wave", "hero-wave"),
         ("deck-b/zoom-in", "activation"),
         ("deck-b/zoom-out", "activation"),
@@ -1093,7 +1102,7 @@ fn a_layout_addresses_only_the_decks_it_lays_out() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
         let paths = control_paths(&ui);
-        let shown = ["a", "b"].into_iter().take(layout.decks());
+        let shown = ["a", "b"].into_iter().take(layout.letters().len());
 
         for letter in shown {
             for path in [
@@ -1104,7 +1113,8 @@ fn a_layout_addresses_only_the_decks_it_lays_out() {
                 assert!(paths.contains(&path.as_str()), "{layout:?}: missing {path}");
             }
         }
-        for letter in ["a", "b"].into_iter().skip(layout.decks()) {
+
+        for letter in ["a", "b"].into_iter().skip(layout.letters().len()) {
             let hidden = [
                 format!("deck-{letter}/"),
                 format!("overview/{letter}/"),
@@ -1126,8 +1136,13 @@ fn every_laid_out_deck_takes_dropped_tracks() {
         let ui = compile_ui(layout).unwrap();
         let targets = drop_targets(&ui);
 
-        assert_eq!(targets.len(), layout.decks(), "{layout:?}: {targets:?}");
-        for letter in ["a", "b"].into_iter().take(layout.decks()) {
+        assert_eq!(
+            targets.len(),
+            layout.letters().len(),
+            "{layout:?}: {targets:?}"
+        );
+
+        for letter in ["a", "b"].into_iter().take(layout.letters().len()) {
             let want = (
                 format!("deck-{letter}"),
                 vec![format!("deck.queue.load@deck={letter}")],
@@ -1523,7 +1538,8 @@ fn the_layouts_head_opens_and_folds_the_layouts_block() {
 fn each_deck_picks_its_own_stream_quality() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
-        let letters = ["a", "b"].into_iter().take(layout.decks());
+        let letters = ["a", "b"].into_iter().take(layout.letters().len());
+
         for letter in letters {
             let cell = format!("deck-{letter}/stream/cell");
             let auto = format!("deck-{letter}/stream/auto/pick");
@@ -1534,6 +1550,7 @@ fn each_deck_picks_its_own_stream_quality() {
                 pressed.contains(&(cell.as_str(), format!("deck-{letter}/quality").as_str())),
                 "{layout:?}: the cell of deck {letter} must toggle its own menu",
             );
+
             for (path, variant) in [(&auto, "auto"), (&rung, "0")] {
                 assert!(
                     pressed.contains(&(
@@ -1930,24 +1947,21 @@ fn every_control_the_studio_draws_declares_the_write_it_makes() {
 mod answered {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use ::kithara::ui::{
-        expand::{Binding, BindingKind},
-        geom::Pt,
-        render::{Scope, WindowCommand},
+    use ::kithara::{
+        host::api::Tempo,
+        ui::{
+            expand::{Binding, BindingKind},
+            geom::Pt,
+            render::{Scope, WindowCommand},
+        },
     };
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        deck::{DeckId, EqMode},
+        deck::EqMode,
         engine::MixCmd,
-        gui::{
-            app::Kithara,
-            deck::DeckMsg,
-            message::Message,
-            rig::Rig,
-            ui::{events::translate, scope::deck_index},
-        },
+        gui::{app::Kithara, deck::DeckMsg, message::Message, rig::Rig, ui::events::translate},
         state::AbrVariant,
     };
 
@@ -2039,24 +2053,28 @@ mod answered {
             .collect()
     }
 
-    fn zoom(state: &mut Kithara, deck: Option<usize>) -> Option<f64> {
+    fn zoom(state: &mut Kithara, deck: Option<&str>) -> Option<f64> {
         state.ui.cache.deck_mut(deck?)?.view.zoom
     }
 
     fn answers(key: &str, value: WriteValue) -> bool {
         let (id, scope) = Scope::split(key);
-        let deck = scope.get("deck").and_then(deck_index);
+        let deck = scope.get("deck");
+
         let mut rig = Rig::offline();
+        let deck_id = deck.map(|letter| rig.deck(letter));
+
         if matches!(id, "deck.eq.low_mid" | "deck.eq.high_mid") {
             rig.message(Message::SetEqMode(EqMode::FourBand));
             rig.pump();
             rig.ui.refresh();
         }
-        if let (Some(index), Some(slot)) = (
+
+        if let (Some(letter), Some(slot)) = (
             deck,
             scope.get("variant").and_then(|slot| slot.parse().ok()),
         ) {
-            rig.shows(DeckId(index), |shown| {
+            rig.shows(letter, |shown| {
                 shown.abr_variants = (0..=slot)
                     .map(|index| AbrVariant {
                         index,
@@ -2066,18 +2084,22 @@ mod answered {
                     .collect();
             });
         }
+
         let state = &mut rig.ui;
-        if let (Some(index), "deck.queue.load") = (deck, id) {
-            state.ui.cache.focus(1 - index);
+        if let (Some(letter), "deck.queue.load") = (deck, id) {
+            state.ui.cache.focus(if letter == "a" { "b" } else { "a" });
         }
+
         let zoomed = zoom(state, deck);
         let module = scope.get("module");
         let shown = module.map(|module| state.ui.cache.modules.is_on(module));
+
         // Row 1 is selected at mount and opens nothing; row 2 does both.
         let value = match id {
             "library.select" | "library.toggle" => WriteValue::Index(2),
             _ => value,
         };
+
         let tree = drawn_tree(state);
         let row = match value {
             WriteValue::Index(row) => Some(row),
@@ -2107,10 +2129,13 @@ mod answered {
                 Some(Message::Window(WindowCommand::ToggleFullScreen))
             ),
             "broadcast.toggle" => matches!(answer, Some(Message::BroadcastToggle)),
+            "clock.tempo" => {
+                matches!(answer, Some(Message::SetTempo(_) | Message::StepTempo(_)))
+            }
             "ui.library.add_folder" => matches!(answer, Some(Message::AddMusicFolder)),
             "mix.crossfader" => matches!(answer, Some(Message::Mix(MixCmd::Crossfader(_)))),
             "mixer.trim" => {
-                matches!(answer, Some(Message::Mix(MixCmd::Trim(DeckId(index), _))) if Some(index) == deck)
+                matches!(answer, Some(Message::Mix(MixCmd::Trim(id, _))) if Some(id) == deck_id)
             }
             "library.select" => {
                 answer.is_none()
@@ -2134,12 +2159,13 @@ mod answered {
             }
             "deck.eq.mode" => matches!(answer, Some(Message::SetEqMode(_))),
             _ => {
-                let Some(Message::Deck(DeckId(index), msg)) = answer else {
+                let Some(Message::Deck(target, msg)) = answer else {
                     return false;
                 };
-                Some(index) == deck
+                Some(target) == deck_id
                     && match id {
                         "deck.transport.toggle_play" => matches!(msg, DeckMsg::TogglePlayPause),
+                        "deck.transport.toggle_sync" => matches!(msg, DeckMsg::ToggleSync),
                         "deck.transport.prev" => matches!(msg, DeckMsg::Prev),
                         "deck.transport.next" => matches!(msg, DeckMsg::Next),
                         "deck.transport.seek_normalized" => matches!(msg, DeckMsg::SeekTo(_)),
@@ -2153,6 +2179,25 @@ mod answered {
                     }
             }
         }
+    }
+
+    #[kithara::test(native, flash(false))]
+    #[kithara::hang_watchdog]
+    fn a_number_written_to_the_tempo_sets_that_tempo() {
+        let mut rig = Rig::offline();
+
+        let answer = translate(
+            &mut rig.ui,
+            UiEvent::Write {
+                key: "clock.tempo".to_owned(),
+                value: WriteValue::Scalar(128.5),
+            },
+        );
+
+        assert!(
+            matches!(answer, Some(Message::SetTempo(tempo)) if Tempo::new(128.5).ok() == Some(tempo)),
+            "a number typed for the tempo must ask for that tempo: {answer:?}"
+        );
     }
 
     #[kithara::test(native, flash(false))]

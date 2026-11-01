@@ -1,14 +1,26 @@
 use kithara::{
     assets::AssetStore,
     bufpool::{OverallBudget, PoolConfig, PoolConfigPatch, PoolError, PoolRegion, pool_schema},
-    host::Host,
-    play::{PlayWorker, ResourceConfig},
+    host::{Host, HostConfig, HostCore, HostSettings},
+    link::{
+        LinkedConfig, LinkedFactory, LinkedHost, LinkedHostConfig, LinkedHostDeck, TempoStep,
+        TempoTrajectory,
+    },
+    play::{PlayError, PlayWorker, PlayerFactory, ResourceConfig},
     prelude::PlaybackResamplerBackend,
     queue::{Queue, QueueControl, TrackSource},
+    signal::SessionFrame,
+    sync::SessionBeat,
 };
 use serde::Deserialize;
 
 mod consts {
+    use std::num::NonZeroU16;
+
+    pub(super) const BEATS_PER_BAR: NonZeroU16 = match NonZeroU16::new(4) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
     pub(super) const BYTE_MAX_BUFFERS: usize = 32;
     pub(super) const BYTE_MAX_RETAINED_CAPACITY: usize = 2 * 1024 * 1024;
     pub(super) const INITIAL_SAMPLE_BUFFERS: usize = 16;
@@ -32,8 +44,11 @@ pub type Pools = PoolRegion<AppPools>;
 /// App-owned asset-store shape.
 pub type AppStore = AssetStore<AppPools>;
 
+/// App-owned session owner: the host core with deck sync on top.
+pub type AppHostOwner = LinkedHost<AppPools, HostCore<AppPools, LinkedHostDeck<AppPools>>>;
+
 /// App-owned audio host shape.
-pub type AppHost = Host<AppPools>;
+pub type AppHost = Host<AppPools, AppHostOwner>;
 
 /// App-owned playback worker shape.
 pub type AppWorker = PlayWorker<AppPools>;
@@ -41,14 +56,54 @@ pub type AppWorker = PlayWorker<AppPools>;
 /// App-owned resource configuration shape.
 pub type AppResourceConfig<B = PlaybackResamplerBackend> = ResourceConfig<AppPools, B>;
 
-/// App-owned queue shape.
-pub type AppQueue = Queue<AppPools>;
+/// App-owned queue shape: every track can follow the host tempo.
+pub type AppQueue = Queue<AppPools, LinkedFactory<PlayerFactory>>;
 
 /// App-owned queue control shape.
 pub type AppQueueControl = QueueControl<AppPools>;
 
 /// App-owned track-source shape.
 pub type AppTrackSource = TrackSource<AppPools>;
+
+/// Builds the application's audio host.
+///
+/// # Errors
+/// Returns [`PlayError`] when the host rejects `config` or cannot start.
+pub fn host(config: HostConfig<AppPools>) -> Result<AppHost, PlayError> {
+    let trajectory = trajectory(config.settings());
+    AppHost::layered(config, move |core| {
+        LinkedHost::new(
+            LinkedHostConfig::builder()
+                .inner(core)
+                .trajectory(trajectory)
+                .build(),
+        )
+    })
+}
+
+/// The track factory of a deck queue on a host running `settings`.
+pub(crate) fn factory(settings: HostSettings) -> LinkedFactory<PlayerFactory> {
+    LinkedFactory::new(
+        LinkedConfig::builder()
+            .inner(PlayerFactory)
+            .trajectory(trajectory(settings))
+            .build(),
+    )
+}
+
+/// The host tempo plan before the session starts: beat zero on frame zero at
+/// the configured tempo, four beats to the bar.
+fn trajectory(settings: HostSettings) -> TempoTrajectory {
+    TempoTrajectory::new(
+        TempoStep {
+            frame: SessionFrame::new(0),
+            beat: SessionBeat::default(),
+            tempo: settings.tempo(),
+        },
+        consts::BEATS_PER_BAR,
+        settings.sample_rate(),
+    )
+}
 
 /// What a document can say about this application's buffer pools: the region's
 /// own byte budget, then one field per pool the `pool_schema!` invocation above

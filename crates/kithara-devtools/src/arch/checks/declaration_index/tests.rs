@@ -277,7 +277,7 @@ fn narrowed_finding_scope_preserves_the_workspace_graph() {
 }
 
 #[test]
-fn custom_target_file_outside_source_roots_keeps_unavailable_siblings_unknown() {
+fn custom_target_keeps_declared_siblings_and_leaves_orphans_unknown() {
     let (_, index) = fixture(
         &[
             (
@@ -290,11 +290,22 @@ fn custom_target_file_outside_source_roots_keeps_unavailable_siblings_unknown() 
             ),
             ("component/entry.rs", "struct Known; mod sibling;"),
             ("component/sibling.rs", "pub struct Meter;"),
+            ("component/orphan.rs", "pub struct Unknown;"),
         ],
         &Scope::default(),
     );
     assert!(resolved(&index, "component/entry.rs", &[], "Known").is_some());
-    assert!(resolved(&index, "component/entry.rs", &[], "sibling::Meter").is_none());
+    assert_eq!(
+        resolved(&index, "component/entry.rs", &[], "sibling::Meter")
+            .expect("declared sibling")
+            .1,
+        ["sibling", "Meter"]
+    );
+    assert!(
+        index
+            .key_for_decl("component/orphan.rs", &[], "Unknown")
+            .is_none()
+    );
 }
 
 #[test]

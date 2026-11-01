@@ -60,7 +60,11 @@ struct Build {
 /// # Errors
 ///
 /// When a fingerprint cannot be read, before anything is removed.
-pub(super) fn collect(dir: &Path, window: Duration) -> Result<()> {
+pub(crate) fn collect(dir: &Path, window: Duration) -> Result<()> {
+    let Some(_cargo) = crate::ci::build_cache::hold_cargo_locks(dir)? else {
+        info!(path = %dir.display(), "keeping build units while Cargo holds a profile");
+        return Ok(());
+    };
     let started = Instant::now();
     let mut units = Vec::new();
     let mut builds = Vec::new();
@@ -475,6 +479,39 @@ mod tests {
 
     fn at(hours: u64) -> SystemTime {
         SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000 + hours * 60 * 60)
+    }
+
+    #[test]
+    fn collection_keeps_units_while_cargo_holds_the_profile() {
+        use kithara_devtools::lock::FileLock;
+
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("debug");
+        fs::create_dir_all(&profile).unwrap();
+        let lock = fs::File::create(profile.join(consts::CARGO_LOCK)).unwrap();
+        let _cargo = FileLock::try_exclusive(lock).unwrap();
+        let old = Unit {
+            package: "xtask",
+            hash: "1111111111111111",
+            fingerprint: 1,
+            features: "[]",
+            deps: &[],
+            built: at(0),
+        }
+        .write(&profile);
+        Unit {
+            package: "xtask",
+            hash: "2222222222222222",
+            fingerprint: 2,
+            features: "[]",
+            deps: &[],
+            built: at(48),
+        }
+        .write(&profile);
+
+        collect(dir.path(), consts::GARBAGE_WINDOW).unwrap();
+
+        assert!(exist(&old));
     }
 
     fn exist(paths: &[PathBuf]) -> bool {

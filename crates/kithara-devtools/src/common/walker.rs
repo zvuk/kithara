@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use glob::{MatchOptions, Pattern};
 
-use super::{project::ProjectConfig, scope::Scope};
+use super::{exclude::module_files, project::ProjectConfig, scope::Scope};
 
 /// Recursively collect all `.rs` files under `dir`, returning them sorted.
 ///
@@ -83,8 +83,8 @@ pub fn matches_any_segmented(patterns: &[Pattern], rel: &Path) -> bool {
     patterns.iter().any(|p| p.matches_with(&s, OPTIONS))
 }
 
-/// Walk `.rs` files under each root in `scope` (defaults to `<workspace>/crates`
-/// when scope is empty). Results are de-duplicated and sorted.
+/// Walk scoped Rust sources using Cargo targets or the project's default roots.
+/// Explicit scopes override defaults; results are de-duplicated and sorted.
 ///
 /// # Errors
 ///
@@ -93,8 +93,13 @@ pub fn matches_any_segmented(patterns: &[Pattern], rel: &Path) -> bool {
 pub fn workspace_rs_files_scoped(workspace_root: &Path, scope: &Scope) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     let excludes = WorkspaceScanExcludes::from_root(workspace_root)?;
-    for root in scope.roots(workspace_root) {
-        collect_rs_files(&root, &mut out)?;
+    let targets = scope.root_targets();
+    for root in scope.roots_with_defaults(workspace_root, &excludes.default_roots) {
+        if targets.contains(&root) {
+            out.extend(module_files(&root, |path| excludes.matches(path))?);
+        } else {
+            collect_rs_files(&root, &mut out)?;
+        }
     }
     out.retain(|path| !excludes.matches(path));
     out.sort();
@@ -235,6 +240,7 @@ fn has_shell_shebang(path: &Path) -> bool {
 
 struct WorkspaceScanExcludes {
     workspace_root: PathBuf,
+    default_roots: Vec<PathBuf>,
     patterns: Vec<Pattern>,
 }
 
@@ -248,6 +254,7 @@ impl WorkspaceScanExcludes {
         })?;
         Ok(Self {
             workspace_root: workspace_root.to_path_buf(),
+            default_roots: config.workspace_scan.default_roots,
             patterns: compile_globs(&config.workspace_scan.exclude),
         })
     }

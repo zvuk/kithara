@@ -1,5 +1,7 @@
 use kithara_signal::{AudioChunk, AudioSpec};
 
+use crate::{EffectChange, EffectPrepareError, EffectRefusal, EffectTarget};
+
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
 }
@@ -7,6 +9,18 @@ mod kithara {
 /// Audio processing effect in the chain (transforms decoded-audio chunks).
 #[kithara::mock(api = AudioEffectMock)]
 pub trait AudioEffect: Send + 'static {
+    /// Apply one prepared field without clearing history or allocating.
+    /// # Errors
+    /// Refuses unsupported targets or contextual bounds without changing state.
+    fn configure(
+        &mut self,
+        target: EffectTarget,
+        change: EffectChange,
+    ) -> Result<(), EffectRefusal> {
+        let _ = (target, change);
+        Err(EffectRefusal)
+    }
+
     /// Flush one remaining buffered chunk at end of stream.
     ///
     /// Repeated calls must reach `None` after a finite number of chunks and
@@ -15,6 +29,13 @@ pub trait AudioEffect: Send + 'static {
     /// bounded real-time transition: it must not block, allocate, free, or
     /// rebuild backend state.
     fn flush(&mut self) -> Option<AudioChunk>;
+
+    /// Whether the prepared state admits this format after deferred service.
+    /// Fixed-format effects refuse incompatible streams before production.
+    fn accepts_spec(&self, spec: AudioSpec) -> bool {
+        let _ = spec;
+        true
+    }
 
     /// Frames accepted by this effect but not yet represented in its output,
     /// counted on the decoded-source axis.
@@ -44,7 +65,10 @@ pub trait AudioEffect: Send + 'static {
     /// the checked decoder tick, using the active
     /// decoder specification. Effects without deferred work can keep the
     /// default no-op implementation.
-    fn service_deferred(&mut self, spec: AudioSpec) {
+    /// # Errors
+    /// Refuses a format or failed preparation before further PCM consumption.
+    fn service_deferred(&mut self, spec: AudioSpec) -> Result<(), EffectPrepareError> {
         let _ = spec;
+        Ok(())
     }
 }

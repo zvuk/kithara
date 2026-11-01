@@ -2901,10 +2901,10 @@ fn a_timed_panicking_child_releases_its_joiner_and_preserves_the_payload() {
     reset();
     let _ambient = ambient_scope(true);
     let _flash = enter_dynamic(true);
-    kithara_test_utils::hang::suppress_expected_panic_dumps();
     let error = super::participate_sync(|| {
         let child = crate::thread::spawn_named("panicking-join-child", || {
             crate::thread::sleep(Duration::from_secs(1));
+            kithara_test_utils::hang::suppress_expected_panic_dumps();
             panic!("native child panic");
         });
         child.join().expect_err("native panic remains an error")

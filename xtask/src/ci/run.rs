@@ -15,6 +15,7 @@ use tracing::{info, warn};
 
 use super::{
     build_dir::LaneTarget,
+    cache::evidence,
     config::CiConfig,
     environment::CiEnvironment,
     kache::KacheJob,
@@ -64,17 +65,6 @@ pub(crate) enum CacheGroup {
 }
 
 impl CacheGroup {
-    /// Everywhere but Windows. `ffmpeg-sys-next` declares a `--cfg` for every
-    /// library version it knows, which is thousands of them, and the command
-    /// Cargo builds for it passes what Windows accepts. Cargo hands that to the
-    /// wrapper through a response file; sccache expands it and spawns the
-    /// compiler with the arguments themselves, which does not fit:
-    /// `failed to spawn rustc.exe: The filename or extension is too long.
-    /// (os error 206)`. The cache is worth less than the lane.
-    pub(crate) const fn uses_sccache(self) -> bool {
-        !matches!(self, Self::Windows)
-    }
-
     const fn as_str(self) -> &'static str {
         match self {
             Self::Macos => "macos",
@@ -262,17 +252,28 @@ fn execute_lane(
     dispatch: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     journalled(process, lane, || {
-        if kache.is_some() {
-            retire_sccache_server(process, tools)?;
-            process.run(
-                tools.program("sccache"),
-                &["--start-server"],
-                "start the compiler cache",
-            )?;
-        }
-        let result = dispatch();
+        let result = (|| {
+            if kache.is_some() {
+                retire_sccache_server(process, tools)?;
+                process.run(
+                    tools.program("sccache"),
+                    &["--start-server"],
+                    "start the compiler cache",
+                )?;
+            }
+            if let Some(kache) = kache
+                && ["CI_JOB_ID", "GITHUB_RUN_ID"].iter().any(|name| {
+                    process
+                        .environment_var(name)
+                        .is_some_and(|value| !value.is_empty())
+                })
+            {
+                kache.verify_remote(process, tools)?;
+            }
+            dispatch()
+        })();
         if let Some(kache) = kache {
-            note_compiler_cache(process, tools, crate::job::is_github());
+            note_compiler_cache(process, tools, crate::job::is_github(), lane);
             kache.stop(process, tools);
         }
         result
@@ -292,6 +293,9 @@ pub(crate) fn journalled(
     lane: &str,
     dispatch: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
+    if !process.is_recording() {
+        evidence::clear(process, lane);
+    }
     let (event, detail) = crate::self_cache::provenance();
     process.note_cache("xtask self-cache", event, detail);
     let result = dispatch();
@@ -307,24 +311,42 @@ pub(crate) fn journalled(
 /// build takes as long as a cold one, and only the write errors say that
 /// nothing it compiled will be there for the next job. That number is raised
 /// to the job's summary rather than left in a table of thirty.
-pub(crate) fn note_compiler_cache(process: &Process, tools: &ToolsConfig, on_github: bool) {
+pub(crate) fn note_compiler_cache(
+    process: &Process,
+    tools: &ToolsConfig,
+    on_github: bool,
+    lane: &str,
+) {
     if process.is_recording() {
         return;
     }
-    let kache = tools.program("kache");
-    let (event, detail) = match process.capture(kache, &["stats", "--json"], "kache statistics") {
-        Ok(stats) => kache_note(&stats),
-        Err(error) => (CompilerCache::Unreadable, format!("{error:#}")),
-    };
+    let primary = crate::ci::kache::statistics(process, tools);
+    let (event, detail) = primary.as_ref().map_or_else(
+        |_| {
+            (
+                CompilerCache::Unreadable,
+                "kache statistics unavailable".into(),
+            )
+        },
+        |stats| kache_note(stats),
+    );
     process.note_cache("compiler cache", event.name(), detail);
     let sccache = tools.program("sccache");
-    let (event, detail) = match process.capture(sccache, &["--show-stats"], "sccache statistics") {
-        Ok(stats) => {
-            println!("{stats}");
-            compiler_cache_note(&stats)
-        }
-        Err(error) => (CompilerCache::Unreadable, format!("{error:#}")),
-    };
+    let fallback = process.capture_bounded(
+        sccache,
+        &["--show-stats"],
+        "sccache statistics",
+        consts::CACHE_EVIDENCE_INPUT_LIMIT,
+    );
+    let (event, detail) = fallback.as_ref().map_or_else(
+        |_| {
+            (
+                CompilerCache::Unreadable,
+                "sccache statistics unavailable".into(),
+            )
+        },
+        |stats| compiler_cache_note(stats),
+    );
     if event == CompilerCache::WriteFailed {
         warn!(%detail, "the compiler cache could not store what this lane compiled");
         if on_github {
@@ -335,6 +357,9 @@ pub(crate) fn note_compiler_cache(process: &Process, tools: &ToolsConfig, on_git
         }
     }
     process.note_cache("compiler cache fallback", event.name(), detail);
+    if evidence::retain(process, tools, &primary, &fallback, lane).is_err() {
+        warn!("cache evidence unavailable; the lane outcome is unchanged");
+    }
 }
 
 /// What the compiler cache did for a lane, as its counts tell it.
@@ -395,16 +420,7 @@ fn kache_note(stats: &str) -> (CompilerCache, String) {
 
 /// The journal entry for what `sccache --show-stats` counted.
 fn compiler_cache_note(stats: &str) -> (CompilerCache, String) {
-    let count = |label: &str| {
-        stats.lines().find_map(|line| {
-            let (name, value) = line.trim_end().rsplit_once(char::is_whitespace)?;
-            if name.trim() == label {
-                value.parse::<u64>().ok()
-            } else {
-                None
-            }
-        })
-    };
+    let count = |label| evidence::sccache_count(stats, label);
     let (Some(hits), Some(misses), Some(failed)) = (
         count("Cache hits"),
         count("Cache misses"),
@@ -499,7 +515,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     execute_lane(
         &process,
         &ctx.config.tools,
-        environment.kache(),
+        Some(environment.kache()),
         &args.lane,
         || match lane {
             Lane::ReleaseXcframework => {
@@ -539,7 +555,7 @@ fn report_lane(
     swiftpm_cache: &Path,
     lanes: &BTreeMap<String, CiLaneConfig>,
 ) -> Result<()> {
-    let process = Process::recording(root, executor_replies(ci_config, &project.tools));
+    let process = Process::recording(root, executor_replies(&project.tools));
     let outcome = command_lane(
         lane,
         kind,
@@ -564,11 +580,11 @@ fn report_lane(
 /// What a recorded lane is told when it asks the executor something: enough to
 /// get past the checks a real executor answers, and a stand-in where the
 /// answer is an identity only a real run produces.
-fn executor_replies(ci_config: &CiConfig, tools: &ToolsConfig) -> Recording {
+fn executor_replies(tools: &ToolsConfig) -> Recording {
     Recording::default()
         .with_reply(
             &[tools.program("xcodebuild")],
-            &format!("Xcode {}", ci_config.pins.expected_xcode_version),
+            "Xcode 99.1\nBuild version 99A1",
         )
         .with_reply(&[tools.program("xcrun"), "simctl", "create"], "<simulator>")
 }
@@ -596,9 +612,7 @@ fn command_lane(
         | Lane::ReleaseAndroid
         | Lane::ReleasePublish
         | Lane::Verdict => bail!("{lane:?} produces artifacts and is not a command lane"),
-        Lane::AppleSwiftTest => {
-            super::lane::apple::swift_test(process, ci_config, tools, swiftpm_cache)
-        }
+        Lane::AppleSwiftTest => super::lane::apple::swift_test(process, tools, swiftpm_cache),
         // The simulator set belongs to the executor's user, which other
         // projects' lanes may share, so the device is named for both.
         Lane::AppleIosTest => super::lane::apple::ios_test(
@@ -632,7 +646,7 @@ mod tests {
 
     use super::{
         super::{config::fixture, kache::KacheJob, process::Step},
-        CacheGroup, CompilerCache, Lane, PipelineKind, command_lane, compiler_cache_note,
+        CacheGroup, CompilerCache, Lane, PipelineKind, command_lane, compiler_cache_note, evidence,
         execute_lane, executor_replies, kache_note, sccache_server_is_stopped,
     };
     use crate::{
@@ -770,7 +784,7 @@ mod tests {
         let project = kithara_devtools::common::project::ProjectConfig::load(repo())
             .expect("the project config loads");
         let lane = Lane::parse(name, &ext.ci.lanes).expect("the lane is declared");
-        let process = Process::recording(root, executor_replies(&ci_config, &project.tools));
+        let process = Process::recording(root, executor_replies(&project.tools));
         let outcome = command_lane(
             &lane,
             kind,
@@ -1005,7 +1019,7 @@ mod tests {
                     .expect("every kind has a name")
                     .get_name()
                     .to_owned();
-                let recording = executor_replies(&ci_config, &project.tools)
+                let recording = executor_replies(&project.tools)
                     // Enough for the conversion to resolve; what it makes of
                     // real results is pinned where that conversion lives.
                     .with_reply(
@@ -1096,9 +1110,69 @@ mod tests {
     }
 
     #[test]
+    fn a_named_ci_job_checks_the_remote_before_dispatch() {
+        for readonly in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let bin = directory.path().join("bin");
+            crate::testing::install_double(&bin, "sccache");
+            crate::testing::install_double(&bin, "kache");
+            let trace = directory.path().join("trace");
+            let stats = serde_json::json!({
+                "remote": "s3://fixture/kache",
+                "daemon_connected": true,
+                "daemon_remote_readonly": readonly,
+                "local_hits": 0,
+                "remote_hits": 0,
+                "prefetch_hits": 0,
+                "misses": 0,
+            });
+            let process = Process::new(
+                directory.path(),
+                BTreeMap::from([
+                    (OsString::from("PATH"), bin.into_os_string()),
+                    (OsString::from("CI_JOB_ID"), OsString::from("42")),
+                    (
+                        OsString::from("KACHE_RUNTIME_DIR"),
+                        directory.path().join("kache/runtime").into_os_string(),
+                    ),
+                    (OsString::from("GITHUB_RUN_ID"), OsString::new()),
+                    (OsString::from("KITHARA_TEST_RULES"), OsString::new()),
+                    (
+                        OsString::from("KITHARA_TEST_STDOUT"),
+                        stats.to_string().into(),
+                    ),
+                    (
+                        OsString::from("KITHARA_TEST_TRACE"),
+                        trace.clone().into_os_string(),
+                    ),
+                ]),
+            );
+            let kache = KacheJob::prepare(&directory.path().join("kache"), None).unwrap();
+            let outcome = execute_lane(
+                &process,
+                &ToolsConfig::default(),
+                Some(&kache),
+                "recorded",
+                || {
+                    let mut events = fs::read_to_string(&trace)?;
+                    events.push_str("lane\n");
+                    fs::write(&trace, events)?;
+                    Ok(())
+                },
+            );
+            assert_eq!(outcome.is_ok(), !readonly, "{outcome:?}");
+            let events = fs::read_to_string(trace).unwrap();
+            if readonly {
+                assert!(!events.lines().any(|line| line == "lane"));
+            } else {
+                assert!(events.contains("daemon start\nlane\n"), "{events}");
+            }
+        }
+    }
+
+    #[test]
     fn sccache_lifecycle_precedes_real_lane_dispatch() {
-        const READY: &str =
-            "--stop-server\n--start-server\nlane\nstats --json\n--show-stats\ndaemon stop\n";
+        const READY: &str = "--stop-server\n--start-server\nlane\ndaemon start\n--show-stats\nstats --full --json\nexplain --json\ndaemon stop\n";
 
         let directory = tempfile::tempdir().unwrap();
         let bin = directory.path().join("bin");
@@ -1106,7 +1180,7 @@ mod tests {
         crate::testing::install_double(&bin, "kache");
         let trace = directory.path().join("trace");
 
-        let kache = KacheJob::prepare(directory.path().join("kache"), None).unwrap();
+        let kache = KacheJob::prepare(&directory.path().join("kache"), None).unwrap();
 
         for (scenario, uses_kache, expected_trace) in [
             ("success", true, READY),
@@ -1114,12 +1188,34 @@ mod tests {
             // What kache did not upload is lost to the next job, not to this
             // one: the lane's own outcome stands.
             ("daemon-stop-failure", true, READY),
-            ("stop-failure", true, "--stop-server\n"),
-            ("start-failure", true, "--stop-server\n--start-server\n"),
+            ("lane-failure", true, READY),
+            ("report-failure", true, READY),
+            ("stats-failure", true, READY),
+            (
+                "stop-failure",
+                true,
+                "--stop-server\ndaemon start\n--show-stats\nstats --full --json\nexplain --json\ndaemon stop\n",
+            ),
+            (
+                "start-failure",
+                true,
+                "--stop-server\n--start-server\ndaemon start\n--show-stats\nstats --full --json\nexplain --json\ndaemon stop\n",
+            ),
             ("success", false, "lane\n"),
         ] {
             let _ = fs::remove_file(&trace);
+            let artifacts = directory.path().join(".ci-artifacts");
+            let _ = fs::remove_dir_all(&artifacts);
+            if scenario == "report-failure" {
+                fs::write(&artifacts, "prevent evidence creation").unwrap();
+            }
             let mut vars = BTreeMap::from([
+                (OsString::from("CI_JOB_ID"), OsString::new()),
+                (OsString::from("GITHUB_RUN_ID"), OsString::new()),
+                (
+                    OsString::from("KACHE_RUNTIME_DIR"),
+                    directory.path().join("kache/runtime").into_os_string(),
+                ),
                 (OsString::from("PATH"), bin.clone().into_os_string()),
                 (
                     OsString::from("KITHARA_TEST_SCENARIO"),
@@ -1135,7 +1231,9 @@ mod tests {
                         "sccache:--stop-server:stop-failure=7,\
                          sccache:--start-server:start-failure=8,\
                          sccache:--stop-server:already-stopped=2,\
-                         kache:daemon:daemon-stop-failure=1",
+                         kache:daemon:daemon-stop-failure=1,\
+                         kache:stats:stats-failure=9,\
+                         kache:explain:stats-failure=9",
                     ),
                 ),
             ]);
@@ -1166,39 +1264,37 @@ mod tests {
                     let mut sequence = fs::read_to_string(&trace).unwrap_or_default();
                     sequence.push_str("lane\n");
                     fs::write(&trace, sequence)?;
+                    if matches!(scenario, "lane-failure" | "report-failure") {
+                        anyhow::bail!("original lane failure");
+                    }
                     Ok(())
                 },
             );
 
-            let succeeds = !scenario.ends_with("failure") || scenario.starts_with("daemon");
+            let succeeds = matches!(
+                scenario,
+                "success" | "already-stopped" | "daemon-stop-failure" | "stats-failure"
+            );
             assert_eq!(outcome.is_ok(), succeeds, "{scenario}: {outcome:?}");
+            if matches!(scenario, "lane-failure" | "report-failure") {
+                assert_eq!(outcome.unwrap_err().to_string(), "original lane failure");
+            }
+            if scenario == "report-failure" {
+                fs::remove_file(&artifacts).unwrap();
+            } else {
+                assert_eq!(
+                    evidence::report_path(&process, "recorded")
+                        .unwrap()
+                        .is_file(),
+                    uses_kache
+                );
+            }
             assert_eq!(
                 fs::read_to_string(&trace).unwrap(),
                 expected_trace,
                 "{scenario}"
             );
         }
-    }
-
-    #[test]
-    fn the_linux_pipeline_uses_the_runner_provisioned_image() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask has a workspace root");
-        let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
-            .expect("the shared pipeline definition is readable");
-        let (_, after_linux) = common
-            .split_once(".linux-job:")
-            .expect("the Linux job template exists");
-        let linux_job = after_linux
-            .split_once("\n.")
-            .map_or(after_linux, |(job, _)| job);
-        assert!(
-            linux_job
-                .lines()
-                .all(|line| !line.trim().starts_with("image:")),
-            "the pipeline must not override the local image provisioned in runner config"
-        );
     }
 
     #[test]
@@ -1216,12 +1312,6 @@ mod tests {
     #[test]
     fn verdict_uses_the_macos_cache_group() {
         assert_eq!(Lane::Verdict.cache_group(), CacheGroup::Macos);
-    }
-
-    #[test]
-    fn windows_lanes_disable_sccache() {
-        assert!(!CacheGroup::Windows.uses_sccache());
-        assert!(CacheGroup::Linux.uses_sccache());
     }
 
     #[test]
@@ -1308,32 +1398,6 @@ mod tests {
     }
 
     #[test]
-    fn linux_tests_do_not_disappear_when_linux_check_fails() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask has a workspace root");
-        let linux = fs::read_to_string(root.join(".gitlab/ci/linux.yml"))
-            .expect("the Linux pipeline definition is readable");
-        let (_, after_test) = linux
-            .split_once("linux:test:")
-            .expect("the Linux test job exists");
-        let (test_job, coverage_job) = after_test
-            .split_once("linux:coverage:")
-            .expect("the coverage job follows Linux test");
-
-        for (name, job) in [("linux:test", test_job), ("linux:coverage", coverage_job)] {
-            assert!(
-                job.contains("needs:\n    - job: linux:image\n      optional: true\n  script:"),
-                "{name} waits on a job other than the image it runs in"
-            );
-            assert!(
-                !job.contains("linux:check"),
-                "{name} disappears when linux:check fails"
-            );
-        }
-    }
-
-    #[test]
     fn ci_junit_paths_match_their_producers() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -1348,23 +1412,8 @@ mod tests {
             Some("junit.xml")
         );
 
-        let linux = fs::read_to_string(root.join(".gitlab/ci/linux.yml"))
-            .expect("the Linux pipeline definition is readable");
-        let (_, after_test) = linux
-            .split_once("linux:test:")
-            .expect("the Linux test job exists");
-        let (test_job, _) = after_test
-            .split_once("linux:coverage:")
-            .expect("the coverage job follows Linux test");
-        assert!(
-            test_job.lines().any(|line| {
-                line.trim() == "junit: .ci-artifacts/junit/linux-test-simulated-clock.xml"
-            }),
-            "linux:test does not publish the nextest JUnit report"
-        );
-
         let mut reports = Vec::new();
-        for name in ["apple.yml", "linux.yml", "windows.yml"] {
+        for name in ["apple.yml", "windows.yml"] {
             let pipeline = fs::read_to_string(root.join(".gitlab/ci").join(name))
                 .expect("pipeline definition is readable");
             reports.extend(
@@ -1386,7 +1435,6 @@ mod tests {
                 ".ci-artifacts/junit/apple-swift-test.xml",
                 ".ci-artifacts/junit/apple-test-flash-off.xml",
                 ".ci-artifacts/junit/apple-test.xml",
-                ".ci-artifacts/junit/linux-test-simulated-clock.xml",
                 "target/nextest/ci/junit.xml",
             ]
         );

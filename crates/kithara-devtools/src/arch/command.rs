@@ -5,20 +5,24 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, bail};
-use cargo_metadata::{Metadata, MetadataCommand};
+use cargo_metadata::Metadata;
 use clap::Args;
 
 use super::{
-    checks::{Check, Context, redundant_accessors::RedundantAccessors, registry},
+    checks::{
+        Check, Context, direction::Direction, redundant_accessors::RedundantAccessors, registry,
+    },
     config::ArchConfig,
 };
-use crate::common::{
-    baseline::{Baseline, RatchetDiff},
-    exclude::{apply_lint_excludes, cfg_test_module_globs},
-    project::ProjectConfig,
-    report,
-    scope::Scope,
-    violation::Report,
+use crate::{
+    Ctx,
+    common::{
+        baseline::{Baseline, RatchetDiff},
+        exclude::{apply_lint_excludes, cfg_test_module_globs},
+        report,
+        scope::Scope,
+        violation::Report,
+    },
 };
 
 pub(crate) fn redundant_accessor_keys(
@@ -67,15 +71,24 @@ pub struct ArchArgs {
     pub update_baseline: bool,
 }
 
-pub(crate) fn run(args: &ArchArgs) -> Result<()> {
+pub(crate) fn run(args: &ArchArgs, workspace: &Ctx) -> Result<()> {
     validate(args)?;
 
-    let metadata = MetadataCommand::new().exec()?;
-    let workspace_root = metadata.workspace_root.as_std_path().to_path_buf();
-    let config = ArchConfig::load(&args.config_dir)?;
-    let scope = Scope::new(args.crates.clone(), args.paths.clone());
+    let metadata = workspace.metadata()?;
+    let workspace_root = workspace.root.clone();
+    let config_dir = workspace_root.join(&args.config_dir);
+    let config = ArchConfig::load(&config_dir)?;
+    let resolved = if !config.direction.layers.is_empty()
+        && (args.check.is_empty() || args.check.iter().any(|id| id == Direction.id()))
+    {
+        Some(workspace.resolved_metadata()?)
+    } else {
+        None
+    };
+    let metadata = resolved.as_ref().unwrap_or(metadata);
+    let scope = Scope::new(args.crates.clone(), args.paths.clone()).with_metadata(metadata);
 
-    let ctx = Context::new(&config, &metadata, &workspace_root, &scope);
+    let ctx = Context::new(&config, metadata, &workspace_root, &scope);
 
     let registry = registry();
     let known_ids: HashSet<&str> = registry.iter().map(|c| c.id()).collect();
@@ -132,7 +145,7 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
         report.extend(violations);
     }
 
-    let project = ProjectConfig::load(&workspace_root)?;
+    let project = &workspace.config;
     apply_lint_excludes(
         &mut report,
         &project.lint_exclude.runtime_paths(),
@@ -143,7 +156,7 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
 
     if args.update_baseline {
         let new_baseline = Baseline::from_report(&report);
-        let path = new_baseline.save(&args.config_dir)?;
+        let path = new_baseline.save(&config_dir)?;
         let total: usize = new_baseline.checks.values().map(BTreeMap::len).sum();
         println!(
             "wrote baseline ({} entry across {} check(s)) to {}",
@@ -154,7 +167,7 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
         return Ok(());
     }
 
-    let baseline = Baseline::load(&args.config_dir)?;
+    let baseline = Baseline::load(&config_dir)?;
     let baseline = if scope.is_empty() {
         baseline
     } else {
@@ -163,12 +176,13 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
     let diff = baseline.diff(&report.violations);
 
     if let Some(path) = &args.report {
+        let path = workspace_root.join(path);
         let md = report::render_markdown(&report, &ran, &diff);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("create report dir: {}", parent.display()))?;
         }
-        fs::write(path, md).with_context(|| format!("write report: {}", path.display()))?;
+        fs::write(&path, md).with_context(|| format!("write report: {}", path.display()))?;
         eprintln!("wrote markdown report to {}", path.display());
     } else if args.json {
         print!("{}", report::render_json(&report, &ran, &diff));

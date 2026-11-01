@@ -21,7 +21,7 @@ on:
           entries that still answer to their name and only a deliberate run
           replaces them. Dispatch the pipeline once with this set, and leave
           it unset afterwards.
-        default: ''
+        default: ""
         type: string
       kind:
         description: >-
@@ -38,13 +38,13 @@ on:
           running an empty matrix; a name another role owns leaves this one
           with nothing to do, because the dispatcher hands the same list to
           each.
-        default: ''
+        default: ""
         type: string
       narrow:
         description: >-
           Nextest filterset every lane's test suite is narrowed to. Empty
           narrows nothing.
-        default: ''
+        default: ""
         type: string
 
 # Not inherited from the caller: a called workflow gets its own environment.
@@ -54,16 +54,14 @@ env:
 
 jobs:
   # Reading the catalog needs a checkout and the xtask binary, so the selection
-  # runs on the fleet rather than on a hosted machine. The image carries no
-  # `jq`, which is why `ci lanes` prints one member of the selection itself
-  # instead of a caller splitting the object in shell.
+  # runs on the fleet rather than on a hosted machine.
   select:
     name: Select ${{ inputs.role }} lanes
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    runs-on: [self-hosted, linux, x64, kithara-report]
     timeout-minutes: 10
     outputs:
-      matrix: ${{ steps.render.outputs.matrix }}
-      dependent: ${{ steps.render.outputs.dependent }}
+      matrix: ${{ toJSON(fromJSON(steps.render.outputs.selection).matrix) }}
+      dependent: ${{ toJSON(fromJSON(steps.render.outputs.selection).dependent) }}
 
     steps:
       - name: Checkout code
@@ -79,20 +77,9 @@ jobs:
           KIND: ${{ inputs.kind }}
           ONLY: ${{ inputs.only }}
         run: |
-          render() {
-            just ci lanes --role "$ROLE" --kind "$KIND" ${ONLY:+--only "$ONLY"} --field "$1"
-          }
-          # Assigned first and echoed second, because a substitution inside
-          # `echo` is only the echo's argument: the selector could die and the
-          # step would still exit zero, writing an empty value. The caller then
-          # hands that empty string to `fromJSON` and the run dies at the job
-          # graph, naming nothing, while the job that knew the reason is
-          # reported green. A plain assignment carries the substitution's own
-          # status, so the step that failed is the step that says so.
-          matrix=$(render matrix)
-          dependent=$(render dependent)
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-          echo "dependent=$dependent" >> "$GITHUB_OUTPUT"
+          # Assignment preserves selector failure before publishing an output.
+          selection=$(just ci lanes --role "$ROLE" --kind "$KIND" ${ONLY:+--only "$ONLY"})
+          echo "selection=$selection" >> "$GITHUB_OUTPUT"
 
   # Every lane's verdict, not the first one's: these answer independent
   # questions and a run that stops at the first red hides the rest.

@@ -14,7 +14,10 @@ use fs4::TryLockError;
 use kithara_devtools::{lease, lock::FileLock};
 use tracing::{info, warn};
 
-use super::build_dir::{Claim, claim_beside_alias};
+use super::{
+    build_dir::{Claim, claim_beside_alias},
+    environment::CacheTrust,
+};
 use crate::consts;
 
 /// One build directory in a build root: a lane's, a stress run's, xtask's own.
@@ -35,23 +38,14 @@ struct CacheContents {
     held: Vec<CacheEntry>,
 }
 
-/// The least recently used entries, oldest first, until what is left fits the
-/// budget.
-fn select_evictions(mut entries: Vec<CacheEntry>, budget_bytes: u64) -> Vec<CacheEntry> {
-    let mut remaining_bytes = total_bytes(&entries);
+/// The least recently used entries, oldest first, breaking ties by path.
+fn eviction_order(mut entries: Vec<CacheEntry>) -> Vec<CacheEntry> {
     entries.sort_by(|left, right| {
         left.used
             .cmp(&right.used)
             .then_with(|| left.path.cmp(&right.path))
     });
     entries
-        .into_iter()
-        .take_while(|entry| {
-            let over = remaining_bytes > budget_bytes;
-            remaining_bytes = remaining_bytes.saturating_sub(entry.size_bytes);
-            over
-        })
-        .collect()
 }
 
 /// The budget is what the host can afford in total, not what one checkout may
@@ -119,9 +113,14 @@ fn total_bytes(entries: &[CacheEntry]) -> u64 {
 /// reported and the others still go. Stopping on it left the host's budget
 /// unenforced and refused every job its room for as long as it stood.
 fn evict_to_budget(candidates: Vec<CacheEntry>, held_bytes: u64, budget_bytes: u64) {
-    let bytes_before = total_bytes(&candidates).saturating_add(held_bytes);
+    let candidate_bytes = total_bytes(&candidates);
+    let bytes_before = candidate_bytes.saturating_add(held_bytes);
+    let bytes_needed = candidate_bytes.saturating_sub(budget_bytes.saturating_sub(held_bytes));
     let mut bytes_freed = 0_u64;
-    for entry in select_evictions(candidates, budget_bytes.saturating_sub(held_bytes)) {
+    for entry in eviction_order(candidates) {
+        if bytes_freed >= bytes_needed {
+            break;
+        }
         match evict(&entry) {
             Ok(bytes) => bytes_freed = bytes_freed.saturating_add(bytes),
             Err(error) => warn!(
@@ -199,7 +198,7 @@ fn evict(entry: &CacheEntry) -> Result<u64> {
 
 /// The `.cargo-lock` of every profile in `entry`, held so Cargo cannot start
 /// building in one while it is removed, or `None` when Cargo already holds one.
-fn hold_cargo_locks(entry: &Path) -> Result<Option<Vec<FileLock>>> {
+pub(super) fn hold_cargo_locks(entry: &Path) -> Result<Option<Vec<FileLock>>> {
     let mut held = Vec::new();
     for dir in levels(entry, consts::CARGO_LOCK_DEPTH)? {
         match try_hold(&dir.join(consts::CARGO_LOCK))? {
@@ -324,6 +323,20 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
             target_dir.display()
         );
     }
+    if is_leased_cargo_target(target_dir) {
+        let (entry, held) = inspect_entry(target_dir.to_path_buf())?;
+        return Ok(if held {
+            CacheContents {
+                entries: Vec::new(),
+                held: vec![entry],
+            }
+        } else {
+            CacheContents {
+                entries: vec![entry],
+                held: Vec::new(),
+            }
+        });
+    }
     let listing = fs::read_dir(target_dir)
         .with_context(|| format!("reading build cache {}", target_dir.display()))?;
     let mut contents = CacheContents {
@@ -354,33 +367,7 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         if is_hidden(&path) {
             continue;
         }
-        let mut used = SystemTime::UNIX_EPOCH;
-        let mut held = lock_is_held(&lock_beside(&path));
-        for dir in levels(&path, consts::LEASE_DEPTH)? {
-            for mark in [lease::FILE, lease::HEARTBEAT] {
-                let mark = dir.join(mark);
-                if let Some(found) = still_there(fs::metadata(&mark))
-                    .with_context(|| format!("reading {}", mark.display()))?
-                {
-                    let date = found
-                        .modified()
-                        .with_context(|| format!("reading the date of {}", mark.display()))?;
-                    used = used.max(date);
-                }
-            }
-            held = held
-                || lock_is_held(&dir.join(lease::FILE))
-                || heartbeat_is_fresh(&dir.join(lease::HEARTBEAT));
-        }
-        held = held
-            || levels(&path, consts::CARGO_LOCK_DEPTH)?
-                .iter()
-                .any(|dir| lock_is_held(&dir.join(consts::CARGO_LOCK)));
-        let entry = CacheEntry {
-            size_bytes: directory_bytes(&path)?,
-            used,
-            path,
-        };
+        let (entry, held) = inspect_entry(path)?;
         if held {
             contents.held.push(entry);
         } else {
@@ -388,6 +375,37 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         }
     }
     Ok(contents)
+}
+
+fn inspect_entry(path: PathBuf) -> Result<(CacheEntry, bool)> {
+    let mut used = SystemTime::UNIX_EPOCH;
+    let mut held = lock_is_held(&lock_beside(&path));
+    for dir in levels(&path, consts::LEASE_DEPTH)? {
+        for mark in [lease::FILE, lease::HEARTBEAT] {
+            let mark = dir.join(mark);
+            if let Some(found) = still_there(fs::metadata(&mark))
+                .with_context(|| format!("reading {}", mark.display()))?
+            {
+                let date = found
+                    .modified()
+                    .with_context(|| format!("reading the date of {}", mark.display()))?;
+                used = used.max(date);
+            }
+        }
+        held = held
+            || lock_is_held(&dir.join(lease::FILE))
+            || heartbeat_is_fresh(&dir.join(lease::HEARTBEAT));
+    }
+    held = held
+        || levels(&path, consts::CARGO_LOCK_DEPTH)?
+            .iter()
+            .any(|dir| lock_is_held(&dir.join(consts::CARGO_LOCK)));
+    let entry = CacheEntry {
+        size_bytes: directory_bytes(&path)?,
+        used,
+        path,
+    };
+    Ok((entry, held))
 }
 
 /// Cargo writes no hidden directory at the top of a build directory, so one
@@ -577,8 +595,9 @@ pub(crate) fn hold_target(
 /// the environment gate: refusing a job is only honest once these have been
 /// reclaimed.
 ///
-/// The walk stops at a checkout, whose tree is the job's and holds no build,
-/// and at a root, whose entries are the builds the budget weighs. A root a job
+/// The walk inspects only direct children of a checkout for leased Cargo
+/// targets, leaving its sources and report directories alone. It stops
+/// at a root, whose entries are the builds the budget weighs. A root a job
 /// is building in is listed like any other: the lease on the build it entered
 /// keeps that one, and its bytes are charged against the ceiling, which is
 /// what leaves the idle builds beside it payable.
@@ -590,10 +609,12 @@ pub(crate) fn build_roots(root: &Path) -> Result<Vec<PathBuf>> {
     let mut pending = vec![root.to_path_buf()];
     let mut roots = Vec::new();
     while let Some(directory) = pending.pop() {
-        if directory.join("Cargo.toml").is_file() {
+        if is_leased_cargo_target(&directory) {
+            roots.push(directory);
             continue;
         }
-        if holds_a_build(&directory) {
+        let checkout = directory.join("Cargo.toml").is_file();
+        if !checkout && holds_a_build(&directory) {
             roots.push(directory);
             continue;
         }
@@ -607,6 +628,9 @@ pub(crate) fn build_roots(root: &Path) -> Result<Vec<PathBuf>> {
                 )
             })?;
             let path = entry.path();
+            if checkout && !is_leased_cargo_target(&path) {
+                continue;
+            }
             // A hidden directory is walked only as the root an executor
             // names: anything else hidden there is not this walk's.
             if is_hidden(&path) && !holds_a_build(&path) {
@@ -621,6 +645,17 @@ pub(crate) fn build_roots(root: &Path) -> Result<Vec<PathBuf>> {
     }
     roots.sort();
     Ok(roots)
+}
+
+/// Only a leased Cargo output directory may be reclaimed as a whole.
+fn is_leased_cargo_target(directory: &Path) -> bool {
+    fs::symlink_metadata(directory).is_ok_and(|metadata| metadata.file_type().is_dir())
+        && !directory.join("Cargo.toml").exists()
+        && !holds_a_build(directory)
+        && [".rustc_info.json", lease::FILE].iter().all(|name| {
+            fs::symlink_metadata(directory.join(name))
+                .is_ok_and(|metadata| metadata.file_type().is_file())
+        })
 }
 
 /// Every build root a host's budget weighs: those beside the checkouts under
@@ -648,7 +683,11 @@ pub(crate) fn previous_build_roots(cache: &Path) -> Result<Vec<PathBuf>> {
     };
     for entry in listing {
         let entry = entry.with_context(|| format!("reading {}", bootstrap.display()))?;
-        if entry.file_type()?.is_dir() {
+        if CacheTrust::ALL
+            .iter()
+            .any(|trust| entry.file_name() == trust.as_str())
+            && entry.file_type()?.is_dir()
+        {
             roots.push(entry.path());
         }
     }
@@ -695,8 +734,73 @@ mod tests {
         dir
     }
 
+    #[test]
+    fn checkout_builds_share_the_host_budget_without_removing_sources_or_reports() {
+        let workspace = tempfile::tempdir().unwrap();
+        let checkout = workspace.path().join("runner/repository/subject");
+        fs::create_dir_all(&checkout).unwrap();
+        fs::write(checkout.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::write(checkout.join("source.rs"), "source").unwrap();
+        let reports = checkout.join("target/nextest");
+        fs::create_dir_all(&reports).unwrap();
+        fs::write(reports.join("junit.xml"), "report").unwrap();
+        let nested_source = checkout.join("nested-source");
+        fs::create_dir_all(&nested_source).unwrap();
+        for name in ["Cargo.toml", ".rustc_info.json", lease::FILE] {
+            fs::write(nested_source.join(name), "source metadata").unwrap();
+        }
+        let build = build_dir(&checkout, "target-stress", 100);
+        fs::write(build.join(".rustc_info.json"), "{}").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&build, checkout.join("target-link")).unwrap();
+        let held = lease::hold(&build).unwrap();
+
+        let roots = build_roots(workspace.path()).unwrap();
+        assert_eq!(roots, std::slice::from_ref(&build));
+        enforce_budget(&roots, 0).unwrap();
+        assert!(build.join("debug/artifact").is_file());
+        drop(held);
+        enforce_budget(&roots, 0).unwrap();
+
+        assert!(!build.exists());
+        assert!(checkout.join("Cargo.toml").is_file());
+        assert!(nested_source.join("Cargo.toml").is_file());
+        assert_eq!(
+            fs::read_to_string(checkout.join("source.rs")).unwrap(),
+            "source"
+        );
+        assert_eq!(
+            fs::read_to_string(reports.join("junit.xml")).unwrap(),
+            "report"
+        );
+    }
+
     fn occupied(root: &Path) -> u64 {
         total_bytes(&candidate_entries(root).unwrap().entries)
+    }
+
+    #[test]
+    fn cargo_budget_preserves_the_bootstrap_compiler_store() {
+        let cache = tempfile::tempdir().unwrap();
+        let bootstrap = cache.path().join(consts::PREVIOUS_BOOTSTRAP);
+        let store = bootstrap.join("macos-aarch64/kache/store");
+        fs::create_dir_all(&store).unwrap();
+        fs::write(store.join("index"), b"compiler index").unwrap();
+        fs::write(store.join("blob"), b"compiler artifact").unwrap();
+        let build = build_dir(&bootstrap.join("review"), "target-macos-aarch64-0", 4096);
+        let slot = build_dir(
+            &cache.path().join(consts::PREVIOUS_TARGET_SLOTS),
+            "lint-0",
+            4096,
+        );
+
+        let roots = previous_build_roots(cache.path()).unwrap();
+        enforce_budget(&roots, 0).unwrap();
+
+        assert_eq!(fs::read(store.join("index")).unwrap(), b"compiler index");
+        assert_eq!(fs::read(store.join("blob")).unwrap(), b"compiler artifact");
+        assert!(!build.exists(), "idle bootstrap build was retained");
+        assert!(!slot.exists(), "idle lane build was retained");
     }
 
     /// A runner always has some job, so a root held whole was 1.4 TB the
@@ -990,9 +1094,14 @@ mod tests {
 
     #[test]
     fn under_budget_deletes_nothing() {
-        let entries = vec![entry("lint", 10, 1), entry("usdt", 20, 2)];
+        let root = tempfile::tempdir().unwrap();
+        let lint = build_dir(root.path(), "lint", 4096);
+        let usdt = build_dir(root.path(), "usdt", 4096);
 
-        assert!(select_evictions(entries, 30).is_empty());
+        enforce_budget(&[root.path().to_path_buf()], occupied(root.path())).unwrap();
+
+        assert!(lint.exists());
+        assert!(usdt.exists());
     }
 
     #[test]
@@ -1002,22 +1111,27 @@ mod tests {
             entry("oldest", 10, 1),
             entry("middle", 10, 2),
         ];
-        let paths = evicted(select_evictions(entries, 0));
+        let paths = evicted(eviction_order(entries));
 
         assert_eq!(paths, ["oldest", "middle", "newest"].map(PathBuf::from));
     }
 
     #[test]
     fn deletion_stops_as_soon_as_the_budget_is_met() {
-        let entries = vec![entry("oldest", 5, 1), entry("newest", 7, 2)];
+        let root = tempfile::tempdir().unwrap();
+        let oldest = build_dir(root.path(), "a-oldest", 4096);
+        let newest = build_dir(root.path(), "b-newest", 4096);
 
-        assert_eq!(select_evictions(entries, 7).len(), 1);
+        enforce_budget(&[root.path().to_path_buf()], occupied(root.path()) - 1).unwrap();
+
+        assert!(!oldest.exists());
+        assert!(newest.exists());
     }
 
     #[test]
     fn equal_timestamps_break_ties_by_path() {
         let entries = vec![entry("b", 1, 1), entry("a", 1, 1)];
-        let paths = evicted(select_evictions(entries, 0));
+        let paths = evicted(eviction_order(entries));
 
         assert_eq!(paths, ["a", "b"].map(PathBuf::from));
     }
@@ -1126,6 +1240,34 @@ mod tests {
         assert_eq!(evict(&scanned[0]).unwrap(), 0);
         assert!(lane.join("debug/artifact").exists());
         drop(job);
+    }
+
+    #[test]
+    fn a_late_lease_does_not_leave_the_budget_unpaid() {
+        let root = tempfile::tempdir().unwrap();
+        let oldest = build_dir(root.path(), "a-oldest", 4096);
+        let idle = build_dir(root.path(), "b-idle", 4096);
+        let (candidates, held_bytes) = collect(&[root.path().to_path_buf()]).unwrap();
+        assert_eq!(held_bytes, 0);
+        assert_eq!(candidates.len(), 2);
+        assert!(
+            candidates
+                .iter()
+                .all(|entry| entry.size_bytes > 0 && entry.used == UNIX_EPOCH)
+        );
+        assert!(oldest < idle);
+        let budget = total_bytes(&candidates) - 1;
+
+        let _job = lease::hold(&oldest).unwrap();
+        assert!(lease::evict(&oldest).unwrap().is_none());
+
+        evict_to_budget(candidates, held_bytes, budget);
+
+        assert!(oldest.join("debug/artifact").is_file());
+        assert!(
+            !idle.exists(),
+            "the next idle candidate must pay the shortfall"
+        );
     }
 
     /// An evicted entry is moved aside before it is removed, and nothing of

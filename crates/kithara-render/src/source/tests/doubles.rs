@@ -254,6 +254,37 @@ pub(in crate::source) struct DeferredEffect {
     pub(in crate::source) serviced: Arc<Mutex<Option<AudioSpec>>>,
 }
 
+pub(in crate::source) struct FixedSpecEffect(pub(in crate::source) AudioSpec);
+
+impl AudioEffect for FixedSpecEffect {
+    fn accepts_spec(&self, spec: AudioSpec) -> bool {
+        spec == self.0
+    }
+    fn service_deferred(
+        &mut self,
+        spec: AudioSpec,
+    ) -> Result<(), kithara_effects::EffectPrepareError> {
+        if spec.sample_rate != self.0.sample_rate {
+            return Err(kithara_dsp::filter::FilterError::Parameters.into());
+        }
+        if self.accepts_spec(spec) {
+            Ok(())
+        } else {
+            Err(kithara_effects::EffectPrepareError::Shape)
+        }
+    }
+    fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+        Some(chunk)
+    }
+    fn flush(&mut self) -> Option<AudioChunk> {
+        None
+    }
+    fn held_source_frames(&self) -> u64 {
+        0
+    }
+    fn reset(&mut self) {}
+}
+
 impl AudioEffect for DeferredEffect {
     fn flush(&mut self) -> Option<AudioChunk> {
         None
@@ -269,9 +300,13 @@ impl AudioEffect for DeferredEffect {
 
     fn reset(&mut self) {}
 
-    fn service_deferred(&mut self, spec: AudioSpec) {
+    fn service_deferred(
+        &mut self,
+        spec: AudioSpec,
+    ) -> Result<(), kithara_effects::EffectPrepareError> {
         self.log.lock().push("effect.service");
         *self.serviced.lock() = Some(spec);
+        Ok(())
     }
 }
 

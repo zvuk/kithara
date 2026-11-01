@@ -33,6 +33,7 @@ use crate::{
         hosted::HostedControlPlan,
         scroll::{Bar, Window},
         solve::{self, Alignment, Length, Padding, Size},
+        surface::entry_value,
         window::DragGhost,
     },
     ids::InternId,
@@ -55,14 +56,11 @@ use crate::{
 type Windows = BTreeMap<String, Rc<RefCell<Window>>>;
 
 /// Mounts the toolkit-neutral document fold into a retained Masonry widget tree.
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, with)]
 pub struct MasonryHost<'a, Action = Published> {
     pub(crate) skin: &'a Skin,
     pub(crate) ctx: Ctx<'a, 'a>,
     pub(crate) map_event: Rc<dyn Fn(Published) -> HostAction>,
     custom: BTreeMap<String, Box<dyn CustomWidget<Action = HostAction>>>,
-    #[field(with)]
     state: MasonryState,
     action: std::marker::PhantomData<fn() -> Action>,
 }
@@ -70,17 +68,13 @@ pub struct MasonryHost<'a, Action = Published> {
 /// Retained host state shared across Masonry document rebuilds.
 #[derive(Clone, Default)]
 pub struct MasonryState {
-    paths: Rc<RefCell<BTreeMap<String, WidgetId>>>,
+    paths: Rc<RefCell<BTreeMap<String, Vec<WidgetId>>>>,
     popovers: Rc<RefCell<BTreeMap<String, Rc<PopoverState>>>>,
     windows: Rc<RefCell<Windows>>,
     pointer: Rc<Cell<Option<crate::draw::Pt>>>,
 }
 
 impl MasonryState {
-    pub(crate) fn clear_paths(&self) {
-        self.paths.borrow_mut().clear();
-    }
-
     fn popover(&self, path: &str, open: bool, kind: SurfaceKind) -> Rc<PopoverState> {
         let mut popovers = self.popovers.borrow_mut();
         let state = Rc::clone(
@@ -93,11 +87,27 @@ impl MasonryState {
     }
 
     pub(crate) fn tag_path(&self, path: &str, id: WidgetId) {
-        self.paths.borrow_mut().insert(path.to_owned(), id);
+        self.paths
+            .borrow_mut()
+            .entry(path.to_owned())
+            .or_default()
+            .push(id);
     }
 
-    pub(crate) fn widget_id(&self, path: &str) -> Option<WidgetId> {
-        self.paths.borrow().get(path).copied()
+    delegate::delegate! {
+        to self.paths.borrow() {
+            #[expr($?.last().copied())]
+            #[call(get)]
+            pub(crate) fn widget_id(&self, path: &str) -> Option<WidgetId>;
+            /// Every widget the document tagged with one path, in mount order.
+            ///
+            /// The branches of an adaptive block repeat the paths of the controls
+            /// they share, and only the branch the room reaches is laid out, so one
+            /// path can name several widgets at once.
+            #[expr($.cloned().unwrap_or_default())]
+            #[call(get)]
+            pub(crate) fn widget_ids(&self, path: &str) -> Vec<WidgetId>;
+        }
     }
 
     /// The window one scroll of the document looks through.
@@ -114,6 +124,16 @@ impl MasonryState {
                 .entry(path.to_owned())
                 .or_insert_with(|| Rc::new(RefCell::new(Window::new()))),
         )
+    }
+}
+
+impl<Action> MasonryHost<'_, Action> {
+    /// Reuses retained state, replacing the previous tree's path registrations.
+    #[must_use]
+    pub fn with_state(mut self, state: MasonryState) -> Self {
+        state.paths.borrow_mut().clear();
+        self.state = state;
+        self
     }
 }
 
@@ -320,24 +340,26 @@ where
     }
 
     /// The text leaf `spec` describes, carrying `content` and the flag it is
-    /// dressed by. The content is resolved by the caller, which is the only
-    /// thing that can reach the reading; the flag travels so that this host can
-    /// read it again into the tree it keeps.
+    /// dressed by, in `skin`: the one its path wears, so an override the skin
+    /// names for this text dresses it as it dresses any other control. The
+    /// content is resolved by the caller, which is the only thing that can
+    /// reach the reading; the flag travels so that this host can read it again
+    /// into the tree it keeps.
     pub(crate) fn text_leaf(
         &self,
         spec: &mount::label::text::host::Text<'_>,
         content: &str,
+        skin: &Skin,
         declared: Size<Length>,
     ) -> MasonryNode<Action> {
         let style = spec.style;
         let face = |active| {
-            let role = self
-                .skin
+            let role = skin
                 .text_role(style, spec.color, spec.active_color, active)
                 .faced(spec.font, spec.weight);
             TextFace {
                 role,
-                color: self.skin.rgba(role.color),
+                color: skin.rgba(role.color),
             }
         };
         let idle = face(false);
@@ -350,9 +372,9 @@ where
             .filter(|_| shown)
             .map_or(idle, |(_, face)| *face);
         let padding_x = match style {
-            TextStyle::VisFooter => self.skin.vis.footer_padding_x,
-            TextStyle::VisMeta => self.skin.vis.index_padding_x,
-            TextStyle::VisTitle => self.skin.vis.name_padding_x,
+            TextStyle::VisFooter => skin.vis.footer_padding_x,
+            TextStyle::VisMeta => skin.vis.index_padding_x,
+            TextStyle::VisTitle => skin.vis.name_padding_x,
             _ => 0.0,
         };
         let content = role.cased(content).into_owned();
@@ -364,7 +386,8 @@ where
                 color,
                 align: spec.align,
                 lit: lit.map(|(_, lit)| TextFaces { idle, lit }),
-                text: Box::new(TextContext::from(self.skin.text_resources.as_ref())),
+                text: Box::new(TextContext::from(skin.text_resources.as_ref())),
+                room: f32::INFINITY,
             }),
             declared,
             Vec::new(),
@@ -636,7 +659,14 @@ where
             output.set_detent(Detent::new(
                 self.ctx.ui.resolve(surface.path).to_owned(),
                 Rc::clone(&self.map_event),
+                surface
+                    .entry
+                    .as_ref()
+                    .map(|entry| (entry_value(self.ctx, entry), self.skin.clone())),
             ));
+            if let Some(entry) = &surface.entry {
+                output.watch(entry);
+            }
         }
         if let Some((flag, lit)) = lit {
             output.lights(flag.clone(), Some(Faces { idle, lit }));

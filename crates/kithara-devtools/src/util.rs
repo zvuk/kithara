@@ -1,5 +1,6 @@
 use std::{
     io::{BufRead, BufReader},
+    path::Path,
     process::{Command, Stdio},
     sync::OnceLock,
 };
@@ -57,7 +58,7 @@ pub fn check_tool(tool: &str, args: &[&str], install_hint: &str) -> Result<()> {
 }
 
 /// Refuse to proceed with destructive autofix when there are uncommitted
-/// changes in the working tree. Mirrors `cargo fmt` / `cargo fix` UX:
+/// changes in the working tree at `root`. Mirrors `cargo fmt` / `cargo fix` UX:
 /// the user can override with `--allow-dirty` once they understand that
 /// our edits will mix with their own.
 ///
@@ -67,12 +68,13 @@ pub fn check_tool(tool: &str, args: &[&str], install_hint: &str) -> Result<()> {
 ///
 /// Returns an error if the git status command fails or the worktree is dirty
 /// while `allow_dirty` is false.
-pub fn ensure_clean_tree(allow_dirty: bool, scope_label: &str) -> Result<()> {
+pub fn ensure_clean_tree(root: &Path, allow_dirty: bool, scope_label: &str) -> Result<()> {
     if allow_dirty {
         return Ok(());
     }
     let output = Command::new("git")
         .args(["status", "--porcelain"])
+        .current_dir(root)
         .output()
         .context("failed to run `git status --porcelain`")?;
     if !output.status.success() {

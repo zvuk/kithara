@@ -128,6 +128,83 @@ fn a_nested_just_hands_build_scripts_the_same_pkg_config_path() {
     assert_eq!(evaluate(&outer), outer, "a nested just changed the value");
 }
 
+#[cfg(unix)]
+#[test]
+fn wasm_tests_run_the_prebuilt_native_runner() {
+    use std::{env, os::unix::fs::PermissionsExt, process::Command};
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let fixture = tempfile::tempdir().expect("a temporary runner fixture");
+    let bin = fixture.path().join("bin");
+    let target = fixture.path().join("native target");
+    let runs = fixture.path().join("runs");
+    fs::create_dir(&bin).expect("a stand-in binary directory");
+    let cargo = bin.join("cargo");
+    fs::write(
+        &cargo,
+        r#"#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+args = sys.argv[1:]
+target = Path(os.environ["CARGO_TARGET_DIR"])
+if args[0] == "build":
+    output = target / "debug"
+    output.mkdir(parents=True)
+    for index, arg in enumerate(args):
+        if arg == "--bin":
+            binary = output / args[index + 1]
+            binary.write_text('#!/bin/sh\nprintf "run\\n" >> "$WASM_RECIPE_RUNS"\n')
+            binary.chmod(0o755)
+elif args[0] == "metadata":
+    print(json.dumps({"target_directory": str(target)}))
+else:
+    assert "test" in args, args
+    runner = os.environ.get("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER", "")
+    resolved = shutil.which(runner)
+    assert resolved == str(target / "debug/wasm_test_runner"), "runner must be prebuilt"
+    assert (target / "debug/test_server").is_file(), "fixture server must be beside runner"
+    subprocess.run([resolved], check=True)
+"#,
+    )
+    .expect("a Cargo stand-in");
+    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))
+        .expect("an executable Cargo stand-in");
+    let path = env::join_paths(
+        std::iter::once(bin).chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
+    )
+    .expect("a binary search path");
+    let output = Command::new("just")
+        .arg("--justfile")
+        .arg(root.join("justfile"))
+        .args(["test", "wasm", "chrome", "webcodecs", "include"])
+        .env("PATH", path)
+        .env("CARGO_TARGET_DIR", target)
+        .env("WASM_RECIPE_RUNS", &runs)
+        .env_remove("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER")
+        .output()
+        .expect("the browser recipe runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(runs)
+            .expect("runner invocations are recorded")
+            .lines()
+            .count(),
+        10,
+        "every browser test command uses the native runner"
+    );
+}
+
 /// What is wrong with a `main` that can return, or ends, before it names a
 /// path or a variable to cargo.
 fn main_problem(stmts: &[Stmt]) -> Option<&'static str> {

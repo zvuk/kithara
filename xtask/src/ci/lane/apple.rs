@@ -1,8 +1,8 @@
 use std::{path::Path, process::Output};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use kithara_devtools::{common::tools::ToolsConfig, verdict::ChildFailure};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     child,
@@ -14,7 +14,7 @@ use crate::{
 /// The two Apple lanes a parameter cannot describe. Both hold something open
 /// for the length of a run - a package cache, a server, a simulator - and one
 /// of them answers with the test's outcome rather than the build's.
-fn preflight(process: &Process, config: &CiConfig, tools: &ToolsConfig) -> Result<()> {
+fn preflight(process: &Process, tools: &ToolsConfig) -> Result<()> {
     process.require_os(&["macos"], "Apple")?;
     let xcodebuild = tools.program("xcodebuild");
     process.require_tools(&[
@@ -33,22 +33,21 @@ fn preflight(process: &Process, config: &CiConfig, tools: &ToolsConfig) -> Resul
         .next()
         .and_then(|line| line.strip_prefix("Xcode "))
         .context("xcodebuild -version did not report an Xcode version")?;
-    if actual != config.pins.expected_xcode_version {
-        bail!(
-            "Xcode {} is required, found {actual}",
-            config.pins.expected_xcode_version
-        );
-    }
+    info!(xcode = actual, "Apple toolchain selected");
+    process.run(
+        xcodebuild,
+        &["-checkFirstLaunchStatus"],
+        "Xcode first launch readiness",
+    )?;
     Ok(())
 }
 
 pub(crate) fn swift_test(
     process: &Process,
-    config: &CiConfig,
     tools: &ToolsConfig,
     swiftpm_cache: &Path,
 ) -> Result<()> {
-    preflight(process, config, tools)?;
+    preflight(process, tools)?;
     // The Swift package resolves the framework from the debug build tree, so
     // this job builds it too. Repeated work is nearly free — the jobs share a
     // target directory on the executor — and it keeps the job self-contained.
@@ -79,7 +78,7 @@ pub(crate) fn ios_test(
     tools: &ToolsConfig,
     device_name: &str,
 ) -> Result<()> {
-    preflight(process, config, tools)?;
+    preflight(process, tools)?;
     let cancel = child::Cancel::install()?;
     let server = TestServer::start(
         process,
@@ -220,12 +219,147 @@ mod tests {
         path::{Path, PathBuf},
     };
 
+    use kithara_devtools::common::tools::ToolsConfig;
+
     use self::consts::UUID;
-    use super::Simulator;
-    use crate::{ci::process::Process, testing::install_script};
+    use super::{Simulator, ios_test};
+    use crate::{
+        ci::{
+            config::fixture,
+            process::{Process, Recording},
+        },
+        testing::{install_script, signals},
+    };
 
     mod consts {
         pub(super) const UUID: &str = "5F1C0B6E-0000-4000-8000-000000000001";
+    }
+
+    #[test]
+    fn an_initialized_xcode_is_not_rejected_for_its_version() {
+        let directory = tempfile::tempdir().unwrap();
+        let process = Process::recording(
+            directory.path(),
+            Recording::default().with_reply(
+                &["xcodebuild", "-version"],
+                "Xcode 99.1\nBuild version 99A1\n",
+            ),
+        );
+        super::preflight(&process, &ToolsConfig::default()).unwrap();
+        let recording = process.recorded().unwrap();
+        assert!(
+            recording
+                .steps()
+                .iter()
+                .any(|step| step.args == ["-checkFirstLaunchStatus"])
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_uninitialized_xcode_stops_before_building() {
+        let _signals = signals();
+        let directory = tempfile::tempdir().unwrap();
+        let bin = directory.path().join("bin");
+        for tool in [
+            "cargo",
+            "just",
+            "kache",
+            "sccache",
+            "swift",
+            "xcodebuild",
+            "xcodegen",
+            "xcrun",
+        ] {
+            crate::testing::install_double(&bin, tool);
+        }
+        let process = Process::new(
+            directory.path(),
+            BTreeMap::from([
+                ("PATH".into(), bin.into_os_string()),
+                (
+                    "KITHARA_TEST_STDOUT".into(),
+                    "Xcode 99.1\nBuild version 99A1".into(),
+                ),
+                (
+                    "KITHARA_TEST_RULES".into(),
+                    "xcodebuild:-checkFirstLaunchStatus:*=69".into(),
+                ),
+            ]),
+        );
+        let error = super::preflight(&process, &ToolsConfig::default()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Xcode first launch readiness failed (exit code 69)"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn ios_device_exclusion_covers_the_entire_job() {
+        let apple: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(include_str!("../../../../.gitlab/ci/apple.yml")).unwrap();
+        let common: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(include_str!("../../../../.gitlab/ci/common.yml")).unwrap();
+        let extends = apple["apple:ios-test"]["extends"].as_sequence().unwrap();
+        for owner in [".apple-device-job", ".measured"] {
+            assert!(extends.iter().any(|value| value.as_str() == Some(owner)));
+        }
+        assert_eq!(
+            common[".apple-device-job"]["tags"][0].as_str(),
+            Some("kithara-macos-2")
+        );
+        assert_eq!(
+            common[".measured"]["resource_group"].as_str(),
+            Some("kithara-suite")
+        );
+    }
+
+    #[test]
+    fn ios_lane_keeps_its_fixed_server_and_deletes_its_device_before_returning() {
+        let _signals = signals();
+        let directory = tempfile::tempdir().unwrap();
+        let config = fixture();
+        let process = Process::recording(
+            directory.path(),
+            Recording::default()
+                .with_reply(
+                    &["xcodebuild", "-version"],
+                    "Xcode 99.1\nBuild version 99A1",
+                )
+                .with_reply(&["xcrun", "simctl", "create"], UUID),
+        );
+
+        ios_test(&process, &config, &ToolsConfig::default(), "project-lane").unwrap();
+
+        let recording = process.recorded().unwrap();
+        let steps = recording.steps();
+        let server = steps
+            .iter()
+            .position(|step| step.env.contains_key("TEST_SERVER_PORT"))
+            .unwrap();
+        assert_eq!(
+            steps[server].env["TEST_SERVER_PORT"],
+            crate::consts::TEST_SERVER_PORT.to_string()
+        );
+        let suite = steps
+            .iter()
+            .position(|step| step.args == ["platform", "apple", "test", "--skip-build"])
+            .unwrap();
+        assert!(server < suite);
+        assert_eq!(
+            steps[suite].env["KITHARA_IOS_DESTINATION"],
+            format!("platform=iOS Simulator,id={UUID}")
+        );
+        assert_eq!(
+            steps[suite].env["KITHARA_TEST_SERVER_URL"],
+            format!("http://127.0.0.1:{}", crate::consts::TEST_SERVER_PORT)
+        );
+        let last = steps.last().unwrap();
+        assert_eq!(last.program, "xcrun");
+        assert_eq!(last.args, ["simctl", "delete", UUID]);
+        assert!(suite < steps.len() - 1);
     }
 
     /// An `xcrun` that creates one device and answers a delete the way

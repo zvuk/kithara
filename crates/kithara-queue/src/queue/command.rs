@@ -57,6 +57,13 @@ where
         to: Position,
     },
     ConfigureTrack(TrackSettingsChange, When<SessionFrame>),
+    ConfigureEffect {
+        item: TrackId,
+        lane: kithara_play::LaneId,
+        target: kithara_play::EffectTarget,
+        change: kithara_play::EffectChange,
+        at: When<SessionFrame>,
+    },
     ConfigureQueue(QueueSettingsChange, When<SessionFrame>),
     SetActionAtItemEnd(ActionAtItemEnd),
     SetPlaybackOrder(PlaybackOrder),
@@ -170,6 +177,37 @@ where
             QueueCommand::Pause { at } => self.pause_at(at, out),
             QueueCommand::Seek { to } => self.seek_to(to, out),
             QueueCommand::ConfigureTrack(change, at) => self.configure_tracks(change, at, out),
+            QueueCommand::ConfigureEffect {
+                item,
+                lane,
+                target,
+                change,
+                at,
+            } => {
+                let index = self
+                    .active
+                    .position(|active| {
+                        let snapshot = active.track.snapshot();
+                        let snapshot = snapshot.as_ref();
+                        snapshot.item == item
+                            && snapshot.effects.iter().any(|effect| effect.lane() == lane)
+                    })
+                    .ok_or(PlayError::NotReady)?;
+                self.active
+                    .get_mut(index)
+                    .ok_or(PlayError::NotReady)?
+                    .track
+                    .apply(
+                        TrackCommand::ConfigureEffect {
+                            lane,
+                            target,
+                            change,
+                            at,
+                        },
+                        out,
+                    )
+                    .map_err(Into::into)
+            }
             QueueCommand::NotifyInterruption(kind) => {
                 self.deck.suspended = out.notify_interruption(kind)?;
                 Ok(None)

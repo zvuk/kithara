@@ -475,8 +475,14 @@ fn bench_layout(c: &mut Criterion) {
     group.finish();
 }
 
+#[path = "support/effects.rs"]
+mod effect_controls;
+
 criterion_group!(
     benches,
+    effect_controls::controls,
+    effect_controls::empty_route,
+    effect_controls::configured_route,
     bench_resampler_process,
     bench_audio_file_new_and_read,
     bench_hls_stream_seek_read,

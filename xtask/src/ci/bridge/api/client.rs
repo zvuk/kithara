@@ -10,7 +10,7 @@ use super::{
         command::BridgeConfig,
         model::{PipelineObservation, PullRequest, Scope, pipeline_observation},
     },
-    http::{Api, Payload},
+    http::{Api, Payload, paginated},
     sources::pull_request,
 };
 use crate::ci::run::PipelineKind;
@@ -44,15 +44,12 @@ impl Github {
     }
 
     pub(in crate::ci::bridge) fn merged_pull_request(&self, sha: &str) -> Result<Option<u64>> {
-        let response = self.request(
-            &Method::GET,
-            &format!("/repos/{}/commits/{sha}/pulls", self.config.github_repo),
-            None,
-        )?;
-        let pulls = response
-            .as_array()
-            .context("GitHub commit pulls response was not an array")?;
-        Ok(merged_pull_number(pulls, sha, &self.config.github_branch))
+        merged_pull_number(
+            &self.config.github_repo,
+            sha,
+            &self.config.github_branch,
+            |path| self.request(&Method::GET, path, None),
+        )
     }
 
     pub(in crate::ci::bridge) fn open_pull_requests(&self) -> Result<Vec<PullRequest>> {
@@ -375,15 +372,29 @@ fn read_secret(path: &std::path::Path, label: &str) -> Result<String> {
     Ok(secret)
 }
 
-fn merged_pull_number(pulls: &[Value], sha: &str, branch: &str) -> Option<u64> {
-    pulls.iter().find_map(|pull| {
+fn merged_pull_number(
+    repository: &str,
+    sha: &str,
+    branch: &str,
+    mut request: impl FnMut(&str) -> Result<Value>,
+) -> Result<Option<u64>> {
+    let pulls = paginated(
+        |page| {
+            request(&format!(
+                "/repos/{repository}/pulls?state=closed&base={branch}&sort=updated&direction=desc&per_page=100&page={page}"
+            ))
+        },
+        None,
+    )
+    .context("reading closed GitHub pull requests")?;
+    Ok(pulls.iter().find_map(|pull| {
         let exact_commit = pull["merge_commit_sha"].as_str() == Some(sha);
         let merged = pull.get("merged_at").is_some_and(|value| !value.is_null());
         let exact_branch = pull.pointer("/base/ref").and_then(Value::as_str) == Some(branch);
         (exact_commit && merged && exact_branch)
             .then(|| pull.get("number").and_then(Value::as_u64))
             .flatten()
-    })
+    }))
 }
 
 /// Whether a pipeline has reached a state it will not leave.
@@ -468,9 +479,132 @@ mod tests {
         ]);
 
         assert_eq!(
-            merged_pull_number(pulls.as_array().unwrap(), expected, "main"),
+            merged_pull_number("owner/repo", expected, "main", |_| Ok(pulls.clone())).unwrap(),
             Some(3)
         );
+    }
+
+    #[test]
+    fn merged_provenance_does_not_depend_on_the_commit_reverse_index() -> Result<()> {
+        let expected = "0123456789abcdef0123456789abcdef01234567";
+        let closed_path = "/repos/owner/repo/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100&page=1";
+        let mut requested = Vec::new();
+        let number = merged_pull_number("owner/repo", expected, "main", |path| {
+            requested.push(path.to_owned());
+            if path == format!("/repos/owner/repo/commits/{expected}/pulls") {
+                Ok(json!([]))
+            } else if path == closed_path {
+                Ok(json!([{
+                    "number": 776,
+                    "merged_at": "2026-10-29T05:37:38Z",
+                    "merge_commit_sha": expected,
+                    "base": {"ref": "main"}
+                }]))
+            } else {
+                bail!("unexpected GitHub request: {path}")
+            }
+        })?;
+
+        assert_eq!(number, Some(776));
+        assert_eq!(requested, [closed_path.to_owned()]);
+        Ok(())
+    }
+
+    #[test]
+    fn merged_provenance_is_found_on_a_later_closed_pull_page() -> Result<()> {
+        let expected = "0123456789abcdef0123456789abcdef01234567";
+        let mut requested = Vec::new();
+        let number = merged_pull_number("owner/repo", expected, "main", |path| {
+            requested.push(path.to_owned());
+            if path.ends_with("&page=1") {
+                Ok(json!(
+                    (1..=100)
+                        .map(|number| json!({"number": number, "merged_at": null}))
+                        .collect::<Vec<_>>()
+                ))
+            } else if path.ends_with("&page=2") {
+                Ok(json!([{
+                    "number": 776,
+                    "merged_at": "2026-10-29T05:37:38Z",
+                    "merge_commit_sha": expected,
+                    "base": {"ref": "main"}
+                }]))
+            } else {
+                bail!("unexpected GitHub request: {path}")
+            }
+        })?;
+
+        assert_eq!(number, Some(776));
+        assert_eq!(requested.len(), 2);
+        assert!(requested[0].ends_with("&page=1"));
+        assert!(requested[1].ends_with("&page=2"));
+        Ok(())
+    }
+
+    #[test]
+    fn merged_provenance_preserves_later_page_errors() {
+        for malformed in [false, true] {
+            let mut requested = Vec::new();
+            let result = merged_pull_number("owner/repo", "expected", "main", |path| {
+                requested.push(path.to_owned());
+                if path.ends_with("&page=1") {
+                    Ok(json!(
+                        (1..=100)
+                            .map(|number| json!({"number": number, "merged_at": null}))
+                            .collect::<Vec<_>>()
+                    ))
+                } else if malformed {
+                    Ok(json!({"message": "not a pull list"}))
+                } else {
+                    bail!("second page unavailable")
+                }
+            });
+
+            let error = format!("{:#}", result.unwrap_err());
+            assert!(error.contains(if malformed {
+                "API page was not an array"
+            } else {
+                "second page unavailable"
+            }));
+            assert_eq!(requested.len(), 2);
+        }
+    }
+
+    #[test]
+    fn merged_provenance_rejects_missing_and_invalid_proof() -> Result<()> {
+        let expected = "0123456789abcdef0123456789abcdef01234567";
+        let valid = json!({
+            "number": 776,
+            "merged_at": "2026-10-29T05:37:38Z",
+            "merge_commit_sha": expected,
+            "base": {"ref": "main"}
+        });
+        let mut unmerged = valid.clone();
+        unmerged["merged_at"] = Value::Null;
+        let mut wrong_commit = valid.clone();
+        wrong_commit["merge_commit_sha"] = json!("another commit");
+        let mut wrong_branch = valid.clone();
+        wrong_branch["base"]["ref"] = json!("other");
+        let mut invalid_number = valid.clone();
+        invalid_number["number"] = json!("776");
+        let mut missing_number = valid;
+        missing_number.as_object_mut().unwrap().remove("number");
+
+        for pulls in [
+            json!([]),
+            json!([unmerged]),
+            json!([wrong_commit]),
+            json!([wrong_branch]),
+            json!([invalid_number]),
+            json!([missing_number]),
+        ] {
+            assert_eq!(
+                merged_pull_number("owner/repo", expected, "main", |_| Ok(pulls.clone()))?,
+                None,
+                "invalid proof: {pulls}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

@@ -11,7 +11,7 @@ use kithara::{
         maybe_send::MaybeSend,
         sync::{Arc, Mutex},
         time::{Duration, Instant, WallInstant},
-        tokio::sync::broadcast::error::TryRecvError,
+        tokio::sync::broadcast::{self, error::TryRecvError},
     },
     play::{
         CrossfadeSettings, DeckMixSettings, DeckMixerConfig, HostedDeck, PlayWorker,
@@ -21,7 +21,7 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     warp::WarpConfig,
 };
-use kithara_render::bridge::{DeckSnapshot, RtMetricsSnapshot};
+use kithara_render::bridge::{DeckEvent, DeckSnapshot, RtMetricsSnapshot};
 
 use super::{
     OfflineHostHarness, append_source_loaded,
@@ -38,6 +38,7 @@ use crate::{
 #[fieldwork(opt_in, get)]
 pub struct OfflinePlayer<F: TrackFactory<TestPools> = PlayerFactory> {
     events: Mutex<EventReceiver<TestEvent>>,
+    underruns: broadcast::Sender<DeckEvent>,
     host: OfflineHostHarness<TestPools>,
     queue: HostOwned<ObservedDeck<Queue<TestPools, F>>>,
     snapshot: Arc<Mutex<DeckSnapshot>>,
@@ -176,12 +177,13 @@ where
             .await
             .unwrap_or_else(|error| panic!("create product offline Host: {error}"));
 
+        let (underruns, _) = broadcast::channel(kithara::events::DEFAULT_EVENT_BUS_CAPACITY);
         let snapshot = Arc::new(Mutex::new(DeckSnapshot::default()));
         let queue = host
             .insert(ObservedDeck {
                 inner: queue,
                 snapshot: snapshot.clone(),
-                underruns: None,
+                underruns: Some(underruns.clone()),
             })
             .await
             .unwrap_or_else(|error| panic!("insert product offline queue: {error}"));
@@ -194,6 +196,7 @@ where
         Self {
             snapshot,
             events: Mutex::new(events),
+            underruns,
             host,
             queue,
             worker,
@@ -254,6 +257,11 @@ where
     #[must_use]
     pub fn position(&self) -> f64 {
         self.queue.position_seconds().unwrap_or_default()
+    }
+
+    /// Observe raw mixer underrun edges before facade event translation.
+    pub fn subscribe_underruns(&self) -> broadcast::Receiver<DeckEvent> {
+        self.underruns.subscribe()
     }
 
     pub fn metrics(&self) -> RtMetricsSnapshot {
@@ -443,6 +451,7 @@ where
     pub async fn close(self) {
         let Self {
             events,
+            underruns,
             host,
             queue,
             worker,
@@ -452,6 +461,7 @@ where
             snapshot,
         } = self;
         drop(events);
+        drop(underruns);
         drop(snapshot);
         drop(queue);
         drop(worker);

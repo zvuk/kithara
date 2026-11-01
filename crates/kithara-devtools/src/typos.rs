@@ -33,7 +33,7 @@ pub(crate) fn run(args: &TyposArgs, ctx: &Ctx) -> Result<()> {
             .install_hint("typos", consts::TYPOS_INSTALL_HINT),
     )?;
     if args.fix {
-        ensure_clean_tree(args.allow_dirty, "typos")?;
+        ensure_clean_tree(&ctx.root, args.allow_dirty, "typos")?;
     }
     let mut cmd = Command::new(program);
     cmd.arg("--config")

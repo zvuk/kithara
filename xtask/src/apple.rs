@@ -1883,6 +1883,170 @@ fn require_apple_needles<'a>(needles: &'a [String], key: &str) -> Result<&'a [St
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_framework_jobs_keep_their_own_archives_and_bindings() {
+        let directory = tempfile::tempdir().unwrap();
+        let xcodebuild = directory.path().join("xcodebuild");
+        let lipo = directory.path().join("lipo");
+        crate::testing::install_script(
+            &xcodebuild,
+            r#"#!/bin/sh
+set -eu
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -library) library=$2; shift ;;
+        -headers) headers=$2; shift ;;
+        -output) output=$2; shift ;;
+    esac
+    shift
+done
+mkdir -p "$output"
+cp "$library" "$output/libkithara_ffi.a"
+cp -R "$headers" "$output/Headers"
+printf '%s\n' "$library" > "$output/staging"
+"#,
+        );
+        crate::testing::install_script(&lipo, "#!/bin/sh\nset -eu\ncat \"$2\" \"$3\" > \"$5\"\n");
+        let tools: ToolsConfig = serde_json::from_value(serde_json::json!({
+            "xcodebuild": { "program": xcodebuild },
+            "lipo": { "program": lipo },
+        }))
+        .unwrap();
+        let roots = [
+            directory.path().join("job a"),
+            directory.path().join("job b"),
+        ];
+        for (root, revision) in roots.iter().zip(["branch-a", "branch-b"]) {
+            let generated = root.join("crates/kithara-ffi/generated/Headers/KitharaFFIInternal");
+            fs::create_dir_all(&generated).unwrap();
+            fs::write(generated.join("KitharaFFIInternal.h"), revision).unwrap();
+            for target in ["first", "second"] {
+                fs::write(root.join(format!("{target}.a")), format!("{revision}\n")).unwrap();
+            }
+        }
+        std::thread::scope(|scope| {
+            let jobs = roots
+                .iter()
+                .map(|root| {
+                    let tools = &tools;
+                    scope.spawn(move || {
+                        let builds = ["first", "second"]
+                            .map(|target| (target, root.join(format!("{target}.a")), Vec::new()));
+                        assemble_staticlib_xcframework(
+                            &root.join("apple/KitharaFFIInternal.xcframework"),
+                            &[vec!["first", "second"]],
+                            &builds,
+                            &root.join("crates/kithara-ffi/generated/Headers/KitharaFFIInternal"),
+                            tools,
+                        )
+                        .unwrap();
+                    })
+                })
+                .collect::<Vec<_>>();
+            for job in jobs {
+                job.join().unwrap();
+            }
+        });
+        let mut staging = Vec::new();
+        for (root, revision) in roots.iter().zip(["branch-a", "branch-b"]) {
+            let framework = root.join("apple/KitharaFFIInternal.xcframework");
+            assert_eq!(
+                fs::read_to_string(framework.join("libkithara_ffi.a")).unwrap(),
+                format!("{revision}\n{revision}\n")
+            );
+            assert_eq!(
+                fs::read_to_string(
+                    framework.join("Headers/KitharaFFIInternal/KitharaFFIInternal.h")
+                )
+                .unwrap(),
+                revision
+            );
+            staging.push(fs::read_to_string(framework.join("staging")).unwrap());
+        }
+        assert_ne!(staging[0], staging[1]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn xcode_recipes_keep_derived_data_in_each_job_checkout() {
+        let (_, recipe) = include_str!("../../.config/just/platform.just")
+            .split_once("apple MODE=\"xcframework\" *ARGS:\n")
+            .unwrap();
+        let (recipe, _) = recipe.split_once("\n[private]").unwrap();
+        let recipe = recipe
+            .lines()
+            .map(|line| line.strip_prefix("    ").unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let directory = tempfile::tempdir().unwrap();
+        let base = directory.path().canonicalize().unwrap();
+        let bin = base.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        crate::testing::install_script(&bin.join("just"), "#!/bin/sh\nexit 0\n");
+        crate::testing::install_script(
+            &bin.join("xcodebuild"),
+            r#"#!/bin/sh
+set -eu
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = -derivedDataPath ]; then
+        derived=$2
+        shift
+    fi
+    shift
+done
+test "$derived" = "$PWD/apple/Examples/KitharaDemo/build/DerivedData"
+mkdir -p "$derived"
+cp revision "$derived/producer"
+printf '%s\n' "$derived" >> xcode-paths
+"#,
+        );
+        let path = env::join_paths(
+            std::iter::once(bin).chain(env::split_paths(&env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let roots = [base.join("job a"), base.join("job b")];
+        for (root, revision) in roots.iter().zip(["branch-a", "branch-b"]) {
+            let tests = root.join("apple/Examples/KitharaDemo/UnitTests");
+            fs::create_dir_all(&tests).unwrap();
+            fs::create_dir_all(root.join("apple/KitharaFFIInternal.xcframework")).unwrap();
+            fs::write(root.join("revision"), revision).unwrap();
+            fs::write(
+                tests.join("Regression.swift"),
+                "struct IntegrationRegressionsIOS {}\n@Test(\"regression\")\nfunc regression() {}\n",
+            )
+            .unwrap();
+            for args in [
+                &["ios"][..],
+                &["test", "--skip-build"][..],
+                &["integration-regressions"][..],
+            ] {
+                let output = Command::new("bash")
+                    .args(["-c", &recipe, "apple"])
+                    .args(args)
+                    .current_dir(root)
+                    .env("PATH", &path)
+                    .env("TMPDIR", root)
+                    .env("KITHARA_IOS_DESTINATION", "platform=iOS Simulator,id=owned")
+                    .env("KITHARA_TEST_SERVER_URL", "http://127.0.0.1:1")
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{args:?}: {output:?}");
+            }
+        }
+        for (root, revision) in roots.iter().zip(["branch-a", "branch-b"]) {
+            let derived = root.join("apple/Examples/KitharaDemo/build/DerivedData");
+            assert_eq!(
+                fs::read_to_string(derived.join("producer")).unwrap(),
+                revision
+            );
+            assert_eq!(
+                fs::read_to_string(root.join("xcode-paths")).unwrap(),
+                format!("{}\n", derived.display()).repeat(4)
+            );
+        }
+    }
+
     #[test]
     fn build_plan_preserves_each_slice_and_its_architectures() {
         let slices: &[(&str, &[&str])] = &[

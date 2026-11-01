@@ -179,53 +179,9 @@ impl AnalysisFile {
         let layout = spec.layout()?;
         header.validate(layout, bytes.len())?;
 
-        let index_start =
-            usize::try_from(header.index_offset).map_err(|_| AnalysisFileError::Corrupt)?;
-        let index_end =
-            usize::try_from(header.payload_offset).map_err(|_| AnalysisFileError::Corrupt)?;
-        let index_bytes = bytes
-            .get(index_start..index_end)
-            .ok_or(AnalysisFileError::Corrupt)?;
-        let count = usize::try_from(header.chunk_count).map_err(|_| AnalysisFileError::Corrupt)?;
-        if index_bytes.len() != count.saturating_mul(consts::INDEX_ENTRY_LEN) {
-            return Err(AnalysisFileError::Corrupt);
-        }
-
-        let mut index: Vec<IndexEntry> = Vec::with_capacity(count);
-        for raw in index_bytes.as_chunks::<{ consts::INDEX_ENTRY_LEN }>().0 {
-            let entry = IndexEntry::decode(raw)?;
-            index.push(entry);
-        }
-
-        let latest_start = usize::try_from(header.latest_payload_offset)
-            .map_err(|_| AnalysisFileError::Corrupt)?;
-        let latest_end = usize::try_from(
-            header
-                .latest_payload_offset
-                .checked_add(header.latest_payload_len)
-                .ok_or(AnalysisFileError::Corrupt)?,
-        )
-        .map_err(|_| AnalysisFileError::Corrupt)?;
-        let payload = bytes
-            .get(latest_start..latest_end)
-            .ok_or(AnalysisFileError::Corrupt)?;
-        let latest = AnalysisProgress::try_from((payload, spec.fingerprint()))?;
-        let analysis = latest.analysis();
-        if validate_analysis(&spec, analysis).is_err() {
-            return Err(AnalysisFileError::Corrupt);
-        }
-        if analysis.revision() != header.latest_revision || analysis.is_settled() != header.settled
-        {
-            return Err(AnalysisFileError::Corrupt);
-        }
-        if latest
-            .resume_meta()
-            .is_some_and(|(chunk_frames, _)| chunk_frames != spec.chunk_frames)
-        {
-            return Err(AnalysisFileError::Corrupt);
-        }
-
-        validate_index_coverage(&spec, &index, analysis)?;
+        let index = Self::read_index(&header, bytes)?;
+        let latest = Self::read_latest(&header, bytes, &spec)?;
+        validate_index_coverage(&spec, &index, latest.analysis())?;
         Ok(Self {
             spec,
             latest,
@@ -252,6 +208,62 @@ impl AnalysisFile {
         progress: &AnalysisProgress,
     ) -> Result<AnalysisFileUpdate, AnalysisFileError> {
         build_update(&self.spec, Some(self), progress)
+    }
+
+    fn read_index(header: &Header, bytes: &[u8]) -> Result<Vec<IndexEntry>, AnalysisFileError> {
+        let index_start =
+            usize::try_from(header.index_offset).map_err(|_| AnalysisFileError::Corrupt)?;
+        let index_end =
+            usize::try_from(header.payload_offset).map_err(|_| AnalysisFileError::Corrupt)?;
+        let index_bytes = bytes
+            .get(index_start..index_end)
+            .ok_or(AnalysisFileError::Corrupt)?;
+        let count = usize::try_from(header.chunk_count).map_err(|_| AnalysisFileError::Corrupt)?;
+        if index_bytes.len() != count.saturating_mul(consts::INDEX_ENTRY_LEN) {
+            return Err(AnalysisFileError::Corrupt);
+        }
+
+        let mut index: Vec<IndexEntry> = Vec::with_capacity(count);
+        for raw in index_bytes.as_chunks::<{ consts::INDEX_ENTRY_LEN }>().0 {
+            let entry = IndexEntry::decode(raw)?;
+            index.push(entry);
+        }
+        Ok(index)
+    }
+
+    fn read_latest(
+        header: &Header,
+        bytes: &[u8],
+        spec: &AnalysisFileSpec,
+    ) -> Result<AnalysisProgress, AnalysisFileError> {
+        let latest_start = usize::try_from(header.latest_payload_offset)
+            .map_err(|_| AnalysisFileError::Corrupt)?;
+        let latest_end = usize::try_from(
+            header
+                .latest_payload_offset
+                .checked_add(header.latest_payload_len)
+                .ok_or(AnalysisFileError::Corrupt)?,
+        )
+        .map_err(|_| AnalysisFileError::Corrupt)?;
+        let payload = bytes
+            .get(latest_start..latest_end)
+            .ok_or(AnalysisFileError::Corrupt)?;
+        let latest = AnalysisProgress::try_from((payload, spec.fingerprint()))?;
+        let analysis = latest.analysis();
+        if validate_analysis(spec, analysis).is_err() {
+            return Err(AnalysisFileError::Corrupt);
+        }
+        if analysis.revision() != header.latest_revision || analysis.is_settled() != header.settled
+        {
+            return Err(AnalysisFileError::Corrupt);
+        }
+        if latest
+            .resume_meta()
+            .is_some_and(|(chunk_frames, _)| chunk_frames != spec.chunk_frames)
+        {
+            return Err(AnalysisFileError::Corrupt);
+        }
+        Ok(latest)
     }
 }
 
@@ -284,6 +296,26 @@ struct Header {
     payload_offset: u64,
 }
 
+struct HeaderIdentity {
+    settled: bool,
+    latest_revision: u64,
+}
+
+struct HeaderGeometry {
+    source_sample_rate: NonZeroU32,
+    extent: u64,
+    chunk_frames: NonZeroU64,
+    chunk_count: u64,
+}
+
+struct HeaderOffsets {
+    index_offset: u64,
+    payload_offset: u64,
+    payload_end: u64,
+    latest_payload_offset: u64,
+    latest_payload_len: u64,
+}
+
 impl Header {
     const VERSION: u32 = 0x4b41_4604;
 
@@ -306,57 +338,24 @@ impl Header {
 
     fn decode(bytes: &[u8]) -> Result<Self, AnalysisFileError> {
         let mut reader = Reader::new(bytes);
-        let version = reader.read_u32().map_err(|_| AnalysisFileError::Corrupt)?;
-        if version != Self::VERSION {
-            return Err(AnalysisFileError::Version {
-                found: version,
-                expected: Self::VERSION,
-            });
-        }
-        let settled = reader.read_bool().map_err(|_| AnalysisFileError::Corrupt)?;
-        if reader
-            .read_array::<3>()
-            .map_err(|_| AnalysisFileError::Corrupt)?
-            != [0; 3]
-        {
-            return Err(AnalysisFileError::Corrupt);
-        }
-        let latest_revision = reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?;
-        let source_sample_rate =
-            NonZeroU32::new(reader.read_u32().map_err(|_| AnalysisFileError::Corrupt)?)
-                .ok_or(AnalysisFileError::Corrupt)?;
-        if reader
-            .read_array::<4>()
-            .map_err(|_| AnalysisFileError::Corrupt)?
-            != [0; 4]
-        {
-            return Err(AnalysisFileError::Corrupt);
-        }
-        let extent = reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?;
-        let chunk_frames =
-            NonZeroU64::new(reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?)
-                .ok_or(AnalysisFileError::Corrupt)?;
-        let chunk_count = reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?;
-        let index_offset = reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?;
-        let payload_offset = reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?;
-        let payload_end = reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?;
-        let latest_payload_offset = reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?;
-        let latest_payload_len = reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?;
+        let identity = read_header_identity(&mut reader)?;
+        let geometry = read_header_geometry(&mut reader)?;
+        let offsets = read_header_offsets(&mut reader)?;
         let waveform = read_fingerprint(&mut reader)?;
         let beat = read_fingerprint(&mut reader)?;
         reader.finish().map_err(|_| AnalysisFileError::Corrupt)?;
         Ok(Self {
-            settled,
-            latest_revision,
-            source_sample_rate,
-            extent,
-            chunk_frames,
-            chunk_count,
-            index_offset,
-            payload_offset,
-            payload_end,
-            latest_payload_offset,
-            latest_payload_len,
+            settled: identity.settled,
+            latest_revision: identity.latest_revision,
+            source_sample_rate: geometry.source_sample_rate,
+            extent: geometry.extent,
+            chunk_frames: geometry.chunk_frames,
+            chunk_count: geometry.chunk_count,
+            index_offset: offsets.index_offset,
+            payload_offset: offsets.payload_offset,
+            payload_end: offsets.payload_end,
+            latest_payload_offset: offsets.latest_payload_offset,
+            latest_payload_len: offsets.latest_payload_len,
             fingerprint: AnalysisFingerprint::new(beat.as_deref(), waveform.as_deref()),
         })
     }
@@ -409,6 +408,62 @@ impl Header {
     }
 }
 
+fn read_header_identity(reader: &mut Reader<'_>) -> Result<HeaderIdentity, AnalysisFileError> {
+    let version = reader.read_u32().map_err(|_| AnalysisFileError::Corrupt)?;
+    if version != Header::VERSION {
+        return Err(AnalysisFileError::Version {
+            found: version,
+            expected: Header::VERSION,
+        });
+    }
+    let settled = reader.read_bool().map_err(|_| AnalysisFileError::Corrupt)?;
+    if reader
+        .read_array::<3>()
+        .map_err(|_| AnalysisFileError::Corrupt)?
+        != [0; 3]
+    {
+        return Err(AnalysisFileError::Corrupt);
+    }
+    let latest_revision = reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?;
+    Ok(HeaderIdentity {
+        settled,
+        latest_revision,
+    })
+}
+
+fn read_header_geometry(reader: &mut Reader<'_>) -> Result<HeaderGeometry, AnalysisFileError> {
+    let source_sample_rate =
+        NonZeroU32::new(reader.read_u32().map_err(|_| AnalysisFileError::Corrupt)?)
+            .ok_or(AnalysisFileError::Corrupt)?;
+    if reader
+        .read_array::<4>()
+        .map_err(|_| AnalysisFileError::Corrupt)?
+        != [0; 4]
+    {
+        return Err(AnalysisFileError::Corrupt);
+    }
+    let extent = reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?;
+    let chunk_frames = NonZeroU64::new(reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?)
+        .ok_or(AnalysisFileError::Corrupt)?;
+    let chunk_count = reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?;
+    Ok(HeaderGeometry {
+        source_sample_rate,
+        extent,
+        chunk_frames,
+        chunk_count,
+    })
+}
+
+fn read_header_offsets(reader: &mut Reader<'_>) -> Result<HeaderOffsets, AnalysisFileError> {
+    Ok(HeaderOffsets {
+        index_offset: reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?,
+        payload_offset: reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?,
+        payload_end: reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?,
+        latest_payload_offset: reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?,
+        latest_payload_len: reader.read_u64().map_err(|_| AnalysisFileError::Corrupt)?,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct IndexEntry(bool);
 
@@ -445,16 +500,8 @@ fn build_update(
     }
     let layout = spec.layout()?;
     let (mut header, index, initial) = if let Some(file) = existing {
-        if analysis.revision() <= file.header.latest_revision {
-            return Err(AnalysisFileError::StaleRevision {
-                stored: file.header.latest_revision,
-                incoming: analysis.revision(),
-            });
-        }
-        if file.header.settled && !analysis.is_settled() {
-            return Err(AnalysisFileError::Config);
-        }
-        (file.header.clone(), file.index.clone(), None)
+        let (header, index) = state_for_update(file, analysis)?;
+        (header, index, None)
     } else {
         let header = Header::base(spec, layout);
         let count = usize::try_from(layout.chunk_count).map_err(|_| AnalysisFileError::TooLarge)?;
@@ -473,8 +520,46 @@ fn build_update(
     let final_len = payload_offset
         .checked_add(payload_len)
         .ok_or(AnalysisFileError::TooLarge)?;
-    let entry = IndexEntry(true);
+    let mut patches = index_patches(spec, layout, &index, analysis)?;
 
+    header.settled = analysis.is_settled();
+    header.latest_revision = analysis.revision();
+    header.payload_end = final_len;
+    header.latest_payload_offset = payload_offset;
+    header.latest_payload_len = payload_len;
+    patches.push(AnalysisFilePatch::new(0, header.encode()?));
+
+    Ok(AnalysisFileUpdate::new(
+        initial,
+        AnalysisFileWrite::new(payload_offset, Bytes::from(payload)),
+        patches,
+        final_len,
+    ))
+}
+
+fn state_for_update(
+    file: &AnalysisFile,
+    analysis: &TrackAnalysis,
+) -> Result<(Header, Vec<IndexEntry>), AnalysisFileError> {
+    if analysis.revision() <= file.header.latest_revision {
+        return Err(AnalysisFileError::StaleRevision {
+            stored: file.header.latest_revision,
+            incoming: analysis.revision(),
+        });
+    }
+    if file.header.settled && !analysis.is_settled() {
+        return Err(AnalysisFileError::Config);
+    }
+    Ok((file.header.clone(), file.index.clone()))
+}
+
+fn index_patches(
+    spec: &AnalysisFileSpec,
+    layout: Layout,
+    index: &[IndexEntry],
+    analysis: &TrackAnalysis,
+) -> Result<Vec<AnalysisFilePatch>, AnalysisFileError> {
+    let entry = IndexEntry(true);
     let mut patches: Vec<AnalysisFilePatch> = Vec::new();
     for (index_position, held) in index.iter().copied().enumerate() {
         let id = u64::try_from(index_position).map_err(|_| AnalysisFileError::TooLarge)?;
@@ -491,20 +576,7 @@ fn build_update(
             ));
         }
     }
-
-    header.settled = analysis.is_settled();
-    header.latest_revision = analysis.revision();
-    header.payload_end = final_len;
-    header.latest_payload_offset = payload_offset;
-    header.latest_payload_len = payload_len;
-    patches.push(AnalysisFilePatch::new(0, header.encode()?));
-
-    Ok(AnalysisFileUpdate::new(
-        initial,
-        AnalysisFileWrite::new(payload_offset, Bytes::from(payload)),
-        patches,
-        final_len,
-    ))
+    Ok(patches)
 }
 
 fn validate_analysis(

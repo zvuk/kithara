@@ -7,6 +7,7 @@ use syn::{Attribute, Item, Meta, meta::ParseNestedMeta, parse_file};
 use super::{Check, Context};
 use crate::common::{
     exclude::item_attrs,
+    scope::package_for_path,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
@@ -86,7 +87,8 @@ pub(super) fn configured_pattern_sites(
         let rel_str = rel.to_string_lossy().replace('\\', "/");
         if is_test_or_bench_path(&rel_str)
             || rel.file_name().and_then(|file| file.to_str()) == Some("tests.rs")
-            || crate_is_exempt(rel, &exempt)
+            || package_for_path(ctx.metadata, &path)
+                .is_some_and(|package| exempt.contains(package.name.as_str()))
             || allowed.contains(rel_str.as_str())
         {
             continue;
@@ -273,28 +275,84 @@ fn strip_line_comment(line: &str) -> &str {
     line
 }
 
-fn crate_is_exempt(rel: &std::path::Path, exempt: &BTreeSet<&str>) -> bool {
-    let mut comps = rel.components();
-    if comps.next().and_then(|c| c.as_os_str().to_str()) != Some("crates") {
-        return true;
-    }
-    let Some(crate_name) = comps
-        .next()
-        .and_then(|c| c.as_os_str().to_str().map(String::from))
-    else {
-        return true;
-    };
-    exempt.contains(crate_name.as_str())
-}
-
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{fs, path::PathBuf};
 
-    use super::{crate_is_exempt, is_test_or_bench_path, scan_source};
+    use anyhow::Result;
+    use cargo_metadata::MetadataCommand;
+    use tempfile::tempdir;
+
+    use super::{is_test_or_bench_path, scan_source};
+    use crate::{
+        arch::{
+            checks::{
+                Check, Context, cancel_root_sites::CancelRootSites,
+                smoothing_primitive_sites::SmoothingPrimitiveSites,
+            },
+            config::ArchConfig,
+        },
+        common::scope::Scope,
+    };
+
+    #[test]
+    fn configured_ownership_uses_actual_cargo_names_in_root_and_custom_members() -> Result<()> {
+        let workspace = tempdir()?;
+        for directory in ["src", "packages/renamed-directory/src"] {
+            fs::create_dir_all(workspace.path().join(directory))?;
+            fs::write(
+                workspace.path().join(directory).join("lib.rs"),
+                "fn build() { Shutdown::forever(); MySmoother::new(); }\n",
+            )?;
+        }
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname='app-main'\nversion='0.1.0'\nedition='2024'\n[workspace]\nmembers=['packages/renamed-directory']\n",
+        )?;
+        fs::write(
+            workspace
+                .path()
+                .join("packages/renamed-directory/Cargo.toml"),
+            "[package]\nname='domain-model'\nversion='0.1.0'\nedition='2024'\n",
+        )?;
+        let metadata = MetadataCommand::new()
+            .manifest_path(workspace.path().join("Cargo.toml"))
+            .no_deps()
+            .exec()?;
+        let scope = Scope::new(
+            Vec::new(),
+            vec![
+                PathBuf::from("src"),
+                PathBuf::from("packages/renamed-directory/src"),
+            ],
+        );
+        let mut config = ArchConfig::default();
+        config.thresholds.cancel_root_sites.patterns = vec!["Shutdown::forever".into()];
+        config.thresholds.smoothing_primitive_sites.patterns = vec!["MySmoother::new".into()];
+        for exempt in ["app-main", "domain-model"] {
+            config.thresholds.cancel_root_sites.exempt_crates = vec![exempt.into()];
+            config.thresholds.smoothing_primitive_sites.exempt_crates = vec![exempt.into()];
+            let context = Context::new(&config, &metadata, workspace.path(), &scope);
+            let expected = if exempt == "app-main" {
+                "packages/renamed-directory/src/lib.rs"
+            } else {
+                "src/lib.rs"
+            };
+            for findings in [
+                CancelRootSites.run(&context)?,
+                SmoothingPrimitiveSites.run(&context)?,
+            ] {
+                assert_eq!(findings.len(), 1);
+                assert!(findings[0].key.starts_with(expected));
+            }
+        }
+        Ok(())
+    }
 
     fn patterns() -> Vec<String> {
-        crate::arch::config::CancelRootSitesThreshold::default().patterns
+        ["CancelToken::root", "CancelToken::never"]
+            .map(String::from)
+            .to_vec()
     }
 
     #[test]
@@ -333,31 +391,12 @@ mod tests {
     }
 
     #[test]
-    fn allowed_and_exempt_resolution() {
-        let exempt = ["kithara-test-utils"].into_iter().collect();
-        assert!(crate_is_exempt(
-            Path::new("crates/kithara-test-utils/src/lib.rs"),
-            &exempt
-        ));
-        assert!(!crate_is_exempt(
-            Path::new("crates/kithara-audio/src/audio.rs"),
-            &exempt
-        ));
+    fn test_and_bench_paths_are_excluded() {
         assert!(is_test_or_bench_path(
             "crates/kithara-platform/benches/cancel.rs"
         ));
         assert!(is_test_or_bench_path("crates/kithara-hls/src/tests/foo.rs"));
         assert!(!is_test_or_bench_path("crates/kithara-app/src/main.rs"));
-    }
-
-    #[test]
-    fn the_default_patterns_are_the_ones_the_check_shipped_with() {
-        let threshold = crate::arch::config::CancelRootSitesThreshold::default();
-
-        assert_eq!(
-            threshold.patterns,
-            ["CancelToken::root", "CancelToken::never"]
-        );
     }
 
     /// A project that names a different root-minting call gets that call

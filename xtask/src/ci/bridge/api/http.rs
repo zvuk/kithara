@@ -73,12 +73,29 @@ pub(super) fn paginated(
     const PAGE_SIZE: usize = 100;
     let mut result = Vec::new();
     let mut page = 1;
+    let mut total = None;
     loop {
         let response = fetch(page)?;
+        match (total, response.get("total_count")) {
+            (expected, Some(count)) => {
+                let count = count
+                    .as_u64()
+                    .context("API total_count was not a nonnegative integer")?;
+                if expected.is_some_and(|expected| expected != count) {
+                    bail!("API total_count changed while reading pages");
+                }
+                total = Some(count);
+            }
+            (Some(_), None) => bail!("API page omitted its previous total_count"),
+            (None, None) => {}
+        }
         let values = field.map_or(&response, |field| &response[field]);
         let values = values.as_array().context("API page was not an array")?;
         result.extend(values.iter().cloned());
         if values.len() < PAGE_SIZE {
+            if total.is_some_and(|total| total != result.len() as u64) {
+                bail!("API pages did not contain their declared total_count");
+            }
             return Ok(result);
         }
         page += 1;
@@ -93,7 +110,13 @@ mod tests {
 
     #[test]
     fn all_pages_are_collected_for_jobs_bridges_runs_and_commit_statuses() {
-        for field in [None, Some("jobs"), Some("workflow_runs"), Some("statuses")] {
+        for field in [
+            None,
+            Some("jobs"),
+            Some("workflow_runs"),
+            Some("statuses"),
+            Some("check_runs"),
+        ] {
             let mut requested = Vec::new();
             let values = paginated(
                 |page| {
@@ -102,7 +125,10 @@ mod tests {
                     let entries = (0..count)
                         .map(|index| json!({"id": (page - 1) * 100 + index}))
                         .collect::<Vec<_>>();
-                    Ok(field.map_or_else(|| json!(entries), |field| json!({(field): entries})))
+                    Ok(field.map_or_else(
+                        || json!(entries),
+                        |field| json!({(field): entries, "total_count": 201}),
+                    ))
                 },
                 field,
             )
@@ -126,5 +152,35 @@ mod tests {
             None,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn declared_counts_reject_truncation_and_inconsistent_pages() {
+        for second in [
+            json!({"check_runs": [], "total_count": 101}),
+            json!({"check_runs": [{"id": 100}], "total_count": 102}),
+            json!({"check_runs": [{"id": 100}]}),
+        ] {
+            let result = paginated(
+                |page| {
+                    Ok(if page == 1 {
+                        json!({"check_runs": vec![Value::Null; 100], "total_count": 101})
+                    } else {
+                        second.clone()
+                    })
+                },
+                Some("check_runs"),
+            );
+            assert!(result.is_err());
+        }
+        for invalid in [json!(-1), json!("100"), Value::Null] {
+            assert!(
+                paginated(
+                    |_| Ok(json!({"check_runs": [], "total_count": invalid})),
+                    Some("check_runs")
+                )
+                .is_err()
+            );
+        }
     }
 }

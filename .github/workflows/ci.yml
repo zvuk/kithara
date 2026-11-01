@@ -10,28 +10,28 @@ on:
       required_lanes:
         description: Space-separated additional required lane names, or all.
         type: string
-        default: ''
+        default: ""
       fixture-refresh:
         description: >-
           Comma-separated fixture names, or producing-function names, to
           produce again instead of reading from the store. Leave unset on
           ordinary runs and dispatch once with it set when a format change
           has to replace what the store already answers for.
-        default: ''
+        default: ""
         type: string
   workflow_dispatch:
     inputs:
       required_lanes:
         description: Space-separated additional required lane names, or all.
         type: string
-        default: ''
+        default: ""
       fixture-refresh:
         description: >-
           Comma-separated fixture names, or producing-function names, to
           produce again instead of reading from the store. Leave unset on
           ordinary runs and dispatch once with it set when a format change
           has to replace what the store already answers for.
-        default: ''
+        default: ""
         type: string
 
 env:
@@ -53,8 +53,7 @@ jobs:
   # answers it before a job is requested.
   authorize:
     name: CI authorization
-    # Every job below takes its `runs-on` from the runner-labels variable, so a
-    # repository without one runs nothing: upstream has no runners and is not
+    # A repository without runner labels runs nothing: upstream has no runners and is not
     # getting any — its gate is the GitLab verification status the bridge
     # writes. Every other workflow already skips on that variable; this one
     # turned the question into a job, and on upstream that job cannot even
@@ -130,24 +129,10 @@ jobs:
           fi
           echo "kind=$kind" >> "$GITHUB_OUTPUT"
 
-  # The self-hosted gate every lane job depends on. The runner
-  # labels remain repository configuration rather than naming an owner or a
-  # machine in this workflow.
-  gate:
-    name: Self-hosted gate
-    needs: authorize
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 5
-    outputs:
-      kind: ${{ needs.authorize.outputs.kind }}
-    steps:
-      - name: Confirm the runner is reachable
-        run: just --version
-
   ui-select:
     name: Select UI ownership
     needs: authorize
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    runs-on: [self-hosted, linux, x64, kithara-report]
     timeout-minutes: 10
     outputs:
       ui_required: ${{ steps.ui.outputs.ui_required }}
@@ -175,24 +160,24 @@ jobs:
   # release, platforms) schedules.
   lanes:
     name: Gate
-    needs: gate
+    needs: authorize
     uses: ./.github/workflows/run.yml
     with:
       role: gate
-      kind: ${{ needs.gate.outputs.kind }}
+      kind: ${{ needs.authorize.outputs.kind }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
 
   deep:
     name: Deep
-    needs: gate
+    needs: authorize
     if: >-
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
       || inputs.required_lanes != ''
     uses: ./.github/workflows/run.yml
     with:
       role: deep
-      kind: ${{ needs.gate.outputs.kind }}
+      kind: ${{ needs.authorize.outputs.kind }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
 
@@ -202,33 +187,33 @@ jobs:
 
   platforms:
     name: Platforms
-    needs: gate
+    needs: authorize
     if: >-
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
       || inputs.required_lanes != ''
     uses: ./.github/workflows/run.yml
     with:
       role: platforms
-      kind: ${{ needs.gate.outputs.kind }}
+      kind: ${{ needs.authorize.outputs.kind }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
 
   quality:
     name: Quality
-    needs: gate
+    needs: authorize
     if: >-
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
       || inputs.required_lanes != ''
     uses: ./.github/workflows/run.yml
     with:
       role: quality
-      kind: ${{ needs.gate.outputs.kind }}
+      kind: ${{ needs.authorize.outputs.kind }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
 
   ui:
     name: UI
-    needs: [gate, ui-select]
+    needs: [authorize, ui-select]
     if: >-
       vars.KITHARA_GPU_RUNNER_LABELS != ''
       && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
@@ -242,7 +227,7 @@ jobs:
   # shared fan-out.
   android:
     name: Android
-    needs: gate
+    needs: authorize
     if: >-
       vars.KITHARA_ANDROID_RUNNER_LABELS != ''
       && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
@@ -261,7 +246,6 @@ jobs:
     if: ${{ always() && (github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != '') }}
     needs:
       - authorize
-      - gate
       - ui-select
       - lanes
       - deep

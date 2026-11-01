@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroU64,
+};
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -89,25 +92,27 @@ fn project_source(
     snapshot.statuses
 }
 
-pub(in crate::ci::bridge) fn review_size(lines: &Result<u64>) -> CheckStatus {
+pub(in crate::ci::bridge) fn review_size(lines: &Result<(u64, NonZeroU64)>) -> CheckStatus {
     lines.as_ref().map_or_else(
         |_| {
             check(
                 "kithara/pr-size",
                 "error",
-                "Unable to measure PR review lines",
+                "Unable to read review policy or measure PR review lines",
                 None,
             )
         },
-        |lines| {
+        |(lines, limit)| {
             check(
                 "kithara/pr-size",
-                if *lines <= 5_000 {
+                if *lines <= limit.get() {
                     "success"
                 } else {
                     "failure"
                 },
-                format!("{lines}/5000 added review lines; deletions and unchanged moves excluded"),
+                format!(
+                    "{lines}/{limit} added review lines; deletions and unchanged moves excluded"
+                ),
                 None,
             )
         },
@@ -155,29 +160,24 @@ pub(super) fn job_contexts<'a>(host: &str, jobs: &'a [Value]) -> Result<Vec<(Str
         .iter()
         .map(|job| job["name"].as_str().context("CI job has no name"))
         .collect::<Result<Vec<_>>>()?;
-    let mut counts = BTreeMap::new();
-    for name in &names {
-        *counts.entry(job_label(name)).or_insert(0_u64) += 1;
-    }
-    Ok(names
-        .into_iter()
-        .zip(jobs)
-        .map(|(name, job)| {
-            let label = job_label(name);
-            let context = format!("{host} / {label}");
-            let context = if context.chars().count() > 100 || counts[&label] > 1 {
-                let digest = Sha256::digest(name.as_bytes());
-                format!(
-                    "{} [{}]",
-                    context.chars().take(80).collect::<String>(),
-                    hex::encode(&digest[..8])
-                )
-            } else {
-                context
-            };
-            (context, job)
-        })
-        .collect())
+    Ok(check_contexts(host, &names).into_iter().zip(jobs).collect())
+}
+
+pub(super) fn check_contexts(host: &str, names: &[&str]) -> Vec<String> {
+    names
+        .iter()
+        .map(|name| check_context(host, name, name.as_bytes()))
+        .collect()
+}
+
+pub(super) fn check_context(host: &str, label: &str, identity: &[u8]) -> String {
+    let context = format!("{host} / {}", job_label(label));
+    let digest = Sha256::digest(identity);
+    format!(
+        "{} [{}]",
+        context.chars().take(80).collect::<String>(),
+        hex::encode(&digest[..8])
+    )
 }
 
 fn job_label(name: &str) -> String {
@@ -195,14 +195,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn review_limit_counts_5000_as_pass_and_5001_as_failure() {
-        assert_eq!(review_size(&Ok(5_000)).state, "success");
-        assert_eq!(review_size(&Ok(5_001)).state, "failure");
+    fn review_limit_uses_the_configured_boundary() {
+        for (lines, limit, state) in [
+            (7, 7, "success"),
+            (8, 7, "failure"),
+            (8, 9, "success"),
+            (0, 7, "success"),
+            (5000, 5000, "success"),
+            (5001, 5000, "failure"),
+        ] {
+            let status = review_size(&Ok((lines, NonZeroU64::new(limit).unwrap())));
+            assert_eq!(status.state, state, "{lines}/{limit}");
+            assert!(status.description.starts_with(&format!("{lines}/{limit} ")));
+        }
         assert_eq!(
             review_size(&Err(anyhow!("missing merge base"))).state,
             "error"
         );
-        assert_eq!(review_size(&Ok(0)).context, "kithara/pr-size");
+        assert_eq!(
+            review_size(&Ok((0, NonZeroU64::new(7).unwrap()))).context,
+            "kithara/pr-size"
+        );
     }
 
     #[test]
@@ -290,12 +303,32 @@ mod tests {
             {"name": "x".repeat(200)}
         ]);
         let contexts = job_contexts("GitHub", jobs.as_array().unwrap()).unwrap();
-        assert_eq!(contexts[0].0, "GitHub / Gate / linux-lint");
+        assert!(contexts[0].0.starts_with("GitHub / Gate / linux-lint ["));
         assert_ne!(contexts[1].0, contexts[2].0);
         assert!(
             contexts
                 .iter()
                 .all(|(context, _)| context.chars().count() <= 100)
+        );
+    }
+
+    #[test]
+    fn context_identities_survive_suffix_lookalikes_and_case_insensitive_publication() {
+        let long = format!("status: {}", "a".repeat(90));
+        let lookalike = format!("status: {} [fd420d32c3430a63]", "a".repeat(63));
+        let contexts = check_contexts("GitHub", &[&long, &lookalike, "lint", "Lint"]);
+        assert_eq!(
+            contexts
+                .iter()
+                .map(|name| name.to_lowercase())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            4
+        );
+        assert!(
+            contexts
+                .iter()
+                .all(|context| context.chars().count() <= 100)
         );
     }
 }

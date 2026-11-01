@@ -2,19 +2,23 @@ use std::{
     fmt::Write,
     fs,
     fs::File,
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
-use cargo_metadata::{Metadata, MetadataCommand};
+use cargo_metadata::Metadata;
+#[cfg(test)]
+use cargo_metadata::MetadataCommand;
 use clap::Args;
 
 use crate::{
+    Ctx,
     common::{project::ProjectConfig, timestamp::utc_timestamp},
     consts,
     touched::fetch_args,
+    verdict::ChildFailure,
 };
 
 #[derive(Debug, Args)]
@@ -108,23 +112,23 @@ struct StageResult {
     cmdline: String,
 }
 
-pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
-    let project = ProjectConfig::load(Path::new("."))?;
-    let logs_dir = PathBuf::from(&project.health.logs_dir);
+pub(crate) fn run(_args: &HealthArgs, ctx: &Ctx) -> Result<()> {
+    let project = &ctx.config;
+    let logs_dir = ctx.root.join(&project.health.logs_dir);
     fs::create_dir_all(&logs_dir).context("create health-logs directory")?;
 
-    let stages = build_stages(&project)?;
+    let stages = build_stages(project, ctx.metadata()?)?;
     let total_start = Instant::now();
     let mut results = Vec::with_capacity(stages.len());
 
     for (idx, stage) in stages.iter().enumerate() {
-        let result = run_stage(idx + 1, stage, &logs_dir);
+        let result = run_stage(idx + 1, stage, &logs_dir, ctx);
         print_progress(idx + 1, stages.len(), &result);
         results.push(result);
     }
 
     let total = total_start.elapsed();
-    write_report(&results, total, &logs_dir, &project)?;
+    write_report(&results, total, &logs_dir, project, &ctx.root)?;
 
     let failed = results.iter().filter(|r| r.status == Status::Fail).count();
     println!();
@@ -134,9 +138,12 @@ pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
         failed,
         format_duration(total),
     );
-    println!("report: {}", project.health.report_path);
+    println!(
+        "report: {}",
+        ctx.root.join(&project.health.report_path).display()
+    );
     if failed > 0 {
-        std::process::exit(1);
+        return Err(ChildFailure::inherited("health".to_owned(), Some(1)));
     }
     Ok(())
 }
@@ -152,13 +159,12 @@ struct Resolved {
     semver_packages: Vec<String>,
 }
 
-fn build_stages(project: &ProjectConfig) -> Result<Vec<Stage>> {
-    let metadata = MetadataCommand::new().no_deps().exec()?;
+fn build_stages(project: &ProjectConfig, metadata: &Metadata) -> Result<Vec<Stage>> {
     let resolved = Resolved {
-        machete_paths: walkable_packages(&metadata, &project.health.machete_exclude),
+        machete_paths: walkable_packages(metadata, &project.health.machete_exclude),
         semver_packages: project.health.semver_packages.clone(),
-        geiger_manifest: manifest_of(&metadata, &project.health.geiger_package)?,
-        own_crates: own_crate_names(&metadata, &project.health.lockbud_exclude),
+        geiger_manifest: manifest_of(metadata, &project.health.geiger_package)?,
+        own_crates: own_crate_names(metadata, &project.health.lockbud_exclude),
         lockbud_toolchain: format!("+{}", lockbud_toolchain()),
     };
     let mut stages = build_stages_with(&resolved);
@@ -180,23 +186,14 @@ fn lockbud_toolchain() -> String {
     std::env::var("KITHARA_LOCKBUD_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_owned())
 }
 
-/// Workspace member directories relative to the workspace root, minus the
-/// packages named. cargo-machete has no exclude flag: given no arguments it
-/// walks the whole tree, and the only way to keep a package out of the walk is
-/// to name every other one.
+/// Select each member by manifest so cargo-machete cannot walk excluded nested members.
 fn walkable_packages(metadata: &Metadata, excluded: &[String]) -> Vec<String> {
-    let root = metadata.workspace_root.as_std_path();
     let mut paths = Vec::new();
     for package in metadata.workspace_packages() {
         if excluded.contains(&package.name.to_string()) {
             continue;
         }
-        let Some(dir) = package.manifest_path.parent() else {
-            continue;
-        };
-        let dir = dir.as_std_path();
-        let relative = dir.strip_prefix(root).unwrap_or(dir);
-        paths.push(relative.to_string_lossy().into_owned());
+        paths.push(package.manifest_path.to_string());
     }
     paths.sort();
     paths
@@ -239,7 +236,7 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
         own_crates,
         lockbud_toolchain,
     } = resolved;
-    vec![
+    let mut stages = vec![
         Stage::new(
             "markdown-format-check",
             "cargo",
@@ -295,14 +292,17 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
         )
         .own_crates(own_crates)
         .strict(),
-    ]
+    ];
+    stages.retain(|stage| stage.name != "machete" || !machete_paths.is_empty());
+    stages
 }
 
 /// Runs one stage without the runner's own `CARGO_PKG_NAME`, which `cargo run`
 /// sets for the xtask binary. A cargo subcommand that sees it takes itself for
 /// a plain binary: `cargo machete` walked `machete` as a path and failed.
-fn run_stage(idx: usize, stage: &Stage, logs_dir: &Path) -> StageResult {
-    let cmdline = format!("{} {}", stage.program, stage.args.join(" "));
+fn run_stage(idx: usize, stage: &Stage, logs_dir: &Path, ctx: &Ctx) -> StageResult {
+    let program = ctx.config.tools.program(stage.program);
+    let cmdline = format!("{} {}", program, stage.args.join(" "));
     let log_path = logs_dir.join(format!("{idx:02}-{}.log", stage.name));
     let log_file = match File::create(&log_path) {
         Ok(f) => f,
@@ -329,8 +329,9 @@ fn run_stage(idx: usize, stage: &Stage, logs_dir: &Path) -> StageResult {
         }
     };
     let start = Instant::now();
-    let status_result = Command::new(stage.program)
+    let status_result = Command::new(program)
         .args(&stage.args)
+        .current_dir(&ctx.root)
         .env_remove("CARGO_PKG_NAME")
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(stderr_file))
@@ -401,6 +402,7 @@ fn write_report(
     total: Duration,
     logs_dir: &Path,
     project: &ProjectConfig,
+    root: &Path,
 ) -> Result<()> {
     let mut out = String::new();
     let timestamp = utc_timestamp();
@@ -468,7 +470,7 @@ fn write_report(
         }
     }
 
-    fs::write(&project.health.report_path, out).context("write health report")?;
+    fs::write(root.join(&project.health.report_path), out).context("write health report")?;
     Ok(())
 }
 
@@ -556,9 +558,13 @@ fn format_duration(d: Duration) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        path::PathBuf,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use clap::Subcommand;
+    use tempfile::tempdir;
 
     use super::*;
     use crate::{CoreCommand, stages::SharedStage};
@@ -640,7 +646,13 @@ mod tests {
         let stage = Stage::new("env", "sh", &["-c", "test -z \"${CARGO_PKG_NAME+set}\""]);
         let logs_dir = std::env::temp_dir();
 
-        let result = run_stage(COUNTER.fetch_add(1, Ordering::Relaxed), &stage, &logs_dir);
+        let ctx = Ctx::new(logs_dir.clone(), ProjectConfig::default());
+        let result = run_stage(
+            COUNTER.fetch_add(1, Ordering::Relaxed),
+            &stage,
+            &logs_dir,
+            &ctx,
+        );
 
         assert!(matches!(result.status, Status::Pass), "{:?}", result.note);
     }
@@ -727,8 +739,11 @@ mod tests {
     }
 
     #[test]
-    fn machete_walks_the_packages_it_is_given() {
-        let paths = ["crates/kithara-abr".to_owned(), "xtask".to_owned()];
+    fn machete_receives_exact_package_manifests() {
+        let paths = [
+            "crates/kithara-abr/Cargo.toml".to_owned(),
+            "xtask/Cargo.toml".to_owned(),
+        ];
         let stages = build_stages_with(&Resolved {
             machete_paths: paths.to_vec(),
             ..Resolved::default()
@@ -737,7 +752,81 @@ mod tests {
             .iter()
             .find(|s| s.name == "machete")
             .expect("machete stage exists");
-        assert_eq!(machete.args, ["machete", "crates/kithara-abr", "xtask"]);
+        assert_eq!(
+            machete.args,
+            [
+                "machete",
+                "crates/kithara-abr/Cargo.toml",
+                "xtask/Cargo.toml"
+            ]
+        );
+    }
+
+    #[test]
+    fn root_package_is_selected_by_manifest_without_walking_excluded_members() {
+        let workspace = tempdir().expect("workspace");
+        for (directory, name) in [
+            ("", "root-package"),
+            ("packages/kept", "kept"),
+            ("packages/kept/nested", "excluded"),
+        ] {
+            let directory = workspace.path().join(directory);
+            fs::create_dir_all(directory.join("src")).expect("package directory");
+            fs::write(directory.join("src/lib.rs"), "").expect("package source");
+            let mut manifest =
+                format!("[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\n");
+            if name == "root-package" {
+                manifest
+                    .push_str("[workspace]\nmembers=['packages/kept','packages/kept/nested']\n");
+            }
+            fs::write(directory.join("Cargo.toml"), manifest).expect("package manifest");
+        }
+        let metadata = MetadataCommand::new()
+            .manifest_path(workspace.path().join("Cargo.toml"))
+            .no_deps()
+            .exec()
+            .expect("workspace metadata");
+        let excluded = ["excluded".to_owned()];
+        assert_eq!(
+            walkable_packages(&metadata, &excluded),
+            [
+                workspace
+                    .path()
+                    .join("Cargo.toml")
+                    .to_string_lossy()
+                    .into_owned(),
+                workspace
+                    .path()
+                    .join("packages/kept/Cargo.toml")
+                    .to_string_lossy()
+                    .into_owned()
+            ]
+        );
+        assert_eq!(
+            walkable_packages(
+                &metadata,
+                &["excluded".to_owned(), "root-package".to_owned()]
+            ),
+            [workspace
+                .path()
+                .join("packages/kept/Cargo.toml")
+                .to_string_lossy()
+                .into_owned()]
+        );
+        let paths = walkable_packages(
+            &metadata,
+            &[
+                "excluded".to_owned(),
+                "root-package".to_owned(),
+                "kept".to_owned(),
+            ],
+        );
+        assert!(paths.is_empty());
+        let stages = build_stages_with(&Resolved {
+            machete_paths: paths,
+            ..Resolved::default()
+        });
+        assert!(!stages.iter().any(|stage| stage.name == "machete"));
     }
 
     fn this_workspace() -> Metadata {
@@ -751,7 +840,9 @@ mod tests {
     fn a_package_left_out_is_not_walked() {
         let walked = walkable_packages(&this_workspace(), &["kithara-workspace-hack".to_owned()]);
         assert!(
-            !walked.contains(&"crates/kithara-workspace-hack".to_owned()),
+            !walked
+                .iter()
+                .any(|path| path.ends_with("crates/kithara-workspace-hack/Cargo.toml")),
             "the excluded package is still in the walk: {walked:?}"
         );
     }
@@ -760,7 +851,9 @@ mod tests {
     fn every_other_package_is_still_walked() {
         let walked = walkable_packages(&this_workspace(), &["kithara-workspace-hack".to_owned()]);
         assert!(
-            walked.contains(&"crates/kithara-abr".to_owned()),
+            walked
+                .iter()
+                .any(|path| path.ends_with("crates/kithara-abr/Cargo.toml")),
             "naming one package dropped the rest: {walked:?}"
         );
     }

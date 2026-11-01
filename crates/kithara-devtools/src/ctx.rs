@@ -31,7 +31,7 @@ impl Ctx {
     /// Returns an error if Cargo metadata cannot be resolved for the current
     /// working directory or the project config cannot be loaded.
     pub fn load() -> Result<Self> {
-        Self::load_with_metadata(MetadataCommand::new())
+        Self::load_with_metadata(&mut MetadataCommand::new())
     }
 
     /// Loads an xtask context from a specific Cargo manifest.
@@ -41,12 +41,18 @@ impl Ctx {
     /// Returns an error if Cargo metadata or the project config cannot be
     /// loaded for the selected manifest.
     pub fn load_from_manifest(manifest_path: &Path) -> Result<Self> {
+        let manifest = manifest_path
+            .canonicalize()
+            .with_context(|| format!("resolve selected manifest {}", manifest_path.display()))?;
+        let directory = manifest
+            .parent()
+            .context("selected manifest has no parent")?;
         let mut command = MetadataCommand::new();
-        command.manifest_path(manifest_path);
-        Self::load_with_metadata(command)
+        command.manifest_path(&manifest).current_dir(directory);
+        Self::load_with_metadata(&mut command)
     }
 
-    fn load_with_metadata(mut command: MetadataCommand) -> Result<Self> {
+    fn load_with_metadata(command: &mut MetadataCommand) -> Result<Self> {
         let metadata = command
             .no_deps()
             .exec()
@@ -71,6 +77,15 @@ impl Ctx {
         self.metadata
             .as_ref()
             .context("workspace metadata is unavailable in this xtask context")
+    }
+
+    #[cfg(feature = "lint")]
+    pub(crate) fn resolved_metadata(&self) -> Result<Metadata> {
+        MetadataCommand::new()
+            .manifest_path(self.root.join("Cargo.toml"))
+            .current_dir(&self.root)
+            .exec()
+            .context("resolving the selected workspace dependency graph")
     }
 }
 
@@ -142,6 +157,24 @@ mod tests {
             Outer::Core(Inner::Alpha { level }) => assert_eq!(level, 3),
             other => panic!("unexpected parse: {other:?}"),
         }
+    }
+
+    #[test]
+    fn ctx_loads_empty_virtual_workspaces() {
+        let workspace = tempdir().expect("workspace");
+        let manifest = workspace.path().join("Cargo.toml");
+        fs::write(&manifest, "[workspace]\nmembers=[]\n").expect("virtual manifest");
+        let ctx = Ctx::load_from_manifest(&manifest).expect("context without packages");
+        assert_eq!(
+            ctx.root,
+            workspace.path().canonicalize().expect("workspace root")
+        );
+        assert!(
+            ctx.metadata()
+                .expect("workspace metadata")
+                .workspace_members
+                .is_empty()
+        );
     }
 
     #[test]

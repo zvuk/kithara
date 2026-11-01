@@ -27,17 +27,18 @@ impl<'data, 'skin> Text<'data, 'skin> {
         }
     }
 
-    /// Returns the intrinsic width and height in logical pixels.
-    ///
-    /// Shaped unbounded, because this is what the control asks its parent for.
-    /// [`Self::paint`] shapes against what it was given instead, so a squeezed
-    /// box breaks lines rather than overflowing.
-    pub(crate) fn measure(&self, text: &mut TextContext) -> (f32, f32) {
+    /// Returns the width and height in logical pixels this text takes in a box
+    /// at most `room` wide: its one line where that fits, and the lines it
+    /// wraps to where it does not, so the box it asks for holds every line
+    /// [`Self::paint`] then breaks it into.
+    pub(crate) fn measure(&self, text: &mut TextContext, room: f32) -> (f32, f32) {
         if self.content.is_empty() {
             return (0.0, 0.0);
         }
-        let run = text.shape(self.content, self.role, None);
-        (run.width() + self.padding_x * 2.0, run.height())
+        let (width, height) =
+            self.role
+                .measure(text, self.content, (room - self.padding_x * 2.0).max(0.0));
+        (width + self.padding_x * 2.0, height)
     }
 
     pub(crate) fn paint(&self, list: &mut DrawListBuilder, text: &mut TextContext, bounds: Rect) {
@@ -87,7 +88,7 @@ mod tests {
             0.0,
             &skin,
         )
-        .measure(&mut text);
+        .measure(&mut text, f32::INFINITY);
         let tracked = Text::new(
             "TRACKING",
             TextRoleSkin {
@@ -97,7 +98,7 @@ mod tests {
             0.0,
             &skin,
         )
-        .measure(&mut text);
+        .measure(&mut text, f32::INFINITY);
 
         assert!(tracked.0 > plain.0);
     }

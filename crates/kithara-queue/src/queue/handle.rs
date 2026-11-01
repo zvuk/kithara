@@ -285,7 +285,7 @@ where
     }
 
     #[kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(Duration::from_secs(4)))]
-    fn call(&self, command: QueueCommand<S>) -> Result<(), QueueError> {
+    pub(super) fn call(&self, command: QueueCommand<S>) -> Result<(), QueueError> {
         let mut ticket = self.post(command)?;
         let seq = ticket.seq().get();
         loop {

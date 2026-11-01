@@ -69,6 +69,11 @@ pub struct Ui<'config, Application> {
     /// application's: nothing is asked for it and nothing declares it.
     view: ViewState,
     scale: f64,
+    /// The document and the skin the standing tree was built from. The
+    /// application turns to others whenever it likes — in answer to a press,
+    /// on a tick, or between frames from outside — and the host follows by
+    /// comparing against these.
+    built_from: (String, String),
 }
 
 impl<'config, Application> Ui<'config, Application>
@@ -103,7 +108,9 @@ where
             &view,
         )?;
         let screens = Screens::new(doc.screen_cache, ui);
+        let built_from = (app.document().to_owned(), app.skin().id().to_owned());
         Ok(Self {
+            built_from,
             app,
             clock,
             config,
@@ -180,7 +187,7 @@ where
     /// the path the document gave the control.
     #[cfg(feature = "capture")]
     pub fn ink_of(&self, path: &str) -> Option<Rgba> {
-        self.root.ink_of(self.state.widget_id(path)?)
+        self.root.ink_of(self.visible_widget_id(path)?)
     }
 
     /// Feeds one neutral input event in. Whatever the document publishes in
@@ -298,7 +305,7 @@ where
     /// and a capture photographs it. A control a hidden block stashed takes
     /// an empty box.
     pub fn rect_of(&self, path: &str) -> Option<Rect> {
-        let id = self.state.widget_id(path)?;
+        let id = self.visible_widget_id(path)?;
         let widget = self.root.root().get_widget(id)?;
         let bounds = widget.ctx().bounding_rect();
         let corner = Rect {
@@ -315,6 +322,26 @@ where
             h: (bounds.y1 - bounds.y0).as_(),
             ..corner
         })
+    }
+
+    /// The widget a path names on screen right now.
+    ///
+    /// The branches of an adaptive block share the paths of the controls they
+    /// both hold, and only the branch the room reaches stands; the others are
+    /// stashed. A path whose every widget is stashed names the last one
+    /// mounted, as it did before.
+    fn visible_widget_id(&self, path: &str) -> Option<masonry::core::WidgetId> {
+        self.state
+            .widget_ids(path)
+            .into_iter()
+            .rev()
+            .find(|id| {
+                self.root
+                    .root()
+                    .get_widget(*id)
+                    .is_some_and(|widget| !widget.ctx().is_stashed())
+            })
+            .or_else(|| self.state.widget_id(path))
     }
 
     /// Draws the current document, in the physical pixels the caller sized it
@@ -514,6 +541,12 @@ where
     /// application moved on, or because another skin measures it differently -
     /// reaches the screen only by being built again.
     fn remount(&mut self) -> Result<(), RunError> {
+        // Taken before compiling, so a document that fails reports once per turn
+        // rather than once per frame.
+        self.built_from = (
+            self.app.document().to_owned(),
+            self.app.skin().id().to_owned(),
+        );
         let ui = compile_document(&self.app, &self.config, &self.doc, &self.view)?;
         self.screens.reset(ui);
         self.mount_shown()
@@ -530,13 +563,13 @@ where
     /// where its shape really did change — and only then is the document
     /// compiled again. A hand on a knob publishes an action for every step it moves, and
     /// compiling the page for each of them costs more than drawing it.
+    ///
+    /// The application may have turned without the document publishing
+    /// anything, so the turn is looked for on every call, not only after an
+    /// action.
     fn settle(&mut self) {
         let actions = self.root.take_actions();
-        if actions.is_empty() {
-            return;
-        }
-        let was_document = self.app.document().to_owned();
-        let was_skin = self.app.skin().id().to_owned();
+        let acted = !actions.is_empty();
         for published in actions {
             let Self {
                 app, screens, view, ..
@@ -551,7 +584,10 @@ where
             }
             self.app.update(event);
         }
-        if self.app.document() == was_document && self.app.skin().id() == was_skin {
+        if self.app.document() == self.built_from.0 && self.app.skin().id() == self.built_from.1 {
+            if !acted {
+                return;
+            }
             match self.turn() {
                 Ok(false) => {
                     let Self {
@@ -655,7 +691,6 @@ fn mount<Application>(
 where
     Application: App,
 {
-    state.clear_paths();
     let skin = app.skin();
     let node = app.reads(|reads| {
         let ctx = frame_ctx(ui, reads, view, skin, config, clock);

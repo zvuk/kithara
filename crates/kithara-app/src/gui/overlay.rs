@@ -1,10 +1,6 @@
-use kithara::platform::sync::Arc;
+use kithara::{host::DeckId, platform::sync::Arc};
 
-use crate::{
-    deck::DeckId,
-    engine::{Command, DeckCmd, DeckSnapshot, EngineSnapshot, MixCmd},
-    mix::MixStrip,
-};
+use crate::engine::{Command, DeckCmd, DeckSnapshot, EngineSnapshot, MixCmd};
 
 #[derive(Default)]
 pub(crate) struct Overlay {
@@ -80,17 +76,12 @@ fn deck_mut(drawn: &mut EngineSnapshot, id: DeckId) -> Option<&mut DeckSnapshot>
     drawn.decks.iter_mut().find(|deck| deck.id == id)
 }
 
-fn strip_mut(drawn: &mut EngineSnapshot, id: DeckId) -> Option<&mut MixStrip> {
-    let at = drawn.decks.iter().position(|deck| deck.id == id)?;
-    drawn.mix.strips.get_mut(at)
-}
-
 fn lay_mix(cmd: MixCmd, drawn: &mut EngineSnapshot) {
     match cmd {
         MixCmd::Crossfader(position) => drawn.mix.position = position,
         MixCmd::Trim(id, trim) => {
-            if let Some(strip) = strip_mut(drawn, id) {
-                strip.trim = trim;
+            if let Some(deck) = deck_mut(drawn, id) {
+                deck.strip.trim = trim;
             }
         }
     }

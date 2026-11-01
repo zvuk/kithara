@@ -1,5 +1,6 @@
 mod client;
 mod evict;
+pub(super) mod evidence;
 mod provision;
 mod serve;
 pub(crate) mod snapshot;

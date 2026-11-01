@@ -267,7 +267,7 @@ impl Process {
 
     /// Record how long a step took. A step that never ran is not recorded, so
     /// the sum of these is the time the lane actually spent.
-    fn time(&self, label: &str, elapsed: Duration, ok: bool) {
+    pub(super) fn time(&self, label: &str, elapsed: Duration, ok: bool) {
         if let Ok(mut journal) = self.journal.lock() {
             journal.steps.push(Timing {
                 elapsed,
@@ -287,6 +287,18 @@ impl Process {
                 layer,
             });
         }
+    }
+
+    /// Numeric step observations, without command labels, arguments or environment.
+    pub(crate) fn timing_evidence(&self) -> Option<serde_json::Value> {
+        let (step_count, steps) = {
+            let journal = self.journal.lock().ok()?;
+            let steps: Vec<_> = journal.steps.iter().take(128).map(|step| {
+            serde_json::json!({"elapsed_ms": step.elapsed.as_secs_f64() * 1000.0, "ok": step.ok})
+        }).collect();
+            (journal.steps.len(), steps)
+        };
+        Some(serde_json::json!({"step_count": step_count, "steps": steps}))
     }
 
     /// Print what the job spent and what its caches carried.
@@ -332,18 +344,69 @@ impl Process {
     }
 
     pub(crate) fn capture(&self, program: &str, args: &[&str], label: &str) -> Result<String> {
-        if let Some(reply) = self.reply(program, args) {
-            let mut command = self.command(program);
-            command.args(args);
-            self.record(Step::of(&command, label, &self.root));
-            return Ok(reply);
+        let mut command = self.command(program);
+        command.args(args);
+        self.capture_command(&mut command, label)
+    }
+
+    pub(crate) fn capture_command(&self, command: &mut Command, label: &str) -> Result<String> {
+        if self.is_recording() {
+            let program = command.get_program().to_string_lossy();
+            let arguments: Vec<_> = command
+                .get_args()
+                .map(|arg| arg.to_string_lossy())
+                .collect();
+            let args: Vec<_> = arguments.iter().map(AsRef::as_ref).collect();
+            self.record(Step::of(command, label, &self.root));
+            return Ok(self.reply(&program, &args).unwrap_or_default());
         }
-        let output = self
-            .command(program)
-            .args(args)
+        let output = command
             .output()
             .with_context(|| format!("failed to start {label}"))?;
         output_text(output, label)
+    }
+
+    /// Capture a bounded report without retaining or printing the tool's stderr.
+    pub(super) fn capture_bounded(
+        &self,
+        program: &str,
+        args: &[&str],
+        label: &str,
+        limit: usize,
+    ) -> Result<String> {
+        self.capture_bounded_command(
+            self.command(program).args(args),
+            label,
+            Duration::from_secs(5),
+            limit,
+        )
+    }
+
+    pub(super) fn capture_bounded_command(
+        &self,
+        command: &mut Command,
+        label: &str,
+        deadline: Duration,
+        limit: usize,
+    ) -> Result<String> {
+        if self.is_recording() {
+            return self.capture_command(command, label);
+        }
+        let started = Instant::now();
+        let output = crate::child::bounded_output(command, deadline, limit);
+        self.time(
+            label,
+            started.elapsed(),
+            output.as_ref().is_ok_and(|value| value.status.success()),
+        );
+        let output = output?;
+        if !output.status.success() {
+            return Err(ChildFailure::inherited(
+                label.to_owned(),
+                output.status.code(),
+            ));
+        }
+        String::from_utf8(output.stdout).with_context(|| format!("{label} was not UTF-8"))
     }
 
     /// The platform a lane refuses to run anywhere but on. Recorded rather than

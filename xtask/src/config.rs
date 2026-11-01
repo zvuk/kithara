@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     iter,
+    num::NonZeroU64,
     path::{Component, Path, PathBuf},
     time::Duration,
 };
@@ -26,6 +27,7 @@ pub(crate) struct KitharaExt {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct CiProjectConfig {
     pub(crate) pins: PathBuf,
+    pub(crate) pr_review_line_limit: Option<NonZeroU64>,
     pub(crate) lanes: BTreeMap<String, CiLaneConfig>,
     pub(crate) verdict: CiVerdictConfig,
     /// How long a lane slot keeps a build unit its builds stopped using,
@@ -37,6 +39,7 @@ impl Default for CiProjectConfig {
     fn default() -> Self {
         Self {
             pins: PathBuf::new(),
+            pr_review_line_limit: None,
             lanes: BTreeMap::new(),
             verdict: CiVerdictConfig::default(),
             lane_unit_window_hours: consts::LANE_UNIT_WINDOW_HOURS,
@@ -62,16 +65,13 @@ pub(crate) struct CiLaneConfig {
     pub(crate) cache_group: String,
     /// How the lane names itself when it refuses a platform.
     pub(crate) label: String,
-    /// Every operating system the lane runs on. The shared GitHub fan-out
-    /// reaches a lane that names Linux alone; one that also names another
-    /// machine needs a device the shared pool lacks and runs from a workflow
-    /// naming a pool of its own.
+    /// Every operating system the lane runs on. GitHub fan-out requires Linux;
+    /// lanes needing a dedicated pool opt out through `kinds_github`.
     #[serde(deserialize_with = "one_or_many")]
     pub(crate) os: Vec<String>,
     pub(crate) tools: Vec<String>,
-    /// Tools whose reported version has to match a reviewed pin before the lane
-    /// spends a runner on a build it would have to throw away.
-    pub(crate) pinned: Vec<CiLanePin>,
+    /// Tool readiness commands run before installing tools or restoring caches.
+    pub(crate) checks: Vec<CiLaneCheck>,
     /// Paths a predecessor job has to have left in the checkout, and the job
     /// that leaves them. A lane that arrives without them fails minutes in, on
     /// a device, with nothing more informative than a link error.
@@ -103,16 +103,8 @@ pub(crate) struct CiLaneConfig {
     /// Immutable trusted Cargo target snapshot this lane restores before it
     /// builds. The key names a compatible Cargo invocation, not a revision.
     pub(crate) target_snapshot: Option<String>,
-    /// Whether this lane records the dependency sources it ended up with, for
-    /// every other lane to restore.
-    ///
-    /// Exactly one lane should, and it must be a Linux lane: a Linux runner
-    /// receives its trust scope and its cache credentials together, while a
-    /// Mac host carries one credential set for every lane it runs whatever
-    /// `KITHARA_CACHE_TRUST` says. Publishing from there wrote the trusted
-    /// bucket with review keys and was refused on every run. Sources are
-    /// platform-independent, so the object serves both fleets wherever it is
-    /// produced.
+    /// Whether this lane publishes dependency sources on its scope's default
+    /// branch. The client's credentials select the bucket on either host.
     #[serde(default)]
     pub(crate) publishes_sources: bool,
     pub(crate) timeout_minutes: u32,
@@ -130,8 +122,8 @@ pub(crate) struct CiLaneConfig {
 
 impl CiLaneConfig {
     /// Whether the shared Linux fan-out can carry the lane.
-    pub(crate) fn runs_only_on_linux(&self) -> bool {
-        matches!(self.os.as_slice(), [os] if os == "linux")
+    pub(crate) fn runs_on_linux(&self) -> bool {
+        self.os.iter().any(|os| os == "linux")
     }
 }
 
@@ -216,18 +208,12 @@ pub(crate) enum ArtifactWhen {
     Failure,
 }
 
-/// A version check: ask `tool` how old it is, and require the answer to carry
-/// the value `pin` names in `.config/ci-pins.toml`.
+/// A tool command that must succeed before the lane can build.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub(crate) struct CiLanePin {
-    pub(crate) tool: String,
+pub(crate) struct CiLaneCheck {
     pub(crate) args: Vec<String>,
-    pub(crate) pin: String,
-    /// What the reported version has to read in full, on its first line, for
-    /// tools that print more than a number. Without it any whitespace-separated
-    /// word matching the pin is accepted.
-    pub(crate) line_prefix: Option<String>,
+    pub(crate) tool: String,
 }
 
 impl CiProjectConfig {
@@ -268,7 +254,7 @@ impl CiProjectConfig {
                 bail!("ext.ci.lanes.{name}.os must be linux, macos or windows, got `{os}`");
             }
             // `kinds_github` is a statement that GitHub schedules this lane, and
-            // GitHub's fan-out reaches one pool. A lane naming another machine
+            // GitHub's fan-out reaches one pool. A lane excluding Linux
             // would be refused at selection and never run, which is a lane
             // declared into a schedule it cannot reach - the failure this
             // catalog exists to make impossible, not one to restate quietly.
@@ -276,7 +262,7 @@ impl CiProjectConfig {
                 .kinds_github
                 .as_ref()
                 .is_some_and(|kinds| !kinds.is_empty())
-                && !lane.runs_only_on_linux()
+                && !lane.runs_on_linux()
             {
                 bail!(
                     "ext.ci.lanes.{name}.kinds_github schedules a `{}` lane, and the GitHub fleet is Linux",
@@ -296,17 +282,19 @@ impl CiProjectConfig {
             if lane.target_snapshot.as_deref().is_some_and(str::is_empty) {
                 bail!("ext.ci.lanes.{name}.target_snapshot must not be empty");
             }
-            if lane.publishes_sources && !lane.runs_only_on_linux() {
+            if lane.publishes_sources
+                && !matches!(lane.os.as_slice(), [os] if matches!(os.as_str(), "linux" | "macos"))
+            {
                 bail!(
-                    "ext.ci.lanes.{name}.publishes_sources requires a Linux-only lane: only a Linux runner is handed its trust scope and its cache credentials together"
+                    "ext.ci.lanes.{name}.publishes_sources requires one supported native platform (linux or macos)"
                 );
             }
             if lane.label.is_empty() {
                 bail!("ext.ci.lanes.{name} must carry a label to refuse under");
             }
-            for check in &lane.pinned {
-                if check.tool.is_empty() || check.pin.is_empty() {
-                    bail!("ext.ci.lanes.{name}.pinned must name both a tool and a pin");
+            for check in &lane.checks {
+                if check.tool.is_empty() {
+                    bail!("ext.ci.lanes.{name}.checks must name a tool");
                 }
             }
             if !lane.left_behind.is_empty() && lane.left_behind_by.is_empty() {
@@ -1071,20 +1059,17 @@ timeout_minutes = 30
         );
     }
 
-    /// A Mac host carries one cache identity for every lane it runs, so a
-    /// publish declared there writes the trusted bucket with whatever keys the
-    /// host happens to hold. Refuse the declaration rather than the upload.
     #[test]
-    fn only_a_linux_only_lane_may_publish_the_source_layer() {
-        let declared = |os: &str| {
+    fn only_a_supported_native_lane_may_publish_the_source_layer() {
+        let declared = |cache_group: &str, os: &str| {
             let ctx = ctx_from_config(&format!(
                 r#"
 [ext.ci]
 pins = "ci-pins.toml"
 
 [ext.ci.lanes.publisher]
-cache_group = "linux"
-label = "Linux"
+cache_group = "{cache_group}"
+label = "Publisher"
 os = {os}
 program = "just"
 role = "gate"
@@ -1099,9 +1084,21 @@ publishes_sources = true
                 .validate()
         };
 
-        declared(r#""linux""#).expect("a Linux lane may publish");
-        for os in [r#"["macos", "linux"]"#, r#""macos""#] {
-            let refusal = declared(os).expect_err("a lane that can land on a Mac must not publish");
+        for (cache_group, os) in [
+            ("linux", r#""linux""#),
+            ("macos", r#""macos""#),
+            ("linux", r#"["linux"]"#),
+            ("macos", r#"["macos"]"#),
+        ] {
+            declared(cache_group, os).expect("a supported native lane may publish");
+        }
+        for (cache_group, os) in [
+            ("windows", r#""windows""#),
+            ("host", r#"["macos", "linux"]"#),
+            ("host", r#"["linux", "windows"]"#),
+            ("host", r#"["macos", "windows"]"#),
+        ] {
+            let refusal = declared(cache_group, os).expect_err(os);
             assert!(
                 refusal.to_string().contains("publishes_sources"),
                 "the refusal must name the field: {refusal}"
@@ -1149,7 +1146,7 @@ timeout_minutes = 30
             .ci;
         ci.validate().expect("a lane may run on two machines");
         assert_eq!(ci.lanes["device"].os, ["macos", "linux"]);
-        assert!(!ci.lanes["device"].runs_only_on_linux());
+        assert!(ci.lanes["device"].runs_on_linux());
     }
 
     /// The compiler cache keys every compilation on each `CARGO_*` value, so a

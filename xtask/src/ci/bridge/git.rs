@@ -1,5 +1,6 @@
 use std::{
     fs,
+    num::NonZeroU64,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
@@ -11,7 +12,7 @@ use super::{
     command::BridgeConfig,
     control::{ControlChange, classify},
 };
-use crate::consts;
+use crate::{config::CiProjectConfig, consts};
 
 pub(super) struct GitRepo {
     root: PathBuf,
@@ -129,6 +130,23 @@ impl GitRepo {
             );
         }
         Ok(())
+    }
+
+    pub(super) fn review_size(&self, target: &str, head: &str) -> Result<(u64, NonZeroU64)> {
+        let text = self
+            .file_at(target, ".config/xtask.toml")?
+            .context("PR target has no readable .config/xtask.toml")?;
+        let document: toml::Value =
+            toml::from_str(&text).context("parse PR target xtask config")?;
+        let ci = document
+            .get("ext")
+            .and_then(|ext| ext.get("ci"))
+            .context("PR target xtask config has no [ext.ci]")?;
+        let config: CiProjectConfig = ci.clone().try_into().context("parse PR target [ext.ci]")?;
+        let limit = config
+            .pr_review_line_limit
+            .context("PR target must set ext.ci.pr_review_line_limit")?;
+        Ok((self.review_lines(target, head)?, limit))
     }
 
     /// Added text lines in the pull request, excluding unchanged moves.
@@ -696,6 +714,70 @@ mod tests {
         repo.run(&["fetch", "--no-tags", work.to_str().unwrap(), &head], None)
             .unwrap();
         head
+    }
+
+    #[test]
+    fn review_size_uses_current_target_policy_not_pull_policy() {
+        let (state, repo, ..) = repository();
+        let work = state.path().join("work");
+        let policy = work.join(".config/xtask.toml");
+        fs::write(&policy, "[ext.ci]\npr_review_line_limit = 7\n").unwrap();
+        let base = commit_review(&repo, &work);
+
+        fs::write(&policy, "[ext.ci]\npr_review_line_limit = 9000\n").unwrap();
+        fs::write(work.join("added.rs"), "added\n".repeat(7)).unwrap();
+        let head = commit_review(&repo, &work);
+        let measured = repo.review_size(&base, &head);
+        assert_eq!(
+            measured.as_ref().unwrap(),
+            &(8, NonZeroU64::new(7).unwrap())
+        );
+        let status = crate::ci::bridge::checks::review_size(&measured);
+        assert_eq!(status.state, "failure");
+        assert!(status.description.starts_with("8/7 "));
+
+        git(
+            &work,
+            &["checkout", "--quiet", "-b", "updated-target", &base],
+        );
+        fs::write(&policy, "[ext.ci]\npr_review_line_limit = 9\n").unwrap();
+        let target = commit_review(&repo, &work);
+        let measured = repo.review_size(&target, &head);
+        assert_eq!(
+            measured.as_ref().unwrap(),
+            &(8, NonZeroU64::new(9).unwrap())
+        );
+        let status = crate::ci::bridge::checks::review_size(&measured);
+        assert_eq!(status.state, "success");
+        assert!(status.description.starts_with("8/9 "));
+    }
+
+    #[test]
+    fn review_size_reports_missing_or_invalid_target_policy_as_error() {
+        let (state, repo, ..) = repository();
+        let work = state.path().join("work");
+        let path = work.join(".config/xtask.toml");
+        for policy in [
+            None,
+            Some("[ext.ci]\n"),
+            Some("[ext.ci]\npr_review_line_limit = 0\n"),
+            Some("[ext.ci]\npr_review_line_limit = -1\n"),
+            Some("[ext.ci]\npr_review_line_limit = 'unlimited'\n"),
+            Some("[ext.ci\n"),
+        ] {
+            if let Some(policy) = policy {
+                fs::write(&path, policy).unwrap();
+            } else {
+                fs::remove_file(&path).unwrap();
+            }
+            let target = commit_review(&repo, &work);
+            let measured = repo.review_size(&target, &target);
+            assert!(measured.is_err(), "{policy:?}");
+            assert_eq!(
+                crate::ci::bridge::checks::review_size(&measured).state,
+                "error"
+            );
+        }
     }
 
     #[test]
