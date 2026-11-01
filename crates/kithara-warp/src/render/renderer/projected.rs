@@ -403,20 +403,28 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             self.prime_projected(span, stages)?;
         }
         let frames = self.prepare_projected_output(span, lookahead, channels)?;
+        let affine_speed = (frames != 0 && span.is_affine())
+            .then(|| span_speed(span, 0))
+            .transpose()?;
         let mut position = span.source_ratio_at(0).map(fraction);
         for frame in 0..frames {
-            let next = u64::try_from(frame)
-                .ok()
-                .and_then(|frame| frame.checked_add(1))
-                .and_then(|frame| span.source_ratio_at(frame))
-                .map(fraction);
-            let speed = position
-                .zip(next)
-                .and_then(|(position, next)| next.sub(position))
-                .and_then(Fraction::as_f64)
-                .ok_or(ElasticError::SampleCountOverflow)?;
+            let speed = if let Some(speed) = affine_speed {
+                speed
+            } else {
+                let next = u64::try_from(frame)
+                    .ok()
+                    .and_then(|frame| frame.checked_add(1))
+                    .and_then(|frame| span.source_ratio_at(frame))
+                    .map(fraction);
+                let speed = position
+                    .zip(next)
+                    .and_then(|(position, next)| next.sub(position))
+                    .and_then(Fraction::as_f64)
+                    .ok_or(ElasticError::SampleCountOverflow)?;
+                position = next;
+                speed
+            };
             self.render_projected_frame(speed, frame, channels, stages)?;
-            position = next;
         }
         self.clear_pending_source();
         self.active = true;

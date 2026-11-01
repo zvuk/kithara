@@ -14,8 +14,8 @@ mod consts {
     pub(super) const START: f32 = 0.000_01;
     /// Progress at or above which the fade is fully incoming (firewheel's edge).
     pub(super) const END: f32 = 0.999_99;
-    /// Taylor coefficients of `(sin a − a)/a³` in powers of `a²`, to `a¹¹`:
-    /// within `10⁻¹¹` of `sin a` for `|a| ≤ π/4`.
+    /// Taylor coefficients of `(sin a - a)/a^3` in powers of `a^2`, to `a^11`:
+    /// within `10^-11` of `sin a` for `|a| <= pi/4`.
     pub(super) const SINE: [f64; 5] = [
         -1.0 / 6.0,
         1.0 / 120.0,
@@ -23,8 +23,8 @@ mod consts {
         1.0 / 362_880.0,
         -1.0 / 39_916_800.0,
     ];
-    /// Taylor coefficients of `(cos a − 1)/a²` in powers of `a²`, to `a¹⁰`:
-    /// within `2·10⁻¹⁰` of `cos a` for `|a| ≤ π/4`.
+    /// Taylor coefficients of `(cos a - 1)/a^2` in powers of `a^2`, to `a^10`:
+    /// within `2*10^-10` of `cos a` for `|a| <= pi/4`.
     pub(super) const COSINE: [f64; 5] = [
         -1.0 / 2.0,
         1.0 / 24.0,
@@ -86,7 +86,7 @@ fn pair<S: Simd>(simd: S, curve: FadeCurve, u: S::f32s) -> (S::f32s, S::f32s) {
     )
 }
 
-/// `(shape(cos x), shape(sin x))` at `x = π/2·u`: `x` rounds to `f32` as
+/// `(shape(cos x), shape(sin x))` at `x = pi/2*u`: `x` rounds to `f32` as
 /// firewheel's does, the rest runs in `f64` and rounds once at the end.
 #[inline(always)]
 fn quarter_wave<S: Simd>(
@@ -103,8 +103,8 @@ fn quarter_wave<S: Simd>(
     )
 }
 
-/// `(cos x, sin x)` for `x` in `[0, π/2]`: above `π/4` the polynomials run on
-/// `π/2 − x`, an exact `f64` subtraction, so the side tending to zero keeps
+/// `(cos x, sin x)` for `x` in `[0, pi/2]`: above `pi/4` the polynomials run on
+/// `pi/2 - x`, an exact `f64` subtraction, so the side tending to zero keeps
 /// its relative precision.
 #[inline(always)]
 fn cos_sin<S: Simd>(simd: S, x: S::f64s) -> (S::f64s, S::f64s) {
@@ -116,7 +116,7 @@ fn cos_sin<S: Simd>(simd: S, x: S::f64s) -> (S::f64s, S::f64s) {
     (near.select(cosine, sine), near.select(sine, cosine))
 }
 
-/// `Σ c[k]·zᵏ`, written out: the size profile neither unrolls nor inlines a
+/// `sum c[k]*z^k`, written out: the size profile neither unrolls nor inlines a
 /// fold over the coefficients.
 #[inline(always)]
 fn horner<S: Simd>(simd: S, z: S::f64s, [c0, c1, c2, c3, c4]: [f64; 5]) -> S::f64s {

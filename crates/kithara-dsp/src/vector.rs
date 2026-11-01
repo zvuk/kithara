@@ -9,7 +9,7 @@ pub fn sum_squares(samples: &[f32]) -> f32 {
     platform::sum_squares(samples)
 }
 
-/// `output[i] = start + i·step`, rounded once while `i` stays below 2²⁴;
+/// `output[i] = start + i*step`, rounded once while `i` stays below 2^24;
 /// returns `output.len()`.
 pub fn ramp(output: &mut [f32], start: f32, step: f32) -> usize {
     backend::ramp(output, start, step)
@@ -21,7 +21,7 @@ pub fn div(samples: &mut [f32], divisor: f32) -> usize {
     backend::div(samples, divisor)
 }
 
-/// `samples[i] = samples[i]·scale + offset`, within 1 ulp of the exact
+/// `samples[i] = samples[i]*scale + offset`, within 1 ulp of the exact
 /// value; returns `samples.len()`.
 pub fn affine(samples: &mut [f32], scale: f32, offset: f32) -> usize {
     platform::affine(samples, scale, offset)
@@ -33,13 +33,13 @@ pub fn sub(x: &mut [f32], y: &[f32]) -> usize {
     platform::sub(x, y)
 }
 
-/// `acc[i] += x[i]·gain` over the common prefix, within 1 ulp of the exact
+/// `acc[i] += x[i]*gain` over the common prefix, within 1 ulp of the exact
 /// value; returns its length.
 pub fn scale_add(x: &[f32], gain: f32, acc: &mut [f32]) -> usize {
     platform::scale_add(x, gain, acc)
 }
 
-/// `acc[i] += x[i]·y[i]`, rounded once, over the common prefix of the three
+/// `acc[i] += x[i]*y[i]`, rounded once, over the common prefix of the three
 /// slices; returns its length.
 pub fn mul_add(x: &[f32], y: &[f32], acc: &mut [f32]) -> usize {
     backend::mul_add(x, y, acc)

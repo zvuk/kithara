@@ -127,14 +127,17 @@ async fn build_hls_abr(helper: &TestServerHelper, drm: bool, mixed_codec: bool) 
 
 async fn run_scenario(specs: Vec<TrackSpec>, actions: Vec<Action>) {
     let temp = temp_dir();
-    let mut harness = SimHarness::new(temp.path(), &specs).await;
-    harness.enter_track(0, WARMUP).await;
-    for action in actions {
-        let label = action.label();
-        tracing::debug!(action = %label, "user_sim: applying");
-        harness.apply(action).await;
-    }
-    harness.close().await;
+    let closing = {
+        let mut harness = SimHarness::new(temp.path(), &specs).await;
+        harness.enter_track(0, WARMUP).await;
+        for action in actions {
+            let label = action.label();
+            tracing::debug!(action = %label, "user_sim: applying");
+            harness.apply(action).await;
+        }
+        harness.close()
+    };
+    closing.await;
 }
 
 async fn run_single(kind: PreparedTrack, abr: AbrMode, actions: Vec<Action>) {

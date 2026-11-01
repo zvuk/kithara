@@ -1063,7 +1063,7 @@ fn affine_rounds_within_one_ulp_on_every_backend() {
                     let count = (row.affine)(region.split_at_mut(size).0, scale, offset_value);
                     let input = input.split_at(offset).1;
                     assert_prefix(
-                        &format!("{name}: ·{scale} + {offset_value}, size {size}, offset {offset}"),
+                        &format!("{name}: *{scale} + {offset_value}, size {size}, offset {offset}"),
                         count,
                         region,
                         size,
@@ -1124,7 +1124,7 @@ fn scale_add_rounds_within_one_ulp_on_every_backend() {
                     let count = (row.scale_add)(x.split_at(offset).1, gain, region);
                     let (x, acc) = (x.split_at(offset).1, acc.split_at(offset).1);
                     assert_prefix(
-                        &format!("{name}: ·{gain}, size {size}, offset {offset}"),
+                        &format!("{name}: *{gain}, size {size}, offset {offset}"),
                         count,
                         region,
                         size,
@@ -1190,7 +1190,7 @@ fn mul_add_rounds_within_one_ulp_at_every_level() {
     }
 }
 
-/// `(1 + 2⁻¹²)·(1 + 2⁻¹²) − (1 + 2⁻¹¹)` is exactly 2⁻²⁴, but the product
+/// `(1 + 2^-12)*(1 + 2^-12) - (1 + 2^-11)` is exactly 2^-24, but the product
 /// rounded alone cancels to `0.0`: a kernel that rounds the product before
 /// the add loses the whole result.
 const CANCELLING_TRIPLE: [f32; 3] = [1.000_244_1, 1.000_244_1, -1.000_488_3];
@@ -1273,7 +1273,7 @@ fn a_short_target_bounds_every_elementwise_kernel() {
 }
 
 /// Edges first, then a band just below the incoming edge where the cosine
-/// side tends to zero, then an even grid over `[−1/8, 9/8]`.
+/// side tends to zero, then an even grid over `[-1/8, 9/8]`.
 fn fade_positions() -> Vec<f32> {
     const GRID: u16 = 4_096;
     let start = 0.000_01_f32;

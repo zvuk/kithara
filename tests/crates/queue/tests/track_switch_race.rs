@@ -62,6 +62,7 @@ async fn a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched() {
             .prep(
                 ResourcePrep::builder()
                     .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+                    .block_on_underrun(true)
                     .build(),
             )
             .store(AssetStore::builder(pools()).build())

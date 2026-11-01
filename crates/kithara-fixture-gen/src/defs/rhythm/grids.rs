@@ -6,7 +6,9 @@ use kithara_analysis::{
 use kithara_test_macros as kithara;
 use num_traits::AsPrimitive;
 
-#[kithara::asset(ext = "json", content_type = "application/json", embed)]
+#[kithara::asset(
+    ext = "json", content_type = "application/json", embed, format = synthetic_grid
+)]
 #[case::default()]
 fn synthetic_grid() -> Vec<u8> {
     let spacing = 60.0 / 120.0;
@@ -15,7 +17,7 @@ fn synthetic_grid() -> Vec<u8> {
         model_id: "synthetic-rhythm".to_owned(),
         revision: 1,
         state: BeatGridState::Final,
-        duration: None,
+        duration: Some(24.0 * spacing),
         bpm: 120.0,
         beats: (0..24_u32)
             .map(|ordinal| GridBeat {

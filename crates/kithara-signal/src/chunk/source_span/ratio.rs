@@ -9,14 +9,31 @@ pub(super) struct Ratio {
     pub(super) denominator: NonZeroU128,
 }
 
-pub(super) fn divisor(mut first: u128, mut second: u128) -> u128 {
+/// Greatest common divisor by Stein's binary algorithm: `u128` has no hardware
+/// division, so shifts and subtractions replace Euclid's remainder loop.
+pub(super) fn divisor(first: u128, second: u128) -> u128 {
+    if first == 0 {
+        return second;
+    }
+    if second == 0 {
+        return first;
+    }
     if second.is_power_of_two() {
         return 1u128 << first.trailing_zeros().min(second.trailing_zeros());
     }
-    while second != 0 {
-        (first, second) = (second, first % second);
+    let shift = first.trailing_zeros().min(second.trailing_zeros());
+    let mut odd = first >> first.trailing_zeros();
+    let mut rest = second;
+    loop {
+        rest >>= rest.trailing_zeros();
+        if odd > rest {
+            (odd, rest) = (rest, odd);
+        }
+        rest -= odd;
+        if rest == 0 {
+            return odd << shift;
+        }
     }
-    first
 }
 
 fn quotient(numerator: u128, denominator: NonZeroU128) -> u128 {
@@ -189,6 +206,49 @@ mod tests {
                 assert_eq!(
                     quotient(numerator, denominator),
                     numerator / denominator.get()
+                );
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn binary_divisor_matches_euclid_across_full_width() {
+        fn euclid(mut first: u128, mut second: u128) -> u128 {
+            while second != 0 {
+                (first, second) = (second, first % second);
+            }
+            first
+        }
+        let mut values = vec![
+            0,
+            1,
+            2,
+            3,
+            44_100,
+            48_000,
+            96_000,
+            u128::from(u32::MAX),
+            u128::from(u64::MAX),
+            1 << 64,
+            (1 << 64) + 1,
+            1 << 127,
+            u128::MAX - 1,
+            u128::MAX,
+        ];
+        let mut state = 0x9E37_79B9_7F4A_7C15_F39C_C060_5CED_C834_u128;
+        for _ in 0..64 {
+            state = state
+                .wrapping_mul(0x2360_ED05_1FC6_5DA4_4385_DF64_9FCC_F645)
+                .wrapping_add(0x5851_F42D_4C95_7F2D_1405_7B7E_F767_814F);
+            values.push(state >> (state % 127));
+            values.push((state >> 96) * 44_100 * 48_000);
+        }
+        for &first in &values {
+            for &second in &values {
+                assert_eq!(
+                    divisor(first, second),
+                    euclid(first, second),
+                    "first={first}, second={second}",
                 );
             }
         }

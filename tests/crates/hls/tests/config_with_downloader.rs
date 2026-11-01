@@ -6,13 +6,16 @@ use kithara::{
     events::EventBus,
     hls::{AbrMode, Hls, HlsConfig},
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
+    platform::{
+        CancelToken,
+        time::{self, Duration},
+        tokio::task::spawn_blocking,
+    },
     stream::Stream,
 };
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    fixture_protocol::DelayRule,
     hls_server::abr_binary_ladder,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -25,22 +28,17 @@ use kithara_test_utils::{TestTempDir, temp_dir};
     hang_timeout_secs(1)
 )]
 async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_dir: TestTempDir) {
-    let ladder = abr_binary_ladder(false, Duration::ZERO).delay_rules(vec![DelayRule {
-        variant: Some(0),
-        segment_eq: Some(0),
-        delay_ms: 10,
-        ..DelayRule::default()
-    }]);
-    let hls_a = TestServerHelper::new()
-        .await
+    let helper = TestServerHelper::new().await;
+    let ladder = abr_binary_ladder(false, Duration::ZERO);
+    let hls_a = helper
         .create_hls(ladder.clone())
         .await
         .expect("create ABR ladder");
-    let hls_b = TestServerHelper::new()
-        .await
-        .create_hls(ladder)
-        .await
-        .expect("create ABR ladder");
+    let hls_b = helper.create_hls(ladder).await.expect("create ABR ladder");
+    let gates = [
+        helper.register_segment_gate(hls_a.token(), 0, 0),
+        helper.register_segment_gate(hls_b.token(), 0, 0),
+    ];
 
     let cancel = CancelToken::never();
     let pools = pools();
@@ -89,11 +87,27 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
     let mut stream_a = Stream::<Hls<TestPools>>::new(config_a).await.unwrap();
     let mut stream_b = Stream::<Hls<TestPools>>::new(config_b).await.unwrap();
 
-    // No warmup sleep: `read_all` reads to EOF via the blocking `Stream::read`,
-    // which already waits for every byte to download (the client waits for data,
-    // not a fixed delay). Both reads run concurrently on the shared downloader.
     let read_a = spawn_blocking(move || read_all(&mut stream_a));
     let read_b = spawn_blocking(move || read_all(&mut stream_b));
+    let reported = time::timeout(Duration::from_millis(250), async {
+        let mut reported = [false; 2];
+        for (events, reported) in [&mut events_a, &mut events_b]
+            .into_iter()
+            .zip(&mut reported)
+        {
+            while let Ok(envelope) = events.recv().await {
+                *reported |= matches!(envelope.event, DownloaderEvent::LoadSlow { .. });
+                if *reported {
+                    break;
+                }
+            }
+        }
+        reported
+    })
+    .await;
+    for gate in gates {
+        gate.release();
+    }
 
     let bytes_a = read_a.await.unwrap();
     let bytes_b = read_b.await.unwrap();
@@ -115,11 +129,8 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
         "shared-downloader streams produced different total byte counts",
     );
 
-    for events in [&mut events_a, &mut events_b] {
-        let mut reported = false;
-        while let Ok(envelope) = events.try_recv() {
-            reported |= matches!(envelope.event, DownloaderEvent::LoadSlow { .. });
-        }
+    for reported in reported.expect("both injected downloader observations stay within the budget")
+    {
         assert!(reported, "each stream must use the injected Downloader");
     }
 

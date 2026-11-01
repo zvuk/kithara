@@ -181,6 +181,7 @@ where
             .insert(ObservedDeck {
                 inner: queue,
                 snapshot: snapshot.clone(),
+                underruns: None,
             })
             .await
             .unwrap_or_else(|error| panic!("insert product offline queue: {error}"));

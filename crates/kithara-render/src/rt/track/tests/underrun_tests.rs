@@ -3,7 +3,11 @@ use std::num::NonZeroU32;
 
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{OutputContext, SegmentId, SessionEpoch, SessionFrame};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    kithara,
+    test::{usdt, wall_sleep},
+    wait_until_blocking,
+};
 use kithara_warp::RenderContext;
 use ringbuf::{
     HeapRb,
@@ -48,9 +52,15 @@ fn a_blocking_read_waits_for_the_lane_instead_of_underrunning() {
     )
     .expect("output range");
     let context = RenderContext::new(output, None).expect("render context");
-    // The lane publishes only after the reader has parked on the empty ring.
+    let trace = usdt::scope();
     let writer = thread::spawn_named("late-lane", move || {
-        thread::sleep(Duration::from_millis(20));
+        wait_until_blocking(
+            Duration::from_secs(1),
+            "the PCM reader enters its wait",
+            || usdt::last("pcm_wait_started").is_some(),
+        )
+        .expect("observe the actual wait before delaying its producer");
+        wall_sleep(Duration::from_millis(20));
         fixture
             .push(PcmPacket::Chunk(Box::new(chunk(
                 SegmentId::FIRST,
@@ -82,6 +92,27 @@ fn a_blocking_read_waits_for_the_lane_instead_of_underrunning() {
     assert!(received.try_pop().is_none());
     let _fixture = writer.join().expect("the late lane publishes");
     assert!(!track.resource.consumer.get().receiver.is_closed());
+    let entries = trace.events_of("pcm_wait_started");
+    let exits = trace.events_of("pcm_wait_finished");
+    let truncated = usdt::recorded().1;
+    drop(trace);
+    assert!(
+        !entries.is_empty(),
+        "a late lane must cause an observed wait"
+    );
+    assert_eq!(entries.len(), exits.len());
+    assert!(!truncated);
+    let waited: Duration = entries
+        .iter()
+        .zip(&exits)
+        .map(|(entry, exit)| {
+            assert_eq!(entry.thread, exit.thread);
+            exit.wall_time
+                .checked_duration_since(entry.wall_time)
+                .expect("the same wait uses one real monotonic clock")
+        })
+        .sum();
+    assert!(waited >= Duration::from_millis(20), "{waited:?}");
 }
 
 #[kithara::test(native, tokio)]

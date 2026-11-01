@@ -6305,6 +6305,7 @@ dependencies = [
 name = "kithara-test-utils"
 version = "0.0.1-alpha5"
 dependencies = [
+ "arrayvec",
  "axum",
  "fieldwork",
  "kithara-bufpool",

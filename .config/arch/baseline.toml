@@ -46,7 +46,6 @@ schema_version = 1
 "crates/kithara-analysis/src/beat/analyzer.rs::BeatAnalyzer::prepare_detection" = 2
 "crates/kithara-analysis/src/blob/track.rs::TrackAnalysis::try_from" = 16
 "crates/kithara-analysis/src/progress.rs::BeatResume::decode" = 4
-"crates/kithara-app/src/gui/ui/events.rs::deck_write" = 4
 "crates/kithara-beat/src/nn/inference.rs::BeatPredictor::predict" = 2
 "crates/kithara-broadcast/src/service/task.rs::BroadcastTask::process" = 3
 "crates/kithara-decode/src/android/codec.rs::AndroidCodec::read_output" = 1
@@ -75,10 +74,6 @@ schema_version = 1
 "crates/kithara-platform/src/flash/system/sched.rs::Core::try_advance_once" = 2
 "crates/kithara-record/src/live/task.rs::RecordingTask::process" = 5
 "crates/kithara-storage/src/backend/mmap/io.rs::MmapDriver::commit" = 11
-"crates/kithara-ui/src/engine/router.rs::Router::handle" = 1
-"crates/kithara-ui/src/hosts/solve/flex.rs::resolve" = 13
-"crates/kithara-ui/src/iced/tree/host.rs::Host::update" = 14
-"crates/kithara-ui/src/masonry/vis.rs::VisDeclaration::prepare" = 7
 
 [generic_param_count]
 "crates/kithara-net/src/retry.rs::RetryNet::retry_loop" = 1

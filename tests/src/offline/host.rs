@@ -19,7 +19,7 @@ use kithara::{
             atomic::{AtomicU64, Ordering},
         },
         time::{Duration, Instant},
-        tokio::sync::watch,
+        tokio::sync::{broadcast, watch},
     },
     play::{DeckPass, HostedDeck, MixTapWriter, Outbox, PlayError, PlayWorker, TrackReceipt},
     queue::Queue,
@@ -28,7 +28,7 @@ use kithara::{
 };
 use kithara_command::Refused;
 use kithara_render::{
-    bridge::{DeckSnapshot, RtMetricsSnapshot},
+    bridge::{DeckEvent, DeckSnapshot, RtMetricsSnapshot},
     rt::DeckMixerConfig,
 };
 use ringbuf::{
@@ -42,6 +42,7 @@ pub use super::render_clock::RenderClock;
 pub struct ObservedDeck<P: DeckControl> {
     pub(super) inner: P,
     pub(super) snapshot: Arc<Mutex<DeckSnapshot>>,
+    pub(super) underruns: Option<broadcast::Sender<DeckEvent>>,
 }
 
 impl<P: DeckControl> DeckControl for ObservedDeck<P> {
@@ -69,6 +70,16 @@ where
         out: &mut Outbox<'_, S>,
     ) {
         *self.snapshot.lock() = pass.deck.clone();
+        if let Some(underruns) = &self.underruns
+            && let TrackReceipt::Event(event) = &receipt
+            && matches!(
+                event,
+                DeckEvent::UnderrunStarted { .. } | DeckEvent::UnderrunEnded { .. }
+            )
+        {
+            // No subscriber means no observation was requested; lag is checked by receivers.
+            let _ = underruns.send(*event);
+        }
         self.inner.settle(receipt, pass, out);
     }
 
@@ -146,6 +157,7 @@ where
     host: OfflineHostHarness<S>,
     member: HostOwned<ObservedDeck<P>>,
     snapshot: Arc<Mutex<DeckSnapshot>>,
+    underruns: broadcast::Sender<DeckEvent>,
 }
 
 impl<P, S> OfflineResident<P, S>
@@ -170,11 +182,15 @@ where
     }
 
     async fn open(host: OfflineHostHarness<S>, player: P) -> Result<Self, PlayError> {
-        let (member, snapshot) = host.insert_observed(player).await?;
+        let (underruns, _) = broadcast::channel(kithara::events::DEFAULT_EVENT_BUS_CAPACITY);
+        let (member, snapshot) = host
+            .insert_observed_with_underruns(player, Some(underruns.clone()))
+            .await?;
         Ok(Self {
             host,
             member,
             snapshot,
+            underruns,
         })
     }
 
@@ -184,6 +200,11 @@ where
 
     pub fn deck_snapshot(&self) -> DeckSnapshot {
         self.snapshot.lock().clone()
+    }
+
+    /// Observes complete mixer underrun edges before facade event translation.
+    pub fn subscribe_underruns(&self) -> broadcast::Receiver<DeckEvent> {
+        self.underruns.subscribe()
     }
 
     pub fn metrics(&self) -> RtMetricsSnapshot {
@@ -222,7 +243,9 @@ where
             host,
             member,
             snapshot,
+            underruns,
         } = self;
+        drop(underruns);
         drop(snapshot);
         drop(member);
         let _real_io = kithara::platform::flash::real_io();
@@ -621,6 +644,38 @@ impl TapProbe {
         self.pcm.pop_iter().collect()
     }
 
+    /// Drains a delivered batch into preallocated storage, rejecting incomplete PCM.
+    pub(crate) fn drain_exact_into(
+        &mut self,
+        samples: &mut Vec<f32>,
+        frames: u64,
+        channels: u16,
+    ) -> Result<(), String> {
+        let start = samples.len();
+        samples.extend(self.pcm.pop_iter());
+        let expected = usize::try_from(frames)
+            .expect("batch frames fit usize")
+            .checked_mul(usize::from(channels))
+            .expect("batch samples fit usize");
+        assert!(channels > 0, "capture channels must be non-zero");
+        let drops = self.drops();
+        if drops != 0 {
+            return Err(format!(
+                "Output tap lost samples: observed {drops}, expected 0"
+            ));
+        }
+        let captured = samples.len() - start;
+        if captured != expected {
+            return Err(format!(
+                "Output tap captures every delivered channel: captured {captured}, expected {expected}"
+            ));
+        }
+        if samples[start..].iter().any(|sample| !sample.is_finite()) {
+            return Err("non-finite Output PCM".to_owned());
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn drops(&self) -> u64 {
         self.drops.load(Ordering::Relaxed)
@@ -693,11 +748,24 @@ where
         P: DeckControl + HostedDeck<S> + MaybeSend + 'static,
         P::Control: MaybeSend,
     {
+        self.insert_observed_with_underruns(player, None).await
+    }
+
+    async fn insert_observed_with_underruns<P>(
+        &self,
+        player: P,
+        underruns: Option<broadcast::Sender<DeckEvent>>,
+    ) -> Result<(HostOwned<ObservedDeck<P>>, Arc<Mutex<DeckSnapshot>>), PlayError>
+    where
+        P: DeckControl + HostedDeck<S> + MaybeSend + 'static,
+        P::Control: MaybeSend,
+    {
         let snapshot = Arc::new(Mutex::new(DeckSnapshot::default()));
         let member = self
             .insert(ObservedDeck {
                 inner: player,
                 snapshot: snapshot.clone(),
+                underruns,
             })
             .await?;
         Ok((member, snapshot))
@@ -711,5 +779,73 @@ where
         self.insert(player)
             .await
             .map(|owned| owned.control().clone())
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use ringbuf::traits::Producer;
+
+    use super::*;
+
+    #[kithara_test_utils::kithara::test(native)]
+    fn output_capture_preserves_all_channels_and_empty_tail() {
+        let (mut writer, pcm) = HeapRb::<f32>::new(4).split();
+        let input = [0.0_f32, -0.0, 0.25, -0.5];
+        assert_eq!(writer.push_slice(&input), input.len());
+        let mut tap = TapProbe {
+            drops: Arc::new(AtomicU64::new(0)),
+            pcm,
+        };
+        let mut captured = Vec::with_capacity(input.len());
+        tap.drain_exact_into(&mut captured, 2, 2)
+            .expect("complete Output PCM");
+        tap.drain_exact_into(&mut captured, 0, 2)
+            .expect("empty Output tail");
+        assert_eq!(
+            captured
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            input.map(f32::to_bits)
+        );
+        assert!(tap.writer_alive());
+        drop(writer);
+        assert!(!tap.writer_alive());
+    }
+
+    #[kithara_test_utils::kithara::test(native)]
+    fn output_capture_rejects_missing_extra_dropped_and_nonfinite_samples() {
+        for (input, drops, expected) in [
+            (
+                vec![0.0_f32],
+                0,
+                "Output tap captures every delivered channel: captured 1, expected 2",
+            ),
+            (
+                vec![0.0, 0.0, 0.0],
+                0,
+                "Output tap captures every delivered channel: captured 3, expected 2",
+            ),
+            (
+                vec![0.0, 0.0],
+                1,
+                "Output tap lost samples: observed 1, expected 0",
+            ),
+            (vec![0.0, f32::NAN], 0, "non-finite Output PCM"),
+            (vec![f32::INFINITY, 0.0], 0, "non-finite Output PCM"),
+        ] {
+            let (mut writer, pcm) = HeapRb::<f32>::new(4).split();
+            assert_eq!(writer.push_slice(&input), input.len());
+            let mut tap = TapProbe {
+                drops: Arc::new(AtomicU64::new(drops)),
+                pcm,
+            };
+            assert_eq!(
+                tap.drain_exact_into(&mut Vec::with_capacity(4), 1, 2)
+                    .expect_err("invalid capture must not become a passing witness"),
+                expected
+            );
+        }
     }
 }

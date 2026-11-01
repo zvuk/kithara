@@ -232,7 +232,9 @@ impl PcmReceiver {
             self.wake.wake();
             let _real_io = kithara_platform::flash::real_io();
             hang_park!(|remaining| {
+                kithara::probe_event!(pcm_wait_started);
                 ready.wait_timeout(since, remaining);
+                kithara::probe_event!(pcm_wait_finished);
             });
         }
     }

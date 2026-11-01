@@ -25,7 +25,7 @@ where
     use kithara_mpa::MpaReader;
     use symphonia_core::{
         formats::FormatOptions,
-        io::{MediaSourceStream, MediaSourceStreamOptions, ReadBytes},
+        io::{MediaSourceStream, ReadBytes},
     };
 
     use crate::{
@@ -58,7 +58,7 @@ where
     };
     let byte_len_handle = adapter.byte_len_handle();
     let byte_pos_handle = adapter.byte_pos_handle();
-    let mut stream = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
+    let mut stream = MediaSourceStream::from(adapter);
     if container != Some(ContainerFormat::Wav) {
         stream
             .ignore_bytes(audio_start)

@@ -369,6 +369,7 @@ apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 arbitrary = { version = "1", features = ["derive"] }
 
 arc-swap = "1.9"
+arrayvec = "0.7"
 
 # memory profiling
 assert_no_alloc = "1.1"

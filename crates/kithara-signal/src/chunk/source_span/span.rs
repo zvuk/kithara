@@ -169,12 +169,23 @@ impl SourceSpan {
         output_origin: u64,
         position: (u128, NonZeroU128),
     ) -> Option<(u128, NonZeroU128)> {
-        let (origin, step) = self.affine_basis()?;
-        let inverse = Affine::new(
-            origin,
-            Ratio::new(u128::from(output_origin), NonZeroU128::MIN)?,
-            Ratio::new(step.denominator.get(), NonZeroU128::new(step.numerator)?)?,
-        )?;
+        let Mapping::Rational(Rational {
+            numerator,
+            denominator,
+            step,
+            step_change: 0,
+        }) = self.mapping
+        else {
+            return None;
+        };
+        let step = NonZeroU128::new(step)?;
+        let inverse = Affine {
+            scale: Ratio::new(denominator.get(), step)?,
+            offset: Offset::difference(
+                Ratio::new(u128::from(output_origin), NonZeroU128::MIN)?,
+                Ratio::new(numerator, step)?,
+            )?,
+        };
         let position = inverse.apply(Ratio::new(position.0, position.1)?)?;
         Some((position.numerator, position.denominator))
     }
@@ -490,6 +501,219 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    fn original_output_ratio_at_source(
+        span: SourceSpan,
+        output_origin: u64,
+        position: (u128, NonZeroU128),
+    ) -> Option<(u128, NonZeroU128)> {
+        let Mapping::Rational(Rational {
+            numerator,
+            denominator,
+            step,
+            step_change: 0,
+        }) = span.mapping
+        else {
+            return None;
+        };
+        let origin = Ratio::new(numerator, denominator)?;
+        let step = Ratio::new(step, denominator)?;
+        let inverse = Affine::new(
+            origin,
+            Ratio::new(u128::from(output_origin), NonZeroU128::MIN)?,
+            Ratio::new(step.denominator.get(), NonZeroU128::new(step.numerator)?)?,
+        )?;
+        let position = inverse.apply(Ratio::new(position.0, position.1)?)?;
+        Some((position.numerator, position.denominator))
+    }
+
+    #[kithara::test]
+    fn affine_inverse_matches_original_full_width_arithmetic() {
+        let values = [
+            0,
+            1,
+            2,
+            3,
+            6,
+            u128::from(u64::MAX),
+            1 << 64,
+            1 << 127,
+            u128::MAX - 1,
+            u128::MAX,
+        ];
+        let denominators = values[1..]
+            .iter()
+            .map(|&value| NonZeroU128::new(value).expect("positive denominator"))
+            .collect::<Vec<_>>();
+        for numerator in values {
+            for &denominator in &denominators {
+                for step in values {
+                    let span = SourceSpan {
+                        sample_rate: NonZeroU32::new(48_000).expect("rate"),
+                        mapping_revision: None,
+                        mapping: Mapping::Rational(Rational {
+                            numerator,
+                            denominator,
+                            step,
+                            step_change: 0,
+                        }),
+                        output_frames: 1,
+                        render_revision: 0,
+                    };
+                    if let Some(step) = NonZeroU128::new(step) {
+                        let origin = Ratio::new(numerator, denominator).expect("origin");
+                        let advance = Ratio::new(step.get(), denominator).expect("advance");
+                        let reciprocal = Ratio::new(
+                            advance.denominator.get(),
+                            NonZeroU128::new(advance.numerator).expect("positive advance"),
+                        )
+                        .expect("reciprocal");
+                        assert_eq!(origin.mul(reciprocal), Ratio::new(numerator, step));
+                    }
+                    for output_origin in [0, u64::MAX] {
+                        for position_numerator in values {
+                            for &position_denominator in &denominators {
+                                let position = (position_numerator, position_denominator);
+                                assert_eq!(
+                                    span.output_ratio_at_source(output_origin, position),
+                                    original_output_ratio_at_source(span, output_origin, position),
+                                    "span={span:?}, output_origin={output_origin}, position={position:?}",
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn affine_inverse_preserves_exact_offsets_and_overflow_refusals() {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        for (numerator, step, denominator, output_origin, position, expected) in [
+            (1, 2, 2, 3, (9, 2), Some((7, 1))),
+            (10, 2, 1, 0, (12, 1), Some((1, 1))),
+            (10, 2, 1, 7, (0, 1), Some((2, 1))),
+            (10, 2, 1, 5, (0, 1), Some((0, 1))),
+            (10, 2, 1, 0, (0, 1), None),
+            (0, 3, 6, 0, (1, 4), Some((1, 2))),
+            (
+                0,
+                u128::MAX,
+                u128::MAX,
+                0,
+                (u128::MAX, 1),
+                Some((u128::MAX, 1)),
+            ),
+            (u128::MAX, u128::MAX, u128::MAX, 0, (2, 1), Some((1, 1))),
+            (u128::MAX - 1, 1, u128::MAX, 0, (1, 1), Some((1, 1))),
+            (0, 1, u128::MAX, 0, (2, 1), None),
+            (1, u128::MAX, 1, u64::MAX, (0, 1), None),
+            (1, u128::MAX, 1, u64::MAX, (1, 1), None),
+            (u128::MAX - 1, 1, u128::MAX - 1, 0, (2, 1), None),
+            (0, 2, 1, 0, (1, u128::MAX), None),
+            (0, 1, 1, u64::MAX, (u128::MAX, 1), None),
+            (0, 1, 1, u64::MAX, (0, 1), Some((u128::from(u64::MAX), 1))),
+            (0, 0, 1, 0, (0, 1), None),
+        ] {
+            let span = SourceSpan {
+                sample_rate: rate,
+                mapping_revision: None,
+                mapping: Mapping::Rational(Rational {
+                    numerator,
+                    denominator: NonZeroU128::new(denominator).expect("denominator"),
+                    step,
+                    step_change: 0,
+                }),
+                output_frames: 1,
+                render_revision: 0,
+            };
+            let position = (
+                position.0,
+                NonZeroU128::new(position.1).expect("position denominator"),
+            );
+            let expected = expected.map(|(numerator, denominator)| {
+                (
+                    numerator,
+                    NonZeroU128::new(denominator).expect("expected denominator"),
+                )
+            });
+            assert_eq!(
+                span.output_ratio_at_source(output_origin, position),
+                expected
+            );
+            assert_eq!(
+                original_output_ratio_at_source(span, output_origin, position),
+                expected,
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn admitted_affine_spans_preserve_intermediate_overflow_refusals() {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        for (numerator, step, denominator, output_origin, position) in [
+            (1, u128::MAX - 1, u128::MAX, 2, (1, u128::MAX)),
+            (u128::MAX - 2, 1, u128::MAX - 1, 0, (3, 2)),
+        ] {
+            let span = SourceSpan::try_from((
+                numerator,
+                step,
+                NonZeroU128::new(denominator).expect("denominator"),
+                rate,
+                1,
+            ))
+            .expect("valid one-frame span");
+            let position = (
+                position.0,
+                NonZeroU128::new(position.1).expect("position denominator"),
+            );
+            assert_eq!(span.output_ratio_at_source(output_origin, position), None);
+            assert_eq!(
+                original_output_ratio_at_source(span, output_origin, position),
+                None,
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn inverse_rejects_nonlinear_and_invalid_source_geometry() {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let ramp = SourceSpan::try_from((0, 1, 1, NonZeroU128::MIN, rate, 2)).expect("ramp");
+        let approach = SourceSpan::approaching(
+            0,
+            NonZeroU128::MIN,
+            ExponentialApproach::new(1.0, 0.9, 240.0).expect("curve"),
+            0,
+            rate,
+            2,
+        )
+        .expect("approach");
+        let zero = SourceSpan::try_from((0, 0, NonZeroU128::MIN, rate, 1)).expect("zero step");
+        for span in [
+            ramp,
+            approach,
+            zero,
+            ramp.for_output_range(1..1).expect("point"),
+        ] {
+            for output_origin in [0, u64::MAX] {
+                let position = (
+                    u128::MAX,
+                    NonZeroU128::new(u128::MAX - 1).expect("denominator"),
+                );
+                assert_eq!(span.output_ratio_at_source(output_origin, position), None);
+                assert_eq!(
+                    original_output_ratio_at_source(span, output_origin, position),
+                    None,
+                );
+            }
+        }
+        assert!(SourceSpan::try_from((u128::MAX, 1, NonZeroU128::MIN, rate, 1)).is_err());
+        let mut malformed: [u64; 24] = zero.into();
+        malformed[8] = 0;
+        malformed[9] = 0;
+        assert!(SourceSpan::try_from(malformed).is_err());
+    }
 
     #[kithara::test]
     fn native_geometry_telemetry_keeps_fractional_and_analytic_bases() {

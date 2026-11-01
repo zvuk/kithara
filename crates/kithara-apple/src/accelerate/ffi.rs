@@ -163,7 +163,7 @@ unsafe extern "C" {
         n: VdspLength,
     );
 
-    /// `c = a − b`, with the subtrahend first, as vDSP declares it.
+    /// `c = a - b`, with the subtrahend first, as vDSP declares it.
     pub(super) fn vDSP_vsub(
         b: *const f32,
         ib: VdspStride,

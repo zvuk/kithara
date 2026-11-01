@@ -1,28 +1,43 @@
-use std::path::Path;
+use std::{
+    collections::BTreeMap,
+    env,
+    path::{Path, PathBuf},
+};
 
 use ::kithara::{
     abr::{AbrHandle, AbrMode},
     audio::{AudioEvent, SeekLifecycleStage},
     bufpool::HasPool,
     decode::DecoderBackend,
-    events::{EventReceiver, TrackId},
+    events::{BusEvent, EventReceiver, EventSet, TrackId},
+    file::FileReaderEvent,
+    hls::DrmEvent,
+    host::Tap,
     platform::{
         time::{Duration, sleep, timeout},
         tokio::{
             self,
-            sync::broadcast::error::{RecvError, TryRecvError},
+            sync::broadcast::{
+                self,
+                error::{RecvError, TryRecvError},
+            },
         },
     },
     play::{ResourceConfig, ResourceSrc},
     queue::{QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
+    signal::AudioSpec,
 };
+use kithara_render::bridge::{DeckEvent, RtMetricsSnapshot};
 use kithara_test_utils::kithara;
+use serde_json::{Value, json};
 use url::Url;
 
 use crate::{
+    audio_artifact::{AudioArtifactSet, artifact_label, audio_artifact_path},
     bufpool_ext::TestPools,
     event::TestEvent,
-    offline::{DiskQueue, RenderPacing},
+    offline::{DiskQueue, RenderPacing, TapProbe},
+    usdt_trace,
     user_sim::actions::Action,
 };
 
@@ -65,6 +80,207 @@ pub struct SimHarness {
     /// `SetQuality` action compares the codec before and after the
     /// switch to catch cross-codec recreate regressions.
     last_known_codec: Option<String>,
+    capture: Option<SimCapture>,
+    _capture_trace: Option<usdt_trace::Scope>,
+}
+
+struct SimCapture {
+    root: PathBuf,
+    label: String,
+    spec: AudioSpec,
+    tap: TapProbe,
+    underruns: broadcast::Receiver<DeckEvent>,
+    events: EventReceiver<TestEvent>,
+    source_topics: EventReceiver<CaptureSourceEvent>,
+    pcm: Vec<f32>,
+    batches: Vec<Value>,
+    markers: Vec<Value>,
+    underrun_edges: Vec<DeckEvent>,
+    source_events: Vec<String>,
+    metrics_start: RtMetricsSnapshot,
+    delivered: u64,
+}
+
+#[derive(Clone, Debug, EventSet)]
+enum CaptureSourceEvent {
+    Drm(DrmEvent),
+    FileReader(FileReaderEvent),
+}
+
+fn drain_source_topics(
+    receiver: &mut EventReceiver<CaptureSourceEvent>,
+    envelopes: &mut Vec<String>,
+    closed: bool,
+) -> Result<(), TryRecvError> {
+    loop {
+        match receiver.try_recv() {
+            Ok(envelope) => envelopes.push(format!("{envelope:?}")),
+            Err(TryRecvError::Empty) => return Ok(()),
+            Err(TryRecvError::Closed) if closed => return Ok(()),
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn metrics_value(metrics: RtMetricsSnapshot) -> Value {
+    json!({
+        "decode_errors": metrics.decode_errors(), "evicted_playing": metrics.evicted_playing(),
+        "event_overflows": metrics.event_overflows(), "underruns": metrics.underruns(),
+    })
+}
+
+impl SimCapture {
+    fn drain(&mut self, rendered: u64, cursor: u64, metrics: RtMetricsSnapshot, closed: bool) {
+        self.tap
+            .drain_exact_into(&mut self.pcm, rendered, self.spec.channels)
+            .expect("complete Output PCM");
+        self.delivered = self
+            .delivered
+            .checked_add(rendered)
+            .expect("capture frame count");
+        assert_eq!(
+            self.tap.writer_alive(),
+            !closed,
+            "Output tap writer lifetime"
+        );
+        assert_eq!(
+            u64::try_from(self.pcm.len() / usize::from(self.spec.channels))
+                .expect("capture frames"),
+            self.delivered
+        );
+        assert_eq!(
+            metrics.event_overflows(),
+            self.metrics_start.event_overflows(),
+            "mixer event overflow invalidates observation"
+        );
+        loop {
+            match self.underruns.try_recv() {
+                Ok(event) => self.underrun_edges.push(event),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Closed) if closed => break,
+                Err(error) => panic!("incomplete mixer underrun observation: {error}"),
+            }
+        }
+        loop {
+            match self.events.try_recv() {
+                Ok(event) => {
+                    assert!(
+                        !matches!(event.event, TestEvent::Bus(BusEvent::Overflow { .. })),
+                        "source event bus overflow"
+                    );
+                    self.source_events.push(format!("{event:?}"));
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Closed) if closed => break,
+                Err(error) => panic!("incomplete source event observation: {error}"),
+            }
+        }
+        drain_source_topics(&mut self.source_topics, &mut self.source_events, closed)
+            .unwrap_or_else(|error| panic!("incomplete DRM/file-reader observation: {error}"));
+        self.batches.push(json!({
+            "delivered_frames": rendered, "session_cursor": cursor,
+            "capture_frames": self.delivered, "metrics": metrics_value(metrics),
+        }));
+    }
+
+    fn persist(
+        self,
+        metrics_end: RtMetricsSnapshot,
+        probes: Vec<usdt_trace::ProbeEvent>,
+        truncated: bool,
+        wait_counts: [usize; 2],
+    ) {
+        let set = AudioArtifactSet::new(
+            &self.root,
+            &self.label,
+            self.spec.sample_rate.get(),
+            self.spec.channels,
+        )
+        .expect("user simulation artifact set");
+        let mut recording = set
+            .recording("output", Some(self.delivered))
+            .expect("complete Output recording");
+        recording
+            .push(&self.pcm)
+            .expect("record every captured sample");
+        let output =
+            AudioArtifactSet::finish(recording).expect("publish complete Output recording");
+        let output = audio_artifact_path(&output).expect("Output artifact path");
+        let probe_epoch = probes.iter().map(|event| event.wall_time).min();
+        let probes = probes
+            .into_iter()
+            .map(|event| {
+                json!({
+                    "probe": event.probe, "target": event.target,
+                    "file": event.file, "line": event.line, "thread": format!("{:?}", event.thread),
+                    "fields": event.fields().collect::<BTreeMap<_, _>>(),
+                    "wall_ns": u64::try_from(event.wall_time.duration_since(
+                        probe_epoch.expect("a retained event has an epoch"),
+                    ).as_nanos()).expect("probe observation fits nanoseconds"),
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut open_underruns = BTreeMap::new();
+        let mut starts = 0_u64;
+        let underruns = self.underrun_edges.iter().map(|event| match event {
+            DeckEvent::UnderrunStarted { slot, item, at, position } => {
+                assert!(open_underruns.insert((*slot, *item), *at).is_none(), "duplicate underrun start");
+                starts += 1;
+                json!({
+                "kind": "UnderrunStarted", "slot": slot.get(), "item": u64::from(*item),
+                "session_frame": i64::from(*at), "position": position.map(|value| value.as_secs_f64()),
+                })
+            }
+            DeckEvent::UnderrunEnded { slot, item, at, position, frames, recovered } => {
+                let start = open_underruns.remove(&(*slot, *item)).expect("underrun end has its observed start");
+                json!({
+                "kind": "UnderrunEnded", "slot": slot.get(), "item": u64::from(*item),
+                "session_frame": i64::from(*at), "position": position.map(|value| value.as_secs_f64()),
+                "frames": frames, "recovered": recovered, "start_session_frame": i64::from(start),
+                })
+            }
+            _ => unreachable!("only underrun edges are subscribed"),
+        }).collect::<Vec<_>>();
+        let underruns_delta = metrics_end
+            .underruns()
+            .checked_sub(self.metrics_start.underruns())
+            .expect("the same mixer's underrun count is monotonic");
+        assert_eq!(
+            starts, underruns_delta,
+            "current underrun edges agree with the owner counter"
+        );
+        let open_underruns = open_underruns.into_iter().map(|((slot, item), at)| json!({
+            "slot": slot.get(), "item": u64::from(item), "start_session_frame": i64::from(at),
+        })).collect::<Vec<_>>();
+        let manifest = json!({
+            "case": self.label, "frames": self.delivered, "channels": self.spec.channels,
+            "sample_rate": self.spec.sample_rate.get(), "output": output,
+            "render_observation_complete": true, "teardown_complete": true,
+            "persistence": "after render observation and original teardown",
+            "batches": self.batches, "markers": self.markers, "source_events": self.source_events,
+            "source_topics": ["TestEvent members", "DrmEvent", "FileReaderEvent"],
+            "source_event_order": "per-topic order; envelope seq retains publication order across topics",
+            "metrics_start": metrics_value(self.metrics_start), "metrics_at_render_end": metrics_value(metrics_end),
+            "metrics_boundary": "last completed render, before original teardown; not post-destruction live metrics",
+            "underruns_delta": underruns_delta,
+            "event_overflows_delta": metrics_end.event_overflows().checked_sub(self.metrics_start.event_overflows()),
+            "current_underrun_edges": underruns, "probes": probes, "probes_truncated": truncated,
+            "underrun_intervals_complete": open_underruns.is_empty(), "open_underruns": open_underruns,
+            "producer_wait_evidence": {
+                "schema_version": 1, "status": "recorded_unvalidated",
+                "clock": "kithara_platform::time::WallInstant",
+                "epoch": "earliest retained probe; timestamps are relative nanoseconds",
+                "entry_count": wait_counts[0], "exit_count": wait_counts[1],
+            },
+            "legacy_pcm_underrun_ledger": "not used: no current emitter",
+        });
+        let manifest = set
+            .write_manifest(&manifest)
+            .expect("publish UserSim capture manifest");
+        let manifest = audio_artifact_path(&manifest).expect("UserSim manifest path");
+        set.append_index(&manifest, Some(&output), None)
+            .expect("index UserSim capture");
+    }
 }
 
 /// Single owned URL+backend descriptor used to populate the queue.
@@ -112,6 +328,46 @@ impl SimHarness {
             .open()
             .await;
         let queue = rig.queue.control();
+        let capture = if let Some(root) = env::var_os("KITHARA_AUDIO_ARTIFACT_DIR") {
+            let root = PathBuf::from(root);
+            assert!(
+                root.is_absolute(),
+                "audio artifact directory must be absolute"
+            );
+            let spec = rig.queue.host().spec().await;
+            let batch = usize::try_from(
+                u64::from(rig.queue.host().max_block_frames().get()) * RENDER_BATCH_BLOCKS,
+            )
+            .expect("render batch frames fit usize");
+            let capacity = batch
+                .checked_mul(usize::from(spec.channels))
+                .expect("tap capacity");
+            let tap = rig
+                .queue
+                .host()
+                .attach_tap(Tap::Output, capacity)
+                .await
+                .expect("observe all Output PCM before warmup");
+            Some(SimCapture {
+                root,
+                label: artifact_label(),
+                spec,
+                tap,
+                underruns: rig.queue.subscribe_underruns(),
+                events: queue.subscribe(),
+                source_topics: queue.subscribe(),
+                pcm: Vec::new(),
+                batches: Vec::new(),
+                markers: Vec::new(),
+                underrun_edges: Vec::new(),
+                source_events: Vec::new(),
+                metrics_start: rig.queue.metrics(),
+                delivered: 0,
+            })
+        } else {
+            None
+        };
+        let capture_trace = capture.as_ref().map(|_| usdt_trace::scope());
 
         let mut track_ids = Vec::with_capacity(specs.len());
         for spec in specs {
@@ -146,6 +402,8 @@ impl SimHarness {
             rig,
             track_ids,
             last_known_codec: None,
+            capture,
+            _capture_trace: capture_trace,
         }
     }
 
@@ -168,37 +426,66 @@ impl SimHarness {
     /// advanced by — the queue's cached position only moves inside `tick`.
     #[kithara::flash(io)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
-    async fn render_step(&self) -> u64 {
+    async fn render_step(&mut self) -> u64 {
         let batch = u64::from(self.rig.queue.host().max_block_frames().get())
             .saturating_mul(RENDER_BATCH_BLOCKS);
-        let step = async {
-            tracing::debug!(
-                batch,
-                cursor = self.rig.queue.host().position(),
-                "user simulation render batch submitted"
-            );
-            let rendered = self.rig.queue.host().render_forward(batch).await;
-            tracing::debug!(
-                rendered,
-                "user simulation render batch complete; queue tick submitted"
-            );
-            let _ = self.run(QueueControl::tick).await;
-            tracing::debug!("user simulation queue tick complete");
-            rendered
-        };
-        tokio::pin!(step);
-        loop {
-            hang_tick!(format!(
-                "user simulation renders track {:?}",
-                self.current_track_id()
-            ));
-            tokio::select! {
-                rendered = &mut step => {
-                    hang_reset!();
-                    return rendered;
+        if let Some(capture) = self.capture.as_mut() {
+            let samples = usize::try_from(batch)
+                .expect("render batch frames")
+                .checked_mul(usize::from(capture.spec.channels))
+                .expect("render batch samples");
+            capture.pcm.reserve(samples);
+        }
+        let rendered = {
+            let step = async {
+                tracing::debug!(
+                    batch,
+                    cursor = self.rig.queue.host().position(),
+                    "user simulation render batch submitted"
+                );
+                let rendered = self.rig.queue.host().render_forward(batch).await;
+                tracing::debug!(
+                    rendered,
+                    "user simulation render batch complete; queue tick submitted"
+                );
+                let _ = self.run(QueueControl::tick).await;
+                tracing::debug!("user simulation queue tick complete");
+                rendered
+            };
+            tokio::pin!(step);
+            loop {
+                hang_tick!(format!(
+                    "user simulation renders track {:?}",
+                    self.current_track_id()
+                ));
+                tokio::select! {
+                    rendered = &mut step => {
+                        hang_reset!();
+                        break rendered;
+                    }
+                    () = sleep(Duration::from_millis(100).min(__hang_detector.remaining())) => {}
                 }
-                () = sleep(Duration::from_millis(100).min(__hang_detector.remaining())) => {}
             }
+        };
+        if let Some(capture) = self.capture.as_mut() {
+            capture.drain(
+                rendered,
+                self.rig.queue.host().position(),
+                self.rig.queue.metrics(),
+                false,
+            );
+        }
+        rendered
+    }
+
+    fn mark_capture(&mut self, label: &str) {
+        if let Some(capture) = self.capture.as_mut() {
+            capture.markers.push(json!({
+                "label": label, "frame": capture.delivered,
+                "session_cursor": self.rig.queue.host().position(),
+                "track": self.queue.current().map(|track| u64::from(track.id)),
+                "position_seconds": self.queue.position_seconds(),
+            }));
         }
     }
 
@@ -206,7 +493,7 @@ impl SimHarness {
     /// of them. Returns whether it landed.
     #[kithara::flash(io)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
-    async fn render_until(&self, turns: u32, mut done: impl FnMut(&Self) -> bool) -> bool {
+    async fn render_until(&mut self, turns: u32, mut done: impl FnMut(&Self) -> bool) -> bool {
         let mut observed = (self.current_track_id(), self.position(), self.is_playing());
         for _ in 0..turns {
             hang_tick!(format!("user simulation awaits state after {observed:?}"));
@@ -249,6 +536,9 @@ impl SimHarness {
     /// Loaded, play for `warmup` so the audio worker is past initial
     /// pre-roll, then snapshot the codec so `SetQuality` has a baseline.
     pub async fn enter_track(&mut self, idx: usize, warmup: Duration) {
+        self.mark_capture(&format!(
+            "enter_track({idx}) before select; warmup={warmup:?}"
+        ));
         let id = self.track_ids[idx];
         self.run(move |queue| queue.select(id, Transition::None))
             .await
@@ -270,6 +560,7 @@ impl SimHarness {
         );
 
         self.last_known_codec = self.current_codec();
+        self.mark_capture(&format!("enter_track({idx}) warmup complete"));
     }
 
     /// Apply one user-simulation action and assert the four invariants
@@ -277,6 +568,8 @@ impl SimHarness {
     /// on spurious auto-advance, and on quality-switch cross-codec
     /// recreate — that's what gives the bug repros their teeth.
     pub async fn apply(&mut self, action: Action) {
+        let label = action.label();
+        self.mark_capture(&format!("{label} started"));
         tracing::debug!(action = %action.label(), "user simulation action started");
         match action {
             Action::SeekRatio(r) => self.do_seek(r, false).await,
@@ -288,12 +581,16 @@ impl SimHarness {
             Action::Resume => self.do_resume().await,
             Action::RenderFor(d) => self.do_render_for(d).await,
         }
+        self.mark_capture(&format!("{label} completed"));
     }
 
     /// Wait for any in-flight seek to settle, then assert the queue is
     /// at a sane terminal state for the scenario. Used as the final
     /// step in scripted scenarios.
-    pub async fn close(self) {
+    pub async fn close(mut self) {
+        self.mark_capture("render observation ended; original teardown begins");
+        let metrics_end = self.rig.queue.metrics();
+        let cursor = self.rig.queue.host().position();
         let Self {
             queue,
             rig:
@@ -303,6 +600,8 @@ impl SimHarness {
                     store,
                     mut ticker,
                 },
+            mut capture,
+            _capture_trace: capture_trace,
             ..
         } = self;
         ticker.stop().await;
@@ -310,6 +609,21 @@ impl SimHarness {
         queue_owner.close().await;
         drop(downloader);
         drop(store);
+        if let Some(mut capture) = capture.take() {
+            capture.drain(0, cursor, metrics_end, true);
+            let (probes, truncated) = usdt_trace::recorded();
+            assert!(!truncated, "probe history overflow invalidates observation");
+            let wait_counts = [
+                usdt_trace::count("pcm_wait_started"),
+                usdt_trace::count("pcm_wait_finished"),
+            ];
+            drop(capture_trace);
+            tokio::task::spawn_blocking(move || {
+                capture.persist(metrics_end, probes, truncated, wait_counts);
+            })
+            .await
+            .expect("UserSim artifact persistence completes");
+        }
     }
 
     fn current_codec(&self) -> Option<String> {
@@ -894,4 +1208,81 @@ where
                 queue.position_seconds()
             )
         })
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use ::kithara::{events::EventBus, hls::KeySource};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test(native)]
+    fn source_capture_subscribes_to_drm_and_reader_topics_with_envelopes() {
+        let bus = EventBus::new(4);
+        let mut receiver = bus.subscribe::<CaptureSourceEvent>();
+        bus.publish(DrmEvent::KeyAcquired {
+            key_host: Some("fixture.test".to_owned()),
+            source: KeySource::MemCache,
+            bytes: 16,
+            latency_ms: None,
+        });
+        bus.publish(FileReaderEvent::ReaderSeek {
+            from_offset: 7,
+            to_offset: 11,
+        });
+        let mut envelopes = Vec::new();
+        drain_source_topics(&mut receiver, &mut envelopes, false).expect("complete source topics");
+        assert_eq!(
+            envelopes.len(),
+            2,
+            "neither source topic may be silently unsubscribed"
+        );
+        assert!(
+            envelopes
+                .iter()
+                .any(|event| event.contains("Drm(KeyAcquired") && event.contains("seq: 0"))
+        );
+        assert!(
+            envelopes
+                .iter()
+                .any(|event| event.contains("FileReader(ReaderSeek") && event.contains("seq: 1"))
+        );
+        assert!(
+            envelopes
+                .iter()
+                .all(|event| event.contains(&format!("origin: {}", bus.id()))
+                    && event.contains("ts_micros:"))
+        );
+    }
+
+    #[kithara::test(native)]
+    fn source_capture_rejects_loss_on_each_additional_topic() {
+        for drm in [true, false] {
+            let bus = EventBus::new(1);
+            let mut receiver = bus.subscribe::<CaptureSourceEvent>();
+            for _ in 0..3 {
+                if drm {
+                    bus.publish(DrmEvent::KeyAcquired {
+                        key_host: None,
+                        source: KeySource::MemCache,
+                        bytes: 16,
+                        latency_ms: None,
+                    });
+                } else {
+                    bus.publish(FileReaderEvent::ReadProgress {
+                        position: 7,
+                        total: Some(11),
+                    });
+                }
+            }
+            assert!(
+                matches!(
+                    drain_source_topics(&mut receiver, &mut Vec::new(), false),
+                    Err(TryRecvError::Lagged(lost)) if lost > 0
+                ),
+                "a lost source topic must reject the witness"
+            );
+        }
+    }
 }

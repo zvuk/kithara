@@ -305,8 +305,14 @@ where
             self.retire(packet);
             hang_reset!();
         }
-        self.port.playing.read();
-        let _ = self.source.prepare_deferred();
+        let playing = *self.port.playing.read();
+        let ready_pcm = matches!(
+            self.pending.as_ref().map(|pending| &pending.packet),
+            Some(PcmPacket::Chunk(chunk)) if chunk.frames() > 0
+        );
+        if !ready_pcm || !playing || self.cancel.as_ref().is_some_and(CancelToken::is_cancelled) {
+            let _ = self.source.prepare_deferred();
+        }
         self.source.finish_deferred();
         self.port.flush();
     }

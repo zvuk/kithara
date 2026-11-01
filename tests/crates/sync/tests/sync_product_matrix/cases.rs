@@ -45,7 +45,7 @@ fn prepared_synthetic_grid_preserves_the_authored_score() {
     assert_eq!(raw.model_id, "synthetic-rhythm");
     assert_eq!(raw.revision, 1);
     assert_eq!(raw.state, BeatGridState::Final);
-    assert_eq!(raw.duration, None);
+    assert_eq!(raw.duration, Some(12.0));
     assert_eq!(raw.bpm, START_BPM);
     assert_eq!(raw.beats.len(), SYNTHETIC_BEATS as usize);
     for (beat, ordinal) in raw.beats.iter().zip(0..SYNTHETIC_BEATS) {
@@ -67,6 +67,56 @@ fn prepared_synthetic_grid_preserves_the_authored_score() {
         );
         assert_eq!(beat.beat_ordinal, i64::from(ordinal));
         assert_eq!(beat.confidence, Some(1.0));
+    }
+}
+
+#[kithara::test(native)]
+fn prepared_synthetic_grid_covers_the_complete_authored_pcm() {
+    use kithara::warp::{
+        AssetAxis, AssetExtent, AssetFrame, BeatEvidence, BeatGridId, BeatGridQuery,
+        BeatGridRevision, BeatGridSnapshot, MapPoint, MapPosition,
+    };
+
+    let ArtifactSource::Value(model) = synthetic_grid() else {
+        panic!("synthetic grid is a prepared value");
+    };
+    let rate = NonZeroU32::new(48_000).expect("authored sample rate");
+    let media = Duration::from_nanos(11_930_854_167) - Duration::from_nanos(23_020_833);
+    assert_eq!(media, Duration::from_nanos(11_907_833_334));
+    let observed = media.as_secs_f64() * f64::from(rate.get());
+    assert_eq!(observed, 571_576.000_032);
+    let after_end =
+        (Duration::from_secs(12) + Duration::from_nanos(1)).as_secs_f64() * f64::from(rate.get());
+    for extent in [AssetExtent::Unknown, AssetExtent::Bounded(576_000)] {
+        let grid = BeatGridSnapshot::model(
+            BeatGridId::allocate().expect("fixture grid identity"),
+            BeatGridRevision::first(),
+            &model,
+            AssetAxis::new(rate, extent),
+        )
+        .expect("authored finite source grid");
+        let query = |frame| {
+            grid.beat_at(MapPoint::new(
+                grid.stamp(),
+                MapPosition::Asset(AssetFrame::new(frame).expect("finite source frame")),
+            ))
+        };
+        for frame in [552_000.0, observed, 576_000.0] {
+            let BeatGridQuery::Resolved(beat) = query(frame) else {
+                panic!("authored source frame {frame:?} must have a grid beat");
+            };
+            let expected = if frame == 552_000.0 {
+                BeatEvidence::Observed
+            } else {
+                BeatEvidence::Extrapolated
+            };
+            assert_eq!(beat.evidence(), expected);
+        }
+        if matches!(extent, AssetExtent::Unknown) {
+            assert!(matches!(query(after_end), BeatGridQuery::Uncovered { .. }));
+        } else {
+            assert!(matches!(query(after_end), BeatGridQuery::OutsideDomain));
+        }
     }
 }
 

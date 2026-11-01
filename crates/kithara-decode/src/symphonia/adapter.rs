@@ -6,7 +6,7 @@ use std::{
 
 use kithara_platform::sync::Arc;
 use kithara_stream::{NotReadyCause, PendingReason, ReaderControl, StreamPending};
-use symphonia_core::io::MediaSource;
+use symphonia_core::io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions};
 
 /// Adapter that wraps a Read + Seek source as a Symphonia [`MediaSource`].
 #[derive(fieldwork::Fieldwork)]
@@ -27,6 +27,8 @@ pub(crate) struct ReadSeekAdapter<R> {
     /// (prevents `IsoMp4Reader` from seeking to end looking for moov atom).
     seek_enabled: Arc<AtomicBool>,
     inner: R,
+    /// MSS refills fit this bound; larger reads are direct packet demand.
+    refill_limit: usize,
     range: Option<Range<u64>>,
     /// The source error follows the consumed prefix already returned by this adapter.
     read_error: Option<io::Error>,
@@ -55,6 +57,7 @@ impl<R: Seek> ReadSeekAdapter<R> {
             byte_len,
             seek_enabled,
             inner,
+            refill_limit: MediaSourceStreamOptions::default().buffer_len,
             byte_pos: Arc::new(AtomicU64::new(initial_pos)),
             range: None,
             read_error: None,
@@ -97,8 +100,20 @@ impl<R: Seek> ReadSeekAdapter<R> {
     }
 }
 
+impl<R: Read + Seek + Send + Sync + 'static> From<ReadSeekAdapter<R>>
+    for MediaSourceStream<'static>
+{
+    fn from(adapter: ReadSeekAdapter<R>) -> Self {
+        let options = MediaSourceStreamOptions {
+            buffer_len: adapter.refill_limit,
+        };
+        Self::new(Box::new(adapter), options)
+    }
+}
+
 impl<R: Read> Read for ReadSeekAdapter<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let direct_demand = buf.len() > self.refill_limit;
         let available = self.range.as_ref().map_or(buf.len(), |range| {
             usize::try_from(
                 range
@@ -137,6 +152,9 @@ impl<R: Read> Read for ReadSeekAdapter<R> {
                     read += len;
                     if let Some(control) = &self.control {
                         control.clear_pending();
+                    }
+                    if !direct_demand {
+                        break;
                     }
                 }
                 Err(error) => {
@@ -253,7 +271,7 @@ impl<R: Read + Seek + Send + Sync> MediaSource for ReadSeekAdapter<R> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::{io::Cursor, sync::mpsc};
 
     use kithara_stream::PendingReason;
     use kithara_test_utils::kithara;
@@ -264,6 +282,7 @@ mod tests {
     struct PrefixErrorSource {
         cursor: Cursor<Vec<u8>>,
         error: Option<io::Error>,
+        pending_read: Option<mpsc::Sender<Result<usize, io::ErrorKind>>>,
     }
 
     impl Read for PrefixErrorSource {
@@ -271,6 +290,11 @@ mod tests {
             if self.cursor.position() == 3
                 && let Some(error) = self.error.take()
             {
+                if let Some(pending_read) = &self.pending_read {
+                    pending_read
+                        .send(Err(error.kind()))
+                        .expect("report pending input");
+                }
                 return Err(error);
             }
             let len = buf.len().min(3);
@@ -299,6 +323,7 @@ mod tests {
         let source = PrefixErrorSource {
             cursor: Cursor::new(vec![1, 2, 3, 4, 5, 6]),
             error: Some(error),
+            pending_read: None,
         };
         let adapter = ReadSeekAdapter::new(source, None, true);
         if controlled {
@@ -306,6 +331,76 @@ mod tests {
         } else {
             adapter
         }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn available_prefix_returns_before_waiting_for_future_input() {
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let mut adapter = prefix_error_adapter(true, false);
+        adapter.inner.pending_read = Some(observed_tx.clone());
+        let control = adapter.control.as_ref().expect("input control").clone();
+        let worker = std::thread::spawn(move || {
+            let mut bytes = [0; 6];
+            let result = adapter.read(&mut bytes);
+            observed_tx
+                .send(result.as_ref().copied().map_err(io::Error::kind))
+                .expect("report returned prefix");
+            (adapter, bytes, result)
+        });
+
+        let first = observed_rx.recv();
+        control.cancel();
+        let (adapter, bytes, result) = worker.join().expect("prefix reader joins");
+
+        assert_eq!(
+            first.expect("read progress observed"),
+            Ok(3),
+            "ready prefix must return before pending input is requested"
+        );
+        assert_eq!(result.expect("available prefix"), 3);
+        assert_eq!(&bytes[..3], &[1, 2, 3]);
+        assert_eq!(adapter.byte_pos_handle().load(Ordering::Acquire), 3);
+    }
+
+    fn assert_direct_read(range: Option<Range<u64>>) {
+        let request_bytes = MediaSourceStreamOptions::default().buffer_len + 17;
+        let source_bytes = (0..request_bytes + 128)
+            .map(|index| u8::try_from(index % 251).expect("fixture byte"))
+            .collect::<Vec<_>>();
+        let expected = range.clone().unwrap_or(0..request_bytes as u64);
+        let source = PrefixErrorSource {
+            cursor: Cursor::new(source_bytes.clone()),
+            error: None,
+            pending_read: None,
+        };
+        let mut adapter = ReadSeekAdapter::new(source, None, true);
+        if let Some(range) = range {
+            adapter = adapter.with_range(range).expect("encoded source range");
+        }
+        let mut bytes = vec![0xa5; request_bytes];
+        let start = usize::try_from(expected.start).expect("range start");
+        let end = usize::try_from(expected.end).expect("range end");
+        assert_eq!(
+            adapter.read(&mut bytes).expect("direct native demand"),
+            end - start,
+            "direct demand must complete every short tail and clipped range"
+        );
+        assert_eq!(&bytes[..end - start], &source_bytes[start..end]);
+        assert!(bytes[end - start..].iter().all(|byte| *byte == 0xa5));
+        assert_eq!(
+            adapter.byte_pos_handle().load(Ordering::Acquire),
+            expected.end
+        );
+    }
+
+    #[kithara::test]
+    fn direct_reads_complete_short_tails() {
+        assert_direct_read(None);
+    }
+
+    #[kithara::test]
+    fn direct_reads_complete_clipped_ranges() {
+        assert_direct_read(Some(5..4_096));
     }
 
     #[kithara::test]
@@ -326,27 +421,29 @@ mod tests {
                 assert_eq!(adapter.stream_position().expect("observed position"), 3);
                 if reposition {
                     assert_eq!(adapter.seek(SeekFrom::Start(0)).expect("reposition"), 0);
-                    assert_eq!(adapter.read(&mut bytes).expect("repositioned bytes"), 6);
-                    assert_eq!(bytes, [1, 2, 3, 4, 5, 6]);
-                } else {
-                    let error = adapter.read(&mut bytes).expect_err("deferred source error");
-                    assert_eq!(error.kind(), expected_kind);
-                    assert!(std::ptr::eq(
-                        expected_identity,
-                        error.get_ref().expect("same owned error")
-                    ));
-                    if !terminal {
-                        assert_eq!(
-                            error
-                                .get_ref()
-                                .and_then(|error| error.downcast_ref::<PendingReason>()),
-                            Some(&PendingReason::Retry)
-                        );
-                    }
+                    assert_eq!(adapter.read(&mut bytes).expect("repositioned prefix"), 3);
+                    assert_eq!(&bytes[..3], &[1, 2, 3]);
                     assert_eq!(adapter.byte_pos_handle().load(Ordering::Acquire), 3);
-                    assert_eq!(adapter.read(&mut bytes).expect("remaining bytes"), 3);
-                    assert_eq!(&bytes[..3], &[4, 5, 6]);
                 }
+                let error = adapter
+                    .read(&mut bytes)
+                    .expect_err("source error after prefix");
+                assert_eq!(error.kind(), expected_kind);
+                assert!(std::ptr::eq(
+                    expected_identity,
+                    error.get_ref().expect("same owned error")
+                ));
+                if !terminal {
+                    assert_eq!(
+                        error
+                            .get_ref()
+                            .and_then(|error| error.downcast_ref::<PendingReason>()),
+                        Some(&PendingReason::Retry)
+                    );
+                }
+                assert_eq!(adapter.byte_pos_handle().load(Ordering::Acquire), 3);
+                assert_eq!(adapter.read(&mut bytes).expect("remaining bytes"), 3);
+                assert_eq!(&bytes[..3], &[4, 5, 6]);
                 assert_eq!(adapter.read(&mut bytes).expect("physical EOF"), 0);
             }
             let mut adapter = prefix_error_adapter(controlled, terminal);
@@ -365,6 +462,52 @@ mod tests {
             assert_eq!(adapter.byte_pos_handle().load(Ordering::Acquire), 3);
             assert_eq!(adapter.read(&mut bytes).expect("released source"), 3);
             assert_eq!(&bytes[..3], &[4, 5, 6]);
+        }
+    }
+
+    #[kithara::test]
+    fn direct_reads_preserve_deferred_errors_and_seek_boundaries() {
+        for (controlled, terminal) in [(false, false), (false, true), (true, true)] {
+            for reposition in [false, true] {
+                let mut adapter = prefix_error_adapter(controlled, terminal);
+                let expected_error = adapter.inner.error.as_ref().expect("source error");
+                let expected_kind = expected_error.kind();
+                let expected_identity =
+                    std::ptr::from_ref(expected_error.get_ref().expect("owned error"));
+                let mut bytes = vec![0; MediaSourceStreamOptions::default().buffer_len + 1];
+                assert_eq!(adapter.read(&mut bytes).expect("consumed prefix"), 3);
+                assert_eq!(&bytes[..3], &[1, 2, 3]);
+                assert_eq!(adapter.byte_pos_handle().load(Ordering::Acquire), 3);
+                assert_eq!(adapter.read(&mut []).expect("empty read"), 0);
+                assert!(adapter.seek(SeekFrom::Current(-4)).is_err());
+                assert_eq!(adapter.stream_position().expect("observed position"), 3);
+                if reposition {
+                    assert_eq!(adapter.seek(SeekFrom::Start(0)).expect("reposition"), 0);
+                    assert_eq!(adapter.read(&mut bytes).expect("repositioned bytes"), 6);
+                    assert_eq!(&bytes[..6], &[1, 2, 3, 4, 5, 6]);
+                    assert_eq!(adapter.byte_pos_handle().load(Ordering::Acquire), 6);
+                } else {
+                    let error = adapter.read(&mut bytes).expect_err("deferred source error");
+                    assert_eq!(error.kind(), expected_kind);
+                    assert!(std::ptr::eq(
+                        expected_identity,
+                        error.get_ref().expect("same owned error")
+                    ));
+                    if !terminal {
+                        assert_eq!(
+                            error
+                                .get_ref()
+                                .and_then(|error| error.downcast_ref::<PendingReason>()),
+                            Some(&PendingReason::Retry)
+                        );
+                    }
+                    assert_eq!(adapter.byte_pos_handle().load(Ordering::Acquire), 3);
+                    assert_eq!(adapter.read(&mut bytes).expect("remaining bytes"), 3);
+                    assert_eq!(&bytes[..3], &[4, 5, 6]);
+                    assert_eq!(adapter.byte_pos_handle().load(Ordering::Acquire), 6);
+                }
+                assert_eq!(adapter.read(&mut bytes).expect("physical EOF"), 0);
+            }
         }
     }
 

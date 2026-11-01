@@ -86,55 +86,15 @@ impl Router {
             input,
             Input::InputMethod(_) | Input::KeyPressed { .. } | Input::KeyReleased { .. }
         ) {
-            let path = self.focus.as_deref()?;
-            let component = components
-                .iter_mut()
-                .find(|component| component.path() == path && component.focusable())?;
-            let (outcome, child) = component.handle_key(input);
-            return emission(component.event_path().to_owned(), child, outcome);
+            return self.handle_key(components, input);
         }
         if matches!(input, Input::ModifiersChanged(_)) {
-            for target in targets {
-                if let Some(component) = components
-                    .iter_mut()
-                    .find(|component| component.path() == target.path)
-                {
-                    let _ = component.handle(input, &target.hit, target.index, now);
-                }
-            }
+            Self::broadcast_modifiers(components, input, targets, now);
             return None;
         }
-        if matches!(
-            input,
-            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down
-        ) {
-            let focus = targets.iter().rev().find_map(|target| {
-                if !target.hit.over() {
-                    return None;
-                }
-                components
-                    .iter()
-                    .find(|component| component.path() == target.path && component.focusable())
-                    .map(|component| component.path().to_owned())
-            });
-            if self.focus != focus {
-                self.clear_focus(components);
-                self.focus = focus;
-            }
-        }
-        if let Some(identity) = &self.capture {
-            let component_index = components
-                .iter()
-                .position(|component| component.has_identity(identity))?;
-            let target = targets.iter().find(|target| target.path == identity.path)?;
-            let component = &mut components[component_index];
-            let (outcome, child) = component.handle(input, &target.hit, target.index, now);
-            let path = component.event_path().to_owned();
-            match outcome.ownership() {
-                PointerOwnership::Release => self.capture = None,
-                PointerOwnership::Claim | PointerOwnership::Unchanged => {}
-            }
-            return emission(path, child, outcome);
+        self.focus_on_press(components, input, targets);
+        if self.capture.is_some() {
+            return self.handle_captured(components, input, targets, now);
         }
 
         for target in targets.iter().rev() {
@@ -155,6 +115,84 @@ impl Router {
             return emission(component.event_path().to_owned(), child, outcome);
         }
         None
+    }
+
+    fn handle_key(
+        &self,
+        components: &mut [RetainedComponent],
+        input: Input<'_>,
+    ) -> Option<Emission> {
+        let path = self.focus.as_deref()?;
+        let component = components
+            .iter_mut()
+            .find(|component| component.path() == path && component.focusable())?;
+        let (outcome, child) = component.handle_key(input);
+        emission(component.event_path().to_owned(), child, outcome)
+    }
+
+    fn broadcast_modifiers(
+        components: &mut [RetainedComponent],
+        input: Input<'_>,
+        targets: &[Target<'_>],
+        now: Instant,
+    ) {
+        for target in targets {
+            if let Some(component) = components
+                .iter_mut()
+                .find(|component| component.path() == target.path)
+            {
+                let _ = component.handle(input, &target.hit, target.index, now);
+            }
+        }
+    }
+
+    fn focus_on_press(
+        &mut self,
+        components: &mut [RetainedComponent],
+        input: Input<'_>,
+        targets: &[Target<'_>],
+    ) {
+        if !matches!(
+            input,
+            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down
+        ) {
+            return;
+        }
+        let focus = targets.iter().rev().find_map(|target| {
+            if !target.hit.over() {
+                return None;
+            }
+            components
+                .iter()
+                .find(|component| component.path() == target.path && component.focusable())
+                .map(|component| component.path().to_owned())
+        });
+        if self.focus != focus {
+            self.clear_focus(components);
+            self.focus = focus;
+        }
+    }
+
+    fn handle_captured(
+        &mut self,
+        components: &mut [RetainedComponent],
+        input: Input<'_>,
+        targets: &[Target<'_>],
+        now: Instant,
+    ) -> Option<Emission> {
+        let identity = self.capture.as_ref()?;
+        let component_index = components
+            .iter()
+            .position(|component| component.has_identity(identity))?;
+        let target = targets.iter().find(|target| target.path == identity.path)?;
+        let component = &mut components[component_index];
+        let (outcome, child) = component.handle(input, &target.hit, target.index, now);
+        let path = component.event_path().to_owned();
+        match outcome.ownership() {
+            PointerOwnership::Release => self.capture = None,
+            PointerOwnership::Claim | PointerOwnership::Unchanged => {}
+        }
+        emission(path, child, outcome)
     }
 
     pub(super) fn reconcile(&mut self, components: &[RetainedComponent]) {

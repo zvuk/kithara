@@ -74,6 +74,22 @@ struct State {
     zone: Zone,
 }
 
+#[derive(Default)]
+struct Captured {
+    event: bool,
+    pointer: bool,
+    scroll: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ProjectionChanges {
+    item: bool,
+    overlay: bool,
+    picker: bool,
+    scroll: bool,
+    text: bool,
+}
+
 impl State {
     fn new(layout: &HostedLayout) -> Self {
         let mut engine = Engine::default();
@@ -105,6 +121,118 @@ impl Zone {
 
     pub(super) fn hover(&mut self, zone: Option<&str>) {
         self.hovered = self.path.is_some() && self.path.as_deref() == zone;
+    }
+}
+
+impl Host<'_> {
+    fn route_input(
+        &self,
+        engine: &mut Engine,
+        input: Option<Input<'_>>,
+        layout: Layout<'_>,
+        cursor: Cursor,
+        shell: &mut Shell<'_, Published>,
+    ) -> Captured {
+        let Some(input) = input else {
+            return Captured::default();
+        };
+        let targets = self
+            .layout
+            .targets_with_engine(layout, cursor, Some(engine));
+        let Some(emission) = engine.handle(input, &targets, Instant::now()) else {
+            return Captured::default();
+        };
+        let event = emission.outcome.is_captured();
+        let scroll = event
+            && matches!(input, Input::Wheel(_))
+            && engine.scroll_offset(&emission.path).is_some();
+        let pointer = control_pointer_answered(engine, input, &emission.path, event);
+        let captured = Captured {
+            event,
+            pointer,
+            scroll,
+        };
+        let action = engine_event(&emission.path, emission.child, emission.outcome);
+        if let Some(action) = action {
+            let (message, redraw_request, _) = action.into_inner();
+            shell.request_redraw_at(redraw_request);
+            if let Some(message) = message {
+                shell.publish(message);
+            }
+        }
+        captured
+    }
+
+    fn sync_projections(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        shell: &mut Shell<'_, Published>,
+        engine: &Engine,
+        changed: ProjectionChanges,
+    ) {
+        if !(changed.scroll || changed.item || changed.picker || changed.overlay || changed.text) {
+            return;
+        }
+        let targets = self
+            .layout
+            .targets_with_engine(layout, Cursor::Unavailable, Some(engine));
+        sync_scrolls(&mut self.child, tree, layout, renderer, engine, &targets);
+        if changed.picker {
+            sync_pickers(
+                &mut self.child,
+                tree,
+                layout,
+                renderer,
+                &self.layout,
+                engine,
+            );
+        }
+        if changed.text {
+            sync_text_inputs(&mut self.child, tree, layout, renderer, engine);
+        }
+        if changed.picker || changed.overlay {
+            shell.invalidate_layout();
+        }
+        shell.request_redraw();
+    }
+
+    fn track_cursor(
+        &self,
+        state: &mut State,
+        layout: Layout<'_>,
+        cursor: Cursor,
+        event: &Event,
+        shell: &mut Shell<'_, Published>,
+    ) {
+        if matches!(event, Event::Window(window::Event::RedrawRequested(_))) {
+            let targets = self
+                .layout
+                .targets_with_engine(layout, cursor, Some(&state.engine));
+            let request = iced_interact::input_method(state.engine.input_method(&targets));
+            shell.request_input_method(&request);
+        }
+
+        if shell.redraw_request() != RedrawRequest::NextFrame {
+            let targets = self
+                .layout
+                .targets_with_engine(layout, cursor, Some(&state.engine));
+            let interaction = state.engine.cursor(&targets).into();
+            let hovered = hovered_control(&targets);
+            if matches!(event, Event::Window(window::Event::RedrawRequested(_))) {
+                if state.last_hovered_control.as_deref() != hovered {
+                    state.last_hovered_control = hovered.map(ToOwned::to_owned);
+                }
+                state.last_mouse_interaction = Some(interaction);
+            } else if state
+                .last_mouse_interaction
+                .is_some_and(|last| last != interaction)
+                || state.last_hovered_control.as_deref() != hovered
+            {
+                shell.request_redraw();
+            }
+        }
     }
 }
 
@@ -302,32 +430,7 @@ impl IcedWidget<Published, Theme, Renderer> for Host<'_> {
         let item_was_pressed = state.engine.has_pressed_item();
         let picker_before = self.layout.picker_snapshots(&state.engine);
         let text_before = state.engine.text_input_snapshots();
-        let (captured, scroll_captured, control_pointer_captured) = if let Some(input) = input {
-            let targets = self
-                .layout
-                .targets_with_engine(layout, cursor, Some(&state.engine));
-            if let Some(emission) = state.engine.handle(input, &targets, Instant::now()) {
-                let captured = emission.outcome.is_captured();
-                let scroll_captured = captured
-                    && matches!(input, Input::Wheel(_))
-                    && state.engine.scroll_offset(&emission.path).is_some();
-                let control_pointer_captured =
-                    control_pointer_answered(&state.engine, input, &emission.path, captured);
-                let action = engine_event(&emission.path, emission.child, emission.outcome);
-                if let Some(action) = action {
-                    let (message, redraw_request, _) = action.into_inner();
-                    shell.request_redraw_at(redraw_request);
-                    if let Some(message) = message {
-                        shell.publish(message);
-                    }
-                }
-                (captured, scroll_captured, control_pointer_captured)
-            } else {
-                (false, false, false)
-            }
-        } else {
-            (false, false, false)
-        };
+        let captured = self.route_input(&mut state.engine, input, layout, cursor, shell);
         if state.engine.focused_path().is_some()
             && focus_before.as_deref() != state.engine.focused_path()
         {
@@ -339,7 +442,7 @@ impl IcedWidget<Published, Theme, Renderer> for Host<'_> {
                 &mut unfocus,
             );
         }
-        if !captured {
+        if !captured.event {
             self.child.as_widget_mut().update(
                 &mut tree.children[0],
                 event,
@@ -356,90 +459,37 @@ impl IcedWidget<Published, Theme, Renderer> for Host<'_> {
         let picker_projection_changed = picker_before != picker_after;
         let text_after = state.engine.text_input_snapshots();
         let text_projection_changed = text_before != text_after;
-        let picker_overlay_needs_rebuild = captured
+        let picker_overlay_needs_rebuild = captured.event
             && matches!(
                 input,
                 Some(Input::KeyPressed { .. } | Input::KeyReleased { .. })
             )
             && picker_after.iter().any(|(_, snapshot)| snapshot.open);
-        if scroll_captured
-            || item_projection_changed
-            || picker_projection_changed
-            || picker_overlay_needs_rebuild
-            || text_projection_changed
-        {
-            let targets =
-                self.layout
-                    .targets_with_engine(layout, Cursor::Unavailable, Some(&state.engine));
-            sync_scrolls(
-                &mut self.child,
-                &mut tree.children[0],
-                layout,
-                renderer,
-                &state.engine,
-                &targets,
-            );
-            if picker_projection_changed {
-                sync_pickers(
-                    &mut self.child,
-                    &mut tree.children[0],
-                    layout,
-                    renderer,
-                    &self.layout,
-                    &state.engine,
-                );
-            }
-            if text_projection_changed {
-                sync_text_inputs(
-                    &mut self.child,
-                    &mut tree.children[0],
-                    layout,
-                    renderer,
-                    &state.engine,
-                );
-            }
-            if picker_projection_changed || picker_overlay_needs_rebuild {
-                shell.invalidate_layout();
-            }
-            shell.request_redraw();
-        }
+        self.sync_projections(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            shell,
+            &state.engine,
+            ProjectionChanges {
+                item: item_projection_changed,
+                overlay: picker_overlay_needs_rebuild,
+                picker: picker_projection_changed,
+                scroll: captured.scroll,
+                text: text_projection_changed,
+            },
+        );
         if captures_event(
             input,
-            captured,
-            scroll_captured,
-            control_pointer_captured,
+            captured.event,
+            captured.scroll,
+            captured.pointer,
             state.engine.captures_pointer(),
         ) {
             shell.capture_event();
         }
 
-        if matches!(event, Event::Window(window::Event::RedrawRequested(_))) {
-            let targets = self
-                .layout
-                .targets_with_engine(layout, cursor, Some(&state.engine));
-            let request = iced_interact::input_method(state.engine.input_method(&targets));
-            shell.request_input_method(&request);
-        }
-
-        if shell.redraw_request() != RedrawRequest::NextFrame {
-            let targets = self
-                .layout
-                .targets_with_engine(layout, cursor, Some(&state.engine));
-            let interaction = state.engine.cursor(&targets).into();
-            let hovered = hovered_control(&targets);
-            if matches!(event, Event::Window(window::Event::RedrawRequested(_))) {
-                if state.last_hovered_control.as_deref() != hovered {
-                    state.last_hovered_control = hovered.map(ToOwned::to_owned);
-                }
-                state.last_mouse_interaction = Some(interaction);
-            } else if state
-                .last_mouse_interaction
-                .is_some_and(|last| last != interaction)
-                || state.last_hovered_control.as_deref() != hovered
-            {
-                shell.request_redraw();
-            }
-        }
+        self.track_cursor(state, layout, cursor, event, shell);
     }
 
     delegate::delegate! {

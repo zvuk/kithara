@@ -1261,22 +1261,21 @@ impl DecodedCapture {
         channels: [usize; N],
     ) -> SampleResult<N> {
         let kernel = sampling::SampleKernel::new((position.0, position.1.get()), speed)?;
-        self.samples_with_kernel(info, position, &kernel, channels)
+        self.samples_with_kernel(position, &kernel, channels, &mut self.sampler(info))
     }
 
     fn samples_with_kernel<const N: usize>(
         &self,
-        info: consumed::SourceIdentity,
         position: SourcePosition,
         kernel: &sampling::SampleKernel,
         channels: [usize; N],
+        read: &mut impl FnMut(i64, usize) -> Result<f32, String>,
     ) -> SampleResult<N> {
         if self.rejected {
             return Err("decoder observer rejected or conflicted while capturing PCM".to_owned());
         }
         let source =
             i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
-        let mut read = self.sampler(info);
         kernel.samples(|offset| {
             let frame = source
                 .checked_add(offset)
@@ -1444,7 +1443,7 @@ impl DecodedCapture {
         let sample_rate = consumed.sample_rate;
         check_physical_marks(marks, sample_rate)?;
         let intervals = physical_intervals(capture_start, frames, consumed, jump)?;
-        let physical_bases = intervals
+        let mut physical_bases = intervals
             .iter()
             .map(|(&start, interval)| {
                 let info = interval.identity;
@@ -1456,7 +1455,8 @@ impl DecodedCapture {
                 let first = basis
                     .output_ratio_at_source(origin, position)
                     .ok_or_else(|| "wrong-tempo negative has no physical origin".to_owned())?;
-                Ok((start, (origin, basis, first)))
+                let samplers = [self.sampler(info), self.sampler(info), self.sampler(info)];
+                Ok((start, (origin, basis, first, samplers)))
             })
             .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
         let mut reference = PhysicalReference {
@@ -1492,9 +1492,11 @@ impl DecodedCapture {
             let raw_next = span
                 .source_ratio_at(offset + 1)
                 .ok_or_else(|| "physical capture has an unmapped source endpoint".to_owned())?;
-            let &(origin, basis, first) = physical_bases
-                .get(&start)
+            let (origin, basis, first, samplers) = physical_bases
+                .get_mut(&start)
                 .ok_or_else(|| "physical source interval lost its decoded basis".to_owned())?;
+            let (origin, basis, first) = (*origin, *basis, *first);
+            let [expected_source, cue_source, tempo_source] = samplers;
             let (raw_position, (numerator, denominator)) = if let Some((_, raw, physical)) =
                 next_position.filter(|(previous_start, _, _)| *previous_start == start)
             {
@@ -1519,13 +1521,17 @@ impl DecodedCapture {
             next_position = Some((start, raw_next, physical_next));
             let speed = physical_source_speed((numerator, denominator), physical_next)?;
             let kernel = sampling::SampleKernel::new((numerator, denominator.get()), speed)?;
-            let expected =
-                self.samples_with_kernel(info, (numerator, denominator), &kernel, [0, 1])?;
+            let expected = self.samples_with_kernel(
+                (numerator, denominator),
+                &kernel,
+                [0, 1],
+                expected_source,
+            )?;
             let wrong_position = numerator
                 .checked_add(denominator.get())
                 .ok_or_else(|| "wrong-cue negative coordinate overflows".to_owned())?;
             let wrong_cue = self
-                .samples_with_kernel(info, (wrong_position, denominator), &kernel, [0, 1])
+                .samples_with_kernel((wrong_position, denominator), &kernel, [0, 1], cue_source)
                 .map_err(|error| format!("wrong-cue negative: {error}"))?;
             let wrong_denominator = denominator
                 .get()
@@ -1537,14 +1543,19 @@ impl DecodedCapture {
                 .checked_mul(first.1.get())
                 .and_then(|value| value.checked_add(first.0.checked_mul(denominator.get())?))
                 .ok_or_else(|| "wrong-tempo negative coordinate overflows".to_owned())?;
-            let wrong_tempo = self
-                .samples_at(
-                    info,
+            let wrong_tempo = sampling::SampleKernel::new(
+                (wrong_numerator, wrong_denominator.get()),
+                speed * 0.5,
+            )
+            .and_then(|kernel| {
+                self.samples_with_kernel(
                     (wrong_numerator, wrong_denominator),
-                    speed * 0.5,
+                    &kernel,
                     [0, 1],
+                    tempo_source,
                 )
-                .map_err(|error| format!("wrong-tempo negative: {error}"))?;
+            })
+            .map_err(|error| format!("wrong-tempo negative: {error}"))?;
             for (channel, sample) in expected.into_iter().enumerate() {
                 reference
                     .expected
@@ -1921,6 +1932,73 @@ fn native_stereo_sampling_preserves_scalar_bits_and_coverage_errors() {
     }
 }
 
+fn check_persistent_physical_sampling(
+    capture: &DecodedCapture,
+    identity: consumed::SourceIdentity,
+) {
+    let mut readers = [
+        capture.sampler(identity),
+        capture.sampler(identity),
+        capture.sampler(identity),
+    ];
+    for speed in [0.5, 1.0, 1.25, 1.5, 8.0, f64::INFINITY, f64::NAN] {
+        for (frame, phase) in [
+            (0_u128, 0),
+            (30, 1),
+            (31, 3),
+            (32, 0),
+            (63, 1),
+            (64, 3),
+            (95, 1),
+            (63, 0),
+            (0, 1),
+            (u128::MAX / 4 - 2, 3),
+        ] {
+            let numerator = frame * 4 + phase;
+            let positions = [(numerator, 4), (numerator + 4, 4), (numerator, 8)];
+            for ((read, (numerator, denominator)), speed) in readers
+                .iter_mut()
+                .zip(positions)
+                .zip([speed, speed, speed * 0.5])
+            {
+                let denominator =
+                    std::num::NonZeroU128::new(denominator).expect("physical reference phase");
+                let position = (numerator, denominator);
+                let kernel = sampling::SampleKernel::new((numerator, denominator.get()), speed)
+                    .expect("representable physical reference phase");
+                let mut actual_reads = Vec::new();
+                let actual = capture.samples_with_kernel(
+                    position,
+                    &kernel,
+                    [0, 1],
+                    &mut |frame, channel| {
+                        actual_reads.push((frame, channel));
+                        read(frame, channel)
+                    },
+                );
+                let mut expected_reads = Vec::new();
+                let expected = capture.samples_with_kernel(
+                    position,
+                    &kernel,
+                    [0, 1],
+                    &mut |frame, channel| {
+                        expected_reads.push((frame, channel));
+                        capture.sample(identity, frame, channel)
+                    },
+                );
+                assert_eq!(actual_reads, expected_reads, "{position:?}, {speed}");
+                let bits = |result: SampleResult<2>| result.map(|pcm| pcm.map(f32::to_bits));
+                assert_eq!(bits(actual), bits(expected), "{position:?}, {speed}");
+                assert_eq!(
+                    bits(capture.samples_at(identity, position, speed, [0, 1])),
+                    bits(capture.samples_with_kernel(position, &kernel, [0, 1], read)),
+                    "fresh and retained cursors: {position:?}, {speed}",
+                );
+            }
+        }
+    }
+}
+
 #[kithara::test(native)]
 fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     let asset = kithara_test_fixtures::assets::by_name("sine_wav_a440_10000_frames")
@@ -1960,6 +2038,13 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
         source_revision: 7,
         media_origin: Some(Duration::ZERO),
     };
+    check_persistent_physical_sampling(&capture, identity);
+    let mut rejected = capture.clone();
+    rejected.rejected = true;
+    check_persistent_physical_sampling(&rejected, identity);
+    let mut missing_chunk = capture.clone();
+    missing_chunk.chunks.remove(&(7, 32));
+    check_persistent_physical_sampling(&missing_chunk, identity);
     let denominator = std::num::NonZeroU128::new(4).expect("quarter-frame phase");
     let domain = 0..96;
     let mut across_frames = capture
@@ -2073,6 +2158,7 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
         ),
     );
     overlapping.samples += 64 * channels;
+    check_persistent_physical_sampling(&overlapping, identity);
     assert_ne!(
         overlapping
             .sample(identity, 31, 0)
@@ -2129,6 +2215,7 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
         .expect("overlapping source chunk")
         .0
         .media_origin = Some(Duration::from_millis(1));
+    check_persistent_physical_sampling(&overlapping, identity);
     {
         let mut invalid = overlapping
             .sampler_at_domain(identity, [0], domain.clone())
@@ -2162,6 +2249,7 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
         source_revision: 8,
         ..identity
     };
+    check_persistent_physical_sampling(&capture, wrong_identity);
     assert!(
         capture
             .samples_at(wrong_identity, (125, denominator), 1.5, [0, 1])
@@ -2181,6 +2269,7 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
         media_origin: Some(Duration::from_millis(1)),
         ..identity
     };
+    check_persistent_physical_sampling(&capture, wrong_identity);
     assert!(
         capture
             .samples_at(wrong_identity, (125, denominator), 1.5, [0, 1])
@@ -2195,6 +2284,7 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
         spec: AudioSpec::new(1, spec.sample_rate),
         ..identity
     };
+    check_persistent_physical_sampling(&capture, wrong_identity);
     assert!(
         capture
             .samples_at(wrong_identity, (125, denominator), 1.5, [0, 1])
@@ -2217,6 +2307,7 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
             let mut changed = sample_buffer(&pcm_pools, &pcm[..]);
             changed[channel] = invalid;
             *pcm = Arc::new(changed);
+            check_persistent_physical_sampling(&broken, identity);
             for speed in [0.5, 1.5] {
                 assert!(
                     broken
@@ -2240,6 +2331,7 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     let (_, pcm) = missing_right.chunks.get_mut(&(7, 64)).expect("last chunk");
     let truncated = sample_buffer(&pcm_pools, &pcm[..pcm.len() - 1]);
     *pcm = Arc::new(truncated);
+    check_persistent_physical_sampling(&missing_right, identity);
     assert!(
         missing_right
             .sample_at(identity, (380, denominator), 1.0, 0)

@@ -80,7 +80,7 @@ impl SourceGrid {
         })
     }
 
-    fn by_frame(&self, frame: f64) -> Option<&Interval> {
+    fn frame_index(&self, frame: f64) -> Option<usize> {
         if !frame.is_finite()
             || frame < 0.0
             || self
@@ -90,22 +90,36 @@ impl SourceGrid {
         {
             return None;
         }
-        self.intervals
+        let index = self
+            .intervals
             .partition_point(|interval| *interval.frames.start() <= frame)
-            .checked_sub(1)
-            .and_then(|index| self.intervals.get(index))
+            .checked_sub(1)?;
+        self.intervals
+            .get(index)
             .filter(|interval| interval.frames.contains(&frame))
+            .map(|_| index)
     }
 
-    fn by_beat(&self, beat: f64) -> Option<&Interval> {
+    fn by_frame(&self, frame: f64) -> Option<&Interval> {
+        self.intervals.get(self.frame_index(frame)?)
+    }
+
+    fn beat_index(&self, beat: f64) -> Option<usize> {
         if !beat.is_finite() {
             return None;
         }
-        self.intervals
+        let index = self
+            .intervals
             .partition_point(|interval| *interval.beats.start() <= beat)
-            .checked_sub(1)
-            .and_then(|index| self.intervals.get(index))
+            .checked_sub(1)?;
+        self.intervals
+            .get(index)
             .filter(|interval| interval.beats.contains(&beat))
+            .map(|_| index)
+    }
+
+    fn by_beat(&self, beat: f64) -> Option<&Interval> {
+        self.intervals.get(self.beat_index(beat)?)
     }
 
     delegate::delegate! {
@@ -198,19 +212,19 @@ impl SourceGrid {
     }
 
     pub(super) fn maximum_slope(&self) -> Option<f64> {
-        let mut frame = self.observed.as_ref()?.start().as_secs_f64() * f64::from(self.rate.get());
+        let frame = self.observed.as_ref()?.start().as_secs_f64() * f64::from(self.rate.get());
+        let mut intervals = self.intervals.get(self.frame_index(frame)?..)?.iter();
+        let mut interval = intervals.next()?;
         let mut maximum: f64 = 0.0;
         loop {
-            maximum = maximum.max(60.0 / self.bpm_at_frame(frame)?);
-            let interval = self.by_frame(frame)?;
-            let end = *interval.frames.end();
-            let Some(next) = self.by_frame(end) else {
+            maximum = maximum.max(60.0 / interval.bpm(self.rate)?);
+            let Some(next) = intervals
+                .next()
+                .filter(|next| next.frames.start() == interval.frames.end())
+            else {
                 return Some(maximum);
             };
-            if *next.frames.end() == end {
-                return Some(maximum);
-            }
-            frame = end;
+            interval = next;
         }
     }
 
@@ -241,16 +255,18 @@ impl SourceGrid {
     }
 
     fn interval_at(&self, beat: f64) -> Option<(f64, Option<f64>)> {
-        let mut interval = self.by_beat(beat)?;
+        let mut intervals = self.intervals.get(self.beat_index(beat)?..)?.iter();
+        let mut interval = intervals.next()?;
         let slope = 60.0 / interval.bpm(self.rate)?;
         loop {
-            let end = *interval.frames.end();
-            let next = self.by_frame(end)?;
-            if *next.frames.end() == end {
+            let Some(next) = intervals
+                .next()
+                .filter(|next| next.frames.start() == interval.frames.end())
+            else {
                 return Some((slope, None));
-            }
+            };
             if 60.0 / next.bpm(self.rate)? != slope {
-                return Some((slope, Some(self.beat_at_frame(end)?)));
+                return Some((slope, Some(next.beat_at(*interval.frames.end())?)));
             }
             interval = next;
         }
@@ -688,3 +704,7 @@ pub(super) fn curve(
     let frames = terminal.map_or(0, |(end, _)| end);
     Some((speed_curve(laws)?, frames))
 }
+
+#[cfg(test)]
+#[path = "tests/source.rs"]
+mod tests;

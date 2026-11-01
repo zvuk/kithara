@@ -3366,6 +3366,7 @@ fn ordinary_source_spans_preserve_beat_sides_at_rounded_seams() {
         panic!("declared source grid");
     };
     let mut raw = model.as_raw().clone();
+    raw.duration = None;
     raw.beats = [(74, 31.96), (75, 32.38), (76, 32.8)]
         .into_iter()
         .map(|(ordinal, at)| GridBeat {
@@ -4202,6 +4203,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
     assert_eq!(nonnegative.source_beat, 3.0);
 
     let mut shifted = model.as_raw().clone();
+    shifted.duration = None;
     for beat in &mut shifted.beats {
         beat.ordinal += 2;
         beat.at += 1.0;

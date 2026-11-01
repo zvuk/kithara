@@ -261,3 +261,35 @@ fn projected_dsp_matches_scalar_speeds_across_successive_spans() {
         }
     }
 }
+
+#[kithara::test]
+fn affine_speed_keeps_scalar_bits_at_full_width_boundaries() {
+    let rate = NonZeroU32::new(44_100).expect("sample rate");
+    for (origin, step, denominator, frames) in [
+        (0, 0, 1, 17),
+        (129, 1, 2, 257),
+        (257, 3, 2, 257),
+        (u128::MAX / 4, u128::MAX / 1024, u128::MAX / 2, 257),
+        (u128::from(u64::MAX) * 1024 - 257, 1, 1024, 257),
+        (0, 1, u128::MAX, u64::MAX),
+    ] {
+        let span = SourceSpan::try_from((
+            origin,
+            step,
+            NonZeroU128::new(denominator).expect("nonzero denominator"),
+            rate,
+            frames,
+        ))
+        .expect("validated affine source extent");
+        assert!(span.is_affine());
+        let speed = span_speed(span, 0).expect("first scalar speed");
+        for frame in [0, 1, frames / 2, frames - 1] {
+            let scalar = span_speed(span, frame).expect("scalar speed inside the extent");
+            assert_eq!(speed.to_bits(), scalar.to_bits(), "{span:?}, {frame}");
+        }
+        assert_eq!(
+            span_speed(span, frames),
+            Err(ElasticError::SampleCountOverflow)
+        );
+    }
+}

@@ -76,7 +76,7 @@ pub fn sum_squares_f32(samples: &[f32]) -> f32 {
     sum
 }
 
-/// `x[i] = x[i]·scale + offset` in place; returns the length of `x`.
+/// `x[i] = x[i]*scale + offset` in place; returns the length of `x`.
 #[must_use]
 pub fn affine_f32(x: &mut [f32], scale: f32, offset: f32) -> usize {
     if x.is_empty() {
@@ -116,7 +116,7 @@ pub fn sub_f32(x: &mut [f32], y: &[f32]) -> usize {
     len
 }
 
-/// `acc[i] += x[i]·gain` over the common prefix of the two slices; returns
+/// `acc[i] += x[i]*gain` over the common prefix of the two slices; returns
 /// its length.
 #[must_use]
 pub fn scale_add_f32(x: &[f32], gain: f32, acc: &mut [f32]) -> usize {
