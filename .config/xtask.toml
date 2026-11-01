@@ -1136,6 +1136,7 @@ runner.nextest.filter = "test(/(^|::)loom_model_/)"
 default_features = ["kithara-platform/loom"]
 default_backend = "none"
 default_flash = false
+undeclared_toggles = ["load"]
 
 # `test-release` is the profile every other lane builds in, and this one ran in
 # `test`. `just test all` therefore built the whole workspace a second time to
