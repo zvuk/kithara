@@ -189,7 +189,7 @@ impl Container<'_> {
     pub(super) const PIDS_LIMIT: u32 = 8192;
 
     /// Temporary executable copies stay within the job's memory ceiling.
-    pub(super) const TOOLING_TMPFS: &str =
+    pub(super) const TOOLING_TMPFS: &'static str =
         "/run/kithara-ci-tests:rw,exec,nosuid,nodev,size=4g,mode=1777";
 
     /// `RLIMIT_NICE` for every process of a job: 20 minus the lowest nice
