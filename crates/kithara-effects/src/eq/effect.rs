@@ -1,4 +1,7 @@
-use kithara_bufpool::{HasPool, PoolError};
+use std::num::{NonZeroU32, NonZeroUsize};
+
+use kithara_bufpool::HasPool;
+use kithara_dsp::filter::FilterError;
 use kithara_signal::{AudioChunk, AudioSpec};
 
 use super::{EqBandConfig, EqBandConfigChange, EqConfig, IsolatorEq};
@@ -21,14 +24,13 @@ impl EqEffect {
     ///
     /// # Errors
     ///
-    /// Returns [`PoolError`] when the region cannot hand out the per-band
-    /// filter and gain buffers the two channel isolators need.
+    /// Returns [`EffectPrepareError`] for an invalid design or exhausted buffer pool.
     pub fn new<S>(
         config: &EqConfig<S>,
         bands: Vec<EqBandConfig>,
         sample_rate: u32,
         channels: u16,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, EffectPrepareError>
     where
         S: HasPool<f32>,
     {
@@ -41,6 +43,15 @@ impl EqEffect {
             channels,
             sample_rate,
         })
+    }
+
+    fn update_sample_rate(&mut self, sample_rate: u32) -> Result<(), FilterError> {
+        self.eq_l.prepare_sample_rate(sample_rate)?;
+        self.eq_r.prepare_sample_rate(sample_rate)?;
+        let rate = NonZeroU32::new(sample_rate).ok_or(FilterError::Parameters)?;
+        self.eq_l.apply_sample_rate(rate);
+        self.eq_r.apply_sample_rate(rate);
+        Ok(())
     }
 
     /// Set the gain for a specific band.
@@ -78,16 +89,15 @@ impl AudioEffect for EqEffect {
         if spec.channels == 0 {
             return Err(EffectPrepareError::Shape);
         }
-        if self.channels != spec.channels {
-            self.reset();
-            self.channels = spec.channels;
-        }
         let rate = spec.sample_rate.get();
         if self.sample_rate != rate {
-            self.eq_l.update_sample_rate(rate);
-            self.eq_r.update_sample_rate(rate);
-            self.sample_rate = rate;
+            self.update_sample_rate(rate)?;
         }
+        if self.channels != spec.channels {
+            self.reset();
+        }
+        self.channels = spec.channels;
+        self.sample_rate = rate;
         Ok(())
     }
 
@@ -118,36 +128,32 @@ impl AudioEffect for EqEffect {
     }
 
     fn process(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
-        let channels = self.channels as usize;
-        if channels == 0 {
+        let Some(channels) = NonZeroUsize::new(usize::from(self.channels)) else {
             return Some(chunk);
-        }
+        };
 
         let samples = &mut chunk.samples;
 
-        for chunk in samples.chunks_mut(channels * EQ_BLOCK_FRAMES) {
-            let frames = chunk.len() / channels;
-            let mut left = [0.0; EQ_BLOCK_FRAMES];
-            let mut right = [0.0; EQ_BLOCK_FRAMES];
-            for (index, frame) in chunk.chunks_exact(channels).enumerate() {
-                left[index] = frame[0];
-                if channels >= 2 {
-                    right[index] = frame[1];
-                }
-            }
-            let mut wet_left = [0.0; EQ_BLOCK_FRAMES];
-            let mut wet_right = [0.0; EQ_BLOCK_FRAMES];
-            self.eq_l.process(&left[..frames], &mut wet_left[..frames]);
-            if channels >= 2 {
+        for chunk in samples.chunks_mut(channels.get() * EQ_BLOCK_FRAMES) {
+            let Some(frames) = NonZeroUsize::new(chunk.len() / channels.get()) else {
+                continue;
+            };
+            let mut dry = [[0.0; EQ_BLOCK_FRAMES]; 2];
+            kithara_dsp::deinterleave_variable(chunk, channels, &mut dry, 0..frames.get());
+            let mut wet = [0.0; 2 * EQ_BLOCK_FRAMES];
+            let (wet_left, wet_right) = wet.split_at_mut(frames.get());
+            self.eq_l.process(&dry[0][..frames.get()], wet_left);
+            if channels.get() >= 2 {
                 self.eq_r
-                    .process(&right[..frames], &mut wet_right[..frames]);
+                    .process(&dry[1][..frames.get()], &mut wet_right[..frames.get()]);
             }
-            for (index, frame) in chunk.chunks_exact_mut(channels).enumerate() {
-                frame[0] = wet_left[index];
-                if channels >= 2 {
-                    frame[1] = wet_right[index];
-                }
-            }
+            kithara_dsp::interleave_channel_major(
+                &wet[..2 * frames.get()],
+                frames,
+                0..frames.get(),
+                chunk,
+                channels,
+            );
         }
 
         Some(chunk)
