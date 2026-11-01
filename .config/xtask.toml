@@ -2475,6 +2475,11 @@ steps = [
     "run",
     "--touched",
     "--lane=tooling",
+  ], label = "build tooling suites this push touches", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1", TMPDIR = "/run/kithara-ci-tests" } },
+  { args = [
+    "test",
+    "run",
+    "--touched",
     "--lane=harness",
     "--lane=fixtures",
     "--lane=net-host",
