@@ -1130,11 +1130,11 @@ cargo.packages = ["kithara-ui"]
 runner.cargo.doc = true
 
 [test.lanes.loom]
-cargo.workspace = true
-cargo.exclude = ["kithara-fuzz"]
+cargo.packages = ["kithara-platform"]
 cargo.profile = "test-release"
 runner.nextest.filter = "test(/(^|::)loom_model_/)"
-default_features = ["kithara/loom"]
+default_features = ["kithara-platform/loom"]
+default_backend = "none"
 default_flash = false
 
 # `test-release` is the profile every other lane builds in, and this one ran in
