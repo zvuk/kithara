@@ -85,14 +85,10 @@ fn membership(lane: &CiLaneConfig, fleet: Fleet) -> &[String] {
     &lane.kinds
 }
 
-/// Whether this fleet has a machine for the lane at all. The GitHub fan-out
-/// puts every lane through `lane.yml`, whose runner labels are the Linux
-/// fleet's; its macOS and Windows work runs from workflows of its own, against
-/// runner-label variables of their own. A lane that names another operating
-/// system is therefore not one GitHub schedules from the catalog, whatever its
-/// membership says - rendering it would run a macOS recipe on a Linux runner.
+/// GitHub's shared fan-out runs Linux. Portable lanes can run there too;
+/// dedicated device workflows opt out through their empty GitHub membership.
 fn reachable(lane: &CiLaneConfig, fleet: Fleet) -> bool {
-    fleet != Fleet::Github || lane.runs_only_on_linux()
+    fleet != Fleet::Github || lane.runs_on_linux()
 }
 
 /// A lane with the asked-for role that this pipeline kind schedules, or that
@@ -542,28 +538,23 @@ mod tests {
         assert!(gitlab.matrix.is_empty());
     }
 
-    // The GitHub fan-out has one runner pool and it is Linux; its macOS and
-    // Windows work runs from workflows with runner labels of their own. A macOS
-    // lane rendered here would run its recipe on a Linux machine and report a
-    // green gate for a sanitizer that never ran.
-    // A lane that also runs on another machine needs a device the shared Linux
-    // pool lacks, so the fan-out leaves it to the workflow naming that pool.
     #[test]
-    fn the_github_fleet_leaves_a_lane_that_also_names_another_machine_to_its_own_pool() {
+    fn portable_lanes_reach_linux_without_scheduling_dedicated_device_work() {
         let mut lanes = catalog();
+        let mut portable = lane("gate", &["main"], &[]);
+        portable.os = vec!["macos".to_owned(), "linux".to_owned()];
+        lanes.insert("deps-deny".to_owned(), portable);
         let mut device = lane("gate", &["main"], &[]);
         device.os = vec!["macos".to_owned(), "linux".to_owned()];
+        device.kinds_github = Some(Vec::new());
         lanes.insert("android-test".to_owned(), device);
-
-        let github = render(&lanes, &args("gate", PipelineKind::Main, &[]))
-            .expect("the GitHub fleet renders");
-        assert!(
-            github
-                .matrix
-                .iter()
-                .all(|entry| entry.lane != "android-test"),
-            "the shared fan-out has no emulator"
-        );
+        let github = render(&lanes, &args("gate", PipelineKind::Main, &[])).unwrap();
+        let names: Vec<&str> = github
+            .matrix
+            .iter()
+            .map(|entry| entry.lane.as_str())
+            .collect();
+        assert_eq!(names, ["deps-deny", "linux-lint"]);
     }
 
     #[test]

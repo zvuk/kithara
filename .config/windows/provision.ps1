@@ -251,6 +251,11 @@ if ($install.ExitCode -ne 0) {
     'PATH',
     [Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';C:\Program Files\Git\bin',
     'Machine')
+New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock' -Force | Out-Null
+New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock' `
+    -Name 'AllowDevelopmentWithoutDevLicense' -Value 1 -PropertyType DWord -Force | Out-Null
+& 'C:\Program Files\Git\cmd\git.exe' config --system core.symlinks true
+if ($LASTEXITCODE -ne 0) { throw 'could not enable Git symlink checkout' }
 
 Start-Step 'Installing the Rust toolchain'
 Get-Verified -Url $settings.rustup_url `
@@ -265,11 +270,14 @@ $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
     "$env:USERPROFILE\.cargo\bin;" + [Environment]::GetEnvironmentVariable('PATH', 'Machine'),
     'Machine')
 
+. 'E:\cache.ps1'
 foreach ($tool in $settings.cargo_tools.PSObject.Properties) {
     Start-Step "Installing $($tool.Name) $($tool.Value)"
     cargo install --locked --version $tool.Value $tool.Name
     if ($LASTEXITCODE -ne 0) { throw "cargo install $($tool.Name) failed" }
 }
+& kache daemon stop
+if ($LASTEXITCODE -ne 0) { throw 'could not drain compiler cache uploads' }
 
 Start-Step 'Installing the GitHub Actions runner'
 New-Item -ItemType Directory -Force -Path "$root\runner" | Out-Null

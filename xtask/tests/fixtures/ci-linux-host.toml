@@ -1,5 +1,6 @@
 build_cache_size = "25GB"
 cache_root = "/var/lib/kithara-ci"
+image_cache_env_file = "/etc/kithara-ci/cache/images.env"
 compiler_cache_size = "40G"
 network = "kithara-ci"
 subnet = "172.16.240.0/24"
@@ -56,6 +57,7 @@ labels = ["self-hosted", "linux", "x64", "kithara"]
 [windows]
 name = "kithara-ci-windows"
 repository = "octocat/kithara"
+sccache_s3_env_file = "/etc/kithara-ci/cache/windows.env"
 labels = ["self-hosted", "windows", "x64", "kithara"]
 vcpus = 8
 memory_mib = 16384

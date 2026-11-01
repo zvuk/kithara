@@ -38,9 +38,11 @@ fn secret(path: &Path) -> Result<String> {
     }
 }
 
-pub(super) fn credentials() -> Result<()> {
-    let root = Path::new("/config");
-    fs::create_dir_all(root)?;
+pub(super) fn prepare(service_root: &Path) -> Result<()> {
+    for directory in ["config", "data", "clients", "audit"] {
+        fs::create_dir_all(service_root.join(directory))?;
+    }
+    let root = service_root.join("config");
     if !root.join("admin-user").exists() {
         write_secure(&root.join("admin-user"), "kithara-cache-admin")?;
     }
@@ -122,7 +124,7 @@ pub(super) fn scope_bucket(scope: &str) -> Result<String> {
     Ok(format!("kithara-{scope}"))
 }
 
-pub(super) fn initialize(cancel: &Cancel) -> Result<()> {
+pub(super) fn initialize(service_root: &Path, cancel: &Cancel) -> Result<()> {
     let scopes = required("CACHE_SCOPES")?;
     let endpoint = required("CACHE_CLIENT_ENDPOINT")?;
     let uid = required("CACHE_CLIENT_UID")?.parse::<u32>()?;
@@ -139,7 +141,7 @@ pub(super) fn initialize(cancel: &Cancel) -> Result<()> {
         })
         .collect::<Result<Vec<_>>>()?;
     let program = Path::new("rc");
-    let root = Path::new("/config");
+    let root = service_root.join("config");
     rc(
         program,
         &[
@@ -164,20 +166,28 @@ pub(super) fn initialize(cancel: &Cancel) -> Result<()> {
         cancel,
     )?;
     for scope in scopes {
-        initialize_scope(program, scope, &endpoint, uid, cancel)?;
+        initialize_scope(
+            program,
+            &service_root.join("clients"),
+            scope,
+            &endpoint,
+            uid,
+            cancel,
+        )?;
     }
     Ok(())
 }
 
 fn initialize_scope(
     program: &Path,
+    clients: &Path,
     scope: &str,
     endpoint: &str,
     uid: u32,
     cancel: &Cancel,
 ) -> Result<()> {
     let bucket = scope_bucket(scope)?;
-    let directory = Path::new("/clients").join(scope);
+    let directory = clients.join(scope);
     fs::create_dir_all(&directory)?;
     let key = secret(&directory.join("access-key"))?;
     let password = secret(&directory.join("secret-key"))?;
@@ -321,6 +331,24 @@ fn write_environment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preparing_a_native_service_creates_volumes_and_preserves_its_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        prepare(directory.path()).unwrap();
+        for name in ["config", "data", "clients", "audit"] {
+            assert!(directory.path().join(name).is_dir(), "{name}");
+        }
+        let config = directory.path().join("config");
+        let user = read_secret(&config.join("admin-user")).unwrap();
+        let password = read_secret(&config.join("admin-password")).unwrap();
+        prepare(directory.path()).unwrap();
+        assert_eq!(read_secret(&config.join("admin-user")).unwrap(), user);
+        assert_eq!(
+            read_secret(&config.join("admin-password")).unwrap(),
+            password
+        );
+    }
 
     /// A stop signal during the setup ends it, so the store is asked to stop
     /// while Docker still waits for it.

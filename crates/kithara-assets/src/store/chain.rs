@@ -35,7 +35,8 @@ pub type AssetReader<S> = LeaseReader<CachedReader<ProcessedReader<BaseReader, S
 
 /// Phase-typed acquisition outcome returned by
 /// [`super::AssetStore::acquire_resource`]: a `Pending` [`AssetWriter`] to stream and
-/// commit, or a `Ready` [`AssetReader`] when the resource is already committed.
+/// commit, a `Ready` [`AssetReader`] when the resource is already committed, or a
+/// `Joined` [`AssetReader`] over another party's in-flight writer.
 pub type ResourceAcquisition<S> = AcquisitionResult<AssetWriter<S>, AssetReader<S>>;
 
 pub(crate) type MemStore<S> = StoreChain<MemAssetStore<S>, S>;

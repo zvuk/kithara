@@ -17,7 +17,7 @@ release:xcframework:
     when: always
     expire_in: never
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - KitharaFFIInternal.xcframework.zip
       - KitharaFFIInternal.xcframework.zip.sha256
       - Kithara.xcframework.zip
@@ -44,7 +44,7 @@ release:framework-snapshot:
     when: always
     expire_in: 30 days
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - Kithara.xcframework.zip
       - Kithara.xcframework.zip.sha256
       - provenance.json
@@ -58,7 +58,7 @@ release:docs:
     when: always
     expire_in: never
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - Kithara-docs.zip
       - Kithara-docs.zip.sha256
 
@@ -71,7 +71,7 @@ release:wasm:
     when: always
     expire_in: never
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - kithara-wasm-pages.zip
       - kithara-wasm-pages.zip.sha256
       - kithara-web-docs.zip
@@ -93,7 +93,7 @@ release:android:
     when: always
     expire_in: never
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - kithara.aar
       - kithara.aar.sha256
       - kithara-okhttp.aar

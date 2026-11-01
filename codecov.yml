@@ -6,15 +6,15 @@ coverage:
     # Project-wide coverage
     project:
       default:
-        target: 80%           # Minimum target coverage
-        threshold: 2%         # Allowable drop before failure
-        base: auto            # Compare against base branch
+        target: 80% # Minimum target coverage
+        threshold: 2% # Allowable drop before failure
+        base: auto # Compare against base branch
 
     # Coverage for new changes (patches/PRs)
     patch:
       default:
-        target: 70%           # Coverage for new code
-        threshold: 5%         # More lenient for patches
+        target: 70% # Coverage for new code
+        threshold: 5% # More lenient for patches
 
   # Precision for coverage percentages
   precision: 2
@@ -22,11 +22,11 @@ coverage:
 
 # Ignore paths (don't count toward coverage)
 ignore:
-  - "tests/**/*"              # Integration tests
-  - "examples/**/*"           # Examples
-  - "benches/**/*"            # Benchmarks
-  - "**/tests.rs"             # Test modules
-  - "**/tests/**"             # Nested test directories
+  - "tests/**/*" # Integration tests
+  - "examples/**/*" # Examples
+  - "benches/**/*" # Benchmarks
+  - "**/tests.rs" # Test modules
+  - "**/tests/**" # Nested test directories
 
 # Comment behavior on PRs
 comment:

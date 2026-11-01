@@ -26,13 +26,10 @@ message: |
   but enforced at workspace level via ast-grep so violations are caught
   pre-commit, not only on `cargo clippy`.
 
-  Suppress with `// ast-grep-ignore: rust.no-inherent-to-string` when there
-  is a documented reason — e.g. an FFI bridge that intentionally exposes
-  a named symbol `to_string` with non-Display semantics.
 severity: error
 language: Rust
 files:
-  - crates/**/*.rs
+  - "crates/**/*.rs"
 ignores:
   - "**/tests/**"
   - "**/test_*.rs"

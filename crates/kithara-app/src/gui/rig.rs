@@ -27,7 +27,7 @@ use crate::{
     deck::{self, DeckSet, EqMode},
     engine::{Engine, EngineSnapshot, Envelope},
     pools::{AppHost, AppQueue, AppQueueControl},
-    state::StateController,
+    state::{GridPost, StateController},
 };
 
 pub(crate) struct Rig {
@@ -74,12 +74,12 @@ impl Rig {
         host: AppHost,
         broadcast: Broadcaster,
         analysis: AnalysisHandle,
-        mut model: impl FnMut(&HostOwned<AppQueue>, &CancelToken) -> StateController,
+        mut model: impl FnMut(&HostOwned<AppQueue>, &CancelToken, GridPost) -> StateController,
     ) -> Self {
         let mut deck_tokens = Vec::new();
-        let mut session = DeckSet::new(config, host, |queue, cancel| {
+        let mut session = DeckSet::new(config, host, |queue, cancel, grids| {
             deck_tokens.push(cancel.child());
-            model(queue, cancel)
+            model(queue, cancel, grids)
         })
         .expect("host accepts the test decks");
 
@@ -172,18 +172,7 @@ impl Rig {
     /// without depending on a device.
     #[cfg(feature = "broadcast")]
     pub(crate) fn on_air() -> Self {
-        use kithara::worker::{Worker, WorkerConfig};
-
-        let (runtime, config) = test_fixture::runtime_and_config();
-        let broadcast = AppBroadcastConfig::builder(
-            Worker::new(WorkerConfig::new()),
-            config.worker.pools().clone(),
-        )
-        .cancel(config.shutdown.child())
-        .build();
-        let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
-            .expect("test host");
-        Self::with_host(runtime, &config, host, Broadcaster::new(broadcast))
+        Self::playback()
     }
 
     #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
@@ -215,16 +204,21 @@ impl Rig {
         applied
     }
 
-    #[cfg(not(feature = "broadcast"))]
     pub(crate) fn playback() -> Self {
+        Self::playback_with(AnalysisHandle::channel(watch::channel(Arc::default()).1).0)
+    }
+
+    /// A playback rig whose decks ask `analysis` for their tracks.
+    pub(crate) fn playback_with(analysis: AnalysisHandle) -> Self {
         let (runtime, config) = test_fixture::runtime_and_config();
-        let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
+        let host = crate::pools::host(HostConfig::offline(config.worker.pools().clone()).build())
             .expect("test host");
         Self::with_host(
             runtime,
             &config,
             host,
-            Broadcaster::new(AppBroadcastConfig::default()),
+            Broadcaster::new(idle_broadcast(&config)),
+            analysis,
         )
     }
 
@@ -233,16 +227,22 @@ impl Rig {
         config: &AppConfig,
         host: AppHost,
         broadcast: Broadcaster,
+        analysis: AnalysisHandle,
     ) -> Self {
-        let (analysis, _) = AnalysisHandle::channel(watch::channel(Arc::default()).1);
+        let decks = analysis.clone();
         Self::build(
             runtime,
             config,
             host,
             broadcast,
-            analysis.clone(),
-            |queue, cancel| {
-                StateController::new(queue.control().clone(), cancel.child(), analysis.clone())
+            analysis,
+            move |queue, cancel, grids| {
+                StateController::new(
+                    queue.control().clone(),
+                    cancel.child(),
+                    decks.clone(),
+                    grids,
+                )
             },
         )
     }
@@ -277,7 +277,6 @@ impl Rig {
         self.ui.refresh();
     }
 
-    #[cfg(not(feature = "broadcast"))]
     pub(crate) fn text(&self, key: &str) -> Option<String> {
         let root = ReadRoot::new(&self.ui);
         match Walk::new(&root).get(key) {
@@ -357,7 +356,7 @@ impl Rig {
     pub(crate) fn offline_with(configure: impl FnOnce(&mut AppConfig)) -> Self {
         let (runtime, mut config) = test_fixture::runtime_and_config();
         configure(&mut config);
-        let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
+        let host = crate::pools::host(HostConfig::offline(config.worker.pools().clone()).build())
             .expect("test host");
 
         let mut states = Vec::new();
@@ -367,7 +366,7 @@ impl Rig {
             host,
             Broadcaster::new(AppBroadcastConfig::default()),
             AnalysisHandle::channel(watch::channel(Arc::default()).1).0,
-            |queue, cancel| {
+            |queue, cancel, _grids| {
                 let state = Arc::new(kithara::platform::sync::Mutex::new(
                     crate::state::UiState::new(queue.control()),
                 ));
@@ -392,4 +391,21 @@ impl Rig {
         );
         self.pump();
     }
+}
+
+#[cfg(feature = "broadcast")]
+fn idle_broadcast(config: &AppConfig) -> AppBroadcastConfig {
+    use kithara::worker::{Worker, WorkerConfig};
+
+    AppBroadcastConfig::builder(
+        Worker::new(WorkerConfig::new()),
+        config.worker.pools().clone(),
+    )
+    .cancel(config.shutdown.child())
+    .build()
+}
+
+#[cfg(not(feature = "broadcast"))]
+fn idle_broadcast(_config: &AppConfig) -> AppBroadcastConfig {
+    AppBroadcastConfig::default()
 }

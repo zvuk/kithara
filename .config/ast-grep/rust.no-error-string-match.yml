@@ -30,22 +30,22 @@ ignores:
 rule:
   any:
     - pattern:
-        context: 'match x { Err($V($X)) if $X == $S => () }'
+        context: "match x { Err($V($X)) if $X == $S => () }"
         selector: match_pattern
     - pattern:
-        context: 'match x { Err($V($X)) if &*$X == $S => () }'
+        context: "match x { Err($V($X)) if &*$X == $S => () }"
         selector: match_pattern
     - pattern:
-        context: 'match x { Err($V($X)) if $X.as_str() == $S => () }'
+        context: "match x { Err($V($X)) if $X.as_str() == $S => () }"
         selector: match_pattern
     - pattern:
-        context: 'match x { Err($V { $F }) if $F == $S => () }'
+        context: "match x { Err($V { $F }) if $F == $S => () }"
         selector: match_pattern
     - pattern:
-        context: 'match x { Some($V($X)) if $X == $S => () }'
+        context: "match x { Some($V($X)) if $X == $S => () }"
         selector: match_pattern
     - pattern:
-        context: 'match x { Some($V { $F }) if $F == $S => () }'
+        context: "match x { Some($V { $F }) if $F == $S => () }"
         selector: match_pattern
 constraints:
   S:

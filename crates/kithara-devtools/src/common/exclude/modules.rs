@@ -75,24 +75,56 @@ pub fn cfg_test_module_globs(workspace_root: &Path) -> Vec<String> {
     let Ok(files) = walk_rs_files(&root.join("crates")) else {
         return Vec::new();
     };
-    let (roots, mut tainted_crates) = cargo_roots(&root, &files);
+    let (roots, tainted_crates) = cargo_roots(&root, &files);
+    module_globs(&root, files, &roots, tainted_crates)
+}
+
+/// Cargo-backed callers include custom and root-package target layouts.
+pub(crate) fn cfg_test_module_globs_for_targets<'a>(
+    workspace_root: &Path,
+    targets: impl IntoIterator<Item = &'a Path>,
+) -> Vec<String> {
+    let Ok(root) = fs::canonicalize(workspace_root) else {
+        return Vec::new();
+    };
+    let mut roots = BTreeSet::new();
+    let mut files = BTreeSet::new();
+    for target in targets {
+        let Ok(target) = fs::canonicalize(target) else {
+            return Vec::new();
+        };
+        let Ok(reachable) = module_files(&target, |_| false) else {
+            return Vec::new();
+        };
+        roots.insert(target);
+        files.extend(reachable);
+    }
+    module_globs(&root, files.into_iter().collect(), &roots, BTreeSet::new())
+}
+
+fn module_globs(
+    root: &Path,
+    files: Vec<PathBuf>,
+    roots: &BTreeSet<PathBuf>,
+    mut tainted_crates: BTreeSet<PathBuf>,
+) -> Vec<String> {
     let mut graph = BTreeMap::new();
     let mut uncertain_roots = BTreeSet::new();
     for path in files {
         let Ok(path) = fs::canonicalize(&path) else {
-            if let Some(directory) = crate_directory(&root, &path) {
+            if let Some(directory) = crate_directory(root, &path) {
                 tainted_crates.insert(directory);
             }
             continue;
         };
         let Ok(source) = fs::read_to_string(&path) else {
-            if let Some(directory) = crate_directory(&root, &path) {
+            if let Some(directory) = crate_directory(root, &path) {
                 tainted_crates.insert(directory);
             }
             continue;
         };
         let Ok(file) = syn::parse_file(&source) else {
-            if let Some(directory) = crate_directory(&root, &path) {
+            if let Some(directory) = crate_directory(root, &path) {
                 tainted_crates.insert(directory);
             }
             continue;
@@ -185,7 +217,7 @@ pub fn cfg_test_module_globs(workspace_root: &Path) -> Vec<String> {
                 .iter()
                 .any(|directory| path.starts_with(directory))
         })
-        .filter_map(|(path, _)| path.strip_prefix(&root).ok())
+        .filter_map(|(path, _)| path.strip_prefix(root).ok())
         .map(|path| Pattern::escape(&path.to_string_lossy()))
         .collect();
     globs.sort();
