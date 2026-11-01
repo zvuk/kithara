@@ -19,17 +19,19 @@ use bytes::Bytes;
 use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioRead},
+    audio::{AudioConfig, AudioRead, mock::TestPcmReader},
     download::{Downloader, DownloaderConfig},
     file::{File, FileConfig},
     hls::{Hls, HlsConfig},
+    host::{HostConfig, HostSettings},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         time::Duration,
         tokio::runtime::{Builder, Runtime},
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, SessionDuckingMode},
+    queue::RepeatMode,
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
@@ -40,8 +42,11 @@ use kithara::{
 use kithara_integration_tests::{
     auto,
     bufpool_ext::{TestPools, pools},
+    offline::{OfflinePlayer, OfflinePlayerOptions},
 };
-use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+use kithara_test_fixtures::{
+    assets::signal_mp3_track_sine440_187s, integration_fixtures::benchmark_half,
+};
 use kithara_test_utils::TestHttpServer;
 use tempfile::TempDir;
 use url::Url;
@@ -473,6 +478,79 @@ fn bench_layout(c: &mut Criterion) {
     group.finish();
 }
 
+async fn render_player(ducking: SessionDuckingMode) -> OfflinePlayer {
+    let rate = NonZeroU32::new(48_000).expect("bench sample rate");
+    let player = OfflinePlayer::with_options(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.02)
+            .block_on_underrun(true)
+            .build(),
+        HostConfig::offline(pools())
+            .max_block_frames(NonZeroU32::new(1024).expect("bench block"))
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(rate)
+                    .ducking(ducking)
+                    .build(),
+            )
+            .build(),
+    )
+    .await;
+    let source = player.pcm_deck(Box::new(TestPcmReader::with_pcm(
+        AudioSpec::new(2, rate),
+        120.0,
+        benchmark_half(),
+    )));
+    player
+        .with_queue(|queue| queue.set_repeat(RepeatMode::All))
+        .await;
+    player.load_and_fadein(source).await;
+    player.set_volume(0.5).await.expect("bench gain");
+    let warm = player.render(48_000).await;
+    assert!(
+        warm.iter().any(|sample| sample.abs() > 0.0),
+        "bench must render audio"
+    );
+    player
+}
+
+#[path = "support/render_buffers.rs"]
+mod render_buffer_cases;
+
+fn bench_render_buffers(c: &mut Criterion) {
+    let runtime = make_runtime();
+    let mut group = c.benchmark_group("render_buffers");
+    for (label, frames) in [("settled", 128), ("moving", 257), ("seek_tail", 1023)] {
+        let player = runtime.block_on(render_player(SessionDuckingMode::Soft));
+        runtime.block_on(render_buffer_cases::admit_player(&player, label, frames));
+        let mut high = false;
+        group.bench_function(format!("{label}/{frames}"), |b| {
+            b.iter(|| {
+                let output = runtime.block_on(async {
+                    if label == "moving" {
+                        high = !high;
+                        player
+                            .set_volume(if high { 0.75 } else { 0.5 })
+                            .await
+                            .expect("bench gain change");
+                    } else if label == "seek_tail" {
+                        player.seek(0.0).await;
+                    }
+                    player.render(frames).await
+                });
+                black_box(output);
+            });
+        });
+        assert_eq!(player.metrics().decode_errors(), 0, "bench decode failure");
+        let output = runtime.block_on(player.render(frames));
+        assert!(
+            output.iter().any(|sample| sample.abs() > 0.0),
+            "bench ended in silence"
+        );
+        runtime.block_on(player.close());
+    }
+    group.finish();
+}
 #[path = "support/effects.rs"]
 mod effect_controls;
 
@@ -484,6 +562,8 @@ criterion_group!(
     bench_resampler_process,
     bench_audio_file_new_and_read,
     bench_hls_stream_seek_read,
-    bench_layout
+    bench_layout,
+    bench_render_buffers,
+    render_buffer_cases::bench
 );
 criterion_main!(benches);
