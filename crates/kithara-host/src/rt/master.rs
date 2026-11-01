@@ -14,6 +14,7 @@ use kithara_test_utils::kithara;
 use crate::{api::SessionDuckingMode, session::applied_spans};
 
 mod consts {
+    pub(super) const GAIN_CHUNK: usize = 256;
     /// A ducking amplitude lies between silence and unity.
     pub(super) const GAIN_SPAN: f32 = 1.0;
 }
@@ -130,6 +131,7 @@ impl AudioNodeProcessor for MasterProcessor {
         ) else {
             return ProcessStatus::Bypass;
         };
+        let mut gains = [0.0; consts::GAIN_CHUNK];
         for (range, ducking) in duckings {
             gain.set_value(ducking.volume().amp());
             let (Some(in_left), Some(in_right), Some(out_left), Some(out_right)) = (
@@ -141,17 +143,26 @@ impl AudioNodeProcessor for MasterProcessor {
                 continue;
             };
             for (((out_left, out_right), in_left), in_right) in out_left
-                .iter_mut()
-                .zip(out_right.iter_mut())
-                .zip(in_left)
-                .zip(in_right)
+                .chunks_mut(consts::GAIN_CHUNK)
+                .zip(out_right.chunks_mut(consts::GAIN_CHUNK))
+                .zip(in_left.chunks(consts::GAIN_CHUNK))
+                .zip(in_right.chunks(consts::GAIN_CHUNK))
             {
-                let gain = gain.next_smoothed();
-                *out_left = in_left * gain;
-                *out_right = in_right * gain;
+                let gains = &mut gains[..out_left.len()];
+                for level in gains.iter_mut() {
+                    *level = gain.next_smoothed();
+                }
+                out_left.copy_from_slice(in_left);
+                out_right.copy_from_slice(in_right);
+                kithara_dsp::multiply_in_place(out_left, gains);
+                kithara_dsp::multiply_in_place(out_right, gains);
             }
         }
         gain.settle();
         ProcessStatus::OutputsModified
     }
 }
+
+#[cfg(test)]
+#[path = "master_tests.rs"]
+mod tests;

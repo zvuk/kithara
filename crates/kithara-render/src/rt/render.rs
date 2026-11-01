@@ -99,17 +99,108 @@ impl RenderPass {
     fn apply_gain(&mut self, left: &mut [f32], right: &mut [f32]) {
         if self.gain.has_settled() {
             let gain = self.gain.target_value();
-            for (l, r) in left.iter_mut().zip(right.iter_mut()) {
-                *l *= gain;
-                *r *= gain;
-            }
+            let frames = left.len().min(right.len());
+            kithara_dsp::scale_in_place(&mut left[..frames], gain);
+            kithara_dsp::scale_in_place(&mut right[..frames], gain);
             return;
         }
-        for (l, r) in left.iter_mut().zip(right.iter_mut()) {
-            let gain = self.gain.next_smoothed();
-            *l *= gain;
-            *r *= gain;
+        let frames = left.len().min(right.len());
+        let mut gains = [0.0; crate::consts::FADE_CHUNK];
+        for (left, right) in left[..frames]
+            .chunks_mut(crate::consts::FADE_CHUNK)
+            .zip(right[..frames].chunks_mut(crate::consts::FADE_CHUNK))
+        {
+            let gains = &mut gains[..left.len()];
+            for gain in gains.iter_mut() {
+                *gain = self.gain.next_smoothed();
+            }
+            kithara_dsp::multiply_in_place(left, gains);
+            kithara_dsp::multiply_in_place(right, gains);
         }
         self.gain.settle();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn gain_matches_scalar_pcm_and_terminal_state() {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let shape = StreamShape::new(NonZeroU32::new(1024).expect("block"), rate);
+        let mut pass = RenderPass::new(
+            &crate::test_pools::pools(),
+            shape,
+            1.0,
+            super::super::DeckMixerConfig::builder().eq_bands(0).build(),
+        )
+        .expect("render pass");
+        for (target, settled) in [
+            (1.0, false),
+            (0.0, false),
+            (0.5, false),
+            (0.999_99, false),
+            (0.5, true),
+            (0.0, true),
+        ] {
+            for length in [0, 1, 255, 256, 257, 513] {
+                for (left_extra, right_extra) in [(0, 0), (3, 0), (0, 3)] {
+                    pass.gain = SmoothedParam::new(1.0, 1.0, SmootherConfig::default(), rate);
+                    pass.set_gain(target);
+                    if settled {
+                        pass.gain.reset_to_target();
+                        assert!(pass.gain.has_settled());
+                    }
+                    let mut expected_gain = pass.gain;
+                    if target == 0.999_99 && length > crate::consts::FADE_CHUNK {
+                        let mut premature = expected_gain;
+                        premature.process_into_buffer(&mut [0.0; crate::consts::FADE_CHUNK]);
+                        assert!(
+                            premature.has_settled(),
+                            "the first scratch chunk could settle early"
+                        );
+                    }
+                    let mut left: Vec<_> = [0.25, -0.75, 0.0, -0.0]
+                        .into_iter()
+                        .cycle()
+                        .take(length + left_extra)
+                        .collect();
+                    let mut right = vec![-0.5; length + right_extra];
+                    let (mut expected_left, mut expected_right) = (left.clone(), right.clone());
+                    let moving = !expected_gain.has_settled();
+                    for (l, r) in expected_left.iter_mut().zip(&mut expected_right) {
+                        let gain = if moving {
+                            expected_gain.next_smoothed()
+                        } else {
+                            target
+                        };
+                        *l *= gain;
+                        *r *= gain;
+                    }
+                    if moving {
+                        expected_gain.settle();
+                    }
+                    pass.apply_gain(&mut left, &mut right);
+                    assert_eq!(
+                        left.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                        expected_left
+                            .iter()
+                            .map(|x| x.to_bits())
+                            .collect::<Vec<_>>()
+                    );
+                    assert_eq!(
+                        right.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                        expected_right
+                            .iter()
+                            .map(|x| x.to_bits())
+                            .collect::<Vec<_>>()
+                    );
+                    assert_eq!(pass.gain, expected_gain, "target {target}, length {length}");
+                }
+            }
+        }
     }
 }
