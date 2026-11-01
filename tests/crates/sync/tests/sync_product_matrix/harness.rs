@@ -560,7 +560,6 @@ impl ProductHarness {
         let mut decoded = Vec::with_capacity(sources.len());
         for (index, source) in sources.into_iter().enumerate() {
             hang_tick!(format!("{}: creating deck {index}", case.id));
-            // Ruling: PlayerImpl-backed Host deck → Queue<LinkedFactory<ObservedFactory>> on LinkedHost — spec §4.4–§4.6, §11.2.
             let observation = Arc::new(Mutex::new(LinkObservation::default()));
             let queue = linked_queue(case, &worker, &trajectory, &observation, block_frames);
             let deck = host
@@ -714,7 +713,6 @@ impl ProductHarness {
             let _ = self.render(case, self.block_frames).await;
             hang_reset!();
         }
-        // Ruling: processed TransportRevision probe → real load Settled and published track snapshot — spec §11.2, F belongs to LinkedHost.
         for deck in &self.decks {
             let item = deck.current().expect("selected item").id;
             let snapshot = deck
@@ -1063,20 +1061,9 @@ impl ProductHarness {
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     async fn deliver_grids(&self, case: SyncCase) {
-        // Ruling: SyncOperation source/load grid topology → item/load-scoped GridAnswer — spec §4.8, §11.2.
         for (index, deck) in self.decks.iter().enumerate() {
             hang_tick!(format!("deliver_grids: deck {index}"));
             let item = deck.current().expect("selected item").id;
-            let load = deck
-                .observe(|observation| {
-                    observation
-                        .loads
-                        .iter()
-                        .rev()
-                        .find(|(loaded, _)| *loaded == item)
-                        .map(|(_, seq)| *seq)
-                })
-                .expect("real load sequence");
             let ArtifactSource::Value(model) = self.provider.beat_grid(index) else {
                 panic!("fixture grid must be materialized")
             };
@@ -1086,7 +1073,6 @@ impl ProductHarness {
                     deck: target,
                     answer: GridAnswer {
                         item,
-                        load,
                         model: Ok((*model).clone()),
                     },
                 })
@@ -1696,10 +1682,6 @@ impl ProductHarness {
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub(crate) async fn request_sync_intent(&mut self, case: SyncCase, intent: SyncRequest) {
-        // Ruling: SyncIntent::Enable → LinkedHostCommand::Sync{on:true} — spec §4.5–§4.6.
-        // Ruling: SyncIntent::Disable → LinkedHostCommand::Sync{on:false} — spec §4.5–§4.6.
-        // Ruling: SyncIntent::AlignNow → explicit Sync{on:true}, including a repeated enable — spec §4.5.
-        // Ruling: SyncOperation::Sync{source,activation,transport,load} → DeckId-routed Sync; Linked chooses F from its observed mark and lead — spec §3.4, §4.5, §11.2.
         #[cfg(not(target_os = "android"))]
         self.mark(&format!("sync {intent:?}"));
         for index in 0..self.decks.len() {

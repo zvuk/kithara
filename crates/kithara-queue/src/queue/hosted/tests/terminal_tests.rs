@@ -942,8 +942,6 @@ fn failed_playback_stopped_notification_carries_the_role() {
     ));
 }
 
-// Ruling: CrossfadeArm → pending auto transition for the current item; an outgoing predecessor does not arm its successor — spec §4.4, §6 scenario 9.
-// Ruling: should_arm_crossfade → tick_deadlines creates one future transition; zero crossfade waits until the end, without pre-arming — spec §4.4, §6 scenario 9.
 #[kithara::test]
 #[case::remaining_equals_crossfade(162.0, 157.0, 5.0, None, true)]
 #[case::remaining_below_crossfade(162.0, 160.0, 5.0, None, true)]

@@ -33,10 +33,10 @@ rule:
         - kind: function_item
         - regex: 'pub fn \w+\([^)]*\)\s*->\s*bool\b'
         - not:
-            regex: 'pub fn (is_|has_|should_|can_|will_|was_|were_|did_|are_|allow_|allows|contains|matches|starts_with|ends_with|accepts|supports|requires|equals|intersects|overlaps|exists|fits|owns|covers|holds|needs|wants)'
+            regex: "pub fn (is_|has_|should_|can_|will_|was_|were_|did_|are_|allow_|allows|contains|matches|starts_with|ends_with|accepts|supports|requires|equals|intersects|overlaps|exists|fits|owns|covers|holds|needs|wants)"
     # `pub field: bool` without a predicate-style prefix.
     - all:
         - kind: field_declaration
         - regex: 'pub \w+\s*:\s*bool\b'
         - not:
-            regex: 'pub (is_|has_|should_|can_|will_|was_|were_|did_|are_)'
+            regex: "pub (is_|has_|should_|can_|will_|was_|were_|did_|are_)"

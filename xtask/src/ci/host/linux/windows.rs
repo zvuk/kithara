@@ -50,6 +50,8 @@ struct GuestSettings<'a> {
     monkeys_audio_source_sha256: &'a str,
     git_sha256: &'a str,
     git_url: String,
+    kache_sha256: &'a str,
+    kache_url: String,
     runner_sha256: &'a str,
     runner_url: String,
     rustup_sha256: &'a str,
@@ -185,6 +187,7 @@ fn creation_args(
     Ok([
         "--name",
         &guest.name,
+        "--autostart",
         "--osinfo",
         "win11",
         "--boot",
@@ -568,6 +571,7 @@ fn build_enrolment_media(
         fs::remove_dir_all(&staging).with_context(|| format!("clearing {}", staging.display()))?;
     }
     fs::create_dir_all(&staging).with_context(|| format!("creating {}", staging.display()))?;
+    super::permissions::set_mode(&staging, consts::OWNER_DIRECTORY)?;
 
     let enrolment = Enrolment {
         labels: guest.labels.join(","),
@@ -663,8 +667,13 @@ fn build_answer_media(
         fs::remove_dir_all(&staging).with_context(|| format!("clearing {}", staging.display()))?;
     }
     fs::create_dir_all(&staging).with_context(|| format!("creating {}", staging.display()))?;
+    super::permissions::set_mode(&staging, consts::OWNER_DIRECTORY)?;
 
-    for source in [consts::GUEST_ANSWER_FILE, consts::GUEST_PROVISION_SCRIPT] {
+    for source in [
+        consts::GUEST_ANSWER_FILE,
+        consts::GUEST_PROVISION_SCRIPT,
+        ".config/windows/cache.ps1",
+    ] {
         let name = Path::new(source)
             .file_name()
             .context("a tracked file with no name")?;
@@ -678,6 +687,26 @@ fn build_answer_media(
             .context("serialising the guest settings")?,
     )
     .context("writing the guest settings")?;
+    let guest = host
+        .windows
+        .as_ref()
+        .context("no Windows guest configured")?;
+    let environment = crate::ci::cache::client_environment(&guest.sccache_s3_env_file)?;
+    fs::write(
+        staging.join("cache.env"),
+        environment
+            .iter()
+            .map(|(key, value)| format!("{key}={value}\n"))
+            .collect::<String>(),
+    )?;
+    fs::write(
+        staging.join("kache-host.toml"),
+        crate::ci::kache::host_config(
+            &environment,
+            Path::new("C:/kithara-ci/cache/kache/store"),
+            &host.compiler_cache_size,
+        )?,
+    )?;
 
     let media = host.cache_root.join("windows-answers.iso");
     let mut command = process.command("xorriso");
@@ -694,6 +723,7 @@ fn build_answer_media(
         path_text(&staging)?,
     ]);
     process.run_command(&mut command, "build the answer media")?;
+    super::permissions::set_mode(&media, consts::OWNER_ONLY)?;
     Ok(media)
 }
 
@@ -721,6 +751,11 @@ fn guest_settings(pins: &CiPins) -> Result<GuestSettings<'_>> {
         ),
         git_sha256: &pins.git_windows_sha256,
         git_url: pins.git_windows_url.clone(),
+        kache_sha256: &pins.kache_windows_amd64_sha256,
+        kache_url: format!(
+            "https://github.com/kunobi-ninja/kache/releases/download/v{}/kache-x86_64-pc-windows-msvc.exe",
+            pins.cargo_tool_version("kache")?
+        ),
         runner_sha256: &pins.actions_runner_windows_sha256,
         runner_url: format!(
             "https://github.com/actions/runner/releases/download/v{version}/actions-runner-win-x64-{version}.zip",
@@ -984,6 +1019,21 @@ mod tests {
             sources,
             [PathBuf::from("/srv/kithara ci/kithara-ci-windows.qcow2")]
         );
+    }
+
+    #[test]
+    fn guest_creation_enables_hypervisor_autostart() {
+        let host = super::super::profile::tests::host_fixture();
+        let guest = host.windows.clone().unwrap();
+        let args = creation_args(
+            &host,
+            &guest,
+            Path::new("/iso/windows.iso"),
+            Path::new("/iso/answers.iso"),
+        )
+        .unwrap();
+
+        assert!(args.iter().any(|arg| arg == "--autostart"), "{args:?}");
     }
 
     /// The suite opens the machine's default audio output, and Windows has one

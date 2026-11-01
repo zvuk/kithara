@@ -132,7 +132,7 @@ fn aligned_seek_respects_lane_lead_and_refusal_keeps_the_pending_jump() {
 
 #[kithara::test]
 fn a_new_load_owns_position_and_obsolete_jump_receipts_change_nothing() {
-    let (mut deck, control, mut rig, old_load) = sounding();
+    let (mut deck, control, mut rig, _) = sounding();
     let jump = rig
         .run(|out| {
             deck.apply(
@@ -149,12 +149,6 @@ fn a_new_load_owns_position_and_obsolete_jump_receipts_change_nothing() {
     control.clear();
     let before = deck.snapshot();
     assert!(matches!(rig.apply(&mut deck, jump, 128), Settled::Pending));
-    answer(
-        &mut deck,
-        &mut rig,
-        old_load,
-        grid(24_000, 0, None, 960_000),
-    );
     assert_eq!(deck.snapshot().as_ref().position, position(6_000));
     assert_eq!(deck.snapshot().as_ref().status, before.as_ref().status);
     assert_eq!(deck.snapshot().sync, before.sync);
@@ -163,7 +157,7 @@ fn a_new_load_owns_position_and_obsolete_jump_receipts_change_nothing() {
 
 #[kithara::test]
 fn aligned_seek_waits_for_a_grid_covering_its_cue() {
-    let (mut deck, control, mut rig, load) = loaded(grid(24_000, 0, None, 192_000));
+    let (mut deck, control, mut rig, _) = loaded(grid(24_000, 0, None, 192_000));
     let sync = rig
         .run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("sync")
@@ -192,7 +186,7 @@ fn aligned_seek_waits_for_a_grid_covering_its_cue() {
         }
     );
     assert!(control.commands().is_empty());
-    answer(&mut deck, &mut rig, load, grid(24_000, 0, None, 480_000));
+    answer(&mut deck, &mut rig, grid(24_000, 0, None, 480_000));
     let commands = control.commands();
     assert_eq!(commands.len(), 1);
     assert_eq!(
@@ -290,7 +284,6 @@ fn rejected_jump_keeps_active_playback_and_cannot_be_resurrected() {
     assert_eq!(deck.snapshot().as_ref().position, before.as_ref().position);
 }
 
-// Ruling: spec 4.3 replaces the executor Capacity receipt with immediate Full; the refused jump leaves the entire applied snapshot intact.
 #[kithara::test]
 fn a_capacity_rejection_drops_the_relocation_and_keeps_the_applied_map() {
     let (mut deck, control, mut rig, _) = sounding();
@@ -382,7 +375,6 @@ fn retime_owns_the_replacement_start_and_ignores_the_withdrawn_receipt() {
     );
 }
 
-// Ruling: spec 4.5 replaces an exact-cue WarpPlan with the nearest in-phase Jump at lane lead.
 #[kithara::test]
 fn a_relocation_starts_on_the_exact_cue_and_keeps_the_applied_map() {
     let (mut deck, control, mut rig, loading) = sounding();
@@ -423,7 +415,6 @@ fn a_relocation_starts_on_the_exact_cue_and_keeps_the_applied_map() {
     assert_eq!(deck.snapshot().as_ref().position, position(0));
 }
 
-// Ruling: spec 3.4/4.5 replaces a caller window with mandatory lane lead; a refused enqueue retains the prior Jump.
 #[kithara::test]
 fn a_relocation_starts_no_earlier_than_the_frame_after_its_frontier() {
     let (mut deck, control, mut rig, _) = sounding();
@@ -459,10 +450,9 @@ fn a_relocation_starts_no_earlier_than_the_frame_after_its_frontier() {
     assert_eq!(deck.snapshot().as_ref().position, position(1));
 }
 
-// Ruling: spec 4.8 replaces RelocationUncovered with a grid wait that emits no lane command before coverage.
 #[kithara::test]
 fn an_uncovered_cue_refuses_the_relocation_without_waiting() {
-    let (mut deck, control, mut rig, loading) = loaded(grid(24_000, 0, Some((4, 0)), 192_000));
+    let (mut deck, control, mut rig, _) = loaded(grid(24_000, 0, Some((4, 0)), 192_000));
     let sync = rig
         .run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("sync")
@@ -489,12 +479,7 @@ fn an_uncovered_cue_refuses_the_relocation_without_waiting() {
         }
     );
     assert!(control.commands().is_empty());
-    answer(
-        &mut deck,
-        &mut rig,
-        loading,
-        grid(24_000, 0, Some((4, 0)), 480_000),
-    );
+    answer(&mut deck, &mut rig, grid(24_000, 0, Some((4, 0)), 480_000));
     let commands = control.commands();
     assert_eq!(commands.len(), 1);
     assert_eq!(
@@ -503,7 +488,6 @@ fn an_uncovered_cue_refuses_the_relocation_without_waiting() {
     );
 }
 
-// Ruling: spec 4.5 removes PrepareStart and destructive SYNC Seek; sounding Seek is a Jump, while Pause is unchanged.
 #[kithara::test]
 fn an_applied_member_refuses_a_destructive_transport() {
     let (mut deck, control, mut rig, _) = sounding();
@@ -547,7 +531,6 @@ fn an_unmapped_member_keeps_the_ordinary_seek() {
     assert_eq!(deck.snapshot().sync, SyncStatus::On);
 }
 
-// Ruling: spec 4.5/4.8 replaces relocation-map withdrawal with an ordered speed step; an already sent Jump remains owned by its Seq.
 #[kithara::test]
 fn a_tempo_commit_withdraws_the_relocation_and_retargets_under_a_new_operation() {
     let (mut deck, control, mut rig, _) = sounding();
@@ -573,7 +556,6 @@ fn a_tempo_commit_withdraws_the_relocation_and_retargets_under_a_new_operation()
         control.commands(),
         [(
             relocation,
-            // Ruling: spec 4.5 uses bar phase at F: before the commit, (400000 / 24000) mod 4 = 2/3; nearest to 240000 is 208000.
             Command::Jump(position(208_000), SessionFrame::new(400_000))
         )]
     );
@@ -615,7 +597,6 @@ fn a_tempo_commit_withdraws_the_relocation_and_retargets_under_a_new_operation()
     }
 }
 
-// Ruling: spec 3.4/4.5 removes ArmedOperation; admitted speed and relocation commands share lane order, without changing applied playback early.
 #[kithara::test]
 fn an_armed_preparation_refuses_a_relocation() {
     let (mut deck, control, mut rig, _) = sounding();

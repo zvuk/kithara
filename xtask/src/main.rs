@@ -171,7 +171,7 @@ mod tests {
 
     /// `.cargo/config.toml` aliases `cargo xtask` to `cargo run --package xtask`,
     /// which refuses to pick when the package carries several binaries.
-    /// `src/bin/fake-tool.rs` is the second one, so the manifest has to name this
+    /// Auxiliary entry points live in `bin/`, so the manifest has to name this
     /// file's binary as the default or every `cargo xtask` invocation fails.
     #[test]
     fn the_cargo_xtask_alias_resolves_to_this_binary() {

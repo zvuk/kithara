@@ -423,6 +423,16 @@ pub(super) fn tempo(host: &mut Host, bpm: f64, frame: i64) -> Result<Option<Seq>
     )
 }
 
+pub(super) fn next_tempo(host: &mut Host, bpm: f64) -> Result<Option<Seq>, PlayError> {
+    host.apply(
+        HostCommand::Configure(
+            HostSettingsChange::Tempo(Tempo::new(bpm).expect("test tempo")),
+            When::Next,
+        )
+        .into(),
+    )
+}
+
 pub(super) fn finish(host: &mut Host) -> Vec<HostSettled> {
     assert!(
         host.pass().is_empty(),

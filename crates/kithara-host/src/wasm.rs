@@ -5,10 +5,9 @@ use kithara_platform::{
     sync::{Arc, Mutex, Notify},
     thread::{assert_main_thread, assert_not_main_thread},
 };
-use kithara_play::HostedDeck;
 
 use crate::{
-    Host, HostCommand, HostCore, HostOwner, PlayError,
+    Host, HostCore, HostOwner, PlayError,
     session::{
         RootView,
         decks::{DeckInbox, DeckMsg},
@@ -20,16 +19,16 @@ use crate::{
 
 /// A Worker endpoint to the canonical owner's existing command queue.
 #[derive_where::derive_where(Clone)]
-pub struct HostSender<S> {
+pub struct HostSender<S: 'static, O: HostOwner<S> = HostCore<S>> {
     pub(crate) id: crate::DeckId,
     pub(crate) root_view: RootView,
-    pub(crate) postbox: HostPostbox<HostCommand<S, dyn HostedDeck<S>>>,
+    pub(crate) postbox: HostPostbox<O::Command>,
 }
 
 /// The main-thread endpoint driving the same canonical owner.
-pub struct HostReceiver<S: 'static> {
-    pub(crate) state: WebSessionState<HostCore<S>>,
-    pub(crate) route: Arc<HostRoute<HostCommand<S, dyn HostedDeck<S>>>>,
+pub struct HostReceiver<S: 'static, O: HostOwner<S> = HostCore<S>> {
+    pub(crate) state: WebSessionState<O>,
+    pub(crate) route: Arc<HostRoute<O::Command>>,
 }
 
 pub(crate) struct HostRoute<C> {
@@ -136,21 +135,33 @@ impl<C> HostRoute<C> {
 }
 
 /// Shares the existing owner's route with a Worker without transferring decks twice.
-pub fn worker_host_channel<S: HasPool<f32> + Send + Sync + 'static>(
-    host: &Host<S>,
-) -> Result<(HostSender<S>, HostReceiver<S>), PlayError> {
+pub fn worker_host_channel<S, O>(
+    host: &Host<S, O>,
+) -> Result<(HostSender<S, O>, HostReceiver<S, O>), PlayError>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+    O: HostOwner<S>,
+{
     assert_main_thread("worker_host_channel");
     host.browser_channel()
 }
 
 /// Connects a Worker facade to the existing main-thread owner.
-pub fn remote_host<S: HasPool<f32> + Send + Sync + 'static>(sender: HostSender<S>) -> Host<S> {
+pub fn remote_host<S, O>(sender: HostSender<S, O>) -> Host<S, O>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+    O: HostOwner<S>,
+{
     assert_not_main_thread("remote_host");
     Host::browser_remote(sender)
 }
 
 /// Runs pending owner commands and one owner pass on the main thread.
-pub fn tick_and_poll<S: HasPool<f32> + Send + Sync + 'static>(receiver: &HostReceiver<S>) {
+pub fn tick_and_poll<S, O>(receiver: &HostReceiver<S, O>)
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+    O: HostOwner<S>,
+{
     assert_main_thread("tick_and_poll");
-    receiver.route.drain::<S, HostCore<S>>(&receiver.state);
+    receiver.route.drain::<S, O>(&receiver.state);
 }

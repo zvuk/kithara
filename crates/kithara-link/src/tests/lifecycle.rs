@@ -32,7 +32,6 @@ fn assert_track_unchanged(actual: &TrackSnapshot, expected: &TrackSnapshot) {
     assert_eq!(actual.pending_lane, expected.pending_lane);
 }
 
-// Ruling: spec 4.6/8 fences staged work by Load Seq and item, replacing the staged member-grid stamp.
 #[kithara::test]
 fn a_parent_fact_commits_the_member_observation_it_was_staged_on() {
     let (mut deck, control, mut rig, _) = sounding();
@@ -56,7 +55,7 @@ fn a_parent_fact_commits_the_member_observation_it_was_staged_on() {
     let seq = staged[0].0;
     let loading = load(&mut deck, &mut rig, 0);
     rig.apply(&mut deck, loading, 0);
-    answer(&mut deck, &mut rig, loading, grid(24_000, 0, None, 24_000));
+    answer(&mut deck, &mut rig, grid(24_000, 0, None, 24_000));
     let before = deck.snapshot();
     assert!(matches!(
         rig.apply(&mut deck, seq, 36_000),
@@ -66,10 +65,9 @@ fn a_parent_fact_commits_the_member_observation_it_was_staged_on() {
     assert_eq!(deck.snapshot().sync, before.sync);
 }
 
-// Ruling: spec 4.8 replaces Installed/Armed fences with entry replacement; a terminal start rejection clears the pending entry.
 #[kithara::test]
 fn a_member_grid_publication_fences_installing_and_arming() {
-    let (mut deck, control, mut rig, loading) = silent();
+    let (mut deck, control, mut rig, _) = silent();
     for first in [12_000, 24_000] {
         let old = rig
             .run(|out| {
@@ -86,7 +84,6 @@ fn a_member_grid_publication_fences_installing_and_arming() {
         answer(
             &mut deck,
             &mut rig,
-            loading,
             grid(24_000, first, Some((4, 0)), 960_000),
         );
         let replacement = control.commands();
@@ -121,7 +118,6 @@ fn a_member_grid_publication_fences_installing_and_arming() {
     ));
 }
 
-// Ruling: spec 5.8 replaces receipt stamps with Seq and the current load basis; neither obsolete fact commits.
 #[kithara::test]
 fn a_receipt_under_other_facts_or_an_older_operation_commits_nothing() {
     let (mut deck, control, mut rig, _) = silent();
@@ -162,7 +158,6 @@ fn a_receipt_under_other_facts_or_an_older_operation_commits_nothing() {
     assert_eq!(deck.snapshot().sync, held.sync);
 }
 
-// Ruling: spec 4.6 removes detached grid members; replacing a load invalidates its pending start receipt.
 #[kithara::test]
 fn arming_an_absent_member_is_rejected() {
     let (mut deck, _, mut rig, _) = silent();
@@ -178,7 +173,6 @@ fn arming_an_absent_member_is_rejected() {
     assert_eq!(deck.snapshot().sync, held.sync);
 }
 
-// Ruling: spec 3.4/3.5 deletes ArmedOperation; resident-player starts are ordered frame commands, not competing staged lanes.
 #[kithara::test]
 fn an_armed_member_refuses_a_second_entry() {
     let (mut deck, control, mut rig, _) = silent();
@@ -234,7 +228,6 @@ fn an_armed_member_refuses_a_second_entry() {
     assert_eq!(deck.snapshot().sync, SyncStatus::On);
 }
 
-// Ruling: spec 4.8 replaces an audible WarpPlan with speed-only correction; source and playing beat never jump.
 #[kithara::test]
 fn a_tempo_retarget_continues_the_audible_source_without_a_new_beat() {
     let (mut deck, control, mut rig, _) = sounding();
@@ -279,7 +272,6 @@ fn a_tempo_retarget_continues_the_audible_source_without_a_new_beat() {
     assert_eq!(deck.snapshot().as_ref().speed, 1.0);
 }
 
-// Ruling: spec 4.8 replaces Converging/applied-map with correction status; rejected speed keeps the applied source.
 #[kithara::test]
 fn a_rejected_retarget_returns_the_member_to_its_applied_map() {
     let (mut deck, control, mut rig, _) = sounding();
@@ -314,7 +306,6 @@ fn a_rejected_retarget_returns_the_member_to_its_applied_map() {
     assert_track_unchanged(deck.snapshot().as_ref(), before.as_ref());
 }
 
-// Ruling: spec 4.6/8 retimes two audible lanes and replans the silent entry, replacing three prepared maps.
 #[kithara::test]
 fn a_tempo_commit_retargets_only_the_member_holding_no_prepared_map() {
     let mut members = Vec::new();
@@ -363,7 +354,6 @@ fn a_tempo_commit_retargets_only_the_member_holding_no_prepared_map() {
     );
 }
 
-// Ruling: spec 4.8 replaces the locked map with the applied speed and the correction's exact remaining frames.
 #[kithara::test]
 fn a_presented_retarget_locks_the_member_on_its_new_map() {
     let (mut deck, control, mut rig, _) = sounding();
@@ -421,12 +411,7 @@ fn a_presented_retarget_locks_the_member_on_its_new_map() {
 
 fn active_refinement() -> (Deck, Control, Rig, Seq, FrameCount) {
     let (mut deck, control, mut rig, load) = sounding();
-    answer(
-        &mut deck,
-        &mut rig,
-        load,
-        grid(24_000, 12, Some((4, 0)), 960_000),
-    );
+    answer(&mut deck, &mut rig, grid(24_000, 12, Some((4, 0)), 960_000));
     let sent = control.commands();
     let Command::Speed(_, When::At(at)) = &sent[0].1 else {
         panic!("timed source refinement");
@@ -456,7 +441,7 @@ fn active_refinement() -> (Deck, Control, Rig, Seq, FrameCount) {
 #[kithara::test]
 fn a_pending_refinement_preserves_the_current_correction() {
     for rejected in [false, true] {
-        let (mut deck, control, mut rig, load, first_frames) = active_refinement();
+        let (mut deck, control, mut rig, _, first_frames) = active_refinement();
         let first_at = rig.now;
         let active = deck.snapshot().sync;
         let observed = deck.snapshot().as_ref().mark;
@@ -488,12 +473,7 @@ fn a_pending_refinement_preserves_the_current_correction() {
         );
         control.edit(|script| script.snapshot.mark = observed);
         assert_eq!(deck.snapshot().sync, active);
-        answer(
-            &mut deck,
-            &mut rig,
-            load,
-            grid(24_000, 24, Some((4, 0)), 960_000),
-        );
+        answer(&mut deck, &mut rig, grid(24_000, 24, Some((4, 0)), 960_000));
         let sent = control.commands();
         let Command::Speed(_, When::At(at)) = &sent[0].1 else {
             panic!("timed replacement");
@@ -566,13 +546,8 @@ fn a_pending_refinement_preserves_the_current_correction() {
 
 #[kithara::test]
 fn a_correction_follows_its_actual_applied_receipt_frame() {
-    let (mut deck, control, mut rig, load) = sounding();
-    answer(
-        &mut deck,
-        &mut rig,
-        load,
-        grid(24_000, 12, Some((4, 0)), 960_000),
-    );
+    let (mut deck, control, mut rig, _) = sounding();
+    answer(&mut deck, &mut rig, grid(24_000, 12, Some((4, 0)), 960_000));
     let sent = control.commands();
     let Command::Speed(_, When::At(requested)) = &sent[0].1 else {
         panic!("timed correction");
@@ -613,15 +588,10 @@ fn a_correction_follows_its_actual_applied_receipt_frame() {
 
 #[kithara::test]
 fn a_foreign_consumed_segment_cannot_activate_a_correction() {
-    let (mut deck, control, mut rig, load) = sounding();
+    let (mut deck, control, mut rig, _) = sounding();
     let mark = deck.snapshot().as_ref().mark;
     control.edit(|script| script.snapshot.mark = None);
-    answer(
-        &mut deck,
-        &mut rig,
-        load,
-        grid(24_000, 12, Some((4, 0)), 960_000),
-    );
+    answer(&mut deck, &mut rig, grid(24_000, 12, Some((4, 0)), 960_000));
     assert!(
         control.commands().is_empty(),
         "no correction can invent a missing consumed Segment"
@@ -670,21 +640,11 @@ fn a_foreign_consumed_segment_cannot_activate_a_correction() {
 #[kithara::test]
 fn an_older_applied_receipt_cannot_replace_a_newer_consumed_correction() {
     for (delay, after_expiry) in [(0, false), (0, true), (64, false), (64, true)] {
-        let (mut deck, control, mut rig, load) = sounding();
-        answer(
-            &mut deck,
-            &mut rig,
-            load,
-            grid(24_000, 12, Some((4, 0)), 960_000),
-        );
+        let (mut deck, control, mut rig, _) = sounding();
+        answer(&mut deck, &mut rig, grid(24_000, 12, Some((4, 0)), 960_000));
         let older = control.commands()[0].0;
         rig.now = SessionFrame::new(delay);
-        answer(
-            &mut deck,
-            &mut rig,
-            load,
-            grid(24_000, 24, Some((4, 0)), 960_000),
-        );
+        answer(&mut deck, &mut rig, grid(24_000, 24, Some((4, 0)), 960_000));
         let sent = control.commands();
         let Command::Speed(_, When::At(at)) = &sent[1].1 else {
             panic!("timed replacement");
@@ -736,7 +696,6 @@ fn an_older_applied_receipt_cannot_replace_a_newer_consumed_correction() {
     }
 }
 
-// Ruling: spec 4.8 removes armed preparation immunity; a tempo commit withdraws and replaces the pending entry.
 #[kithara::test]
 fn an_armed_preparation_survives_a_tempo_commit_and_then_converges() {
     let (mut deck, control, mut rig, _) = silent();
@@ -778,7 +737,6 @@ fn an_armed_preparation_survives_a_tempo_commit_and_then_converges() {
     assert_eq!(deck.snapshot().sync, SyncStatus::On);
 }
 
-// Ruling: spec 4.6/5.8 replaces topology fencing with the new load's item/Seq basis.
 #[kithara::test]
 fn stale_host_seek_topology_commits_nothing() {
     let (mut deck, control, mut rig, old_load) = sounding();
@@ -798,10 +756,9 @@ fn stale_host_seek_topology_commits_nothing() {
     assert!(control.commands().is_empty());
 }
 
-// Ruling: spec 4.8 removes member revision stamps; current-load analysis supersedes the pending silent entry.
 #[kithara::test]
 fn stale_host_seek_member_grid_stamp_commits_nothing() {
-    let (mut deck, control, mut rig, loading) = silent();
+    let (mut deck, control, mut rig, _) = silent();
     let old = rig
         .run(|out| {
             deck.apply(
@@ -814,12 +771,7 @@ fn stale_host_seek_member_grid_stamp_commits_nothing() {
         .expect("entry")
         .expect("start");
     control.clear();
-    answer(
-        &mut deck,
-        &mut rig,
-        loading,
-        grid(24_000, 12_000, None, 960_000),
-    );
+    answer(&mut deck, &mut rig, grid(24_000, 12_000, None, 960_000));
     assert_eq!(control.commands().len(), 2);
     let held = deck.snapshot();
     assert!(matches!(
@@ -830,7 +782,6 @@ fn stale_host_seek_member_grid_stamp_commits_nothing() {
     assert_eq!(deck.snapshot().sync, held.sync);
 }
 
-// Ruling: spec 4.6 replaces the owner-grid stamp with a new entry Seq under the same media identity.
 #[kithara::test]
 fn stale_host_seek_owner_grid_stamp_commits_nothing_without_topology_change() {
     let (mut deck, control, mut rig, _) = silent();
@@ -867,10 +818,9 @@ fn stale_host_seek_owner_grid_stamp_commits_nothing_without_topology_change() {
     assert_eq!(deck.snapshot().sync, held.sync);
 }
 
-// Ruling: spec 4.8 replaces armed-map preservation with speed-only refinement preserving the audible stream.
 #[kithara::test]
 fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
-    let (mut deck, control, mut rig, loading) = sounding();
+    let (mut deck, control, mut rig, _) = sounding();
     rig.now = SessionFrame::new(12_000);
     let applied = deck.snapshot();
     let at = SessionFrame::new(96_000);
@@ -905,12 +855,12 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
         .is_none(),
         "a half-beat correction cannot finish inside the served twenty seconds"
     );
-    answer(&mut deck, &mut rig, loading, uncovered);
+    answer(&mut deck, &mut rig, uncovered);
     assert!(control.commands().is_empty());
     assert_track_unchanged(deck.snapshot().as_ref(), armed_snapshot.as_ref());
     assert_eq!(deck.snapshot().sync, armed_snapshot.sync);
     let revised = grid(24_000, 12, Some((4, 0)), 960_000);
-    answer(&mut deck, &mut rig, loading, revised.clone());
+    answer(&mut deck, &mut rig, revised.clone());
     let replacement = control.commands();
     assert_eq!(replacement.len(), 1);
     assert_ne!(replacement[0].0, armed);
@@ -988,7 +938,6 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     assert!((source_beat - f64::from(host.beat_at(end))).abs() < 1e-12);
 }
 
-// Ruling: spec 4.5 removes Free's map handoff; off sends nothing and preserves the source at frame 96000.
 #[kithara::test]
 fn free_leaves_the_beat_timeline() {
     let (mut deck, control, mut rig, _) = sounding();
@@ -1020,7 +969,6 @@ fn free_leaves_the_beat_timeline() {
     assert_track_unchanged(deck.snapshot().as_ref(), before.as_ref());
 }
 
-// Ruling: spec 4.5 has no free-geometry command; a rejected in-flight speed after off leaves no preparing lane.
 #[kithara::test]
 fn rejected_free_geometry_receipt_clears_the_exact_preparing_state() {
     let (mut deck, control, mut rig, _) = sounding();
@@ -1050,7 +998,6 @@ fn rejected_free_geometry_receipt_clears_the_exact_preparing_state() {
     ));
 }
 
-// Ruling: spec 4.5 removes ArmedOperation on Free; off preserves an already sent entry and its eventual receipt.
 #[kithara::test]
 fn an_armed_member_keeps_the_timeline_from_being_left() {
     let (mut deck, control, mut rig, _) = silent();

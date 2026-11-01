@@ -41,7 +41,7 @@ deep:perf:
     when: always
     expire_in: 30 days
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - perf-results.txt
 
 deep:bench:
@@ -53,18 +53,16 @@ deep:bench:
     when: always
     expire_in: 30 days
     paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - bench-results.txt
       - target/criterion/
 
 .deps-job:
   extends:
-    - .linux-job
+    - .macos-job
     - .rules-weekly
   stage: deep
-  needs:
-    - job: linux:image
-      optional: true
+  needs: []
 
 # Advisories and licence bans are the only dependency check on the import path.
 # The bridge no longer refuses a merged pull request for moving a manifest, so
@@ -82,7 +80,7 @@ deps:deny:
     expire_in: 30 days
     paths:
       - .ci-artifacts/deps-deny/
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID.json
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
 
 deps:unused:
   extends: .deps-job

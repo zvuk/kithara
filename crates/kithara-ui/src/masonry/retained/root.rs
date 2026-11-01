@@ -12,7 +12,6 @@ use masonry::{
     ui_events::keyboard::{Key, NamedKey},
     vello::Scene,
 };
-use num_traits::cast::AsPrimitive;
 use thiserror::Error;
 
 use super::{
@@ -556,30 +555,17 @@ where
     }
 
     fn observe_pointer(&mut self, event: &PointerEvent) {
-        let position = match event {
-            PointerEvent::Down(button) | PointerEvent::Up(button) => {
-                Some(button.state.logical_position())
-            }
-            PointerEvent::Move(update) => Some(update.current.logical_position()),
-            PointerEvent::Scroll(scroll) => Some(scroll.state.logical_position()),
-            PointerEvent::Gesture(gesture) => Some(gesture.state.logical_position()),
-            PointerEvent::Cancel(_) | PointerEvent::Enter(_) | PointerEvent::Leave(_) => None,
-        };
-        if let Some(position) = position {
-            let point = Pt {
-                x: position.x.as_(),
-                y: position.y.as_(),
-            };
-            if let Some(window) = &self.window {
-                window.pointer.set(Some(point));
-                if window.carrying
-                    && matches!(event, PointerEvent::Move(_))
-                    && let Some(layer) = window.layer
-                {
-                    self.root.edit_widget(layer, |mut layer| {
-                        layer.ctx.request_paint_only();
-                    });
-                }
+        if let Some(point) = picker::at(event)
+            && let Some(window) = &self.window
+        {
+            window.pointer.set(Some(point));
+            if window.carrying
+                && matches!(event, PointerEvent::Move(_))
+                && let Some(layer) = window.layer
+            {
+                self.root.edit_widget(layer, |mut layer| {
+                    layer.ctx.request_paint_only();
+                });
             }
         }
     }
@@ -617,10 +603,25 @@ where
                 self.follow_drag(&engine, &event)?;
             }
             if captured || held {
+                if matches!(event, PointerEvent::Down(_)) {
+                    self.leave_focus(owner);
+                }
                 return Ok(true);
             }
         }
         Ok(false)
+    }
+
+    /// A press an engine took never reaches the tree, where a press elsewhere
+    /// ends the keyboard focus, so it ends here.
+    fn leave_focus(&mut self, owner: WidgetId) {
+        if self
+            .root
+            .focused_widget()
+            .is_some_and(|focused| focused != owner)
+        {
+            self.root.focus_on(None);
+        }
     }
 
     /// Whether the pointer reaches this engine past the surface that covers

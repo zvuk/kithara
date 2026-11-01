@@ -26,6 +26,8 @@ pub(crate) struct LinuxHost {
     pub(crate) build_cache_size: String,
     /// Directory holding the caches jobs keep between runs.
     pub(crate) cache_root: PathBuf,
+    /// Scoped credentials with an endpoint reachable from image builds.
+    pub(crate) image_cache_env_file: PathBuf,
     /// Whole gigabytes, such as `50G`, each trust's compiler-cache store may
     /// hold. Defaulted: installed profiles predate the store.
     #[serde(default = "default_compiler_cache_size")]
@@ -71,6 +73,8 @@ pub(crate) struct WindowsGuest {
     pub(crate) name: String,
     /// Which repository of [`LinuxHost::repositories`] this guest enrols with.
     pub(crate) repository: String,
+    /// Scoped credentials with an endpoint reachable from the guest network.
+    pub(crate) sccache_s3_env_file: PathBuf,
     pub(crate) vcpus: u32,
     pub(crate) memory_mib: u32,
     pub(crate) disk_gib: u32,
@@ -162,6 +166,9 @@ impl LinuxHost {
         if !self.cache_root.is_absolute() {
             bail!("Linux CI profile cache_root must be an absolute path");
         }
+        if !self.image_cache_env_file.is_absolute() {
+            bail!("Linux CI image builds must name their S3 environment by absolute path");
+        }
         if !safe_name(&self.network) {
             bail!("Linux CI profile network contains unsupported characters");
         }
@@ -241,6 +248,9 @@ impl RepositoryCredential {
 
 impl WindowsGuest {
     fn validate(&self) -> Result<()> {
+        if !self.sccache_s3_env_file.is_absolute() {
+            bail!("the Windows guest must name its S3 cache environment by absolute path");
+        }
         if !safe_name(&self.name) {
             bail!("Linux CI profile's Windows guest name is unusable");
         }

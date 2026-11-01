@@ -43,7 +43,7 @@ args+=(
 [[ -z "$TIER" ]] || args+=(--tier "$TIER")
 for mode in $MODE; do args+=(--mode "$mode"); done
 for lane in $LANE; do args+=(--lane "$lane"); done
-just ci stress-report "${args[@]}""#;
+just ci cache-exec stress-report just ci stress-report "${args[@]}""#;
 
 const AUTHORIZATION_SCRIPT: &str = r#"python3 - <<'PY'
 import json
@@ -1189,26 +1189,21 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
     let report = workflow_job(jobs, "report");
     assert_eq!(job_needs(report), BTreeSet::from(["execute".to_owned()]));
     assert_eq!(
-        mapping_field(report, "runs-on").as_str(),
-        Some("ubuntu-latest")
+        mapping_field(report, "runs-on"),
+        &serde_yaml_ng::to_value(["self-hosted", "linux", "x64", "kithara-report"])
+            .expect("report runner labels"),
     );
     assert_eq!(
         mapping_field(report, "if").as_str(),
         Some("${{ always() && needs.execute.result != 'skipped' }}")
     );
-    // The renderer is built from the workspace on the hosted image that owns
-    // the reporting boundary, so the job carries the system libraries that
-    // build links and nothing else. It links ALSA because the renderer reaches
-    // the feature-unification crate through `kithara-derive`; until that edge
-    // is gone the headers are a build prerequisite, not portable work.
     assert_eq!(
         job_step_names(report),
         BTreeSet::from([
             "Add the stress summary".to_owned(),
             "Checkout controller".to_owned(),
             "Download every shard's evidence".to_owned(),
-            "Install just".to_owned(),
-            "Install the audio headers the renderer links".to_owned(),
+            "Upload report compiler-cache evidence".to_owned(),
             "Upload the stress evidence".to_owned(),
             "Verify and render the stress evidence".to_owned(),
         ])
@@ -1239,13 +1234,23 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
         Some(true)
     );
 
-    let report_install = named_step(report, "Install just");
-    assert_always(report_install);
-    assert_action_repository(report_install, "taiki-e/install-action");
-    let install_inputs = mapping_field(report_install, "with")
+    let cache_upload = named_step(report, "Upload report compiler-cache evidence");
+    assert_action_repository(cache_upload, "actions/upload-artifact");
+    assert_eq!(
+        mapping_field(cache_upload, "if").as_str(),
+        Some(
+            "${{ always() && hashFiles(format('controller/.ci-artifacts/cache/github-{0}-{1}-*.json', github.run_id, github.run_attempt)) != '' }}"
+        ),
+    );
+    let cache_inputs = mapping_field(cache_upload, "with")
         .as_mapping()
-        .expect("install action inputs are a mapping");
-    assert_eq!(mapping_field(install_inputs, "tool").as_str(), Some("just"));
+        .expect("compiler-cache evidence inputs");
+    assert_eq!(
+        mapping_field(cache_inputs, "path").as_str(),
+        Some(
+            "controller/.ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json"
+        ),
+    );
 
     let verifier = named_step(report, "Verify and render the stress evidence");
     assert_always(verifier);
@@ -2245,6 +2250,12 @@ fn ui_ownership_selection_uses_the_fleet_checkout_and_build_environment() {
         mapping_field(selection, "runs-on"),
         mapping_field(reference, "runs-on")
     );
+    assert_eq!(
+        mapping_field(reference, "runs-on"),
+        &serde_yaml_ng::to_value(["self-hosted", "linux", "x64", "kithara-report"])
+            .expect("control runner labels"),
+        "selectors must stay schedulable when compilation runners are occupied"
+    );
     assert_eq!(first_step(selection), first_step(reference));
     assert_no_key(&Value::Mapping(selection.clone()), "fetch-depth");
     for variable in [
@@ -2884,11 +2895,11 @@ fn the_windows_lane_runs_the_backend_the_platform_ships() {
     let tests = steps
         .iter()
         .filter_map(|step| step.get("run").and_then(Value::as_str))
-        .find(|run| run.starts_with("just test"))
+        .find(|run| run.split_whitespace().any(|arg| arg == "windows-test"))
         .expect("the lane runs the suite");
 
     assert_eq!(
-        tests, "just test run --net-backend=none",
+        tests, "just ci cache-exec windows-test just test run --net-backend=none",
         "the suite takes the default backend, which this guest cannot build"
     );
 }
