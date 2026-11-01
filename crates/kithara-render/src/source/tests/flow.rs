@@ -1,4 +1,123 @@
+use kithara_effects::{
+    EffectConfig, EffectPrepareError, EffectSetup, GainDb,
+    eq::{EqConfig, EqEffect, generate_log_spaced_bands},
+};
+
 use super::*;
+
+#[kithara::test]
+fn failed_effect_preparation_does_not_advance_the_source() {
+    let pools = pools();
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).unwrap());
+    for (channels, rate) in [(1, 44_100), (2, 48_000)] {
+        let incoming = AudioSpec::new(channels, NonZeroU32::new(rate).unwrap());
+        let refused =
+            EffectSetup::Prepared(Box::new(FixedSpecEffect(spec))).prepare(incoming, &pools);
+        if rate != spec.sample_rate.get() {
+            assert!(matches!(
+                refused,
+                Err(EffectPrepareError::Filter(
+                    kithara_dsp::filter::FilterError::Parameters
+                ))
+            ));
+        } else {
+            assert!(matches!(refused, Err(EffectPrepareError::Shape)));
+        }
+        let head = Arc::new(AtomicU64::new(0));
+        let raw = RawSource {
+            head: Arc::clone(&head),
+            chunks: VecDeque::from([chunk_with_frames(&pools, incoming, 0, 16, &[0.25; 32])]),
+        };
+        let mut source = source_stage(&pools, raw, vec![Box::new(FixedSpecEffect(spec))], incoming);
+        flush_deferred(&mut source);
+        for _ in 0..3 {
+            assert!(matches!(
+                source.step_track(),
+                TrackStep::Failed(TrackFailureKind::Render)
+            ));
+            assert_eq!(head.load(Ordering::Acquire), 0);
+            assert_eq!(source.cursor().frame, 0);
+        }
+    }
+}
+
+#[kithara::test]
+fn configured_eq_services_producer_format_changes_without_same_spec_reset() {
+    let initial = AudioSpec::new(2, NonZeroU32::new(44_100).unwrap());
+    let region = pools();
+    let mut bands = generate_log_spaced_bands(3);
+    for (band, gain) in bands.iter_mut().zip([-12.0, 6.0, -3.0]) {
+        band.set_gain_db(GainDb::from(gain));
+    }
+    for (channels, rate) in [(2, 48_000), (1, 44_100), (4, 48_000)] {
+        let changed = AudioSpec::new(channels, NonZeroU32::new(rate).unwrap());
+        let samples = |spec: AudioSpec, offset: usize| {
+            (offset..offset + 128)
+                .flat_map(|frame| {
+                    (0..spec.channels).map(move |channel| {
+                        if (frame + usize::from(channel)) % 7 == 0 {
+                            0.5
+                        } else {
+                            -0.25
+                        }
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let first = samples(initial, 0);
+        let next = samples(changed, 128);
+        let last = samples(changed, 256);
+        let discontinuity = Arc::new(Mutex::new(SourceDiscontinuity::new(0, initial)));
+        let raw = RevisionSource {
+            discontinuity: discontinuity.clone(),
+            chunks: VecDeque::from([
+                chunk_with_frames(&region, initial, 0, 128, &first),
+                chunk_with_frames(&region, changed, 128, 128, &next),
+                chunk_with_frames(&region, changed, 256, 128, &last),
+            ]),
+        };
+        let effect = EffectSetup::Config(EffectConfig::Equalizer(bands.clone()))
+            .prepare(initial, &region)
+            .unwrap();
+        let mut source = source_stage(&region, raw, vec![effect], initial);
+        flush_deferred(&mut source);
+        assert!(matches!(
+            source.step_track(),
+            TrackStep::Produced(Fetch::Data { .. })
+        ));
+        *discontinuity.lock() = SourceDiscontinuity::new(1, changed);
+        assert!(matches!(source.step_track(), TrackStep::StateChanged));
+        assert_eq!(
+            source.source.chunks.len(),
+            2,
+            "deferred preparation precedes consuming new PCM"
+        );
+        flush_deferred(&mut source);
+        let mut reference = EqEffect::new(
+            &EqConfig::builder(region.clone()).build(),
+            bands.clone(),
+            rate,
+            channels,
+        )
+        .unwrap();
+        for (offset, input) in [(128, next), (256, last)] {
+            let expected = reference
+                .process(chunk_with_frames(&region, changed, offset, 128, &input))
+                .unwrap();
+            let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
+                panic!("configured EQ emits after deferred format preparation");
+            };
+            assert_eq!(data.spec(), changed);
+            assert_eq!(
+                data.samples.as_ref(),
+                expected.samples.as_ref(),
+                "{channels}ch/{rate}, block {offset}"
+            );
+            assert_eq!(source.cursor().frame, offset + 128);
+            flush_deferred(&mut source);
+        }
+    }
+}
 
 #[cfg(any(
     feature = "stretch-identity",
@@ -893,7 +1012,7 @@ fn buffered_audio_track(
         .render_quantum_frames(NonZeroUsize::new(256).expect("quantum"))
         .build();
     crate::TrackConfig::for_audio(audio)
-        .effects(effects)
+        .effects(effects.into_iter().map(EffectSetup::Prepared).collect())
         .warp(warp)
         .preload_chunks(NonZeroUsize::MIN)
         .audio_buffer_chunks(NonZeroUsize::MIN)

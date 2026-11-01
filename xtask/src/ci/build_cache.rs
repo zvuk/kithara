@@ -14,7 +14,10 @@ use fs4::TryLockError;
 use kithara_devtools::{lease, lock::FileLock};
 use tracing::{info, warn};
 
-use super::build_dir::{Claim, claim_beside_alias};
+use super::{
+    build_dir::{Claim, claim_beside_alias},
+    environment::CacheTrust,
+};
 use crate::consts;
 
 /// One build directory in a build root: a lane's, a stress run's, xtask's own.
@@ -649,7 +652,11 @@ pub(crate) fn previous_build_roots(cache: &Path) -> Result<Vec<PathBuf>> {
     };
     for entry in listing {
         let entry = entry.with_context(|| format!("reading {}", bootstrap.display()))?;
-        if entry.file_type()?.is_dir() {
+        if CacheTrust::ALL
+            .iter()
+            .any(|trust| entry.file_name() == trust.as_str())
+            && entry.file_type()?.is_dir()
+        {
             roots.push(entry.path());
         }
     }
@@ -698,6 +705,30 @@ mod tests {
 
     fn occupied(root: &Path) -> u64 {
         total_bytes(&candidate_entries(root).unwrap().entries)
+    }
+
+    #[test]
+    fn cargo_budget_preserves_the_bootstrap_compiler_store() {
+        let cache = tempfile::tempdir().unwrap();
+        let bootstrap = cache.path().join(consts::PREVIOUS_BOOTSTRAP);
+        let store = bootstrap.join("macos-aarch64/kache/store");
+        fs::create_dir_all(&store).unwrap();
+        fs::write(store.join("index"), b"compiler index").unwrap();
+        fs::write(store.join("blob"), b"compiler artifact").unwrap();
+        let build = build_dir(&bootstrap.join("review"), "target-macos-aarch64-0", 4096);
+        let slot = build_dir(
+            &cache.path().join(consts::PREVIOUS_TARGET_SLOTS),
+            "lint-0",
+            4096,
+        );
+
+        let roots = previous_build_roots(cache.path()).unwrap();
+        enforce_budget(&roots, 0).unwrap();
+
+        assert_eq!(fs::read(store.join("index")).unwrap(), b"compiler index");
+        assert_eq!(fs::read(store.join("blob")).unwrap(), b"compiler artifact");
+        assert!(!build.exists(), "idle bootstrap build was retained");
+        assert!(!slot.exists(), "idle lane build was retained");
     }
 
     /// A runner always has some job, so a root held whole was 1.4 TB the

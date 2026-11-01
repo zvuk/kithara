@@ -53,5 +53,8 @@ kithara-test-utils = { path = "../kithara-test-utils", features = ["mock"] }
 
 unimock = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+assert_no_alloc = { workspace = true }
+
 [lints]
 workspace = true

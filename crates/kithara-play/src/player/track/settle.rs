@@ -442,6 +442,7 @@ impl<S> PlayerImpl<S> {
         }
         while let Some(receipt) = self.lane.as_mut().and_then(|lane| lane.receipts().next()) {
             self.settings.settle(&receipt);
+            self.effects.settle(&receipt);
             let segment = receipt
                 .batch()
                 .commands

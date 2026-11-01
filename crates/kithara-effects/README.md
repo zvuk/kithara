@@ -72,6 +72,14 @@ fn boost_low_band<S>(config: &EqConfig<S>, sample_rate: u32, channels: u16) {
 
 ## Integration
 
+`EffectConfig` carries cloneable construction intent; the producer prepares each
+`EffectSetup` once with its actual audio format and injected pool region.
+`AudioEffect::configure` applies typed steps without clearing history. EQ steps
+retain manual smoothing, and EQ reset clears history while retaining targets.
+Deferred preparation services stream-format changes before further production.
+The chain refuses unsupported formats and incomplete interleaved frames;
+accumulation remains distinct from a preparation failure.
+
 `kithara-play` builds a per-track effect chain and the band layouts its deck
 takes; `kithara-render` runs a `StereoEq` on every deck; `kithara-host` puts
 `LimiterNode` on the session bus. Reusable DSP building

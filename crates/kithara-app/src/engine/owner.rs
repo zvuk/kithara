@@ -1,6 +1,6 @@
 use arc_swap::ArcSwap;
 use kithara::{
-    host::DeckId,
+    host::{DeckId, HostSettingsControl, api::Tempo},
     platform::{
         sync::Arc,
         time::Duration,
@@ -38,6 +38,7 @@ pub(crate) struct Engine {
     has_shut_down: bool,
     drain: Option<UnboundedReceiver<Option<Duration>>>,
     applied_seq: u64,
+    accepted_tempo: Tempo,
 }
 
 impl Engine {
@@ -48,7 +49,9 @@ impl Engine {
         snapshots: Arc<ArcSwap<EngineSnapshot>>,
         analysis: AnalysisHandle,
     ) -> Self {
+        let accepted_tempo = session.host().tempo();
         let engine = Self {
+            accepted_tempo,
             broadcast,
             analysis,
             config,
@@ -77,16 +80,15 @@ impl Engine {
     fn apply_app(&mut self, cmd: AppCmd) {
         match cmd {
             AppCmd::SetEqMode(mode) => self.set_eq_mode(mode),
+            AppCmd::SetTempo(tempo) => self.set_tempo(tempo),
+            AppCmd::StepTempo(steps) => self.step_tempo(steps),
             AppCmd::BroadcastToggle => self.toggle_broadcast(),
             AppCmd::Shutdown => self.shut_down(),
         }
     }
 
     fn apply_deck(&mut self, id: DeckId, cmd: DeckCmd) {
-        let eq_mode = self.eq_mode;
-        if let Some(record) = self.session.record_mut(id) {
-            record.apply(cmd, eq_mode);
-        }
+        self.session.apply(id, cmd, self.eq_mode);
     }
 
     fn apply_mix(&mut self, cmd: MixCmd) {
@@ -153,6 +155,22 @@ impl Engine {
         }
     }
 
+    fn set_tempo(&mut self, tempo: Tempo) {
+        match self.session.host().set_tempo(tempo) {
+            Ok(()) => self.accepted_tempo = tempo,
+            Err(error) => error!(?tempo, %error, "host tempo refused"),
+        }
+    }
+
+    fn step_tempo(&mut self, steps: f32) {
+        const STEP_BPM: f64 = 0.1;
+
+        let bpm = f64::from(steps).mul_add(STEP_BPM, f64::from(self.accepted_tempo));
+        if let Ok(tempo) = Tempo::new(bpm) {
+            self.set_tempo(tempo);
+        }
+    }
+
     fn shut_down(&mut self) {
         if let Some(stop) = self.broadcast.shut_down(self.session.host()) {
             let elapsed = stop.drain();
@@ -175,6 +193,7 @@ impl Engine {
             broadcast: BroadcastPhase::new(&self.broadcast),
             eq_mode: self.eq_mode,
             mix: *self.session.mix(),
+            tempo: self.session.host().tempo(),
             applied_seq: self.applied_seq,
         }
     }
@@ -209,6 +228,10 @@ impl Drop for Engine {
 #[cfg(all(test, feature = "mock", feature = "gui"))]
 pub(crate) mod mock {
     use crate::gui::rig::Rig;
+
+    pub(crate) fn host(rig: &mut Rig) -> &mut crate::pools::AppHost {
+        crate::deck::mock::host(&mut rig.engine.session)
+    }
 
     pub(crate) fn render(rig: &mut Rig, frames: u64) {
         let host = crate::deck::mock::host(&mut rig.engine.session);

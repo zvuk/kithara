@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, ensure};
 use tracing::info;
 
 use super::{container::Container, profile::LinuxHost};
@@ -26,9 +26,9 @@ use crate::{
 pub(super) fn run(process: &Process, host: &LinuxHost, keep: &[String]) -> Result<()> {
     // Every project image would be superseded by an empty list, and this is
     // the one caller whose mistakes are unattended.
-    if keep.is_empty() {
-        bail!("cleanup was given no image to keep; reinstall the services to name them");
-    }
+    let image = keep
+        .first()
+        .context("cleanup was given no image to keep; reinstall the services to name them")?;
 
     let listed = process.capture(
         "docker",
@@ -84,9 +84,80 @@ pub(super) fn run(process: &Process, host: &LinuxHost, keep: &[String]) -> Resul
         ],
         "prune the build cache",
     );
+    reclaim_compiler_stores(process, host, image)?;
     let target_dirs = target_dirs(host)?;
     build_cache::enforce_budget(&target_dirs, host.build_cache_budget_bytes()?)?;
     Ok(())
+}
+
+// Automatic GC protects recent imports for six hours above the size limit.
+// The installed image's CLI applies the host budget without that retention.
+fn reclaim_compiler_stores(process: &Process, host: &LinuxHost, image: &str) -> Result<()> {
+    for store in compiler_stores(host)? {
+        let report = process.capture(
+            "docker",
+            &[
+                "run",
+                "--rm",
+                "--init",
+                "--pull=never",
+                "--network=none",
+                &format!("--user={user}:{user}", user = consts::JOB_USER),
+                "--read-only",
+                "--tmpfs=/tmp:rw,nosuid,nodev",
+                "--volume",
+                &format!("{}:/store:rw", store.display()),
+                "--env=HOME=/tmp",
+                "--env=KACHE_CONFIG=/dev/null",
+                "--env=KACHE_HOST_CONFIG=/dev/null",
+                "--env=KACHE_LOCAL_ONLY=1",
+                "--env=KACHE_CACHE_DIR=/store",
+                "--env=KACHE_RUNTIME_DIR=/tmp/kache",
+                "--env=KACHE_PREFETCH_ENABLED=false",
+                &format!("--env=KACHE_MAX_SIZE={}", host.compiler_cache_size),
+                "--entrypoint=/usr/bin/ionice",
+                image,
+                "-c",
+                "3",
+                "/usr/bin/nice",
+                "-n",
+                "15",
+                "kache",
+                "gc",
+            ],
+            "collect the local compiler store",
+        )?;
+        info!(path = %store.display(), %report, "local compiler store collected");
+    }
+    Ok(())
+}
+
+fn compiler_stores(host: &LinuxHost) -> Result<BTreeSet<PathBuf>> {
+    let mut stores = BTreeSet::new();
+    if !host.cache_root.is_dir() {
+        return Ok(stores);
+    }
+    let root = host.cache_root.canonicalize()?;
+    for runner in &host.runners {
+        let store = Container::kache(host, runner).join(consts::KACHE_STORE);
+        let index = store.join("index.db");
+        ensure!(
+            !store.is_symlink() && !index.is_symlink(),
+            "compiler store contains a symlink: {}",
+            store.display()
+        );
+        if !index.is_file() {
+            continue;
+        }
+        let store = store.canonicalize()?;
+        ensure!(
+            store.starts_with(&root),
+            "compiler store is outside its owned cache root: {}",
+            store.display()
+        );
+        stores.insert(store);
+    }
+    Ok(stores)
 }
 
 /// Which of the project's images nothing on this machine is installed to run.
@@ -146,12 +217,75 @@ fn target_dirs(host: &LinuxHost) -> Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::{collections::BTreeMap, os::unix::fs::symlink};
     use std::{fs, path::Path};
 
     use super::*;
 
     fn keep(images: &[&str]) -> Vec<String> {
         images.iter().map(|image| (*image).to_owned()).collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compiler_collection_covers_shared_stores_once_without_the_network() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut host = super::super::profile::tests::host_fixture();
+        host.cache_root = directory.path().join("cache");
+        host.compiler_cache_size = "3G".into();
+        let mut expected = BTreeSet::new();
+        for runner in &host.runners {
+            let store = Container::kache(&host, runner).join(consts::KACHE_STORE);
+            fs::create_dir_all(&store).unwrap();
+            fs::write(store.join("index.db"), []).unwrap();
+            expected.insert(store);
+        }
+        crate::testing::install_double(directory.path(), "docker");
+        let trace = directory.path().join("calls");
+        let paths = std::env::join_paths(std::iter::once(directory.path().to_path_buf()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+        ))
+        .unwrap();
+        let process = Process::new(
+            directory.path(),
+            BTreeMap::from([
+                ("PATH".into(), paths),
+                ("KITHARA_TEST_TRACE".into(), trace.clone().into_os_string()),
+                ("KITHARA_TEST_STDOUT".into(), "{\"success\":true}".into()),
+            ]),
+        );
+        reclaim_compiler_stores(&process, &host, "installed:reviewed").unwrap();
+        let calls = fs::read_to_string(trace).unwrap();
+        assert_eq!(calls.lines().count(), expected.len());
+        for store in expected {
+            assert!(calls.contains(&format!("{}:/store:rw", store.display())));
+        }
+        for call in calls.lines() {
+            assert!(call.contains("--network=none"));
+            assert!(call.contains("--pull=never"));
+            assert!(call.contains("--env=KACHE_MAX_SIZE=3G"));
+            assert!(call.contains("--env=KACHE_LOCAL_ONLY=1"));
+            assert!(call.contains("--user=1000:1000"));
+            assert!(call.contains("installed:reviewed"));
+            assert!(call.ends_with("kache gc"));
+            assert!(!call.contains("AWS_"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compiler_collection_refuses_a_store_outside_its_cache_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let mut host = super::super::profile::tests::host_fixture();
+        host.cache_root = directory.path().join("cache");
+        fs::create_dir_all(&host.cache_root).unwrap();
+        symlink(outside.path(), host.cache_root.join(consts::KACHE_DIR)).unwrap();
+        let store = Container::kache(&host, &host.runners[0]).join(consts::KACHE_STORE);
+        fs::create_dir_all(&store).unwrap();
+        fs::write(store.join("index.db"), []).unwrap();
+        assert!(compiler_stores(&host).is_err());
     }
 
     #[test]

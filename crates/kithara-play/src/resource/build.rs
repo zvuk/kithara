@@ -118,6 +118,13 @@ where
         T: StreamType,
     {
         let mut config = TrackConfig::for_audio(audio)
+            .effects(
+                self.effects
+                    .iter()
+                    .cloned()
+                    .map(kithara_effects::EffectSetup::Config)
+                    .collect(),
+            )
             .block_on_underrun(self.block_on_underrun)
             .maybe_engine_load(self.engine_load.clone())
             .warp(self.warp.clone())

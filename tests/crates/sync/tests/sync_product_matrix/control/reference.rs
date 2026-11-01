@@ -4,7 +4,7 @@ use kithara::{
     download::Downloader,
     effects::LimiterConfig,
     play::{DeckMixSettings, Position, Settled},
-    signal::{AudioChunk, AudioChunkInfo},
+    signal::{AudioChunk, AudioChunkInfo, SourceInverse, SourceSpan},
 };
 use kithara_integration_tests::{
     offline::{OfflinePlayer, OfflinePlayerOptions, linked::LinkReceiptOrigin},
@@ -370,7 +370,7 @@ impl ControlCapture {
     fn check_packet_law(
         &self,
         info: AudioChunkInfo,
-        span: kithara::signal::SourceSpan,
+        span: SourceSpan,
         source: u128,
         rate: (u128, u128),
     ) -> Result<(), String> {
@@ -940,14 +940,11 @@ pub(in super::super) struct DecodedCapture {
     rejected: bool,
 }
 
-/// A captured chunk's source clock normalized to its own rate, with the raw
-/// source extent a basis lookup may land in. The extent is widened by the
-/// chunk's own width on both sides, so it only skips chunks whose exact
-/// inverse cannot reach their frame range: the mapping is affine with a
-/// positive step.
+/// A captured chunk's normalized source clock and exact affine inverse,
+/// retained together for repeated physical-basis lookups.
 struct PhysicalCandidate<'a> {
     decoded: &'a AudioChunkInfo,
-    basis: Result<(kithara::signal::SourceSpan, std::ops::RangeInclusive<f64>), String>,
+    basis: Result<(SourceSpan, Option<SourceInverse>), String>,
 }
 
 impl<'a> PhysicalCandidate<'a> {
@@ -967,24 +964,7 @@ impl<'a> PhysicalCandidate<'a> {
                     )
                     .ok_or_else(|| "decoded PCM source clock cannot be normalized".to_owned())
             })
-            .map(|basis| {
-                let at = |frame| {
-                    basis
-                        .source_ratio_at(frame)
-                        .map_or(f64::NAN, |(numerator, denominator)| {
-                            numerator.to_f64().unwrap_or(f64::NAN)
-                                / denominator.get().to_f64().unwrap_or(f64::NAN)
-                        })
-                };
-                let (start, end) = (at(0), at(basis.output_frames()));
-                let width = end - start + 1.0;
-                let extent = if width.is_finite() {
-                    start - width..=end + width
-                } else {
-                    f64::NEG_INFINITY..=f64::INFINITY
-                };
-                (basis, extent)
-            });
+            .map(|basis| (basis, basis.source_inverse(decoded.frame_offset)));
         Self { decoded, basis }
     }
 }
@@ -1195,7 +1175,7 @@ impl DecodedCapture {
         &self,
         info: impl Into<consumed::SourceIdentity>,
         frame: u64,
-    ) -> Result<(u64, kithara::signal::SourceSpan), String> {
+    ) -> Result<(u64, SourceSpan), String> {
         let info = info.into();
         let (_, (decoded, _)) = self
             .chunks
@@ -1208,7 +1188,7 @@ impl DecodedCapture {
                     && decoded.frame_range().contains(&frame)
             })
             .ok_or_else(|| format!("decoder observer has no current physical frame {frame}"))?;
-        let position = kithara::signal::SourceSpan::new(
+        let position = SourceSpan::new(
             frame,
             frame
                 .checked_add(1)
@@ -1230,7 +1210,7 @@ impl DecodedCapture {
         &self,
         info: impl Into<consumed::SourceIdentity>,
         position: (u128, std::num::NonZeroU128),
-    ) -> Result<(u64, kithara::signal::SourceSpan), String> {
+    ) -> Result<(u64, SourceSpan), String> {
         let info = info.into();
         self.physical_basis_among(
             self.chunks
@@ -1256,21 +1236,16 @@ impl DecodedCapture {
         candidates: impl IntoIterator<Item = impl std::borrow::Borrow<PhysicalCandidate<'a>>>,
         info: consumed::SourceIdentity,
         position: (u128, std::num::NonZeroU128),
-    ) -> Result<(u64, kithara::signal::SourceSpan), String> {
-        let raw =
-            position.0.to_f64().unwrap_or(f64::NAN) / position.1.get().to_f64().unwrap_or(f64::NAN);
+    ) -> Result<(u64, SourceSpan), String> {
         for candidate in candidates {
             let candidate = candidate.borrow();
             let decoded = candidate.decoded;
             if !info.describes(decoded) {
                 continue;
             }
-            let (basis, extent) = candidate.basis.as_ref().map_err(Clone::clone)?;
-            if !extent.contains(&raw) {
-                continue;
-            }
+            let (basis, inverse) = candidate.basis.as_ref().map_err(Clone::clone)?;
             let Some((frame, denominator)) =
-                basis.output_ratio_at_source(decoded.frame_offset, position)
+                inverse.and_then(|inverse| inverse.output_at(position))
             else {
                 continue;
             };
@@ -1505,13 +1480,7 @@ impl DecodedCapture {
         candidates: &[PhysicalCandidate<'_>],
         info: consumed::SourceIdentity,
         position: (u128, std::num::NonZeroU128),
-    ) -> Result<
-        (
-            kithara::signal::SourceInverse,
-            (u128, std::num::NonZeroU128),
-        ),
-        String,
-    > {
+    ) -> Result<(SourceInverse, (u128, std::num::NonZeroU128)), String> {
         let (origin, basis) = self.physical_basis_among(candidates, info, position)?;
         let inverse = basis
             .source_inverse(origin)
@@ -2086,6 +2055,56 @@ fn check_persistent_physical_sampling(
                 );
             }
         }
+    }
+}
+
+#[kithara::test(native)]
+fn physical_basis_preserves_subframe_positions_above_f64_precision() {
+    let rate = NonZeroU32::new(48_000).expect("sample rate");
+    let span = SourceSpan::try_from((
+        55_340_232_221_128_594_846,
+        1,
+        std::num::NonZeroU128::new(3).expect("source denominator"),
+        rate,
+        1,
+    ))
+    .expect("admitted fractional source span");
+    let position = (
+        36_893_488_147_419_063_231,
+        std::num::NonZeroU128::new(2).expect("position denominator"),
+    );
+    let half = (1, std::num::NonZeroU128::new(2).expect("half frame"));
+    assert_eq!(span.output_ratio_at_source(0, position), Some(half));
+    for origin in [0, 37] {
+        let decoded = AudioChunkInfo {
+            spec: AudioSpec::new(CHANNELS, rate),
+            source_revision: 7,
+            source_span: Some(span),
+            frame_offset: origin,
+            frames: 1,
+            ..AudioChunkInfo::default()
+        };
+        let identity = consumed::SourceIdentity {
+            spec: decoded.spec,
+            source_revision: decoded.source_revision,
+            media_origin: decoded.media_origin,
+        };
+        let mut capture = DecodedCapture::default();
+        let pcm = Arc::new(sample_buffer(&pools(), &[0.125, -0.25]));
+        capture.samples = pcm.len();
+        capture.chunks.insert((7, origin), (decoded, pcm));
+        let fresh = capture.physical_basis(identity, position);
+        let candidates = capture.physical_candidates();
+        let retained = capture.physical_basis_among(&candidates, identity, position);
+        assert_eq!(fresh, retained);
+        let (offset, basis) =
+            fresh.expect("an exact half-frame position belongs to the captured chunk");
+        assert_eq!(offset, origin);
+        let expected = (u128::from(origin) * 2 + 1, half.1);
+        assert_eq!(
+            basis.output_ratio_at_source(offset, position),
+            Some(expected)
+        );
     }
 }
 

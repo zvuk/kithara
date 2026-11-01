@@ -30,12 +30,15 @@ pub use api::{
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
-pub use kithara_effects::{GainDb, eq::EqBandConfig};
+pub use kithara_effects::{
+    EffectChange, EffectConfig, EffectTarget, GainDb,
+    eq::{EqBandConfig, EqBandConfigChange, EqBandConfigControl},
+};
 pub use kithara_net::Headers;
 pub use kithara_render::{
     CrossfadeCurve, CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError,
-    DispatcherProtocol, EngineLoad, EngineLoadSnapshot, InvalidCrossfade, LoadRefusal, PlayWorker,
-    PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
+    DispatcherProtocol, EngineLoad, EngineLoadSnapshot, InvalidCrossfade, LaneId, LoadRefusal,
+    PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
     bridge::{
         DeckEqChange, DeckEvent, DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol,
         DeckRefusal, DeckSnapshot, EqSnapshot, FadeDir, MixTapWriter, PlaybackFault, Returned,
@@ -50,9 +53,10 @@ pub use kithara_render::{
 pub use kithara_sync::MIN_SPEED;
 pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 pub use player::{
-    Bound, DeckControl, DeckPass, HostedDeck, Outbox, Player, PlayerConfig, PlayerFactory,
-    PlayerImpl, Position, Settled, Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings,
-    TrackSettingsChange, TrackSettingsPatch, TrackSettingsPatchError, TrackSnapshot, TrackStatus,
+    Bound, DeckControl, DeckPass, EffectConfigView, EffectSnapshot, HostedDeck, Outbox, Player,
+    PlayerConfig, PlayerFactory, PlayerImpl, Position, Settled, Track, TrackCommand, TrackFactory,
+    TrackReceipt, TrackSettings, TrackSettingsChange, TrackSettingsPatch, TrackSettingsPatchError,
+    TrackSnapshot, TrackStatus,
 };
 pub use resource::{
     ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,

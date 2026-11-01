@@ -1,8 +1,8 @@
 use kithara_bufpool::{HasPool, PoolError};
-use kithara_signal::AudioChunk;
+use kithara_signal::{AudioChunk, AudioSpec};
 
-use super::{EqBandConfig, EqConfig, IsolatorEq};
-use crate::{AudioEffect, GainDb};
+use super::{EqBandConfig, EqBandConfigChange, EqConfig, IsolatorEq};
+use crate::{AudioEffect, EffectChange, EffectPrepareError, EffectRefusal, EffectTarget, GainDb};
 
 #[non_exhaustive]
 pub struct EqEffect {
@@ -10,6 +10,7 @@ pub struct EqEffect {
     eq_r: IsolatorEq,
     bands: Vec<EqBandConfig>,
     channels: u16,
+    sample_rate: u32,
 }
 
 impl EqEffect {
@@ -35,6 +36,7 @@ impl EqEffect {
             eq_r,
             bands,
             channels,
+            sample_rate,
         })
     }
 
@@ -69,6 +71,41 @@ impl EqEffect {
 }
 
 impl AudioEffect for EqEffect {
+    fn service_deferred(&mut self, spec: AudioSpec) -> Result<(), EffectPrepareError> {
+        if spec.channels == 0 {
+            return Err(EffectPrepareError::Shape);
+        }
+        if self.channels != spec.channels {
+            self.reset();
+            self.channels = spec.channels;
+        }
+        let rate = spec.sample_rate.get();
+        if self.sample_rate != rate {
+            self.eq_l.update_sample_rate(rate);
+            self.eq_r.update_sample_rate(rate);
+            self.sample_rate = rate;
+        }
+        Ok(())
+    }
+
+    fn accepts_spec(&self, spec: AudioSpec) -> bool {
+        self.channels == spec.channels && self.sample_rate == spec.sample_rate.get()
+    }
+
+    fn configure(
+        &mut self,
+        target: EffectTarget,
+        change: EffectChange,
+    ) -> Result<(), EffectRefusal> {
+        let (EffectTarget::EqBand { band, .. }, EffectChange::EqBand(change)) = (target, change);
+        if self.target_gain(band).is_none() {
+            return Err(EffectRefusal);
+        }
+        let EqBandConfigChange::GainDb(gain) = change;
+        self.set_gain(band, gain);
+        Ok(())
+    }
+
     fn flush(&mut self) -> Option<AudioChunk> {
         None
     }
@@ -96,11 +133,8 @@ impl AudioEffect for EqEffect {
     }
 
     fn reset(&mut self) {
-        for band in &mut self.bands {
-            band.set_gain_db(GainDb::DEFAULT);
-        }
-        self.eq_l.reset();
-        self.eq_r.reset();
+        self.eq_l.reset_to_targets();
+        self.eq_r.reset_to_targets();
     }
 }
 
@@ -209,32 +243,38 @@ mod tests {
     }
 
     #[kithara::test]
-    fn eq_reset_clears_gains_and_history(eq_half: Vec<f32>) {
+    fn eq_reset_retains_targets_and_clears_history(eq_half: Vec<f32>) {
         let pools = pools();
         let bands = generate_log_spaced_bands(3);
         let mut eq = make_eq(&pools, bands, 44100, 2);
 
         eq.set_gain(0, GainDb::MAX);
+        eq.set_gain(1, GainDb::MIN);
         let spec = EqFixture::spec(2, 44100);
-        let samples = eq_half;
-        let chunk = test_chunk(&pools, spec, &samples);
+        let chunk = test_chunk(&pools, spec, &eq_half[..4]);
         let _ = eq.process(chunk);
+        assert!(eq.is_smoothing());
 
+        let targets = eq.bands();
+        let mut fresh = make_eq(&pools, targets.clone(), 44100, 2);
         eq.reset();
-
-        assert!(
-            eq.bands()
+        assert_eq!(eq.bands(), targets);
+        assert!(!eq.is_smoothing());
+        let input = [0.25, -0.5, 0.75, 0.125, -0.25, 0.5];
+        let actual = eq.process(test_chunk(&pools, spec, &input)).unwrap();
+        let expected = fresh.process(test_chunk(&pools, spec, &input)).unwrap();
+        assert_eq!(
+            actual
+                .samples
                 .iter()
-                .all(|band| band.gain_db() == GainDb::DEFAULT)
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            expected
+                .samples
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>()
         );
-
-        for i in 0..3 {
-            assert_eq!(
-                eq.target_gain(i).unwrap(),
-                GainDb::DEFAULT,
-                "target should be unity after reset"
-            );
-        }
     }
 
     #[kithara::test]

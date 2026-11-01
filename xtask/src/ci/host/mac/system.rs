@@ -4,10 +4,7 @@ use anyhow::{Context, Result, bail};
 use tracing::info;
 
 use super::runners::path_text;
-use crate::{
-    ci::{config::CiConfig, process::Process},
-    consts,
-};
+use crate::ci::{config::CiConfig, process::Process};
 
 pub(super) struct SystemSetup<'a> {
     config: &'a CiConfig,
@@ -61,12 +58,6 @@ impl<'a> SystemSetup<'a> {
             .next()
             .and_then(|line| line.strip_prefix("Xcode "))
             .context("xcodebuild did not return an Xcode version")?;
-        if actual != self.config.pins.expected_xcode_version {
-            bail!(
-                "Xcode {} is required, found {actual}",
-                self.config.pins.expected_xcode_version
-            );
-        }
         self.process.run(
             "/usr/bin/xcodebuild",
             &["-license", "accept"],
@@ -455,7 +446,6 @@ fn checkout_directories(config: &CiConfig) -> Vec<PathBuf> {
     }
     directories.push(build_root.join("workspaces"));
     directories.push(build_root.join("workspaces/gitlab"));
-    directories.push(build_root.join(consts::CONTAINER_BUILDS));
     directories
 }
 
@@ -518,6 +508,7 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::consts;
 
     #[test]
     fn root_container_parser_accepts_current_diskutil_shape() {
@@ -587,7 +578,6 @@ mod tests {
                 "/build-root",
                 "/build-root/workspaces",
                 "/build-root/workspaces/gitlab",
-                "/build-root/workspaces/colima",
             ]
             .map(PathBuf::from)
         );

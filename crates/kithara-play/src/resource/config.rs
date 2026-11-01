@@ -8,6 +8,7 @@ use kithara_bufpool::HasPool;
 use kithara_config::Config;
 use kithara_decode::TrackMetadata;
 use kithara_download::Downloader;
+use kithara_effects::EffectConfig;
 use kithara_events::EventBus;
 use kithara_file::FileConfigPatch;
 use kithara_hls::{HlsConfigPatch, KeyOptions};
@@ -142,6 +143,9 @@ where
     /// Resource callers must configure it themselves.
     #[config(skip = "transferred to the playback worker")]
     pub(crate) worker: Option<PlayWorker<S>>,
+    /// Fixed chain prepared by the worker in the opened audio format.
+    #[config(skip = "transferred to the track effect chain", builder(default))]
+    pub(crate) effects: Vec<EffectConfig>,
     /// Resident Warp resources and live temporal controls. Not a document
     /// key: a player-managed resource has this overwritten with the player's
     /// own `warp`, which is where a document's `player.warp:` section lands.

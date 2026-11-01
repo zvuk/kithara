@@ -132,9 +132,12 @@ where
     /// # Errors
     /// Returns the source's seek classification or a render failure.
     pub fn service_commands(&mut self) -> Result<bool, TrackFailureKind> {
-        let changed = self
-            .lane
-            .execute_due(&mut self.source, &mut self.warp, self.spec)?;
+        let changed = self.lane.execute_due(
+            &mut self.source,
+            &mut self.warp,
+            self.spec,
+            &mut self.effects,
+        )?;
         if changed == LaneChange::Source {
             self.discard_staged_input();
             reset_effects(&mut self.effects);
@@ -272,6 +275,10 @@ where
     }
 
     fn accept_source_chunk(&mut self, mut data: AudioChunk) -> TrackStep<AudioChunk> {
+        let channels = usize::from(data.spec().channels);
+        if channels == 0 || !data.samples.len().is_multiple_of(channels) {
+            return self.fail(TrackFailureKind::Render);
+        }
         let Some(geometry) = data.meta.source_geometry() else {
             tracing::error!("decoded source has invalid PCM geometry");
             return self.fail(TrackFailureKind::Render);
@@ -498,7 +505,7 @@ where
             }
             return Some(
                 chunk
-                    .and_then(|chunk| apply_effects(&mut self.effects, chunk))
+                    .and_then(|chunk| self.apply_chain(chunk))
                     .and_then(|output| self.fetch(output))
                     .map_or(TrackStep::StateChanged, TrackStep::Produced),
             );
@@ -511,7 +518,7 @@ where
             };
             if let Some(chunk) = chunk {
                 return Some(
-                    apply_effects(&mut self.effects, chunk)
+                    self.apply_chain(chunk)
                         .and_then(|output| self.fetch(output))
                         .map_or(TrackStep::StateChanged, TrackStep::Produced),
                 );
@@ -523,7 +530,8 @@ where
             return None;
         };
         Some(match self.drain.step(&mut self.effects) {
-            EffectDrainStep::Produced(chunk) => {
+            Err(_) => self.fail(TrackFailureKind::Render),
+            Ok(EffectDrainStep::Produced(chunk)) => {
                 let source_end = chunk.meta.source_span.map(|span| {
                     SourceEnd::new(span.end(), span.sample_rate())
                         .with_mapping_revision(span.mapping_revision())
@@ -531,8 +539,8 @@ where
                 self.emit_output(*chunk, source_end)
                     .map_or(TrackStep::StateChanged, TrackStep::Produced)
             }
-            EffectDrainStep::Progress => TrackStep::StateChanged,
-            EffectDrainStep::Exhausted => {
+            Ok(EffectDrainStep::Progress) => TrackStep::StateChanged,
+            Ok(EffectDrainStep::Exhausted) => {
                 self.drain_state = DrainState::Exhausted;
                 TrackStep::Eof
             }
@@ -602,8 +610,16 @@ where
         if !self.warp.transition_pending() {
             self.prepare_staging();
         }
-        for effect in &mut self.effects {
-            effect.service_deferred(spec);
+    }
+
+    fn apply_chain(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+        match apply_effects(&mut self.effects, chunk) {
+            Ok(output) => output,
+            Err(error) => {
+                tracing::error!(%error, "effect input was not admitted");
+                self.quantum_failed = true;
+                None
+            }
         }
     }
 
@@ -620,7 +636,7 @@ where
         if self.warp.transition_pending() {
             self.drain_state = DrainState::LiveWarp;
         }
-        let output = output.and_then(|chunk| apply_effects(&mut self.effects, chunk));
+        let output = output.and_then(|chunk| self.apply_chain(chunk));
         ControlFlow::Continue(output.and_then(|output| self.fetch(output)))
     }
 
@@ -780,6 +796,14 @@ where
             spec.unwrap_or(self.spec)
         };
         self.prepare_renderers(prepared_spec);
+        for effect in &mut self.effects {
+            if effect.service_deferred(prepared_spec).is_err()
+                || !effect.accepts_spec(prepared_spec)
+            {
+                self.quantum_failed = true;
+                break;
+            }
+        }
         spec.map(|_| prepared_spec)
     }
 
@@ -808,6 +832,14 @@ where
         }
         if self.quantum_failed {
             return self.fail(TrackFailureKind::Render);
+        }
+
+        if self
+            .effects
+            .iter()
+            .any(|effect| !effect.accepts_spec(self.spec))
+        {
+            return TrackStep::StateChanged;
         }
 
         if let Some(step) = self.step_buffered() {

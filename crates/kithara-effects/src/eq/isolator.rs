@@ -84,6 +84,15 @@ impl IsolatorEq {
 
     pub fn reset(&mut self) {
         self.gains.reset();
+        self.reset_history();
+    }
+
+    pub(crate) fn reset_to_targets(&mut self) {
+        self.gains.reset_to_targets();
+        self.reset_history();
+    }
+
+    fn reset_history(&mut self) {
         self.filters.reset();
         self.update_mix();
         self.bypass.reset_to_target();

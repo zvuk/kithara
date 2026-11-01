@@ -380,7 +380,7 @@ fn unit(
     let job = container(host, runner, cpuset.to_owned(), pins)?;
     write!(
         unit,
-        "\nExecStart=/usr/bin/docker run --rm --name {name} \
+        "\nExecStart=/usr/bin/docker run --init --rm --name {name} \
          --network {network} \
          --cpuset-cpus {cpuset} \
          --memory {memory} \
@@ -640,6 +640,22 @@ mod tests {
             text.contains(&format!("--env-file {}", env_file(runner))),
             "{text}"
         );
+    }
+
+    #[test]
+    fn every_runner_reaps_orphaned_job_processes() {
+        let host = host_fixture();
+        for runner in &host.runners {
+            let text = unit(
+                &host,
+                runner,
+                "0,1,2",
+                &fixture().pins,
+                "/usr/local/bin/kithara-ci",
+            )
+            .expect("the unit must render");
+            assert!(text.contains("docker run --init "), "{text}");
+        }
     }
 
     /// No single runner's ceiling ever fired: the host died of the sum of them.

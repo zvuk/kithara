@@ -88,6 +88,12 @@ impl GainBank {
         }
     }
 
+    pub(crate) fn reset_to_targets(&mut self) {
+        for gain in &mut self.gains {
+            gain.filter = SmoothingFilter::new(gain.target_linear);
+        }
+    }
+
     pub(crate) fn set(&mut self, band: usize, gain_db: GainDb) {
         if let Some(gain) = self.gains.get_mut(band) {
             gain.set_target(gain_db);

@@ -15,3 +15,5 @@ mod mixing;
 mod no_sync_real_media;
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 mod offline_recording;
+#[cfg(not(target_arch = "wasm32"))]
+mod underrun;

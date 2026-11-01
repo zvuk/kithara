@@ -322,10 +322,7 @@ pub(crate) const KACHE_DIR: &str = "kache";
 pub(crate) const KACHE_MOUNT: &str = "/cache/kache";
 pub(crate) const KACHE_HOST_FILE: &str = "host.toml";
 pub(crate) const KACHE_STORE: &str = "store";
-/// The host file a Mac host's container runner names: the same remote and
-/// store, spelled as the container reaches them.
-pub(crate) const KACHE_DOCKER_HOST_FILE: &str = "host-docker.toml";
-
+pub(crate) const KACHE_LOCAL_ROOT_ENV: &str = "KITHARA_CI_COMPILER_CACHE_ROOT";
 /// Where a Linux runner mounts the Cargo home of its trust: the image's own
 /// `CARGO_HOME`, so a job that names no home and one that is told it key their
 /// compilations alike.
@@ -396,6 +393,7 @@ pub(crate) const PRIVATE_BLOCKS: [&str; 3] = ["172.16.0.0/12", "10.0.0.0/8", "19
 
 /// A mode only its owner may read and write.
 pub(crate) const OWNER_ONLY: u32 = 0o600;
+pub(crate) const OWNER_DIRECTORY: u32 = 0o700;
 
 /// A mode anyone may read and run, and only its owner may write.
 pub(crate) const EXECUTABLE: u32 = 0o755;
@@ -440,10 +438,6 @@ pub(crate) const HOST_PACKAGES: [&str; 10] = [
 /// and make then reports `/Volumes/My: No such file or directory`. Only a real
 /// mount elsewhere fixes it, so the guest moves the share here on startup.
 pub(crate) const GUEST_SHARE: &str = "/opt/kithara";
-
-/// The floating tag the Linux runner runs. It always names the image the most
-/// recent pipeline pinned, so the runner configuration never changes with a pin.
-pub(crate) const LINUX_LATEST_IMAGE: &str = "kithara-ci:linux-latest";
 
 /// The throwaway VM the macOS lane clones for every job.
 pub(crate) const JOB_VM_NAME: &str = "kithara-ci-job";
@@ -555,11 +549,6 @@ pub(crate) const UNIT_HASH_LEN: usize = 16;
 /// The directory a runner's Cargo home takes under the root it keeps its
 /// caches in. On the cache share it is a namespace cleanup keeps.
 pub(crate) const CARGO_HOME_DIR: &str = "cargo";
-
-/// The host tree the container runner checks out into, under the build root.
-/// The container sees it where every runner checks out, `workspaces/gitlab`;
-/// the host's runners never do.
-pub(crate) const CONTAINER_BUILDS: &str = "workspaces/colima";
 
 /// Where a CI job's lanes take their build slots, when not in the root Cargo
 /// is told: runners that share their lanes' builds are told the directory they
@@ -931,7 +920,7 @@ pub(crate) const GUEST_PROVISION_SCRIPT: &str = ".config/windows/provision.ps1";
 pub(crate) const GUEST_BUILD_TOOLS_URL: &str = "https://aka.ms/vs/17/release/vs_buildtools.exe";
 
 /// The tools the lane needs on a guest beyond the toolchain.
-pub(crate) const GUEST_CARGO_TOOLS: [&str; 2] = ["cargo-nextest", "just"];
+pub(crate) const GUEST_CARGO_TOOLS: [&str; 3] = ["cargo-nextest", "just", "sccache"];
 
 /// Where the Linux host's services live.
 pub(crate) const SERVICE_SYSTEMD_ROOT: &str = "/etc/systemd/system";

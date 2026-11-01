@@ -52,9 +52,6 @@ pub(crate) struct CiHost {
     /// kill the cleanup on every host that already has one.
     #[serde(default = "default_cleanup_deadline_seconds")]
     pub(crate) cleanup_deadline_seconds: u64,
-    /// The profile `install-services` starts the Linux guest under.
-    #[serde(default = "default_colima_profile")]
-    pub(crate) colima_profile: String,
     /// Cores this machine has.
     ///
     /// Job admission and per-job Cargo workers are both carved out of this, and
@@ -64,11 +61,6 @@ pub(crate) struct CiHost {
     /// profiles predate the field, and refusing to load would kill every lane.
     #[serde(default = "default_cores")]
     pub(crate) cores: usize,
-    /// What the Linux guest's Docker build cache is held to, as positive
-    /// decimal gigabytes such as `10GB`. Every cleanup prunes it to this size,
-    /// oldest first. Defaulted for the same reason `build_cache_size` is.
-    #[serde(default = "default_docker_build_cache_size")]
-    pub(crate) docker_build_cache_size: String,
     /// Maximum jobs admitted at once.
     ///
     /// Runner rendering and per-job cache partitioning share this value.
@@ -198,7 +190,6 @@ impl CiHost {
             bail!("CI host profile cleanup_deadline_seconds must be positive");
         }
         self.build_cache_budget_bytes()?;
-        self.docker_build_cache_budget_bytes()?;
         if self.soft_cleanup_bytes == 0
             || self.soft_cleanup_bytes >= self.aggressive_cleanup_bytes
             || self.aggressive_cleanup_bytes >= self.reject_bytes
@@ -210,12 +201,6 @@ impl CiHost {
             bail!(
                 "CI host profile active_lease_hours must be at least one hour; at zero every \
                  lease reads as stale and cleanup takes the workspace a running job holds"
-            );
-        }
-        if self.colima_profile.trim().is_empty() {
-            bail!(
-                "CI host profile colima_profile must name an instance; an empty name addresses \
-                 the wrong Docker socket instead of failing"
             );
         }
         if self.ci_uid == 0 || self.sync_uid == 0 || self.ci_uid == self.sync_uid {
@@ -286,11 +271,6 @@ impl CiHost {
     pub(crate) fn build_cache_budget_bytes(&self) -> Result<u64> {
         parse_build_cache_size(&self.build_cache_size)
             .context("CI host profile build_cache_size is invalid")
-    }
-
-    pub(crate) fn docker_build_cache_budget_bytes(&self) -> Result<u64> {
-        parse_build_cache_size(&self.docker_build_cache_size)
-            .context("CI host profile docker_build_cache_size is invalid")
     }
 
     pub(crate) fn cleanup_deadline(&self) -> Duration {
@@ -388,12 +368,6 @@ pub(crate) fn default_build_cache_size() -> String {
     "25GB".to_owned()
 }
 
-/// About what this host's image builds kept on 2026-10-05: 9.1 GB in 27
-/// records, after weeks of pruning by age alone.
-fn default_docker_build_cache_size() -> String {
-    "10GB".to_owned()
-}
-
 /// The Mac mini this fleet was sized on.
 const fn default_cores() -> usize {
     10
@@ -411,11 +385,7 @@ const fn default_active_lease_hours() -> u64 {
 }
 
 fn default_always_on_agents() -> Vec<String> {
-    ["colima", "gitlab-runner"].map(String::from).to_vec()
-}
-
-fn default_colima_profile() -> String {
-    "kithara".to_owned()
+    ["gitlab-runner"].map(String::from).to_vec()
 }
 
 const fn default_log_limit_bytes() -> u64 {
@@ -548,34 +518,6 @@ mod tests {
             CiHost::load(&path).unwrap().build_cache_size,
             default_build_cache_size()
         );
-    }
-
-    #[test]
-    fn ci_host_load_accepts_a_profile_without_a_docker_build_cache_size() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("host.toml");
-        let host = super::super::fixture().host;
-        host.write(&path).unwrap();
-        let text = fs::read_to_string(&path).unwrap();
-        let without: String = text
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("docker_build_cache_size"))
-            .map(|line| format!("{line}\n"))
-            .collect();
-        fs::write(&path, without).unwrap();
-
-        assert_eq!(
-            CiHost::load(&path).unwrap().docker_build_cache_size,
-            default_docker_build_cache_size()
-        );
-    }
-
-    #[test]
-    fn ci_host_rejects_a_docker_build_cache_size_that_is_not_whole_gigabytes() {
-        let mut host = super::super::fixture().host;
-        host.docker_build_cache_size = "10G".to_owned();
-
-        assert!(host.validate().is_err());
     }
 
     /// A deadline every installed profile predates, so refusing to load
@@ -758,20 +700,6 @@ mod tests {
         assert!(format!("{error:#}").contains("active_lease_hours"));
     }
 
-    /// An unnamed profile does not fail: it addresses `.colima/docker.sock`,
-    /// which is some other instance's socket or nothing at all.
-    #[test]
-    fn a_profile_without_a_colima_instance_name_is_refused() {
-        let mut host = super::super::fixture().host;
-        host.colima_profile = "  ".to_owned();
-
-        let error = host
-            .validate()
-            .expect_err("an unnamed colima instance must not load");
-
-        assert!(format!("{error:#}").contains("colima_profile"));
-    }
-
     #[test]
     fn a_profile_that_leaves_each_job_a_worker_loads() {
         let mut host = super::super::fixture().host;
@@ -857,7 +785,6 @@ mod tests {
         let mut emitted: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         for key in [
             "always_on_agents",
-            "colima_profile",
             "active_lease_hours",
             "log_limit_bytes",
             "removable_roots",
@@ -872,8 +799,7 @@ mod tests {
 
         let host = CiHost::load(&path).unwrap();
 
-        assert_eq!(host.always_on_agents, ["colima", "gitlab-runner"]);
-        assert_eq!(host.colima_profile, "kithara");
+        assert_eq!(host.always_on_agents, ["gitlab-runner"]);
         assert_eq!(host.active_lease_hours, 12);
         assert_eq!(host.log_limit_bytes, 20_000_000);
         assert_eq!(host.removable_roots, ["cache", "logs", "vm", "workspaces"]);

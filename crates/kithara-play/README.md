@@ -122,6 +122,9 @@ resource.read(&mut buf);
   deck back.
 - **Configuration:** `PlayerConfig`, `PlayWorkerConfig`, and `ResourceConfig` expose
   builders while their fields remain crate-private.
+- **Track effects:** `ResourceConfig::effects` carries a fixed built-in chain.
+  The worker prepares it once; parameter steps reuse the lane's output clock
+  and frontier checks. Settings views publish only applied receipts.
 - **Tempo and key-lock:** `PlayerConfig::builder().warp(...)` supplies the
   `WarpConfig` every track's renderer starts from, with its key-lock and
   backend. A speed change goes to each held track's render lane and applies on

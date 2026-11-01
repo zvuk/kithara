@@ -173,6 +173,7 @@ pub(super) fn geometry(
 
 /// A single-use source open and its preparation-owned lane wiring.
 pub struct ResourceLoad<S, B = PlaybackResamplerBackend> {
+    pub(crate) effects: Vec<kithara_effects::EffectConfig>,
     pub(super) opener: Box<ResourceOpener>,
     pub(super) channel: Option<Box<dyn Fn() -> LaneChannel + Send>>,
     pub(super) cancel: Option<CancelToken>,
@@ -218,7 +219,9 @@ where
             Box::new(move || worker.lane_channel()) as Box<dyn Fn() -> LaneChannel + Send>
         });
         let cancel = config.cancel.clone();
+        let effects = config.effects.clone();
         Self {
+            effects,
             opener: Box::new(move |position, start, inbox| {
                 Box::pin(Self::load(config, observer, position, start, inbox))
             }),

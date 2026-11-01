@@ -253,19 +253,24 @@ where
             let prepared = spawn_blocking(move || {
                 tracing::dispatcher::with_default(&dispatch, || {
                     let _entered = span.enter();
-                    let mut renderer = warp.renderer(spec, pools);
+                    let mut renderer = warp.renderer(spec, pools.clone());
                     renderer.set_speed(start.speed, 0).map_err(|error| {
                         DecodeError::audio_stream("initial lane speed curve", error)
                     })?;
                     renderer.prepare_engine_latency(spec).map_err(|error| {
                         DecodeError::audio_stream("lane engine preparation", error)
                     })?;
-                    Ok::<_, DecodeError>(renderer)
+                    let effects = effects
+                        .into_iter()
+                        .map(|effect| effect.prepare(spec, &pools))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|error| DecodeError::audio_stream("effect preparation", error))?;
+                    Ok::<_, DecodeError>((renderer, effects))
                 })
             })
             .await;
             self.check_load_cancelled(cancel.as_ref())?;
-            let renderer = prepared
+            let (renderer, effects) = prepared
                 .map_err(|error| DecodeError::audio_stream("lane renderer preparation task", error))
                 .map_err(decode_refusal)?
                 .map_err(decode_refusal)?;

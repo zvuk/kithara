@@ -283,7 +283,12 @@ fn audio_config(
         .build();
     TrackConfig::for_audio(audio)
         .warp(warp)
-        .effects(effects)
+        .effects(
+            effects
+                .into_iter()
+                .map(kithara::effects::EffectSetup::Prepared)
+                .collect(),
+        )
         .build()
 }
 

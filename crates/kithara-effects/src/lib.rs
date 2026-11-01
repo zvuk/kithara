@@ -5,6 +5,7 @@
 
 mod chain;
 mod contract;
+mod control;
 mod drain;
 mod dsp;
 pub mod eq;
@@ -16,6 +17,9 @@ pub use chain::{apply_effects, held_source_frames, reset_effects};
 pub use contract::AudioEffect;
 #[cfg(any(test, feature = "mock"))]
 pub use contract::AudioEffectMock;
+pub use control::{
+    EffectChange, EffectConfig, EffectPrepareError, EffectRefusal, EffectSetup, EffectTarget,
+};
 pub use drain::{EffectDrain, EffectDrainStep};
 pub use gain_db::GainDb;
 #[cfg(test)]

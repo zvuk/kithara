@@ -1,7 +1,10 @@
 use kithara_bufpool::{ByteBuffer, HasPool, PoolError, PoolRegion};
 use kithara_signal::AudioChunk;
 
-use crate::AudioEffect;
+use crate::{
+    AudioEffect, EffectPrepareError,
+    chain::{check_geometry, check_input},
+};
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -43,9 +46,15 @@ impl EffectDrain {
         self.active = false;
     }
 
-    pub fn step(&mut self, effects: &mut [Box<dyn AudioEffect>]) -> EffectDrainStep {
+    /// Advance the chain's finite tail without silently discarding invalid PCM.
+    /// # Errors
+    /// Refuses an unsupported format or incomplete interleaved frame.
+    pub fn step(
+        &mut self,
+        effects: &mut [Box<dyn AudioEffect>],
+    ) -> Result<EffectDrainStep, EffectPrepareError> {
         if effects.is_empty() {
-            return EffectDrainStep::Exhausted;
+            return Ok(EffectDrainStep::Exhausted);
         }
         if !self.active {
             self.exhausted.fill(StageState::UpstreamActive as u8);
@@ -59,21 +68,22 @@ fn pull(
     effects: &mut [Box<dyn AudioEffect>],
     exhausted: &mut [u8],
     stage: usize,
-) -> EffectDrainStep {
+) -> Result<EffectDrainStep, EffectPrepareError> {
     if stage == 0 {
         return flush_stage(effects, exhausted, stage);
     }
 
     if exhausted[stage] == StageState::UpstreamActive as u8 {
-        match pull(effects, exhausted, stage - 1) {
+        match pull(effects, exhausted, stage - 1)? {
             EffectDrainStep::Produced(chunk) => {
-                return effects[stage]
-                    .process(*chunk)
-                    .map_or(EffectDrainStep::Progress, |chunk| {
-                        EffectDrainStep::Produced(Box::new(chunk))
-                    });
+                check_input(&*effects[stage], &chunk)?;
+                let Some(output) = effects[stage].process(*chunk) else {
+                    return Ok(EffectDrainStep::Progress);
+                };
+                check_geometry(&output)?;
+                return Ok(EffectDrainStep::Produced(Box::new(output)));
             }
-            EffectDrainStep::Progress => return EffectDrainStep::Progress,
+            EffectDrainStep::Progress => return Ok(EffectDrainStep::Progress),
             EffectDrainStep::Exhausted => exhausted[stage] = StageState::Flushing as u8,
         }
     }
@@ -84,15 +94,14 @@ fn flush_stage(
     effects: &mut [Box<dyn AudioEffect>],
     exhausted: &mut [u8],
     stage: usize,
-) -> EffectDrainStep {
+) -> Result<EffectDrainStep, EffectPrepareError> {
     if exhausted[stage] == StageState::Exhausted as u8 {
-        return EffectDrainStep::Exhausted;
+        return Ok(EffectDrainStep::Exhausted);
     }
-    effects[stage].flush().map_or_else(
-        || {
-            exhausted[stage] = StageState::Exhausted as u8;
-            EffectDrainStep::Exhausted
-        },
-        |chunk| EffectDrainStep::Produced(Box::new(chunk)),
-    )
+    let Some(chunk) = effects[stage].flush() else {
+        exhausted[stage] = StageState::Exhausted as u8;
+        return Ok(EffectDrainStep::Exhausted);
+    };
+    check_input(&*effects[stage], &chunk)?;
+    Ok(EffectDrainStep::Produced(Box::new(chunk)))
 }

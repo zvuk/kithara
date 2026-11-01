@@ -34,6 +34,7 @@ impl From<u8> for FilterKind {
 #[non_exhaustive]
 pub struct EqBandConfig {
     kind: FilterKind,
+    #[config(live)]
     gain_db: GainDb,
     #[config(builder(default = consts::DEFAULT_FREQ))]
     frequency: f32,

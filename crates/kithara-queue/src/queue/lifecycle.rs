@@ -912,7 +912,7 @@ mod tests {
         let (mut queue, mut rig) = make_queue();
         queue.insert_entry(
             TrackId(1),
-            "/kithara/missing.wav".into(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/missing.wav").into(),
             Position::ZERO,
             Placement::Append,
         );
@@ -946,7 +946,7 @@ mod tests {
         for id in [TrackId(1), TrackId(2)] {
             queue.insert_entry(
                 id,
-                "/kithara/missing.wav".into(),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/missing.wav").into(),
                 Position::ZERO,
                 Placement::Append,
             );
@@ -992,7 +992,7 @@ mod tests {
         let (mut queue, mut rig) = make_queue();
         queue.insert_entry(
             TrackId(1),
-            "/kithara/missing.wav".into(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/missing.wav").into(),
             Position::ZERO,
             Placement::Append,
         );
@@ -1065,7 +1065,7 @@ mod tests {
         let (mut queue, mut rig) = make_queue();
         queue.insert_entry(
             TrackId(1),
-            "/kithara/missing.wav".into(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/missing.wav").into(),
             Position::ZERO,
             Placement::Append,
         );
@@ -1114,7 +1114,7 @@ mod tests {
         let (mut queue, mut rig) = make_queue();
         queue.insert_entry(
             TrackId(1),
-            "/kithara/missing.wav".into(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/missing.wav").into(),
             Position::ZERO,
             Placement::Append,
         );
