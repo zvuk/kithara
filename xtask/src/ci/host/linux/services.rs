@@ -190,20 +190,13 @@ fn cleanup_unit(keep: &[String]) -> String {
     )
 }
 
-/// Every two hours, because the fleet fills faster than a day. Measured across
-/// one day of this timer on the Linux host: the build caches waiting at a pass
-/// ranged from 20 GB to 515 GB, each amount accumulated inside a single
-/// two-hour window, against 3.0 TB free. A daily timer would meet twelve such
-/// windows at once, which a busy day does not fit on the volume — so the host
-/// this shipped to had been carrying a hand-written drop-in overriding the
-/// cadence, a second source of truth this file could not see. A pass over a
-/// volume already inside its budget frees nothing and costs seconds, so the
-/// frequency is only paid for when it is needed.
+/// Check budgets frequently enough to limit growth between cleanup passes.
+/// Active builds retain their leases while idle outputs can be reclaimed.
 fn cleanup_timer() -> &'static str {
     "[Unit]\n\
      Description=Kithara CI cleanup\n\n\
      [Timer]\n\
-     OnCalendar=*-*-* 00/2:00:00\n\
+     OnCalendar=*-*-* *:00/10:00\n\
      Persistent=true\n\n\
      [Install]\n\
      WantedBy=timers.target\n"
@@ -540,14 +533,11 @@ mod tests {
         assert!(Cli::try_parse_from(argv).is_ok(), "{command:?}");
     }
 
-    /// The cadence is the whole of the disk policy: the cleaner runs when the
-    /// timer says so and at no other time. A daily pass was measured arriving
-    /// at up to 515 GB of build caches, and that was one two-hour window's
-    /// worth.
+    /// Frequent passes bound idle cache growth between budget checks.
     #[test]
     fn the_cleanup_timer_outpaces_what_the_fleet_accumulates() {
         assert!(
-            cleanup_timer().contains("OnCalendar=*-*-* 00/2:00:00"),
+            cleanup_timer().contains("OnCalendar=*-*-* *:00/10:00"),
             "{}",
             cleanup_timer()
         );
