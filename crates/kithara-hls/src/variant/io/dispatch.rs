@@ -238,11 +238,7 @@ where
             && !entry.state().is_failed()
             && !entry.state().is_downloading()
         {
-            let planned = PlannedFetch::Segment(segment);
-            let mut queue = self.flow.queue.lock();
-            if !queue.contains(&planned) {
-                queue.push_front(planned);
-            }
+            self.flow.queue.lock().prioritize_segment(segment);
         }
     }
 

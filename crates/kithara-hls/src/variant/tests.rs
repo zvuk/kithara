@@ -2975,13 +2975,44 @@ async fn dispatch_owed_covers_the_range_the_reader_waits_on() {
     assert_eq!(
         got,
         vec![
+            v.segments()[4].url().clone(),
             v.segments()[0].url().clone(),
             v.segments()[1].url().clone(),
             v.segments()[2].url().clone(),
             v.segments()[3].url().clone(),
-            v.segments()[4].url().clone(),
         ],
         "the owed window runs through the segments the parked read waits on"
+    );
+}
+
+#[kithara::test(tokio)]
+async fn a_queued_reader_demand_uses_the_next_download_slot() {
+    let ctx = test_ctx(1);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+    let revision = v.flow.queue.revision();
+    let parked = v.wait_range(400..401, Some(Duration::ZERO));
+    assert!(matches!(
+        parked,
+        Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+    ));
+
+    let commands = session.dispatch(&ctx, 1);
+
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].url(), v.segments()[4].url());
+    assert_eq!(v.flow.queue.revision(), revision);
+    assert_eq!(
+        v.flow.queue.lock().iter().copied().collect::<Vec<_>>(),
+        vec![
+            PlannedFetch::Segment(0),
+            PlannedFetch::Segment(1),
+            PlannedFetch::Segment(2),
+            PlannedFetch::Segment(3),
+            PlannedFetch::Segment(5),
+        ],
+        "reader demand moves ahead without duplicating it or discarding prefetch"
     );
 }
 
