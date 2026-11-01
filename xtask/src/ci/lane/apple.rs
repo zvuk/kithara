@@ -1,8 +1,8 @@
 use std::{path::Path, process::Output};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use kithara_devtools::{common::tools::ToolsConfig, verdict::ChildFailure};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     child,
@@ -14,7 +14,7 @@ use crate::{
 /// The two Apple lanes a parameter cannot describe. Both hold something open
 /// for the length of a run - a package cache, a server, a simulator - and one
 /// of them answers with the test's outcome rather than the build's.
-fn preflight(process: &Process, config: &CiConfig, tools: &ToolsConfig) -> Result<()> {
+fn preflight(process: &Process, tools: &ToolsConfig) -> Result<()> {
     process.require_os(&["macos"], "Apple")?;
     let xcodebuild = tools.program("xcodebuild");
     process.require_tools(&[
@@ -33,22 +33,21 @@ fn preflight(process: &Process, config: &CiConfig, tools: &ToolsConfig) -> Resul
         .next()
         .and_then(|line| line.strip_prefix("Xcode "))
         .context("xcodebuild -version did not report an Xcode version")?;
-    if actual != config.pins.expected_xcode_version {
-        bail!(
-            "Xcode {} is required, found {actual}",
-            config.pins.expected_xcode_version
-        );
-    }
+    info!(xcode = actual, "Apple toolchain selected");
+    process.run(
+        xcodebuild,
+        &["-checkFirstLaunchStatus"],
+        "Xcode first launch readiness",
+    )?;
     Ok(())
 }
 
 pub(crate) fn swift_test(
     process: &Process,
-    config: &CiConfig,
     tools: &ToolsConfig,
     swiftpm_cache: &Path,
 ) -> Result<()> {
-    preflight(process, config, tools)?;
+    preflight(process, tools)?;
     // The Swift package resolves the framework from the debug build tree, so
     // this job builds it too. Repeated work is nearly free — the jobs share a
     // target directory on the executor — and it keeps the job self-contained.
@@ -79,7 +78,7 @@ pub(crate) fn ios_test(
     tools: &ToolsConfig,
     device_name: &str,
 ) -> Result<()> {
-    preflight(process, config, tools)?;
+    preflight(process, tools)?;
     let cancel = child::Cancel::install()?;
     let server = TestServer::start(
         process,
@@ -237,6 +236,67 @@ mod tests {
     }
 
     #[test]
+    fn an_initialized_xcode_is_not_rejected_for_its_version() {
+        let directory = tempfile::tempdir().unwrap();
+        let process = Process::recording(
+            directory.path(),
+            Recording::default().with_reply(
+                &["xcodebuild", "-version"],
+                "Xcode 99.1\nBuild version 99A1\n",
+            ),
+        );
+        super::preflight(&process, &ToolsConfig::default()).unwrap();
+        let recording = process.recorded().unwrap();
+        assert!(
+            recording
+                .steps()
+                .iter()
+                .any(|step| step.args == ["-checkFirstLaunchStatus"])
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_uninitialized_xcode_stops_before_building() {
+        let _signals = signals();
+        let directory = tempfile::tempdir().unwrap();
+        let bin = directory.path().join("bin");
+        for tool in [
+            "cargo",
+            "just",
+            "kache",
+            "sccache",
+            "swift",
+            "xcodebuild",
+            "xcodegen",
+            "xcrun",
+        ] {
+            crate::testing::install_double(&bin, tool);
+        }
+        let process = Process::new(
+            directory.path(),
+            BTreeMap::from([
+                ("PATH".into(), bin.into_os_string()),
+                (
+                    "KITHARA_TEST_STDOUT".into(),
+                    "Xcode 99.1\nBuild version 99A1".into(),
+                ),
+                (
+                    "KITHARA_TEST_RULES".into(),
+                    "xcodebuild:-checkFirstLaunchStatus:*=69".into(),
+                ),
+            ]),
+        );
+        let error = super::preflight(&process, &ToolsConfig::default()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Xcode first launch readiness failed (exit code 69)"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
     fn ios_device_exclusion_covers_the_entire_job() {
         let apple: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(include_str!("../../../../.gitlab/ci/apple.yml")).unwrap();
@@ -266,7 +326,7 @@ mod tests {
             Recording::default()
                 .with_reply(
                     &["xcodebuild", "-version"],
-                    &format!("Xcode {}", config.pins.expected_xcode_version),
+                    "Xcode 99.1\nBuild version 99A1",
                 )
                 .with_reply(&["xcrun", "simctl", "create"], UUID),
         );

@@ -250,6 +250,11 @@ impl TextInputComponent {
         self
     }
 
+    pub(super) fn select_all(&mut self) {
+        self.cursor.anchor = 0;
+        self.cursor.focus = self.query.len();
+    }
+
     pub(super) fn snapshot(&self, focused: bool) -> TextInputSnapshot {
         TextInputSnapshot {
             focused,
@@ -324,8 +329,7 @@ impl Component for TextInputComponent {
     fn handle_key(&mut self, input: Input<'_>) -> (Outcome<EngineEvent>, Option<&'static str>) {
         let outcome = match input {
             _ if input.shortcut('a') => {
-                self.cursor.anchor = 0;
-                self.cursor.focus = self.query.len();
+                self.select_all();
                 Outcome::captured()
             }
             Input::KeyPressed {

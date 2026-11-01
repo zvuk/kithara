@@ -14,7 +14,10 @@ use fs4::TryLockError;
 use kithara_devtools::{lease, lock::FileLock};
 use tracing::{info, warn};
 
-use super::build_dir::{Claim, claim_beside_alias};
+use super::{
+    build_dir::{Claim, claim_beside_alias},
+    environment::CacheTrust,
+};
 use crate::consts;
 
 /// One build directory in a build root: a lane's, a stress run's, xtask's own.
@@ -320,6 +323,20 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
             target_dir.display()
         );
     }
+    if is_leased_cargo_target(target_dir) {
+        let (entry, held) = inspect_entry(target_dir.to_path_buf())?;
+        return Ok(if held {
+            CacheContents {
+                entries: Vec::new(),
+                held: vec![entry],
+            }
+        } else {
+            CacheContents {
+                entries: vec![entry],
+                held: Vec::new(),
+            }
+        });
+    }
     let listing = fs::read_dir(target_dir)
         .with_context(|| format!("reading build cache {}", target_dir.display()))?;
     let mut contents = CacheContents {
@@ -578,8 +595,9 @@ pub(crate) fn hold_target(
 /// the environment gate: refusing a job is only honest once these have been
 /// reclaimed.
 ///
-/// The walk stops at a checkout, whose tree is the job's and holds no build,
-/// and at a root, whose entries are the builds the budget weighs. A root a job
+/// The walk inspects only direct children of a checkout for leased Cargo
+/// targets, leaving its sources and report directories alone. It stops
+/// at a root, whose entries are the builds the budget weighs. A root a job
 /// is building in is listed like any other: the lease on the build it entered
 /// keeps that one, and its bytes are charged against the ceiling, which is
 /// what leaves the idle builds beside it payable.
@@ -591,10 +609,12 @@ pub(crate) fn build_roots(root: &Path) -> Result<Vec<PathBuf>> {
     let mut pending = vec![root.to_path_buf()];
     let mut roots = Vec::new();
     while let Some(directory) = pending.pop() {
-        if directory.join("Cargo.toml").is_file() {
+        if is_leased_cargo_target(&directory) {
+            roots.push(directory);
             continue;
         }
-        if holds_a_build(&directory) {
+        let checkout = directory.join("Cargo.toml").is_file();
+        if !checkout && holds_a_build(&directory) {
             roots.push(directory);
             continue;
         }
@@ -608,6 +628,9 @@ pub(crate) fn build_roots(root: &Path) -> Result<Vec<PathBuf>> {
                 )
             })?;
             let path = entry.path();
+            if checkout && !is_leased_cargo_target(&path) {
+                continue;
+            }
             // A hidden directory is walked only as the root an executor
             // names: anything else hidden there is not this walk's.
             if is_hidden(&path) && !holds_a_build(&path) {
@@ -622,6 +645,17 @@ pub(crate) fn build_roots(root: &Path) -> Result<Vec<PathBuf>> {
     }
     roots.sort();
     Ok(roots)
+}
+
+/// Only a leased Cargo output directory may be reclaimed as a whole.
+fn is_leased_cargo_target(directory: &Path) -> bool {
+    fs::symlink_metadata(directory).is_ok_and(|metadata| metadata.file_type().is_dir())
+        && !directory.join("Cargo.toml").exists()
+        && !holds_a_build(directory)
+        && [".rustc_info.json", lease::FILE].iter().all(|name| {
+            fs::symlink_metadata(directory.join(name))
+                .is_ok_and(|metadata| metadata.file_type().is_file())
+        })
 }
 
 /// Every build root a host's budget weighs: those beside the checkouts under
@@ -649,7 +683,11 @@ pub(crate) fn previous_build_roots(cache: &Path) -> Result<Vec<PathBuf>> {
     };
     for entry in listing {
         let entry = entry.with_context(|| format!("reading {}", bootstrap.display()))?;
-        if entry.file_type()?.is_dir() {
+        if CacheTrust::ALL
+            .iter()
+            .any(|trust| entry.file_name() == trust.as_str())
+            && entry.file_type()?.is_dir()
+        {
             roots.push(entry.path());
         }
     }
@@ -696,8 +734,73 @@ mod tests {
         dir
     }
 
+    #[test]
+    fn checkout_builds_share_the_host_budget_without_removing_sources_or_reports() {
+        let workspace = tempfile::tempdir().unwrap();
+        let checkout = workspace.path().join("runner/repository/subject");
+        fs::create_dir_all(&checkout).unwrap();
+        fs::write(checkout.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::write(checkout.join("source.rs"), "source").unwrap();
+        let reports = checkout.join("target/nextest");
+        fs::create_dir_all(&reports).unwrap();
+        fs::write(reports.join("junit.xml"), "report").unwrap();
+        let nested_source = checkout.join("nested-source");
+        fs::create_dir_all(&nested_source).unwrap();
+        for name in ["Cargo.toml", ".rustc_info.json", lease::FILE] {
+            fs::write(nested_source.join(name), "source metadata").unwrap();
+        }
+        let build = build_dir(&checkout, "target-stress", 100);
+        fs::write(build.join(".rustc_info.json"), "{}").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&build, checkout.join("target-link")).unwrap();
+        let held = lease::hold(&build).unwrap();
+
+        let roots = build_roots(workspace.path()).unwrap();
+        assert_eq!(roots, std::slice::from_ref(&build));
+        enforce_budget(&roots, 0).unwrap();
+        assert!(build.join("debug/artifact").is_file());
+        drop(held);
+        enforce_budget(&roots, 0).unwrap();
+
+        assert!(!build.exists());
+        assert!(checkout.join("Cargo.toml").is_file());
+        assert!(nested_source.join("Cargo.toml").is_file());
+        assert_eq!(
+            fs::read_to_string(checkout.join("source.rs")).unwrap(),
+            "source"
+        );
+        assert_eq!(
+            fs::read_to_string(reports.join("junit.xml")).unwrap(),
+            "report"
+        );
+    }
+
     fn occupied(root: &Path) -> u64 {
         total_bytes(&candidate_entries(root).unwrap().entries)
+    }
+
+    #[test]
+    fn cargo_budget_preserves_the_bootstrap_compiler_store() {
+        let cache = tempfile::tempdir().unwrap();
+        let bootstrap = cache.path().join(consts::PREVIOUS_BOOTSTRAP);
+        let store = bootstrap.join("macos-aarch64/kache/store");
+        fs::create_dir_all(&store).unwrap();
+        fs::write(store.join("index"), b"compiler index").unwrap();
+        fs::write(store.join("blob"), b"compiler artifact").unwrap();
+        let build = build_dir(&bootstrap.join("review"), "target-macos-aarch64-0", 4096);
+        let slot = build_dir(
+            &cache.path().join(consts::PREVIOUS_TARGET_SLOTS),
+            "lint-0",
+            4096,
+        );
+
+        let roots = previous_build_roots(cache.path()).unwrap();
+        enforce_budget(&roots, 0).unwrap();
+
+        assert_eq!(fs::read(store.join("index")).unwrap(), b"compiler index");
+        assert_eq!(fs::read(store.join("blob")).unwrap(), b"compiler artifact");
+        assert!(!build.exists(), "idle bootstrap build was retained");
+        assert!(!slot.exists(), "idle lane build was retained");
     }
 
     /// A runner always has some job, so a root held whole was 1.4 TB the

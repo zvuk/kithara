@@ -132,7 +132,7 @@ rule:
           stopBy: end
 constraints:
   TYPE:
-    regex: '^(?:u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f32|f64|bool|char)$'
+    regex: "^(?:u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f32|f64|bool|char)$"
   ALLOC:
     regex: '(?s)(?:^vec!\s*\[|^Vec(?:::\s*<[^>]+>)?::(?:new|default|with_capacity|from)\s*\(|^Default::default\s*\(|\.(?:collect(?:\s*::\s*<[^>]+>)?|to_vec|repeat)\s*\()'
   ELEMENT:

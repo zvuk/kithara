@@ -100,3 +100,42 @@ fn explicit_binary_features_are_owned_by_the_manifest() {
         "the source scan must exercise a binary request"
     );
 }
+
+#[test]
+fn bootstrap_does_not_require_the_cli_dependency_closure() {
+    let manifest: toml::Table = include_str!("../Cargo.toml").parse().unwrap();
+    assert_eq!(
+        manifest["features"]["default"].as_array().unwrap(),
+        &[toml::Value::from("cli")]
+    );
+    let cli = manifest["features"]["cli"].as_array().unwrap();
+    let dependencies = manifest["dependencies"].as_table().unwrap().iter().chain(
+        manifest["target"]["cfg(unix)"]["dependencies"]
+            .as_table()
+            .unwrap()
+            .iter(),
+    );
+    for (name, dependency) in dependencies {
+        if matches!(name.as_str(), "serde_json" | "tempfile" | "socket2" | "nix") {
+            assert!(dependency.get("optional").is_none(), "{name}");
+        } else {
+            assert_eq!(dependency["optional"].as_bool(), Some(true), "{name}");
+            assert!(
+                cli.contains(&toml::Value::from(format!("dep:{name}"))),
+                "{name}"
+            );
+        }
+    }
+    for target in manifest["bin"].as_array().unwrap() {
+        let name = target["name"].as_str().unwrap();
+        if name == "xtask" {
+            assert_eq!(
+                target["required-features"].as_array().unwrap(),
+                &[toml::Value::from("cli")]
+            );
+        } else {
+            assert!(target.get("required-features").is_none(), "{name}");
+            assert!(target["path"].as_str().unwrap().starts_with("bin/"));
+        }
+    }
+}

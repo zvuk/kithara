@@ -1,6 +1,7 @@
 #[cfg(feature = "lint")]
 pub mod arch;
 pub mod ast_grep;
+mod ast_rules;
 #[cfg(feature = "lint")]
 pub mod audit;
 pub mod audit_clippy;

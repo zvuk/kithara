@@ -125,7 +125,6 @@ impl Scope {
 
     /// Bind package selection to Cargo identity without widening explicit paths.
     #[must_use]
-    #[cfg(feature = "lint")]
     pub(crate) fn with_metadata(mut self, metadata: &Metadata) -> Self {
         let root = metadata.workspace_root.as_std_path();
         let members = metadata

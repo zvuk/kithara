@@ -148,7 +148,9 @@ impl<S> Player<S> for PlayerImpl<S> {
             item: self.item,
             slot: self.slot,
             status: self.status,
-            speed: self.settings.config().speed(),
+            speed: self
+                .consumed_speed()
+                .unwrap_or_else(|_| self.settings.config().speed()),
             position: self.position,
             duration: self.duration,
             abr: self.abr.clone(),

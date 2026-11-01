@@ -22,17 +22,13 @@
   tags:
     - kithara-macos-2
 
-.linux-job:
-  extends: .builds-beside-checkout
-  tags:
-    - kithara-linux
-
 .android-job:
   extends: .builds-beside-checkout
   tags:
     - kithara-android
 
 .windows-job:
+  extends: .builds-beside-checkout
   variables:
     # Beside the pins and the runner token, the way the macOS host keeps them.
     KITHARA_CI_HOST_CONFIG: C:/KitharaCI/services/mac-host.toml
@@ -44,19 +40,8 @@
   tags:
     - kithara-release
 
-# One Mac mini serves every platform: a Linux container under colima, Windows
-# under qemu, and the Android and Apple simulator lanes directly on the host.
-# Carrying all of them on every push spends the machine on lanes the GitHub
-# fork already covers, and buries the platform under focus — today iOS — among
-# failures that belong elsewhere. So the others are opt-in: name them in
-# `KITHARA_PLATFORMS`, comma-separated, on a run started for that purpose.
-#
-# These gate the lanes' own rule sets rather than the `include`, because an
-# `include:rules` is resolved before the variables a run carries are visible —
-# a child pipeline that plainly has `KITHARA_PLATFORMS=linux` still saw none of
-# the Linux jobs. As the first entry in a job's `rules` a `when: never` match
-# ends the evaluation, so the platform check comes before anything the lane's
-# own kind rules would allow.
+# Linux and browser checks run on the GitHub Linux fleet. GitLab uses native
+# Mac lanes; Android and Windows are opted into through KITHARA_PLATFORMS.
 # A lane the verdict judges does not gate on its own: it reports, and the
 # verdict decides by comparing what failed here with what the default branch is
 # already failing. Gating on each lane means gating on a suite that is not
@@ -65,16 +50,6 @@
 # for a lane that can name no test, as a marker carrying the lane's name.
 .judged:
   allow_failure: true
-
-.platform-linux:
-  rules:
-    - if: $KITHARA_PLATFORMS !~ /(^|,)\s*linux\s*(,|$)/
-      when: never
-
-.platform-web:
-  rules:
-    - if: $KITHARA_PLATFORMS !~ /(^|,)\s*web\s*(,|$)/
-      when: never
 
 .platform-android:
   rules:

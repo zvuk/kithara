@@ -530,7 +530,7 @@ pub(crate) mod tests {
             QueueCommand::Append {
                 position: Position::ZERO,
                 id,
-                source: "/kithara/missing-track.wav".into(),
+                source: concat!(env!("CARGO_MANIFEST_DIR"), "/missing-track.wav").into(),
             },
         )
         .expect("an open queue appends");
@@ -757,7 +757,7 @@ pub(crate) mod tests {
             QueueCommand::Append {
                 position: Position::ZERO,
                 id,
-                source: "/kithara/missing-track.wav".into(),
+                source: concat!(env!("CARGO_MANIFEST_DIR"), "/missing-track.wav").into(),
             },
         )
         .expect("append transition fixture");
@@ -787,7 +787,7 @@ pub(crate) mod tests {
             QueueCommand::Append {
                 position: Position::ZERO,
                 id: other,
-                source: "/kithara/other-missing-track.wav".into(),
+                source: concat!(env!("CARGO_MANIFEST_DIR"), "/other-missing-track.wav").into(),
             },
         )
         .expect("append unrelated track");
