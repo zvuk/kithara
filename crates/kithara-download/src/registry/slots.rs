@@ -34,6 +34,10 @@ pub(super) struct Slots {
 }
 
 impl Slots {
+    pub(super) fn len(&self) -> usize {
+        self.slots.iter().map(VecDeque::len).sum()
+    }
+
     pub(super) fn has_work(&self) -> bool {
         self.slots.iter().any(|slot| !slot.is_empty())
     }

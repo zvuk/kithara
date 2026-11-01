@@ -94,16 +94,11 @@ impl Registry {
                 self.slots.notify_urgent();
             }
             let stats = self.peers.poll(cx, inner, &mut self.slots);
-            let peers_advanced = stats.drained_cmds > 0 || stats.peer_batches > 0;
             aggregate.drained_cmds += stats.drained_cmds;
             aggregate.peer_batches += stats.peer_batches;
             self.reschedule();
             let capacity = inner.inflight.load(Ordering::Relaxed) < inner.config.max_concurrent;
-            if deadline_elapsed
-                || aggregate.abr_ticked
-                || peers_advanced
-                || (self.slots.has_work() && capacity)
-            {
+            if deadline_elapsed || aggregate.abr_ticked || (self.slots.has_work() && capacity) {
                 Poll::Ready(())
             } else {
                 Poll::Pending
