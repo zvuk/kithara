@@ -29,16 +29,7 @@ verdict:
     - job: apple:ios-test
       artifacts: true
       optional: true
-    - job: linux:test
-      artifacts: true
-      optional: true
     - job: android:test
-      artifacts: true
-      optional: true
-    - job: web:chromium
-      artifacts: true
-      optional: true
-    - job: web:firefox
       artifacts: true
       optional: true
   # A lane that failed is exactly the one whose report is needed, so this runs

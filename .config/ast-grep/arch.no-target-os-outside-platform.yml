@@ -24,7 +24,7 @@ rule:
     - pattern: "#[cfg($$$)]"
     - has:
         kind: identifier
-        regex: '^target_(os|arch)$'
+        regex: "^target_(os|arch)$"
         stopBy: end
 
 ---
@@ -44,7 +44,7 @@ rule:
     - pattern: "#[cfg($$$)]"
     - has:
         kind: identifier
-        regex: '^target_(os|arch)$'
+        regex: "^target_(os|arch)$"
         stopBy: end
     - not:
         all:
@@ -54,17 +54,17 @@ rule:
           - precedes:
               all:
                 - any:
-                    - pattern: 'mod buffer;'
-                    - pattern: 'mod http;'
-                    - pattern: 'pub mod media;'
-                    - pattern: 'mod method;'
+                    - pattern: "mod buffer;"
+                    - pattern: "mod http;"
+                    - pattern: "pub mod media;"
+                    - pattern: "mod method;"
                 - not:
                     follows:
                       all:
                         - kind: attribute_item
                         - has:
                             kind: identifier
-                            regex: '^path$'
+                            regex: "^path$"
                             stopBy: end
                       stopBy:
                         not:
@@ -96,7 +96,7 @@ rule:
     - pattern: "#[cfg($$$)]"
     - has:
         kind: identifier
-        regex: '^target_(os|arch)$'
+        regex: "^target_(os|arch)$"
         stopBy: end
     - not:
         all:
@@ -108,17 +108,17 @@ rule:
                   - precedes:
                       all:
                         - any:
-                            - pattern: 'mod native;'
-                            - pattern: 'pub(crate) use core::registry;'
-                            - pattern: 'pub(crate) use native::{EventBridge, FFI_RUNTIME, Inner, Router};'
-                            - pattern: 'pub use native::{asset, cipher, config, logging, salt};'
+                            - pattern: "mod native;"
+                            - pattern: "pub(crate) use core::registry;"
+                            - pattern: "pub(crate) use native::{EventBridge, FFI_RUNTIME, Inner, Router};"
+                            - pattern: "pub use native::{asset, cipher, config, logging, salt};"
                         - not:
                             follows:
                               all:
                                 - kind: attribute_item
                                 - has:
                                     kind: identifier
-                                    regex: '^path$'
+                                    regex: "^path$"
                                     stopBy: end
                               stopBy:
                                 not:
@@ -137,15 +137,15 @@ rule:
                   - precedes:
                       all:
                         - any:
-                            - pattern: 'pub mod web;'
-                            - pattern: 'pub(crate) use web::inner::Inner;'
+                            - pattern: "pub mod web;"
+                            - pattern: "pub(crate) use web::inner::Inner;"
                         - not:
                             follows:
                               all:
                                 - kind: attribute_item
                                 - has:
                                     kind: identifier
-                                    regex: '^path$'
+                                    regex: "^path$"
                                     stopBy: end
                               stopBy:
                                 not:
@@ -164,16 +164,16 @@ rule:
                   - precedes:
                       all:
                         - any:
-                            - pattern: 'uniffi::setup_scaffolding!();'
-                            - pattern: 'use kithara::events::TrackId;'
-                            - pattern: 'uniffi::custom_type!(TrackId, u64, { remote });'
+                            - pattern: "uniffi::setup_scaffolding!();"
+                            - pattern: "use kithara::events::TrackId;"
+                            - pattern: "uniffi::custom_type!(TrackId, u64, { remote });"
                         - not:
                             follows:
                               all:
                                 - kind: attribute_item
                                 - has:
                                     kind: identifier
-                                    regex: '^path$'
+                                    regex: "^path$"
                                     stopBy: end
                               stopBy:
                                 not:
@@ -205,7 +205,7 @@ rule:
     - pattern: "#[cfg($$$)]"
     - has:
         kind: identifier
-        regex: '^target_(os|arch)$'
+        regex: "^target_(os|arch)$"
         stopBy: end
     - not:
         all:
@@ -215,14 +215,14 @@ rule:
           - precedes:
               all:
                 - any:
-                    - pattern: 'pub(crate) mod android;'
+                    - pattern: "pub(crate) mod android;"
                 - not:
                     follows:
                       all:
                         - kind: attribute_item
                         - has:
                             kind: identifier
-                            regex: '^path$'
+                            regex: "^path$"
                             stopBy: end
                       stopBy:
                         not:

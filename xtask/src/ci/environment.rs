@@ -265,7 +265,7 @@ impl CiEnvironment {
             .join(&platform)
             .join("kache");
         let kache = KacheJob::prepare(
-            temp.join("kache").join(job_owner()?),
+            &temp.join("kache").join(job_owner()?),
             Some(LocalStore {
                 directory: &kache_store,
                 max_size: &sccache.cache_size,

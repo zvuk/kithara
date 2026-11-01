@@ -5,7 +5,7 @@ use std::{
     process::{Command, ExitStatus},
 };
 
-use crate::{CompilerCache, cache, lease};
+use super::{CompilerCache, cache, lease};
 
 /// Execute one compilation phase, optionally holding its build target's lease.
 ///

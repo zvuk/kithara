@@ -27,7 +27,7 @@ platforms = [
 # Exclude test-only and development-tooling crates from traversal.
 # kithara-test-utils is test-only tooling; excluding it keeps its probe-feature
 # env-filter (and its regex/regex-automata/aho-corasick) out of the shared hack.
-# xtask, its bootstrap and kithara-devtools are host-side tooling and should not inherit the
+# xtask and kithara-devtools are host-side tooling and should not inherit the
 # application dependency union through the generated workspace hack.
 # kithara-app's desktop deps (incl env-filter) are gated to non-iOS in its own
 # manifest, and aarch64-apple-ios is a hakari platform, so env-filter resolves
@@ -49,7 +49,6 @@ workspace-members = [
   "kithara-audio-tests",
   "kithara-broadcast-tests",
   "kithara-bufpool",
-  "kithara-ci-bootstrap",
   "kithara-config",
   "kithara-core-test-fixtures",
   "kithara-decode-tests",

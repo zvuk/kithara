@@ -9,7 +9,7 @@ use std::{
     time::{Instant, SystemTime},
 };
 
-use crate::consts;
+use super::consts;
 
 struct Heartbeat {
     path: PathBuf,
@@ -110,7 +110,7 @@ fn still_at(file: &File, path: &Path) -> io::Result<bool> {
 mod windows {
     use std::{ffi::c_void, fs::File, io, mem::MaybeUninit, os::windows::io::AsRawHandle};
 
-    use crate::consts;
+    use super::consts;
 
     #[repr(C)]
     #[derive(PartialEq, Eq)]

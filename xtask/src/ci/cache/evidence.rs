@@ -66,12 +66,7 @@ pub(super) fn record(phase: &str) -> Result<()> {
     let root = std::env::current_dir()?;
     let tools = kithara_devtools::common::project::ProjectConfig::load(&root)?.tools;
     let process = Process::new(&root, std::collections::BTreeMap::new());
-    let primary = process.capture_bounded(
-        tools.program("kache"),
-        &["stats", "--json"],
-        "kache statistics",
-        consts::CACHE_EVIDENCE_INPUT_LIMIT,
-    );
+    let primary = crate::ci::kache::statistics(&process, &tools);
     let fallback = process.capture_bounded(
         tools.program("sccache"),
         &["--show-stats"],
@@ -416,7 +411,7 @@ mod tests {
     fn key_history_survives_runtime_cleanup_without_raw_inputs() {
         let directory = tempfile::tempdir().unwrap();
         let job =
-            crate::ci::kache::KacheJob::prepare(directory.path().join("kache"), None).unwrap();
+            crate::ci::kache::KacheJob::prepare(&directory.path().join("kache"), None).unwrap();
         let tools = ToolsConfig::default();
         let bin = directory.path().join("bin");
         crate::testing::install_double(&bin, "kache");
@@ -443,8 +438,9 @@ mod tests {
         let event = json!({"cache_key": "a".repeat(64), "unit_id": "b".repeat(16), "schema": 20,
             "key_fields": {"compiler": "c".repeat(16), "args": "AWS_SECRET_ACCESS_KEY=secret", "AWS_SECRET_ACCESS_KEY": "secret"},
             "key_env_deps": {"AWS_SECRET_ACCESS_KEY": "secret"}, "command": "secret"});
+        let runtime = process.environment_path("KACHE_RUNTIME_DIR").unwrap();
         fs::write(
-            directory.path().join("kache/runtime/events.jsonl"),
+            runtime.join("events.jsonl"),
             format!(
                 "{}invalid\n",
                 format!("{event}\n").repeat(consts::CACHE_EVIDENCE_RECORD_LIMIT + 1)
@@ -481,7 +477,7 @@ mod tests {
         assert!(!report.to_string().contains("secret"));
         job.stop(&process, &tools);
         drop(job);
-        assert!(!directory.path().join("kache/runtime").exists());
+        assert!(!runtime.exists());
         assert_eq!(
             serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap(),
             report

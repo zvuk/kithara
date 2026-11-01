@@ -627,13 +627,7 @@ fn the_branch_verdict_expects_only_the_apple_test_producer() {
 #[test]
 fn judged_jobs_stage_only_checkout_cleaned_verdict_evidence() {
     let root = workspace_root();
-    for file in [
-        "apple.yml",
-        "android.yml",
-        "linux.yml",
-        "web.yml",
-        "verdict.yml",
-    ] {
+    for file in ["apple.yml", "android.yml", "verdict.yml"] {
         let document = yaml(root.join(".gitlab/ci").join(file));
         let jobs = mapping(&document, "a CI lane document");
         for (name, definition) in jobs {
@@ -1308,8 +1302,7 @@ fn a_provisioning_run_on_the_default_branch_reaches_the_mac_roll_out_alone() {
         "a provisioning run carries the roll-out alone, found {beside:?}"
     );
 
-    // A platform request riding the same run would start a second child whose
-    // Linux image job moves the tag underneath the roll-out.
+    // Provisioning must not race a second child using the services it replaces.
     let platforms = dispatch["dispatch:platforms"]["rules"]
         .as_sequence()
         .expect("platform dispatch rules");
@@ -1329,18 +1322,50 @@ fn a_provisioning_run_on_the_default_branch_reaches_the_mac_roll_out_alone() {
 }
 
 #[test]
-fn shared_linux_images_use_the_installed_host_tool() {
+fn mac_pipeline_requires_no_linux_guest() {
     let config = GitlabConfig::load(workspace_root());
-    let script = config.definition("linux:image")["script"]
-        .as_sequence()
-        .expect("image maintenance commands");
-    let commands: Vec<&str> = script.iter().filter_map(Value::as_str).collect();
+    for job in config.job_names() {
+        assert!(
+            !job.starts_with("linux:") && !job.starts_with("web:"),
+            "{job} requires the retired guest"
+        );
+    }
+    assert!(!config.job_names().any(|job| job == ".linux-job"));
+    assert!(
+        config.definition(".deps-job")["extends"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|base| base.as_str() == Some(".macos-job"))
+    );
+}
+
+#[test]
+fn native_dependency_audits_retain_the_linux_fleet_and_host_cache() {
+    let lanes = lane_catalog(workspace_root());
+    for name in [
+        "deps-deny",
+        "deps-unused",
+        "deps-shear",
+        "deps-features-full",
+        "deps-semver",
+    ] {
+        assert_eq!(lanes[name]["cache_group"].as_str(), Some("host"));
+        let os: Vec<&str> = lanes[name]["os"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect();
+        assert_eq!(os, ["macos", "linux"]);
+    }
     assert_eq!(
-        commands,
-        [
-            "\"$KITHARA_CI_HOST_BINARY\" ci host mac build-linux-image",
-            "\"$KITHARA_CI_HOST_BINARY\" ci host mac smoke-linux",
-        ],
-        "shared images use the deployed binary and its embedded Dockerfile"
+        lanes["linux-coverage"]["kinds_github"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>(),
+        ["nightly"]
     );
 }

@@ -21,18 +21,6 @@ services:
     # The host's environment whole: a scope sized apart names its quota as
     # CACHE_BUCKET_QUOTA_<SCOPE>, a name this file cannot list.
     env_file: ${CACHE_ENV_FILE:?use just ci cache}
-    environment:
-      RUSTFS_ACCESS_KEY_FILE: /config/admin-user
-      RUSTFS_SECRET_KEY_FILE: /config/admin-password
-      # Every request reaches the evictor beside the store, which learns from
-      # it what each build still reads. The store refuses to send anywhere it
-      # was not told to reach, loopback included.
-      RUSTFS_AUDIT_ENABLE: "true"
-      RUSTFS_AUDIT_WEBHOOK_ENABLE_RECENCY: "on"
-      RUSTFS_AUDIT_WEBHOOK_ENDPOINT_RECENCY: http://127.0.0.1:9180/
-      RUSTFS_AUDIT_WEBHOOK_QUEUE_DIR_RECENCY: /audit
-      RUSTFS_AUDIT_WEBHOOK_QUEUE_LIMIT_RECENCY: "20000"
-      RUSTFS_OUTBOUND_ALLOW_ORIGINS: http://127.0.0.1:9180
     # What the evictor has not taken yet waits in memory: a request it misses
     # only ages an entry, and the queue must not take the store's disk.
     tmpfs:

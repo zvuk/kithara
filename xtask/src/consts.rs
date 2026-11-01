@@ -323,11 +323,6 @@ pub(crate) const KACHE_MOUNT: &str = "/cache/kache";
 pub(crate) const KACHE_HOST_FILE: &str = "host.toml";
 pub(crate) const KACHE_STORE: &str = "store";
 pub(crate) const KACHE_LOCAL_ROOT_ENV: &str = "KITHARA_CI_COMPILER_CACHE_ROOT";
-pub(crate) const KACHE_CONTAINER_ROOT: &str = "/tmp/kithara-ci/compiler-cache";
-/// The host file a Mac host's container runner names: the same remote and
-/// store, spelled as the container reaches them.
-pub(crate) const KACHE_DOCKER_HOST_FILE: &str = "host-docker.toml";
-
 /// Where a Linux runner mounts the Cargo home of its trust: the image's own
 /// `CARGO_HOME`, so a job that names no home and one that is told it key their
 /// compilations alike.
@@ -444,10 +439,6 @@ pub(crate) const HOST_PACKAGES: [&str; 10] = [
 /// mount elsewhere fixes it, so the guest moves the share here on startup.
 pub(crate) const GUEST_SHARE: &str = "/opt/kithara";
 
-/// The floating tag the Linux runner runs. It always names the image the most
-/// recent pipeline pinned, so the runner configuration never changes with a pin.
-pub(crate) const LINUX_LATEST_IMAGE: &str = "kithara-ci:linux-latest";
-
 /// The throwaway VM the macOS lane clones for every job.
 pub(crate) const JOB_VM_NAME: &str = "kithara-ci-job";
 
@@ -558,11 +549,6 @@ pub(crate) const UNIT_HASH_LEN: usize = 16;
 /// The directory a runner's Cargo home takes under the root it keeps its
 /// caches in. On the cache share it is a namespace cleanup keeps.
 pub(crate) const CARGO_HOME_DIR: &str = "cargo";
-
-/// The host tree the container runner checks out into, under the build root.
-/// The container sees it where every runner checks out, `workspaces/gitlab`;
-/// the host's runners never do.
-pub(crate) const CONTAINER_BUILDS: &str = "workspaces/colima";
 
 /// Where a CI job's lanes take their build slots, when not in the root Cargo
 /// is told: runners that share their lanes' builds are told the directory they

@@ -15,6 +15,9 @@ default_roots = ["crates"]
 # multi-target FFI builds). Generated bindings are not workspace source.
 exclude = ["target/**", "**/target/**"]
 
+[ast-grep]
+default_roots = ["."]
+
 [architecture.filters]
 exclude_crates = [
   "kithara-devtools-trace-format",
@@ -644,7 +647,6 @@ cargo.exclude = [
   "kithara-devtools",
   "kithara-devtools-trace-format",
   "xtask",
-  "kithara-ci-bootstrap",
   "kithara-test-utils",
   "kithara-test-macros",
   "kithara-ffi-web-tests",
@@ -1004,12 +1006,7 @@ owns = [
   "crates/kithara-devtools-trace-format/",
   "crates/kithara-devtools/",
 ]
-cargo.packages = [
-  "kithara-devtools-trace-format",
-  "kithara-devtools",
-  "xtask",
-  "kithara-ci-bootstrap",
-]
+cargo.packages = ["kithara-devtools-trace-format", "kithara-devtools", "xtask"]
 cargo.profile = "test-release"
 runner.nextest.ignore_default_filter = true
 # These crates declare no `flash` feature — the virtual clock is a property of
@@ -1559,9 +1556,9 @@ pr_review_line_limit = 5000
 # Lanes that are nothing but the work they ask the executor for. A lane needs a
 # function only when a parameter cannot say what it does.
 [ext.ci.lanes.deps-deny]
-cache_group = "linux"
+cache_group = "host"
 label = "dependency audit"
-os = "linux"
+os = ["macos", "linux"]
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "deny"], label = "licence and advisory gate" }]
@@ -1571,9 +1568,9 @@ kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 
 [ext.ci.lanes.deps-unused]
-cache_group = "linux"
+cache_group = "host"
 label = "dependency audit"
-os = "linux"
+os = ["macos", "linux"]
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "machete"], label = "unused manifest entries" }]
@@ -1588,9 +1585,9 @@ timeout_minutes = 30
 # bench-only entries - and every one of them would refuse every push. Weekly
 # on GitLab, nightly here, where the report is read rather than blocking.
 [ext.ci.lanes.deps-shear]
-cache_group = "linux"
+cache_group = "host"
 label = "dependency audit"
-os = "linux"
+os = ["macos", "linux"]
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "shear"], label = "unused crate dependencies" }]
@@ -1600,9 +1597,9 @@ kinds_github = ["nightly"]
 timeout_minutes = 30
 
 [ext.ci.lanes.deps-features-full]
-cache_group = "linux"
+cache_group = "host"
 label = "dependency audit"
-os = "linux"
+os = ["macos", "linux"]
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "hack"], label = "feature powerset check" }]
@@ -1664,9 +1661,9 @@ kinds_github = ["main", "nightly"]
 timeout_minutes = 60
 
 [ext.ci.lanes.deps-semver]
-cache_group = "linux"
+cache_group = "host"
 label = "dependency audit"
-os = "linux"
+os = ["macos", "linux"]
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "semver"], label = "public API compatibility" }]
@@ -1695,7 +1692,7 @@ steps = [
   ], label = "Chromium WebCodecs tests", env = { CHROMEDRIVER_ARGS = "--verbose --log-path={root}/target/web-chromium.log" } },
 ]
 role = "gate"
-kinds = ["platforms", "main", "nightly"]
+kinds = []
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 artifact = { name = "web-chromium-driver", path = "target/web-chromium.log", when = "failure" }
@@ -1719,7 +1716,7 @@ steps = [
   ], label = "Firefox WASM tests" },
 ]
 role = "gate"
-kinds = ["platforms", "main", "nightly"]
+kinds = []
 kinds_github = ["nightly"]
 timeout_minutes = 60
 
@@ -1737,7 +1734,7 @@ steps = [
   ], label = "WASM size check" },
 ]
 role = "gate"
-kinds = ["platforms", "main", "nightly"]
+kinds = []
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 artifact = { name = "wasm-slim-report", path = "target/wasm-slim-result.json" }
@@ -2063,14 +2060,7 @@ steps = [
   ], label = "repository secret scan" },
 ]
 role = "gate"
-kinds = [
-  "merge-request",
-  "quarantine",
-  "platforms",
-  "main",
-  "nightly",
-  "release",
-]
+kinds = []
 # GitHub's own answer: a ready pull request there runs what a branch push does,
 # and a GitHub branch push has never run this lane.
 kinds_github = ["main", "nightly"]
@@ -2084,14 +2074,7 @@ tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [{ args = ["check", "workspace"], label = "Linux workspace check" }]
 role = "gate"
-kinds = [
-  "merge-request",
-  "quarantine",
-  "platforms",
-  "main",
-  "nightly",
-  "release",
-]
+kinds = []
 # GitHub's own answer, for the reason `linux-secrets` gives.
 kinds_github = ["main", "nightly"]
 timeout_minutes = 60
@@ -2105,14 +2088,7 @@ program = "just"
 steps = [{ args = ["platform", "wasm"], label = "WASM portability check" }]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
-kinds = [
-  "merge-request",
-  "quarantine",
-  "platforms",
-  "main",
-  "nightly",
-  "release",
-]
+kinds = []
 timeout_minutes = 60
 
 # Every Linux test lane caps Cargo at two build jobs. The container has five
@@ -2167,7 +2143,7 @@ steps = [
   ], label = "Test utilities at checked-out revision", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds = ["platforms", "main", "nightly"]
+kinds = []
 kinds_github = ["main", "branch", "merge-request"]
 # The real-clock lane's budget: a build directory the host budget evicted
 # rebuilds whole at two jobs, which took 58 minutes on the trusted runner.
@@ -2187,7 +2163,7 @@ steps = [
   ], label = "Linux doc lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "deep"
-kinds = ["weekly"]
+kinds = []
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
@@ -2205,7 +2181,7 @@ steps = [
   ], label = "Linux loom lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "deep"
-kinds = ["weekly"]
+kinds = []
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
@@ -2229,7 +2205,7 @@ steps = [
   ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds = ["weekly"]
+kinds = []
 kinds_github = ["main", "nightly"]
 timeout_minutes = 180
 
@@ -2247,7 +2223,7 @@ steps = [
   ], label = "Linux harness lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds = ["weekly"]
+kinds = []
 kinds_github = ["main", "nightly"]
 timeout_minutes = 180
 
@@ -2271,7 +2247,7 @@ steps = [
   ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1" } },
 ]
 role = "gate"
-kinds = ["weekly"]
+kinds = []
 kinds_github = ["main", "nightly"]
 timeout_minutes = 180
 
@@ -2289,7 +2265,7 @@ steps = [
   ], label = "Linux broadcast lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "deep"
-kinds = ["weekly"]
+kinds = []
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
@@ -2329,7 +2305,7 @@ steps = [
   ], label = "Linux integration-regressions lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "deep"
-kinds = ["weekly"]
+kinds = []
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
@@ -2350,7 +2326,7 @@ steps = [
   ], label = "Linux selenium-firefox lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "deep"
-kinds = ["weekly"]
+kinds = []
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
@@ -2376,7 +2352,8 @@ steps = [
   ], label = "Linux coverage", env = { CARGO_BUILD_JOBS = "2", COVERAGE_OUTPUT_DIR = "coverage" } },
 ]
 role = "deep"
-kinds = ["nightly"]
+kinds = []
+kinds_github = ["nightly"]
 timeout_minutes = 90
 
 # GitLab already runs its own equivalents of these six under other names; the
@@ -2551,7 +2528,7 @@ steps = [
   ], label = "USDT queue contracts", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds = ["platforms", "main", "nightly"]
+kinds = []
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
@@ -2850,7 +2827,7 @@ timeout_minutes = 90
 
 # Every Apple job repeats the preflight instead of inheriting it from a
 # predecessor. Each one is scheduled on its own and can be retried alone, so the
-# wrong Xcode has to fail in the job that would have used it.
+# uninitialized Xcode fails in the job that would have used it.
 [ext.ci.lanes.apple-lint]
 cache_group = "macos"
 target_snapshot = "apple-lint"
@@ -2858,10 +2835,13 @@ publishes_sources = true
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 # Both chains run the checks that answer whether a change is acceptable:
@@ -2903,10 +2883,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 steps = [
@@ -2926,10 +2909,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 kinds_refused = { weekly = "weekly pipelines do not run the Apple suite" }
 program = "just"
@@ -2975,10 +2961,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 steps = [
@@ -2999,10 +2988,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 steps = [
@@ -3031,10 +3023,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 steps = [

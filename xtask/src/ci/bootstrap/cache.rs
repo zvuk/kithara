@@ -11,7 +11,7 @@ use std::{
 
 use tempfile::TempDir;
 
-use crate::consts;
+use super::consts;
 
 /// Require the effective daemon, rather than merely a configured remote URL.
 ///
@@ -61,7 +61,7 @@ impl CompilerCache {
                 .tempdir()?,
             active: true,
         };
-        require_remote(&cache.capture(&["stats", "--json"])?)?;
+        cache.verify_remote()?;
         Ok(Some(cache))
     }
 
@@ -78,11 +78,20 @@ impl CompilerCache {
     /// Drain queued uploads and report a failed stop to the compilation owner.
     ///
     /// # Errors
-    /// Returns an error when the daemon cannot drain and stop within the command bound.
+    /// Returns an error when the writable daemon cannot be established, drained or stopped.
     pub fn finish(mut self) -> io::Result<()> {
-        let result = self.capture(&["daemon", "stop"]).map(|_| ());
+        // The idle policy can retire this daemon while the compilation child is quiet.
+        let verified = self.verify_remote();
+        let stopped = self.capture(&["daemon", "stop"]).map(|_| ());
         self.active = false;
-        result
+        verified.and(stopped)
+    }
+
+    fn verify_remote(&self) -> io::Result<()> {
+        require_remote(&super::statistics(
+            &mut kache_command(self.directory.path(), &[]),
+            self.directory.path(),
+        )?)
     }
 
     fn capture(&self, args: &[&str]) -> io::Result<String> {
@@ -101,12 +110,12 @@ impl Drop for CompilerCache {
     }
 }
 
-fn output(command: &mut Command) -> io::Result<String> {
+pub(super) fn output(command: &mut Command) -> io::Result<String> {
     let mut output = tempfile::tempfile()?;
     command
         .stdin(Stdio::null())
         .stdout(output.try_clone()?)
-        .stderr(Stdio::null());
+        .stderr(Stdio::inherit());
     let mut child = command.spawn()?;
     let started = Instant::now();
     let status: ExitStatus = loop {
@@ -134,7 +143,9 @@ fn output(command: &mut Command) -> io::Result<String> {
         thread::sleep(consts::POLL_INTERVAL);
     };
     if !status.success() {
-        return Err(io::Error::other("compiler-cache command failed"));
+        return Err(io::Error::other(format!(
+            "compiler-cache command failed ({status})"
+        )));
     }
     if output.metadata()?.len() > consts::OUTPUT_LIMIT {
         return Err(io::Error::other("compiler-cache output exceeds its bound"));
@@ -174,6 +185,7 @@ fn compilation_environment(command: &mut Command, runtime: &Path) {
         .env("GITLAB_CI", "")
         .env("KACHE_RUNTIME_DIR", runtime)
         .env("KACHE_DAEMON_IDLE_TIMEOUT", consts::DAEMON_IDLE_TIMEOUT)
+        .env("KACHE_PREFETCH_ENABLED", "false")
         .env_remove("KACHE_SOCKET_PATH")
         .env("RUSTC_WRAPPER", "kache");
 }
@@ -227,7 +239,7 @@ pub(super) fn finish_bootstrap(runtime: &Path) -> io::Result<()> {
         if in_ci {
             require_host()?;
         }
-        let stats = output(&mut kache_command(runtime, &["stats", "--json"]))?;
+        let stats = super::statistics(&mut kache_command(runtime, &[]), runtime)?;
         if in_ci {
             require_remote(&stats)?;
             record(runtime, OsStr::new("bootstrap-driver"));

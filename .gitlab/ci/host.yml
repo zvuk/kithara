@@ -1,34 +1,14 @@
-# Repairs the host needs on itself, reachable from the pipeline rather than
-# only over ssh.
-
-# Shared images use the installed host bundle. A checkout may predate its
-# pins schema; neither its executable nor its Dockerfile owns host state.
-# Device affinity serializes the floating-tag and digest transaction.
-linux:image:
-  extends: .apple-device-job
-  stage: linux
-  timeout: 90 minutes
-  needs: []
-  rules:
-    - if: $KITHARA_PIPELINE_KIND == "provision"
-      when: never
-    - when: on_success
-  script:
-    - '"$KITHARA_CI_HOST_BINARY" ci host mac build-linux-image'
-    - '"$KITHARA_CI_HOST_BINARY" ci host mac smoke-linux'
-
 # The same roll-out on the Mac mini, opted into by starting a pipeline on the
 # default branch with `KITHARA_PROVISION` set to `1`, from "Run pipeline" or the
 # API. That run is the `provision` kind and carries this job alone. It
-# reinstalls the services from this commit, rewrites the runner configuration,
-# makes sure the pinned Linux image is there and reloads the agents.
+# reinstalls services, rewrites the native runner configuration and reloads agents.
 #
 # The default branch only. Provisioning writes to the machine that serves every
 # lane, and a merge-request or quarantine ref carries code no one has reviewed
-# yet. Other refs use the installed host bundle through `linux:image`.
+# yet.
 host:provision:
   extends: .macos-job
-  stage: linux
+  stage: apple
   timeout: 180 minutes
   needs: []
   rules:

@@ -18,7 +18,7 @@ use ::kithara::{
 use kithara_test_utils::{TestTempDir, kithara, off_thread::OffThread, temp_dir};
 
 use super::{
-    AnalysisService, TrackArtifacts,
+    AnalysisService, GridState, TrackArtifacts,
     entry::Stage,
     fixtures::{
         analysis, app_config, axis, beats_only, document, fingerprint, grid, long_wav,
@@ -28,7 +28,7 @@ use super::{
     },
     run::{Activity, Run},
     service::{Owner, resource_config_from_source},
-    supply::Prepared,
+    supply::{Prepared, Supply},
 };
 use crate::{
     pools::{AppHost, AppPools, AppQueueControl, AppStore, AppTrackSource},
@@ -487,6 +487,34 @@ async fn a_close_carrying_a_complete_value_publishes_and_caches_it(tone_mp3: Str
         Stage::Ended(axis()),
         "the pass ran its course"
     );
+    cancel.cancel();
+    run.close().await;
+}
+
+#[kithara::test(native, tokio)]
+async fn a_failed_pass_refuses_the_grid_until_the_next_subscribe(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut run = close_run(&cancel, &tone_mp3, None).await;
+
+    let refused = run
+        .rx
+        .borrow()
+        .as_ref()
+        .is_some_and(|published| matches!(published.grid_state(), GridState::Refused(_)));
+    assert!(
+        refused,
+        "a pass that failed tells the deck no grid will come"
+    );
+
+    let again = run
+        .owner
+        .subscribe(run.queue.clone(), run.track_id, run.source.clone(), axis());
+    let refused = again
+        .borrow()
+        .as_ref()
+        .is_some_and(|published| matches!(published.grid_state(), GridState::Refused(_)));
+    assert!(!refused, "the next pass may still deliver one");
+
     cancel.cancel();
     run.close().await;
 }
@@ -1518,4 +1546,49 @@ async fn an_artifact_answering_a_closed_load_is_dropped(tone_mp3: String) {
     );
     cancel.cancel();
     host.close().await;
+}
+
+#[kithara::test]
+fn a_publication_answers_its_grid_once_nothing_more_can_come() {
+    let prepared = |beat_grid| Prepared {
+        beat_grid,
+        waveform: Supply::Missing,
+    };
+    let running = TrackAnalysis::builder()
+        .token("running".into())
+        .revision(1)
+        .source_sample_rate(axis())
+        .build();
+    let answer = |artifacts: TrackArtifacts| match artifacts.grid_state() {
+        GridState::Pending => None,
+        GridState::Ready(grid) => Some(Ok(grid.clone())),
+        GridState::Refused(refusal) => Some(Err(refusal)),
+    };
+
+    assert_eq!(
+        answer(TrackArtifacts::new(None, prepared(Supply::Pending), false)),
+        None,
+        "a supplied grid still being read"
+    );
+    assert_eq!(answer(running.into()), None, "a pass still running");
+    assert_eq!(
+        answer(TrackArtifacts::new(
+            None,
+            prepared(Supply::Ready(Arc::new(served_grid()))),
+            false,
+        )),
+        Some(Ok(served_grid())),
+        "a supplied grid"
+    );
+    assert!(
+        matches!(
+            answer(TrackArtifacts::new(None, prepared(Supply::Failed), false)),
+            Some(Err(_))
+        ),
+        "a supplied grid that failed to load"
+    );
+    assert!(
+        matches!(answer(analysis().into()), Some(Err(_))),
+        "a settled pass that found no grid"
+    );
 }

@@ -59,12 +59,10 @@ deep:bench:
 
 .deps-job:
   extends:
-    - .linux-job
+    - .macos-job
     - .rules-weekly
   stage: deep
-  needs:
-    - job: linux:image
-      optional: true
+  needs: []
 
 # Advisories and licence bans are the only dependency check on the import path.
 # The bridge no longer refuses a merged pull request for moving a manifest, so

@@ -199,6 +199,12 @@ impl RetainedComponent {
         }
     }
 
+    pub(in crate::engine) fn select_all(&mut self) {
+        if let Self::TextInput(component) = self {
+            component.select_all();
+        }
+    }
+
     pub(crate) fn text_input_snapshot(&self, focused: bool) -> Option<TextInputSnapshot> {
         if let Self::TextInput(component) = self {
             Some(component.snapshot(focused))

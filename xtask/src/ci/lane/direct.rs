@@ -113,7 +113,7 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
     // developer's.
     let kache = if wrapped && ci_in(var) {
         Some(KacheJob::prepare(
-            scratch_root().join("kache").join(job_owner()?),
+            &scratch_root().join("kache").join(job_owner()?),
             None,
         )?)
     } else {
@@ -961,8 +961,10 @@ cargo.packages = ["tools"]
     /// them are answered here rather than by the machine's own daemons.
     #[cfg(unix)]
     fn cache_doubles(root: &Path) -> (toml::Table, PathBuf) {
-        use std::os::unix::fs::PermissionsExt as _;
-
+        let socket_tool = root.join("cache-double").join("fake-tool");
+        if !socket_tool.exists() {
+            crate::testing::install_double(&root.join("cache-double"), "fake-tool");
+        }
         let asked = root.join("asked");
         let mut tools = toml::Table::new();
         for (name, answer) in [
@@ -976,16 +978,21 @@ cargo.packages = ["tools"]
             ),
         ] {
             let program = root.join(name);
-            fs::write(
-                &program,
+            let start = if name == "kache" {
                 format!(
-                    "#!/bin/sh\necho \"{name} $@\" >> '{}'\nprintf '{answer}'\n",
+                    "if [ \"$1 $2\" = \"daemon start\" ] && [ -n \"$KACHE_RUNTIME_DIR\" ]; then\nKITHARA_TEST_STDOUT='{answer}' exec '{}' --kache-start\nfi\n",
+                    socket_tool.display()
+                )
+            } else {
+                String::new()
+            };
+            crate::testing::install_script(
+                &program,
+                &format!(
+                    "#!/bin/sh\necho \"{name} $@\" >> '{}'\n{start}printf '{answer}'\n",
                     asked.display()
                 ),
-            )
-            .expect("write the cache double");
-            fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
-                .expect("make the cache double runnable");
+            );
             tools.insert(
                 name.to_owned(),
                 toml::Table::from_iter([(
@@ -999,11 +1006,10 @@ cargo.packages = ["tools"]
     }
 
     /// A job compiling through the cache says what the cache carried for it;
-    /// one that compiles without it has no cache to ask. Outside a CI job the
-    /// daemon is the developer's, configured and stopped by nobody but them.
+    /// one that compiles without it has no cache to ask.
     #[cfg(unix)]
     #[test]
-    fn a_lane_that_compiled_through_the_cache_reads_its_counts() {
+    fn a_ci_lane_that_compiled_through_the_cache_reads_its_counts() {
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let (tools, asked) = cache_doubles(temp.path());
         let (mut ctx, args) = trivial_lane(temp.path());
@@ -1015,11 +1021,15 @@ cargo.packages = ["tools"]
             "a lane with no wrapper has no cache to ask"
         );
 
-        run_in(&args, &ctx, &environment(&[("RUSTC_WRAPPER", "kache")]))
-            .expect("lane runs through the wrapper");
+        run_in(
+            &args,
+            &ctx,
+            &environment(&[("CI", "true"), ("RUSTC_WRAPPER", "kache")]),
+        )
+        .expect("lane runs through the wrapper");
         assert_eq!(
             fs::read_to_string(&asked).expect("the cache was asked"),
-            "kache stats --json\nsccache --show-stats\nkache stats --full --json\nkache explain --json\n"
+            "kache daemon start\nkache daemon start\nsccache --show-stats\nkache stats --full --json\nkache explain --json\nkache daemon stop\n"
         );
     }
 
@@ -1074,7 +1084,7 @@ cargo.packages = ["tools"]
         );
         assert_eq!(
             fs::read_to_string(&asked).expect("the cache was asked"),
-            "kache stats --json\nkache stats --json\nsccache --show-stats\nkache stats --full --json\nkache explain --json\nkache daemon stop\n"
+            "kache daemon start\nkache daemon start\nsccache --show-stats\nkache stats --full --json\nkache explain --json\nkache daemon stop\n"
         );
     }
 

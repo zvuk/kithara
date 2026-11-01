@@ -187,6 +187,7 @@ fn creation_args(
     Ok([
         "--name",
         &guest.name,
+        "--autostart",
         "--osinfo",
         "win11",
         "--boot",
@@ -1018,6 +1019,21 @@ mod tests {
             sources,
             [PathBuf::from("/srv/kithara ci/kithara-ci-windows.qcow2")]
         );
+    }
+
+    #[test]
+    fn guest_creation_enables_hypervisor_autostart() {
+        let host = super::super::profile::tests::host_fixture();
+        let guest = host.windows.clone().unwrap();
+        let args = creation_args(
+            &host,
+            &guest,
+            Path::new("/iso/windows.iso"),
+            Path::new("/iso/answers.iso"),
+        )
+        .unwrap();
+
+        assert!(args.iter().any(|arg| arg == "--autostart"), "{args:?}");
     }
 
     /// The suite opens the machine's default audio output, and Windows has one

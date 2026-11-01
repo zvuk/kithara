@@ -3597,30 +3597,30 @@ async fn an_eviction_that_overtakes_the_settle_keeps_the_segment_owed() {
 /// it itself: bytes another writer committed meanwhile make it loaded, not a
 /// `Downloading` slot with no fetch behind it.
 #[kithara::test(tokio)]
-async fn a_cancelled_fetch_settles_a_segment_another_writer_committed() {
+async fn a_fetch_deferred_on_a_live_writer_loads_once_it_commits() {
     let ctx = test_ctx(1);
     let v = make_var(0, 0, &[64], &ctx);
     let root = CancelToken::root();
     let session = HlsSession::active(root, ctx.signal.clone(), 0, Arc::clone(&v), 0);
+    let key = v.segments()[0].resource_id().clone();
+    let AcquisitionResult::Pending(writer) = ctx
+        .scope
+        .store()
+        .acquire_resource(&key, None)
+        .expect("acquire segment")
+    else {
+        panic!("the other party must own the writer");
+    };
     push_planned(&v, 0);
-    let mut cmds = session.dispatch(&ctx, 1);
-    let on_complete = cmds
-        .first_mut()
-        .and_then(kithara_download::FetchCmd::take_on_complete)
-        .expect("the dispatched fetch settles through its completion");
-    write_seg_bytes(&v, &ctx, 0, 64);
-    assert!(
-        v.segments()[0].contains(&ctx.scope, 0..64),
-        "precondition: another writer committed the bytes"
-    );
-    session.abort();
 
-    on_complete(0, None, Some(&kithara_net::NetError::Cancelled));
+    assert!(session.dispatch(&ctx, 1).is_empty());
+    assert!(!v.segments()[0].state().is_downloading());
 
-    assert!(
-        v.segments()[0].state().is_loaded(),
-        "the committed segment must settle loaded, not stay claimed by a finished fetch"
-    );
+    writer.write_at(0, &[7; 64]).expect("write segment");
+    writer.commit(Some(64)).expect("commit segment");
+    assert!(session.dispatch(&ctx, 1).is_empty());
+
+    assert!(v.segments()[0].state().is_loaded());
 }
 
 fn disk_ctx(root: &std::path::Path) -> PlanCtx {

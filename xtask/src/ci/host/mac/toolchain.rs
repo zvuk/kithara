@@ -99,9 +99,37 @@ impl<'a> ToolchainInstaller<'a> {
         self.install_rust()?;
         self.install_cargo_tools()?;
         self.install_android()?;
-        self.install_docker_config()?;
         info!("CI user toolchain installed");
         Ok(())
+    }
+
+    pub(super) fn install_cache(&self) -> Result<PathBuf> {
+        require_macos()?;
+        self.require_user(&self.config.host.ci_user)?;
+        let version = &self.config.pins.rustfs_version;
+        let directory = self
+            .config
+            .host
+            .host_root
+            .join("toolchains/rustfs")
+            .join(version);
+        let temporary = tempfile::tempdir()?;
+        let archive = temporary.path().join("rustfs.zip");
+        download(
+            &format!(
+                "https://github.com/rustfs/rustfs/releases/download/{version}/rustfs-macos-aarch64-v{version}.zip"
+            ),
+            &archive,
+        )?;
+        verify_sha256(&archive, &self.config.pins.rustfs_macos_arm64_sha256)?;
+        let extracted = temporary.path().join("extracted");
+        let mut extract = self.process.command("/usr/bin/ditto");
+        extract.args(["-x", "-k"]).arg(&archive).arg(&extracted);
+        self.process
+            .run_command(&mut extract, "extract pinned native RustFS")?;
+        fs::create_dir_all(&directory)?;
+        super::runners::replace_file(&extracted.join("rustfs"), &directory.join("rustfs"))?;
+        Ok(directory)
     }
 
     fn install_rust(&self) -> Result<()> {
@@ -283,7 +311,7 @@ impl<'a> ToolchainInstaller<'a> {
                 &self.config.host.sccache_size,
             )?,
         )?;
-        let job = KacheJob::prepare(temporary.path().join("job"), None)?;
+        let job = KacheJob::prepare(&temporary.path().join("job"), None)?;
         let tools = ToolsConfig::default();
         let mut vars = environment
             .into_iter()
@@ -452,19 +480,6 @@ impl<'a> ToolchainInstaller<'a> {
         Ok(())
     }
 
-    fn install_docker_config(&self) -> Result<()> {
-        let directory = self.ci_home().join(".docker");
-        fs::create_dir_all(&directory)?;
-        let bytes = serde_json::to_vec_pretty(&serde_json::json!({
-            "cliPluginsExtraDirs": [self.config.host.brew_root.join("lib/docker/cli-plugins")],
-        }))
-        .context("serializing Docker CLI configuration")?;
-        write_private(
-            &directory.join("config.json"),
-            &[bytes, b"\n".to_vec()].concat(),
-        )
-    }
-
     fn require_user(&self, expected: &str) -> Result<()> {
         let actual = self
             .process
@@ -547,17 +562,6 @@ fn replace_symlink(source: &Path, target: &Path) -> Result<()> {
 #[cfg(not(unix))]
 fn replace_symlink(_source: &Path, _target: &Path) -> Result<()> {
     bail!("Rust proxy installation requires Unix symlinks")
-}
-
-fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
-    fs::write(path, contents).with_context(|| format!("writing {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("securing {}", path.display()))?;
-    }
-    Ok(())
 }
 
 /// Every Apple xcframework slice target, plus the Android and WASM targets

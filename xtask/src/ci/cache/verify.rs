@@ -26,7 +26,7 @@ impl Probe {
         let root = tempfile::Builder::new().prefix("ci-cache-").tempdir()?;
         let clients = ["a", "b"].map(|name| {
             KacheJob::prepare(
-                root.path().join(name),
+                &root.path().join(name),
                 Some(LocalStore {
                     directory: &root.path().join(format!("store-{name}")),
                     max_size: "1G",

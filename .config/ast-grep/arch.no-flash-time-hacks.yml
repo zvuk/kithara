@@ -28,4 +28,4 @@ files:
   - tests/**/*.rs
 rule:
   kind: identifier
-  regex: '^(real_timeout|io_guard|io_enter|io_leave|io_pending|IO_PACE|IoGuard)$'
+  regex: "^(real_timeout|io_guard|io_enter|io_leave|io_pending|IO_PACE|IoGuard)$"

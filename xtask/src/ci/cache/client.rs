@@ -8,6 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Subcommand};
+use xtask::ci::bootstrap;
 
 use super::{super::config::CiPins, evidence, serve, snapshot, snapshot::SnapshotArgs, verify};
 use crate::{ci::host::mac::read_secret, consts};
@@ -164,10 +165,10 @@ enum CacheCommand {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         arguments: Vec<String>,
     },
-    /// Run the cache stack inside its container: the store, its buckets and
+    /// Run the cache service: the store, its buckets and
     /// client credentials, and the evictor keeping each scope's compiler cache
     /// under its budget by last use.
-    Serve,
+    Serve(serve::ServeArgs),
     /// Verify cache reuse between two independent compiler daemons.
     Verify { env_file: Option<PathBuf> },
     /// Retain bounded observations for a compilation phase outside a lane.
@@ -241,11 +242,11 @@ pub(crate) fn run(args: &CacheArgs) -> Result<()> {
             ensure!(status.success(), "cache Compose exited with {status}");
             Ok(())
         }
-        CacheCommand::Serve => serve::run(),
+        CacheCommand::Serve(args) => serve::run(args),
         CacheCommand::Verify { env_file } => verify::run(env_file.as_deref()),
         CacheCommand::Record { phase } => evidence::record(phase),
         CacheCommand::Exec { phase, arguments } => {
-            let status = kithara_ci_bootstrap::run(
+            let status = bootstrap::run(
                 [OsString::from("cache"), phase.into()]
                     .into_iter()
                     .chain(arguments.iter().cloned()),
@@ -282,6 +283,19 @@ mod tests {
 
     use super::*;
     use crate::ci::config::workspace_root;
+
+    #[test]
+    fn the_native_cache_service_accepts_its_host_directory() {
+        crate::Cli::try_parse_from([
+            "xtask",
+            "ci",
+            "cache",
+            "serve",
+            "--root",
+            "/Volumes/KitharaCI/services/ci-cache",
+        ])
+        .expect("the native service names its persistent root");
+    }
 
     fn host_file(contents: &str) -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
@@ -499,42 +513,11 @@ mod tests {
         assert_eq!(cache["init"].as_bool(), Some(true));
     }
 
-    /// The store posts its audit log to the evictor beside it, and its egress
-    /// filter refuses even loopback unless the origin is allowed. An endpoint
-    /// that drifted from where the evictor listens would leave every read
-    /// unseen, and the evictor would age entries by their writes alone. The
-    /// evictor takes every delivery on trust, so it listens where no job
-    /// reaches.
     #[test]
-    fn the_store_sends_its_audit_log_to_the_evictor_beside_it() {
+    fn the_container_keeps_its_audit_queue_in_memory() {
         let stack = stack();
         let cache = &stack["services"]["cache"];
-        let environment = &cache["environment"];
-        let setting = |name: &str| {
-            environment[name]
-                .as_str()
-                .unwrap_or_else(|| panic!("the store sets no {name}"))
-        };
-
-        let endpoint =
-            reqwest::Url::parse(setting("RUSTFS_AUDIT_WEBHOOK_ENDPOINT_RECENCY")).unwrap();
-
-        assert_eq!(setting("RUSTFS_AUDIT_ENABLE"), "true");
-        assert_eq!(setting("RUSTFS_AUDIT_WEBHOOK_ENABLE_RECENCY"), "on");
-        assert!(consts::EVICT_LISTEN.ip().is_loopback());
-        assert_eq!(
-            endpoint.host_str(),
-            Some(consts::EVICT_LISTEN.ip().to_string().as_str())
-        );
-        assert_eq!(endpoint.port(), Some(consts::EVICT_LISTEN.port()));
-        let origin = endpoint.origin().ascii_serialization();
-        assert!(
-            setting("RUSTFS_OUTBOUND_ALLOW_ORIGINS")
-                .split(',')
-                .any(|allowed| allowed == origin),
-            "the store's egress filter refuses {origin}"
-        );
-        let queue = setting("RUSTFS_AUDIT_WEBHOOK_QUEUE_DIR_RECENCY");
+        let queue = "/audit";
         assert!(
             cache["tmpfs"]
                 .as_sequence()

@@ -88,7 +88,6 @@ members = [
     "tests/crates/warp",
     "tests/fuzz",
     "xtask",
-    "xtask/bootstrap",
 ]
 default-members = [
     "crates/kithara",
@@ -301,7 +300,6 @@ kithara-beat = { path = "crates/kithara-beat", version = "0.0.1-alpha5" }
 kithara-blob = { path = "crates/kithara-blob", version = "0.0.1-alpha5" }
 kithara-broadcast = { path = "crates/kithara-broadcast", version = "0.0.1-alpha5", default-features = false }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha5" }
-kithara-ci-bootstrap = { path = "xtask/bootstrap", version = "0.0.1-alpha5" }
 kithara-command = { path = "crates/kithara-command", version = "0.0.1-alpha5" }
 kithara-config = { path = "crates/kithara-config", version = "0.0.1-alpha5" }
 kithara-core-test-fixtures = { path = "tests/crates/core" }
@@ -480,7 +478,7 @@ memory-stats = "1.2"
 mmap-io = { version = "1.0", default-features = false }
 naga = { version = "27", features = ["wgsl-in", "termcolor"] }
 ndk-context = "0.1.1"
-nix = { version = "0.31", features = ["resource", "signal"] }
+nix = { version = "0.31", features = ["poll", "resource", "signal"] }
 num-traits = { version = "0.2", default-features = false }
 obfstr = "0.4.6"
 objc2 = "0.6.4"
@@ -537,6 +535,7 @@ signal-hook = "0.4"
 signalsmith-stretch = "0.1.3"
 skrifa = "0.37"
 smallvec = "1"
+socket2 = "0.6.5"
 symphonia = { version = "0.6.1", features = ["all", "opt-simd"] }
 symphonia-codec-aac = "0.6.1"
 symphonia-codec-pcm = "0.6.1"

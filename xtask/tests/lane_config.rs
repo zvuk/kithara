@@ -366,10 +366,10 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
 
 /// The kinds a lane enters the GitHub fan-out under: its own `kinds_github`
 /// where it is declared, the shared `kinds` otherwise, and none at all for a lane
-/// that is not Linux-only, because that fan-out has only Linux machines.
+/// that cannot run on Linux, because that fan-out has only Linux machines.
 fn github_membership(lane: &toml::Value) -> Vec<&str> {
     let os = lane.get("os").map_or_else(Vec::new, strings);
-    if os != ["linux"] {
+    if !os.contains(&"linux") {
         return Vec::new();
     }
     lane.get("kinds_github")

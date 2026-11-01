@@ -38,7 +38,7 @@ impl Snapshot {
 struct Sources;
 
 impl Sources {
-    const SCHEMA: &str = "kithara-source-snapshot-v1";
+    const SCHEMA: &str = "kithara-source-snapshot-v2";
     const PREFIX: &str = "source-snapshots";
     /// Records which layer a `CARGO_HOME` already carries, so a job that
     /// already has it neither downloads it again nor unpacks over a live one.
@@ -192,10 +192,21 @@ pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Resu
     Ok(Restored::Layer(object))
 }
 
-/// Publish the sources this job ended up with into its own scope's bucket.
+/// Publish all locked dependency sources into this job's own scope's bucket.
 pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Result<()> {
     let client = Client::load(rc)?;
     let fingerprint = sources_fingerprint(root)?;
+    if let Some(object) = client.latest(Sources::PREFIX, &fingerprint)? {
+        info!(%fingerprint, object, "dependency sources already published");
+        return Ok(());
+    }
+    run_command(
+        Command::new("cargo")
+            .args(["fetch", "--locked", "--manifest-path", "Cargo.toml"])
+            .current_dir(root)
+            .env("CARGO_HOME", cargo_home),
+        "fetch locked dependency sources",
+    )?;
     let present: Vec<&str> = Sources::PATHS
         .into_iter()
         .filter(|path| cargo_home.join(path).is_dir())
@@ -218,6 +229,7 @@ pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Resu
     let checksum = sha256(archive.path())?;
     let object = Sources::object(&fingerprint, &checksum);
     if client.exists(&object)? {
+        write_marker(cargo_home, &fingerprint)?;
         info!(%fingerprint, %checksum, "source snapshot already exists");
         return Ok(());
     }
@@ -306,6 +318,25 @@ fn fingerprint(
     let rustflags = env::var("RUSTFLAGS").unwrap_or_default();
     let encoded_rustflags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
     let mut hash = Sha256::new();
+    #[cfg(target_os = "macos")]
+    for (program, args, label) in [
+        (
+            "xcodebuild",
+            ["-version"].as_slice(),
+            "read Xcode build identity",
+        ),
+        (
+            "xcrun",
+            ["--sdk", "macosx", "--show-sdk-build-version"].as_slice(),
+            "read Apple SDK build identity",
+        ),
+    ] {
+        let output = Command::new(program).args(args).output().context(label)?;
+        require_success(&output, label)?;
+        hash.update((output.stdout.len() as u64).to_le_bytes());
+        hash.update(output.stdout);
+    }
+
     for value in [
         Snapshot::SCHEMA.as_bytes(),
         lane.as_bytes(),
@@ -759,6 +790,59 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fingerprint_changes_when_xcode_changes() {
+        if let Some(root) = env::var_os("KITHARA_XCODE_FINGERPRINT_TEST_ROOT") {
+            let root = Path::new(&root);
+            let key =
+                fingerprint("apple-lint", "cargo", "host", root, &root.join("cargo")).unwrap();
+            fs::write(
+                env::var_os("KITHARA_XCODE_FINGERPRINT_TEST_OUTPUT").unwrap(),
+                key,
+            )
+            .unwrap();
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join(".config")).unwrap();
+        fs::write(root.path().join("Cargo.lock"), "lock").unwrap();
+        fs::write(root.path().join(".config/ci-pins.toml"), "pins").unwrap();
+        let bin = root.path().join("bin");
+        crate::testing::install_double(&bin, "xcodebuild");
+        let path = env::join_paths(
+            std::iter::once(bin).chain(env::split_paths(&env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let keys: Vec<String> = [
+            "Xcode 26.6\nBuild version 26G1",
+            "Xcode 27.2\nBuild version 27B52",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(index, version)| {
+            let output = root.path().join(format!("key-{index}"));
+            let status = Command::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "ci::cache::snapshot::tests::fingerprint_changes_when_xcode_changes",
+                ])
+                .env("KITHARA_XCODE_FINGERPRINT_TEST_ROOT", root.path())
+                .env("KITHARA_XCODE_FINGERPRINT_TEST_OUTPUT", &output)
+                .env("KITHARA_TEST_STDOUT", version)
+                .env("PATH", &path)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            fs::read_to_string(output).unwrap()
+        })
+        .collect();
+        assert_ne!(
+            keys[0], keys[1],
+            "a target snapshot must not cross an Xcode build change"
+        );
+    }
+
     #[test]
     fn fingerprint_changes_when_the_lockfile_changes() {
         let root = tempfile::tempdir().unwrap();
@@ -983,12 +1067,34 @@ esac
         let rc = rc(&directory);
         let root = directory.join("checkout");
         fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("Cargo.lock"), "version = 4\n").unwrap();
+        fs::write(
+            root.join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"source-fixture\"\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("lib.rs"), "").unwrap();
         let recorded = directory.join("recorded");
         fs::create_dir_all(recorded.join("registry/cache")).unwrap();
         fs::write(recorded.join("registry/cache/dependency.crate"), b"crate").unwrap();
 
+        let error = publish_sources(&root, &recorded, &rc)
+            .expect_err("failed fetch cannot publish an incomplete layer");
+        assert!(
+            error
+                .to_string()
+                .contains("fetch locked dependency sources")
+        );
+        assert!(!directory.join("store").exists());
+        assert!(!recorded.join(Sources::MARKER).exists());
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"source-fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\npath = \"lib.rs\"\n",
+        )
+        .unwrap();
         publish_sources(&root, &recorded, &rc).expect("the default branch publishes");
+        fs::remove_dir_all(&recorded).unwrap();
+        publish_sources(&root, &recorded, &rc)
+            .expect("a complete source layer is reused without reading the local Cargo home");
         let read = directory.join("read");
         let restored = restore_sources(&root, &read, &rc).expect("a branch restores");
 

@@ -16,9 +16,9 @@ use tracing::warn;
 use super::{
     Linked, LinkedPlayer, LinkedSnapshot, SyncMode, SyncStatus, Waiting,
     geometry::cue_position,
-    state::{CorrectionState, RunningCorrection, SpeedOperation},
+    state::{CorrectionState, Cue, RunningCorrection, SpeedOperation},
 };
-use crate::{GridAnswer, TempoTrajectory, covers, entry, jump_target};
+use crate::{GridAnswer, GridRefusal, TempoTrajectory, covers, entry, jump_target};
 
 impl<P> Linked<P> {
     fn drain_speed_receipts<S>(&mut self)
@@ -106,7 +106,7 @@ impl<P> Linked<P> {
         if self.lane_room() == 0 {
             return Err(PlayError::Full("lane"));
         }
-        let source = self.source::<S>(grid)?;
+        let source = self.source(grid)?;
         let (curve, frame_count) = corrected_speed_curve(
             &self.host,
             &source,
@@ -244,56 +244,80 @@ impl<P> Linked<P> {
     where
         P: Track<S>,
     {
-        let Some(required) = self.cue else {
-            return;
+        match self.cue_on_beat(out) {
+            Ok(_)
+            | Err(
+                PlayError::Full(_) | PlayError::Late | PlayError::NotReady | PlayError::Untimed,
+            ) => {}
+            Err(error) => {
+                warn!(%error, "synchronized cue refused");
+                self.refuse_sync(out);
+            }
+        }
+    }
+
+    fn refuse_sync<S>(&mut self, out: &mut Outbox<'_, S>)
+    where
+        P: Track<S>,
+    {
+        self.mode = SyncMode::Unsyncable;
+        self.cue = None;
+        self.alignment = None;
+        self.resume_wait(out);
+    }
+
+    fn cue_on_beat<S>(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>
+    where
+        P: Track<S>,
+    {
+        let Some(cue) = self.cue else {
+            return Ok(None);
         };
         let Some(grid) = self.grid.as_ref() else {
-            return;
+            return Ok(None);
         };
-        let Some(position) = kithara_sync::boundary(grid.geometry(), required) else {
-            return;
+        let placed = match cue {
+            Cue::Covered(position) if covers(grid.geometry(), position) => Some(position),
+            Cue::Covered(position) | Cue::Beat(position) => {
+                kithara_sync::boundary(grid.geometry(), position)
+            }
+        };
+        let Some(position) = placed else {
+            return Ok(None);
         };
         let Some(pass) = out.pass() else {
-            return;
+            return Ok(None);
         };
-        let Ok(source) = self.source::<S>(grid) else {
-            return;
-        };
+        let source = self.source(grid)?;
         let Some(at) = entry(
             &self.host,
             &source,
             position,
             Bound::AtOrAfter(pass.earliest()),
         ) else {
-            return;
+            return Ok(None);
         };
-        let Ok(value) = self.curve(&source, position, at, None) else {
-            return;
-        };
+        let value = self.curve(&source, position, at, None)?;
         tracing::debug!(
             item = u64::from(self.inner.snapshot().as_ref().item),
-            load = ?self.load,
-            ?required,
             ?position,
             entry = i64::from(at),
             speed = ?value,
             "preparing synchronized load cue"
         );
-        match self.cue(position, value, out) {
-            Ok(_) => {
-                self.cue = None;
-                self.withdraw_start(position);
-                self.waiting = self.waiting.map(|waiting| match waiting {
-                    Waiting::Load { .. } => Waiting::Load { required: position },
-                    Waiting::Play { at, .. } => Waiting::Play {
-                        required: position,
-                        at,
-                    },
-                    other => other,
-                });
-            }
-            Err(error) => warn!(%error, "synchronized cue waits for its segment"),
-        }
+        let sent = self.cue(position, value, out)?;
+        self.cue = None;
+        self.withdraw_start(position);
+        self.waiting = self.waiting.and_then(|waiting| match waiting {
+            Waiting::Load { .. } => Some(Waiting::Load { required: position }),
+            Waiting::Play { at, .. } => Some(Waiting::Play {
+                required: position,
+                at,
+            }),
+            Waiting::Sync { .. } => None,
+            Waiting::Seek { .. } => Some(waiting),
+        });
+        Ok(sent)
     }
 }
 
@@ -315,7 +339,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
         }
         self.grid.as_ref().and_then(|grid| {
             let position = cue_position(track.as_ref());
-            entry(&self.host, &self.source::<S>(grid).ok()?, position, bound)
+            entry(&self.host, &self.source(grid).ok()?, position, bound)
         })
     }
 
@@ -483,14 +507,13 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
         else {
             return Ok(false);
         };
-        let source = self.source::<S>(grid)?;
+        let source = self.source(grid)?;
         let curve = self.curve(&source, position, at, None)?;
         if !ended && self.inner.prepared_speed() == Some(&curve) {
             return Ok(true);
         }
         tracing::debug!(
             item = u64::from(track.item),
-            load = ?self.load,
             ?position,
             entry = i64::from(at),
             prepared = ?self.inner.prepared_speed(),
@@ -616,35 +639,36 @@ impl<P> Linked<P> {
     {
         let track = self.inner.snapshot();
         let required = cue_position(track.as_ref());
-        let playing = matches!(track.as_ref().status, TrackStatus::Playing { .. });
-        let Some(grid) = self
-            .grid
-            .as_ref()
-            .filter(|grid| playing || covers(grid.geometry(), required))
-        else {
+        if !matches!(track.as_ref().status, TrackStatus::Playing { .. }) {
+            self.cue = Some(Cue::Covered(required));
+            self.waiting.get_or_insert(Waiting::Sync { required });
+            return match self.cue_on_beat(out) {
+                Err(PlayError::Internal(error)) => {
+                    warn!(%error, "track cannot follow the host");
+                    self.refuse_sync(out);
+                    Ok(None)
+                }
+                answer => answer,
+            };
+        }
+        let Some(grid) = self.grid.as_ref() else {
             self.waiting = Some(Waiting::Sync { required });
             return Ok(None);
         };
-        let source = self.source::<S>(grid)?;
-        if playing {
-            let at = self.jump_frame(out)?;
-            let (position, _speed) = self.planned::<S>(at)?;
-            if !covers(grid.geometry(), position) {
-                self.waiting = Some(Waiting::Sync { required: position });
-                return Ok(None);
-            }
-            return self.align_playing(&source, position, at, out);
+        let source = self.source(grid)?;
+        let at = self.jump_frame(out)?;
+        let (position, _speed) = self.planned::<S>(at)?;
+        if !covers(grid.geometry(), position) {
+            self.waiting = Some(Waiting::Sync { required: position });
+            return Ok(None);
         }
-        let at = self.earliest(out)?;
-        let at = entry(&self.host, &source, required, Bound::AtOrAfter(at))
-            .ok_or(PlayError::NotReady)?;
-        self.cue(required, self.curve(&source, required, at, None)?, out)
+        self.align_playing(&source, position, at, out)
     }
 }
 
 impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
     fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
-        let previous = self.mode;
+        let previous = (self.mode, self.cue, self.waiting);
         self.mode = if on { SyncMode::On } else { SyncMode::Off };
         if !on {
             self.waiting = None;
@@ -654,7 +678,7 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
         }
         let result = self.align(out);
         if result.is_err() {
-            self.mode = previous;
+            (self.mode, self.cue, self.waiting) = previous;
         }
         result
     }
@@ -687,7 +711,7 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
         }
         let snapshot = self.inner.snapshot();
         let required = cue_position(snapshot.as_ref());
-        let Ok(source) = self.source::<S>(grid) else {
+        let Ok(source) = self.source(grid) else {
             return;
         };
         let Some(entry_frame) = entry(&self.host, &source, required, Bound::AtOrAfter(at)) else {
@@ -710,10 +734,16 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
     }
 
     fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>) {
-        if self.load != Some(answer.load) || self.inner.snapshot().as_ref().item != answer.item {
+        if self.inner.snapshot().as_ref().item != answer.item {
             return;
         }
-        match answer.model {
+        let validated = answer.model.and_then(|model| {
+            self.source(&model).map_err(|error| GridRefusal {
+                reason: error.to_string(),
+            })?;
+            Ok(model)
+        });
+        match validated {
             Ok(model) => {
                 if self.grid.as_ref() == Some(&model) {
                     return;
@@ -730,7 +760,7 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
                         return;
                     }
                     if self.start.is_some() {
-                        self.cue = Some(self.inner.snapshot().as_ref().position);
+                        self.cue = Some(Cue::Beat(self.inner.snapshot().as_ref().position));
                     }
                     self.prepare_cue(out);
                     if self.cue.is_none() {
@@ -739,13 +769,10 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
                 }
             }
             Err(refusal) => {
-                warn!(item = ?answer.item, load = ?answer.load, %refusal, "track grid unavailable");
+                warn!(item = ?answer.item, %refusal, "track grid unavailable");
                 self.grid = None;
                 if self.synced() {
-                    self.mode = SyncMode::Unsyncable;
-                    self.cue = None;
-                    self.alignment = None;
-                    self.resume_wait(out);
+                    self.refuse_sync(out);
                 }
             }
         }

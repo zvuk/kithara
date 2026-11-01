@@ -4977,14 +4977,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kithara-ci-bootstrap"
-version = "0.0.1-alpha5"
-dependencies = [
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "kithara-command"
 version = "0.0.1-alpha5"
 dependencies = [
@@ -5129,6 +5121,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "which",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -13044,7 +13037,6 @@ dependencies = [
  "glob",
  "hex",
  "humantime",
- "kithara-ci-bootstrap",
  "kithara-devtools",
  "nix",
  "plist",
@@ -13057,6 +13049,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "signal-hook",
+ "socket2",
  "syn 3.0.6",
  "tempfile",
  "tiny_http",
