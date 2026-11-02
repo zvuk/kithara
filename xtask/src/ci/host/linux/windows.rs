@@ -194,8 +194,10 @@ fn creation_args(
         "uefi",
         "--tpm",
         "backend.type=emulator,backend.version=2.0,model=tpm-crb",
+        // Without a topology every processor is a socket of its own, and a
+        // Windows client edition schedules onto only a few sockets.
         "--vcpus",
-        &guest.vcpus.to_string(),
+        &format!("{0},sockets=1,cores={0},threads=1", guest.vcpus),
         "--memory",
         &guest.memory_mib.to_string(),
         "--disk",
@@ -1059,6 +1061,36 @@ mod tests {
         assert!(
             model.is_some_and(|model| model.starts_with("model=")),
             "{args:?}"
+        );
+    }
+
+    /// Left to itself libvirt gives each processor a socket of its own, and a
+    /// Windows client edition schedules onto only a few sockets. An eight-way
+    /// guest built that way ran its whole suite on four processors while the
+    /// other four stayed idle.
+    #[test]
+    fn every_guest_processor_sits_in_one_socket() {
+        let host = super::super::profile::tests::host_fixture();
+        let guest = host.windows.clone().unwrap();
+
+        let args = creation_args(
+            &host,
+            &guest,
+            Path::new("/iso/windows.iso"),
+            Path::new("/iso/answers.iso"),
+        )
+        .unwrap();
+
+        let vcpus = args
+            .iter()
+            .position(|arg| arg == "--vcpus")
+            .and_then(|at| args.get(at + 1))
+            .expect("the guest is given processors");
+        let options: Vec<&str> = vcpus.split(',').collect();
+        assert!(options.contains(&"sockets=1"), "{vcpus}");
+        assert!(
+            options.contains(&format!("cores={}", guest.vcpus).as_str()),
+            "{vcpus}"
         );
     }
 
