@@ -5,8 +5,8 @@ use num_traits::cast::ToPrimitive;
 
 use super::{artwork::Artwork, modules::Modules, window::WindowState};
 use crate::{
-    analysis::{TrackArtifacts, WaveformId},
-    deck::DeckSet,
+    analysis::{ArtifactId, TrackArtifacts},
+    deck::{DeckSet, TempoPercent},
     engine::{DeckSnapshot, EngineSnapshot},
     gui::view::track_subtitle,
 };
@@ -17,6 +17,7 @@ pub(crate) struct ViewCache {
     pub(in crate::gui) modules: Modules,
     pub(in crate::gui) stage: StageView,
     pub(in crate::gui) window: WindowState,
+    pub(in crate::gui) master_bpm: String,
     #[field(get, vis = "pub(in crate::gui)", copy)]
     layout: DeckLayout,
 
@@ -34,6 +35,7 @@ impl Default for ViewCache {
             modules: Modules::default(),
             stage: StageView::default(),
             window: WindowState::default(),
+            master_bpm: String::new(),
             decks: BTreeMap::new(),
             focus_deck: layout.letters()[0],
             layout,
@@ -89,7 +91,7 @@ pub(in crate::gui) struct DeckCache {
     pub(in crate::gui) tempo: String,
     pub(in crate::gui) wave: Vec<WaveBucket>,
     pub(in crate::gui) wave_revision: u64,
-    wave_src: Option<WaveformId>,
+    wave_src: Option<ArtifactId>,
 }
 
 #[derive(Default)]
@@ -118,6 +120,7 @@ impl ViewCache {
                 .refresh(deck, runtime);
         }
 
+        self.master_bpm = format!("{:.2}", f64::from(snapshot.tempo));
         self.window.refresh(self.layout, &self.modules);
     }
 
@@ -154,8 +157,8 @@ impl DeckCache {
                 .and_then(|track| track.metadata().artwork.as_ref()),
             runtime,
         );
-        self.tempo = format!("{:+.1}%", f32::from(deck.tempo));
-        self.bpm = format_bpm(deck.analysis.bpm, deck.tempo.speed());
+        self.tempo = format_tempo(deck.speed);
+        self.bpm = format_bpm(deck.analysis.bpm, deck.speed);
         self.remain = format_remain(deck);
         self.subtitle = track_subtitle(deck);
         self.quality = format_quality(deck);
@@ -191,6 +194,12 @@ fn format_quality(deck: &DeckSnapshot) -> String {
         (false, Some(rung)) => rung.label.clone(),
         (false, None) => String::new(),
     }
+}
+
+fn format_tempo(speed: f32) -> String {
+    let tenths = (f32::from(TempoPercent::at_speed(speed)) * 10.0).round();
+    // Adding zero turns a rounded -0.0 into 0.0.
+    format!("{:+.1}%", tenths / 10.0 + 0.0)
 }
 
 fn format_bpm(source: Option<f32>, speed: f32) -> String {
@@ -233,7 +242,6 @@ mod tests {
     use super::*;
     use crate::{
         analysis::{AnalysisHandle, fixtures},
-        deck::TempoPercent,
         mix::MixStrip,
         state::{AbrVariant, UiState, listen},
         waveform::TrackAnalysis,
@@ -254,6 +262,7 @@ mod tests {
             cancel.clone(),
             queue.subscribe(),
             analysis,
+            fixtures::grid_post(&host).await,
         ));
         let (asked, reply) = fixtures::next_subscribe(&mut requests).await;
         assert_eq!(asked, track_id);
@@ -327,6 +336,12 @@ mod tests {
     }
 
     #[kithara::test]
+    fn a_speed_just_under_one_reads_as_no_tempo_change() {
+        assert_eq!(format_tempo(1.0 - f32::EPSILON), "+0.0%");
+        assert_eq!(format_tempo(1.05), "+5.0%");
+    }
+
+    #[kithara::test]
     fn dropping_the_track_names_the_empty_run() {
         let mut cache = DeckCache::default();
         cache.refresh_wave(Some(&revision(1, wave_of(63))));
@@ -345,6 +360,7 @@ mod tests {
             MixStrip::new(0, 1),
             Vec::new(),
             TempoPercent::DEFAULT,
+            false,
             ui,
         )
     }

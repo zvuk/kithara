@@ -41,7 +41,8 @@ use kithara_integration_tests::{
 use kithara_render::{
     CrossfadeCurve, CrossfadeSettings, LaneProtocol, LaneStart, LaneTask,
     bridge::{
-        DeckEnds, DeckPart, DeckProtocol, Fade, SessionInbox, Slot, SlotState, scope_channels,
+        DeckEnds, DeckMixSettingsChange, DeckPart, DeckProtocol, Fade, SessionInbox, Slot,
+        SlotState, scope_channels,
     },
     rt::{
         DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context,
@@ -71,6 +72,8 @@ mod consts {
 enum Lane {
     /// A declick that settles before the warm-up ends: a unity mix.
     Settled,
+    /// A settled output gain of 0.5.
+    Gain,
     /// One equal-power crossfade that spans every warm-up and measured block.
     Crossfade,
 }
@@ -78,7 +81,7 @@ enum Lane {
 impl Lane {
     fn fade(self) -> Fade {
         match self {
-            Self::Settled => Fade::Declick,
+            Self::Settled | Self::Gain => Fade::Declick,
             Self::Crossfade => Fade::Crossfade(
                 CrossfadeSettings::new(
                     consts::CROSSFADE_SECONDS,
@@ -94,6 +97,7 @@ impl Lane {
     const fn label(self) -> &'static str {
         match self {
             Self::Settled => "settled",
+            Self::Gain => "settled gain",
             Self::Crossfade => "active crossfade",
         }
     }
@@ -172,6 +176,9 @@ async fn processor(count: usize, lane: Lane) -> BenchMixer {
     let mut lanes = Vec::new();
     let mut senders = Vec::new();
     let mut commands = Vec::new();
+    if lane == Lane::Gain {
+        commands.push(DeckPart::Mix(DeckMixSettingsChange::Level(0.5)));
+    }
     for index in 0..count {
         hang_tick!();
         let source = PcmDeck::new(Box::new(TestPcmReader::with_pcm(
@@ -453,7 +460,7 @@ fn main() {
         "lane", "tracks", "p50", "p99", "max"
     );
 
-    for (lane, count) in [Lane::Settled, Lane::Crossfade]
+    for (lane, count) in [Lane::Settled, Lane::Gain, Lane::Crossfade]
         .into_iter()
         .flat_map(|lane| consts::TRACK_COUNTS.map(|count| (lane, count)))
     {

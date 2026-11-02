@@ -245,6 +245,7 @@ pub(super) fn synthetic_project() -> ProjectConfig {
         },
     );
     ProjectConfig {
+        ast_grep: crate::common::project::AstGrepConfig::default(),
         architecture: crate::common::project::ArchitectureConfig::default(),
         project: ProjectIdentity {
             name: "demo".to_owned(),

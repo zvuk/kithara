@@ -190,20 +190,7 @@ fn shut_down(client: &SessionClient<Command>, worker: JoinHandle<()>) {
 
 #[cfg(feature = "offline")]
 fn ask(client: &SessionClient<Command>, command: Command) -> Result<(), &'static str> {
-    let command_name = match &command {
-        Command::Host(command) => match command {
-            HostCommand::Register { .. } => "Register",
-            HostCommand::Configure(..) => "Configure",
-            HostCommand::Close(_) => "Close",
-            HostCommand::Release(_) => "Release",
-            HostCommand::AttachOutputs { .. } => "AttachOutputs",
-            HostCommand::DetachOutputs { .. } => "DetachOutputs",
-            HostCommand::Restart => "Restart",
-            HostCommand::_Marker(_) => "_Marker",
-        },
-        Command::Render { .. } => "Render",
-    };
-    dispatch(client, command, command_name).map_err(|_| "native command refused")
+    dispatch(client, command).map_err(|_| "native command refused")
 }
 
 #[cfg(feature = "offline")]

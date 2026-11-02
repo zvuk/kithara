@@ -107,13 +107,13 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
         var,
     )?;
     let text = |name: &str| var(name).and_then(|value| value.into_string().ok());
-    let wrapped = var("RUSTC_WRAPPER").is_some_and(|wrapper| !wrapper.is_empty());
+    let wrapped = ci_in(var) || var("RUSTC_WRAPPER").is_some_and(|wrapper| !wrapper.is_empty());
     // The container names kache's host layer, its remote and store; the
     // daemon is the job's to start and to stop. Outside a job both are the
     // developer's.
     let kache = if wrapped && ci_in(var) {
         Some(KacheJob::prepare(
-            scratch_root().join("kache").join(job_owner()?),
+            &scratch_root().join("kache").join(job_owner()?),
             None,
         )?)
     } else {
@@ -129,7 +129,12 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
     }
     let process = Process::new(&ctx.root, vars);
     let result = crate::ci::run::journalled(&process, &args.lane, || {
-        let result = declared::run(&process, lane, &pins, &ctx.config.tools, args.kind, narrow);
+        let result = (|| {
+            if let Some(kache) = &kache {
+                kache.verify_remote(&process, &ctx.config.tools)?;
+            }
+            declared::run(&process, lane, &pins, &ctx.config.tools, args.kind, narrow)
+        })();
         if wrapped {
             let on_github = crate::job::github_in(&text);
             crate::ci::run::note_compiler_cache(&process, &ctx.config.tools, on_github, &args.lane);
@@ -361,10 +366,17 @@ label = "run"
 {step}
 "#
         );
-        let ctx = Ctx::new(
-            root,
+        let mut ctx = Ctx::new(
+            root.clone(),
             toml::from_str(&config_text).expect("parse fixture lane config"),
         );
+        #[cfg(unix)]
+        {
+            ctx.config.tools = cache_doubles(&root)
+                .0
+                .try_into()
+                .expect("parse cache fixture tools");
+        }
         let args = LaneArgs {
             lane: "trivial".to_owned(),
             kind: PipelineKind::Branch,
@@ -846,8 +858,12 @@ label = "run"
         )
         .unwrap();
         fs::set_permissions(&just, fs::Permissions::from_mode(0o755)).unwrap();
-        ctx.config.tools = toml::from_str(&format!("[just]\nprogram = \"{}\"\n", just.display()))
-            .expect("parse the tools table");
+        let mut tools = cache_doubles(root).0;
+        tools.extend(
+            toml::from_str::<toml::Table>(&format!("[just]\nprogram = \"{}\"\n", just.display()))
+                .expect("parse the just double"),
+        );
+        ctx.config.tools = tools.try_into().expect("parse the tools table");
         ctx.config.test = test_lanes();
         (ctx, args, called)
     }
@@ -945,8 +961,10 @@ cargo.packages = ["tools"]
     /// them are answered here rather than by the machine's own daemons.
     #[cfg(unix)]
     fn cache_doubles(root: &Path) -> (toml::Table, PathBuf) {
-        use std::os::unix::fs::PermissionsExt as _;
-
+        let socket_tool = root.join("cache-double").join("fake-tool");
+        if !socket_tool.exists() {
+            crate::testing::install_double(&root.join("cache-double"), "fake-tool");
+        }
         let asked = root.join("asked");
         let mut tools = toml::Table::new();
         for (name, answer) in [
@@ -956,20 +974,25 @@ cargo.packages = ["tools"]
             ),
             (
                 "kache",
-                r#"{\"local_hits\":3,\"prefetch_hits\":0,\"remote_hits\":0,\"misses\":1}"#,
+                r#"{"remote":"s3://test/kache","daemon_connected":true,"daemon_remote_readonly":false,"local_hits":3,"prefetch_hits":0,"remote_hits":0,"misses":1}"#,
             ),
         ] {
             let program = root.join(name);
-            fs::write(
-                &program,
+            let start = if name == "kache" {
                 format!(
-                    "#!/bin/sh\necho \"{name} $@\" >> '{}'\nprintf '{answer}'\n",
+                    "if [ \"$1 $2\" = \"daemon start\" ] && [ -n \"$KACHE_RUNTIME_DIR\" ]; then\nKITHARA_TEST_STDOUT='{answer}' exec '{}' --kache-start\nfi\n",
+                    socket_tool.display()
+                )
+            } else {
+                String::new()
+            };
+            crate::testing::install_script(
+                &program,
+                &format!(
+                    "#!/bin/sh\necho \"{name} $@\" >> '{}'\n{start}printf '{answer}'\n",
                     asked.display()
                 ),
-            )
-            .expect("write the cache double");
-            fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
-                .expect("make the cache double runnable");
+            );
             tools.insert(
                 name.to_owned(),
                 toml::Table::from_iter([(
@@ -983,11 +1006,10 @@ cargo.packages = ["tools"]
     }
 
     /// A job compiling through the cache says what the cache carried for it;
-    /// one that compiles without it has no cache to ask. Outside a CI job the
-    /// daemon is the developer's, configured and stopped by nobody but them.
+    /// one that compiles without it has no cache to ask.
     #[cfg(unix)]
     #[test]
-    fn a_lane_that_compiled_through_the_cache_reads_its_counts() {
+    fn a_ci_lane_that_compiled_through_the_cache_reads_its_counts() {
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let (tools, asked) = cache_doubles(temp.path());
         let (mut ctx, args) = trivial_lane(temp.path());
@@ -999,11 +1021,15 @@ cargo.packages = ["tools"]
             "a lane with no wrapper has no cache to ask"
         );
 
-        run_in(&args, &ctx, &environment(&[("RUSTC_WRAPPER", "kache")]))
-            .expect("lane runs through the wrapper");
+        run_in(
+            &args,
+            &ctx,
+            &environment(&[("CI", "true"), ("RUSTC_WRAPPER", "kache")]),
+        )
+        .expect("lane runs through the wrapper");
         assert_eq!(
             fs::read_to_string(&asked).expect("the cache was asked"),
-            "kache stats --json\nsccache --show-stats\nkache stats --full --json\nkache explain --json\n"
+            "kache daemon start\nkache daemon start\nsccache --show-stats\nkache stats --full --json\nkache explain --json\nkache daemon stop\n"
         );
     }
 
@@ -1058,7 +1084,7 @@ cargo.packages = ["tools"]
         );
         assert_eq!(
             fs::read_to_string(&asked).expect("the cache was asked"),
-            "kache stats --json\nsccache --show-stats\nkache stats --full --json\nkache explain --json\nkache daemon stop\n"
+            "kache daemon start\nkache daemon start\nsccache --show-stats\nkache stats --full --json\nkache explain --json\nkache daemon stop\n"
         );
     }
 
