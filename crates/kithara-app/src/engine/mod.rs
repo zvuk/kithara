@@ -5,6 +5,8 @@ mod owner;
 mod run;
 mod serve;
 mod snapshot;
+#[cfg(all(test, feature = "mock", feature = "gui"))]
+mod tests;
 #[cfg(not(target_arch = "wasm32"))]
 mod thread;
 

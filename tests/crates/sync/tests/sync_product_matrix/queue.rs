@@ -866,10 +866,10 @@ impl QueueMusic {
             };
             let entry = Position::from_secs_f64(start.seconds(Some(&model)));
             let pinned_cue = match *name {
-                "library_flac_newtechno" => Some((64, 27.64)),
+                "library_flac_newtechno" => Some((64, 27.623621013)),
                 "library_flac_ryabina" if self.forward_oracle => Some((128, 38.8)),
                 "library_flac_ryabina" => Some((96, 43.63635416666666)),
-                "library_flac_song1" => Some((64, 31.24)),
+                "library_flac_song1" => Some((64, 31.232696078)),
                 _ => None,
             };
             if let Some((ordinal, seconds)) = pinned_cue {
@@ -1333,12 +1333,11 @@ impl QueueMusic {
                     deck: target,
                     answer: GridAnswer {
                         item,
-                        load,
                         model: Ok((*model).clone()),
                     },
                 })
                 .await
-                .expect("item and actual Load scoped grid");
+                .expect("item scoped grid");
             data.answered.push((item, load));
         }
     }

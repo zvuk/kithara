@@ -1,5 +1,6 @@
 use kithara::{
     effects::GainDb,
+    host::api::Tempo,
     ui::render::{
         DEFAULT_ZOOM, Scope, UiEvent, WindowCommand, WriteValue, Zoom, zoom_in, zoom_out,
     },
@@ -34,6 +35,7 @@ fn write(state: &mut Kithara, key: &str, value: WriteValue) -> Option<Message> {
         "mix" | "mixer" => mixer_write(state, id, scope, &value),
         "ui" => ui_write(&mut state.ui.cache, id, scope, &value),
         "broadcast" => broadcast_write(id, &value),
+        "clock" => clock_write(id, &value),
         "library" => {
             library_write(state, id, &value);
             None
@@ -50,7 +52,7 @@ fn deck_write(
     value: WriteValue,
 ) -> Option<Message> {
     let shown = state.snapshot.lettered(scope.get("deck")?)?;
-    let (deck, letter) = (shown.id, shown.letter);
+    let (deck, letter, synced) = (shown.id, shown.letter, shown.synced);
 
     match id {
         "deck.view.zoom_in" | "deck.view.zoom_out" | "deck.view.zoom" | "deck.queue.load"
@@ -63,11 +65,13 @@ fn deck_write(
             quality_msg(state, letter, scope.get("variant")?)?
         }
         ("deck.transport.toggle_play", WriteValue::Trigger) => DeckMsg::TogglePlayPause,
+        ("deck.transport.toggle_sync", WriteValue::Trigger) => DeckMsg::ToggleSync,
         ("deck.transport.prev", WriteValue::Trigger) => DeckMsg::Prev,
         ("deck.transport.next", WriteValue::Trigger) => DeckMsg::Next,
         ("deck.transport.seek_normalized", WriteValue::Scalar(position)) => {
             DeckMsg::SeekTo(position.clamp(0.0, 1.0))
         }
+        ("deck.tempo.rate" | "deck.tempo.reset", _) if synced => return None,
         ("deck.tempo.rate", WriteValue::Step(steps)) => {
             let tempo = f32::from(state.snapshot.deck(deck)?.tempo);
             DeckMsg::SetTempo(TempoPercent::from(steps.mul_add(TEMPO_STEP, tempo)))
@@ -184,6 +188,14 @@ fn ui_write(
             cache.set_layout(DeckLayout::from_decks(scope.get("layout")?.parse().ok()?)?);
             Some(Message::PauseHiddenDecks)
         }
+        _ => None,
+    }
+}
+
+fn clock_write(id: &str, value: &WriteValue) -> Option<Message> {
+    match (id, value) {
+        ("clock.tempo", WriteValue::Step(steps)) => Some(Message::StepTempo(*steps)),
+        ("clock.tempo", WriteValue::Scalar(bpm)) => Tempo::new(*bpm).ok().map(Message::SetTempo),
         _ => None,
     }
 }
@@ -399,6 +411,23 @@ mod tests {
                 press(state, "broadcast.toggle"),
                 Some(Message::BroadcastToggle)
             ));
+        }
+
+        #[kithara::test(native, flash(false))]
+        fn a_synced_tempo_fader_sends_nothing() {
+            let mut rig = Rig::offline();
+            let a = rig.deck("a");
+            rig.message(Message::Deck(a, DeckMsg::ToggleSync));
+            rig.pump();
+            rig.frame();
+            let state = &mut rig.ui;
+            assert!(
+                state.snapshot.deck(a).is_some_and(|deck| deck.synced),
+                "deck A is synced"
+            );
+
+            assert!(write(state, "deck.tempo.rate@deck=a", WriteValue::Step(2.0)).is_none());
+            assert!(press(state, "deck.tempo.reset@deck=a").is_none());
         }
 
         #[kithara::test(native, flash(false))]

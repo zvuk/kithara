@@ -25,7 +25,7 @@ use kithara_test_utils::{
 };
 
 use super::{
-    fixtures::{answer, grid, load, loaded, position, source_grid, trajectory},
+    fixtures::{answer, grid, loaded, position, source_grid, trajectory},
     host_fixture::{host, register},
 };
 use crate::{
@@ -52,7 +52,6 @@ fn settle(
     .expect("live deck scope");
 }
 
-// Ruling: spec 3/5.5 removes staged sync lanes; supersession cancels queued starts by Seq on the one resident player.
 #[kithara::test(tokio)]
 async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
     let directory = TestTempDir::new();
@@ -194,10 +193,9 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
     );
 }
 
-// Ruling: spec 4.5/4.6 replaces attached group topology with one item/load-owned track grid, never a nested group.
 #[kithara::test]
 fn an_attached_group_owns_its_track_geometry_as_its_only_member() {
-    let (mut deck, control, mut rig, loading) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
+    let (mut deck, control, mut rig, _) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
     let item = deck.snapshot().as_ref().item;
     let slot = deck.snapshot().as_ref().slot;
     let sync = rig
@@ -214,7 +212,6 @@ fn an_attached_group_owns_its_track_geometry_as_its_only_member() {
     answer(
         &mut deck,
         &mut rig,
-        loading,
         grid(24_000, 12_000, Some((4, 0)), 960_000),
     );
     assert_eq!(deck.snapshot().as_ref().item, item);
@@ -225,25 +222,8 @@ fn an_attached_group_owns_its_track_geometry_as_its_only_member() {
             .iter()
             .any(|(_, command)| matches!(command, super::fixtures::Command::Load(_)))
     );
-    let replacement = load(&mut deck, &mut rig, 0);
-    rig.apply(&mut deck, replacement, 0);
-    control.clear();
-    answer(
-        &mut deck,
-        &mut rig,
-        loading,
-        grid(24_000, 0, Some((4, 0)), 960_000),
-    );
-    assert_eq!(
-        deck.snapshot().sync,
-        SyncStatus::WaitingForGrid {
-            required: position(0)
-        }
-    );
-    assert!(control.commands().is_empty());
 }
 
-// Ruling: spec 4.6 removes recursive groups; a receipt routed by DeckId updates only the registered issuing player.
 #[kithara::test]
 fn a_receipt_reaches_the_nested_group_that_issued_it() {
     let (mut host, clock) = host();
@@ -446,7 +426,6 @@ async fn native_linked(
             &mut deck,
             GridAnswer {
                 item,
-                load: loading,
                 model: Ok(model),
             },
             out,

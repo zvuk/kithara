@@ -28,15 +28,15 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
     hosts::{
         solve::{self, Limits, Size},
+        surface::{Entry, SteppingSurface},
         vis::VisFrame,
     },
     interact::{
-        CursorShape, Hit, Hover, Input, MOUSE, PointerInput, PointerOwnership, PointerPhase,
+        CursorShape, Hit, Input, MOUSE, PointerInput, PointerOwnership, PointerPhase,
         masonry::{
             cursor_icon, pointer_button, pointer_position, portable_modifiers, portable_scroll,
             portable_text_input,
         },
-        recognizers::{StepEvent, Stepper},
     },
     layout::{FrameCorners, FrameSides},
     masonry::{
@@ -44,35 +44,64 @@ use crate::{
         paint::corner::{corner_frame, corner_path},
         shader::ShaderDeclaration,
     },
-    render::{ControlAction, Published, ReadValue, document::Ctx},
+    render::{Published, ReadValue, Skin, document::Ctx},
 };
 
 /// The stepping surface a flow declares over itself: a detent anywhere on it
 /// moves the value the document named, and so does a held drag.
 ///
 /// The gesture is the one the immediate host puts over the same flow, so the
-/// two hosts step alike; only the way it is mounted differs.
+/// two hosts step alike; only the way it is mounted differs. Where the document
+/// declares an entry, `entry` holds the text the number field opens with and
+/// the skin it is drawn in.
 pub(crate) struct Detent {
     map_event: Rc<dyn Fn(Published) -> HostAction>,
-    stepper: Stepper,
+    surface: SteppingSurface,
+    entry: Option<(String, Skin)>,
     path: String,
 }
 
 impl Detent {
-    pub(crate) fn new(path: String, map_event: Rc<dyn Fn(Published) -> HostAction>) -> Self {
+    pub(crate) fn new(
+        path: String,
+        map_event: Rc<dyn Fn(Published) -> HostAction>,
+        entry: Option<(String, Skin)>,
+    ) -> Self {
         Self {
             path,
             map_event,
-            stepper: Stepper::default(),
+            entry,
+            surface: SteppingSurface::default(),
         }
     }
 
-    /// The hand this surface asks for, which is the one the immediate host
-    /// puts over the same flow: the surface reads as a thing that steps while
-    /// the pointer is over it, and goes on reading that way for as long as a
-    /// drag it started lasts, wherever the pointer has got to.
-    fn cursor(&self, hit: &Hit) -> CursorShape {
-        Hover::new(CursorShape::ResizeV).cursor(self.stepper.dragging(), hit)
+    delegate::delegate! {
+        to self.surface {
+            /// Closes the number field unchanged, answering whether one stood open.
+            fn close(&mut self) -> bool;
+            /// The hand this surface asks for, which is the one the immediate
+            /// host puts over the same flow.
+            fn cursor(&self, hit: &Hit) -> CursorShape;
+        }
+    }
+
+    const fn declares_entry(&self) -> bool {
+        self.entry.is_some()
+    }
+
+    fn paint(&self, bounds: Rect, list: &mut DrawListBuilder) {
+        if let Some((_, skin)) = &self.entry {
+            self.surface.paint(list, bounds, skin);
+        }
+    }
+
+    /// Keeps the text the next double-click opens the field holding.
+    fn show(&mut self, value: &ReadValue<'_>) {
+        if let (Some((held, _)), ReadValue::Text(text)) = (&mut self.entry, value)
+            && held.as_str() != *text
+        {
+            (*text).clone_into(held);
+        }
     }
 
     /// Offers one input to this surface, answering whether the surface took it.
@@ -82,23 +111,32 @@ impl Detent {
     /// stop arriving and the release ending it would land on whatever the
     /// pointer wandered onto, leaving this one armed for the next hover.
     fn step(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>, hit: &Hit) -> bool {
-        let held = self.stepper.dragging();
-        let outcome = self.stepper.on_input(input, hit, Instant::now());
+        let held = self.surface.dragging();
+        let editing = self.surface.editing();
+        let entry = self
+            .entry
+            .as_ref()
+            .map(|(value, skin)| Entry { value, skin });
+        let outcome = self.surface.on_input(input, hit, Instant::now(), entry);
+        if editing || self.surface.editing() {
+            ctx.request_paint_only();
+        }
+        match (editing, self.surface.editing()) {
+            (false, true) => ctx.request_focus(),
+            (true, false) => ctx.resign_focus(),
+            _ => {}
+        }
         match outcome.ownership() {
             PointerOwnership::Claim => ctx.capture_pointer(),
             PointerOwnership::Release if held => ctx.release_pointer(),
             PointerOwnership::Unchanged | PointerOwnership::Release => {}
         }
-        if let Some(event) = outcome.value() {
-            let action = match event {
-                StepEvent::By(steps) => ControlAction::StepScalar(steps),
-                StepEvent::Activate => ControlAction::Activate,
-            };
+        let taken = outcome.is_captured() || held;
+        if let Some(action) = outcome.value() {
             ctx.submit_action::<HostAction>((self.map_event)(crate::hosts::event::control_event(
                 &self.path, action,
             )));
         }
-        let taken = outcome.is_captured() || held;
         if taken {
             ctx.set_handled();
         }
@@ -179,6 +217,10 @@ impl Node {
             spot: None,
             transform: Transform::IDENTITY,
         }
+    }
+
+    fn declares_entry(&self) -> bool {
+        self.detent.as_ref().is_some_and(Detent::declares_entry)
     }
 
     /// Offers the input to the grip a placement carries, answering whether
@@ -468,8 +510,25 @@ impl Node {
         self.round.any() && self.radius > 0.0
     }
 
+    /// Offers a key to the number field this flow has open.
+    fn detent_text_input(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>) -> bool {
+        let size = ctx.size();
+        self.detent
+            .as_mut()
+            .filter(|detent| detent.surface.editing())
+            .is_some_and(|detent| {
+                let area = Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: size.width.as_(),
+                    h: size.height.as_(),
+                };
+                detent.step(ctx, input, &Hit::new(None, area))
+            })
+    }
+
     fn route_text_input(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>) {
-        if self.leaf_text_input(ctx, input) {
+        if self.detent_text_input(ctx, input) || self.leaf_text_input(ctx, input) {
             return;
         }
         self.engine_text_input(ctx, input);
@@ -503,6 +562,9 @@ impl Node {
     /// Shows the value an engine just published for this node's control, without
     /// waiting for the rebuild that follows the gesture.
     pub(crate) fn show_live(&mut self, value: &ReadValue<'_>) -> bool {
+        if let Some(detent) = &mut self.detent {
+            detent.show(value);
+        }
         self.layout.leaf().is_some_and(|leaf| leaf.set_read(value))
     }
 
@@ -641,7 +703,7 @@ impl Widget for Node {
     type Action = HostAction;
 
     fn accepts_focus(&self) -> bool {
-        self.layout.accepts_input() || self.engine.is_some()
+        self.layout.accepts_input() || self.engine.is_some() || self.declares_entry()
     }
 
     /// A leaf whose picture answers the hand is asked for too, even when the
@@ -658,6 +720,7 @@ impl Widget for Node {
 
     fn accepts_text_input(&self) -> bool {
         self.layout.accepts_text_input()
+            || self.declares_entry()
             || self
                 .engine
                 .as_ref()
@@ -808,6 +871,12 @@ impl Widget for Node {
         _props: &mut PropertiesMut<'_>,
         event: &TextEvent,
     ) {
+        if matches!(event, TextEvent::WindowFocusChange(false))
+            && self.detent.as_mut().is_some_and(Detent::close)
+        {
+            ctx.resign_focus();
+            ctx.request_paint_only();
+        }
         if let TextEvent::Keyboard(event) = event {
             self.route_text_input(
                 ctx,
@@ -855,6 +924,9 @@ impl Widget for Node {
             y: 0.0,
         };
         self.layout.indicate(bounds, &mut list);
+        if let Some(detent) = &self.detent {
+            detent.paint(bounds, &mut list);
+        }
         self.paint_frame(bounds, &mut list);
         replay(&list.finish(), &mut VelloBackend::new(scene));
     }
@@ -881,6 +953,11 @@ impl Widget for Node {
             && let Some(engine) = &self.engine
         {
             engine.clear_focus();
+        }
+        if matches!(event, Update::FocusChanged(false))
+            && self.detent.as_mut().is_some_and(Detent::close)
+        {
+            ctx.request_paint_only();
         }
     }
 }

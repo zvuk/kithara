@@ -223,7 +223,7 @@ jobs:
     name: Report evidence
     needs: execute
     if: ${{ always() && needs.execute.result != 'skipped' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, kithara-report]
     timeout-minutes: 30
     steps:
       - name: Checkout controller
@@ -241,24 +241,6 @@ jobs:
           pattern: stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-shard-*
           path: raw
           merge-multiple: true
-
-      - name: Install just
-        if: always()
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
-        with:
-          tool: just
-
-      # The reporting boundary is a GitHub-hosted runner on purpose, and that
-      # image carries no audio headers. The renderer reaches the workspace
-      # feature-unification crate through `kithara-derive`, which turns on
-      # firewheel's `cpal` feature, so building it links ALSA on Linux even
-      # though rendering a report never touches audio. Without this the job
-      # fails in `alsa-sys` before it reads a single result file.
-      - name: Install the audio headers the renderer links
-        if: always()
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes libasound2-dev
 
       - name: Verify and render the stress evidence
         if: always()
@@ -287,7 +269,15 @@ jobs:
           [[ -z "$TIER" ]] || args+=(--tier "$TIER")
           for mode in $MODE; do args+=(--mode "$mode"); done
           for lane in $LANE; do args+=(--lane "$lane"); done
-          just ci stress-report "${args[@]}"
+          just ci cache-exec stress-report just ci stress-report "${args[@]}"
+
+      - name: Upload report compiler-cache evidence
+        if: ${{ always() && hashFiles(format('controller/.ci-artifacts/cache/github-{0}-{1}-*.json', github.run_id, github.run_attempt)) != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compiler-cache-stress-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: controller/.ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json
+          if-no-files-found: error
 
       - name: Add the stress summary
         if: always()

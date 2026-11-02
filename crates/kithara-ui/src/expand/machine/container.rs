@@ -10,15 +10,28 @@ use crate::{
     module::{BindingRef, ControlNode},
 };
 
+/// What a container binds, as the document declared it.
+#[derive(Clone, Copy)]
+struct Declared<'a> {
+    write: Option<&'a BindingRef>,
+    reset: Option<&'a BindingRef>,
+    entry: Option<&'a BindingRef>,
+    active: Option<&'a BindingRef>,
+}
+
 fn container_bindings(
     context: &Context<'_>,
     node: &ControlNode,
     id: Option<&NodeId>,
-    write: Option<&BindingRef>,
-    reset: Option<&BindingRef>,
-    active: Option<&BindingRef>,
+    declared: Declared<'_>,
     machine: &mut Expander<'_, '_>,
 ) -> Result<(Option<SurfaceSpec>, Option<Binding>), UiDocError> {
+    let Declared {
+        write,
+        reset,
+        entry,
+        active,
+    } = declared;
     if write.is_none() && reset.is_none() && active.is_none() {
         return Ok((None, None));
     }
@@ -35,9 +48,13 @@ fn container_bindings(
     let reset = reset
         .map(|binding| context.substitute(binding, &path))
         .transpose()?;
+    let entry = entry
+        .map(|binding| context.substitute(binding, &path))
+        .transpose()?;
     machine.visit(
         ControlSite {
             write: write.as_ref(),
+            read: entry.as_ref(),
             active: active.as_ref(),
             writes: SlotWrites {
                 reset: reset.as_ref(),
@@ -53,6 +70,7 @@ fn container_bindings(
             Ok(SurfaceSpec {
                 path: machine.interner.intern(&path, &context.origin)?,
                 write: intern_binding(machine.interner, write, &context.origin)?,
+                entry: intern_optional_binding(machine.interner, entry.as_ref(), &context.origin)?,
             })
         })
         .transpose()?;
@@ -93,6 +111,7 @@ pub(super) fn expand_row(
         active_frame_color,
         write,
         reset,
+        entry,
         children,
     } = node
     else {
@@ -103,9 +122,12 @@ pub(super) fn expand_row(
         context,
         node,
         id.as_ref(),
-        write.as_ref(),
-        reset.as_ref(),
-        active.as_ref(),
+        Declared {
+            write: write.as_ref(),
+            reset: reset.as_ref(),
+            entry: entry.as_ref(),
+            active: active.as_ref(),
+        },
         machine,
     )?;
     Ok(ExpandedNode::Row {
@@ -150,6 +172,7 @@ pub(super) fn expand_column(
         background_alpha,
         write,
         reset,
+        entry,
         children,
     } = node
     else {
@@ -160,9 +183,12 @@ pub(super) fn expand_column(
         context,
         node,
         id.as_ref(),
-        write.as_ref(),
-        reset.as_ref(),
-        None,
+        Declared {
+            write: write.as_ref(),
+            reset: reset.as_ref(),
+            entry: entry.as_ref(),
+            active: None,
+        },
         machine,
     )?;
     Ok(ExpandedNode::Column {
