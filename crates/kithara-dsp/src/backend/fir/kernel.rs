@@ -9,18 +9,12 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
     #[inline(always)]
     pub(super) fn begin_block_kernel<S: Simd>(
         &mut self,
-        _simd: S,
+        simd: S,
         channels: &[&mut [f32]],
         threshold: f32,
     ) {
         self.shared_valid.fill(false);
-        if channels
-            .iter()
-            .map(|channel| channel.len())
-            .min()
-            .unwrap_or(0)
-            == 0
-        {
+        if channels.is_empty() || channels.iter().any(|channel| channel.is_empty()) {
             self.reconstruct = false;
             return;
         }
@@ -40,10 +34,22 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
                 return;
             }
         }
-        self.reconstruct = self.taps.iter().any(|branch| {
-            branch.iter().fold(0.0_f32, |sum, coefficient| {
-                coefficient.abs().mul_add(maximum, sum)
-            }) > threshold
+        self.reconstruct = simd.vectorize(|| {
+            self.taps.chunks(f32x8::<S>::LEN).any(|phases| {
+                let mut sums = f32x8::splat(simd, 0.0);
+                for tap in 0..TAPS {
+                    let coefficients = f32x8::from_fn(simd, |lane| {
+                        phases
+                            .get(lane)
+                            .map_or(0.0, |branch| branch.get(tap).copied().unwrap_or(0.0).abs())
+                    });
+                    sums = coefficients.mul_add_precise(f32x8::splat(simd, maximum), sums);
+                }
+                sums.as_slice()
+                    .iter()
+                    .take(phases.len())
+                    .any(|&sum| sum > threshold)
+            })
         });
     }
 
@@ -68,62 +74,62 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
                 };
                 let len = raw.len().min(current.len()).min(peaks.len());
                 let mut future = raw.iter();
-                let mut samples = current.iter();
-                let mut output = peaks.iter_mut();
-                while let (Some(_), Some(&sample), Some(peak)) =
-                    (future.next(), samples.next(), output.next())
-                {
+                for (peak, &sample) in peaks.iter_mut().take(raw.len()).zip(current) {
+                    let _ = future.next();
                     *peak = sample.abs().max(0.0);
                     let future = future.as_slice();
                     let held = future.last().copied().unwrap_or(sample);
+                    let past = &history[HISTORY.min(1)..];
+                    let zero = sample == 0.0
+                        && held == 0.0
+                        && future.iter().take(TAPS).all(|&sample| sample == 0.0);
+                    let ahead_active =
+                        TAPS.min(PHASES) > 0 && !(zero && past.iter().all(|&sample| sample == 0.0));
+                    let behind_active = !*valid
+                        && TAPS.min(PHASES) > 0
+                        && !(zero && history.iter().all(|&sample| sample == 0.0));
                     let mut ahead = 0.0_f32;
-                    let mut behind = *shared;
-                    for boundary in 0..=usize::from(!*valid) {
-                        let (past, padding) = if boundary == 0 {
-                            (&history[HISTORY.min(1)..], 0)
-                        } else {
-                            (history.as_slice(), usize::from(HISTORY == 0))
-                        };
-                        let result = if boundary == 0 {
-                            &mut ahead
-                        } else {
-                            &mut behind
-                        };
-                        *result = 0.0;
-                        if TAPS.min(PHASES) == 0
-                            || (sample == 0.0
-                                && held == 0.0
-                                && past.iter().all(|&sample| sample == 0.0)
-                                && future.iter().take(TAPS).all(|&sample| sample == 0.0))
-                        {
-                            // Zero samples yield zero or NaN sums; both fold to a positive-zero peak.
-                            continue;
-                        }
+                    let mut behind = if *valid { *shared } else { 0.0 };
+                    if ahead_active || behind_active {
                         for phases in self.taps.chunks(f32x8::<S>::LEN) {
-                            let mut sums = f32x8::splat(simd, 0.0);
+                            let mut ahead_sums = f32x8::splat(simd, 0.0);
+                            let mut behind_sums = f32x8::splat(simd, 0.0);
+                            let mut previous = history.first().copied().unwrap_or(0.0);
                             for tap in 0..TAPS {
-                                let input = match tap.checked_sub(padding) {
-                                    None => 0.0,
-                                    Some(slot) if slot <= past.len() => {
-                                        *past.get(slot).unwrap_or(&sample)
-                                    }
-                                    Some(slot) => future
-                                        .get(slot.saturating_sub(past.len()).saturating_sub(1))
+                                let input = if tap <= past.len() {
+                                    *past.get(tap).unwrap_or(&sample)
+                                } else {
+                                    future
+                                        .get(tap.saturating_sub(past.len()).saturating_sub(1))
                                         .copied()
-                                        .unwrap_or(held),
+                                        .unwrap_or(held)
                                 };
                                 let coefficients = f32x8::from_fn(simd, |lane| {
                                     phases.get(lane).map_or(0.0, |branch| {
                                         branch.get(tap).copied().unwrap_or(0.0)
                                     })
                                 });
-                                let input = f32x8::from_fn(simd, |lane| {
-                                    phases.get(lane).map_or(0.0, |_| input)
-                                });
-                                sums = coefficients.mul_add_precise(input, sums);
+                                if ahead_active {
+                                    let input = f32x8::from_fn(simd, |lane| {
+                                        phases.get(lane).map_or(0.0, |_| input)
+                                    });
+                                    ahead_sums = coefficients.mul_add_precise(input, ahead_sums);
+                                }
+                                if behind_active {
+                                    let input = f32x8::from_fn(simd, |lane| {
+                                        phases.get(lane).map_or(0.0, |_| previous)
+                                    });
+                                    behind_sums = coefficients.mul_add_precise(input, behind_sums);
+                                }
+                                previous = input;
                             }
-                            for &sum in sums.as_slice().iter().take(phases.len()) {
-                                *result = result.max(sum.abs());
+                            for &sum in ahead_sums.as_slice().iter().take(phases.len()) {
+                                ahead = ahead.max(sum.abs());
+                            }
+                            if behind_active {
+                                for &sum in behind_sums.as_slice().iter().take(phases.len()) {
+                                    behind = behind.max(sum.abs());
+                                }
                             }
                         }
                     }
