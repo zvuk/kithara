@@ -119,25 +119,39 @@ where
         prefix: bool,
         wait: PrepareWait,
     ) -> DecodeResult<DecoderSeekOutcome> {
-        if !pos.is_zero() {
-            self.observing_initial_pcm = false;
-        }
         let (native_bound, seek_frame) = if prefix {
             (pos, None)
         } else {
-            // The last native sample whose output position rounds to the requested frame or earlier.
-            let half_frame = self.target_spec.duration_for(1)? / 2;
-            (
-                pos.saturating_add(half_frame.saturating_sub(Duration::from_nanos(1))),
-                Some(self.target_spec.frame_at(pos)?),
-            )
+            let seek_frame = self.target_spec.frame_at(pos)?;
+            (self.nearest_native_bound(seek_frame)?, Some(seek_frame))
         };
+        if !native_bound.is_zero() {
+            self.observing_initial_pcm = false;
+        }
         let outcome = self.decoder.seek_prefix_with_wait(native_bound, wait)?;
         self.prepared = None;
         self.reset_resampler_state();
         self.seek_frame = seek_frame;
         self.reanchor_output_on_next_chunk = true;
         Ok(self.map_seek_outcome(outcome))
+    }
+
+    /// Native prefix bound whose last sample is the one nearest to `frame` without
+    /// rounding past it on the output grid. Frame zero stays at zero so the
+    /// inner decoder keeps observing its PCM origin.
+    fn nearest_native_bound(&self, frame: u64) -> DecodeResult<Duration> {
+        if frame == 0 {
+            return Ok(Duration::ZERO);
+        }
+        let half_period = self
+            .target_spec
+            .duration_for(1)?
+            .min(self.source_spec.duration_for(1)?)
+            / 2;
+        Ok(self
+            .target_spec
+            .duration_for(frame)?
+            .saturating_add(half_period.saturating_sub(Duration::from_nanos(1))))
     }
 
     fn map_seek_outcome(&mut self, outcome: DecoderSeekOutcome) -> DecoderSeekOutcome {
