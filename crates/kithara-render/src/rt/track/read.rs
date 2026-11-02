@@ -236,19 +236,24 @@ impl PlayerTrack {
             ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
             ReadOutcome::Eof | ReadOutcome::Failed(_) => 0,
         };
-        for (index, (left, right)) in left[..written]
-            .iter_mut()
-            .zip(&mut right[..written])
+        let mut gains = [0.0; crate::consts::FADE_CHUNK];
+        for (block, (left, right)) in left[..written]
+            .chunks_mut(crate::consts::FADE_CHUNK)
+            .zip(right[..written].chunks_mut(crate::consts::FADE_CHUNK))
             .enumerate()
         {
-            let progress = if length <= 1 {
-                1.0
-            } else {
-                index.to_f32().unwrap_or(f32::MAX) / (length - 1).to_f32().unwrap_or(f32::MAX)
-            };
-            let level = gain * (1.0 - progress);
-            *left *= level;
-            *right *= level;
+            let gains = &mut gains[..left.len()];
+            for (offset, level) in gains.iter_mut().enumerate() {
+                let index = block * crate::consts::FADE_CHUNK + offset;
+                let progress = if length <= 1 {
+                    1.0
+                } else {
+                    index.to_f32().unwrap_or(f32::MAX) / (length - 1).to_f32().unwrap_or(f32::MAX)
+                };
+                *level = gain * (1.0 - progress);
+            }
+            kithara_dsp::multiply_in_place(left, gains);
+            kithara_dsp::multiply_in_place(right, gains);
         }
         written
     }
