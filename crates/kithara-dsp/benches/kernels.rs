@@ -1,8 +1,5 @@
 #![forbid(unsafe_code)]
 
-#[path = "support/crossover.rs"]
-mod crossover_control;
-
 use std::{
     f64::consts::{FRAC_1_SQRT_2, TAU},
     hint::black_box,
@@ -301,49 +298,39 @@ fn biquad_decay(c: &mut Criterion) {
 }
 
 fn crossover(c: &mut Criterion) {
-    for frequencies in [
-        &[250.0, 2_500.0][..],
-        &[
-            100.0, 250.0, 500.0, 1_000.0, 2_000.0, 4_000.0, 6_000.0, 9_000.0, 12_000.0,
-        ][..],
-    ] {
-        let frequencies_hz: Vec<_> = frequencies
-            .iter()
-            .map(|&frequency| Hertz::from_hz(frequency).expect("positive benchmark frequency"))
-            .collect();
-        let mut filter = Crossover::new(
-            &frequencies_hz,
-            Hertz::from_hz(48_000.0).expect("benchmark rate"),
-        )
-        .expect("valid benchmark crossover");
-        let mut original = crossover_control::Original::new(frequencies);
-        for input in [tone(257), vec![f32::MIN_POSITIVE; 257], vec![f32::MAX; 257]] {
-            let mut actual = vec![vec![0.0; input.len()]; frequencies.len() + 1];
-            let mut expected = actual.clone();
-            assert_eq!(filter.split(&input, &mut actual), input.len());
-            assert_eq!(original.split(&input, &mut expected), input.len());
-            assert!(
-                actual
-                    .iter()
-                    .flatten()
-                    .zip(expected.iter().flatten())
-                    .all(|(a, b)| a.to_bits() == b.to_bits()),
-                "original crossover control must preserve every band"
-            );
+    let mut group = c.benchmark_group("crossover");
+    for frames in [7, 128, 255, 256, 257, 1024] {
+        group.throughput(Throughput::Elements(
+            u64::try_from(frames).expect("frame count fits u64"),
+        ));
+        for frequencies in [
+            &[250.0, 2_500.0][..],
+            &[
+                100.0, 250.0, 500.0, 1_000.0, 2_000.0, 4_000.0, 6_000.0, 9_000.0, 12_000.0,
+            ][..],
+        ] {
+            let mut filter = Crossover::new(frequencies, 48_000.0);
+            let mut bands = vec![vec![0.0; frames]; frequencies.len() + 1];
+            for (label, input) in [
+                ("tone", tone(frames)),
+                ("quiet", vec![f32::MIN_POSITIVE; frames]),
+                ("pathological", vec![f32::MAX; frames]),
+            ] {
+                group.bench_with_input(
+                    BenchmarkId::new(format!("{}band_{label}", bands.len()), frames),
+                    &frames,
+                    |b, _| {
+                        b.iter(|| {
+                            let count = filter.split(black_box(&input), black_box(&mut bands));
+                            black_box(&bands);
+                            count
+                        });
+                    },
+                );
+            }
         }
     }
-    crossover_control::bench(c, |frequencies| {
-        let frequencies_hz: Vec<_> = frequencies
-            .iter()
-            .map(|&frequency| Hertz::from_hz(frequency).expect("positive benchmark frequency"))
-            .collect();
-        let mut filter = Crossover::new(
-            &frequencies_hz,
-            Hertz::from_hz(48_000.0).expect("benchmark rate"),
-        )
-        .expect("valid benchmark crossover");
-        move |input: &[f32], bands: &mut [Vec<f32>]| filter.split(input, bands)
-    });
+    group.finish();
 }
 
 fn interp(c: &mut Criterion) {

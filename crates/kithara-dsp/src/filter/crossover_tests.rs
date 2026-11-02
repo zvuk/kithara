@@ -1,24 +1,11 @@
-use biquad::{Biquad, Coefficients, DirectForm1, Hertz, Type};
+use biquad::{Biquad, Coefficients, DirectForm1, Type};
 use kithara_test_utils::kithara;
 
 use super::Crossover;
-use crate::filter::FilterError;
-
-fn hz(value: f32) -> Hertz<f32> {
-    Hertz::from_hz(value).expect("positive test hertz")
-}
-
-fn crossover(frequencies: &[f32], rate: f32) -> Crossover {
-    Crossover::new(
-        &frequencies.iter().copied().map(hz).collect::<Vec<_>>(),
-        hz(rate),
-    )
-    .expect("valid test crossover")
-}
 
 #[kithara::test]
 fn butterworth_lp_dc_gain_is_unity() {
-    let coeffs = super::coefficients(Type::LowPass, hz(250.0), hz(44100.0)).expect("valid design");
+    let coeffs = super::coefficients(Type::LowPass, 250.0, 44100.0);
     let dc_gain = (coeffs.b0 + coeffs.b1 + coeffs.b2) / (1.0 + coeffs.a1 + coeffs.a2);
     assert!((dc_gain - 1.0).abs() < 0.001);
 }
@@ -110,9 +97,9 @@ impl Scalar {
 #[kithara::test]
 fn reset_clears_active_history_and_keeps_the_design() {
     let frequencies = [250.0, 2_500.0];
-    let mut actual = crossover(&frequencies, 48_000.0);
-    let mut retained = crossover(&frequencies, 48_000.0);
-    let mut fresh = crossover(&frequencies, 48_000.0);
+    let mut actual = Crossover::new(&frequencies, 48_000.0);
+    let mut retained = Crossover::new(&frequencies, 48_000.0);
+    let mut fresh = Crossover::new(&frequencies, 48_000.0);
     let warm = [0.25, -0.5, 1.0, -0.125];
     let probe = [1.0, -0.5, 0.0, 0.25];
     let mut discarded = vec![vec![0.0; warm.len()]; 3];
@@ -168,13 +155,14 @@ fn every_band_matches_the_scalar_state_across_splits_reset_and_retune(#[case] ch
         &[][..],
         &[250.0][..],
         &[250.0, 2_500.0][..],
+        &[0.0, 1.0e9][..],
         &[
             100.0, 250.0, 500.0, 1_000.0, 2_000.0, 4_000.0, 6_000.0, 9_000.0, 12_000.0,
         ][..],
     ] {
-        let mut actual = crossover(frequencies, 48_000.0);
-        for rate in [48_000.0, 44_100.0] {
-            actual.update_sample_rate(hz(rate)).expect("valid retune");
+        let mut actual = Crossover::new(frequencies, 48_000.0);
+        for rate in [48_000.0, 44_100.0, 0.0] {
+            actual.update_sample_rate(rate);
             for reset in [false, true] {
                 if reset {
                     actual.reset();
@@ -205,8 +193,8 @@ fn every_band_matches_the_scalar_state_across_splits_reset_and_retune(#[case] ch
 #[kithara::test]
 fn short_planes_extra_planes_and_empty_calls_do_not_advance_unprocessed_state() {
     let frequencies = [250.0, 2_500.0];
-    let mut actual = crossover(&frequencies, 48_000.0);
-    let mut reference = crossover(&frequencies, 48_000.0);
+    let mut actual = Crossover::new(&frequencies, 48_000.0);
+    let mut reference = Crossover::new(&frequencies, 48_000.0);
     let marker = f32::from_bits(0x7fc0_1234);
     let input = [0.25, -0.5, 0.75, -1.0];
     let mut short = vec![
@@ -245,154 +233,4 @@ fn short_planes_extra_planes_and_empty_calls_do_not_advance_unprocessed_state() 
     actual.split(&input, &mut actual_tail);
     reference.split(&input, &mut expected_tail);
     assert_eq!(actual_tail, expected_tail);
-}
-
-#[kithara::test]
-fn strict_design_rejects_invalid_rate_frequency_order_and_nyquist() {
-    let zero = Hertz::from_dt(f32::INFINITY).expect("public Hz constructor can underflow");
-    for rate in [zero, hz(f32::INFINITY)] {
-        for frequencies in [vec![], vec![hz(250.0)]] {
-            assert!(matches!(
-                Crossover::new(&frequencies, rate),
-                Err(FilterError::Parameters)
-            ));
-        }
-    }
-    for frequencies in [
-        vec![zero],
-        vec![hz(f32::INFINITY)],
-        vec![hz(250.0), hz(250.0)],
-        vec![hz(2_500.0), hz(250.0)],
-        vec![hz(24_000.0)],
-        vec![hz(24_001.0)],
-    ] {
-        assert!(matches!(
-            Crossover::new(&frequencies, hz(48_000.0)),
-            Err(FilterError::Parameters)
-        ));
-    }
-    for value in [0.0, -1.0, f32::NEG_INFINITY, f32::NAN] {
-        assert!(Hertz::<f32>::from_hz(value).is_err());
-    }
-    let mut empty = Crossover::new(&[], hz(48_000.0)).expect("empty valid design");
-    let input = [0.25, -0.0, f32::from_bits(1)];
-    let mut bands = [vec![f32::NAN; input.len()]];
-    assert_eq!(empty.split(&input, &mut bands), input.len());
-    assert_eq!(
-        bands[0].iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
-        input.map(f32::to_bits)
-    );
-}
-
-#[kithara::test]
-fn coefficient_factory_errors_and_nonfinite_results_are_not_identity() {
-    assert!(matches!(
-        super::coefficients(Type::LowPass, hz(24_000.0), hz(48_000.0)),
-        Err(FilterError::Parameters)
-    ));
-    assert!(matches!(
-        super::coefficients(Type::PeakingEQ(f32::NAN), hz(250.0), hz(48_000.0)),
-        Err(FilterError::Parameters)
-    ));
-}
-
-#[kithara::test]
-fn rejected_and_prepared_retunes_leave_every_active_state_unchanged() {
-    let frequencies = [250.0, 2_500.0, 12_000.0];
-    let mut actual = crossover(&frequencies, 48_000.0);
-    let mut reference = crossover(&frequencies, 48_000.0);
-    let source = input();
-    let mut outputs = [vec![vec![0.0; 7]; 4], vec![vec![0.0; 7]; 4]];
-    for (filter, output) in [&mut actual, &mut reference].into_iter().zip(&mut outputs) {
-        filter.split(&source[..7], output);
-    }
-    actual
-        .prepare_sample_rate(hz(44_100.0))
-        .expect("valid preparation");
-    for rate in [
-        Hertz::from_dt(f32::INFINITY).expect("zero Hz"),
-        hz(f32::INFINITY),
-        hz(20_000.0),
-        hz(24_000.0),
-    ] {
-        assert_eq!(
-            actual.update_sample_rate(rate),
-            Err(FilterError::Parameters)
-        );
-        assert_eq!(actual.apply_prepared_sample_rate(), None);
-        for (filter, output) in [&mut actual, &mut reference].into_iter().zip(&mut outputs) {
-            filter.split(&source[..7], output);
-        }
-        assert_eq!(
-            outputs[0]
-                .iter()
-                .flatten()
-                .map(|x| x.to_bits())
-                .collect::<Vec<_>>(),
-            outputs[1]
-                .iter()
-                .flatten()
-                .map(|x| x.to_bits())
-                .collect::<Vec<_>>()
-        );
-    }
-    actual
-        .prepare_sample_rate(hz(44_100.0))
-        .expect("valid preparation");
-    for (filter, output) in [&mut actual, &mut reference].into_iter().zip(&mut outputs) {
-        filter.split(&source[..7], output);
-    }
-    assert_eq!(
-        outputs[0], outputs[1],
-        "preparation must not change sounding state"
-    );
-    actual
-        .update_sample_rate(hz(44_100.0))
-        .expect("commit prepared design");
-    let mut fresh = crossover(&frequencies, 44_100.0);
-    for (filter, output) in [&mut actual, &mut fresh].into_iter().zip(&mut outputs) {
-        filter.split(&source[..7], output);
-    }
-    assert_eq!(
-        outputs[0]
-            .iter()
-            .flatten()
-            .map(|x| x.to_bits())
-            .collect::<Vec<_>>(),
-        outputs[1]
-            .iter()
-            .flatten()
-            .map(|x| x.to_bits())
-            .collect::<Vec<_>>()
-    );
-}
-
-#[kithara::test]
-fn a_prepared_design_is_consumed_once_without_resetting_later_history() {
-    let mut actual = crossover(&[250.0, 2_500.0], 48_000.0);
-    let mut reference = crossover(&[250.0, 2_500.0], 44_100.0);
-    assert_eq!(actual.apply_prepared_sample_rate(), None);
-    actual
-        .prepare_sample_rate(hz(44_100.0))
-        .expect("valid preparation");
-    assert_eq!(actual.apply_prepared_sample_rate(), Some(hz(44_100.0)));
-    let mut outputs = [vec![vec![0.0; 7]; 3], vec![vec![0.0; 7]; 3]];
-    for _ in 0..4 {
-        assert_eq!(actual.apply_prepared_sample_rate(), None);
-        for (filter, output) in [&mut actual, &mut reference].into_iter().zip(&mut outputs) {
-            filter.split(&[0.25; 7], output);
-        }
-        assert_eq!(
-            outputs[0]
-                .iter()
-                .flatten()
-                .map(|x| x.to_bits())
-                .collect::<Vec<_>>(),
-            outputs[1]
-                .iter()
-                .flatten()
-                .map(|x| x.to_bits())
-                .collect::<Vec<_>>()
-        );
-    }
 }

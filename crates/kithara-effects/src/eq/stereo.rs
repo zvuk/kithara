@@ -1,21 +1,19 @@
 use core::{fmt, num::NonZeroU32};
 
-use kithara_bufpool::HasPool;
+use kithara_bufpool::{HasPool, PoolError};
 use kithara_dsp::{
     fade::FadeCurve,
-    filter::FilterError,
     param::{Mix, MixDSP},
 };
 
 use super::{EqBandConfig, EqConfig, IsolatorEq};
-use crate::{EffectPrepareError, GainDb, consts::EQ_BLOCK_FRAMES};
+use crate::{GainDb, consts::EQ_BLOCK_FRAMES};
 
 /// One band layout built for both channels of a stereo signal. It is built off the audio
 /// thread, so taking it in allocates nothing there.
 pub struct EqLayout {
     pub(super) left: IsolatorEq,
     right: IsolatorEq,
-    prepared_rate: Option<NonZeroU32>,
 }
 
 impl EqLayout {
@@ -23,19 +21,19 @@ impl EqLayout {
     ///
     /// # Errors
     ///
-    /// Returns [`EffectPrepareError`] for an invalid crossover design or exhausted pool.
+    /// Returns [`PoolError`] when the region cannot hand out the crossover filter states and
+    /// the gain banks the two isolators run on.
     pub fn new<S>(
         config: &EqConfig<S>,
         bands: &[EqBandConfig],
         sample_rate: NonZeroU32,
-    ) -> Result<Self, EffectPrepareError>
+    ) -> Result<Self, PoolError>
     where
         S: HasPool<f32>,
     {
         Ok(Self {
             left: IsolatorEq::new(config, bands, sample_rate.get())?,
             right: IsolatorEq::new(config, bands, sample_rate.get())?,
-            prepared_rate: None,
         })
     }
 
@@ -51,30 +49,9 @@ impl EqLayout {
         }
     }
 
-    /// Stages both channels without changing filter history or gain targets.
-    ///
-    /// # Errors
-    /// Refuses an unsupported design and invalidates previous preparation.
-    pub fn prepare_sample_rate(&mut self, sample_rate: NonZeroU32) -> Result<(), FilterError> {
-        self.prepared_rate = None;
-        self.left.prepare_sample_rate(sample_rate.get())?;
-        self.right.prepare_sample_rate(sample_rate.get())?;
-        self.prepared_rate = Some(sample_rate);
-        Ok(())
-    }
-
-    fn update_sample_rate(&mut self, sample_rate: NonZeroU32) -> Result<(), FilterError> {
-        if self.prepared_rate != Some(sample_rate) {
-            self.prepare_sample_rate(sample_rate)?;
-        }
-        self.apply_sample_rate(sample_rate);
-        Ok(())
-    }
-
-    fn apply_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        self.prepared_rate = None;
-        self.left.apply_sample_rate(sample_rate);
-        self.right.apply_sample_rate(sample_rate);
+    fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        self.left.update_sample_rate(sample_rate.get());
+        self.right.update_sample_rate(sample_rate.get());
     }
 }
 
@@ -109,7 +86,6 @@ pub struct StereoEq {
     update: Option<LayoutUpdate>,
     pub(super) crossover: MixDSP,
     sample_rate: NonZeroU32,
-    prepared_rate: Option<NonZeroU32>,
 }
 
 impl StereoEq {
@@ -127,46 +103,31 @@ impl StereoEq {
                 sample_rate,
             ),
             sample_rate,
-            prepared_rate: None,
         }
     }
 
     /// A stereo EQ sounding `layout` immediately, without an initial crossover.
-    ///
-    /// # Errors
-    /// Returns the design error and unchanged owning layout if its retune is refused.
+    #[must_use]
     pub fn with_layout<S>(
         config: &EqConfig<S>,
         sample_rate: NonZeroU32,
         mut layout: Box<EqLayout>,
-    ) -> Result<Self, (FilterError, Box<EqLayout>)> {
-        if let Err(error) = layout.update_sample_rate(sample_rate) {
-            return Err((error, layout));
-        }
-        Ok(Self {
+    ) -> Self {
+        layout.update_sample_rate(sample_rate);
+        Self {
             active: Some(layout),
             ..Self::new(config, sample_rate)
-        })
+        }
     }
 
     /// Takes `layout`, retuned to this EQ's rate, to cross over to once the crossover in
     /// progress settles, and hands back the layout it displaces: one still waiting, or the one
     /// the last crossover retired. Nothing it held is freed here.
-    ///
-    /// # Errors
-    /// Returns the design error and owning incoming layout without replacing live state.
-    pub fn take_layout(
-        &mut self,
-        mut layout: Box<EqLayout>,
-    ) -> Result<Option<Box<EqLayout>>, (FilterError, Box<EqLayout>)> {
-        if let Err(error) = layout.update_sample_rate(self.sample_rate) {
-            return Err((error, layout));
-        }
-        self.prepared_rate = None;
-        Ok(self
-            .update
+    pub fn take_layout(&mut self, mut layout: Box<EqLayout>) -> Option<Box<EqLayout>> {
+        layout.update_sample_rate(self.sample_rate);
+        self.update
             .replace(LayoutUpdate::Pending(layout))
-            .map(LayoutUpdate::into_inner))
+            .map(LayoutUpdate::into_inner)
     }
 
     /// Ramps `band` to `gain_db` on the layout a gain speaks of: the one waiting to be crossed
@@ -199,57 +160,19 @@ impl StereoEq {
     }
 
     /// Retunes every layout this EQ holds, and its crossover, to `sample_rate`.
-    ///
-    /// # Errors
-    /// Returns [`FilterError::Parameters`] before changing any active channel or mix state
-    /// if any retained layout cannot represent the rate.
-    pub fn update_sample_rate(&mut self, sample_rate: NonZeroU32) -> Result<(), FilterError> {
-        self.prepare_sample_rate(sample_rate)?;
-        let _ = self.apply_prepared_sample_rate();
-        Ok(())
-    }
-
-    /// Stages both channels of every retained layout without changing sounding state.
-    ///
-    /// # Errors
-    /// Refuses an unsupported design and invalidates any earlier preparation.
-    pub fn prepare_sample_rate(&mut self, sample_rate: NonZeroU32) -> Result<(), FilterError> {
-        self.prepared_rate = None;
-        for layout in self.retained_layouts() {
-            layout.prepare_sample_rate(sample_rate)?;
-        }
-        self.prepared_rate = Some(sample_rate);
-        Ok(())
-    }
-
-    /// Discards pending coefficients without changing sounding state or layout ownership.
-    pub fn discard_prepared_sample_rate(&mut self) {
-        self.prepared_rate = None;
-    }
-
-    /// Consumes the prepared rate once, with no factory calls or allocation.
-    /// Returns `None` without mutation after refusal or when no preparation remains.
-    pub fn apply_prepared_sample_rate(&mut self) -> Option<NonZeroU32> {
-        let sample_rate = self.prepared_rate.take()?;
-        for layout in self.retained_layouts() {
-            layout.apply_sample_rate(sample_rate);
-        }
+    pub fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.sample_rate = sample_rate;
         self.crossover.update_sample_rate(sample_rate);
-        Some(sample_rate)
-    }
-
-    fn retained_layouts(&mut self) -> impl Iterator<Item = &mut EqLayout> {
-        let update = self.update.as_mut().map(|update| match update {
-            LayoutUpdate::Pending(layout) | LayoutUpdate::Retired(layout) => layout.as_mut(),
-        });
-        [
-            self.active.as_deref_mut(),
-            self.retiring.as_deref_mut(),
-            update,
-        ]
-        .into_iter()
-        .flatten()
+        let pending = match &mut self.update {
+            Some(LayoutUpdate::Pending(layout)) => Some(layout),
+            _ => None,
+        };
+        for layout in [self.active.as_mut(), self.retiring.as_mut(), pending]
+            .into_iter()
+            .flatten()
+        {
+            layout.update_sample_rate(sample_rate);
+        }
     }
 
     /// Runs both channels through the sounding layout in place, crossing over from the layout

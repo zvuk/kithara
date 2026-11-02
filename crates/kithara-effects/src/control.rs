@@ -14,7 +14,7 @@ pub enum EffectConfig {
 }
 
 /// Construction failure before an effect enters audio production.
-#[derive(Clone, Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum EffectPrepareError {
     #[error("the prepared effect does not admit this PCM format or frame geometry")]

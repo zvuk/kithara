@@ -146,7 +146,8 @@ mod tests {
 
     use super::*;
 
-    /// The gain smoother reaches its target even at an unusable design rate.
+    /// `IsolatorEq::new` takes a plain `u32`, so a caller can hand the bank a
+    /// rate no filter can be built from. The band still has to arrive.
     #[kithara::test]
     fn a_bank_built_at_an_unusable_sample_rate_still_reaches_its_target() {
         let smoothing = SmootherConfig {
