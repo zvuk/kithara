@@ -1,11 +1,14 @@
 use std::num::NonZeroUsize;
 
+use async_trait::async_trait;
+use bytes::Bytes;
+use http::{Request, Response};
 use kithara_assets::{AcquisitionResult, AssetResource, AssetStore, StorageBackend, WriteSide};
 use kithara_audio::AudioObserverSlot;
 use kithara_command::{ScopedReceipt, Seq};
 use kithara_download::{Downloader, DownloaderConfig};
 use kithara_events::TrackId;
-use kithara_net::{HttpClient, NetOptions};
+use kithara_net::{HttpBody, HttpClient, HttpTransport, NetError, NetOptions};
 use kithara_platform::{
     CancelToken,
     time::{Duration, timeout},
@@ -21,10 +24,24 @@ use kithara_test_utils::{TestTempDir, kithara};
 
 use crate::{Queue, QueueCommand, QueueConfig, TrackSource};
 
+/// Fixtures are seeded into the store under `.invalid` hosts, so no request
+/// has a server to reach and none needs a real HTTP stack.
+struct NoNetwork;
+
+#[async_trait]
+impl HttpTransport for NoNetwork {
+    async fn open(&self, request: Request<Bytes>) -> Result<Response<HttpBody>, NetError> {
+        Err(NetError::Refused(format!(
+            "queue fixtures have no network: {}",
+            request.uri()
+        )))
+    }
+}
+
 pub(crate) fn downloader() -> Downloader {
-    let config = DownloaderConfig::for_client(HttpClient::new(
+    let config = DownloaderConfig::for_client(HttpClient::new_with_transport(
         NetOptions::default(),
-        pools(),
+        NoNetwork,
         CancelToken::never(),
     ));
     #[cfg(not(target_arch = "wasm32"))]
