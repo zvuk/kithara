@@ -46,7 +46,7 @@ impl PlayerTrack {
         if self.state != SlotState::Playing {
             return false;
         }
-        let Some(outcome) = self.resource.poll_end(budget) else {
+        let Some(outcome) = self.resource.poll_end(budget, !self.gate.is_shut()) else {
             return false;
         };
         let event = match outcome {

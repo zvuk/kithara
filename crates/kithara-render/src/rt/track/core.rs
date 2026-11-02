@@ -104,12 +104,8 @@ impl PlayerTrack {
             .unwrap_or(0.0)
     }
 
-    pub(crate) fn frames_until_boundary(
-        &self,
-        at: SessionFrame,
-        context_valid: bool,
-    ) -> Option<usize> {
-        let packet = (self.state == SlotState::Playing && context_valid && !self.gate.is_shut())
+    pub(crate) fn frames_until_boundary(&self, at: SessionFrame) -> Option<usize> {
+        let packet = (self.state == SlotState::Playing)
             .then(|| self.resource.frames_until_boundary())
             .flatten();
         let fade = self

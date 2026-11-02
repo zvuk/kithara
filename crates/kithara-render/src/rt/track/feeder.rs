@@ -195,7 +195,11 @@ impl PlayerResource {
         }
     }
 
-    pub(super) fn poll_end(&mut self, budget: &mut usize) -> Option<ReadOutcome> {
+    pub(super) fn poll_end(
+        &mut self,
+        budget: &mut usize,
+        wait_for_pcm: bool,
+    ) -> Option<ReadOutcome> {
         self.recycle_obsolete(budget);
         if self.eof {
             return Some(ReadOutcome::Eof);
@@ -207,6 +211,9 @@ impl PlayerResource {
             return None;
         }
         let receiver = &mut self.consumer.get_mut().receiver;
+        if wait_for_pcm {
+            receiver.wait_for_packet();
+        }
         let Some(next) = receiver.peek() else {
             if receiver.is_closed() {
                 self.failed = Some(FailureSource::ChannelClosed);
@@ -300,10 +307,7 @@ impl PlayerResource {
         while written < requested {
             hang_tick!();
             self.recycle_obsolete(budget);
-            if self.packet.is_none() && !self.eof && self.failed.is_none() {
-                self.consumer.get().receiver.wait_for_packet();
-            }
-            if let Some(end) = self.poll_end(budget) {
+            if let Some(end) = self.poll_end(budget, true) {
                 return if written == 0 {
                     end
                 } else {

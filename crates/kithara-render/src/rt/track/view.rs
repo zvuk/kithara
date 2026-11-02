@@ -48,12 +48,9 @@ impl PlayerResource {
     }
 
     pub(super) fn frames_until_boundary(&self) -> Option<usize> {
-        let (packet, offset) = if let Some(packet) = self.packet.as_ref() {
-            (packet, self.offset)
-        } else {
-            let receiver = &self.consumer.get().receiver;
-            receiver.wait_for_packet();
-            (receiver.peek()?, 0)
+        let (packet, offset) = match self.packet.as_ref() {
+            Some(packet) => (packet, self.offset),
+            None => (self.consumer.get().receiver.peek()?, 0),
         };
         match packet {
             PcmPacket::Chunk(chunk) if chunk.meta.segment == self.lane.segment => {

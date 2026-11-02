@@ -349,7 +349,11 @@ async fn render_audio_handover_fills_tail_from_next_playing_track(constant_half:
 }
 
 #[kithara::test(native, tokio)]
-async fn a_delayed_final_packet_stitches_its_successor_inside_the_same_block() {
+#[case::empty(0)]
+#[case::short(614)]
+async fn a_delayed_final_packet_stitches_its_successor_inside_the_same_block(
+    #[case] final_frames: usize,
+) {
     use kithara_test_utils::wait_until;
 
     use crate::worker::{
@@ -398,10 +402,13 @@ async fn a_delayed_final_packet_stitches_its_successor_inside_the_same_block() {
     )
     .await
     .expect("offline renderer requests the producer before it can proceed");
-    let mut final_packet = chunk(spec, SegmentId::FIRST, 0, 0, &[0.5; 614 * 2]);
-    final_packet.meta.end_of_track = true;
-    leading_packets.push(PcmPacket::Chunk(Box::new(final_packet)));
-    let mut terminal = chunk(spec, SegmentId::FIRST, 614, 614, &[]);
+    if final_frames > 0 {
+        let mut final_packet = chunk(spec, SegmentId::FIRST, 0, 0, &vec![0.5; final_frames * 2]);
+        final_packet.meta.end_of_track = true;
+        leading_packets.push(PcmPacket::Chunk(Box::new(final_packet)));
+    }
+    let end = u64::try_from(final_frames).expect("final packet frame count");
+    let mut terminal = chunk(spec, SegmentId::FIRST, end, end, &[]);
     terminal.meta.end_of_track = true;
     leading_packets.push(PcmPacket::Chunk(Box::new(terminal)));
     let (sounded, left, right) = rendered.await.expect("renderer completes");
