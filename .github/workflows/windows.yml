@@ -5,10 +5,23 @@ name: Windows
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      fixture-refresh:
+        description: >-
+          Comma-separated fixture names, or producing-function names, to
+          produce again instead of reading from the store. Leave unset on
+          ordinary runs and dispatch once with it set when a format change
+          has to replace what the store already answers for.
+        default: ""
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # What this run produces again rather than reads from the store; empty unless
+  # the run was dispatched to refill it. The guest's store outlives every run,
+  # so an entry it built wrong stays until a run names it here.
+  KITHARA_FIXTURE_REFRESH: ${{ inputs.fixture-refresh }}
   # Where the encoded fixtures are built and reused. It is read when the
   # fixture crate is compiled, not when a test runs, so a lane that leaves it
   # unset fails to build rather than to find a file. The guest keeps it beside
