@@ -980,6 +980,15 @@ mod origin_tests {
         assert_eq!(decoder.timeline_gap_frames(), 62);
         assert_eq!(origin.position(), Duration::from_millis(59));
         assert_eq!(origin.comparison_base(), Duration::from_millis(42));
+        let source = crate::composed::origin_tests::head_gap_fixture(vec![0.25, -0.5], zero_packet);
+        let config = DecoderResamplerConfig::builder()
+            .target_sample_rate(NonZeroU32::new(2_000).expect("target rate"))
+            .backend(RepeatBackend)
+            .build();
+        let mut sought = ResampledDecoder::new(source, config, &pools).expect("resampled decoder");
+        sought.seek(Duration::ZERO).expect("head seek");
+        assert_eq!(first_pcm(&mut sought).meta.frame_offset, 118);
+        assert_eq!(sought.initial_pcm_origin(), Some(origin));
         for (native_rate, output_rate, physical_origin, requested_ns) in [
             (1_000, 2_000, 42, 43_300_000),
             (8_000, 48_000, 338, 42_350_000),
@@ -1442,15 +1451,27 @@ mod origin_tests {
     #[cfg(feature = "resample-rubato")]
     #[kithara::test]
     #[kithara::hang_watchdog]
-    #[case::nearest_native_lands_after_the_frame(24_006)]
-    #[case::nearest_native_lands_before_the_frame(24_068)]
-    fn seek_starts_at_the_requested_output_frame_between_native_samples(#[case] frame: u64) {
+    #[case::nearest_native_lands_after_the_frame(44_100, 44_100, 24_006, 0)]
+    #[case::nearest_native_lands_before_the_frame(44_100, 44_100, 24_068, 0)]
+    #[case::off_grid_below_half_a_frame(44_100, 44_100, 24_006, 45)]
+    #[case::downsampled_head(192_000, 48_000, 0, 0)]
+    #[case::downsampled_interior(192_000, 48_000, 6_000, 0)]
+    #[case::downsampled_off_grid(192_000, 48_000, 6_000, 45)]
+    fn seek_starts_at_the_requested_output_frame_between_native_samples(
+        #[case] native_rate: u32,
+        #[case] length: u64,
+        #[case] frame: u64,
+        #[case] percent_past_frame: u32,
+    ) {
         let pools = pools();
-        let rate = NonZeroU32::new(44_100).expect("native rate");
+        let rate = NonZeroU32::new(native_rate).expect("native rate");
+        let native = AudioSpec::new(1, rate);
         let source = OffsetDecoder {
             rate,
-            length: 44_100,
-            declared: crate::DecoderDuration::RawLength(Duration::from_secs(1)),
+            length,
+            declared: crate::DecoderDuration::RawLength(
+                native.duration_for(length).expect("native length"),
+            ),
             media_origin: None,
             phase: Duration::ZERO,
             origin: 0,
@@ -1466,12 +1487,18 @@ mod origin_tests {
         let mut decoder =
             ResampledDecoder::new(Box::new(source), config, &pools).expect("actual resampler");
         let spec = decoder.spec();
-        let target = spec.duration_for(frame).expect("output frame time");
+        let frame_time = spec.duration_for(frame).expect("output frame time");
+        let output_period = spec.duration_for(1).expect("output period");
+        let target = frame_time + output_period * percent_past_frame / 100;
         decoder.seek(target).expect("resampled seek");
         let first = first_pcm(&mut decoder);
         assert_eq!(first.meta.frame_offset, frame);
-        let half_frame = Duration::from_nanos(1_000_000_000 / 96_000);
-        assert!(first.meta.timestamp.abs_diff(target) <= half_frame);
+        let nearest = output_period.min(native.duration_for(1).expect("native period")) / 2;
+        assert!(first.meta.timestamp.abs_diff(frame_time) <= nearest);
+        assert_eq!(
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
+            Some(Duration::ZERO)
+        );
         let mut end = first.meta.frame_range().end;
         loop {
             hang_tick!();
@@ -1485,7 +1512,11 @@ mod origin_tests {
                 DecoderChunkOutcome::Eof => break,
             }
         }
-        assert_eq!(end, 48_000);
+        assert_eq!(
+            end,
+            spec.frame_at(native.duration_for(length).expect("native length"))
+                .expect("output length")
+        );
     }
 }
 
