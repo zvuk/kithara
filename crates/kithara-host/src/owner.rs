@@ -12,6 +12,8 @@ use kithara_render::{DispatcherProtocol, PlayWorker, bridge::DeckPart};
 use kithara_signal::{FrameCount, SessionFrame};
 use kithara_worker::TaskHandle;
 
+#[cfg(feature = "offline")]
+use crate::session::state::SessionStream;
 use crate::{
     HostSettingsChange, HostSettingsExec,
     session::{
@@ -19,7 +21,7 @@ use crate::{
         decks::{Deck, DeckInbox, DeckMsg, DeckWake, Decks},
         dispatch::tick_session,
         graph,
-        state::{DeviceBackend, SessionState, SessionStream},
+        state::{DeviceBackend, SessionState},
         transport::TransportState,
     },
 };
