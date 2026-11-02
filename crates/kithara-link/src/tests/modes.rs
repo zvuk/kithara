@@ -73,7 +73,7 @@ fn a_late_audible_alignment_replans_from_the_batch_receipt() {
 #[kithara::test]
 fn a_seek_completes_the_host_speed_of_a_grid_waiting_sync() {
     let (mut deck, control, mut rig, _) = loaded(grid(24_000, 24_000, None, 480_000));
-    rig.run(|out| deck.retime(&trajectory(180.0, 4), SessionFrame::new(0), out));
+    rig.run(|out| deck.retime(&trajectory(180.0, 4), &[SessionFrame::new(0)], out));
     control.edit(|script| {
         script.snapshot.status = TrackStatus::Playing {
             since: SessionFrame::new(0),
@@ -437,7 +437,7 @@ fn sync_off_keeps_inherited_speed_and_stops_following_host_retimes() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(126.0, 4),
-            SessionFrame::new(48_000),
+            &[SessionFrame::new(48_000)],
             out,
         );
     });
@@ -509,7 +509,7 @@ fn a_synced_deck_reports_the_speed_of_the_current_host_observation() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(180.0, 4),
-            SessionFrame::new(48_000),
+            &[SessionFrame::new(48_000)],
             out,
         );
     });
@@ -554,7 +554,7 @@ fn sync_off_holds_instantaneous_speed_not_a_pending_target() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(180.0, 4),
-            SessionFrame::new(96_000),
+            &[SessionFrame::new(96_000)],
             out,
         );
     });
@@ -566,7 +566,12 @@ fn sync_off_holds_instantaneous_speed_not_a_pending_target() {
         .expect("off mid-change");
     for at in [48_000, 96_000, 480_000] {
         rig.run(|out| {
-            LinkedPlayer::retime(&mut deck, &trajectory(180.0, 4), SessionFrame::new(at), out);
+            LinkedPlayer::retime(
+                &mut deck,
+                &trajectory(180.0, 4),
+                &[SessionFrame::new(at)],
+                out,
+            );
         });
         assert_eq!(deck.snapshot().as_ref().speed, 1.25);
     }
@@ -797,7 +802,7 @@ fn disable_mid_ramp_latches_the_tempo_actually_playing() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(180.0, 4),
-            SessionFrame::new(96_000),
+            &[SessionFrame::new(96_000)],
             out,
         );
     });
@@ -817,7 +822,7 @@ fn disable_mid_ramp_latches_the_tempo_actually_playing() {
             LinkedPlayer::retime(
                 &mut deck,
                 &trajectory(180.0, 4),
-                SessionFrame::new(frame),
+                &[SessionFrame::new(frame)],
                 out,
             );
         });

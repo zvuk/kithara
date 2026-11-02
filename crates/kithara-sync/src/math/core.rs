@@ -20,6 +20,15 @@ impl PhaseError {
         let phase = self.beats.rem_euclid(1.0);
         if phase > 0.5 { phase - 1.0 } else { phase }
     }
+
+    fn nearest(self) -> f64 {
+        let phase = self.beats.rem_euclid(self.period);
+        if phase > self.period / 2.0 {
+            phase - self.period
+        } else {
+            phase
+        }
+    }
 }
 
 /// Whether a position lies inside the grid's inclusive observed beat span.
@@ -96,6 +105,35 @@ pub fn corrected_speed_curve(
         epsilon,
     };
     source::curve(host, grid, position, at, None, &offsets, Some(&correction))
+}
+
+/// Source beats ahead of the Host a slew would have to close: the standing
+/// error, to the nearest bar when both sides count the same bar, plus what the
+/// speed ramp from `from` accrues before the closing starts.
+#[must_use]
+pub fn slew_phase(
+    host: &TempoTrajectory,
+    grid: &SourceGrid,
+    position: Duration,
+    at: SessionFrame,
+    from: f64,
+    epsilon: f32,
+) -> Option<f64> {
+    let local = grid.slope_at(position.as_secs_f64())?;
+    let reference = host.anchor_at(at).tempo_at(at) * local;
+    let plan = checked_correction(from, reference, epsilon)?;
+    let ramp: f64 = plan
+        .steps
+        .iter()
+        .map(|step| (step.speed - reference) * step.seconds)
+        .sum();
+    let error = phase_error(host, grid, position, at)?;
+    let standing = if grid.phase_axes(position.as_secs_f64())?.1 == error.period {
+        error.nearest()
+    } else {
+        error.shortest()
+    };
+    Some(standing + ramp / local)
 }
 
 /// The nearest in-phase entry on the requested side of a frame.

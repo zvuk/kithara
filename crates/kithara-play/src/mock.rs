@@ -694,6 +694,7 @@ impl<S> DeckRig<S> {
             suspended: false,
             now: self.now,
             delivery: FrameCount::new(0),
+            deck_delivery: FrameCount::new(0),
             output: &output,
             deck: &self.observation,
         };

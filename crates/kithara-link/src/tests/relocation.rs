@@ -1,11 +1,66 @@
-use kithara_command::{Rejection, When};
-use kithara_play::{HostedDeck, PlayError, Player, Settled, TrackCommand, TrackStatus};
+use kithara_beat::{BeatGridModel, BeatGridState};
+use kithara_command::{Rejection, Seq, When};
+use kithara_play::{
+    CrossfadeSettings, FadeDir, HostedDeck, PlayError, Player, Settled, Track, TrackCommand,
+    TrackStatus,
+};
 use kithara_signal::{ExponentialApproach, FrameCount, SessionFrame};
 use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 
-use super::fixtures::{Command, answer, grid, load, loaded, position, sounding, trajectory};
-use crate::{LinkedPlayer, SyncStatus};
+use super::fixtures::{
+    Command, Control, Deck, Rig, answer, deck, grid, load, loaded, position, sounding, trajectory,
+};
+use crate::{GridAnswer, GridRefusal, LinkedPlayer, SyncStatus};
+
+/// `model` as an answer a later revision can still extend.
+fn provisional(model: &BeatGridModel) -> BeatGridModel {
+    let mut raw = model.as_raw().clone();
+    raw.state = BeatGridState::Provisional;
+    BeatGridModel::try_from(raw).expect("consistent grid")
+}
+
+/// A final grid of a track with no beats, as a silent recording gets.
+fn final_grid_without_beats() -> BeatGridModel {
+    let mut raw = grid(24_000, 0, None, 24_000).as_raw().clone();
+    raw.beats.clear();
+    raw.downbeats.clear();
+    BeatGridModel::try_from(raw).expect("consistent grid")
+}
+
+/// A grid whose meter places no bar line on its two beats, the last at 24 000.
+fn final_grid_without_a_bar_line() -> BeatGridModel {
+    grid(24_000, 0, Some((4, 2)), 24_000)
+}
+
+/// A playing synchronized deck on `model`.
+fn playing(model: BeatGridModel) -> (Deck, Control, Rig) {
+    let (mut deck, control, mut rig, _) = loaded(model);
+    let sync = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync")
+        .expect("cue");
+    rig.apply(&mut deck, sync, 0);
+    control.edit(|script| {
+        script.snapshot.status = TrackStatus::Playing {
+            since: SessionFrame::new(0),
+        }
+    });
+    control.clear();
+    (deck, control, rig)
+}
+
+/// A deck with SYNC on that loaded a track at 300 000 and holds its cue for a grid.
+fn cued_past_the_grid() -> (Deck, Control, Rig) {
+    let (mut deck, control) = deck(trajectory(120.0, 4));
+    let mut rig = Rig::new(0);
+    rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync waits");
+    let loading = load(&mut deck, &mut rig, 300_000);
+    rig.apply(&mut deck, loading, 0);
+    control.clear();
+    (deck, control, rig)
+}
 
 #[kithara::test]
 fn aligned_seek_uses_the_committed_host_tempo_at_its_landing() {
@@ -16,7 +71,7 @@ fn aligned_seek_uses_the_committed_host_tempo_at_its_landing() {
         kithara_host::api::Tempo::new(130.0).expect("tempo"),
     )
     .expect("step");
-    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, SessionFrame::new(96_000), out));
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[SessionFrame::new(96_000)], out));
     control.clear();
     rig.now = SessionFrame::new(48_000);
     rig.delivery = FrameCount::new(352_000);
@@ -58,6 +113,69 @@ fn aligned_seek_uses_the_committed_host_tempo_at_its_landing() {
             )
         ]
     );
+}
+
+/// A playing deck whose host tempo makes a seek send an alignment, late.
+fn late_aligned_seek() -> (Deck, Control, Rig, Seq) {
+    let (mut deck, control, mut rig, _) = sounding();
+    let mut host = trajectory(120.0, 4);
+    host.push(
+        SessionFrame::new(96_000),
+        kithara_host::api::Tempo::new(130.0).expect("tempo"),
+    )
+    .expect("step");
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[SessionFrame::new(96_000)], out));
+    control.clear();
+    rig.now = SessionFrame::new(48_000);
+    rig.delivery = FrameCount::new(352_000);
+    control.edit(|script| {
+        script.snapshot.position = position(48_000);
+        script.snapshot.status = TrackStatus::Playing { since: rig.now };
+    });
+    let seq = rig
+        .run(|out| {
+            deck.apply(
+                TrackCommand::Seek {
+                    to: position(240_000),
+                },
+                out,
+            )
+        })
+        .expect("seek")
+        .expect("alignment");
+    assert_eq!(deck.seek_applied(seq), None);
+    rig.settle(
+        &mut deck,
+        seq,
+        &kithara_command::Outcome::Rejected(Rejection::Late),
+    );
+    (deck, control, rig, seq)
+}
+
+#[kithara::test]
+fn a_late_aligned_seek_settles_on_its_reissue() {
+    let (mut deck, control, mut rig, caller) = late_aligned_seek();
+    assert_eq!(deck.seek_applied(caller), None);
+    control.clear();
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    let reissued = control
+        .commands()
+        .first()
+        .expect("the seek goes out again")
+        .0;
+    assert_ne!(reissued, caller);
+    assert_eq!(deck.seek_applied(caller), None);
+    rig.apply(&mut deck, reissued, 400_000);
+    assert_eq!(deck.seek_applied(caller), Some(true));
+}
+
+#[kithara::test]
+fn a_late_aligned_seek_settles_when_its_reissue_is_dropped() {
+    let (mut deck, _, mut rig, caller) = late_aligned_seek();
+    assert_eq!(deck.seek_applied(caller), None);
+    rig.run(|out| deck.apply(TrackCommand::Pause { at: When::Next }, out))
+        .expect("pause");
+    assert_eq!(deck.seek_applied(caller), Some(false));
 }
 
 #[kithara::test]
@@ -157,18 +275,7 @@ fn a_new_load_owns_position_and_obsolete_jump_receipts_change_nothing() {
 
 #[kithara::test]
 fn aligned_seek_waits_for_a_grid_covering_its_cue() {
-    let (mut deck, control, mut rig, _) = loaded(grid(24_000, 0, None, 192_000));
-    let sync = rig
-        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
-        .expect("sync")
-        .expect("cue");
-    rig.apply(&mut deck, sync, 0);
-    control.edit(|script| {
-        script.snapshot.status = TrackStatus::Playing {
-            since: SessionFrame::new(0),
-        }
-    });
-    control.clear();
+    let (mut deck, control, mut rig) = playing(provisional(&grid(24_000, 0, None, 192_000)));
     assert_eq!(
         rig.run(|out| deck.apply(
             TrackCommand::Seek {
@@ -195,6 +302,247 @@ fn aligned_seek_waits_for_a_grid_covering_its_cue() {
     );
     assert_eq!(deck.snapshot().sync, SyncStatus::On);
     assert_eq!(deck.snapshot().as_ref().position, position(0));
+}
+
+#[kithara::test]
+fn a_seek_past_the_last_beat_of_a_final_grid_lands_on_that_beat() {
+    let (mut deck, control, mut rig) = playing(grid(24_000, 0, None, 192_000));
+    let seq = rig
+        .run(|out| {
+            deck.apply(
+                TrackCommand::Seek {
+                    to: position(300_000),
+                },
+                out,
+            )
+        })
+        .expect("seek")
+        .expect("jump");
+    assert_eq!(
+        control.commands(),
+        [(
+            seq,
+            Command::Jump(position(192_128), SessionFrame::new(128))
+        )]
+    );
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
+}
+
+#[kithara::test]
+fn a_seek_on_a_final_grid_without_beats_refuses_once_and_still_moves() {
+    let (mut deck, control, mut rig) = playing(provisional(&grid(24_000, 0, None, 192_000)));
+    answer(&mut deck, &mut rig, final_grid_without_beats());
+    control.clear();
+    let seq = rig
+        .run(|out| {
+            deck.apply(
+                TrackCommand::Seek {
+                    to: position(300_000),
+                },
+                out,
+            )
+        })
+        .expect("seek")
+        .expect("the ordinary seek");
+    assert_eq!(
+        control.commands(),
+        [(seq, Command::Seek(position(300_000)))]
+    );
+    assert_eq!(deck.snapshot().sync, SyncStatus::Unsyncable);
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(control.commands().len(), 1);
+}
+
+#[kithara::test]
+#[case::on_its_last_beat(grid(24_000, 0, Some((4, 0)), 192_000), SyncStatus::On)]
+#[case::refused(final_grid_without_beats(), SyncStatus::Unsyncable)]
+fn a_reissued_seek_past_a_final_grid_answers_its_caller(
+    #[case] model: BeatGridModel,
+    #[case] sync: SyncStatus,
+) {
+    let (mut deck, control, mut rig, caller) = late_aligned_seek();
+    assert_eq!(deck.seek_applied(caller), None);
+    control.clear();
+    answer(&mut deck, &mut rig, model);
+    let reissued = control
+        .commands()
+        .first()
+        .expect("the seek goes out again")
+        .0;
+    assert_ne!(reissued, caller);
+    assert_eq!(deck.snapshot().sync, sync);
+    rig.apply(&mut deck, reissued, 400_000);
+    assert_eq!(deck.seek_applied(caller), Some(true));
+}
+
+#[kithara::test]
+#[case::without_a_meter(grid(24_000, 0, None, 192_000), 192_000)]
+#[case::without_a_bar_line(final_grid_without_a_bar_line(), 24_000)]
+fn a_load_cue_past_a_final_grid_lands_on_its_last_beat(
+    #[case] model: BeatGridModel,
+    #[case] last: u32,
+) {
+    let (mut deck, control, mut rig) = cued_past_the_grid();
+    answer(&mut deck, &mut rig, model);
+    let commands = control.commands();
+    assert_eq!(commands.len(), 2);
+    assert_eq!(commands[1].1, Command::Seek(position(last)));
+    rig.apply(&mut deck, commands[1].0, 0);
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
+}
+
+#[kithara::test]
+fn a_load_cue_on_a_final_grid_without_beats_refuses_once() {
+    let (mut deck, control, mut rig) = cued_past_the_grid();
+    answer(&mut deck, &mut rig, final_grid_without_beats());
+    assert_eq!(deck.snapshot().sync, SyncStatus::Unsyncable);
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(deck.snapshot().sync, SyncStatus::Unsyncable);
+    assert!(control.commands().is_empty());
+}
+
+#[kithara::test]
+#[case::the_host_can_follow(grid(24_000, 0, Some((4, 0)), 960_000), SyncStatus::On, true)]
+#[case::no_speed_law(grid(144_000, 0, None, 480_000), SyncStatus::Unsyncable, false)]
+fn a_ready_grid_after_a_grid_refusal_retries_sync_once(
+    #[case] model: BeatGridModel,
+    #[case] sync: SyncStatus,
+    #[case] jumps: bool,
+) {
+    let (mut deck, control, mut rig) = playing(grid(24_000, 0, Some((4, 0)), 960_000));
+    let item = deck.snapshot().as_ref().item;
+    rig.run(|out| {
+        LinkedPlayer::grid(
+            &mut deck,
+            GridAnswer {
+                item,
+                model: Err(GridRefusal {
+                    reason: "the analysis pass failed".into(),
+                }),
+            },
+            out,
+        );
+    });
+    assert_eq!(deck.snapshot().sync, SyncStatus::Unsyncable);
+    control.clear();
+    answer(&mut deck, &mut rig, model);
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(deck.snapshot().sync, sync);
+    let jumped = control
+        .commands()
+        .iter()
+        .any(|(_, command)| matches!(command, Command::Jump(..)));
+    assert_eq!(jumped, jumps);
+}
+
+#[kithara::test]
+fn aligned_seek_before_the_first_beat_jumps_to_that_beat() {
+    let (mut deck, control, mut rig, _) = loaded(grid(24_000, 24_000, None, 480_000));
+    let sync = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync")
+        .expect("cue");
+    rig.apply(&mut deck, sync, 0);
+    control.edit(|script| {
+        script.snapshot.status = TrackStatus::Playing {
+            since: SessionFrame::new(0),
+        }
+    });
+    control.clear();
+    let seq = rig
+        .run(|out| {
+            deck.apply(
+                TrackCommand::Seek {
+                    to: position(6_000),
+                },
+                out,
+            )
+        })
+        .expect("seek")
+        .expect("jump");
+    assert_eq!(
+        control.commands(),
+        [(seq, Command::Jump(position(24_128), SessionFrame::new(128)))]
+    );
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
+}
+
+#[kithara::test]
+#[case::final_grid(BeatGridState::Final, SyncStatus::Unsyncable, true)]
+#[case::provisional_grid(
+    BeatGridState::Provisional,
+    SyncStatus::WaitingForGrid { required: position(300_000) },
+    false
+)]
+fn play_past_the_last_beat_waits_only_while_a_later_grid_could_cover_it(
+    #[case] state: BeatGridState,
+    #[case] sync: SyncStatus,
+    #[case] sends: bool,
+) {
+    let mut raw = grid(24_000, 0, None, 192_000).as_raw().clone();
+    raw.state = state;
+    let (mut deck, control, mut rig, _) =
+        loaded(BeatGridModel::try_from(raw).expect("consistent grid"));
+    let cue = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync")
+        .expect("cue");
+    rig.apply(&mut deck, cue, 0);
+    control.edit(|script| {
+        script.snapshot.position = position(300_000);
+        script.snapshot.status = TrackStatus::Paused {
+            at: position(300_000),
+        };
+    });
+    control.clear();
+    rig.run(|out| deck.apply(TrackCommand::Play { at: When::Next }, out))
+        .expect("Play");
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(deck.snapshot().sync, sync);
+    let plays = control
+        .commands()
+        .iter()
+        .filter(|(_, command)| matches!(command, Command::Play(_)))
+        .count();
+    assert_eq!(plays, usize::from(sends));
+}
+
+#[kithara::test]
+fn a_refused_fade_out_keeps_a_parked_play() {
+    let mut raw = grid(24_000, 0, None, 192_000).as_raw().clone();
+    raw.state = BeatGridState::Provisional;
+    let (mut deck, control, mut rig, _) =
+        loaded(BeatGridModel::try_from(raw).expect("consistent grid"));
+    let cue = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync")
+        .expect("cue");
+    rig.apply(&mut deck, cue, 0);
+    control.edit(|script| {
+        script.snapshot.position = position(300_000);
+        script.snapshot.status = TrackStatus::Paused {
+            at: position(300_000),
+        };
+    });
+    rig.run(|out| deck.apply(TrackCommand::Play { at: When::Next }, out))
+        .expect("Play");
+    let parked = deck.snapshot().sync;
+    assert!(matches!(parked, SyncStatus::WaitingForGrid { .. }));
+    control.edit(|script| script.reject = Some(PlayError::Late));
+    let refused = rig.run(|out| {
+        deck.apply(
+            TrackCommand::Fade {
+                at: When::At(SessionFrame::new(128)),
+                settings: CrossfadeSettings::default(),
+                dir: FadeDir::Out,
+            },
+            out,
+        )
+    });
+    assert!(matches!(refused, Err(PlayError::Late)));
+    assert_eq!(deck.snapshot().sync, parked);
 }
 
 #[kithara::test]
@@ -229,6 +577,80 @@ fn synchronized_transport_intercepts_seek_and_resume_but_admits_pause() {
         control.commands(),
         [(start, Command::Play(When::At(SessionFrame::new(96_000))))]
     );
+}
+
+#[kithara::test]
+fn a_start_without_a_lane_pays_only_the_deck_delivery() {
+    let (mut deck, control, mut rig, _) = sounding();
+    rig.delivery = FrameCount::new(48_000);
+    rig.deck_delivery = Some(FrameCount::new(128));
+    let pause = rig
+        .run(|out| deck.apply(TrackCommand::Pause { at: When::Next }, out))
+        .expect("pause")
+        .expect("pause sequence");
+    rig.apply(&mut deck, pause, 0);
+    let seek = rig
+        .run(|out| deck.apply(TrackCommand::Seek { to: position(960) }, out))
+        .expect("paused seek")
+        .expect("seek sequence");
+    rig.apply(&mut deck, seek, 0);
+    control.clear();
+    let start = rig
+        .run(|out| deck.apply(TrackCommand::Play { at: When::Next }, out))
+        .expect("resume")
+        .expect("start sequence");
+    assert_eq!(
+        control.commands(),
+        [(start, Command::Play(When::At(SessionFrame::new(960))))]
+    );
+}
+
+#[kithara::test]
+#[case::sounded(true)]
+#[case::held_before_sounding(false)]
+fn only_a_sounded_track_resumes_at_host_phase(#[case] sounded: bool) {
+    let (mut deck, control, mut rig, _) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
+    let sync = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync")
+        .expect("cue");
+    rig.apply(&mut deck, sync, 0);
+    if sounded {
+        control.edit(|script| {
+            script.snapshot.status = TrackStatus::Playing {
+                since: SessionFrame::new(0),
+            }
+        });
+    }
+    let pause = rig
+        .run(|out| deck.apply(TrackCommand::Pause { at: When::Next }, out))
+        .expect("pause")
+        .expect("pause sequence");
+    rig.apply(&mut deck, pause, 0);
+    control.clear();
+    let start = rig
+        .run(|out| deck.apply(TrackCommand::Play { at: When::Next }, out))
+        .expect("play");
+    let commands: Vec<_> = control
+        .commands()
+        .into_iter()
+        .map(|(_, command)| command)
+        .collect();
+    if sounded {
+        assert_eq!(start, None);
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, Command::Seek(to) if *to != position(0))),
+            "{commands:?}"
+        );
+    } else {
+        assert_eq!(
+            commands,
+            [Command::Play(When::At(SessionFrame::new(96_000)))]
+        );
+        assert!(start.is_some());
+    }
 }
 
 #[kithara::test]
@@ -341,7 +763,7 @@ fn retime_owns_the_replacement_start_and_ignores_the_withdrawn_receipt() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(90.0, 4),
-            SessionFrame::new(48_000),
+            &[SessionFrame::new(48_000)],
             out,
         );
     });
@@ -452,7 +874,8 @@ fn a_relocation_starts_no_earlier_than_the_frame_after_its_frontier() {
 
 #[kithara::test]
 fn an_uncovered_cue_refuses_the_relocation_without_waiting() {
-    let (mut deck, control, mut rig, _) = loaded(grid(24_000, 0, Some((4, 0)), 192_000));
+    let (mut deck, control, mut rig, _) =
+        loaded(provisional(&grid(24_000, 0, Some((4, 0)), 192_000)));
     let sync = rig
         .run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("sync")
@@ -565,7 +988,7 @@ fn a_tempo_commit_withdraws_the_relocation_and_retargets_under_a_new_operation()
         kithara_host::api::Tempo::new(130.0).expect("tempo"),
     )
     .expect("step");
-    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, SessionFrame::new(96_000), out));
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[SessionFrame::new(96_000)], out));
     let commands = control.commands();
     assert_eq!(commands.len(), 2);
     assert_ne!(commands[1].0, relocation);
@@ -609,7 +1032,7 @@ fn an_armed_preparation_refuses_a_relocation() {
         kithara_host::api::Tempo::new(130.0).expect("tempo"),
     )
     .expect("step");
-    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, SessionFrame::new(96_000), out));
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[SessionFrame::new(96_000)], out));
     let relocation = rig
         .run(|out| deck.apply(TrackCommand::Seek { to: position(0) }, out))
         .expect("relocation after retime")

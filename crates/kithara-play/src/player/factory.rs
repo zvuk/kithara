@@ -6,7 +6,7 @@ use kithara_signal::SessionFrame;
 use kithara_sync::SpeedCurve;
 
 use super::{
-    Player, PlayerConfig, PlayerImpl, Position, Settled, TrackCommand, TrackSettings,
+    Player, PlayerConfig, PlayerImpl, Position, SeekBatch, Settled, TrackCommand, TrackSettings,
     TrackSettingsChange, TrackSnapshot,
 };
 use crate::PlayError;
@@ -26,6 +26,11 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
         at: When<SessionFrame>,
         out: &super::Outbox<'_, S>,
     ) -> Result<Option<usize>, PlayError>;
+
+    /// Whether the host's tempo, rather than this track's settings, drives its speed.
+    fn follows_host(&self) -> bool {
+        false
+    }
 
     /// The settings a track built after this one starts with: the applied ones and the changes still in flight.
     fn projected(&self) -> TrackSettings;
@@ -65,6 +70,19 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
 
     /// Whether the lane accepted a particular speed batch, once it answered.
     fn speed_applied(&mut self, seq: Seq) -> Option<bool>;
+
+    /// Seeks and names the batch whose answer settles the seek.
+    ///
+    /// # Errors
+    /// Returns what applying `TrackCommand::Seek` returns.
+    fn seek(
+        &mut self,
+        to: Position,
+        out: &mut super::Outbox<'_, S>,
+    ) -> Result<Option<SeekBatch>, PlayError>;
+
+    /// Whether the seek sent as lane batch `seq` took effect, once that is final.
+    fn seek_applied(&mut self, seq: Seq) -> Option<bool>;
 
     /// Binds a staged attachment to its shared batch or restores returned parts.
     fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);

@@ -5,7 +5,7 @@ use kithara_events::{EventReceiver, EventSet, TrackId};
 use kithara_platform::sync::Arc;
 use kithara_play::{
     DeckMixSettings, DeckMixerConfig, DeckSnapshot, EngineLoadSnapshot, Player, PlayerStatus,
-    Position, SlotSnapshot, TrackFactory, TrackSettings, TrackSnapshot,
+    Position, SlotSnapshot, Track, TrackFactory, TrackSettings, TrackSnapshot,
     TrackStatus as PlayingStatus,
 };
 
@@ -40,7 +40,10 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     pub current: Option<TrackId>,
+    pub(super) target: Option<TrackId>,
+    pub(super) upcoming: Option<TrackId>,
     pub track: Option<TrackSnapshot>,
+    follows_host: Option<bool>,
     pub settings: QueueSettings,
     rows: Arc<[TrackRow<S>]>,
     revision: u64,
@@ -90,7 +93,10 @@ where
     ) -> Self {
         Self(Arc::new(ArcSwap::from_pointee(QueueSnapshot {
             current: None,
+            target: None,
+            upcoming: None,
             track: None,
+            follows_host: None,
             settings,
             rows: tracks.rows(),
             revision: tracks.revision(),
@@ -126,8 +132,29 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
+    /// The transition target or the track navigation advances to, chosen again
+    /// only when something that decides it moved since the last publication.
+    pub(super) fn upcoming(&mut self) -> Option<TrackId> {
+        let target = self.target.map(|target| target.to);
+        let repeat = self.navigation.repeat_mode();
+        let published = self.view.read();
+        if published.revision == self.tracks.revision()
+            && published.current == self.current
+            && published.target == target
+            && published.order == self.navigation.playback_order()
+            && published.repeat == repeat
+        {
+            return published.upcoming;
+        }
+        target.or_else(|| {
+            let ids = self.selectable_ids();
+            self.navigation
+                .next(&ids, self.current, true, repeat == RepeatMode::All)
+        })
+    }
+
     pub(super) fn queue_snapshot(&self) -> QueueSnapshot<S> {
-        let mut track = self
+        let shown = self
             .active_current_index()
             .or_else(|| {
                 self.target.and_then(|target| {
@@ -138,8 +165,9 @@ where
                 })
             })
             .and_then(|index| self.active.get(index))
-            .map(|active| &active.track)
-            .map(|track| track.snapshot().as_ref().clone());
+            .map(|active| &active.track);
+        let follows_host = shown.map(Track::follows_host);
+        let mut track = shown.map(|track| track.snapshot().as_ref().clone());
         if let Some(track) = &mut track {
             match self.held_position {
                 Some(SeekPosition::Held(to)) => track.position = to,
@@ -161,7 +189,10 @@ where
         };
         QueueSnapshot {
             current: self.current,
+            target: self.target.map(|target| target.to),
+            upcoming: published.upcoming,
             track,
+            follows_host,
             settings: self.config.settings,
             rows,
             revision: self.tracks.revision(),
@@ -241,6 +272,13 @@ where
         let snapshot = self.view.read();
         let id = snapshot.current?;
         snapshot.rows.iter().position(|row| row.entry.id == id)
+    }
+
+    /// The track the queue enters next, unless that is `held`: its transition
+    /// target, or the one navigation advances to.
+    #[must_use]
+    pub fn upcoming(&self, held: Option<TrackId>) -> Option<TrackId> {
+        self.view.read().upcoming.filter(|&id| Some(id) != held)
     }
 
     #[must_use]
@@ -363,6 +401,12 @@ where
                 .track
                 .as_ref()
                 .is_some_and(|track| matches!(track.status, PlayingStatus::Playing { .. }))
+    }
+
+    /// Whether the host's tempo drives the current track; `None` with no track.
+    #[must_use]
+    pub fn follows_host(&self) -> Option<bool> {
+        self.view.read().follows_host
     }
 
     #[must_use]

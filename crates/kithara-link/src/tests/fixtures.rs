@@ -15,8 +15,9 @@ use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_play::{
     Bound, DeckMixSettings, DeckPass, HostedDeck, Outbox, OutputSnapshot, PlayError, PlayWorker,
-    Player, Position, ResourceConfig, ResourceLoad, ResourceSrc, Settled, Track, TrackCommand,
-    TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot, TrackStatus, mock::DeckRig,
+    Player, Position, ResourceConfig, ResourceLoad, ResourceSrc, SeekBatch, Settled, Track,
+    TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot, TrackStatus,
+    mock::DeckRig,
 };
 use kithara_render::{
     bridge::{DeckPart, DeckProtocol, DeckSnapshot, Slot, SlotMark},
@@ -115,6 +116,7 @@ pub(super) enum Command {
     Load(Position),
     Play(When<SessionFrame>),
     Pause(When<SessionFrame>),
+    Fade(When<SessionFrame>),
     Seek(Position),
     Jump(Position, SessionFrame),
     Speed(SpeedCurve, When<SessionFrame>),
@@ -248,6 +250,7 @@ impl Player<TestPools> for ScriptedTrack {
             TrackCommand::Load { position, .. } => Command::Load(position),
             TrackCommand::Play { at } => Command::Play(at),
             TrackCommand::Pause { at } => Command::Pause(at),
+            TrackCommand::Fade { at, .. } => Command::Fade(at),
             TrackCommand::Seek { to } => Command::Seek(to),
             TrackCommand::Jump { to, at } => Command::Jump(to, at),
             TrackCommand::SetSpeed { speed, at } => Command::Speed(speed, at),
@@ -261,7 +264,6 @@ impl Player<TestPools> for ScriptedTrack {
             TrackCommand::Release => Command::Release,
             TrackCommand::Supersede
             | TrackCommand::ConfigureEffect { .. }
-            | TrackCommand::Fade { .. }
             | TrackCommand::PlayAfter { .. }
             | TrackCommand::Seat { .. } => {
                 panic!("unexpected command in synchronization fixture")
@@ -348,7 +350,7 @@ impl Player<TestPools> for ScriptedTrack {
                             }
                             Command::ConfigureSpeed(value, _) => script.snapshot.speed = value,
                             Command::Release => script.snapshot.status = TrackStatus::Released,
-                            Command::Rate(_) => {}
+                            Command::Rate(_) | Command::Fade(_) => {}
                         }
                     }
                     script.snapshot.pending_lane = false;
@@ -473,6 +475,21 @@ impl Track<TestPools> for ScriptedTrack {
                 .map(|(_, applied)| *applied)
         })
     }
+    fn seek(
+        &mut self,
+        to: Position,
+        out: &mut Outbox<'_, TestPools>,
+    ) -> Result<Option<SeekBatch>, PlayError> {
+        let sent = self.apply(TrackCommand::Seek { to }, out)?;
+        Ok(sent.map(if self.snapshot().attached {
+            SeekBatch::Deck
+        } else {
+            SeekBatch::Lane
+        }))
+    }
+    fn seek_applied(&mut self, seq: Seq) -> Option<bool> {
+        self.speed_applied(seq)
+    }
     fn finish_group(&mut self, _result: Result<Seq, &mut Vec<DeckPart>>) {}
 
     fn cue(
@@ -535,6 +552,7 @@ pub(super) struct Rig {
     pub queues: DeckRig<TestPools>,
     pub now: SessionFrame,
     pub delivery: FrameCount,
+    pub deck_delivery: Option<FrameCount>,
     output: OutputSnapshot,
     observation: DeckSnapshot,
 }
@@ -545,6 +563,7 @@ impl Rig {
             queues: DeckRig::new(DeckMixerConfig::default()).expect("deck scope"),
             now: SessionFrame::new(now),
             delivery: FrameCount::new(128),
+            deck_delivery: None,
             output: kithara_play::mock::output(None).get(),
             observation: DeckSnapshot::default(),
         }
@@ -568,6 +587,7 @@ impl Rig {
             suspended: false,
             now: self.now,
             delivery: self.delivery,
+            deck_delivery: self.deck_delivery.unwrap_or(self.delivery),
             output: &self.output,
             deck: &self.observation,
         };

@@ -597,7 +597,7 @@ fn a_route_boundary_drops_the_free_handoff_planned_on_the_previous_axis() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(150.0, 4),
-            SessionFrame::new(96_000),
+            &[SessionFrame::new(96_000)],
             out,
         );
     });

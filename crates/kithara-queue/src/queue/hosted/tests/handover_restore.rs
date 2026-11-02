@@ -30,6 +30,7 @@ impl HandoverRig {
             suspended: false,
             now,
             delivery: FrameCount::new(128),
+            deck_delivery: FrameCount::new(128),
             output: &output,
             deck: &deck,
         };

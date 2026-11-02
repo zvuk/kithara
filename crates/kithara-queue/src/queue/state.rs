@@ -4,7 +4,8 @@ use kithara_command::mailbox;
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::{CancelScope, CancelToken, tokio::runtime::Handle as RuntimeHandle};
 use kithara_play::{
-    PlayError, Player, PlayerEvent, PlayerFactory, TrackFactory, TrackStatus as PlayingStatus,
+    PlayError, Player, PlayerEvent, PlayerFactory, SeekBatch, Track, TrackFactory,
+    TrackStatus as PlayingStatus,
 };
 use kithara_signal::{FrameCount, SessionFrame};
 
@@ -195,39 +196,48 @@ where
 
     /// Publishes before announcing, so an event's reader sees its state.
     pub(super) fn publish(&mut self) {
-        if let Some(SeekPosition::Pending { item, segment, .. }) = self.held_position {
-            let active = self
-                .active_current_index()
-                .or_else(|| {
-                    self.target.and_then(|target| {
-                        self.active.position(|active| {
-                            active.item == target.to && matches!(active.role, Role::Incoming)
-                        })
+        if let Some(SeekPosition::Pending {
+            item,
+            sent,
+            segment,
+            ..
+        }) = self.held_position
+        {
+            let index = self.active_current_index().or_else(|| {
+                self.target.and_then(|target| {
+                    self.active.position(|active| {
+                        active.item == target.to && matches!(active.role, Role::Incoming)
                     })
                 })
-                .and_then(|index| self.active.get(index));
-            if active.is_none_or(|active| active.item != item)
-                || active.is_some_and(|active| {
-                    segment.is_some_and(|segment| {
-                        active
-                            .track
-                            .snapshot()
-                            .as_ref()
-                            .mark
-                            .is_some_and(|mark| mark.lane.segment == segment)
-                    })
-                })
-            {
+            });
+            let active = index.and_then(|index| self.active.get_mut(index));
+            if active.is_none_or(|active| {
+                active.item != item
+                    || match sent {
+                        SeekBatch::Lane(seq) => active.track.seek_applied(seq).is_some(),
+                        SeekBatch::Deck(_) => segment.is_some_and(|segment| {
+                            active
+                                .track
+                                .snapshot()
+                                .as_ref()
+                                .mark
+                                .is_some_and(|mark| mark.lane.segment == segment)
+                        }),
+                    }
+            }) {
                 self.held_position = None;
             }
         }
         self.events.extend(self.tracks.drain_events());
-        let snapshot = self.queue_snapshot();
+        let upcoming = self.upcoming();
+        let mut snapshot = self.queue_snapshot();
+        snapshot.upcoming = upcoming;
         let previous = self.view.read();
         let rate = snapshot.applied_rate();
         let rate_changed = previous.applied_rate() != rate;
         let previous_mix = previous.deck.mix;
         let mix = snapshot.deck.mix;
+        let target_changed = previous.target != snapshot.target;
         self.view.publish(snapshot);
         if rate_changed {
             self.bus.publish(PlayerEvent::RateChanged { rate });
@@ -247,6 +257,9 @@ where
                     .publish(PlayerEvent::CurrentItemChanged { item: *id });
             }
             self.bus.publish(event);
+        }
+        if target_changed {
+            self.bus.publish(QueueEvent::TransitionTargetChanged);
         }
     }
 
@@ -367,6 +380,7 @@ pub(crate) mod tests {
             suspended: false,
             now: SessionFrame::new(0),
             delivery: FrameCount::new(128),
+            deck_delivery: FrameCount::new(128),
             output: &output,
             deck: &deck,
         };
@@ -640,6 +654,59 @@ pub(crate) mod tests {
         assert_eq!(
             queue.control().crossfade_settings().duration,
             crossfade.duration
+        );
+    }
+
+    #[kithara::test]
+    fn at_a_shuffle_cycle_end_the_upcoming_track_is_the_one_next_chooses() {
+        let (mut queue, mut rig) = make_queue();
+        let control = queue.control();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::SetPlaybackOrder(PlaybackOrder::Shuffle),
+        )
+        .expect("shuffle");
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::SetRepeat(RepeatMode::All),
+        )
+        .expect("repeat");
+        for name in ["a", "b", "c"] {
+            queue.insert_entry(
+                TrackId::allocate(),
+                format!("https://example.com/{name}.mp3").as_str().into(),
+                Position::ZERO,
+                Placement::Append,
+            );
+        }
+        let ids = queue.track_ids();
+        for &id in &ids {
+            queue
+                .navigation
+                .commit(queue.current, id, crate::AdvanceReason::UserSelect, &ids);
+            queue.current = Some(id);
+        }
+
+        queue.publish();
+        assert_eq!(queue.selectable_ids(), ids, "every track can be entered");
+        let upcoming = control.upcoming(queue.current);
+        assert_eq!(
+            upcoming,
+            queue.navigation.next(&ids, queue.current, true, true),
+            "the deck is told the track the queue then enters"
+        );
+        assert!(upcoming.is_some(), "a repeating cycle goes on");
+        queue.publish();
+        assert_eq!(
+            control.upcoming(queue.current),
+            upcoming,
+            "the cycle is drawn once, however often it is read"
+        );
+        assert_eq!(
+            queue.navigation.next(&ids, queue.current, true, true),
+            upcoming
         );
     }
 

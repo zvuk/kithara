@@ -168,14 +168,20 @@ impl DeckRecord {
     }
 
     pub(crate) fn snapshot(&self) -> DeckSnapshot {
+        let synced = self.queue().follows_host().unwrap_or(self.synced);
         self.controller.read(|state| {
+            let refused = self.synced && !synced;
             DeckSnapshot::new(
                 self.id(),
                 self.letter,
                 self.strip,
                 self.eq_bands.clone(),
-                self.tempo,
-                self.synced,
+                if refused {
+                    TempoPercent::at_speed(state.speed)
+                } else {
+                    self.tempo
+                },
+                synced,
                 state,
             )
         })

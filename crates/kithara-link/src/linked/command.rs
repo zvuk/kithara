@@ -1,13 +1,16 @@
+use std::mem;
+
 use kithara_command::{Seq, When};
 use kithara_play::{
-    Bound, FadeDir, Outbox, PlayError, Position, Track, TrackCommand, TrackSettingsChange,
-    TrackStatus,
+    Bound, FadeDir, Outbox, PlayError, Position, SeekBatch, Track, TrackCommand,
+    TrackSettingsChange, TrackStatus,
 };
 use kithara_signal::SessionFrame;
+use tracing::warn;
 
 use super::{
     Linked, LinkedPlayer, SyncMode, Waiting,
-    geometry::cue_position,
+    geometry::{cue_position, is_final, last_beat, placement},
     state::{Cue, SpeedOperation},
 };
 use crate::{covers, entry, jump_target};
@@ -42,7 +45,7 @@ impl<P> Linked<P> {
             && let TrackCommand::Play {
                 at: When::At(frame),
             } = command
-            && *frame < self.earliest(out)?
+            && *frame < self.earliest_start(out)?
         {
             return Err(PlayError::Late);
         }
@@ -65,6 +68,8 @@ impl<P> Linked<P> {
         self.correction = None;
         self.alignment = None;
         self.speeds.clear();
+        self.relocation = None;
+        self.paused_in_place = false;
         self.start = None;
         self.start_caller = None;
         self.withdrawn.clear();
@@ -80,7 +85,7 @@ impl<P> Linked<P> {
         &mut self,
         to: Position,
         out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError>
+    ) -> Result<Option<SeekBatch>, PlayError>
     where
         P: Track<S>,
     {
@@ -95,7 +100,7 @@ impl<P> Linked<P> {
             return Ok(None);
         }
         if !matches!(status, TrackStatus::Playing { .. }) {
-            let sent = self.inner.apply(TrackCommand::Seek { to }, out)?;
+            let sent = self.inner.seek(to, out)?;
             if let Some(start) = self.start {
                 self.start_caller.get_or_insert(start);
             }
@@ -112,15 +117,21 @@ impl<P> Linked<P> {
         &mut self,
         to: Position,
         out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError>
+    ) -> Result<Option<SeekBatch>, PlayError>
     where
         P: Track<S>,
     {
-        let Some(grid) = self
-            .grid
-            .as_ref()
-            .filter(|grid| covers(grid.geometry(), to))
-        else {
+        let Some(grid) = self.grid.as_ref() else {
+            self.waiting = Some(Waiting::Seek { required: to });
+            return Ok(None);
+        };
+        let Some(to) = placement(grid, to).or_else(|| last_beat(grid)) else {
+            if is_final(grid) {
+                warn!(?to, "the final grid holds no beat for this seek");
+                self.waiting = None;
+                self.refuse_sync(out);
+                return self.inner.seek(to, out);
+            }
             self.waiting = Some(Waiting::Seek { required: to });
             return Ok(None);
         };
@@ -145,7 +156,7 @@ impl<P> Linked<P> {
             self.speeds.push((seq, SpeedOperation::Relocation { to }));
         }
         self.waiting = None;
-        Ok(sent)
+        Ok(sent.map(SeekBatch::Lane))
     }
 
     pub(super) fn check_synced_fade<S>(
@@ -182,6 +193,34 @@ impl<P> Linked<P> {
         Ok(())
     }
 
+    /// A Play the grid does not cover waits, and a stopped track moves to the
+    /// grid's boundary or refuses SYNC when a final grid holds none.
+    fn park_play<S>(&mut self, required: Position, at: When<SessionFrame>, out: &mut Outbox<'_, S>)
+    where
+        P: Track<S>,
+    {
+        self.waiting = Some(Waiting::Play { required, at });
+        let snapshot = self.inner.snapshot();
+        let track = snapshot.as_ref();
+        if matches!(track.status, TrackStatus::Playing { .. }) || track.pending_lane {
+            return;
+        }
+        let Some(grid) = self.grid.as_ref() else {
+            return;
+        };
+        match placement(grid, required) {
+            Some(_) if self.cue.is_none() => {
+                self.cue = Some(Cue::Beat(required));
+                self.prepare_cue(out);
+            }
+            None if is_final(grid) => {
+                warn!(?required, "the final grid holds no beat for this Play");
+                self.refuse_sync(out);
+            }
+            Some(_) | None => {}
+        }
+    }
+
     pub(super) fn play_synced<S>(
         &mut self,
         at: When<SessionFrame>,
@@ -197,7 +236,7 @@ impl<P> Linked<P> {
             .as_ref()
             .filter(|grid| covers(grid.geometry(), required))
         else {
-            self.waiting = Some(Waiting::Play { required, at });
+            self.park_play(required, at, out);
             return Ok(None);
         };
         if matches!(
@@ -208,7 +247,7 @@ impl<P> Linked<P> {
             self.waiting = Some(Waiting::Play { required, at });
             return Ok(None);
         }
-        let earliest = self.earliest(out)?;
+        let earliest = self.earliest_start(out)?;
         let bound = match at {
             When::Next => earliest,
             When::At(frame) if frame < earliest => return Err(PlayError::Late),
@@ -220,6 +259,21 @@ impl<P> Linked<P> {
             }
         };
         let source = self.source(grid)?;
+        if matches!(
+            track.as_ref().status,
+            TrackStatus::Paused { .. } | TrackStatus::Faded { .. }
+        ) && mem::take(&mut self.paused_in_place)
+            && let Some(target) = jump_target(&self.host, &source, required, self.prepared(bound)?)
+                .filter(|target| covers(grid.geometry(), *target))
+        {
+            self.cue = Some(Cue::Covered(target));
+            self.waiting = Some(Waiting::Play {
+                required: target,
+                at,
+            });
+            self.prepare_cue(out);
+            return Ok(None);
+        }
         let frame = entry(&self.host, &source, required, Bound::AtOrAfter(bound))
             .ok_or(PlayError::NotReady)?;
         if !self.prepare_entry(frame, out)? {
@@ -234,6 +288,7 @@ impl<P> Linked<P> {
         )?;
         self.waiting = None;
         self.start = sent;
+        self.entry_planned::<S>();
         Ok(sent)
     }
 }

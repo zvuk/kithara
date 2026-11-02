@@ -1,13 +1,16 @@
 use kithara_command::{Batch, Outcome, Rejection, Seq, When};
 use kithara_host::{DeckId, HostCommand, HostOwner, HostSettingsChange, HostSettled, api::Tempo};
 use kithara_play::{HostedDeck, PlayError, SessionError, TrackCommand, TrackReceipt};
-use kithara_render::bridge::{DeckProtocol, Slot};
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_render::bridge::{DeckProtocol, Slot, SlotMark};
+use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 
 use super::{
-    fixtures::{Command, deck as new_deck, grid, loaded, ordinary, position, sounding, trajectory},
+    fixtures::{
+        Command, Control, answer, deck as new_deck, grid, loaded, ordinary, position, sounding,
+        trajectory,
+    },
     host_fixture::{Host, Probe, finish, host, next_tempo, register, register_ordinary, tempo},
 };
 use crate::{GridAnswer, LinkedHostCommand, LinkedPlayer, SyncStatus};
@@ -337,6 +340,79 @@ fn an_observation_cannot_replace_geometry_without_a_new_route_axis() {
     let (_, observed) = register(&mut host, observer, &observer_control);
     assert_eq!(observed.trajectory().sample_rate().get(), 48_000);
     assert_eq!(beats(&observed, 48_000), 2.0);
+}
+
+/// A registered deck sounding a third of a beat behind the host, near the end
+/// of the frames its grid covers.
+fn off_the_beat_near_the_covered_end(host: &mut Host) -> (DeckId, Control) {
+    let (mut deck, control, mut rig, _) = sounding();
+    answer(&mut deck, &mut rig, grid(24_000, 0, Some((4, 0)), 480_000));
+    control.edit(|script| {
+        script.snapshot.status = kithara_play::TrackStatus::Playing {
+            since: SessionFrame::new(475_200),
+        };
+        script.snapshot.position = position(467_200);
+        script.snapshot.mark = Some(SlotMark {
+            session: SessionFrame::new(475_200),
+            lane: kithara_render::LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: 467_200,
+            },
+            position: position(467_200),
+        });
+    });
+    let (id, _) = register(host, deck, &control);
+    (id, control)
+}
+
+fn jumps(control: &Control) -> usize {
+    control
+        .commands()
+        .iter()
+        .filter(|(_, command)| matches!(command, Command::Jump(..)))
+        .count()
+}
+
+#[kithara::test]
+fn one_tempo_action_moves_a_deck_a_slew_cannot_close_once() {
+    let (mut host, clock) = host();
+    clock.at(475_200);
+    let (_, control) = off_the_beat_near_the_covered_end(&mut host);
+    let later = tempo(&mut host, 120.5, 477_000)
+        .expect("later tempo")
+        .expect("later sequence");
+    clock.answer(later, 120.5, Ok(SessionFrame::new(477_000)));
+    finish(&mut host);
+    control.clear();
+    tempo(&mut host, 121.0, 476_000)
+        .expect("tempo")
+        .expect("sequence");
+    assert_eq!(jumps(&control), 1, "{:?}", control.commands());
+}
+
+#[kithara::test]
+fn an_in_phase_tempo_step_keeps_a_slew_for_every_frame() {
+    let (mut host, clock) = host();
+    let (deck, control, _, _) = sounding();
+    let _ = register(&mut host, deck, &control);
+    let later = tempo(&mut host, 120.5, 96_000)
+        .expect("later tempo")
+        .expect("later sequence");
+    clock.answer(later, 120.5, Ok(SessionFrame::new(96_000)));
+    finish(&mut host);
+    control.clear();
+    tempo(&mut host, 121.0, 48_000)
+        .expect("tempo")
+        .expect("sequence");
+    let commands = control.commands();
+    assert_eq!(jumps(&control), 0, "{commands:?}");
+    assert_eq!(commands.len(), 2, "{commands:?}");
+    assert!(
+        commands
+            .iter()
+            .all(|(_, command)| matches!(command, Command::Speed(..))),
+        "{commands:?}"
+    );
 }
 
 #[kithara::test]

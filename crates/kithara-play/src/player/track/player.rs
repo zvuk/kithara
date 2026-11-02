@@ -25,7 +25,10 @@ impl<S> Player<S> for PlayerImpl<S> {
         }
         if matches!(
             self.status,
-            TrackStatus::Loading | TrackStatus::Loaded | TrackStatus::Paused { .. }
+            TrackStatus::Loading
+                | TrackStatus::Loaded
+                | TrackStatus::Paused { .. }
+                | TrackStatus::Faded { .. }
         ) && self.ready != Some(self.segment)
         {
             return None;
@@ -235,7 +238,26 @@ impl<S> PlayerImpl<S> {
                 slot,
                 fade: Fade::Crossfade(settings),
             },
-            (_, FadeDir::Out) => return Ok(None),
+            (_, FadeDir::Out) => {
+                self.play = None;
+                if let Some(attaching) = self.attaching.as_mut() {
+                    attaching.play = None;
+                }
+                let start_outstanding = self
+                    .playback_commands
+                    .iter()
+                    .rev()
+                    .find_map(|operation| operation.action)
+                    == Some(PlaybackAction::Start);
+                if !start_outstanding {
+                    return Ok(None);
+                }
+                DeckPart::Fade {
+                    slot,
+                    settings,
+                    dir,
+                }
+            }
         };
         self.send_playback(at, vec![part], out)
     }

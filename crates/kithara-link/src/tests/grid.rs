@@ -104,7 +104,7 @@ fn a_rate_change_reprojects_the_model_it_already_holds() {
         super::fixtures::rate(96_000),
     );
     control.clear();
-    rig.run(|out| LinkedPlayer::retime(&mut deck, &doubled, SessionFrame::new(0), out));
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &doubled, &[SessionFrame::new(0)], out));
     let replacement = control.commands()[0].0;
     assert_eq!(
         deck.entry(Bound::AtOrAfter(SessionFrame::new(1))),
@@ -286,7 +286,14 @@ fn repeating_the_same_grid_does_not_restart_a_correction() {
     );
     let unchanged = deck.snapshot();
     answer(&mut deck, &mut rig, uncovered);
-    assert!(control.commands().is_empty());
+    assert!(
+        control
+            .commands()
+            .iter()
+            .any(|(_, command)| matches!(command, Command::Jump(..))),
+        "a correction that cannot finish relocates the deck"
+    );
+    control.clear();
     let actual = deck.snapshot();
     assert_eq!(actual.as_ref().item, unchanged.as_ref().item);
     assert_eq!(actual.as_ref().position, unchanged.as_ref().position);

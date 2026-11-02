@@ -5731,6 +5731,7 @@ dependencies = [
  "kithara-decode",
  "kithara-events",
  "kithara-host",
+ "kithara-platform",
  "kithara-play",
  "kithara-queue",
  "kithara-render",

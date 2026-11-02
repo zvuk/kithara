@@ -164,9 +164,7 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> LinkedHost<S, H> {
             if let LinkedHostDeck::Linked(deck) = deck
                 && deck.synced()
             {
-                for &frame in &frames {
-                    deck.retime(trajectory, frame, out);
-                }
+                deck.retime(trajectory, &frames, out);
             }
         });
     }
@@ -369,7 +367,7 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostOwner<S> for Lin
                     sent = match deck {
                         LinkedHostDeck::Linked(deck) => {
                             if on && !deck.synced() {
-                                deck.retime(trajectory, pass.now, out);
+                                deck.retime(trajectory, &[pass.now], out);
                             }
                             deck.sync(on, out)
                         }
@@ -383,9 +381,16 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostOwner<S> for Lin
             }
             LinkedHostCommand::Grid { deck, answer } => {
                 let mut delivered = Ok(None);
+                let trajectory = &self.trajectory;
                 self.inner
-                    .with_deck(deck, &mut |deck, out, _pass| match deck {
-                        LinkedHostDeck::Linked(deck) => deck.grid(answer.clone(), out),
+                    .with_deck(deck, &mut |deck, out, pass| match deck {
+                        LinkedHostDeck::Linked(deck) => {
+                            let unsynced = !deck.synced();
+                            deck.grid(answer.clone(), out);
+                            if unsynced && deck.synced() {
+                                deck.retime(trajectory, &[pass.now], out);
+                            }
+                        }
                         LinkedHostDeck::Ordinary(_) => {
                             delivered = Err(PlayError::InvalidParameter {
                                 name: "grid".into(),
@@ -407,7 +412,7 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostOwner<S> for Lin
         let trajectory = &self.trajectory;
         self.inner.with_deck(id, &mut |deck, out, pass| {
             if let LinkedHostDeck::Linked(deck) = deck {
-                deck.retime(trajectory, pass.now, out);
+                deck.retime(trajectory, &[pass.now], out);
             }
         })
     }

@@ -292,7 +292,7 @@ impl<S> PlayerImpl<S> {
             let origin = self
                 .attach_at
                 .map_or(pass.now, |attach| attach.max(pass.now));
-            if frame < origin + pass.delivery {
+            if frame < origin + pass.deck_delivery {
                 return Err(PlayError::Late);
             }
             if self.attach_at.is_none() {

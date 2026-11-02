@@ -408,6 +408,7 @@ where
     ) {
         let clock = self.clock();
         let (now, delivery) = clock.unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
+        let deck_delivery = self.session.deck_delivery();
         let output = self.session.root_view.output.get();
         let Some(channel) = &mut self.session.channel else {
             return;
@@ -421,6 +422,7 @@ where
                 suspended,
                 now,
                 delivery,
+                deck_delivery,
                 output: &output,
                 deck: record.snapshot.read(),
             };
@@ -450,6 +452,7 @@ where
         let index = self.decks.index(id)?;
         let clock = self.clock();
         let (now, delivery) = clock.unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
+        let deck_delivery = self.session.deck_delivery();
         let output = self.session.root_view.output.get();
         let record = &mut self.decks.0[index].1;
         let suspended = record
@@ -460,6 +463,7 @@ where
             suspended,
             now,
             delivery,
+            deck_delivery,
             output: &output,
             deck: record.snapshot.read(),
         };
@@ -573,6 +577,7 @@ where
         let (now, delivery) = self
             .clock()
             .unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
+        let deck_delivery = self.session.deck_delivery();
         let output = self.session.root_view.output.get();
         loop {
             let receipt = {
@@ -616,6 +621,7 @@ where
                 suspended,
                 now,
                 delivery,
+                deck_delivery,
                 output: &output,
                 deck: record.snapshot.read(),
             };
@@ -720,6 +726,7 @@ where
     }
 
     fn route_receipts(&mut self, now: SessionFrame, delivery: FrameCount) {
+        let deck_delivery = self.session.deck_delivery();
         let output = self.session.root_view.output.get();
         loop {
             let Some(receipt) = self
@@ -779,6 +786,7 @@ where
                             suspended,
                             now,
                             delivery,
+                            deck_delivery,
                             output: &output,
                             deck: record.snapshot.read(),
                         };
@@ -830,6 +838,7 @@ where
     }
 
     fn poll_events(&mut self) {
+        let deck_delivery = self.session.deck_delivery();
         let output = self.session.root_view.output.get();
         if let Some((now, delivery)) = self.session.iteration_clock
             && let Some(channel) = &mut self.session.channel
@@ -843,6 +852,7 @@ where
                     suspended,
                     now,
                     delivery,
+                    deck_delivery,
                     output: &output,
                     deck: record.snapshot.read(),
                 };

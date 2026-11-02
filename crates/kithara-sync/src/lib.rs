@@ -19,7 +19,7 @@ pub use grid::{TrackBeat, TrackGrid, TrackGridError, boundary};
 pub use kithara_signal::Bound;
 pub use math::{
     CorrectionPlan, CorrectionStep, PhaseError, SourceGrid, SourceGridError, checked_correction,
-    corrected_speed_curve, covers, entry, jump_target, phase_error, speed, speed_curve,
+    corrected_speed_curve, covers, entry, jump_target, phase_error, slew_phase, speed, speed_curve,
 };
 pub use meter::Meter;
 pub use tempo::{Tempo, TempoError};

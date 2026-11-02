@@ -104,6 +104,8 @@ pub enum QueueEvent {
         id: TrackId,
         index: usize,
     },
+    /// The queue chose another track to enter, or no longer enters one.
+    TransitionTargetChanged,
     /// A crossfade between tracks just started. Emitted when
     /// [`Queue::select`](https://docs.rs/kithara-queue) triggers the engine
     /// to fade from a currently-playing track to the newly selected one.

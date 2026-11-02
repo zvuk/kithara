@@ -524,6 +524,7 @@ async fn assert_no_barge_in(
         | QueueEvent::ActionAtItemEndChanged { .. }
         | QueueEvent::RepeatModeChanged { .. }
         | QueueEvent::NextTrackReady { .. }
+        | QueueEvent::TransitionTargetChanged
         | QueueEvent::CrossfadeStarted { .. } => false,
     })
     .await;

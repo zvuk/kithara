@@ -119,12 +119,15 @@ impl LinkedDeck<TestPools> for ObservedDeck {
     fn retime(
         &mut self,
         trajectory: &TempoTrajectory,
-        at: SessionFrame,
+        frames: &[SessionFrame],
         out: &mut Outbox<'_, TestPools>,
     ) {
-        self.probe
-            .read(|observation| observation.trajectories.push((at, trajectory.clone())));
-        LinkedPlayer::retime(&mut self.inner, trajectory, at, out);
+        self.probe.read(|observation| {
+            observation
+                .trajectories
+                .extend(frames.iter().map(|at| (*at, trajectory.clone())));
+        });
+        LinkedPlayer::retime(&mut self.inner, trajectory, frames, out);
         self.publish();
     }
     fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, TestPools>) {

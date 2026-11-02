@@ -6,9 +6,9 @@ use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_play::{
-    Bound, DeckEvent, DeckPart, Outbox, PlayError, PlaybackFault, Player, PlayerConfig, Settled,
-    Slot, Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings, TrackSettingsChange,
-    TrackSnapshot, TrackStatus as PlayerTrackStatus,
+    Bound, DeckEvent, DeckPart, Outbox, PlayError, PlaybackFault, Player, PlayerConfig, SeekBatch,
+    Settled, Slot, Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings,
+    TrackSettingsChange, TrackSnapshot, TrackStatus as PlayerTrackStatus,
 };
 use kithara_signal::{AudioSpec, FrameCount, SessionFrame};
 use kithara_test_utils::kithara;
@@ -169,6 +169,23 @@ impl Track<TestPools> for SnapshotTrack {
 
     fn speed_applied(&mut self, _seq: Seq) -> Option<bool> {
         panic!("terminal-event fixture does not send speed commands")
+    }
+
+    fn seek(
+        &mut self,
+        to: Duration,
+        out: &mut Outbox<'_, TestPools>,
+    ) -> Result<Option<SeekBatch>, PlayError> {
+        let sent = self.apply(TrackCommand::Seek { to }, out)?;
+        Ok(sent.map(if self.0.attached {
+            SeekBatch::Deck
+        } else {
+            SeekBatch::Lane
+        }))
+    }
+
+    fn seek_applied(&mut self, _seq: Seq) -> Option<bool> {
+        panic!("terminal-event fixture does not settle a lane seek")
     }
 
     fn finish_group(&mut self, _result: Result<Seq, &mut Vec<DeckPart>>) {

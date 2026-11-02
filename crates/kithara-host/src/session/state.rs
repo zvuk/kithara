@@ -351,7 +351,19 @@ impl<T, S> SessionState<T, S> {
 
     /// The configured owner pump and worker wake allowances, plus one output block.
     pub(crate) fn delivery(&self) -> FrameCount {
-        let duration = self.delivery_delay.unwrap_or_default();
+        self.delivery_within(self.delivery_delay.unwrap_or_default())
+    }
+
+    /// The owner pump allowance plus one output block: deck parts wake no worker.
+    pub(crate) fn deck_delivery(&self) -> FrameCount {
+        self.delivery_within(
+            self.delivery_delay
+                .unwrap_or_default()
+                .min(crate::consts::SESSION_PUMP_INTERVAL),
+        )
+    }
+
+    fn delivery_within(&self, duration: Duration) -> FrameCount {
         let publication_frames = duration
             .as_nanos()
             .saturating_mul(u128::from(sample_rate(self).output()))
@@ -638,6 +650,7 @@ mod tests {
         assert!(state.ctx.is_none());
         state.owner.apply(command).expect("first registration");
         assert_eq!(state.delivery_delay, expected_delay);
+        assert_eq!(threaded_delivery, state.deck_delivery() < state.delivery());
         let ctx = state.ctx.as_ref().expect("actual activated native context");
         assert!(ctx.stream_info().is_some());
         let native = SessionFrame::new(ctx.audio_clock().samples.0);

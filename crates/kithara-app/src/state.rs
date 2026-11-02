@@ -466,7 +466,9 @@ pub(crate) async fn listen(
                     apply_event(&event, &queue, &state);
                     match event {
                         AnalysisEvent::Queue(
-                            QueueEvent::NextTrackReady { .. } | QueueEvent::CurrentTrackChanged { .. },
+                            QueueEvent::NextTrackReady { .. }
+                            | QueueEvent::CurrentTrackChanged { .. }
+                            | QueueEvent::TransitionTargetChanged,
                         )
                         | AnalysisEvent::Engine(EngineEvent::Started)
                         | AnalysisEvent::Session(SessionEvent::RouteChanged { .. }) => {
@@ -491,7 +493,7 @@ pub(crate) async fn listen(
     }
 }
 
-/// The current track's publication channel, and the loaded successor's.
+/// The current track's publication channel, and the loaded upcoming track's.
 struct HeldAnalysis {
     analysis: AnalysisHandle,
     queue: AppQueueControl,
@@ -569,8 +571,9 @@ impl HeldAnalysis {
         }
     }
 
-    /// Holds the current track and the nearest loaded track after it, as the
-    /// queue states them; a successor that became current keeps its channel.
+    /// Holds the current track and the loaded track the queue enters next, as
+    /// the queue states them; an upcoming track that became current keeps its
+    /// channel.
     async fn follow(&mut self, state: &Mutex<UiState>) {
         let st = state.lock();
         let shown = st
@@ -587,10 +590,14 @@ impl HeldAnalysis {
                 None => None,
             };
         }
-        let successor = self.successor(shown);
-        if self.next.as_ref().map(|next| next.track) != successor {
+        let upcoming = self.queue.upcoming(shown).filter(|&id| {
+            self.queue
+                .track(id)
+                .is_some_and(|track| track.status == TrackStatus::Loaded)
+        });
+        if self.next.as_ref().map(|next| next.track) != upcoming {
             self.next = None;
-            self.next = successor.map(Held::new);
+            self.next = upcoming.map(Held::new);
         }
         let axis = self.axis();
         if let Some(held) = self.held.take() {
@@ -600,18 +607,6 @@ impl HeldAnalysis {
             self.next = Some(self.attach(next, axis).await);
         }
         self.mirror(state, Closed::Neither);
-    }
-
-    fn successor(&self, current: Option<TrackId>) -> Option<TrackId> {
-        let tracks = self.queue.tracks();
-        let start = current
-            .and_then(|id| tracks.iter().position(|track| track.id == id))
-            .map_or(0, |index| index + 1);
-        tracks
-            .iter()
-            .skip(start)
-            .find(|track| track.status == TrackStatus::Loaded)
-            .map(|track| track.id)
     }
 
     /// Answers `held` on `axis`, keeping a channel already answered there.
@@ -1054,21 +1049,17 @@ mod tests {
         let (first, first_rx) = ::kithara::platform::tokio::sync::watch::channel(None);
         assert!(reply.send(first_rx).is_ok(), "the deck waits for the reply");
 
-        let (asked, reply) = next_subscribe(&mut requests).await;
-        assert_eq!(
-            asked, second_id,
-            "the deck asks for the successor whose announcement the lag dropped"
-        );
-        let (_second, second_rx) = ::kithara::platform::tokio::sync::watch::channel(None);
-        assert!(
-            reply.send(second_rx).is_ok(),
-            "the deck waits for the reply"
-        );
         time::timeout(Duration::from_secs(2), async {
-            while !matches!(
-                requests.recv().await,
-                Some(Request::Warm { track_ids, .. }) if track_ids.len() == 2
-            ) {}
+            loop {
+                match requests.recv().await {
+                    Some(Request::Warm { track_ids, .. }) if track_ids.len() == 2 => break,
+                    Some(Request::Warm { .. }) => {}
+                    Some(Request::Subscribe { track_id, .. }) => {
+                        panic!("the queue with no current track enters the held one next, not {track_id:?}")
+                    }
+                    None => panic!("the deck stays connected"),
+                }
+            }
         })
         .await
         .expect("the deck warms the library it read back after the lag");
