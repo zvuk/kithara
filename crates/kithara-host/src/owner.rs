@@ -19,7 +19,7 @@ use crate::{
         decks::{Deck, DeckInbox, DeckMsg, DeckWake, Decks},
         dispatch::tick_session,
         graph,
-        state::{SessionState, SessionStream},
+        state::{DeviceBackend, SessionState, SessionStream},
         transport::TransportState,
     },
 };
@@ -163,7 +163,7 @@ pub enum HostSettled {
 
 /// The base owner of a session, its deck records and its single load dispatcher.
 pub struct HostCore<S: 'static, D: ?Sized + HostedDeck<S> = dyn HostedDeck<S>> {
-    pub(crate) session: SessionState<SessionStream, S>,
+    pub(crate) session: SessionState<DeviceBackend, S>,
     decks: Decks<S, D>,
     dispatcher: Sender<DispatcherProtocol<ResourceLoad<S>>>,
     dispatcher_inbox: Option<kithara_command::Inbox<DispatcherProtocol<ResourceLoad<S>>>>,
@@ -178,7 +178,7 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     pub(crate) fn new(
-        session: SessionState<SessionStream, S>,
+        session: SessionState<DeviceBackend, S>,
         inbox: kithara_platform::sync::Arc<dyn DeckInbox>,
     ) -> Self {
         let (dispatcher, dispatcher_inbox) = channel(ChannelConfig::builder().build());
@@ -515,13 +515,27 @@ where
         frames: usize,
         output: &mut [f32],
     ) -> Result<(), PlayError> {
+        let clock = self
+            .session
+            .ctx
+            .as_ref()
+            .ok_or_else(|| PlayError::Internal("offline context is not prepared".to_owned()))?
+            .audio_clock()
+            .samples
+            .0;
         let Some(SessionStream::Offline(stream)) = &mut self.session.stream else {
             return Err(PlayError::Internal(
                 "offline stream is not prepared".to_owned(),
             ));
         };
         let result = stream
-            .render(position, frames, output)
+            .render(
+                position,
+                SessionFrame::new(clock),
+                frames,
+                output,
+                &mut self.session.deck_nodes,
+            )
             .map_err(|error| PlayError::Internal(error.to_string()));
         if let Some((task, _)) = &self.dispatcher_task {
             task.control().wake();

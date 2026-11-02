@@ -15,7 +15,7 @@ use super::super::{
     graph::{drop_idle_context, idle, install_deck, remove_deck},
     protocol::SessionError,
     queue::settle_receipt,
-    state::{HostRoot, RootView, SessionState},
+    state::{HostRoot, RootView, SessionState, SessionStream},
     transport::observe_commits,
 };
 use crate::{HostSettings, HostSettingsChange, HostSettingsExec, rt::SessionOutput};
@@ -145,7 +145,11 @@ impl<T> GraphSession<T> {
     }
 
     pub(crate) fn stream_mut(&mut self) -> Option<&mut T> {
-        self.state.stream.as_mut()
+        match self.state.stream.as_mut()? {
+            SessionStream::Realtime { _backend } => Some(_backend),
+            #[cfg(feature = "offline")]
+            SessionStream::Offline(_) => None,
+        }
     }
 
     pub(crate) fn transport(&mut self) -> Option<SessionTransportSnapshot> {
@@ -165,7 +169,10 @@ where
     GraphSession::new(start)
 }
 
-pub(crate) fn state_for<T, F, S>(sample_rate: NonZeroU32, start_stream_fn: F) -> SessionState<T, S>
+pub(crate) fn state_for<T, F, S>(
+    sample_rate: NonZeroU32,
+    mut start_stream_fn: F,
+) -> SessionState<T, S>
 where
     F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
 {
@@ -181,7 +188,9 @@ where
             .settings(settings)
             .build()
             .channel_config(),
-        start_stream_fn,
+        move |ctx, rate| {
+            start_stream_fn(ctx, rate).map(|backend| SessionStream::Realtime { _backend: backend })
+        },
     )
 }
 

@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use kithara_command::Outcome;
 use kithara_platform::time::Duration;
-use kithara_signal::{AudioSpec, SegmentId};
+use kithara_signal::{AudioSpec, SegmentId, SessionFrame};
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use kithara_test_utils::kithara;
 
@@ -351,7 +351,7 @@ async fn render_audio_handover_fills_tail_from_next_playing_track(constant_half:
 #[kithara::test(native, tokio)]
 #[case::empty(0)]
 #[case::short(614)]
-async fn a_delayed_final_packet_stitches_its_successor_inside_the_same_block(
+async fn a_prepared_delayed_final_packet_stitches_its_successor_inside_the_same_block(
     #[case] final_frames: usize,
 ) {
     use kithara_test_utils::wait_until;
@@ -393,7 +393,24 @@ async fn a_delayed_final_packet_stitches_its_successor_inside_the_same_block(
     let mut leading_packets = control.packets.remove(0);
     assert_eq!(kithara_worker::mock::wake_state(&wake).0, 0);
     let rendered = kithara_platform::tokio::task::spawn_blocking(move || {
-        render(&mut processor, MAX_BLOCK_FRAMES as usize)
+        let trace = kithara_test_utils::test::usdt::scope();
+        processor.inbox.0.drain();
+        let scope = processor.mixer.scope;
+        processor.mixer.prepare_offline(
+            processor.inbox.0.scope(scope),
+            SessionFrame::new(0),
+            MAX_BLOCK_FRAMES as usize,
+            RATE,
+        );
+        let waits = trace.events_of("pcm_wait_started").len();
+        let rendered = render(&mut processor, MAX_BLOCK_FRAMES as usize);
+        assert_eq!(
+            trace.events_of("pcm_wait_started").len(),
+            waits,
+            "the single graph block must not wait for PCM",
+        );
+        drop(trace);
+        rendered
     });
     wait_until(
         Duration::from_secs(5),
