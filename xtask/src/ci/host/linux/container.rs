@@ -53,9 +53,12 @@ impl Container<'_> {
     /// guards both with a lock file kept beside them, and mounting the data
     /// without the lock leaves two jobs unpacking one crate into one directory.
     /// Host paths keep these write-heavy caches on the disk the machine profile
-    /// selects instead of wherever Docker stores named volumes.
+    /// selects instead of wherever Docker stores named volumes. An Android
+    /// runner also keeps its Gradle home, its own rather than its scope's:
+    /// Gradle asks the holder of a cache lock to release it over loopback, and
+    /// separate containers do not share one.
     pub(super) fn mounts(host: &LinuxHost, runner: &LinuxRunner) -> Vec<(String, &'static str)> {
-        vec![
+        let mut mounts = vec![
             (
                 Self::cargo_home(host, runner)
                     .to_string_lossy()
@@ -96,7 +99,18 @@ impl Container<'_> {
                     .into_owned(),
                 consts::PREVIOUS_LANES_MOUNT,
             ),
-        ]
+        ];
+        if matches!(runner.flavor, RunnerFlavor::Android) {
+            mounts.push((
+                host.cache_root
+                    .join("gradle")
+                    .join(&runner.name)
+                    .to_string_lossy()
+                    .into_owned(),
+                consts::GRADLE_HOME_MOUNT,
+            ));
+        }
+        mounts
     }
 
     /// Where a runner's jobs build: every lane's directory, the alias pointing
@@ -360,6 +374,35 @@ pub(crate) mod tests {
                 Container::cargo_home(&host, ordinary)
             );
         }
+    }
+
+    /// Gradle keeps the distribution its wrapper names and every plugin it
+    /// resolves under its user home. A container built for one job starts that
+    /// home empty, so every Android job downloaded the toolchain again and the
+    /// lane went red whenever a download timed out.
+    #[test]
+    fn an_android_runner_keeps_its_own_gradle_home_across_jobs() {
+        let host = host_fixture();
+        let gradle = Path::new(consts::GRADLE_HOME_MOUNT);
+        let mut android = 0;
+        for runner in &host.runners {
+            let mounted = Container::mounts(&host, runner)
+                .into_iter()
+                .find(|(_, at)| Path::new(at) == gradle)
+                .map(|(source, _)| PathBuf::from(source));
+            if matches!(runner.flavor, RunnerFlavor::Android) {
+                android += 1;
+                assert_eq!(
+                    mounted,
+                    Some(host.cache_root.join("gradle").join(&runner.name)),
+                    "{}",
+                    runner.name
+                );
+            } else {
+                assert_eq!(mounted, None, "{}", runner.name);
+            }
+        }
+        assert!(android > 0, "the fixture serves an Android runner");
     }
 
     /// Cargo's home holds what jobs download and what they unpack it into, and
