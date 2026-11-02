@@ -61,6 +61,7 @@ where
     observing_initial_pcm: bool,
     source_frames_seen: u64,
     output_skip_frames: usize,
+    seek_frame: Option<u64>,
     prepared: Option<DecodeResult<DecoderChunkOutcome>>,
 }
 
@@ -105,6 +106,7 @@ where
             reanchor_output_on_next_chunk: true,
             resampler,
             scratch: PlanarBuffer::new(pools, target_spec, empty)?,
+            seek_frame: None,
             source_frames_seen: 0,
             source_spec,
             target_spec,
@@ -120,13 +122,20 @@ where
         if !pos.is_zero() {
             self.observing_initial_pcm = false;
         }
-        let outcome = if prefix {
-            self.decoder.seek_prefix_with_wait(pos, wait)?
+        let (native_bound, seek_frame) = if prefix {
+            (pos, None)
         } else {
-            self.decoder.seek_with_wait(pos, wait)?
+            // The last native sample whose output position rounds to the requested frame or earlier.
+            let half_frame = self.target_spec.duration_for(1)? / 2;
+            (
+                pos.saturating_add(half_frame.saturating_sub(Duration::from_nanos(1))),
+                Some(self.target_spec.frame_at(pos)?),
+            )
         };
+        let outcome = self.decoder.seek_prefix_with_wait(native_bound, wait)?;
         self.prepared = None;
         self.reset_resampler_state();
+        self.seek_frame = seek_frame;
         self.reanchor_output_on_next_chunk = true;
         Ok(self.map_seek_outcome(outcome))
     }
@@ -164,7 +173,18 @@ where
             return Ok(());
         }
         if self.reanchor_output_on_next_chunk {
-            self.output_frame_offset = self.target_spec.frame_at(chunk.meta.timestamp)?;
+            let landing = self.target_spec.frame_at(chunk.meta.timestamp)?;
+            let trim = self
+                .seek_frame
+                .take()
+                .map_or(0, |frame| frame.saturating_sub(landing));
+            self.output_frame_offset = landing + trim;
+            self.output_skip_frames +=
+                usize::try_from(trim).map_err(|_| DecodeError::InvalidData {
+                    detail: "resampled seek trim overflow",
+                })?;
+            // Trimmed frames are source content, so they count against the expected output.
+            self.emitted_frames = trim;
             self.reanchor_output_on_next_chunk = false;
             if self.observing_initial_pcm {
                 let position = chunk
@@ -1082,10 +1102,13 @@ mod origin_tests {
             ));
             decoder.seek(prefix_bound).expect("ordinary nearest seek");
             let nearest = first_pcm(&mut decoder);
-            assert_eq!(nearest.samples[0], 1.0 / 2_000.0);
+            assert_eq!(nearest.samples[0], 0.0);
             assert_eq!(
-                nearest.meta.timestamp,
-                raw_origin + native_spec.duration_for(1).expect("next native sample")
+                nearest.meta.frame_offset,
+                decoder
+                    .spec()
+                    .frame_at(prefix_bound)
+                    .expect("nearest output frame")
             );
             decoder
                 .seek_prefix(requested)
@@ -1444,12 +1467,7 @@ mod origin_tests {
             ResampledDecoder::new(Box::new(source), config, &pools).expect("actual resampler");
         let spec = decoder.spec();
         let target = spec.duration_for(frame).expect("output frame time");
-        let DecoderSeekOutcome::Landed { landed_frame, .. } =
-            decoder.seek(target).expect("resampled seek")
-        else {
-            panic!("seek landing");
-        };
-        assert_eq!(landed_frame, frame);
+        decoder.seek(target).expect("resampled seek");
         let first = first_pcm(&mut decoder);
         assert_eq!(first.meta.frame_offset, frame);
         let half_frame = Duration::from_nanos(1_000_000_000 / 96_000);
@@ -1582,6 +1600,10 @@ mod tests {
                 clock: LandingClock::Kept,
             });
             Ok(self.seek_outcome(outcome))
+        }
+
+        fn seek_prefix(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+            self.seek(pos)
         }
 
         fn prepare_seek(&mut self) -> DecodeResult<Option<DecoderSeekOutcome>> {
