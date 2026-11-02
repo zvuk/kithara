@@ -433,6 +433,11 @@ fn a_physical_epoch_invalidates_every_mode() {
                 }
             );
         });
+        host.apply(LinkedHostCommand::Sync {
+            deck: id,
+            on: false,
+        })
+        .expect("off");
         control.clear();
         host.apply(LinkedHostCommand::Sync { deck: id, on: true })
             .expect("preserved grid aligns");

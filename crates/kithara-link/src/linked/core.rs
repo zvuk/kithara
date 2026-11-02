@@ -103,9 +103,24 @@ impl<P> Linked<P> {
         match waiting {
             Waiting::Play { at, .. } => self.apply(TrackCommand::Play { at }, out),
             Waiting::Seek { required } => self.reissue_seek(required, out),
-            Waiting::Sync { .. } if self.synced() => self.sync(true, out),
+            Waiting::Sync { .. } if self.synced() => self.enter_sync(out),
             Waiting::Load { .. } | Waiting::Sync { .. } => Ok(None),
         }
+    }
+
+    /// Puts the track on the host; a refused alignment restores the mode,
+    /// cue and wait the track had.
+    fn enter_sync<S>(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>
+    where
+        P: Track<S>,
+    {
+        let previous = (self.mode, self.cue, self.waiting);
+        self.mode = SyncMode::On;
+        let result = self.align(out);
+        if result.is_err() {
+            (self.mode, self.cue, self.waiting) = previous;
+        }
+        result
     }
 
     fn reissue_seek<S>(
@@ -622,19 +637,17 @@ impl<P> Linked<P> {
 
 impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
     fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
-        let previous = (self.mode, self.cue, self.waiting);
-        self.mode = if on { SyncMode::On } else { SyncMode::Off };
         if !on {
+            self.mode = SyncMode::Off;
             self.waiting = None;
             self.cue = None;
             self.alignment = None;
             return Ok(None);
         }
-        let result = self.align(out);
-        if result.is_err() {
-            (self.mode, self.cue, self.waiting) = previous;
+        if self.mode == SyncMode::On {
+            return Ok(None);
         }
-        result
+        self.enter_sync(out)
     }
 
     fn retime(

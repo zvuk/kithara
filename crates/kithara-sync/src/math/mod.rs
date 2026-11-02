@@ -4,8 +4,8 @@ mod plan;
 mod source;
 
 pub use core::{
-    PhaseError, checked_correction, corrected_speed_curve, covers, entry, jump_target, phase_error,
-    slew_phase, speed, speed_curve,
+    PhaseError, Slew, SlewCause, checked_correction, covers, entry, jump_target, phase_error, slew,
+    speed, speed_curve,
 };
 
 pub use plan::{CorrectionPlan, CorrectionStep};

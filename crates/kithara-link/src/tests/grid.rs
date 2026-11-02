@@ -3,12 +3,13 @@ use kithara_command::When;
 use kithara_events::TrackId;
 use kithara_play::{Bound, HostedDeck, Player, TrackCommand};
 use kithara_signal::SessionFrame;
+use kithara_sync::{Slew, SlewCause, slew};
 use kithara_test_utils::{bufpool::TestPools, kithara};
 
 use super::fixtures::{
     Command, answer, grid, load, loaded, position, sounding, source_grid, trajectory,
 };
-use crate::{GridAnswer, LinkedPlayer, SyncStatus};
+use crate::{GridAnswer, LinkConfig, LinkedPlayer, SyncStatus};
 
 fn served_grid() -> BeatGridModel {
     use kithara_beat::{GridBeat, RawBeatGrid, SCHEMA_VERSION};
@@ -271,18 +272,20 @@ fn repeating_the_same_grid_does_not_restart_a_correction() {
     let (media, from) = kithara_play::Track::<TestPools>::planned(&deck, at, host.sample_rate())
         .expect("planned source");
     let uncovered = grid(32_000, 0, Some((4, 0)), 960_000);
-    assert!(
-        kithara_sync::corrected_speed_curve(
+    assert_eq!(
+        slew(
             &host,
             &source_grid(&uncovered),
             media,
             at,
-            from,
             0.001,
-            false,
-        )
-        .is_none(),
-        "the media slew cannot finish inside the served twenty seconds"
+            SlewCause::Drift {
+                from,
+                limit: LinkConfig::default().slew_limit(),
+            },
+        ),
+        Some(Slew::Relocate),
+        "the served grid puts the deck past the slew limit"
     );
     let unchanged = deck.snapshot();
     answer(&mut deck, &mut rig, uncovered);
@@ -489,6 +492,8 @@ fn group_accepts_latest_grid_after_unpublished_revisions() {
         Some(SessionFrame::new(48_000))
     );
     assert_eq!(deck.snapshot().sync, SyncStatus::On);
+    rig.run(|out| LinkedPlayer::sync(&mut deck, false, out))
+        .expect("off");
     control.clear();
     let seq = rig
         .run(|out| LinkedPlayer::sync(&mut deck, true, out))

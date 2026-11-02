@@ -11,7 +11,8 @@ use crate::{GridAnswer, LinkedPlayer, TempoTrajectory};
 
 /// Object-safe synchronization face of a deck held by the Host owner.
 pub trait LinkedDeck<S>: HostedDeck<S> {
-    /// Enables explicit phase alignment or disables future Host retimes.
+    /// Enables explicit phase alignment of the tracks not yet aligned, or
+    /// disables future Host retimes.
     ///
     /// # Errors
     /// Returns the refusal of an alignment batch.

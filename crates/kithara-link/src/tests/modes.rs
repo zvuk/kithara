@@ -49,6 +49,8 @@ fn rejected_sync_on_preserves_mode_and_playing_speed() {
 #[kithara::test]
 fn a_late_audible_alignment_replans_from_the_batch_receipt() {
     let (mut deck, control, mut rig, _) = sounding();
+    rig.run(|out| LinkedPlayer::sync(&mut deck, false, out))
+        .expect("off");
     let seq = rig
         .run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("audible alignment admitted")
@@ -742,14 +744,10 @@ fn enabling_without_a_parent_withdraws_local_geometry() {
 }
 
 #[kithara::test]
-#[case::enable(true)]
-#[case::realign(false)]
-fn rejected_state_change_preserves_mode_and_tempo(#[case] already_on: bool) {
+fn rejected_state_change_preserves_mode_and_tempo() {
     let (mut deck, control, mut rig, _) = sounding();
-    if !already_on {
-        rig.run(|out| LinkedPlayer::sync(&mut deck, false, out))
-            .expect("off");
-    }
+    rig.run(|out| LinkedPlayer::sync(&mut deck, false, out))
+        .expect("off");
     control.edit(|script| {
         script.snapshot.speed = 0.75;
         script.reject = Some(PlayError::Full("lane"));
@@ -760,9 +758,23 @@ fn rejected_state_change_preserves_mode_and_tempo(#[case] already_on: bool) {
         Err(PlayError::Full("lane"))
     ));
     assert_eq!(deck.snapshot().sync, before.sync);
-    assert_eq!(LinkedPlayer::synced(&deck), already_on);
+    assert!(!LinkedPlayer::synced(&deck));
     assert_eq!(deck.snapshot().as_ref().speed, before.as_ref().speed);
     assert!(control.commands().is_empty());
+}
+
+#[kithara::test]
+fn sync_on_over_a_sounding_synced_deck_sends_nothing() {
+    let (mut deck, control, mut rig, _) = sounding();
+
+    assert_eq!(
+        rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
+            .expect("the deck stays in SYNC"),
+        None
+    );
+
+    assert!(control.commands().is_empty(), "{:?}", control.commands());
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
 }
 
 #[kithara::test]

@@ -652,6 +652,42 @@ async fn a_ready_grid_after_a_refusal_turns_sync_back_on_at_the_host_tempo(rhyth
     drop(analysis);
 }
 
+/// A SYNC press on a deck the refusal turned off shows SYNC on while the deck
+/// waits for its grid.
+#[kithara::test(native, tokio, flash(false))]
+async fn a_sync_press_after_a_refusal_shows_sync_on_before_a_grid_arrives(rhythm_a_wav: String) {
+    let Synced { rig, served } = synced_one(rhythm_a_wav, 126.0).await;
+    let analysis = served.await.expect("the analysis fixture serves");
+    rig.call(|rig| {
+        rig.until("deck A turns SYNC on", Rig::DEADLINE, Rig::frame, |rig| {
+            rig.flag("deck.playback.synced@deck=a")
+        });
+    })
+    .await;
+    analysis.send_replace(Some(fixtures::refused()));
+    rig.call(|rig| {
+        rig.until(
+            "the refusal turns the SYNC indicator off",
+            Rig::DEADLINE,
+            Rig::frame,
+            |rig| !rig.flag("deck.playback.synced@deck=a"),
+        );
+
+        rig.send("deck-a/sync", ControlAction::Activate);
+        rig.pump();
+
+        rig.until(
+            "the press shows SYNC on before a grid arrives",
+            Rig::DEADLINE,
+            Rig::frame,
+            |rig| rig.flag("deck.playback.synced@deck=a"),
+        );
+    })
+    .await;
+    rig.close().await;
+    drop(analysis);
+}
+
 /// A tempo the host takes while the current track is refused reaches the
 /// deck's next track, which sounds on the host beats of that tempo.
 #[kithara::test(native, tokio, flash(false))]

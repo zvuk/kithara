@@ -1,7 +1,7 @@
 use kithara_command::{Rejection, Seq, When};
 use kithara_play::{Outbox, PlayError, Position, Settled, Track, TrackCommand, TrackStatus};
 use kithara_signal::{FrameCount, SessionFrame};
-use kithara_sync::{corrected_speed_curve, slew_phase};
+use kithara_sync::{Slew, SlewCause, SpeedCurve, slew};
 use tracing::warn;
 
 use super::{
@@ -111,45 +111,72 @@ impl<P> Linked<P> {
             return Err(PlayError::Full("lane"));
         }
         let source = self.source(grid)?;
-        let epsilon = self.config.epsilon();
-        let slewable = commanded
-            || slew_phase(&self.host, &source, position, at, from, epsilon)
-                .is_some_and(|phase| phase.abs() <= f64::from(self.config.slew_limit()));
-        let slew = slewable
-            .then(|| {
-                corrected_speed_curve(&self.host, &source, position, at, from, epsilon, commanded)
-            })
-            .flatten();
-        let Some((curve, frame_count)) = slew else {
-            if self.waiting.is_some() {
-                return Err(PlayError::NotReady);
+        let cause = if commanded {
+            SlewCause::Commanded
+        } else {
+            SlewCause::Drift {
+                from,
+                limit: self.config.slew_limit(),
             }
-            return self.align(out).map(Corrected::Move);
         };
-        let frames = usize::try_from(frame_count)
-            .map(FrameCount::new)
-            .map_err(|error| PlayError::Internal(error.to_string()))?;
+
+        match slew(
+            &self.host,
+            &source,
+            position,
+            at,
+            self.config.epsilon(),
+            cause,
+        ) {
+            Some(Slew::Closes { curve, frames }) => {
+                let frames = usize::try_from(frames)
+                    .map(FrameCount::new)
+                    .map_err(|error| PlayError::Internal(error.to_string()))?;
+                let correction = RunningCorrection {
+                    at,
+                    frames,
+                    segment,
+                };
+                self.send_slew(curve, commanded, correction, out)
+                    .map(Corrected::Slew)
+            }
+            Some(Slew::Relocate) | None if self.waiting.is_some() => Err(PlayError::NotReady),
+            Some(Slew::Relocate) => self.align(out).map(Corrected::Move),
+            None => Err(PlayError::Internal(
+                "source phase correction has no playable grid law".into(),
+            )),
+        }
+    }
+
+    /// Sends the speed law of a slew and tracks its correction.
+    fn send_slew<S>(
+        &mut self,
+        curve: SpeedCurve,
+        commanded: bool,
+        correction: RunningCorrection,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError>
+    where
+        P: Track<S>,
+    {
         let sent = self.inner.apply(
             TrackCommand::SetSpeed {
                 speed: curve,
-                at: When::At(at),
+                at: When::At(correction.at),
             },
             out,
         )?;
+
         if let Some(seq) = sent {
             self.speeds.push((
                 seq,
                 SpeedOperation::Correction {
                     commanded,
-                    state: CorrectionState::Pending(RunningCorrection {
-                        at,
-                        frames,
-                        segment,
-                    }),
+                    state: CorrectionState::Pending(correction),
                 },
             ));
         }
-        Ok(Corrected::Slew(sent))
+        Ok(sent)
     }
 
     /// Whether the owed correction moved the deck.

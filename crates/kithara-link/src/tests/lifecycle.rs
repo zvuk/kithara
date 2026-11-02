@@ -1,14 +1,14 @@
 use kithara_command::{Outcome, Rejection, Seq, When};
 use kithara_play::{HostedDeck, Player, Settled, TrackCommand, TrackSnapshot, TrackStatus};
 use kithara_signal::{FrameCount, SessionFrame};
-use kithara_sync::SpeedCurve;
+use kithara_sync::{Slew, SlewCause, SpeedCurve, slew};
 use kithara_test_utils::{bufpool::TestPools, kithara};
 
 use super::fixtures::{
     Command, Control, Deck, Rig, answer, consume, grid, load, loaded, position, sounding,
     source_grid, trajectory,
 };
-use crate::{LinkedPlayer, SyncStatus};
+use crate::{LinkConfig, LinkedPlayer, SyncStatus};
 
 fn silent() -> (Deck, Control, Rig, Seq) {
     let (mut deck, control, mut rig, loading) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
@@ -851,19 +851,15 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     let start = rig.now + LinkedPlayer::<TestPools>::lead(&deck, rig.delivery).expect("lane lead");
     let (media, from) = kithara_play::Track::<TestPools>::planned(&deck, start, host.sample_rate())
         .expect("planned source");
+    let drift = SlewCause::Drift {
+        from,
+        limit: LinkConfig::default().slew_limit(),
+    };
     let uncovered = grid(24_000, 12_000, Some((4, 0)), 960_000);
-    assert!(
-        kithara_sync::corrected_speed_curve(
-            &host,
-            &source_grid(&uncovered),
-            media,
-            start,
-            from,
-            0.001,
-            false,
-        )
-        .is_none(),
-        "a half-beat correction cannot finish inside the served twenty seconds"
+    assert_eq!(
+        slew(&host, &source_grid(&uncovered), media, start, 0.001, drift),
+        Some(Slew::Relocate),
+        "a half-beat drift is past the slew limit"
     );
     answer(&mut deck, &mut rig, uncovered);
     assert!(
@@ -907,16 +903,13 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
         applied.sync,
         "grid refinement remains pending"
     );
-    let (_, frame_count) = kithara_sync::corrected_speed_curve(
-        &host,
-        &source_grid(&revised),
-        media,
-        start,
-        from,
-        0.001,
-        false,
-    )
-    .expect("bounded revised correction");
+    let Some(Slew::Closes {
+        frames: frame_count,
+        ..
+    }) = slew(&host, &source_grid(&revised), media, start, 0.001, drift)
+    else {
+        panic!("bounded revised correction");
+    };
     let remaining = FrameCount::new(usize::try_from(frame_count).expect("correction frames"));
     assert!(remaining.get() > 0);
     rig.apply(&mut deck, replacement[0].0, i64::from(start));

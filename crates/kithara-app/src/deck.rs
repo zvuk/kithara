@@ -167,8 +167,14 @@ impl DeckRecord {
         self.controller.refresh_continuous();
     }
 
+    /// The SYNC state the deck shows: whether the host drives the current
+    /// track, or the accepted SYNC state while the deck is empty.
+    fn shows_sync(&self) -> bool {
+        self.queue().follows_host().unwrap_or(self.synced)
+    }
+
     pub(crate) fn snapshot(&self) -> DeckSnapshot {
-        let synced = self.queue().follows_host().unwrap_or(self.synced);
+        let synced = self.shows_sync();
         self.controller.read(|state| {
             let refused = self.synced && !synced;
             DeckSnapshot::new(
@@ -425,7 +431,7 @@ impl DeckSet {
     /// Waits for the host's answer; the deck keeps the change only once accepted.
     fn toggle_sync(host: &AppHost, record: &mut DeckRecord) {
         let deck = record.id();
-        let on = !record.synced;
+        let on = !record.shows_sync();
         match host.ask(LinkedHostCommand::Sync { deck, on }) {
             Ok(()) => record.sync_landed(on),
             Err(error) => error!(%deck, on, %error, "sync refused"),

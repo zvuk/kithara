@@ -596,6 +596,11 @@ fn route_restart_preserves_modes_and_media_grids_on_a_new_rate() {
     });
     off_probe.read(|observation| assert_eq!(observation.snapshot.sync, SyncStatus::Off));
     assert!(off_control.commands().is_empty());
+    host.apply(LinkedHostCommand::Sync {
+        deck: id,
+        on: false,
+    })
+    .expect("off");
     on_control.clear();
     host.apply(LinkedHostCommand::Sync { deck: id, on: true })
         .expect("explicit alignment with preserved grid");

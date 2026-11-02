@@ -10,7 +10,8 @@ use crate::{GridAnswer, LinkError, LinkedConfig, TempoTrajectory};
 /// A player that can align itself and receive the Host's planned tempo trajectory.
 pub trait LinkedPlayer<S>: Player<S> {
     /// Enables alignment, including an explicit phase jump while sounding;
-    /// disabling alignment sends nothing and preserves in-flight speeds.
+    /// an aligned track keeps its alignment and sends nothing. Disabling
+    /// alignment sends nothing and preserves in-flight speeds.
     ///
     /// # Errors
     /// Returns the refusal of the speed or jump batch, if one is sent.
@@ -58,7 +59,8 @@ pub struct LinkConfig {
     /// Maximum adjacent speed step used for inaudible phase correction.
     #[config(check = check_epsilon, builder(default = 0.001))]
     epsilon: f32,
-    /// Largest phase error, in beats, a slew closes; a larger one relocates the deck.
+    /// Largest phase error, in beats, a drift correction closes by a slew; a
+    /// larger one relocates the deck. Tempo command corrections skip this limit.
     #[config(check = check_slew_limit, builder(default = 0.05))]
     slew_limit: f32,
     /// Time a new segment takes from its cue to ready on a silent deck.
