@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Producer-side render stage: decoded audio through Warp and effects before the play ring."
+description = "Producer-side render stage: decoded audio through Warp before the play ring."
 keywords = ["audio", "playback", "render", "timestretch", "realtime"]
 categories = ["multimedia::audio"]
 

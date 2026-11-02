@@ -59,8 +59,6 @@ fn curve_source(
     kithara_render::WarpSource::new(
         kithara_render::mock::ScriptedSource::new(chunks),
         warp.renderer(spec, pools.clone()),
-        Vec::new(),
-        kithara_effects::EffectDrain::new(0, &pools).expect("drain"),
         spec,
         pools,
         kithara_render::LaneSetup {
@@ -859,8 +857,6 @@ async fn assert_source_end_resume_endpoint() {
     let mut source = kithara_render::WarpSource::new(
         audio,
         warp.renderer(old_spec, pools.clone()),
-        Vec::new(),
-        kithara_effects::EffectDrain::new(0, &pools).expect("no effect tail"),
         old_spec,
         pools,
         kithara_render::LaneSetup {
