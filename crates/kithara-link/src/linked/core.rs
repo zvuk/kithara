@@ -410,9 +410,14 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                 }
             }
         }
+        // The dropout already broke the sound, so its end is a silent entry:
+        // the deck re-enters on the host phase rather than closing the gap
+        // with speed steps, which a short track may never have room for.
         if self.synced() && underrun {
-            self.alignment = Some(false);
-            self.realign(out);
+            self.waiting = Some(Waiting::Sync {
+                required: self.inner.snapshot().as_ref().position,
+            });
+            self.resume_wait(out);
         }
         if self.cue.is_none() && matches!(self.waiting, Some(Waiting::Load { .. })) {
             self.resume_wait(out);

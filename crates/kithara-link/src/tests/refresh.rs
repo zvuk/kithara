@@ -325,7 +325,7 @@ fn only_the_resident_tracks_pcm_recovery_realigns_sync(
         control
             .commands()
             .iter()
-            .any(|(_, command)| matches!(command, Command::Speed(..))),
+            .any(|(_, command)| matches!(command, Command::Jump(..))),
         realigns
     );
 }
