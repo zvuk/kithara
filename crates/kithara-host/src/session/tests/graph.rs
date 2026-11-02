@@ -51,12 +51,14 @@ impl<T> GraphSession<T> {
         Self::with_sample_rate(Self::DEFAULT_SAMPLE_RATE, start)
     }
 
-    pub(crate) fn with_sample_rate<F>(rate: NonZeroU32, start: F) -> Self
+    pub(crate) fn with_sample_rate<F>(rate: NonZeroU32, mut start: F) -> Self
     where
         F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
     {
         Self {
-            state: state_for(rate, start),
+            state: state_for(rate, move |ctx, rate| {
+                start(ctx, rate).map(|backend| SessionStream::Realtime { _backend: backend })
+            }),
             scopes: Vec::new(),
         }
     }
@@ -169,12 +171,9 @@ where
     GraphSession::new(start)
 }
 
-pub(crate) fn state_for<T, F, S>(
-    sample_rate: NonZeroU32,
-    mut start_stream_fn: F,
-) -> SessionState<T, S>
+pub(crate) fn state_for<T, F, S>(sample_rate: NonZeroU32, start_stream_fn: F) -> SessionState<T, S>
 where
-    F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
+    F: FnMut(&mut FirewheelContext, u32) -> Result<SessionStream<T>, String> + Send + 'static,
 {
     let (root, root_view) = empty_root(sample_rate);
     let settings = HostSettings::builder().sample_rate(sample_rate).build();
@@ -188,9 +187,7 @@ where
             .settings(settings)
             .build()
             .channel_config(),
-        move |ctx, rate| {
-            start_stream_fn(ctx, rate).map(|backend| SessionStream::Realtime { _backend: backend })
-        },
+        start_stream_fn,
     )
 }
 

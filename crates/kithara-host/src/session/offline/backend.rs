@@ -195,7 +195,7 @@ impl OfflineStream {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_render::rt::OfflineDeckError;
     use kithara_test_utils::kithara;

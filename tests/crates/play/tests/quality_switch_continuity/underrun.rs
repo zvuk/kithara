@@ -331,6 +331,11 @@ async fn render_to_capture_frame(player: &mut OfflinePlayer, pacer: &mut Pacer, 
 async fn capture_tiny_ring(
     prepared: &mut PreparedPlayer,
 ) -> (Vec<f32>, Vec<DecoderObservation>, Vec<CaptureBlock>) {
+    assert_eq!(
+        kithara_test_utils::test::usdt::count("pcm_wait_started"),
+        0,
+        "device continuity setup must not wait for PCM"
+    );
     let mut item_events = prepared.player.player().subscribe::<ItemEvent>();
     let mut blocks = Vec::with_capacity(OBSERVATION_FRAMES.div_ceil(BLOCK_FRAMES));
     let mut samples = Vec::with_capacity(OBSERVATION_FRAMES * usize::from(CHANNELS));
@@ -422,6 +427,11 @@ async fn capture_tiny_ring(
             samples.len() / usize::from(CHANNELS),
         ));
     }
+    assert_eq!(
+        kithara_test_utils::test::usdt::count("pcm_wait_started"),
+        0,
+        "device continuity capture must not wait for PCM before or inside the graph"
+    );
     let admissions = kithara_test_utils::test::usdt::events_of("chunk_admitted");
     let mut through = 0;
     let mut ends = Vec::new();
