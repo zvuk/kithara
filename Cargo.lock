@@ -5232,7 +5232,6 @@ dependencies = [
  "kithara-resampler",
  "kithara-signal",
  "kithara-test-fixtures",
- "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",

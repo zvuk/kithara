@@ -24,7 +24,6 @@ kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default", "ranged"] }
 kithara-dsp = { workspace = true }
 kithara-signal = { workspace = true }
-kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 
 biquad = { workspace = true }
