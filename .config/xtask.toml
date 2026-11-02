@@ -2203,7 +2203,7 @@ steps = [
     "test",
     "run",
     "--lane=tooling",
-  ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2", TMPDIR = "/run/kithara-ci-tests" } },
+  ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
 kinds = []
@@ -2371,12 +2371,7 @@ os = "linux"
 tools = ["cargo", "just"]
 program = "just"
 publishes_sources = true
-steps = [
-  { args = [
-    "lint",
-    "full",
-  ], label = "workspace lint gate", env = { TMPDIR = "/run/kithara-ci-tests" } },
-]
+steps = [{ args = ["lint", "full"], label = "workspace lint gate" }]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
@@ -2480,7 +2475,7 @@ steps = [
     "run",
     "--touched",
     "--lane=tooling",
-  ], label = "build tooling suites this push touches", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1", TMPDIR = "/run/kithara-ci-tests" } },
+  ], label = "build tooling suites this push touches", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1" } },
   { args = [
     "test",
     "run",

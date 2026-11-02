@@ -1653,42 +1653,34 @@
   <require os> linux
   <require tools> cargo just
   just lint full
-    TMPDIR=/run/kithara-ci-tests
 # linux-lint / platforms
   <require os> linux
   <require tools> cargo just
   just lint full
-    TMPDIR=/run/kithara-ci-tests
 # linux-lint / merge-request
   <require os> linux
   <require tools> cargo just
   just lint full
-    TMPDIR=/run/kithara-ci-tests
 # linux-lint / quarantine
   <require os> linux
   <require tools> cargo just
   just lint full
-    TMPDIR=/run/kithara-ci-tests
 # linux-lint / main
   <require os> linux
   <require tools> cargo just
   just lint full
-    TMPDIR=/run/kithara-ci-tests
 # linux-lint / nightly
   <require os> linux
   <require tools> cargo just
   just lint full
-    TMPDIR=/run/kithara-ci-tests
 # linux-lint / weekly
   <require os> linux
   <require tools> cargo just
   just lint full
-    TMPDIR=/run/kithara-ci-tests
 # linux-lint / release
   <require os> linux
   <require tools> cargo just
   just lint full
-    TMPDIR=/run/kithara-ci-tests
 # linux-loom / branch
   <require os> linux
   <require tools> cargo just sccache kache
@@ -1919,7 +1911,6 @@
   just test run --touched --lane=tooling
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
-    TMPDIR=/run/kithara-ci-tests
   just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1929,7 +1920,6 @@
   just test run --touched --lane=tooling
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
-    TMPDIR=/run/kithara-ci-tests
   just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1939,7 +1929,6 @@
   just test run --touched --lane=tooling
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
-    TMPDIR=/run/kithara-ci-tests
   just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1949,7 +1938,6 @@
   just test run --touched --lane=tooling
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
-    TMPDIR=/run/kithara-ci-tests
   just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1959,7 +1947,6 @@
   just test run --touched --lane=tooling
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
-    TMPDIR=/run/kithara-ci-tests
   just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1969,7 +1956,6 @@
   just test run --touched --lane=tooling
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
-    TMPDIR=/run/kithara-ci-tests
   just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1979,7 +1965,6 @@
   just test run --touched --lane=tooling
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
-    TMPDIR=/run/kithara-ci-tests
   just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -1989,7 +1974,6 @@
   just test run --touched --lane=tooling
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
-    TMPDIR=/run/kithara-ci-tests
   just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
@@ -2158,49 +2142,41 @@
   <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    TMPDIR=/run/kithara-ci-tests
 # linux-tooling / platforms
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    TMPDIR=/run/kithara-ci-tests
 # linux-tooling / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    TMPDIR=/run/kithara-ci-tests
 # linux-tooling / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    TMPDIR=/run/kithara-ci-tests
 # linux-tooling / main
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    TMPDIR=/run/kithara-ci-tests
 # linux-tooling / nightly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    TMPDIR=/run/kithara-ci-tests
 # linux-tooling / weekly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    TMPDIR=/run/kithara-ci-tests
 # linux-tooling / release
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    TMPDIR=/run/kithara-ci-tests
 # linux-usdt / branch
   <require os> linux
   <require tools> cargo just sccache kache

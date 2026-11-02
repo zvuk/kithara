@@ -380,7 +380,7 @@ fn unit(
          --cgroup-parent {cgroup_parent} \
          --pids-limit {pids} \
          --ulimit nice={nice}:{nice} \
-         --tmpfs {tooling_tmpfs} \
+         --tmpfs {tmpfs} \
          --security-opt no-new-privileges \
          --env-file {env_file}",
         name = job.name,
@@ -390,7 +390,7 @@ fn unit(
         cgroup_parent = job.cgroup_parent,
         pids = Container::PIDS_LIMIT,
         nice = Container::NICE_LIMIT,
-        tooling_tmpfs = Container::TOOLING_TMPFS,
+        tmpfs = Container::tmpfs(),
         env_file = job.env_file,
     )?;
     for entry in Container::environment(runner) {

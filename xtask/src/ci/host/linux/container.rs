@@ -154,6 +154,7 @@ impl Container<'_> {
         environment.extend([
             // Containers own CPU admission; their kache store is shared.
             "KACHE_SCHEDULER=0".to_owned(),
+            format!("TMPDIR={}", Self::TMPDIR),
             format!("{}={}", consts::KACHE_LOCAL_ROOT_ENV, consts::KACHE_MOUNT),
             format!("CARGO_HOME={}", consts::CARGO_HOME_MOUNT),
             format!("CARGO_TARGET_DIR={}", root.display()),
@@ -188,9 +189,12 @@ impl Container<'_> {
 
     pub(super) const PIDS_LIMIT: u32 = 8192;
 
-    /// Temporary executable copies stay within the job's memory ceiling.
-    pub(super) const TOOLING_TMPFS: &'static str =
-        "/run/kithara-ci-tests:rw,exec,nosuid,nodev,size=4g,mode=1777";
+    const TMPDIR: &'static str = "/run/kithara-ci-tests";
+
+    /// Disposable job files stay within the runner's memory ceiling.
+    pub(super) fn tmpfs() -> String {
+        format!("{}:rw,exec,nosuid,nodev,size=4g,mode=1777", Self::TMPDIR)
+    }
 
     /// `RLIMIT_NICE` for every process of a job: 20 minus the lowest nice
     /// value a thread may set for itself, so 40 allows -20, as Android's init
@@ -418,6 +422,18 @@ pub(crate) mod tests {
                 "{} shares kache's CPU scheduler with other containers",
                 runner.name
             );
+        }
+    }
+
+    #[test]
+    fn job_temporary_files_use_the_bounded_memory_mount() {
+        let specification = Container::tmpfs();
+        let (mount, options) = specification.split_once(':').unwrap();
+        assert!(options.split(',').any(|option| option.starts_with("size=")));
+        assert!(options.split(',').any(|option| option == "nosuid"));
+        assert!(options.split(',').any(|option| option == "nodev"));
+        for runner in &host_fixture().runners {
+            assert_eq!(told(runner, "TMPDIR"), Path::new(mount));
         }
     }
 
