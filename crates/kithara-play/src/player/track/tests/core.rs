@@ -3398,8 +3398,8 @@ async fn a_loaded_track_sends_each_change_to_its_lane() {
         "{commands:?}"
     );
     assert!(
-        (track.snapshot().speed - 1.0).abs() < f32::EPSILON,
-        "the speed shows once the lane applied it"
+        (track.snapshot().speed - 2.0).abs() < f32::EPSILON,
+        "the segment the lane starts from states its speed"
     );
     due.apply(kithara_render::LaneApplied {
         source_basis: None,
@@ -3588,7 +3588,11 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
         });
         rig.with_outbox(|out| track.tick(frame(0), out))
             .expect("ramp applies");
-        assert_eq!(track.snapshot().speed, 1.5);
+        assert_eq!(
+            track.snapshot().speed,
+            if sounding { 1.5 } else { 1.0 },
+            "a silent segment holds the start of its ramp, a sounding one has played through it"
+        );
         assert!(
             command_at_zero(
                 &mut track,
@@ -3817,7 +3821,7 @@ async fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
     });
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("native speed receipt");
-    assert_eq!(track.snapshot().speed, 2.0);
+    assert_eq!(track.snapshot().speed, 1.25, "the ramp has only begun");
     assert_eq!(track.ready, Some(segment));
     let attach = track
         .attaching
@@ -3847,7 +3851,7 @@ async fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
             .speed
             .is_none()
     );
-    assert_eq!(track.snapshot().speed, 2.0);
+    assert_eq!(track.snapshot().speed, 3.0);
     assert_eq!(track.projected().speed(), 3.0);
     let latest = track.segment;
     assert_eq!(latest, segment.next());

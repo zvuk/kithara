@@ -146,7 +146,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: compiler-cache-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.lane }}.json
+          path: |
+            .ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.lane }}.json
+            .ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-bootstrap*.json
           if-no-files-found: error
 
       # `ci lane` copies this job's reports out of the slot it held into the

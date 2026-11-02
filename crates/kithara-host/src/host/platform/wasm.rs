@@ -80,11 +80,14 @@ impl<S, O: HostOwner<S>> Platform<S, O> {
     }
 }
 
-impl<S> crate::Host<S>
+impl<S, O> crate::Host<S, O>
 where
     S: HasPool<f32> + Send + Sync + 'static,
+    O: HostOwner<S>,
 {
-    pub(crate) fn browser_channel(&self) -> Result<(HostSender<S>, HostReceiver<S>), PlayError> {
+    pub(crate) fn browser_channel(
+        &self,
+    ) -> Result<(HostSender<S, O>, HostReceiver<S, O>), PlayError> {
         let platform = self._session.platform();
         let state = platform.web_state.as_ref().ok_or_else(|| {
             PlayError::Internal("worker routing requires a local browser host".to_owned())
@@ -103,9 +106,9 @@ where
         ))
     }
 
-    pub(crate) fn browser_remote(sender: HostSender<S>) -> Self {
+    pub(crate) fn browser_remote(sender: HostSender<S, O>) -> Self {
         Self {
-            dispatcher: crate::session::web::remote::<S, HostCore<S>>(sender.postbox),
+            dispatcher: crate::session::web::remote::<S, O>(sender.postbox),
             id: sender.id,
             root_view: sender.root_view,
             _session: crate::host::owner::SessionRuntime::Realtime {

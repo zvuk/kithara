@@ -17,13 +17,13 @@ use tracing::warn;
 use super::nextest;
 use crate::{
     ci::{cache::snapshot, config::CiPins, process::Process, run::PipelineKind},
-    config::{CiLaneConfig, CiLanePin, CiLaneStep},
+    config::{CiLaneConfig, CiLaneStep},
     consts,
 };
 
 /// Run a lane the way `.config/xtask.toml` declares it: the pipeline kinds it
 /// declines, the platform it refuses to run anywhere but on, the tools it needs,
-/// the versions those tools have to report, then its commands in order. A step
+/// their readiness checks, then its commands in order. A step
 /// that checks its rebuild is repeated building only.
 ///
 /// A lane whose whole content is this needs no Rust of its own; the ones that
@@ -48,8 +48,13 @@ pub(crate) fn run(
     if !lane.left_behind.is_empty() {
         process.require_left_behind(&lane.left_behind, &lane.left_behind_by)?;
     }
-    for check in &lane.pinned {
-        require_pinned_version(process, check, pins, tools)?;
+    for check in &lane.checks {
+        let args: Vec<&str> = check.args.iter().map(String::as_str).collect();
+        process.run(
+            tools.program(&check.tool),
+            &args,
+            &format!("check {}", check.tool),
+        )?;
     }
     let nextest_bin = nextest::prepare(process, pins, tools.program("cargo"))?;
     let target_snapshot_to_publish = if process.is_recording() {
@@ -234,8 +239,8 @@ fn restore_target_layer(
         Ok(None) => {
             process.note_cache(
                 "target snapshot",
-                "restored",
-                format!("{key} unpacked in {took}"),
+                "reused",
+                format!("{key} ready in {took}"),
             );
         }
         Ok(Some(fingerprint)) => {
@@ -376,36 +381,6 @@ fn step_vars(
         .iter()
         .map(|(key, value)| Ok((key.clone(), resolve(value, process, pins)?)))
         .collect()
-}
-
-fn require_pinned_version(
-    process: &Process,
-    check: &CiLanePin,
-    pins: &CiPins,
-    tools: &ToolsConfig,
-) -> Result<()> {
-    let expected = pin(pins, &check.pin)?;
-    let args: Vec<&str> = check.args.iter().map(String::as_str).collect();
-    let label = format!("read {} version", check.tool);
-    let actual = process.capture(tools.program(&check.tool), &args, &label)?;
-    let Some(prefix) = check.line_prefix.as_deref() else {
-        if !actual.split_whitespace().any(|part| part == expected) {
-            bail!(
-                "{} version mismatch: expected {expected}, got {actual}",
-                check.tool
-            );
-        }
-        return Ok(());
-    };
-    let reported = actual
-        .lines()
-        .next()
-        .and_then(|line| line.strip_prefix(prefix))
-        .with_context(|| format!("{} did not report a version", check.tool))?;
-    if reported != expected {
-        bail!("{prefix}{expected} is required, found {reported}");
-    }
-    Ok(())
 }
 
 /// Pins are reviewed as data, so a lane names the one it wants rather than

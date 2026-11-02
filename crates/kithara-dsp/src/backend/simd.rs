@@ -1,4 +1,4 @@
-use std::ops::{Add, Div};
+use std::ops::{Add, Div, Mul};
 
 use fearless_simd::{Level, dispatch, prelude::*};
 
@@ -35,6 +35,39 @@ pub(crate) fn div(samples: &mut [f32], divisor: f32) -> usize {
 pub(super) fn div_kernel<S: Simd>(simd: S, samples: &mut [f32], divisor: f32) -> usize {
     let divisor = S::f32s::splat(simd, divisor);
     update(simd, samples, [], |x, []| x.div(divisor))
+}
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[inline(always)]
+pub(crate) fn scale_in_place(samples: &mut [f32], gain: f32) -> usize {
+    let level = Level::new();
+    // The target already supplies NEON, without a feature trampoline.
+    if let Some(neon) = level.as_neon() {
+        return scale_in_place_kernel(neon, samples, gain);
+    }
+    dispatch!(level, simd => scale_in_place_kernel(simd, samples, gain))
+}
+
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+#[inline(never)]
+pub(crate) fn scale_in_place(samples: &mut [f32], gain: f32) -> usize {
+    dispatch!(Level::new(), simd => scale_in_place_kernel(simd, samples, gain))
+}
+
+#[inline(always)]
+pub(super) fn scale_in_place_kernel<S: Simd>(simd: S, samples: &mut [f32], gain: f32) -> usize {
+    let len = samples.len();
+    let gains = S::f32s::splat(simd, gain);
+    let mut chunks = samples.chunks_exact_mut(S::f32s::LEN);
+    for chunk in &mut chunks {
+        S::f32s::from_slice(simd, chunk)
+            .mul(gains)
+            .store_slice(chunk);
+    }
+    for sample in chunks.into_remainder() {
+        *sample *= gain;
+    }
+    len
 }
 
 /// `output[i] = start + i*step`, rounded once while `i` stays below 2^24;
@@ -233,21 +266,4 @@ pub(super) fn zip_map<S: Simd, F: Fn(S::f32s, S::f32s) -> S::f32s>(
         *slot = *value;
     }
     len
-}
-
-#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
-pub(crate) fn multiply_in_place(samples: &mut [f32], gains: &[f32]) -> usize {
-    dispatch!(Level::new(), simd => multiply_in_place_kernel(simd, samples, gains))
-}
-
-#[inline(always)]
-#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
-pub(super) fn multiply_in_place_kernel<S: Simd>(
-    simd: S,
-    samples: &mut [f32],
-    gains: &[f32],
-) -> usize {
-    update(simd, samples, [gains], |x, [gain]| {
-        std::ops::Mul::mul(x, gain)
-    })
 }

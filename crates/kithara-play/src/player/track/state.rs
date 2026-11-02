@@ -112,6 +112,7 @@ pub struct TrackSnapshot {
     /// None while a background load holds the track off the deck.
     pub slot: Option<Slot>,
     pub status: TrackStatus,
+    /// The speed at the last consumed frame.
     pub speed: f32,
     /// Last known media position; an unconsumed segment retains its exact entry mark.
     pub position: Position,

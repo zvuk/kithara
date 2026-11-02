@@ -264,12 +264,6 @@ mod tests {
         );
     }
 
-    // Ruling: Loaded → StatusChanged(ReadyToPlay) — spec §4.3, player lifecycle events.
-    // Ruling: Requested → TimeControlStatusChanged(WaitingToPlay) — spec §4.3, loading is explicit.
-    // Ruling: HandoverRequested → ItemDidPlayToEnd(Leading) — spec §4.4, Queue owns the successor.
-    // Ruling: FadingIn → PlaybackStarted(Leading) — spec §4.3, playback belongs to the slot.
-    // Ruling: RateChanged → PlayerEvent::RateChanged — spec §4.3, applied speed observation.
-    // Ruling: PlaybackStopped(Eof) → ItemDidPlayToEnd(Leading) — spec §4.3, natural end event.
     #[kithara::test]
     #[case(PlayerEvent::StatusChanged { status: PlayerStatus::ReadyToPlay }, "StatusChanged")]
     #[case(PlayerEvent::TimeControlStatusChanged { status: TimeControlStatus::WaitingToPlay, reason: None }, "TimeControlStatusChanged")]

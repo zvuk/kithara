@@ -6,7 +6,9 @@ use kithara_play::{
 use kithara_signal::SessionFrame;
 
 use super::{
-    Linked, LinkedPlayer, SyncMode, Waiting, geometry::cue_position, state::SpeedOperation,
+    Linked, LinkedPlayer, SyncMode, Waiting,
+    geometry::cue_position,
+    state::{Cue, SpeedOperation},
 };
 use crate::{covers, entry, jump_target};
 
@@ -59,7 +61,6 @@ impl<P> Linked<P> {
         let seq = self
             .inner
             .apply(TrackCommand::Load { item, position }, out)?;
-        self.load = seq;
         self.grid = None;
         self.correction = None;
         self.alignment = None;
@@ -68,7 +69,7 @@ impl<P> Linked<P> {
         self.start_caller = None;
         self.withdrawn.clear();
         self.retimes.clear();
-        self.cue = self.synced().then_some(position);
+        self.cue = self.synced().then_some(Cue::Beat(position));
         self.waiting = self
             .synced()
             .then_some(Waiting::Load { required: position });
@@ -85,7 +86,7 @@ impl<P> Linked<P> {
     {
         let status = self.inner.snapshot().as_ref().status;
         if status == TrackStatus::Loading && self.cue.is_some() {
-            self.cue = Some(to);
+            self.cue = Some(Cue::Beat(to));
             if let Some(Waiting::Load { required } | Waiting::Play { required, .. }) =
                 self.waiting.as_mut()
             {
@@ -100,7 +101,7 @@ impl<P> Linked<P> {
             }
             self.withdraw_start(to);
             if self.cue.is_some() {
-                self.cue = Some(to);
+                self.cue = Some(Cue::Beat(to));
             }
             return Ok(sent);
         }
@@ -124,7 +125,7 @@ impl<P> Linked<P> {
             return Ok(None);
         };
         let at = self.jump_frame(out)?;
-        let source = self.source::<S>(grid)?;
+        let source = self.source(grid)?;
         let target = jump_target(&self.host, &source, to, at).ok_or(PlayError::NotReady)?;
         let start = at - self.inner.snapshot().as_ref().declick;
         let (position, _) = self.planned::<S>(start)?;
@@ -165,7 +166,7 @@ impl<P> Linked<P> {
                 return Err(PlayError::Untimed);
             };
             let grid = self.grid.as_ref().ok_or(PlayError::NotReady)?;
-            let source = self.source::<S>(grid)?;
+            let source = self.source(grid)?;
             if self.inner.entry(Bound::AtOrAfter(frame)).is_none()
                 || self.inner.prepared_speed()
                     != Some(&self.curve(
@@ -218,7 +219,7 @@ impl<P> Linked<P> {
                 ));
             }
         };
-        let source = self.source::<S>(grid)?;
+        let source = self.source(grid)?;
         let frame = entry(&self.host, &source, required, Bound::AtOrAfter(bound))
             .ok_or(PlayError::NotReady)?;
         if !self.prepare_entry(frame, out)? {

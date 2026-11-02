@@ -12,14 +12,28 @@ where
     F: TrackFactory<S>,
 {
     fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
-        self.factory_mut().set_synced(on);
         let mut sent = None;
+        let mut turned = 0;
+        let mut refused = None;
         for track in self.tracks_mut() {
-            let seq = track.sync(on, out)?;
-            if seq.is_some() {
-                sent = seq;
+            match track.sync(on, out) {
+                Ok(seq) => {
+                    sent = seq.or(sent);
+                    turned += 1;
+                }
+                Err(error) => {
+                    refused = Some(error);
+                    break;
+                }
             }
         }
+        if let Some(error) = refused {
+            for track in self.tracks_mut().take(turned) {
+                track.sync(!on, out)?;
+            }
+            return Err(error);
+        }
+        self.factory_mut().set_synced(on);
         Ok(sent)
     }
 

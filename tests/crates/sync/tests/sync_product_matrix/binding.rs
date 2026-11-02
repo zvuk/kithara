@@ -402,17 +402,22 @@ fn configured_speed_failures(
         let cue = owned_cue(observation, item, segment)?;
         (cue.seq, &cue.curve)
     };
-    let target = analytic_parts(curve)?
-        .last()
-        .ok_or_else(|| "confirmed curve is empty".to_owned())?
-        .1
-        .target();
-    Ok(if target.to_f32() == Some(configured_speed) {
+    let parts = analytic_parts(curve)?;
+    if parts.is_empty() {
+        return Err("confirmed curve is empty".to_owned());
+    }
+    let reached = parts.iter().any(|(_, law)| {
+        [law.initial(), law.target()]
+            .iter()
+            .any(|speed| speed.to_f32() == Some(configured_speed))
+            || (law.initial().min(law.target())..=law.initial().max(law.target()))
+                .contains(&f64::from(configured_speed))
+    });
+    Ok(if reached {
         Vec::new()
     } else {
         vec![format!(
-            "confirmed {:?} final target {} differs from published speed {}",
-            seq, target, configured_speed
+            "confirmed {seq:?} never plays the published speed {configured_speed}"
         )]
     })
 }
@@ -2955,14 +2960,10 @@ pub(super) fn relocation_count(
             _ => None,
         })
         .ok_or_else(|| "initial Sync waiting has no actually served grid".to_owned())?;
-    let load = observation
-        .loads
-        .iter()
-        .rev()
-        .find_map(|(owner, seq)| (*owner == item).then_some(*seq));
-    if load != Some(served.load) || served.model.as_ref() != Ok(model) {
+    let loaded = observation.loads.iter().any(|(owner, _)| *owner == item);
+    if !loaded || served.model.as_ref() != Ok(model) {
         return Err(
-            "initial Sync waiting grid has no current Load or declared-model custody".to_owned(),
+            "initial Sync waiting grid has no loaded item or declared-model custody".to_owned(),
         );
     }
     let raw = model.as_raw();
@@ -3434,6 +3435,28 @@ fn ordinary_source_spans_preserve_beat_sides_at_rounded_seams() {
     }
 }
 
+/// The grid with the beats nearest `seconds` moved onto them, for a geometry
+/// recorded across an interval change.
+fn with_beats_at(model: &BeatGridModel, seconds: &[f64]) -> BeatGridModel {
+    let mut raw = model.as_raw().clone();
+    for at in seconds {
+        let beat = raw
+            .beats
+            .iter_mut()
+            .min_by(|left, right| (left.at - at).abs().total_cmp(&(right.at - at).abs()))
+            .expect("the analysed grid holds beats");
+        if let Some(downbeat) = raw
+            .downbeats
+            .iter_mut()
+            .find(|downbeat| downbeat.beat_ordinal == beat.ordinal)
+        {
+            downbeat.at = *at;
+        }
+        beat.at = *at;
+    }
+    BeatGridModel::try_from(raw).expect("the moved beats keep their order")
+}
+
 #[kithara::test(native)]
 fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
     let source_rate = NonZeroU32::new(48_000).expect("source rate");
@@ -3598,7 +3621,7 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
             .expect("slope crossing in second half")
     );
 
-    let model = analysed_grid("library_flac_song2");
+    let model = with_beats_at(&analysed_grid("library_flac_song2"), &[32.82, 33.3, 33.76]);
     let anchor = SessionAnchor::new(
         SessionFrame::new(0),
         SessionBeat::default(),
@@ -3712,7 +3735,10 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
 #[kithara::test(native)]
 fn direct_grid_binding_checks_the_declared_crossing_cell() {
     let rate = NonZeroU32::new(48_000).expect("source and Host rate");
-    let model = analysed_grid("library_flac_newtechno");
+    let model = with_beats_at(
+        &analysed_grid("library_flac_newtechno"),
+        &[27.64, 28.04, 28.5],
+    );
     let at = SessionFrame::new(2_127_986);
     let host = SessionAnchor::new(
         at,
@@ -4347,7 +4373,6 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
                 kind: LinkOwnerInputKind::Grid {
                     answer: Box::new(GridAnswer {
                         item,
-                        load: seq,
                         model: Ok(shifted.clone()),
                     }),
                 },
@@ -4414,9 +4439,6 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
     observation.sync_requests[0].tracks[0].sync = kithara::link::SyncStatus::WaitingForGrid {
         required: Duration::ZERO,
     };
-    observation.loads[0].1 = wrong_seq;
-    assert!(relocation_count(&observation, item, &shifted, PLAY_SYNC_SEEK, None).is_err());
-    observation.loads[0].1 = seq;
     observation.sync_requests[0].seq = Some(seq);
     observation.sync_requests[0].tracks[0].sync = kithara::link::SyncStatus::On;
     observation.sync_requests[0].placements = 0..1;

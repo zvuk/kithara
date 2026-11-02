@@ -17,7 +17,9 @@ use crate::{
     interp::{InterpError, Interpolation},
 };
 
-const SIZES: [usize; 15] = [0, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 63, 64, 1023, 4096];
+const SIZES: [usize; 19] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 63, 64, 66, 258, 1023, 4096,
+];
 const OFFSETS: [usize; 2] = [0, 1];
 const STRIDES: [usize; 5] = [1, 2, 3, 6, 9];
 const RATE: u32 = 48_000;
@@ -35,6 +37,44 @@ const SPECIALS: [f32; 9] = [
     f32::NAN,
     f32::from_bits(SIGNALING_NAN),
 ];
+
+#[kithara::test]
+fn scalar_gain_matches_ieee_multiplication_at_every_level() {
+    let fallback = |samples: &mut [f32], gain: f32| dispatch!(Level::fallback(), simd => simd::scale_in_place_kernel(simd, samples, gain));
+    for scale in [
+        crate::scale_in_place as fn(&mut [f32], f32) -> usize,
+        fallback,
+    ] {
+        for gain in [0.7, -1.5].into_iter().chain(SPECIALS) {
+            for size in SIZES {
+                for offset in OFFSETS {
+                    let input = padded_signal(size.saturating_add(offset), sine_440());
+                    let mut output = input.clone();
+                    let region = output.split_at_mut(offset).1;
+                    let count = scale(region.split_at_mut(size).0, gain);
+                    assert_prefix(
+                        &format!("gain {gain}, size {size}, offset {offset}"),
+                        count,
+                        region,
+                        size,
+                        |slot, got| {
+                            input
+                                .get(offset.saturating_add(slot))
+                                .is_some_and(|x| same(got, x * gain))
+                        },
+                    );
+                    assert!(
+                        output
+                            .iter()
+                            .zip(&input)
+                            .take(offset)
+                            .all(|(got, want)| got.to_bits() == want.to_bits())
+                    );
+                }
+            }
+        }
+    }
+}
 
 type DeinterleavePair = fn(&[f32], &mut [f32], &mut [f32]) -> usize;
 type DownmixPair = fn(&[f32], &mut [f32]) -> usize;
@@ -1350,7 +1390,7 @@ const CURVES: [FadeCurve; 4] = [
 #[kithara::test]
 fn in_place_product_preserves_ieee_prefixes_at_every_level() {
     type Product = fn(&mut [f32], &[f32]) -> usize;
-    let fallback: Product = |samples, gains| dispatch!(Level::fallback(), simd => simd::multiply_in_place_kernel(simd, samples, gains));
+    let fallback: Product = |samples, gains| dispatch!(Level::fallback(), simd => portable::multiply_in_place_kernel(simd, samples, gains));
     let mut products: Vec<(&str, Product)> = vec![
         ("native", portable::multiply_in_place),
         ("fallback", fallback),

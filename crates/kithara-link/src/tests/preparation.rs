@@ -28,7 +28,7 @@ fn a_silent_curve_is_rebound_to_the_admitted_start(
     let loading = load(&mut deck, &mut rig, 0);
     rig.apply(&mut deck, loading, 23_990);
     control.clear();
-    answer(&mut deck, &mut rig, loading, model.clone());
+    answer(&mut deck, &mut rig, model.clone());
     let initial = control.commands()[0].0;
     let Command::Speed(SpeedCurve::Approach(curve), _) = control.commands()[0].1.clone() else {
         panic!("the cue must begin inside the Host approach");
@@ -104,7 +104,7 @@ fn owner_entry_preparation_waits_for_the_replacement_without_starting() {
     let loading = load(&mut deck, &mut rig, 0);
     rig.apply(&mut deck, loading, 23_990);
     control.clear();
-    answer(&mut deck, &mut rig, loading, model.clone());
+    answer(&mut deck, &mut rig, model.clone());
     let initial = control.commands()[0].0;
     rig.apply(&mut deck, initial, 23_990);
     control.clear();
@@ -394,7 +394,7 @@ fn a_late_partial_grid_resumes_ended_sync_from_zero() {
     assert!(crate::covers(model.geometry(), position(0)));
     assert!(!crate::covers(model.geometry(), position(480_000)));
     control.clear();
-    answer(&mut deck, &mut rig, loading, model);
+    answer(&mut deck, &mut rig, model);
     let commands = control.commands();
     assert_eq!(commands.len(), 2);
     assert_eq!(commands[1].1, Command::Seek(position(0)));
@@ -460,7 +460,6 @@ fn sync_load_snaps_to_the_first_strong_beat_and_waits_before_play(
     answer(
         &mut deck,
         &mut rig,
-        load,
         grid(beat_frames, first, meter, 480_000),
     );
     let commands = control.commands();
@@ -528,7 +527,7 @@ fn preparation_preserves_both_phase_error_directions(
     let loading = load(&mut deck, &mut rig, source_frontier);
     rig.apply(&mut deck, loading, output_frontier);
     control.clear();
-    answer(&mut deck, &mut rig, loading, grid(24_000, 0, None, 480_000));
+    answer(&mut deck, &mut rig, grid(24_000, 0, None, 480_000));
     let seq = control.commands()[0].0;
     assert_eq!(
         control.commands(),
@@ -603,7 +602,6 @@ fn audible_manual_speed_selects_the_cue_the_faster_stream_reaches() {
     assert_eq!(commands[0].0, commands[1].0);
 }
 
-// Ruling: spec 4.5 replaces forward-downbeat preparation with the nearest phase jump at lane lead.
 #[kithara::test]
 fn audible_alignment_seeks_ahead_of_the_live_source_at_the_next_host_downbeat() {
     let (mut deck, control, mut rig, _) =
@@ -644,7 +642,7 @@ fn host_seek_quantizes_between_beats_and_keeps_an_exact_beat() {
         let loading = load(&mut deck, &mut rig, cue);
         rig.apply(&mut deck, loading, 10_000);
         control.clear();
-        answer(&mut deck, &mut rig, loading, grid(24_000, 0, None, 480_000));
+        answer(&mut deck, &mut rig, grid(24_000, 0, None, 480_000));
         let seq = control.commands()[0].0;
         assert_eq!(
             control.commands()[1],
@@ -656,7 +654,6 @@ fn host_seek_quantizes_between_beats_and_keeps_an_exact_beat() {
     }
 }
 
-// Ruling: spec 4.6/8 replaces group maps and global operation ids with per-deck Seq and media identity.
 #[kithara::test]
 fn each_member_keeps_its_own_prepared_map() {
     let mut pending = Vec::new();
@@ -709,7 +706,6 @@ fn a_track_without_geometry_waits_for_its_grid() {
     assert_eq!(deck.entry(Bound::AtOrAfter(SessionFrame::new(0))), None);
 }
 
-// Ruling: spec 4.4/8 replaces half-open preparation windows with the two entry bounds.
 #[kithara::test]
 fn the_launch_window_admits_its_last_frame_and_refuses_its_end() {
     let (mut deck, control, mut rig, _) = super::fixtures::sounding();
@@ -761,7 +757,6 @@ fn the_launch_window_admits_its_last_frame_and_refuses_its_end() {
     );
 }
 
-// Ruling: spec 4.4/4.8 replaces the pending map with one current start; Retime replans it from the new entry bound.
 #[kithara::test]
 fn the_launch_window_starts_at_the_first_frame_the_caller_reaches() {
     let (mut deck, control, mut rig, _) = super::fixtures::loaded(grid(24_000, 0, None, 480_000));
@@ -833,7 +828,6 @@ fn the_launch_window_starts_at_the_first_frame_the_caller_reaches() {
     );
 }
 
-// Ruling: spec 4.5 removes preparation when off; the ordinary Play passes through unchanged.
 #[kithara::test]
 fn an_off_deck_prepares_no_member() {
     let (mut deck, control, mut rig, _) = super::fixtures::loaded(grid(24_000, 0, None, 480_000));
@@ -908,7 +902,6 @@ fn pickup_track_start_preserves_fractional_beat_phase() {
     assert_eq!(pickup(12_000), 3.5);
 }
 
-// Ruling: spec 8 exposes admissibility through entry bounds rather than a group refusal or id counter.
 #[kithara::test]
 fn a_window_too_short_for_a_downbeat_is_refused() {
     let (deck, control, _, _) = super::fixtures::sounding();
@@ -948,7 +941,6 @@ fn a_building_grid_that_proves_its_bar_is_prepared() {
     );
 }
 
-// Ruling: spec 4.8 explicitly permits beat phase for a NoMeter provisional grid.
 #[kithara::test]
 fn a_building_grid_that_cannot_prove_its_bar_waits_for_it() {
     let mut raw = grid(24_000, 0, None, 480_000).as_raw().clone();
@@ -987,7 +979,7 @@ fn a_building_track_grid_defers_until_it_covers_the_entry() {
     let first = load(&mut deck, &mut rig, 48_000);
     rig.apply(&mut deck, first, 0);
     control.clear();
-    answer(&mut deck, &mut rig, first, initial.clone());
+    answer(&mut deck, &mut rig, initial.clone());
     let covered = control.commands()[0].0;
     assert_eq!(
         control.commands()[1],
@@ -1002,7 +994,7 @@ fn a_building_track_grid_defers_until_it_covers_the_entry() {
     let loading = load(&mut deck, &mut rig, 200_000);
     rig.apply(&mut deck, loading, 0);
     control.clear();
-    answer(&mut deck, &mut rig, loading, initial);
+    answer(&mut deck, &mut rig, initial);
     assert_eq!(
         deck.snapshot().sync,
         SyncStatus::WaitingForGrid {
@@ -1010,12 +1002,7 @@ fn a_building_track_grid_defers_until_it_covers_the_entry() {
         }
     );
     assert!(control.commands().is_empty());
-    answer(
-        &mut deck,
-        &mut rig,
-        loading,
-        grid(24_000, 0, Some((4, 0)), 480_000),
-    );
+    answer(&mut deck, &mut rig, grid(24_000, 0, Some((4, 0)), 480_000));
     let commands = control.commands();
     assert_eq!(commands.len(), 2);
     assert_eq!(commands[1].1, Command::Seek(position(288_000)));
@@ -1038,7 +1025,7 @@ fn sync_load_snaps_between_beats_but_keeps_an_exact_beat() {
         let load = load(&mut deck, &mut rig, cue);
         rig.apply(&mut deck, load, 10_000);
         control.clear();
-        answer(&mut deck, &mut rig, load, grid(24_000, 0, None, 480_000));
+        answer(&mut deck, &mut rig, grid(24_000, 0, None, 480_000));
         let commands = control.commands();
         assert_eq!(commands.len(), 2);
         assert_eq!(

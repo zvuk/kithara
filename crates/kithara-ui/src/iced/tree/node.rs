@@ -10,9 +10,9 @@ use super::{
     measure::{Flex, Measured},
 };
 use crate::{
-    compile::CompiledUi,
     draw::Transform,
     expand::{Binding, ControlSpec, ExpandedNode, SurfaceSpec, header_path},
+    hosts::surface::entry_value,
     iced::{
         immediate::{
             Anchored, Modal, ModuleChrome, Placement, Viewport, WheelSurface, drop_outline,
@@ -106,7 +106,8 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
             ),
             group.surface(),
             size,
-            self.ctx.ui,
+            self.ctx,
+            self.skin,
         );
         apply_size(Rendered::leading(element), group.size())
     }
@@ -396,13 +397,20 @@ fn wheeled<'a>(
     element: Element<'a, Published>,
     surface: Option<&SurfaceSpec>,
     size: (Length, Length),
-    ui: &'a CompiledUi,
+    ctx: Ctx<'a, '_>,
+    skin: &'a Skin,
 ) -> Element<'a, Published> {
     let Some(surface) = surface else {
         return element;
     };
     let wheel = WheelSurface::builder()
-        .path(ui.resolve(surface.path))
+        .path(ctx.ui.resolve(surface.path))
+        .maybe_entry(
+            surface
+                .entry
+                .as_ref()
+                .map(|entry| (entry_value(ctx, entry), skin)),
+        )
         .build()
         .view();
     Stack::with_children([element, wheel])

@@ -27,6 +27,7 @@ struct CacheHandle<T> {
 #[debug("{:?}", handle.inner)]
 pub struct CachedWriter<W> {
     handle: CacheHandle<W>,
+    _writing: Arc<()>,
 }
 
 /// Reader (Ready) wrapper returned by [`super::CachedAssets`]. Cheap to clone.
@@ -64,9 +65,11 @@ impl<W> CachedWriter<W> {
         key: ResourceKey,
         inner: W,
         enforce_capacity: Option<EnforceCapacity>,
+        writing: Arc<()>,
     ) -> Self {
         Self {
             handle: CacheHandle::new(pinned, key, inner, enforce_capacity),
+            _writing: writing,
         }
     }
 
@@ -121,12 +124,16 @@ impl<W: WriteSide> WriteSide for CachedWriter<W> {
     type Reader = CachedReader<W::Reader>;
 
     fn commit(self, final_len: Option<u64>) -> StorageResult<CachedReader<W::Reader>> {
-        let CacheHandle {
-            enforce_capacity,
-            pinned,
-            key,
-            inner,
-        } = self.handle;
+        let Self {
+            handle:
+                CacheHandle {
+                    enforce_capacity,
+                    pinned,
+                    key,
+                    inner,
+                },
+            _writing,
+        } = self;
         let reader = CachedReader::new(
             pinned,
             key,
@@ -167,6 +174,7 @@ impl<R: ReadSide> ReadSide for CachedReader<R> {
             self.handle.key.clone(),
             self.handle.inner.reactivate()?,
             self.handle.enforce_capacity.clone(),
+            Arc::new(()),
         ))
     }
 
