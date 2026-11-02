@@ -45,9 +45,9 @@ impl Container<'_> {
     /// The build root is the runner's own: one job runs per container, and the
     /// lane runner re-points the alias inside it at the lane's build, which
     /// two jobs sharing one root would race. The lanes' builds are not: every
-    /// runner of a trust takes its lane's slots in one directory, so a lane
+    /// runner of a cache scope takes its lane's slots in one directory, so a lane
     /// built on one runner is warm for the next that runs it. Cargo's home is shared by the
-    /// runners of one trust, so a crate is downloaded once per trust, while a
+    /// runners of one cache scope, so a crate is downloaded once per scope, while a
     /// review job never writes what a trusted job reads. It is mounted whole
     /// rather than as its registry and its git checkouts separately: cargo
     /// guards both with a lock file kept beside them, and mounting the data
@@ -105,24 +105,22 @@ impl Container<'_> {
         host.cache_root.join("target").join(&runner.name)
     }
 
-    /// Where the runners of one trust take their lanes' build slots.
+    /// Where the runners of one cache scope take their lanes' build slots.
     pub(super) fn build_slots(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
         host.cache_root
             .join(consts::BUILD_SLOTS_DIR)
-            .join(runner.cache_trust.as_str())
+            .join(&runner.cache_scope)
     }
 
-    /// Where the runners of one trust keep kache's host file and store.
+    /// Where the runners of one cache scope keep kache's host file and store.
     pub(super) fn kache(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
         host.cache_root
             .join(consts::KACHE_DIR)
-            .join(runner.cache_trust.as_str())
+            .join(&runner.cache_scope)
     }
 
     fn cargo_home(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
-        host.cache_root
-            .join("cargo")
-            .join(runner.cache_trust.as_str())
+        host.cache_root.join("cargo").join(&runner.cache_scope)
     }
 
     pub(super) fn mount_type(source: &str) -> &'static str {
@@ -138,7 +136,7 @@ impl Container<'_> {
     /// Cargo is told the build root, the same path in every container; a lane
     /// builds behind the alias in it, so every lane's compilations are keyed
     /// alike fleet-wide and the compiler cache serves one runner's entries to
-    /// another. The lane is told where its trust's slots are. The store itself is the one the runner's credentials name;
+    /// another. The lane is told where its scope's slots are. The store itself is the one the runner's credentials name;
     /// nothing of it is kept on this disk. `production/main` is told where it
     /// claims lane directories too, until this layout replaces its own.
     ///
@@ -338,20 +336,47 @@ pub(crate) mod tests {
         assert_eq!(xtask.file_name(), Some(OsStr::new(consts::XTASK_BUILD)));
     }
 
+    #[test]
+    fn private_cache_scopes_isolate_files_at_the_same_trust() {
+        let mut host = host_fixture();
+        "network".clone_into(&mut host.runners[0].cache_scope);
+        host.runners[0].sccache_s3_env_file = "/etc/kithara-ci/cache/network.env".into();
+        host.runners[0].labels = ["self-hosted", "linux", "x64", "kithara-network"]
+            .map(String::from)
+            .into();
+        let network = &host.runners[0];
+        for ordinary in &host.runners[1..] {
+            assert_eq!(network.cache_trust, ordinary.cache_trust);
+            assert_ne!(
+                Container::build_slots(&host, network),
+                Container::build_slots(&host, ordinary)
+            );
+            assert_ne!(
+                Container::kache(&host, network),
+                Container::kache(&host, ordinary)
+            );
+            assert_ne!(
+                Container::cargo_home(&host, network),
+                Container::cargo_home(&host, ordinary)
+            );
+        }
+    }
+
     /// Cargo's home holds what jobs download and what they unpack it into, and
     /// a review job must never write what a trusted job reads: two runners
-    /// share a home exactly when they share a trust.
+    /// share a home exactly when they share a cache scope.
     #[test]
-    fn runners_share_a_cargo_home_exactly_when_they_share_a_trust() {
+    fn runners_share_a_cargo_home_exactly_when_they_share_a_scope() {
         let mut host = host_fixture();
         host.runners[0].cache_trust = CacheTrust::Trusted;
+        "trusted".clone_into(&mut host.runners[0].cache_scope);
         let home = |runner: &LinuxRunner| mounted_at(&host, runner, &told(runner, "CARGO_HOME"));
 
         for first in &host.runners {
             for second in &host.runners {
                 assert_eq!(
                     home(first) == home(second),
-                    first.cache_trust == second.cache_trust,
+                    first.cache_scope == second.cache_scope,
                     "{} and {}",
                     first.name,
                     second.name
@@ -360,13 +385,14 @@ pub(crate) mod tests {
         }
     }
 
-    /// A lane's build is reused by whichever runner of its trust runs the lane
-    /// next, so runners keep their lanes' slots where every runner of a trust
+    /// A lane's build is reused by whichever runner of its scope runs the lane
+    /// next, so runners keep their lanes' slots where every runner of a scope
     /// sees them, and a review job never builds in a slot a trusted job reads.
     #[test]
-    fn runners_share_lane_slots_exactly_when_they_share_a_trust() {
+    fn runners_share_lane_slots_exactly_when_they_share_a_scope() {
         let mut host = host_fixture();
         host.runners[0].cache_trust = CacheTrust::Trusted;
+        "trusted".clone_into(&mut host.runners[0].cache_scope);
         let slots = |runner: &LinuxRunner| {
             mounted_at(&host, runner, &told(runner, consts::BUILD_SLOTS_ENV))
         };
@@ -375,7 +401,7 @@ pub(crate) mod tests {
             for second in &host.runners {
                 assert_eq!(
                     slots(first) == slots(second),
-                    first.cache_trust == second.cache_trust,
+                    first.cache_scope == second.cache_scope,
                     "{} and {}",
                     first.name,
                     second.name
@@ -387,11 +413,12 @@ pub(crate) mod tests {
     /// Every compile in a container reaches kache's store and remote through
     /// the host file the runner writes, whatever command started it: a stress
     /// run or the xtask bootstrap compiled cold into a store thrown away with
-    /// the container. The store is one per trust, as the Cargo home is.
+    /// the container. The store is one per scope, as the Cargo home is.
     #[test]
-    fn every_compile_reaches_its_trusts_kache() {
+    fn every_compile_reaches_its_scopes_kache() {
         let mut host = host_fixture();
         host.runners[0].cache_trust = CacheTrust::Trusted;
+        "trusted".clone_into(&mut host.runners[0].cache_scope);
         let store =
             |runner: &LinuxRunner| mounted_at(&host, runner, Path::new(consts::KACHE_MOUNT));
 
@@ -406,7 +433,7 @@ pub(crate) mod tests {
                 store(runner),
                 host.cache_root
                     .join(consts::KACHE_DIR)
-                    .join(runner.cache_trust.as_str())
+                    .join(&runner.cache_scope)
                     .to_string_lossy()
             );
         }
