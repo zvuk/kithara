@@ -1415,6 +1415,60 @@ mod origin_tests {
             );
         }
     }
+
+    #[cfg(feature = "resample-rubato")]
+    #[kithara::test]
+    #[kithara::hang_watchdog]
+    #[case::nearest_native_lands_after_the_frame(24_006)]
+    #[case::nearest_native_lands_before_the_frame(24_068)]
+    fn seek_starts_at_the_requested_output_frame_between_native_samples(#[case] frame: u64) {
+        let pools = pools();
+        let rate = NonZeroU32::new(44_100).expect("native rate");
+        let source = OffsetDecoder {
+            rate,
+            length: 44_100,
+            declared: crate::DecoderDuration::RawLength(Duration::from_secs(1)),
+            media_origin: None,
+            phase: Duration::ZERO,
+            origin: 0,
+            next_frame: 0,
+            original: Some(PcmOrigin::new(Duration::ZERO, Duration::ZERO)),
+            observing_original: false,
+            pools: pools.clone(),
+        };
+        let config = DecoderResamplerConfig::builder()
+            .target_sample_rate(NonZeroU32::new(48_000).expect("output rate"))
+            .backend(RubatoBackend::new())
+            .build();
+        let mut decoder =
+            ResampledDecoder::new(Box::new(source), config, &pools).expect("actual resampler");
+        let spec = decoder.spec();
+        let target = spec.duration_for(frame).expect("output frame time");
+        let DecoderSeekOutcome::Landed { landed_frame, .. } =
+            decoder.seek(target).expect("resampled seek")
+        else {
+            panic!("seek landing");
+        };
+        assert_eq!(landed_frame, frame);
+        let first = first_pcm(&mut decoder);
+        assert_eq!(first.meta.frame_offset, frame);
+        let half_frame = Duration::from_nanos(1_000_000_000 / 96_000);
+        assert!(first.meta.timestamp.abs_diff(target) <= half_frame);
+        let mut end = first.meta.frame_range().end;
+        loop {
+            hang_tick!();
+            match decoder.next_chunk().expect("resampled suffix") {
+                DecoderChunkOutcome::Chunk(chunk) => {
+                    assert_eq!(chunk.meta.frame_offset, end);
+                    end = chunk.meta.frame_range().end;
+                    hang_reset!();
+                }
+                DecoderChunkOutcome::Pending(_) => {}
+                DecoderChunkOutcome::Eof => break,
+            }
+        }
+        assert_eq!(end, 48_000);
+    }
 }
 
 #[cfg(all(test, feature = "resample-rubato"))]
