@@ -392,8 +392,7 @@ async fn a_prepared_delayed_final_packet_stitches_its_successor_inside_the_same_
     legacy_fixture::chain(&mut control, leading, successor);
     let mut leading_packets = control.packets.remove(0);
     assert_eq!(kithara_worker::mock::wake_state(&wake).0, 0);
-    let rendered = kithara_platform::tokio::task::spawn_blocking(move || {
-        let trace = kithara_test_utils::test::usdt::scope();
+    let prepared = kithara_platform::tokio::task::spawn_blocking(move || {
         processor.inbox.0.drain();
         let scope = processor.mixer.scope;
         processor.mixer.prepare_offline(
@@ -402,15 +401,7 @@ async fn a_prepared_delayed_final_packet_stitches_its_successor_inside_the_same_
             MAX_BLOCK_FRAMES as usize,
             RATE,
         );
-        let waits = trace.events_of("pcm_wait_started").len();
-        let rendered = render(&mut processor, MAX_BLOCK_FRAMES as usize);
-        assert_eq!(
-            trace.events_of("pcm_wait_started").len(),
-            waits,
-            "the single graph block must not wait for PCM",
-        );
-        drop(trace);
-        rendered
+        processor
     });
     wait_until(
         Duration::from_secs(5),
@@ -428,7 +419,14 @@ async fn a_prepared_delayed_final_packet_stitches_its_successor_inside_the_same_
     let mut terminal = chunk(spec, SegmentId::FIRST, end, end, &[]);
     terminal.meta.end_of_track = true;
     leading_packets.push(PcmPacket::Chunk(Box::new(terminal)));
-    let (sounded, left, right) = rendered.await.expect("renderer completes");
+    let mut processor = prepared.await.expect("offline preparation completes");
+    let trace = kithara_test_utils::test::usdt::scope();
+    let (sounded, left, right) = render(&mut processor, MAX_BLOCK_FRAMES as usize);
+    assert!(
+        trace.events_of("pcm_wait_started").is_empty(),
+        "the single graph block must not wait for PCM",
+    );
+    drop(trace);
     assert!(sounded);
     assert!(
         left.iter()
