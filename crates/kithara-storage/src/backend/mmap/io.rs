@@ -255,9 +255,10 @@ impl MmapDriver {
             self.config.path.parent().ok_or_else(|| {
                 StorageError::Failed("empty commit path has no parent".to_owned())
             })?;
-        tempfile::NamedTempFile::new_in(parent)?
-            .persist(&self.config.path)
-            .map_err(|error| error.error)?;
+        let generation = tempfile::tempdir_in(parent)?;
+        let empty = generation.path().join("empty");
+        fs::File::create(&empty)?;
+        fs::rename(&empty, &self.config.path)?;
         let displaced = self.committed.swap(None);
         *mmap = MmapState::Empty;
         if let Some(temp) = rewrite_temp {
