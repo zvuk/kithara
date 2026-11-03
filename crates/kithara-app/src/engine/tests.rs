@@ -478,30 +478,42 @@ async fn sync_puts_the_deck_on_the_host_beat(rhythm_a_wav: String) {
     drop(served);
 }
 
-/// The deck shows the seek's target, then plays on from it.
+/// The deck shows a seek landing on the in-phase position nearest the
+/// request, then plays on from it.
 #[cfg(not(feature = "broadcast"))]
 #[kithara::test(native, tokio, flash(false))]
 async fn a_seek_on_a_synced_deck_shows_the_position_moving_on(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
     rig.call(|rig| {
         let _ = capture(rig, consts::SETTLE);
+        let bar = f64::from(consts::BEATS_PER_BAR) * 60.0 / consts::TRACK_BPM;
+        let half_bar = bar / 2.0;
         let duration = rig.queues[0]
             .duration_seconds()
             .expect("the playing deck knows its duration");
-        let target = duration * 0.25;
-        rig.send("deck-a/wave", ControlAction::SetScalar(0.25));
+        let mut shown = rig.queues[0]
+            .position_seconds()
+            .expect("the playing deck knows its position");
+        let target = 2.0f64.mul_add(bar, shown);
+
+        rig.send("deck-a/wave", ControlAction::SetScalar(target / duration));
         rig.pump();
+
+        let mut landed = None;
         rig.until(
-            "the deck shows the seek",
+            "the deck jumps near the request and plays on",
             Rig::DEADLINE,
             Rig::frame,
-            |rig| (rig.scalar("deck.playback.position_secs@deck=a") - target).abs() < 0.2,
-        );
-        rig.until(
-            "the shown position plays on past the target",
-            Rig::DEADLINE,
-            Rig::frame,
-            |rig| rig.scalar("deck.playback.position_secs@deck=a") > target + 0.3,
+            |rig| {
+                let last =
+                    std::mem::replace(&mut shown, rig.scalar("deck.playback.position_secs@deck=a"));
+                if (shown - target).abs() >= half_bar {
+                    landed = None;
+                } else if (shown - last).abs() >= half_bar {
+                    landed = Some(shown);
+                }
+                landed.is_some_and(|at| shown > at)
+            },
         );
     })
     .await;
