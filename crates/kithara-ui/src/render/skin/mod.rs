@@ -1,4 +1,6 @@
 mod custom;
+#[cfg(test)]
+mod fonts_tests;
 mod neutral;
 
 pub use custom::CustomSkin;

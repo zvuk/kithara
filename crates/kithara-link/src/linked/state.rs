@@ -1,7 +1,8 @@
 use kithara_beat::BeatGridModel;
 use kithara_command::{Seq, When};
 use kithara_config::Config;
-use kithara_play::{Outbox, PlayError, Player, Position, Track, TrackSnapshot};
+use kithara_platform::time::Duration;
+use kithara_play::{Outbox, PlayError, Player, Position, Settled, Track, TrackSnapshot};
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 
 use crate::{GridAnswer, LinkError, LinkedConfig, TempoTrajectory};
@@ -9,18 +10,26 @@ use crate::{GridAnswer, LinkError, LinkedConfig, TempoTrajectory};
 /// A player that can align itself and receive the Host's planned tempo trajectory.
 pub trait LinkedPlayer<S>: Player<S> {
     /// Enables alignment, including an explicit phase jump while sounding;
-    /// disabling alignment sends nothing and preserves in-flight speeds.
+    /// an aligned track keeps its alignment and sends nothing. Disabling
+    /// alignment sends nothing and preserves in-flight speeds.
     ///
     /// # Errors
     /// Returns the refusal of the speed or jump batch, if one is sent.
     fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>;
 
-    /// Replaces the Host trajectory, changing sounding lanes on `at`, silent
-    /// lanes on Next, and withdrawing and replanning any waiting start.
-    fn retime(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>);
+    /// Replaces the Host trajectory, changing sounding lanes on each of `frames`,
+    /// silent lanes on Next, and withdrawing and replanning any waiting start.
+    /// One call moves a sounding deck at most once.
+    fn retime(
+        &mut self,
+        trajectory: &TempoTrajectory,
+        frames: &[SessionFrame],
+        out: &mut Outbox<'_, S>,
+    );
 
     /// Accepts analysis for the current item only: resumes grid waits, applies
-    /// silent refinements immediately, and corrects sounding phase without a jump.
+    /// silent refinements immediately, and closes sounding phase by the law of
+    /// [`LinkConfig`].
     fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>);
 
     /// Whether the Host should send this player tempo changes.
@@ -39,24 +48,38 @@ pub trait LinkedPlayer<S>: Player<S> {
     /// None awaits its current receipt.
     fn retime_applied(&mut self, at: SessionFrame) -> Option<bool>;
 
-    /// Replaces the trajectory and closes phase using only bounded speed steps.
+    /// Replaces the trajectory and closes phase by the law of [`LinkConfig`].
     fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>);
 }
 
-/// Maximum adjacent speed step used for inaudible phase correction.
+/// How a sounding deck closes its phase error.
 #[derive(Clone, Copy, Debug, PartialEq, Config)]
 #[config(default, check(error = LinkError), fields(value, get(copy)))]
 pub struct LinkConfig {
+    /// Maximum adjacent speed step used for inaudible phase correction.
     #[config(check = check_epsilon, builder(default = 0.001))]
     epsilon: f32,
+    /// Largest phase error, in beats, a drift correction closes by a slew; a
+    /// larger one relocates the deck. Tempo command corrections skip this limit.
+    #[config(check = check_slew_limit, builder(default = 0.05))]
+    slew_limit: f32,
+    /// Time a new segment takes from its cue to ready on a silent deck.
+    #[config(builder(default = Duration::from_millis(60)))]
+    preparation: Duration,
 }
 
 fn check_epsilon(epsilon: f32) -> Result<f32, LinkError> {
-    if epsilon.is_finite() && epsilon > 0.0 {
-        Ok(epsilon)
-    } else {
-        Err(LinkError::Epsilon { epsilon })
-    }
+    positive(epsilon, LinkError::Epsilon { epsilon })
+}
+
+fn check_slew_limit(limit: f32) -> Result<f32, LinkError> {
+    positive(limit, LinkError::SlewLimit { limit })
+}
+
+fn positive(value: f32, refusal: LinkError) -> Result<f32, LinkError> {
+    (value.is_finite() && value > 0.0)
+        .then_some(value)
+        .ok_or(refusal)
 }
 
 /// Whether Host synchronization owns speed and phase for this track.
@@ -66,6 +89,8 @@ pub enum SyncMode {
     On,
     /// Analysis refused; playback continues without synchronization.
     Unsyncable,
+    /// Waits for a grid: shown as unsyncable until one turns SYNC on.
+    NoGrid,
 }
 
 /// Synchronization progress beside the underlying track snapshot.
@@ -105,6 +130,19 @@ impl Waiting {
             | Self::Seek { required } => required,
         }
     }
+
+    /// The wait left once a cue lands on `position`: a Load or Play follows it, a Sync ends.
+    pub(super) fn cued(self, position: Position) -> Option<Self> {
+        match self {
+            Self::Load { .. } => Some(Self::Load { required: position }),
+            Self::Play { at, .. } => Some(Self::Play {
+                required: position,
+                at,
+            }),
+            Self::Sync { .. } => None,
+            Self::Seek { .. } => Some(self),
+        }
+    }
 }
 
 /// Track state and its synchronization admission or correction state.
@@ -129,13 +167,34 @@ pub struct Linked<P> {
     pub(crate) mode: SyncMode,
     pub(super) waiting: Option<Waiting>,
     pub(super) correction: Option<(Seq, RunningCorrection)>,
-    pub(super) alignment: Option<bool>,
+    pub(super) alignment: Option<Cause>,
     pub(super) speeds: Vec<(Seq, SpeedOperation)>,
     pub(super) start: Option<Seq>,
     pub(super) start_caller: Option<Seq>,
     pub(super) withdrawn: Vec<Seq>,
     pub(super) retimes: Vec<(SessionFrame, Seq)>,
     pub(super) cue: Option<Cue>,
+    pub(super) relocation: Option<Relocation>,
+    /// A pause holds a deck that sounded since its Load, and no Seek has moved it since.
+    pub(super) paused_in_place: bool,
+}
+
+/// A refused seek on a playing deck, answered by what re-issues it.
+#[derive(Clone, Copy)]
+pub(super) struct Relocation {
+    /// The number the seek's caller holds.
+    pub(super) caller: Seq,
+    /// The re-issued batch; `None` until it goes out.
+    pub(super) sent: Option<Reissued>,
+}
+
+/// The batch that carries a refused seek again.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Reissued {
+    /// Answered by the track's lane.
+    Lane(Seq),
+    /// Answered by its deck receipt.
+    Deck { seq: Seq, applied: Option<bool> },
 }
 
 /// A silent entry waiting for its grid, and how the grid places it.
@@ -160,9 +219,18 @@ pub(super) enum CorrectionState {
     Applied(RunningCorrection),
 }
 
+/// Why a sounding deck owes a phase correction.
+#[derive(Clone, Copy)]
+pub(super) enum Cause {
+    /// A tempo command: the slew closes any phase.
+    Commanded,
+    /// Phase drift: a slew closes it up to the slew limit.
+    Drift,
+}
+
 pub(super) enum SpeedOperation {
     Correction {
-        commanded: bool,
+        cause: Cause,
         state: CorrectionState,
     },
     Alignment,
@@ -172,6 +240,20 @@ pub(super) enum SpeedOperation {
 }
 
 impl<P> Linked<P> {
+    pub(super) fn answer_reissued(&mut self, settled: &Settled) {
+        if let Some(Relocation {
+            sent: Some(Reissued::Deck { seq: sent, applied }),
+            ..
+        }) = &mut self.relocation
+        {
+            match settled {
+                Settled::Applied { seq, .. } if seq == sent => *applied = Some(true),
+                Settled::Rejected { seq, .. } if seq == sent => *applied = Some(false),
+                _ => {}
+            }
+        }
+    }
+
     /// Decorates a track with synchronization initially off.
     #[must_use]
     pub fn new(config: LinkedConfig<P>) -> Self {
@@ -192,9 +274,11 @@ impl<P> Linked<P> {
             speeds: Vec::new(),
             start: None,
             start_caller: None,
+            relocation: None,
             withdrawn: Vec::new(),
             retimes: Vec::new(),
             cue: None,
+            paused_in_place: false,
         }
     }
 

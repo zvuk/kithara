@@ -52,7 +52,7 @@ fn a_tempo_commit_before_the_activation_moves_it_onto_the_live_beat() {
     host.push(SessionFrame::new(36_000), Tempo::new(150.0).expect("tempo"))
         .expect("step");
     rig.now = SessionFrame::new(36_000);
-    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, SessionFrame::new(36_000), out));
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[SessionFrame::new(36_000)], out));
     let commands = control.commands();
     assert_eq!(commands.len(), 2);
     assert_eq!(commands[0].0, commands[1].0);
@@ -94,7 +94,7 @@ fn every_pending_member_moves_in_one_transaction_onto_its_own_map() {
     for (deck, control, rig, _, old) in &mut members {
         rig.now = SessionFrame::new(36_000);
         let source = deck.snapshot().as_ref().position;
-        rig.run(|out| LinkedPlayer::retime(deck, &host, SessionFrame::new(36_000), out));
+        rig.run(|out| LinkedPlayer::retime(deck, &host, &[SessionFrame::new(36_000)], out));
         let commands = control.commands();
         assert_eq!(commands.len(), 2);
         assert_eq!(commands[0].0, commands[1].0);
@@ -133,7 +133,7 @@ fn an_activation_pushed_past_its_window_is_withdrawn() {
     host.push(SessionFrame::new(36_000), Tempo::new(90.0).expect("tempo"))
         .expect("step");
     rig.now = SessionFrame::new(36_000);
-    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, SessionFrame::new(36_000), out));
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[SessionFrame::new(36_000)], out));
     let commands = control.commands();
     assert_eq!(commands.len(), 2);
     assert_eq!(
