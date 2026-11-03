@@ -3439,7 +3439,11 @@ banned_symbol_needles = [
   "symphonia_format_riff",
   "fdk_aac",
 ]
-apple_proof_needles = ["AppleCodec", "AppleAudioFileDemuxer"]
+# The release slices are fat-LTO'd and stripped, so no Rust name survives in
+# them; the proof is AudioToolbox entry points that only the Apple decode
+# backend imports: the demuxer opens files through callbacks, and the codec
+# reads the format list a magic cookie describes.
+apple_proof_needles = ["AudioFileOpenWithCallbacks", "AudioFormatGetProperty"]
 
 [ext.apple.docgen]
 # DocC documentation-extension pages generated from Rust rustdoc JSON so the
