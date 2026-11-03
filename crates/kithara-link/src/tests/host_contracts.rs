@@ -1,6 +1,6 @@
 use kithara_host::{DeckId, HostOwner};
 use kithara_play::{HostedDeck, PlayError, SessionError, TrackSnapshot, TrackStatus};
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
 
 use super::{
@@ -275,7 +275,7 @@ fn parent_tempo_reaches_only_a_host_synced_group() {
     let (mut host, clock) = host();
     clock.axis(0, -96_000, -4.0, 120.0, 48_000);
     host.begin_pass();
-    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
+    clock.edit(|script| script.clock = Some(kithara_host::PassClock::default()));
     let mut decks = Vec::new();
     for synced in [false, false, true] {
         let (mut deck, control, mut rig, _) = sounding();
@@ -321,7 +321,7 @@ fn a_session_publication_reaches_host_synced_descendants_on_every_level() {
     let (mut host, clock) = host();
     clock.axis(0, -96_000, -4.0, 120.0, 48_000);
     host.begin_pass();
-    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
+    clock.edit(|script| script.clock = Some(kithara_host::PassClock::default()));
     let mut decks = Vec::new();
     for synced in [true, true, false] {
         let (mut deck, control, mut rig, _) = sounding();
@@ -369,7 +369,7 @@ fn a_session_publication_reaches_host_synced_descendants_on_every_level() {
 #[kithara::test]
 fn a_child_refusing_the_segment_leaves_the_whole_tree_unchanged() {
     let (mut host, clock) = host();
-    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
+    clock.edit(|script| script.clock = Some(kithara_host::PassClock::default()));
     let mut decks = Vec::new();
     for room in [32, 0] {
         let (deck, control, _, _) = sounding();
@@ -433,6 +433,11 @@ fn a_physical_epoch_invalidates_every_mode() {
                 }
             );
         });
+        host.apply(LinkedHostCommand::Sync {
+            deck: id,
+            on: false,
+        })
+        .expect("off");
         control.clear();
         host.apply(LinkedHostCommand::Sync { deck: id, on: true })
             .expect("preserved grid aligns");
@@ -445,7 +450,7 @@ fn a_new_session_axis_reaches_every_descendant_in_every_mode() {
     let (mut host, clock) = host();
     clock.axis(0, -96_000, -4.0, 120.0, 48_000);
     host.begin_pass();
-    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
+    clock.edit(|script| script.clock = Some(kithara_host::PassClock::default()));
     let mut probes = Vec::new();
     for synced in [true, false] {
         let (mut deck, control, mut rig, _) = sounding();
@@ -597,7 +602,7 @@ fn a_route_boundary_drops_the_free_handoff_planned_on_the_previous_axis() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(150.0, 4),
-            SessionFrame::new(96_000),
+            &[SessionFrame::new(96_000)],
             out,
         );
     });

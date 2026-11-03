@@ -106,6 +106,7 @@ where
         suspended: false,
         now: SessionFrame::new(0),
         delivery: FrameCount::new(128),
+        deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
     };
@@ -453,6 +454,7 @@ pub(crate) fn tick_fixture(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestP
         suspended: false,
         now: SessionFrame::new(0),
         delivery: FrameCount::new(128),
+        deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
     };
