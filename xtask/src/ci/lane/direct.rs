@@ -1010,6 +1010,8 @@ cargo.packages = ["tools"]
     #[cfg(unix)]
     #[test]
     fn a_ci_lane_that_compiled_through_the_cache_reads_its_counts() {
+        let _tracing =
+            tracing::subscriber::set_default(tracing_subscriber::fmt().with_test_writer().finish());
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let (tools, asked) = cache_doubles(temp.path());
         let (mut ctx, args) = trivial_lane(temp.path());
@@ -1040,6 +1042,8 @@ cargo.packages = ["tools"]
     #[cfg(unix)]
     #[test]
     fn a_ci_lane_compiles_through_a_kache_of_its_own() {
+        let _tracing =
+            tracing::subscriber::set_default(tracing_subscriber::fmt().with_test_writer().finish());
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let (tools, asked) = cache_doubles(temp.path());
         let told = temp.path().join("told");

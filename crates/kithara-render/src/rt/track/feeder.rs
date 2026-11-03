@@ -195,7 +195,11 @@ impl PlayerResource {
         }
     }
 
-    pub(super) fn poll_end(&mut self, budget: &mut usize) -> Option<ReadOutcome> {
+    pub(super) fn poll_end(
+        &mut self,
+        budget: &mut usize,
+        wait_for_pcm: bool,
+    ) -> Option<ReadOutcome> {
         self.recycle_obsolete(budget);
         if self.eof {
             return Some(ReadOutcome::Eof);
@@ -207,6 +211,9 @@ impl PlayerResource {
             return None;
         }
         let receiver = &mut self.consumer.get_mut().receiver;
+        if wait_for_pcm {
+            receiver.wait_for_packet();
+        }
         let Some(next) = receiver.peek() else {
             if receiver.is_closed() {
                 self.failed = Some(FailureSource::ChannelClosed);
@@ -276,13 +283,49 @@ impl PlayerResource {
         }
     }
 
-    #[kithara::hang_watchdog]
+    pub(in crate::rt) fn waits_offline(&self) -> bool {
+        self.consumer.get().receiver.waits_offline()
+    }
+
+    pub(super) fn prepare_offline(&mut self) -> bool {
+        if !self.waits_offline() {
+            return false;
+        }
+        let mut budget = usize::MAX;
+        loop {
+            self.recycle_obsolete(&mut budget);
+            if self.packet.is_some() || self.eof || self.failed.is_some() {
+                break;
+            }
+            let receiver = &self.consumer.get().receiver;
+            receiver.wait_for_packet();
+            if !matches!(receiver.peek(), Some(PcmPacket::Chunk(chunk)) if chunk.meta.segment < self.lane.segment)
+            {
+                break;
+            }
+        }
+        self.refresh_mark(&mut budget);
+        true
+    }
+
     pub(super) fn read(
         &mut self,
         context: Option<&RenderContext>,
         buffers: &mut [&mut [f32]],
         range: Range<usize>,
         budget: &mut usize,
+    ) -> ReadOutcome {
+        self.read_in(context, buffers, range, budget, false)
+    }
+
+    #[kithara::hang_watchdog]
+    pub(super) fn read_in(
+        &mut self,
+        context: Option<&RenderContext>,
+        buffers: &mut [&mut [f32]],
+        range: Range<usize>,
+        budget: &mut usize,
+        wait_for_pcm: bool,
     ) -> ReadOutcome {
         let [left, right, ..] = buffers else {
             return ReadOutcome::Full { frames: 0 };
@@ -300,10 +343,7 @@ impl PlayerResource {
         while written < requested {
             hang_tick!();
             self.recycle_obsolete(budget);
-            if self.packet.is_none() && !self.eof && self.failed.is_none() {
-                self.consumer.get().receiver.wait_for_packet();
-            }
-            if let Some(end) = self.poll_end(budget) {
+            if let Some(end) = self.poll_end(budget, wait_for_pcm) {
                 return if written == 0 {
                     end
                 } else {

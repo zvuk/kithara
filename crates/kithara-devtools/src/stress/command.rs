@@ -3681,6 +3681,7 @@ mod engine_selection_tests {
                 module_path!(),
                 "check_pinned_engine_fixture",
             ))
+            .env("NEXTEST_PROFILE", "stress")
             .env("RUSTC_WRAPPER", &executable)
             .env("RUSTC_WORKSPACE_WRAPPER", &executable)
             .env("KITHARA_ENGINE_FIXTURE_RECEIPT", &receipt)
@@ -3739,6 +3740,7 @@ mod engine_selection_tests {
                         .get_envs()
                         .filter_map(|(key, value)| value.map(|value| (key, value))),
                 )
+                .env_remove("NEXTEST_PROFILE")
                 .env_remove("RUSTFLAGS")
                 .env_remove("CARGO_ENCODED_RUSTFLAGS")
                 .env_remove("RUSTC_WRAPPER")
