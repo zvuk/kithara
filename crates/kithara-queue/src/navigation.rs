@@ -81,12 +81,39 @@ impl NavigationState {
         allow_repeat_one: bool,
         allow_wrap: bool,
     ) -> Option<TrackId> {
+        self.draw_cycle(tracks, current, allow_wrap);
+        self.peek(tracks, current, allow_repeat_one, allow_wrap)
+    }
+
+    /// Settles the shuffle bag on `tracks`, drawing a new cycle once the
+    /// running one has nothing left to offer and may start over.
+    fn draw_cycle(&mut self, tracks: &[TrackId], current: Option<TrackId>, allow_wrap: bool) {
+        if self.playback_order != PlaybackOrder::Shuffle {
+            return;
+        }
+        self.bag.retain(|id| tracks.contains(id));
+        let ended =
+            self.bag.is_empty() || (allow_wrap && self.bag.iter().all(|id| current == Some(*id)));
+        if ended && (allow_wrap || current.is_none()) {
+            self.fresh_cycle(tracks, current);
+        }
+    }
+
+    fn peek(
+        &self,
+        tracks: &[TrackId],
+        current: Option<TrackId>,
+        allow_repeat_one: bool,
+        allow_wrap: bool,
+    ) -> Option<TrackId> {
         if allow_repeat_one && self.repeat_mode == RepeatMode::One {
             return current.filter(|id| tracks.contains(id));
         }
         match self.playback_order {
             PlaybackOrder::Sequential => Self::next_sequential(tracks, current, allow_wrap),
-            PlaybackOrder::Shuffle => self.next_shuffle(tracks, current, allow_wrap),
+            PlaybackOrder::Shuffle => self.bag.iter().rev().copied().find(|id| {
+                tracks.contains(id) && (current != Some(*id) || (tracks.len() == 1 && allow_wrap))
+            }),
         }
     }
 
@@ -103,26 +130,6 @@ impl NavigationState {
             .get(index + 1)
             .copied()
             .or_else(|| allow_wrap.then(|| tracks.first().copied()).flatten())
-    }
-
-    fn next_shuffle(
-        &mut self,
-        tracks: &[TrackId],
-        current: Option<TrackId>,
-        allow_wrap: bool,
-    ) -> Option<TrackId> {
-        self.bag.retain(|id| tracks.contains(id));
-        if self.bag.is_empty() || (allow_wrap && self.bag.iter().all(|id| current == Some(*id))) {
-            if !allow_wrap && current.is_some() {
-                return None;
-            }
-            self.fresh_cycle(tracks, current);
-        }
-        self.bag
-            .iter()
-            .rev()
-            .copied()
-            .find(|id| current != Some(*id) || (tracks.len() == 1 && allow_wrap))
     }
 
     pub(crate) fn prev(&self, tracks: &[TrackId]) -> Option<TrackId> {
@@ -197,7 +204,7 @@ impl NavigationState {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -206,8 +213,13 @@ mod tests {
         [TrackId(1), TrackId(2), TrackId(3), TrackId(4)]
     }
 
+    /// Navigation whose shuffle draws repeat for a given seed.
+    pub(crate) fn seeded(seed: u64) -> NavigationState {
+        NavigationState::with_rng(16, StdRng::seed_from_u64(seed))
+    }
+
     fn nav() -> NavigationState {
-        NavigationState::with_rng(16, StdRng::seed_from_u64(7))
+        seeded(7)
     }
 
     fn select(
