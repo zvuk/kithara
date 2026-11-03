@@ -3074,6 +3074,42 @@ async fn retire_lookahead_spares_the_owed_window() {
     }
 }
 
+/// A reader still inside the init prefix owes the first media segment and the
+/// next, like a reader at that segment's start. Every later segment is
+/// look-ahead a transition can retire; a fetch dispatched without a look-ahead
+/// token would keep a downloader slot through an urgent down-switch.
+#[kithara::test(tokio)]
+async fn a_reader_in_the_init_prefix_dispatches_retirable_lookahead() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 44, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+    let cmds = session.dispatch(&ctx, 10);
+    let segment_cmds: Vec<_> = cmds.iter().filter(|cmd| *cmd.url() != init_url()).collect();
+    assert_eq!(
+        segment_cmds.len(),
+        6,
+        "precondition: every segment dispatches"
+    );
+
+    for token in session.take_retired_lookahead(Duration::ZERO) {
+        token.cancel();
+    }
+
+    for cmd in segment_cmds {
+        let seg = seg_idx_by_url(&v, cmd.url());
+        let cancelled = cmd
+            .cancel()
+            .expect("segment cmd carries a cancel token")
+            .is_cancelled();
+        assert_eq!(
+            cancelled,
+            seg > 1,
+            "segment {seg}: only fetches past the owed window are retired"
+        );
+    }
+}
+
 #[kithara::test(tokio)]
 async fn lookahead_registry_releases_completed_fetches_across_seeks() {
     let ctx = test_ctx(4);
