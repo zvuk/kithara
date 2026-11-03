@@ -331,6 +331,11 @@ async fn render_to_capture_frame(player: &mut OfflinePlayer, pacer: &mut Pacer, 
 async fn capture_tiny_ring(
     prepared: &mut PreparedPlayer,
 ) -> (Vec<f32>, Vec<DecoderObservation>, Vec<CaptureBlock>) {
+    assert_eq!(
+        kithara_test_utils::test::usdt::count("pcm_wait_started"),
+        0,
+        "device continuity setup must not wait for PCM"
+    );
     let mut item_events = prepared.player.player().subscribe::<ItemEvent>();
     let mut blocks = Vec::with_capacity(OBSERVATION_FRAMES.div_ceil(BLOCK_FRAMES));
     let mut samples = Vec::with_capacity(OBSERVATION_FRAMES * usize::from(CHANNELS));
@@ -422,6 +427,11 @@ async fn capture_tiny_ring(
             samples.len() / usize::from(CHANNELS),
         ));
     }
+    assert_eq!(
+        kithara_test_utils::test::usdt::count("pcm_wait_started"),
+        0,
+        "device continuity capture must not wait for PCM before or inside the graph"
+    );
     let admissions = kithara_test_utils::test::usdt::events_of("chunk_admitted");
     let mut through = 0;
     let mut ends = Vec::new();
@@ -814,6 +824,59 @@ fn cold_switch_failures(
         ));
     }
     failures
+}
+
+#[kithara::test(tokio, multi_thread, native, serial)]
+async fn device_capture_exposes_a_starved_producer_as_missing_pcm() {
+    let trace = kithara_test_utils::test::usdt::scope();
+    let server = TestServerHelper::new().await;
+    let control_source = server.create_hls(fixture()).await.expect("control HLS");
+    let starved_source = server
+        .create_hls(fixture().delay_rules(vec![DelayRule {
+            segment_eq: None,
+            segment_gte: Some(3),
+            variant: None,
+            delay_ms: 5_000,
+        }]))
+        .await
+        .expect("starved HLS");
+    let control_url = control_source.master_url();
+    let starved_url = starved_source.master_url();
+    let (control, starved) = join!(
+        prepare_tiny_ring_player(&control_url, AAC_HIGH, DecoderBackend::default(), "control"),
+        prepare_tiny_ring_player(&starved_url, AAC_HIGH, DecoderBackend::default(), "starved"),
+    );
+    let (control, starved) = join!(
+        capture_tiny_ring_control(control, AAC_TO_FLAC),
+        capture_tiny_ring_control(starved, AAC_TO_FLAC),
+    );
+    assert!(
+        trace.events_of("pcm_wait_started").is_empty(),
+        "device capture must not wait for PCM before or inside the graph"
+    );
+    drop(trace);
+    assert!(
+        control
+            .samples
+            .iter()
+            .any(|sample| sample.abs() > ACTIVE_SAMPLE_THRESHOLD),
+        "the undelayed control must contain the fixture signal: {}",
+        control.silence_diagnostic(),
+    );
+    assert!(
+        starved
+            .blocks
+            .iter()
+            .any(|block| block.after.metrics.underruns() > block.before.metrics.underruns()),
+        "the device must expose producer starvation as an underrun",
+    );
+    let failures = cold_switch_failures(AAC_TO_FLAC, &control, &starved);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("inserted an audible silent gap")),
+        "the unchanged PCM oracle must reject the starved capture: {failures:?}",
+    );
 }
 
 async fn rebuild_source(delay_ms: u64) -> (TestServerHelper, CreatedHls) {

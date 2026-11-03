@@ -1,13 +1,14 @@
 use std::{future::Future, num::NonZeroU32, task::Poll};
 
 use firewheel::{
+    StreamInfo,
     clock::InstantSamples,
     dsp::{buffer::ConstSequentialBuffer, declick::DeclickValues},
     log::{RealtimeLoggerConfig, realtime_logger},
     mask::{ConnectedMask, ConstantMask, SilenceMask},
     node::{
-        AudioNodeProcessor, NUM_SCRATCH_BUFFERS, ProcBuffers, ProcExtra, ProcInfo, ProcStore,
-        StreamStatus,
+        AudioNode, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig, NUM_SCRATCH_BUFFERS,
+        NodeID, ProcBuffers, ProcExtra, ProcInfo, ProcStore, StreamStatus,
     },
 };
 use futures::future::poll_fn;
@@ -25,7 +26,10 @@ use kithara_render::{
     Dispatched, DispatcherCommand, DispatcherProtocol, LoadRefusal, LoadRequest, Loaded, Open,
     bridge::{DeckEnds, DeckEvents, DeckPart, DeckProtocol, Slot, scope_channels},
     mock::{MockDeck, TestSessionInbox},
-    rt::{DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
+    rt::{
+        DeckMixerConfig, OfflineDeck, PlayerNode, StreamShape, install_render_context,
+        publish_render_context,
+    },
 };
 use kithara_signal::{FrameCount, OutputContext, SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
@@ -374,7 +378,8 @@ pub struct MixerRig {
     pub ring: ScopedSender<DeckProtocol, DeckProtocol>,
     pub scope: ScopeId,
     pub ends: DeckEnds,
-    mixer: DeckMixer<TestSessionInbox>,
+    processor: Box<dyn AudioNodeProcessor>,
+    offline: OfflineDeck<TestSessionInbox>,
     extra: ProcExtra,
     shape: StreamShape,
 }
@@ -402,7 +407,17 @@ impl MixerRig {
             .open(targets)
             .map_err(|error| PlayError::Internal(error.to_string()))?;
         let (ends, inputs) = scope_channels(scope, config);
-        let mixer = DeckMixer::new(inputs, shape, pools)
+        let (node, offline) = PlayerNode::offline(inputs, pools.clone());
+        let stream = StreamInfo {
+            sample_rate: shape.sample_rate,
+            max_block_frames: shape.max_block_frames,
+            ..StreamInfo::default()
+        };
+        let processor = node
+            .construct_processor(
+                &EmptyConfig,
+                ConstructProcessorContext::new(NodeID::DANGLING, &stream, &mut None),
+            )
             .map_err(|error| PlayError::Internal(error.to_string()))?;
         let frames = usize::try_from(shape.max_block_frames.get())
             .map_err(|error| PlayError::Internal(error.to_string()))?;
@@ -419,7 +434,8 @@ impl MixerRig {
             ring,
             scope,
             ends,
-            mixer,
+            processor: Box::new(processor),
+            offline,
             extra: ProcExtra {
                 logger,
                 store,
@@ -438,7 +454,7 @@ impl MixerRig {
         self.block_frames(at, out)
     }
 
-    /// Processes an exact block within the configured maximum output geometry.
+    /// Renders an offline block in the product node's prepared PCM quanta.
     /// Writes PCM into caller-owned storage independent of the mixer and its pools.
     ///
     /// # Errors
@@ -446,7 +462,7 @@ impl MixerRig {
     pub fn block_frames(
         &mut self,
         at: SessionFrame,
-        mut out: [&mut [f32]; 2],
+        out: [&mut [f32]; 2],
     ) -> Result<(), PlayError> {
         let frames = out[0].len();
         if frames == 0
@@ -457,7 +473,57 @@ impl MixerRig {
                 "mock block exceeds its output geometry".into(),
             ));
         }
+        self.ring
+            .publish()
+            .map_err(|error| PlayError::Internal(error.to_string()))?;
+        self.extra
+            .store
+            .try_get_mut::<TestSessionInbox>()
+            .ok_or(PlayError::Closed)?
+            .0
+            .drain();
+        let mut cursor = 0;
+        let [left, right] = out;
+        while cursor < frames {
+            let start = i64::from(at)
+                .checked_add(
+                    i64::try_from(cursor)
+                        .map_err(|error| PlayError::Internal(error.to_string()))?,
+                )
+                .ok_or_else(|| PlayError::Internal("mock block frame overflow".into()))?;
+            let quantum = self
+                .offline
+                .prepare(
+                    self.extra
+                        .store
+                        .try_get_mut::<TestSessionInbox>()
+                        .ok_or(PlayError::Closed)?,
+                    SessionFrame::new(start),
+                    frames - cursor,
+                    self.shape.sample_rate,
+                )
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
+            self.offline
+                .begin_render(quantum)
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
+            self.render_turn(
+                SessionFrame::new(start),
+                [
+                    &mut left[cursor..cursor + quantum],
+                    &mut right[cursor..cursor + quantum],
+                ],
+            )?;
+            self.offline
+                .end_render()
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
+            cursor += quantum;
+        }
+        Ok(())
+    }
+
+    fn render_turn(&mut self, at: SessionFrame, mut out: [&mut [f32]; 2]) -> Result<(), PlayError> {
         let start: i64 = at.into();
+        let frames = out[0].len();
         let count =
             i64::try_from(frames).map_err(|error| PlayError::Internal(error.to_string()))?;
         let end = start
@@ -474,15 +540,6 @@ impl MixerRig {
             .ok_or_else(|| PlayError::Internal("mock render context is invalid".into()))?;
         publish_render_context(&mut self.extra.store, context)
             .map_err(|error| PlayError::Internal(error.to_string()))?;
-        self.ring
-            .publish()
-            .map_err(|error| PlayError::Internal(error.to_string()))?;
-        self.extra
-            .store
-            .try_get_mut::<TestSessionInbox>()
-            .ok_or(PlayError::Closed)?
-            .0
-            .drain();
         let info = ProcInfo {
             frames,
             sample_rate: self.shape.sample_rate,
@@ -510,7 +567,7 @@ impl MixerRig {
         for channel in &mut out {
             channel.fill(0.0);
         }
-        let _ = self.mixer.process(
+        let _ = self.processor.process(
             &info,
             ProcBuffers {
                 inputs: &[],

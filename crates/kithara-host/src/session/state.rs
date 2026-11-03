@@ -196,14 +196,14 @@ impl RootView {
     }
 }
 
-pub(crate) enum SessionStream {
-    #[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DeviceBackend = Box<firewheel::cpal::CpalStream>;
+#[cfg(target_arch = "wasm32")]
+pub(crate) type DeviceBackend = firewheel_web_audio::WebAudioBackend;
+
+pub(crate) enum SessionStream<T = DeviceBackend> {
     Realtime {
-        _backend: Box<firewheel::cpal::CpalStream>,
-    },
-    #[cfg(target_arch = "wasm32")]
-    Realtime {
-        _backend: firewheel_web_audio::WebAudioBackend,
+        _backend: T,
     },
     #[cfg(feature = "offline")]
     Offline(Box<crate::session::offline::backend::OfflineStream>),
@@ -213,6 +213,8 @@ pub(crate) struct DeckNode {
     pub(crate) id: DeckId,
     pub(crate) node: NodeID,
     pub(crate) bus: Option<EventBus>,
+    #[cfg(feature = "offline")]
+    pub(crate) offline: Option<kithara_render::rt::OfflineDeck<super::transport::TransportState>>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -243,7 +245,7 @@ pub(crate) struct SessionState<T, S> {
     pub(crate) reserved_session_grid: Option<SessionGridGeneration>,
     pub(crate) session_limiter_node_id: Option<NodeID>,
     pub(crate) session_output_node_id: Option<NodeID>,
-    pub(crate) stream: Option<T>,
+    pub(crate) stream: Option<SessionStream<T>>,
     /// The root and deck scopes of the session's command channel.
     pub(crate) channel: Option<ScopedSender<HostProtocol, DeckProtocol>>,
     /// What the running transport last committed.
@@ -286,7 +288,7 @@ impl<T, S> SessionState<T, S> {
         start_stream_fn: F,
     ) -> Self
     where
-        F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
+        F: FnMut(&mut FirewheelContext, u32) -> Result<SessionStream<T>, String> + Send + 'static,
     {
         let grid_id = root.id();
         let mut generation = SessionGridGeneration::new(grid_id);
@@ -835,12 +837,9 @@ mod tests {
         let before = state.root_view.root.load_full();
 
         assert!(matches!(ask(&mut state, HostCommand::Close(first)), Ok(())));
-        let SessionStream::Offline(stream) = state.stream.as_mut().expect("remaining deck runs")
-        else {
-            panic!("offline fixture")
-        };
-        stream
-            .render(0, 512, &mut [0.0; 1024])
+        state
+            .owner
+            .render_offline(0, 512, &mut [0.0; 1024])
             .expect("retire first scope");
         state.owner.begin_pass();
         state.owner.pass();

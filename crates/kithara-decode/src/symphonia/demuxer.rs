@@ -378,7 +378,12 @@ mod ogg_raw_clock_tests {
             .default_track(TrackType::Audio)
             .expect("Ogg audio track")
             .clone();
-        assert_eq!(track.start_ts.get(), origin);
+        assert_eq!(
+            track.start_ts.get(),
+            origin,
+            "Ogg fixture prefix: {:?}",
+            &bytes[..bytes.len().min(512)]
+        );
         assert_eq!(track.delay, Some(delay));
         assert_eq!(track.padding, Some(padding));
         assert_eq!(track.num_frames, Some(native_end));

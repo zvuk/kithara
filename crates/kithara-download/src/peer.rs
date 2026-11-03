@@ -53,9 +53,12 @@ pub trait Peer: Abr {
     /// [`FetchCmd`]s. Each command carries its own `writer` and
     /// `on_complete` closures — the Downloader calls them directly.
     ///
+    /// `budget` bounds new commands by the downloader's available capacity.
+    /// At zero, reconcile reader demand and cancellation without issuing work.
+    ///
     /// Returns `Ready(None)` when the peer has no more work (stream
     /// ended). Returns `Pending` when waiting (throttle, idle).
-    fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+    fn poll_next(&self, _cx: &mut Context<'_>, _budget: usize) -> Poll<Option<Vec<FetchCmd>>> {
         Poll::Ready(None)
     }
 
