@@ -1,16 +1,16 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{HasPool, PoolError, SampleBuffer};
+use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_dsp::{
     fade::FadeCurve,
-    filter::Crossover,
+    filter::{Crossover, FilterError, Hertz},
     param::{Mix, MixDSP},
 };
 use kithara_signal::sanitize_sample;
 use num_traits::cast::AsPrimitive;
 
 use super::{EqBandConfig, EqConfig, gain::GainBank};
-use crate::{GainDb, consts::EQ_BLOCK_FRAMES};
+use crate::{EffectPrepareError, GainDb, consts::EQ_BLOCK_FRAMES};
 
 /// Single-channel isolator crossover EQ.
 #[non_exhaustive]
@@ -28,17 +28,16 @@ impl IsolatorEq {
     ///
     /// # Errors
     ///
-    /// Returns [`PoolError`] when the region cannot hand out the crossover
-    /// filter states and the gain bank this isolator runs on.
+    /// Returns [`EffectPrepareError`] for an invalid crossover design or exhausted pool.
     pub fn new<S>(
         config: &EqConfig<S>,
         bands: &[EqBandConfig],
         sample_rate: u32,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, EffectPrepareError>
     where
         S: HasPool<f32>,
     {
-        let rate = NonZeroU32::new(sample_rate).unwrap_or(NonZeroU32::MIN);
+        let rate = NonZeroU32::new(sample_rate).ok_or(FilterError::Parameters)?;
         let bypass = if bands.iter().all(|band| band.gain_db() == GainDb::default()) {
             Mix::FULLY_DRY
         } else {
@@ -52,14 +51,19 @@ impl IsolatorEq {
         };
         let sample_rate: f32 = sample_rate.as_();
         let crossover_count = bands.len().saturating_sub(1);
-        let mut crossover_freqs = config.pools().get_with_len::<f32>(crossover_count)?;
-        for (frequency, pair) in crossover_freqs.iter_mut().zip(bands.windows(2)) {
-            *frequency = (pair[0].frequency() * pair[1].frequency()).sqrt();
+        let mut crossover_freqs = Vec::with_capacity(crossover_count);
+        for pair in bands.windows(2) {
+            let frequency = (pair[0].frequency() * pair[1].frequency()).sqrt();
+            crossover_freqs.push(Hertz::from_hz(frequency).map_err(|_| FilterError::Parameters)?);
         }
+        let filters = Crossover::new(
+            &crossover_freqs,
+            Hertz::from_hz(sample_rate).map_err(|_| FilterError::Parameters)?,
+        )?;
         Ok(Self {
             bypass: MixDSP::new(bypass, FadeCurve::Linear, config.smoothing(), rate),
             silence: MixDSP::new(silence, FadeCurve::Linear, config.smoothing(), rate),
-            filters: Crossover::new(&crossover_freqs, sample_rate),
+            filters,
             bands: (0..if bands.len() > 1 { bands.len() } else { 0 })
                 .map(|_| config.pools().get_with_len::<f32>(EQ_BLOCK_FRAMES))
                 .collect::<Result<_, _>>()?,
@@ -171,13 +175,30 @@ impl IsolatorEq {
         );
     }
 
-    pub fn update_sample_rate(&mut self, sample_rate: u32) {
-        let rate = NonZeroU32::new(sample_rate).unwrap_or(NonZeroU32::MIN);
+    pub(super) fn prepare_sample_rate(&mut self, sample_rate: u32) -> Result<(), FilterError> {
+        let rate: f32 = sample_rate.as_();
+        self.filters
+            .prepare_sample_rate(Hertz::from_hz(rate).map_err(|_| FilterError::Parameters)?)
+    }
+
+    /// Retunes without allocation; a refused design preserves filters, gains and mix state.
+    ///
+    /// # Errors
+    /// Returns [`FilterError::Parameters`] when the rate cannot represent the crossovers.
+    pub fn update_sample_rate(&mut self, sample_rate: u32) -> Result<(), FilterError> {
+        let rate = NonZeroU32::new(sample_rate).ok_or(FilterError::Parameters)?;
+        self.prepare_sample_rate(sample_rate)?;
+        self.apply_sample_rate(rate);
+        Ok(())
+    }
+
+    pub(super) fn apply_sample_rate(&mut self, rate: NonZeroU32) {
+        let Some(sample_rate) = self.filters.apply_prepared_sample_rate() else {
+            return;
+        };
         self.bypass.update_sample_rate(rate);
         self.silence.update_sample_rate(rate);
-        let sample_rate = sample_rate.as_();
-        self.gains.update_sample_rate(sample_rate);
-        self.filters.update_sample_rate(sample_rate);
+        self.gains.update_sample_rate(sample_rate.hz());
     }
 
     delegate::delegate! {

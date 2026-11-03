@@ -109,13 +109,29 @@ fn biquad_never_allocates_after_construction() {
 
 #[kithara::test(native)]
 fn crossover_never_allocates_after_construction() {
-    let mut filter = kithara_dsp::filter::Crossover::new(&[250.0, 2_500.0], 48_000.0);
+    let hz = |value: f32| Hertz::from_hz(value).expect("positive test Hz");
+    let mut filter = kithara_dsp::filter::Crossover::new(&[hz(250.0), hz(2_500.0)], hz(48_000.0))
+        .expect("valid crossover");
     let input = [0.25; FRAMES];
     let mut bands = vec![vec![0.0; FRAMES]; 3];
     assert_no_alloc(|| {
         assert_eq!(filter.split(&input, &mut bands), FRAMES);
         filter.reset();
-        filter.update_sample_rate(44_100.0);
+        filter
+            .prepare_sample_rate(hz(44_100.0))
+            .expect("prepared retune");
+        filter
+            .update_sample_rate(hz(44_100.0))
+            .expect("valid retune");
+        filter
+            .prepare_sample_rate(hz(48_000.0))
+            .expect("prepared design");
+        assert_eq!(filter.apply_prepared_sample_rate(), Some(hz(48_000.0)));
+        assert_eq!(filter.apply_prepared_sample_rate(), None);
+        assert_eq!(
+            filter.update_sample_rate(hz(4_000.0)),
+            Err(kithara_dsp::filter::FilterError::Parameters)
+        );
         assert_eq!(filter.split(&input, &mut bands), FRAMES);
     });
 }
