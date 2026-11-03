@@ -56,7 +56,7 @@ impl Abr for SelfReferencingPeer {
 }
 
 impl Peer for SelfReferencingPeer {
-    fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+    fn poll_next(&self, _cx: &mut Context<'_>, _budget: usize) -> Poll<Option<Vec<FetchCmd>>> {
         Poll::Pending
     }
 }
