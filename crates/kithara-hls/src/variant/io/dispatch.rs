@@ -67,7 +67,8 @@ where
     /// Emits prioritized fetches within construction and look-ahead bounds.
     ///
     /// Owed fetches ride `tokens.fetch`; an audible session's prefetches past
-    /// the owed window (the playing segment and the next) ride
+    /// the owed window (the playing segment and the next, a cursor in the
+    /// init prefix playing segment 0) ride
     /// individual children registered in `tokens.lookahead`, which a variant
     /// transition retires without touching what playback waits on.
     ///
@@ -104,7 +105,7 @@ where
         let construction_segment_end =
             construction_segment_end.map(|end| end.max(wait_segment.unwrap_or(end)));
         let owed_through = audible
-            .then(|| self.find_at_offset(position).map(|(seg_idx, _, _)| seg_idx))
+            .then(|| self.demand_segment_at_offset(position))
             .flatten()
             .max(wait_segment);
         let owed = |seg_idx: u32| !audible || owed_through.is_some_and(|last| seg_idx <= last);

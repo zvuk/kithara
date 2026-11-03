@@ -3105,6 +3105,41 @@ async fn retire_lookahead_spares_the_owed_window() {
     }
 }
 
+/// A reader still inside the init prefix owes segment 0, so the prefetch
+/// dispatched from there is look-ahead like any other: a transition retires it
+/// instead of letting it hold downloader capacity the construction waits on.
+#[kithara::test(tokio)]
+async fn retire_lookahead_burns_prefetch_dispatched_from_the_init_prefix() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 48, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+    let init_url = v.init().expect("declared init").url().clone();
+    let cmds = session.dispatch(&ctx, 10);
+    assert_eq!(
+        cmds.len(),
+        7,
+        "precondition: the init and every segment dispatch"
+    );
+
+    for token in session.take_retired_lookahead(Duration::ZERO) {
+        token.cancel();
+    }
+
+    for cmd in cmds.iter().filter(|cmd| *cmd.url() != init_url) {
+        let seg = seg_idx_by_url(&v, cmd.url());
+        let cancelled = cmd
+            .cancel()
+            .expect("segment cmd carries a cancel token")
+            .is_cancelled();
+        assert_eq!(
+            cancelled,
+            seg > 1,
+            "segment {seg}: only fetches past segment 0 and its successor are retired"
+        );
+    }
+}
+
 #[kithara::test(tokio)]
 async fn lookahead_registry_releases_completed_fetches_across_seeks() {
     let ctx = test_ctx(4);
