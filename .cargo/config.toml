@@ -62,6 +62,8 @@ rustflags = [
 # Cargo also applies these pins when a tool builds an external manifest from
 # this workspace, including the temporary consumer used by semver-checks.
 [patch.crates-io]
+firewheel = { git = "https://github.com/gerasim13/Firewheel", rev = "ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb" }
+firewheel-core = { git = "https://github.com/gerasim13/Firewheel", rev = "ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb" }
 firewheel-web-audio = { git = "https://github.com/gerasim13/bevy_seedling", rev = "18bbf168523175735d7ece9fb293cdf3de66b273" }
 # The renderer's bump-allocated buffers are hand-picked constants sized for
 # vello's own 8K test scenes, so a window pays 165 MiB on its first frame

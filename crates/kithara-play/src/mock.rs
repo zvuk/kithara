@@ -403,7 +403,7 @@ impl MixerRig {
             .map_err(|error| PlayError::Internal(error.to_string()))?;
         let (ends, inputs) = scope_channels(scope, config);
         let mixer = DeckMixer::new(inputs, shape, pools)
-            .map_err(|error| PlayError::Internal(error.to_string()))?;
+            .map_err(PlayError::from)?;
         let frames = usize::try_from(shape.max_block_frames.get())
             .map_err(|error| PlayError::Internal(error.to_string()))?;
         let mut store = ProcStore::with_capacity(2);

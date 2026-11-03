@@ -1,9 +1,9 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{HasPool, PoolError, PoolRegion};
-use kithara_dsp::param::{SmoothedParam, SmootherConfig};
+use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_dsp::{filter::FilterError, param::{SmoothedParam, SmootherConfig}};
 use kithara_effects::{
-    GainDb,
+    EffectPrepareError, GainDb,
     eq::{EqConfig, EqLayout, StereoEq, generate_log_spaced_bands},
 };
 
@@ -28,7 +28,7 @@ impl RenderPass {
         shape: StreamShape,
         gain: f32,
         config: super::DeckMixerConfig,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, EffectPrepareError>
     where
         S: HasPool<f32>,
     {
@@ -37,9 +37,10 @@ impl RenderPass {
             let layout = EqLayout::new(
                 &eq_config,
                 &generate_log_spaced_bands(config.eq_bands()),
-                config.sample_rate(),
+                shape.sample_rate,
             )?;
             StereoEq::with_layout(&eq_config, shape.sample_rate, Box::new(layout))
+                .map_err(|(error, _layout)| EffectPrepareError::from(error))?
         } else {
             StereoEq::new(&eq_config, shape.sample_rate)
         };
@@ -87,13 +88,22 @@ impl RenderPass {
             pub(crate) fn set_eq_gain(&mut self, band: usize, gain: GainDb);
             /// Cross the deck's equaliser over to `layout`, answering the layout it displaced.
             #[call(take_layout)]
-            pub(crate) fn take_eq_layout(&mut self, layout: Box<EqLayout>) -> Option<Box<EqLayout>>;
+            pub(crate) fn take_eq_layout(&mut self, layout: Box<EqLayout>) -> Result<Option<Box<EqLayout>>, (FilterError, Box<EqLayout>)>;
         }
     }
 
-    pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
+    pub(crate) fn prepare_sample_rate(&mut self, sample_rate: NonZeroU32) -> Result<(), FilterError> {
+        self.eq.prepare_sample_rate(sample_rate)
+    }
+
+    pub(crate) fn discard_prepared_sample_rate(&mut self) {
+        self.eq.discard_prepared_sample_rate();
+    }
+
+    pub(crate) fn apply_prepared_sample_rate(&mut self) -> Option<NonZeroU32> {
+        let sample_rate = self.eq.apply_prepared_sample_rate()?;
         self.gain.update_sample_rate(sample_rate);
-        self.eq.update_sample_rate(sample_rate);
+        Some(sample_rate)
     }
 
     fn apply_gain(&mut self, left: &mut [f32], right: &mut [f32]) {

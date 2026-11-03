@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+use kithara_effects::eq::generate_log_spaced_bands;
 use kithara_platform::time::Duration;
 use kithara_play::{
     DeckMixerConfig, DeckPass, EqBandConfig, HostedDeck, Outbox, TrackReceipt, mock,
@@ -13,6 +14,13 @@ use crate::{
     Queue, QueueConfig, QueueControl, QueueError,
     mock::{TestPools, answer_loaded, finish, pending_selection, pools},
 };
+
+fn layout(gains: &[f32]) -> Vec<EqBandConfig> {
+    generate_log_spaced_bands(gains.len()).into_iter().zip(gains)
+        .map(|(center, gain)| EqBandConfig::builder()
+            .frequency(center.frequency()).gain_db((*gain).into()).build())
+        .collect()
+}
 
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 fn drive_call(
@@ -112,11 +120,7 @@ fn a_handle_clone_sees_the_replacement_band_array() {
     let eq = queue.control();
     let handle = eq.clone();
     eq_call(&mut queue, &mut mixer, &mut loads, eq.clone(), |control| {
-        control.set_eq_layout(
-            [0.0; 3]
-                .map(|gain| EqBandConfig::builder().gain_db(gain.into()).build())
-                .to_vec(),
-        )
+        control.set_eq_layout(layout(&[0.0; 3]))
     });
     eq_call(&mut queue, &mut mixer, &mut loads, eq.clone(), |control| {
         control.set_eq_gain(1, 4.0)
@@ -135,11 +139,7 @@ fn a_handle_clone_sees_the_replacement_band_array() {
         vec![0.0, 4.0, 0.0]
     );
     eq_call(&mut queue, &mut mixer, &mut loads, eq.clone(), |control| {
-        control.set_eq_layout(
-            [-6.0, -2.0, 2.0, 5.0]
-                .map(|gain| EqBandConfig::builder().gain_db(gain.into()).build())
-                .to_vec(),
-        )
+        control.set_eq_layout(layout(&[-6.0, -2.0, 2.0, 5.0]))
     });
     assert_eq!(handle.eq_band_count(), 4);
     assert_eq!(handle.eq_gain(2), Some(2.0));

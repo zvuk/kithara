@@ -238,6 +238,22 @@ impl DurationRig {
     }
 }
 
+#[kithara::test]
+fn pre_render_pass_uses_admitted_output_rate_without_rewriting_mixer_snapshot() {
+    let mut rig = DurationRig::new();
+    let initial = rig.mixer.ends.snapshot.read().clone();
+    assert_eq!(initial.sample_rate, 0);
+    assert_eq!(initial.blocks, 0);
+    rig.in_pass(|queue, out| {
+        let pass = out.pass().expect("existing Host pass");
+        assert_eq!(*pass.deck, initial);
+        assert_eq!(pass.output.sample_rate.output(), SAMPLE_RATE);
+        assert_eq!(queue.deck.mixer.sample_rate, SAMPLE_RATE);
+        assert_eq!(queue.deck.mixer.blocks, 0);
+    });
+    assert_eq!(*rig.mixer.ends.snapshot.read(), initial);
+}
+
 fn last(rendered: &[f32]) -> f32 {
     rendered.last().copied().expect("blocks were rendered")
 }

@@ -12,7 +12,7 @@ use super::{
     },
     state::*,
 };
-use crate::bridge::{DeckEqChange, DeckPart, DeckProtocol, Fade, Returned, Slot};
+use crate::bridge::{DeckEqChange, DeckPart, DeckProtocol, DeckRefusal, Fade, Returned, Slot};
 
 impl Deck {
     pub(in crate::rt) fn apply(
@@ -21,9 +21,9 @@ impl Deck {
         at: SessionFrame,
         seq: Seq,
         context_valid: bool,
-    ) -> Option<DeckPart> {
+    ) -> Result<Option<DeckPart>, (DeckRefusal, DeckPart)> {
         self.interrupt_underrun(&part, at);
-        match part {
+        Ok(match part {
             DeckPart::Attach {
                 slot,
                 item_id,
@@ -71,12 +71,12 @@ impl Deck {
                 self.render.set_eq_gain(band, gain);
                 Some(DeckPart::Eq(DeckEqChange::Gain { band, gain }))
             }
-            DeckPart::Eq(DeckEqChange::Layout(layout)) => self
-                .render
-                .take_eq_layout(layout)
-                .map(|layout| DeckPart::Returned(Returned::Eq(layout))),
+            DeckPart::Eq(DeckEqChange::Layout(layout)) => match self.render.take_eq_layout(layout) {
+                Ok(returned) => returned.map(|layout| DeckPart::Returned(Returned::Eq(layout))),
+                Err((error, layout)) => return Err((DeckRefusal::Eq(error), DeckPart::Eq(DeckEqChange::Layout(layout)))),
+            },
             DeckPart::Returned(returned) => Some(DeckPart::Returned(returned)),
-        }
+        })
     }
 
     fn interrupt_underrun(&mut self, part: &DeckPart, at: SessionFrame) {

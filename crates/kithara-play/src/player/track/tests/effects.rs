@@ -13,6 +13,53 @@ use crate::EffectSnapshot;
 const FRAMES: u32 = 96;
 const AT: u64 = 17;
 
+#[kithara::test]
+fn cold_eq_preparation_preserves_pool_filter_and_shape_errors() {
+    use kithara_bufpool::PoolError;
+    use kithara_dsp::filter::FilterError;
+    use kithara_effects::{EffectPrepareError, EffectSetup, eq::generate_log_spaced_bands};
+
+    let mut rig = rig();
+    let region = crate::test_pools::pools_with_budget(4);
+    in_pass(&mut rig, frame(0), |out| {
+        let available = out.deck_available();
+        let error = out
+            .eq_layout(&region, &generate_log_spaced_bands(10), mock::SAMPLE_RATE)
+            .expect_err("pool cannot hold this layout");
+        let PlayError::Pool(ref pool) = error else {
+            panic!("lost pool classification: {error:?}");
+        };
+        assert!(matches!(
+            pool,
+            PoolError::OverallBudgetExceeded { max_bytes: 4, .. }
+        ));
+        assert!(matches!(error.clone(), PlayError::Pool(cloned) if cloned == *pool));
+
+        let bands = [
+            EqBandConfig::builder().frequency(1.0).build(),
+            EqBandConfig::builder().frequency(f32::INFINITY).build(),
+        ];
+        let error = out
+            .eq_layout(&region, &bands, mock::SAMPLE_RATE)
+            .expect_err("design is refused before pool allocation");
+        assert!(matches!(
+            error.clone(),
+            PlayError::EffectPreparation(EffectPrepareError::Filter(FilterError::Parameters))
+        ));
+        assert_eq!(error.to_string(), FilterError::Parameters.to_string());
+        assert_eq!(out.deck_available(), available);
+    });
+
+    let error = EffectSetup::Config(EffectConfig::Equalizer(vec![EqBandConfig::default()]))
+        .prepare(AudioSpec::new(0, mock::SAMPLE_RATE), &region)
+        .err()
+        .expect("invalid channel geometry");
+    assert!(matches!(
+        PlayError::from(error).clone(),
+        PlayError::EffectPreparation(EffectPrepareError::Shape)
+    ));
+}
+
 fn input(region: &PoolRegion<TestPools>, frames: u32) -> AudioChunk {
     let spec = AudioSpec::new(2, mock::SAMPLE_RATE);
     AudioChunk::new(

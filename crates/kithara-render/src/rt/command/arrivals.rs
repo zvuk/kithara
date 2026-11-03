@@ -5,7 +5,7 @@ use super::{
     super::{processor::Deck, track::PlayerTrack},
     state::*,
 };
-use crate::bridge::{DeckPart, DeckProtocol, DeckRefusal, Slot};
+use crate::bridge::{DeckEqChange, DeckPart, DeckProtocol, DeckRefusal, Slot};
 
 impl Deck {
     pub(in crate::rt) fn arrivals(&mut self, level: &mut LevelInbox<'_, DeckProtocol>) {
@@ -48,6 +48,17 @@ impl Deck {
             due.refuse(reason);
             return;
         }
+        // No command changes the deck rate; application consumes these cached designs.
+        let preparation = due.commands_mut().iter_mut().try_for_each(|part| {
+            match part {
+                DeckPart::Eq(DeckEqChange::Layout(layout)) => layout.prepare_sample_rate(self.sample_rate),
+                _ => Ok(()),
+            }
+        });
+        if let Err(error) = preparation {
+            due.refuse(DeckRefusal::Eq(error));
+            return;
+        }
         let at = due.at();
         let seq = due.seq();
         let length = due.commands().len();
@@ -56,8 +67,14 @@ impl Deck {
             if let Some(slot) = shifted_slot(&part) {
                 self.interrupt_stop(&mut due, slot, remaining);
             }
-            if let Some(returned) = self.apply(part, at, seq, context_valid) {
-                due.commands_mut().push(returned);
+            match self.apply(part, at, seq, context_valid) {
+                Ok(Some(returned)) => due.commands_mut().push(returned),
+                Ok(None) => {},
+                Err((reason, returned)) => {
+                    due.commands_mut().push(returned);
+                    due.refuse(reason);
+                    return;
+                }
             }
         }
         if due
@@ -155,8 +172,14 @@ impl Deck {
                     }
                 }
             }
-            if let Some(returned) = self.apply(part, at, seq, context_valid) {
-                due.commands_mut().push(returned);
+            match self.apply(part, at, seq, context_valid) {
+                Ok(Some(returned)) => due.commands_mut().push(returned),
+                Ok(None) => {},
+                Err((reason, returned)) => {
+                    due.commands_mut().push(returned);
+                    due.refuse(reason);
+                    continue;
+                }
             }
             due.apply(());
             self.resolve_armed(level, start, at);

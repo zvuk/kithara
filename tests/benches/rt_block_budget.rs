@@ -52,6 +52,11 @@ use kithara_render::{
 };
 use kithara_test_fixtures::integration_fixtures::benchmark_half;
 
+#[path = "support/eq_reference.rs"]
+mod eq_reference;
+
+use eq_reference::EqReference;
+
 mod consts {
     pub(super) const BLOCK_FRAMES: u32 = 128;
     pub(super) const CHANNELS: u16 = 2;
@@ -383,8 +388,66 @@ fn every_slot_fading(mixer: &mut BenchMixer) -> bool {
         .all(|slot| slot.gain > 0.0 && slot.gain < 1.0)
 }
 
-fn measure(tracks: usize, lane: Lane) -> Measurement {
+struct EqAdmission {
+    left: EqReference,
+    right: EqReference,
+    dry_l: Vec<f32>,
+    dry_r: Vec<f32>,
+}
+
+impl EqAdmission {
+    fn new() -> Self {
+        let bands =
+            kithara::effects::eq::generate_log_spaced_bands(DeckMixerConfig::default().eq_bands());
+        let targets: Vec<_> = (0..bands.len()).map(eq_gain).collect();
+        let config = kithara::effects::eq::EqConfig::builder(pools()).build();
+        let make = || EqReference::new(&bands, &targets, spec().sample_rate, config.smoothing());
+        Self {
+            left: make(),
+            right: make(),
+            dry_l: vec![0.0; block_frames()],
+            dry_r: vec![0.0; block_frames()],
+        }
+    }
+
+    fn check(&mut self, left: &[f32], right: &[f32]) {
+        assert_eq!(left.len(), self.dry_l.len());
+        assert_eq!(right.len(), self.dry_r.len());
+        for (frame, ((&dry_l, &dry_r), (&left, &right))) in self
+            .dry_l
+            .iter()
+            .zip(&self.dry_r)
+            .zip(left.iter().zip(right))
+            .enumerate()
+        {
+            assert_eq!(
+                left.to_bits(),
+                self.left.sample(dry_l).to_bits(),
+                "left EQ must match the stateful old law at frame {frame}"
+            );
+            assert_eq!(
+                right.to_bits(),
+                self.right.sample(dry_r).to_bits(),
+                "right EQ must match the stateful old law at frame {frame}"
+            );
+        }
+    }
+
+    fn assert_settled(&self, tracks: usize) {
+        self.left.assert_settled();
+        self.right.assert_settled();
+        let input = (0..tracks).fold(0.0_f32, |sum, _| sum + 0.5);
+        for sample in self.dry_l.iter().chain(&self.dry_r) {
+            assert_eq!(sample.to_bits(), input.to_bits(), "settled benchmark input");
+        }
+    }
+}
+
+fn measure(tracks: usize, lane: Lane, preflight_only: bool) -> Option<Measurement> {
     let runtime = tokio::runtime::Runtime::new().expect("bench runtime");
+    let mut dry_mixer =
+        (lane == Lane::NonFlatEq).then(|| runtime.block_on(processor(tracks, Lane::Settled)));
+    let mut admission = (lane == Lane::NonFlatEq).then(EqAdmission::new);
     let mut processor = runtime.block_on(processor(tracks, lane));
     let _runtime = runtime.enter();
 
@@ -394,12 +457,32 @@ fn measure(tracks: usize, lane: Lane) -> Measurement {
 
     for _ in 0..consts::WARMUP_BLOCKS {
         render_block(&mut processor, &mut out_l, &mut out_r);
+        if let (Some(dry), Some(reference)) = (&mut dry_mixer, &mut admission) {
+            render_block(dry, &mut reference.dry_l, &mut reference.dry_r);
+            reference.check(&out_l, &out_r);
+        }
     }
-    if lane == Lane::NonFlatEq {
+    if let Some(reference) = &admission {
         assert_non_flat_eq(&mut processor);
-        let settled = out_l.clone();
-        render_block(&mut processor, &mut out_l, &mut out_r);
-        assert_eq!(out_l, settled, "measure only the settled non-flat EQ");
+        reference.assert_settled(tracks);
+        let metrics = dry_mixer
+            .as_mut()
+            .expect("flat input witness")
+            .deck
+            .snapshot
+            .read()
+            .metrics;
+        assert_eq!(
+            metrics.underruns(),
+            0,
+            "flat witness must render valid input"
+        );
+        assert_eq!(metrics.decode_errors(), 0);
+    }
+    // The flat input witness is only needed to reproduce the startup history.
+    drop(dry_mixer);
+    if preflight_only {
+        return None;
     }
 
     let fading_before = every_slot_fading(&mut processor);
@@ -408,6 +491,9 @@ fn measure(tracks: usize, lane: Lane) -> Measurement {
     let mut peak = 0.0_f32;
     for _ in 0..consts::MEASURED_BLOCKS {
         durations.push(render_block(&mut processor, &mut out_l, &mut out_r));
+        if let Some(reference) = &mut admission {
+            reference.check(&out_l, &out_r);
+        }
         peak = peak.max(peak_of(&out_l));
         black_box(&out_l);
     }
@@ -447,12 +533,12 @@ fn measure(tracks: usize, lane: Lane) -> Measurement {
     assert!(peak > 0.0, "measured blocks must carry audio, not silence");
 
     durations.sort_unstable();
-    Measurement {
+    Some(Measurement {
         durations,
         lane,
         peak,
         tracks,
-    }
+    })
 }
 
 impl Measurement {
@@ -474,6 +560,12 @@ fn cell(elapsed: Duration, budget: Duration) -> String {
 }
 
 fn main() {
+    let only_non_flat = std::env::args().any(|arg| arg == "--non-flat-eq");
+    let preflight_only = std::env::args().any(|arg| arg == "--test");
+    assert!(
+        !preflight_only || only_non_flat,
+        "admission smoke requires --non-flat-eq"
+    );
     let budget = block_budget();
     println!(
         "DeckMixer block budget: {:.3} ms ({} frames @ {} Hz, {} ch)",
@@ -496,7 +588,13 @@ fn main() {
         .into_iter()
         .flat_map(|lane| consts::TRACK_COUNTS.map(|count| (lane, count)))
     {
-        let measurement = measure(count, lane);
+        if only_non_flat && lane != Lane::NonFlatEq {
+            continue;
+        }
+        let Some(measurement) = measure(count, lane, preflight_only) else {
+            println!("non-flat EQ admission passed: {count} track(s), no timed row");
+            continue;
+        };
         println!(
             "{:>16}  {:>7}  {:>22}  {:>22}  {:>22}",
             measurement.lane.label(),

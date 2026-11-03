@@ -15,7 +15,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Config, Patch)]
 #[config(default, fields(value, get(copy)), patch(fallible))]
 pub struct DeckMixerConfig {
-    /// Source axis used to prepare the deck's initial equalizer off-RT.
+    /// Requested initial rate; DSP construction uses the negotiated stream rate.
     #[config(builder(default = DEFAULT_SAMPLE_RATE))]
     sample_rate: NonZeroU32,
     /// Initial log-spaced bands and capacity of later layouts. Default: 10.

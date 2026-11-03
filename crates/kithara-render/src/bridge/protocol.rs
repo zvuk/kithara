@@ -56,6 +56,7 @@ pub enum DeckRefusal {
     Outdated { slot: Slot },
     Deferral,
     AxisRestarted,
+    Eq(kithara_dsp::filter::FilterError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -1,6 +1,52 @@
 use super::*;
 
 #[kithara::test]
+fn a_late_layout_refusal_returns_the_whole_batch_without_changing_eq_history() {
+    use kithara_dsp::filter::FilterError;
+    use kithara_effects::eq::generate_log_spaced_bands;
+
+    let (mut actual, mut ends) = mixer();
+    let (mut reference, _reference_ends) = mixer();
+    for mixer in [&mut actual, &mut reference] {
+        mixer.mixer.deck.render.set_eq_gain(0, GainDb::from(-6.0));
+        mixer.mixer.deck.render.finish(&mut [0.25; 7], &mut [-0.125; 7]);
+    }
+    let config = EqConfig::builder(pools()).build();
+    let valid = Box::new(EqLayout::new(&config, &generate_log_spaced_bands(3),
+        NonZeroU32::new(RATE).expect("fixture rate")).expect("valid layout"));
+    let bands = [EqBandConfig::builder().frequency(22_000.0).build(),
+        EqBandConfig::builder().frequency(23_000.0).build()];
+    let invalid = Box::new(EqLayout::new(&config, &bands,
+        NonZeroU32::new(48_000).expect("producer rate")).expect("valid producer design"));
+    let valid_pointer = std::ptr::from_ref(valid.as_ref());
+    let invalid_pointer = std::ptr::from_ref(invalid.as_ref());
+    let seq = send(&mut ends, When::Next, vec![
+        DeckPart::Eq(DeckEqChange::Gain { band: 0, gain: GainDb::MAX }),
+        DeckPart::Eq(DeckEqChange::Layout(valid)),
+        DeckPart::Eq(DeckEqChange::Layout(invalid)),
+    ]);
+    render(&mut actual, 0);
+    render(&mut reference, 0);
+    let replies = receipts(&mut ends);
+    let (_, outcome, returned) = replies.iter().find(|(answered, _, _)| *answered == seq).expect("owning receipt");
+    assert!(matches!(outcome, Outcome::Rejected(Rejection::Refused(DeckRefusal::Eq(FilterError::Parameters)))));
+    let [DeckPart::Eq(DeckEqChange::Gain { band: 0, gain }),
+        DeckPart::Eq(DeckEqChange::Layout(valid)),
+        DeckPart::Eq(DeckEqChange::Layout(invalid))] = returned.as_slice() else { panic!("original batch retained"); };
+    assert_eq!(*gain, GainDb::MAX);
+    assert_eq!(std::ptr::from_ref(valid.as_ref()), valid_pointer);
+    assert_eq!(std::ptr::from_ref(invalid.as_ref()), invalid_pointer);
+    for _ in 0..8 {
+        let (mut left, mut right) = ([0.25; 257], [-0.125; 257]);
+        let (mut expected_left, mut expected_right) = (left, right);
+        actual.mixer.deck.render.finish(&mut left, &mut right);
+        reference.mixer.deck.render.finish(&mut expected_left, &mut expected_right);
+        assert_eq!(left.map(f32::to_bits), expected_left.map(f32::to_bits));
+        assert_eq!(right.map(f32::to_bits), expected_right.map(f32::to_bits));
+    }
+}
+
+#[kithara::test]
 fn eof_during_a_crossfade_answers_the_transition_batch_once() {
     const EOF: usize = BLOCK + 88;
     let (mut mixer, mut ends) = mixer();

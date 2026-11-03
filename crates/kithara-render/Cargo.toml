@@ -70,6 +70,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
+audioadapter-buffers = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-audio = { workspace = true, default-features = false, features = ["mock"] }
 kithara-beat = { workspace = true }
