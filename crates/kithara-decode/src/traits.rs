@@ -358,9 +358,9 @@ pub trait Decoder: Send + 'static {
 
     /// Seeks while retaining the native sample at or before `pos` for later rendering.
     ///
-    /// Rate adapters forward this operation before converting PCM. The ordinary
-    /// seek operation retains its nearest-sample behavior, which for a rate
-    /// adapter means the nearest output frame.
+    /// A rate adapter builds every seek on this operation of its inner decoder.
+    /// The ordinary seek operation retains its nearest-sample behavior, which for
+    /// a rate adapter means the nearest output frame.
     ///
     /// # Errors
     /// Returns an error when native-prefix seeking is unsupported or repositioning fails.
