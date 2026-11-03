@@ -15,6 +15,12 @@ impl AttackRelease {
         Self { gain: 1.0, release }
     }
 
+    /// Gain the next target releases from.
+    #[must_use]
+    pub fn gain(&self) -> f32 {
+        self.gain
+    }
+
     /// Replace targets with ordered gains; return their count. No sanitization or domain clamp.
     pub fn process(&mut self, targets: &mut [f32]) -> usize {
         backend::attack_release(self.release, &mut self.gain, targets)
@@ -60,10 +66,10 @@ mod tests {
                         .map(|value| value.to_bits())
                         .collect::<Vec<_>>()
                 );
-                assert_eq!(envelope.gain.to_bits(), gain.to_bits());
+                assert_eq!(envelope.gain().to_bits(), gain.to_bits());
             }
             envelope.reset();
-            assert_eq!(envelope.gain.to_bits(), 1.0_f32.to_bits());
+            assert_eq!(envelope.gain().to_bits(), 1.0_f32.to_bits());
             assert_eq!(envelope.release.to_bits(), release.to_bits());
         }
         let mut envelope = AttackRelease::new(0.9);

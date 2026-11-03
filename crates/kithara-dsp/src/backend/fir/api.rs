@@ -50,26 +50,7 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
         if self.reconstruct {
             return dispatch!(Level::new(), simd => self.process_kernel(simd, channel, raw, current, peaks));
         }
-        let (Some(history), Some(valid)) = (
-            self.history.get_mut(channel),
-            self.shared_valid.get_mut(channel),
-        ) else {
-            return 0;
-        };
-        let len = raw.len().min(current.len()).min(peaks.len());
-        for (peak, &sample) in peaks.iter_mut().zip(current).take(raw.len()) {
-            *peak = sample.abs().max(0.0);
-        }
-        for &sample in current.iter().take(len).skip(len.saturating_sub(HISTORY)) {
-            history.copy_within(HISTORY.min(1).., 0);
-            if let Some(newest) = history.last_mut() {
-                *newest = sample;
-            }
-        }
-        if len > 0 {
-            *valid = true;
-        }
-        len
+        dispatch!(Level::new(), simd => self.magnitude_kernel(simd, channel, raw, current, peaks))
     }
 
     /// Forget all input and interval state, preserving the coefficients.

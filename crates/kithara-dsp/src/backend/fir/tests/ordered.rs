@@ -207,7 +207,7 @@ fn ordered_intervals_and_complete_state_match_the_scalar_base() {
                         let processed = if fallback.reconstruct {
                             dispatch!(Level::fallback(), simd => fallback.process_kernel(simd, channel, raw, samples, output))
                         } else {
-                            fallback.process(channel, raw, samples, output)
+                            dispatch!(Level::fallback(), simd => fallback.magnitude_kernel(simd, channel, raw, samples, output))
                         };
                         assert_eq!(processed, end.checked_sub(start).unwrap());
                     }
