@@ -10,7 +10,8 @@ use kithara_test_utils::kithara;
 
 use super::{
     fixtures::{
-        Command, Control, Deck, Rig, answer, deck, grid, load, position, sounding, trajectory,
+        Command, Control, Deck, Rig, answer, deck, grid, load, position, provisional, sound,
+        sounding, synced, trajectory,
     },
     host_fixture::{host, register, tempo},
 };
@@ -316,7 +317,10 @@ fn only_the_resident_tracks_pcm_recovery_realigns_sync(
 
 #[kithara::test]
 fn a_recovered_underrun_keeps_a_seek_waiting_for_the_grid() {
-    let (mut deck, control, mut rig, _) = sounding();
+    // Only a grid a later revision can extend leaves a seek past its end waiting.
+    let (mut deck, control, mut rig, _) =
+        synced(provisional(&grid(24_000, 0, Some((4, 0)), 960_000)));
+    sound(&control, &mut rig, 0, 0);
     let beyond = position(2_000_000);
     assert_eq!(
         rig.run(|out| deck.apply(TrackCommand::Seek { to: beyond }, out))
