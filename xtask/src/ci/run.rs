@@ -322,7 +322,8 @@ pub(crate) fn note_compiler_cache(
     }
     let primary = crate::ci::kache::statistics(process, tools);
     let (event, detail) = primary.as_ref().map_or_else(
-        |_| {
+        |error| {
+            warn!("kache statistics unavailable: {error:#}");
             (
                 CompilerCache::Unreadable,
                 "kache statistics unavailable".into(),
@@ -339,7 +340,8 @@ pub(crate) fn note_compiler_cache(
         consts::CACHE_EVIDENCE_INPUT_LIMIT,
     );
     let (event, detail) = fallback.as_ref().map_or_else(
-        |_| {
+        |error| {
+            warn!("sccache statistics unavailable: {error:#}");
             (
                 CompilerCache::Unreadable,
                 "sccache statistics unavailable".into(),

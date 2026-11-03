@@ -190,7 +190,7 @@ fn orphaned_volumes(listed: &str) -> Vec<&str> {
 
 /// Where the live build caches sit on disk, so their contents can be held to a
 /// budget: each runner's build root, which holds its xtask bootstrap and the
-/// builds its jobs name, each trust's lane slots, and the lane directories and
+/// builds its jobs name, each scope's lane slots, and the lane directories and
 /// xtask bootstraps `production/main` keeps until this layout replaces its
 /// own. One budget over both is what keeps two layouts on one disk inside one
 /// ceiling.
@@ -319,9 +319,9 @@ mod tests {
 
     /// The budget is held over every directory a job of either layout builds
     /// in, and nothing else: every directory a runner binds in, except Cargo's
-    /// home, the checkouts and kache's directory, which kache holds to its own
-    /// budget, and each xtask bootstrap the previous layout keeps under its
-    /// cache root.
+    /// and Gradle's homes, which hold downloads rather than builds, the
+    /// checkouts and kache's directory, which kache holds to its own budget,
+    /// and each xtask bootstrap the previous layout keeps under its cache root.
     #[test]
     fn the_budget_covers_every_directory_a_job_builds_in() {
         use std::collections::BTreeSet;
@@ -342,6 +342,7 @@ mod tests {
                 let at = Path::new(at);
                 if source.is_absolute()
                     && at != home
+                    && at != Path::new(consts::GRADLE_HOME_MOUNT)
                     && at != Path::new(consts::KACHE_MOUNT)
                     && !checkouts.starts_with(at)
                 {

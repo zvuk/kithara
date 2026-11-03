@@ -238,9 +238,9 @@ pub(crate) fn run(cmd: AppleCommand, ctx: &Ctx) -> Result<()> {
     }
 }
 
-/// Run `nm` on every slice's static lib and fail if any
-/// software-backend symbol survived linking or the Apple dispatcher
-/// went missing.
+/// Run `nm` on every slice's static lib and fail if any software-backend
+/// symbol survived linking or none of the `AudioToolbox` imports that prove the
+/// Apple decode backend is linked remains.
 fn audit_symbols(xcframework_dir: &FsPath, apple: &AppleConfig, tools: &ToolsConfig) -> Result<()> {
     if !xcframework_dir.is_dir() {
         bail!(
@@ -283,8 +283,8 @@ fn audit_symbols(xcframework_dir: &FsPath, apple: &AppleConfig, tools: &ToolsCon
             .any(|n| symbols.contains(n.as_str()) || strings.contains(n.as_str()));
         if !has_apple_proof {
             errors.push(format!(
-                "slice `{slice}` missing Apple-backend proof symbols \
-                 ({apple_proof_needles:?}) — AppleCodec not linked?"
+                "slice `{slice}` imports none of the Apple-backend proof \
+                 symbols ({apple_proof_needles:?}) — Apple decode backend not linked?"
             ));
         }
     }
@@ -296,7 +296,7 @@ fn audit_symbols(xcframework_dir: &FsPath, apple: &AppleConfig, tools: &ToolsCon
         );
     }
     println!(
-        "==> Apple xcframework symbol audit passed: 0 banned symbols, AppleCodec linked in all {} slices",
+        "==> Apple xcframework symbol audit passed: 0 banned symbols, Apple decode backend linked in all {} slices",
         consts::XCFRAMEWORK_SLICES.len()
     );
     Ok(())
@@ -1882,6 +1882,44 @@ fn require_apple_needles<'a>(needles: &'a [String], key: &str) -> Result<&'a [St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A release slice is fat-LTO'd and stripped, which removes every Rust
+    /// name, so only an import the slice still needs at link time can prove
+    /// what was linked into it.
+    #[test]
+    fn every_apple_proof_needle_is_an_audio_toolbox_import() {
+        let root = FsPath::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask sits beside the workspace root");
+        let apple = KitharaExt::load(root)
+            .expect("the project config loads")
+            .apple;
+        let sources = kithara_devtools::common::walker::workspace_rs_files_scoped(
+            root,
+            &kithara_devtools::common::scope::Scope::default(),
+        )
+        .expect("the workspace sources are listed");
+        let imports: Vec<String> = sources
+            .iter()
+            .filter_map(|path| fs::read_to_string(path).ok())
+            .filter(|source| source.contains("#[link(name = \"AudioToolbox\""))
+            .flat_map(|source| {
+                source
+                    .split("#[link_name = \"")
+                    .skip(1)
+                    .filter_map(|rest| rest.split_once('"').map(|(name, _)| name.to_owned()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        assert!(!apple.apple_proof_needles.is_empty());
+        for needle in &apple.apple_proof_needles {
+            assert!(
+                imports.contains(needle),
+                "`{needle}` is not an AudioToolbox import, so a stripped slice cannot carry it"
+            );
+        }
+    }
 
     #[cfg(unix)]
     #[test]

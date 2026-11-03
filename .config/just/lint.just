@@ -40,14 +40,14 @@ fast:
 # that drive temporary repositories inherit it.
 gate:
     just lint fast
-    cargo test -p xtask
+    just test run --lane=tooling '--narrow=package(xtask)' --retries=0
 
 # Full CI chain: fast checks, xtask tests, quality scans, idioms, and struct twins.
 # It runs every idiom check below, so it takes the shared part directly rather
 # than through `fast`, whose two-check pass it would then repeat.
 full:
     just lint _shared
-    cargo test -p xtask
+    just test run --lane=tooling '--narrow=package(xtask)' --retries=0
     just quality unimock-check
     just quality rstest-audit
     just quality trait-mock-audit
