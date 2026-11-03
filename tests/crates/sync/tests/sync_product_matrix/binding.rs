@@ -7,7 +7,7 @@ use kithara::{
         AudioChunkInfo, AudioSpec, ExponentialApproach, SegmentId, SessionEpoch, SessionFrame,
         SourceSpan,
     },
-    sync::{SessionAnchor, SourceGrid, SpeedCurve, corrected_speed_curve, speed_curve},
+    sync::{SessionAnchor, Slew, SlewCause, SourceGrid, SpeedCurve, slew, speed_curve},
     warp::{
         AssetAxis, AssetExtent, AssetFrame, Beat, BeatGridId, BeatGridQuery, BeatGridRevision,
         BeatGridSnapshot, MapPoint, MapPosition,
@@ -2331,16 +2331,28 @@ impl QueueLaw {
         if &planned != applied.planned_input()? {
             return Err("Queue planned(C) differs from independent prior source law".to_owned());
         }
-        let (curve, deadline) = corrected_speed_curve(
+        let cause = if commanded {
+            SlewCause::Commanded
+        } else {
+            SlewCause::Drift {
+                from: planned.1,
+                limit: LinkConfig::default().slew_limit(),
+            }
+        };
+        let Some(Slew::Closes {
+            curve,
+            frames: deadline,
+        }) = slew(
             host,
             grid,
             planned.0,
             applied.at,
-            planned.1,
             LinkConfig::default().epsilon(),
-            commanded,
+            cause,
         )
-        .ok_or_else(|| "Queue public correction has no canonical finite law".to_owned())?;
+        else {
+            return Err("Queue public correction has no canonical finite law".to_owned());
+        };
         if curve != command.curve {
             return Err("Queue emitted correction differs from public Host/cue intent".to_owned());
         }
@@ -4691,16 +4703,16 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     );
     let start = SessionFrame::new(23_998);
     let media = Duration::from_nanos(499_958_333);
-    let (curve, end) = corrected_speed_curve(
+    let Some(Slew::Closes { curve, frames: end }) = slew(
         &host,
         &source_grid,
         media,
         start,
-        1.0,
         LinkConfig::default().epsilon(),
-        true,
-    )
-    .expect("finite phase correction");
+        SlewCause::Commanded,
+    ) else {
+        panic!("finite phase correction");
+    };
     let parts = analytic_parts(&curve).expect("analytic correction");
     assert_eq!(end, 2, "phase correction ends before the source bridge");
     assert!(

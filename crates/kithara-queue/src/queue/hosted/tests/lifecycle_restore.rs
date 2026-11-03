@@ -31,6 +31,7 @@ fn apply_mix(
         suspended: false,
         now: SessionFrame::new(256),
         delivery: FrameCount::new(128),
+        deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
     };

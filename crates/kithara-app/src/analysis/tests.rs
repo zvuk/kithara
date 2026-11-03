@@ -14,6 +14,7 @@ use ::kithara::{
         time::{self, Duration},
         tokio::sync::watch,
     },
+    play::PlayWorkerConfig,
 };
 use kithara_test_utils::{TestTempDir, kithara, off_thread::OffThread, temp_dir};
 
@@ -31,7 +32,9 @@ use super::{
     supply::{Prepared, Supply},
 };
 use crate::{
-    pools::{AppHost, AppPools, AppQueueControl, AppStore, AppTrackSource},
+    pools::{
+        self, AppHost, AppPools, AppQueueControl, AppStore, AppTrackSource, AppWorker, PoolsSection,
+    },
     wave_cache::{AnalysisTarget, token_for},
 };
 
@@ -517,6 +520,42 @@ async fn a_failed_pass_refuses_the_grid_until_the_next_subscribe(tone_mp3: Strin
 
     cancel.cancel();
     run.close().await;
+}
+
+#[kithara::test(native, tokio)]
+async fn a_pass_that_cannot_open_refuses_the_grid(tone_mp3: String) {
+    /// Room for the sample pool's initial buffers, not for a pass's ingress ring.
+    const BUDGET_BELOW_INGRESS: usize = 640 * 1024;
+
+    let cancel = CancelToken::root();
+    let pools = pools::build(&PoolsSection {
+        budget_bytes: Some(BUDGET_BELOW_INGRESS),
+        ..PoolsSection::default()
+    })
+    .expect("the budget holds the initial buffers");
+    let mut config = app_config(&cancel, memory_store());
+    config.worker = AppWorker::new(PlayWorkerConfig::builder(pools).build());
+    let persistence = persistence(&cancel, test_pools(), config.analysis_chunk_seconds);
+    let (service, _handle) = AnalysisService::new(&config, persistence, cancel.child());
+    let mut owner = service.owner;
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
+
+    let rx = owner.subscribe(queue, track_id, source, axis());
+
+    assert!(owner.runner.is_active(), "the analyzers are configured");
+    assert!(owner.active.is_none(), "the ingress did not fit the budget");
+    let refused = rx
+        .borrow()
+        .as_ref()
+        .is_some_and(|published| matches!(published.grid_state(), GridState::Refused(_)));
+    assert!(
+        refused,
+        "a pass that cannot open tells the deck no grid will come"
+    );
+
+    cancel.cancel();
+    host.close().await;
 }
 
 #[kithara::test(native, tokio)]

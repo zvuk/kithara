@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use kithara_command::Outcome;
 use kithara_platform::time::Duration;
-use kithara_signal::{AudioSpec, SegmentId};
+use kithara_signal::{AudioSpec, SegmentId, SessionFrame};
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use kithara_test_utils::kithara;
 
@@ -345,6 +345,94 @@ async fn render_audio_handover_fills_tail_from_next_playing_track(constant_half:
         out_r
             .iter()
             .all(|sample| (*sample - 0.5).abs() < f32::EPSILON)
+    );
+}
+
+#[kithara::test(native, tokio)]
+#[case::empty(0)]
+#[case::short(614)]
+async fn a_prepared_delayed_final_packet_stitches_its_successor_inside_the_same_block(
+    #[case] final_frames: usize,
+) {
+    use kithara_test_utils::wait_until;
+
+    use crate::worker::{
+        PcmPacket,
+        packet_tests::{PacketRing, chunk},
+        scheduler::StreamWake,
+    };
+
+    let (mut processor, mut control) = make_processor();
+    let leading = Slot::new(0);
+    let successor = Slot::new(1);
+    let spec = AudioSpec::new(2, RATE);
+    let wake = kithara_worker::Wake::default();
+    let packets = PacketRing::with_wake(
+        spec,
+        Duration::from_secs(1),
+        8,
+        8,
+        true,
+        StreamWake::new(wake.clone()),
+    );
+    attach(
+        &mut control,
+        leading,
+        legacy_fixture::from_packets("delayed", packets),
+        false,
+    );
+    attach(
+        &mut control,
+        successor,
+        create_duration_player_resource("successor", Duration::from_secs(1)),
+        false,
+    );
+    block(&mut processor);
+    legacy_fixture::start(&mut processor, leading);
+    legacy_fixture::chain(&mut control, leading, successor);
+    let mut leading_packets = control.packets.remove(0);
+    assert_eq!(kithara_worker::mock::wake_state(&wake).0, 0);
+    let prepared = kithara_platform::tokio::task::spawn_blocking(move || {
+        processor.inbox.0.drain();
+        let scope = processor.mixer.scope;
+        processor.mixer.prepare_offline(
+            processor.inbox.0.scope(scope),
+            SessionFrame::new(0),
+            MAX_BLOCK_FRAMES as usize,
+            RATE,
+        );
+        processor
+    });
+    wait_until(
+        Duration::from_secs(5),
+        "renderer requests its missing PCM",
+        || kithara_worker::mock::wake_state(&wake).0 > 0,
+    )
+    .await
+    .expect("offline renderer requests the producer before it can proceed");
+    if final_frames > 0 {
+        let mut final_packet = chunk(spec, SegmentId::FIRST, 0, 0, &vec![0.5; final_frames * 2]);
+        final_packet.meta.end_of_track = true;
+        leading_packets.push(PcmPacket::Chunk(Box::new(final_packet)));
+    }
+    let end = u64::try_from(final_frames).expect("final packet frame count");
+    let mut terminal = chunk(spec, SegmentId::FIRST, end, end, &[]);
+    terminal.meta.end_of_track = true;
+    leading_packets.push(PcmPacket::Chunk(Box::new(terminal)));
+    let mut processor = prepared.await.expect("offline preparation completes");
+    let trace = kithara_test_utils::test::usdt::scope();
+    let (sounded, left, right) = render(&mut processor, MAX_BLOCK_FRAMES as usize);
+    assert!(
+        trace.events_of("pcm_wait_started").is_empty(),
+        "the single graph block must not wait for PCM",
+    );
+    drop(trace);
+    assert!(sounded);
+    assert!(
+        left.iter()
+            .chain(&right)
+            .all(|sample| (*sample - 0.5).abs() < f32::EPSILON),
+        "the successor fills the same block after the delayed final packet"
     );
 }
 
