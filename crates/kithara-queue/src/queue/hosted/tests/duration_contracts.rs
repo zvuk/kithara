@@ -238,8 +238,8 @@ impl DurationRig {
     }
 }
 
-#[kithara::test]
-fn pre_render_pass_uses_admitted_output_rate_without_rewriting_mixer_snapshot() {
+#[kithara::test(tokio)]
+async fn pre_render_pass_uses_admitted_output_rate_without_rewriting_mixer_snapshot() {
     let mut rig = DurationRig::new();
     let initial = rig.mixer.ends.snapshot.read().clone();
     assert_eq!(initial.sample_rate, 0);
