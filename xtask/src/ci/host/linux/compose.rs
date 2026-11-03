@@ -90,6 +90,8 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
              pids_limit: {pids}\n    \
              ulimits:\n      \
              nice: {nice}\n    \
+             tmpfs:\n      \
+             - \"{tmpfs}\"\n    \
              security_opt: [\"no-new-privileges\"]\n    \
              env_file: [\"{env_file}\"]",
             name = runner.name,
@@ -100,6 +102,7 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
             cgroup_parent = unit.cgroup_parent,
             pids = Container::PIDS_LIMIT,
             nice = Container::NICE_LIMIT,
+            tmpfs = Container::tmpfs(),
             env_file = unit.env_file,
         )?;
         writeln!(yaml, "    environment:")?;

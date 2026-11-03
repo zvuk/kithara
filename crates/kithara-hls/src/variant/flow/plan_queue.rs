@@ -123,6 +123,17 @@ impl PlanGuard<'_> {
         PlanQueue::mark(self.init_planned, self.segments_planned, planned, true);
     }
 
+    /// Promote reader demand without superseding the plan or preceding its init.
+    pub(in crate::variant) fn prioritize_segment(&mut self, segment: u32) {
+        let planned = PlannedFetch::Segment(segment);
+        if let Some(at) = self.queue.iter().position(|queued| *queued == planned) {
+            self.queue.remove(at);
+        }
+        let at = usize::from(self.queue.front() == Some(&PlannedFetch::Init));
+        self.queue.insert(at, planned);
+        PlanQueue::mark(self.init_planned, self.segments_planned, planned, true);
+    }
+
     pub(in crate::variant) fn replace_with(&mut self, plan: impl Iterator<Item = PlannedFetch>) {
         self.supersede();
         self.queue.clear();
@@ -229,6 +240,68 @@ mod tests {
             queue.lock().pop_front().map(|(planned, _)| planned),
             Some(PlannedFetch::Segment(40))
         );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn reader_priority_preserves_init_membership_and_plan_identity() {
+        let queue = plan();
+        queue.lock().replace_with(
+            [
+                PlannedFetch::Init,
+                PlannedFetch::Segment(0),
+                PlannedFetch::Segment(1),
+                PlannedFetch::Segment(2),
+            ]
+            .into_iter(),
+        );
+        let revision = queue.revision();
+
+        queue.lock().prioritize_segment(2);
+        queue.lock().prioritize_segment(2);
+
+        assert_eq!(queue.revision(), revision);
+        assert_eq!(
+            queue.lock().iter().copied().collect::<Vec<_>>(),
+            vec![
+                PlannedFetch::Init,
+                PlannedFetch::Segment(2),
+                PlannedFetch::Segment(0),
+                PlannedFetch::Segment(1),
+            ]
+        );
+        assert!(queue.planned(PlannedFetch::Init));
+        for segment in 0..3 {
+            assert!(queue.planned(PlannedFetch::Segment(segment)));
+        }
+        assert!(!queue.planned(PlannedFetch::Segment(3)));
+        queue.lock().pop_front();
+        queue.lock().pop_front();
+        assert!(!queue.planned(PlannedFetch::Segment(2)));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn reader_priority_inserts_missing_demand_once() {
+        let queue = plan();
+        queue
+            .lock()
+            .replace_with([PlannedFetch::Segment(0), PlannedFetch::Segment(1)].into_iter());
+        let revision = queue.revision();
+
+        queue.lock().prioritize_segment(3);
+        queue.lock().prioritize_segment(3);
+
+        assert_eq!(queue.revision(), revision);
+        assert_eq!(
+            queue.lock().iter().copied().collect::<Vec<_>>(),
+            vec![
+                PlannedFetch::Segment(3),
+                PlannedFetch::Segment(0),
+                PlannedFetch::Segment(1),
+            ]
+        );
+        assert!(queue.planned(PlannedFetch::Segment(3)));
+        queue.lock().pop_front();
+        assert!(!queue.planned(PlannedFetch::Segment(3)));
     }
 
     #[kithara::test(native, flash(false))]

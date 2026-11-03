@@ -16,6 +16,6 @@ pub use context::{
 pub use node::PlayerNode;
 #[cfg(any(test, feature = "mock"))]
 pub(crate) use processor::mock as processor_fixture;
-pub use processor::{BufferGeometryError, DeckMixer, StreamShape};
+pub use processor::{BufferGeometryError, DeckMixer, OfflineDeck, OfflineDeckError, StreamShape};
 pub(crate) use render::RenderPass;
 pub(crate) use slots::TrackSlots;

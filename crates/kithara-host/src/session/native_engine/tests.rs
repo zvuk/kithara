@@ -7,7 +7,7 @@ use kithara_platform::{thread::JoinHandle, time::Duration};
 #[cfg(feature = "offline")]
 use kithara_play::{DeckPass, HostedDeck, Outbox};
 #[cfg(feature = "offline")]
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
 #[cfg(feature = "offline")]
 use kithara_test_utils::{bufpool::TestPools, wait_until_blocking};
@@ -118,7 +118,7 @@ impl HostOwner<TestPools> for RigOwner {
             fn transport(&mut self) -> Option<crate::api::SessionTransportSnapshot>;
             fn begin_pass(&mut self);
             fn pass(&mut self) -> Vec<HostSettled>;
-            fn clock(&self) -> Option<(SessionFrame, FrameCount)>;
+            fn clock(&self) -> Option<crate::PassClock>;
             fn host_room(&self) -> usize;
         }
     }

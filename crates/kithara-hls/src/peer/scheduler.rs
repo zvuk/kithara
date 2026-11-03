@@ -44,12 +44,17 @@ impl SessionTurns {
 
     /// Serve both resident sessions within one poll's budget. A one-command
     /// budget alternates; a larger budget serves active, incoming, then active.
-    pub(super) fn dispatch<S>(&self, coord: &HlsCoord<S>, ctx: &PlanCtx<S>) -> Vec<FetchCmd>
+    pub(super) fn dispatch<S>(
+        &self,
+        coord: &HlsCoord<S>,
+        ctx: &PlanCtx<S>,
+        budget: usize,
+    ) -> Vec<FetchCmd>
     where
         S: HasPool<u8> + Send + Sync + 'static,
     {
         let mut cmds: Vec<FetchCmd> = Vec::new();
-        let prefetch_budget = ctx.config.download_batch_size.max(1);
+        let prefetch_budget = ctx.config.download_batch_size.max(1).min(budget);
         let has_incoming = coord.has_incoming();
         if has_incoming && prefetch_budget == 1 {
             let first = self.next(true);
