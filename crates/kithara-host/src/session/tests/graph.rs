@@ -15,7 +15,7 @@ use super::super::{
     graph::{drop_idle_context, idle, install_deck, remove_deck},
     protocol::SessionError,
     queue::settle_receipt,
-    state::{HostRoot, RootView, SessionState},
+    state::{HostRoot, RootView, SessionState, SessionStream},
     transport::observe_commits,
 };
 use crate::{HostSettings, HostSettingsChange, HostSettingsExec, rt::SessionOutput};
@@ -51,12 +51,14 @@ impl<T> GraphSession<T> {
         Self::with_sample_rate(Self::DEFAULT_SAMPLE_RATE, start)
     }
 
-    pub(crate) fn with_sample_rate<F>(rate: NonZeroU32, start: F) -> Self
+    pub(crate) fn with_sample_rate<F>(rate: NonZeroU32, mut start: F) -> Self
     where
         F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
     {
         Self {
-            state: state_for(rate, start),
+            state: state_for(rate, move |ctx, rate| {
+                start(ctx, rate).map(|backend| SessionStream::Realtime { _backend: backend })
+            }),
             scopes: Vec::new(),
         }
     }
@@ -145,7 +147,11 @@ impl<T> GraphSession<T> {
     }
 
     pub(crate) fn stream_mut(&mut self) -> Option<&mut T> {
-        self.state.stream.as_mut()
+        match self.state.stream.as_mut()? {
+            SessionStream::Realtime { _backend } => Some(_backend),
+            #[cfg(feature = "offline")]
+            SessionStream::Offline(_) => None,
+        }
     }
 
     pub(crate) fn transport(&mut self) -> Option<SessionTransportSnapshot> {
@@ -167,7 +173,7 @@ where
 
 pub(crate) fn state_for<T, F, S>(sample_rate: NonZeroU32, start_stream_fn: F) -> SessionState<T, S>
 where
-    F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
+    F: FnMut(&mut FirewheelContext, u32) -> Result<SessionStream<T>, String> + Send + 'static,
 {
     let (root, root_view) = empty_root(sample_rate);
     let settings = HostSettings::builder().sample_rate(sample_rate).build();

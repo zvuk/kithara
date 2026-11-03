@@ -4,7 +4,8 @@ use kithara_command::mailbox;
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::{CancelScope, CancelToken, tokio::runtime::Handle as RuntimeHandle};
 use kithara_play::{
-    PlayError, Player, PlayerEvent, PlayerFactory, TrackFactory, TrackStatus as PlayingStatus,
+    PlayError, Player, PlayerEvent, PlayerFactory, SeekBatch, Track, TrackFactory,
+    TrackStatus as PlayingStatus,
 };
 use kithara_signal::{FrameCount, SessionFrame};
 
@@ -173,6 +174,17 @@ where
         self.active.position(|active| active.role == Role::Current)
     }
 
+    /// The active track the view shows: the current one, else the incoming
+    /// transition target.
+    pub(super) fn shown_index(&self) -> Option<usize> {
+        self.active_current_index().or_else(|| {
+            self.target.and_then(|target| {
+                self.active
+                    .position(|active| active.item == target.to && active.role == Role::Incoming)
+            })
+        })
+    }
+
     pub(super) fn earliest(&self) -> Result<SessionFrame, PlayError> {
         self.clock
             .map(|(now, delivery)| now + delivery)
@@ -195,40 +207,18 @@ where
 
     /// Publishes before announcing, so an event's reader sees its state.
     pub(super) fn publish(&mut self) {
-        if let Some(SeekPosition::Pending { item, segment, .. }) = self.held_position {
-            let active = self
-                .active_current_index()
-                .or_else(|| {
-                    self.target.and_then(|target| {
-                        self.active.position(|active| {
-                            active.item == target.to && matches!(active.role, Role::Incoming)
-                        })
-                    })
-                })
-                .and_then(|index| self.active.get(index));
-            if active.is_none_or(|active| active.item != item)
-                || active.is_some_and(|active| {
-                    segment.is_some_and(|segment| {
-                        active
-                            .track
-                            .snapshot()
-                            .as_ref()
-                            .mark
-                            .is_some_and(|mark| mark.lane.segment == segment)
-                    })
-                })
-            {
-                self.held_position = None;
-            }
-        }
+        self.settle_held_position();
         self.events.extend(self.tracks.drain_events());
+
         let snapshot = self.queue_snapshot();
         let previous = self.view.read();
         let rate = snapshot.applied_rate();
         let rate_changed = previous.applied_rate() != rate;
         let previous_mix = previous.deck.mix;
         let mix = snapshot.deck.mix;
+        let upcoming_changed = previous.upcoming != snapshot.upcoming;
         self.view.publish(snapshot);
+
         if rate_changed {
             self.bus.publish(PlayerEvent::RateChanged { rate });
         }
@@ -247,6 +237,43 @@ where
                     .publish(PlayerEvent::CurrentItemChanged { item: *id });
             }
             self.bus.publish(event);
+        }
+        if upcoming_changed {
+            self.bus.publish(QueueEvent::UpcomingChanged);
+        }
+    }
+
+    /// Lets a pending seek's held position go once the shown track applied
+    /// the seek or shows another item.
+    fn settle_held_position(&mut self) {
+        let Some(SeekPosition::Pending {
+            item,
+            sent,
+            segment,
+            ..
+        }) = self.held_position
+        else {
+            return;
+        };
+
+        let active = self
+            .shown_index()
+            .and_then(|index| self.active.get_mut(index));
+        if active.is_none_or(|active| {
+            active.item != item
+                || match sent {
+                    SeekBatch::Lane(seq) => active.track.seek_applied(seq).is_some(),
+                    SeekBatch::Deck(_) => segment.is_some_and(|segment| {
+                        active
+                            .track
+                            .snapshot()
+                            .as_ref()
+                            .mark
+                            .is_some_and(|mark| mark.lane.segment == segment)
+                    }),
+                }
+        }) {
+            self.held_position = None;
         }
     }
 
@@ -367,6 +394,7 @@ pub(crate) mod tests {
             suspended: false,
             now: SessionFrame::new(0),
             delivery: FrameCount::new(128),
+            deck_delivery: FrameCount::new(128),
             output: &output,
             deck: &deck,
         };
@@ -643,6 +671,104 @@ pub(crate) mod tests {
         );
     }
 
+    /// Each Next press enters the track the queue announced as upcoming,
+    /// across a shuffle cycle boundary, for several seeds. The deck's four
+    /// slots hold the first track and three presses: the fixture never
+    /// retires an outgoing tail.
+    #[kithara::test(tokio)]
+    async fn under_shuffle_next_enters_the_announced_upcoming_track() {
+        for seed in 0..8 {
+            let (mut queue, mut rig, dir) = crate::mock::empty_queue();
+            queue.navigation = crate::navigation::tests::seeded(seed);
+            for _ in 0..3 {
+                apply(
+                    &mut queue,
+                    &mut rig,
+                    QueueCommand::Append {
+                        position: Position::ZERO,
+                        id: TrackId::allocate(),
+                        source: crate::TrackSource::Uri(crate::mock::fixture_uri(
+                            dir.path(),
+                            "entry.wav",
+                        )),
+                    },
+                )
+                .expect("append");
+            }
+            apply(
+                &mut queue,
+                &mut rig,
+                QueueCommand::SetPlaybackOrder(PlaybackOrder::Shuffle),
+            )
+            .expect("shuffle");
+            apply(
+                &mut queue,
+                &mut rig,
+                QueueCommand::SetRepeat(RepeatMode::All),
+            )
+            .expect("repeat");
+            crate::mock::answer_load(&mut queue, &mut rig, &dir).await;
+            crate::mock::finish(&mut queue, &mut rig);
+
+            for press in 0..3 {
+                let announced = queue.control().upcoming();
+                assert!(announced.is_some(), "a repeating cycle goes on");
+
+                apply(
+                    &mut queue,
+                    &mut rig,
+                    QueueCommand::Next(super::super::Transition::None),
+                )
+                .expect("next");
+                crate::mock::answer_load(&mut queue, &mut rig, &dir).await;
+                crate::mock::finish(&mut queue, &mut rig);
+
+                assert_eq!(
+                    queue.current, announced,
+                    "seed {seed}, press {press}: Next enters the announced track"
+                );
+            }
+        }
+    }
+
+    /// Turning repeat on at the last track makes the first track upcoming,
+    /// and the queue says so: the deck follows the upcoming track on this
+    /// event, though no transition target changed.
+    #[kithara::test(tokio)]
+    async fn turning_repeat_on_announces_the_new_upcoming_track() {
+        let (mut queue, first, second, mut rig, dir) = crate::mock::selected().await;
+        let control = queue.control();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Next(super::super::Transition::None),
+        )
+        .expect("next");
+        crate::mock::answer_load(&mut queue, &mut rig, &dir).await;
+        crate::mock::finish(&mut queue, &mut rig);
+        assert_eq!(queue.current, Some(second));
+        assert_eq!(control.upcoming(), None, "the last track ends the queue");
+        let mut events = control.subscribe::<QueueEvent>();
+
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::SetRepeat(RepeatMode::All),
+        )
+        .expect("repeat");
+
+        assert_eq!(control.upcoming(), Some(first));
+        let heard: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+            .map(|envelope| envelope.event)
+            .collect();
+        assert!(
+            heard
+                .iter()
+                .any(|event| matches!(event, QueueEvent::UpcomingChanged)),
+            "the new upcoming track is announced: {heard:?}"
+        );
+    }
+
     /// A queue event is heard only with the view that shows it, in the order
     /// the queue made its changes: a handle that hears a track change reads
     /// that change.
@@ -728,9 +854,10 @@ pub(crate) mod tests {
                     QueueEvent::RepeatModeChanged {
                         mode: QueueRepeatMode::All,
                     },
+                    QueueEvent::UpcomingChanged,
                 ] if *changed == id
             ),
-            "the publish announces both changes in order: {heard:?}"
+            "the publish announces its changes in order: {heard:?}"
         );
         assert_eq!(
             control.track(id).map(|track| track.status),
@@ -741,7 +868,7 @@ pub(crate) mod tests {
 
     #[kithara::test]
     fn cached_position_unknown_after_construction() {
-        let (queue, _audio_thread) = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         assert_eq!(
             queue.queue_snapshot().track.map(|track| track.position),
             None

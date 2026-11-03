@@ -5,7 +5,7 @@ use kithara_events::{EventReceiver, EventSet, TrackId};
 use kithara_platform::sync::Arc;
 use kithara_play::{
     DeckMixSettings, DeckMixerConfig, DeckSnapshot, EngineLoadSnapshot, Player, PlayerStatus,
-    Position, SlotSnapshot, TrackFactory, TrackSettings, TrackSnapshot,
+    Position, SlotSnapshot, Track, TrackFactory, TrackSettings, TrackSnapshot,
     TrackStatus as PlayingStatus,
 };
 
@@ -40,7 +40,9 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     pub current: Option<TrackId>,
+    pub(super) upcoming: Option<TrackId>,
     pub track: Option<TrackSnapshot>,
+    follows_host: Option<bool>,
     pub settings: QueueSettings,
     rows: Arc<[TrackRow<S>]>,
     revision: u64,
@@ -90,7 +92,9 @@ where
     ) -> Self {
         Self(Arc::new(ArcSwap::from_pointee(QueueSnapshot {
             current: None,
+            upcoming: None,
             track: None,
+            follows_host: None,
             settings,
             rows: tracks.rows(),
             revision: tracks.revision(),
@@ -126,20 +130,24 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
-    pub(super) fn queue_snapshot(&self) -> QueueSnapshot<S> {
-        let mut track = self
-            .active_current_index()
-            .or_else(|| {
-                self.target.and_then(|target| {
-                    self.active.position(|active| {
-                        active.item == target.to
-                            && matches!(active.role, super::slots::Role::Incoming)
-                    })
-                })
-            })
+    /// The transition target, or the track navigation advances to.
+    fn upcoming(&mut self) -> Option<TrackId> {
+        self.target.map(|target| target.to).or_else(|| {
+            let ids = self.selectable_ids();
+            let wrap = self.navigation.repeat_mode() == RepeatMode::All;
+            self.navigation.next(&ids, self.current, true, wrap)
+        })
+    }
+
+    pub(super) fn queue_snapshot(&mut self) -> QueueSnapshot<S> {
+        let upcoming = self.upcoming();
+
+        let shown = self
+            .shown_index()
             .and_then(|index| self.active.get(index))
-            .map(|active| &active.track)
-            .map(|track| track.snapshot().as_ref().clone());
+            .map(|active| &active.track);
+        let follows_host = shown.map(Track::follows_host);
+        let mut track = shown.map(|track| track.snapshot().as_ref().clone());
         if let Some(track) = &mut track {
             match self.held_position {
                 Some(SeekPosition::Held(to)) => track.position = to,
@@ -161,7 +169,9 @@ where
         };
         QueueSnapshot {
             current: self.current,
+            upcoming,
             track,
+            follows_host,
             settings: self.config.settings,
             rows,
             revision: self.tracks.revision(),
@@ -241,6 +251,13 @@ where
         let snapshot = self.view.read();
         let id = snapshot.current?;
         snapshot.rows.iter().position(|row| row.entry.id == id)
+    }
+
+    /// The track the queue enters next: its transition target, or the one
+    /// navigation advances to.
+    #[must_use]
+    pub fn upcoming(&self) -> Option<TrackId> {
+        self.view.read().upcoming
     }
 
     #[must_use]
@@ -363,6 +380,12 @@ where
                 .track
                 .as_ref()
                 .is_some_and(|track| matches!(track.status, PlayingStatus::Playing { .. }))
+    }
+
+    /// Whether the host's tempo drives the current track; `None` with no track.
+    #[must_use]
+    pub fn follows_host(&self) -> Option<bool> {
+        self.view.read().follows_host
     }
 
     #[must_use]

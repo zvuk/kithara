@@ -74,6 +74,7 @@ impl DurationRig {
             suspended: false,
             now: SessionFrame::new(self.frame),
             delivery: FrameCount::new(BLOCK_FRAMES),
+            deck_delivery: FrameCount::new(BLOCK_FRAMES),
             output: &output,
             deck: &deck,
         };

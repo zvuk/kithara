@@ -1,6 +1,6 @@
 use kithara::{
     events::{EventReceiver, TrackId},
-    platform::{maybe_send::MaybeSend, time::Duration},
+    platform::time::Duration,
     play::TrackFactory,
     queue::{QueueControl, TrackSource},
 };
@@ -51,8 +51,8 @@ pub async fn append_source_loaded<F>(
     source: impl Into<TrackSource<TestPools>>,
 ) -> TrackId
 where
-    F: TrackFactory<TestPools> + MaybeSend + 'static,
-    F::Track: MaybeSend,
+    F: TrackFactory<TestPools> + Send + 'static,
+    F::Track: Send,
 {
     let source = source.into();
     let mut events: EventReceiver<TestEvent> = queue.subscribe();
