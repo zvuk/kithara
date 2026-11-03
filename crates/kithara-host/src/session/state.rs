@@ -225,8 +225,8 @@ pub(crate) struct SessionBufferConfig {
 
 pub(crate) struct SessionState<T, S> {
     pub(crate) settled: Vec<crate::HostSettled>,
-    /// The single clock read and delivery lead for the current owner pass.
-    pub(crate) iteration_clock: Option<(SessionFrame, FrameCount)>,
+    /// The single clock read and delivery leads for the current owner pass.
+    pub(crate) iteration_clock: Option<crate::PassClock>,
     /// Wall-time delivery lead, absent for a runtime that drains before rendering.
     pub(crate) delivery_delay: Option<Duration>,
     /// Graph node identities; deck state remains with the deck's owner.
@@ -324,13 +324,20 @@ impl<T, S> SessionState<T, S> {
     }
 
     pub(crate) fn begin_iteration(&mut self) {
-        self.iteration_clock = self.ctx.as_ref().and_then(|ctx| {
+        let now = self.ctx.as_ref().and_then(|ctx| {
             let _ = ctx.stream_info()?;
-            Some((
-                SessionFrame::new(ctx.audio_clock().samples.0),
-                self.delivery(),
-            ))
+            Some(SessionFrame::new(ctx.audio_clock().samples.0))
         });
+        self.iteration_clock = now.map(|now| self.clock_at(now));
+    }
+
+    /// The pass clock at `now`, with the delivery leads the session has now.
+    pub(crate) fn clock_at(&self, now: SessionFrame) -> crate::PassClock {
+        crate::PassClock {
+            now,
+            delivery: self.delivery(),
+            deck_delivery: self.deck_delivery(),
+        }
     }
 
     /// Rejects a timed change that cannot reach the render executor in this pass.
@@ -338,8 +345,8 @@ impl<T, S> SessionState<T, S> {
         match when {
             When::Next => Ok(()),
             When::At(frame) => {
-                let (now, delivery) = self.iteration_clock.ok_or(PlayError::Untimed)?;
-                if frame < now + delivery {
+                let clock = self.iteration_clock.ok_or(PlayError::Untimed)?;
+                if frame < clock.now + clock.delivery {
                     Err(PlayError::Late)
                 } else {
                     Ok(())
@@ -353,7 +360,19 @@ impl<T, S> SessionState<T, S> {
 
     /// The configured owner pump and worker wake allowances, plus one output block.
     pub(crate) fn delivery(&self) -> FrameCount {
-        let duration = self.delivery_delay.unwrap_or_default();
+        self.delivery_within(self.delivery_delay.unwrap_or_default())
+    }
+
+    /// The owner pump allowance plus one output block: deck parts wake no worker.
+    pub(crate) fn deck_delivery(&self) -> FrameCount {
+        self.delivery_within(
+            self.delivery_delay
+                .unwrap_or_default()
+                .min(crate::consts::SESSION_PUMP_INTERVAL),
+        )
+    }
+
+    fn delivery_within(&self, duration: Duration) -> FrameCount {
         let publication_frames = duration
             .as_nanos()
             .saturating_mul(u128::from(sample_rate(self).output()))
@@ -640,6 +659,7 @@ mod tests {
         assert!(state.ctx.is_none());
         state.owner.apply(command).expect("first registration");
         assert_eq!(state.delivery_delay, expected_delay);
+        assert_eq!(threaded_delivery, state.deck_delivery() < state.delivery());
         let ctx = state.ctx.as_ref().expect("actual activated native context");
         assert!(ctx.stream_info().is_some());
         let native = SessionFrame::new(ctx.audio_clock().samples.0);
@@ -647,7 +667,7 @@ mod tests {
             .owner
             .clock()
             .expect("started stream has a clock in this registration pass");
-        assert_eq!(clock, (native, state.delivery()));
+        assert_eq!(clock, state.clock_at(native));
         let directory = TestTempDir::new();
         let path = directory.path().join("same-pass.wav");
         kithara_play::mock::write_pcm_wav(
@@ -663,8 +683,12 @@ mod tests {
                 let actual = out
                     .pass()
                     .expect("real same-pass clock and delivery are lent");
-                assert_eq!((actual.now, actual.delivery), clock);
-                assert_eq!((pass.now, pass.delivery), clock);
+                assert_eq!(actual.now, clock.now);
+                assert_eq!(actual.delivery, clock.delivery);
+                assert_eq!(actual.deck_delivery, clock.deck_delivery);
+                assert_eq!(pass.now, clock.now);
+                assert_eq!(pass.delivery, clock.delivery);
+                assert_eq!(pass.deck_delivery, clock.deck_delivery);
                 Player::apply(
                     deck,
                     QueueCommand::Append {
@@ -706,9 +730,9 @@ mod tests {
         render_block(&mut state, 0);
         state.owner.begin_pass();
         let cached = state.owner.clock().expect("actual running stream clock");
-        assert!(cached.0 > SessionFrame::new(0));
+        assert!(cached.now > SessionFrame::new(0));
         assert_eq!(
-            cached.0,
+            cached.now,
             SessionFrame::new(
                 state
                     .ctx
@@ -721,7 +745,7 @@ mod tests {
         );
         let before_delay = state.delivery_delay.expect("threaded delivery budget");
         let position = cached
-            .0
+            .now
             .frames_since(SessionFrame::new(0))
             .expect("offline clock is nonnegative");
         render_block(&mut state, position);
@@ -735,7 +759,7 @@ mod tests {
                 .0,
         );
         assert!(
-            advanced > cached.0,
+            advanced > cached.now,
             "the real native clock moved during this pass"
         );
         assert_eq!(state.owner.clock(), Some(cached));
@@ -761,16 +785,20 @@ mod tests {
             .expect("second registration in the live pass");
 
         assert_eq!(state.delivery_delay, Some(expected_delay));
-        let expected = (cached.0, state.delivery());
-        assert!(expected.1 > cached.1);
+        let expected = state.clock_at(cached.now);
+        assert!(expected.delivery > cached.delivery);
         assert_eq!(state.owner.clock(), Some(expected));
         for id in [first_id, second_id] {
             state
                 .owner
                 .with_deck(id, &mut |_, out, pass| {
                     let actual = out.pass().expect("live registration pass");
-                    assert_eq!((actual.now, actual.delivery), expected);
-                    assert_eq!((pass.now, pass.delivery), expected);
+                    assert_eq!(actual.now, expected.now);
+                    assert_eq!(actual.delivery, expected.delivery);
+                    assert_eq!(actual.deck_delivery, expected.deck_delivery);
+                    assert_eq!(pass.now, expected.now);
+                    assert_eq!(pass.delivery, expected.delivery);
+                    assert_eq!(pass.deck_delivery, expected.deck_delivery);
                 })
                 .expect("registered deck");
         }
