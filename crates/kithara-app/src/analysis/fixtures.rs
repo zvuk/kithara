@@ -487,6 +487,18 @@ pub(crate) fn supplied(grid: BeatGridModel) -> TrackArtifacts {
     )
 }
 
+/// The publication of a track whose supplied grid did not load.
+pub(crate) fn refused() -> TrackArtifacts {
+    TrackArtifacts::new(
+        None,
+        super::supply::Prepared {
+            beat_grid: super::supply::Supply::Failed,
+            waveform: super::supply::Supply::Missing,
+        },
+        false,
+    )
+}
+
 #[kithara::hang_watchdog(ctx = String)]
 async fn serve_requests(
     mut requests: mpsc::Receiver<Request>,

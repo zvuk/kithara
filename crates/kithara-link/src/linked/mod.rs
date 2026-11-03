@@ -1,5 +1,6 @@
 mod command;
 mod core;
+mod correction;
 mod geometry;
 mod state;
 

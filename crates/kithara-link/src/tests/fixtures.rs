@@ -115,6 +115,7 @@ pub(super) enum Command {
     Load(Position),
     Play(When<SessionFrame>),
     Pause(When<SessionFrame>),
+    Fade(When<SessionFrame>),
     Seek(Position),
     Jump(Position, SessionFrame),
     Speed(SpeedCurve, When<SessionFrame>),
@@ -248,6 +249,7 @@ impl Player<TestPools> for ScriptedTrack {
             TrackCommand::Load { position, .. } => Command::Load(position),
             TrackCommand::Play { at } => Command::Play(at),
             TrackCommand::Pause { at } => Command::Pause(at),
+            TrackCommand::Fade { at, .. } => Command::Fade(at),
             TrackCommand::Seek { to } => Command::Seek(to),
             TrackCommand::Jump { to, at } => Command::Jump(to, at),
             TrackCommand::SetSpeed { speed, at } => Command::Speed(speed, at),
@@ -261,7 +263,6 @@ impl Player<TestPools> for ScriptedTrack {
             TrackCommand::Release => Command::Release,
             TrackCommand::Supersede
             | TrackCommand::ConfigureEffect { .. }
-            | TrackCommand::Fade { .. }
             | TrackCommand::PlayAfter { .. }
             | TrackCommand::Seat { .. } => {
                 panic!("unexpected command in synchronization fixture")
@@ -348,7 +349,7 @@ impl Player<TestPools> for ScriptedTrack {
                             }
                             Command::ConfigureSpeed(value, _) => script.snapshot.speed = value,
                             Command::Release => script.snapshot.status = TrackStatus::Released,
-                            Command::Rate(_) => {}
+                            Command::Rate(_) | Command::Fade(_) => {}
                         }
                     }
                     script.snapshot.pending_lane = false;
@@ -535,6 +536,7 @@ pub(super) struct Rig {
     pub queues: DeckRig<TestPools>,
     pub now: SessionFrame,
     pub delivery: FrameCount,
+    pub deck_delivery: Option<FrameCount>,
     output: OutputSnapshot,
     observation: DeckSnapshot,
 }
@@ -545,6 +547,7 @@ impl Rig {
             queues: DeckRig::new(DeckMixerConfig::default()).expect("deck scope"),
             now: SessionFrame::new(now),
             delivery: FrameCount::new(128),
+            deck_delivery: None,
             output: kithara_play::mock::output(None).get(),
             observation: DeckSnapshot::default(),
         }
@@ -568,6 +571,7 @@ impl Rig {
             suspended: false,
             now: self.now,
             delivery: self.delivery,
+            deck_delivery: self.deck_delivery.unwrap_or(self.delivery),
             output: &self.output,
             deck: &self.observation,
         };
@@ -700,28 +704,65 @@ pub(super) fn loaded(model: BeatGridModel) -> (Deck, Control, Rig, Seq) {
     (deck, control, rig, load)
 }
 
-pub(super) fn sounding() -> (Deck, Control, Rig, Seq) {
-    let (mut deck, control, mut rig, load) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
+/// A session frame near the end of a grid covering 480 000 frames.
+pub(super) const NEAR_THE_COVERED_END: u32 = 475_200;
+/// The track frame a deck sounds on `NEAR_THE_COVERED_END` a third of a beat
+/// behind the host.
+pub(super) const A_THIRD_OF_A_BEAT_BEHIND: u32 = 467_200;
+
+/// `model` as an answer a later revision can still extend.
+pub(super) fn provisional(model: &BeatGridModel) -> BeatGridModel {
+    let mut raw = model.as_raw().clone();
+    raw.state = BeatGridState::Provisional;
+    BeatGridModel::try_from(raw).expect("consistent grid")
+}
+
+/// A deck that loaded a track at 0 on `model` and turned SYNC on, silent.
+pub(super) fn synced(model: BeatGridModel) -> (Deck, Control, Rig, Seq) {
+    let (mut deck, control, mut rig, load) = loaded(model);
     let seq = rig
         .run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("sync accepted")
         .expect("speed sequence");
     rig.apply(&mut deck, seq, 0);
+    control.clear();
+    (deck, control, rig, load)
+}
+
+/// The deck sounds track frame `at` on session frame `now`.
+pub(super) fn sound(control: &Control, rig: &mut Rig, now: u32, at: u32) {
+    rig.now = SessionFrame::new(i64::from(now));
     control.edit(|script| {
-        script.snapshot.status = TrackStatus::Playing {
-            since: SessionFrame::new(0),
-        };
+        script.snapshot.status = TrackStatus::Playing { since: rig.now };
+        script.snapshot.position = position(at);
         script.snapshot.mark = Some(SlotMark {
-            session: SessionFrame::new(0),
+            session: rig.now,
             lane: kithara_render::LaneFrame {
                 segment: SegmentId::FIRST,
-                frame: 0,
+                frame: u64::from(at),
             },
-            position: Position::ZERO,
+            position: position(at),
         });
     });
     control.clear();
+}
+
+pub(super) fn sounding() -> (Deck, Control, Rig, Seq) {
+    let (deck, control, mut rig, load) = synced(grid(24_000, 0, Some((4, 0)), 960_000));
+    sound(&control, &mut rig, 0, 0);
     (deck, control, rig, load)
+}
+
+/// The jumps the deck was sent.
+pub(super) fn jumps(control: &Control) -> Vec<(Position, SessionFrame)> {
+    control
+        .commands()
+        .into_iter()
+        .filter_map(|(_, command)| match command {
+            Command::Jump(to, at) => Some((to, at)),
+            _ => None,
+        })
+        .collect()
 }
 
 pub(super) fn consume(control: &Control, frame: u32) {

@@ -33,7 +33,7 @@ fn entry_preserves_the_media_offset_between_source_and_host_beats() {
     assert!(
         phase_error(&host, &source_grid(&grid), cue, at)
             .expect("mapped source phase")
-            .shortest()
+            .wrapped(1.0)
             .abs()
             < 1e-9
     );
@@ -108,7 +108,7 @@ fn phase_error_keeps_both_half_beat_directions_and_entry_preserves_the_cue(
             SessionFrame::new(expected_entry)
         )
         .expect("mapped source phase")
-        .shortest()
+        .wrapped(1.0)
         .abs()
             < 1e-9
     );
@@ -140,7 +140,7 @@ fn different_bpms_share_one_phase_preserving_entry_and_speed() {
     assert!(
         phase_error(&host, &source_grid(&grid), cue, activation)
             .expect("mapped source phase")
-            .shortest()
+            .wrapped(1.0)
             .abs()
             < 1e-9
     );
@@ -173,7 +173,7 @@ fn an_in_phase_metered_cue_is_an_inclusive_entry_on_both_sides() {
     assert!(
         phase_error(&host, &source_grid(&grid), cue, at)
             .expect("mapped source phase")
-            .shortest()
+            .wrapped(1.0)
             .abs()
             < 1e-9
     );
@@ -224,7 +224,7 @@ fn three_four_entries_keep_the_offset_from_the_observed_downbeat() {
     assert!(
         phase_error(&host, &source_grid(&grid), cue, activation)
             .expect("mapped source phase")
-            .shortest()
+            .wrapped(1.0)
             .abs()
             < 1e-9
     );

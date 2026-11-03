@@ -70,12 +70,7 @@ impl DriverIo for MmapDriver {
                 *mmap_guard = MmapState::Committed(Arc::clone(&arc));
                 displaced = self.committed.swap(Some(arc));
             } else {
-                displaced = self.committed.swap(None);
-                *mmap_guard = MmapState::Empty;
-                if let Some(temp) = rewrite_temp.as_deref() {
-                    let _ = fs::remove_file(temp);
-                }
-                let _ = fs::write(&self.config.path, b"");
+                displaced = self.commit_empty(&mut mmap_guard, rewrite_temp.as_deref())?;
             }
         } else {
             let is_active = matches!(*mmap_guard, MmapState::Active(_));
@@ -250,6 +245,28 @@ impl DriverIo for MmapDriver {
 }
 
 impl MmapDriver {
+    fn commit_empty(
+        &self,
+        mmap: &mut MmapState,
+        rewrite_temp: Option<&Path>,
+    ) -> StorageResult<Option<Arc<MemoryMappedFile>>> {
+        // Truncating the old inode invalidates retained committed mappings.
+        let parent =
+            self.config.path.parent().ok_or_else(|| {
+                StorageError::Failed("empty commit path has no parent".to_owned())
+            })?;
+        let generation = tempfile::tempdir_in(parent)?;
+        let empty = generation.path().join("empty");
+        fs::File::create(&empty)?;
+        fs::rename(&empty, &self.config.path)?;
+        let displaced = self.committed.swap(None);
+        *mmap = MmapState::Empty;
+        if let Some(temp) = rewrite_temp {
+            let _ = fs::remove_file(temp);
+        }
+        Ok(displaced)
+    }
+
     /// Path the new generation of a re-download is written to, kept separate
     /// from the committed file so the published RO snapshot is never aliased.
     /// [`commit`](DriverIo::commit) renames it onto `self.config.path` atomically.
