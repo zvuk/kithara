@@ -2711,12 +2711,11 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 [[package]]
 name = "firewheel"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1270d1a20d0143ffcf76432d15085c79043dcb8d0bb5b6af9e9480c941eee6bf"
+source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
 dependencies = [
  "firewheel-core",
  "firewheel-cpal",
- "firewheel-graph",
+ "firewheel-graph 0.14.0 (git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb)",
  "firewheel-nodes",
  "firewheel-rtaudio",
  "firewheel-symphonium",
@@ -2726,8 +2725,7 @@ dependencies = [
 [[package]]
 name = "firewheel-core"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a51e33f3ade070d0da6ea87ff385d32e7d5f073a74449fbbda1e8549201eaf2"
+source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
 dependencies = [
  "arrayvec",
  "audioadapter",
@@ -2755,14 +2753,13 @@ dependencies = [
 [[package]]
 name = "firewheel-cpal"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f085db5567eb2059643de90f37eff03c572a405571e6ae088935089337e0e248"
+source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
 dependencies = [
  "audioadapter-buffers",
  "bevy_platform",
  "cpal",
  "firewheel-core",
- "firewheel-graph",
+ "firewheel-graph 0.14.0 (git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb)",
  "fixed-resample",
  "thiserror 2.0.21",
  "tracing",
@@ -2791,10 +2788,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "firewheel-graph"
+version = "0.14.0"
+source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
+dependencies = [
+ "arrayvec",
+ "audioadapter",
+ "bevy_platform",
+ "bevy_reflect",
+ "bitflags 2.13.2",
+ "firewheel-core",
+ "num-traits",
+ "ringbuf",
+ "smallvec",
+ "thiserror 2.0.21",
+ "thunderdome",
+ "tracing",
+ "triple_buffer",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "firewheel-macros"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6e6da6e4ad09849a0a46790a37a555e621be74de43c1e3ef3ecc588bac4c61f"
+source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
 dependencies = [
  "bevy_macro_utils",
  "proc-macro2",
@@ -2806,8 +2823,7 @@ dependencies = [
 [[package]]
 name = "firewheel-nodes"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3cff45842650fee713bea9a2e6cada1a96e393895073aad3ee453acb0e26073"
+source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
 dependencies = [
  "bevy_ecs",
  "bevy_platform",
@@ -2820,13 +2836,12 @@ dependencies = [
 [[package]]
 name = "firewheel-rtaudio"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6c6e3ee75d88ad0dda1be16f849cee579dda70b69f2c3003f0a81eb5e455060"
+source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
 dependencies = [
  "audioadapter-buffers",
  "bevy_platform",
  "firewheel-core",
- "firewheel-graph",
+ "firewheel-graph 0.14.0 (git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb)",
  "rtaudio",
  "thiserror 2.0.21",
  "tracing",
@@ -2835,8 +2850,7 @@ dependencies = [
 [[package]]
 name = "firewheel-symphonium"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2188ec2f3039775663fda4cdef93a83b3feebca49a0d6c0c18097e81cdf06a75"
+source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
 dependencies = [
  "bevy_platform",
  "firewheel-core",
@@ -5954,6 +5968,7 @@ dependencies = [
  "kithara-decode",
  "kithara-derive",
  "kithara-download",
+ "kithara-effects",
  "kithara-events",
  "kithara-host",
  "kithara-net",
@@ -6024,6 +6039,7 @@ dependencies = [
 name = "kithara-render"
 version = "0.0.1-alpha5"
 dependencies = [
+ "audioadapter-buffers",
  "bon",
  "delegate",
  "derive-where",
@@ -6609,7 +6625,7 @@ dependencies = [
  "either",
  "firewheel",
  "firewheel-core",
- "firewheel-graph",
+ "firewheel-graph 0.14.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "foldhash 0.2.0",
  "form_urlencoded",
  "futures-channel",
