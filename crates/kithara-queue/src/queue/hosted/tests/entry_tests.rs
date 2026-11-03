@@ -9,7 +9,7 @@ pub(super) use kithara_play::{
     Player, ResourceConfig, ResourcePrep, ResourceSrc, TrackReceipt, TrackStatus as PlayingStatus,
     mock,
 };
-use kithara_play::{DeckMixSettingsChange, DeckProtocol, PlayerEvent, Position};
+use kithara_play::{DeckMixSettingsChange, DeckProtocol, PlayerEvent, Position, SeekBatch};
 pub(super) use kithara_render::{
     LaneFrame,
     bridge::{Returned, SlotMark},
@@ -87,6 +87,7 @@ fn mix_command(
         suspended: false,
         now: SessionFrame::new(0),
         delivery: FrameCount::new(128),
+        deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
     };
@@ -186,6 +187,7 @@ fn rejected_slot_volume_leaves_live_values_unchanged() {
         suspended: false,
         now: SessionFrame::new(0),
         delivery: FrameCount::new(128),
+        deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
     };
@@ -315,7 +317,7 @@ async fn a_seek_accepted_while_opening_is_adopted_before_the_first_start() {
     answer_load(&mut queue, &mut rig, &dir).await;
     let Some(SeekPosition::Pending {
         item,
-        seq,
+        sent: SeekBatch::Deck(seq),
         to: saved,
         ..
     }) = queue.held_position
@@ -735,6 +737,7 @@ fn a_host_pass_publishes_the_deck_mixer_counters() {
         suspended: false,
         now: SessionFrame::new(0),
         delivery: FrameCount::new(128),
+        deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
     };

@@ -32,6 +32,14 @@ pub enum UiDocError {
     #[cfg(feature = "render")]
     #[error(transparent)]
     Text(#[from] crate::shaping::TextError),
+    /// A font source named by a skin could not be registered.
+    #[cfg(feature = "render")]
+    #[error("{origin}: skin font is invalid: {source}")]
+    Font {
+        origin: SourceUri,
+        #[source]
+        source: crate::shaping::TextError,
+    },
     #[error("{origin}: duplicate id {id:?} at {path}")]
     DuplicateId {
         origin: SourceUri,
