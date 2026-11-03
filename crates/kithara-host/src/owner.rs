@@ -33,7 +33,6 @@ type DeckVisit<'a, S, D> = &'a mut (dyn FnMut(&mut D, &mut Outbox<'_, S>, DeckPa
 type EachDeckVisit<'a, S, D> =
     &'a mut (dyn FnMut(DeckId, &mut D, &mut Outbox<'_, S>, DeckPass<'_>) + 'a);
 
-/// What the session thread drives, including decorators over its base owner.
 /// The clock one owner pass reads once: its frame and delivery leads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PassClock {
@@ -45,6 +44,7 @@ pub struct PassClock {
     pub deck_delivery: FrameCount,
 }
 
+/// What the session thread drives, including decorators over its base owner.
 pub trait HostOwner<S>:
     HostSettingsExec<(), At = When<SessionFrame>, Output = Result<Option<Seq>, PlayError>> + 'static
 {
