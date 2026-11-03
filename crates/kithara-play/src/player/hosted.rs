@@ -64,9 +64,8 @@ pub struct DeckPass<'a> {
     pub suspended: bool,
     /// The session frame the pass stands on.
     pub now: SessionFrame,
-    /// Frames a batch sent now takes to reach the mixer: the session thread,
-    /// the worker's wake and one block. The earliest frame a press lands on is
-    /// `now + delivery`.
+    /// Frames a batch that wakes the worker takes to reach the mixer: the
+    /// session thread, the worker's wake and one block.
     pub delivery: FrameCount,
     /// Frames a batch of deck parts takes to reach the mixer: the session
     /// thread and one block, with no worker on its way.

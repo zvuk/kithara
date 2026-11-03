@@ -40,7 +40,6 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     pub current: Option<TrackId>,
-    pub(super) target: Option<TrackId>,
     pub(super) upcoming: Option<TrackId>,
     pub track: Option<TrackSnapshot>,
     follows_host: Option<bool>,
@@ -93,7 +92,6 @@ where
     ) -> Self {
         Self(Arc::new(ArcSwap::from_pointee(QueueSnapshot {
             current: None,
-            target: None,
             upcoming: None,
             track: None,
             follows_host: None,
@@ -132,38 +130,20 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
-    /// The transition target or the track navigation advances to, chosen again
-    /// only when something that decides it moved since the last publication.
-    pub(super) fn upcoming(&mut self) -> Option<TrackId> {
-        let target = self.target.map(|target| target.to);
-        let repeat = self.navigation.repeat_mode();
-        let published = self.view.read();
-        if published.revision == self.tracks.revision()
-            && published.current == self.current
-            && published.target == target
-            && published.order == self.navigation.playback_order()
-            && published.repeat == repeat
-        {
-            return published.upcoming;
-        }
-        target.or_else(|| {
+    /// The transition target, or the track navigation advances to.
+    fn upcoming(&mut self) -> Option<TrackId> {
+        self.target.map(|target| target.to).or_else(|| {
             let ids = self.selectable_ids();
-            self.navigation
-                .next(&ids, self.current, true, repeat == RepeatMode::All)
+            let wrap = self.navigation.repeat_mode() == RepeatMode::All;
+            self.navigation.next(&ids, self.current, true, wrap)
         })
     }
 
-    pub(super) fn queue_snapshot(&self) -> QueueSnapshot<S> {
+    pub(super) fn queue_snapshot(&mut self) -> QueueSnapshot<S> {
+        let upcoming = self.upcoming();
+
         let shown = self
-            .active_current_index()
-            .or_else(|| {
-                self.target.and_then(|target| {
-                    self.active.position(|active| {
-                        active.item == target.to
-                            && matches!(active.role, super::slots::Role::Incoming)
-                    })
-                })
-            })
+            .shown_index()
             .and_then(|index| self.active.get(index))
             .map(|active| &active.track);
         let follows_host = shown.map(Track::follows_host);
@@ -189,8 +169,7 @@ where
         };
         QueueSnapshot {
             current: self.current,
-            target: self.target.map(|target| target.to),
-            upcoming: published.upcoming,
+            upcoming,
             track,
             follows_host,
             settings: self.config.settings,
@@ -274,11 +253,11 @@ where
         snapshot.rows.iter().position(|row| row.entry.id == id)
     }
 
-    /// The track the queue enters next, unless that is `held`: its transition
-    /// target, or the one navigation advances to.
+    /// The track the queue enters next: its transition target, or the one
+    /// navigation advances to.
     #[must_use]
-    pub fn upcoming(&self, held: Option<TrackId>) -> Option<TrackId> {
-        self.view.read().upcoming.filter(|&id| Some(id) != held)
+    pub fn upcoming(&self) -> Option<TrackId> {
+        self.view.read().upcoming
     }
 
     #[must_use]

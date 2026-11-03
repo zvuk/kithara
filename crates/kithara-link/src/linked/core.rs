@@ -3,9 +3,9 @@ use std::task::Waker;
 use kithara_beat::BeatGridModel;
 use kithara_command::{Rejection, Seq, When};
 use kithara_play::{
-    Bound, DeckControl, DeckPass, FadeDir, HostedDeck, Outbox, PlayError, PlayWorker, Player,
-    Position, SeekBatch, Settled, Track, TrackCommand, TrackReceipt, TrackSettings,
-    TrackSettingsChange, TrackStatus,
+    Bound, DeckControl, DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, Player, Position,
+    SeekBatch, Settled, Track, TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange,
+    TrackStatus,
 };
 use kithara_render::{
     bridge::{DeckEvent, DeckPart},
@@ -16,23 +16,56 @@ use tracing::warn;
 
 use super::{
     Linked, LinkedPlayer, LinkedSnapshot, SyncMode, SyncStatus, Waiting,
-    geometry::{cue_position, is_final, last_beat, placement},
-    state::{Cue, Reissued, Relocation},
+    geometry::{PastEnd, Placement, cue_position, place},
+    state::{Cause, Cue, Reissued, Relocation},
 };
 use crate::{GridAnswer, GridRefusal, TempoTrajectory, covers, entry};
 
-/// Whether `grid` answers a parked command: a Play or Seek is placed by it, and
-/// a final grid answers one it cannot place by refusing it.
+/// Whether `grid` answers a parked command: a Play or Seek is placed or
+/// refused by it, and a Load or Sync needs its position covered.
 fn resolves(waiting: Waiting, grid: &BeatGridModel, required: Position) -> bool {
     match waiting {
-        Waiting::Play { .. } | Waiting::Seek { .. } => {
-            placement(grid, required).is_some() || is_final(grid)
-        }
+        Waiting::Play { .. } | Waiting::Seek { .. } => !matches!(
+            place(grid, Cue::Covered(required), PastEnd::LastBeat),
+            Placement::Wait
+        ),
         Waiting::Load { .. } | Waiting::Sync { .. } => covers(grid.geometry(), required),
     }
 }
 
+/// What a refused synchronization step does next.
+pub(super) enum Refusal {
+    /// Room or a timed pass may come.
+    Retry,
+    /// The step is given up.
+    Drop,
+    /// An Internal refusal: the track left SYNC.
+    Unsyncable,
+}
+
 impl<P> Linked<P> {
+    /// Sorts a refused step; an Internal refusal refuses SYNC here.
+    pub(super) fn triage<S>(&mut self, error: &PlayError, out: &mut Outbox<'_, S>) -> Refusal
+    where
+        P: Track<S>,
+    {
+        match error {
+            PlayError::Full(_) | PlayError::Late | PlayError::NotReady | PlayError::Untimed => {
+                Refusal::Retry
+            }
+            PlayError::Internal(_) if self.synced() => {
+                warn!(%error, "track cannot follow the host");
+                self.refuse_sync(out);
+                Refusal::Unsyncable
+            }
+            _ => {
+                warn!(%error, "synchronized step dropped");
+                Refusal::Drop
+            }
+        }
+    }
+
+    /// A late waiting command drops: its frame passed while it waited.
     fn resume_wait<S>(&mut self, out: &mut Outbox<'_, S>)
     where
         P: Track<S>,
@@ -40,28 +73,15 @@ impl<P> Linked<P> {
         let Some(waiting) = self.waiting else {
             return;
         };
-        let snapshot = self.inner.snapshot();
-        let track = snapshot.as_ref();
-        if matches!(
-            track.status,
-            TrackStatus::Idle | TrackStatus::Loading | TrackStatus::Released
-        ) || self.start.is_some()
-        {
+        if !self.resumable(out) {
             return;
         }
-        let Some(pass) = out.pass() else {
-            return;
-        };
-        if self
-            .inner
-            .entry(Bound::AtOrAfter(pass.earliest()))
-            .is_none()
-        {
-            return;
-        }
+
         let required = match waiting {
-            Waiting::Play { .. } | Waiting::Sync { .. } => cue_position(track),
-            _ => waiting.required(),
+            Waiting::Play { .. } | Waiting::Sync { .. } => {
+                cue_position(self.inner.snapshot().as_ref())
+            }
+            Waiting::Load { .. } | Waiting::Seek { .. } => waiting.required(),
         };
         if self.synced()
             && self
@@ -69,27 +89,38 @@ impl<P> Linked<P> {
                 .as_ref()
                 .is_none_or(|grid| !resolves(waiting, grid, required))
         {
-            if matches!(waiting, Waiting::Sync { .. }) {
+            if let Waiting::Sync { .. } = waiting {
                 self.waiting = Some(Waiting::Sync { required });
             }
             return;
         }
+
         self.waiting = None;
-        let result = self.apply_waiting(waiting, out);
-        match result {
-            Ok(_) => {}
-            Err(PlayError::Full(_) | PlayError::NotReady | PlayError::Untimed) => {
-                self.waiting = Some(waiting);
-            }
-            Err(error) => {
-                warn!(%error, "waiting linked command was refused");
-                if matches!(waiting, Waiting::Sync { .. })
-                    && matches!(error, PlayError::Internal(_))
-                {
-                    self.refuse_sync(out);
-                }
-            }
+        let Err(error) = self.apply_waiting(waiting, out) else {
+            return;
+        };
+        if let Refusal::Retry = self.triage(&error, out)
+            && !matches!(error, PlayError::Late)
+        {
+            self.waiting = Some(waiting);
         }
+    }
+
+    /// Whether a loaded track with its start settled can enter on this pass.
+    fn resumable<S>(&self, out: &Outbox<'_, S>) -> bool
+    where
+        P: Track<S>,
+    {
+        let status = self.inner.snapshot().as_ref().status;
+        !matches!(
+            status,
+            TrackStatus::Idle | TrackStatus::Loading | TrackStatus::Released
+        ) && self.start.is_none()
+            && out.pass().is_some_and(|pass| {
+                self.inner
+                    .entry(Bound::AtOrAfter(pass.earliest()))
+                    .is_some()
+            })
     }
 
     fn apply_waiting<S>(
@@ -166,19 +197,15 @@ impl<P> Linked<P> {
         }
     }
 
+    /// A cue stays owed until placed, so a refusal that would drop it refuses SYNC.
     pub(super) fn prepare_cue<S>(&mut self, out: &mut Outbox<'_, S>)
     where
         P: Track<S>,
     {
-        match self.cue_on_beat(out) {
-            Ok(_)
-            | Err(
-                PlayError::Full(_) | PlayError::Late | PlayError::NotReady | PlayError::Untimed,
-            ) => {}
-            Err(error) => {
-                warn!(%error, "synchronized cue refused");
-                self.refuse_sync(out);
-            }
+        if let Err(error) = self.cue_on_beat(out)
+            && let Refusal::Drop = self.triage(&error, out)
+        {
+            self.refuse_sync(out);
         }
     }
 
@@ -190,6 +217,48 @@ impl<P> Linked<P> {
         self.cue = None;
         self.alignment = None;
         self.resume_wait(out);
+    }
+
+    /// A new grid turns a track waiting for one to SYNC and aligns a synchronized one.
+    fn take_grid<S>(&mut self, model: BeatGridModel, out: &mut Outbox<'_, S>)
+    where
+        P: Track<S>,
+    {
+        self.grid = Some(model);
+
+        let track = self.inner.snapshot();
+        let playing = matches!(track.as_ref().status, TrackStatus::Playing { .. });
+        match self.mode {
+            SyncMode::NoGrid => {
+                self.mode = SyncMode::On;
+                let required = cue_position(track.as_ref());
+                self.waiting.get_or_insert(Waiting::Sync { required });
+            }
+            SyncMode::On if playing && self.waiting.is_none() => {
+                self.alignment = Some(Cause::Drift);
+                self.realign(out);
+            }
+            SyncMode::On => {
+                if self.start.is_some() {
+                    self.cue = Some(Cue::Beat(track.as_ref().position));
+                } else if !playing {
+                    self.alignment = Some(Cause::Drift);
+                }
+                self.prepare_cue(out);
+                if self.cue.is_none() {
+                    self.resume_wait(out);
+                }
+            }
+            SyncMode::Off | SyncMode::Unsyncable => {}
+        }
+    }
+
+    /// Drops the grid; a refusal it carried becomes a wait for the next one.
+    pub(super) fn clear_grid(&mut self) {
+        self.grid = None;
+        if self.mode == SyncMode::Unsyncable {
+            self.mode = SyncMode::NoGrid;
+        }
     }
 
     fn retime_silent<S>(&mut self, at: SessionFrame, out: &mut Outbox<'_, S>)
@@ -207,24 +276,21 @@ impl<P> Linked<P> {
         let Some(entry_frame) = entry(&self.host, &source, required, Bound::AtOrAfter(at)) else {
             return;
         };
-        let curve = match self.curve(&source, required, entry_frame, None) {
-            Ok(curve) => curve,
-            Err(error) => {
-                warn!(?at, %error, "track retime refused");
-                self.refuse_sync(out);
-                return;
-            }
-        };
-        match self.send_cue(required, curve, out) {
-            Ok(Some(seq)) => {
-                self.record_retime(at, seq);
+        let sent = self
+            .curve(&source, required, entry_frame, None)
+            .and_then(|curve| self.send_cue(required, curve, out));
+        match sent {
+            Ok(sent @ Some(_)) => {
+                self.record_retime(at, sent);
                 if let Some(start) = self.start {
                     self.start_caller.get_or_insert(start);
                 }
                 self.withdraw_start(required);
             }
             Ok(None) => {}
-            Err(error) => warn!(?at, %error, "track retime refused"),
+            Err(error) => {
+                self.triage(&error, out);
+            }
         }
     }
 
@@ -241,17 +307,14 @@ impl<P> Linked<P> {
         let Some(grid) = self.grid.as_ref() else {
             return Ok(None);
         };
-        let placed = match cue {
-            Cue::Covered(position) => placement(grid, position),
-            Cue::Beat(position) => kithara_sync::boundary(grid.geometry(), position),
-        };
-        let Some(position) = placed.or_else(|| last_beat(grid)) else {
-            if is_final(grid) {
+        let position = match place(grid, cue, PastEnd::LastBeat) {
+            Placement::At(position) => position,
+            Placement::Wait => return Ok(None),
+            Placement::Refused => {
                 return Err(PlayError::Internal(
                     "the final grid holds no beat for this cue".into(),
                 ));
             }
-            return Ok(None);
         };
         let Some(pass) = out.pass() else {
             return Ok(None);
@@ -276,15 +339,7 @@ impl<P> Linked<P> {
         let sent = self.send_cue(position, value, out)?;
         self.cue = None;
         self.withdraw_start(position);
-        self.waiting = self.waiting.and_then(|waiting| match waiting {
-            Waiting::Load { .. } => Some(Waiting::Load { required: position }),
-            Waiting::Play { at, .. } => Some(Waiting::Play {
-                required: position,
-                at,
-            }),
-            Waiting::Sync { .. } => None,
-            Waiting::Seek { .. } => Some(waiting),
-        });
+        self.waiting = self.waiting.and_then(|waiting| waiting.cued(position));
         Ok(sent)
     }
 }
@@ -316,47 +371,27 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
         command: TrackCommand<S>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        self.check_synced_command(&command, out)?;
         match command {
-            TrackCommand::Pause { .. } => {
+            TrackCommand::Load { item, position } => self.load_item(item, position, out),
+            TrackCommand::Seek { to } => {
+                Track::seek(self, to, out).map(|sent| sent.map(SeekBatch::seq))
+            }
+            TrackCommand::Pause { at } => {
                 self.paused_in_place |= matches!(
                     self.inner.snapshot().as_ref().status,
                     TrackStatus::Playing { .. } | TrackStatus::Faded { .. }
                 );
-            }
-            TrackCommand::Seek { .. } => self.paused_in_place = false,
-            _ => {}
-        }
-        if let TrackCommand::Load { item, position } = command {
-            return self.load_item(item, position, out);
-        }
-        if !self.synced() {
-            return self.inner.apply(command, out);
-        }
-        match command {
-            TrackCommand::Load { .. } => unreachable!("load was handled before the SYNC dispatch"),
-            TrackCommand::Configure(change, at) => {
-                self.synced_speed(change)?;
-                self.inner.apply(TrackCommand::Configure(change, at), out)
-            }
-            TrackCommand::Play { at } => self.play_synced(at, out),
-            TrackCommand::Seek { to } => Ok(Track::seek(self, to, out)?.map(SeekBatch::seq)),
-            TrackCommand::Pause { at } => {
-                self.waiting = None;
-                self.inner.apply(TrackCommand::Pause { at }, out)
-            }
-            TrackCommand::Fade { at, settings, dir } => {
-                self.check_synced_fade::<S>(at, dir)?;
-                let sent = self
-                    .inner
-                    .apply(TrackCommand::Fade { at, settings, dir }, out)?;
-                if dir == FadeDir::Out && matches!(self.waiting, Some(Waiting::Play { .. })) {
+                if self.synced() {
                     self.waiting = None;
                 }
-                if dir == FadeDir::In {
-                    self.entry_planned::<S>();
-                }
-                Ok(sent)
+                self.inner.apply(TrackCommand::Pause { at }, out)
+            }
+            TrackCommand::Configure(change, at) => self
+                .synced_speed(change)
+                .and_then(|()| self.inner.apply(TrackCommand::Configure(change, at), out)),
+            TrackCommand::Play { at } if self.synced() => self.play_synced(at, out),
+            TrackCommand::Fade { at, settings, dir } if self.synced() => {
+                self.fade_synced(at, settings, dir, out)
             }
             other => self.inner.apply(other, out),
         }
@@ -398,7 +433,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
             }
         }
         if self.synced() && underrun {
-            self.alignment = Some(false);
+            self.alignment = Some(Cause::Drift);
             self.realign(out);
         }
         if self.cue.is_none() && matches!(self.waiting, Some(Waiting::Load { .. })) {
@@ -435,7 +470,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
         });
         let sync = match self.mode {
             SyncMode::Off => SyncStatus::Off,
-            SyncMode::Unsyncable => SyncStatus::Unsyncable,
+            SyncMode::Unsyncable | SyncMode::NoGrid => SyncStatus::Unsyncable,
             SyncMode::On => self.waiting.map_or_else(
                 || {
                     remaining.map_or(SyncStatus::On, |remaining| SyncStatus::Correcting {
@@ -458,7 +493,7 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
         at: When<SessionFrame>,
         out: &Outbox<'_, S>,
     ) -> Result<Option<usize>, PlayError> {
-        self.synced_speed(change)?;
+        self.synced_speed::<S>(change)?;
         self.inner.admit(change, at, out)
     }
 
@@ -554,7 +589,7 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
     }
 
     fn follows_host(&self) -> bool {
-        self.mode == SyncMode::On
+        LinkedPlayer::<S>::synced(self)
     }
 
     delegate::delegate! {
@@ -685,49 +720,14 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
             Ok(model)
         });
         match validated {
-            Ok(model) => {
-                if self.grid.as_ref() == Some(&model) {
-                    return;
-                }
-                let refused_for_lack_of_a_grid =
-                    self.mode == SyncMode::Unsyncable && self.grid.is_none();
-                self.grid = Some(model);
-                if refused_for_lack_of_a_grid {
-                    self.mode = SyncMode::On;
-                    let required = cue_position(self.inner.snapshot().as_ref());
-                    self.waiting.get_or_insert(Waiting::Sync { required });
-                    return;
-                }
-                if self.synced() {
-                    if matches!(
-                        self.inner.snapshot().as_ref().status,
-                        TrackStatus::Playing { .. }
-                    ) && self.waiting.is_none()
-                    {
-                        self.alignment = Some(false);
-                        self.realign(out);
-                        return;
-                    }
-                    if self.start.is_some() {
-                        self.cue = Some(Cue::Beat(self.inner.snapshot().as_ref().position));
-                    } else if !matches!(
-                        self.inner.snapshot().as_ref().status,
-                        TrackStatus::Playing { .. }
-                    ) {
-                        self.alignment = Some(false);
-                    }
-                    self.prepare_cue(out);
-                    if self.cue.is_none() {
-                        self.resume_wait(out);
-                    }
-                }
-            }
+            Ok(model) if self.grid.as_ref() == Some(&model) => {}
+            Ok(model) => self.take_grid(model, out),
             Err(refusal) => {
                 warn!(item = ?answer.item, %refusal, "track grid unavailable");
-                self.grid = None;
                 if self.synced() {
                     self.refuse_sync(out);
                 }
+                self.clear_grid();
             }
         }
     }
@@ -798,9 +798,9 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
         }
         self.host = trajectory.clone();
         if self.synced()
-            && let Err(error) = self.correct(at, false, out)
+            && let Err(error) = self.correct(at, Cause::Drift, out)
         {
-            self.alignment = Some(false);
+            self.alignment = Some(Cause::Drift);
             warn!(?at, %error, "tempo phase correction awaits a lane");
         }
     }

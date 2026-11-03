@@ -80,79 +80,57 @@ fn fade_out(track: &mut Track, rig: &mut Rig, at: SessionFrame) -> Option<Seq> {
     .expect("fade admission")
 }
 
+/// A fade-out takes back a Play that has not started, waiting for its track
+/// (`waits`) or scheduled after the fade, and fades a Play it follows. The
+/// rows give the Play's frame, the fade's, and whether the Start applies.
 #[kithara::test(tokio)]
-async fn a_fade_out_takes_back_a_play_still_waiting_for_its_track() {
+#[case::while_its_play_waits_for_the_track(true, When::Next, 0, None)]
+#[case::before_a_scheduled_start(false, When::At(frame(256)), 0, Some(false))]
+#[case::after_a_scheduled_start(false, When::At(frame(0)), 128, Some(true))]
+async fn a_fade_out_takes_back_a_play_it_precedes_and_fades_one_it_follows(
+    #[case] waits: bool,
+    #[case] play: When<SessionFrame>,
+    #[case] fade_at: i64,
+    #[case] started: Option<bool>,
+) {
     let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "deferred fade").await;
-    track.ready = None;
-    command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: When::Next });
-    assert_eq!(fade_out(&mut track, &mut rig, frame(0)), None);
-    track.ready = Some(track.segment);
-    rig.with_outbox(|out| track.tick(frame(0), out))
-        .expect("live scope");
-    assert!(
-        rig.block(frame(0), 0.0).is_empty(),
-        "a deferred Play leaves no Start behind the fade"
-    );
-    assert_eq!(track.snapshot().status, TrackStatus::Loaded);
-}
-
-#[kithara::test(tokio)]
-async fn a_fade_out_before_a_scheduled_start_takes_it_back() {
-    let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "early fade").await;
-    let start = command_at_zero(
-        &mut track,
-        &mut rig,
-        TrackCommand::Play {
-            at: When::At(frame(256)),
-        },
-    )
-    .expect("scheduled Start");
-    let fade = fade_out(&mut track, &mut rig, frame(0)).expect("native envelope");
-    let mut answers = rig.block(frame(0), 0.0);
-    answers.extend(rig.block(frame(256), 0.0));
-    assert!(
-        answers
-            .iter()
-            .any(|answer| answer.seq == fade && matches!(answer.outcome, Outcome::Applied { .. })),
-    );
-    assert!(
-        answers.iter().any(|answer| answer.seq == start
-            && matches!(answer.outcome, Outcome::Rejected(Rejection::Stale))),
-        "the earlier envelope outdates the Start"
-    );
+    let (mut track, _lane) = loaded(&mut rig, A, "fade").await;
+    if waits {
+        track.ready = None;
+    }
+    let start = command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: play });
+    let fade = fade_out(&mut track, &mut rig, frame(fade_at));
+    if waits {
+        track.ready = Some(track.segment);
+        rig.with_outbox(|out| track.tick(frame(0), out))
+            .expect("live scope");
+    }
+    let mut answers: Vec<_> = [0, 128, 256]
+        .into_iter()
+        .flat_map(|at| rig.block(frame(at), 0.0))
+        .collect();
+    assert_eq!(answers.is_empty(), waits, "a deferred Play leaves no Start");
+    let applied = |seq: Option<Seq>| {
+        let answer = answers.iter().find(|answer| Some(answer.seq) == seq)?;
+        Some(match answer.outcome {
+            Outcome::Applied { .. } => true,
+            Outcome::Rejected(Rejection::Stale) => false,
+            Outcome::Rejected(rejection) => panic!("{rejection:?}"),
+        })
+    };
+    assert_eq!(applied(start), started, "the Start");
+    assert_eq!(fade.is_some(), !waits, "a deferred Play takes no envelope");
+    if let Some(fade) = fade {
+        assert!(answers.iter().any(|answer| answer.seq == fade
+            && matches!(answer.outcome, Outcome::Applied { at, .. } if at == frame(fade_at))
+            && matches!(answer.batch.commands.as_slice(),
+                [DeckPart::Fade { slot, dir: FadeDir::Out, .. }] if *slot == A)));
+    }
     settle(&mut track, &mut rig, &mut answers);
-    assert_eq!(track.snapshot().status, TrackStatus::Loaded);
-}
-
-#[kithara::test(tokio)]
-async fn a_fade_out_after_a_scheduled_start_fades_what_it_started() {
-    let mut rig = rig();
-    let (mut track, _lane) = loaded(&mut rig, A, "late fade").await;
-    let start = command_at_zero(
-        &mut track,
-        &mut rig,
-        TrackCommand::Play {
-            at: When::At(frame(0)),
-        },
-    )
-    .expect("scheduled Start");
-    let fade = fade_out(&mut track, &mut rig, frame(128)).expect("native envelope");
-    let mut answers = rig.block(frame(0), 0.0);
-    answers.extend(rig.block(frame(128), 0.0));
-    assert!(
-        answers
-            .iter()
-            .any(|answer| answer.seq == start && matches!(answer.outcome, Outcome::Applied { .. }))
-    );
-    assert!(answers.iter().any(|answer| answer.seq == fade
-        && matches!(answer.outcome, Outcome::Applied { at, .. } if at == frame(128))
-        && matches!(answer.batch.commands.as_slice(),
-            [DeckPart::Fade { slot, dir: FadeDir::Out, .. }] if *slot == A)));
-    settle(&mut track, &mut rig, &mut answers);
-    assert_eq!(
-        track.snapshot().status,
+    let status = if started == Some(true) {
         TrackStatus::Playing { since: frame(0) }
-    );
+    } else {
+        TrackStatus::Loaded
+    };
+    assert_eq!(track.snapshot().status, status);
 }

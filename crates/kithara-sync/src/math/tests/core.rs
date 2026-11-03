@@ -197,7 +197,7 @@ fn correction_bounds_every_step_and_cancels_the_phase_integral() {
                 geometry
                     .beat_at(cue.as_secs_f64())
                     .expect("initial source beat")
-                    - error.shortest()
+                    - error.wrapped(1.0)
                     + 2.0 * to * end.to_f64().expect("deadline") / 48_000.0,
             )
             .expect("phase closure inside source geometry");

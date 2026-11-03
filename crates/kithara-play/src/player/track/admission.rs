@@ -14,7 +14,7 @@ use tracing::warn;
 use super::{
     super::{
         factory::Track,
-        outbox::{Outbox, SeekBatch, Settled},
+        outbox::{Outbox, Settled},
         settings::{TrackSettings, TrackSettingsChange},
     },
     core::PlayerImpl,
@@ -284,21 +284,8 @@ impl<S> Track<S> for PlayerImpl<S> {
             .and_then(LaneOperation::applied)
     }
 
-    fn seek(
-        &mut self,
-        to: Position,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<SeekBatch>, PlayError> {
-        let sent = self.apply(TrackCommand::Seek { to }, out)?;
-        Ok(sent.map(if self.snapshot().attached {
-            SeekBatch::Deck
-        } else {
-            SeekBatch::Lane
-        }))
-    }
-
-    fn seek_applied(&mut self, seq: Seq) -> Option<bool> {
-        self.speed_applied(seq)
+    fn attached(&self) -> bool {
+        Self::attached(self)
     }
 
     fn cue(

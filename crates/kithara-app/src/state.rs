@@ -468,7 +468,7 @@ pub(crate) async fn listen(
                         AnalysisEvent::Queue(
                             QueueEvent::NextTrackReady { .. }
                             | QueueEvent::CurrentTrackChanged { .. }
-                            | QueueEvent::TransitionTargetChanged,
+                            | QueueEvent::UpcomingChanged,
                         )
                         | AnalysisEvent::Engine(EngineEvent::Started)
                         | AnalysisEvent::Session(SessionEvent::RouteChanged { .. }) => {
@@ -590,10 +590,12 @@ impl HeldAnalysis {
                 None => None,
             };
         }
-        let upcoming = self.queue.upcoming(shown).filter(|&id| {
-            self.queue
-                .track(id)
-                .is_some_and(|track| track.status == TrackStatus::Loaded)
+        let upcoming = self.queue.upcoming().filter(|&id| {
+            Some(id) != shown
+                && self
+                    .queue
+                    .track(id)
+                    .is_some_and(|track| track.status == TrackStatus::Loaded)
         });
         if self.next.as_ref().map(|next| next.track) != upcoming {
             self.next = None;
@@ -1024,9 +1026,10 @@ mod tests {
         let render_cancel = cancel.child();
         time::timeout(Duration::from_secs(2), async {
             let mut frame = 0;
-            while queue
-                .track(second_id)
-                .is_none_or(|entry| entry.status != TrackStatus::Loaded)
+            while queue.current_index() != Some(0)
+                || queue
+                    .track(second_id)
+                    .is_none_or(|entry| entry.status != TrackStatus::Loaded)
             {
                 let frames = frame..frame + 128;
                 frame += 128;
@@ -1040,7 +1043,7 @@ mod tests {
             }
         })
         .await
-        .expect("the queue loads its second track");
+        .expect("the queue enters its first track and loads its second");
         for _ in 0..=::kithara::events::DEFAULT_EVENT_BUS_CAPACITY {
             queue
                 .bus()
@@ -1049,17 +1052,21 @@ mod tests {
         let (first, first_rx) = ::kithara::platform::tokio::sync::watch::channel(None);
         assert!(reply.send(first_rx).is_ok(), "the deck waits for the reply");
 
+        let (asked, reply) = next_subscribe(&mut requests).await;
+        assert_eq!(
+            asked, second_id,
+            "the deck asks for the upcoming track whose announcement the lag dropped"
+        );
+        let (_second, second_rx) = ::kithara::platform::tokio::sync::watch::channel(None);
+        assert!(
+            reply.send(second_rx).is_ok(),
+            "the deck waits for the reply"
+        );
         time::timeout(Duration::from_secs(2), async {
-            loop {
-                match requests.recv().await {
-                    Some(Request::Warm { track_ids, .. }) if track_ids.len() == 2 => break,
-                    Some(Request::Warm { .. }) => {}
-                    Some(Request::Subscribe { track_id, .. }) => {
-                        panic!("the queue with no current track enters the held one next, not {track_id:?}")
-                    }
-                    None => panic!("the deck stays connected"),
-                }
-            }
+            while !matches!(
+                requests.recv().await,
+                Some(Request::Warm { track_ids, .. }) if track_ids.len() == 2
+            ) {}
         })
         .await
         .expect("the deck warms the library it read back after the lag");

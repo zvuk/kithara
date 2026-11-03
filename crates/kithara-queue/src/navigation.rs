@@ -204,7 +204,7 @@ impl NavigationState {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -213,8 +213,13 @@ mod tests {
         [TrackId(1), TrackId(2), TrackId(3), TrackId(4)]
     }
 
+    /// Navigation whose shuffle draws repeat for a given seed.
+    pub(crate) fn seeded(seed: u64) -> NavigationState {
+        NavigationState::with_rng(16, StdRng::seed_from_u64(seed))
+    }
+
     fn nav() -> NavigationState {
-        NavigationState::with_rng(16, StdRng::seed_from_u64(7))
+        seeded(7)
     }
 
     fn select(

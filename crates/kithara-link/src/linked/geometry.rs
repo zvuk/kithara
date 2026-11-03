@@ -4,7 +4,7 @@ use kithara_signal::{FrameCount, SessionFrame};
 use kithara_sync::{SourceGrid, boundary, speed_curve};
 use num_traits::ToPrimitive;
 
-use super::{Linked, LinkedPlayer};
+use super::{Linked, LinkedPlayer, state::Cue};
 use crate::covers;
 
 pub(super) fn cue_position(track: &TrackSnapshot) -> Position {
@@ -15,38 +15,60 @@ pub(super) fn cue_position(track: &TrackSnapshot) -> Position {
     }
 }
 
-/// Where a transport command lands: a position the grid covers stays, any
-/// other moves to the first boundary at or after it.
-pub(super) fn placement(grid: &BeatGridModel, position: Position) -> Option<Position> {
-    if covers(grid.geometry(), position) {
-        Some(position)
-    } else {
-        boundary(grid.geometry(), position)
+/// Where a grid places a transport command.
+pub(super) enum Placement {
+    /// The command lands on this position.
+    At(Position),
+    /// A later grid may place it.
+    Wait,
+    /// The final grid ends before it.
+    Refused,
+}
+
+/// What a final grid does with a command past its last beat.
+#[derive(Clone, Copy)]
+pub(super) enum PastEnd {
+    /// The command lands on the last beat.
+    LastBeat,
+    /// The command is refused.
+    Refused,
+}
+
+/// Places `cue` by its own rule; past that, a final grid answers by
+/// `past_end` and a provisional one leaves the command waiting.
+pub(super) fn place(grid: &BeatGridModel, cue: Cue, past_end: PastEnd) -> Placement {
+    let placed = match cue {
+        Cue::Covered(position) if covers(grid.geometry(), position) => Some(position),
+        Cue::Covered(position) | Cue::Beat(position) => boundary(grid.geometry(), position),
+    };
+    if let Some(position) = placed {
+        return Placement::At(position);
+    }
+
+    if !is_final(grid) {
+        return Placement::Wait;
+    }
+
+    match past_end {
+        PastEnd::LastBeat => grid
+            .geometry()
+            .beats()
+            .last()
+            .and_then(|beat| Position::try_from_secs_f64(beat.at).ok())
+            .map_or(Placement::Refused, Placement::At),
+        PastEnd::Refused => Placement::Refused,
     }
 }
 
-/// The last beat of a grid no later answer extends.
-pub(super) fn last_beat(grid: &BeatGridModel) -> Option<Position> {
-    let last = grid.geometry().beats().last().filter(|_| is_final(grid))?;
-    Position::try_from_secs_f64(last.at).ok()
-}
-
 /// A final grid is the last answer for its track, so what it leaves out stays out.
-pub(super) fn is_final(grid: &BeatGridModel) -> bool {
+fn is_final(grid: &BeatGridModel) -> bool {
     matches!(grid.as_raw().state, kithara_beat::BeatGridState::Final)
 }
 
 impl<P> Linked<P> {
+    /// The earliest frame a batch lands on: a sounding deck's lane lead, else
+    /// the deck delivery of a silent start.
     pub(super) fn earliest<S>(&self, out: &Outbox<'_, S>) -> Result<SessionFrame, PlayError>
-    where
-        P: Track<S>,
-    {
-        let pass = out.pass().ok_or(PlayError::Untimed)?;
-        Ok(pass.now + self.lead(pass.delivery).unwrap_or(pass.delivery))
-    }
-
-    /// The earliest frame a Start can land on; a silent deck's takes no lane.
-    pub(super) fn earliest_start<S>(&self, out: &Outbox<'_, S>) -> Result<SessionFrame, PlayError>
     where
         P: Track<S>,
     {

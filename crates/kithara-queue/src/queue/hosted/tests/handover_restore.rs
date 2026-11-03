@@ -2796,8 +2796,13 @@ async fn eof_playback_stopped_notification_maps_to_item_end_event() {
     });
     assert!(rig.queue.control().current().is_none());
     let observed = events(&mut receiver);
-    assert_eq!(observed.len(), 1);
-    assert!(matches!(observed[0], QueueEvent::QueueEnded));
+    assert!(
+        matches!(
+            observed.as_slice(),
+            [QueueEvent::QueueEnded, QueueEvent::UpcomingChanged]
+        ),
+        "{observed:?}"
+    );
     with_outbox(&mut rig.queue, &mut rig.deck, |queue, out| {
         Player::tick(queue, SessionFrame::new(128), out);
     });
@@ -2891,8 +2896,13 @@ async fn end_of_the_held_slot_is_the_leading_track() {
         at: SessionFrame::new(128),
     });
     let observed = events(&mut receiver);
-    assert_eq!(observed.len(), 1);
-    assert!(matches!(observed[0], QueueEvent::QueueEnded));
+    assert!(
+        matches!(
+            observed.as_slice(),
+            [QueueEvent::QueueEnded, QueueEvent::UpcomingChanged]
+        ),
+        "{observed:?}"
+    );
 }
 
 #[kithara::test(tokio)]
@@ -2981,8 +2991,13 @@ async fn the_promoted_half_of_a_crossfade_is_the_leading_track() {
         at: SessionFrame::new(128),
     });
     let observed = events(&mut receiver);
-    assert_eq!(observed.len(), 1);
-    assert!(matches!(observed[0], QueueEvent::QueueEnded));
+    assert!(
+        matches!(
+            observed.as_slice(),
+            [QueueEvent::QueueEnded, QueueEvent::UpcomingChanged]
+        ),
+        "{observed:?}"
+    );
 }
 
 #[kithara::test(tokio)]

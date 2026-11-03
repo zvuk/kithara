@@ -69,19 +69,17 @@ pub struct LinkConfig {
 }
 
 fn check_epsilon(epsilon: f32) -> Result<f32, LinkError> {
-    if epsilon.is_finite() && epsilon > 0.0 {
-        Ok(epsilon)
-    } else {
-        Err(LinkError::Epsilon { epsilon })
-    }
+    positive(epsilon, LinkError::Epsilon { epsilon })
 }
 
 fn check_slew_limit(limit: f32) -> Result<f32, LinkError> {
-    if limit.is_finite() && limit > 0.0 {
-        Ok(limit)
-    } else {
-        Err(LinkError::SlewLimit { limit })
-    }
+    positive(limit, LinkError::SlewLimit { limit })
+}
+
+fn positive(value: f32, refusal: LinkError) -> Result<f32, LinkError> {
+    (value.is_finite() && value > 0.0)
+        .then_some(value)
+        .ok_or(refusal)
 }
 
 /// Whether Host synchronization owns speed and phase for this track.
@@ -91,6 +89,8 @@ pub enum SyncMode {
     On,
     /// Analysis refused; playback continues without synchronization.
     Unsyncable,
+    /// Waits for a grid: shown as unsyncable until one turns SYNC on.
+    NoGrid,
 }
 
 /// Synchronization progress beside the underlying track snapshot.
@@ -130,6 +130,19 @@ impl Waiting {
             | Self::Seek { required } => required,
         }
     }
+
+    /// The wait left once a cue lands on `position`: a Load or Play follows it, a Sync ends.
+    pub(super) fn cued(self, position: Position) -> Option<Self> {
+        match self {
+            Self::Load { .. } => Some(Self::Load { required: position }),
+            Self::Play { at, .. } => Some(Self::Play {
+                required: position,
+                at,
+            }),
+            Self::Sync { .. } => None,
+            Self::Seek { .. } => Some(self),
+        }
+    }
 }
 
 /// Track state and its synchronization admission or correction state.
@@ -154,7 +167,7 @@ pub struct Linked<P> {
     pub(crate) mode: SyncMode,
     pub(super) waiting: Option<Waiting>,
     pub(super) correction: Option<(Seq, RunningCorrection)>,
-    pub(super) alignment: Option<bool>,
+    pub(super) alignment: Option<Cause>,
     pub(super) speeds: Vec<(Seq, SpeedOperation)>,
     pub(super) start: Option<Seq>,
     pub(super) start_caller: Option<Seq>,
@@ -206,9 +219,18 @@ pub(super) enum CorrectionState {
     Applied(RunningCorrection),
 }
 
+/// Why a sounding deck owes a phase correction.
+#[derive(Clone, Copy)]
+pub(super) enum Cause {
+    /// A tempo command: the slew closes any phase.
+    Commanded,
+    /// Phase drift: a slew closes it up to the slew limit.
+    Drift,
+}
+
 pub(super) enum SpeedOperation {
     Correction {
-        commanded: bool,
+        cause: Cause,
         state: CorrectionState,
     },
     Alignment,

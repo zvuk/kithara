@@ -71,7 +71,13 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
     /// Whether the lane accepted a particular speed batch, once it answered.
     fn speed_applied(&mut self, seq: Seq) -> Option<bool>;
 
-    /// Seeks and names the batch whose answer settles the seek.
+    /// Whether the track holds a deck slot or is joining one.
+    fn attached(&self) -> bool {
+        self.snapshot().as_ref().attached
+    }
+
+    /// Seeks and names the batch whose answer settles the seek: the deck's
+    /// while the track is attached, its lane's otherwise.
     ///
     /// # Errors
     /// Returns what applying `TrackCommand::Seek` returns.
@@ -79,10 +85,20 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
         &mut self,
         to: Position,
         out: &mut super::Outbox<'_, S>,
-    ) -> Result<Option<SeekBatch>, PlayError>;
+    ) -> Result<Option<SeekBatch>, PlayError> {
+        let sent = self.apply(TrackCommand::Seek { to }, out)?;
+        let batch = if self.attached() {
+            SeekBatch::Deck
+        } else {
+            SeekBatch::Lane
+        };
+        Ok(sent.map(batch))
+    }
 
     /// Whether the seek sent as lane batch `seq` took effect, once that is final.
-    fn seek_applied(&mut self, seq: Seq) -> Option<bool>;
+    fn seek_applied(&mut self, seq: Seq) -> Option<bool> {
+        self.speed_applied(seq)
+    }
 
     /// Binds a staged attachment to its shared batch or restores returned parts.
     fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);

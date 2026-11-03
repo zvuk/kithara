@@ -3,7 +3,7 @@ use std::{marker::PhantomData, num::NonZeroU32};
 use kithara_command::{Rejection, Seq, When};
 use kithara_host::{
     DeckId, HostCommand, HostOwner, HostRegistration, HostSettingsChange, HostSettingsExec,
-    HostSettled, api::Tempo,
+    HostSettled, PassClock, api::Tempo,
 };
 use kithara_play::{
     DeckControl, DeckPass, HostedDeck, Outbox, PlayError, SessionTransportSnapshot,
@@ -66,6 +66,15 @@ impl TempoOperation {
         }
     }
 }
+
+/// A command run on one linked member with the Host trajectory.
+type LinkedVisit<'a, S> = dyn FnMut(
+        &mut dyn LinkedDeck<S>,
+        &TempoTrajectory,
+        &mut Outbox<'_, S>,
+        DeckPass<'_>,
+    ) -> Result<Option<Seq>, PlayError>
+    + 'a;
 
 fn superseded() -> Result<SessionFrame, Rejection<PlayError>> {
     Err(Rejection::Refused(PlayError::Superseded))
@@ -131,7 +140,7 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> LinkedHost<S, H> {
         }
         self.trajectory.reaxis_observed(transport.anchor());
         self.epoch = Some(epoch);
-        if let Some((now, delivery)) = self.inner.clock() {
+        if let Some(PassClock { now, delivery, .. }) = self.inner.clock() {
             let at = now + self.lead(delivery);
             let trajectory = &self.trajectory;
             self.inner.each_deck(&mut |_id, deck, out, _pass| {
@@ -236,7 +245,7 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> LinkedHost<S, H> {
     }
 
     fn reschedule_tempo(&mut self, index: usize) -> Result<(), PlayError> {
-        let Some((now, delivery)) = self.inner.clock() else {
+        let Some(PassClock { now, delivery, .. }) = self.inner.clock() else {
             return Ok(());
         };
         let bound = now + self.lead(delivery);
@@ -293,7 +302,7 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> LinkedHost<S, H> {
                         self.tempo[index].state = TempoState::Parked;
                         continue;
                     }
-                    if let Some((now, delivery)) = self.inner.clock() {
+                    if let Some(PassClock { now, delivery, .. }) = self.inner.clock() {
                         let frame = now + self.lead(delivery);
                         self.retime(frame);
                     }
@@ -305,6 +314,28 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> LinkedHost<S, H> {
             answers.push(operation.settled(outcome));
         }
         answers
+    }
+
+    /// Runs `visit` on a linked member; an ordinary member refuses the named command.
+    fn with_linked(
+        &mut self,
+        id: DeckId,
+        name: &str,
+        value: f32,
+        visit: &mut LinkedVisit<'_, S>,
+    ) -> Result<Option<Seq>, PlayError> {
+        let mut sent = Ok(None);
+        let trajectory = &self.trajectory;
+        self.inner.with_deck(id, &mut |deck, out, pass| {
+            sent = match deck {
+                LinkedHostDeck::Linked(deck) => visit(&mut **deck, trajectory, out, pass),
+                LinkedHostDeck::Ordinary(_) => Err(PlayError::InvalidParameter {
+                    name: name.into(),
+                    value,
+                }),
+            };
+        })?;
+        sent
     }
 
     /// Admission retires a parked tempo, so at most one waits, and it is the newest.
@@ -361,44 +392,19 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostOwner<S> for Lin
             }
             LinkedHostCommand::Host(command) => self.inner.apply(H::Command::from(command)),
             LinkedHostCommand::Sync { deck, on } => {
-                let mut sent = Ok(None);
-                let trajectory = &self.trajectory;
-                self.inner.with_deck(deck, &mut |deck, out, pass| {
-                    sent = match deck {
-                        LinkedHostDeck::Linked(deck) => {
-                            if on && !deck.synced() {
-                                deck.retime(trajectory, &[pass.now], out);
-                            }
-                            deck.sync(on, out)
-                        }
-                        LinkedHostDeck::Ordinary(_) => Err(PlayError::InvalidParameter {
-                            name: "sync".into(),
-                            value: if on { 1.0 } else { 0.0 },
-                        }),
-                    };
-                })?;
-                sent
+                let value = if on { 1.0 } else { 0.0 };
+                self.with_linked(deck, "sync", value, &mut |deck, trajectory, out, pass| {
+                    if on && !deck.synced() {
+                        deck.retime(trajectory, &[pass.now], out);
+                    }
+                    deck.sync(on, out)
+                })
             }
             LinkedHostCommand::Grid { deck, answer } => {
-                let mut delivered = Ok(None);
-                let trajectory = &self.trajectory;
-                self.inner
-                    .with_deck(deck, &mut |deck, out, pass| match deck {
-                        LinkedHostDeck::Linked(deck) => {
-                            let unsynced = !deck.synced();
-                            deck.grid(answer.clone(), out);
-                            if unsynced && deck.synced() {
-                                deck.retime(trajectory, &[pass.now], out);
-                            }
-                        }
-                        LinkedHostDeck::Ordinary(_) => {
-                            delivered = Err(PlayError::InvalidParameter {
-                                name: "grid".into(),
-                                value: 0.0,
-                            });
-                        }
-                    })?;
-                delivered
+                self.with_linked(deck, "grid", 0.0, &mut |deck, _, out, _| {
+                    deck.grid(answer.clone(), out);
+                    Ok(None)
+                })
             }
         }
     }
@@ -428,7 +434,7 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostOwner<S> for Lin
                 id: DeckId,
                 visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),
             ) -> Result<(), PlayError>;
-            fn clock(&self) -> Option<(SessionFrame, FrameCount)>;
+            fn clock(&self) -> Option<PassClock>;
             fn prepare_offline(&mut self) -> Result<(), PlayError>;
             fn render_offline(
                 &mut self,
@@ -503,7 +509,7 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostSettingsExec<()>
                 "a tempo has no deferred executor moment".into(),
             ));
         }
-        let Some((now, delivery)) = self.inner.clock() else {
+        let Some(PassClock { now, delivery, .. }) = self.inner.clock() else {
             if matches!(at, When::At(_)) {
                 return Err(PlayError::Untimed);
             }

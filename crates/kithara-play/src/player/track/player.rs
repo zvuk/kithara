@@ -215,51 +215,74 @@ impl<S> PlayerImpl<S> {
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         let slot = self.seat()?;
-        let staged = dir == FadeDir::In
-            && out.is_grouped()
-            && self.attaching.is_some_and(|attach| {
-                attach.seq.is_none() && attach.replacement && attach.at == at
-            });
-        if !staged {
+        if !self.joins_staged_attachment(at, dir, out) {
             self.check_when(at, out)?;
         }
-        let basis = out.deck_basis(slot, at);
-        let pending_stop = dir == FadeDir::In
-            && self
-                .pending_playback_action(slot, basis, PlaybackQuery::Admission)
-                .is_some_and(|(_, action)| action == PlaybackAction::Stop);
-        let part = match (self.status, dir) {
-            (TrackStatus::Playing { .. }, _) if !pending_stop => DeckPart::Fade {
-                slot,
-                settings,
-                dir,
-            },
-            (_, FadeDir::In) => DeckPart::Start {
-                slot,
-                fade: Fade::Crossfade(settings),
-            },
-            (_, FadeDir::Out) => {
-                self.play = None;
-                if let Some(attaching) = self.attaching.as_mut() {
-                    attaching.play = None;
-                }
-                let start_outstanding = self
-                    .playback_commands
-                    .iter()
-                    .rev()
-                    .find_map(|operation| operation.action)
-                    == Some(PlaybackAction::Start);
-                if !start_outstanding {
-                    return Ok(None);
-                }
-                DeckPart::Fade {
-                    slot,
-                    settings,
-                    dir,
-                }
-            }
+
+        let stopping = dir == FadeDir::In && self.stop_pending(slot, at, out);
+        let playing = matches!(self.status, TrackStatus::Playing { .. }) && !stopping;
+        let fade = DeckPart::Fade {
+            slot,
+            settings,
+            dir,
         };
-        self.send_playback(at, vec![part], out)
+        match dir {
+            _ if playing => self.send_playback(at, vec![fade], out),
+            FadeDir::In => self.send_playback(
+                at,
+                vec![DeckPart::Start {
+                    slot,
+                    fade: Fade::Crossfade(settings),
+                }],
+                out,
+            ),
+            FadeDir::Out => self.withdraw_start(at, fade, out),
+        }
+    }
+
+    /// Whether a fade-in at `at` joins the staged replacement attachment's group.
+    fn joins_staged_attachment(
+        &self,
+        at: When<SessionFrame>,
+        dir: FadeDir,
+        out: &Outbox<'_, S>,
+    ) -> bool {
+        dir == FadeDir::In
+            && out.is_grouped()
+            && self
+                .attaching
+                .is_some_and(|attach| attach.seq.is_none() && attach.replacement && attach.at == at)
+    }
+
+    /// Whether the slot's admitted playback at `at` ends in a stop.
+    fn stop_pending(&self, slot: Slot, at: When<SessionFrame>, out: &Outbox<'_, S>) -> bool {
+        let basis = out.deck_basis(slot, at);
+        self.pending_playback_action(slot, basis, PlaybackQuery::Admission)
+            .is_some_and(|(_, action)| action == PlaybackAction::Stop)
+    }
+
+    /// Fades out a track that is not sounding: the fade cancels a start still
+    /// outstanding, and the start the track owes is withdrawn once sent.
+    fn withdraw_start(
+        &mut self,
+        at: When<SessionFrame>,
+        fade: DeckPart,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError> {
+        let start_outstanding = self
+            .playback_commands
+            .iter()
+            .rev()
+            .find_map(|operation| operation.action)
+            == Some(PlaybackAction::Start);
+        let sent = if start_outstanding {
+            self.send_playback(at, vec![fade], out)?
+        } else {
+            None
+        };
+
+        self.withdraw_play();
+        Ok(sent)
     }
 
     fn play_after(
@@ -442,11 +465,10 @@ impl<S> PlayerImpl<S> {
                 };
             }
             self.ready = None;
-            self.play = None;
+            self.withdraw_play();
             self.newest_epoch_pending = None;
             self.repeat = false;
             if let Some(attaching) = self.attaching.as_mut() {
-                attaching.play = None;
                 attaching.obsolete = true;
             }
         }
