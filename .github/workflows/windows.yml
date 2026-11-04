@@ -32,6 +32,12 @@ env:
   # wiped on every run, so leaving this unset rebuilt the workspace - the part
   # of this lane that costs hours - from source each time.
   CARGO_TARGET_DIR: C:\kithara-ci\target
+  # xtask builds itself before the first phase. Left unset, that build lands
+  # in the checkout and is wiped with it, so every run compiled xtask from
+  # source before the cache check could start. Beside the workspace build it
+  # is reused, where Linux runners keep it too, and the job leases it for as
+  # long as xtask runs.
+  KITHARA_XTASK_TARGET: C:\kithara-ci\target\xtask
 
 concurrency:
   group: windows-${{ github.ref }}
