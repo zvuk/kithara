@@ -3,7 +3,7 @@ use kithara_command::{Seq, When};
 use kithara_config::Config;
 use kithara_platform::time::Duration;
 use kithara_play::{
-    Outbox, PlayError, Player, Position, Settled, Track, TrackClock, TrackSnapshot,
+    Outbox, PlayError, Player, Position, Settled, Track, TrackClock, TrackCommand, TrackSnapshot,
 };
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 
@@ -284,6 +284,26 @@ impl<P> Linked<P> {
             retimes: Vec::new(),
             cue: None,
             paused_in_place: false,
+        }
+    }
+
+    /// A synced track keeps session time through a PCM dropout, so it comes
+    /// back on the host phase in the block its PCM returns.
+    pub(super) fn keep_clock<S>(&mut self, out: &mut Outbox<'_, S>)
+    where
+        P: Track<S>,
+    {
+        let clock = if self.synced() {
+            TrackClock::Session
+        } else {
+            TrackClock::Media
+        };
+        if clock == self.clock {
+            return;
+        }
+        match self.inner.apply(TrackCommand::Clock(clock), out) {
+            Ok(_) => self.clock = clock,
+            Err(error) => tracing::debug!(%error, "the track clock waits for the next pass"),
         }
     }
 

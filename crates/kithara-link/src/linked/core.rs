@@ -4,12 +4,12 @@ use kithara_beat::BeatGridModel;
 use kithara_command::{Rejection, Seq, When};
 use kithara_play::{
     Bound, DeckControl, DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, Player, Position,
-    SeekBatch, Settled, Track, TrackClock, TrackCommand, TrackReceipt, TrackSettings,
-    TrackSettingsChange, TrackStatus,
+    SeekBatch, Settled, Track, TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange,
+    TrackStatus,
 };
 use kithara_render::{bridge::DeckPart, rt::DeckMixerConfig};
 use kithara_signal::{FrameCount, SessionFrame};
-use tracing::{debug, warn};
+use tracing::warn;
 
 use super::{
     Linked, LinkedPlayer, LinkedSnapshot, SyncMode, SyncStatus, Waiting,
@@ -639,26 +639,6 @@ where
 }
 
 impl<P> Linked<P> {
-    /// A synced track keeps session time through a PCM dropout, so it comes
-    /// back on the host phase in the block its PCM returns.
-    fn keep_clock<S>(&mut self, out: &mut Outbox<'_, S>)
-    where
-        P: Track<S>,
-    {
-        let clock = if self.synced() {
-            TrackClock::Session
-        } else {
-            TrackClock::Media
-        };
-        if clock == self.clock {
-            return;
-        }
-        match self.inner.apply(TrackCommand::Clock(clock), out) {
-            Ok(_) => self.clock = clock,
-            Err(error) => debug!(%error, "the track clock waits for the next pass"),
-        }
-    }
-
     fn send_cue<S>(
         &mut self,
         position: Position,

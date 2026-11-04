@@ -307,7 +307,10 @@ impl PlayerResource {
         self.refresh_mark(&mut budget);
         true
     }
+}
 
+/// Consuming the lane FIFO: frames either go to the output or are dropped.
+impl PlayerResource {
     pub(super) fn read(
         &mut self,
         context: Option<&RenderContext>,
