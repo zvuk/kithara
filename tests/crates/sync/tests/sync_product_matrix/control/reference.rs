@@ -1756,11 +1756,14 @@ impl PhysicalReference {
                     .collect()
             })
             .collect();
+        let rate = NonZeroU32::new(sample_rate)
+            .ok_or_else(|| "physical capture has a zero output rate".to_owned())?;
         let mut limiter = kithara::effects::PeakLimiter::new(
-            NonZeroU32::new(sample_rate)
-                .ok_or_else(|| "physical capture has a zero output rate".to_owned())?,
+            rate,
+            rate,
             NonZeroUsize::new(usize::from(CHANNELS)).expect("fixture channels"),
             LimiterConfig::default(),
+            &pools(),
         )
         .map_err(|error| error.to_string())?;
         let mut channels: Vec<_> = limited.iter_mut().map(Vec::as_mut_slice).collect();
@@ -1852,10 +1855,13 @@ fn output_reference_keeps_the_limiter_sample_domain_and_strict_pcm_checks() {
         -0.25,
     ];
     let mut actual = source;
+    let rate = NonZeroU32::new(48_000).expect("output rate");
     let mut limiter = kithara::effects::PeakLimiter::new(
-        NonZeroU32::new(48_000).expect("output rate"),
+        rate,
+        rate,
         NonZeroUsize::MIN,
         LimiterConfig::default(),
+        &pools(),
     )
     .expect("output limiter");
     limiter.process_planar(&mut [&mut actual]);

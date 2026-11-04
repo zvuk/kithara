@@ -42,7 +42,7 @@ fn ensure_host_channel() -> Result<(wasm::HostSender<FfiPools>, Pools), JsValue>
 
     let pools = build_pools()
         .map_err(|error| JsValue::from_str(&format!("pool construction failed: {error}")))?;
-    let host = FfiHost::new(HostConfig::builder().build())
+    let host = FfiHost::new(HostConfig::builder(pools.clone()).build())
         .map_err(|error| JsValue::from_str(&format!("host construction failed: {error}")))?;
     let (sender, receiver) = wasm::worker_host_channel(&host)
         .map_err(|error| JsValue::from_str(&format!("host channel failed: {error}")))?;

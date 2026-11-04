@@ -59,6 +59,7 @@ mod limiter {
         effects::{LimiterConfig, PeakLimiter, node::LimiterNode},
         platform::time::Duration,
     };
+    use kithara_integration_tests::bufpool_ext::pools;
 
     #[derive(Clone)]
     struct Block {
@@ -78,10 +79,13 @@ mod limiter {
     }
 
     fn owner(group: &mut BenchmarkGroup<'_, WallTime>, frames: usize, input: &[Block; 4]) {
+        let rate = NonZeroU32::new(48_000).expect("sample rate");
         let mut limiter = PeakLimiter::new(
-            NonZeroU32::new(48_000).expect("sample rate"),
+            rate,
+            rate,
             NonZeroUsize::new(2).expect("stereo"),
             LimiterConfig::default(),
+            &pools(),
         )
         .expect("limiter config");
         group.bench_function(BenchmarkId::new("owner", frames), |b| {
@@ -131,7 +135,7 @@ mod limiter {
                 .expect("nonempty block"),
             ..StreamInfo::default()
         };
-        let node = LimiterNode::new(LimiterConfig::default());
+        let node = LimiterNode::new(LimiterConfig::default(), rate, pools());
         let mut custom_state = None;
         let mut processor = node
             .construct_processor(
@@ -169,13 +173,17 @@ mod limiter {
 
     fn graph(group: &mut BenchmarkGroup<'_, WallTime>) {
         const FRAMES: usize = 128;
+        let rate = NonZeroU32::new(48_000).expect("sample rate");
 
         let mut context = FirewheelContext::new(FirewheelConfig {
             num_graph_inputs: ChannelCount::STEREO,
             ..FirewheelConfig::default()
         });
         let limiter = context
-            .add_node(LimiterNode::new(LimiterConfig::default()), None)
+            .add_node(
+                LimiterNode::new(LimiterConfig::default(), rate, pools()),
+                None,
+            )
             .expect("graph limiter");
         let volume = context
             .add_node(VolumeNode::from_linear(1.0), None)
@@ -191,7 +199,7 @@ mod limiter {
         }
         let mut processor = context
             .activate(ActivateInfo {
-                sample_rate: NonZeroU32::new(48_000).expect("sample rate"),
+                sample_rate: rate,
                 max_block_frames: NonZeroU32::new(u32::try_from(FRAMES).expect("block frames"))
                     .expect("nonempty block"),
                 num_stream_in_channels: 2,
@@ -742,6 +750,7 @@ fn bench_limiter_detector(c: &mut Criterion) {
     group.sample_size(20);
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(3));
+    let pools = pools();
     for (frames, tail) in [
         (1, 0),
         (7, 0),
@@ -762,14 +771,21 @@ fn bench_limiter_detector(c: &mut Criterion) {
                     .map(|sample| sample * amplitude)
                     .collect()
             });
-            let mut limiter = PeakLimiter::new(
-                NonZeroU32::new(48_000).expect("bench rate"),
-                NonZeroUsize::new(2).expect("stereo"),
-                LimiterConfig::default(),
-            )
-            .expect("stereo detector");
-            let [mut left, mut right] = input.clone();
-            limiter.process_planar(&mut [&mut left, &mut right]);
+            let primed = || {
+                let rate = NonZeroU32::new(48_000).expect("bench rate");
+                let mut limiter = PeakLimiter::new(
+                    rate,
+                    rate,
+                    NonZeroUsize::new(2).expect("stereo"),
+                    LimiterConfig::default(),
+                    &pools,
+                )
+                .expect("stereo detector");
+                let [mut left, mut right] = input.clone();
+                limiter.process_planar(&mut [&mut left, &mut right]);
+                (limiter, [left, right])
+            };
+            let (_, [left, right]) = primed();
             let reduced = [&left, &right]
                 .into_iter()
                 .zip(&input)
@@ -796,7 +812,7 @@ fn bench_limiter_detector(c: &mut Criterion) {
             };
             group.bench_function(BenchmarkId::new(label, shape), |b| {
                 b.iter_batched_ref(
-                    || (limiter.clone(), input.clone()),
+                    || (primed().0, input.clone()),
                     |(limiter, [left, right])| {
                         limiter.process_planar(&mut [
                             black_box(left.as_mut_slice()),

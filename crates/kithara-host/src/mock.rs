@@ -40,9 +40,9 @@ mod fixture {
             root,
             root_view,
             SessionBufferConfig::default(),
-            SessionOutput::new(LimiterConfig::default()),
+            SessionOutput::new(LimiterConfig::default(), pools()),
             Live::new(settings).expect("fixture settings"),
-            crate::HostConfig::<TestPools>::builder()
+            crate::HostConfig::builder(pools())
                 .settings(settings)
                 .build()
                 .channel_config(),

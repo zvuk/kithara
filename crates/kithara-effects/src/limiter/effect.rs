@@ -5,27 +5,39 @@ use core::{
 
 use arrayvec::ArrayVec;
 use bon::bon;
+use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_config::Config;
 use kithara_dsp::{
-    envelope::{AttackRelease, PeakHold},
+    envelope::{AttackRelease, MinimumWindow, PeakHold, WindowTooLong},
     filter::Fir,
     multiply_in_place, sanitize,
 };
 use kithara_signal::sanitize_sample;
 use num_traits::ToPrimitive;
 
-use super::{Ceiling, ReleaseMs};
+use super::{Ceiling, LookaheadMs, ReleaseMs};
 use crate::consts;
 
-/// Channel count rejected by [`PeakLimiter::new`].
+/// Why [`PeakLimiter::new`] built no limiter, or [`PeakLimiter::retune`] kept the old rate.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum LimiterError {
     #[error("limiter carries {channels} channels, more than the {limit} the detector tracks")]
     Channels { channels: usize, limit: usize },
+    #[error(
+        "a lookahead of {frames} frames at {sample_rate} Hz is longer than the {prepared} frames \
+         prepared"
+    )]
+    Latency {
+        sample_rate: NonZeroU32,
+        frames: usize,
+        prepared: usize,
+    },
+    #[error(transparent)]
+    Pool(#[from] PoolError),
 }
 
-/// Output ceiling and gain recovery of one [`PeakLimiter`].
+/// Output ceiling, gain recovery and lookahead of one [`PeakLimiter`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Config)]
 #[config(builder(existing), owner_access, fields(value, get(copy)))]
 #[non_exhaustive]
@@ -34,6 +46,8 @@ pub struct LimiterConfig {
     ceiling: Ceiling,
     /// Milliseconds the gain takes to recover toward unity.
     release_ms: ReleaseMs,
+    /// Milliseconds the output trails the input.
+    lookahead_ms: LookaheadMs,
 }
 
 #[bon]
@@ -46,17 +60,36 @@ impl LimiterConfig {
     fn new(
         #[builder(default)] ceiling: Ceiling,
         #[builder(default)] release_ms: ReleaseMs,
+        #[builder(default)] lookahead_ms: LookaheadMs,
     ) -> Self {
         Self {
             ceiling,
             release_ms,
+            lookahead_ms,
         }
+    }
+
+    /// Whole frames the output trails the input at `sample_rate`: the lookahead rounded to the
+    /// nearest frame.
+    ///
+    /// # Panics
+    ///
+    /// Never: the longest lookahead at the highest `u32` rate is under 10^8 frames, which fits
+    /// `usize` on every target.
+    #[must_use]
+    pub fn latency_frames(self, sample_rate: NonZeroU32) -> usize {
+        let frames = f64::from(f32::from(self.lookahead_ms)) * f64::from(sample_rate.get())
+            / f64::from(consts::MS_PER_SEC);
+        frames
+            .round()
+            .to_usize()
+            .expect("invariant: 20 ms at u32::MAX Hz is under 10^8 frames, which fits usize")
     }
 }
 
 /// Stereo-linked, zero-lookahead peak limiter: immediate attack, exponential release toward unity,
 /// and a unity bypass below the ceiling that is exact for normal finite samples.
-#[derive(Debug, Clone, kithara_config::ConfigOwner)]
+#[derive(Debug, kithara_config::ConfigOwner)]
 #[config_owner(config)]
 #[non_exhaustive]
 pub struct PeakLimiter {
@@ -68,6 +101,8 @@ pub struct PeakLimiter {
     >,
     config: LimiterConfig,
     envelope: AttackRelease,
+    /// Smallest gain target over the latency and the current frame.
+    window: MinimumWindow,
     channels: usize,
 }
 
@@ -92,25 +127,34 @@ impl PeakLimiter {
     /// Taps in one polyphase branch of the detector kernel.
     const DETECTOR_TAPS: usize = 2 * Self::DETECTOR_HALF_WIDTH + 1;
 
-    /// Build a limiter applying `config` to `channels` linked channels.
+    /// Build a limiter applying `config` to `channels` linked channels at `sample_rate`, its
+    /// latency storage for every rate up to `max_rate` taken from `pools` once.
     ///
     /// # Errors
-    /// Returns [`LimiterError::Channels`] when `channels` exceeds what the detector tracks.
-    pub fn new(
+    /// Returns [`LimiterError::Channels`] when `channels` exceeds what the detector tracks,
+    /// [`LimiterError::Pool`] when `pools` cannot hold the latency storage, and
+    /// [`LimiterError::Latency`] when the latency at `sample_rate` is longer than at
+    /// `max_rate`.
+    pub fn new<S>(
         sample_rate: NonZeroU32,
+        max_rate: NonZeroU32,
         channels: NonZeroUsize,
         config: LimiterConfig,
-    ) -> Result<Self, LimiterError> {
-        let release_ms = f32::from(config.release_ms());
+        pools: &PoolRegion<S>,
+    ) -> Result<Self, LimiterError>
+    where
+        S: HasPool<f32>,
+    {
         if channels.get() > Self::DETECTOR_CHANNELS {
             return Err(LimiterError::Channels {
                 channels: channels.get(),
                 limit: Self::DETECTOR_CHANNELS,
             });
         }
-
-        let samples = release_ms / consts::MS_PER_SEC * sample_rate.get().to_f32().unwrap_or(1.0);
-        let release_coeff = (-1.0 / samples).exp();
+        let window = MinimumWindow::new(
+            NonZeroUsize::MIN.saturating_add(config.latency_frames(max_rate)),
+            pools,
+        )?;
 
         let taps = std::array::from_fn(|phase: usize| {
             std::array::from_fn(|tap: usize| {
@@ -122,12 +166,42 @@ impl PeakLimiter {
             })
         });
 
-        Ok(Self {
+        let mut limiter = Self {
             config,
             detector: Fir::new(taps),
-            envelope: AttackRelease::new(release_coeff),
+            envelope: Self::release_envelope(config, sample_rate),
+            window,
             channels: channels.get(),
-        })
+        };
+        limiter.retune(sample_rate)?;
+        Ok(limiter)
+    }
+
+    /// Move to `sample_rate` in the storage taken by [`new`](Self::new) and restart from
+    /// unity gain and empty history, as a limiter built at that rate.
+    ///
+    /// # Errors
+    /// Returns [`LimiterError::Latency`] when the latency at `sample_rate` is longer than at
+    /// the `max_rate` given to [`new`](Self::new); the limiter keeps its rate and state.
+    pub fn retune(&mut self, sample_rate: NonZeroU32) -> Result<(), LimiterError> {
+        let frames = self.config.latency_frames(sample_rate);
+        self.window
+            .set_len(NonZeroUsize::MIN.saturating_add(frames))
+            .map_err(|WindowTooLong { capacity, .. }| LimiterError::Latency {
+                sample_rate,
+                frames,
+                prepared: capacity.saturating_sub(1),
+            })?;
+        self.envelope = Self::release_envelope(self.config, sample_rate);
+        self.detector.reset();
+        Ok(())
+    }
+
+    /// Unity gain releasing over `config`'s release time at `sample_rate`.
+    fn release_envelope(config: LimiterConfig, sample_rate: NonZeroU32) -> AttackRelease {
+        let samples = f32::from(config.release_ms()) / consts::MS_PER_SEC
+            * sample_rate.get().to_f32().unwrap_or(1.0);
+        AttackRelease::new((-1.0 / samples).exp())
     }
 
     /// Hann-windowed sinc evaluated `distance` input samples away from a tap.
@@ -199,9 +273,10 @@ impl PeakLimiter {
         }
     }
 
-    /// Reset the gain envelope to unity and forget detector history.
+    /// Reset the gain envelope to unity and forget detector and gain-target history.
     pub fn reset(&mut self) {
         self.envelope.reset();
+        self.window.reset();
         self.detector.reset();
     }
 }
@@ -217,15 +292,18 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{super::scalar, *};
+    use crate::test_pools::{pools, pools_with_budget};
 
     fn limiter(sample_rate: u32, release_ms: f32) -> PeakLimiter {
         PeakLimiter::new(
+            NonZeroU32::new(sample_rate).unwrap(),
             NonZeroU32::new(sample_rate).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             LimiterConfig::builder()
                 .ceiling(Ceiling::try_from(consts::CEILING).unwrap())
                 .release_ms(ReleaseMs::try_from(release_ms).unwrap())
                 .build(),
+            &pools(),
         )
         .unwrap()
     }
@@ -233,6 +311,10 @@ mod tests {
     fn run(limiter: &mut PeakLimiter, left: &mut [f32], right: &mut [f32]) {
         let mut chans: [&mut [f32]; 2] = [left, right];
         limiter.process_planar(&mut chans);
+    }
+
+    fn bits(values: &[f32]) -> Vec<u32> {
+        values.iter().copied().map(f32::to_bits).collect()
     }
 
     #[kithara::test(native, flash(false))]
@@ -253,8 +335,10 @@ mod tests {
             for frames in [0, 1, 7, 17, 127, 255, 256, 257, 600] {
                 let mut actual = PeakLimiter::new(
                     NonZeroU32::new(48_000).unwrap(),
+                    NonZeroU32::new(48_000).unwrap(),
                     NonZeroUsize::new(channel_count).unwrap(),
                     LimiterConfig::default(),
+                    &pools(),
                 )
                 .unwrap();
                 let mut reference = scalar::ScalarLimiter::new(
@@ -313,7 +397,7 @@ mod tests {
             let rate = NonZeroU32::new(48_000).unwrap();
             let channels = NonZeroUsize::new(channels).unwrap();
             let config = LimiterConfig::default();
-            let mut actual = PeakLimiter::new(rate, channels, config).unwrap();
+            let mut actual = PeakLimiter::new(rate, rate, channels, config, &pools()).unwrap();
             let mut reference = scalar::ScalarLimiter::new(rate, channels, config).unwrap();
             for (stage, frames) in [600_usize, 1, 0, 7, 257, 1, 256, 0, 255, 7, 600]
                 .into_iter()
@@ -462,9 +546,90 @@ mod tests {
         let rate = NonZeroU32::new(44_100).unwrap();
         let wide = NonZeroUsize::new(9).unwrap();
         assert!(matches!(
-            PeakLimiter::new(rate, wide, LimiterConfig::default()),
+            PeakLimiter::new(rate, rate, wide, LimiterConfig::default(), &pools()),
             Err(LimiterError::Channels { channels: 9, .. })
         ));
+    }
+
+    #[kithara::test]
+    fn the_lookahead_history_for_the_highest_rate_is_taken_from_the_region_once() {
+        // 5 ms at 96 kHz trails by 480 frames: one f32 gain target per frame.
+        const BYTES: usize = 480 * size_of::<f32>();
+        let rate = NonZeroU32::new(48_000).unwrap();
+        let max_rate = NonZeroU32::new(96_000).unwrap();
+        let stereo = NonZeroUsize::new(2).unwrap();
+        let config = LimiterConfig::builder()
+            .lookahead_ms(LookaheadMs::try_from(5.0).unwrap())
+            .build();
+        assert!(matches!(
+            PeakLimiter::new(
+                rate,
+                max_rate,
+                stereo,
+                config,
+                &pools_with_budget(BYTES - 1)
+            ),
+            Err(LimiterError::Pool(PoolError::OverallBudgetExceeded { .. }))
+        ));
+        let mut limiter =
+            PeakLimiter::new(rate, max_rate, stereo, config, &pools_with_budget(BYTES)).unwrap();
+        for retuned in [96_000, 44_100, 96_001, 8_000] {
+            limiter.retune(NonZeroU32::new(retuned).unwrap()).unwrap();
+        }
+        let above = NonZeroU32::new(192_000).unwrap();
+        assert!(matches!(
+            limiter.retune(above),
+            Err(LimiterError::Latency {
+                sample_rate,
+                frames: 960,
+                prepared: 480,
+            }) if sample_rate == above
+        ));
+        assert!(matches!(
+            PeakLimiter::new(above, max_rate, stereo, config, &pools()),
+            Err(LimiterError::Latency { frames: 960, .. })
+        ));
+    }
+
+    #[kithara::test]
+    fn a_retuned_limiter_runs_as_one_built_at_the_new_rate() {
+        let max_rate = NonZeroU32::new(96_000).unwrap();
+        let stereo = NonZeroUsize::new(2).unwrap();
+        let config = LimiterConfig::builder()
+            .ceiling(Ceiling::try_from(consts::CEILING).unwrap())
+            .release_ms(ReleaseMs::try_from(1.0).unwrap())
+            .lookahead_ms(LookaheadMs::try_from(5.0).unwrap())
+            .build();
+        let loud = [1.96_f32; 64];
+        let tail: Vec<f32> = (0..200_u16).map(|frame| f32::from(frame) / 256.0).collect();
+        let mut retuned = PeakLimiter::new(
+            NonZeroU32::new(48_000).unwrap(),
+            max_rate,
+            stereo,
+            config,
+            &pools(),
+        )
+        .unwrap();
+        let (mut left, mut right) = (loud, loud);
+        run(&mut retuned, &mut left, &mut right);
+        assert!(
+            retuned.envelope.gain() < 1.0,
+            "the overload left the gain down"
+        );
+
+        let rate = NonZeroU32::new(44_100).unwrap();
+        retuned.retune(rate).unwrap();
+        let mut fresh = PeakLimiter::new(rate, max_rate, stereo, config, &pools()).unwrap();
+        let above = NonZeroU32::new(192_000).unwrap();
+        assert!(retuned.retune(above).is_err());
+        for block in [&loud[..], &tail[..]] {
+            let (mut left, mut right) = (block.to_vec(), block.to_vec());
+            let (mut expected_left, mut expected_right) = (block.to_vec(), block.to_vec());
+            run(&mut retuned, &mut left, &mut right);
+            run(&mut fresh, &mut expected_left, &mut expected_right);
+            assert_eq!(bits(&left), bits(&expected_left));
+            assert_eq!(bits(&right), bits(&expected_right));
+        }
     }
 
     #[kithara::test(native, flash(false))]
@@ -722,10 +887,12 @@ mod tests {
         let ceiling = 0.5;
         let mut lim = PeakLimiter::new(
             NonZeroU32::new(44_100).unwrap(),
+            NonZeroU32::new(44_100).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             LimiterConfig::builder()
                 .ceiling(Ceiling::try_from(ceiling).unwrap())
                 .build(),
+            &pools(),
         )
         .unwrap();
         let mut left = limiter_attack.clone();

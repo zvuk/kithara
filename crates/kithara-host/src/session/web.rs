@@ -61,7 +61,7 @@ pub(crate) fn spawn<S, O>(
     root: HostRoot,
     view: RootView,
     channel_config: ScopedConfig,
-    output: SessionOutput,
+    output: SessionOutput<S>,
     settings: Live<HostSettings, HostProtocol>,
     layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
 ) -> Result<

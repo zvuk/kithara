@@ -21,7 +21,10 @@ use kithara_render::{
     rt::{install_render_context, read_render_context},
 };
 use kithara_signal::{SessionEpoch, SessionFrame};
-use kithara_test_utils::{bufpool::TestPools, kithara};
+use kithara_test_utils::{
+    bufpool::{TestPools, pools},
+    kithara,
+};
 use kithara_warp::{Beat, BeatGridId, BeatGridQuery, BeatsPerMinute, MapPoint, MapPosition};
 use triple_buffer::{Output, triple_buffer};
 
@@ -103,9 +106,7 @@ fn proc_extra() -> (
     );
     let initial = TransportObservation::new(None, session_grid);
     let (observation_input, observation_output) = triple_buffer(&initial);
-    let config = crate::HostConfig::<TestPools>::builder()
-        .build()
-        .channel_config();
+    let config = crate::HostConfig::builder(pools()).build().channel_config();
     let (queue, inbox) = scoped_channel(config);
     let mut store = ProcStore::with_capacity(3);
     assert!(install_render_context(&mut store).is_ok());

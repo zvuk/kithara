@@ -285,6 +285,7 @@ where
         let channel_config = config.channel_config();
         match config {
             HostConfig::Realtime {
+                pools,
                 output_block_frames,
                 limiter,
                 settings,
@@ -297,7 +298,7 @@ where
                     root.view.clone(),
                     output_block_frames,
                     channel_config,
-                    crate::rt::SessionOutput::new(limiter),
+                    crate::rt::SessionOutput::new(limiter, pools),
                     settings,
                     layer,
                 )

@@ -56,7 +56,7 @@ impl DeckSession {
             root_view,
             OfflineTaskConfig::builder()
                 .declared_latency(Duration::ZERO)
-                .output(SessionOutput::new(LimiterConfig::default()))
+                .output(SessionOutput::new(LimiterConfig::default(), pools()))
                 .settings(
                     Live::new(HostSettings::builder().sample_rate(sample_rate).build())
                         .expect("the fixture settings are valid"),

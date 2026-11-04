@@ -9,6 +9,13 @@ pub(crate) const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100)
     None => unreachable!(),
 };
 
+/// Highest output rate a session runs at, the Web Audio limit: the output chain takes its
+/// lookahead storage for this rate once, so a stream restart never takes more.
+pub(crate) const MAX_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(768_000) {
+    Some(sample_rate) => sample_rate,
+    None => unreachable!(),
+};
+
 #[cfg(test)]
 pub(crate) const GRAPH_BLOCK_FRAMES: usize = 128;
 

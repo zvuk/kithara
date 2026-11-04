@@ -33,10 +33,11 @@ players with that same schema, while each registered deck retains its existing
 `PoolRegion<S>` handle for graph-node scratch allocation.
 
 `HostConfig<S>` directly selects and configures a realtime or offline session.
-With the `offline` feature, the same `Host<S>` drives its owned graph without an
-audio device and implements `kithara_output::OfflineRenderer` for exact finite
-output-frame ranges. Its offline variant carries the pool, render quantum,
-latency, worker, task, and dispatcher budgets.
+Both variants carry the pool region the session output chain takes its storage
+from. With the `offline` feature, the same `Host<S>` drives its owned graph
+without an audio device and implements `kithara_output::OfflineRenderer` for
+exact finite output-frame ranges. Its offline variant also carries the render
+quantum, latency, worker, task, and dispatcher budgets.
 
 The current crate is a mechanical ownership extraction. Runtime invariants and
 dependency boundaries are documented in [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-host).

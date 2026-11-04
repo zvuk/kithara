@@ -92,15 +92,18 @@ fn process_eq(eq: &mut EqEffect, pools: &Pools, spec: AudioSpec, samples: &[f32]
 }
 
 fn limiter_with_ceiling(ceiling: f32) -> PeakLimiter {
+    let rate = NonZeroU32::new(u32::from(HOST_RATE)).expect("host rate is non-zero");
     PeakLimiter::new(
-        NonZeroU32::new(u32::from(HOST_RATE)).expect("host rate is non-zero"),
+        rate,
+        rate,
         NonZeroUsize::new(2).expect("stereo is non-zero"),
         LimiterConfig::builder()
             .ceiling(Ceiling::try_from(ceiling).expect("limiter ceiling"))
             .release_ms(ReleaseMs::try_from(LIMITER_RELEASE_MS).expect("limiter release"))
             .build(),
+        &pools(),
     )
-    .expect("a stereo limiter fits the detector")
+    .expect("a stereo limiter fits the detector and the test region")
 }
 
 fn limit_stereo(limiter: &mut PeakLimiter, interleaved: &[f32]) -> Vec<f32> {

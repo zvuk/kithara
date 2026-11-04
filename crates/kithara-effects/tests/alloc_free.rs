@@ -4,18 +4,22 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
-use kithara_effects::{LimiterConfig, PeakLimiter};
-use kithara_test_utils::kithara;
+use kithara_effects::{LimiterConfig, LookaheadMs, PeakLimiter};
+use kithara_test_utils::{bufpool::pools, kithara};
 
 #[global_allocator]
 static ALLOCATOR: AllocDisabler = AllocDisabler;
 
 #[kithara::test(native, flash(false))]
-fn limiter_process_and_reset_never_allocate() {
+fn limiter_process_retune_and_reset_never_allocate() {
     let mut limiter = PeakLimiter::new(
         NonZeroU32::new(48_000).unwrap(),
+        NonZeroU32::new(96_000).unwrap(),
         NonZeroUsize::new(2).unwrap(),
-        LimiterConfig::default(),
+        LimiterConfig::builder()
+            .lookahead_ms(LookaheadMs::try_from(5.0).unwrap())
+            .build(),
+        &pools(),
     )
     .unwrap();
     let mut left = [0.0; 600];
@@ -32,5 +36,8 @@ fn limiter_process_and_reset_never_allocate() {
             }
         }
         limiter.reset();
+        for rate in [96_000, 44_100, 48_000] {
+            limiter.retune(NonZeroU32::new(rate).unwrap()).unwrap();
+        }
     });
 }

@@ -145,7 +145,7 @@ where
             root_view,
             OfflineTaskConfig::builder()
                 .declared_latency(declared_latency)
-                .output(SessionOutput::new(limiter))
+                .output(SessionOutput::new(limiter, pools.clone()))
                 .settings(settings)
                 .channel_config(channel_config)
                 .declick_frames(declick_frames)
@@ -339,10 +339,41 @@ mod tests {
         assert_eq!(host.sample_rate(), sample_rate);
     }
 
+    #[kithara::test(native)]
+    fn a_rate_above_the_highest_a_session_serves_is_refused_at_start_and_on_change() {
+        let highest = crate::consts::MAX_SAMPLE_RATE;
+        let above = highest.saturating_add(1);
+        let host_at = |sample_rate| {
+            Host::<TestPools>::new(
+                HostConfig::offline(pools())
+                    .settings(HostSettings::builder().sample_rate(sample_rate).build())
+                    .build(),
+            )
+        };
+        let refused = host_at(above).err();
+        assert!(
+            matches!(
+                &refused,
+                Some(PlayError::InvalidParameter { name, .. }) if name == "sample_rate"
+            ),
+            "{refused:?}"
+        );
+        let mut host = host_at(highest).expect("the highest rate starts");
+        let changed = host.set_sample_rate(above);
+        assert!(
+            matches!(
+                &changed,
+                Err(PlayError::InvalidParameter { name, .. }) if name == "sample_rate"
+            ),
+            "{changed:?}"
+        );
+        assert_eq!(host.sample_rate(), highest);
+    }
+
     #[kithara::test(native, flash(false))]
     fn realtime_host_rejects_offline_rendering() {
-        let mut host =
-            Host::<TestPools>::new(HostConfig::builder().build()).expect("fixture realtime Host");
+        let mut host = Host::<TestPools>::new(HostConfig::builder(pools()).build())
+            .expect("fixture realtime Host");
         let request = OfflineRenderRequest::builder()
             .spec(AudioSpec::new(consts::CHANNELS, consts::SAMPLE_RATE))
             .frames(0..1)

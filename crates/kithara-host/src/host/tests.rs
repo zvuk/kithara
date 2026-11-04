@@ -1,12 +1,15 @@
 use std::num::NonZeroU32;
 
-use kithara_test_utils::{bufpool::TestPools, kithara};
+use kithara_test_utils::{
+    bufpool::{TestPools, pools},
+    kithara,
+};
 
 use super::*;
 
 #[kithara::test]
 fn realtime_config_preserves_output_block_default_and_allows_override() {
-    let default = HostConfig::<TestPools>::builder().build();
+    let default = HostConfig::builder(pools()).build();
     let output_block_frames = match default {
         HostConfig::Realtime {
             output_block_frames,
@@ -18,7 +21,7 @@ fn realtime_config_preserves_output_block_default_and_allows_override() {
     assert_eq!(output_block_frames, None);
 
     let frames = NonZeroU32::new(128).expect("test block size is non-zero");
-    let configured = HostConfig::<TestPools>::builder()
+    let configured = HostConfig::builder(pools())
         .output_block_frames(frames)
         .build();
     let output_block_frames = match configured {
@@ -35,7 +38,7 @@ fn realtime_config_preserves_output_block_default_and_allows_override() {
 #[kithara::test]
 fn host_root_owns_the_configured_sample_rate() {
     let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
-    let config = HostConfig::<TestPools>::builder()
+    let config = HostConfig::builder(pools())
         .settings(HostSettings::builder().sample_rate(sample_rate).build())
         .build();
     let root = Host::<TestPools>::session_root(config.settings()).expect("host root");
@@ -50,7 +53,7 @@ async fn an_offline_deck_publishes_owner_commands_without_a_render_pull() {
     use kithara_platform::time::{self, Duration, WallInstant};
     use kithara_play::{PlayError, PlayWorker, PlayWorkerConfig, ResourcePrep};
     use kithara_queue::{Queue, QueueConfig};
-    use kithara_test_utils::{bufpool::pools, off_thread::OffThread};
+    use kithara_test_utils::off_thread::OffThread;
 
     let host = OffThread::spawn("offline-publication", || {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
