@@ -116,6 +116,30 @@ fn run(
     wet
 }
 
+/// The wet bits and the tail report after each [`REGULAR`] block of `effect`
+/// playing `input`, `before` handed the first frame of each block and the
+/// effect ahead of it.
+fn takes(
+    effect: &mut FeedbackDelay,
+    input: &[Vec<f32>; 2],
+    mut before: impl FnMut(usize, &mut FeedbackDelay),
+) -> ([Vec<u32>; 2], Vec<bool>) {
+    let length = input[0].len();
+    let mut wet = [vec![0.0; length], vec![0.0; length]];
+    let mut spent = Vec::new();
+    for start in (0..length).step_by(REGULAR[0]) {
+        before(start, effect);
+        let end = (start + REGULAR[0]).min(length);
+        let [left, right] = &mut wet;
+        effect.process(
+            [&input[0][start..end], &input[1][start..end]],
+            [&mut left[start..end], &mut right[start..end]],
+        );
+        spent.push(effect.tail_exhausted());
+    }
+    (wet.map(|plane| bits(&plane)), spent)
+}
+
 fn bits(samples: &[f32]) -> Vec<u32> {
     samples.iter().map(|sample| sample.to_bits()).collect()
 }
@@ -205,17 +229,22 @@ struct Model {
 }
 
 impl Model {
-    /// The model having played `input`, its delay moving to each of
-    /// `changes` on its frame.
-    fn play(settings: Settings, input: &[f32], changes: &[(usize, u32)]) -> Self {
-        let mut model = Self {
-            wet: Vec::with_capacity(input.len()),
-            history: Vec::with_capacity(input.len()),
+    /// The model at `settings`, holding silence.
+    fn new(settings: Settings) -> Self {
+        Self {
+            wet: Vec::new(),
+            history: Vec::new(),
             filter: Section::new(settings.high_pass, RATE),
             feedback: f64::from(settings.feedback),
             time: frames(settings.time),
             ramp: None,
-        };
+        }
+    }
+
+    /// The model having played `input`, its delay moving to each of
+    /// `changes` on its frame.
+    fn play(settings: Settings, input: &[f32], changes: &[(usize, u32)]) -> Self {
+        let mut model = Self::new(settings);
         for (frame, sample) in input.iter().enumerate() {
             for (_, time) in changes.iter().filter(|(at, _)| *at == frame) {
                 model.ramp = Some((model.time, 0));
@@ -332,6 +361,39 @@ fn feedback_delay_echo_amplitudes_follow_the_feedback_law() {
 }
 
 #[kithara::test]
+fn feedback_delay_feedback_change_takes_effect_on_its_frame() {
+    const TIME: u32 = 40;
+    /// A frame inside the third echo, the high-pass ringing.
+    const CHANGE: usize = 3 * 40 + 7;
+    const TO: f32 = 0.9;
+    let settings = Settings {
+        capacity: 64,
+        time: TIME,
+        feedback: 0.5,
+        high_pass: f32::from(FeedbackHighPass::MAX),
+    };
+    let input = impulses(12 * frames(TIME));
+    let change = FxParamChange::Delay(DelayParam::Feedback(
+        Feedback::checked(TO).expect("a feedback below unity"),
+    ));
+    let wet = run(&mut delay(settings), &input, &REGULAR, &[(CHANGE, change)]);
+    for (channel, (wet, input)) in wet.iter().zip(&input).enumerate() {
+        let mut model = Model::new(settings);
+        for (frame, sample) in input.iter().enumerate() {
+            if frame == CHANGE {
+                model.feedback = f64::from(TO);
+            }
+            model.step(*sample);
+        }
+        assert_near(
+            wet,
+            &model.wet,
+            &format!("channel {channel}: the feedback moves to {TO} on the change's frame"),
+        );
+    }
+}
+
+#[kithara::test]
 fn feedback_delay_time_change_crosses_over_within_its_ramp() {
     const FROM: u32 = 1000;
     const TO: u32 = 1007;
@@ -385,6 +447,17 @@ fn feedback_delay_time_change_crosses_over_within_its_ramp() {
             "channel {channel}: the cross-read steps {jump}, above the declared {bound}"
         );
     }
+    let irregular = run(
+        &mut delay(settings),
+        &input,
+        &IRREGULAR,
+        &[(CHANGE, time(f64::from(TO)))],
+    );
+    assert_eq!(
+        changed.each_ref().map(|plane| bits(plane)),
+        irregular.each_ref().map(|plane| bits(plane)),
+        "the cross-read renders the same in any block partition"
+    );
 }
 
 #[kithara::test]
@@ -404,16 +477,12 @@ fn feedback_delay_time_change_during_a_cross_waits_for_its_end() {
     let during = CHANGE + frames(RAMP) / 2;
     let end = CHANGE + frames(RAMP);
     let input = sines(end + 2 * frames(RAMP) + 1000);
-    let wet = run(
-        &mut delay(settings),
-        &input,
-        &REGULAR,
-        &[
-            (CHANGE, time(f64::from(TO))),
-            (during, time(f64::from(REPLACED))),
-            (during, time(f64::from(LAST))),
-        ],
-    );
+    let changes = [
+        (CHANGE, time(f64::from(TO))),
+        (during, time(f64::from(REPLACED))),
+        (during, time(f64::from(LAST))),
+    ];
+    let wet = run(&mut delay(settings), &input, &REGULAR, &changes);
     for (channel, (wet, input)) in wet.iter().zip(&input).enumerate() {
         assert_near(
             wet,
@@ -424,6 +493,13 @@ fn feedback_delay_time_change_during_a_cross_waits_for_its_end() {
             ),
         );
     }
+    assert_eq!(
+        wet.each_ref().map(|plane| bits(plane)),
+        run(&mut delay(settings), &input, &IRREGULAR, &changes)
+            .each_ref()
+            .map(|plane| bits(plane)),
+        "the deferred change renders the same in any block partition"
+    );
 }
 
 #[kithara::test]
@@ -469,7 +545,7 @@ fn feedback_delay_filters_each_repeat_once_more() {
 
 #[kithara::test]
 fn feedback_delay_reports_its_tail_spent_within_the_bound() {
-    /// Frames between two readings of the report.
+    /// Frames between two readings of the report away from where it turns.
     const BLOCK: usize = 16;
     /// Frames after which a delay still not reporting its tail spent fails.
     const LIMIT: usize = 1 << 18;
@@ -481,17 +557,19 @@ fn feedback_delay_reports_its_tail_spent_within_the_bound() {
     };
     let low = f32::from(FeedbackHighPass::MIN);
     let high = f32::from(FeedbackHighPass::MAX);
-    // Settings, rate, and a cutoff the delay moves to on a frame.
+    // Settings, rate, the channel the impulse enters, and a cutoff the delay
+    // moves to on a frame.
     let cases = [
-        (settings(256, 512, 0.5, low), RATE, None),
-        (settings(16, 64, 0.95, low), RATE, None),
-        (settings(64, 128, 0.95, low), RATE, None),
-        (settings(256, 512, 0.95, 200.0), RATE, None),
-        (settings(64, 64, 0.5, high), RATE, None),
-        (settings(256, 512, 0.5, low), 96_000, None),
-        (settings(256, 512, 0.5, low), RATE, Some((3072, high))),
+        (settings(256, 512, 0.5, low), RATE, 0, None),
+        (settings(256, 512, 0.5, low), RATE, 1, None),
+        (settings(16, 64, 0.95, low), RATE, 0, None),
+        (settings(64, 128, 0.95, low), RATE, 1, None),
+        (settings(256, 512, 0.95, 200.0), RATE, 0, None),
+        (settings(64, 64, 0.5, high), RATE, 1, None),
+        (settings(256, 512, 0.5, low), 96_000, 0, None),
+        (settings(256, 512, 0.5, low), RATE, 0, Some((3072, high))),
     ];
-    for (case, (settings, rate, change)) in cases.into_iter().enumerate() {
+    for (case, (settings, rate, channel, change)) in cases.into_iter().enumerate() {
         let mut effect = delay_at(settings, rate);
         assert!(
             effect.tail_exhausted(),
@@ -499,39 +577,67 @@ fn feedback_delay_reports_its_tail_spent_within_the_bound() {
         );
         let time = frames(settings.time);
         let mut window = tail_window(settings.capacity, settings.high_pass, rate);
-        let mut wet = Vec::new();
+        let mut wet = [Vec::new(), Vec::new()];
+        // Whether each frame of the history rose above the floor: the history
+        // the delay wrote is its wet signal one delay later.
+        let mut loud = Vec::new();
+        let mut last_seen = None;
         let mut reports = Vec::new();
         let mut first = None;
-        while first.is_none_or(|first| wet.len() < first + window + time) {
+        while first.is_none_or(|first| wet[0].len() < first + window + time) {
+            let written = wet[0].len();
             assert!(
-                wet.len() < LIMIT,
+                written < LIMIT,
                 "case {case}: the delay never reports its tail spent"
             );
             if let Some((at, cutoff)) = change
-                && at == wet.len()
+                && at == written
             {
                 effect.set(high_pass_change(cutoff));
                 window = tail_window(settings.capacity, cutoff, rate);
             }
-            let mut input = [0.0; BLOCK];
-            if wet.is_empty() {
-                input[0] = 1.0;
+            // Around the frame the history seen so far turns the report on,
+            // read it after every frame.
+            let near =
+                last_seen.is_some_and(|last: usize| (last + 1 + window).abs_diff(written) <= BLOCK);
+            let block = if near { 1 } else { BLOCK };
+            let mut input = [[0.0; BLOCK]; 2];
+            if written == 0 {
+                input[channel][0] = 1.0;
             }
-            let mut left = [0.0; BLOCK];
-            effect.process([&input, &[0.0; BLOCK]], [&mut left, &mut [0.0; BLOCK]]);
-            wet.extend(left);
+            let mut output = [[0.0; BLOCK]; 2];
+            let [left, right] = &mut output;
+            effect.process(
+                [&input[0][..block], &input[1][..block]],
+                [&mut left[..block], &mut right[..block]],
+            );
+            for (plane, output) in wet.iter_mut().zip(&output) {
+                plane.extend_from_slice(&output[..block]);
+            }
+            let written = wet[0].len();
+            while loud.len() + time < written {
+                let frame = loud.len() + time;
+                let above = wet[0][frame].abs().max(wet[1][frame].abs()) > FLOOR;
+                if above {
+                    last_seen = Some(loud.len());
+                }
+                loud.push(above);
+            }
             let spent = effect.tail_exhausted();
             if spent && first.is_none() {
-                first = Some(wet.len());
+                first = Some(written);
             }
-            reports.push((wet.len(), spent, window));
+            reports.push((written, spent, window));
         }
-        // The history the delay wrote is its wet signal one delay later.
-        let loud: Vec<bool> = wet[time..]
-            .iter()
-            .map(|sample| sample.abs() > FLOOR)
-            .collect();
         let first = first.expect("the loop ends on a report");
+        let turn = reports
+            .iter()
+            .position(|(written, ..)| *written == first)
+            .expect("the first report of a spent tail");
+        assert!(
+            turn > 0 && reports[turn - 1].0 + 1 == first,
+            "case {case}: the report turns between two readings one frame apart"
+        );
         let mut last = None;
         let mut read = 0;
         for (written, spent, window) in reports {
@@ -554,10 +660,13 @@ fn feedback_delay_reports_its_tail_spent_within_the_bound() {
             );
         }
         assert!(
-            wet[first..].iter().all(|sample| sample.abs() <= FLOOR),
+            wet.iter()
+                .all(|plane| plane[first..].iter().all(|sample| sample.abs() <= FLOOR)),
             "case {case}: the tail reported spent at {first} still sounds"
         );
-        effect.process([&[0.1], &[0.0]], [&mut [0.0], &mut [0.0]]);
+        let mut input = [[0.0]; 2];
+        input[channel][0] = 0.1;
+        effect.process([&input[0], &input[1]], [&mut [0.0], &mut [0.0]]);
         assert!(
             !effect.tail_exhausted(),
             "case {case}: new input sounds again"
@@ -591,6 +700,10 @@ fn feedback_delay_refuses_a_time_beyond_its_capacity() {
     assert!(
         !effect.accepts(&time(513.0)),
         "a delay past the capacity is refused"
+    );
+    assert!(
+        f32::from(Feedback::MAX) < 1.0,
+        "the feedback stays below unity, so every tail ends"
     );
     assert!(effect.accepts(&FxParamChange::Delay(DelayParam::Feedback(Feedback::MAX))));
     assert!(effect.accepts(&FxParamChange::Delay(DelayParam::HighPass(
@@ -634,12 +747,27 @@ fn feedback_delay_reset_returns_to_silence_and_keeps_its_settings() {
         &REGULAR,
         &[],
     );
+    let fresh = fresh.each_ref().map(|plane| bits(plane));
     assert_eq!(
         run(&mut used, &input, &REGULAR, &[])
             .each_ref()
             .map(|plane| bits(plane)),
-        fresh.each_ref().map(|plane| bits(plane)),
+        fresh,
         "a reset delay plays as one prepared at the time it was set to"
+    );
+    // A unit switched off takes changes without playing: the second waits for
+    // the cross the first starts.
+    let mut off = delay(settings);
+    run(&mut off, &input, &REGULAR, &[]);
+    off.set(time(250.0));
+    off.set(time(200.0));
+    off.reset();
+    assert_eq!(
+        run(&mut off, &input, &REGULAR, &[])
+            .each_ref()
+            .map(|plane| bits(plane)),
+        fresh,
+        "a reset drops the cross and lands the change waiting on it"
     );
 }
 
@@ -654,24 +782,14 @@ fn feedback_delay_tuned_to_a_rate_plays_as_one_prepared_at_it() {
         high_pass: 1000.0,
     };
     let input = impulses(LENGTH);
-    // The wet signal and the tail report after each block of `effect`, its
-    // time crossing to 700 frames at `CHANGE`.
+    // The wet signal and the tail report of `effect`, its time crossing to 700
+    // frames at `CHANGE`.
     let play = |effect: &mut FeedbackDelay| {
-        let mut wet = [vec![0.0; LENGTH], vec![0.0; LENGTH]];
-        let mut spent = Vec::new();
-        for start in (0..LENGTH).step_by(REGULAR[0]) {
+        takes(effect, &input, |start, effect| {
             if start == CHANGE {
                 effect.set(time(700.0));
             }
-            let end = start + REGULAR[0];
-            let [left, right] = &mut wet;
-            effect.process(
-                [&input[0][start..end], &input[1][start..end]],
-                [&mut left[start..end], &mut right[start..end]],
-            );
-            spent.push(effect.tail_exhausted());
-        }
-        (wet.map(|plane| bits(&plane)), spent)
+        })
     };
     for rate in [RATE, 22_050, 48_000, 96_000] {
         let mut tuned = delay(settings);
@@ -698,6 +816,8 @@ fn feedback_delay_keeps_its_history_and_time_across_a_rate_change() {
     const TIME: u32 = 1000;
     const NEW: u32 = 48_000;
     const FEEDBACK: f32 = 0.5;
+    /// Frames into the first echo when the rate changes, the high-pass ringing.
+    const INTO: usize = 8;
     let settings = Settings {
         capacity: frames(TIME),
         time: TIME,
@@ -705,12 +825,17 @@ fn feedback_delay_keeps_its_history_and_time_across_a_rate_change() {
         high_pass: 1000.0,
     };
     let time = frames(TIME);
+    let split = time + INTO;
     let input = impulses(3 * time);
     let mut effect = delay(settings);
-    let head = [&input[0][..time / 2], &input[1][..time / 2]].map(<[f32]>::to_vec);
-    let tail = [&input[0][time / 2..], &input[1][time / 2..]].map(<[f32]>::to_vec);
+    let head = [&input[0][..split], &input[1][..split]].map(<[f32]>::to_vec);
+    let tail = [&input[0][split..], &input[1][split..]].map(<[f32]>::to_vec);
     let mut wet = run(&mut effect, &head, &REGULAR, &[]);
     effect.update_sample_rate(rate_of(NEW));
+    assert!(
+        !effect.tail_exhausted(),
+        "the echo sounding through the change keeps the tail alive"
+    );
     for (wet, rest) in wet.iter_mut().zip(run(&mut effect, &tail, &REGULAR, &[])) {
         wet.extend(rest);
     }
@@ -719,20 +844,73 @@ fn feedback_delay_keeps_its_history_and_time_across_a_rate_change() {
         left[..time].iter().all(|sample| *sample == 0.0),
         "nothing sounds before the first echo"
     );
+    assert_eq!(left[time], 1.0, "the first echo is the impulse itself");
+    assert_eq!(right[time + 3], -0.5, "each channel echoes its own input");
+    for (channel, wet) in wet.iter().enumerate() {
+        // The high-pass keeps its state and takes the coefficients of the new
+        // rate from the frame the change lands on.
+        let mut filter = Section::new(settings.high_pass, RATE);
+        let expected: Vec<f64> = wet[time..2 * time]
+            .iter()
+            .enumerate()
+            .map(|(frame, sample)| {
+                if time + frame == split {
+                    filter.coefficients = high_pass(settings.high_pass, NEW);
+                }
+                f64::from(FEEDBACK) * filter.step(f64::from(*sample))
+            })
+            .collect();
+        assert_near(
+            &wet[2 * time..],
+            &expected,
+            &format!(
+                "channel {channel}: the history written on both sides of the change echoes one \
+                 delay later, its high-pass retuned on the change's frame with its state kept"
+            ),
+        );
+    }
+}
+
+#[kithara::test]
+fn feedback_delay_keeps_its_tuning_when_a_new_rate_cannot_hold_its_cutoff() {
+    const LENGTH: usize = 16_384;
+    /// The rate whose Nyquist the highest cutoff reaches.
+    const LOW: u32 = 8000;
+    /// A block start inside the first echo, the high-pass ringing.
+    const CHANGE: usize = 640;
+    let settings = Settings {
+        capacity: 1024,
+        time: 620,
+        feedback: 0.5,
+        high_pass: f32::from(FeedbackHighPass::MAX),
+    };
+    let input = impulses(LENGTH);
+    let (untouched, untouched_spent) = takes(&mut delay(settings), &input, |_, _| {});
+    let mut moved = delay(settings);
+    let (wet, spent) = takes(&mut moved, &input, |start, effect| {
+        if start == CHANGE {
+            effect.update_sample_rate(rate_of(LOW));
+        }
+    });
     assert_eq!(
-        left[time], 1.0,
-        "the impulse written before the change echoes the same frames later"
+        wet, untouched,
+        "a rate the cutoff does not fit under keeps the high-pass tuned as before"
     );
-    assert_eq!(right[time + 3], -0.5, "each channel keeps its history");
-    let mut filter = Section::new(settings.high_pass, NEW);
-    let expected: Vec<f64> = left[time..2 * time]
-        .iter()
-        .map(|sample| f64::from(FEEDBACK) * filter.step(f64::from(*sample)))
-        .collect();
-    assert_near(
-        &left[2 * time..],
-        &expected,
-        "the next echo passes the high-pass tuned to the new rate",
+    assert_eq!(
+        spent, untouched_spent,
+        "a rate the cutoff does not fit under keeps the tail window"
+    );
+    assert!(
+        spent.first() == Some(&false) && spent.last() == Some(&true),
+        "the take covers the tail and its report"
+    );
+    assert!(
+        !moved.accepts(&high_pass_change(f32::from(FeedbackHighPass::MAX))),
+        "a cutoff at the new Nyquist is refused"
+    );
+    assert!(
+        moved.accepts(&high_pass_change(f32::from(FeedbackHighPass::MIN))),
+        "a cutoff under the new Nyquist is taken"
     );
 }
 
