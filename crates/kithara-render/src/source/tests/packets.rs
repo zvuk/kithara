@@ -58,13 +58,9 @@ where
         .render_quantum_frames(NonZeroUsize::new(PACKET as usize).expect("quantum"))
         .build();
     let renderer = kithara_warp::Warp::new((), &config).renderer(spec(), pools.clone());
-    let drain =
-        EffectDrain::new(0, pools).unwrap_or_else(|error| panic!("test effect drain: {error}"));
     let source = WarpSource::new(
         source,
         renderer,
-        Vec::new(),
-        drain,
         spec(),
         pools.clone(),
         LaneSetup {
