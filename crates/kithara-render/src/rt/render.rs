@@ -195,12 +195,13 @@ impl RenderPass {
         }
     }
 
-    /// Retune the deck's chain, with every effect its units hold, to `sample_rate`.
+    /// Retune the deck's chain, with every effect its units hold, to
+    /// `sample_rate`. A ramp in flight goes on toward its target at the new rate.
     pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        self.trim.update_sample_rate(sample_rate);
-        self.output.update_sample_rate(sample_rate);
+        retune(&mut self.trim, sample_rate);
+        retune(&mut self.output, sample_rate);
         for unit in &mut self.units {
-            unit.mix.update_sample_rate(sample_rate);
+            retune(&mut unit.mix, sample_rate);
             if let Some(effect) = &mut unit.effect {
                 effect.update_sample_rate(sample_rate);
             }
@@ -282,6 +283,15 @@ fn smoothed(value: f32, sample_rate: NonZeroU32) -> SmoothedParam {
     SmoothedParam::new(value, GAIN_SPAN, SmootherConfig::default(), sample_rate)
 }
 
+/// Retune `param` to `sample_rate`. The smoother keeps its target scaled by
+/// the coefficient of the rate the target was set at, so the target is set
+/// again at the new rate; otherwise a ramp in flight converges short of or past
+/// its target and never settles.
+fn retune(param: &mut SmoothedParam, sample_rate: NonZeroU32) {
+    param.update_sample_rate(sample_rate);
+    param.set_value(param.target_value());
+}
+
 /// Scale the frames of a stereo pair by `gain`, ramping it while it moves; a
 /// settled unity leaves them untouched.
 fn apply_gain(gain: &mut SmoothedParam, left: &mut [f32], right: &mut [f32]) {
@@ -312,11 +322,19 @@ fn apply_gain(gain: &mut SmoothedParam, left: &mut [f32], right: &mut [f32]) {
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::sync::{Arc, Mutex};
+    use kithara_dsp::param::DEFAULT_SMOOTH_SECONDS;
+    use kithara_platform::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{rt::DeckMixerConfig, test_pools::pools};
+    use crate::{
+        bridge::{CrossfaderGain, FxMix, Trim},
+        rt::DeckMixerConfig,
+        test_pools::pools,
+    };
 
     #[kithara::test]
     fn gain_matches_scalar_pcm_and_terminal_state() {
@@ -434,5 +452,77 @@ mod tests {
         );
         render.update_sample_rate(rate(96_000));
         assert_eq!(*tuned.lock(), [48_000, 96_000]);
+    }
+
+    /// A ramp a sample-rate change catches goes on toward its target at the
+    /// new rate: one ramp later the deck sounds its settled chain and its unit
+    /// no longer rings.
+    #[kithara::test]
+    fn a_ramp_caught_by_a_sample_rate_change_settles_on_its_target() {
+        const BLOCK: usize = 512;
+        const INPUT: f32 = 0.5;
+        let rate = |hz| NonZeroU32::new(hz).expect("rate");
+        let levels = |level| {
+            DeckMixSettings::builder()
+                .trim(Trim::checked(level).expect("a trim"))
+                .crossfader(CrossfaderGain::checked(level).expect("a crossfader share"))
+                .build()
+        };
+        let dry_wet = |value| DeckFxChange::Mix {
+            unit: 0,
+            value: FxMix::checked(value).expect("a dry/wet"),
+        };
+        let block = |render: &mut RenderPass| {
+            let (mut left, mut right) = ([INPUT; BLOCK], [INPUT; BLOCK]);
+            render.finish(&mut left, &mut right);
+            [left, right]
+        };
+        // With the coefficient of the old rate, ramps up after a fall in rate
+        // converge short of their targets, and ramps down after a rise past them.
+        for (from, to, [level_from, level_to], [mix_from, mix_to]) in [
+            (48_000, 44_100, [0.5, 1.0], [0.0, 0.5]),
+            (44_100, 48_000, [1.0, 0.5], [1.0, 0.5]),
+        ] {
+            let mut render = RenderPass::new(
+                &pools(),
+                StreamShape::new(
+                    rate(u32::try_from(BLOCK).expect("a block fits u32")),
+                    rate(from),
+                ),
+                DeckMixerConfig::builder().eq_bands(0).build(),
+            )
+            .expect("deck chain");
+            let effect = Box::new(Tuned(Arc::new(Mutex::new(Vec::new()))));
+            for change in [
+                DeckFxChange::Install { unit: 0, effect },
+                DeckFxChange::Power { unit: 0, on: true },
+                dry_wet(mix_from),
+            ] {
+                render.change_fx(change, rate(from));
+            }
+            render.set_mix(levels(level_from));
+            render.idle();
+            render.set_mix(levels(level_to));
+            render.change_fx(dry_wet(mix_to), rate(from));
+            block(&mut render);
+            render.update_sample_rate(rate(to));
+            let ramp = Duration::from_secs_f32(DEFAULT_SMOOTH_SECONDS).as_nanos() * u128::from(to);
+            let ramp = usize::try_from(ramp.div_ceil(1_000_000_000)).expect("a ramp fits usize");
+            for _ in 0..ramp.div_ceil(BLOCK) {
+                block(&mut render);
+            }
+            let settled = INPUT * level_to * (1.0 - mix_to) * level_to;
+            assert!(
+                block(&mut render)
+                    .iter()
+                    .flatten()
+                    .all(|&sample| sample == settled),
+                "{from} Hz to {to} Hz: the chain sounds {settled} once settled"
+            );
+            assert!(
+                !render.ringing(),
+                "{from} Hz to {to} Hz: a settled unit with its tail spent no longer rings"
+            );
+        }
     }
 }
