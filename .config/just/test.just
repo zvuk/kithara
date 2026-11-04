@@ -23,8 +23,11 @@ all:
 # why they do not go through `just test run`. `just platform wasm` keeps the
 # artifacts (check, build, size-check); the tests belong here.
 #
-# Both suites run the wasm Host tests and FFI wire contract. SUITE `all` also
-# runs the integration browser suite; `webcodecs` adds kithara-decode's target.
+# Every run, whatever the browser, suite or route, runs the library unit tests
+# of each package whose manifest declares
+# `[package.metadata.kithara.wasm-lib-tests]`, with the `default-features` and
+# `features` that entry sets. SUITE `all` also runs the integration browser
+# suite; Chromium adds kithara-decode's WebCodecs target.
 
 # Run browser tests; REAL_AUDIO_ROUTE selects device-backed binaries for CI only.
 [positional-arguments]
@@ -62,10 +65,31 @@ wasm BROWSER="chrome" SUITE="all" REAL_AUDIO_ROUTE="exclude":
         exit 2
         ;;
     esac
+    # One metadata read gives the host target directory and one `--lib` run per
+    # declaring package. An entry without both keys stops here, before any build.
+    metadata="$(cargo metadata --format-version=1 --no-deps)"
+    host_target_dir="$(python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' <<<"$metadata")"
+    lib_tests="$(python3 -c '
+    import json, sys
+    for package in json.load(sys.stdin)["packages"]:
+        entry = ((package["metadata"] or {}).get("kithara") or {}).get("wasm-lib-tests")
+        if entry is None:
+            continue
+        name = package["name"]
+        default_features = entry.get("default-features")
+        features = entry.get("features")
+        if not isinstance(default_features, bool) or not isinstance(features, list):
+            sys.exit(name + ": [package.metadata.kithara.wasm-lib-tests] needs a boolean default-features and a features list")
+        run = ["-p", name, "--lib"]
+        if not default_features:
+            run.append("--no-default-features")
+        if features:
+            run += ["--features", ",".join(features)]
+        print(" ".join(run))
+    ' <<<"$metadata")"
     # Build the runner and its sibling fixture server together so running WASM
     # tests does not start another host Cargo build.
     cargo build -p kithara-integration-tests --features all --bin test_server --bin wasm_test_runner
-    host_target_dir="$(cargo metadata --format-version=1 --no-deps | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
     export PATH="$host_target_dir/debug:$PATH"
     export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm_test_runner
     WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
@@ -76,13 +100,14 @@ wasm BROWSER="chrome" SUITE="all" REAL_AUDIO_ROUTE="exclude":
       -p kithara-encode --no-default-features \
       --features client-reqwest,tls-rustls \
       --test session
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-host --lib --no-default-features \
-      --features symphonia,webcodecs,resample-rubato,stretch-identity,client-reqwest,tls-rustls
+    while read -r -a lib_test <&3; do
+      WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+        cargo "+$toolchain" test --profile test-release \
+        --target wasm32-unknown-unknown \
+        -Z build-std=std,panic_abort,core,alloc \
+        -Z build-std-features=optimize_for_size \
+        "${lib_test[@]}"
+    done 3<<<"$lib_tests"
     if [[ "$real_audio_route" == "include" ]]; then
       WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
         cargo "+$toolchain" test --profile test-release \
@@ -97,32 +122,7 @@ wasm BROWSER="chrome" SUITE="all" REAL_AUDIO_ROUTE="exclude":
       --target wasm32-unknown-unknown \
       -Z build-std=std,panic_abort,core,alloc \
       -Z build-std-features=optimize_for_size \
-      -p kithara-worker --lib
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-dsp --lib --test layout --features spectrum
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-platform --lib
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-command --lib
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-analysis --lib --no-default-features \
-      --features analysis-waveform,beat-dsp,client-reqwest,tls-rustls,symphonia,webcodecs
+      -p kithara-dsp --test layout --features spectrum
     if [[ "$real_audio_route" == "include" ]]; then
       WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
         cargo "+$toolchain" test --profile test-release \

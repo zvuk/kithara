@@ -9,6 +9,10 @@ description = "Multi-player audio session host and output graph for Kithara."
 keywords = ["audio", "player", "dj", "mixing", "synchronization"]
 categories = ["multimedia::audio"]
 
+[package.metadata.kithara.wasm-lib-tests]
+default-features = false
+features = ["symphonia", "webcodecs", "resample-rubato", "stretch-identity", "client-reqwest", "tls-rustls"]
+
 [features]
 default = [
     "backend-cpal",

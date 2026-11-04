@@ -12,6 +12,10 @@ categories = ["concurrency"]
 [package.metadata.cargo-machete]
 ignored = ["hotpath"]
 
+[package.metadata.kithara.wasm-lib-tests]
+default-features = true
+features = []
+
 [features]
 mock = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
