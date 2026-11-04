@@ -99,7 +99,7 @@ macro_rules! define_skin {
                     table_footer_rows: text_field(catalog, "table.footer_rows", origin)?,
                     tree_search_placeholder: text_field(catalog, "tree.search_placeholder", origin)?,
                     $($field: document.$field,)*
-                    text_resources: Arc::new(TextResources::new(font_policy)?),
+                    text_resources: Arc::new(load_text_resources(&document, font_policy, origin, resolver)?),
                     document: Arc::new(document),
                     overrides: BTreeMap::new(),
                 };
@@ -126,6 +126,26 @@ macro_rules! define_skin {
 }
 
 skin_sections!(define_skin);
+
+fn load_text_resources(
+    document: &SkinDoc,
+    policy: FontPolicy,
+    origin: &SourceUri,
+    resolver: &dyn SourceResolver,
+) -> Result<TextResources, UiDocError> {
+    let mut fonts = BTreeMap::new();
+    for (&family, files) in &document.fonts {
+        let bytes = files
+            .iter()
+            .map(|path| resolver.bytes(None, path).map(|loaded| loaded.bytes))
+            .collect::<Result<Vec<_>, _>>()?;
+        fonts.insert(family, bytes);
+    }
+    TextResources::with_fonts(policy, fonts).map_err(|source| UiDocError::Font {
+        origin: origin.clone(),
+        source,
+    })
+}
 
 impl Skin {
     /// The skin one control instance wears.

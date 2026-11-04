@@ -1,5 +1,7 @@
 use kithara_command::{Batch, Outcome, Rejection, Seq, When};
-use kithara_host::{DeckId, HostCommand, HostOwner, HostSettingsChange, HostSettled, api::Tempo};
+use kithara_host::{
+    DeckId, HostCommand, HostOwner, HostSettingsChange, HostSettled, PassClock, api::Tempo,
+};
 use kithara_play::{HostedDeck, PlayError, SessionError, TrackCommand, TrackReceipt};
 use kithara_render::bridge::{DeckProtocol, Slot};
 use kithara_signal::{FrameCount, SessionFrame};
@@ -7,8 +9,11 @@ use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 
 use super::{
-    fixtures::{Command, deck as new_deck, grid, loaded, ordinary, position, sounding, trajectory},
-    host_fixture::{Host, Probe, finish, host, register, register_ordinary, tempo},
+    fixtures::{
+        A_THIRD_OF_A_BEAT_BEHIND, Command, NEAR_THE_COVERED_END, deck as new_deck, grid, jumps,
+        loaded, ordinary, position, sound, sounding, synced, trajectory,
+    },
+    host_fixture::{Host, Probe, finish, host, next_tempo, register, register_ordinary, tempo},
 };
 use crate::{GridAnswer, LinkedHostCommand, LinkedPlayer, SyncStatus};
 
@@ -53,7 +58,7 @@ fn registration_projects_the_canonical_member_grid() {
     host.begin_pass();
     let root = host.transport().expect("canonical Host transport");
     let model = grid(24_000, 0, Some((4, 0)), 960_000);
-    let (deck, control, _, load) = loaded(model.clone());
+    let (deck, control, _, _) = loaded(model.clone());
     let (id, probe) = register(&mut host, deck, &control);
     let synced = host
         .apply(LinkedHostCommand::Sync { deck: id, on: true })
@@ -83,7 +88,6 @@ fn registration_projects_the_canonical_member_grid() {
             deck: id,
             answer: GridAnswer {
                 item: identity.0,
-                load,
                 model: Ok(model.clone()),
             },
         }),
@@ -180,7 +184,6 @@ fn registration_projects_the_canonical_member_grid() {
             deck: id,
             answer: GridAnswer {
                 item: identity.0,
-                load,
                 model: Ok(model)
             },
         }),
@@ -339,6 +342,63 @@ fn an_observation_cannot_replace_geometry_without_a_new_route_axis() {
     let (_, observed) = register(&mut host, observer, &observer_control);
     assert_eq!(observed.trajectory().sample_rate().get(), 48_000);
     assert_eq!(beats(&observed, 48_000), 2.0);
+}
+
+/// A tempo action moves a sounding deck once, onto the host's bar, when a
+/// slew cannot close its phase, and keeps a slew for every frame of a deck
+/// already in phase.
+#[kithara::test]
+#[case::off_the_beat_near_the_covered_end(
+    480_000,
+    NEAR_THE_COVERED_END,
+    A_THIRD_OF_A_BEAT_BEHIND,
+    477_000,
+    476_000,
+    true
+)]
+#[case::in_phase(960_000, 0, 0, 96_000, 48_000, false)]
+fn a_tempo_action_moves_a_deck_once_only_past_what_a_slew_closes(
+    #[case] covered: u32,
+    #[case] now: u32,
+    #[case] at: u32,
+    #[case] later: i64,
+    #[case] step: i64,
+    #[case] moves: bool,
+) {
+    let (mut host, clock) = host();
+    clock.at(i64::from(now));
+    let (deck, control, mut rig, _) = synced(grid(24_000, 0, Some((4, 0)), covered));
+    sound(&control, &mut rig, now, at);
+    let (_, probe) = register(&mut host, deck, &control);
+    let committed = tempo(&mut host, 120.5, later)
+        .expect("later tempo")
+        .expect("later sequence");
+    clock.answer(committed, 120.5, Ok(SessionFrame::new(later)));
+    finish(&mut host);
+    control.clear();
+    tempo(&mut host, 121.0, step)
+        .expect("tempo")
+        .expect("sequence");
+    let commands = control.commands();
+    if moves {
+        let landings = jumps(&control);
+        let [(to, at)] = landings.as_slice() else {
+            panic!("one jump: {commands:?}");
+        };
+        let bar = (to.as_secs_f64() * 2.0 - beats(&probe, i64::from(*at))).rem_euclid(4.0);
+        assert!(
+            bar.min(4.0 - bar) < 1e-3,
+            "{to:?} on {at:?} lands {bar} beats off the host bar: {commands:?}"
+        );
+    } else {
+        assert_eq!(commands.len(), 2, "{commands:?}");
+        assert!(
+            commands
+                .iter()
+                .all(|(_, command)| matches!(command, Command::Speed(..))),
+            "{commands:?}"
+        );
+    }
 }
 
 #[kithara::test]
@@ -522,6 +582,11 @@ fn route_restart_preserves_modes_and_media_grids_on_a_new_rate() {
     });
     off_probe.read(|observation| assert_eq!(observation.snapshot.sync, SyncStatus::Off));
     assert!(off_control.commands().is_empty());
+    host.apply(LinkedHostCommand::Sync {
+        deck: id,
+        on: false,
+    })
+    .expect("off");
     on_control.clear();
     host.apply(LinkedHostCommand::Sync { deck: id, on: true })
         .expect("explicit alignment with preserved grid");
@@ -742,25 +807,11 @@ fn rejected_next_tempo_replans_with_lane_lead_and_keeps_the_caller() {
 #[kithara::test]
 fn a_newer_next_tempo_supersedes_a_rejected_older_one() {
     let (mut host, clock) = host();
-    let older = host
-        .apply(
-            HostCommand::Configure(
-                HostSettingsChange::Tempo(Tempo::new(180.0).expect("tempo")),
-                When::Next,
-            )
-            .into(),
-        )
+    let older = next_tempo(&mut host, 180.0)
         .expect("older")
         .expect("sequence");
     clock.at(128);
-    let newer = host
-        .apply(
-            HostCommand::Configure(
-                HostSettingsChange::Tempo(Tempo::new(90.0).expect("tempo")),
-                When::Next,
-            )
-            .into(),
-        )
+    let newer = next_tempo(&mut host, 90.0)
         .expect("newer")
         .expect("sequence");
     clock.answer(older, 180.0, Err(Rejection::Late));
@@ -783,10 +834,145 @@ fn a_newer_next_tempo_supersedes_a_rejected_older_one() {
     finish(&mut host);
 }
 
+/// Where the older `When::Next` tempo stands when the newer one arrives.
+enum Older {
+    Planned(Option<Rejection<PlayError>>),
+    Replanned,
+    Parked,
+}
+
+/// The newer tempo; `At` names its distance from the older step.
+#[derive(Clone, Copy)]
+enum Newer {
+    Next,
+    At(i64),
+}
+
+fn full() -> Rejection<PlayError> {
+    Rejection::Refused(PlayError::Full("host"))
+}
+
+#[kithara::test]
+#[case::planned_applied_next(Older::Planned(None), Newer::Next)]
+#[case::planned_late_next(Older::Planned(Some(Rejection::Late)), Newer::Next)]
+#[case::planned_full_next(Older::Planned(Some(full())), Newer::Next)]
+#[case::planned_applied_at_same_frame(Older::Planned(None), Newer::At(0))]
+#[case::planned_applied_at_later_frame_keeps_its_step(Older::Planned(None), Newer::At(128))]
+#[case::planned_full_at_same_frame(Older::Planned(Some(full())), Newer::At(0))]
+#[case::planned_full_at_later_frame(Older::Planned(Some(full())), Newer::At(128))]
+#[case::replanned_next(Older::Replanned, Newer::Next)]
+#[case::replanned_at_later_frame(Older::Replanned, Newer::At(128))]
+#[case::parked_next(Older::Parked, Newer::Next)]
+#[case::parked_at_same_frame(Older::Parked, Newer::At(0))]
+#[case::parked_at_later_frame(Older::Parked, Newer::At(128))]
+fn a_newer_tempo_replaces_what_it_can(#[case] standing: Older, #[case] arriving: Newer) {
+    let (mut host, clock) = host();
+    let (deck, control, _, _) = sounding();
+    let (_, probe) = register(&mut host, deck, &control);
+    let older = next_tempo(&mut host, 180.0)
+        .expect("older")
+        .expect("sequence");
+    if !matches!(standing, Older::Planned(_)) {
+        clock.answer(older, 180.0, Err(full()));
+    }
+    if matches!(standing, Older::Parked) {
+        let room = clock.edit(|script| std::mem::replace(&mut script.room, 0));
+        assert!(finish(&mut host).is_empty());
+        assert_eq!(clock.edit(|script| script.sent.len()), 1);
+        clock.edit(|script| script.room = room);
+    } else if matches!(standing, Older::Replanned) {
+        assert!(finish(&mut host).is_empty());
+    }
+    let (retry, When::At(step), sent) = clock.edit(|script| {
+        let last = script.sent.last().expect("older tempo sent");
+        (last.0, last.2, script.sent.len())
+    }) else {
+        panic!("a planned tempo names its frame");
+    };
+    let step = i64::from(step);
+    let frame = match arriving {
+        Newer::Next => step,
+        Newer::At(after) => step + after,
+    };
+    probe.clear();
+    let newer = match arriving {
+        Newer::Next => next_tempo(&mut host, 90.0),
+        Newer::At(_) => tempo(&mut host, 90.0, frame),
+    }
+    .expect("newer")
+    .expect("sequence");
+    let (last, admitted) = clock.edit(|script| (script.sent[sent].2, script.sent.len()));
+    assert_eq!(admitted, sent + 1);
+    assert_eq!(last, When::At(SessionFrame::new(frame)));
+    let target = |probe: &Probe, frame: i64| {
+        probe
+            .trajectory()
+            .anchor_at(SessionFrame::new(frame))
+            .target_beats_per_second()
+    };
+    assert_eq!(
+        probe.read(|observation| observation.trajectories[0].0),
+        SessionFrame::new(frame)
+    );
+    let at_step = match standing {
+        _ if frame == step => 1.5,
+        Older::Parked => 2.0,
+        Older::Planned(_) | Older::Replanned => 3.0,
+    };
+    assert_eq!(target(&probe, step), at_step);
+    assert!(
+        matches!(control.commands().last(), Some((_, Command::Speed(_, When::At(speed))))
+            if *speed == SessionFrame::new(frame))
+    );
+    let applied_aside = frame != step && matches!(standing, Older::Planned(None));
+    let mut settled = host.pass();
+    assert_eq!(
+        settled.len(),
+        usize::from(matches!(standing, Older::Parked))
+    );
+    clock.at(frame);
+    match standing {
+        Older::Planned(rejection) => clock.answer(
+            older,
+            180.0,
+            rejection.map_or_else(|| Ok(SessionFrame::new(step)), Err),
+        ),
+        Older::Replanned => {
+            assert_ne!(retry, older);
+            clock.answer(retry, 180.0, Err(Rejection::Late));
+        }
+        Older::Parked => {}
+    }
+    clock.answer(newer, 90.0, Ok(SessionFrame::new(frame)));
+    settled.extend(finish(&mut host));
+    assert!(matches!(
+        settled.as_slice(),
+        [
+            HostSettled::Settings { seq: first, outcome: answered, .. },
+            HostSettled::Settings { seq: second, outcome: Ok(_), .. },
+        ] if *first == older && *second == newer && match answered {
+            Ok(_) => applied_aside,
+            Err(Rejection::Refused(PlayError::Superseded)) => !applied_aside,
+            Err(_) => false,
+        }
+    ));
+    assert_eq!(clock.edit(|script| script.sent.len()), admitted);
+    let at_step = if frame == step {
+        1.5
+    } else if applied_aside {
+        3.0
+    } else {
+        2.0
+    };
+    assert_eq!(target(&probe, step), at_step);
+    assert_eq!(target(&probe, frame), 1.5);
+    assert_eq!(bpm(&probe, frame + 48_000), 90.0);
+}
+
 #[kithara::test]
 fn ordinary_members_keep_their_law_while_linked_members_follow_host_tempo() {
     let (mut host, clock) = host();
-    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
+    clock.edit(|script| script.clock = Some(PassClock::default()));
     let (plain, ordinary) = ordinary();
     let ordinary_id = register_ordinary(&mut host, plain);
     let (linked, linked_control, _, _) = sounding();
@@ -824,7 +1010,7 @@ fn addressed_link_commands_refuse_ordinary_and_missing_members_without_retiming(
     let (mut host, _) = host();
     let (plain, ordinary) = ordinary();
     let ordinary_id = register_ordinary(&mut host, plain);
-    let (linked, control, _, load) = sounding();
+    let (linked, control, _, _) = sounding();
     let (_, probe) = register(&mut host, linked, &control);
     probe.clear();
     let before = probe.read(|observation| observation.snapshot.clone());
@@ -838,7 +1024,6 @@ fn addressed_link_commands_refuse_ordinary_and_missing_members_without_retiming(
                     deck: id,
                     answer: GridAnswer {
                         item: before.as_ref().item,
-                        load,
                         model: Ok(grid(24_000, 0, Some((4, 0)), 960_000)),
                     },
                 },

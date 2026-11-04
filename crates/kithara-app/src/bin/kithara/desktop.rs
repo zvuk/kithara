@@ -4,12 +4,7 @@ use kithara::{
     platform::{CancelToken, tokio},
 };
 use kithara_app::{
-    config::AppConfig,
-    document::Config,
-    gui,
-    logging::init_tracing,
-    memory, plugins,
-    pools::{self, AppHost},
+    config::AppConfig, document::Config, gui, logging::init_tracing, memory, plugins, pools,
 };
 use kithara_app_library::{Environment, Secrets};
 
@@ -130,7 +125,7 @@ pub(super) fn main(shutdown: CancelToken) -> AppResult {
         config.ui_package = Some(package);
     }
 
-    let host = AppHost::new(
+    let host = pools::host(
         HostConfig::builder()
             .settings(
                 HostSettings::builder()

@@ -212,7 +212,7 @@ jobs:
       - name: Upload the raw stress evidence
         if: always()
         id: raw-upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/kithara-stress/raw
@@ -223,7 +223,7 @@ jobs:
     name: Report evidence
     needs: execute
     if: ${{ always() && needs.execute.result != 'skipped' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, kithara-report]
     timeout-minutes: 30
     steps:
       - name: Checkout controller
@@ -236,29 +236,11 @@ jobs:
 
       - name: Download every shard's evidence
         if: always()
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-shard-*
-          path: raw
+          path: ${{ runner.temp }}/kithara-stress/raw
           merge-multiple: true
-
-      - name: Install just
-        if: always()
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
-        with:
-          tool: just
-
-      # The reporting boundary is a GitHub-hosted runner on purpose, and that
-      # image carries no audio headers. The renderer reaches the workspace
-      # feature-unification crate through `kithara-derive`, which turns on
-      # firewheel's `cpal` feature, so building it links ALSA on Linux even
-      # though rendering a report never touches audio. Without this the job
-      # fails in `alsa-sys` before it reads a single result file.
-      - name: Install the audio headers the renderer links
-        if: always()
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes libasound2-dev
 
       - name: Verify and render the stress evidence
         if: always()
@@ -275,9 +257,9 @@ jobs:
         run: |
           args=()
           # One root per shard: each artifact carries its evidence under `shard-<index>`.
-          for raw in "$GITHUB_WORKSPACE"/raw/shard-*; do args+=(--raw "$raw"); done
+          for raw in "$RUNNER_TEMP"/kithara-stress/raw/shard-*; do args+=(--raw "$raw"); done
           args+=(
-            --output "$GITHUB_WORKSPACE/target/stress-report.md"
+            --output "$RUNNER_TEMP/kithara-stress/stress-report.md"
             --expected-controller-sha "$CONTROLLER_SHA"
             --expected-subject-sha "$SUBJECT_SHA"
             --execute-result "$EXECUTE_RESULT"
@@ -287,23 +269,31 @@ jobs:
           [[ -z "$TIER" ]] || args+=(--tier "$TIER")
           for mode in $MODE; do args+=(--mode "$mode"); done
           for lane in $LANE; do args+=(--lane "$lane"); done
-          just ci stress-report "${args[@]}"
+          just ci cache-exec stress-report just ci stress-report "${args[@]}"
+
+      - name: Upload report compiler-cache evidence
+        if: ${{ always() && hashFiles(format('controller/.ci-artifacts/cache/github-{0}-{1}-*.json', github.run_id, github.run_attempt)) != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compiler-cache-stress-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: controller/.ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json
+          if-no-files-found: error
 
       - name: Add the stress summary
         if: always()
         run: |
-          if [[ -s "$GITHUB_WORKSPACE/target/stress-report.md" ]]; then
-            cat "$GITHUB_WORKSPACE/target/stress-report.md" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -s "$RUNNER_TEMP/kithara-stress/stress-report.md" ]]; then
+            cat "$RUNNER_TEMP/kithara-stress/stress-report.md" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Stress report was not produced." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload the stress evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: stress-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            raw
-            target/stress-report.md
+            ${{ runner.temp }}/kithara-stress/raw
+            ${{ runner.temp }}/kithara-stress/stress-report.md
           retention-days: 14

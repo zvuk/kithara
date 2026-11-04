@@ -284,6 +284,10 @@ impl<S> Track<S> for PlayerImpl<S> {
             .and_then(LaneOperation::applied)
     }
 
+    fn attached(&self) -> bool {
+        Self::attached(self)
+    }
+
     fn cue(
         &mut self,
         position: Position,

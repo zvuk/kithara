@@ -11,6 +11,9 @@
 
 use std::{env, fs::OpenOptions, io::Write as _, path::Path, process::ExitCode};
 
+#[cfg(unix)]
+mod kache;
+
 /// The environment this double reads its whole behaviour from.
 mod consts {
     /// File the arguments of each run are appended to, one line per run,
@@ -30,6 +33,17 @@ mod consts {
 }
 
 fn main() -> ExitCode {
+    #[cfg(unix)]
+    if env::args().nth(1).as_deref() == Some("--kache-stats-socket") {
+        return kache::serve().unwrap_or_else(|_| fail("serving compiler-cache statistics"));
+    }
+    #[cfg(unix)]
+    if env::args().nth(1).as_deref() == Some("--kache-start") {
+        return match kache::start() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => fail("starting compiler-cache socket"),
+        };
+    }
     let role = env::args_os()
         .next()
         .map(|argv0| {
@@ -59,12 +73,22 @@ fn main() -> ExitCode {
     if let Some(text) = env::var_os(consts::STDERR) {
         eprint!("{}", text.to_string_lossy());
     }
-    ExitCode::from(exit_code(
+    let code = exit_code(
         &env::var(consts::RULES).unwrap_or_default(),
         &role,
         first,
         &scenario,
-    ))
+    );
+    #[cfg(unix)]
+    if code == 0
+        && role == "kache"
+        && args == ["daemon", "start"]
+        && let Err(error) = kache::start()
+    {
+        eprintln!("{error}");
+        return fail("starting compiler-cache socket");
+    }
+    ExitCode::from(code)
 }
 
 fn fail(what: &str) -> ExitCode {

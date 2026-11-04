@@ -11,9 +11,7 @@ use kithara_dsp::{
     filter::{Biquad, Coefficients, Hertz, Type},
     interp::{InterpError, Interpolation, interpolate},
 };
-#[cfg(feature = "spectrum")]
-use kithara_test_utils::bufpool::pools;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::pools, kithara};
 
 #[global_allocator]
 static ALLOCATOR: AllocDisabler = AllocDisabler;
@@ -189,11 +187,17 @@ fn elementwise_kernels_and_fade_gains_never_allocate() {
     assert_no_alloc(|| {
         assert_eq!(kithara_dsp::ramp(&mut positions, 0.0, 1.0), FRAMES);
         assert_eq!(kithara_dsp::div(&mut positions, 1_023.0), FRAMES);
+        assert_eq!(kithara_dsp::scale_in_place(&mut acc, -0.75), FRAMES);
         assert_eq!(kithara_dsp::affine(&mut acc, 0.5, 0.25), FRAMES);
         assert_eq!(kithara_dsp::sub(&mut acc, &input), FRAMES);
         assert_eq!(kithara_dsp::scale_add(&input, 0.5, &mut acc), FRAMES);
         assert_eq!(kithara_dsp::mul_add(&input, &input, &mut acc), FRAMES);
         assert_eq!(kithara_dsp::add(&input, &mut acc), FRAMES);
+        assert_eq!(kithara_dsp::multiply_in_place(&mut acc, &input), FRAMES);
+        assert_eq!(kithara_dsp::scale_in_place(&mut acc[..1], -0.75), 1);
+        assert_eq!(kithara_dsp::scale_in_place(&mut acc[..3], -0.75), 3);
+        assert_eq!(kithara_dsp::multiply_in_place(&mut acc[..1], &input), 1);
+        assert_eq!(kithara_dsp::multiply_in_place(&mut acc, &input[..1]), 1);
         for curve in [
             FadeCurve::EqualPower3dB,
             FadeCurve::EqualPower6dB,
@@ -225,4 +229,27 @@ fn downmix_never_allocates_at_any_channel_count() {
             );
         }
     });
+}
+
+#[kithara::test(native)]
+fn delay_reads_writes_and_reset_never_allocate() {
+    let mut line = kithara_dsp::delay::DelayLine::new(TWO, PLANE, &pools()).expect("line fits");
+    let integer = line.tap(512.0).expect("tap in range");
+    let fractional = line.tap(300.5).expect("tap in range");
+    let input = vec![vec![0.25_f32; FRAMES]; TWO.get()];
+    let mut output = vec![0.0_f32; 256];
+    assert_no_alloc(|| {
+        for _ in 0..4 {
+            line.write(&input, 0..FRAMES)
+                .expect("planes cover the block");
+            for channel in 0..TWO.get() {
+                line.read(channel, integer, &mut output)
+                    .expect("span within delay");
+                line.read(channel, fractional, &mut output)
+                    .expect("span within delay");
+            }
+        }
+        line.reset();
+    });
+    assert!(output.iter().all(|sample| *sample == 0.25));
 }

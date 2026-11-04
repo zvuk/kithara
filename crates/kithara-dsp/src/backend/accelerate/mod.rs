@@ -5,7 +5,8 @@ mod spectrum;
 pub(crate) use kithara_apple::accelerate::{
     add_f32 as add, affine_f32 as affine, deinterleave_pair_f32 as deinterleave_pair,
     downmix_pair_f32 as downmix_pair, interleave_pair_f32 as interleave_pair,
-    scale_add_f32 as scale_add, sub_f32 as sub, sum_squares_f32 as sum_squares,
+    multiply_in_place_f32 as multiply_in_place, scale_add_f32 as scale_add, sub_f32 as sub,
+    sum_squares_f32 as sum_squares,
 };
 
 pub(crate) use self::interpolate::interpolate;

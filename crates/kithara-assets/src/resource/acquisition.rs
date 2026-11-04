@@ -49,6 +49,8 @@ pub enum AcquisitionResult<A, R> {
     Pending(A),
     /// Resource is readable now.
     Ready(R),
+    /// Another party owns the in-flight writer; the reader views its generation.
+    Joined(R),
 }
 
 impl<A, R> AcquisitionResult<A, R> {

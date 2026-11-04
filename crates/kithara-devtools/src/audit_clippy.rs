@@ -102,8 +102,7 @@ fn clippy_command(args: &AuditClippyArgs, ctx: &Ctx, fix: bool) -> Command {
     for lint in &ctx.config.audit_clippy.lints {
         cmd.arg("--force-warn").arg(format!("clippy::{lint}"));
     }
-    cmd.env_remove("RUSTC_WRAPPER")
-        .env_remove("CARGO_INCREMENTAL")
+    cmd.env("CARGO_INCREMENTAL", "0")
         .env("CARGO_TARGET_DIR", ctx.root.join("target-audit-clippy"));
     cmd
 }
@@ -352,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn clippy_passes_disable_sccache_and_keep_incremental_builds() {
+    fn clippy_passes_keep_the_compiler_cache_and_disable_incremental_builds() {
         let args = AuditClippyArgs {
             paths: Vec::new(),
             fix: true,
@@ -365,8 +364,11 @@ mod tests {
             clippy_command(&args, &ctx, true),
             clippy_command(&args, &ctx, false),
         ] {
-            assert_eq!(command_env(&command, "RUSTC_WRAPPER"), Some(None));
-            assert_eq!(command_env(&command, "CARGO_INCREMENTAL"), Some(None));
+            assert_eq!(command_env(&command, "RUSTC_WRAPPER"), None);
+            assert_eq!(
+                command_env(&command, "CARGO_INCREMENTAL"),
+                Some(Some("0".to_owned()))
+            );
         }
     }
 

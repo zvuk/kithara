@@ -2975,13 +2975,44 @@ async fn dispatch_owed_covers_the_range_the_reader_waits_on() {
     assert_eq!(
         got,
         vec![
+            v.segments()[4].url().clone(),
             v.segments()[0].url().clone(),
             v.segments()[1].url().clone(),
             v.segments()[2].url().clone(),
             v.segments()[3].url().clone(),
-            v.segments()[4].url().clone(),
         ],
         "the owed window runs through the segments the parked read waits on"
+    );
+}
+
+#[kithara::test(tokio)]
+async fn a_queued_reader_demand_uses_the_next_download_slot() {
+    let ctx = test_ctx(1);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+    let revision = v.flow.queue.revision();
+    let parked = v.wait_range(400..401, Some(Duration::ZERO));
+    assert!(matches!(
+        parked,
+        Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+    ));
+
+    let commands = session.dispatch(&ctx, 1);
+
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].url(), v.segments()[4].url());
+    assert_eq!(v.flow.queue.revision(), revision);
+    assert_eq!(
+        v.flow.queue.lock().iter().copied().collect::<Vec<_>>(),
+        vec![
+            PlannedFetch::Segment(0),
+            PlannedFetch::Segment(1),
+            PlannedFetch::Segment(2),
+            PlannedFetch::Segment(3),
+            PlannedFetch::Segment(5),
+        ],
+        "reader demand moves ahead without duplicating it or discarding prefetch"
     );
 }
 
@@ -3070,6 +3101,41 @@ async fn retire_lookahead_spares_the_owed_window() {
                 .expect("segment cmd carries a cancel token")
                 .is_cancelled(),
             "owed fetch for segment {seg} must stay live"
+        );
+    }
+}
+
+/// A reader still inside the init prefix owes segment 0, so the prefetch
+/// dispatched from there is look-ahead like any other: a transition retires it
+/// instead of letting it hold downloader capacity the construction waits on.
+#[kithara::test(tokio)]
+async fn retire_lookahead_burns_prefetch_dispatched_from_the_init_prefix() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 48, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+    let init_url = v.init().expect("declared init").url().clone();
+    let cmds = session.dispatch(&ctx, 10);
+    assert_eq!(
+        cmds.len(),
+        7,
+        "precondition: the init and every segment dispatch"
+    );
+
+    for token in session.take_retired_lookahead(Duration::ZERO) {
+        token.cancel();
+    }
+
+    for cmd in cmds.iter().filter(|cmd| *cmd.url() != init_url) {
+        let seg = seg_idx_by_url(&v, cmd.url());
+        let cancelled = cmd
+            .cancel()
+            .expect("segment cmd carries a cancel token")
+            .is_cancelled();
+        assert_eq!(
+            cancelled,
+            seg > 1,
+            "segment {seg}: only fetches past segment 0 and its successor are retired"
         );
     }
 }
@@ -3597,30 +3663,30 @@ async fn an_eviction_that_overtakes_the_settle_keeps_the_segment_owed() {
 /// it itself: bytes another writer committed meanwhile make it loaded, not a
 /// `Downloading` slot with no fetch behind it.
 #[kithara::test(tokio)]
-async fn a_cancelled_fetch_settles_a_segment_another_writer_committed() {
+async fn a_fetch_deferred_on_a_live_writer_loads_once_it_commits() {
     let ctx = test_ctx(1);
     let v = make_var(0, 0, &[64], &ctx);
     let root = CancelToken::root();
     let session = HlsSession::active(root, ctx.signal.clone(), 0, Arc::clone(&v), 0);
+    let key = v.segments()[0].resource_id().clone();
+    let AcquisitionResult::Pending(writer) = ctx
+        .scope
+        .store()
+        .acquire_resource(&key, None)
+        .expect("acquire segment")
+    else {
+        panic!("the other party must own the writer");
+    };
     push_planned(&v, 0);
-    let mut cmds = session.dispatch(&ctx, 1);
-    let on_complete = cmds
-        .first_mut()
-        .and_then(kithara_download::FetchCmd::take_on_complete)
-        .expect("the dispatched fetch settles through its completion");
-    write_seg_bytes(&v, &ctx, 0, 64);
-    assert!(
-        v.segments()[0].contains(&ctx.scope, 0..64),
-        "precondition: another writer committed the bytes"
-    );
-    session.abort();
 
-    on_complete(0, None, Some(&kithara_net::NetError::Cancelled));
+    assert!(session.dispatch(&ctx, 1).is_empty());
+    assert!(!v.segments()[0].state().is_downloading());
 
-    assert!(
-        v.segments()[0].state().is_loaded(),
-        "the committed segment must settle loaded, not stay claimed by a finished fetch"
-    );
+    writer.write_at(0, &[7; 64]).expect("write segment");
+    writer.commit(Some(64)).expect("commit segment");
+    assert!(session.dispatch(&ctx, 1).is_empty());
+
+    assert!(v.segments()[0].state().is_loaded());
 }
 
 fn disk_ctx(root: &std::path::Path) -> PlanCtx {

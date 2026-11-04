@@ -26,7 +26,7 @@ on:
           entries that still answer to their name and only a deliberate run
           replaces them. Dispatch the pipeline once with this set, and leave
           it unset afterwards.
-        default: ''
+        default: ""
         type: string
       kind:
         description: Pipeline kind the lane runs under, for `xtask ci lane --kind`.
@@ -45,11 +45,11 @@ on:
         type: boolean
       artifact-name:
         description: Name of the artifact to upload, when the lane leaves one.
-        default: ''
+        default: ""
         type: string
       artifact-path:
         description: Path the artifact is collected from. Empty uploads nothing.
-        default: ''
+        default: ""
         type: string
       artifact-when:
         description: >-
@@ -61,17 +61,17 @@ on:
         description: >-
           Name of an artifact this lane downloads before it runs, when it
           depends on one lane's output. Empty downloads nothing.
-        default: ''
+        default: ""
         type: string
       runner:
         description: Stable runner label for a lane-owned persistent build cache.
-        default: ''
+        default: ""
         type: string
       narrow:
         description: >-
           Nextest filterset the lane's test suite is narrowed to. Empty narrows
           nothing; a lane with no suite refuses one.
-        default: ''
+        default: ""
         type: string
 
 # Not inherited from the caller: a called workflow gets its own environment.
@@ -121,7 +121,7 @@ jobs:
       # whether anything is collected at all.
       - name: Fetch what this lane reads
         if: ${{ inputs.download != '' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
 
@@ -143,10 +143,12 @@ jobs:
 
       - name: Upload compiler-cache evidence
         if: ${{ always() && hashFiles(format('.ci-artifacts/cache/github-{0}-{1}-{2}.json', github.run_id, github.run_attempt, inputs.lane)) != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: compiler-cache-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.lane }}.json
+          path: |
+            .ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.lane }}.json
+            .ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-bootstrap*.json
           if-no-files-found: error
 
       # `ci lane` copies this job's reports out of the slot it held into the
@@ -155,7 +157,7 @@ jobs:
       # nothing to upload.
       - name: Upload Cargo timing report
         if: ${{ always() && env.KITHARA_LANE_TIMINGS != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cargo-timings-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.KITHARA_LANE_TIMINGS }}
@@ -172,7 +174,7 @@ jobs:
       # claim broken, not a reason to warn and move on.
       - name: Upload the lane's report
         if: ${{ always() && inputs.artifact-path != '' && (inputs.artifact-when == 'always' || failure()) }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ inputs.artifact-path }}

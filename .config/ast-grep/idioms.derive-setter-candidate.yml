@@ -3,7 +3,14 @@ message: Trivial setter; prefer direct field access at the right visibility or a
 severity: warning
 language: Rust
 files: ["crates/**/*.rs"]
-ignores: ["**/tests/**", "**/test_*.rs", "**/*_test.rs", "**/*_tests.rs", "**/tests.rs"]
+ignores:
+  [
+    "**/tests/**",
+    "**/test_*.rs",
+    "**/*_test.rs",
+    "**/*_tests.rs",
+    "**/tests.rs",
+  ]
 rule:
   all:
     - any:

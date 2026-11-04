@@ -33,6 +33,6 @@ rule:
     - pattern: $X.ends_with($S)
 constraints:
   X:
-    regex: '^(msg|message|err|error|reason|cause|text|body|err_str|err_string|http_err_str|err_msg|error_msg|error_string|error_str)$'
+    regex: "^(msg|message|err|error|reason|cause|text|body|err_str|err_string|http_err_str|err_msg|error_msg|error_string|error_str)$"
   S:
     kind: string_literal

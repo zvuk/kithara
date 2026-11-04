@@ -7,7 +7,7 @@ use kithara_platform::{thread::JoinHandle, time::Duration};
 #[cfg(feature = "offline")]
 use kithara_play::{DeckPass, HostedDeck, Outbox};
 #[cfg(feature = "offline")]
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
 #[cfg(feature = "offline")]
 use kithara_test_utils::{bufpool::TestPools, wait_until_blocking};
@@ -118,7 +118,7 @@ impl HostOwner<TestPools> for RigOwner {
             fn transport(&mut self) -> Option<crate::api::SessionTransportSnapshot>;
             fn begin_pass(&mut self);
             fn pass(&mut self) -> Vec<HostSettled>;
-            fn clock(&self) -> Option<(SessionFrame, FrameCount)>;
+            fn clock(&self) -> Option<crate::PassClock>;
             fn host_room(&self) -> usize;
         }
     }
@@ -190,20 +190,7 @@ fn shut_down(client: &SessionClient<Command>, worker: JoinHandle<()>) {
 
 #[cfg(feature = "offline")]
 fn ask(client: &SessionClient<Command>, command: Command) -> Result<(), &'static str> {
-    let command_name = match &command {
-        Command::Host(command) => match command {
-            HostCommand::Register { .. } => "Register",
-            HostCommand::Configure(..) => "Configure",
-            HostCommand::Close(_) => "Close",
-            HostCommand::Release(_) => "Release",
-            HostCommand::AttachOutputs { .. } => "AttachOutputs",
-            HostCommand::DetachOutputs { .. } => "DetachOutputs",
-            HostCommand::Restart => "Restart",
-            HostCommand::_Marker(_) => "_Marker",
-        },
-        Command::Render { .. } => "Render",
-    };
-    dispatch(client, command, command_name).map_err(|_| "native command refused")
+    dispatch(client, command).map_err(|_| "native command refused")
 }
 
 #[cfg(feature = "offline")]
