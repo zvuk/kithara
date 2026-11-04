@@ -394,16 +394,12 @@ and is restarted forever, so health checks each `always_on_agents` process, not
 the loaded service: a missing one looks like nothing from outside, its jobs
 sitting `pending` while the pipeline reads as hung.
 
-launchd starts no second instance while the first is alive, so a wedged pass
-silences `StartInterval` outright: one hung for over a day inside `opendir` on a
-volume that had stopped answering, and nothing said so. A watchdog thread ends
-the process at `cleanup_deadline_seconds`, thirty minutes by default, so the
-next tick gets a machine that can try again. It cannot be a check between steps,
-because such a pass never reaches the next step. The Linux host holds the same
-deadline through systemd: the oneshot `kithara-ci-cleanup.service` carries
-`TimeoutStartSec` from the Linux profile's `cleanup_deadline_seconds`, because a
-oneshot otherwise never times out and its timer starts no second pass while one
-is still starting.
+Neither scheduler starts a second pass while one is alive, so a wedged pass
+silences cleanup: one hung for over a day inside `opendir` on a volume that had
+stopped answering, and nothing said so. Each host ends a pass at its profile's
+`cleanup_deadline_seconds`, 30 minutes by default: a watchdog thread on the
+Mac, `TimeoutStartSec` on the Linux oneshot. It cannot be a check between
+steps, because such a pass never reaches the next step.
 
 ## GitLab project settings
 
