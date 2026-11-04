@@ -5,9 +5,7 @@ use std::num::NonZeroUsize;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 #[cfg(feature = "spectrum")]
-use kithara_dsp::spectrum::{
-    Autocorrelation, Fft, FftLen, magnitude, phase, prediction_difference,
-};
+use kithara_dsp::spectrum::{Autocorrelation, Fft, FftLen, prediction_difference};
 use kithara_dsp::{
     fade::{self, FadeCurve},
     filter::{Biquad, Coefficients, Hertz, Type},
@@ -141,35 +139,10 @@ fn spectrum_never_allocates_after_construction() {
         Fft::new(FftLen::new(FRAMES).expect("1024 is an FFT length")).expect("the FFT builds");
     let mut spectrum = fft.spectrum(&pools()).expect("the planes fit the region");
     let frame = vec![0.25_f32; FRAMES];
-    let mut bins = vec![0.0_f32; FRAMES / 2 + 1];
     assert_no_alloc(|| {
         fft.forward(&frame, &mut spectrum).expect("the frame fits");
         fft.forward(&frame[..FRAMES / 2], &mut spectrum)
             .expect("a short frame fits");
-        assert_eq!(
-            magnitude(spectrum.re(), spectrum.im(), &mut bins),
-            FRAMES / 2 + 1
-        );
-        assert_eq!(
-            phase(spectrum.re(), spectrum.im(), &mut bins),
-            FRAMES / 2 + 1
-        );
-    });
-}
-
-#[cfg(feature = "spectrum")]
-#[kithara::test(native)]
-fn phase_never_allocates_for_prefixes_and_offsets() {
-    let re = [0.75_f32; FRAMES + 5];
-    let im = [-0.25_f32; FRAMES + 5];
-    let mut output = [0.0_f32; FRAMES + 5];
-    assert_no_alloc(|| {
-        for len in [0, 1, 2, 7, 255, 256, 257, 512, 513, 1025] {
-            assert_eq!(
-                phase(&re[1..len + 1], &im[2..len + 3], &mut output[3..]),
-                len
-            );
-        }
     });
 }
 

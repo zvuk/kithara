@@ -81,8 +81,6 @@ assert_eq!(samples, [0.0, 0.5]);
 
 <tr><td><code>spectrum::Fft</code></td><td>Real FFT of a Hann-windowed frame into a <code>Spectrum</code> of <code>N/2 + 1</code> unscaled bins; a short frame is zero-padded; <code>new</code> allocates, <code>spectrum</code> takes its sample planes from the caller's pool region and, off Apple, allocates the complex ones, <code>forward</code> does neither</td></tr>
 
-<tr><td><code>spectrum::magnitude</code> / <code>spectrum::phase</code></td><td>Magnitude and phase (<code>atan2</code>) of each bin from its real and imaginary parts, through one <code>fearless_simd</code> kernel on every target</td></tr>
-
 <tr><td><code>spectrum::prediction_difference</code></td><td>Complex spectral difference from caller-owned history of the two previous spectra; vector arithmetic without transcendentals and no allocation</td></tr>
 
 <tr><td><code>spectrum::Autocorrelation</code></td><td>Unbiased autocorrelation of a frame over lags <code>0..N</code>; <code>new</code> takes its zero padding from the caller's pool region, <code>process</code> does not allocate</td></tr>

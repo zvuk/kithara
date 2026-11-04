@@ -111,6 +111,59 @@ fn sequences_follow_the_phase_law_and_shift_the_history() {
     }
 }
 
+/// Three frames of `len` bins at one `radius`, each bin turning by its own
+/// constant step; the last frame sits `nudge` radians past its prediction.
+fn turning(radius: f32, nudge: f32, len: u16) -> [[Vec<f32>; 2]; 3] {
+    std::array::from_fn(|frame| {
+        let at = f32::from(u8::try_from(frame).expect("three frames"));
+        (0..len)
+            .map(|bin| {
+                let bin = f32::from(bin);
+                let past = if frame == 2 { nudge } else { 0.0 };
+                let (sin, cos) = (0.37 * bin + at * 0.11 * (bin + 1.0) + past).sin_cos();
+                (radius * cos, radius * sin)
+            })
+            .unzip::<_, _, Vec<_>, Vec<_>>()
+            .into()
+    })
+}
+
+#[kithara::test]
+fn sequences_follow_the_phase_law_at_both_ends_of_the_magnitude_domain() {
+    // At the bottom a residual of 2.5e-23 squares to zero; at the top an
+    // opposite bin doubles the magnitude the difference squares.
+    for (radius, nudge) in [(2.0e-18, 2.5e-23 / 2.0e-18), (9.2e18, std::f32::consts::PI)] {
+        let mut history: [Vec<f32>; 4] = std::array::from_fn(|_| vec![0.0; 17]);
+        let mut state = std::array::from_fn(|_| vec![0.0; 17]);
+        for (frame, [re, im]) in turning(radius, nudge, 17).into_iter().enumerate() {
+            let want = law(&re, &im, &mut state);
+            let got = prediction_difference([&re, &im], history.each_mut().map(Vec::as_mut_slice));
+            assert!(
+                within(got, want),
+                "radius {radius:e}, frame {frame}: {got} vs {want:?}"
+            );
+        }
+    }
+}
+
+#[kithara::test]
+fn an_earlier_bin_whose_square_rounds_to_zero_counts_as_silent() {
+    let run = |earlier: f32| {
+        let mut history = [
+            vec![0.75_f32, -0.5],
+            vec![0.25, 1.0],
+            vec![earlier, -earlier],
+            vec![0.0, earlier],
+        ];
+        prediction_difference(
+            [&[0.5, -1.0], &[1.5, 0.25]],
+            history.each_mut().map(Vec::as_mut_slice),
+        )
+        .to_bits()
+    };
+    assert_eq!(run(1.0e-23), run(0.0));
+}
+
 #[kithara::test]
 fn offsets_and_short_planes_bound_the_prefix_and_keep_tails() {
     const GUARD: f32 = -7.0;
