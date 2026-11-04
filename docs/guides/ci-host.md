@@ -125,10 +125,9 @@ throttles Cargo and the single-threaded source linters.
 ## Pipeline scheduling
 
 Dispatch waits for its child's verdict without holding a host resource group.
-Independent pipelines can therefore fill the runner's available slots. Each
-measured child job holds the `kithara-suite-<job>` group named after itself, so
-two runs of one measured job never overlap while different measured jobs may;
-the runner limits total parallelism, each job owns its checkout and
+Independent pipelines can therefore fill the runner's available slots. A
+measured child job holds `kithara-suite-<job>`, so only runs of one job
+serialize; the runner limits total parallelism, each job owns its checkout and
 compiler-cache slot, and the verdict journal locks its read-modify-write
 transaction. Raising the runner limit is a separate host-capacity
 change, not a prerequisite for removing idle time between pipelines.
