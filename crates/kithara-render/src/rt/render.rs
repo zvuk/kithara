@@ -130,7 +130,7 @@ impl RenderPass {
         self.units.len()
     }
 
-    /// Whether `unit` holds an effect that has the parameter `change` names.
+    /// Whether `unit` holds an effect that takes `change`.
     pub(crate) fn accepts_fx(&self, unit: usize, change: &FxParamChange) -> bool {
         self.units
             .get(unit)

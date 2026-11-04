@@ -67,8 +67,9 @@ pub enum DeckRefusal {
     MissingFxUnit {
         unit: usize,
     },
-    /// A part changes a parameter the effect in `unit` does not have.
-    UnknownFxParam {
+    /// A part changes a parameter the effect in `unit` does not have or cannot
+    /// take.
+    RefusedFxParam {
         unit: usize,
     },
 }

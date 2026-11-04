@@ -241,7 +241,7 @@ impl Deck {
                     if let DeckFxChange::Param { change, .. } = change
                         && !self.render.accepts_fx(unit, change)
                     {
-                        return Err(DeckRefusal::UnknownFxParam { unit });
+                        return Err(DeckRefusal::RefusedFxParam { unit });
                     }
                 }
                 DeckPart::Mix(_) | DeckPart::Eq(_) | DeckPart::Returned(_) => {}

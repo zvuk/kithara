@@ -14,7 +14,8 @@ pub trait DeckEffect: Send {
     /// one length.
     fn process(&mut self, input: [&[f32]; 2], wet: [&mut [f32]; 2]);
 
-    /// Whether `change` names a parameter this effect has.
+    /// Whether this effect takes `change`: it has the parameter, and the value
+    /// fits what the effect was prepared with.
     fn accepts(&self, change: &FxParamChange) -> bool;
 
     /// Applies `change`, one [`DeckEffect::accepts`] holds, from the next
