@@ -421,8 +421,8 @@ fn default_cache_namespaces() -> Vec<String> {
 }
 
 /// Long enough for a pass that walks hundreds of gigabytes of trees, short
-/// enough that a wedged one costs a handful of `StartInterval` ticks rather
-/// than the day this host lost to one.
+/// enough that a wedged one costs a handful of cleanup ticks rather than the
+/// day a host lost to one.
 pub(crate) fn default_cleanup_deadline_seconds() -> u64 {
     30 * 60
 }

@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::ci::{
     cache::scope_bucket,
-    config::{default_build_cache_size, is_whole_gigabytes, parse_build_cache_size},
+    config::{
+        default_build_cache_size, default_cleanup_deadline_seconds, is_whole_gigabytes,
+        parse_build_cache_size,
+    },
     environment::CacheTrust,
 };
 
@@ -33,6 +36,11 @@ pub(crate) struct LinuxHost {
     /// hold. Defaulted: installed profiles predate the store.
     #[serde(default = "default_compiler_cache_size")]
     pub(crate) compiler_cache_size: String,
+    /// How long one cleanup pass may run before systemd ends it as wedged.
+    /// Defaulted: installed profiles predate it, and refusing to load would
+    /// kill the cleanup.
+    #[serde(default = "default_cleanup_deadline_seconds")]
+    pub(crate) cleanup_deadline_seconds: u64,
     /// Docker network the runners are confined to.
     pub(crate) network: String,
     /// Address block of that network, fenced off from the rest of the machine.
@@ -165,6 +173,10 @@ impl LinuxHost {
             bail!(
                 "Linux CI profile compiler_cache_size must be a positive whole number followed by G"
             );
+        }
+        // systemd reads a start timeout of zero as none at all.
+        if self.cleanup_deadline_seconds == 0 {
+            bail!("Linux CI profile cleanup_deadline_seconds must be positive");
         }
         if !self.cache_root.is_absolute() {
             bail!("Linux CI profile cache_root must be an absolute path");
@@ -435,6 +447,39 @@ pub(crate) mod tests {
                 .compiler_cache_size,
             default_compiler_cache_size()
         );
+    }
+
+    /// Installed profiles predate the cleanup deadline, and the binary reaches
+    /// every host before its profile does.
+    #[test]
+    fn a_profile_without_a_cleanup_deadline_still_loads() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("linux-host.toml");
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-linux-host.toml");
+        let text = fs::read_to_string(&source).expect("fixture profile");
+        let without: String = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("cleanup_deadline_seconds"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        fs::write(&path, without).expect("write profile");
+
+        assert_eq!(
+            LinuxHost::load(&path)
+                .expect("profile loads")
+                .cleanup_deadline_seconds,
+            default_cleanup_deadline_seconds()
+        );
+    }
+
+    /// A deadline of zero would be written into the unit as no deadline.
+    #[test]
+    fn a_cleanup_deadline_of_zero_is_refused() {
+        let mut host = host_fixture();
+        host.cleanup_deadline_seconds = 0;
+
+        assert!(host.validate().is_err());
     }
 
     /// kache reads the budget as whole gigabytes; anything else would reach

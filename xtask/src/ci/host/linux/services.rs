@@ -60,7 +60,7 @@ pub(super) fn install(
         );
     }
     install_slice()?;
-    install_cleanup_timer(&installed_images(host, pins)?)?;
+    install_cleanup_timer(host, &installed_images(host, pins)?)?;
     if host.windows.is_some() {
         install_renewal_timer(root)?;
     }
@@ -172,7 +172,14 @@ fn require_pinned_images(process: &Process, host: &LinuxHost, pins: &CiPins) -> 
 /// runs from a timer with no repository around it — and because what must
 /// survive is what this machine was installed to run, not what the checkout
 /// happens to pin by the time the timer next fires.
-fn cleanup_unit(keep: &[String]) -> String {
+///
+/// A oneshot has no start timeout unless it is given one, and its timer starts
+/// no second pass while one is still starting: one pass wedged on a mount that
+/// stopped answering or a Docker call that never returns would end cleanup on
+/// this machine for good. `TimeoutStartSec` is what bounds a oneshot; at the
+/// profile's deadline systemd ends the unit's processes and fails the pass, so
+/// the next tick starts a fresh one.
+fn cleanup_unit(host: &LinuxHost, keep: &[String]) -> String {
     format!(
         "[Unit]\n\
          Description=Kithara CI cleanup\n\
@@ -180,7 +187,9 @@ fn cleanup_unit(keep: &[String]) -> String {
          Requires=docker.service\n\n\
          [Service]\n\
          Type=oneshot\n\
+         TimeoutStartSec={deadline}\n\
          ExecStart={executable} ci host linux --config {config} cleanup{keep}\n",
+        deadline = host.cleanup_deadline_seconds,
         executable = consts::SERVICE_EXECUTABLE,
         config = consts::LINUX_CONFIG_PATH,
         keep = keep
@@ -282,8 +291,8 @@ pub(super) fn install_slice() -> Result<()> {
     Ok(())
 }
 
-fn install_cleanup_timer(keep: &[String]) -> Result<()> {
-    let service = cleanup_unit(keep);
+fn install_cleanup_timer(host: &LinuxHost, keep: &[String]) -> Result<()> {
+    let service = cleanup_unit(host, keep);
     for (name, body) in [
         (consts::SERVICE_CLEANUP_UNIT, service.as_str()),
         (consts::SERVICE_CLEANUP_TIMER, cleanup_timer()),
@@ -503,7 +512,10 @@ mod tests {
     fn the_cleanup_unit_is_a_command_this_executable_accepts() {
         let host = host_fixture();
         let pins = &fixture().pins;
-        let text = cleanup_unit(&installed_images(&host, pins).expect("the pins carry tags"));
+        let text = cleanup_unit(
+            &host,
+            &installed_images(&host, pins).expect("the pins carry tags"),
+        );
 
         let command = text
             .lines()
@@ -514,6 +526,33 @@ mod tests {
             .collect::<Vec<_>>();
         let argv = std::iter::once("xtask").chain(command.iter().copied());
         assert!(Cli::try_parse_from(argv).is_ok(), "{command:?}");
+    }
+
+    /// One wedged pass must not end cleanup on the machine, and how long a
+    /// pass may take is the profile's to say, not this unit's.
+    #[test]
+    fn the_cleanup_unit_ends_a_wedged_pass_at_the_profile_deadline() {
+        let mut host = host_fixture();
+        host.cleanup_deadline_seconds += 45;
+        let text = cleanup_unit(
+            &host,
+            &installed_images(&host, &fixture().pins).expect("the pins carry tags"),
+        );
+
+        let deadline = text
+            .split_once("[Service]\n")
+            .expect("the unit has a service section")
+            .1
+            .lines()
+            .find_map(|line| line.strip_prefix("TimeoutStartSec="))
+            .unwrap_or_else(|| {
+                panic!("a oneshot without TimeoutStartSec never times out:\n{text}")
+            });
+        assert_eq!(
+            deadline.parse::<u64>().ok(),
+            Some(host.cleanup_deadline_seconds),
+            "{text}"
+        );
     }
 
     /// The guest is built from files the repository tracks, so the timer that
@@ -557,7 +596,10 @@ mod tests {
     fn the_cleanup_unit_names_every_image_the_fleet_runs() {
         let host = host_fixture();
         let pins = &fixture().pins;
-        let text = cleanup_unit(&installed_images(&host, pins).expect("the pins carry tags"));
+        let text = cleanup_unit(
+            &host,
+            &installed_images(&host, pins).expect("the pins carry tags"),
+        );
         for pin in [
             &pins.linux_image,
             &pins.linux_runner_image,

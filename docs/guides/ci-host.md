@@ -399,7 +399,11 @@ silences `StartInterval` outright: one hung for over a day inside `opendir` on a
 volume that had stopped answering, and nothing said so. A watchdog thread ends
 the process at `cleanup_deadline_seconds`, thirty minutes by default, so the
 next tick gets a machine that can try again. It cannot be a check between steps,
-because such a pass never reaches the next step.
+because such a pass never reaches the next step. The Linux host holds the same
+deadline through systemd: the oneshot `kithara-ci-cleanup.service` carries
+`TimeoutStartSec` from the Linux profile's `cleanup_deadline_seconds`, because a
+oneshot otherwise never times out and its timer starts no second pass while one
+is still starting.
 
 ## GitLab project settings
 
