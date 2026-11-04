@@ -10,11 +10,11 @@
 // bad: one vtable call per sample
 for x in buf.iter_mut() { *x = effect.process_sample(*x); }
 // good: one vtable call per block, monomorphic loop inside the impl
-for effect in &mut self.effects { effect.process(buf); } // Vec<Box<dyn AudioEffect>>
+for effect in &mut self.effects { effect.process(buf); } // Vec<Box<dyn Stage>>
 ```
 
 Closed sets -> `enum` + `match`; keep `dyn` only where the backend is runtime-selected (`Box<dyn Decoder>` per track, `Box<dyn StretchBackend>` per stream).
-*tier: hot | detector: manual (dyn-in-hot-loop rule proposed, not wired) | present in kithara (Decoder/AudioEffect/StretchBackend all dispatch coarsely)*
+*tier: hot | detector: manual (dyn-in-hot-loop rule proposed, not wired) | present in kithara (Decoder/StretchBackend dispatch coarsely)*
 
 **Monomorphization bloat** - split a large generic fn so a tiny type-parametric shell delegates to one non-generic core; only the shell is duplicated per instantiation.
 
