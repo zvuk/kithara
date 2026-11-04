@@ -60,8 +60,32 @@ fn publish(source: &Path, destination: &Path) {
     fs::copy(source, destination).expect("publish the fake tool");
 }
 
+/// Install the workspace's `fake-tool` at `bin/<role>` running `body`, for a
+/// double the code under test runs by that absolute path and whose behaviour
+/// that code's environment cannot select.
+///
+/// The body is written beside the double as `<role>.sh`, and the double runs
+/// it with `/bin/sh`: the body is only read, and the program executed is the
+/// tool every other double already ran. A CI Mac holds the first run of an
+/// executable it has not run before for seconds, longer than a bounded call
+/// waits for its answer, so a newly written executable answering such a call
+/// fails the call instead of answering it. A file that is only read cannot be
+/// "Text file busy" either, so this process writes it.
+#[cfg(unix)]
+pub(crate) fn install_scripted_double(bin: &Path, role: &str, body: &str) -> PathBuf {
+    let double = install_double(bin, role);
+    let mut script = double.clone().into_os_string();
+    script.push(".sh");
+    fs::write(&script, body).expect("write the double's script");
+    double
+}
+
 /// Install `body` as an executable script at `path`, for a double whose
 /// behaviour the environment of the code under test cannot select.
+///
+/// Its first run waits on a host that checks every new executable, which a
+/// call bounded by a shorter deadline does not outlast; a double installed
+/// with [`install_scripted_double`] runs nothing newly written.
 ///
 /// Writing it from this process would open the "Text file busy" window [`publish`]
 /// avoids, and a rename cannot close it: the leaked descriptor names the inode.
@@ -114,6 +138,35 @@ fn executable_alias_preserves_the_tool_role() {
         .status()
         .expect("execute the published tool alias");
     assert_eq!(status.code(), Some(7));
+}
+
+/// A scripted double runs its script on its own arguments, while the program
+/// executed is the built tool rather than anything newly written.
+#[cfg(unix)]
+#[test]
+fn a_scripted_double_runs_its_body_through_the_built_tool() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let said = directory.path().join("said");
+    let double = install_scripted_double(
+        directory.path(),
+        "tool",
+        &format!("printf '%s' \"$*\" > '{}'\nexit 7\n", said.display()),
+    );
+
+    assert_eq!(
+        fs::canonicalize(&double)
+            .expect("the double exists")
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("fake-tool"),
+        "the double is the built tool, not a newly written executable"
+    );
+    let status = Command::new(&double)
+        .args(["a", "b"])
+        .status()
+        .expect("run the double");
+    assert_eq!(status.code(), Some(7));
+    assert_eq!(fs::read_to_string(&said).expect("the body ran"), "a b");
 }
 
 /// Only Linux refuses to execute a file some process can still write to, so

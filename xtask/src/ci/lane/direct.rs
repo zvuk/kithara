@@ -764,21 +764,16 @@ label = "run"
     #[cfg(unix)]
     #[test]
     fn a_rebuild_check_fails_a_suite_the_next_job_would_build_again() {
-        use std::os::unix::fs::PermissionsExt as _;
-
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let status = temp.path().join("status");
-        let just = temp.path().join("just");
-        fs::write(
-            &just,
-            format!(
-                "#!/bin/sh\ncase \"$*\" in *--no-run*) cat '{}' >&2 ;; esac\n",
+        let just = crate::testing::install_scripted_double(
+            temp.path(),
+            "just",
+            &format!(
+                "case \"$*\" in *--no-run*) cat '{}' >&2 ;; esac\n",
                 status.display()
             ),
-        )
-        .expect("write the just double");
-        fs::set_permissions(&just, fs::Permissions::from_mode(0o755))
-            .expect("make the just double runnable");
+        );
         let (mut ctx, args) = lane_running(
             temp.path(),
             "just",
@@ -808,8 +803,6 @@ label = "run"
     /// the default and `tooling` owns `xtask/`.
     #[cfg(unix)]
     fn touched_lane(root: &Path, changed: &str) -> (Ctx, LaneArgs, PathBuf) {
-        use std::os::unix::fs::PermissionsExt as _;
-
         let (mut ctx, args) = lane_running(
             root,
             "just",
@@ -851,13 +844,11 @@ label = "run"
         commit("change");
 
         let called = root.join("called");
-        let just = root.join("just");
-        fs::write(
-            &just,
-            format!("#!/bin/sh\nprintf ran > '{}'\n", called.display()),
-        )
-        .unwrap();
-        fs::set_permissions(&just, fs::Permissions::from_mode(0o755)).unwrap();
+        let just = crate::testing::install_scripted_double(
+            root,
+            "just",
+            &format!("printf ran > '{}'\n", called.display()),
+        );
         let mut tools = cache_doubles(root).0;
         tools.extend(
             toml::from_str::<toml::Table>(&format!("[just]\nprogram = \"{}\"\n", just.display()))
@@ -959,6 +950,9 @@ cargo.packages = ["tools"]
 
     /// A recording double for each compiler cache, so a lane's questions to
     /// them are answered here rather than by the machine's own daemons.
+    ///
+    /// A test and `lane_running` both ask for them on one root, so each is
+    /// installed once.
     #[cfg(unix)]
     fn cache_doubles(root: &Path) -> (toml::Table, PathBuf) {
         let socket_tool = root.join("cache-double").join("fake-tool");
@@ -978,21 +972,24 @@ cargo.packages = ["tools"]
             ),
         ] {
             let program = root.join(name);
-            let start = if name == "kache" {
-                format!(
-                    "if [ \"$1 $2\" = \"daemon start\" ] && [ -n \"$KACHE_RUNTIME_DIR\" ]; then\nKITHARA_TEST_STDOUT='{answer}' exec '{}' --kache-start\nfi\n",
-                    socket_tool.display()
-                )
-            } else {
-                String::new()
-            };
-            crate::testing::install_script(
-                &program,
-                &format!(
-                    "#!/bin/sh\necho \"{name} $@\" >> '{}'\n{start}printf '{answer}'\n",
-                    asked.display()
-                ),
-            );
+            if !program.exists() {
+                let start = if name == "kache" {
+                    format!(
+                        "if [ \"$1 $2\" = \"daemon start\" ] && [ -n \"$KACHE_RUNTIME_DIR\" ]; then\nKITHARA_TEST_STDOUT='{answer}' exec '{}' --kache-start\nfi\n",
+                        socket_tool.display()
+                    )
+                } else {
+                    String::new()
+                };
+                crate::testing::install_scripted_double(
+                    root,
+                    name,
+                    &format!(
+                        "echo \"{name} $@\" >> '{}'\n{start}printf '{answer}'\n",
+                        asked.display()
+                    ),
+                );
+            }
             tools.insert(
                 name.to_owned(),
                 toml::Table::from_iter([(
