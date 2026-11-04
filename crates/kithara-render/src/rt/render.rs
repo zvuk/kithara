@@ -10,11 +10,8 @@ use kithara_effects::{
 use super::processor::StreamShape;
 use crate::{
     bridge::{DeckFxChange, DeckMixSettings, DeckPart, Returned},
-    consts::FADE_CHUNK,
+    consts::{FADE_CHUNK, GAIN_SPAN},
 };
-
-/// Every gain and dry/wet of a deck runs from silence to unity.
-const GAIN_SPAN: f32 = 1.0;
 
 /// A deck's chain in Traktor's Insert order: trim, equaliser, FX units in
 /// series, then fader and crossfader.

@@ -69,3 +69,6 @@ pub(crate) const EVENTS_PER_SLOT: usize = 16;
 /// Frames per stack chunk of a track fade: the four gain arrays of one chunk
 /// stay within the real-time stack budget.
 pub(crate) const FADE_CHUNK: usize = 256;
+
+/// Every gain and dry/wet of a deck runs from silence to unity.
+pub(crate) const GAIN_SPAN: f32 = 1.0;
