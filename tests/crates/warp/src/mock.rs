@@ -2,12 +2,11 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, ops::Range};
 
 use kithara::{
     audio::{AudioConfig, NoResamplerBackend},
-    effects::AudioEffect,
-    events::TrackId,
+    events::{EventBus, TrackId},
     host::{HostConfig, HostSettings},
     platform::{
         flash::real_io,
@@ -19,7 +18,11 @@ use kithara::{
     },
     play::TrackConfig,
     queue::{Queue, QueueConfig, QueueEvent, TrackStatus, Transition},
-    signal::AudioChunk,
+    storage::WaitOutcome,
+    stream::{
+        Activity, ActivityWriter, PlayheadRead, PlayheadWrite, ReadOutcome, ReaderControl, Source,
+        SourceError, SourcePhase, SourceProbe, StreamResult, StreamType,
+    },
     warp::{StretchKind, WarpConfig},
 };
 #[cfg(not(target_os = "android"))]
@@ -28,7 +31,7 @@ use kithara_integration_tests::{
     bufpool_ext::pools,
     cochlea::{CochleaReport, assert_oracle_load_bearing, continuity_failures, percentile_f32},
     kithara,
-    memory_source::{MemStream, MemStreamConfig, MemorySource},
+    memory_source::MemorySource,
     mock::InjectedFactory,
     offline::{OfflinePlayer, OfflinePlayerOptions},
     waits::wait_for_loader_done_event,
@@ -80,41 +83,53 @@ impl LoadProbe {
     }
 }
 
-struct BurstLoadEffect {
-    blocks: usize,
-    probe: Arc<LoadProbe>,
+/// A player's asset bytes; with a probe, every `LOAD_INTERVAL_BLOCKS`th read
+/// burns real CPU so the burst lands on the decoder thread.
+struct BurstSource {
+    inner: MemorySource,
+    reads: usize,
+    probe: Option<Arc<LoadProbe>>,
 }
 
-impl BurstLoadEffect {
-    fn new(probe: Arc<LoadProbe>) -> Self {
-        Self { blocks: 0, probe }
+impl Source for BurstSource {
+    delegate::delegate! {
+        to self.inner {
+            fn activity(&self) -> Activity;
+            fn take_activity_writer(&mut self) -> Option<ActivityWriter>;
+            fn advance(&self, n: u64);
+            fn len(&self) -> Option<u64>;
+            fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+            fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
+            fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
+            fn position(&self) -> u64;
+            fn probe(&self) -> Arc<dyn SourceProbe>;
+            fn set_position(&self, pos: u64);
+            fn wait_range(
+                &mut self,
+                range: Range<u64>,
+                timeout: Option<Duration>,
+                cancel: Option<&ReaderControl>,
+            ) -> StreamResult<WaitOutcome>;
+        }
     }
-}
 
-impl AudioEffect for BurstLoadEffect {
-    fn flush(&mut self) -> Option<AudioChunk> {
-        None
-    }
-
-    fn held_source_frames(&self) -> u64 {
-        0
-    }
-
-    /// Pass the chunk through, burning real CPU on every `LOAD_INTERVAL_BLOCKS`th
-    /// one.
+    /// Read the asset bytes; a probed source spins for `LOAD_BURST` on every
+    /// `LOAD_INTERVAL_BLOCKS`th read.
     ///
     /// The real region is what makes the burst a burst. This runs on the
-    /// producer thread, which the quiescence engine counts as running, so a
+    /// decoder thread, which the quiescence engine counts as running, so a
     /// virtual `Instant` would have the spin wait for a clock that cannot move
     /// until the spin ends. Carving the region REAL keeps the deadline on the
     /// host clock, so the contention the load player is here to create stays
     /// contention under flash as well as off it.
     #[kithara::flash(false)]
     #[hang_watchdog]
-    fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        self.blocks = self.blocks.saturating_add(1);
-        if self.blocks.is_multiple_of(LOAD_INTERVAL_BLOCKS) {
-            self.probe.observe_burst();
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
+        self.reads = self.reads.saturating_add(1);
+        if let Some(probe) = &self.probe
+            && self.reads.is_multiple_of(LOAD_INTERVAL_BLOCKS)
+        {
+            probe.observe_burst();
             let deadline = Instant::now() + LOAD_BURST;
             while Instant::now() < deadline {
                 hang_tick!();
@@ -122,11 +137,20 @@ impl AudioEffect for BurstLoadEffect {
             }
             hang_reset!();
         }
-        Some(chunk)
+        self.inner.read_at(offset, buf)
     }
+}
 
-    fn reset(&mut self) {
-        self.blocks = 0;
+/// A stream over one [`BurstSource`].
+struct BurstStream;
+
+impl StreamType for BurstStream {
+    type Config = Option<BurstSource>;
+    type Events = EventBus;
+    type Source = BurstSource;
+
+    async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
+        config.ok_or_else(|| SourceError::other(std::io::Error::other("no source")))
     }
 }
 
@@ -269,34 +293,20 @@ fn warp_config(stretch: Option<(StretchKind, f32)>) -> WarpConfig {
 }
 
 fn audio_config(
-    source: &[u8],
+    source: BurstSource,
     warp: WarpConfig,
-    effects: Vec<Box<dyn AudioEffect>>,
-) -> TrackConfig<MemStream, NoResamplerBackend> {
-    let stream = MemStreamConfig {
-        source: Some(MemorySource::new(source.to_vec())),
-        event_bus: None,
-    };
-
-    let audio = AudioConfig::<MemStream>::for_stream(stream)
+) -> TrackConfig<BurstStream, NoResamplerBackend> {
+    let audio = AudioConfig::<BurstStream>::for_stream(Some(source))
         .hint("wav".to_owned())
         .build();
-    TrackConfig::for_audio(audio)
-        .warp(warp)
-        .effects(
-            effects
-                .into_iter()
-                .map(kithara::effects::EffectSetup::Prepared)
-                .collect(),
-        )
-        .build()
+    TrackConfig::for_audio(audio).warp(warp).build()
 }
 
 #[hang_watchdog]
 async fn passthrough_player(
     asset: &Asset,
     warp: WarpConfig,
-    effects: Vec<Box<dyn AudioEffect>>,
+    probe: Option<Arc<LoadProbe>>,
 ) -> OfflinePlayer<InjectedFactory> {
     let factory = InjectedFactory::default();
     let player = OfflinePlayer::with_factory(
@@ -316,7 +326,14 @@ async fn passthrough_player(
     .await;
     let source = kithara_integration_tests::offline::asset_source(asset);
     let load = kithara::play::mock::track_load(
-        audio_config(asset.bytes(), warp, effects),
+        audio_config(
+            BurstSource {
+                inner: MemorySource::new(asset.bytes().to_vec()),
+                reads: 0,
+                probe,
+            },
+            warp,
+        ),
         Arc::from(source.as_str()),
         player.worker().clone(),
         NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"),
@@ -358,8 +375,8 @@ async fn passthrough_player(
 /// macro rewrites time calls in the test body, not in the helpers it calls —
 /// and the consumer would advance at host speed against a producer advancing at
 /// virtual speed, draining the ring into zeros and making every PCM oracle a
-/// property of the machine. The burst load stays REAL: `BurstLoadEffect` spins
-/// on the producer thread, whose callstack never enters this guard.
+/// property of the machine. The burst load stays REAL: `BurstSource` spins
+/// on the decoder thread, whose callstack never enters this guard.
 #[kithara::flash(true)]
 #[hang_watchdog]
 pub(super) async fn render_passthrough(
@@ -368,16 +385,9 @@ pub(super) async fn render_passthrough(
     with_load: bool,
 ) -> RealtimeCapture {
     let load_probe = Arc::new(LoadProbe::new());
-    let target = passthrough_player(asset, warp_config(stretch), Vec::new()).await;
+    let target = passthrough_player(asset, warp_config(stretch), None).await;
     let mut load = if with_load {
-        Some(
-            passthrough_player(
-                asset,
-                warp_config(None),
-                vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))],
-            )
-            .await,
-        )
+        Some(passthrough_player(asset, warp_config(None), Some(Arc::clone(&load_probe))).await)
     } else {
         None
     };

@@ -1,123 +1,4 @@
-use kithara_effects::{
-    EffectConfig, EffectPrepareError, EffectSetup, GainDb,
-    eq::{EqConfig, EqEffect, generate_log_spaced_bands},
-};
-
 use super::*;
-
-#[kithara::test]
-fn failed_effect_preparation_does_not_advance_the_source() {
-    let pools = pools();
-    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).unwrap());
-    for (channels, rate) in [(1, 44_100), (2, 48_000)] {
-        let incoming = AudioSpec::new(channels, NonZeroU32::new(rate).unwrap());
-        let refused =
-            EffectSetup::Prepared(Box::new(FixedSpecEffect(spec))).prepare(incoming, &pools);
-        if rate != spec.sample_rate.get() {
-            assert!(matches!(
-                refused,
-                Err(EffectPrepareError::Filter(
-                    kithara_dsp::filter::FilterError::Parameters
-                ))
-            ));
-        } else {
-            assert!(matches!(refused, Err(EffectPrepareError::Shape)));
-        }
-        let head = Arc::new(AtomicU64::new(0));
-        let raw = RawSource {
-            head: Arc::clone(&head),
-            chunks: VecDeque::from([chunk_with_frames(&pools, incoming, 0, 16, &[0.25; 32])]),
-        };
-        let mut source = source_stage(&pools, raw, vec![Box::new(FixedSpecEffect(spec))], incoming);
-        flush_deferred(&mut source);
-        for _ in 0..3 {
-            assert!(matches!(
-                source.step_track(),
-                TrackStep::Failed(TrackFailureKind::Render)
-            ));
-            assert_eq!(head.load(Ordering::Acquire), 0);
-            assert_eq!(source.cursor().frame, 0);
-        }
-    }
-}
-
-#[kithara::test]
-fn configured_eq_services_producer_format_changes_without_same_spec_reset() {
-    let initial = AudioSpec::new(2, NonZeroU32::new(44_100).unwrap());
-    let region = pools();
-    let mut bands = generate_log_spaced_bands(3);
-    for (band, gain) in bands.iter_mut().zip([-12.0, 6.0, -3.0]) {
-        band.set_gain_db(GainDb::from(gain));
-    }
-    for (channels, rate) in [(2, 48_000), (1, 44_100), (4, 48_000)] {
-        let changed = AudioSpec::new(channels, NonZeroU32::new(rate).unwrap());
-        let samples = |spec: AudioSpec, offset: usize| {
-            (offset..offset + 128)
-                .flat_map(|frame| {
-                    (0..spec.channels).map(move |channel| {
-                        if (frame + usize::from(channel)) % 7 == 0 {
-                            0.5
-                        } else {
-                            -0.25
-                        }
-                    })
-                })
-                .collect::<Vec<_>>()
-        };
-        let first = samples(initial, 0);
-        let next = samples(changed, 128);
-        let last = samples(changed, 256);
-        let discontinuity = Arc::new(Mutex::new(SourceDiscontinuity::new(0, initial)));
-        let raw = RevisionSource {
-            discontinuity: discontinuity.clone(),
-            chunks: VecDeque::from([
-                chunk_with_frames(&region, initial, 0, 128, &first),
-                chunk_with_frames(&region, changed, 128, 128, &next),
-                chunk_with_frames(&region, changed, 256, 128, &last),
-            ]),
-        };
-        let effect = EffectSetup::Config(EffectConfig::Equalizer(bands.clone()))
-            .prepare(initial, &region)
-            .unwrap();
-        let mut source = source_stage(&region, raw, vec![effect], initial);
-        flush_deferred(&mut source);
-        assert!(matches!(
-            source.step_track(),
-            TrackStep::Produced(Fetch::Data { .. })
-        ));
-        *discontinuity.lock() = SourceDiscontinuity::new(1, changed);
-        assert!(matches!(source.step_track(), TrackStep::StateChanged));
-        assert_eq!(
-            source.source.chunks.len(),
-            2,
-            "deferred preparation precedes consuming new PCM"
-        );
-        flush_deferred(&mut source);
-        let mut reference = EqEffect::new(
-            &EqConfig::builder(region.clone()).build(),
-            bands.clone(),
-            rate,
-            channels,
-        )
-        .unwrap();
-        for (offset, input) in [(128, next), (256, last)] {
-            let expected = reference
-                .process(chunk_with_frames(&region, changed, offset, 128, &input))
-                .unwrap();
-            let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
-                panic!("configured EQ emits after deferred format preparation");
-            };
-            assert_eq!(data.spec(), changed);
-            assert_eq!(
-                data.samples.as_ref(),
-                expected.samples.as_ref(),
-                "{channels}ch/{rate}, block {offset}"
-            );
-            assert_eq!(source.cursor().frame, offset + 128);
-            flush_deferred(&mut source);
-        }
-    }
-}
 
 #[cfg(any(
     feature = "stretch-identity",
@@ -153,12 +34,9 @@ fn upstream_terminal_failure_keeps_its_classification(
         .keylock(true)
         .build();
     let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
-    let drain = EffectDrain::new(0, &pools).expect("empty effect drain");
     let mut source = WarpSource::new(
         raw,
         renderer,
-        Vec::new(),
-        drain,
         spec,
         pools.clone(),
         LaneSetup {
@@ -220,13 +98,9 @@ fn upstream_terminal_failure_keeps_its_classification_after_buffered_pcm(
         .render_quantum_frames(NonZeroUsize::new(128).expect("test quantum"))
         .build();
     let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
-    let effects: Vec<Box<dyn AudioEffect>> = vec![Box::<BufferThenHalveFrames>::default()];
-    let drain = EffectDrain::new(effects.len(), &pools).expect("buffered effect drain");
     let mut source = WarpSource::new(
         raw,
         renderer,
-        effects,
-        drain,
         spec,
         pools.clone(),
         LaneSetup {
@@ -259,7 +133,6 @@ fn upstream_terminal_failure_keeps_its_classification_after_buffered_pcm(
             TrackStep::Failed(actual) => {
                 assert_eq!(actual, failure);
                 assert!(source.source.chunks.is_empty());
-                assert!(held_source_frames(&source.effects) > 0);
                 assert!(matches!(source.drain_state, DrainState::Open));
                 assert!(!source.quantum_failed);
                 terminal_seen = true;
@@ -281,7 +154,6 @@ fn upstream_terminal_failure_keeps_its_classification_after_buffered_pcm(
         hang_tick!();
         flush_deferred(&mut source);
         assert!(matches!(source.step_track(), TrackStep::Failed(actual) if actual == failure));
-        assert!(held_source_frames(&source.effects) > 0);
     }
 }
 
@@ -315,7 +187,7 @@ fn unity_source_chunks_bypass_staging_without_losing_terminal_input(
         chunks: VecDeque::from(chunks),
         head: Arc::new(AtomicU64::new(0)),
     };
-    let mut source = source_stage_with_quantum(&pools, source, Vec::new(), spec, quantum_frames);
+    let mut source = source_stage_with_quantum(&pools, source, spec, quantum_frames);
     let mut output_frames = Vec::new();
     let mut output_samples = Vec::new();
 
@@ -341,117 +213,17 @@ fn unity_source_chunks_bypass_staging_without_losing_terminal_input(
 }
 
 #[kithara::test]
-fn buffered_frame_changing_effect_tracks_live_and_flush_frontiers(quarter: Vec<f32>) {
-    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-    let pools = pools();
-    let head = Arc::new(AtomicU64::new(0));
-    let source = RawSource {
-        chunks: VecDeque::from([
-            chunk(&pools, spec, 0, &quarter),
-            chunk(&pools, spec, u64::from(128_u32), &quarter),
-        ]),
-        head: Arc::clone(&head),
-    };
-    let effects: Vec<Box<dyn AudioEffect>> = vec![Box::<BufferThenHalveFrames>::default()];
-    let mut source = source_stage(&pools, source, effects, spec);
-
-    assert!(matches!(source.step_track(), TrackStep::StateChanged));
-    assert_eq!(
-        head.load(Ordering::Acquire),
-        128,
-        "one worker pass advances exactly one source transition"
-    );
-    flush_deferred(&mut source);
-    let mut produced = None;
-    for _ in 0..3 {
-        match source.step_track() {
-            TrackStep::Produced(fetch) => {
-                produced = Some(fetch);
-                break;
-            }
-            TrackStep::StateChanged => flush_deferred(&mut source),
-            _ => panic!("the second raw chunk must release the first buffered span"),
-        }
-    }
-    let Some(Fetch::Data {
-        data, source_end, ..
-    }) = produced
-    else {
-        panic!("the second raw chunk must release the first buffered span");
-    };
-
-    assert_eq!(head.load(Ordering::Acquire), 256);
-    assert_eq!(data.meta.frame_offset, 0);
-    assert_eq!(data.meta.frames, 64);
-    assert_eq!(
-        source_end,
-        Some(SourceEnd::new(
-            128,
-            NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
-        )),
-        "the buffered second span remains outside the live source frontier"
-    );
-
-    assert!(matches!(source.step_track(), TrackStep::StateChanged));
-    let TrackStep::Produced(Fetch::Data {
-        data, source_end, ..
-    }) = source.step_track()
-    else {
-        panic!("EOF drain must release the second buffered span");
-    };
-
-    assert_eq!(data.meta.frame_offset, 128);
-    assert_eq!(data.meta.frames, 64);
-    assert_eq!(
-        source_end,
-        Some(SourceEnd::new(
-            256,
-            NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
-        )),
-        "terminal output releases the held source frontier"
-    );
-}
-
-#[kithara::test]
-fn deferred_shell_services_effects_between_source_phases() {
-    let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
-    let pools = pools();
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let serviced = Arc::new(Mutex::new(None));
-    let source = DeferredSource {
-        spec,
-        log: Arc::clone(&log),
-    };
-    let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(DeferredEffect {
-        log: Arc::clone(&log),
-        serviced: Arc::clone(&serviced),
-    })];
-    let mut source = source_stage(&pools, source, effects, spec);
-
-    flush_deferred(&mut source);
-
-    assert_eq!(
-        log.lock().as_slice(),
-        ["source.prepare", "effect.service", "source.finish"]
-    );
-    assert_eq!(*serviced.lock(), Some(spec));
-}
-
-#[kithara::test]
 fn discontinuity_refreshes_spec_without_resetting_same_revision() {
     let initial = AudioSpec::new(2, NonZeroU32::new(44_100).expect("initial rate"));
     let changed = AudioSpec::new(1, NonZeroU32::new(48_000).expect("changed rate"));
     let pools = pools();
     let discontinuity = Arc::new(Mutex::new(SourceDiscontinuity::new(7, initial)));
-    let resets = Arc::new(AtomicU64::new(0));
     let source = RevisionSource {
         chunks: VecDeque::new(),
         discontinuity: Arc::clone(&discontinuity),
     };
-    let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResetCounter {
-        resets: Arc::clone(&resets),
-    })];
-    let mut source = source_stage(&pools, source, effects, initial);
+    let mut source = source_stage(&pools, source, initial);
+    source.drain_state = DrainState::Exhausted;
 
     *discontinuity.lock() = SourceDiscontinuity::new(7, changed);
     flush_deferred(&mut source);
@@ -459,11 +231,11 @@ fn discontinuity_refreshes_spec_without_resetting_same_revision() {
         source.discontinuity().map(|stamp| *stamp.spec()),
         Some(changed)
     );
-    assert_eq!(resets.load(Ordering::Acquire), 0);
+    assert!(matches!(source.drain_state, DrainState::Exhausted));
 
     *discontinuity.lock() = SourceDiscontinuity::new(8, changed);
     flush_deferred(&mut source);
-    assert_eq!(resets.load(Ordering::Acquire), 1);
+    assert!(matches!(source.drain_state, DrainState::Open));
 }
 
 #[kithara::test]
@@ -494,8 +266,7 @@ fn unity_warp_preserves_samples_and_meta_across_discontinuity(
         chunks: VecDeque::from([first, second]),
         discontinuity: Arc::clone(&discontinuity),
     };
-    let effects = Vec::new();
-    let mut source = source_stage(&pools, source, effects, initial);
+    let mut source = source_stage(&pools, source, initial);
 
     let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
         panic!("initial unity span must pass through");
@@ -588,15 +359,10 @@ fn live_warp_drain_holds_the_source_and_seek_discards_stale_unity(
             )
             .build();
         let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
-        let effects = Vec::new();
-        let drain = EffectDrain::new(effects.len(), &pools)
-            .unwrap_or_else(|error| panic!("test effect drain: {error}"));
         let (mut lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
         let mut source = WarpSource::new(
             raw,
             renderer,
-            effects,
-            drain,
             spec,
             pools.clone(),
             LaneSetup {
@@ -694,7 +460,7 @@ async fn rejected_staged_quantum_retains_both_owning_buffers(quarter: Vec<f32>) 
         };
         let decoded = chunk_with_frames(&pools, spec, 0, 64, quarter);
         let decoded_pointer = decoded.samples.as_ptr();
-        let mut source = source_stage_with_quantum(&pools, raw, Vec::new(), spec, FRAMES);
+        let mut source = source_stage_with_quantum(&pools, raw, spec, FRAMES);
         source.pending_input = Some(PendingInput {
             chunk: decoded,
             consumed_frames: 0,
@@ -758,12 +524,9 @@ fn projected_backend_switch_keeps_pending_input_during_resident_output(quarter: 
             .collect(),
     };
     let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
-    let drain = EffectDrain::new(0, &pools).expect("empty effect drain");
     let mut source = WarpSource::new(
         raw,
         renderer,
-        Vec::new(),
-        drain,
         spec,
         pools.clone(),
         LaneSetup {
@@ -885,14 +648,9 @@ fn unavailable_warp_target_fails_before_pulling_source(quarter: Vec<f32>) {
             .build();
         let target_pools = pools_with_budget(0);
         let renderer = kithara_warp::Warp::new((), &config).renderer(spec, target_pools.clone());
-        let effects = Vec::new();
-        let drain = EffectDrain::new(effects.len(), &target_pools)
-            .unwrap_or_else(|error| panic!("test effect drain: {error}"));
         let mut source = WarpSource::new(
             raw,
             renderer,
-            effects,
-            drain,
             spec,
             target_pools.clone(),
             LaneSetup {
@@ -908,241 +666,4 @@ fn unavailable_warp_target_fails_before_pulling_source(quarter: Vec<f32>) {
             assert_eq!(head.load(Ordering::Acquire), 0);
         }
     }
-}
-
-#[kithara::test]
-fn seek_cancels_stale_tail_and_resets_effects_once(quarter: Vec<f32>) {
-    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-    let pools = pools();
-    let resets = Arc::new(AtomicU64::new(0));
-    let source = SeekApplyingSource {
-        spec,
-        revision: 0,
-        pending: false,
-    };
-    let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResettingTail {
-        resets: Arc::clone(&resets),
-        tail: Some(chunk(&pools, spec, 128, &quarter)),
-    })];
-    let mut source = source_stage(&pools, source, effects, spec);
-
-    assert!(matches!(source.step_track(), TrackStep::StateChanged));
-    assert!(matches!(
-        source.source.seek(Duration::from_secs(1)),
-        Ok(SeekOutcome::Landed { .. })
-    ));
-    assert!(matches!(source.step_track(), TrackStep::StateChanged));
-    assert_eq!(
-        resets.load(Ordering::Acquire),
-        1,
-        "stale seek drain resets renderers before the source adopts the epoch"
-    );
-    assert!(matches!(source.step_track(), TrackStep::StateChanged));
-    assert_eq!(resets.load(Ordering::Acquire), 1);
-
-    assert!(matches!(source.step_track(), TrackStep::StateChanged));
-    assert!(matches!(source.step_track(), TrackStep::Eof));
-}
-
-#[kithara::test]
-fn every_effect_tail_precedes_the_single_eof(quarter: Vec<f32>) {
-    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-    let pools = pools();
-    let source = RawSource {
-        chunks: VecDeque::new(),
-        head: Arc::new(AtomicU64::new(0)),
-    };
-    let effects: Vec<Box<dyn AudioEffect>> = vec![
-        Box::new(ResettingTail {
-            resets: Arc::new(AtomicU64::new(0)),
-            tail: Some(chunk(&pools, spec, 128, &quarter)),
-        }),
-        Box::new(ResettingTail {
-            resets: Arc::new(AtomicU64::new(0)),
-            tail: Some(chunk(&pools, spec, 256, &quarter)),
-        }),
-    ];
-    let mut source = source_stage(&pools, source, effects, spec);
-
-    assert!(matches!(source.step_track(), TrackStep::StateChanged));
-    for expected in [128, 256] {
-        let TrackStep::Produced(Fetch::Data {
-            data, source_end, ..
-        }) = source.step_track()
-        else {
-            panic!("effect tail must be emitted before EOF");
-        };
-        assert_eq!(data.meta.frame_offset, expected);
-        assert_eq!(source_end, None, "effect-only tails do not advance source");
-    }
-    assert!(matches!(source.step_track(), TrackStep::Eof));
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn buffered_audio_track(
-    pools: &kithara_bufpool::PoolRegion<TestPools>,
-    bus: kithara_events::EventBus,
-    unmapped_tail: bool,
-) -> crate::TrackConfig<kithara_file::File<TestPools>, kithara_audio::NoResamplerBackend> {
-    use kithara_assets::{AssetStore, StorageBackend};
-    use kithara_audio::{AudioConfig, NoResamplerBackend};
-    use kithara_file::{File, FileConfig, FileSrc};
-
-    let path = kithara_test_fixtures::assets::signal_wav_sine440_120ms()
-        .path()
-        .expect("native WAV fixture");
-    let file = FileConfig::for_src(FileSrc::Local(path.to_owned()))
-        .store(
-            AssetStore::builder(pools.clone())
-                .backend(StorageBackend::Memory)
-                .build(),
-        )
-        .events(bus)
-        .build();
-    let audio = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file).build();
-    let mut effects: Vec<Box<dyn AudioEffect>> = vec![Box::<BufferThenHalveFrames>::default()];
-    if unmapped_tail {
-        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("fixture sample rate"));
-        effects.push(Box::new(ResettingTail {
-            resets: Arc::new(AtomicU64::new(0)),
-            tail: Some(chunk(pools, spec, 0, &[0.25; 256])),
-        }));
-    }
-    let warp = kithara_warp::WarpConfig::builder()
-        .render_quantum_frames(NonZeroUsize::new(256).expect("quantum"))
-        .build();
-    crate::TrackConfig::for_audio(audio)
-        .effects(effects.into_iter().map(EffectSetup::Prepared).collect())
-        .warp(warp)
-        .preload_chunks(NonZeroUsize::MIN)
-        .audio_buffer_chunks(NonZeroUsize::MIN)
-        .build()
-}
-
-#[kithara::test(native, tokio)]
-#[case::mapped_only(false)]
-#[case::mapped_then_unmapped(true)]
-#[kithara::hang_watchdog]
-async fn final_progress_follows_the_last_admitted_effect_tail(#[case] unmapped_tail: bool) {
-    use kithara_audio::{AudioEvent, NoResamplerBackend};
-    use kithara_events::EventBus;
-    use kithara_file::File;
-    use kithara_worker::{Task, TickResult};
-
-    let pools = pools();
-    let bus = EventBus::default();
-    let mut events = bus.subscribe::<AudioEvent>();
-    let track = buffered_audio_track(&pools, bus, unmapped_tail);
-    let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools).build());
-    let (_lane, inbox) = worker.lane_channel();
-    let start = crate::LaneStart {
-        speed: SpeedCurve::Constant(1.0),
-        keylock: false,
-        backend: StretchKind::default(),
-    };
-    let (mut receiver, mut node, _latency) = worker
-        .load::<File<TestPools>, NoResamplerBackend, _>(track, Duration::ZERO, start, inbox)
-        .await
-        .expect("real Audio lane");
-
-    let mut progress = Vec::new();
-    let mut at_decoded_eof = None;
-    let mut frontier = Duration::ZERO;
-    let mut tail_packets = 0;
-    let mut unmapped_tail_packets = 0;
-    let mut backpressured_tail = false;
-    let final_frontier = loop {
-        hang_tick!();
-        node.recycle();
-        node.tick();
-        if receiver.next_chunk_info().is_some_and(|meta| {
-            !meta.end_of_track && Some(meta.end_timestamp) == receiver.duration()
-        }) {
-            assert_eq!(node.tick(), TickResult::Backpressured);
-            backpressured_tail = true;
-        }
-        node.recycle();
-        while let Ok(envelope) = events.try_recv() {
-            match envelope.event {
-                AudioEvent::EndOfStream => at_decoded_eof = Some(frontier),
-                AudioEvent::PlaybackProgress { position_ms, .. } => progress.push((
-                    position_ms,
-                    receiver
-                        .next_chunk_info()
-                        .is_some_and(|meta| meta.end_of_track),
-                )),
-                AudioEvent::TrackFailed { failure } => panic!("real source failed: {failure:?}"),
-                _ => {}
-            }
-        }
-        let previous_frontier = frontier;
-        if let Some(packet) = receiver.pop() {
-            let crate::PcmPacket::Chunk(chunk) = &packet else {
-                panic!("the real source must reach natural EOF")
-            };
-            frontier = receiver.decoded_frontier();
-            let terminal = chunk.meta.end_of_track;
-            if !terminal && chunk.meta.source_span.is_none() {
-                assert!(
-                    unmapped_tail,
-                    "only the configured effect emits unmapped PCM"
-                );
-                assert!(
-                    at_decoded_eof.is_some(),
-                    "the unmapped tail follows decoded EOF"
-                );
-                assert!(tail_packets > 0, "the mapped effect tail is admitted first");
-                assert!(chunk.meta.frames > 0);
-                assert_eq!(
-                    frontier, previous_frontier,
-                    "effect-only PCM preserves the source frontier"
-                );
-                assert_eq!(
-                    Some(frontier),
-                    receiver.duration(),
-                    "the mapped source endpoint was admitted"
-                );
-                unmapped_tail_packets += 1;
-            } else if !terminal && at_decoded_eof.is_some() {
-                assert_eq!(
-                    unmapped_tail_packets, 0,
-                    "mapped PCM precedes the unmapped tail"
-                );
-                assert!(chunk.meta.frames > 0);
-                tail_packets += 1;
-            }
-            receiver.recycle(packet).expect("return admitted packet");
-            hang_reset!();
-            if terminal {
-                break frontier;
-            }
-        }
-        kithara_platform::tokio::task::yield_now().await;
-    };
-    assert_eq!(Some(final_frontier), receiver.duration());
-    let decoded_eof = at_decoded_eof.expect("decoded EOF precedes render completion");
-    let tail = final_frontier - decoded_eof;
-    assert!(tail_packets > 0, "mapped PCM is admitted after decoded EOF");
-    assert_eq!(unmapped_tail_packets, usize::from(unmapped_tail));
-    assert!(
-        (1..100).contains(&tail.as_millis()),
-        "tail stays inside the throttle: {tail:?}"
-    );
-    assert!(
-        decoded_eof.as_millis() < final_frontier.as_millis(),
-        "the mapped tail changes the public millisecond position"
-    );
-    let final_ms = u64::try_from(final_frontier.as_millis()).expect("fixture millis");
-    assert!(backpressured_tail, "the final mapped tail filled the ring");
-    assert_eq!(
-        progress.last(),
-        Some(&(final_ms, true)),
-        "final event follows terminal admission: {progress:?}"
-    );
-    assert!(
-        progress
-            .iter()
-            .all(|(position, terminal)| *position != final_ms || *terminal),
-        "final progress cannot precede its terminal marker: {progress:?}"
-    );
 }
