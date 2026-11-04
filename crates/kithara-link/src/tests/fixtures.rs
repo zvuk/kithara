@@ -276,7 +276,6 @@ impl Player<TestPools> for ScriptedTrack {
                 });
             }
             TrackCommand::Supersede
-            | TrackCommand::ConfigureEffect { .. }
             | TrackCommand::PlayAfter { .. }
             | TrackCommand::Seat { .. } => {
                 panic!("unexpected command in synchronization fixture")
@@ -633,7 +632,6 @@ impl Rig {
 pub(super) fn ordinary() -> (ScriptedTrack, Control) {
     let control = Control(Arc::new(Mutex::new(Script {
         snapshot: TrackSnapshot {
-            effects: Vec::new(),
             item: TrackId::allocate(),
             slot: Some(Slot::new(0)),
             status: TrackStatus::Loaded,
