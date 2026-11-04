@@ -13,7 +13,7 @@ use kithara::{
         CancelToken,
         time::{Duration, sleep},
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource},
+    play::{PlayWorker, PlayWorkerConfig},
     queue::TrackSource,
 };
 use kithara_app::{
@@ -22,8 +22,8 @@ use kithara_app::{
 };
 use kithara_integration_tests::{
     bufpool_ext::pools as test_pools,
-    kithara,
-    offline::{OfflinePlayer, app_disk_asset_store, app_drm, app_track_source, prod_document},
+    disk_asset_store, kithara,
+    offline::{OfflinePlayer, app_drm, app_track_source, prod_document},
 };
 use kithara_test_utils::TestTempDir;
 use tracing::info;
@@ -165,36 +165,13 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     let TrackSource::Config(cfg) = app_track_source(
         PROD_TRACK,
         &config,
-        app_disk_asset_store(&config, temp.path()),
+        disk_asset_store(temp.path()),
         backend,
         AbrMode::manual(START_VARIANT),
         Some(TRACK_NAME),
     ) else {
         panic!("expected an HLS config source for {PROD_TRACK}");
     };
-
-    let resource = Resource::new(*cfg)
-        .await
-        .unwrap_or_else(|e| panic!("Resource::new failed [{PROD_TRACK}]: {e:?}"));
-    let abr = resource
-        .abr_handle()
-        .unwrap_or_else(|| panic!("HLS resource exposes no ABR handle for {PROD_TRACK}"));
-    let variants = abr.variants();
-    let flac_idx = find_flac_variant_idx(&variants);
-    assert_ne!(
-        flac_idx, START_VARIANT,
-        "FLAC/top variant discovery selected the AAC start variant; variants={variants:?}"
-    );
-    assert_eq!(
-        abr.current_variant_index(),
-        Some(START_VARIANT),
-        "resource must start locked on low AAC variant {START_VARIANT}"
-    );
-
-    info!(
-        variant_count = variants.len(),
-        flac_idx, "loaded zvuk prod HLS master"
-    );
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(test_pools())
@@ -206,7 +183,7 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
             .build(),
     )
     .await;
-    player.load_and_fadein(resource).await;
+    player.load_and_fadein(TrackSource::Config(cfg)).await;
 
     let pre = render_until(&mut player, "AAC warmup before FLAC switch", |position| {
         position >= PRE_SWITCH_POSITION_SECS
@@ -217,6 +194,27 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         "AAC warmup must advance to at least {PRE_SWITCH_POSITION_SECS:.1}s; \
          rendered_blocks={}, window={pre:?}",
         pre.rendered_blocks
+    );
+
+    let abr = player
+        .player()
+        .current_abr_handle()
+        .unwrap_or_else(|| panic!("HLS track exposes no ABR handle for {PROD_TRACK}"));
+    let variants = abr.variants();
+    let flac_idx = find_flac_variant_idx(&variants);
+    assert_ne!(
+        flac_idx, START_VARIANT,
+        "FLAC/top variant discovery selected the AAC start variant; variants={variants:?}"
+    );
+    assert_eq!(
+        abr.current_variant_index(),
+        Some(START_VARIANT),
+        "the AAC warmup must stay locked on low AAC variant {START_VARIANT}"
+    );
+
+    info!(
+        variant_count = variants.len(),
+        flac_idx, "loaded zvuk prod HLS master"
     );
 
     abr.set_mode(AbrMode::manual(flac_idx))

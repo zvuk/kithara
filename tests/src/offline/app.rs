@@ -4,22 +4,24 @@ use keyring_core::sample::Store;
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     audio::{AudioDecoderConfig, DecoderResamplerSettings},
+    bufpool::HasPool,
     decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
     hls::{AbrMode, KeyOptions},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration, tokio},
-    play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, ResourcePrep, ResourceSrc},
-    queue::{Queue, QueueConfig},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, ResourceConfig, ResourcePrep,
+        ResourceSrc,
+    },
+    queue::{Queue, QueueConfig, TrackSource},
 };
 use kithara_app::{
     config::{AppConfig, AppDrm},
     document::Config,
     plugins,
-    pools::{
-        AppPools, AppResourceConfig, AppStore, AppTrackSource, PoolsSection, build as app_pools,
-    },
+    pools::{AppPools, AppStore, PoolsSection, build as app_pools},
     secret,
 };
 use kithara_app_library::{Environment, Secrets};
@@ -161,19 +163,23 @@ pub fn app_disk_asset_store(config: &AppConfig, root: impl Into<PathBuf>) -> App
 }
 
 /// A track source configured the way the app configures one: its DRM keys and
-/// headers, downloader, worker, decoder and store.
-pub fn app_track_source(
+/// headers, downloader, decoder and store. The queue that loads it supplies the
+/// playback worker, so `store` decides the pools it plays on.
+pub fn app_track_source<S>(
     url: &str,
     config: &AppConfig,
-    store: AppStore,
+    store: AssetStore<S>,
     backend: DecoderBackend,
     abr: AbrMode,
     discriminator: Option<&str>,
-) -> AppTrackSource {
+) -> TrackSource<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let Ok(src) = ResourceSrc::parse(url) else {
-        return AppTrackSource::Uri(url.to_string());
+        return TrackSource::Uri(url.to_string());
     };
-    let builder = AppResourceConfig::for_src(src);
+    let builder = ResourceConfig::<S>::for_src(src);
     let registry = config.drm.registry();
     let keys = if registry.is_empty() {
         KeyOptions::default()
@@ -197,7 +203,6 @@ pub fn app_track_source(
         .build();
     let builder = builder
         .downloader(config.downloader.clone())
-        .worker(config.worker.clone())
         .keys(keys)
         .maybe_headers(headers)
         .audio(config.audio.clone())
@@ -212,5 +217,5 @@ pub fn app_track_source(
         Some(discriminator) => builder.discriminator(discriminator).build(),
         None => builder.build(),
     };
-    AppTrackSource::Config(Box::new(config))
+    TrackSource::Config(Box::new(config))
 }
