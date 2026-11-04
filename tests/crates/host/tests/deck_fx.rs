@@ -189,14 +189,14 @@ pub(super) fn delay_time(frames: usize) -> DelayTime {
     .expect("a representable delay")
 }
 
-/// A delay of [`DELAY`] frames in [`DELAY_CAPACITY`], feeding half of each
+/// A delay of `frames` frames in twice that history, feeding half of each
 /// echo back through the lowest high-pass.
-pub(super) fn feedback_delay() -> FeedbackDelay {
+pub(super) fn feedback_delay(frames: usize) -> FeedbackDelay {
     FeedbackDelay::new(
         FeedbackDelayConfig::builder()
             .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("nonzero sample rate"))
-            .capacity(NonZeroUsize::new(DELAY_CAPACITY).expect("nonzero capacity"))
-            .time(delay_time(DELAY))
+            .capacity(NonZeroUsize::new(2 * frames).expect("nonzero capacity"))
+            .time(delay_time(frames))
             .feedback(Feedback::checked(0.5).expect("half is a feedback"))
             .high_pass(FeedbackHighPass::MIN)
             .build(),
@@ -917,56 +917,49 @@ async fn deck_fx_missing_unit_refuses_batch() {
     );
 }
 
+/// Each batch would turn its unit dry, which the sine shows: the echo and the
+/// delay shift it off its own phase.
 #[kithara::test(tokio)]
 async fn deck_fx_mismatched_param_refuses_batch() {
-    let refused = |effect: Vec<DeckFxChange>, change: FxParamChange| async move {
-        take(
-            deck(None, DeckMixSettings::default()).await,
-            assets::fixed_constant_wav_cd_half_44100(),
-            effect,
-            vec![(
-                LEAD + 500,
-                vec![
-                    DeckFxChange::Mix {
-                        unit: 0,
-                        value: FxMix::MIN,
-                    },
-                    DeckFxChange::Param { unit: 0, change },
-                ],
-            )],
-            None,
-        )
-        .await
+    let units = || {
+        let mut units = insert(0, Echo::new(ECHO));
+        units.extend(insert(1, feedback_delay(DELAY)));
+        units
     };
-    let echoed = plain_take(
-        assets::fixed_constant_wav_cd_half_44100(),
-        insert(0, Echo::new(ECHO)),
-    )
-    .await;
-    let foreign = refused(
-        insert(0, Echo::new(ECHO)),
-        FxParamChange::Delay(DelayParam::Feedback(Feedback::MAX)),
+    let dry_unit = |unit, change| {
+        vec![
+            DeckFxChange::Mix {
+                unit,
+                value: FxMix::MIN,
+            },
+            DeckFxChange::Param { unit, change },
+        ]
+    };
+    let kept = plain_take(assets::metronome_sine_wav_full(), units()).await;
+    let refused = take(
+        deck(None, DeckMixSettings::default()).await,
+        assets::metronome_sine_wav_full(),
+        units(),
+        vec![
+            (
+                LEAD + 500,
+                dry_unit(0, FxParamChange::Delay(DelayParam::Feedback(Feedback::MAX))),
+            ),
+            (
+                LEAD + 1500,
+                dry_unit(
+                    1,
+                    FxParamChange::Delay(DelayParam::Time(delay_time(DELAY_CAPACITY + 1))),
+                ),
+            ),
+        ],
+        None,
     )
     .await;
     assert_same(
-        &foreign,
-        &echoed,
-        "a batch giving an effect a parameter it lacks changes no unit",
-    );
-    let delayed = plain_take(
-        assets::fixed_constant_wav_cd_half_44100(),
-        insert(0, feedback_delay()),
-    )
-    .await;
-    let beyond = refused(
-        insert(0, feedback_delay()),
-        FxParamChange::Delay(DelayParam::Time(delay_time(DELAY_CAPACITY + 1))),
-    )
-    .await;
-    assert_same(
-        &beyond,
-        &delayed,
-        "a batch asking for a delay beyond the prepared capacity changes no unit",
+        &refused,
+        &kept,
+        "a batch giving an effect a parameter it lacks, or a delay beyond its capacity, changes no unit",
     );
 }
 
@@ -985,12 +978,12 @@ async fn deck_fx_delay_echoes_outlive_deck_stop() {
     let fx = take(
         deck(None, DeckMixSettings::default()).await,
         assets::fixed_constant_wav_cd_half_44100(),
-        insert(0, feedback_delay()),
+        insert(0, feedback_delay(DELAY)),
         Vec::new(),
         Some(PAUSE),
     )
     .await;
-    let tail = wet(&mut feedback_delay(), &dry);
+    let tail = wet(&mut feedback_delay(DELAY), &dry);
     let silent = dry
         .chunks(CHANNELS)
         .rposition(|frame| frame != [0.0; 2])
