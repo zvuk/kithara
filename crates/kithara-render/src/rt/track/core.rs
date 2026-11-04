@@ -5,7 +5,7 @@ use kithara_command::Seq;
 use kithara_dsp::param::SmootherConfig;
 use kithara_events::TrackId;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::{SegmentId, SessionFrame};
+use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 
 use super::{PlayerResource, RtSink, fade::TrackFade, gate::TrackGate};
 use crate::{
@@ -36,8 +36,8 @@ pub struct PlayerTrack {
     pub(super) gate: TrackGate,
     pub(super) state: SlotState,
     pub(super) gap: u32,
-    /// Lane frames the dropout missed that a session-time track still drops.
-    pub(super) owed: u32,
+    /// Lane frames dropped to pay the current dropout under session time.
+    pub(super) paid: u32,
     pub(super) clock: TrackClock,
     stop: StopState,
     sample_rate: NonZeroU32,
@@ -63,7 +63,7 @@ impl PlayerTrack {
             gate: TrackGate::new(false, declick, sample_rate),
             state: SlotState::Stopped,
             gap: 0,
-            owed: 0,
+            paid: 0,
             clock: TrackClock::Media,
             stop: StopState::Idle,
             sample_rate,
@@ -74,6 +74,15 @@ impl PlayerTrack {
     #[must_use]
     pub const fn state(&self) -> SlotState {
         self.state
+    }
+
+    /// The lane frame sounding on `session` with its source position. A
+    /// session-time track in a dropout still stands on the session frame where
+    /// its lane stopped, because it re-enters as if the lane had kept going.
+    #[must_use]
+    pub fn mark(&self, session: SessionFrame) -> Option<SlotMark> {
+        self.resource
+            .mark(session - FrameCount::new(usize::try_from(self.owed()).ok()?))
     }
 
     delegate::delegate! {
@@ -95,8 +104,6 @@ impl PlayerTrack {
             pub fn src(&self) -> &Arc<str>;
             #[must_use]
             pub fn segment(&self) -> SegmentId;
-            #[must_use]
-            pub fn mark(&self, session: SessionFrame) -> Option<SlotMark>;
             #[call(refresh_mark)]
             pub(crate) fn recycle_obsolete(&mut self, budget: &mut usize);
         }
@@ -203,17 +210,24 @@ impl PlayerTrack {
         }
     }
 
-    /// A media-time track owes nothing, so leaving session time forgives the debt.
-    pub(crate) fn set_clock(&mut self, clock: TrackClock) {
+    /// The clock in force when PCM returns decides the whole dropout, so a
+    /// switch lands the same on any frame inside it.
+    pub(crate) const fn set_clock(&mut self, clock: TrackClock) {
         self.clock = clock;
-        if clock == TrackClock::Media {
-            self.owed = 0;
+    }
+
+    /// Lane frames the track still drops before it plays: the dropout's
+    /// unpaid frames under session time, none under media time.
+    pub(super) const fn owed(&self) -> u32 {
+        match self.clock {
+            TrackClock::Session => self.gap.saturating_sub(self.paid),
+            TrackClock::Media => 0,
         }
     }
 
     pub(super) const fn clear_gap(&mut self) {
         self.gap = 0;
-        self.owed = 0;
+        self.paid = 0;
     }
 
     pub(super) const fn stopping(&self) -> bool {

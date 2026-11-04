@@ -211,3 +211,46 @@ async fn leaving_session_time_forgives_the_debt() {
     assert_eq!(played, [0.1, 0.2]);
     assert_eq!(rig.underrun_ends(), [(4, true)]);
 }
+
+/// Two frames play on session frames 0 and 1, then the track starves through
+/// session frame 5; the mark it publishes on frame 6 maps frame 8 onto the
+/// lane frame that will sound there.
+#[kithara::test(native, tokio)]
+#[case::media_time(TrackClock::Media, 4)]
+#[case::session_time(TrackClock::Session, 8)]
+async fn the_mark_of_a_starving_track_maps_the_session_by_its_clock(
+    #[case] clock: TrackClock,
+    #[case] lane: u64,
+) {
+    let mut rig = Rig::new(clock).await;
+    rig.push(SegmentId::FIRST, 0, &PCM[..2]);
+    rig.block();
+    rig.starve(2);
+
+    let mark = rig
+        .track
+        .mark(SessionFrame::new(6))
+        .expect("a playing track keeps its mark");
+
+    assert_eq!(
+        mark.lane_at(SessionFrame::new(8)).map(|at| at.frame),
+        Some(lane)
+    );
+}
+
+/// The clock in force when PCM returns decides the dropout, so a switch to
+/// session time one block into it drops the whole dropout, as a track on
+/// session time from the start does.
+#[kithara::test(native, tokio)]
+async fn a_switch_to_session_time_inside_a_dropout_drops_the_whole_dropout() {
+    let mut rig = Rig::new(TrackClock::Media).await;
+    rig.starve(1);
+    rig.track.set_clock(TrackClock::Session);
+    rig.starve(1);
+    rig.push(SegmentId::FIRST, 0, &PCM);
+
+    let (_, played) = rig.block();
+
+    assert_eq!(played, [0.5, 0.6]);
+    assert_eq!(rig.underrun_ends(), [(4, true)]);
+}

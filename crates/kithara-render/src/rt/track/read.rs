@@ -6,7 +6,7 @@ use kithara_warp::RenderContext;
 use num_traits::ToPrimitive;
 
 use super::{PlayerTrack, ReadOutcome, RtSink};
-use crate::bridge::{DeckEvent, PlaybackFault, RtMetrics, SlotState, TrackClock};
+use crate::bridge::{DeckEvent, PlaybackFault, RtMetrics, SlotState};
 
 /// Result of an exact packet-backed render range.
 #[derive(Debug)]
@@ -132,7 +132,7 @@ impl PlayerTrack {
             return end;
         }
         let recovery_position = self.media_position();
-        let outcome = if self.owed == 0 {
+        let outcome = if self.owed() == 0 {
             self.resource
                 .read(context, scratch, requested.clone(), budget)
         } else {
@@ -172,10 +172,10 @@ impl PlayerTrack {
     /// Drops the lane frames a session-time dropout missed before any plays;
     /// a debt PCM cannot cover yet keeps the track silent.
     fn pay_owed(&mut self, budget: &mut usize) -> Option<TrackReadOutcome> {
-        if self.owed == 0 {
+        let owed = usize::try_from(self.owed()).unwrap_or(usize::MAX);
+        if owed == 0 {
             return None;
         }
-        let owed = usize::try_from(self.owed).unwrap_or(usize::MAX);
         let dropped = match self.resource.discard(owed, budget) {
             ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
             ReadOutcome::Eof => return Some(TrackReadOutcome::Eof),
@@ -183,9 +183,9 @@ impl PlayerTrack {
                 return Some(TrackReadOutcome::Failed(PlaybackFault::Source(kind.into())));
             }
         };
-        self.owed = self
-            .owed
-            .saturating_sub(u32::try_from(dropped).unwrap_or(u32::MAX));
+        self.paid = self
+            .paid
+            .saturating_add(u32::try_from(dropped).unwrap_or(u32::MAX));
         None
     }
 
@@ -209,7 +209,7 @@ impl PlayerTrack {
         recovered: bool,
         sink: &mut RtSink<'_>,
     ) {
-        self.owed = 0;
+        self.paid = 0;
         if self.gap > 0 {
             sink.report(DeckEvent::UnderrunEnded {
                 slot: sink.slot,
@@ -241,9 +241,6 @@ impl PlayerTrack {
             }
             let missing = u32::try_from(limit - frames).unwrap_or(u32::MAX);
             self.gap = self.gap.saturating_add(missing);
-            if self.clock == TrackClock::Session {
-                self.owed = self.owed.saturating_add(missing);
-            }
         }
     }
 
