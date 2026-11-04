@@ -3,7 +3,8 @@ use std::{fs, path::Path};
 use ffmpeg::{
     ChannelLayout, Dictionary, Error as FfmpegError, Packet,
     codec::{
-        Id, context::Context as CodecContext, encoder::Audio as AudioEncoder,
+        context::Context as CodecContext,
+        encoder::{Audio as AudioEncoder, find_by_name as find_encoder_by_name},
         flag::Flags as CodecFlags,
     },
     format::{self as av_format, context::Output, flag::Flags as FormatFlags},
@@ -12,7 +13,7 @@ use ffmpeg_next as ffmpeg;
 use ffmpeg_next::filter::Graph;
 
 use super::{
-    build_direct_filter, ensure_ffmpeg_initialized, find_encoder,
+    build_direct_filter, ensure_ffmpeg_initialized,
     pcm::{
         consts::PCM_INPUT_FORMAT, drain_filtered_frames, flush_filter, pump_pcm_frames,
         send_eof_to_encoder, send_frame_to_filter,
@@ -22,11 +23,47 @@ use crate::{
     BytesEncodeRequest, BytesEncodeTarget, EncodeError, EncodeResult, EncodedBytes, PcmSource,
 };
 
+/// An `FFmpeg` encoder, looked up by name. A codec id leaves the pick to
+/// whichever encoders the `FFmpeg` build registers, and two encoders of one
+/// codec write different packet geometry.
+#[derive(Clone, Copy, Debug)]
+enum Encoder {
+    Aac,
+    Alac,
+    Flac,
+    Lame,
+    Opus,
+    PcmF32le,
+    PcmS16be,
+    PcmS16le,
+    PcmS24le,
+    PcmS32le,
+    Vorbis,
+}
+
+impl From<Encoder> for &'static str {
+    fn from(encoder: Encoder) -> Self {
+        match encoder {
+            Encoder::Aac => "aac",
+            Encoder::Alac => "alac",
+            Encoder::Flac => "flac",
+            Encoder::Lame => "libmp3lame",
+            Encoder::Opus => "libopus",
+            Encoder::PcmF32le => "pcm_f32le",
+            Encoder::PcmS16be => "pcm_s16be",
+            Encoder::PcmS16le => "pcm_s16le",
+            Encoder::PcmS24le => "pcm_s24le",
+            Encoder::PcmS32le => "pcm_s32le",
+            Encoder::Vorbis => "vorbis",
+        }
+    }
+}
+
 struct EncodeTarget {
     option_pairs: &'static [(&'static str, &'static str)],
     ext: &'static str,
     mime: &'static str,
-    codec: Id,
+    encoder: Encoder,
     bit_rate: Option<usize>,
     sample_format: Option<ffmpeg::format::Sample>,
 }
@@ -48,14 +85,14 @@ impl EncodeTarget {
         let target = match request.target {
             BytesEncodeTarget::Mp3 => Self {
                 bit_rate,
-                codec: Id::MP3,
+                encoder: Encoder::Lame,
                 ext: "mp3",
                 mime: "audio/mpeg",
                 sample_format: None,
                 option_pairs: &[],
             },
             BytesEncodeTarget::Flac => Self {
-                codec: Id::FLAC,
+                encoder: Encoder::Flac,
                 ext: "flac",
                 mime: "audio/flac",
                 bit_rate: None,
@@ -66,7 +103,7 @@ impl EncodeTarget {
             },
             BytesEncodeTarget::Aac => Self {
                 bit_rate,
-                codec: Id::AAC,
+                encoder: Encoder::Aac,
                 ext: "aac",
                 mime: "audio/aac",
                 sample_format: None,
@@ -74,14 +111,14 @@ impl EncodeTarget {
             },
             BytesEncodeTarget::M4a => Self {
                 bit_rate,
-                codec: Id::AAC,
+                encoder: Encoder::Aac,
                 ext: "m4a",
                 mime: "audio/mp4",
                 sample_format: None,
                 option_pairs: &[],
             },
             BytesEncodeTarget::Alac => Self {
-                codec: Id::ALAC,
+                encoder: Encoder::Alac,
                 ext: "m4a",
                 mime: "audio/mp4",
                 bit_rate: None,
@@ -91,7 +128,7 @@ impl EncodeTarget {
                 option_pairs: &[],
             },
             BytesEncodeTarget::Flac24 => Self {
-                codec: Id::FLAC,
+                encoder: Encoder::Flac,
                 ext: "flac",
                 mime: "audio/flac",
                 bit_rate: None,
@@ -101,7 +138,7 @@ impl EncodeTarget {
                 option_pairs: &[("compression_level", "5")],
             },
             BytesEncodeTarget::Vorbis => Self {
-                codec: Id::VORBIS,
+                encoder: Encoder::Vorbis,
                 ext: "ogg",
                 mime: "audio/ogg",
                 bit_rate,
@@ -109,7 +146,7 @@ impl EncodeTarget {
                 option_pairs: &[("strict", "-2")],
             },
             BytesEncodeTarget::Opus => Self {
-                codec: Id::OPUS,
+                encoder: Encoder::Opus,
                 ext: "opus",
                 mime: "audio/ogg",
                 bit_rate,
@@ -121,12 +158,12 @@ impl EncodeTarget {
             | BytesEncodeTarget::Wav32
             | BytesEncodeTarget::WavFloat32
             | BytesEncodeTarget::Aiff16 => Self {
-                codec: match request.target {
-                    BytesEncodeTarget::Wav16 => Id::PCM_S16LE,
-                    BytesEncodeTarget::Wav24 => Id::PCM_S24LE,
-                    BytesEncodeTarget::Wav32 => Id::PCM_S32LE,
-                    BytesEncodeTarget::WavFloat32 => Id::PCM_F32LE,
-                    BytesEncodeTarget::Aiff16 => Id::PCM_S16BE,
+                encoder: match request.target {
+                    BytesEncodeTarget::Wav16 => Encoder::PcmS16le,
+                    BytesEncodeTarget::Wav24 => Encoder::PcmS24le,
+                    BytesEncodeTarget::Wav32 => Encoder::PcmS32le,
+                    BytesEncodeTarget::WavFloat32 => Encoder::PcmF32le,
+                    BytesEncodeTarget::Aiff16 => Encoder::PcmS16be,
                     _ => unreachable!("PCM target selected"),
                 },
                 ext: request.target.extension(),
@@ -224,18 +261,18 @@ impl DirectEncoder {
             sample_rate,
             channels,
         } = config;
-        let output_codec = find_encoder(target.codec)
+        let encoder: &str = target.encoder.into();
+        let output_codec = find_encoder_by_name(encoder)
             .ok_or_else(|| {
                 EncodeError::backend_message(format!(
-                    "no output codec is registered for `{}`",
+                    "FFmpeg registers no encoder `{encoder}` for `{}`",
                     target.ext
                 ))
             })?
             .audio()
             .map_err(|_| {
                 EncodeError::backend_message(format!(
-                    "no encoder is available for `{}`",
-                    target.ext
+                    "FFmpeg encoder `{encoder}` is not an audio encoder"
                 ))
             })?;
         let global_header = octx.format().flags().contains(FormatFlags::GLOBAL_HEADER);

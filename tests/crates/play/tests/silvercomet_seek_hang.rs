@@ -11,9 +11,9 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken, thread,
-        time::{Duration, Instant, timeout},
+        time::{Duration, Instant},
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     offline::{OfflinePlayer, WindowStats},
@@ -90,15 +90,15 @@ fn fresh_downloader() -> Downloader {
     )
 }
 
-async fn build_resource(
+fn resource_config(
     url: &str,
     downloader: &Downloader,
     iter_label: &str,
     store: kithara::assets::AssetStore<TestPools>,
     backend: DecoderBackend,
     abr: AbrMode,
-) -> Resource {
-    let cfg: ResourceConfig<TestPools> = ResourceConfig::for_src(
+) -> ResourceConfig<TestPools> {
+    ResourceConfig::for_src(
         ResourceSrc::parse(url).unwrap_or_else(|e| panic!("ResourceSrc::parse({url}): {e}")),
     )
     .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
@@ -111,15 +111,7 @@ async fn build_resource(
             .build(),
     )
     .initial_abr_mode(abr)
-    .build();
-    let mut resource = Resource::new(cfg)
-        .await
-        .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));
-    timeout(Duration::from_secs(15), resource.preload())
-        .await
-        .unwrap_or_else(|_| panic!("Resource::preload({url}) timed out after 15s"))
-        .unwrap_or_else(|err| panic!("Resource::preload({url}) failed: {err}"));
-    resource
+    .build()
 }
 
 /// Minimal IEEE-float 32-bit stereo WAV writer (RIFF/WAVE, fmt code 3).
@@ -234,11 +226,10 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
         let mut iteration_samples: Vec<f32> = Vec::new();
 
         for (track_idx, url) in SILVERCOMET_URLS.iter().enumerate() {
-            eprintln!("[iter {iter}][t{track_idx}] building resource: {url}");
-            let resource =
-                build_resource(url, &downloader, &iter_label, store.clone(), backend, abr).await;
-            eprintln!("[iter {iter}][t{track_idx}] resource built, load_and_fadein");
-            player.load_and_fadein(resource).await;
+            eprintln!("[iter {iter}][t{track_idx}] load_and_fadein: {url}");
+            let config =
+                resource_config(url, &downloader, &iter_label, store.clone(), backend, abr);
+            player.load_and_fadein(config).await;
 
             eprintln!("[iter {iter}][t{track_idx}] warmup ({warmup_blocks} blocks)");
             let _ = render_and_collect(&mut player, warmup_blocks, &mut iteration_samples).await;

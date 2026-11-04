@@ -5942,11 +5942,14 @@ name = "kithara-queue"
 version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
+ "async-trait",
+ "bytes",
  "delegate",
  "derive-where",
  "derive_more",
  "fieldwork",
  "getrandom 0.4.3",
+ "http",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
