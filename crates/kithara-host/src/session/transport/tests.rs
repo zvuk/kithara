@@ -33,12 +33,12 @@ use super::{
     },
 };
 use crate::{
-    api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
+    api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, Tempo, TransportRevision},
     consts,
     host::{HostSettings, HostSettingsChange, HostSettingsExec},
     session::{
         queue::{HostPart, HostProtocol, settle_receipt},
-        state::{SessionState, ensure_ctx},
+        state::{SessionState, SessionStream, ensure_ctx},
         tests::graph,
     },
 };
@@ -140,6 +140,26 @@ fn proc_extra() -> (
     )
 }
 
+pub(crate) fn ducking_store(changes: &[(usize, SessionDuckingMode)], frames: usize) -> ProcStore {
+    let (mut extra, _observation, mut queue) = proc_extra();
+    for &(frame, mode) in changes {
+        queue
+            .send(
+                When::At(SessionFrame::new(i64::try_from(frame).expect("frame"))),
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![HostPart::Settings(HostSettingsChange::Ducking(mode))],
+                },
+            )
+            .expect("ducking command");
+    }
+    queue.publish().expect("publish ducking commands");
+    let mut info = proc_info_at(0);
+    info.frames = frames;
+    process_transport(&info, &mut extra.store).expect("apply ducking spans");
+    extra.store
+}
+
 fn process_node(processor: &mut SessionTransportProcessor, info: &ProcInfo, extra: &mut ProcExtra) {
     let inputs: [&[f32]; 0] = [];
     let mut outputs: [&mut [f32]; 0] = [];
@@ -223,7 +243,9 @@ fn outcome(queue: &mut ScopedSender<HostProtocol, DeckProtocol>) -> Outcome<Host
 fn owned_session() -> SessionState<(), TestPools> {
     let sample_rate = NonZeroU32::new(consts::TRANSPORT_SAMPLE_RATE)
         .expect("invariant: the fixture rate is non-zero");
-    let mut state = graph::state_for(sample_rate, |_ctx, _sample_rate| Ok(()));
+    let mut state = graph::state_for(sample_rate, |_ctx, _sample_rate| {
+        Ok(SessionStream::Realtime { _backend: () })
+    });
     assert!(ensure_ctx(&mut state).is_ok());
     state
 }

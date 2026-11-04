@@ -1,7 +1,11 @@
 use std::collections::BTreeMap;
 
 use kithara::{
-    abr::AbrMode, effects::GainDb, host::DeckId, platform::sync::Arc, prelude::EngineLoadSnapshot,
+    abr::AbrMode,
+    effects::GainDb,
+    host::{DeckId, api::Tempo},
+    platform::sync::Arc,
+    prelude::EngineLoadSnapshot,
     queue::TrackEntry,
 };
 use num_traits::cast::AsPrimitive;
@@ -19,6 +23,7 @@ pub(crate) struct EngineSnapshot {
     pub(crate) broadcast: BroadcastPhase,
     pub(crate) eq_mode: EqMode,
     pub(crate) mix: MixState,
+    pub(crate) tempo: Tempo,
     pub(crate) decks: Vec<DeckSnapshot>,
     pub(crate) track_bpms: Arc<BTreeMap<String, f64>>,
     pub(crate) applied_seq: u64,
@@ -30,6 +35,7 @@ impl EngineSnapshot {
             broadcast: BroadcastPhase::default(),
             eq_mode: EqMode::default(),
             mix: MixState::default(),
+            tempo: Tempo::DEFAULT,
             decks: Vec::new(),
             track_bpms: Arc::new(BTreeMap::new()),
             applied_seq: 0,
@@ -73,6 +79,8 @@ pub(crate) struct DeckSnapshot {
     pub(crate) engine_load: EngineLoadSnapshot,
     pub(crate) current_track_index: Option<usize>,
     pub(crate) tempo: TempoPercent,
+    pub(crate) speed: f32,
+    pub(crate) synced: bool,
     pub(crate) playing: bool,
     pub(crate) duration: f64,
     pub(crate) position: f64,
@@ -102,6 +110,7 @@ impl DeckSnapshot {
         strip: MixStrip,
         eq_bands: Vec<GainDb>,
         tempo: TempoPercent,
+        synced: bool,
         state: &UiState,
     ) -> Self {
         Self {
@@ -115,6 +124,8 @@ impl DeckSnapshot {
             tracks: state.tracks.clone(),
             engine_load: state.engine_load,
             tempo,
+            speed: state.speed,
+            synced,
             current_track_index: state.current_track_index,
             duration: state.duration,
             position: state.position,

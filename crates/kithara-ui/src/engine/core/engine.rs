@@ -55,6 +55,18 @@ impl Engine {
             .map(RetainedComponent::pressed_item_index)
     }
 
+    /// Focuses the text input at `path` with its whole text selected.
+    pub(crate) fn open_text_input(&mut self, path: &str) {
+        if let Some(component) = self
+            .components
+            .iter_mut()
+            .find(|component| component.path() == path && component.kind() == Kind::TextInput)
+        {
+            component.select_all();
+            self.router.focus(path);
+        }
+    }
+
     pub(crate) fn picker_snapshot(&self, path: &str) -> Option<PickerSnapshot> {
         self.components
             .iter()

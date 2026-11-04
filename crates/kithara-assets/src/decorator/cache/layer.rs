@@ -3,7 +3,7 @@
 use std::{fmt, num::NonZeroUsize, path::Path};
 
 use dashmap::DashSet;
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::sync::{Arc, Mutex, Weak};
 use kithara_storage::ResourceStatus;
 use lru::LruCache;
 
@@ -52,6 +52,21 @@ struct CacheKey {
 struct CacheEntry<R> {
     reader: R,
     hits: usize,
+    writer: Weak<()>,
+}
+
+impl<R: ReadSide> CacheEntry<R> {
+    fn is_committed(&self) -> bool {
+        !self.is_writing() && matches!(self.reader.status(), ResourceStatus::Committed { .. })
+    }
+
+    fn is_dead(&self) -> bool {
+        !self.is_writing() && !self.is_committed()
+    }
+
+    fn is_writing(&self) -> bool {
+        self.writer.strong_count() > 0
+    }
 }
 
 type Cache<R> = Mutex<LruCache<CacheKey, CacheEntry<R>>>;
@@ -308,10 +323,14 @@ where
         &self,
         key: &ResourceKey,
         acq: AcquisitionResult<A::ActiveRes, A::ReadyRes>,
+        writing: Arc<()>,
     ) -> AcquisitionResult<CachedWriter<A::ActiveRes>, CachedReader<A::ReadyRes>> {
         match acq {
-            AcquisitionResult::Pending(w) => AcquisitionResult::Pending(self.wrap_writer(key, w)),
+            AcquisitionResult::Pending(w) => {
+                AcquisitionResult::Pending(self.wrap_writer(key, w, writing))
+            }
             AcquisitionResult::Ready(r) => AcquisitionResult::Ready(self.wrap_reader(key, r)),
+            AcquisitionResult::Joined(r) => AcquisitionResult::Joined(self.wrap_reader(key, r)),
         }
     }
 
@@ -324,12 +343,18 @@ where
         )
     }
 
-    fn wrap_writer(&self, key: &ResourceKey, inner: A::ActiveRes) -> CachedWriter<A::ActiveRes> {
+    fn wrap_writer(
+        &self,
+        key: &ResourceKey,
+        inner: A::ActiveRes,
+        writing: Arc<()>,
+    ) -> CachedWriter<A::ActiveRes> {
         CachedWriter::new(
             Arc::clone(&self.pinned),
             key.clone(),
             inner,
             self.enforce_capacity.clone(),
+            writing,
         )
     }
 }
@@ -368,8 +393,9 @@ where
     type Context = A::Context;
     type ReadyRes = CachedReader<A::ReadyRes>;
 
-    /// Reactivating an in-flight slot mints a fresh-generation writer, and its current-generation
-    /// reader view is cached so concurrent opens block on the new generation's gate.
+    /// A live writer stays the only writer of its generation, so a second party joins as a reader.
+    /// A slot without one mints a fresh-generation writer, and its current-generation reader view
+    /// is cached so concurrent opens block on the new generation's gate.
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
@@ -380,6 +406,7 @@ where
             return Ok(self.wrap_acq(
                 key,
                 self.inner.acquire_resource_with_ctx(key, identity, ctx)?,
+                Arc::new(()),
             ));
         }
 
@@ -392,29 +419,38 @@ where
 
         let hit = cache.get_mut(&cache_key).map(|entry| {
             entry.hits = entry.hits.saturating_add(1);
-            (entry.reader.clone(), entry.hits)
+            entry.clone()
         });
-        if let Some((reader, hit_count)) = hit {
-            if matches!(reader.status(), ResourceStatus::Committed { .. }) {
+        if let Some(hit) = hit {
+            if hit.is_writing() {
                 drop(cache);
-                return Ok(AcquisitionResult::Ready(self.wrap_reader(key, reader)));
+                return Ok(AcquisitionResult::Joined(self.wrap_reader(key, hit.reader)));
             }
-            let writer = reader.reactivate()?;
+            if hit.is_committed() {
+                drop(cache);
+                return Ok(AcquisitionResult::Ready(self.wrap_reader(key, hit.reader)));
+            }
+            let writer = hit.reader.reactivate()?;
+            let writing = Arc::new(());
             cache.put(
                 cache_key,
                 CacheEntry {
                     reader: writer.reader(),
-                    hits: hit_count,
+                    hits: hit.hits,
+                    writer: Arc::downgrade(&writing),
                 },
             );
             drop(cache);
-            return Ok(AcquisitionResult::Pending(self.wrap_writer(key, writer)));
+            return Ok(AcquisitionResult::Pending(
+                self.wrap_writer(key, writer, writing),
+            ));
         }
 
         let acq = self.inner.acquire_resource_with_ctx(key, identity, ctx)?;
-        let reader_for_cache = match &acq {
-            AcquisitionResult::Pending(w) => w.reader(),
-            AcquisitionResult::Ready(r) => r.clone(),
+        let writing = Arc::new(());
+        let (reader_for_cache, writer) = match &acq {
+            AcquisitionResult::Pending(w) => (w.reader(), Arc::downgrade(&writing)),
+            AcquisitionResult::Ready(r) | AcquisitionResult::Joined(r) => (r.clone(), Weak::new()),
         };
         let displaced = self.cache_entry(
             &mut cache,
@@ -422,6 +458,7 @@ where
             CacheEntry {
                 reader: reader_for_cache,
                 hits: 1,
+                writer,
             },
         );
         let on_invalidated = self.on_invalidated.clone();
@@ -436,7 +473,7 @@ where
             enforce();
         }
 
-        Ok(self.wrap_acq(key, acq))
+        Ok(self.wrap_acq(key, acq, writing))
     }
 
     fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
@@ -477,7 +514,8 @@ where
 
         let mut cache = self.cache.lock();
 
-        if let Some(entry) = cache.get_mut(&cache_key) {
+        let dead = cache.peek(&cache_key).is_some_and(CacheEntry::is_dead);
+        if !dead && let Some(entry) = cache.get_mut(&cache_key) {
             entry.hits = entry.hits.saturating_add(1);
             return Ok(self.wrap_reader(key, entry.reader.clone()));
         }
@@ -485,22 +523,24 @@ where
         if ctx.is_none()
             && let Some(res) = cache
                 .iter()
-                .find(|(candidate_key, entry)| {
-                    candidate_key.key == *key
-                        && matches!(entry.reader.status(), ResourceStatus::Committed { .. })
-                })
+                .find(|(candidate_key, entry)| candidate_key.key == *key && entry.is_committed())
                 .map(|(_, entry)| entry.reader.clone())
         {
             return Ok(self.wrap_reader(key, res));
         }
 
         let res = self.inner.open_resource_with_ctx(key, identity, ctx)?;
+        if dead {
+            drop(cache);
+            return Ok(self.wrap_reader(key, res));
+        }
         let displaced = self.cache_entry(
             &mut cache,
             cache_key,
             CacheEntry {
                 reader: res.clone(),
                 hits: 1,
+                writer: Weak::new(),
             },
         );
         let on_invalidated = self.on_invalidated.clone();
@@ -579,7 +619,9 @@ mod tests {
     fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
         match acq {
             AcquisitionResult::Pending(w) => w,
-            AcquisitionResult::Ready(_) => panic!("expected a Pending writer"),
+            AcquisitionResult::Ready(_) | AcquisitionResult::Joined(_) => {
+                panic!("expected a Pending writer")
+            }
         }
     }
 
@@ -897,10 +939,12 @@ mod tests {
         let cached = make_cached(dir.path(), cap);
         let key = ResourceKey::relative(consts::LAYER_ROOT, "audio.mp3");
 
-        let res1 = pending(cached.acquire_resource(&key, None).unwrap());
-        let res2 = pending(cached.acquire_resource(&key, None).unwrap());
+        let writer = pending(cached.acquire_resource(&key, None).unwrap());
+        let AcquisitionResult::Joined(joined) = cached.acquire_resource(&key, None).unwrap() else {
+            panic!("a second acquire must join the live writer");
+        };
 
-        assert_eq!(res1.reader().path(), res2.reader().path());
+        assert_eq!(writer.reader().path(), joined.path());
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

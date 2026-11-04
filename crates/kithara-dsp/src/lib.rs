@@ -4,7 +4,9 @@
 //! select `fearless_simd` by CPU capability. `filter` supplies denormal-safe biquads,
 //! `interp` supplies fractional sampling and rate ramps, and feature-gated
 //! `spectrum` supplies Hann-windowed real FFT, bin magnitude/phase and
-//! autocorrelation. `sum_squares` reduces energy; `downmix` averages channels.
+//! autocorrelation. `delay` holds planar frame history in storage taken from
+//! the caller's buffer region. `sum_squares` reduces energy; `downmix`
+//! averages channels.
 //! Element-wise kernels (`ramp`, `div`, `affine`, `sub`, `scale_add`,
 //! `mul_add`, `add`) and `fade::gains` compose vector fades.
 #![forbid(unsafe_code)]
@@ -16,6 +18,8 @@
 
 mod backend;
 mod consts;
+/// Prepared planar frame history read before each write.
+pub mod delay;
 /// Fade curves: one lexicon for firewheel's `MixDSP` and every crossfade gain.
 pub mod fade;
 /// Biquad cascades over channel planes and the designs that feed them.
@@ -38,4 +42,6 @@ pub use backend::sanitize;
 pub use layout::{
     deinterleave_channel_major, deinterleave_variable, downmix, interleave_channel_major,
 };
-pub use vector::{add, affine, div, mul_add, ramp, scale_add, sub, sum_squares};
+pub use vector::{
+    add, affine, div, mul_add, multiply_in_place, ramp, scale_add, scale_in_place, sub, sum_squares,
+};

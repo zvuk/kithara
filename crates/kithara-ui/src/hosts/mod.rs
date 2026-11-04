@@ -13,5 +13,6 @@ pub(crate) mod scroll;
 pub(crate) mod shader;
 pub(crate) mod skin;
 pub(crate) mod solve;
+pub(crate) mod surface;
 pub(crate) mod vis;
 pub(crate) mod window;
