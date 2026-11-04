@@ -19,7 +19,8 @@ Vector DSP kernels over planar `f32` slices. The layout functions match
 every other target runs it on `fearless_simd` at the best SIMD level the CPU
 reports, and other channel counts take a bit-exact strided copy. `filter`
 runs multichannel biquad cascades and ordered FIR reconstruction; `envelope` links
-interval peaks and releases gains before clamping. `interp` reads a window at fractional
+interval peaks, takes each gain target's window minimum and releases gains before
+clamping. `interp` reads a window at fractional
 positions and `spectrum` takes the real FFT of a Hann-windowed frame on the
 same backends; `downmix` folds interleaved frames to mono and `sum_squares`
 reduces a slice. The FFT, the bin kernels and the autocorrelation build only
@@ -27,9 +28,10 @@ with the `spectrum` feature, off by default, so a build that runs no analysis
 compiles no FFT; `spectrum::FftLen` and `SpectrumError` are always
 available. No kernel panics; only `filter::Biquad::new`,
 `spectrum::Fft::new` and, off Apple, `Fft::spectrum` allocate.
-`Fft::spectrum` takes its sample planes, and `spectrum::Autocorrelation::new`
-its padding, from the caller's `kithara-bufpool` region; off Apple the complex
-planes of the transform are the FFT library's own.
+`Fft::spectrum` takes its sample planes, `spectrum::Autocorrelation::new`
+its padding and `envelope::MinimumWindow::new` its older targets from the
+caller's `kithara-bufpool` region; off Apple the complex planes of the
+transform are the FFT library's own.
 
 ## Usage
 

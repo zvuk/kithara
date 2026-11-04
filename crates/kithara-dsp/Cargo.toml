@@ -13,10 +13,10 @@ categories = ["multimedia::audio"]
 # The real FFT and autocorrelation of `spectrum`, their planes drawn from the
 # caller's `kithara-bufpool` region. `FftLen` and `SpectrumError` are
 # available without it.
-spectrum = ["dep:fieldwork", "dep:kithara-bufpool", "dep:realfft", "dep:rustfft"]
+spectrum = ["dep:fieldwork", "dep:realfft", "dep:rustfft"]
 
 [dependencies]
-kithara-bufpool = { workspace = true, optional = true }
+kithara-bufpool = { workspace = true }
 
 biquad = { workspace = true }
 fearless_simd = { workspace = true }

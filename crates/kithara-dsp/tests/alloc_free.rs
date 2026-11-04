@@ -11,9 +11,7 @@ use kithara_dsp::{
     filter::{Biquad, Coefficients, Hertz, Type},
     interp::{InterpError, Interpolation, interpolate},
 };
-#[cfg(feature = "spectrum")]
-use kithara_test_utils::bufpool::pools;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{bufpool::pools, kithara};
 
 #[global_allocator]
 static ALLOCATOR: AllocDisabler = AllocDisabler;
@@ -23,6 +21,7 @@ const TWO: NonZeroUsize = NonZeroUsize::MIN.saturating_add(1);
 const SIX: NonZeroUsize = NonZeroUsize::MIN.saturating_add(5);
 const TWELVE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(11);
 const PLANE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(FRAMES + 7);
+const WINDOW: NonZeroUsize = NonZeroUsize::MIN.saturating_add(299);
 #[cfg(feature = "spectrum")]
 const LAGS: NonZeroUsize = NonZeroUsize::MIN.saturating_add(511);
 
@@ -274,5 +273,38 @@ fn fir_history_peak_linking_and_envelope_never_allocate() {
         }
         detector.reset();
         envelope.reset();
+    });
+}
+
+#[kithara::test(native)]
+fn minimum_window_process_set_len_and_reset_never_allocate() {
+    let mut window = kithara_dsp::envelope::MinimumWindow::new(WINDOW, &pools())
+        .expect("the older targets fit the region");
+    let mut targets = [0.0_f32; FRAMES];
+    assert_no_alloc(|| {
+        for frames in [
+            FRAMES,
+            0,
+            1,
+            WINDOW.get() - 2,
+            WINDOW.get() - 1,
+            WINDOW.get(),
+            FRAMES,
+        ] {
+            let ascending = std::iter::successors(Some(0.0_f32), |value| Some(value + 1.0));
+            for (target, value) in targets.iter_mut().zip(ascending) {
+                *target = value;
+            }
+            assert_eq!(window.process(&mut targets[..frames]), frames);
+        }
+        window.reset();
+        window
+            .set_len(NonZeroUsize::MIN)
+            .expect("one target fits every window");
+        assert_eq!(window.process(&mut targets), FRAMES);
+        window
+            .set_len(WINDOW)
+            .expect("the capacity fits its own window");
+        assert_eq!(window.process(&mut targets), FRAMES);
     });
 }
