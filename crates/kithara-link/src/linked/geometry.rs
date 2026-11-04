@@ -1,7 +1,7 @@
 use kithara_beat::BeatGridModel;
 use kithara_play::{Outbox, PlayError, Position, Track, TrackSnapshot, TrackStatus};
 use kithara_signal::{FrameCount, SessionFrame};
-use kithara_sync::{SourceGrid, boundary, speed_curve};
+use kithara_sync::{Coverage, SourceGrid, SpeedCurve, boundary, speed_curve};
 use num_traits::ToPrimitive;
 
 use super::{Linked, LinkedPlayer, state::Cue};
@@ -122,14 +122,32 @@ impl<P> Linked<P> {
         .map_err(|error| PlayError::Internal(error.to_string()))
     }
 
+    /// The configured plan horizon in Host frames, saturating at the largest
+    /// frame count.
+    pub(super) fn horizon(&self) -> u64 {
+        let frames = self.config.horizon().as_nanos() * u128::from(self.host.sample_rate().get())
+            / 1_000_000_000;
+        u64::try_from(frames).unwrap_or(u64::MAX)
+    }
+
+    /// Records how far the speed plan sent from `start` reaches.
+    pub(super) fn plan_sent(&mut self, start: SessionFrame, coverage: Coverage) {
+        self.plan_end = match coverage {
+            Coverage::Until(frames) => usize::try_from(frames)
+                .ok()
+                .map(|frames| start + FrameCount::new(frames)),
+            Coverage::GridEnd => None,
+        };
+    }
+
     pub(super) fn curve(
         &self,
         grid: &SourceGrid,
         position: Position,
         at: SessionFrame,
         landing: Option<(Position, SessionFrame)>,
-    ) -> Result<kithara_sync::SpeedCurve, PlayError> {
-        speed_curve(&self.host, grid, position, at, landing).ok_or_else(|| {
+    ) -> Result<(SpeedCurve, Coverage), PlayError> {
+        speed_curve(&self.host, grid, position, at, landing, self.horizon()).ok_or_else(|| {
             let rate = f64::from(self.host.sample_rate().get());
             let track = grid.bpm_at_frame(position.as_secs_f64() * rate);
             let host = self.host.anchor_at(at).tempo_at(at) * 60.0;

@@ -66,6 +66,16 @@ pub struct LinkConfig {
     /// Time a new segment takes from its cue to ready on a silent deck.
     #[config(builder(default = Duration::from_millis(60)))]
     preparation: Duration,
+    /// Output time a sounding deck's speed plan follows the source grid past
+    /// its correction; the deck renews the plan half this time before it ends.
+    #[config(check = check_horizon, builder(default = Duration::from_secs(4)))]
+    horizon: Duration,
+}
+
+fn check_horizon(horizon: Duration) -> Result<Duration, LinkError> {
+    (!horizon.is_zero())
+        .then_some(horizon)
+        .ok_or(LinkError::Horizon { horizon })
 }
 
 fn check_epsilon(epsilon: f32) -> Result<f32, LinkError> {
@@ -168,6 +178,9 @@ pub struct Linked<P> {
     pub(super) waiting: Option<Waiting>,
     pub(super) correction: Option<(Seq, RunningCorrection)>,
     pub(super) alignment: Option<Cause>,
+    /// The first frame the last sent speed plan no longer covers; `None`
+    /// when it follows the grid to its end or none is sent.
+    pub(super) plan_end: Option<SessionFrame>,
     pub(super) speeds: Vec<(Seq, SpeedOperation)>,
     pub(super) start: Option<Seq>,
     pub(super) start_caller: Option<Seq>,
@@ -271,6 +284,7 @@ impl<P> Linked<P> {
             waiting: None,
             correction: None,
             alignment: None,
+            plan_end: None,
             speeds: Vec::new(),
             start: None,
             start_caller: None,

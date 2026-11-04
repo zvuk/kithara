@@ -5,7 +5,7 @@ use kithara_sync::{Slew, SlewCause, SpeedCurve, slew};
 use kithara_test_utils::{bufpool::TestPools, kithara};
 
 use super::fixtures::{
-    Command, Control, Deck, Rig, answer, consume, grid, load, loaded, position, sounding,
+    Command, Control, Deck, Rig, answer, consume, grid, horizon, load, loaded, position, sounding,
     source_grid, trajectory,
 };
 use crate::{LinkConfig, LinkedPlayer, SyncStatus};
@@ -857,7 +857,15 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     };
     let uncovered = grid(24_000, 12_000, Some((4, 0)), 960_000);
     assert_eq!(
-        slew(&host, &source_grid(&uncovered), media, start, 0.001, drift),
+        slew(
+            &host,
+            &source_grid(&uncovered),
+            media,
+            start,
+            0.001,
+            drift,
+            horizon()
+        ),
         Some(Slew::Relocate),
         "a half-beat drift is past the slew limit"
     );
@@ -906,7 +914,15 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     let Some(Slew::Closes {
         frames: frame_count,
         ..
-    }) = slew(&host, &source_grid(&revised), media, start, 0.001, drift)
+    }) = slew(
+        &host,
+        &source_grid(&revised),
+        media,
+        start,
+        0.001,
+        drift,
+        horizon(),
+    )
     else {
         panic!("bounded revised correction");
     };

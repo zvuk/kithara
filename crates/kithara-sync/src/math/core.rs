@@ -4,7 +4,7 @@ use num_traits::ToPrimitive;
 
 use super::{
     plan::{CorrectionPlan, CorrectionStep},
-    source::{self, Correction, CurveError, SourceGrid},
+    source::{self, Correction, Coverage, CurveError, SourceGrid, Span},
 };
 use crate::{
     Bound, MIN_SPEED, SessionBeat, SpeedCurve, TempoTrajectory, TrackGrid, consts::MAX_SPEED,
@@ -54,6 +54,8 @@ pub enum Slew {
         curve: SpeedCurve,
         /// Frames from the correction start to the closed phase.
         frames: u64,
+        /// How far the law follows the source grid.
+        coverage: Coverage,
     },
     /// The drift is over its limit, or the slew needs source beats past the
     /// grid's end: the deck relocates.
@@ -98,7 +100,8 @@ pub fn speed(
     (host.anchor_at(at).tempo_at(at) * grid.slope_at(position.as_secs_f64())?).to_f32()
 }
 
-/// The Host law composed with the actual source anchor and an optional jump landing.
+/// The Host law composed with the actual source anchor and an optional jump
+/// landing, planned `horizon` output frames past the landing.
 #[must_use]
 pub fn speed_curve(
     host: &TempoTrajectory,
@@ -106,10 +109,16 @@ pub fn speed_curve(
     position: Duration,
     at: SessionFrame,
     landing: Option<(Duration, SessionFrame)>,
-) -> Option<SpeedCurve> {
-    source::curve(host, grid, position, at, landing, &[(0, 0.0)], None)
+    horizon: u64,
+) -> Option<(SpeedCurve, Coverage)> {
+    let span = Span {
+        start: at,
+        landing,
+        horizon,
+    };
+    source::curve(host, grid, position, span, &[(0, 0.0)], None)
         .ok()
-        .map(|(curve, _)| curve)
+        .map(|(curve, _, coverage)| (curve, coverage))
 }
 
 /// What a slew starts from at its frame.
@@ -125,7 +134,8 @@ struct SlewStart {
 }
 
 /// Plans the slew that replaces the remaining correction and closes source
-/// beat phase from `at`; `None` when the grid has no speed law there.
+/// beat phase from `at`, `horizon` output frames past the closed phase;
+/// `None` when the grid has no speed law there.
 #[must_use]
 pub fn slew(
     host: &TempoTrajectory,
@@ -134,6 +144,7 @@ pub fn slew(
     at: SessionFrame,
     epsilon: f32,
     cause: SlewCause,
+    horizon: u64,
 ) -> Option<Slew> {
     let start = slew_start(host, grid, position, at, epsilon, cause)?;
     if let SlewCause::Drift { limit, .. } = cause
@@ -141,7 +152,12 @@ pub fn slew(
     {
         return Some(Slew::Relocate);
     }
-    close_slew(host, grid, position, at, epsilon, cause, &start)
+    let span = Span {
+        start: at,
+        landing: None,
+        horizon,
+    };
+    close_slew(host, grid, position, span, epsilon, cause, &start)
 }
 
 /// The speed law that closes the phase from `start`, or a relocation when it
@@ -150,7 +166,7 @@ fn close_slew(
     host: &TempoTrajectory,
     grid: &SourceGrid,
     position: Duration,
-    at: SessionFrame,
+    span: Span,
     epsilon: f32,
     cause: SlewCause,
     start: &SlewStart,
@@ -168,8 +184,12 @@ fn close_slew(
         scale: grid.maximum_slope()?,
         epsilon,
     };
-    match source::curve(host, grid, position, at, None, &offsets, Some(&correction)) {
-        Ok((curve, frames)) => Some(Slew::Closes { curve, frames }),
+    match source::curve(host, grid, position, span, &offsets, Some(&correction)) {
+        Ok((curve, frames, coverage)) => Some(Slew::Closes {
+            curve,
+            frames,
+            coverage,
+        }),
         Err(CurveError::PastGrid) => Some(Slew::Relocate),
         Err(CurveError::NoLaw) => None,
     }

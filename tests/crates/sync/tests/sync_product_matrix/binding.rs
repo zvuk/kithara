@@ -70,6 +70,15 @@ impl GridBinding {
     }
 }
 
+/// The default Linked plan horizon in `host` frames.
+fn plan_horizon(host: &TempoTrajectory) -> u64 {
+    u64::try_from(
+        LinkConfig::default().horizon().as_nanos() * u128::from(host.sample_rate().get())
+            / 1_000_000_000,
+    )
+    .expect("plan horizon fits in frames")
+}
+
 fn consumed_media_seconds(
     span: SourceSpan,
     output_frame: u64,
@@ -2342,6 +2351,7 @@ impl QueueLaw {
         let Some(Slew::Closes {
             curve,
             frames: deadline,
+            ..
         }) = slew(
             host,
             grid,
@@ -2349,6 +2359,7 @@ impl QueueLaw {
             applied.at,
             LinkConfig::default().epsilon(),
             cause,
+            plan_horizon(host),
         )
         else {
             return Err("Queue public correction has no canonical finite law".to_owned());
@@ -2779,7 +2790,7 @@ pub(super) fn queue_law(
         frame: start,
     };
     let grid = sync_source_grid(model, rate, cue.before.duration)?;
-    let curve = speed_curve(host, &grid, declared_cue, start, None)
+    let (curve, _) = speed_curve(host, &grid, declared_cue, start, None, plan_horizon(host))
         .ok_or_else(|| "Queue declared cue has no canonical source law".to_owned())?;
     if curve != cue.curve {
         return Err("Queue emitted cue law differs from declared cue/Host intent".to_owned());
@@ -4701,14 +4712,18 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     );
     let start = SessionFrame::new(23_998);
     let media = Duration::from_nanos(499_958_333);
-    let Some(Slew::Closes { curve, frames: end }) = slew(
+    let Some(Slew::Closes {
+        curve, frames: end, ..
+    }) = slew(
         &host,
         &source_grid,
         media,
         start,
         LinkConfig::default().epsilon(),
         SlewCause::Commanded,
-    ) else {
+        plan_horizon(&host),
+    )
+    else {
         panic!("finite phase correction");
     };
     let parts = analytic_parts(&curve).expect("analytic correction");

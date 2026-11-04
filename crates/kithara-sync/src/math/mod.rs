@@ -9,7 +9,7 @@ pub use core::{
 };
 
 pub use plan::{CorrectionPlan, CorrectionStep};
-pub use source::{SourceGrid, SourceGridError};
+pub use source::{Coverage, SourceGrid, SourceGridError};
 
 #[cfg(test)]
 mod tests;
