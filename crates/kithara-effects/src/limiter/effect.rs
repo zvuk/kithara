@@ -307,7 +307,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn varying_block_sizes_preserve_history_and_untouched_tails() {
         for channels in [1, 2, 8] {
             let rate = NonZeroU32::new(48_000).unwrap();
@@ -416,7 +416,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn reset_restores_the_scalar_lifecycle() {
         let mut actual = limiter(48_000, 50.0);
         let mut reference = scalar::ScalarLimiter::new(
