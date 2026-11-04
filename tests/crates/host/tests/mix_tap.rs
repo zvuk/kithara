@@ -601,6 +601,11 @@ async fn the_master_and_output_taps_run_together() {
 const LOOKAHEAD_MS: f32 = 10.0;
 /// Silent deck frames before the transient, past the block `play_source` renders untapped.
 const LEAD_FRAMES: usize = 2_000;
+/// Blocks a restart case renders before it restarts the route: past the first impulse and
+/// the lookahead, and before the second impulse.
+const RESTART_BLOCKS: usize = 6;
+/// Silent deck frames between the two impulses of a restart case.
+const RESTART_GAP_FRAMES: usize = 3_000;
 
 /// Master tap, output tap and `graph_out` of a deck playing `samples` through `limiter`.
 struct LimitedTake {
@@ -624,7 +629,8 @@ impl LimitedTake {
 }
 
 /// Play `samples`, one synthetic value per stereo frame at the fixture rate, through
-/// `limiter` for `BLOCKS` blocks, with or without blocking on underrun.
+/// `limiter`, rendering each of `segments` blocks in turn with a route restart between two
+/// segments, with or without blocking on underrun.
 ///
 /// Each lookahead case compares its take with the same limiter at zero lookahead: the
 /// sound moves by exactly the reported frames, audio below the ceiling keeps its bits,
@@ -634,6 +640,7 @@ async fn limited_take(
     block_on_underrun: bool,
     limiter: LimiterConfig,
     samples: Vec<f32>,
+    segments: &[usize],
 ) -> LimitedTake {
     let rate = NonZeroU32::new(SAMPLE_RATE).expect("fixture rate");
     let session = HostConfig::offline(pools())
@@ -664,7 +671,17 @@ async fn limited_take(
         .attach_tap(Tap::Output, ROOMY_CAPACITY)
         .await
         .expect("output tap");
-    let rendered = render_blocks(&harness, BLOCKS).await;
+    let mut rendered = Vec::new();
+    for (index, blocks) in segments.iter().enumerate() {
+        if index > 0 {
+            harness
+                .host()
+                .invalidate_audio_route("lookahead route restart")
+                .await
+                .expect("invalidate the audio route");
+        }
+        rendered.extend(render_blocks(&harness, *blocks).await);
+    }
     assert_eq!(
         harness.metrics().underruns(),
         0,
@@ -713,8 +730,14 @@ async fn lookahead_delays_the_mix(block_on_underrun: bool) {
         .chain([0.5])
         .chain(std::iter::repeat_n(0.0, 3_000))
         .collect();
-    let reference = limited_take(block_on_underrun, zero_lookahead(config), samples.clone()).await;
-    let delayed = limited_take(block_on_underrun, config, samples).await;
+    let reference = limited_take(
+        block_on_underrun,
+        zero_lookahead(config),
+        samples.clone(),
+        &[BLOCKS],
+    )
+    .await;
+    let delayed = limited_take(block_on_underrun, config, samples, &[BLOCKS]).await;
     for take in [&reference, &delayed] {
         assert_eq!(
             take.master, take.rendered,
@@ -763,8 +786,14 @@ async fn final_transient_drains_once(block_on_underrun: bool) {
     let samples: Vec<f32> = std::iter::repeat_n(0.0, LEAD_FRAMES)
         .chain([1.96])
         .collect();
-    let reference = limited_take(block_on_underrun, zero_lookahead(config), samples.clone()).await;
-    let delayed = limited_take(block_on_underrun, config, samples).await;
+    let reference = limited_take(
+        block_on_underrun,
+        zero_lookahead(config),
+        samples.clone(),
+        &[BLOCKS],
+    )
+    .await;
+    let delayed = limited_take(block_on_underrun, config, samples, &[BLOCKS]).await;
     for take in [&reference, &delayed] {
         assert_eq!(
             take.master, take.rendered,
@@ -791,6 +820,78 @@ async fn final_transient_drains_once(block_on_underrun: bool) {
         assert!(
             sample.abs() <= ceiling,
             "{sample} exceeds the ceiling {ceiling}"
+        );
+    }
+}
+
+#[cfg(not(rtsan))]
+#[kithara::test(tokio)]
+async fn a_nonzero_lookahead_delays_the_mix_by_its_frames_across_a_route_restart() {
+    lookahead_across_a_restart(true).await;
+}
+
+#[kithara::test(tokio)]
+async fn nonblocking_a_nonzero_lookahead_delays_the_mix_by_its_frames_across_a_route_restart() {
+    lookahead_across_a_restart(false).await;
+}
+
+async fn lookahead_across_a_restart(block_on_underrun: bool) {
+    // WHY: The first impulse leaves the delay before the restart; the second, the deck's
+    // last frame, enters the retuned delay after it and drains while the input is silent.
+    let config = lookahead_config(50.0);
+    let latency = config.latency_frames(NonZeroU32::new(SAMPLE_RATE).expect("fixture rate"));
+    assert_eq!(latency, 441);
+    let samples: Vec<f32> = std::iter::repeat_n(0.0, LEAD_FRAMES)
+        .chain([0.5])
+        .chain(std::iter::repeat_n(0.0, RESTART_GAP_FRAMES))
+        .chain([0.5])
+        .collect();
+    let segments = [RESTART_BLOCKS, BLOCKS - RESTART_BLOCKS];
+    let reference = limited_take(
+        block_on_underrun,
+        zero_lookahead(config),
+        samples.clone(),
+        &segments,
+    )
+    .await;
+    let delayed = limited_take(block_on_underrun, config, samples, &segments).await;
+    for take in [&reference, &delayed] {
+        assert_eq!(
+            take.rendered.len(),
+            BLOCKS * BLOCK_FRAMES * 2,
+            "every block renders across the restart"
+        );
+        assert_eq!(
+            take.master, take.rendered,
+            "the master tap carries the limited mix"
+        );
+        assert_eq!(
+            take.output, take.rendered,
+            "the output tap carries what graph_out plays"
+        );
+    }
+    let [first, second] = reference.sounding()[..] else {
+        panic!(
+            "the reference plays both impulses once: {:?}",
+            reference.sounding()
+        );
+    };
+    let restart = RESTART_BLOCKS * BLOCK_FRAMES;
+    assert!(
+        first + latency < restart && second >= restart,
+        "the restart falls after the first impulse leaves the delay and before the second \
+         enters it: {first}, {second}, restart at {restart}"
+    );
+    assert_eq!(
+        delayed.sounding(),
+        [first + latency, second + latency],
+        "both impulses are delayed by the reported frames"
+    );
+    for heard in [first, second] {
+        assert_eq!(
+            delayed.rendered[2 * (heard + latency)..2 * (heard + latency + 1)],
+            reference.rendered[2 * heard..2 * (heard + 1)],
+            "audio below the ceiling keeps its bits through the delay"
         );
     }
 }
