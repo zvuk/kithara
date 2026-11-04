@@ -78,6 +78,7 @@ impl PlayerTrack {
 
     delegate::delegate! {
         to self.resource {
+            pub(in crate::rt) fn waits_offline(&self) -> bool;
             #[must_use]
             pub fn duration(&self) -> f64;
             #[must_use]

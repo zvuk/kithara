@@ -222,10 +222,10 @@ fn a_silent_retime_keeps_the_callers_frame_and_latest_native_cue() {
     host.push(frame, Tempo::new(108.0).expect("tempo"))
         .expect("retime");
     control.clear();
-    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, frame, out));
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[frame], out));
     let first = control.commands()[0].0;
     control.clear();
-    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, frame, out));
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[frame], out));
     let latest = control.commands()[0].0;
     assert_ne!(first, latest);
     assert_eq!(LinkedPlayer::retime_applied(&mut deck, frame), None);
@@ -264,7 +264,7 @@ fn an_entry_replacement_transfers_all_retime_callers_to_its_current_receipt(
     let mut previous = None;
     for caller in callers {
         control.clear();
-        rig.run(|out| LinkedPlayer::retime(&mut deck, &host, caller, out));
+        rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[caller], out));
         let seq = control.commands()[0].0;
         rig.apply(&mut deck, seq, 0);
         assert_eq!(LinkedPlayer::retime_applied(&mut deck, caller), Some(true));
@@ -335,7 +335,7 @@ fn a_silent_rebind_after_eof_prepares_zero_before_native_ready_and_play(#[case] 
         let mut host = trajectory(120.0, 4);
         host.push(caller, Tempo::new(108.0).expect("tempo"))
             .expect("target");
-        rig.run(|out| LinkedPlayer::retime(&mut deck, &host, caller, out));
+        rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[caller], out));
     } else {
         rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
             .expect("sync after EOF")
@@ -796,7 +796,7 @@ fn the_launch_window_starts_at_the_first_frame_the_caller_reaches() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(120.0, 4),
-            SessionFrame::new(48_001),
+            &[SessionFrame::new(48_001)],
             out,
         );
     });
@@ -844,7 +844,12 @@ fn a_boundary_rounded_onto_the_first_window_frame_is_admitted() {
     let (mut deck, control, mut rig, _) = super::fixtures::loaded(grid(24_000, 0, None, 480_000));
     rig.delivery = FrameCount::new(0);
     rig.run(|out| {
-        LinkedPlayer::retime(&mut deck, &trajectory(123.0, 4), SessionFrame::new(0), out);
+        LinkedPlayer::retime(
+            &mut deck,
+            &trajectory(123.0, 4),
+            &[SessionFrame::new(0)],
+            out,
+        );
     });
     let seq = rig
         .run(|out| LinkedPlayer::sync(&mut deck, true, out))

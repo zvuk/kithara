@@ -24,7 +24,7 @@ use super::{
 };
 use crate::{
     bridge::{
-        DeckEvent, DeckMixSettings, DeckProtocol, DeckSnapshot, MixerInputs, RtMetrics,
+        DeckEvent, DeckMixSettings, DeckPart, DeckProtocol, DeckSnapshot, MixerInputs, RtMetrics,
         SessionInbox, Slot, SlotSnapshot, SlotState,
     },
     rt::{RenderPass, TrackSlots},
@@ -122,6 +122,71 @@ impl<E: SessionInbox> DeckMixer<E> {
         Ok(mixer)
     }
 
+    pub(in crate::rt) fn update_sample_rate(&mut self, rate: NonZeroU32) {
+        self.deck.update_host_sample_rate(rate);
+    }
+
+    pub(in crate::rt) fn prepare_offline(
+        &mut self,
+        level: Option<LevelInbox<'_, DeckProtocol>>,
+        start: SessionFrame,
+        frames: usize,
+        rate: NonZeroU32,
+    ) -> usize {
+        self.update_sample_rate(rate);
+        let frames = frames.min(self.capacity);
+        let Some(mut level) = level.filter(|_| !self.retired) else {
+            return frames;
+        };
+        let waits = self
+            .deck
+            .tracks
+            .iter_mut()
+            .any(|(_, track)| track.waits_offline())
+            || level.pending_commands().any(|part| match part {
+                DeckPart::Attach { pcm, .. } | DeckPart::Replace { pcm, .. } => pcm.waits_offline(),
+                _ => false,
+            });
+        if !waits {
+            return frames;
+        }
+        self.deck.recycle.fill(usize::MAX);
+        self.deck.arrivals(&mut level);
+        loop {
+            let Some(due) = level.next_due(start, 1) else {
+                break;
+            };
+            self.deck.take_due(due, true, true);
+            self.deck.resolve_armed(&mut level, start, start);
+        }
+        loop {
+            self.deck.maintain();
+            for (_, track) in self.deck.tracks.iter_mut() {
+                track.prepare_offline();
+            }
+            let ended = self.deck.observe_ends(0, start, &mut level);
+            self.deck.fire_ended(&mut level, start, start, true, true);
+            if !ended {
+                break;
+            }
+        }
+        let commands = level
+            .frames_until_due(start)
+            .and_then(|frames| usize::try_from(frames).ok())
+            .unwrap_or(frames);
+        self.deck
+            .tracks
+            .iter_mut()
+            .filter_map(|(_, track)| {
+                track
+                    .prepare_offline()
+                    .then(|| track.frames_until_boundary(start))
+                    .flatten()
+            })
+            .fold(frames.min(commands), usize::min)
+            .max(1)
+    }
+
     #[must_use]
     pub fn track(&self, slot: Slot) -> Option<&PlayerTrack> {
         if self.retired {
@@ -191,14 +256,15 @@ impl<E: SessionInbox> DeckMixer<E> {
                 let Some(due) = level.next_due(start, cursor.saturating_add(1)) else {
                     break;
                 };
-                self.deck.take_due(due, context.is_some());
+                self.deck.take_due(due, context.is_some(), false);
                 self.deck.resolve_armed(level, start, at);
             }
             self.deck.maintain();
             if context.is_some() {
                 self.deck.observe_ends(cursor, start, level);
             }
-            self.deck.fire_ended(level, start, at, context.is_some());
+            self.deck
+                .fire_ended(level, start, at, context.is_some(), false);
             let command_frames = level
                 .frames_until_due(at)
                 .and_then(|count| usize::try_from(count).ok())
@@ -328,13 +394,15 @@ impl Deck {
         cursor: usize,
         start: SessionFrame,
         level: &mut LevelInbox<'_, DeckProtocol>,
-    ) {
+    ) -> bool {
+        let mut ended = false;
         for slot in self.tracks.slots() {
             let Some(track) = self.tracks.at_mut(slot) else {
                 continue;
             };
             let mut sink = RtSink::new(&mut self.events, &self.metrics, slot, start);
             if track.poll_end(cursor, &mut self.recycle[slot.index()], &mut sink) {
+                ended = true;
                 let curve = output_curve(level, track.output_program(), slot);
                 let completed = track.cancel_output(curve, sink.at(cursor));
                 if let Some(seq) = completed {
@@ -342,6 +410,7 @@ impl Deck {
                 }
             }
         }
+        ended
     }
 
     fn render_range(

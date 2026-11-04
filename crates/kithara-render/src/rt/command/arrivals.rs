@@ -35,7 +35,12 @@ impl Deck {
         }
     }
 
-    pub(in crate::rt) fn take_due(&mut self, mut due: Due<'_, DeckProtocol>, context_valid: bool) {
+    pub(in crate::rt) fn take_due(
+        &mut self,
+        mut due: Due<'_, DeckProtocol>,
+        context_valid: bool,
+        wait_for_pcm: bool,
+    ) {
         if due
             .commands()
             .iter()
@@ -66,7 +71,7 @@ impl Deck {
             if let Some(slot) = shifted_slot(&part) {
                 self.interrupt_stop(&mut due, slot, remaining);
             }
-            if let Some(returned) = self.apply(part, at, seq, context_valid) {
+            if let Some(returned) = self.apply(part, at, seq, context_valid, wait_for_pcm) {
                 due.commands_mut().push(returned);
             }
         }
@@ -130,6 +135,7 @@ impl Deck {
         start: SessionFrame,
         at: SessionFrame,
         context_valid: bool,
+        wait_for_pcm: bool,
     ) {
         loop {
             let next = self
@@ -170,7 +176,7 @@ impl Deck {
                     }
                 }
             }
-            if let Some(returned) = self.apply(part, at, seq, context_valid) {
+            if let Some(returned) = self.apply(part, at, seq, context_valid, wait_for_pcm) {
                 due.commands_mut().push(returned);
             }
             due.apply(());

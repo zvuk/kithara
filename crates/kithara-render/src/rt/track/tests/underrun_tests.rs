@@ -25,7 +25,7 @@ use crate::{
 };
 
 #[kithara::test(native)]
-fn a_blocking_read_waits_for_the_lane_instead_of_underrunning() {
+fn offline_preparation_waits_for_the_lane_instead_of_underrunning() {
     use kithara_platform::{thread, time::Duration};
 
     let runtime = kithara_platform::tokio::runtime::Builder::new_current_thread()
@@ -78,6 +78,8 @@ fn a_blocking_read_waits_for_the_lane_instead_of_underrunning() {
     let mut bus_left = [0.0; 2];
     let mut bus_right = [0.0; 2];
     let mut sink = RtSink::new(&mut events, &metrics, Slot::new(0), start);
+    assert!(track.prepare_offline());
+    let prepared_waits = trace.events_of("pcm_wait_started").len();
     let outcome = track.render(
         Some(&context),
         TrackBuffers {
@@ -90,6 +92,7 @@ fn a_blocking_read_waits_for_the_lane_instead_of_underrunning() {
         None,
     );
     assert!(matches!(outcome, TrackReadOutcome::Full { frames: 2, .. }));
+    assert_eq!(trace.events_of("pcm_wait_started").len(), prepared_waits);
     assert_eq!(left, [0.7, 0.8]);
     assert_eq!(right, left);
     assert_eq!(track.gap, 0);
@@ -244,4 +247,27 @@ async fn underrun_edges_emit_once_per_starvation_window() {
     assert!(matches!(receiver.try_pop(), Some(DeckEvent::Ended { .. })));
     assert!(receiver.try_pop().is_none());
     assert_eq!(metrics.snapshot().underruns(), 2);
+}
+
+#[kithara::test(native, tokio, hang_timeout_secs(1))]
+async fn a_graph_read_does_not_wait_for_an_offline_lane() {
+    let mut fixture = PcmFixture::new(8, true).await;
+    let mut resource = PlayerResource::new(
+        PcmConsumer::new(fixture.receiver.take().expect("receiver")),
+        Arc::from("unprepared-offline"),
+        &pools(),
+    )
+    .expect("resource");
+    let trace = usdt::scope();
+    let mut left = [99.0; 2];
+    let mut right = [99.0; 2];
+    let outcome = resource.read(None, &mut [&mut left, &mut right], 0..2, &mut 16);
+    assert!(matches!(
+        outcome,
+        crate::rt::track::ReadOutcome::Full { frames: 0 }
+    ));
+    assert_eq!(left, [0.0; 2]);
+    assert_eq!(right, left);
+    assert!(trace.events_of("pcm_wait_started").is_empty());
+    drop(trace);
 }

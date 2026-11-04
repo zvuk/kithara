@@ -1,17 +1,20 @@
-use std::{marker::PhantomData, num::NonZeroU32};
+use std::num::NonZeroU32;
 
 use kithara_bufpool::HasPool;
 use kithara_command::{
     Batch, ChannelConfig, Outcome, Port, Rejection, ScopedReceipt, Sender, Seq, When, channel,
 };
 use kithara_config::ConfigOwner;
-use kithara_platform::maybe_send::MaybeSend;
-pub use kithara_play::DeckControl;
-use kithara_play::{DeckPass, HostedDeck, Outbox, PlayError, ResourceLoad, TrackReceipt};
+use kithara_play::{
+    DeckControl, DeckPass, HostedDeck, Outbox, PlayError, ResourceLoad, TrackReceipt,
+};
 use kithara_render::{DispatcherProtocol, PlayWorker, bridge::DeckPart};
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_signal::SessionFrame;
 use kithara_worker::TaskHandle;
 
+use super::{DeckId, HostCommand, HostOwner, HostRegistration, HostSettled, PassClock};
+#[cfg(feature = "offline")]
+use crate::session::state::SessionStream;
 use crate::{
     HostSettingsChange, HostSettingsExec,
     session::{
@@ -19,100 +22,10 @@ use crate::{
         decks::{Deck, DeckInbox, DeckMsg, DeckWake, Decks},
         dispatch::tick_session,
         graph,
-        state::{SessionState, SessionStream},
+        state::{DeviceBackend, SessionState},
         transport::TransportState,
     },
 };
-
-/// The existing identity used for decks and their beat grids.
-pub type DeckId = kithara_warp::BeatGridId;
-
-/// A visit to one held deck during its owner's current pass.
-type DeckVisit<'a, S, D> = &'a mut (dyn FnMut(&mut D, &mut Outbox<'_, S>, DeckPass<'_>) + 'a);
-/// A visit that also receives the held deck's identity.
-type EachDeckVisit<'a, S, D> =
-    &'a mut (dyn FnMut(DeckId, &mut D, &mut Outbox<'_, S>, DeckPass<'_>) + 'a);
-
-/// What the session thread drives, including decorators over its base owner.
-pub trait HostOwner<S>:
-    HostSettingsExec<(), At = When<SessionFrame>, Output = Result<Option<Seq>, PlayError>> + 'static
-{
-    /// Commands posted by the Host handle.
-    type Command: From<HostCommand<S, Self::Deck>> + MaybeSend;
-    /// The deck objects held by this owner.
-    type Deck: ?Sized + HostedDeck<S>;
-
-    /// Runs a command and returns the batch it sent, if any.
-    ///
-    /// # Errors
-    /// Propagates registration and deck-close refusals; returns
-    /// [`PlayError::Late`] or [`PlayError::Untimed`] for inadmissible timing,
-    /// [`PlayError::InvalidParameter`] for invalid settings, and
-    /// [`PlayError::Session`] for graph, tap, backend, or
-    /// [`SessionError::HostQueueFull`] admission failures.
-    /// Returns [`PlayError::Internal`] for an invalid marker command or owner
-    /// setup failure, and [`PlayError::Closed`] for a retired command channel.
-    fn apply(&mut self, command: Self::Command) -> Result<Option<Seq>, PlayError>;
-    /// Builds and holds a deck's mixer and owner record.
-    ///
-    /// # Errors
-    /// Returns [`PlayError::Session`] for duplicate deck identities, missing
-    /// context, invalid buffer geometry, graph edits, or backend startup failure.
-    /// Returns [`PlayError::Internal`] for a missing worker, dispatcher startup,
-    /// scope allocation failure, or invalid mixer settings. Returns
-    /// [`PlayError::Closed`] for a retired channel or deck scope.
-    fn register(&mut self, id: DeckId, deck: Box<Self::Deck>) -> Result<(), PlayError>;
-    /// Lends each deck its outbox and current pass.
-    fn each_deck(&mut self, visit: EachDeckVisit<'_, S, Self::Deck>);
-    /// Lends the named deck its outbox and current pass.
-    ///
-    /// # Errors
-    /// Returns [`PlayError::Session`] with [`SessionError::DeckNotFound`] if the
-    /// deck is absent, or [`PlayError::Closed`] if its channel or scope is retired.
-    fn with_deck(
-        &mut self,
-        id: DeckId,
-        visit: DeckVisit<'_, S, Self::Deck>,
-    ) -> Result<(), PlayError>;
-    /// Current frame and delivery lead, absent before a render graph exists.
-    fn clock(&self) -> Option<(SessionFrame, FrameCount)>;
-    /// Prepares the offline stream before the block's owner publication.
-    ///
-    /// # Errors
-    /// Returns [`PlayError::Session`] on graph or backend startup failure, or
-    /// [`PlayError::Internal`] when offline support is absent or the host is realtime.
-    fn prepare_offline(&mut self) -> Result<(), PlayError>;
-    /// Processes one offline block after the owner has published its commands.
-    ///
-    /// # Errors
-    /// Returns [`PlayError::Internal`] if offline support or the prepared stream
-    /// is absent, or if the timeline or output buffer geometry is invalid.
-    fn render_offline(
-        &mut self,
-        position: u64,
-        frames: usize,
-        output: &mut [f32],
-    ) -> Result<(), PlayError>;
-    /// Reads the latest applied transport anchor from its processor observation.
-    fn transport(&mut self) -> Option<crate::api::SessionTransportSnapshot>;
-    /// Available batches in the host ring.
-    fn host_room(&self) -> usize;
-    /// Reads the iteration clock and settles receipts before handling posts.
-    fn begin_pass(&mut self);
-    /// A release post waits for this deck's scope retirement.
-    fn release_id(command: &Self::Command) -> Option<DeckId>;
-    /// Identifies consecutive next-block tempo posts that share one winner.
-    fn is_next_tempo(command: &Self::Command) -> bool;
-    /// Settles executor receipts and publishes the owner snapshot.
-    fn pass(&mut self) -> Vec<HostSettled>;
-}
-
-/// Converts a concrete control-bearing deck into the owning layer's held face.
-/// `Face` selects the source capability converted into [`HostOwner::Deck`].
-pub trait HostRegistration<S, D: DeckControl, Face: ?Sized>: HostOwner<S> {
-    /// Transfers the deck without duplicating its owner or control endpoint.
-    fn into_deck(deck: D) -> Box<Self::Deck>;
-}
 
 impl<S, D> HostRegistration<S, D, dyn HostedDeck<S>> for HostCore<S>
 where
@@ -124,46 +37,9 @@ where
     }
 }
 
-/// One operation on the canonical owner, answered after checks and sending.
-pub enum HostCommand<S, D: ?Sized> {
-    Register {
-        id: DeckId,
-        deck: Box<D>,
-    },
-    Configure(HostSettingsChange, When<SessionFrame>),
-    Close(DeckId),
-    Release(DeckId),
-    AttachOutputs {
-        tap: crate::api::Tap,
-        outputs: kithara_output::OutputGroup,
-    },
-    DetachOutputs {
-        tap: crate::api::Tap,
-    },
-    Restart,
-    #[doc(hidden)]
-    _Marker(PhantomData<fn() -> S>),
-}
-
-/// The final outcome of a host-settings batch.
-pub enum HostSettled {
-    Settings {
-        seq: Seq,
-        change: HostSettingsChange,
-        outcome: Result<SessionFrame, Rejection<PlayError>>,
-    },
-    Batch {
-        seq: Seq,
-        outcome: Result<SessionFrame, Rejection<PlayError>>,
-    },
-    Closed {
-        deck: DeckId,
-    },
-}
-
 /// The base owner of a session, its deck records and its single load dispatcher.
 pub struct HostCore<S: 'static, D: ?Sized + HostedDeck<S> = dyn HostedDeck<S>> {
-    pub(crate) session: SessionState<SessionStream, S>,
+    pub(crate) session: SessionState<DeviceBackend, S>,
     decks: Decks<S, D>,
     dispatcher: Sender<DispatcherProtocol<ResourceLoad<S>>>,
     dispatcher_inbox: Option<kithara_command::Inbox<DispatcherProtocol<ResourceLoad<S>>>>,
@@ -178,7 +54,7 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     pub(crate) fn new(
-        session: SessionState<SessionStream, S>,
+        session: SessionState<DeviceBackend, S>,
         inbox: kithara_platform::sync::Arc<dyn DeckInbox>,
     ) -> Self {
         let (dispatcher, dispatcher_inbox) = channel(ChannelConfig::builder().build());
@@ -237,8 +113,10 @@ where
         if self.session.iteration_clock.is_none() {
             self.session.begin_iteration();
         }
-        let delivery = self.session.delivery();
-        self.session.iteration_clock = self.session.iteration_clock.map(|(now, _)| (now, delivery));
+        self.session.iteration_clock = self
+            .session
+            .iteration_clock
+            .map(|clock| self.session.clock_at(clock.now));
         self.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))?;
         self.publish_root();
         Ok(())
@@ -406,8 +284,8 @@ where
         &mut self,
         visit: &mut dyn FnMut(DeckId, &mut D, &mut Outbox<'_, S>, DeckPass<'_>),
     ) {
-        let clock = self.clock();
-        let (now, delivery) = clock.unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
+        let timed = self.clock();
+        let clock = timed.unwrap_or_default();
         let output = self.session.root_view.output.get();
         let Some(channel) = &mut self.session.channel else {
             return;
@@ -419,8 +297,9 @@ where
             let pass = DeckPass {
                 mix: *record.mix.config(),
                 suspended,
-                now,
-                delivery,
+                now: clock.now,
+                delivery: clock.delivery,
+                deck_delivery: clock.deck_delivery,
                 output: &output,
                 deck: record.snapshot.read(),
             };
@@ -435,7 +314,7 @@ where
                     pass.deck.blocks,
                 )
                 .track_dispatches(&mut record.dispatches);
-            if clock.is_some() {
+            if timed.is_some() {
                 out = out.in_pass(pass);
             }
             visit(*id, &mut record.deck, &mut out, pass);
@@ -448,8 +327,8 @@ where
         visit: &mut dyn FnMut(&mut D, &mut Outbox<'_, S>, DeckPass<'_>),
     ) -> Result<(), PlayError> {
         let index = self.decks.index(id)?;
-        let clock = self.clock();
-        let (now, delivery) = clock.unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
+        let timed = self.clock();
+        let clock = timed.unwrap_or_default();
         let output = self.session.root_view.output.get();
         let record = &mut self.decks.0[index].1;
         let suspended = record
@@ -458,8 +337,9 @@ where
         let pass = DeckPass {
             mix: *record.mix.config(),
             suspended,
-            now,
-            delivery,
+            now: clock.now,
+            delivery: clock.delivery,
+            deck_delivery: clock.deck_delivery,
             output: &output,
             deck: record.snapshot.read(),
         };
@@ -478,14 +358,14 @@ where
                 pass.deck.blocks,
             )
             .track_dispatches(&mut record.dispatches);
-        if clock.is_some() {
+        if timed.is_some() {
             out = out.in_pass(pass);
         }
         visit(&mut record.deck, &mut out, pass);
         Ok(())
     }
 
-    fn clock(&self) -> Option<(SessionFrame, FrameCount)> {
+    fn clock(&self) -> Option<PassClock> {
         self.session.iteration_clock
     }
 
@@ -515,13 +395,27 @@ where
         frames: usize,
         output: &mut [f32],
     ) -> Result<(), PlayError> {
+        let clock = self
+            .session
+            .ctx
+            .as_ref()
+            .ok_or_else(|| PlayError::Internal("offline context is not prepared".to_owned()))?
+            .audio_clock()
+            .samples
+            .0;
         let Some(SessionStream::Offline(stream)) = &mut self.session.stream else {
             return Err(PlayError::Internal(
                 "offline stream is not prepared".to_owned(),
             ));
         };
         let result = stream
-            .render(position, frames, output)
+            .render(
+                position,
+                SessionFrame::new(clock),
+                frames,
+                output,
+                &mut self.session.deck_nodes,
+            )
             .map_err(|error| PlayError::Internal(error.to_string()));
         if let Some((task, _)) = &self.dispatcher_task {
             task.control().wake();
@@ -570,9 +464,7 @@ where
 
     fn begin_pass(&mut self) {
         self.session.begin_iteration();
-        let (now, delivery) = self
-            .clock()
-            .unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
+        let clock = self.clock().unwrap_or_default();
         let output = self.session.root_view.output.get();
         loop {
             let receipt = {
@@ -614,8 +506,9 @@ where
             let pass = DeckPass {
                 mix: *record.mix.config(),
                 suspended,
-                now,
-                delivery,
+                now: clock.now,
+                delivery: clock.delivery,
+                deck_delivery: clock.deck_delivery,
                 output: &output,
                 deck: record.snapshot.read(),
             };
@@ -663,7 +556,7 @@ where
             }
         }
         self.retire_stopped_scopes();
-        self.route_receipts(now, delivery);
+        self.route_receipts(clock);
         self.poll_events();
     }
 
@@ -677,10 +570,8 @@ where
             tracing::warn!(%error, "host publication gate closed");
         }
         self.retire_stopped_scopes();
-        let (now, delivery) = self
-            .clock()
-            .unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
-        self.route_receipts(now, delivery);
+        let clock = self.clock().unwrap_or_default();
+        self.route_receipts(clock);
         if self.session.stream.is_none()
             && self.decks.0.is_empty()
             && let Err(error) = graph::drop_idle_context(&mut self.session)
@@ -719,7 +610,7 @@ where
         }
     }
 
-    fn route_receipts(&mut self, now: SessionFrame, delivery: FrameCount) {
+    fn route_receipts(&mut self, clock: PassClock) {
         let output = self.session.root_view.output.get();
         loop {
             let Some(receipt) = self
@@ -777,8 +668,9 @@ where
                         let pass = DeckPass {
                             mix: *record.mix.config(),
                             suspended,
-                            now,
-                            delivery,
+                            now: clock.now,
+                            delivery: clock.delivery,
+                            deck_delivery: clock.deck_delivery,
                             output: &output,
                             deck: record.snapshot.read(),
                         };
@@ -831,7 +723,7 @@ where
 
     fn poll_events(&mut self) {
         let output = self.session.root_view.output.get();
-        if let Some((now, delivery)) = self.session.iteration_clock
+        if let Some(clock) = self.session.iteration_clock
             && let Some(channel) = &mut self.session.channel
         {
             for (_, record) in &mut self.decks.0 {
@@ -841,8 +733,9 @@ where
                 let pass = DeckPass {
                     mix: *record.mix.config(),
                     suspended,
-                    now,
-                    delivery,
+                    now: clock.now,
+                    delivery: clock.delivery,
+                    deck_delivery: clock.deck_delivery,
                     output: &output,
                     deck: record.snapshot.read(),
                 };
@@ -978,6 +871,6 @@ impl<S: 'static, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
             }
         }
         self.retire_stopped_scopes();
-        self.route_receipts(SessionFrame::new(0), FrameCount::new(0));
+        self.route_receipts(PassClock::default());
     }
 }
