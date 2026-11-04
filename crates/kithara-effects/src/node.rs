@@ -1,7 +1,4 @@
-use core::{
-    fmt::Write as _,
-    num::{NonZeroU32, NonZeroUsize},
-};
+use core::{fmt::Write as _, num::NonZeroU32};
 
 use firewheel::{
     StreamInfo,
@@ -15,10 +12,7 @@ use firewheel::{
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_test_utils::kithara;
 
-use crate::{LimiterConfig, LimiterError, PeakLimiter};
-
-/// Channels the limiter node carries.
-const STEREO: NonZeroUsize = NonZeroUsize::new(2).expect("invariant: 2 is non-zero");
+use crate::{LimiterConfig, LimiterError, PeakLimiter, consts::STEREO};
 
 /// Firewheel adapter around the shared [`PeakLimiter`]: the only site that sees
 /// Firewheel buffers.
@@ -138,7 +132,12 @@ impl AudioNodeProcessor for LimiterProcessor {
         ];
         self.limiter.process_planar(&mut channels);
 
-        if info.in_silence_mask.all_channels_silent(STEREO.get()) {
+        // A silent input block still carries the delayed audio of a lookahead.
+        if info.in_silence_mask.all_channels_silent(STEREO.get())
+            && channels
+                .iter()
+                .all(|channel| channel.iter().all(|sample| *sample == 0.0))
+        {
             ProcessStatus::OutputsModifiedWithMask(MaskType::Silence(info.in_silence_mask))
         } else {
             ProcessStatus::OutputsModified
@@ -338,11 +337,60 @@ mod tests {
     }
 
     #[kithara::test]
+    fn silent_input_blocks_carry_the_delayed_audio_until_it_drains() {
+        // 0.5 ms at 48 kHz trails by 24 frames: the sounding block leaves over the next two
+        // silent-input blocks, and only the third is silence again.
+        let rate = rate(48_000);
+        let config = lookahead(0.5);
+        assert_eq!(config.latency_frames(rate), 24);
+        let mut processor = LimiterProcessor::new(rate, rate, config, &pools()).unwrap();
+        let mut reference = PeakLimiter::new(rate, rate, STEREO, config, &pools()).unwrap();
+        let mut rig = Rig::new(rate);
+        let silence = ProcessStatus::OutputsModifiedWithMask(MaskType::Silence(
+            SilenceMask::new_all_silent(2),
+        ));
+        let mut sounding = Vec::new();
+        for (block, (value, expected_status)) in [
+            (0.5, ProcessStatus::OutputsModified),
+            (0.0, ProcessStatus::OutputsModified),
+            (0.0, ProcessStatus::OutputsModified),
+            (0.0, silence),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (left, right) = ([value; FRAMES], [value * 0.5; FRAMES]);
+            let (mut expected_left, mut expected_right) = (left, right);
+            reference.process_planar(&mut [&mut expected_left, &mut expected_right]);
+            let (status, actual_left, actual_right) = rig.process(&mut processor, &left, &right);
+            assert_eq!(
+                actual_left.map(f32::to_bits),
+                expected_left.map(f32::to_bits),
+                "left block {block}"
+            );
+            assert_eq!(
+                actual_right.map(f32::to_bits),
+                expected_right.map(f32::to_bits),
+                "right block {block}"
+            );
+            assert_eq!(status, expected_status, "status block {block}");
+            sounding.extend(
+                (0..FRAMES)
+                    .filter(|&frame| actual_left[frame] != 0.0)
+                    .map(|frame| block * FRAMES + frame),
+            );
+        }
+        assert_eq!(sounding, (24..24 + FRAMES).collect::<Vec<_>>());
+    }
+
+    #[kithara::test]
     fn a_restart_takes_nothing_from_a_region_holding_exactly_the_reserve() {
-        // 5 ms at the highest rate, 96 kHz, trails by 480 frames: one f32 gain target each.
-        const RESERVE: usize = 480 * size_of::<f32>();
+        // 0.25 ms at the highest rate, 96 kHz, trails by 24 frames: one f32 gain target each,
+        // and each delayed plane holds those frames and one 256-frame chunk. Every rate trails
+        // by less than a block, so a restart that kept delayed audio would sound it.
+        const RESERVE: usize = (24 + 2 * (24 + 256)) * size_of::<f32>();
         let max_rate = rate(96_000);
-        let config = lookahead(5.0);
+        let config = lookahead(0.25);
         let region = pools_with_budget(RESERVE);
         let mut processor = LimiterProcessor::new(rate(48_000), max_rate, config, &region).unwrap();
         let mut rig = Rig::new(rate(48_000));
@@ -364,8 +412,9 @@ mod tests {
 
     #[kithara::test]
     fn a_stream_past_the_prepared_lookahead_is_silent_until_one_fits() {
+        // 0.25 ms trails by 12 frames at 48 kHz and 11 at 44.1 kHz, less than a block.
         let prepared = rate(48_000);
-        let config = lookahead(5.0);
+        let config = lookahead(0.25);
         let mut processor = LimiterProcessor::new(prepared, prepared, config, &pools()).unwrap();
         let mut rig = Rig::new(prepared);
         for above in [96_000, 192_000] {

@@ -1,6 +1,7 @@
 use core::{
     f32::consts::PI,
     num::{NonZeroU32, NonZeroUsize},
+    ops::Range,
 };
 
 use arrayvec::ArrayVec;
@@ -8,6 +9,7 @@ use bon::bon;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_config::Config;
 use kithara_dsp::{
+    delay::DelayLine,
     envelope::{AttackRelease, MinimumWindow, PeakHold, WindowTooLong},
     filter::Fir,
     multiply_in_place, sanitize,
@@ -87,8 +89,13 @@ impl LimiterConfig {
     }
 }
 
-/// Stereo-linked, zero-lookahead peak limiter: immediate attack, exponential release toward unity,
-/// and a unity bypass below the ceiling that is exact for normal finite samples.
+/// Stereo-linked peak limiter: immediate attack, exponential release toward unity, and a unity
+/// bypass below the ceiling that is exact for normal finite samples.
+///
+/// With a lookahead of `L` frames the output trails the input by `L`: each output frame is the
+/// input `L` frames earlier under a gain no larger than the smallest target of those `L + 1`
+/// frames, so the gain is down before a peak leaves the delay. A lookahead of zero frames is the
+/// same law with no delay.
 #[derive(Debug, kithara_config::ConfigOwner)]
 #[config_owner(config)]
 #[non_exhaustive]
@@ -103,6 +110,10 @@ pub struct PeakLimiter {
     envelope: AttackRelease,
     /// Smallest gain target over the latency and the current frame.
     window: MinimumWindow,
+    /// Sanitized input on its way to the output; absent when the highest rate has no latency.
+    delay: Option<DelayLine>,
+    /// Frames the output trails the input at the current rate.
+    latency: usize,
     channels: usize,
 }
 
@@ -151,10 +162,14 @@ impl PeakLimiter {
                 limit: Self::DETECTOR_CHANNELS,
             });
         }
-        let window = MinimumWindow::new(
-            NonZeroUsize::MIN.saturating_add(config.latency_frames(max_rate)),
-            pools,
-        )?;
+        let prepared = config.latency_frames(max_rate);
+        let window = MinimumWindow::new(NonZeroUsize::MIN.saturating_add(prepared), pools)?;
+        // A chunk is written before it is read, so a read reaches back the chunk and the latency.
+        let delay = NonZeroUsize::new(prepared)
+            .map(|frames| {
+                DelayLine::new(channels, frames.saturating_add(Self::CHUNK_FRAMES), pools)
+            })
+            .transpose()?;
 
         let taps = std::array::from_fn(|phase: usize| {
             std::array::from_fn(|tap: usize| {
@@ -171,6 +186,8 @@ impl PeakLimiter {
             detector: Fir::new(taps),
             envelope: Self::release_envelope(config, sample_rate),
             window,
+            delay,
+            latency: 0,
             channels: channels.get(),
         };
         limiter.retune(sample_rate)?;
@@ -192,8 +209,12 @@ impl PeakLimiter {
                 frames,
                 prepared: capacity.saturating_sub(1),
             })?;
+        self.latency = frames;
         self.envelope = Self::release_envelope(self.config, sample_rate);
         self.detector.reset();
+        if let Some(delay) = self.delay.as_mut() {
+            delay.reset();
+        }
         Ok(())
     }
 
@@ -215,7 +236,7 @@ impl PeakLimiter {
         argument.sin() / argument * window
     }
 
-    /// Apply linked gains to the common prefix without allocation.
+    /// Delay the common prefix by the latency and apply linked gains, without allocation.
     /// Keep sanitized current and raw future separate until pre-gain history is recorded.
     pub fn process_planar(&mut self, channels: &mut [&mut [f32]]) {
         debug_assert_eq!(channels.len(), self.channels);
@@ -261,10 +282,14 @@ impl PeakLimiter {
                     self.detector
                         .process(index, &channel[start..], &channel[start..end], linked);
                 }
-                if self.envelope.gain() == 1.0 {
-                    continue;
-                }
                 linked.fill(1.0);
+            }
+            self.window.process(linked);
+            self.delay(channels, start..end);
+            // Unity targets only raise the window's minimums, so a unity first gain over a
+            // settled envelope keeps every frame of the chunk at unity.
+            if !reconstruct && self.envelope.gain() == 1.0 && linked.first() == Some(&1.0) {
+                continue;
             }
             self.envelope.process(linked);
             for channel in channels.iter_mut() {
@@ -273,11 +298,42 @@ impl PeakLimiter {
         }
     }
 
-    /// Reset the gain envelope to unity and forget detector and gain-target history.
+    /// Replace `range` of every channel with the sanitized input the latency earlier.
+    fn delay(&mut self, channels: &mut [&mut [f32]], range: Range<usize>) {
+        let Some(delay) = self.delay.as_mut().filter(|_| self.latency > 0) else {
+            return;
+        };
+        // The range is written first, so one read covers it by reaching back the range and the
+        // latency: the storage holds a chunk beyond the longest latency.
+        let reach = self
+            .latency
+            .saturating_add(range.len())
+            .to_f64()
+            .unwrap_or(0.0);
+        let delayed = delay.write(channels, range.clone()).and_then(|()| {
+            let tap = delay.tap(reach)?;
+            channels
+                .iter_mut()
+                .enumerate()
+                .try_for_each(|(index, channel)| {
+                    delay.read(index, tap, &mut channel[range.clone()])
+                })
+        });
+        debug_assert!(
+            delayed.is_ok(),
+            "one plane per channel and a chunk beyond the longest latency fit every read"
+        );
+    }
+
+    /// Reset the gain envelope to unity and forget detector, gain-target and delayed-input
+    /// history.
     pub fn reset(&mut self) {
         self.envelope.reset();
         self.window.reset();
         self.detector.reset();
+        if let Some(delay) = self.delay.as_mut() {
+            delay.reset();
+        }
     }
 }
 
@@ -553,8 +609,9 @@ mod tests {
 
     #[kithara::test]
     fn the_lookahead_history_for_the_highest_rate_is_taken_from_the_region_once() {
-        // 5 ms at 96 kHz trails by 480 frames: one f32 gain target per frame.
-        const BYTES: usize = 480 * size_of::<f32>();
+        // 5 ms at 96 kHz trails by 480 frames: one f32 gain target per frame, and each plane
+        // holds those frames and one 256-frame chunk.
+        const BYTES: usize = (480 + 2 * (480 + 256)) * size_of::<f32>();
         let rate = NonZeroU32::new(48_000).unwrap();
         let max_rate = NonZeroU32::new(96_000).unwrap();
         let stereo = NonZeroUsize::new(2).unwrap();
