@@ -1,13 +1,17 @@
-use std::{f64::consts::FRAC_1_SQRT_2, fmt, num::NonZeroUsize};
+use std::{
+    f64::consts::FRAC_1_SQRT_2,
+    fmt,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_dsp::{
-    delay::{DelayError, DelayLine, Tap},
+    delay::{DelayLine, Tap},
     filter::{Biquad, Coefficients, FilterError, Hertz, Type},
 };
 use num_traits::ToPrimitive;
 
-use super::{DelayParam, DelayTime, FeedbackDelayConfig, FeedbackDelayError, FeedbackHighPass};
+use super::{DelayParam, FeedbackDelayConfig, FeedbackDelayError, FeedbackHighPass};
 use crate::{DeckEffect, FxParamChange, consts};
 
 /// Stereo feedback delay a deck FX unit holds.
@@ -18,33 +22,30 @@ use crate::{DeckEffect, FxParamChange, consts};
 /// high-pass once more, so the filter sits in the loop, not on the input. A
 /// time change crosses linearly from the old read to the new one over 20 ms
 /// of the one history; a change arriving while a cross runs waits for it to
-/// end, the latest such change winning. The tail counts as spent once the
-/// input has stayed silent for the capacity plus one delay per pass the
-/// feedback takes to fall under -120 dBFS.
+/// end and starts on the frame after, the latest such change winning. The
+/// tail counts as spent once nothing above -120 dBFS has entered the history
+/// for the capacity plus the frames the high-pass's slowest pole takes to
+/// decay under that level. The delay time and the capacity count frames, so a
+/// new sample rate keeps them and retunes the high-pass, the cross length and
+/// that decay.
 pub struct FeedbackDelay {
     line: DelayLine,
     filter: Biquad,
-    sample_rate: f64,
+    sample_rate: NonZeroU32,
+    high_pass: FeedbackHighPass,
     feedback: f32,
-    time: Read,
+    time: Tap,
     ramp: Option<Ramp>,
-    pending: Option<Read>,
+    pending: Option<Tap>,
     ramp_frames: usize,
-    tail: usize,
+    window: usize,
     quiet: usize,
-}
-
-/// A read position and the oldest frame it touches.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Read {
-    tap: Tap,
-    reach: usize,
 }
 
 /// A cross-read from `from` toward the current time, `done` frames in.
 #[derive(Clone, Copy, Debug)]
 struct Ramp {
-    from: Read,
+    from: Tap,
     done: usize,
 }
 
@@ -62,36 +63,31 @@ impl FeedbackDelay {
         pools: &PoolRegion<S>,
     ) -> Result<Self, FeedbackDelayError> {
         let line = DelayLine::new(consts::DELAY_CHANNELS, config.capacity(), pools)?;
-        let time = read(&line, config.time())?;
-        let sample_rate = f64::from(config.sample_rate().get());
-        let mut filter = Biquad::new(consts::DELAY_CHANNELS, NonZeroUsize::MIN)?;
-        filter.retune(0, high_pass(sample_rate, config.high_pass())?)?;
-        let ramp_frames = (sample_rate * consts::DELAY_RAMP_SECONDS)
-            .round()
-            .to_usize()
-            .map_or(1, |frames| frames.max(1));
+        let time = line.tap(f64::from(config.time()))?;
+        let sample_rate = config.sample_rate();
         let mut delay = Self {
             line,
-            filter,
+            filter: Biquad::new(consts::DELAY_CHANNELS, NonZeroUsize::MIN)?,
             sample_rate,
+            high_pass: config.high_pass(),
             feedback: f32::from(config.feedback()),
             time,
             ramp: None,
             pending: None,
-            ramp_frames,
-            tail: 0,
+            ramp_frames: ramp_frames(sample_rate),
+            window: 0,
             quiet: usize::MAX,
         };
-        delay.tail = delay.tail_bound();
+        delay.tune(config.high_pass())?;
         Ok(delay)
     }
 
     /// Frames the next span renders: at most `rest`, the chunk, and what each
     /// read and the cross allow.
     fn span(&self, rest: usize) -> usize {
-        let span = rest.min(consts::DELAY_CHUNK).min(self.time.tap.whole());
+        let span = rest.min(consts::DELAY_CHUNK).min(self.time.whole());
         self.ramp.map_or(span, |ramp| {
-            span.min(ramp.from.tap.whole())
+            span.min(ramp.from.whole())
                 .min(self.ramp_frames.saturating_sub(ramp.done))
         })
     }
@@ -111,9 +107,9 @@ impl FeedbackDelay {
         let mut send = [[0.0; consts::DELAY_CHUNK], [0.0; consts::DELAY_CHUNK]];
         for (channel, (wet, send)) in wet.into_iter().zip(&mut send).enumerate() {
             let send = &mut send[..frames];
-            self.line.read(channel, self.time.tap, wet)?;
+            self.line.read(channel, self.time, wet)?;
             if let Some(ramp) = self.ramp {
-                self.line.read(channel, ramp.from.tap, send)?;
+                self.line.read(channel, ramp.from, send)?;
                 kithara_dsp::sub(wet, send);
                 kithara_dsp::mul_add(wet, shares, send);
                 wet.copy_from_slice(send);
@@ -129,6 +125,7 @@ impl FeedbackDelay {
             kithara_dsp::add(input, plane);
         }
         self.line.write(&planes, 0..frames)?;
+        self.listen(&planes);
         Ok(())
     }
 
@@ -145,7 +142,7 @@ impl FeedbackDelay {
         }
     }
 
-    fn retime(&mut self, time: Read) {
+    fn retime(&mut self, time: Tap) {
         if self.ramp.is_some() {
             self.pending = Some(time);
         } else if time != self.time {
@@ -155,36 +152,32 @@ impl FeedbackDelay {
             });
             self.time = time;
         }
-        self.tail = self.tail_bound();
     }
 
-    fn listen(&mut self, [left, right]: [&[f32]; 2]) {
+    /// Counts the frames since the history last took a sample above the
+    /// tail floor, given the span just `written` to it.
+    fn listen(&mut self, written: &[&mut [f32]; 2]) {
+        let [left, right] = written;
+        let frames = left.len();
         self.quiet = left
             .iter()
-            .zip(right)
-            .rposition(|(left, right)| *left != 0.0 || *right != 0.0)
+            .zip(right.iter())
+            .rposition(|(left, right)| left.abs().max(right.abs()) > consts::DELAY_TAIL_FLOOR)
             .map_or_else(
-                || self.quiet.saturating_add(left.len()),
-                |frame| left.len().saturating_sub(frame).saturating_sub(1),
+                || self.quiet.saturating_add(frames),
+                |frame| frames.saturating_sub(frame).saturating_sub(1),
             );
     }
 
-    /// Frames of silent input after which the tail is spent: the capacity,
-    /// then the longest read once per pass the feedback takes to fall under
-    /// the floor.
-    fn tail_bound(&self) -> usize {
-        let reach = [self.ramp.map(|ramp| ramp.from), self.pending]
-            .into_iter()
-            .flatten()
-            .fold(self.time.reach, |reach, read| reach.max(read.reach));
-        let passes = (consts::DELAY_TAIL_FLOOR.ln() / f64::from(self.feedback).ln())
-            .ceil()
-            .to_usize()
-            .unwrap_or(0);
-        self.line
-            .capacity()
-            .get()
-            .saturating_add(passes.saturating_mul(reach))
+    /// Tunes the feedback high-pass to `cutoff` at the current sample rate and
+    /// sizes the tail window by its slowest pole.
+    fn tune(&mut self, cutoff: FeedbackHighPass) -> Result<(), FilterError> {
+        let coefficients = high_pass(self.sample_rate, cutoff)?;
+        let decay = decay(&coefficients);
+        self.filter.retune(0, coefficients)?;
+        self.high_pass = cutoff;
+        self.window = self.line.capacity().get().saturating_add(decay);
+        Ok(())
     }
 }
 
@@ -205,7 +198,6 @@ impl DeckEffect for FeedbackDelay {
                 wet_right[start..end].fill(0.0);
             }
             self.advance(end - start);
-            self.listen(input);
             start = end;
         }
     }
@@ -223,18 +215,13 @@ impl DeckEffect for FeedbackDelay {
         let FxParamChange::Delay(param) = change;
         match param {
             DelayParam::Time(time) => {
-                if let Ok(time) = read(&self.line, time) {
+                if let Ok(time) = self.line.tap(f64::from(time)) {
                     self.retime(time);
                 }
             }
-            DelayParam::Feedback(feedback) => {
-                self.feedback = f32::from(feedback);
-                self.tail = self.tail_bound();
-            }
+            DelayParam::Feedback(feedback) => self.feedback = f32::from(feedback),
             DelayParam::HighPass(cutoff) => {
-                high_pass(self.sample_rate, cutoff)
-                    .and_then(|coefficients| self.filter.retune(0, coefficients))
-                    .ok();
+                self.tune(cutoff).ok();
             }
         }
     }
@@ -248,12 +235,25 @@ impl DeckEffect for FeedbackDelay {
         if let Some(time) = self.pending.take() {
             self.time = time;
         }
-        self.tail = self.tail_bound();
         self.quiet = usize::MAX;
     }
 
     fn tail_exhausted(&self) -> bool {
-        self.quiet >= self.tail
+        self.quiet >= self.window
+    }
+
+    /// Keeps the history, the delay time in frames and the feedback, and
+    /// retunes the high-pass, the cross length and the tail window to
+    /// `sample_rate`; a cutoff at or past its Nyquist keeps the previous
+    /// tuning. A cross already past its new length ends here.
+    fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        if sample_rate == self.sample_rate {
+            return;
+        }
+        self.sample_rate = sample_rate;
+        self.ramp_frames = ramp_frames(sample_rate);
+        self.tune(self.high_pass).ok();
+        self.advance(0);
     }
 }
 
@@ -262,38 +262,50 @@ impl fmt::Debug for FeedbackDelay {
         formatter
             .debug_struct("FeedbackDelay")
             .field("line", &self.line)
+            .field("sample_rate", &self.sample_rate)
+            .field("high_pass", &self.high_pass)
             .field("feedback", &self.feedback)
             .field("time", &self.time)
             .field("ramp", &self.ramp)
             .field("pending", &self.pending)
-            .field("tail", &self.tail)
+            .field("window", &self.window)
             .field("quiet", &self.quiet)
             .finish_non_exhaustive()
     }
 }
 
-/// `time` on `line`, with the oldest frame it touches.
-fn read(line: &DelayLine, time: DelayTime) -> Result<Read, DelayError> {
-    let frames = f64::from(time);
-    let tap = line.tap(frames)?;
-    Ok(Read {
-        tap,
-        reach: tap
-            .whole()
-            .saturating_add(usize::from(frames.fract() > 0.0)),
-    })
+/// The 20 ms a time change crosses over, in frames at `sample_rate`; at
+/// least one.
+fn ramp_frames(sample_rate: NonZeroU32) -> usize {
+    (f64::from(sample_rate.get()) * consts::DELAY_RAMP_SECONDS)
+        .round()
+        .to_usize()
+        .map_or(1, |frames| frames.max(1))
 }
 
 /// The Butterworth high-pass at `cutoff` for `sample_rate`.
-fn high_pass(sample_rate: f64, cutoff: FeedbackHighPass) -> Result<Coefficients<f64>, FilterError> {
+fn high_pass(
+    sample_rate: NonZeroU32,
+    cutoff: FeedbackHighPass,
+) -> Result<Coefficients<f64>, FilterError> {
     let hertz = |value: f64| Hertz::<f64>::from_hz(value).map_err(|_| FilterError::Parameters);
     Coefficients::from_params(
         Type::HighPass,
-        hertz(sample_rate)?,
+        hertz(f64::from(sample_rate.get()))?,
         hertz(f64::from(f32::from(cutoff)))?,
         FRAC_1_SQRT_2,
     )
     .map_err(|_| FilterError::Parameters)
+}
+
+/// Frames the slowest pole of the Butterworth high-pass `coefficients` takes
+/// to decay under the tail floor. Its two poles are a conjugate pair, both of
+/// radius `√a2`.
+fn decay(coefficients: &Coefficients<f64>) -> usize {
+    (f64::from(consts::DELAY_TAIL_FLOOR).ln() / coefficients.a2.sqrt().ln())
+        .ceil()
+        .to_usize()
+        .unwrap_or(0)
 }
 
 fn to_f32(frames: usize) -> f32 {

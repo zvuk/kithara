@@ -17,8 +17,9 @@ pub(crate) const DELAY_CHUNK: usize = 256;
 /// Seconds a delay time change crosses from the old read to the new one.
 pub(crate) const DELAY_RAMP_SECONDS: f64 = 0.02;
 
-/// Level, -120 dBFS, under which a feedback delay's repeats count as spent.
-pub(crate) const DELAY_TAIL_FLOOR: f64 = 1e-6;
+/// Level, -120 dBFS, at or under which a sample a feedback delay writes to
+/// its history counts as silent.
+pub(crate) const DELAY_TAIL_FLOOR: f32 = 1e-6;
 
 pub(crate) const PASSTHROUGH: Coefficients<f32> = Coefficients {
     a1: 0.0,
