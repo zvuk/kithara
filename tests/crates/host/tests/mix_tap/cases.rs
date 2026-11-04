@@ -535,7 +535,7 @@ async fn deck_fx_delay_install_change_and_clear_during_playback() {
 
     use crate::deck_fx::{delay_time, feedback_delay, insert};
 
-    const SHORTER: usize = 128;
+    const ECHO: usize = 16 * BLOCK_FRAMES;
     let level = 0.2_f32.to_bits();
     let steady = |take: &[f32]| take.iter().all(|sample| sample.to_bits() == level);
     let harness = play_source(
@@ -553,18 +553,22 @@ async fn deck_fx_delay_install_change_and_clear_during_playback() {
         |changes: Vec<DeckFxChange>| harness.with_queue(move |queue| queue.fx(When::Next, changes));
     assert!(steady(&render_blocks(&harness, 2).await), "the dry deck");
 
-    send(insert(0, feedback_delay()))
+    send(insert(0, feedback_delay(ECHO)))
         .await
         .expect("install the delay");
-    let wet = render_blocks(&harness, 2).await;
+    let wet = render_blocks(&harness, 2 * ECHO / BLOCK_FRAMES).await;
     assert!(wet.contains(&0.0), "the fully wet delay starts silent");
+    assert!(
+        steady(&wet[wet.len() - BLOCK_FRAMES * 2..]),
+        "the first echo repeats the deck"
+    );
 
     let param = |change| DeckFxChange::Param {
         unit: 0,
         change: FxParamChange::Delay(change),
     };
     send(vec![
-        param(DelayParam::Time(delay_time(SHORTER))),
+        param(DelayParam::Time(delay_time(ECHO / 2))),
         param(DelayParam::Feedback(
             Feedback::checked(0.25).expect("a quarter is a feedback"),
         )),
