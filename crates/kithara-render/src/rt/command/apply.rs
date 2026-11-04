@@ -61,15 +61,10 @@ impl Deck {
                 item_id,
                 pcm,
                 segment,
-            } => Some(self.replace_track(
-                slot,
-                item_id,
-                pcm,
-                segment,
-                seq,
-                context_valid,
-                wait_for_pcm,
-            )),
+            } => {
+                let track = self.track(pcm, segment, item_id, seq);
+                Some(self.replace_track(slot, track, context_valid, wait_for_pcm))
+            }
             DeckPart::Chain { from, to } => Some(self.chain_tracks(from, to)),
             DeckPart::Mix(change) => {
                 self.mix.apply_change(change);
@@ -225,14 +220,10 @@ impl Deck {
     fn replace_track(
         &mut self,
         slot: Slot,
-        item_id: TrackId,
-        pcm: Box<PlayerResource>,
-        segment: SegmentId,
-        seq: Seq,
+        mut track: PlayerTrack,
         context_valid: bool,
         wait_for_pcm: bool,
     ) -> DeckPart {
-        let mut track = self.track(pcm, segment, item_id, seq);
         track.start(Fade::Declick);
         track.snap_gate();
         match self.tracks.replace(slot, track) {
