@@ -125,10 +125,12 @@ throttles Cargo and the single-threaded source linters.
 ## Pipeline scheduling
 
 Dispatch waits for its child's verdict without holding a host resource group.
-Independent pipelines can therefore fill the runner's available slots. Measured
-child jobs retain `kithara-suite`; the runner limits total parallelism, each job
-owns its checkout and compiler-cache slot, and the verdict journal locks its
-read-modify-write transaction. Raising the runner limit is a separate host-capacity
+Independent pipelines can therefore fill the runner's available slots. Each
+measured child job holds the `kithara-suite-<job>` group named after itself, so
+two runs of one measured job never overlap while different measured jobs may;
+the runner limits total parallelism, each job owns its checkout and
+compiler-cache slot, and the verdict journal locks its read-modify-write
+transaction. Raising the runner limit is a separate host-capacity
 change, not a prerequisite for removing idle time between pipelines.
 
 Native lint, tests and verdict jobs use the shared `kithara-macos` tag so either
@@ -136,8 +138,7 @@ native registration can take them. Each registration retains its own checkout,
 build root and compiler-cache socket. Framework packaging also uses the common
 native pool; bindings, staging and Xcode DerivedData stay in each job's
 checkout. Simulator/server work retains
-`kithara-macos-2` through shutdown and device deletion; measured jobs still
-serialize through `kithara-suite`.
+`kithara-macos-2` through shutdown and device deletion.
 
 Host-shell registrations run the installed host preflight before fetching sources.
 Critical disk pressure refuses the job before checkout or compilation can spend
