@@ -1,4 +1,12 @@
-use std::{io, path::Path, process::Command};
+#[cfg(windows)]
+use std::{
+    fs::OpenOptions,
+    io::{BufRead, BufReader, Read, Write},
+    path::PathBuf,
+    sync::mpsc,
+    thread,
+};
+use std::{io, path::Path, process::Command, time::Instant};
 #[cfg(unix)]
 use std::{
     io::{Read, Write},
@@ -6,19 +14,15 @@ use std::{
         fd::{AsFd, OwnedFd},
         unix::net::UnixStream,
     },
-    time::Instant,
 };
 
 #[cfg(unix)]
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
-#[cfg(unix)]
 use serde_json::{Value, json};
 #[cfg(unix)]
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use super::cache;
-#[cfg(unix)]
-use super::consts;
+use super::{cache, consts};
 
 /// Read daemon policy and counters without probing compiler blob extents.
 ///
@@ -28,19 +32,10 @@ use super::consts;
 /// # Errors
 /// Returns an error if startup, transport or the daemon response fails.
 pub fn statistics(command: &mut Command, runtime: &Path) -> io::Result<String> {
-    #[cfg(unix)]
-    {
-        let deadline = Instant::now() + consts::COMMAND_TIMEOUT;
-        command.args(["daemon", "start"]);
-        cache::output(command)?;
-        query(runtime, deadline)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = runtime;
-        command.args(["stats", "--json"]);
-        cache::output(command)
-    }
+    let deadline = Instant::now() + consts::COMMAND_TIMEOUT;
+    command.args(["daemon", "start"]);
+    cache::output(command)?;
+    query(runtime, deadline)
 }
 
 #[cfg(unix)]
@@ -61,8 +56,64 @@ fn query(runtime: &Path, deadline: Instant) -> io::Result<String> {
             )
         })?;
     socket.set_write_timeout(Some(remaining))?;
-    socket.write_all(b"{\"stats\":{\"include_entries\":false,\"include_summaries\":false,\"sort_by\":null,\"event_hours\":24,\"event_secs\":86400,\"client_epoch\":0}}\n")?;
+    socket.write_all(consts::STATS_REQUEST)?;
     read_reply(&mut socket, deadline)
+}
+
+/// A pipe handle has no read timeout, so the exchange runs on its own thread
+/// and the deadline bounds the wait for its answer.
+#[cfg(windows)]
+fn query(runtime: &Path, deadline: Instant) -> io::Result<String> {
+    let mut pipe = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(pipe_path(&runtime.join("daemon.sock")))?;
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let exchange = pipe.write_all(consts::STATS_REQUEST).and_then(|()| {
+            let mut reply = Vec::new();
+            BufReader::new(pipe)
+                .take(consts::OUTPUT_LIMIT + 1)
+                .read_until(b'\n', &mut reply)?;
+            Ok(reply)
+        });
+        let _ = sender.send(exchange);
+    });
+    let timed_out = || {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            "compiler-cache statistics timed out",
+        )
+    };
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .ok_or_else(timed_out)?;
+    let reply = receiver
+        .recv_timeout(remaining)
+        .map_err(|error| match error {
+            mpsc::RecvTimeoutError::Timeout => timed_out(),
+            mpsc::RecvTimeoutError::Disconnected => {
+                io::Error::other("compiler-cache statistics exchange stopped")
+            }
+        })??;
+    match reply.strip_suffix(b"\n") {
+        Some(line) => normalize(line),
+        None if reply.len() as u64 > consts::OUTPUT_LIMIT => {
+            Err(io::Error::other("compiler-cache output exceeds its bound"))
+        }
+        None => Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "incomplete compiler-cache response",
+        )),
+    }
+}
+
+/// The pipe kache 1.2 serves a socket path on: Windows has no socket file, so
+/// the daemon and its clients name the pipe after a hash of that path.
+#[cfg(windows)]
+fn pipe_path(socket: &Path) -> PathBuf {
+    let hash = blake3::hash(socket.as_os_str().as_encoded_bytes()).to_hex();
+    PathBuf::from(format!(r"\\.\pipe\kache-daemon-{}", &hash[..16]))
 }
 
 #[cfg(unix)]
@@ -110,7 +161,6 @@ fn read_reply(socket: &mut UnixStream, deadline: Instant) -> io::Result<String> 
     }
 }
 
-#[cfg(unix)]
 fn normalize(reply: &[u8]) -> io::Result<String> {
     let reply: Value = serde_json::from_slice(reply)
         .map_err(|_| io::Error::other("invalid compiler-cache daemon response"))?;

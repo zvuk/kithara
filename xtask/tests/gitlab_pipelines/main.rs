@@ -1046,8 +1046,8 @@ fn dispatch_does_not_reserve_the_host_while_children_run() {
                 .effective_value(job, "resource_group")
                 .as_ref()
                 .and_then(Value::as_str),
-            Some("kithara-suite"),
-            "{job} must retain measurement isolation"
+            Some("kithara-suite-$CI_JOB_NAME_SLUG"),
+            "{job} must queue only behind its own runs"
         );
     }
 }
