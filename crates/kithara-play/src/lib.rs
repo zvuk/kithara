@@ -42,7 +42,7 @@ pub use kithara_render::{
     bridge::{
         DeckEqChange, DeckEvent, DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol,
         DeckRefusal, DeckSnapshot, EqSnapshot, FadeDir, MixTapWriter, PlaybackFault, Returned,
-        RtMetricsSnapshot, Slot, SlotSnapshot,
+        RtMetricsSnapshot, Slot, SlotSnapshot, TrackClock,
     },
     dispatch,
     rt::{

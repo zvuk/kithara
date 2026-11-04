@@ -15,8 +15,9 @@ use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_play::{
     Bound, DeckMixSettings, DeckPass, HostedDeck, Outbox, OutputSnapshot, PlayError, PlayWorker,
-    Player, Position, ResourceConfig, ResourceLoad, ResourceSrc, Settled, Track, TrackCommand,
-    TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot, TrackStatus, mock::DeckRig,
+    Player, Position, ResourceConfig, ResourceLoad, ResourceSrc, Settled, Track, TrackClock,
+    TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot, TrackStatus,
+    mock::DeckRig,
 };
 use kithara_render::{
     bridge::{DeckPart, DeckProtocol, DeckSnapshot, Slot, SlotMark},
@@ -128,6 +129,10 @@ pub(super) struct Script {
     pub snapshot: TrackSnapshot,
     pub sent: Vec<(Seq, Command)>,
     pub reject: Option<PlayError>,
+    /// The dropout clock the track accepted; kept apart from `sent` because
+    /// SYNC reconciles it on every pass.
+    pub clock: TrackClock,
+    pub clock_refusal: Option<PlayError>,
     pending: Vec<(Seq, Vec<Command>, bool)>,
     speeds: VecDeque<Settled>,
     verdicts: Vec<(Seq, bool)>,
@@ -261,6 +266,15 @@ impl Player<TestPools> for ScriptedTrack {
             }
             TrackCommand::SetHostRate { rate } => Command::Rate(rate),
             TrackCommand::Release => Command::Release,
+            TrackCommand::Clock(clock) => {
+                return self.control.edit(|script| {
+                    if let Some(error) = script.clock_refusal.take() {
+                        return Err(error);
+                    }
+                    script.clock = clock;
+                    Ok(None)
+                });
+            }
             TrackCommand::Supersede
             | TrackCommand::ConfigureEffect { .. }
             | TrackCommand::PlayAfter { .. }
@@ -638,6 +652,8 @@ pub(super) fn ordinary() -> (ScriptedTrack, Control) {
         },
         sent: Vec::new(),
         reject: None,
+        clock: TrackClock::Media,
+        clock_refusal: None,
         pending: Vec::new(),
         speeds: VecDeque::new(),
         verdicts: Vec::new(),

@@ -8,7 +8,7 @@ use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_render::{
     CrossfadeSettings, LaneCommand, LaneFrame,
-    bridge::{FadeDir, PlaybackFault, Slot, SlotMark},
+    bridge::{FadeDir, PlaybackFault, Slot, SlotMark, TrackClock},
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
@@ -68,6 +68,9 @@ pub enum TrackCommand<S> {
     PlayAfter {
         track: Slot,
     },
+    /// Sets the clock the track keeps through a PCM dropout, for its seated
+    /// slot and every later seat.
+    Clock(TrackClock),
     /// Supersedes scheduled slot batches without stopping the sounding segment.
     Supersede,
     Release,

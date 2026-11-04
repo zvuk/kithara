@@ -7,7 +7,7 @@ use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_render::{
     LaneCommand, LaneFrame, LaneId, LaneProtocol, ServiceClass,
-    bridge::{DeckPart, Fade, Slot, SlotMark},
+    bridge::{DeckPart, Fade, Slot, SlotMark, TrackClock},
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
@@ -46,6 +46,10 @@ pub struct PlayerImpl<S> {
     pub(super) segment_speed: f32,
     pub(super) play: Option<When<SessionFrame>>,
     pub(super) repeat: bool,
+    /// The clock the track keeps through a dropout.
+    pub(super) clock: TrackClock,
+    /// The clock its seated RT track was last sent.
+    pub(super) seated_clock: TrackClock,
     pub(super) releasing: bool,
     pub(super) resume: Option<SlotMark>,
     pub(super) mark: Option<SlotMark>,
@@ -95,6 +99,8 @@ impl<S> PlayerImpl<S> {
             segment_speed: config.settings.speed(),
             play: None,
             repeat: false,
+            clock: TrackClock::Media,
+            seated_clock: TrackClock::Media,
             releasing: false,
             resume: None,
             mark: None,
@@ -120,6 +126,42 @@ impl<S> PlayerImpl<S> {
     #[must_use]
     pub fn status(&self) -> TrackStatus {
         self.status
+    }
+
+    /// Seat parts carry the clock a fresh RT track lacks.
+    pub(super) fn seated_with_clock(
+        &mut self,
+        slot: Slot,
+        mut parts: Vec<DeckPart>,
+    ) -> Vec<DeckPart> {
+        if self.clock != TrackClock::Media {
+            parts.push(DeckPart::Clock {
+                slot,
+                clock: self.clock,
+            });
+        }
+        self.seated_clock = self.clock;
+        parts
+    }
+
+    /// Sends a changed clock to the RT track the deck has already seated; a
+    /// seat still in flight carries it itself.
+    pub(super) fn sync_clock(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+        let Some(slot) = self.slot else {
+            return Ok(None);
+        };
+        if self.clock == self.seated_clock || self.attaching.is_some() || self.attach_at.is_none() {
+            return Ok(None);
+        }
+        let sent = out.deck(
+            When::Next,
+            vec![DeckPart::Clock {
+                slot,
+                clock: self.clock,
+            }],
+        )?;
+        self.seated_clock = self.clock;
+        Ok(sent)
     }
 
     pub(super) fn seat(&self) -> Result<Slot, PlayError> {

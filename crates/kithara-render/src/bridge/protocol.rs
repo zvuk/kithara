@@ -70,6 +70,17 @@ pub enum FadeDir {
     Out,
 }
 
+/// Which clock a track keeps through a PCM dropout.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TrackClock {
+    /// The track resumes on the frame it stopped on.
+    #[default]
+    Media,
+    /// The track drops the frames the dropout missed and resumes where the
+    /// session stands.
+    Session,
+}
+
 /// Parts are applied in order after validation against the whole batch.
 pub enum DeckPart {
     Attach {
@@ -107,6 +118,11 @@ pub enum DeckPart {
     Chain {
         from: Slot,
         to: Slot,
+    },
+    /// Sets the clock of the track seated in `slot`; an empty slot ignores it.
+    Clock {
+        slot: Slot,
+        clock: TrackClock,
     },
     Mix(DeckMixSettingsChange),
     Eq(DeckEqChange),
@@ -220,6 +236,11 @@ impl fmt::Debug for DeckPart {
                 .debug_struct("Chain")
                 .field("from", from)
                 .field("to", to)
+                .finish(),
+            Self::Clock { slot, clock } => formatter
+                .debug_struct("Clock")
+                .field("slot", slot)
+                .field("clock", clock)
                 .finish(),
             Self::Mix(change) => formatter.debug_tuple("Mix").field(change).finish(),
             Self::Eq(change) => formatter.debug_tuple("Eq").field(change).finish(),

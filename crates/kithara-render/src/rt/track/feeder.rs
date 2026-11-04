@@ -318,7 +318,6 @@ impl PlayerResource {
         self.read_in(context, buffers, range, budget, false)
     }
 
-    #[kithara::hang_watchdog]
     pub(super) fn read_in(
         &mut self,
         context: Option<&RenderContext>,
@@ -339,6 +338,39 @@ impl PlayerResource {
         }
         left[range.start..range.start + requested].fill(0.0);
         right[range.start..range.start + requested].fill(0.0);
+        self.consume(
+            requested,
+            budget,
+            wait_for_pcm,
+            |chunk, offset, written, receiver| {
+                copy_packet(
+                    chunk,
+                    offset,
+                    context,
+                    receiver,
+                    left,
+                    right,
+                    range.start + written.start..range.start + written.end,
+                );
+            },
+        )
+    }
+
+    /// Consumes `frames` lane frames without playing them.
+    pub(super) fn discard(&mut self, frames: usize, budget: &mut usize) -> ReadOutcome {
+        self.consume(frames, budget, false, |_, _, _, _| {})
+    }
+
+    /// Consumes up to `requested` lane frames in order, handing each packet
+    /// span to `take` with its packet offset and its range within the request.
+    #[kithara::hang_watchdog]
+    fn consume(
+        &mut self,
+        requested: usize,
+        budget: &mut usize,
+        wait_for_pcm: bool,
+        mut take: impl FnMut(&AudioChunk, usize, Range<usize>, &crate::PcmReceiver),
+    ) -> ReadOutcome {
         let mut written = 0;
         while written < requested {
             hang_tick!();
@@ -386,14 +418,11 @@ impl PlayerResource {
             if count == 0 {
                 break;
             }
-            copy_packet(
+            take(
                 chunk,
                 self.offset,
-                context,
+                written..written + count,
                 &self.consumer.get().receiver,
-                left,
-                right,
-                range.start + written..range.start + written + count,
             );
             self.offset += count;
             written += count;

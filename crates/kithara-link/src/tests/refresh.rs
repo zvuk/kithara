@@ -1,7 +1,8 @@
 use kithara_command::{Seq, When};
 use kithara_host::{HostOwner, api::Tempo};
 use kithara_play::{
-    Bound, HostedDeck, PlayError, Player, Settled, TrackCommand, TrackReceipt, TrackStatus,
+    Bound, HostedDeck, PlayError, Player, Settled, TrackClock, TrackCommand, TrackReceipt,
+    TrackStatus,
 };
 use kithara_render::bridge::{DeckEvent, Slot};
 use kithara_signal::{FrameCount, SessionFrame};
@@ -292,27 +293,64 @@ fn a_child_refusing_the_segment_keeps_every_preparation() {
 }
 
 #[kithara::test]
-#[case::recovery(true, true, true, true)]
-#[case::closed_by_transport(false, true, true, false)]
-#[case::stale_item(true, false, true, false)]
-#[case::foreign_slot(true, true, false, false)]
-fn only_the_resident_tracks_pcm_recovery_realigns_sync(
+#[case::recovery(true, true, true)]
+#[case::closed_by_transport(false, true, true)]
+#[case::stale_item(true, false, true)]
+#[case::foreign_slot(true, true, false)]
+fn sync_sends_no_alignment_when_pcm_recovers(
     #[case] recovered: bool,
     #[case] same_item: bool,
     #[case] same_slot: bool,
-    #[case] realigns: bool,
 ) {
+    // The RT keeps a synced track on session time through the dropout.
     let (mut deck, control, mut rig, _) = sounding();
     let event = underrun_ended(&deck, recovered, same_item, same_slot);
     rig.now = SessionFrame::new(128);
     rig.run(|out| Player::settle(&mut deck, TrackReceipt::Event(event), out));
-    assert_eq!(
-        control
-            .commands()
-            .iter()
-            .any(|(_, command)| matches!(command, Command::Jump(..))),
-        realigns
-    );
+    assert!(control.commands().is_empty(), "{:?}", control.commands());
+}
+
+#[kithara::test]
+fn a_synced_track_keeps_session_time_and_a_free_one_media_time() {
+    let (mut deck, control) = deck(trajectory(120.0, 4));
+    let mut rig = Rig::new(0);
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(control.edit(|script| script.clock), TrackClock::Media);
+
+    rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync");
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(control.edit(|script| script.clock), TrackClock::Session);
+
+    rig.run(|out| LinkedPlayer::sync(&mut deck, false, out))
+        .expect("free");
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(control.edit(|script| script.clock), TrackClock::Media);
+}
+
+#[kithara::test]
+fn a_refused_clock_is_sent_on_the_next_pass() {
+    let (mut deck, control) = deck(trajectory(120.0, 4));
+    let mut rig = Rig::new(0);
+    rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync");
+    control.edit(|script| script.clock_refusal = Some(PlayError::Full("deck")));
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(control.edit(|script| script.clock), TrackClock::Media);
+
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(control.edit(|script| script.clock), TrackClock::Session);
+}
+
+#[kithara::test]
+fn sync_owns_the_clock_of_a_linked_track() {
+    let (mut deck, control) = deck(trajectory(120.0, 4));
+    let mut rig = Rig::new(0);
+    assert!(matches!(
+        rig.run(|out| deck.apply(TrackCommand::Clock(TrackClock::Session), out)),
+        Err(PlayError::InvalidConfiguration { .. })
+    ));
+    assert_eq!(control.edit(|script| script.clock), TrackClock::Media);
 }
 
 #[kithara::test]

@@ -206,12 +206,15 @@ impl<S> PlayerImpl<S> {
         let OpenedTrack { pcm, .. } = opened;
         let seq = loading.seq;
         let at = When::Next;
-        let mut parts = vec![DeckPart::Attach {
+        let mut parts = self.seated_with_clock(
             slot,
-            item_id: self.item,
-            pcm,
-            segment: self.segment,
-        }];
+            vec![DeckPart::Attach {
+                slot,
+                item_id: self.item,
+                pcm,
+                segment: self.segment,
+            }],
+        );
         let start = self.play.is_some() && self.ready == Some(self.segment);
         if start {
             parts.push(DeckPart::Start {
@@ -305,21 +308,23 @@ impl<S> PlayerImpl<S> {
         }
         let loading = self.loading.as_mut().ok_or(PlayError::NotReady)?;
         let opened = loading.opened.take().ok_or(PlayError::NotReady)?;
+        let caller = loading.seq;
         let OpenedTrack { pcm, abr, metadata } = opened;
-        match out.deck_owned(
-            at,
+        let parts = self.seated_with_clock(
+            slot,
             vec![DeckPart::Replace {
                 slot,
                 item_id: self.item,
                 pcm,
                 segment: self.segment,
             }],
-        ) {
+        );
+        match out.deck_owned(at, parts) {
             Ok(seq) => {
                 self.slot = Some(slot);
                 self.attaching = Some(Attaching {
                     seq,
-                    caller: seq.unwrap_or(loading.seq),
+                    caller: seq.unwrap_or(caller),
                     at,
                     replacement: true,
                     play: self.play.take(),
@@ -334,7 +339,8 @@ impl<S> PlayerImpl<S> {
                         slot: named, pcm, ..
                     } if named == slot => Some(pcm),
                     _ => None,
-                }) {
+                }) && let Some(loading) = self.loading.as_mut()
+                {
                     loading.opened = Some(OpenedTrack { pcm, abr, metadata });
                 } else {
                     return Err(PlayError::Internal(

@@ -71,6 +71,10 @@ impl<S> Player<S> for PlayerImpl<S> {
             TrackCommand::SetSpeed { speed, at } => self.set_speed(speed, at, out),
             TrackCommand::Release => self.release_track(out),
             TrackCommand::Seat { slot, at } => self.seat_at(slot, at, out),
+            TrackCommand::Clock(clock) => {
+                self.clock = clock;
+                self.sync_clock(out)
+            }
         }
     }
 
@@ -125,6 +129,9 @@ impl<S> Player<S> for PlayerImpl<S> {
         self.fail_preparation(now);
         self.adopt_newest_epoch(out);
         self.promote(out);
+        if let Err(error) = self.sync_clock(out) {
+            warn!(%error, "track clock waits for deck room");
+        }
         if self.status == TrackStatus::Released {
             if let Err(error) = self.release_lane(out) {
                 warn!(%error, "lane release waits for room");

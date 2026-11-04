@@ -1,4 +1,5 @@
 mod batch;
+mod clock;
 mod core;
 mod effects;
 mod fade_events;

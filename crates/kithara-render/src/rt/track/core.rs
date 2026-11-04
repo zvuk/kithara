@@ -10,7 +10,7 @@ use kithara_signal::{SegmentId, SessionFrame};
 use super::{PlayerResource, RtSink, fade::TrackFade, gate::TrackGate};
 use crate::{
     CrossfadeCurve, CrossfadeSettings,
-    bridge::{DeckEvent, Fade, FadeDir, SlotMark, SlotState},
+    bridge::{DeckEvent, Fade, FadeDir, SlotMark, SlotState, TrackClock},
     consts::DEFAULT_DECLICK,
 };
 
@@ -36,6 +36,9 @@ pub struct PlayerTrack {
     pub(super) gate: TrackGate,
     pub(super) state: SlotState,
     pub(super) gap: u32,
+    /// Lane frames the dropout missed that a session-time track still drops.
+    pub(super) owed: u32,
+    pub(super) clock: TrackClock,
     stop: StopState,
     sample_rate: NonZeroU32,
     declick: SmootherConfig,
@@ -60,6 +63,8 @@ impl PlayerTrack {
             gate: TrackGate::new(false, declick, sample_rate),
             state: SlotState::Stopped,
             gap: 0,
+            owed: 0,
+            clock: TrackClock::Media,
             stop: StopState::Idle,
             sample_rate,
             declick,
@@ -153,12 +158,12 @@ impl PlayerTrack {
         self.gate.steer(true);
         self.gate.snap();
         self.state = SlotState::Playing;
-        self.gap = 0;
+        self.clear_gap();
         self.resource.set_playing(true);
     }
 
     pub(crate) fn stop(&mut self, seq: Seq, fade: Fade, at: SessionFrame) {
-        self.gap = 0;
+        self.clear_gap();
         if self.state == SlotState::Playing {
             match fade {
                 Fade::Declick => self.fade.declick_out(self.settings(fade), self.sample_rate),
@@ -188,7 +193,7 @@ impl PlayerTrack {
     pub(crate) fn adopt(&mut self, segment: SegmentId) {
         let ended = self.state == SlotState::Ended;
         self.resource.select_segment(segment);
-        self.gap = 0;
+        self.clear_gap();
         if ended {
             self.start(Fade::Declick);
         } else if self.state == SlotState::Playing {
@@ -196,6 +201,19 @@ impl PlayerTrack {
             self.gate.snap();
             self.gate.steer(true);
         }
+    }
+
+    /// A media-time track owes nothing, so leaving session time forgives the debt.
+    pub(crate) fn set_clock(&mut self, clock: TrackClock) {
+        self.clock = clock;
+        if clock == TrackClock::Media {
+            self.owed = 0;
+        }
+    }
+
+    pub(super) const fn clear_gap(&mut self) {
+        self.gap = 0;
+        self.owed = 0;
     }
 
     pub(super) const fn stopping(&self) -> bool {
