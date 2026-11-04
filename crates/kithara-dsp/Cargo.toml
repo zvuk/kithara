@@ -61,5 +61,9 @@ harness = false
 required-features = ["spectrum"]
 
 [[bench]]
+name = "delay"
+harness = false
+
+[[bench]]
 name = "vector_fade"
 harness = false

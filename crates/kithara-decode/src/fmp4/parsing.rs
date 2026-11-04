@@ -1,6 +1,7 @@
 use std::io::{self, Cursor, Error};
 
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_platform::time::Duration;
 use kithara_stream::AudioCodec;
 use re_mp4::{Mp4, StsdBoxContent};
 
@@ -125,6 +126,33 @@ where
         timescale,
         track_id,
     })
+}
+
+impl Fmp4InitInfo {
+    /// Time of the native sample a `timescale` tick count stands for.
+    ///
+    /// A timescale that does not count native samples rounds each sample
+    /// time to its nearest tick, so a tick count stands for the sample
+    /// nearest to it. Every packet then starts on one sample lattice, and
+    /// every variant of a source places a sample at the same time. A track
+    /// without a sample rate keeps the tick time.
+    pub(crate) fn time_at(&self, ticks: u64) -> Duration {
+        let timescale = u128::from(self.timescale);
+        if timescale == 0 {
+            return Duration::ZERO;
+        }
+        let ticks = u128::from(ticks);
+        let (units, per_second) = match self.sample_rate {
+            0 => (ticks, self.timescale),
+            rate => (
+                (ticks * u128::from(rate) * 2 + timescale) / (timescale * 2),
+                rate,
+            ),
+        };
+        let whole = u64::try_from(units / u128::from(per_second)).unwrap_or(u64::MAX);
+        let part = u64::try_from(units % u128::from(per_second)).unwrap_or(u64::MAX);
+        Duration::from_secs(whole).saturating_add(Duration::from_secs(part) / per_second)
+    }
 }
 
 /// Walk a media segment's `(moof, mdat)` pairs and emit per-frame

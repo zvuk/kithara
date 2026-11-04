@@ -29,9 +29,10 @@ compiles no FFT; `spectrum::FftLen` and `SpectrumError` are always
 available. No kernel panics; only `filter::Biquad::new`,
 `spectrum::Fft::new` and, off Apple, `Fft::spectrum` allocate.
 `Fft::spectrum` takes its sample planes, `spectrum::Autocorrelation::new`
-its padding and `envelope::MinimumWindow::new` its older targets from the
-caller's `kithara-bufpool` region; off Apple the complex planes of the
-transform are the FFT library's own.
+its padding, `delay::DelayLine::new` its frame history and
+`envelope::MinimumWindow::new` its older targets from the caller's
+`kithara-bufpool` region; off Apple the complex planes of the transform are
+the FFT library's own.
 
 ## Usage
 
@@ -87,6 +88,8 @@ assert_eq!(samples, [0.0, 0.5]);
 <tr><td><code>spectrum::magnitude</code> / <code>spectrum::phase</code></td><td>Magnitude and phase (<code>atan2</code>) of each bin from its real and imaginary parts, through one <code>fearless_simd</code> kernel on every target</td></tr>
 
 <tr><td><code>spectrum::Autocorrelation</code></td><td>Unbiased autocorrelation of a frame over lags <code>0..N</code>; <code>new</code> takes its zero padding from the caller's pool region, <code>process</code> does not allocate</td></tr>
+
+<tr><td><code>delay::DelayLine</code></td><td>Planar frame history with one cursor for every channel, read before each write at a <code>Tap</code> of <code>1..=capacity</code> frames, integer or as the chord toward the older frame, in spans no longer than the delay; <code>new</code> takes the history from the caller's pool region, <code>read</code>, <code>write</code> and <code>reset</code> do not allocate</td></tr>
 
 <tr><td><code>fade::FadeCurve</code></td><td>firewheel's fade curve, re-exported as the one import path</td></tr>
 

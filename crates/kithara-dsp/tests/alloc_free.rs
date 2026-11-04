@@ -308,3 +308,26 @@ fn minimum_window_process_set_len_and_reset_never_allocate() {
         assert_eq!(window.process(&mut targets), FRAMES);
     });
 }
+
+#[kithara::test(native)]
+fn delay_reads_writes_and_reset_never_allocate() {
+    let mut line = kithara_dsp::delay::DelayLine::new(TWO, PLANE, &pools()).expect("line fits");
+    let integer = line.tap(512.0).expect("tap in range");
+    let fractional = line.tap(300.5).expect("tap in range");
+    let input = vec![vec![0.25_f32; FRAMES]; TWO.get()];
+    let mut output = vec![0.0_f32; 256];
+    assert_no_alloc(|| {
+        for _ in 0..4 {
+            line.write(&input, 0..FRAMES)
+                .expect("planes cover the block");
+            for channel in 0..TWO.get() {
+                line.read(channel, integer, &mut output)
+                    .expect("span within delay");
+                line.read(channel, fractional, &mut output)
+                    .expect("span within delay");
+            }
+        }
+        line.reset();
+    });
+    assert!(output.iter().all(|sample| *sample == 0.25));
+}
