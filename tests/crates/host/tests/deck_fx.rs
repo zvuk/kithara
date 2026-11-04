@@ -4,7 +4,12 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     dsp::param::DEFAULT_SMOOTH_SECONDS,
-    effects::{DeckEffect, FxParamChange},
+    effects::{
+        DeckEffect, FxParamChange,
+        delay::{
+            DelayParam, DelayTime, Feedback, FeedbackDelay, FeedbackDelayConfig, FeedbackHighPass,
+        },
+    },
     platform::{
         sync::{Arc, Mutex},
         time::Duration,
@@ -17,6 +22,7 @@ use kithara::{
 use kithara_command::When;
 use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions, asset_source};
 use kithara_test_fixtures::{asset::Asset, assets};
+use kithara_test_utils::bufpool::pools;
 
 use crate::mix_tap::load_source;
 
@@ -36,6 +42,18 @@ const CROSSFADE_TAKE: usize = 49_152;
 const DRY_AT: usize = LEAD + 1000 + 37;
 /// The frame it turns the unit wet again, long after the dry ramp settled.
 const WET_AT: usize = DRY_AT + 4096;
+/// Frames the test delay echoes its input after.
+const DELAY: usize = 256;
+/// Frames of history the test delay holds.
+const DELAY_CAPACITY: usize = 2 * DELAY;
+/// Halvings that take full scale under the -120 dBFS floor: 2^-20 < 1e-6.
+const HALVINGS: usize = 20;
+/// Frames of silent input after which the test delay, feeding half of each
+/// echo back, reports its tail spent: its capacity, then one delay per
+/// halving.
+const DELAY_TAIL: usize = DELAY_CAPACITY + HALVINGS * DELAY;
+/// The -120 dBFS floor a spent tail stays under.
+const FLOOR: f32 = 1e-6;
 
 /// A memoryless effect: its wet signal is `curve` of each input sample.
 #[derive(Debug)]
@@ -161,6 +179,30 @@ impl DeckEffect for Clock {
     }
 
     fn update_sample_rate(&mut self, _: NonZeroU32) {}
+}
+
+/// A delay of `frames` frames.
+pub(super) fn delay_time(frames: usize) -> DelayTime {
+    DelayTime::checked(f64::from(
+        u32::try_from(frames).expect("a test delay fits u32"),
+    ))
+    .expect("a representable delay")
+}
+
+/// A delay of [`DELAY`] frames in [`DELAY_CAPACITY`], feeding half of each
+/// echo back through the lowest high-pass.
+pub(super) fn feedback_delay() -> FeedbackDelay {
+    FeedbackDelay::new(
+        FeedbackDelayConfig::builder()
+            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("nonzero sample rate"))
+            .capacity(NonZeroUsize::new(DELAY_CAPACITY).expect("nonzero capacity"))
+            .time(delay_time(DELAY))
+            .feedback(Feedback::checked(0.5).expect("half is a feedback"))
+            .high_pass(FeedbackHighPass::MIN)
+            .build(),
+        &pools(),
+    )
+    .expect("the delay fits the test pools")
 }
 
 /// `effect` installed on `unit`, fully wet and on.
@@ -872,5 +914,106 @@ async fn deck_fx_missing_unit_refuses_batch() {
         &refused,
         &echoed,
         "a batch naming a unit the deck lacks changes no unit",
+    );
+}
+
+#[kithara::test(tokio)]
+async fn deck_fx_mismatched_param_refuses_batch() {
+    let refused = |effect: Vec<DeckFxChange>, change: FxParamChange| async move {
+        take(
+            deck(None, DeckMixSettings::default()).await,
+            assets::fixed_constant_wav_cd_half_44100(),
+            effect,
+            vec![(
+                LEAD + 500,
+                vec![
+                    DeckFxChange::Mix {
+                        unit: 0,
+                        value: FxMix::MIN,
+                    },
+                    DeckFxChange::Param { unit: 0, change },
+                ],
+            )],
+            None,
+        )
+        .await
+    };
+    let echoed = plain_take(
+        assets::fixed_constant_wav_cd_half_44100(),
+        insert(0, Echo::new(ECHO)),
+    )
+    .await;
+    let foreign = refused(
+        insert(0, Echo::new(ECHO)),
+        FxParamChange::Delay(DelayParam::Feedback(Feedback::MAX)),
+    )
+    .await;
+    assert_same(
+        &foreign,
+        &echoed,
+        "a batch giving an effect a parameter it lacks changes no unit",
+    );
+    let delayed = plain_take(
+        assets::fixed_constant_wav_cd_half_44100(),
+        insert(0, feedback_delay()),
+    )
+    .await;
+    let beyond = refused(
+        insert(0, feedback_delay()),
+        FxParamChange::Delay(DelayParam::Time(delay_time(DELAY_CAPACITY + 1))),
+    )
+    .await;
+    assert_same(
+        &beyond,
+        &delayed,
+        "a batch asking for a delay beyond the prepared capacity changes no unit",
+    );
+}
+
+#[kithara::test(tokio)]
+async fn deck_fx_delay_echoes_outlive_deck_stop() {
+    const PAUSE: usize = LEAD + 2000;
+
+    let dry = take(
+        deck(None, DeckMixSettings::default()).await,
+        assets::fixed_constant_wav_cd_half_44100(),
+        Vec::new(),
+        Vec::new(),
+        Some(PAUSE),
+    )
+    .await;
+    let fx = take(
+        deck(None, DeckMixSettings::default()).await,
+        assets::fixed_constant_wav_cd_half_44100(),
+        insert(0, feedback_delay()),
+        Vec::new(),
+        Some(PAUSE),
+    )
+    .await;
+    let tail = wet(&mut feedback_delay(), &dry);
+    let silent = dry
+        .chunks(CHANNELS)
+        .rposition(|frame| frame != [0.0; 2])
+        .expect("the dry take sounds")
+        + 1;
+    let spent = (silent + DELAY_TAIL) * CHANNELS;
+    assert!(
+        fx[silent * CHANNELS..].iter().any(|sample| *sample != 0.0),
+        "the echoes sound after the deck's slots stop"
+    );
+    assert_same(
+        &fx[..spent],
+        &tail[..spent],
+        "the stopped deck rings its echoes out on their frames and at their levels",
+    );
+    assert!(
+        tail[spent..].iter().all(|sample| sample.abs() < FLOOR),
+        "the delay reports its tail spent only under -120 dBFS"
+    );
+    assert!(
+        fx[spent + CALLBACK * CHANNELS..]
+            .iter()
+            .all(|sample| *sample == 0.0),
+        "the deck falls silent within a callback of the delay reporting its tail spent"
     );
 }
