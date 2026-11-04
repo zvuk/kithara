@@ -45,6 +45,10 @@ fn boost_low_band<S: HasPool<f32>>(config: &EqConfig<S>, sample_rate: NonZeroU32
 
 <tr><th>Type</th><th>Role</th></tr>
 
+<tr><td><code>DeckEffect</code></td><td>Contract of the effect a deck FX unit holds: planar stereo wet signal, parameter changes, reset, tail exhaustion</td></tr>
+
+<tr><td><code>FxParamChange</code></td><td>A change of one deck effect parameter; each effect's parameters join as a variant</td></tr>
+
 <tr><td><code>IsolatorEq</code></td><td>DJ isolator built on crossover filters</td></tr>
 
 <tr><td><code>PeakLimiter</code></td><td>Look-ahead peak limiter holding a ceiling</td></tr>
@@ -70,7 +74,7 @@ fn boost_low_band<S: HasPool<f32>>(config: &EqConfig<S>, sample_rate: NonZeroU32
 ## Integration
 
 Effects belong to the deck: a track contributes only its slot gain and fader.
-`kithara-play` builds the band layouts its deck takes; `kithara-render` runs a `StereoEq` on every deck; `kithara-host` puts
+`kithara-play` builds the band layouts its deck takes; `kithara-render` runs a `StereoEq` and the `DeckEffect` of each FX unit on every deck; `kithara-host` puts
 `LimiterNode` on the session bus. Reusable DSP building
 blocks stay private under `src/dsp/` until they become `kithara-dsp`.
 

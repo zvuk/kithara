@@ -10,8 +10,8 @@ pub use kithara_signal::Bound;
 use kithara_signal::SessionFrame;
 
 use crate::{
-    DeckEqChange, DeckMixSettings, DeckMixSettingsChange, DeckPass, InterruptionKind, PlayError,
-    ResourceLoad, SessionEvent,
+    DeckEqChange, DeckFxChange, DeckMixSettings, DeckMixSettingsChange, DeckPass, InterruptionKind,
+    PlayError, ResourceLoad, SessionEvent,
 };
 
 /// One loaded track or a deck built of them: it changes its own state on the
@@ -149,13 +149,27 @@ impl<'a, S> Outbox<'a, S> {
         })?;
         mix.send(&mut *self.deck, at, change, DeckPart::Mix)
             .map_err(|error| match error {
-                LiveError::Invalid(error) => PlayError::from(error),
+                LiveError::Invalid(never) => match never {},
                 LiveError::Send(SendError::Full(_)) => PlayError::Full("deck"),
                 LiveError::Send(SendError::Closed(_)) => PlayError::Closed,
                 LiveError::Send(SendError::Target(_)) => {
                     PlayError::Internal("a deck mix batch names a slot".into())
                 }
             })
+    }
+
+    /// Sends `changes` of the deck's FX units to apply at `at`, whole or not at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayError::Late`] for a frame already rendered and
+    /// [`PlayError::Full`] when the deck has no room.
+    pub fn fx(
+        &mut self,
+        at: When<SessionFrame>,
+        changes: Vec<DeckFxChange>,
+    ) -> Result<Option<Seq>, PlayError> {
+        self.deck(at, changes.into_iter().map(DeckPart::Fx).collect())
     }
 
     pub fn eq(&mut self, parts: Vec<DeckEqChange>) -> Result<Option<Seq>, PlayError> {
@@ -445,7 +459,9 @@ pub(crate) fn slots(part: &DeckPart) -> impl Iterator<Item = Slot> {
         | DeckPart::Adopt { slot, .. }
         | DeckPart::Replace { slot, .. } => (Some(slot), None),
         DeckPart::Chain { from, to } => (Some(from), Some(to)),
-        DeckPart::Mix(_) | DeckPart::Eq(_) | DeckPart::Returned(_) => (None, None),
+        DeckPart::Mix(_) | DeckPart::Eq(_) | DeckPart::Fx(_) | DeckPart::Returned(_) => {
+            (None, None)
+        }
     };
     first.into_iter().chain(second)
 }

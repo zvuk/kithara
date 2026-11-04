@@ -3,8 +3,10 @@ use kithara_command::{Refused, Ticket, When};
 use kithara_events::TrackId;
 use kithara_platform::time::{Duration, Instant};
 use kithara_play::{
-    CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, Position, TrackSettingsChange,
+    CrossfadeSettings, CrossfaderGain, DeckFxChange, EqBandConfig, InterruptionKind, PlayError,
+    Position, TrackSettingsChange, Trim,
 };
+use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
@@ -222,11 +224,25 @@ where
         self.call(QueueCommand::SetVolume(volume))
     }
 
-    /// Forwards mix level to the host owner.
+    /// Forwards the deck's trim to the host owner.
     /// # Errors
     /// Returns the host's refusal or a closed mailbox.
-    pub fn set_level(&self, level: f32) -> Result<(), QueueError> {
-        self.call(QueueCommand::SetLevel(level))
+    pub fn set_trim(&self, trim: Trim) -> Result<(), QueueError> {
+        self.call(QueueCommand::SetTrim(trim))
+    }
+
+    /// Forwards the deck's crossfader gain to the host owner.
+    /// # Errors
+    /// Returns the host's refusal or a closed mailbox.
+    pub fn set_crossfader(&self, gain: CrossfaderGain) -> Result<(), QueueError> {
+        self.call(QueueCommand::SetCrossfader(gain))
+    }
+
+    /// Forwards `changes` of the deck's FX units, applied at `at`, to the host owner.
+    /// # Errors
+    /// Returns the host's refusal or a closed mailbox.
+    pub fn fx(&self, at: When<SessionFrame>, changes: Vec<DeckFxChange>) -> Result<(), QueueError> {
+        self.call(QueueCommand::Fx { at, changes })
     }
 
     /// Forwards mute to the host owner.

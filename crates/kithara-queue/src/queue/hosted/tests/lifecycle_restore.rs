@@ -796,9 +796,11 @@ async fn player_lifecycle_admits_only_one_concurrent_close() {
                 When::Next,
                 kithara_command::Batch {
                     basis: Vec::new(),
-                    commands: vec![DeckPart::Mix(kithara_play::DeckMixSettingsChange::Level(
-                        1.0,
-                    ))],
+                    commands: vec![DeckPart::Mix(
+                        kithara_play::DeckMixSettingsChange::Crossfader(
+                            kithara_play::CrossfaderGain::MAX,
+                        ),
+                    )],
                 },
             )
             .expect("fill deck ring");

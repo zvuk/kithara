@@ -494,8 +494,8 @@ fn stopping_one_track_inside_a_block_holds_it_from_its_frame(
 
 /// Half the fader, a quarter of the amplitude: the deck sounds at the square of its volume.
 const HALF_FADER_GAIN: f32 = 0.25;
-/// Half the fader at half the mix level: the level scales what the volume leaves.
-const HALF_FADER_HALF_LEVEL_GAIN: f32 = 0.125;
+/// Half the fader at half the crossfader: the crossfader scales what the volume leaves.
+const HALF_FADER_HALF_CROSSFADER_GAIN: f32 = 0.125;
 
 fn mix(change: DeckMixSettingsChange) -> DeckPart {
     DeckPart::Mix(change)
@@ -561,7 +561,9 @@ fn a_volume_change_inside_a_block_moves_the_gain_from_its_frame(constant_half: &
 }
 
 #[kithara::test]
-fn a_level_change_inside_a_block_scales_the_volume_from_its_frame(constant_half: &'static [u8]) {
+fn a_crossfader_change_inside_a_block_scales_the_volume_from_its_frame(
+    constant_half: &'static [u8],
+) {
     let (mut processor, mut control) = processor();
     let item_id = load(&mut control, "a.mp3", constant_half);
     push(
@@ -579,41 +581,47 @@ fn a_level_change_inside_a_block_scales_the_volume_from_its_frame(constant_half:
     let quarter = TEST_PCM_DEFAULT_VALUE * HALF_FADER_GAIN;
     assert!(
         (last(&half) - quarter).abs() < EXACT,
-        "the deck plays at the square of its volume before its level changes ({})",
+        "the deck plays at the square of its volume before its crossfader changes ({})",
         last(&half)
     );
 
     let origin = i64::try_from(BLOCK_FRAMES).expect("a block fits the clock");
     let offset = BLOCK_FRAMES / 2;
     let at = SessionFrame::new(origin + i64::try_from(offset).expect("an offset fits the clock"));
-    let seq = send_at(&mut control, at, mix(DeckMixSettingsChange::Level(0.5)));
+    let seq = send_at(
+        &mut control,
+        at,
+        mix(DeckMixSettingsChange::Crossfader(
+            crate::bridge::CrossfaderGain::checked(0.5).expect("half is a crossfader gain"),
+        )),
+    );
     let (changed, _) = block_from(&mut processor, SessionFrame::new(origin));
 
     assert!(
         changed[..offset]
             .iter()
             .all(|sample| (*sample - quarter).abs() < EXACT),
-        "the deck keeps its gain before the frame the level applies on"
+        "the deck keeps its gain before the frame the crossfader applies on"
     );
     assert!(
         changed[offset] < quarter,
-        "the gain moves from the frame the level applies on"
+        "the gain moves from the frame the crossfader applies on"
     );
     let answer = answer(&mut control, seq);
     assert!(
         matches!(answer.outcome(), Outcome::Applied { at: applied, .. } if *applied == at),
-        "the level is applied at its frame"
+        "the crossfader is applied at its frame"
     );
 
     let settled = pump(&mut processor, SETTLE_BLOCKS, None);
     let step = max_step(&across(&half, &[changed, settled.clone()].concat()));
     assert!(
         step <= MAX_STEP,
-        "a level change ramps the gain, it does not step it (step {step})"
+        "a crossfader change ramps the gain, it does not step it (step {step})"
     );
     assert!(
-        (last(&settled) - TEST_PCM_DEFAULT_VALUE * HALF_FADER_HALF_LEVEL_GAIN).abs() < EXACT,
-        "the deck settles at the square of its volume times its level ({})",
+        (last(&settled) - TEST_PCM_DEFAULT_VALUE * HALF_FADER_HALF_CROSSFADER_GAIN).abs() < EXACT,
+        "the deck settles at the square of its volume times its crossfader ({})",
         last(&settled)
     );
 }

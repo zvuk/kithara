@@ -323,7 +323,10 @@ fn linked_mixer() -> kithara::play::DeckMixerConfig {
         .eq_bands(0)
         .mix(
             kithara::play::DeckMixSettings::builder()
-                .level(super::control::CONTROL_GAIN)
+                .crossfader(
+                    kithara::play::CrossfaderGain::checked(super::control::CONTROL_GAIN)
+                        .expect("the control gain is a crossfader gain"),
+                )
                 .build(),
         )
         .build()

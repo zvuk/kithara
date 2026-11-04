@@ -1,4 +1,7 @@
-use kithara::host::{CrossfaderBus, PlayError, crossfader_gain};
+use kithara::{
+    host::{CrossfaderBus, PlayError, crossfader_gain},
+    play::{CrossfaderGain, Trim},
+};
 
 /// One deck's channel strip.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -43,32 +46,39 @@ impl Default for MixState {
 }
 
 impl MixState {
-    /// One strip's level, as [`MixState::levels`] computes it.
+    /// One strip's deck trim, and its crossfader gain
+    /// `mute * crossfader_gain(bus, position) * group_master`.
     ///
     /// # Errors
     /// See [`MixState::levels`].
-    pub(crate) fn level(self, strip: MixStrip) -> Result<f32, PlayError> {
+    pub(crate) fn gains(self, strip: MixStrip) -> Result<(Trim, CrossfaderGain), PlayError> {
         let gain = crossfader_gain(strip.bus, self.position)?;
         let mute = if strip.muted { 0.0 } else { 1.0 };
-        let level = (strip.trim * mute * gain * self.group_master).clamp(0.0, 1.0);
+        let trim = strip.trim.clamp(0.0, 1.0);
+        let crossfader = (mute * gain * self.group_master).clamp(0.0, 1.0);
 
-        if level.is_nan() {
-            return Err(PlayError::MixLevel { level });
-        }
-
-        Ok(level)
+        Ok((
+            Trim::checked(trim).ok_or(PlayError::MixLevel { level: trim })?,
+            CrossfaderGain::checked(crossfader).ok_or(PlayError::MixLevel { level: crossfader })?,
+        ))
     }
 
-    /// `trim * mute * crossfader_gain(bus, position) * group_master` per strip.
+    /// The level each strip passes: its trim times its crossfader gain.
     ///
     /// # Errors
     /// Returns [`PlayError::MixPosition`] for a position outside `0.0..=1.0` and
-    /// [`PlayError::MixLevel`] for a level that is not a number.
+    /// [`PlayError::MixLevel`] for a gain that is not a number.
     pub fn levels<'a, I>(&self, strips: I) -> Result<Vec<f32>, PlayError>
     where
         I: IntoIterator<Item = &'a MixStrip>,
     {
-        strips.into_iter().map(|strip| self.level(*strip)).collect()
+        strips
+            .into_iter()
+            .map(|strip| {
+                let (trim, crossfader) = self.gains(*strip)?;
+                Ok(f32::from(trim) * f32::from(crossfader))
+            })
+            .collect()
     }
 }
 

@@ -64,7 +64,7 @@ impl Deck {
             DeckPart::Chain { from, to } => Some(self.chain_tracks(from, to)),
             DeckPart::Mix(change) => {
                 self.mix.apply_change(change);
-                self.render.set_gain(self.mix.gain());
+                self.render.set_mix(self.mix);
                 Some(DeckPart::Mix(change))
             }
             DeckPart::Eq(DeckEqChange::Gain { band, gain }) => {
@@ -75,6 +75,7 @@ impl Deck {
                 .render
                 .take_eq_layout(layout)
                 .map(|layout| DeckPart::Returned(Returned::Eq(layout))),
+            DeckPart::Fx(change) => self.render.change_fx(change),
             DeckPart::Returned(returned) => Some(DeckPart::Returned(returned)),
         }
     }

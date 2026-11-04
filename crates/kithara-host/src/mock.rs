@@ -173,7 +173,10 @@ mod fixture {
             .block_on_underrun(true)
             .build();
         let mix = kithara_play::DeckMixSettings::builder()
-            .level(level)
+            .crossfader(
+                kithara_play::CrossfaderGain::checked(level)
+                    .expect("fixture start levels are crossfader gains"),
+            )
             .build();
         let mixer = kithara_play::DeckMixerConfig::builder().mix(mix).build();
         let store = kithara_assets::AssetStore::builder(pools())

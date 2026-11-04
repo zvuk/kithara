@@ -9,7 +9,9 @@ use kithara::{
         MetronomeConfigControl, Tap,
     },
     platform::time::{self, Duration},
-    play::{PlayError, PlayWorker, PlayWorkerConfig, ResourcePrep, SessionDuckingMode},
+    play::{
+        CrossfaderGain, PlayError, PlayWorker, PlayWorkerConfig, ResourcePrep, SessionDuckingMode,
+    },
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     signal::SessionFrame,
 };
@@ -99,6 +101,38 @@ async fn two_decks_keep_separate_effects() {
     );
 }
 
+#[kithara::test(tokio)]
+async fn deck_fx_other_deck_is_unaffected() {
+    let halved = || crate::deck_fx::insert(0, crate::deck_fx::Curve(|sample| sample * 0.5));
+    let alone = MixHarness::new(1).await;
+    alone.fx(0, halved()).await;
+    alone
+        .play(&[assets::fixed_constant_wav_cd_fifth_1323000()])
+        .await;
+    let fx_alone = alone.steady().await[0];
+    alone.close().await;
+    let other_alone = steady_level(
+        &[assets::fixed_constant_wav_cd_three_tenths_1323000()],
+        false,
+    )
+    .await;
+    let both = MixHarness::new(2).await;
+    both.fx(0, halved()).await;
+    both.play(&[
+        assets::fixed_constant_wav_cd_fifth_1323000(),
+        assets::fixed_constant_wav_cd_three_tenths_1323000(),
+    ])
+    .await;
+    let mixed = both.steady().await;
+    both.close().await;
+    assert!(
+        mixed
+            .iter()
+            .all(|sample| sample.to_bits() == (fx_alone + other_alone).to_bits()),
+        "deck B sounds exactly as alone beside deck A's effect: {fx_alone} + {other_alone}"
+    );
+}
+
 /// The settled sample of `values` played on their own decks, the first deck's
 /// lowest EQ band cut when `cut` is set.
 async fn steady_level(values: &[Asset], cut: bool) -> f32 {
@@ -181,6 +215,14 @@ impl MixHarness {
             .expect("the deck takes the band cut");
     }
 
+    async fn fx(&self, deck: usize, changes: Vec<kithara::play::DeckFxChange>) {
+        let player = self.players[deck].control().clone();
+        self.host
+            .run(move || player.fx(When::Next, changes))
+            .await
+            .expect("the deck takes the FX batch");
+    }
+
     async fn set_ducking(&self, mode: SessionDuckingMode) {
         self.host
             .with(move |host| host.set_ducking(mode))
@@ -252,7 +294,7 @@ impl MixHarness {
                 players
                     .iter()
                     .zip(levels)
-                    .try_for_each(|(player, level)| player.set_level(level))
+                    .try_for_each(|(player, level)| player.set_crossfader(crossfader(level)))
             })
             .await
     }
@@ -326,6 +368,10 @@ fn constant_unity() -> Asset {
     assets::fixed_constant_wav_cd_unity_1323000()
 }
 
+fn crossfader(level: f32) -> CrossfaderGain {
+    CrossfaderGain::checked(level).expect("fixture levels are crossfader gains")
+}
+
 fn assert_near(actual: f32, expected: f32, what: &str) {
     assert!(
         (actual - expected).abs() < TOL,
@@ -359,14 +405,6 @@ async fn a_deck_mix_shows_once_its_mixer_applies_it() {
         events.try_recv().expect("mute event").event,
         kithara::play::PlayerEvent::MuteChanged { muted: true }
     ));
-    let control = player.clone();
-    let error = harness.host.run(move || control.set_level(2.0)).await;
-    assert!(matches!(
-        error,
-        Err(QueueError::Play(PlayError::MixLevel { level: 2.0 }))
-    ));
-    harness.render_block().await;
-    assert_eq!(player.volume(), 0.5);
     harness.close().await;
 }
 
@@ -507,29 +545,6 @@ async fn single_player_without_a_mix_is_unchanged(constant_four: Asset) {
         harness.steady_peak().await,
         0.4,
         "single-player playback regressed",
-    );
-    harness.close().await;
-}
-
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
-async fn rejected_mix_changes_no_rendered_gain(constant_four: Asset, constant_two: Asset) {
-    let values = [constant_four, constant_two];
-    let harness = MixHarness::new(values.len()).await;
-    harness.apply(&[0.5, 0.25]).await.expect("apply mix");
-    harness.play(&values).await;
-
-    let expected = 0.4 * 0.5 + 0.2 * 0.25;
-    assert_near(harness.steady_peak().await, expected, "baseline mix");
-
-    let err = harness
-        .apply(&[0.5, 2.0])
-        .await
-        .expect_err("invalid level must be rejected");
-    assert!(matches!(err, QueueError::Play(PlayError::MixLevel { .. })));
-    assert_near(
-        harness.steady_peak().await,
-        expected,
-        "rejected mix changed a gain",
     );
     harness.close().await;
 }

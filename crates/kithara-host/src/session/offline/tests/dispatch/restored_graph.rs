@@ -93,8 +93,8 @@ async fn host_mix_before_registration_becomes_the_start_level() {
             state
                 .owner
                 .with_deck(id, &mut |_, _, pass| {
-                    assert_eq!(pass.mix.level(), 0.4);
-                    assert_eq!(pass.mix.gain(), 0.4);
+                    assert_eq!(f32::from(pass.mix.crossfader()), 0.4);
+                    assert_eq!(pass.mix.output_gain(), 0.4);
                 })
                 .expect("held deck");
             let mut output = Vec::new();

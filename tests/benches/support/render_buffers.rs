@@ -32,7 +32,7 @@ use kithara_integration_tests::{
 };
 use kithara_render::{
     CrossfadeSettings, LaneCommand, LaneProtocol, LaneStart, LaneTask, PcmPacket, PcmReceiver,
-    bridge::{DeckMixSettings, DeckPart, Fade, Slot},
+    bridge::{CrossfaderGain, DeckMixSettings, DeckPart, Fade, Slot},
     mock::{PacketRing, TestEnds, TestMixer, TestSessionInbox, chunk, mixer_with_shape, send},
     rt::{
         DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context,
@@ -87,7 +87,11 @@ impl DeckFixture {
     fn new() -> Self {
         let config = DeckMixerConfig::builder()
             .eq_bands(0)
-            .mix(DeckMixSettings::builder().level(0.5).build())
+            .mix(
+                DeckMixSettings::builder()
+                    .crossfader(CrossfaderGain::checked(0.5).expect("half is a crossfader gain"))
+                    .build(),
+            )
             .build();
         let (TestMixer { mixer, inbox }, ends) = mixer_with_shape(
             config,

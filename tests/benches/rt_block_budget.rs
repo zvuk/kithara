@@ -41,8 +41,8 @@ use kithara_integration_tests::{
 use kithara_render::{
     CrossfadeCurve, CrossfadeSettings, LaneProtocol, LaneStart, LaneTask,
     bridge::{
-        DeckEnds, DeckMixSettingsChange, DeckPart, DeckProtocol, Fade, SessionInbox, Slot,
-        SlotState, scope_channels,
+        CrossfaderGain, DeckEnds, DeckMixSettingsChange, DeckPart, DeckProtocol, Fade,
+        SessionInbox, Slot, SlotState, scope_channels,
     },
     rt::{
         DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context,
@@ -177,7 +177,9 @@ async fn processor(count: usize, lane: Lane) -> BenchMixer {
     let mut senders = Vec::new();
     let mut commands = Vec::new();
     if lane == Lane::Gain {
-        commands.push(DeckPart::Mix(DeckMixSettingsChange::Level(0.5)));
+        commands.push(DeckPart::Mix(DeckMixSettingsChange::Crossfader(
+            CrossfaderGain::checked(0.5).expect("half is a crossfader gain"),
+        )));
     }
     for index in 0..count {
         hang_tick!();

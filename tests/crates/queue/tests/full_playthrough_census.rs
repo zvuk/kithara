@@ -30,7 +30,7 @@ use ::kithara::{
         time::{self, Duration},
         tokio::task,
     },
-    play::{PlayerFactory, ResourceConfig, ResourceSrc, TrackFactory},
+    play::{CrossfaderGain, PlayerFactory, ResourceConfig, ResourceSrc, TrackFactory},
     queue::{AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
     stream::AudioCodec,
 };
@@ -359,7 +359,12 @@ async fn build_queue(
             .await
     };
     harness
-        .run(&queue, |control| control.set_level(CENSUS_LEVEL))
+        .run(&queue, |control| {
+            control.set_crossfader(
+                CrossfaderGain::checked(CENSUS_LEVEL)
+                    .expect("the census level is a crossfader gain"),
+            )
+        })
         .await
         .expect("set the mix level");
 

@@ -1,11 +1,7 @@
 use kithara_audio::TrackFailureKind;
 use kithara_bufpool::PoolError;
 use kithara_platform::time::Duration;
-use kithara_render::{
-    InvalidCrossfade,
-    bridge::{DeckRefusal, InvalidMixLevel},
-    rt::BufferGeometryError,
-};
+use kithara_render::{InvalidCrossfade, bridge::DeckRefusal, rt::BufferGeometryError};
 
 use crate::{
     api::{SlotId, TrackId},
@@ -145,11 +141,5 @@ impl From<InvalidCrossfade> for PlayError {
             name: name.into(),
             value,
         }
-    }
-}
-
-impl From<InvalidMixLevel> for PlayError {
-    fn from(InvalidMixLevel { level }: InvalidMixLevel) -> Self {
-        Self::MixLevel { level }
     }
 }
