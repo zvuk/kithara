@@ -181,16 +181,22 @@ async fn pcm_short_of_the_debt_is_dropped_and_the_rest_stays_owed() {
 
 #[kithara::test(native, tokio)]
 async fn an_adopted_segment_drops_nothing_and_ends_the_dropout_unrecovered() {
-    let mut rig = Rig::new(TrackClock::Session).await;
-    rig.starve(2);
-    let segment = SegmentId::FIRST.next();
-    rig.track.adopt(segment);
-    rig.push(segment, 0, &PCM);
+    let mut played = Vec::new();
+    for clock in [TrackClock::Media, TrackClock::Session] {
+        let mut rig = Rig::new(clock).await;
+        rig.starve(2);
+        let segment = SegmentId::FIRST.next();
+        rig.track.adopt(segment);
+        rig.push(segment, 0, &PCM);
 
-    let (_, played) = rig.block();
+        played.push(rig.block().1);
+        assert!(rig.underrun_ends().is_empty(), "adopt cleared the gap");
+    }
 
-    assert_eq!(played, [0.1, 0.2]);
-    assert!(rig.underrun_ends().is_empty(), "adopt cleared the gap");
+    assert_eq!(
+        played[1], played[0],
+        "the adopted segment sounds from its start under either clock"
+    );
 }
 
 #[kithara::test(native, tokio)]

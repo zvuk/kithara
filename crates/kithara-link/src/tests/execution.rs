@@ -6,8 +6,8 @@ use kithara_command::{Batch, Inbox, Outcome, Receipt, Rejection, Seq, When};
 use kithara_host::HostOwner;
 use kithara_play::{
     Bound, DeckPass, Outbox, PlayWorker, PlayWorkerConfig, Player, PlayerConfig, PlayerImpl,
-    ResourceConfig, ResourceLoad, ResourceSrc, Track, TrackCommand, TrackReceipt, TrackSettings,
-    TrackStatus,
+    ResourceConfig, ResourceLoad, ResourceSrc, Track, TrackClock, TrackCommand, TrackReceipt,
+    TrackSettings, TrackStatus,
     mock::{self, DeckRig},
 };
 use kithara_render::{
@@ -575,6 +575,19 @@ async fn native_synced(
     native_marked(&mut rig, segment, |out| {
         deck.tick(SessionFrame::new(0), out);
     });
+    for receipt in rig
+        .block(SessionFrame::new(0), 0.0)
+        .expect("the synced clock")
+    {
+        assert!(matches!(
+            receipt.batch().commands.as_slice(),
+            [DeckPart::Clock {
+                clock: TrackClock::Session,
+                ..
+            }]
+        ));
+        native_settle(&mut deck, &mut rig, segment, receipt);
+    }
     assert_eq!(
         deck.entry(Bound::AtOrAfter(SessionFrame::new(0))),
         Some(SessionFrame::new(0))

@@ -23,15 +23,15 @@ async fn a_clock_set_before_the_seat_rides_on_the_attach() {
         .expect("live deck scope");
     let receipts = rig.block(frame(0), 0.0);
 
+    assert!(track.attached());
+    // The RT keeps the PCM of an applied Attach, so the one seat batch echoes
+    // only the clock that rode on it.
     assert!(
         matches!(
             receipts.as_slice(),
             [receipt] if matches!(
                 receipt.batch.commands.as_slice(),
-                [
-                    DeckPart::Attach { slot: A, .. },
-                    DeckPart::Clock { slot: A, clock: TrackClock::Session },
-                ]
+                [DeckPart::Clock { slot: A, clock: TrackClock::Session }]
             )
         ),
         "{:?}",
