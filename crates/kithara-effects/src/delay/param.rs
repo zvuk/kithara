@@ -2,8 +2,8 @@ use kithara_derive::Ranged;
 
 /// How far behind its input a [`FeedbackDelay`](super::FeedbackDelay) reads,
 /// in frames; a fraction reads between two frames. Zero is no delay: the loop
-/// would read the frame it is writing. The range ends at the largest history
-/// any delay holds; a delay refuses a time past its own capacity.
+/// would read the frame it is writing. The range ends at 2^23 frames, near
+/// three minutes at 48 kHz; a delay also refuses a time past its own capacity.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Ranged)]
 #[ranged(min = 1.0, max = 8_388_608.0)]
 pub struct DelayTime(f64);
