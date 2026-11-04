@@ -387,7 +387,8 @@ mod tests {
     fn a_restart_takes_nothing_from_a_region_holding_exactly_the_reserve() {
         // 0.25 ms at the highest rate, 96 kHz, trails by 24 frames: one f32 gain target each,
         // and each delayed plane holds those frames and one 256-frame chunk. Every rate trails
-        // by less than a block, so a restart that kept delayed audio would sound it.
+        // by less than the three blocks compared after a restart, so a restart that kept
+        // delayed audio would sound it.
         const RESERVE: usize = (24 + 2 * (24 + 256)) * size_of::<f32>();
         let max_rate = rate(96_000);
         let config = lookahead(0.25);
