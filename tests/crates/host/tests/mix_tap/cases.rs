@@ -527,7 +527,7 @@ async fn deck_fx_delay_install_change_and_clear_during_playback() {
     use kithara::{
         effects::{
             FxParamChange,
-            delay::{DelayParam, Feedback},
+            delay::{DelayParam, Feedback, FeedbackHighPass},
         },
         play::DeckFxChange,
     };
@@ -569,15 +569,19 @@ async fn deck_fx_delay_install_change_and_clear_during_playback() {
     };
     send(vec![
         param(DelayParam::Time(delay_time(ECHO / 2))),
-        param(DelayParam::Feedback(
-            Feedback::checked(0.25).expect("a quarter is a feedback"),
-        )),
+        param(DelayParam::Feedback(Feedback::MIN)),
+        param(DelayParam::HighPass(FeedbackHighPass::MAX)),
     ])
     .await
-    .expect("change the time and the feedback");
+    .expect("change the time, the feedback and the high-pass");
+    let changed = render_blocks(&harness, ECHO / BLOCK_FRAMES - 1).await;
     assert!(
-        !steady(&render_blocks(&harness, 4).await),
-        "the changed delay still colours the deck"
+        !steady(&changed[..BLOCK_FRAMES * 2]),
+        "the echoes fed back before the change still sound"
+    );
+    assert!(
+        steady(&changed[changed.len() - BLOCK_FRAMES * 2..]),
+        "the shorter delay, feeding nothing back, repeats the deck"
     );
 
     send(vec![DeckFxChange::Clear { unit: 0 }])
