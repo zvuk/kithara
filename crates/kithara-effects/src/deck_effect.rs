@@ -2,7 +2,7 @@ use std::fmt;
 
 /// A change of one parameter of a deck effect, each effect's parameters one
 /// variant.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub enum FxParamChange {}
 
 /// The effect a deck FX unit holds.

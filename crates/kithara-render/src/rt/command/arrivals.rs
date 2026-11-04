@@ -239,7 +239,7 @@ impl Deck {
                         return Err(DeckRefusal::MissingFxUnit { unit });
                     }
                     if let DeckFxChange::Param { change, .. } = change
-                        && !self.render.accepts_fx(unit, change)
+                        && !self.render.accepts_fx(unit, *change)
                     {
                         return Err(DeckRefusal::RefusedFxParam { unit });
                     }

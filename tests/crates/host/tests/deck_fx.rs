@@ -6,7 +6,7 @@ use kithara::{
     effects::{DeckEffect, FxParamChange},
     platform::sync::{Arc, Mutex},
     play::{DeckFxChange, DeckMixSettings, FxMix, Trim},
-    queue::{TrackSource, Transition},
+    queue::{QueueControl, TrackSource, Transition},
     signal::SessionFrame,
     warp::WarpConfig,
 };
@@ -89,10 +89,10 @@ impl DeckEffect for Echo {
         }
         for frame in 0..left.len() {
             let input = [left[frame], right[frame]];
-            let [late_left, late_right] = match self.line.get_mut(self.cursor) {
-                Some(slot) => std::mem::replace(slot, input),
-                None => input,
-            };
+            let [late_left, late_right] = self
+                .line
+                .get_mut(self.cursor)
+                .map_or(input, |slot| std::mem::replace(slot, input));
             wet_left[frame] = late_left;
             wet_right[frame] = late_right;
             self.cursor = (self.cursor + 1) % self.line.len().max(1);
@@ -207,7 +207,7 @@ async fn take(
     }
     if let Some(pause) = pause {
         output.extend(render_effect_window(&harness, pause - LEAD).await);
-        harness.with_queue(|queue| queue.pause()).await;
+        harness.with_queue(QueueControl::pause).await;
     }
     output.extend(render_effect_window(&harness, TAKE - output.len() / CHANNELS).await);
     assert_eq!(harness.metrics().underruns(), 0);
@@ -511,7 +511,7 @@ async fn deck_fx_fader_cuts_tail() {
     )
     .await;
     let mut fx = render_effect_window(&harness, PAUSE).await;
-    harness.with_queue(|queue| queue.pause()).await;
+    harness.with_queue(QueueControl::pause).await;
     fx.extend(render_effect_window(&harness, DOWN - PAUSE).await);
     harness.set_volume(0.0).await.expect("the fader goes down");
     fx.extend(render_effect_window(&harness, UP - DOWN).await);

@@ -131,11 +131,11 @@ impl RenderPass {
     }
 
     /// Whether `unit` holds an effect that takes `change`.
-    pub(crate) fn accepts_fx(&self, unit: usize, change: &FxParamChange) -> bool {
+    pub(crate) fn accepts_fx(&self, unit: usize, change: FxParamChange) -> bool {
         self.units
             .get(unit)
             .and_then(|unit| unit.effect.as_ref())
-            .is_some_and(|effect| effect.accepts(change))
+            .is_some_and(|effect| effect.accepts(&change))
     }
 
     /// Apply `change` to its unit, answering what goes back in the receipt.
