@@ -37,7 +37,10 @@ Both variants carry the pool region the session output chain takes its storage
 from. With the `offline` feature, the same `Host<S>` drives its owned graph
 without an audio device and implements `kithara_output::OfflineRenderer` for
 exact finite output-frame ranges. Its offline variant also carries the render
-quantum, latency, worker, task, and dispatcher budgets.
+quantum, latency, worker, task, and dispatcher budgets. A limiter lookahead of
+`L` frames delays the whole output, metronome included: output frames
+`[s + L, s + N + L)` hold session frames `[s, s + N)`, and the first `L`
+output frames are silent pre-roll.
 
 The current crate is a mechanical ownership extraction. Runtime invariants and
 dependency boundaries are documented in [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-host).

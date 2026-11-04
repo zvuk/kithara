@@ -291,6 +291,7 @@ struct TimelineOverflow;
 mod tests {
     use kithara_command::When;
     use kithara_config::Configure;
+    use kithara_effects::LookaheadMs;
     use kithara_output::{OfflineRenderRequest, OfflineRenderer, RenderSinkError};
     use kithara_platform::CancelScope;
     use kithara_signal::SessionFrame;
@@ -358,7 +359,7 @@ mod tests {
             ),
             "{refused:?}"
         );
-        let mut host = host_at(highest).expect("the highest rate starts");
+        let host = host_at(highest).expect("the highest rate starts");
         let changed = host.set_sample_rate(above);
         assert!(
             matches!(
@@ -558,5 +559,63 @@ mod tests {
                 "sample {index} sounds at half level: full {full}, quiet {quiet}"
             );
         }
+    }
+
+    /// A [`tempo_host`] under `limiter` with its metronome on.
+    fn clicking_host(limiter: LimiterConfig) -> Host<TestPools> {
+        let block_frames = NonZeroU32::new(128).expect("test block size is non-zero");
+        let config = HostConfig::offline(pools())
+            .limiter(limiter)
+            .max_block_frames(block_frames)
+            .build();
+        let host = Host::<TestPools>::new(config).expect("fixture offline Host");
+        host.metronome()
+            .set_enabled(true)
+            .expect("the metronome switches on");
+        host
+    }
+
+    #[kithara::test(native)]
+    fn a_recording_under_a_lookahead_holds_its_content_the_lookahead_later() {
+        // Beat 1 at 120 BPM clicks on frame 22 050; the content holds its whole click.
+        const CONTENT: std::ops::Range<u64> = 21_504..25_600;
+        let lookahead = LimiterConfig::builder()
+            .lookahead_ms(LookaheadMs::try_from(10.0).expect("limiter lookahead"))
+            .build();
+        let latency =
+            u64::try_from(lookahead.latency_frames(consts::SAMPLE_RATE)).expect("latency frames");
+        let mut direct = clicking_host(LimiterConfig::default());
+        let mut delayed = clicking_host(lookahead);
+
+        render_frames(&mut direct, 0..CONTENT.start);
+        let content = render_samples(&mut direct, CONTENT);
+        let pre_roll = render_samples(&mut delayed, 0..latency);
+        render_frames(&mut delayed, latency..CONTENT.start + latency);
+        let request = OfflineRenderRequest::builder()
+            .spec(AudioSpec::new(consts::CHANNELS, consts::SAMPLE_RATE))
+            .frames(CONTENT.start + latency..CONTENT.end + latency)
+            .build();
+        let mut recording = Capture::default();
+        let report = delayed
+            .render(&request, &CancelScope::new(None).token(), &mut recording)
+            .expect("offline render");
+
+        assert!(
+            content.iter().any(|sample| *sample != 0.0),
+            "the content holds the click of beat 1"
+        );
+        assert!(
+            pre_roll.iter().all(|sample| *sample == 0.0),
+            "the first lookahead frames are silent pre-roll"
+        );
+        assert_eq!(
+            report.frames,
+            CONTENT.end - CONTENT.start,
+            "the report counts the frames asked for"
+        );
+        assert!(
+            recording.0 == content,
+            "the frames the lookahead later hold the content bit for bit"
+        );
     }
 }

@@ -500,7 +500,7 @@ where
     let Some(ref mut fw_ctx) = state.ctx else {
         return Err(SessionError::NoContext);
     };
-    let mut added = Vec::with_capacity(SESSION_OUTPUT_NODES);
+    let mut added = Vec::with_capacity(crate::consts::SESSION_OUTPUT_NODES);
     let [session_id, limiter_id, metronome_id] =
         match build_session_output(fw_ctx, limiter, metronome, &mut added) {
             Ok(nodes) => nodes,
@@ -529,16 +529,13 @@ where
     Ok(())
 }
 
-/// Nodes of the session output chain: master, limiter, metronome and inbox return.
-const SESSION_OUTPUT_NODES: usize = 4;
-
 /// Adds the output chain to `ctx`, each node recorded in `added` as it lands,
 /// connects it in order to the graph output and compiles the graph. Returns the
 /// master, limiter and metronome nodes.
 fn build_session_output<S>(
     ctx: &mut FirewheelContext,
     limiter: LimiterNode<S>,
-    metronome: MetronomeNode,
+    metronome: MetronomeNode<S>,
     added: &mut Vec<NodeID>,
 ) -> Result<[NodeID; 3], SessionError>
 where
@@ -1080,6 +1077,9 @@ mod tests {
         assert!(state.session_output_node_id.is_some());
         assert!(state.session_limiter_node_id.is_some());
         assert!(state.session_metronome_node_id.is_some());
-        assert_eq!(node_count(&state), stopped + SESSION_OUTPUT_NODES);
+        assert_eq!(
+            node_count(&state),
+            stopped + crate::consts::SESSION_OUTPUT_NODES
+        );
     }
 }

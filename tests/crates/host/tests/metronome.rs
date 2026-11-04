@@ -3,7 +3,7 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    effects::{Ceiling, LimiterConfig},
+    effects::{Ceiling, LimiterConfig, LookaheadMs},
     host::{
         HostConfig, HostSettings, HostSettingsChange, HostSettingsControl, MetronomeConfig,
         MetronomeConfigChange, MetronomeConfigControl, Tap,
@@ -135,6 +135,9 @@ mod consts {
     pub(super) const FIRST_CHANGE_BPM: f64 = 60.0;
     /// The tempo the second of two changes in one block moves to.
     pub(super) const SECOND_CHANGE_BPM: f64 = 180.0;
+    /// Lookahead of the limiter a duck lands under: 441 whole frames at
+    /// [`SAMPLE_RATE`].
+    pub(super) const LOOKAHEAD_MS: f32 = 10.0;
 }
 
 /// One click the output tap sounded: the first frame it sounds on, how many
@@ -896,20 +899,30 @@ async fn the_duck_under_a_click_keeps_a_loud_mix_at_or_under_the_limiter_ceiling
     );
 }
 
-/// The output and master taps of a player at the default Host config whose
-/// deck plays the prepared source while the metronome clicks at [`consts::BPM`] for
-/// [`consts::PAUSED_BLOCKS`] blocks.
-async fn deck_under_clicks(source: Asset) -> (Vec<f32>, Vec<f32>) {
+/// The output and master taps of a player at the default Host config but for
+/// `limiter`, whose deck plays the prepared source for [`consts::PAUSED_BLOCKS`]
+/// blocks while the metronome clicks at [`consts::BPM`] through the first
+/// `clicking` of them and is off for the rest.
+async fn deck_under_clicks(
+    source: Asset,
+    limiter: LimiterConfig,
+    clicking: usize,
+) -> (Vec<f32>, Vec<f32>) {
     // WHY: One block plays before the taps attach and one more keeps the
     // deck sounding past the last rendered frame.
     let deck_blocks = u64::try_from(consts::PAUSED_BLOCKS + 2).expect("block count");
     let frames = u64::from(consts::BLOCK_FRAMES) * deck_blocks;
+    let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
+    let session = HostConfig::offline(pools())
+        .limiter(limiter)
+        .settings(HostSettings::builder().sample_rate(rate).build())
+        .build();
     let harness = play_source(
-        OfflinePlayer::with_sample_rate(
+        OfflinePlayer::with_options(
             OfflinePlayerOptions::builder()
                 .block_on_underrun(true)
                 .build(),
-            consts::SAMPLE_RATE,
+            session,
         )
         .await,
         asset_source(&source).into(),
@@ -931,7 +944,11 @@ async fn deck_under_clicks(source: Asset) -> (Vec<f32>, Vec<f32>) {
     host.with(move |host| host.set_tempo(tempo))
         .await
         .expect("Host tempo");
-    render_blocks(&harness, consts::PAUSED_BLOCKS).await;
+    render_blocks(&harness, clicking).await;
+    host.with(|host| host.metronome().set_enabled(false))
+        .await
+        .expect("metronome off");
+    render_blocks(&harness, consts::PAUSED_BLOCKS - clicking).await;
     harness.close().await;
     assert_eq!(
         (output.drops(), master.drops()),
@@ -950,9 +967,18 @@ fn span(pcm: &[f32], frames: std::ops::Range<u64>) -> &[f32] {
 
 #[kithara::test(tokio)]
 async fn a_full_duck_mutes_the_deck_through_the_hold_and_returns_it_over_the_release() {
-    let (loud, loud_master) = deck_under_clicks(assets::fixed_constant_wav_cd_half_52224()).await;
-    let (soft, soft_master) =
-        deck_under_clicks(assets::fixed_constant_wav_cd_quarter_52224()).await;
+    let (loud, loud_master) = deck_under_clicks(
+        assets::fixed_constant_wav_cd_half_52224(),
+        LimiterConfig::default(),
+        consts::PAUSED_BLOCKS,
+    )
+    .await;
+    let (soft, soft_master) = deck_under_clicks(
+        assets::fixed_constant_wav_cd_quarter_52224(),
+        LimiterConfig::default(),
+        consts::PAUSED_BLOCKS,
+    )
+    .await;
 
     assert_eq!(
         (loud.len(), soft.len(), soft_master.len()),
@@ -1044,6 +1070,96 @@ async fn a_full_duck_mutes_the_deck_through_the_hold_and_returns_it_over_the_rel
             "after the release of the beat on frame {beat} the output is the master bit-exactly"
         );
     }
+}
+
+#[kithara::test(tokio)]
+async fn under_a_lookahead_the_duck_and_the_click_land_on_the_mix_they_were_rendered_for() {
+    let lookahead = LimiterConfig::builder()
+        .lookahead_ms(LookaheadMs::try_from(consts::LOOKAHEAD_MS).expect("limiter lookahead"))
+        .build();
+    let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
+    let shift = lookahead.latency_frames(rate) * usize::from(consts::CHANNELS);
+    let (direct, direct_master) = deck_under_clicks(
+        assets::fixed_constant_wav_cd_half_52224(),
+        LimiterConfig::default(),
+        consts::PAUSED_BLOCKS,
+    )
+    .await;
+    let (delayed, _) = deck_under_clicks(
+        assets::fixed_constant_wav_cd_half_52224(),
+        lookahead,
+        consts::PAUSED_BLOCKS,
+    )
+    .await;
+
+    assert_eq!(
+        delayed.len(),
+        direct.len(),
+        "both runs render the same frames"
+    );
+    assert!(
+        clicks(&laid(&direct, &direct_master)).len() > 1,
+        "the render holds several clicks over the deck"
+    );
+    // WHY: The deck stays under the ceiling, so the limiter passes it at
+    // unity in both runs and only the lookahead tells their outputs apart.
+    assert!(
+        delayed[shift..] == direct[..direct.len() - shift],
+        "the mix, its duck and the click trail the session by the lookahead together, bit for bit"
+    );
+}
+
+#[kithara::test(tokio)]
+async fn a_metronome_switched_off_mid_duck_still_lays_the_delayed_rest_of_it() {
+    let lookahead = LimiterConfig::builder()
+        .lookahead_ms(LookaheadMs::try_from(consts::LOOKAHEAD_MS).expect("limiter lookahead"))
+        .build();
+    let rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("test sample rate");
+    let shift = lookahead.latency_frames(rate) * usize::from(consts::CHANNELS);
+    let (clicked, clicked_master) = deck_under_clicks(
+        assets::fixed_constant_wav_cd_half_52224(),
+        LimiterConfig::default(),
+        consts::PAUSED_BLOCKS,
+    )
+    .await;
+    let first = clicks(&laid(&clicked, &clicked_master))
+        .first()
+        .expect("the render holds a click over the deck")
+        .frame;
+    // WHY: The switch lands on the block after the one the first duck starts
+    // in, while the duck still holds the deck down.
+    let clicking = usize::try_from(first / u64::from(consts::BLOCK_FRAMES)).expect("block") + 1;
+    let (direct, direct_master) = deck_under_clicks(
+        assets::fixed_constant_wav_cd_half_52224(),
+        LimiterConfig::default(),
+        clicking,
+    )
+    .await;
+    let (delayed, _) = deck_under_clicks(
+        assets::fixed_constant_wav_cd_half_52224(),
+        lookahead,
+        clicking,
+    )
+    .await;
+
+    assert_eq!(
+        clicks(&laid(&direct, &direct_master)).len(),
+        1,
+        "the duck sounds to its end and no click follows it"
+    );
+    assert!(
+        delayed[shift..] == direct[..direct.len() - shift],
+        "the frames of the duck the lookahead still holds reach the mix after the switch, bit for bit"
+    );
+}
+
+/// What the metronome laid over the mix: the output tap less the master tap.
+fn laid(output: &[f32], master: &[f32]) -> Vec<f32> {
+    output
+        .iter()
+        .zip(master)
+        .map(|(output, master)| output - master)
+        .collect()
 }
 
 /// Renders `host` to the end of the click of Host beat

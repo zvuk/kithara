@@ -16,6 +16,9 @@ pub(crate) const MAX_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(768_000) {
     None => unreachable!(),
 };
 
+/// Nodes of the session output chain: master, limiter, metronome and inbox return.
+pub(crate) const SESSION_OUTPUT_NODES: usize = 4;
+
 #[cfg(test)]
 pub(crate) const GRAPH_BLOCK_FRAMES: usize = 128;
 

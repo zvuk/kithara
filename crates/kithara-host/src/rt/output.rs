@@ -25,8 +25,15 @@ impl<S> SessionOutput<S> {
         LimiterNode::new(self.limiter, consts::MAX_SAMPLE_RATE, self.pools.clone())
     }
 
-    /// The metronome whose click `config` shapes, under the limiter's ceiling.
-    pub(crate) fn metronome(&self, config: MetronomeConfig) -> MetronomeNode {
-        MetronomeNode::new(config, f32::from(self.limiter.ceiling()))
+    /// The metronome whose click `config` shapes, under the limiter's ceiling
+    /// and trailing by its lookahead, its delay storage for every rate a
+    /// session serves taken once when its processor is built.
+    pub(crate) fn metronome(&self, config: MetronomeConfig) -> MetronomeNode<S> {
+        MetronomeNode::new(
+            config,
+            self.limiter,
+            consts::MAX_SAMPLE_RATE,
+            self.pools.clone(),
+        )
     }
 }
