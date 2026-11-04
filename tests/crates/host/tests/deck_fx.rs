@@ -452,6 +452,39 @@ async fn deck_fx_off_is_bypass_on_is_reset() {
 }
 
 #[kithara::test(tokio)]
+async fn deck_fx_unit_turned_dry_while_off_switches_on_dry() {
+    const OFF: usize = LEAD + 3000;
+    const ON: usize = LEAD + 7000;
+
+    let dry = plain_take(assets::fixed_constant_wav_cd_half_44100(), Vec::new()).await;
+    let fx = take(
+        deck(None, DeckMixSettings::default()).await,
+        assets::fixed_constant_wav_cd_half_44100(),
+        insert(0, Curve(|sample| -sample)),
+        vec![
+            (
+                OFF,
+                vec![
+                    DeckFxChange::Power { unit: 0, on: false },
+                    DeckFxChange::Mix {
+                        unit: 0,
+                        value: FxMix::MIN,
+                    },
+                ],
+            ),
+            (ON, vec![DeckFxChange::Power { unit: 0, on: true }]),
+        ],
+        None,
+    )
+    .await;
+    assert_same(
+        &fx[OFF * CHANNELS..],
+        &dry[OFF * CHANNELS..],
+        "a unit switched on at dry/wet zero passes its input through",
+    );
+}
+
+#[kithara::test(tokio)]
 async fn deck_fx_one_state_across_queue_crossfade() {
     let dry = crossfade_take(Vec::new()).await;
     let fx = crossfade_take(insert(0, Echo::new(ECHO))).await;
@@ -652,6 +685,81 @@ async fn deck_fx_change_lands_on_its_frame() {
         &unchanged[wet - skipped..unchanged.len() - skipped],
         "the effect sat out exactly the frames its unit was settled dry",
     );
+}
+
+#[kithara::test(tokio)]
+async fn deck_fx_ramp_outlives_a_unit_settling_dry() {
+    let coarse = settling_take(CREST.end..CREST.end).await;
+    let fine = settling_take(CREST).await;
+    assert!(
+        coarse[again() * CHANNELS..]
+            .iter()
+            .any(|sample| *sample != 0.0),
+        "the echo sounds again once its unit turns wet"
+    );
+    assert_same(
+        &fine,
+        &coarse,
+        "a ramping unit renders the same in any block partition while another settles dry",
+    );
+}
+
+/// The frame [`settling_take`] pauses its deck on, on a callback's start.
+const HUSH: usize = LEAD + 2048;
+/// The frame it turns its echo dry, long after the deck's slot stopped and
+/// before the echo is spent.
+const SPENT: usize = HUSH + 4096;
+/// The frame it starts its second unit's ramp, which outlasts the echo's
+/// ramp to dry.
+const HALF: usize = SPENT + 1500;
+/// Callback-aligned frames around the one the echo's unit settles dry on and
+/// [`again`].
+const CREST: std::ops::Range<usize> = SPENT + 2048..SPENT + 2816;
+
+/// The frame [`settling_take`] turns its echo wet again, while its second unit
+/// still ramps: just after the echo's unit settles dry, in the same callback,
+/// so a deck called back in whole callbacks never renders that unit idle.
+fn again() -> usize {
+    (SPENT + ramp() - CALLBACK).next_multiple_of(CALLBACK) - 4
+}
+
+/// A paused deck whose echo on unit 0 turns dry and back to wet while unit 1
+/// ramps its dry/wet, rendered a frame at a time over `fine` and in
+/// [`CALLBACK`] blocks elsewhere.
+async fn settling_take(fine: std::ops::Range<usize>) -> Vec<f32> {
+    let harness = deck(None, DeckMixSettings::default()).await;
+    let mut setup = insert(0, Echo::new(ECHO * 4));
+    setup.extend(insert(1, Curve(|sample| sample * 0.5)));
+    send(&harness, When::Next, setup).await;
+    let harness = load_source(
+        harness,
+        asset_source(&assets::fixed_constant_wav_cd_half_44100()).into(),
+    )
+    .await;
+    let base = harness.host().position();
+    let mut output = render(&harness, HUSH).await;
+    harness.with_queue(QueueControl::pause).await;
+    let half = FxMix::checked(0.5).expect("half is a dry/wet");
+    for (offset, unit, value) in [
+        (SPENT, 0, FxMix::MIN),
+        (HALF, 1, half),
+        (again(), 0, FxMix::MAX),
+    ] {
+        send(
+            &harness,
+            at(base, offset),
+            vec![DeckFxChange::Mix { unit, value }],
+        )
+        .await;
+    }
+    output.extend(render(&harness, fine.start - HUSH).await);
+    for _ in fine.clone() {
+        output.extend(harness.render(1).await);
+    }
+    output.extend(render(&harness, TAKE - fine.end).await);
+    assert_eq!(harness.metrics().underruns(), 0);
+    harness.close().await;
+    output
 }
 
 /// A take whose unit 0 clock turns dry at a frame inside a block and wet

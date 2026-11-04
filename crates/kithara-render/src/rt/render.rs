@@ -106,14 +106,17 @@ impl RenderPass {
         }
     }
 
-    /// Whether a unit still sounds a tail of input the deck no longer plays.
+    /// Whether a unit still sounds a tail of input the deck no longer plays,
+    /// or still ramps its dry/wet, which settles on its own frame only while
+    /// the chain renders.
     pub(crate) fn ringing(&self) -> bool {
         self.units.iter().any(|unit| {
             unit.running()
-                && unit
-                    .effect
-                    .as_ref()
-                    .is_some_and(|effect| !effect.tail_exhausted())
+                && (!unit.mix.has_settled()
+                    || unit
+                        .effect
+                        .as_ref()
+                        .is_some_and(|effect| !effect.tail_exhausted()))
         })
     }
 
@@ -215,14 +218,17 @@ impl FxUnit {
     /// Run the unit's effect on the frames of a stereo pair and mix its wet
     /// signal in. While the dry/wet ramps, the effect runs up to the frame the
     /// ramp settles on, whatever block holds it; settled fully dry, the unit
-    /// neither runs its effect nor touches the frames.
+    /// neither runs its effect nor touches the frames. Off or empty, the unit
+    /// is not heard, so its dry/wet takes its target at once.
     fn process(&mut self, left: &mut [f32], right: &mut [f32], wet: &mut [SampleBuffer; 2]) {
-        if !self.running() {
-            return;
-        }
-        let Some(effect) = &mut self.effect else {
+        let on = self.on;
+        let Some(effect) = self.effect.as_mut().filter(|_| on) else {
+            self.mix.reset_to_target();
             return;
         };
+        if self.mix.has_settled_at(0.0) {
+            return;
+        }
         let frames = left.len().min(right.len());
         let [wet_left, wet_right] = wet;
         let mut mixes = [0.0; FADE_CHUNK];
