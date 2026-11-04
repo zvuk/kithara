@@ -10,43 +10,36 @@ fn to_f32(x: f64) -> f32 {
     num_traits::cast(x).unwrap_or_default()
 }
 
-/// Blend `sample` into `prev`; seeds from the first sample so the meter
-/// settles immediately instead of ramping up from zero.
-fn ewma(prev: f32, sample: f32) -> f32 {
-    if prev <= 0.0 {
-        sample
-    } else {
-        sample.mul_add(consts::LOAD_ALPHA, prev * (1.0 - consts::LOAD_ALPHA))
-    }
-}
-
-/// Live cost of the audio worker's decode+effects pipeline.
-/// The atomics double as the EWMA state. There is a single writer (the
-/// worker thread; every track's node ticks on it). Values stay at `0.0` until
-/// the first chunk, so `realtime == 0` means "no measurement yet" (paused
-/// / not started).
+/// Live cost of producing one deck's audio: busy time over audio time.
+///
+/// Each chunk's busy time is spread evenly over its audio, and older audio
+/// decays exponentially with audio time at one fixed time constant. The same
+/// audio produced at the same cost reads the same however it is chunked, and
+/// one short chunk moves a settled reading by at most its busy time over the
+/// time constant. There is a single writer (the worker thread; every track's
+/// node ticks on it). The load stays `0.0` until a chunk that took time to
+/// produce, so `realtime == 0` means "no measurement yet" (paused / not
+/// started).
 #[derive(Debug)]
 pub struct EngineLoad {
-    /// Fraction of realtime spent producing (`busy / audio`, `0.05` = 5%).
+    /// Decayed audio seconds measured so far (writer only); `0.0` until the
+    /// first chunk.
+    audio: RelaxedAtomicF32,
+    /// Decayed busy seconds over `audio` (`0.05` = 5%).
     load: RelaxedAtomicF32,
-    /// Wall time spent per produced chunk, in milliseconds.
-    ms: RelaxedAtomicF32,
-    /// Produced audio-seconds per CPU-second (`>1` = faster than realtime).
-    realtime: RelaxedAtomicF32,
 }
 
 impl Default for EngineLoad {
     fn default() -> Self {
         Self {
-            realtime: RelaxedAtomicF32::new(0.0),
+            audio: RelaxedAtomicF32::new(0.0),
             load: RelaxedAtomicF32::new(0.0),
-            ms: RelaxedAtomicF32::new(0.0),
         }
     }
 }
 
 impl EngineLoad {
-    /// Fold one produced chunk's cost into the EWMA (worker thread).
+    /// Fold one produced chunk's cost into the reading (worker thread).
     ///
     /// `busy` is the wall time the tick spent producing `frames` output
     /// frames at `sample_rate`. Skips empty chunks.
@@ -55,25 +48,25 @@ impl EngineLoad {
             return;
         }
         let audio_secs = to_f64(frames) / f64::from(sample_rate.max(1));
-        if audio_secs <= 0.0 {
-            return;
-        }
-        let busy_secs = busy.as_secs_f64();
-        let load = ewma(self.load.load(), to_f32(busy_secs / audio_secs));
-        let ms = ewma(self.ms.load(), to_f32(busy_secs * consts::MS_PER_SEC));
-        let realtime = if load > 0.0 { 1.0 / load } else { 0.0 };
-        self.realtime.store(realtime);
-        self.load.store(load);
-        self.ms.store(ms);
+        let time_constant = consts::LOAD_TIME_CONSTANT.as_secs_f64();
+        // `1 - exp` would lose the weight of a chunk far shorter than the constant.
+        let forgotten = -(-audio_secs / time_constant).exp_m1();
+        let kept = f64::from(self.audio.load()) * (1.0 - forgotten);
+        let fresh = time_constant * forgotten;
+        let audio = kept + fresh;
+        let spent =
+            f64::from(self.load.load()).mul_add(kept, busy.as_secs_f64() / audio_secs * fresh);
+        self.audio.store(to_f32(audio));
+        self.load.store(to_f32(spent / audio));
     }
 
     /// Read a copyable snapshot (UI thread).
     #[must_use]
     pub fn snapshot(&self) -> EngineLoadSnapshot {
+        let load = self.load.load();
         EngineLoadSnapshot {
-            realtime: self.realtime.load(),
-            load: self.load.load(),
-            ms: self.ms.load(),
+            load,
+            realtime: if load > 0.0 { load.recip() } else { 0.0 },
         }
     }
 }
@@ -83,16 +76,15 @@ impl EngineLoad {
 #[non_exhaustive]
 #[fieldwork(get)]
 pub struct EngineLoadSnapshot {
-    /// Fraction of realtime spent producing (`0.05` = 5% load).
+    /// Busy time over audio time (`0.05` = 5% load).
     load: f32,
-    /// Wall time per produced chunk, in milliseconds.
-    ms: f32,
-    /// Produced audio-seconds per CPU-second (`>1` = faster than realtime).
+    /// Produced audio-seconds per CPU-second, the reciprocal of `load`
+    /// (`>1` = faster than realtime); `0.0` until measured.
     realtime: f32,
 }
 
 impl EngineLoadSnapshot {
-    /// `true` once the worker has produced at least one measurement.
+    /// `true` once the worker has measured a chunk that took time to produce.
     #[must_use]
     pub fn is_active(&self) -> bool {
         self.realtime > 0.0
@@ -119,6 +111,11 @@ mod tests {
 
         meter.record(Duration::from_millis(5), 0, 44_100);
         assert!(!meter.snapshot().is_active(), "empty chunk records nothing");
+        assert_eq!(
+            meter.snapshot().load(),
+            0.0,
+            "empty chunk leaves load at zero"
+        );
 
         // 5 ms of CPU to produce 100 ms of audio → load ≈ 0.05, realtime ≈ 20x.
         for _ in 0..8 {
@@ -131,7 +128,11 @@ mod tests {
             s.load() > 0.0 && s.load() < 1.0,
             "load fraction in (0,1): {s:?}"
         );
-        assert!(s.ms() > 0.0, "ms populated: {s:?}");
+        assert_eq!(
+            s.realtime(),
+            s.load().recip(),
+            "realtime is 1 / load: {s:?}"
+        );
     }
 
     #[kithara::test]
