@@ -610,6 +610,7 @@ async fn deck_fx_change_lands_on_its_frame() {
         insert(0, Clock::default()),
     )
     .await;
+    let dry = plain_take(assets::fixed_constant_wav_cd_half_44100(), Vec::new()).await;
     assert_eq!(
         regular
             .iter()
@@ -627,11 +628,29 @@ async fn deck_fx_change_lands_on_its_frame() {
         .position(|(changed, unchanged)| changed != unchanged)
         .map(|sample| sample / CHANNELS);
     assert_eq!(first, Some(DRY_AT), "the change takes effect on its frame");
+    let settled = DRY_AT
+        + regular[DRY_AT * CHANNELS..]
+            .as_chunks::<CHANNELS>()
+            .0
+            .iter()
+            .zip(dry[DRY_AT * CHANNELS..].as_chunks::<CHANNELS>().0)
+            .position(|(changed, dry)| changed == dry)
+            .expect("the unit settles dry");
+    assert!(
+        settled <= DRY_AT + ramp(),
+        "the dry ramp settles within its smoothing, on frame {settled}"
+    );
+    assert_same(
+        &regular[settled * CHANNELS..WET_AT * CHANNELS],
+        &dry[settled * CHANNELS..WET_AT * CHANNELS],
+        "the dry unit passes its input through",
+    );
+    let skipped = (WET_AT - settled) * CHANNELS;
     let wet = (WET_AT + ramp()) * CHANNELS;
     assert_same(
         &regular[wet..],
-        &unchanged[wet..],
-        "the effect kept running while its unit was dry",
+        &unchanged[wet - skipped..unchanged.len() - skipped],
+        "the effect sat out exactly the frames its unit was settled dry",
     );
 }
 
