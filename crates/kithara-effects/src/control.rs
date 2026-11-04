@@ -4,7 +4,7 @@ use kithara_signal::AudioSpec;
 use crate::{
     AudioEffect,
     eq::{EqBandConfig, EqBandConfigChange, EqConfig, EqEffect},
-    filter::{self, FilterConfig, FilterEffect, FilterSettings, FilterSettingsChange},
+    filter::{FilterConfig, FilterEffect, FilterSettings, FilterSettingsChange},
 };
 
 /// Construction intent prepared once in the track's audio format.
@@ -25,15 +25,6 @@ pub enum EffectPrepareError {
     Pool(#[from] PoolError),
     #[error(transparent)]
     Filter(#[from] kithara_dsp::filter::FilterError),
-}
-
-impl From<filter::PrepareError> for EffectPrepareError {
-    fn from(error: filter::PrepareError) -> Self {
-        match error {
-            filter::PrepareError::Filter(error) => Self::Filter(error),
-            filter::PrepareError::Pool(error) => Self::Pool(error),
-        }
-    }
 }
 
 /// One chain entry, transferred to its producer before playback.

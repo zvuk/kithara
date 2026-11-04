@@ -12,7 +12,8 @@ use super::{FilterConfig, FilterSettings, FilterSettingsChange};
 use crate::{AudioEffect, EffectChange, EffectPrepareError, EffectRefusal, EffectTarget, consts};
 
 /// Why a filter's numerical state or pooled scratch could not be prepared.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, kithara_derive::Mirror)]
+#[mirror(into = EffectPrepareError)]
 #[non_exhaustive]
 pub enum PrepareError {
     #[error(transparent)]
