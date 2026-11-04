@@ -17,7 +17,7 @@ use kithara_test_utils::kithara as test_attrs;
 pub(crate) use crate::engine::render_fixture as render_rig;
 use crate::pools::AppHost;
 
-struct Discard;
+pub(crate) struct Discard;
 
 impl RenderSink for Discard {
     fn write(&mut self, _: &[f32]) -> Result<(), RenderSinkError> {
