@@ -339,9 +339,10 @@ are never deleted in place; sccache keeps its own LRU limit. No `diskutil apfs`
 verb accepts `-quota` after creation, so the quota cannot be raised and cleanup
 is the whole answer.
 
-`build_cache_size` caps the build directories visible to one kernel together.
-Every CI lane enforces it before admission, even when free space is above the
-rejection floor. Mac cleanup owns native builds. Bootstrap xtask
+`build_cache_size` caps the build directories one kernel sees: a Mac job
+enforces it at admission, Linux cleanup every 10 minutes. A lane starts once
+its volume has the room its host profile names, waiting up to
+`job_room_wait_seconds`. Mac cleanup owns native builds. Bootstrap xtask
 also collects superseded Cargo units under its build and Cargo profile locks,
 retaining the newest units, their reachable dependencies and a one-day window.
 RustFS holds reusable compiler entries; Cargo still materializes the binaries,

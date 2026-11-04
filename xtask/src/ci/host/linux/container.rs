@@ -157,7 +157,7 @@ impl Container<'_> {
     /// The linker entries come from [`LINUX_LINKER_ENV`](consts::LINUX_LINKER_ENV), which the GitLab lane
     /// executor reads too: one statement of what a Linux job links with rather
     /// than one per way of starting a job.
-    pub(super) fn environment(runner: &LinuxRunner) -> Vec<String> {
+    pub(super) fn environment(host: &LinuxHost, runner: &LinuxRunner) -> Vec<String> {
         let root = Path::new(consts::BUILD_ROOT_MOUNT);
         let mut environment: Vec<String> = consts::CACHE_ENVIRONMENT
             .iter()
@@ -171,6 +171,16 @@ impl Container<'_> {
             format!("CARGO_HOME={}", consts::CARGO_HOME_MOUNT),
             format!("CARGO_TARGET_DIR={}", root.display()),
             format!("{}={}", consts::BUILD_SLOTS_ENV, consts::BUILD_SLOTS_MOUNT),
+            format!(
+                "{}={}",
+                consts::JOB_ROOM_BYTES_ENV,
+                host.free_bytes_for_a_job
+            ),
+            format!(
+                "{}={}",
+                consts::JOB_ROOM_WAIT_ENV,
+                host.job_room_wait_seconds
+            ),
             format!("KITHARA_CI_TARGET_ROOT={}", consts::PREVIOUS_LANES_MOUNT),
             format!(
                 "KITHARA_XTASK_TARGET={}",
@@ -259,9 +269,9 @@ pub(crate) mod tests {
     };
 
     /// The value a runner's job is told for `name`.
-    pub(crate) fn told(runner: &LinuxRunner, name: &str) -> PathBuf {
+    pub(crate) fn told(host: &LinuxHost, runner: &LinuxRunner, name: &str) -> PathBuf {
         let prefix = format!("{name}=");
-        Container::environment(runner)
+        Container::environment(host, runner)
             .iter()
             .find_map(|entry| entry.strip_prefix(&prefix).map(PathBuf::from))
             .unwrap_or_else(|| panic!("{} is not told {name}", runner.name))
@@ -292,14 +302,36 @@ pub(crate) mod tests {
         let [first, second, ..] = host.runners.as_slice() else {
             panic!("the host fixture serves more than one runner");
         };
-        let root = told(first, "CARGO_TARGET_DIR");
+        let root = told(&host, first, "CARGO_TARGET_DIR");
 
-        assert_eq!(root, told(second, "CARGO_TARGET_DIR"));
+        assert_eq!(root, told(&host, second, "CARGO_TARGET_DIR"));
         assert_ne!(
             mounted_at(&host, first, &root),
             mounted_at(&host, second, &root),
             "two jobs re-point one alias"
         );
+    }
+
+    /// A job asks for the room its host names before it builds; the container
+    /// is the only way that number reaches it.
+    #[test]
+    fn a_job_is_told_the_room_its_host_requires() {
+        let mut host = host_fixture();
+        host.job_room_wait_seconds += 45;
+        for runner in &host.runners {
+            assert_eq!(
+                told(&host, runner, consts::JOB_ROOM_BYTES_ENV),
+                PathBuf::from(host.free_bytes_for_a_job.to_string()),
+                "{} tells the room a job needs",
+                runner.name
+            );
+            assert_eq!(
+                told(&host, runner, consts::JOB_ROOM_WAIT_ENV),
+                PathBuf::from(host.job_room_wait_seconds.to_string()),
+                "{} tells how long a job waits for it",
+                runner.name
+            );
+        }
     }
 
     /// A job of the previous layout builds and caches where its workflows and
@@ -331,7 +363,12 @@ pub(crate) mod tests {
         let host = host_fixture();
         for runner in &host.runners {
             for (name, value) in previous_layout().linux.told {
-                assert_eq!(told(runner, &name), value, "{} tells {name}", runner.name);
+                assert_eq!(
+                    told(&host, runner, &name),
+                    value,
+                    "{} tells {name}",
+                    runner.name
+                );
             }
         }
     }
@@ -343,8 +380,8 @@ pub(crate) mod tests {
     fn a_job_bootstraps_xtask_beside_its_lanes() {
         let host = host_fixture();
         let runner = host.runner("kithara-ci-octocat").expect("runner");
-        let root = told(runner, "CARGO_TARGET_DIR");
-        let xtask = told(runner, "KITHARA_XTASK_TARGET");
+        let root = told(&host, runner, "CARGO_TARGET_DIR");
+        let xtask = told(&host, runner, "KITHARA_XTASK_TARGET");
 
         assert_eq!(xtask.parent(), Some(root.as_path()));
         assert_eq!(xtask.file_name(), Some(OsStr::new(consts::XTASK_BUILD)));
@@ -413,7 +450,8 @@ pub(crate) mod tests {
         let mut host = host_fixture();
         host.runners[0].cache_trust = CacheTrust::Trusted;
         "trusted".clone_into(&mut host.runners[0].cache_scope);
-        let home = |runner: &LinuxRunner| mounted_at(&host, runner, &told(runner, "CARGO_HOME"));
+        let home =
+            |runner: &LinuxRunner| mounted_at(&host, runner, &told(&host, runner, "CARGO_HOME"));
 
         for first in &host.runners {
             for second in &host.runners {
@@ -437,7 +475,7 @@ pub(crate) mod tests {
         host.runners[0].cache_trust = CacheTrust::Trusted;
         "trusted".clone_into(&mut host.runners[0].cache_scope);
         let slots = |runner: &LinuxRunner| {
-            mounted_at(&host, runner, &told(runner, consts::BUILD_SLOTS_ENV))
+            mounted_at(&host, runner, &told(&host, runner, consts::BUILD_SLOTS_ENV))
         };
 
         for first in &host.runners {
@@ -467,7 +505,7 @@ pub(crate) mod tests {
 
         for runner in &host.runners {
             assert_eq!(
-                told(runner, "KACHE_HOST_CONFIG"),
+                told(&host, runner, "KACHE_HOST_CONFIG"),
                 Path::new(consts::KACHE_MOUNT).join(consts::KACHE_HOST_FILE),
                 "{}",
                 runner.name
@@ -484,9 +522,10 @@ pub(crate) mod tests {
 
     #[test]
     fn containers_own_compiler_cpu_admission() {
-        for runner in &host_fixture().runners {
+        let host = host_fixture();
+        for runner in &host.runners {
             assert!(
-                Container::environment(runner)
+                Container::environment(&host, runner)
                     .iter()
                     .any(|entry| entry == "KACHE_SCHEDULER=0"),
                 "{} shares kache's CPU scheduler with other containers",
@@ -502,8 +541,9 @@ pub(crate) mod tests {
         assert!(options.split(',').any(|option| option.starts_with("size=")));
         assert!(options.split(',').any(|option| option == "nosuid"));
         assert!(options.split(',').any(|option| option == "nodev"));
-        for runner in &host_fixture().runners {
-            assert_eq!(told(runner, "TMPDIR"), Path::new(mount));
+        let host = host_fixture();
+        for runner in &host.runners {
+            assert_eq!(told(&host, runner, "TMPDIR"), Path::new(mount));
         }
     }
 
@@ -515,11 +555,11 @@ pub(crate) mod tests {
         let runner = host.runner("kithara-ci-octocat").expect("runner");
 
         assert!(
-            !Container::environment(runner)
+            !Container::environment(&host, runner)
                 .iter()
                 .any(|entry| entry.starts_with("SCCACHE_DIR=")),
             "{:?}",
-            Container::environment(runner)
+            Container::environment(&host, runner)
         );
     }
 
@@ -537,7 +577,7 @@ pub(crate) mod tests {
                 .iter()
                 .any(|(_, at)| Path::new(value).starts_with(at))
         };
-        let environment = Container::environment(runner);
+        let environment = Container::environment(&host, runner);
         let said: Vec<&str> = environment
             .iter()
             .filter_map(|entry| entry.split_once('='))
@@ -595,7 +635,7 @@ pub(crate) mod tests {
     fn a_job_is_told_which_linker_to_use() {
         let host = host_fixture();
         let runner = host.runner("kithara-ci-octocat").expect("runner");
-        let environment = Container::environment(runner);
+        let environment = Container::environment(&host, runner);
 
         for (name, value) in consts::LINUX_LINKER_ENV {
             assert!(
@@ -615,7 +655,7 @@ pub(crate) mod tests {
         let [first, second, ..] = host.runners.as_slice() else {
             panic!("the host fixture serves more than one runner");
         };
-        let environment = Container::environment(first);
+        let environment = Container::environment(&host, first);
         let models = environment
             .iter()
             .find_map(|entry| entry.strip_prefix("KITHARA_BEAT_MODEL_CACHE="))
@@ -639,7 +679,7 @@ pub(crate) mod tests {
         let host = host_fixture();
         let runner = host.runner("kithara-ci-octocat").expect("runner");
 
-        assert!(Container::environment(runner).contains(&format!(
+        assert!(Container::environment(&host, runner).contains(&format!(
             "SCCACHE_IDLE_TIMEOUT={SCCACHE_IDLE_TIMEOUT}",
             SCCACHE_IDLE_TIMEOUT = consts::SCCACHE_IDLE_TIMEOUT
         )));

@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::ci::{
     cache::scope_bucket,
     config::{
-        default_build_cache_size, default_cleanup_deadline_seconds, is_whole_gigabytes,
-        parse_build_cache_size,
+        default_build_cache_size, default_cleanup_deadline_seconds, default_job_room_wait_seconds,
+        is_whole_gigabytes, parse_build_cache_size,
     },
     environment::CacheTrust,
 };
@@ -45,6 +45,15 @@ pub(crate) struct LinuxHost {
     pub(crate) network: String,
     /// Address block of that network, fenced off from the rest of the machine.
     pub(crate) subnet: String,
+    /// Bytes a job needs free on `cache_root`'s volume before it starts:
+    /// the room one cold lane build takes. Required: the room depends on the
+    /// machine's builds, and no number fits every machine.
+    pub(crate) free_bytes_for_a_job: u64,
+    /// How long a job waits for that room before refusing to start.
+    /// Defaulted as on the Mac: it is matched to the claim a dead job leaves,
+    /// not to the machine.
+    #[serde(default = "default_job_room_wait_seconds")]
+    pub(crate) job_room_wait_seconds: u64,
     /// Serialised last: TOML requires tables after plain values.
     ///
     /// The repositories this machine serves, each with the token that mints
@@ -188,6 +197,10 @@ impl LinuxHost {
             bail!("Linux CI profile network contains unsupported characters");
         }
         parse_subnet(&self.subnet)?;
+        // A job needing no room would be admitted onto a full volume.
+        if self.free_bytes_for_a_job == 0 {
+            bail!("Linux CI profile free_bytes_for_a_job must be positive");
+        }
         if self.repositories.is_empty() {
             bail!("Linux CI profile must define at least one repository");
         }
@@ -508,6 +521,24 @@ pub(crate) mod tests {
         let host = host_fixture();
         assert!(host.runner("kithara-ci-octocat").is_ok());
         assert!(host.runner("absent").is_err());
+    }
+
+    /// A job told it needs no room would be admitted onto a full volume.
+    #[test]
+    fn a_job_room_of_zero_is_refused() {
+        let mut host = host_fixture();
+        host.free_bytes_for_a_job = 0;
+
+        assert!(host.validate().is_err());
+    }
+
+    /// The wait is matched to the claim a dead job leaves, as on the Mac.
+    #[test]
+    fn a_profile_without_a_job_room_wait_waits_as_the_mac_does() {
+        assert_eq!(
+            host_fixture().job_room_wait_seconds,
+            default_job_room_wait_seconds()
+        );
     }
 
     #[test]

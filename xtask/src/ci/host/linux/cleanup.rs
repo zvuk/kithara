@@ -335,8 +335,8 @@ mod tests {
         let layout = previous_layout().linux;
         let mut expected = BTreeSet::new();
         for runner in &host.runners {
-            let home = told(runner, "CARGO_HOME");
-            let checkouts = told(runner, "SCCACHE_BASEDIRS");
+            let home = told(&host, runner, "CARGO_HOME");
+            let checkouts = told(&host, runner, "SCCACHE_BASEDIRS");
             for (source, at) in Container::mounts(&host, runner) {
                 let source = PathBuf::from(source);
                 let at = Path::new(at);

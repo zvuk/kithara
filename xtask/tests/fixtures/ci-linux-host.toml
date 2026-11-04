@@ -4,6 +4,7 @@ image_cache_env_file = "/etc/kithara-ci/cache/images.env"
 compiler_cache_size = "40G"
 network = "kithara-ci"
 subnet = "172.16.240.0/24"
+free_bytes_for_a_job = 40000000000
 
 [[repositories]]
 name = "octocat/kithara"

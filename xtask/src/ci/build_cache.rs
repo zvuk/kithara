@@ -5,8 +5,8 @@ use std::{
     fs::{self, OpenOptions},
     io,
     path::{Path, PathBuf},
-    process,
-    time::SystemTime,
+    process, thread,
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::{Context, Result, bail};
@@ -77,6 +77,156 @@ pub(crate) fn reclaim_at_least(target_dirs: &[PathBuf], bytes_needed: u64) -> Re
     let keep = total_bytes(&candidates).saturating_sub(bytes_needed);
     evict_to_budget(candidates, held_bytes, keep.saturating_add(held_bytes));
     Ok(())
+}
+
+/// Admit a job once `volume`, the one it builds on, has `required` bytes free,
+/// and refuse it only once there is nothing left to reclaim and nothing left to
+/// wait for.
+///
+/// The gate and the periodic cleanup never spoke: cleanup ran on a timer and
+/// the job arrived when it arrived, so whether a job started came down to how
+/// long ago the timer fired. A host under a build loses gigabytes a minute,
+/// enough to spend a whole pass's worth of reclaimed space before the next one,
+/// and the job landing in that window was refused while tens of gigabytes of
+/// evictable compiler cache sat beside it. Growing the disk only moves the
+/// window; asking for the space back closes it.
+///
+/// Asking once does not, because what a reclaim cannot touch is not lost — it
+/// is held. A build an active job leases is skipped by design, so a host whose
+/// slots are all compiling offers no candidate at all, and the refusal reads as
+/// "no room" when it means "not yet". Six merge requests were refused this way
+/// in one afternoon while the branches beside them went green on the same base;
+/// one was 53 MB short, and every one passed on a manual retry against
+/// unchanged code. So the gate re-asks until the room appears or `wait` runs
+/// out, and the retry it was asking a human for costs a poll instead of a
+/// whole job.
+///
+/// `searched` are the directories the executor keeps builds under, named in a
+/// refusal. `roots` lists the build roots under them as they stand, asked again
+/// on every pass: a job that ends hands its build to the reclaim.
+pub(crate) fn admit(
+    volume: &Path,
+    searched: &[&Path],
+    roots: &dyn Fn() -> Result<Vec<PathBuf>>,
+    required: u64,
+    wait: Duration,
+) -> Result<()> {
+    if free_bytes(volume)? >= required {
+        return Ok(());
+    }
+    let deadline = Instant::now() + wait;
+    loop {
+        let free = free_bytes(volume)?;
+        let reclaimed_from = reclaim_shortfall(&roots()?, searched, free, required)?;
+        let free = free_bytes(volume)?;
+        if free >= required {
+            return Ok(());
+        }
+        let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+            bail!(
+                "{}",
+                refusal(volume, free, required, searched, reclaimed_from)
+            );
+        };
+        warn!(
+            free_bytes = free,
+            required_bytes = required,
+            shortfall_bytes = required.saturating_sub(free),
+            seconds_left = left.as_secs(),
+            "waiting for the CI volume to give the job room"
+        );
+        thread::sleep(consts::JOB_ROOM_POLL.min(left));
+    }
+}
+
+/// Return what the host accumulated for itself before deciding there is no
+/// room for the job, and say how many build roots there were to take it from.
+///
+/// What is reclaimed is the shortfall, not the host's ceiling. The ceiling is
+/// the periodic pass's question and it answers "nothing to do" whenever the
+/// caches happen to sit under it — which is exactly the state a refused job
+/// finds itself in, since a full volume is rarely full of build caches alone.
+///
+/// Failing to reclaim is not itself a refusal — the gate re-reads free space
+/// and answers on that.
+fn reclaim_shortfall(
+    roots: &[PathBuf],
+    searched: &[&Path],
+    free: u64,
+    required: u64,
+) -> Result<usize> {
+    if roots.is_empty() {
+        warn!(
+            free_bytes = free,
+            required_bytes = required,
+            searched = %listed(searched),
+            "no reclaimable build cache to free before refusing the job"
+        );
+        return Ok(0);
+    }
+    let shortfall = required.saturating_sub(free);
+    warn!(
+        free_bytes = free,
+        required_bytes = required,
+        shortfall_bytes = shortfall,
+        targets = roots.len(),
+        "reclaiming build caches before refusing the job"
+    );
+    reclaim_at_least(roots, shortfall)?;
+    Ok(roots.len())
+}
+
+/// Why the job is refused, in the terms of what the reclaim could act on.
+///
+/// Saying "after reclaiming build caches" when there was nothing to reclaim
+/// pointed every reading of this refusal at the compiler cache, which was
+/// neither holding the space nor able to give any back: a build a live job
+/// leases is skipped, so on a host whose only build is the running one the
+/// reclaim has no candidate at all and the sentence described work that never
+/// happened. What an operator needs at that point is the opposite — that the
+/// space is held somewhere this gate does not look.
+fn refusal(
+    volume: &Path,
+    free: u64,
+    required: u64,
+    searched: &[&Path],
+    reclaimed_from: usize,
+) -> String {
+    if reclaimed_from == 0 {
+        return format!(
+            "the volume holding {} has {free} bytes free and a job needs {required}; no \
+             reclaimable build cache sits under {}, so the space is held by live work or by \
+             trees the build-cache budget does not own",
+            volume.display(),
+            listed(searched)
+        );
+    }
+    format!(
+        "the volume holding {} has {free} bytes free after reclaiming from {reclaimed_from} \
+         build cache(s); a job needs {required} bytes",
+        volume.display()
+    )
+}
+
+fn listed(paths: &[&Path]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" or ")
+}
+
+/// How much room the volume holding `path` still has. A job reads this through
+/// whatever the executor mounted the cache with — a virtiofs share into an
+/// ephemeral macOS guest, a bind mount into a container — and those report the
+/// filesystem backing the share, which is the host's whole disk rather than the
+/// CI volume. Free space survives that translation and still answers the
+/// question a job asks; occupancy does not, and comparing the host's disk
+/// against a threshold sized for the CI volume rejected every macOS job while
+/// the volume was barely half full.
+fn free_bytes(path: &Path) -> Result<u64> {
+    fs4::available_space(path)
+        .with_context(|| format!("reading available space for {}", path.display()))
 }
 
 fn collect(target_dirs: &[PathBuf]) -> Result<(Vec<CacheEntry>, u64)> {
@@ -706,11 +856,63 @@ fn holds_a_build(directory: &Path) -> bool {
 mod tests {
     use std::{
         fs::{File, FileTimes},
-        time::{Duration, UNIX_EPOCH},
+        time::UNIX_EPOCH,
     };
 
     use super::*;
     use crate::ci::build_dir::fixture::git_checkout;
+
+    #[test]
+    fn a_refusal_with_nothing_to_reclaim_does_not_claim_it_reclaimed() {
+        let message = refusal(
+            Path::new("/ci/builds/kithara.target/lint"),
+            10,
+            20,
+            &[Path::new("/ci/workspaces/gitlab")],
+            0,
+        );
+
+        assert!(
+            !message.contains("after reclaiming"),
+            "a reclaim that never had a candidate must not be reported as done: {message}"
+        );
+        assert!(
+            message.contains("no reclaimable build cache sits under /ci/workspaces/gitlab"),
+            "the refusal must name the root it found nothing under: {message}"
+        );
+    }
+
+    #[test]
+    fn a_refusal_names_every_directory_it_searched() {
+        let message = refusal(
+            Path::new("/cache/builds/lint-0"),
+            10,
+            20,
+            &[Path::new("/cache/target"), Path::new("/cache/builds")],
+            0,
+        );
+
+        assert!(
+            message.contains("sits under /cache/target or /cache/builds"),
+            "the refusal must name each directory it found nothing under: {message}"
+        );
+    }
+
+    #[test]
+    fn a_refusal_that_reclaimed_says_how_much_it_had_to_work_with() {
+        let message = refusal(
+            Path::new("/ci/builds/kithara.target/lint"),
+            10,
+            20,
+            &[Path::new("/ci/workspaces/gitlab")],
+            3,
+        );
+
+        assert!(
+            message.contains("after reclaiming from 3 build cache(s)"),
+            "the refusal must say how many caches it emptied: {message}"
+        );
+    }
 
     fn entry(path: &str, size_bytes: u64, age: u64) -> CacheEntry {
         CacheEntry {

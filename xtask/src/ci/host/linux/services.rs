@@ -402,7 +402,7 @@ fn unit(
         tmpfs = Container::tmpfs(),
         env_file = job.env_file,
     )?;
-    for entry in Container::environment(runner) {
+    for entry in Container::environment(host, runner) {
         write!(unit, " --env {entry}")?;
     }
     for (volume, target) in &job.mounts {
@@ -635,7 +635,9 @@ mod tests {
             "/usr/local/bin/kithara-ci",
         )
         .expect("the unit must render");
-        for entry in Container::environment(host.runner("kithara-ci-octocat").expect("runner")) {
+        for entry in
+            Container::environment(&host, host.runner("kithara-ci-octocat").expect("runner"))
+        {
             assert!(text.contains(&format!("--env {entry}")), "{entry}:\n{text}");
         }
         assert!(
