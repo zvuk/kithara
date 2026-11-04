@@ -74,6 +74,51 @@ async fn removing_a_non_last_offline_deck_settles_without_render_and_preserves_t
     harness.close().await;
 }
 
+#[kithara::test(tokio)]
+async fn two_decks_keep_separate_effects() {
+    let cut_alone = steady_level(&[assets::fixed_constant_wav_cd_fifth_1323000()], true).await;
+    let other_alone = steady_level(
+        &[assets::fixed_constant_wav_cd_three_tenths_1323000()],
+        false,
+    )
+    .await;
+    let both = MixHarness::new(2).await;
+    both.cut_lowest_band(0).await;
+    both.play(&[
+        assets::fixed_constant_wav_cd_fifth_1323000(),
+        assets::fixed_constant_wav_cd_three_tenths_1323000(),
+    ])
+    .await;
+    let mixed = both.steady().await;
+    both.close().await;
+    assert!(
+        mixed
+            .iter()
+            .all(|sample| sample.to_bits() == (cut_alone + other_alone).to_bits()),
+        "deck B sounds exactly as alone beside deck A's cut: {cut_alone} + {other_alone}"
+    );
+}
+
+/// The settled sample of `values` played on their own decks, the first deck's
+/// lowest EQ band cut when `cut` is set.
+async fn steady_level(values: &[Asset], cut: bool) -> f32 {
+    let harness = MixHarness::new(values.len()).await;
+    if cut {
+        harness.cut_lowest_band(0).await;
+    }
+    harness.play(values).await;
+    let steady = harness.steady().await;
+    harness.close().await;
+    let level = steady[0];
+    assert!(
+        steady
+            .iter()
+            .all(|sample| sample.to_bits() == level.to_bits()),
+        "the deck settles on one sample value"
+    );
+    level
+}
+
 struct MixHarness {
     host: OfflineHostHarness<TestPools>,
     players: Vec<HostOwned<Queue<TestPools>>>,
@@ -126,6 +171,14 @@ impl MixHarness {
             players,
             _store_dir: store_dir,
         }
+    }
+
+    async fn cut_lowest_band(&self, deck: usize) {
+        let player = self.players[deck].control().clone();
+        self.host
+            .run(move || player.set_eq_gain(0, f32::from(kithara::effects::GainDb::MIN)))
+            .await
+            .expect("the deck takes the band cut");
     }
 
     async fn set_ducking(&self, mode: SessionDuckingMode) {

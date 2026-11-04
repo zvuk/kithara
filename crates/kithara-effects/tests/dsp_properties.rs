@@ -6,14 +6,14 @@ use std::{
 };
 
 use kithara_effects::{
-    AudioEffect, Ceiling, GainDb, LimiterConfig, PeakLimiter, ReleaseMs,
-    eq::{EqConfig, EqEffect, generate_log_spaced_bands},
+    Ceiling, GainDb, LimiterConfig, PeakLimiter, ReleaseMs,
+    eq::{EqConfig, EqLayout, StereoEq, generate_log_spaced_bands},
 };
 use kithara_resampler::{
     Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
     ResamplerSettings, create_resampler, rubato::RubatoBackend,
 };
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_signal::AudioSpec;
 use kithara_test_fixtures::integration_fixtures::{
     dsp_silence, dsp_sweep, dsp_tone_a220, dsp_tone_a440, dsp_tone_ceiling, dsp_tone_ceiling_low,
     dsp_tone_ceiling_unity, dsp_tone_round_low, dsp_tone_round_mid, dsp_tone_round_poison,
@@ -56,39 +56,42 @@ fn host_spec(channels: u16) -> AudioSpec {
     )
 }
 
-fn pcm_chunk(pools: &Pools, spec: AudioSpec, samples: &[f32]) -> AudioChunk {
-    let meta = AudioChunkInfo {
-        spec,
-        ..Default::default()
-    };
-    let mut pooled = pools
-        .get_with_len::<f32>(samples.len())
-        .unwrap_or_else(|error| panic!("test sample buffer: {error}"));
-    pooled.copy_from_slice(samples);
-    AudioChunk::new(meta, pooled)
-}
-
-fn eq_with_gain(pools: &Pools, gain_db: GainDb, band_count: usize, channels: u16) -> EqEffect {
-    let bands = generate_log_spaced_bands(band_count);
+fn eq_with_gain(pools: &Pools, gain_db: GainDb, band_count: usize) -> StereoEq {
+    let rate = NonZeroU32::new(u32::from(HOST_RATE)).expect("host rate is non-zero");
     let config = EqConfig::builder(pools.clone()).build();
-    let mut eq = EqEffect::new(&config, bands, u32::from(HOST_RATE), channels)
+    let layout = EqLayout::new(&config, &generate_log_spaced_bands(band_count), rate)
         .unwrap_or_else(|error| panic!("test EQ: {error}"));
+    let mut eq = StereoEq::with_layout(&config, rate, Box::new(layout));
     for band in 0..band_count {
         eq.set_gain(band, gain_db);
     }
     eq
 }
 
-fn settle(eq: &mut EqEffect, pools: &Pools, spec: AudioSpec, silence: &[f32]) {
+fn settle(eq: &mut StereoEq, spec: AudioSpec, silence: &[f32]) {
     let samples = &silence[..SETTLE_FRAMES * usize::from(spec.channels)];
-    let _ = eq.process(pcm_chunk(pools, spec, samples));
+    let _ = process_eq(eq, spec, samples);
 }
 
-fn process_eq(eq: &mut EqEffect, pools: &Pools, spec: AudioSpec, samples: &[f32]) -> Vec<f32> {
-    eq.process(pcm_chunk(pools, spec, samples))
-        .expect("EqEffect must emit the chunk it was handed")
-        .samples
-        .to_vec()
+/// Runs interleaved PCM through the deck's stereo EQ; mono feeds both sides
+/// and reads the left.
+fn process_eq(eq: &mut StereoEq, spec: AudioSpec, samples: &[f32]) -> Vec<f32> {
+    let channels = usize::from(spec.channels);
+    let mut left: Vec<f32> = samples.iter().step_by(channels).copied().collect();
+    let mut right: Vec<f32> = samples
+        .iter()
+        .skip(channels - 1)
+        .step_by(channels)
+        .copied()
+        .collect();
+    eq.process(&mut left, &mut right);
+    if channels == 1 {
+        return left;
+    }
+    left.iter()
+        .zip(right.iter())
+        .flat_map(|(l, r)| [*l, *r])
+        .collect()
 }
 
 fn limiter_with_ceiling(ceiling: f32) -> PeakLimiter {
@@ -116,13 +119,8 @@ fn limit_stereo(limiter: &mut PeakLimiter, interleaved: &[f32]) -> Vec<f32> {
         .collect()
 }
 
-fn master_chain(
-    eq: &mut EqEffect,
-    limiter: &mut PeakLimiter,
-    pools: &Pools,
-    interleaved: &[f32],
-) -> Vec<f32> {
-    let processed = process_eq(eq, pools, host_spec(2), interleaved);
+fn master_chain(eq: &mut StereoEq, limiter: &mut PeakLimiter, interleaved: &[f32]) -> Vec<f32> {
+    let processed = process_eq(eq, host_spec(2), interleaved);
     limit_stereo(limiter, &processed)
 }
 
@@ -143,9 +141,9 @@ fn non_finite_report(label: &str, samples: &[f32]) -> Vec<String> {
 fn eq_maps_silence_to_exact_silence(dsp_silence: Vec<f32>, #[case] gain_db: GainDb) {
     let pools = test_pools();
     let spec = host_spec(2);
-    let mut eq = eq_with_gain(&pools, gain_db, 5, spec.channels);
+    let mut eq = eq_with_gain(&pools, gain_db, 5);
 
-    let output = process_eq(&mut eq, &pools, spec, &dsp_silence[..4_096]);
+    let output = process_eq(&mut eq, spec, &dsp_silence[..4_096]);
 
     for (index, sample) in output.iter().enumerate() {
         assert_eq!(
@@ -171,10 +169,10 @@ fn limiter_maps_silence_to_exact_silence(dsp_silence: Vec<f32>) {
 #[kithara::test]
 fn master_chain_maps_silence_to_exact_silence(dsp_silence: Vec<f32>) {
     let pools = test_pools();
-    let mut eq = eq_with_gain(&pools, GainDb::MAX, 5, 2);
+    let mut eq = eq_with_gain(&pools, GainDb::MAX, 5);
     let mut limiter = limiter_with_ceiling(LIMITER_CEILING);
 
-    let output = master_chain(&mut eq, &mut limiter, &pools, &dsp_silence[..4_096]);
+    let output = master_chain(&mut eq, &mut limiter, &dsp_silence[..4_096]);
 
     for (index, sample) in output.iter().enumerate() {
         assert_eq!(*sample, 0.0, "sample {index} = {sample}");
@@ -192,10 +190,10 @@ fn eq_at_zero_db_is_bit_exact_identity(
 ) {
     let pools = test_pools();
     let spec = host_spec(channels);
-    let mut eq = eq_with_gain(&pools, GainDb::default(), band_count, channels);
+    let mut eq = eq_with_gain(&pools, GainDb::default(), band_count);
     let input = dsp_tone_a440[..8_192 * usize::from(channels)].to_vec();
 
-    let output = process_eq(&mut eq, &pools, spec, &input);
+    let output = process_eq(&mut eq, spec, &input);
 
     assert_eq!(
         output, input,
@@ -210,16 +208,16 @@ fn eq_returns_to_bit_exact_identity_after_a_gain_round_trip(
 ) {
     let pools = test_pools();
     let spec = host_spec(2);
-    let mut eq = eq_with_gain(&pools, GainDb::default(), 3, spec.channels);
+    let mut eq = eq_with_gain(&pools, GainDb::default(), 3);
 
     eq.set_gain(0, GainDb::MAX);
-    settle(&mut eq, &pools, spec, &dsp_silence);
+    settle(&mut eq, spec, &dsp_silence);
     eq.set_gain(0, GainDb::default());
-    settle(&mut eq, &pools, spec, &dsp_silence);
-    settle(&mut eq, &pools, spec, &dsp_silence);
+    settle(&mut eq, spec, &dsp_silence);
+    settle(&mut eq, spec, &dsp_silence);
 
     let input = dsp_tone_a440[..8_192].to_vec();
-    let output = process_eq(&mut eq, &pools, spec, &input);
+    let output = process_eq(&mut eq, spec, &input);
 
     assert_eq!(
         output, input,
@@ -248,10 +246,10 @@ fn limiter_below_ceiling_is_bit_exact_identity(#[case] ceiling: f32, #[case] inp
 #[kithara::test]
 fn master_chain_at_unity_is_bit_exact_identity(dsp_tone_unity: Vec<f32>) {
     let pools = test_pools();
-    let mut eq = eq_with_gain(&pools, GainDb::default(), 5, 2);
+    let mut eq = eq_with_gain(&pools, GainDb::default(), 5);
     let mut limiter = limiter_with_ceiling(LIMITER_CEILING);
 
-    let output = master_chain(&mut eq, &mut limiter, &pools, &dsp_tone_unity);
+    let output = master_chain(&mut eq, &mut limiter, &dsp_tone_unity);
 
     assert_eq!(
         output, dsp_tone_unity,
@@ -276,16 +274,16 @@ fn eq_output_stays_finite_on_pathological_input(
     let mut violations = Vec::new();
 
     for (path, gain_db) in EQ_GAIN_PATHS {
-        let mut eq = eq_with_gain(&pools, gain_db, 3, spec.channels);
-        settle(&mut eq, &pools, spec, &dsp_silence);
+        let mut eq = eq_with_gain(&pools, gain_db, 3);
+        settle(&mut eq, spec, &dsp_silence);
 
         let mut input = dsp_tone_a440[..1_024].to_vec();
         input[512] = poison;
-        let output = process_eq(&mut eq, &pools, spec, &input);
+        let output = process_eq(&mut eq, spec, &input);
         violations.extend(non_finite_report(path, &output));
 
         let clean = dsp_tone_a440[..1_024].to_vec();
-        let recovered = process_eq(&mut eq, &pools, spec, &clean);
+        let recovered = process_eq(&mut eq, spec, &clean);
         violations.extend(non_finite_report(&format!("{path}/recovered"), &recovered));
     }
 
