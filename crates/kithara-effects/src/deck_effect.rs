@@ -3,7 +3,10 @@ use std::{fmt, num::NonZeroU32};
 /// A change of one parameter of a deck effect, each effect's parameters one
 /// variant.
 #[derive(Clone, Copy, Debug)]
-pub enum FxParamChange {}
+pub enum FxParamChange {
+    /// A change of the [`FeedbackDelay`](crate::delay::FeedbackDelay).
+    Delay(crate::delay::DelayParam),
+}
 
 /// The effect a deck FX unit holds.
 ///

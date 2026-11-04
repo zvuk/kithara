@@ -15,8 +15,8 @@
 # kithara-effects
 
 Deck and master audio effects for Kithara. The crate owns the band equaliser
-and the DJ isolator, the stereo equaliser a deck runs, the peak limiter, and the
-Firewheel node that puts the limiter on a session bus. It does not decode
+and the DJ isolator, the stereo equaliser a deck runs, the deck feedback delay,
+the peak limiter, and the Firewheel node that puts the limiter on a session bus. It does not decode
 audio, own player or session state, or reach the network.
 
 `filter::FilterEffect` prepares a high-pass, low-pass, low-shelf or high-shelf
@@ -56,6 +56,8 @@ fn boost_low_band<S: HasPool<f32>>(config: &EqConfig<S>, sample_rate: NonZeroU32
 <tr><td><code>DeckEffect</code></td><td>Contract of the effect a deck FX unit holds: planar stereo wet signal, parameter changes, reset, tail exhaustion, sample-rate retune</td></tr>
 
 <tr><td><code>FxParamChange</code></td><td>A change of one deck effect parameter; each effect's parameters join as a variant</td></tr>
+
+<tr><td><code>FeedbackDelay</code></td><td>Stereo feedback delay with a ramped time change and a high-pass on every repeat, history taken from the pools</td></tr>
 
 <tr><td><code>IsolatorEq</code></td><td>DJ isolator built on crossover filters</td></tr>
 
