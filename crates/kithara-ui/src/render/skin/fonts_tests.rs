@@ -5,7 +5,7 @@ use crate::{
     builtin,
     error::UiDocError,
     ids::SourceUri,
-    shaping::{FontId, FontPolicy, GlyphFace, GlyphSegment, TextContext, TextError},
+    shaping::{FontId, FontPolicy, GlyphFace, TextContext, TextError},
     skin::{FontFamily, parse_skin_over},
 };
 
@@ -91,6 +91,7 @@ fn the_painted_glyphs_keep_the_same_font_and_positions_the_skin_measured() {
     use crate::{
         backends::VelloBackend,
         draw::{DrawListBuilder, Rgba, Transform, replay},
+        shaping::GlyphSegment,
         skin::FontWeight,
     };
 
