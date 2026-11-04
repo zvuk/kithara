@@ -14,7 +14,7 @@ use kithara_command::When;
 use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions, asset_source};
 use kithara_test_fixtures::{asset::Asset, assets};
 
-use crate::mix_tap::{load_source, render_effect_window};
+use crate::mix_tap::load_source;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CALLBACK: usize = 64;
@@ -175,6 +175,16 @@ async fn deck(fx_units: Option<usize>, mix: DeckMixSettings) -> OfflinePlayer {
     .await
 }
 
+/// `frames` of a blocking deck, called back [`CALLBACK`] frames at a time.
+/// Every block reads its own PCM, so no time passes between them.
+async fn render(harness: &OfflinePlayer, frames: usize) -> Vec<f32> {
+    let mut output = Vec::with_capacity(frames * CHANNELS);
+    for start in (0..frames).step_by(CALLBACK) {
+        output.extend(harness.render(CALLBACK.min(frames - start)).await);
+    }
+    output
+}
+
 async fn send(harness: &OfflinePlayer, at: When<SessionFrame>, changes: Vec<DeckFxChange>) {
     harness
         .with_queue(move |queue| queue.fx(at, changes))
@@ -205,15 +215,15 @@ async fn take(
     }
     let harness = load_source(harness, asset_source(&asset).into()).await;
     let base = harness.host().position();
-    let mut output = render_effect_window(&harness, LEAD).await;
+    let mut output = render(&harness, LEAD).await;
     for (offset, changes) in timed {
         send(&harness, at(base, offset), changes).await;
     }
     if let Some(pause) = pause {
-        output.extend(render_effect_window(&harness, pause - LEAD).await);
+        output.extend(render(&harness, pause - LEAD).await);
         harness.with_queue(QueueControl::pause).await;
     }
-    output.extend(render_effect_window(&harness, TAKE - output.len() / CHANNELS).await);
+    output.extend(render(&harness, TAKE - output.len() / CHANNELS).await);
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;
     output
@@ -429,7 +439,7 @@ async fn crossfade_take(setup: Vec<DeckFxChange>) -> Vec<f32> {
                 .expect("append the incoming track")
         })
         .await;
-    let mut take = render_effect_window(&harness, 2048).await;
+    let mut take = render(&harness, 2048).await;
     harness
         .with_queue(|queue| queue.next(Transition::Crossfade))
         .await
@@ -441,7 +451,7 @@ async fn crossfade_take(setup: Vec<DeckFxChange>) -> Vec<f32> {
     )
     .await
     .expect("the incoming track loads");
-    take.extend_from_slice(&render_effect_window(&harness, 8192).await);
+    take.extend_from_slice(&render(&harness, 8192).await);
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;
     take
@@ -514,13 +524,13 @@ async fn deck_fx_fader_cuts_tail() {
         asset_source(&assets::fixed_constant_wav_cd_half_44100()).into(),
     )
     .await;
-    let mut fx = render_effect_window(&harness, PAUSE).await;
+    let mut fx = render(&harness, PAUSE).await;
     harness.with_queue(QueueControl::pause).await;
-    fx.extend(render_effect_window(&harness, DOWN - PAUSE).await);
+    fx.extend(render(&harness, DOWN - PAUSE).await);
     harness.set_volume(0.0).await.expect("the fader goes down");
-    fx.extend(render_effect_window(&harness, UP - DOWN).await);
+    fx.extend(render(&harness, UP - DOWN).await);
     harness.set_volume(1.0).await.expect("the fader comes up");
-    fx.extend(render_effect_window(&harness, TAKE - UP).await);
+    fx.extend(render(&harness, TAKE - UP).await);
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;
 
@@ -588,7 +598,7 @@ async fn partitioned_take(blocks: &[usize]) -> Vec<f32> {
     )
     .await;
     let base = harness.host().position();
-    let mut output = render_effect_window(&harness, LEAD).await;
+    let mut output = render(&harness, LEAD).await;
     send(
         &harness,
         at(base, CHANGE),
@@ -604,7 +614,7 @@ async fn partitioned_take(blocks: &[usize]) -> Vec<f32> {
             break;
         }
         let block = block.min(TAKE - rendered);
-        output.extend(render_effect_window(&harness, block).await);
+        output.extend(render(&harness, block).await);
         rendered += block;
     }
     assert_eq!(harness.metrics().underruns(), 0);
