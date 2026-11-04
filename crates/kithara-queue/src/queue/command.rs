@@ -4,8 +4,9 @@ use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_play::{
     CrossfaderGain, DeckEqChange, DeckFxChange, DeckMixSettingsChange, EqBandConfig, GainDb,
-    InterruptionKind, Outbox, OutputSnapshot, PlayError, Player, Position, Track, TrackCommand,
-    TrackFactory, TrackSettings, TrackSettingsChange, TrackStatus as PlayingStatus, Trim,
+    InterruptionKind, Outbox, OutputSnapshot, PlayError, Player, Position, SeekBatch, Track,
+    TrackCommand, TrackFactory, TrackSettings, TrackSettingsChange, TrackStatus as PlayingStatus,
+    Trim,
 };
 use kithara_signal::{FaderValue, SessionFrame};
 
@@ -355,10 +356,7 @@ where
                 .set_playing(false);
             return self.transition_loaded(out).map_err(Into::into);
         }
-        if self.pending_handover.is_some()
-            && let Some(target) = self.target.as_mut()
-            && self.current == Some(target.to)
-        {
+        if let Some(target) = self.target.as_mut().filter(|target| !target.auto) {
             target.set_playing(false);
         }
         self.cancel_auto(out)?;
@@ -397,10 +395,7 @@ where
             );
         }
         if self.active_current_index().is_some() {
-            if self.pending_handover.is_some()
-                && let Some(target) = self.target.as_mut()
-                && self.current == Some(target.to)
-            {
+            if let Some(target) = self.target.as_mut().filter(|target| !target.auto) {
                 target.set_playing(true);
             }
             let sent = self.transport(TrackCommand::Play { at }, out)?;
@@ -627,15 +622,15 @@ where
             return Ok(None);
         }
         let item = active.item;
-        let sent = active.track.apply(TrackCommand::Seek { to }, out)?;
+        let sent = active.track.seek(to, out)?;
         self.withdraw_auto(out)?;
-        self.held_position = sent.map(|seq| SeekPosition::Pending {
+        self.held_position = sent.map(|sent| SeekPosition::Pending {
             item,
-            seq,
+            sent,
             to,
             segment: None,
         });
-        Ok(sent)
+        Ok(sent.map(SeekBatch::seq))
     }
 }
 

@@ -1,7 +1,7 @@
 use kithara_bufpool::HasPool;
 use kithara_command::Seq;
 use kithara_events::TrackId;
-use kithara_play::{Bound, CrossfadeSettings, Position, ResourceSrc, Slot};
+use kithara_play::{Bound, CrossfadeSettings, Position, ResourceSrc, SeekBatch, Slot};
 use kithara_signal::SegmentId;
 
 use crate::{event::AdvanceReason, track::TrackSource};
@@ -11,7 +11,7 @@ pub(super) enum SeekPosition {
     Held(Position),
     Pending {
         item: TrackId,
-        seq: Seq,
+        sent: SeekBatch,
         to: Position,
         segment: Option<SegmentId>,
     },

@@ -6,6 +6,7 @@ mod host_contracts;
 mod host_fixture;
 mod lifecycle;
 mod modes;
+mod phase;
 mod preparation;
 mod refresh;
 mod relocation;

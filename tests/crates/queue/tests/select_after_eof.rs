@@ -5,32 +5,52 @@ use kithara::{
     events::{EventReceiver, TrackId},
     platform::{
         sync::Arc,
-        time::{self, Duration},
+        time::{self, Duration, Instant},
         tokio::sync::broadcast::error::TryRecvError,
     },
+    play::PlayerEvent,
     queue::{AdvanceReason, QueueControl, QueueEvent, RepeatMode, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
-    hls_fixture::create_test_downloader,
+    event::TestEvent,
     offline::{
         OfflinePlayer, OfflinePlayerOptions, append_loaded, offline_queue_fixture,
         offline_queue_fixture_with_options,
     },
 };
-use kithara_test_fixtures::{assets, signal::mean_abs};
+use kithara_test_fixtures::{
+    assets,
+    signal::{mean_abs, rms},
+};
+use num_traits::ToPrimitive;
 
 use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
-const BLOCK_BUDGET: usize = 256;
+
+/// One block at a device's cadence: the queue ticks as the app update loop
+/// would, the Host renders the block, and the test clock waits out the rest of
+/// the block's period. A device pulls no faster than it plays, so the worker
+/// decodes at that cadence and a silent block is the pipeline's, not the
+/// machine's.
+async fn play_block(queue: &QueueControl<TestPools>, harness: &OfflinePlayer) -> Vec<f32> {
+    let period = Duration::from_secs_f64(
+        BLOCK_FRAMES.to_f64().expect("block frame count fits f64") / f64::from(SAMPLE_RATE),
+    );
+    let started = Instant::now();
+    let _ = harness.run(queue, QueueControl::tick).await;
+    let pcm = harness.render(BLOCK_FRAMES).await;
+    time::sleep(period.saturating_sub(started.elapsed())).await;
+    pcm
+}
 
 /// The advance a natural end asks for, named for the entry it lands on.
-#[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn wait_for_eof_advance(
+    queue: &QueueControl<TestPools>,
     harness: &OfflinePlayer,
     events: &mut EventReceiver<QueueEvent>,
     id: TrackId,
@@ -43,7 +63,7 @@ async fn wait_for_eof_advance(
             let envelope = match events.try_recv() {
                 Ok(envelope) => envelope,
                 Err(TryRecvError::Empty) => {
-                    let _ = harness.render(BLOCK_FRAMES).await;
+                    let _ = play_block(queue, harness).await;
                     continue;
                 }
                 Err(_) => return false,
@@ -74,7 +94,6 @@ async fn wait_for_eof_advance(
 /// the loader's latency instead of the switch. The statement travels from the
 /// player through `tick`, so the wait has to render; subscribe before the
 /// select, because the event is edge-triggered and never repeats.
-#[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn wait_for_current_track(
     queue: &QueueControl<TestPools>,
@@ -95,8 +114,7 @@ async fn wait_for_current_track(
                     return true;
                 }
             }
-            let _ = harness.run(queue, QueueControl::tick).await;
-            let _ = harness.render(BLOCK_FRAMES).await;
+            let _ = play_block(queue, harness).await;
         }
     })
     .await
@@ -116,7 +134,6 @@ fn first_onset_frame(pcm: &[f32], threshold: f32) -> Option<usize> {
         .position(|frame| frame.iter().any(|s| s.abs() > threshold))
 }
 
-#[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn render_loop(
     queue: &QueueControl<TestPools>,
@@ -126,11 +143,59 @@ async fn render_loop(
     let mut pcm = Vec::with_capacity(block_budget * BLOCK_FRAMES * usize::from(CHANNELS));
     for _ in 0..block_budget {
         hang_tick!(format!("queue renders block after {} samples", pcm.len()));
-        let _ = harness.run(queue, QueueControl::tick).await;
-        pcm.extend(harness.render(BLOCK_FRAMES).await);
+        pcm.extend(play_block(queue, harness).await);
         hang_reset!();
     }
     pcm
+}
+
+/// Render `block_budget` blocks and return the second half, the part a level
+/// verdict judges; the first half carries the switch's own start. The judged
+/// half must play: every block sounds and the producer never starves, because
+/// a zero-filled block would pass for the track falling silent.
+async fn judged_half(
+    queue: &QueueControl<TestPools>,
+    harness: &OfflinePlayer,
+    block_budget: usize,
+    track: &str,
+) -> Vec<f32> {
+    let _ = render_loop(queue, harness, block_budget / 2).await;
+    let underruns = harness.metrics().underruns();
+    let judged = render_loop(queue, harness, block_budget - block_budget / 2).await;
+    for (block, samples) in judged
+        .chunks(BLOCK_FRAMES * usize::from(CHANNELS))
+        .enumerate()
+    {
+        let level = rms(samples);
+        assert!(
+            level > 0.0,
+            "{track} must sound in judged block {block}: rms={level}"
+        );
+    }
+    assert_eq!(
+        harness.metrics().underruns(),
+        underruns,
+        "{track}: the judged window must not conceal producer starvation"
+    );
+    judged
+}
+
+/// Whether the player has already published an item's natural end.
+fn played_to_end(events: &mut EventReceiver<TestEvent>) -> bool {
+    loop {
+        match events.try_recv() {
+            Ok(envelope)
+                if matches!(
+                    envelope.event,
+                    TestEvent::Player(PlayerEvent::ItemDidPlayToEnd { .. })
+                ) =>
+            {
+                return true;
+            }
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
 }
 
 fn stalled_successor(server: &TestServerHelper, label: &str) -> String {
@@ -166,21 +231,23 @@ async fn seek_updates_cached_position_optimistically() {
     harness.close().await;
 }
 
-/// Track A reaches real EOF while B is a real HTTP load that stalls. Selecting
+/// Track A reaches real EOF while the fixture server stalls B's HTTP load. Selecting
 /// A again must reload the retained product source and restart playback.
-#[kithara::test(tokio, flash(false))]
+#[kithara::test(tokio)]
 async fn reselect_finished_track_restarts_when_next_track_never_loads() {
+    const PASS_BLOCKS: usize = 64;
+
+    let server = TestServerHelper::new().await;
     let (harness, queue) = offline_queue_fixture_with_options(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
-            .downloader(create_test_downloader())
+            .downloader(server.modeled_downloader())
             .build(),
         SAMPLE_RATE,
     )
     .await;
     let source_a = assets::constant_wav_three_0_4s();
     let id_a = append_loaded(&harness, &queue, &source_a).await;
-    let server = TestServerHelper::new().await;
     let _id_b = harness
         .run(&queue, {
             let source = stalled_successor(&server, "stalled.mp3");
@@ -189,21 +256,28 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
         .await
         .expect("append a real stalled successor");
 
+    let mut events = queue.subscribe::<TestEvent>();
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("select track A");
-    let first_pcm = render_loop(&queue, &harness, BLOCK_BUDGET).await;
+    let first_pcm = render_loop(&queue, &harness, PASS_BLOCKS).await;
     assert!(
         first_onset_frame(&first_pcm, 0.005).is_some(),
         "track A must play through on the first pass"
+    );
+    // Only A ever plays, so the player's end of an item is A's; a silent tail
+    // would also be what a starved read leaves behind.
+    assert!(
+        played_to_end(&mut events),
+        "track A must have played to its end before it is re-selected"
     );
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
         .expect("re-select of the finished track must be accepted");
 
-    let second_pcm = render_loop(&queue, &harness, BLOCK_BUDGET).await;
+    let second_pcm = render_loop(&queue, &harness, PASS_BLOCKS).await;
     assert!(
         first_onset_frame(&second_pcm, 0.005).is_some(),
         "re-selecting track A after it played to EOF must restart playback"
@@ -218,9 +292,11 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
 /// statement that the switch reached the player, so what it measures is the
 /// audio that follows it and not the reload it waited on.
 ///
-/// Every verdict here is a track's level, so a render waits for the decode
-/// it reads: a zero-filled underrun would pass for the track falling silent.
-#[kithara::test(tokio, flash(false))]
+/// Every verdict here is a track's level. The blocks play at a device's
+/// cadence, so the decode has each block's period to fill it and a zero-filled
+/// block is an underrun of the pipeline, not of the machine running the test;
+/// each judged window therefore has to play without one.
+#[kithara::test(tokio)]
 #[case::selected(InitialStart::Select)]
 #[case::play_button(InitialStart::Play)]
 async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: InitialStart) {
@@ -228,7 +304,6 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
 
     let (harness, queue) = offline_queue_fixture_with_options(
         OfflinePlayerOptions::builder()
-            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -246,16 +321,16 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
             .await
             .expect("select track A"),
     }
-    let pcm_a = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
-    let mean_a = mean_abs(&pcm_a[pcm_a.len() / 2..]);
+    let pcm_a = judged_half(&queue, &harness, WARMUP_BLOCKS, "track A").await;
+    let mean_a = mean_abs(&pcm_a);
     assert!(mean_a > 0.005, "track A must start: mean={mean_a}");
 
     harness
         .run(&queue, move |q| q.select(id_b, Transition::None))
         .await
         .expect("select track B");
-    let pcm_b = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
-    let mean_b = mean_abs(&pcm_b[pcm_b.len() / 2..]);
+    let pcm_b = judged_half(&queue, &harness, WARMUP_BLOCKS, "track B").await;
+    let mean_b = mean_abs(&pcm_b);
     assert!(
         mean_b > mean_a * 4.0,
         "track B must dominate after the switch: mean_a={mean_a}, mean_b={mean_b}"
@@ -267,8 +342,8 @@ async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: Ini
         .await
         .expect("switch back to track A");
     wait_for_current_track(&queue, &harness, &mut switches, id_a).await;
-    let pcm = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
-    let mean_back = mean_abs(&pcm[pcm.len() / 2..]);
+    let pcm = judged_half(&queue, &harness, WARMUP_BLOCKS, "switched-back track A").await;
+    let mean_back = mean_abs(&pcm);
     // The selection an amplitude verdict is about: a switch-back that never
     // moved the queue and one that moved it while B kept sounding are
     // different defects, and the amplitudes alone do not tell them apart.
@@ -313,17 +388,17 @@ async fn play_button_marks_current_loaded_track_consumed() {
 async fn reselect_playing_track_cancels_pending_switch() {
     const WARMUP_BLOCKS: usize = 64;
 
+    let server = TestServerHelper::new().await;
     let (harness, queue) = offline_queue_fixture_with_options(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
-            .downloader(create_test_downloader())
+            .downloader(server.modeled_downloader())
             .build(),
         SAMPLE_RATE,
     )
     .await;
     let source_a = assets::constant_wav_three_5s();
     let id_a = append_loaded(&harness, &queue, &source_a).await;
-    let server = TestServerHelper::new().await;
     let id_b = harness
         .run(&queue, {
             let source = stalled_successor(&server, "pending.mp3");
@@ -378,9 +453,10 @@ async fn reselect_playing_track_cancels_pending_switch() {
 /// is a race the product does not control, and each reaches the restart by
 /// its own route: in place, through a re-select of the reloaded entry, or
 /// through a select the load applies. Only the advance is common to all
-/// three, so waiting on a reload would assert whichever route won, and a
-/// fixed budget of immediate renders would assert the loader's latency.
-#[kithara::test(tokio, flash(false), tracing("kithara_queue=debug,kithara_play=debug"))]
+/// three, so waiting on a reload would assert whichever route won. Each pass
+/// plays at a device's cadence, so it is a span of audio the restart has to
+/// fill, not a race between the renders and the loader.
+#[kithara::test(tokio, tracing("kithara_queue=debug,kithara_play=debug"))]
 async fn repeat_one_restarts_the_track_its_own_eof_ended() {
     const PASS_BLOCKS: usize = 64;
 
@@ -399,14 +475,14 @@ async fn repeat_one_restarts_the_track_its_own_eof_ended() {
         first_onset_frame(&first_pass, 0.005).is_some(),
         "the track must play once before repeat-one is judged"
     );
-    wait_for_eof_advance(&harness, &mut advances, id).await;
+    wait_for_eof_advance(&queue, &harness, &mut advances, id).await;
 
     let after_eof = render_loop(&queue, &harness, PASS_BLOCKS).await;
     assert!(
         first_onset_frame(&after_eof, 0.005).is_some(),
         "repeat-one must restart the track its own EOF ended"
     );
-    wait_for_eof_advance(&harness, &mut advances, id).await;
+    wait_for_eof_advance(&queue, &harness, &mut advances, id).await;
     let after_second_eof = render_loop(&queue, &harness, PASS_BLOCKS).await;
     assert!(
         first_onset_frame(&after_second_eof, 0.005).is_some(),

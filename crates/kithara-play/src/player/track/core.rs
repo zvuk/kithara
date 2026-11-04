@@ -290,7 +290,7 @@ impl<S> PlayerImpl<S> {
             let origin = self
                 .attach_at
                 .map_or(pass.now, |attach| attach.max(pass.now));
-            if frame < origin + pass.delivery {
+            if frame < origin + pass.deck_delivery {
                 return Err(PlayError::Late);
             }
             if self.attach_at.is_none() {
@@ -410,16 +410,21 @@ impl<S> PlayerImpl<S> {
         self.lane_when(When::At(start), out)
     }
 
+    /// Drops the start this track still owes, with its pending attachment's.
+    pub(super) fn withdraw_play(&mut self) {
+        self.play = None;
+        if let Some(attaching) = self.attaching.as_mut() {
+            attaching.play = None;
+        }
+    }
+
     pub(super) fn pause(
         &mut self,
         at: When<SessionFrame>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         self.check_when(at, out)?;
-        self.play = None;
-        if let Some(attaching) = self.attaching.as_mut() {
-            attaching.play = None;
-        }
+        self.withdraw_play();
         if !self.attached() {
             return Ok(None);
         }

@@ -21,6 +21,7 @@ impl Deck {
         at: SessionFrame,
         seq: Seq,
         context_valid: bool,
+        wait_for_pcm: bool,
     ) -> Option<DeckPart> {
         self.interrupt_underrun(&part, at);
         match part {
@@ -30,7 +31,7 @@ impl Deck {
                 pcm,
                 segment,
             } => self.attach(slot, item_id, pcm, segment, at, seq),
-            DeckPart::Detach { slot } => self.detach(slot, context_valid),
+            DeckPart::Detach { slot } => self.detach(slot, context_valid, wait_for_pcm),
             DeckPart::Start { slot, fade } => {
                 if let Some(track) = self.tracks.at_mut(slot) {
                     track.start(fade);
@@ -39,7 +40,7 @@ impl Deck {
             }
             DeckPart::Stop { slot, fade } => self.stop_track(slot, fade, at, seq),
             DeckPart::Adopt { slot, segment } => {
-                Some(self.adopt_track(slot, segment, at, seq, context_valid))
+                Some(self.adopt_track(slot, segment, at, seq, context_valid, wait_for_pcm))
             }
             DeckPart::Fade {
                 slot,
@@ -60,7 +61,7 @@ impl Deck {
                 item_id,
                 pcm,
                 segment,
-            } => Some(self.replace_track(slot, item_id, pcm, segment, context_valid)),
+            } => Some(self.replace_track(slot, item_id, pcm, segment, context_valid, wait_for_pcm)),
             DeckPart::Chain { from, to } => Some(self.chain_tracks(from, to)),
             DeckPart::Mix(change) => {
                 self.mix.apply_change(change);
@@ -132,7 +133,7 @@ impl Deck {
         }
     }
 
-    fn detach(&mut self, slot: Slot, context_valid: bool) -> Option<DeckPart> {
+    fn detach(&mut self, slot: Slot, context_valid: bool, wait_for_pcm: bool) -> Option<DeckPart> {
         let mut track = self.tracks.take(slot)?;
         if context_valid {
             self.tails[slot.index()].fill(
@@ -140,6 +141,7 @@ impl Deck {
                 self.declick_frames,
                 &self.metrics,
                 &mut self.recycle[slot.index()],
+                wait_for_pcm,
             );
         }
         Some(returned_pcm(slot, track.into_resource()))
@@ -168,6 +170,7 @@ impl Deck {
         at: SessionFrame,
         seq: Seq,
         context_valid: bool,
+        wait_for_pcm: bool,
     ) -> DeckPart {
         #[cfg(not(feature = "usdt"))]
         let _ = (at, seq);
@@ -178,6 +181,7 @@ impl Deck {
                     self.declick_frames,
                     &self.metrics,
                     &mut self.recycle[slot.index()],
+                    wait_for_pcm,
                 );
             }
             track.adopt(segment);
@@ -201,6 +205,7 @@ impl Deck {
         pcm: Box<PlayerResource>,
         segment: SegmentId,
         context_valid: bool,
+        wait_for_pcm: bool,
     ) -> DeckPart {
         let mut track = self.track(pcm, segment, item_id);
         track.start(Fade::Declick);
@@ -216,6 +221,7 @@ impl Deck {
                         self.evict_frames,
                         &self.metrics,
                         &mut self.recycle[slot.index()],
+                        wait_for_pcm,
                     );
                 }
                 returned_pcm(slot, old.into_resource())

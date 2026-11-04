@@ -4,7 +4,7 @@ use kithara::{
     download::Downloader,
     effects::LimiterConfig,
     play::{DeckMixSettings, Position, Settled},
-    signal::{AudioChunk, AudioChunkInfo},
+    signal::{AudioChunk, AudioChunkInfo, SourceInverse, SourceSpan},
 };
 use kithara_integration_tests::{
     offline::{OfflinePlayer, OfflinePlayerOptions, linked::LinkReceiptOrigin},
@@ -370,7 +370,7 @@ impl ControlCapture {
     fn check_packet_law(
         &self,
         info: AudioChunkInfo,
-        span: kithara::signal::SourceSpan,
+        span: SourceSpan,
         source: u128,
         rate: (u128, u128),
     ) -> Result<(), String> {
@@ -947,6 +947,35 @@ pub(in super::super) struct DecodedCapture {
     rejected: bool,
 }
 
+/// A captured chunk's normalized source clock and exact affine inverse,
+/// retained together for repeated physical-basis lookups.
+struct PhysicalCandidate<'a> {
+    decoded: &'a AudioChunkInfo,
+    basis: Result<(SourceSpan, Option<SourceInverse>), String>,
+}
+
+impl<'a> PhysicalCandidate<'a> {
+    fn new(decoded: &'a AudioChunkInfo) -> Self {
+        let basis = decoded
+            .source_geometry()
+            .ok_or_else(|| "decoded PCM has no source geometry".to_owned())
+            .and_then(|basis| {
+                basis
+                    .scaled_from(
+                        (0, std::num::NonZeroU128::MIN),
+                        (0, std::num::NonZeroU128::MIN),
+                        (
+                            u128::from(decoded.spec.sample_rate.get()),
+                            std::num::NonZeroU128::from(basis.sample_rate()),
+                        ),
+                    )
+                    .ok_or_else(|| "decoded PCM source clock cannot be normalized".to_owned())
+            })
+            .map(|basis| (basis, basis.source_inverse(decoded.frame_offset)));
+        Self { decoded, basis }
+    }
+}
+
 pub(in super::super) struct DecodedRecorder {
     incoming: HeapCons<Result<DecodedChunk, AudioObserveError>>,
     capture: DecodedCapture,
@@ -1153,7 +1182,7 @@ impl DecodedCapture {
         &self,
         info: impl Into<consumed::SourceIdentity>,
         frame: u64,
-    ) -> Result<(u64, kithara::signal::SourceSpan), String> {
+    ) -> Result<(u64, SourceSpan), String> {
         let info = info.into();
         let (_, (decoded, _)) = self
             .chunks
@@ -1166,7 +1195,7 @@ impl DecodedCapture {
                     && decoded.frame_range().contains(&frame)
             })
             .ok_or_else(|| format!("decoder observer has no current physical frame {frame}"))?;
-        let position = kithara::signal::SourceSpan::new(
+        let position = SourceSpan::new(
             frame,
             frame
                 .checked_add(1)
@@ -1188,35 +1217,49 @@ impl DecodedCapture {
         &self,
         info: impl Into<consumed::SourceIdentity>,
         position: (u128, std::num::NonZeroU128),
-    ) -> Result<(u64, kithara::signal::SourceSpan), String> {
+    ) -> Result<(u64, SourceSpan), String> {
         let info = info.into();
-        for (decoded, _) in self.chunks.values().filter(|(decoded, _)| {
-            decoded.source_revision == info.source_revision
-                && decoded.spec == info.spec
-                && decoded.media_origin == info.media_origin
-        }) {
-            let basis = decoded
-                .source_geometry()
-                .ok_or_else(|| "decoded PCM has no source geometry".to_owned())?;
-            let basis = basis
-                .scaled_from(
-                    (0, std::num::NonZeroU128::MIN),
-                    (0, std::num::NonZeroU128::MIN),
-                    (
-                        u128::from(info.spec.sample_rate.get()),
-                        std::num::NonZeroU128::from(basis.sample_rate()),
-                    ),
-                )
-                .ok_or_else(|| "decoded PCM source clock cannot be normalized".to_owned())?;
+        self.physical_basis_among(
+            self.chunks
+                .values()
+                .filter(|(decoded, _)| info.describes(decoded))
+                .map(|(decoded, _)| PhysicalCandidate::new(decoded)),
+            info,
+            position,
+        )
+    }
+
+    /// Every captured chunk as a basis candidate, for a batch of lookups that
+    /// would otherwise normalize the same chunks once per lookup.
+    fn physical_candidates(&self) -> Vec<PhysicalCandidate<'_>> {
+        self.chunks
+            .values()
+            .map(|(decoded, _)| PhysicalCandidate::new(decoded))
+            .collect()
+    }
+
+    fn physical_basis_among<'a>(
+        &self,
+        candidates: impl IntoIterator<Item = impl std::borrow::Borrow<PhysicalCandidate<'a>>>,
+        info: consumed::SourceIdentity,
+        position: (u128, std::num::NonZeroU128),
+    ) -> Result<(u64, SourceSpan), String> {
+        for candidate in candidates {
+            let candidate = candidate.borrow();
+            let decoded = candidate.decoded;
+            if !info.describes(decoded) {
+                continue;
+            }
+            let (basis, inverse) = candidate.basis.as_ref().map_err(Clone::clone)?;
             let Some((frame, denominator)) =
-                basis.output_ratio_at_source(decoded.frame_offset, position)
+                inverse.and_then(|inverse| inverse.output_at(position))
             else {
                 continue;
             };
             let frame =
                 u64::try_from(frame / denominator.get()).map_err(|error| error.to_string())?;
             if decoded.frame_range().contains(&frame) {
-                return Ok((decoded.frame_offset, basis));
+                return Ok((decoded.frame_offset, *basis));
             }
         }
         let mut identities = std::collections::BTreeMap::new();
@@ -1437,6 +1480,24 @@ impl DecodedCapture {
         Ok((capture_start, frames))
     }
 
+    /// The affine inverse of the decoded basis holding raw `position`, with the
+    /// physical PCM position it assigns to `position`.
+    fn physical_inverse(
+        &self,
+        candidates: &[PhysicalCandidate<'_>],
+        info: consumed::SourceIdentity,
+        position: (u128, std::num::NonZeroU128),
+    ) -> Result<(SourceInverse, (u128, std::num::NonZeroU128)), String> {
+        let (origin, basis) = self.physical_basis_among(candidates, info, position)?;
+        let inverse = basis
+            .source_inverse(origin)
+            .ok_or_else(|| "physical basis has no affine inverse".to_owned())?;
+        let first = inverse
+            .output_at(position)
+            .ok_or_else(|| "wrong-tempo negative has no physical origin".to_owned())?;
+        Ok((inverse, first))
+    }
+
     pub(in super::super) fn check_physical(
         &self,
         pcm: &[f32],
@@ -1450,6 +1511,7 @@ impl DecodedCapture {
         let sample_rate = consumed.sample_rate;
         check_physical_marks(marks, sample_rate)?;
         let intervals = physical_intervals(capture_start, frames, consumed, jump)?;
+        let candidates = self.physical_candidates();
         let mut physical_bases = intervals
             .iter()
             .map(|(&start, interval)| {
@@ -1458,12 +1520,9 @@ impl DecodedCapture {
                     .source
                     .source_ratio_at(0)
                     .ok_or_else(|| "physical source interval has no raw origin".to_owned())?;
-                let (origin, basis) = self.physical_basis(info, position)?;
-                let first = basis
-                    .output_ratio_at_source(origin, position)
-                    .ok_or_else(|| "wrong-tempo negative has no physical origin".to_owned())?;
+                let (inverse, first) = self.physical_inverse(&candidates, info, position)?;
                 let samplers = [self.sampler(info), self.sampler(info), self.sampler(info)];
-                Ok((start, (origin, basis, first, samplers)))
+                Ok((start, (inverse, first, samplers)))
             })
             .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
         let mut reference = PhysicalReference {
@@ -1499,10 +1558,10 @@ impl DecodedCapture {
             let raw_next = span
                 .source_ratio_at(offset + 1)
                 .ok_or_else(|| "physical capture has an unmapped source endpoint".to_owned())?;
-            let (origin, basis, first, samplers) = physical_bases
+            let (inverse, first, samplers) = physical_bases
                 .get_mut(&start)
                 .ok_or_else(|| "physical source interval lost its decoded basis".to_owned())?;
-            let (origin, basis, first) = (*origin, *basis, *first);
+            let (inverse, first) = (*inverse, *first);
             let [expected_source, cue_source, tempo_source] = samplers;
             let (raw_position, (numerator, denominator)) = if let Some((_, raw, physical)) =
                 next_position.filter(|(previous_start, _, _)| *previous_start == start)
@@ -1512,7 +1571,7 @@ impl DecodedCapture {
                 let raw = span
                     .source_ratio_at(offset)
                     .ok_or_else(|| "physical capture has an unmapped source frame".to_owned())?;
-                let physical = basis.output_ratio_at_source(origin, raw).ok_or_else(|| {
+                let physical = inverse.output_at(raw).ok_or_else(|| {
                     "raw source coordinate has no physical PCM position".to_owned()
                 })?;
                 (raw, physical)
@@ -1522,8 +1581,8 @@ impl DecodedCapture {
                     "physical source interval origin differs from its captured basis".to_owned(),
                 );
             }
-            let physical_next = basis
-                .output_ratio_at_source(origin, raw_next)
+            let physical_next = inverse
+                .output_at(raw_next)
                 .ok_or_else(|| "raw source endpoint has no physical PCM position".to_owned())?;
             next_position = Some((start, raw_next, physical_next));
             let speed = physical_source_speed((numerator, denominator), physical_next)?;
@@ -2003,6 +2062,56 @@ fn check_persistent_physical_sampling(
                 );
             }
         }
+    }
+}
+
+#[kithara::test(native)]
+fn physical_basis_preserves_subframe_positions_above_f64_precision() {
+    let rate = NonZeroU32::new(48_000).expect("sample rate");
+    let span = SourceSpan::try_from((
+        55_340_232_221_128_594_846,
+        1,
+        std::num::NonZeroU128::new(3).expect("source denominator"),
+        rate,
+        1,
+    ))
+    .expect("admitted fractional source span");
+    let position = (
+        36_893_488_147_419_063_231,
+        std::num::NonZeroU128::new(2).expect("position denominator"),
+    );
+    let half = (1, std::num::NonZeroU128::new(2).expect("half frame"));
+    assert_eq!(span.output_ratio_at_source(0, position), Some(half));
+    for origin in [0, 37] {
+        let decoded = AudioChunkInfo {
+            spec: AudioSpec::new(CHANNELS, rate),
+            source_revision: 7,
+            source_span: Some(span),
+            frame_offset: origin,
+            frames: 1,
+            ..AudioChunkInfo::default()
+        };
+        let identity = consumed::SourceIdentity {
+            spec: decoded.spec,
+            source_revision: decoded.source_revision,
+            media_origin: decoded.media_origin,
+        };
+        let mut capture = DecodedCapture::default();
+        let pcm = Arc::new(sample_buffer(&pools(), &[0.125, -0.25]));
+        capture.samples = pcm.len();
+        capture.chunks.insert((7, origin), (decoded, pcm));
+        let fresh = capture.physical_basis(identity, position);
+        let candidates = capture.physical_candidates();
+        let retained = capture.physical_basis_among(&candidates, identity, position);
+        assert_eq!(fresh, retained);
+        let (offset, basis) =
+            fresh.expect("an exact half-frame position belongs to the captured chunk");
+        assert_eq!(offset, origin);
+        let expected = (u128::from(origin) * 2 + 1, half.1);
+        assert_eq!(
+            basis.output_ratio_at_source(offset, position),
+            Some(expected)
+        );
     }
 }
 

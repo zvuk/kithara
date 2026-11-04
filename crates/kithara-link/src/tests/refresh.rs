@@ -10,7 +10,8 @@ use kithara_test_utils::kithara;
 
 use super::{
     fixtures::{
-        Command, Control, Deck, Rig, answer, deck, grid, load, position, sounding, trajectory,
+        Command, Control, Deck, Rig, answer, deck, grid, load, position, provisional, sound,
+        sounding, synced, trajectory,
     },
     host_fixture::{host, register, tempo},
 };
@@ -52,7 +53,7 @@ fn a_tempo_commit_before_the_activation_moves_it_onto_the_live_beat() {
     host.push(SessionFrame::new(36_000), Tempo::new(150.0).expect("tempo"))
         .expect("step");
     rig.now = SessionFrame::new(36_000);
-    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, SessionFrame::new(36_000), out));
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[SessionFrame::new(36_000)], out));
     let commands = control.commands();
     assert_eq!(commands.len(), 2);
     assert_eq!(commands[0].0, commands[1].0);
@@ -94,7 +95,7 @@ fn every_pending_member_moves_in_one_transaction_onto_its_own_map() {
     for (deck, control, rig, _, old) in &mut members {
         rig.now = SessionFrame::new(36_000);
         let source = deck.snapshot().as_ref().position;
-        rig.run(|out| LinkedPlayer::retime(deck, &host, SessionFrame::new(36_000), out));
+        rig.run(|out| LinkedPlayer::retime(deck, &host, &[SessionFrame::new(36_000)], out));
         let commands = control.commands();
         assert_eq!(commands.len(), 2);
         assert_eq!(commands[0].0, commands[1].0);
@@ -133,7 +134,7 @@ fn an_activation_pushed_past_its_window_is_withdrawn() {
     host.push(SessionFrame::new(36_000), Tempo::new(90.0).expect("tempo"))
         .expect("step");
     rig.now = SessionFrame::new(36_000);
-    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, SessionFrame::new(36_000), out));
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[SessionFrame::new(36_000)], out));
     let commands = control.commands();
     assert_eq!(commands.len(), 2);
     assert_eq!(
@@ -302,8 +303,43 @@ fn only_the_resident_tracks_pcm_recovery_realigns_sync(
     #[case] realigns: bool,
 ) {
     let (mut deck, control, mut rig, _) = sounding();
+    let event = underrun_ended(&deck, recovered, same_item, same_slot);
+    rig.now = SessionFrame::new(128);
+    rig.run(|out| Player::settle(&mut deck, TrackReceipt::Event(event), out));
+    assert_eq!(
+        control
+            .commands()
+            .iter()
+            .any(|(_, command)| matches!(command, Command::Jump(..))),
+        realigns
+    );
+}
+
+#[kithara::test]
+fn a_recovered_underrun_keeps_a_seek_waiting_for_the_grid() {
+    // Only a grid a later revision can extend leaves a seek past its end waiting.
+    let (mut deck, control, mut rig, _) =
+        synced(provisional(&grid(24_000, 0, Some((4, 0)), 960_000)));
+    sound(&control, &mut rig, 0, 0);
+    let beyond = position(2_000_000);
+    assert_eq!(
+        rig.run(|out| deck.apply(TrackCommand::Seek { to: beyond }, out))
+            .expect("seek waits for the grid"),
+        None
+    );
+    let event = underrun_ended(&deck, true, true, true);
+    rig.now = SessionFrame::new(128);
+    rig.run(|out| Player::settle(&mut deck, TrackReceipt::Event(event), out));
+    assert!(control.commands().is_empty());
+    assert_eq!(
+        deck.snapshot().sync,
+        SyncStatus::WaitingForGrid { required: beyond }
+    );
+}
+
+fn underrun_ended(deck: &Deck, recovered: bool, same_item: bool, same_slot: bool) -> DeckEvent {
     let track = deck.snapshot().track;
-    let event = DeckEvent::UnderrunEnded {
+    DeckEvent::UnderrunEnded {
         slot: if same_slot {
             track.slot.expect("resident slot")
         } else {
@@ -318,14 +354,5 @@ fn only_the_resident_tracks_pcm_recovery_realigns_sync(
         position: Some(track.position),
         frames: 128,
         recovered,
-    };
-    rig.now = SessionFrame::new(128);
-    rig.run(|out| Player::settle(&mut deck, TrackReceipt::Event(event), out));
-    assert_eq!(
-        control
-            .commands()
-            .iter()
-            .any(|(_, command)| matches!(command, Command::Speed(..))),
-        realigns
-    );
+    }
 }
