@@ -1,15 +1,20 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroU32;
+
 use kithara::{
     self,
+    audio::mock::TestPcmReader,
+    effects::{Ceiling, LimiterConfig, LookaheadMs, ReleaseMs},
     events::TrackId,
-    host::Tap,
+    host::{HostConfig, HostSettings, Tap},
     play::{PlayError, Resource, SessionError},
     queue::TrackSource,
+    signal::AudioSpec,
 };
 use kithara_integration_tests::{
-    bufpool_ext::TestPools,
-    offline::{OfflinePlayer, OfflinePlayerOptions, asset_source},
+    bufpool_ext::{TestPools, pools},
+    offline::{OfflinePlayer, OfflinePlayerOptions, asset_source, resource_from_reader},
 };
 use kithara_test_fixtures::assets;
 
@@ -32,7 +37,7 @@ async fn nonblocking_effect_config_controls_reach_only_the_bound_track_at_the_du
 }
 
 async fn effect_controls_reach_the_bound_track(block_on_underrun: bool) {
-    use std::num::{NonZeroU32, NonZeroUsize};
+    use std::num::NonZeroUsize;
 
     use kithara::{
         assets::AssetStore,
@@ -41,7 +46,7 @@ async fn effect_controls_reach_the_bound_track(block_on_underrun: bool) {
             eq::{EqBandConfig, EqBandConfigChange, EqBandConfigControl, EqConfig, EqEffect},
         },
         play::{ResourceConfig, ResourceSrc},
-        signal::{AudioChunk, AudioChunkInfo, AudioSpec, SessionFrame},
+        signal::{AudioChunk, AudioChunkInfo, SessionFrame},
         warp::WarpConfig,
     };
     use kithara_command::When;
@@ -210,7 +215,7 @@ async fn nonblocking_configured_multiband_eq_keeps_pcm_and_settings_across_a_hos
 }
 
 async fn effect_format_change(block_on_underrun: bool) {
-    use std::num::{NonZeroU32, NonZeroUsize};
+    use std::num::NonZeroUsize;
 
     use kithara::{
         assets::AssetStore,
@@ -590,4 +595,202 @@ async fn the_master_and_output_taps_run_together() {
         "the output tap carries what graph_out plays"
     );
     harness.close().await;
+}
+
+/// Lookahead of the configured limiter cases: 441 whole frames at the fixture rate.
+const LOOKAHEAD_MS: f32 = 10.0;
+/// Silent deck frames before the transient, past the block `play_source` renders untapped.
+const LEAD_FRAMES: usize = 2_000;
+
+/// Master tap, output tap and `graph_out` of a deck playing `samples` through `limiter`.
+struct LimitedTake {
+    master: Vec<f32>,
+    output: Vec<f32>,
+    rendered: Vec<f32>,
+}
+
+impl LimitedTake {
+    /// Frames of `graph_out` that carry any sound.
+    fn sounding(&self) -> Vec<usize> {
+        self.rendered
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(_, frame)| frame.iter().any(|sample| *sample != 0.0))
+            .map(|(index, _)| index)
+            .collect()
+    }
+}
+
+/// Play `samples`, one synthetic value per stereo frame at the fixture rate, through
+/// `limiter` for `BLOCKS` blocks, with or without blocking on underrun.
+///
+/// Each lookahead case compares its take with the same limiter at zero lookahead: the
+/// sound moves by exactly the reported frames, audio below the ceiling keeps its bits,
+/// a transient over the ceiling stays at or under it, and every other frame is exact
+/// silence.
+async fn limited_take(
+    block_on_underrun: bool,
+    limiter: LimiterConfig,
+    samples: Vec<f32>,
+) -> LimitedTake {
+    let rate = NonZeroU32::new(SAMPLE_RATE).expect("fixture rate");
+    let session = HostConfig::offline(pools())
+        .limiter(limiter)
+        .settings(HostSettings::builder().sample_rate(rate).build())
+        .build();
+    let options = OfflinePlayerOptions::builder()
+        .crossfade_duration(0.0)
+        .block_on_underrun(block_on_underrun)
+        .build();
+    let harness = play_resource(
+        OfflinePlayer::with_options(options, session).await,
+        move || {
+            resource_from_reader(TestPcmReader::with_samples(
+                AudioSpec::new(2, rate),
+                samples,
+            ))
+        },
+    )
+    .await;
+    let mut master = harness
+        .host()
+        .attach_tap(Tap::Master, ROOMY_CAPACITY)
+        .await
+        .expect("master tap");
+    let mut output = harness
+        .host()
+        .attach_tap(Tap::Output, ROOMY_CAPACITY)
+        .await
+        .expect("output tap");
+    let rendered = render_blocks(&harness, BLOCKS).await;
+    assert_eq!(
+        harness.metrics().underruns(),
+        0,
+        "the PCM deck never runs short"
+    );
+    let take = LimitedTake {
+        master: master.drain(),
+        output: output.drain(),
+        rendered,
+    };
+    harness.close().await;
+    take
+}
+
+fn lookahead_config(release_ms: f32) -> LimiterConfig {
+    LimiterConfig::builder()
+        .ceiling(Ceiling::DEFAULT)
+        .release_ms(ReleaseMs::try_from(release_ms).expect("limiter release"))
+        .lookahead_ms(LookaheadMs::try_from(LOOKAHEAD_MS).expect("limiter lookahead"))
+        .build()
+}
+
+fn zero_lookahead(config: LimiterConfig) -> LimiterConfig {
+    LimiterConfig::builder()
+        .ceiling(config.ceiling())
+        .release_ms(config.release_ms())
+        .build()
+}
+
+#[cfg(not(rtsan))]
+#[kithara::test(tokio)]
+async fn a_nonzero_lookahead_delays_the_limited_mix_by_the_reported_frames() {
+    lookahead_delays_the_mix(true).await;
+}
+
+#[kithara::test(tokio)]
+async fn nonblocking_a_nonzero_lookahead_delays_the_limited_mix_by_the_reported_frames() {
+    lookahead_delays_the_mix(false).await;
+}
+
+async fn lookahead_delays_the_mix(block_on_underrun: bool) {
+    let config = lookahead_config(50.0);
+    let latency = config.latency_frames(NonZeroU32::new(SAMPLE_RATE).expect("fixture rate"));
+    assert_eq!(latency, 441);
+    let samples: Vec<f32> = std::iter::repeat_n(0.0, LEAD_FRAMES)
+        .chain([0.5])
+        .chain(std::iter::repeat_n(0.0, 3_000))
+        .collect();
+    let reference = limited_take(block_on_underrun, zero_lookahead(config), samples.clone()).await;
+    let delayed = limited_take(block_on_underrun, config, samples).await;
+    for take in [&reference, &delayed] {
+        assert_eq!(
+            take.master, take.rendered,
+            "the master tap carries the limited mix"
+        );
+        assert_eq!(
+            take.output, take.rendered,
+            "the output tap carries what graph_out plays"
+        );
+    }
+    let [heard] = reference.sounding()[..] else {
+        panic!(
+            "the reference plays the impulse once: {:?}",
+            reference.sounding()
+        );
+    };
+    assert_eq!(
+        delayed.sounding(),
+        [heard + latency],
+        "delayed by the reported frames"
+    );
+    assert_eq!(
+        delayed.rendered[2 * (heard + latency)..2 * (heard + latency + 1)],
+        reference.rendered[2 * heard..2 * (heard + 1)],
+        "audio below the ceiling keeps its bits through the delay"
+    );
+}
+
+#[cfg(not(rtsan))]
+#[kithara::test(tokio)]
+async fn a_final_transient_leaves_the_lookahead_once_at_the_ceiling() {
+    final_transient_drains_once(true).await;
+}
+
+#[kithara::test(tokio)]
+async fn nonblocking_a_final_transient_leaves_the_lookahead_once_at_the_ceiling() {
+    final_transient_drains_once(false).await;
+}
+
+async fn final_transient_drains_once(block_on_underrun: bool) {
+    // WHY: The transient is the deck's last frame, so it leaves the delay while the
+    // limiter's input is already silent. A fast release forgets the gain it needs well
+    // within the lookahead.
+    let config = lookahead_config(1.0);
+    let latency = config.latency_frames(NonZeroU32::new(SAMPLE_RATE).expect("fixture rate"));
+    let samples: Vec<f32> = std::iter::repeat_n(0.0, LEAD_FRAMES)
+        .chain([1.96])
+        .collect();
+    let reference = limited_take(block_on_underrun, zero_lookahead(config), samples.clone()).await;
+    let delayed = limited_take(block_on_underrun, config, samples).await;
+    for take in [&reference, &delayed] {
+        assert_eq!(
+            take.master, take.rendered,
+            "the master tap carries the limited mix"
+        );
+        assert_eq!(
+            take.output, take.rendered,
+            "graph_out keeps the delayed tail"
+        );
+    }
+    let [heard] = reference.sounding()[..] else {
+        panic!(
+            "the reference plays the transient once: {:?}",
+            reference.sounding()
+        );
+    };
+    assert_eq!(
+        delayed.sounding(),
+        [heard + latency],
+        "the transient drains once"
+    );
+    let ceiling = f32::from(Ceiling::DEFAULT);
+    for sample in &delayed.rendered[2 * (heard + latency)..2 * (heard + latency + 1)] {
+        assert!(
+            sample.abs() <= ceiling,
+            "{sample} exceeds the ceiling {ceiling}"
+        );
+    }
 }
