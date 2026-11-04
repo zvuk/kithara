@@ -207,14 +207,16 @@ impl RenderPass {
 }
 
 impl FxUnit {
-    /// On, holding an effect, and not settled fully dry.
+    /// On and holding an effect.
     fn running(&self) -> bool {
-        self.on && self.effect.is_some() && !self.mix.has_settled_at(0.0)
+        self.on && self.effect.is_some()
     }
 
-    /// Mix the wet signal of the unit's effect into the frames of a stereo pair.
+    /// Run the unit's effect on the frames of a stereo pair and mix its wet
+    /// signal in. Fully dry, the frames pass through untouched while the
+    /// effect keeps running, so its state never depends on where a block ends.
     fn process(&mut self, left: &mut [f32], right: &mut [f32], wet: &mut [SampleBuffer; 2]) {
-        if !self.running() {
+        if !self.on {
             return;
         }
         let Some(effect) = &mut self.effect else {
@@ -227,36 +229,54 @@ impl FxUnit {
             [&left[..frames], &right[..frames]],
             [&mut *wet_left, &mut *wet_right],
         );
-        let dry = [&mut left[..frames], &mut right[..frames]];
-        if self.mix.has_settled() {
-            let mix = self.mix.target_value();
-            for (dry, wet) in dry.into_iter().zip([&*wet_left, &*wet_right]) {
-                kithara_dsp::scale_in_place(dry, 1.0 - mix);
-                kithara_dsp::scale_add(wet, mix, dry);
-            }
+        let (left, right) = (&mut left[..frames], &mut right[..frames]);
+        let ramped = self.ramp_mix([&mut *left, &mut *right], [&*wet_left, &*wet_right]);
+        if ramped == frames || self.mix.has_settled_at(0.0) {
             return;
         }
-        let [dry_left, dry_right] = dry;
+        let mix = self.mix.target_value();
+        for (dry, wet) in [(left, &*wet_left), (right, &*wet_right)] {
+            let (dry, wet) = (&mut dry[ramped..], &wet[ramped..]);
+            kithara_dsp::scale_in_place(dry, 1.0 - mix);
+            kithara_dsp::scale_add(wet, mix, dry);
+        }
+    }
+
+    /// Mix `wet` into `dry` while the dry/wet ramps, up to the frame it
+    /// settles on, and answer how many frames that took. The ramp settles on
+    /// the first frame close enough to its target, whatever block holds it.
+    fn ramp_mix(
+        &mut self,
+        [dry_left, dry_right]: [&mut [f32]; 2],
+        [wet_left, wet_right]: [&[f32]; 2],
+    ) -> usize {
+        let frames = dry_left.len().min(dry_right.len());
         let mut mixes = [0.0; FADE_CHUNK];
         let mut keeps = [0.0; FADE_CHUNK];
-        for (((dry_left, dry_right), wet_left), wet_right) in dry_left
-            .chunks_mut(FADE_CHUNK)
-            .zip(dry_right.chunks_mut(FADE_CHUNK))
-            .zip(wet_left.chunks(FADE_CHUNK))
-            .zip(wet_right.chunks(FADE_CHUNK))
-        {
-            let mixes = &mut mixes[..dry_left.len()];
-            let keeps = &mut keeps[..dry_left.len()];
-            for (mix, keep) in mixes.iter_mut().zip(keeps.iter_mut()) {
-                *mix = self.mix.next_smoothed();
-                *keep = 1.0 - *mix;
+        let mut start = 0;
+        while start < frames && !self.mix.has_settled() {
+            let chunk = FADE_CHUNK.min(frames - start);
+            let len = mixes
+                .iter_mut()
+                .zip(&mut keeps)
+                .take(chunk)
+                .position(|(mix, keep)| {
+                    *mix = self.mix.next_smoothed();
+                    *keep = 1.0 - *mix;
+                    self.mix.settle()
+                })
+                .map_or(chunk, |settled| settled + 1);
+            let end = start + len;
+            for (dry, wet) in [
+                (&mut dry_left[start..end], &wet_left[start..end]),
+                (&mut dry_right[start..end], &wet_right[start..end]),
+            ] {
+                kithara_dsp::multiply_in_place(dry, &keeps[..len]);
+                kithara_dsp::mul_add(wet, &mixes[..len], dry);
             }
-            for (dry, wet) in [(&mut *dry_left, wet_left), (&mut *dry_right, wet_right)] {
-                kithara_dsp::multiply_in_place(dry, keeps);
-                kithara_dsp::mul_add(wet, mixes, dry);
-            }
+            start = end;
         }
-        self.mix.settle();
+        start
     }
 }
 
@@ -383,9 +403,7 @@ mod tests {
             false
         }
 
-        fn set(&mut self, change: FxParamChange) {
-            match change {}
-        }
+        fn set(&mut self, _: FxParamChange) {}
 
         fn reset(&mut self) {}
 

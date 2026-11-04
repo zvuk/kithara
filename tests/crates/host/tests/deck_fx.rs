@@ -3,10 +3,14 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
+    dsp::param::DEFAULT_SMOOTH_SECONDS,
     effects::{DeckEffect, FxParamChange},
-    platform::sync::{Arc, Mutex},
+    platform::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    },
     play::{DeckFxChange, DeckMixSettings, FxMix, Trim},
-    queue::{QueueControl, TrackSource, Transition},
+    queue::{QueueControl, TrackSource},
     signal::SessionFrame,
     warp::WarpConfig,
 };
@@ -25,6 +29,13 @@ const ECHO: usize = 2048;
 const LEAD: usize = 4096;
 /// Frames a take renders.
 const TAKE: usize = 16_384;
+/// Frames a crossfade take renders: the first track's second, the queue's
+/// crossfade at its end, and the echo of that crossfade.
+const CROSSFADE_TAKE: usize = 49_152;
+/// The frame a partitioned take turns its unit dry, inside a callback.
+const DRY_AT: usize = LEAD + 1000 + 37;
+/// The frame it turns the unit wet again, long after the dry ramp settled.
+const WET_AT: usize = DRY_AT + 4096;
 
 /// A memoryless effect: its wet signal is `curve` of each input sample.
 #[derive(Debug)]
@@ -43,9 +54,7 @@ impl DeckEffect for Curve {
         false
     }
 
-    fn set(&mut self, change: FxParamChange) {
-        match change {}
-    }
+    fn set(&mut self, _: FxParamChange) {}
 
     fn reset(&mut self) {}
 
@@ -106,9 +115,7 @@ impl DeckEffect for Echo {
         false
     }
 
-    fn set(&mut self, change: FxParamChange) {
-        match change {}
-    }
+    fn set(&mut self, _: FxParamChange) {}
 
     fn reset(&mut self) {
         self.line.fill([0.0; 2]);
@@ -118,6 +125,39 @@ impl DeckEffect for Echo {
 
     fn tail_exhausted(&self) -> bool {
         self.quiet >= self.line.len()
+    }
+
+    fn update_sample_rate(&mut self, _: NonZeroU32) {}
+}
+
+/// Its wet signal counts the frames it has run, so a frame it missed shows in
+/// every frame after.
+#[derive(Default)]
+struct Clock(f32);
+
+impl DeckEffect for Clock {
+    fn process(&mut self, _: [&[f32]; 2], [wet_left, wet_right]: [&mut [f32]; 2]) {
+        /// One frame of count, exact in an `f32` far beyond any take.
+        const TICK: f32 = 1.0 / 65_536.0;
+
+        for (left, right) in wet_left.iter_mut().zip(wet_right) {
+            self.0 += TICK;
+            (*left, *right) = (self.0, self.0);
+        }
+    }
+
+    fn accepts(&self, _: &FxParamChange) -> bool {
+        false
+    }
+
+    fn set(&mut self, _: FxParamChange) {}
+
+    fn reset(&mut self) {
+        self.0 = 0.0;
+    }
+
+    fn tail_exhausted(&self) -> bool {
+        true
     }
 
     fn update_sample_rate(&mut self, _: NonZeroU32) {}
@@ -190,6 +230,14 @@ async fn send(harness: &OfflinePlayer, at: When<SessionFrame>, changes: Vec<Deck
         .with_queue(move |queue| queue.fx(at, changes))
         .await
         .expect("the deck takes the FX batch");
+}
+
+/// Frames a deck ramp takes to settle on its target: the product's smoothing
+/// time, and one callback more for a fader, which settles at a callback's end.
+fn ramp() -> usize {
+    let smoothing =
+        Duration::from_secs_f32(DEFAULT_SMOOTH_SECONDS).as_nanos() * u128::from(SAMPLE_RATE);
+    usize::try_from(smoothing.div_ceil(1_000_000_000)).expect("a ramp fits usize") + CALLBACK
 }
 
 /// A frame `offset` frames after `base`, as a deck command's moment.
@@ -418,8 +466,9 @@ async fn deck_fx_one_state_across_queue_crossfade() {
     );
 }
 
-/// Plays one constant, crossfades to a second, and captures what the deck
-/// sounded from its first block, `setup` sent before it plays.
+/// Plays one constant into a second through the queue's crossfade at the end
+/// of the first, and captures what the deck sounded from its first block,
+/// `setup` sent before it plays.
 async fn crossfade_take(setup: Vec<DeckFxChange>) -> Vec<f32> {
     let harness = deck(None, DeckMixSettings::default()).await;
     if !setup.is_empty() {
@@ -439,19 +488,17 @@ async fn crossfade_take(setup: Vec<DeckFxChange>) -> Vec<f32> {
                 .expect("append the incoming track")
         })
         .await;
-    let mut take = render(&harness, 2048).await;
-    harness
-        .with_queue(|queue| queue.next(Transition::Crossfade))
-        .await
-        .expect("the queue crossfades to the next track");
+    let mut take = render(&harness, LEAD).await;
+    // Once the incoming track has loaded, the queue fixes its crossfade to
+    // the first track's end, wherever the load finished.
     kithara_integration_tests::waits::wait_for_loader_done(
         harness.player(),
         next,
-        kithara::platform::time::Duration::from_secs(30),
+        Duration::from_secs(30),
     )
     .await
     .expect("the incoming track loads");
-    take.extend_from_slice(&render(&harness, 8192).await);
+    take.extend_from_slice(&render(&harness, CROSSFADE_TAKE - LEAD).await);
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;
     take
@@ -503,9 +550,7 @@ async fn deck_fx_stop_rings_out() {
 async fn deck_fx_fader_cuts_tail() {
     const PAUSE: usize = LEAD + 2000;
     const DOWN: usize = PAUSE + 1000;
-    const UP: usize = DOWN + 3000;
-    /// Frames a fader move takes to settle on its target.
-    const RAMP: usize = 2048;
+    const UP: usize = DOWN + 4000;
     const LONG: usize = ECHO * 4;
 
     let dry = take(
@@ -534,7 +579,8 @@ async fn deck_fx_fader_cuts_tail() {
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;
 
-    let closed = (DOWN + RAMP) * CHANNELS..UP * CHANNELS;
+    let ramp = ramp();
+    let closed = (DOWN + ramp) * CHANNELS..UP * CHANNELS;
     assert!(
         tail[closed.clone()].iter().any(|sample| *sample != 0.0),
         "the echo rings while the fader is down"
@@ -549,21 +595,19 @@ async fn deck_fx_fader_cuts_tail() {
         "the open fader sounds the tail",
     );
     assert_same(
-        &fx[(UP + RAMP) * CHANNELS..],
-        &tail[(UP + RAMP) * CHANNELS..],
+        &fx[(UP + ramp) * CHANNELS..],
+        &tail[(UP + ramp) * CHANNELS..],
         "the echo kept running under the closed fader",
     );
 }
 
 #[kithara::test(tokio)]
 async fn deck_fx_change_lands_on_its_frame() {
-    const CHANGE: usize = LEAD + 1000 + 37;
-
     let regular = partitioned_take(&[CALLBACK]).await;
     let irregular = partitioned_take(&[37, 64, 13, 50, 1, 63]).await;
     let unchanged = plain_take(
         assets::fixed_constant_wav_cd_half_44100(),
-        insert(0, Echo::new(ECHO)),
+        insert(0, Clock::default()),
     )
     .await;
     assert_eq!(
@@ -582,16 +626,20 @@ async fn deck_fx_change_lands_on_its_frame() {
         .zip(&unchanged)
         .position(|(changed, unchanged)| changed != unchanged)
         .map(|sample| sample / CHANNELS);
-    assert_eq!(first, Some(CHANGE), "the change takes effect on its frame");
+    assert_eq!(first, Some(DRY_AT), "the change takes effect on its frame");
+    let wet = (WET_AT + ramp()) * CHANNELS;
+    assert_same(
+        &regular[wet..],
+        &unchanged[wet..],
+        "the effect kept running while its unit was dry",
+    );
 }
 
-/// A take whose unit 0 echo turns half dry at a frame inside a block, rendered
-/// in blocks of the sizes `blocks` cycles through.
+/// A take whose unit 0 clock turns dry at a frame inside a block and wet
+/// again later, rendered in blocks of the sizes `blocks` cycles through.
 async fn partitioned_take(blocks: &[usize]) -> Vec<f32> {
-    const CHANGE: usize = LEAD + 1000 + 37;
-
     let harness = deck(None, DeckMixSettings::default()).await;
-    send(&harness, When::Next, insert(0, Echo::new(ECHO))).await;
+    send(&harness, When::Next, insert(0, Clock::default())).await;
     let harness = load_source(
         harness,
         asset_source(&assets::fixed_constant_wav_cd_half_44100()).into(),
@@ -599,15 +647,14 @@ async fn partitioned_take(blocks: &[usize]) -> Vec<f32> {
     .await;
     let base = harness.host().position();
     let mut output = render(&harness, LEAD).await;
-    send(
-        &harness,
-        at(base, CHANGE),
-        vec![DeckFxChange::Mix {
-            unit: 0,
-            value: FxMix::checked(0.5).expect("half is a dry/wet"),
-        }],
-    )
-    .await;
+    for (offset, value) in [(DRY_AT, FxMix::MIN), (WET_AT, FxMix::MAX)] {
+        send(
+            &harness,
+            at(base, offset),
+            vec![DeckFxChange::Mix { unit: 0, value }],
+        )
+        .await;
+    }
     let mut rendered = LEAD;
     for &block in blocks.iter().cycle() {
         if rendered >= TAKE {
