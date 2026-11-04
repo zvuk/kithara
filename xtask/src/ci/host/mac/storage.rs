@@ -164,18 +164,20 @@ impl<'a> HostStorage<'a> {
         self.available_sequence = RefCell::new(sequence.into_iter().collect());
     }
 
+    /// Reclaims what it can and checks the directories a job needs, but leaves
+    /// whether the job has room to the job's own gate. That gate waits for room
+    /// a neighbour still holds and reclaims build caches until it appears.
+    /// Refusing here as well was a second, impatient answer to the same
+    /// question: a job that arrived while a peer's cleanup held the lock on a
+    /// full volume was failed at once, though the peer was freeing that room.
     pub(super) fn preflight(&self) -> Result<()> {
         if let Err(error) = self.cleanup() {
-            warn!(%error, "pre-job cleanup failed; checking current host capacity");
+            warn!(%error, "pre-job cleanup failed; the job's room gate decides admission");
         }
         let free = self.free_bytes()?;
         let (pressure, volume) = self.worst_pressure()?;
-        match pressure {
-            Pressure::Reject => bail!("{} is full; new jobs stop here", volume.path.display()),
-            Pressure::Soft | Pressure::Aggressive => {
-                warn!(volume = %volume.path.display(), ?pressure, "CI volume is under pressure");
-            }
-            Pressure::Normal => {}
+        if pressure != Pressure::Normal {
+            warn!(volume = %volume.path.display(), ?pressure, "CI volume is under pressure");
         }
 
         for name in ["cache", "logs", "toolchains", "vm", "workspaces"] {
@@ -1198,7 +1200,7 @@ mod tests {
     }
 
     #[test]
-    fn preflight_uses_fresh_capacity_after_a_cleanup_error() {
+    fn preflight_checks_the_ci_directories_after_a_cleanup_error() {
         let directory = tempfile::tempdir().unwrap();
         for name in ["cache", "logs", "toolchains", "vm", "workspaces"] {
             fs::create_dir_all(directory.path().join(name)).unwrap();
@@ -1206,13 +1208,9 @@ mod tests {
         let cfg = config(directory.path());
         let process = Process::recording(directory.path(), Recording::default());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
-        // Cleanup cannot restore its soft floor, but admission has its own floor.
+        // Cleanup cannot restore its soft floor.
         storage.set_available_sequence([30, 30, 30, 30, 61]);
         storage.preflight().unwrap();
-
-        storage.set_available_sequence([0; 6]);
-        let error = storage.preflight().unwrap_err();
-        assert!(error.to_string().contains("is full"), "{error:#}");
 
         fs::remove_dir(directory.path().join("toolchains")).unwrap();
         storage.set_available_sequence([61; 4]);
@@ -1221,6 +1219,23 @@ mod tests {
             error.to_string().contains("missing CI directory"),
             "{error:#}"
         );
+    }
+
+    /// A job on a full volume waits in its own room gate for the room a
+    /// neighbour holds; preflight refusing it first answered the same question
+    /// without waiting.
+    #[test]
+    fn preflight_leaves_a_full_volume_to_the_jobs_room_gate() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["cache", "logs", "toolchains", "vm", "workspaces"] {
+            fs::create_dir_all(directory.path().join(name)).unwrap();
+        }
+        let cfg = config(directory.path());
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([0; 6]);
+
+        storage.preflight().unwrap();
     }
 
     #[cfg(unix)]

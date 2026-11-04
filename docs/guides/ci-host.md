@@ -140,9 +140,9 @@ checkout. Simulator/server work retains
 serialize through `kithara-suite`.
 
 Host-shell registrations run the installed host preflight before fetching sources.
-Critical disk pressure refuses the job before checkout or compilation can spend
-the remaining space. Provisioning installs the executable, host profile and pins
-together; the admission hook uses that installed set.
+It reclaims and reports pressure; the job's own gate, which waits and reclaims,
+decides whether it has room. Provisioning installs the executable, host profile
+and pins together; the admission hook uses that installed set.
 
 Superseded branch and merge-request child pipelines cancel interruptible checks,
 including iOS and end-to-end review suites. Main, scheduled, release, and explicit
@@ -374,9 +374,9 @@ soft floor, evicting past the cap. What its sweeps cannot show:
   that backlog.
 
 Automatic cleanup preserves service data and configuration. If safe cache
-reclamation cannot restore the free-space
-floor, cleanup reports failure and preflight refuses new jobs. Runtime deletion
-is an explicit maintenance operation, never a disk-pressure cleanup step.
+reclamation cannot restore the free-space floor, cleanup reports failure and
+the job's gate refuses new jobs. Runtime deletion is an explicit maintenance
+operation, never a disk-pressure cleanup step.
 
 Each pass also runs kache's requested collector against native-platform stores,
 using the host's size limit and an isolated local-only maintenance runtime.
