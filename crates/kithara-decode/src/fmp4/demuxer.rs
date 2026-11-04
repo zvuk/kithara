@@ -121,9 +121,9 @@ where
             }
             let frames = parse_segment_frames(&self.init, &cursor.read.buffer)?;
             let starts_late = self.seek.as_ref().is_some_and(|seek| {
-                frames.first().is_some_and(|frame| {
-                    ticks_to_duration(frame.decode_time, self.init.timescale) > seek.reach
-                })
+                frames
+                    .first()
+                    .is_some_and(|frame| self.init.time_at(frame.decode_time) > seek.reach)
             });
             if starts_late
                 && let Some(earlier) = cursor
@@ -144,9 +144,7 @@ where
                 .seek
                 .as_ref()
                 .and_then(|seek| seek.skip_to)
-                .map_or(0, |skip| {
-                    frame_at_or_before(&frames, skip, self.init.timescale)
-                });
+                .map_or(0, |skip| frame_at_or_before(&frames, skip, &self.init));
             cursor.frames = Some(DecodedFrames { frames, next_index });
             return Ok(status);
         }
@@ -242,8 +240,11 @@ where
             return Ok(DemuxOutcome::Pending(PendingReason::Retry));
         };
         frames.next_index += 1;
-        let pts = ticks_to_duration(frame.decode_time, self.init.timescale);
-        let dur = ticks_to_duration(u64::from(frame.duration), self.init.timescale);
+        let pts = self.init.time_at(frame.decode_time);
+        let dur = self
+            .init
+            .time_at(frame.decode_time.saturating_add(u64::from(frame.duration)))
+            .saturating_sub(pts);
         let data = &cursor.read.buffer[frame.offset..frame.offset + frame.size];
         Ok(DemuxOutcome::Frame(Frame {
             data,
@@ -495,22 +496,10 @@ fn compute_duration(segments: &Arc<dyn ByteMap>) -> Option<Duration> {
 /// or before `skip`: starting one frame later would drop audio the caller
 /// asked for. A `skip` past the segment's last frame keeps that last frame,
 /// leaving the cursor with something to emit rather than an empty segment.
-fn frame_at_or_before(frames: &[Fmp4Frame], skip: Duration, timescale: u32) -> usize {
-    let started_by_skip =
-        |frame: &Fmp4Frame| ticks_to_duration(frame.decode_time, timescale) <= skip;
+fn frame_at_or_before(frames: &[Fmp4Frame], skip: Duration, init: &Fmp4InitInfo) -> usize {
+    let started_by_skip = |frame: &Fmp4Frame| init.time_at(frame.decode_time) <= skip;
     frames
         .partition_point(started_by_skip)
         .saturating_sub(1)
         .min(frames.len().saturating_sub(1))
-}
-
-fn ticks_to_duration(ticks: u64, timescale: u32) -> Duration {
-    if timescale == 0 {
-        return Duration::ZERO;
-    }
-    let secs = ticks / u64::from(timescale);
-    let rem = ticks % u64::from(timescale);
-    let nanos = rem.saturating_mul(1_000_000_000) / u64::from(timescale);
-    let nanos_u32 = u32::try_from(nanos).unwrap_or(999_999_999);
-    Duration::new(secs, nanos_u32)
 }
