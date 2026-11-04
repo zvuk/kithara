@@ -2,7 +2,7 @@ use kithara_platform::time::Duration;
 use kithara_ui::{
     app::{App, Config, Frame, Ui},
     draw::{PoolStats, Pt, Rect, Rgba},
-    interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
+    interact::{Input, Key, MOUSE, Modifiers, PointerInput, PointerPhase, Scroll},
     render::{Reads, Skin, UiEvent},
     view::ViewState,
 };
@@ -69,6 +69,34 @@ impl<'config, A: App> Scenario<'config, A> {
         self.ui.input(pointer(at, PointerPhase::Move));
         self.ui.input(pointer(at, PointerPhase::Down));
         self.ui.input(pointer(at, PointerPhase::Up));
+    }
+
+    /// Two whole presses at the control's centre, inside the double-click
+    /// interval.
+    pub(crate) fn double_click(&mut self, path: &str) {
+        self.click(path);
+        self.click(path);
+    }
+
+    /// One key with nothing typed by it.
+    pub(crate) fn key(&mut self, key: Key<'_>) {
+        self.ui.input(Input::KeyPressed {
+            key,
+            modifiers: Modifiers::default(),
+            text: None,
+        });
+    }
+
+    /// Each character of `text`, typed in turn.
+    pub(crate) fn type_text(&mut self, text: &str) {
+        for (at, typed) in text.char_indices() {
+            let typed = &text[at..at + typed.len_utf8()];
+            self.ui.input(Input::KeyPressed {
+                key: Key::character(typed, None),
+                modifiers: Modifiers::default(),
+                text: Some(typed),
+            });
+        }
     }
 
     /// Drags from one point in the control's rect to another. `from` and

@@ -57,7 +57,7 @@ jobs:
   # runs on the fleet rather than on a hosted machine.
   select:
     name: Select ${{ inputs.role }} lanes
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    runs-on: [self-hosted, linux, x64, kithara-report]
     timeout-minutes: 10
     outputs:
       matrix: ${{ toJSON(fromJSON(steps.render.outputs.selection).matrix) }}

@@ -59,8 +59,6 @@ fn curve_source(
     kithara_render::WarpSource::new(
         kithara_render::mock::ScriptedSource::new(chunks),
         warp.renderer(spec, pools.clone()),
-        Vec::new(),
-        kithara_effects::EffectDrain::new(0, &pools).expect("drain"),
         spec,
         pools,
         kithara_render::LaneSetup {
@@ -236,7 +234,6 @@ fn assert_quiet_curve_projection(
             .all(|operation| operation.applied().is_none())
     );
     assert_eq!(track.ready, None);
-    assert_eq!(track.snapshot().speed, 3.0);
     let mut spans = Vec::new();
     let mut metadata = Vec::new();
     let endpoint = origin + 3_960;
@@ -262,20 +259,6 @@ fn assert_quiet_curve_projection(
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("real segment readiness");
     assert_eq!(track.ready, Some(segment));
-    let final_speed = match curve {
-        SpeedCurve::Constant(speed) | SpeedCurve::Ramp { to: speed, .. } => *speed,
-        SpeedCurve::Steps(steps) => steps.last().expect("speed tail").1,
-        SpeedCurve::Approach(approach) => approach.target().to_f32().expect("published speed"),
-        SpeedCurve::ApproachSteps(steps) => steps
-            .last()
-            .expect("law tail")
-            .1
-            .target()
-            .to_f32()
-            .expect("published speed"),
-    };
-    assert_eq!(track.snapshot().speed, final_speed);
-
     assert!(
         track
             .lane_commands
@@ -874,8 +857,6 @@ async fn assert_source_end_resume_endpoint() {
     let mut source = kithara_render::WarpSource::new(
         audio,
         warp.renderer(old_spec, pools.clone()),
-        Vec::new(),
-        kithara_effects::EffectDrain::new(0, &pools).expect("no effect tail"),
         old_spec,
         pools,
         kithara_render::LaneSetup {

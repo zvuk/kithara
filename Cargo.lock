@@ -5217,7 +5217,6 @@ dependencies = [
 name = "kithara-effects"
 version = "0.0.1-alpha5"
 dependencies = [
- "assert_no_alloc",
  "biquad",
  "bon",
  "delegate",
@@ -5229,18 +5228,15 @@ dependencies = [
  "kithara-config",
  "kithara-derive",
  "kithara-dsp",
- "kithara-effects",
  "kithara-fixture-media",
  "kithara-resampler",
  "kithara-signal",
  "kithara-test-fixtures",
- "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
  "serde",
  "thiserror 2.0.21",
- "unimock",
 ]
 
 [[package]]
@@ -6525,6 +6521,7 @@ dependencies = [
 name = "kithara-warp-tests"
 version = "0.0.1-alpha5"
 dependencies = [
+ "delegate",
  "kithara",
  "kithara-derive",
  "kithara-integration-tests",
@@ -13049,6 +13046,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "signal-hook",
+ "socket2",
  "syn 3.0.6",
  "tempfile",
  "tiny_http",

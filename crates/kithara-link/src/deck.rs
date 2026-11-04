@@ -18,7 +18,7 @@ pub trait LinkedDeck<S>: HostedDeck<S> {
     fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>;
     /// Delivers the planned Host trajectory to every active synchronized track.
     fn retime(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>);
-    /// Delivers analysis to the track owning the exact item and load.
+    /// Delivers analysis to the track owning the item.
     fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>);
     /// Whether this deck follows the Host's tempo.
     fn synced(&self) -> bool;

@@ -261,7 +261,6 @@ impl Player<TestPools> for ScriptedTrack {
             TrackCommand::Release => Command::Release,
             TrackCommand::Supersede
             | TrackCommand::GainProgram(_)
-            | TrackCommand::ConfigureEffect { .. }
             | TrackCommand::Fade { .. }
             | TrackCommand::PlayAfter { .. }
             | TrackCommand::Seat { .. } => {
@@ -617,7 +616,6 @@ pub(super) fn ordinary() -> (ScriptedTrack, Control) {
     let control = Control(Arc::new(Mutex::new(Script {
         snapshot: TrackSnapshot {
             output: kithara_play::SlotOutputSnapshot::default(),
-            effects: Vec::new(),
             item: TrackId::allocate(),
             slot: Some(Slot::new(0)),
             status: TrackStatus::Loaded,
@@ -678,14 +676,13 @@ pub(super) fn load(deck: &mut Deck, rig: &mut Rig, cue: u32) -> Seq {
     .expect("load sequence")
 }
 
-pub(super) fn answer(deck: &mut Deck, rig: &mut Rig, load: Seq, model: BeatGridModel) {
+pub(super) fn answer(deck: &mut Deck, rig: &mut Rig, model: BeatGridModel) {
     let item = deck.snapshot().as_ref().item;
     rig.run(|out| {
         LinkedPlayer::grid(
             deck,
             GridAnswer {
                 item,
-                load,
                 model: Ok(model),
             },
             out,
@@ -698,7 +695,7 @@ pub(super) fn loaded(model: BeatGridModel) -> (Deck, Control, Rig, Seq) {
     let mut rig = Rig::new(0);
     let load = load(&mut deck, &mut rig, 0);
     rig.apply(&mut deck, load, 0);
-    answer(&mut deck, &mut rig, load, model);
+    answer(&mut deck, &mut rig, model);
     control.clear();
     (deck, control, rig, load)
 }

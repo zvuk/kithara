@@ -19,7 +19,7 @@ pub trait LinkedPlayer<S>: Player<S> {
     /// lanes on Next, and withdrawing and replanning any waiting start.
     fn retime(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>);
 
-    /// Accepts analysis for the current load only: resumes grid waits, applies
+    /// Accepts analysis for the current item only: resumes grid waits, applies
     /// silent refinements immediately, and corrects sounding phase without a jump.
     fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>);
 
@@ -127,7 +127,6 @@ pub struct Linked<P> {
     pub(super) grid: Option<BeatGridModel>,
     pub(super) host: TempoTrajectory,
     pub(crate) mode: SyncMode,
-    pub(super) load: Option<Seq>,
     pub(super) waiting: Option<Waiting>,
     pub(super) correction: Option<(Seq, RunningCorrection)>,
     pub(super) alignment: Option<bool>,
@@ -136,7 +135,17 @@ pub struct Linked<P> {
     pub(super) start_caller: Option<Seq>,
     pub(super) withdrawn: Vec<Seq>,
     pub(super) retimes: Vec<(SessionFrame, Seq)>,
-    pub(super) cue: Option<Position>,
+    pub(super) cue: Option<Cue>,
+}
+
+/// A silent entry waiting for its grid, and how the grid places it.
+#[derive(Clone, Copy)]
+pub(super) enum Cue {
+    /// A position the grid covers stays; one before the grid moves to the
+    /// first beat at or after it.
+    Covered(Position),
+    /// The position moves to the first beat at or after it.
+    Beat(Position),
 }
 
 #[derive(Clone, Copy)]
@@ -177,7 +186,6 @@ impl<P> Linked<P> {
             grid: None,
             host,
             mode: SyncMode::Off,
-            load: None,
             waiting: None,
             correction: None,
             alignment: None,

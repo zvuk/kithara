@@ -5,18 +5,20 @@ use kithara::{
         eq::{EqBandConfig, generate_log_spaced_bands},
     },
     host::{DeckId, HostOwned},
+    link::LinkedHostCommand,
     platform::CancelToken,
     play::{DeckMixerConfig, PlayError, ResourcePrep},
     queue::{QueueConfig, QueueError, Transition},
 };
+use kithara_config::Configure;
 use tracing::{debug, error};
 
 use crate::{
     config::AppConfig,
     engine::{DeckCmd, DeckSnapshot},
     mix::{MixState, MixStrip},
-    pools::{AppHost, AppQueue, AppQueueControl},
-    state::StateController,
+    pools::{self, AppHost, AppQueue, AppQueueControl},
+    state::{GridPost, StateController},
 };
 
 /// EQ topology shared by every deck and its player graph.
@@ -77,6 +79,11 @@ impl TempoPercent {
     pub(crate) fn speed(self) -> f32 {
         1.0 + self.0 / 100.0
     }
+
+    /// The tempo of a track playing at `speed`.
+    pub(crate) fn at_speed(speed: f32) -> Self {
+        Self::from((speed - 1.0) * 100.0)
+    }
 }
 
 /// The gain halfway between two bands, for the four-to-three fold where two
@@ -94,6 +101,7 @@ pub struct DeckRecord {
     strip: MixStrip,
     eq_bands: Vec<GainDb>,
     tempo: TempoPercent,
+    synced: bool,
 }
 
 impl DeckRecord {
@@ -106,7 +114,7 @@ impl DeckRecord {
         strip: MixStrip,
         config: &AppConfig,
         host: &mut AppHost,
-        controller: impl FnOnce(&HostOwned<AppQueue>, &CancelToken) -> StateController,
+        controller: impl FnOnce(&HostOwned<AppQueue>, &CancelToken, GridPost) -> StateController,
     ) -> Result<Self, PlayError> {
         let cancel = config.shutdown.child();
 
@@ -116,7 +124,7 @@ impl DeckRecord {
             .cancel(cancel.child())
             .build();
 
-        let mut queue_config = QueueConfig::builder()
+        let mut queue_config = QueueConfig::with_factory(pools::factory(host.settings()))
             .prep(prep)
             .store(config.store.clone())
             .cancel(cancel.clone())
@@ -130,7 +138,8 @@ impl DeckRecord {
         })?;
 
         let queue = host.insert(AppQueue::new(queue_config))?;
-        let controller = controller(&queue, &cancel);
+        let grids = GridPost::new(queue.id(), host.poster());
+        let controller = controller(&queue, &cancel, grids);
         let eq_bands = vec![GainDb::default(); queue.eq_band_count()];
 
         Ok(Self {
@@ -141,6 +150,7 @@ impl DeckRecord {
             strip,
             eq_bands,
             tempo: TempoPercent::DEFAULT,
+            synced: false,
         })
     }
 
@@ -165,47 +175,18 @@ impl DeckRecord {
                 self.strip,
                 self.eq_bands.clone(),
                 self.tempo,
+                self.synced,
                 state,
             )
         })
     }
 
-    pub(crate) fn apply(&mut self, cmd: DeckCmd, eq_mode: EqMode) {
-        let queue = self.queue();
-
-        match cmd {
-            DeckCmd::TogglePlay if queue.is_playing() => queue.pause(),
-            DeckCmd::TogglePlay => queue.play(),
-            DeckCmd::Pause => queue.pause(),
-            DeckCmd::Next => {
-                if let Err(error) = queue.next(Transition::Crossfade) {
-                    error!(%error, "advance to next track failed");
-                }
-            }
-            DeckCmd::Prev => {
-                if let Err(error) = queue.previous(Transition::Crossfade) {
-                    error!(%error, "return to previous track failed");
-                }
-            }
-            DeckCmd::SeekFraction(fraction) => self.seek(fraction),
-            DeckCmd::SetEqGain { layout, band, gain } if layout == eq_mode => {
-                self.set_eq_gain(band, gain);
-            }
-            DeckCmd::SetEqGain { layout, band, .. } => {
-                debug!(
-                    ?layout,
-                    ?eq_mode,
-                    band,
-                    "EQ gain for a replaced band layout rejected"
-                );
-            }
-            DeckCmd::RemoveTrack(track) => {
-                if let Err(e) = queue.remove(track) {
-                    error!(?track, error = %e, "remove failed");
-                }
-            }
-            DeckCmd::SetTempo(tempo) => self.set_tempo(tempo),
-            DeckCmd::SetQuality(variant) => self.set_quality(variant),
+    /// Keeps the SYNC state the host accepted. Turned off, the deck takes the
+    /// speed its track plays at as its tempo.
+    fn sync_landed(&mut self, on: bool) {
+        self.synced = on;
+        if !on {
+            self.set_tempo(TempoPercent::at_speed(self.queue().default_rate()));
         }
     }
 
@@ -321,7 +302,7 @@ impl DeckSet {
     pub(crate) fn new(
         config: &AppConfig,
         mut host: AppHost,
-        mut controller: impl FnMut(&HostOwned<AppQueue>, &CancelToken) -> StateController,
+        mut controller: impl FnMut(&HostOwned<AppQueue>, &CancelToken, GridPost) -> StateController,
     ) -> Result<Self, PlayError> {
         let count = Self::LETTERS.len();
 
@@ -391,8 +372,58 @@ impl DeckSet {
         self.records.iter().find(|record| record.id() == id)
     }
 
-    pub(crate) fn record_mut(&mut self, id: DeckId) -> Option<&mut DeckRecord> {
-        self.records.iter_mut().find(|record| record.id() == id)
+    /// Applies `cmd` to deck `id`.
+    pub(crate) fn apply(&mut self, id: DeckId, cmd: DeckCmd, eq_mode: EqMode) {
+        let Some(record) = self.records.iter_mut().find(|record| record.id() == id) else {
+            return;
+        };
+        let queue = record.queue();
+
+        match cmd {
+            DeckCmd::TogglePlay if queue.is_playing() => queue.pause(),
+            DeckCmd::TogglePlay => queue.play(),
+            DeckCmd::Pause => queue.pause(),
+            DeckCmd::Next => {
+                if let Err(error) = queue.next(Transition::Crossfade) {
+                    error!(%error, "advance to next track failed");
+                }
+            }
+            DeckCmd::Prev => {
+                if let Err(error) = queue.previous(Transition::Crossfade) {
+                    error!(%error, "return to previous track failed");
+                }
+            }
+            DeckCmd::SeekFraction(fraction) => record.seek(fraction),
+            DeckCmd::SetEqGain { layout, band, gain } if layout == eq_mode => {
+                record.set_eq_gain(band, gain);
+            }
+            DeckCmd::SetEqGain { layout, band, .. } => {
+                debug!(
+                    ?layout,
+                    ?eq_mode,
+                    band,
+                    "EQ gain for a replaced band layout rejected"
+                );
+            }
+            DeckCmd::RemoveTrack(track) => {
+                if let Err(e) = queue.remove(track) {
+                    error!(?track, error = %e, "remove failed");
+                }
+            }
+            DeckCmd::SetTempo(tempo) => record.set_tempo(tempo),
+            DeckCmd::SetQuality(variant) => record.set_quality(variant),
+            DeckCmd::ToggleSync => Self::toggle_sync(&self.host, record),
+        }
+    }
+
+    /// Waits for the host's answer; the deck keeps the change only once accepted.
+    fn toggle_sync(host: &AppHost, record: &mut DeckRecord) {
+        let deck = record.id();
+        let on = !record.synced;
+        match host.ask(LinkedHostCommand::Sync { deck, on }) {
+            Ok(()) => record.sync_landed(on),
+            Err(error) => error!(%deck, on, %error, "sync refused"),
+        }
     }
 
     /// Move the DJ crossfader.
@@ -502,10 +533,10 @@ mod tests {
 
     fn open_deck_set(shutdown: &CancelToken) -> DeckSet {
         let config = fixtures::app_config(shutdown, fixtures::memory_store());
-        let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
+        let host = pools::host(HostConfig::offline(config.worker.pools().clone()).build())
             .expect("test host");
 
-        DeckSet::new(&config, host, |queue, cancel| {
+        DeckSet::new(&config, host, |queue, cancel, _grids| {
             let state = Arc::new(Mutex::new(UiState::new(queue.control())));
             controller_on(queue.control().clone(), cancel.child(), state)
         })
@@ -527,6 +558,12 @@ mod tests {
         assert!((speed(0.0) - 1.0).abs() < f32::EPSILON);
         assert!((speed(TempoPercent::MAX.0) - 1.5).abs() < 1e-6);
         assert!((speed(TempoPercent::MIN.0) - 0.5).abs() < 1e-6);
+    }
+
+    #[kithara::test]
+    fn a_played_speed_is_kept_as_its_tempo() {
+        let played = 124.0 / 120.0;
+        assert!((TempoPercent::at_speed(played).speed() - played).abs() < 1e-6);
     }
 
     #[kithara::test]

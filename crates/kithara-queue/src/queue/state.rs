@@ -19,6 +19,16 @@ use crate::{QueueConfig, QueueEvent, loader::Loader, navigation::NavigationState
 /// Cloneable command capability and the queue's published state.
 /// Commands answer after the owner accepts and sends them; executor effects
 /// enter the published state on their receipts.
+///
+/// Effects belong to the deck, so no control addresses an effect of one item:
+/// ```compile_fail
+/// fn bind<S>(queue: &kithara_queue::QueueControl<S>)
+/// where
+///     S: kithara_bufpool::HasPool<u8> + Send + Sync + 'static,
+/// {
+///     let _ = queue.eq_band(0, 0);
+/// }
+/// ```
 #[derive_where::derive_where(Clone)]
 pub struct QueueControl<S>
 where
@@ -530,7 +540,7 @@ pub(crate) mod tests {
             QueueCommand::Append {
                 position: Position::ZERO,
                 id,
-                source: "/kithara/missing-track.wav".into(),
+                source: concat!(env!("CARGO_MANIFEST_DIR"), "/missing-track.wav").into(),
             },
         )
         .expect("an open queue appends");
@@ -757,7 +767,7 @@ pub(crate) mod tests {
             QueueCommand::Append {
                 position: Position::ZERO,
                 id,
-                source: "/kithara/missing-track.wav".into(),
+                source: concat!(env!("CARGO_MANIFEST_DIR"), "/missing-track.wav").into(),
             },
         )
         .expect("append transition fixture");
@@ -787,7 +797,7 @@ pub(crate) mod tests {
             QueueCommand::Append {
                 position: Position::ZERO,
                 id: other,
-                source: "/kithara/other-missing-track.wav".into(),
+                source: concat!(env!("CARGO_MANIFEST_DIR"), "/other-missing-track.wav").into(),
             },
         )
         .expect("append unrelated track");

@@ -60,12 +60,6 @@ impl<S> Player<S> for PlayerImpl<S> {
             | TrackCommand::PlayAfter { .. }
             | TrackCommand::Supersede) => self.apply_transport(command, out),
             TrackCommand::Configure(change, at) => self.configure(change, at, out),
-            TrackCommand::ConfigureEffect {
-                lane,
-                target,
-                change,
-                at,
-            } => self.configure_effect(lane, target, change, at, out),
             TrackCommand::SetSpeed { speed, at } => self.set_speed(speed, at, out),
             TrackCommand::Release => self.release_track(out),
             TrackCommand::Seat { slot, at } => self.seat_at(slot, at, out),
@@ -148,11 +142,12 @@ impl<S> Player<S> for PlayerImpl<S> {
     fn snapshot(&self) -> TrackSnapshot {
         TrackSnapshot {
             output: self.output,
-            effects: self.effects.snapshot(self.lane_id),
             item: self.item,
             slot: self.slot,
             status: self.status,
-            speed: self.settings.config().speed(),
+            speed: self
+                .consumed_speed()
+                .unwrap_or_else(|_| self.settings.config().speed()),
             position: self.position,
             duration: self.duration,
             abr: self.abr.clone(),

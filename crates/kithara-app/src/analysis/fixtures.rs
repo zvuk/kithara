@@ -30,6 +30,7 @@ use ::kithara::{
     queue::QueueConfig,
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
 };
+use kithara_config::Configure;
 use kithara_test_fixtures::{asset::Asset, assets};
 use kithara_test_utils::{kithara, off_thread::OffThread};
 use url::Url;
@@ -42,7 +43,7 @@ use crate::{
         AppWorker, Pools, PoolsSection,
     },
     sources::build_resource_config,
-    state::UiState,
+    state::{GridPost, UiState},
     wave_cache::{AnalysisPersistence, AnalysisTarget, persistence::AnalysisPersistenceConfig},
     waveform::TrackAnalysis,
 };
@@ -155,12 +156,26 @@ pub(crate) fn revision_held(rx: &watch::Receiver<Option<TrackArtifacts>>) -> Opt
 pub(crate) fn queue() -> (AppHost, AppQueueControl) {
     let worker = AppWorker::new(PlayWorkerConfig::builder(test_pools()).build());
     let mut host =
-        AppHost::new(HostConfig::offline(worker.pools().clone()).build()).expect("test host");
+        pools::host(HostConfig::offline(worker.pools().clone()).build()).expect("test host");
     let prep = ResourcePrep::builder().worker(worker).build();
-    let queue = AppQueue::new(QueueConfig::builder().prep(prep).build());
+    let queue = AppQueue::new(
+        QueueConfig::with_factory(pools::factory(host.settings()))
+            .prep(prep)
+            .build(),
+    );
     let queue = host.insert(queue).expect("host accepts queue");
     let control = queue.control().clone();
     (host, control)
+}
+
+/// Where a deck under test sends its grid answers: the host of `queue_off`.
+pub(crate) async fn grid_post(host: &OffThread<(AppHost, AppQueueControl)>) -> GridPost {
+    let poster = host.call(|(host, _)| host.poster()).await;
+    let deck = host
+        .call(|(host, _)| host.deck_id())
+        .await
+        .expect("the host allocates a deck id");
+    GridPost::new(deck, poster)
 }
 
 pub(crate) async fn queue_off() -> (OffThread<(AppHost, AppQueueControl)>, AppQueueControl) {
@@ -365,6 +380,16 @@ pub(crate) fn rhythm_b_mp3() -> String {
 }
 
 #[kithara::fixture]
+pub(crate) fn rhythm_a_wav() -> String {
+    asset_url(&assets::rhythm_wav_deck_a_120bpm_48k())
+}
+
+#[kithara::fixture]
+pub(crate) fn rhythm_b_wav() -> String {
+    asset_url(&assets::rhythm_wav_deck_b_120bpm_48k())
+}
+
+#[kithara::fixture]
 pub(crate) fn short_wav() -> String {
     asset_url(&assets::sine_wav_a440_2s())
 }
@@ -436,6 +461,30 @@ pub(crate) async fn serve_subscribe(
     let sender = tx.clone();
     task::spawn(serve_requests(requests, sender));
     tx
+}
+
+/// Answers every subscription for `expected` with `grid`, the way a track
+/// opened with a supplied grid publishes it.
+pub(crate) async fn serve_grid(
+    requests: mpsc::Receiver<Request>,
+    expected: TrackId,
+    grid: BeatGridModel,
+) -> watch::Sender<Option<TrackArtifacts>> {
+    let tx = serve_subscribe(requests, expected).await;
+    tx.send_replace(Some(supplied(grid)));
+    tx
+}
+
+/// The publication of a track opened with `grid` supplied.
+pub(crate) fn supplied(grid: BeatGridModel) -> TrackArtifacts {
+    TrackArtifacts::new(
+        None,
+        super::supply::Prepared {
+            beat_grid: super::supply::Supply::Ready(Arc::new(grid)),
+            waveform: super::supply::Supply::Missing,
+        },
+        false,
+    )
 }
 
 #[kithara::hang_watchdog(ctx = String)]

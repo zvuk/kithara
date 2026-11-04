@@ -316,6 +316,8 @@ pub enum UiDocError {
     InvalidContextScope { origin: SourceUri, path: String },
     #[error("{origin}: container at {path} declares write but has no id to address it by")]
     UnaddressedSurface { origin: SourceUri, path: String },
+    #[error("{origin}: container at {path} declares entry, which needs a write and no reset")]
+    UnwritableEntry { origin: SourceUri, path: String },
     #[error(
         "{origin}: Object at {path} turns or scales a {child}, which is laid out as several boxes and has no single one to turn about"
     )]

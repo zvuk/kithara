@@ -1,7 +1,6 @@
 //! A queue is a deck: one owner drives its tracks through commands and receipts.
 
 mod command;
-mod effect;
 mod gain;
 mod handle;
 mod hosted;
@@ -20,7 +19,6 @@ pub(crate) use command::QueuePostbox;
 
 pub use self::{
     command::QueueCommand,
-    effect::EffectControl,
     state::{Queue, QueueControl},
     types::{PlaybackView, Transition},
     view::QueueSnapshot,

@@ -27,5 +27,5 @@ pub(crate) use interpolate::quadratic;
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use portable as platform;
 pub use simd::sanitize;
-pub(crate) use simd::{div, mul_add, ramp};
+pub(crate) use simd::{div, mul_add, ramp, scale_in_place};
 pub(crate) use strided::{gather, scatter};

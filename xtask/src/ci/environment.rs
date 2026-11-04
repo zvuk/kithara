@@ -96,6 +96,20 @@ fn cache_lease(cache_root: &FsPath) -> Result<PathBuf> {
     Ok(cache_root.join(".kithara-ci-leases").join(job_owner()?))
 }
 
+fn kache_local_root(shared: &FsPath, var: &dyn Fn(&str) -> Option<OsString>) -> Result<PathBuf> {
+    if let Some(root) = var(consts::KACHE_LOCAL_ROOT_ENV) {
+        let root = PathBuf::from(root);
+        anyhow::ensure!(root.is_absolute(), "compiler-cache root must be absolute");
+        return Ok(root);
+    }
+    anyhow::ensure!(
+        !ci_in(var),
+        "CI executor must configure {} on its local filesystem",
+        consts::KACHE_LOCAL_ROOT_ENV
+    );
+    Ok(shared.to_path_buf())
+}
+
 /// Where the compiler cache keeps its local store, and how large it may grow.
 struct SccachePaths {
     directory: PathBuf,
@@ -103,18 +117,11 @@ struct SccachePaths {
 }
 
 impl SccachePaths {
-    /// The cache a job compiles through, or none: a Windows target builds
-    /// without it, and so does a cache group that does not use it.
-    fn for_job(
-        target_is_windows: bool,
-        cache_root: &FsPath,
-        config: &CiConfig,
-        cache_group: CacheGroup,
-    ) -> Option<Self> {
-        (!target_is_windows && cache_group.uses_sccache()).then(|| Self {
+    fn for_job(cache_root: &FsPath, config: &CiConfig) -> Self {
+        Self {
             directory: cache_root.join("sccache"),
             cache_size: config.host.sccache_size.clone(),
-        })
+        }
     }
 }
 
@@ -128,7 +135,8 @@ pub(crate) struct CiEnvironment {
     pub(crate) temp: PathBuf,
     leases: [PathBuf; 2],
     /// The job's own kache, its directory removed when the job ends.
-    kache: Option<KacheJob>,
+    #[field(get, vis = "pub(crate)")]
+    kache: KacheJob,
     /// Held for the life of the job so a reclaim — this job's own or a sibling
     /// job's — leaves the directory this one builds into alone. The ceiling
     /// still charges its bytes; the claim only says they cannot be taken back.
@@ -167,7 +175,7 @@ impl CiEnvironment {
             ensure_room_for_a_job(config, volume)?;
         }
 
-        let sccache = SccachePaths::for_job(cfg!(windows), &cache_root, config, cache_group);
+        let sccache = SccachePaths::for_job(&cache_root, config);
         let gradle_home = cache_root.join("gradle");
         let fixture_cache = shared_root.join(trust.as_str()).join("fixtures");
         let leases = [cache_lease(&cache_root)?, cache_lease(&fixture_cache)?];
@@ -186,11 +194,8 @@ impl CiEnvironment {
             fs::create_dir_all(directory)
                 .with_context(|| format!("creating CI directory {}", directory.display()))?;
         }
-        if let Some(sccache) = &sccache {
-            fs::create_dir_all(&sccache.directory).with_context(|| {
-                format!("creating CI directory {}", sccache.directory.display())
-            })?;
-        }
+        fs::create_dir_all(&sccache.directory)
+            .with_context(|| format!("creating CI directory {}", sccache.directory.display()))?;
         for lease in &leases {
             let lease_root = lease
                 .parent()
@@ -248,28 +253,27 @@ impl CiEnvironment {
             "RUSTUP_HOME",
             env::var_os("RUSTUP_HOME").unwrap_or_else(|| home.join(".rustup").into_os_string()),
         );
-        let kache = match &sccache {
-            Some(sccache) => {
-                insert_sccache_environment(
-                    &mut vars,
-                    sccache,
-                    &project_root,
-                    ctx.config.tools.program("sccache"),
-                );
-                let kache = KacheJob::prepare(
-                    temp.join("kache").join(job_owner()?),
-                    Some(LocalStore {
-                        directory: &cache_root.join("kache"),
-                        max_size: &sccache.cache_size,
-                    }),
-                )?;
-                for (name, value) in kache.environment(&ctx.config.tools) {
-                    insert(&mut vars, name, value);
-                }
-                Some(kache)
-            }
-            None => None,
-        };
+        insert_sccache_environment(
+            &mut vars,
+            &sccache,
+            &project_root,
+            ctx.config.tools.program("sccache"),
+        );
+        let kache_root = kache_local_root(&shared_root, &process_var)?;
+        let kache_store = kache_root
+            .join(trust.as_str())
+            .join(&platform)
+            .join("kache");
+        let kache = KacheJob::prepare(
+            &temp.join("kache").join(job_owner()?),
+            Some(LocalStore {
+                directory: &kache_store,
+                max_size: &sccache.cache_size,
+            }),
+        )?;
+        for (name, value) in kache.environment(&ctx.config.tools) {
+            insert(&mut vars, name, value);
+        }
         insert(&mut vars, "SWIFTPM_CACHE_PATH", &swiftpm_cache);
         insert(&mut vars, "TMPDIR", &temp);
         insert(
@@ -305,11 +309,6 @@ impl CiEnvironment {
 
     pub(crate) fn vars(&self) -> BTreeMap<OsString, OsString> {
         self.vars.clone()
-    }
-
-    /// The kache the job compiles through, when it compiles through one.
-    pub(crate) const fn kache(&self) -> Option<&KacheJob> {
-        self.kache.as_ref()
     }
 }
 
@@ -655,23 +654,22 @@ mod tests {
     }
 
     #[test]
-    fn the_windows_cache_group_compiles_without_sccache() {
+    fn the_windows_cache_group_uses_the_compiler_cache() {
         let config = super::super::config::fixture();
 
-        let paths =
-            SccachePaths::for_job(false, FsPath::new("/cache"), &config, CacheGroup::Windows);
-
-        assert!(paths.is_none());
+        let root = FsPath::new("C:/cache/review/windows-x86_64");
+        let paths = SccachePaths::for_job(root, &config);
+        assert_eq!(paths.directory, root.join("sccache"));
+        assert_eq!(paths.cache_size, config.host.sccache_size);
     }
 
     #[test]
-    fn windows_target_disables_sccache_independently_of_lane() {
+    fn windows_targets_use_the_compiler_cache_for_every_lane() {
         let config = super::super::config::fixture();
         let root = FsPath::new("/cache");
 
-        let paths = SccachePaths::for_job(true, root, &config, CacheGroup::Macos);
-
-        assert!(paths.is_none());
+        let paths = SccachePaths::for_job(root, &config);
+        assert_eq!(paths.directory, root.join("sccache"));
     }
 
     #[test]
@@ -686,8 +684,7 @@ mod tests {
         let config = super::super::config::fixture();
         let root = FsPath::new("/cache/review/macos-aarch64");
 
-        let paths = SccachePaths::for_job(false, root, &config, CacheGroup::Macos)
-            .expect("a macOS job compiles through the cache");
+        let paths = SccachePaths::for_job(root, &config);
 
         assert_eq!(paths.directory, root.join("sccache"));
         assert_eq!(paths.cache_size, config.host.sccache_size);
@@ -797,9 +794,8 @@ mod tests {
                     "{name} is the executor's to name, or nobody's"
                 );
             }
-            let cache_root =
-                root.join("review")
-                    .join(format!("{}-{}", env::consts::OS, env::consts::ARCH));
+            let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
+            let cache_root = root.join("review").join(platform);
             let kache_config = compiles_through_kache(&vars, &ctx, &config, &cache_root);
             assert_eq!(
                 vars.get(OsStr::new("SCCACHE_DIR")).map(OsString::as_os_str),
@@ -877,6 +873,7 @@ mod tests {
             .env(consts::LANE_PREPARED, "1")
             .env(consts::CACHE_ROOT, directory.path())
             .env("KITHARA_CI_CACHE_ROOT", directory.path())
+            .env(consts::KACHE_LOCAL_ROOT_ENV, directory.path())
             .env("KITHARA_CACHE_TRUST", "review")
             .env("SCCACHE_BUCKET", "kithara-review")
             .env("SCCACHE_ENDPOINT", "http://kithara-ci-cache:9000")

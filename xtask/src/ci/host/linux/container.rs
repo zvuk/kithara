@@ -154,6 +154,7 @@ impl Container<'_> {
         environment.extend([
             // Containers own CPU admission; their kache store is shared.
             "KACHE_SCHEDULER=0".to_owned(),
+            format!("{}={}", consts::KACHE_LOCAL_ROOT_ENV, consts::KACHE_MOUNT),
             format!("CARGO_HOME={}", consts::CARGO_HOME_MOUNT),
             format!("CARGO_TARGET_DIR={}", root.display()),
             format!("{}={}", consts::BUILD_SLOTS_ENV, consts::BUILD_SLOTS_MOUNT),

@@ -20,163 +20,112 @@ pub(super) const BLOCK_FRAMES: usize = 512;
 const BLOCKS: usize = 20;
 pub(crate) const ROOMY_CAPACITY: usize = 65_536;
 
-#[cfg(not(rtsan))]
 #[kithara::test(tokio)]
-async fn public_effect_config_controls_reach_only_the_bound_track_at_the_due_frame() {
-    effect_controls_reach_the_bound_track(true).await;
-}
+async fn deck_eq_processes_the_crossfade_sum() {
+    use std::num::NonZeroU32;
 
-#[kithara::test(tokio)]
-async fn nonblocking_effect_config_controls_reach_only_the_bound_track_at_the_due_frame() {
-    effect_controls_reach_the_bound_track(false).await;
-}
-
-async fn effect_controls_reach_the_bound_track(block_on_underrun: bool) {
-    use std::num::{NonZeroU32, NonZeroUsize};
-
-    use kithara::{
-        assets::AssetStore,
-        effects::{
-            AudioEffect, EffectConfig, GainDb,
-            eq::{EqBandConfig, EqBandConfigChange, EqBandConfigControl, EqConfig, EqEffect},
-        },
-        play::{ResourceConfig, ResourceSrc},
-        signal::{AudioChunk, AudioChunkInfo, AudioSpec, SessionFrame},
-        warp::WarpConfig,
+    use kithara::effects::{
+        GainDb,
+        eq::{EqConfig, StereoEq, generate_log_spaced_bands},
     };
-    use kithara_command::When;
-    use kithara_config::Configure;
 
-    let options = OfflinePlayerOptions::builder()
-        .block_on_underrun(block_on_underrun)
-        .output_block_frames(NonZeroU32::new(64).expect("nonzero callback size"))
-        .warp(
-            WarpConfig::builder()
-                .render_quantum_frames(NonZeroUsize::new(64).expect("nonzero quantum"))
-                .build(),
-        )
-        .build();
-    let harness = OfflinePlayer::with_sample_rate(options, SAMPLE_RATE).await;
-    let config = ResourceConfig::for_src(
-        ResourceSrc::parse(asset_source(&assets::fixed_constant_wav_cd_half_44100()))
-            .expect("fixture URI parses"),
+    let flat = crossfade_take(None).await;
+    let cut = crossfade_take(Some(GainDb::MIN)).await;
+    let crossfade = flat.iter().any(|sample| *sample > 0.2 && *sample < 0.5)
+        && flat.last().map(|sample| sample.to_bits()) == Some(0.2_f32.to_bits());
+    assert!(crossfade, "the take spans the whole queue crossfade");
+
+    let pools = kithara_test_utils::bufpool::pools();
+    let config = EqConfig::builder(pools).build();
+    let rate = NonZeroU32::new(SAMPLE_RATE).expect("nonzero fixture rate");
+    let layout = kithara::effects::eq::EqLayout::new(
+        &config,
+        &generate_log_spaced_bands(DECK_EQ_BANDS),
+        rate,
     )
-    .store(AssetStore::builder(harness.worker().pools().clone()).build())
-    .preload_chunks(NonZeroUsize::MIN)
-    .audio_buffer_chunks(NonZeroUsize::new(2).expect("nonzero buffer chunks"))
-    .effects(vec![EffectConfig::Equalizer(vec![EqBandConfig::default()])])
-    .build();
-    let harness = load_source(harness, TrackSource::Config(Box::new(config))).await;
-    let _ = render_effect_window(&harness, BLOCK_FRAMES).await;
-    let warmed = render_effect_window(&harness, 4096).await;
-    assert!(
-        warmed[warmed.len() - 128..]
-            .iter()
-            .all(|sample| *sample == 0.5)
-    );
-    let handle = harness
-        .with_queue(|queue| queue.eq_band(0, 0))
-        .await
-        .expect("configured track has an EQ control");
-    assert_eq!(handle.gain_db(), GainDb::DEFAULT);
-    let start = harness.host().position();
-    let target = start + 512 + 17;
-    harness
-        .run(&handle, move |effect| {
-            effect.configure(
-                EqBandConfigChange::GainDb(GainDb::MIN),
-                When::At(SessionFrame::new(
-                    i64::try_from(target).expect("target fits session frame"),
-                )),
-            )
-        })
-        .await
-        .expect("a frame beyond the prepared two-packet lead is reachable");
-    let late = harness
-        .run(&handle, move |effect| {
-            effect.configure(
-                EqBandConfigChange::GainDb(GainDb::MAX),
-                When::At(SessionFrame::new(
-                    i64::try_from(start).expect("start fits session frame"),
-                )),
-            )
-        })
-        .await;
-    assert!(matches!(
-        late,
-        Err(kithara::queue::QueueError::Play(PlayError::Late))
-    ));
-    let mut tap = harness
-        .host()
-        .attach_tap(Tap::Master, ROOMY_CAPACITY)
-        .await
-        .expect("master tap attaches");
-    let take = render_effect_window(&harness, 4 * BLOCK_FRAMES).await;
-    assert_eq!(tap.drain(), take);
-    assert_eq!(tap.drops(), 0);
-    let cut = usize::try_from(target - start).expect("capture offset fits usize") * 2;
-    assert!(take[..cut].iter().all(|sample| *sample == 0.5));
-    let region = harness.worker().pools().clone();
-    let spec = AudioSpec::new(
-        2,
-        NonZeroU32::new(SAMPLE_RATE).expect("nonzero fixture rate"),
-    );
-    let make_chunk = |samples: &[f32]| {
-        AudioChunk::new(
-            AudioChunkInfo {
-                spec,
-                frames: u32::try_from(samples.len() / 2).expect("fixture frames fit u32"),
-                ..Default::default()
-            },
-            kithara_integration_tests::bufpool_ext::sample_buffer(&region, samples),
-        )
-    };
-    let mut reference = EqEffect::new(
-        &EqConfig::builder(region.clone()).build(),
-        vec![EqBandConfig::default()],
-        SAMPLE_RATE,
-        2,
-    )
-    .expect("pool fits the reference EQ");
-    let _ = reference.process(make_chunk(&take[..cut]));
+    .expect("pool fits the reference layout");
+    let mut reference = StereoEq::with_layout(&config, rate, Box::new(layout));
     reference.set_gain(0, GainDb::MIN);
-    let expected = reference
-        .process(make_chunk(&vec![0.5; take.len() - cut]))
-        .expect("reference EQ emits PCM");
-    assert!(expected.samples.iter().any(|sample| *sample < 0.5));
+    let mut expected = Vec::with_capacity(flat.len());
+    for block in flat.chunks(64 * 2) {
+        let (mut left, mut right): (Vec<f32>, Vec<f32>) =
+            block.chunks(2).map(|frame| (frame[0], frame[1])).unzip();
+        reference.process(&mut left, &mut right);
+        expected.extend(left.into_iter().zip(right).flat_map(|(l, r)| [l, r]));
+    }
+    assert_ne!(expected, flat, "the band cut changes the crossfade");
     assert_eq!(
-        take[cut..]
-            .iter()
+        cut.iter()
             .map(|sample| sample.to_bits())
             .collect::<Vec<_>>(),
         expected
-            .samples
             .iter()
             .map(|sample| sample.to_bits())
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
+        "one deck EQ state processes the gained sum of both faded slots"
     );
-    assert_eq!(handle.gain_db(), GainDb::MIN);
-    harness
-        .run(&handle, |effect| effect.set_gain_db(GainDb::DEFAULT))
-        .await
-        .expect("unity target is admitted");
-    let _ = render_effect_window(&harness, 1024).await;
-    assert_eq!(handle.gain_db(), GainDb::DEFAULT);
-    harness
-        .with_queue(kithara::queue::QueueControl::clear)
-        .await
-        .expect("queue clears");
-    let _ = render_effect_window(&harness, 1024).await;
-    let stale = harness
-        .run(&handle, |effect| effect.set_gain_db(GainDb::MIN))
+}
+
+/// Bands of the deck's default equalizer layout.
+const DECK_EQ_BANDS: usize = 10;
+
+/// Plays one constant, crossfades to a second, and captures everything the
+/// deck sounded from its first block, with `cut` on the deck's lowest band.
+async fn crossfade_take(cut: Option<kithara::effects::GainDb>) -> Vec<f32> {
+    use std::num::{NonZeroU32, NonZeroUsize};
+
+    use kithara::warp::WarpConfig;
+
+    let harness = OfflinePlayer::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
+            .crossfade_duration(0.05)
+            .output_block_frames(NonZeroU32::new(64).expect("nonzero callback size"))
+            .warp(
+                WarpConfig::builder()
+                    .render_quantum_frames(NonZeroUsize::new(64).expect("nonzero quantum"))
+                    .build(),
+            )
+            .build(),
+        SAMPLE_RATE,
+    )
+    .await;
+    if let Some(gain) = cut {
+        harness
+            .with_queue(move |queue| queue.set_eq_gain(0, f32::from(gain)))
+            .await
+            .expect("the deck takes the band cut");
+    }
+    let harness = load_source(
+        harness,
+        asset_source(&assets::fixed_constant_wav_cd_half_44100()).into(),
+    )
+    .await;
+    let next = harness
+        .with_queue(|queue| {
+            queue
+                .append(TrackSource::Uri(asset_source(
+                    &assets::fixed_constant_wav_cd_fifth_1323000(),
+                )))
+                .expect("append the incoming track")
+        })
         .await;
-    assert!(matches!(
-        stale,
-        Err(kithara::queue::QueueError::Play(PlayError::NotReady))
-    ));
-    assert_eq!(handle.gain_db(), GainDb::DEFAULT);
+    let mut take = render_effect_window(&harness, 2048).await;
+    harness
+        .with_queue(|queue| queue.next(kithara::queue::Transition::Crossfade))
+        .await
+        .expect("the queue crossfades to the next track");
+    kithara_integration_tests::waits::wait_for_loader_done(
+        harness.player(),
+        next,
+        kithara::platform::time::Duration::from_secs(30),
+    )
+    .await
+    .expect("the incoming track loads");
+    take.extend_from_slice(&render_effect_window(&harness, 44_100).await);
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;
+    take
 }
 
 // Advance one callback period between reads instead of draining an offline burst.
@@ -200,28 +149,27 @@ pub(super) async fn render_effect_window(harness: &OfflinePlayer, frames: usize)
 
 #[cfg(not(rtsan))]
 #[kithara::test(tokio)]
-async fn configured_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
-    effect_format_change(true).await;
+async fn deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
+    deck_eq_format_change(true).await;
 }
 
 #[kithara::test(tokio)]
-async fn nonblocking_configured_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
-    effect_format_change(false).await;
+async fn nonblocking_deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
+    deck_eq_format_change(false).await;
 }
 
-async fn effect_format_change(block_on_underrun: bool) {
+async fn deck_eq_format_change(block_on_underrun: bool) {
     use std::num::{NonZeroU32, NonZeroUsize};
 
     use kithara::{
-        assets::AssetStore,
-        effects::{
-            EffectConfig, GainDb,
-            eq::{EqBandConfigControl, generate_log_spaced_bands},
-        },
-        play::{ResourceConfig, ResourceSrc},
+        effects::{GainDb, eq::generate_log_spaced_bands},
         warp::WarpConfig,
     };
 
+    let mut bands = generate_log_spaced_bands(3);
+    for (band, gain) in bands.iter_mut().zip([-12.0, 6.0, -3.0]) {
+        band.set_gain_db(GainDb::from(gain));
+    }
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(block_on_underrun)
@@ -231,37 +179,21 @@ async fn effect_format_change(block_on_underrun: bool) {
                     .render_quantum_frames(NonZeroUsize::new(64).expect("nonzero quantum"))
                     .build(),
             )
+            .eq_layout(bands)
             .build(),
         SAMPLE_RATE,
     )
     .await;
     let mut underruns = underrun::Underruns::new(&harness);
-    let mut bands = generate_log_spaced_bands(3);
-    for (band, gain) in bands.iter_mut().zip([-12.0, 6.0, -3.0]) {
-        band.set_gain_db(GainDb::from(gain));
-    }
-    let config = ResourceConfig::for_src(
-        ResourceSrc::parse(asset_source(&assets::fixed_constant_wav_cd_half_44100()))
-            .expect("fixture URI parses"),
+    let harness = load_source(
+        harness,
+        asset_source(&assets::fixed_constant_wav_cd_half_44100()).into(),
     )
-    .store(AssetStore::builder(harness.worker().pools().clone()).build())
-    .preload_chunks(NonZeroUsize::MIN)
-    .audio_buffer_chunks(NonZeroUsize::new(2).expect("nonzero buffer chunks"))
-    .effects(vec![EffectConfig::Equalizer(bands)])
-    .build();
-    let harness = load_source(harness, TrackSource::Config(Box::new(config))).await;
+    .await;
     let _ = render_effect_window(&harness, 4096).await;
-    assert_eq!(
-        harness.metrics().underruns(),
-        0,
-        "initial configured-track playback"
-    );
+    assert_eq!(harness.metrics().underruns(), 0, "initial deck playback");
     underruns.checkpoint(harness.metrics(), true, "initial ready playback");
-    let control = harness
-        .with_queue(|queue| queue.eq_band(0, 1))
-        .await
-        .expect("configured track has an EQ control");
-    assert_eq!(control.gain_db(), GainDb::from(6.0));
+    assert_eq!(harness.player().eq_gain(1), Some(6.0));
     let mut tap = harness
         .host()
         .attach_tap(Tap::Master, ROOMY_CAPACITY)
@@ -292,9 +224,9 @@ async fn effect_format_change(block_on_underrun: bool) {
             .iter()
             .any(|sample| *sample != 0.0)
     );
-    assert_eq!(control.gain_db(), GainDb::from(6.0));
+    assert_eq!(harness.player().eq_gain(1), Some(6.0));
     harness
-        .run(&control, |control| control.set_gain_db(GainDb::MIN))
+        .with_queue(|queue| queue.set_eq_gain(1, f32::from(GainDb::MIN)))
         .await
         .expect("new EQ target is admitted");
     let output = render_effect_window(&harness, 2048).await;
@@ -304,9 +236,9 @@ async fn effect_format_change(block_on_underrun: bool) {
             .iter()
             .any(|sample| *sample != 0.0)
     );
-    assert_eq!(control.gain_db(), GainDb::MIN);
+    assert_eq!(harness.player().eq_gain(1), Some(f32::from(GainDb::MIN)));
     assert_eq!(tap.drops(), 0);
-    underruns.checkpoint(harness.metrics(), true, "final configured playback");
+    underruns.checkpoint(harness.metrics(), true, "final deck playback");
     harness.close().await;
 }
 

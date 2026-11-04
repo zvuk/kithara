@@ -53,8 +53,7 @@ jobs:
   # answers it before a job is requested.
   authorize:
     name: CI authorization
-    # Every job below takes its `runs-on` from the runner-labels variable, so a
-    # repository without one runs nothing: upstream has no runners and is not
+    # A repository without runner labels runs nothing: upstream has no runners and is not
     # getting any — its gate is the GitLab verification status the bridge
     # writes. Every other workflow already skips on that variable; this one
     # turned the question into a job, and on upstream that job cannot even
@@ -133,7 +132,7 @@ jobs:
   ui-select:
     name: Select UI ownership
     needs: authorize
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    runs-on: [self-hosted, linux, x64, kithara-report]
     timeout-minutes: 10
     outputs:
       ui_required: ${{ steps.ui.outputs.ui_required }}

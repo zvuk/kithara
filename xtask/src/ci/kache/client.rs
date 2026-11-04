@@ -3,15 +3,18 @@ use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, ensure};
 use kithara_devtools::common::tools::ToolsConfig;
 use tracing::{info, warn};
+use xtask::ci::bootstrap;
 
-use super::{config::CiConfig, environment::CacheTrust, process::Process};
-use crate::consts;
+use crate::{
+    ci::{config::CiConfig, environment::CacheTrust, process::Process},
+    consts,
+};
 
 /// The kache one CI job compiles through.
 ///
@@ -21,7 +24,7 @@ use crate::consts;
 /// for its scope, and the job's file outranks that layer key by key only
 /// where it names a key.
 pub(crate) struct KacheJob {
-    directory: PathBuf,
+    directory: tempfile::TempDir,
 }
 
 /// Where a job keeps what it compiled, and how much of it.
@@ -31,16 +34,21 @@ pub(crate) struct LocalStore<'a> {
 }
 
 impl KacheJob {
-    pub(crate) fn prepare(directory: PathBuf, store: Option<LocalStore<'_>>) -> Result<Self> {
-        let job = Self { directory };
-        let runtime = job.directory.join("runtime");
-        // A directory left by a job that died under the same name holds a
-        // daemon's socket that nothing answers.
-        let _ = fs::remove_dir_all(&job.directory);
+    pub(crate) fn prepare(directory: &Path, store: Option<LocalStore<'_>>) -> Result<Self> {
+        fs::create_dir_all(directory)
+            .with_context(|| format!("creating cache session parent {}", directory.display()))?;
+        let job = Self {
+            directory: tempfile::Builder::new()
+                .prefix("daemon-")
+                .tempdir_in(directory)
+                .context("create an owned compiler-cache session")?,
+        };
+        let runtime = job.directory.path().join("runtime");
         fs::create_dir_all(&runtime)
             .with_context(|| format!("creating kache's directory {}", runtime.display()))?;
         let mut cache = toml::Table::new();
         cache.insert("explain_miss".into(), true.into());
+        cache.insert("prefetch_enabled".into(), false.into());
         cache.insert("runtime_dir".into(), path_value(&runtime)?);
         cache.insert(
             "daemon_idle_timeout_secs".into(),
@@ -68,13 +76,17 @@ impl KacheJob {
     /// that is not a push to a protected branch from writing, whatever its
     /// credentials allow, and every branch job of the fork is such a job. The
     /// scope's credentials are what decide where a job writes.
-    pub(crate) fn environment(&self, tools: &ToolsConfig) -> [(&'static str, OsString); 7] {
+    pub(crate) fn environment(&self, tools: &ToolsConfig) -> [(&'static str, OsString); 8] {
         [
             ("CMAKE_CXX_COMPILER_LAUNCHER", tools.program("kache").into()),
             ("CMAKE_C_COMPILER_LAUNCHER", tools.program("kache").into()),
             ("GITHUB_ACTIONS", OsString::new()),
             ("GITLAB_CI", OsString::new()),
             ("KACHE_CONFIG", self.config().into_os_string()),
+            (
+                "KACHE_RUNTIME_DIR",
+                self.directory.path().join("runtime").into_os_string(),
+            ),
             ("KACHE_FALLBACK", tools.program("sccache").into()),
             ("RUSTC_WRAPPER", tools.program("kache").into()),
         ]
@@ -97,9 +109,44 @@ impl KacheJob {
         }
     }
 
-    fn config(&self) -> PathBuf {
-        self.directory.join("config.toml")
+    pub(crate) fn verify_remote(&self, process: &Process, tools: &ToolsConfig) -> Result<()> {
+        let mut command = process.command(tools.program("kache"));
+        let runtime = self.directory.path().join("runtime");
+        command
+            .env("KACHE_CONFIG", self.config())
+            .env("KACHE_RUNTIME_DIR", &runtime);
+        if process.is_recording() {
+            command.args(["daemon", "start"]);
+            return process.run_command(&mut command, "start compiler-cache statistics");
+        }
+        let started = Instant::now();
+        let stats = bootstrap::statistics(&mut command, &runtime);
+        process.time(
+            "verify the compiler cache remote",
+            started.elapsed(),
+            stats.is_ok(),
+        );
+        require_remote(&stats?)
     }
+
+    fn config(&self) -> PathBuf {
+        self.directory.path().join("config.toml")
+    }
+}
+
+pub(crate) fn statistics(process: &Process, tools: &ToolsConfig) -> Result<String> {
+    let runtime = process
+        .environment_path("KACHE_RUNTIME_DIR")
+        .context("compiler-cache statistics require the job runtime")?;
+    let mut command = process.command(tools.program("kache"));
+    let started = Instant::now();
+    let result = bootstrap::statistics(&mut command, &runtime).map_err(Into::into);
+    process.time("kache statistics", started.elapsed(), result.is_ok());
+    result
+}
+
+pub(crate) fn require_remote(stats: &str) -> Result<()> {
+    bootstrap::require_remote(stats).map_err(Into::into)
 }
 
 pub(crate) fn reclaim_local_stores(config: &CiConfig, process: &Process) -> Result<()> {
@@ -109,8 +156,12 @@ pub(crate) fn reclaim_local_stores(config: &CiConfig, process: &Process) -> Resu
     }
     let cache = cache.canonicalize().context("resolving host cache root")?;
     let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
-    for trust in CacheTrust::ALL {
-        let scope = cache.join(trust.as_str());
+    for scope in CacheTrust::ALL
+        .into_iter()
+        .map(CacheTrust::as_str)
+        .chain(["bootstrap"])
+    {
+        let scope = cache.join(scope);
         if !scope.is_dir() {
             continue;
         }
@@ -145,7 +196,7 @@ pub(crate) fn reclaim_local_stores(config: &CiConfig, process: &Process) -> Resu
 fn reclaim_store(process: &Process, store: &Path, max_size: &str) -> Result<()> {
     let directory = tempfile::tempdir().context("creating compiler-cache maintenance runtime")?;
     let job = KacheJob::prepare(
-        directory.path().join("kache"),
+        &directory.path().join("kache"),
         Some(LocalStore {
             directory: store,
             max_size,
@@ -164,7 +215,7 @@ fn reclaim_store(process: &Process, store: &Path, max_size: &str) -> Result<()> 
     };
     // Automatic GC keeps remote imports for six hours even above the size limit.
     let result = process.capture_bounded_command(
-        &mut command(&["gc", "--json"]),
+        &mut command(&["gc"]),
         "collect the local compiler store",
         Duration::from_secs(60),
         65_536,
@@ -178,13 +229,8 @@ fn reclaim_store(process: &Process, store: &Path, max_size: &str) -> Result<()> 
     if let Err(error) = stopped {
         warn!(%error, "compiler-cache maintenance daemon did not stop");
     }
-    let report: serde_json::Value = serde_json::from_str(
-        &result.with_context(|| format!("collecting compiler store {}", store.display()))?,
-    )?;
-    ensure!(
-        report["success"] == true,
-        "compiler-store collection failed: {report}"
-    );
+    let report =
+        result.with_context(|| format!("collecting compiler store {}", store.display()))?;
     info!(path = %store.display(), %report, "local compiler store collected");
     Ok(())
 }
@@ -219,6 +265,7 @@ pub(crate) fn host_config(
     let mut cache = toml::Table::new();
     cache.insert("local_store".into(), path_value(store)?);
     cache.insert("local_max_size".into(), max_size.into());
+    cache.insert("prefetch_enabled".into(), false.into());
     cache.insert("remote".into(), remote.into());
     let mut config = toml::Table::new();
     config.insert("cache".into(), cache.into());
@@ -232,17 +279,28 @@ fn path_value(path: &Path) -> Result<toml::Value> {
         .into())
 }
 
-impl Drop for KacheJob {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.directory);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeMap, ffi::OsStr};
 
     use super::*;
+
+    #[test]
+    fn ci_requires_a_connected_writable_s3_cache() {
+        let ready = serde_json::json!({"remote":"s3://scope/kache", "daemon_connected":true, "daemon_remote_readonly":false});
+        assert!(require_remote(&ready.to_string()).is_ok());
+        for (field, value) in [
+            ("remote", serde_json::Value::Null),
+            ("remote", serde_json::json!("filesystem://local")),
+            ("daemon_connected", serde_json::json!(false)),
+            ("daemon_remote_readonly", serde_json::json!(true)),
+            ("daemon_remote_readonly", serde_json::Value::Null),
+        ] {
+            let mut invalid = ready.clone();
+            invalid[field] = value;
+            assert!(require_remote(&invalid.to_string()).is_err(), "{field}");
+        }
+    }
 
     #[cfg(unix)]
     fn maintenance_process(root: &Path) -> Process {
@@ -273,7 +331,7 @@ mod tests {
             &program,
             &format!(
                 "#!/bin/sh\ncase \"$*\" in\n\
-                 'gc --json') test \"$KACHE_LOCAL_ONLY\" = 1 || exit 2; \
+                 'gc') test \"$KACHE_LOCAL_ONLY\" = 1 || exit 2; \
                  test -z \"${{KACHE_CACHE_DIR+x}}\" || exit 2; \
                  test -z \"${{KACHE_SOCKET_PATH+x}}\" || exit 2; \
                  cp \"$KACHE_CONFIG\" '{}'; printf '%s' '{{\"success\":true}}' ;;\n\
@@ -302,15 +360,11 @@ mod tests {
         let program = directory.path().join("kache");
         let stopped = directory.path().join("stopped");
         let process = maintenance_process(directory.path());
-        for result in [
-            "exit 7",
-            "printf invalid",
-            "printf '%s' '{\"success\":false}'",
-        ] {
+        for result in ["exit 7", "exit 9"] {
             crate::testing::install_script(
                 &program,
                 &format!(
-                    "#!/bin/sh\ncase \"$*\" in\n'gc --json') {result} ;;\n\
+                    "#!/bin/sh\ncase \"$*\" in\n'gc') {result} ;;\n\
                      'daemon stop') touch '{}' ;;\n*) exit 3 ;;\nesac\n",
                     stopped.display(),
                 ),
@@ -391,12 +445,13 @@ mod tests {
     fn a_jobs_own_file_leaves_the_remote_to_its_runner() {
         let directory = tempfile::tempdir().unwrap();
 
-        let job = KacheJob::prepare(directory.path().join("job"), None).unwrap();
+        let job = KacheJob::prepare(&directory.path().join("job"), None).unwrap();
 
         let config = written(&job);
         let cache = config["cache"].as_table().unwrap();
         assert!(!cache.contains_key("remote"), "{cache:?}");
         assert!(!cache.contains_key("local_store"), "{cache:?}");
+        assert_eq!(cache["prefetch_enabled"].as_bool(), Some(false));
     }
 
     fn store_environment(bucket: &str) -> BTreeMap<String, String> {
@@ -430,6 +485,10 @@ mod tests {
             let cache = config["cache"].as_table().unwrap();
             assert_eq!(cache["local_store"].as_str(), Some("/cache/kache/store"));
             assert_eq!(cache["local_max_size"].as_str(), Some("50G"));
+            assert_eq!(
+                cache.get("prefetch_enabled").and_then(toml::Value::as_bool),
+                Some(false)
+            );
             let remote = cache["remote"].as_table().unwrap();
             assert_eq!(remote["type"].as_str(), Some("s3"), "{bucket}");
             assert_eq!(remote["bucket"].as_str(), Some(bucket));
@@ -463,7 +522,7 @@ mod tests {
         let store_root = directory.path().join("store");
 
         let job = KacheJob::prepare(
-            directory.path().join("job"),
+            &directory.path().join("job"),
             Some(LocalStore {
                 directory: &store_root,
                 max_size: "4G",
@@ -478,7 +537,7 @@ mod tests {
         assert_eq!(cache["local_max_size"].as_str(), Some("4G"));
         assert_eq!(
             cache["runtime_dir"].as_str().map(PathBuf::from),
-            Some(directory.path().join("job/runtime"))
+            Some(job.directory.path().join("runtime"))
         );
     }
 
@@ -488,7 +547,7 @@ mod tests {
     fn a_daemon_whose_job_never_stops_it_exits_once_idle() {
         let directory = tempfile::tempdir().unwrap();
 
-        let job = KacheJob::prepare(directory.path().join("job"), None).unwrap();
+        let job = KacheJob::prepare(&directory.path().join("job"), None).unwrap();
 
         let config = written(&job);
         let timeout = config["cache"]["daemon_idle_timeout_secs"].as_integer();
@@ -504,7 +563,7 @@ mod tests {
     fn a_job_compiles_through_kache_and_hands_on_to_sccache() {
         let directory = tempfile::tempdir().unwrap();
         let tools = ToolsConfig::default();
-        let job = KacheJob::prepare(directory.path().join("job"), None).unwrap();
+        let job = KacheJob::prepare(&directory.path().join("job"), None).unwrap();
 
         let environment = job.environment(&tools);
 
@@ -522,6 +581,10 @@ mod tests {
                 ("GITHUB_ACTIONS", OsString::new()),
                 ("GITLAB_CI", OsString::new()),
                 ("KACHE_CONFIG", job.config().into_os_string()),
+                (
+                    "KACHE_RUNTIME_DIR",
+                    job.directory.path().join("runtime").into_os_string()
+                ),
                 ("KACHE_FALLBACK", OsString::from(tools.program("sccache"))),
                 ("RUSTC_WRAPPER", OsString::from(tools.program("kache"))),
             ]
@@ -534,7 +597,7 @@ mod tests {
     #[test]
     fn kache_sees_no_ci_system_whose_policy_would_keep_a_job_read_only() {
         let directory = tempfile::tempdir().unwrap();
-        let job = KacheJob::prepare(directory.path().join("job"), None).unwrap();
+        let job = KacheJob::prepare(&directory.path().join("job"), None).unwrap();
 
         let environment = job.environment(&ToolsConfig::default());
 
@@ -551,12 +614,36 @@ mod tests {
     }
 
     #[test]
+    fn sessions_for_one_job_never_replace_each_others_runtime() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = directory.path().join("job");
+        fs::create_dir_all(&shared).unwrap();
+        let unrelated = shared.join("unrelated");
+        fs::write(&unrelated, "keep").unwrap();
+
+        let first = KacheJob::prepare(&shared, None).unwrap();
+        let second = KacheJob::prepare(&shared, None).unwrap();
+        assert_ne!(first.config(), second.config());
+        assert!(first.config().is_file());
+        assert!(second.config().is_file());
+        assert_eq!(fs::read_to_string(&unrelated).unwrap(), "keep");
+        let second_path = second.directory.path().to_path_buf();
+        drop(second);
+        assert!(!second_path.exists());
+        assert!(first.config().is_file());
+        drop(first);
+        assert_eq!(fs::read_to_string(unrelated).unwrap(), "keep");
+    }
+
+    #[test]
     fn a_finished_job_leaves_nothing_of_its_own_behind() {
         let directory = tempfile::tempdir().unwrap();
         let own = directory.path().join("job");
 
-        drop(KacheJob::prepare(own.clone(), None).unwrap());
+        let job = KacheJob::prepare(&own, None).unwrap();
+        let owned = job.directory.path().to_path_buf();
+        drop(job);
 
-        assert!(!own.exists());
+        assert!(!owned.exists());
     }
 }
