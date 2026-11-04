@@ -45,7 +45,7 @@ fn boost_low_band<S: HasPool<f32>>(config: &EqConfig<S>, sample_rate: NonZeroU32
 
 <tr><th>Type</th><th>Role</th></tr>
 
-<tr><td><code>DeckEffect</code></td><td>Contract of the effect a deck FX unit holds: planar stereo wet signal, parameter changes, reset, tail exhaustion</td></tr>
+<tr><td><code>DeckEffect</code></td><td>Contract of the effect a deck FX unit holds: planar stereo wet signal, parameter changes, reset, tail exhaustion, sample-rate retune</td></tr>
 
 <tr><td><code>FxParamChange</code></td><td>A change of one deck effect parameter; each effect's parameters join as a variant</td></tr>
 

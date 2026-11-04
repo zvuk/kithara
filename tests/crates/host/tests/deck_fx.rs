@@ -52,6 +52,8 @@ impl DeckEffect for Curve {
     fn tail_exhausted(&self) -> bool {
         true
     }
+
+    fn update_sample_rate(&mut self, _: NonZeroU32) {}
 }
 
 /// Its wet signal is its input `delay` frames late, the left input it hears
@@ -117,6 +119,8 @@ impl DeckEffect for Echo {
     fn tail_exhausted(&self) -> bool {
         self.quiet >= self.line.len()
     }
+
+    fn update_sample_rate(&mut self, _: NonZeroU32) {}
 }
 
 /// `effect` installed on `unit`, fully wet and on.

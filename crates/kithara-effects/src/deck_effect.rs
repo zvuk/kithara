@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, num::NonZeroU32};
 
 /// A change of one parameter of a deck effect, each effect's parameters one
 /// variant.
@@ -27,6 +27,10 @@ pub trait DeckEffect: Send {
 
     /// Whether the wet signal stays silent while the input does.
     fn tail_exhausted(&self) -> bool;
+
+    /// Retunes all the effect derives from the sample rate to `sample_rate`,
+    /// from the next frame processed, without allocating or freeing.
+    fn update_sample_rate(&mut self, sample_rate: NonZeroU32);
 }
 
 impl fmt::Debug for dyn DeckEffect {

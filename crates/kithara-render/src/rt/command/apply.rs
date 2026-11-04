@@ -75,7 +75,7 @@ impl Deck {
                 .render
                 .take_eq_layout(layout)
                 .map(|layout| DeckPart::Returned(Returned::Eq(layout))),
-            DeckPart::Fx(change) => self.render.change_fx(change),
+            DeckPart::Fx(change) => self.render.change_fx(change, self.sample_rate),
             DeckPart::Returned(returned) => Some(DeckPart::Returned(returned)),
         }
     }

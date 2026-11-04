@@ -138,16 +138,24 @@ impl RenderPass {
             .is_some_and(|effect| effect.accepts(&change))
     }
 
-    /// Apply `change` to its unit, answering what goes back in the receipt.
-    pub(crate) fn change_fx(&mut self, change: DeckFxChange) -> Option<DeckPart> {
+    /// Apply `change` to its unit, tuning an installed effect to the deck's
+    /// `sample_rate`, and answer what goes back in the receipt.
+    pub(crate) fn change_fx(
+        &mut self,
+        change: DeckFxChange,
+        sample_rate: NonZeroU32,
+    ) -> Option<DeckPart> {
         let Some(unit) = self.units.get_mut(change.unit()) else {
             return Some(DeckPart::Fx(change));
         };
         let taken = match change {
             DeckFxChange::Install {
                 unit: index,
-                effect,
-            } => (index, unit.effect.replace(effect)),
+                mut effect,
+            } => {
+                effect.update_sample_rate(sample_rate);
+                (index, unit.effect.replace(effect))
+            }
             DeckFxChange::Clear { unit: index } => (index, unit.effect.take()),
             DeckFxChange::Power { on, .. } => {
                 if on
@@ -187,11 +195,15 @@ impl RenderPass {
         }
     }
 
+    /// Retune the deck's chain, with every effect its units hold, to `sample_rate`.
     pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.trim.update_sample_rate(sample_rate);
         self.output.update_sample_rate(sample_rate);
         for unit in &mut self.units {
             unit.mix.update_sample_rate(sample_rate);
+            if let Some(effect) = &mut unit.effect {
+                effect.update_sample_rate(sample_rate);
+            }
         }
         self.eq.update_sample_rate(sample_rate);
     }
@@ -285,9 +297,11 @@ fn apply_gain(gain: &mut SmoothedParam, left: &mut [f32], right: &mut [f32]) {
 
 #[cfg(test)]
 mod tests {
+    use kithara_platform::sync::{Arc, Mutex};
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{rt::DeckMixerConfig, test_pools::pools};
 
     #[kithara::test]
     fn gain_matches_scalar_pcm_and_terminal_state() {
@@ -356,5 +370,56 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Records every sample rate it is tuned to.
+    struct Tuned(Arc<Mutex<Vec<u32>>>);
+
+    impl DeckEffect for Tuned {
+        fn process(&mut self, _: [&[f32]; 2], wet: [&mut [f32]; 2]) {
+            for wet in wet {
+                wet.fill(0.0);
+            }
+        }
+
+        fn accepts(&self, _: &FxParamChange) -> bool {
+            false
+        }
+
+        fn set(&mut self, change: FxParamChange) {
+            match change {}
+        }
+
+        fn reset(&mut self) {}
+
+        fn tail_exhausted(&self) -> bool {
+            true
+        }
+
+        fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
+            self.0.lock().push(sample_rate.get());
+        }
+    }
+
+    #[kithara::test]
+    fn an_installed_effect_runs_at_the_deck_sample_rate() {
+        let rate = |hz| NonZeroU32::new(hz).expect("rate");
+        let mut render = RenderPass::new(
+            &pools(),
+            StreamShape::new(rate(512), rate(48_000)),
+            DeckMixerConfig::builder().build(),
+        )
+        .expect("deck chain");
+        let tuned = Arc::new(Mutex::new(Vec::new()));
+        let install = DeckFxChange::Install {
+            unit: 0,
+            effect: Box::new(Tuned(Arc::clone(&tuned))),
+        };
+        assert!(
+            render.change_fx(install, rate(48_000)).is_none(),
+            "an empty unit returns nothing"
+        );
+        render.update_sample_rate(rate(96_000));
+        assert_eq!(*tuned.lock(), [48_000, 96_000]);
     }
 }
