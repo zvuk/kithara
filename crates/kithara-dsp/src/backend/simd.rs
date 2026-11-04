@@ -13,16 +13,9 @@ pub(super) fn sanitize_kernel<S: Simd>(simd: S, samples: &mut [f32]) {
     let smallest = S::f32s::splat(simd, f32::MIN_POSITIVE);
     let largest = S::f32s::splat(simd, f32::MAX);
     let zero = S::f32s::splat(simd, 0.0);
-    let mut blocks = samples.chunks_exact_mut(S::f32s::LEN);
-    for block in &mut blocks {
-        sanitized::<S>(S::f32s::from_slice(simd, block), smallest, largest, zero)
-            .store_slice(block);
-    }
-    let tail = blocks.into_remainder();
-    let cleaned = sanitized::<S>(padded(simd, tail), smallest, largest, zero);
-    for (slot, sample) in tail.iter_mut().zip(cleaned.as_slice()) {
-        *slot = *sample;
-    }
+    update(simd, samples, [], |x, []| {
+        sanitized::<S>(x, smallest, largest, zero)
+    });
 }
 
 /// `samples[i] /= divisor`, correctly rounded, over the whole slice; returns

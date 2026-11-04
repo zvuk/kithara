@@ -15,7 +15,7 @@ pub(super) struct ScalarLimiter {
     taps: [f32; (Self::DETECTOR_PHASES - 1) * Self::DETECTOR_TAPS],
     shared_valid: bool,
     config: LimiterConfig,
-    envelope: f32,
+    pub(super) envelope: f32,
     release_coeff: f32,
     channels: usize,
 }

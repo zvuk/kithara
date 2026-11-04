@@ -10,3 +10,4 @@ pub(crate) use client::{
     CacheArgs, client_environment, current_client_environment, missing_defaults, run,
 };
 use client::{require_success, required};
+pub(in crate::ci) use provision::scope_bucket;

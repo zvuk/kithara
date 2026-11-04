@@ -3,7 +3,7 @@ use kithara_ui::{
     builtin,
     error::UiDocError,
     ids::{DocId, SourceUri},
-    skin::{ColorRole, PopSkin, SkinDoc, load_skin, parse_skin_over},
+    skin::{ColorRole, FontFamily, PopSkin, SkinDoc, load_skin, parse_skin_over},
     source::{Limits, MemResolver},
 };
 
@@ -90,6 +90,59 @@ fn a_skin_carries_the_override_it_names() {
 #[kithara::test]
 fn a_skin_declares_no_overrides_by_default() {
     assert!(builtin::skin_doc().overrides.is_empty());
+}
+
+#[kithara::test]
+fn skin_font_sources_follow_the_declaring_skin_through_inheritance() {
+    let base = parse_skin_over(
+        builtin::skin_doc(),
+        r#"(schema: "kithara.skin", version: 1, id: "base",
+            fonts: {Sans: ["faces/regular.ttf", "faces/bold.ttf"]})"#,
+        &SourceUri("base/skin.ron".into()),
+    )
+    .unwrap();
+    let child = parse_skin_over(
+        &base,
+        r#"(schema: "kithara.skin", version: 1, id: "child",
+            fonts: {Display: ["display.ttf"]})"#,
+        &SourceUri("child/skin.ron".into()),
+    )
+    .unwrap();
+    assert_eq!(
+        child.fonts[&FontFamily::Sans],
+        ["base/faces/regular.ttf", "base/faces/bold.ttf"]
+    );
+    assert_eq!(child.fonts[&FontFamily::Display], ["child/display.ttf"]);
+    assert!(builtin::skin_doc().fonts.is_empty());
+    let replacement = parse_skin_over(
+        &child,
+        r#"(schema: "kithara.skin", version: 1, id: "replacement",
+            fonts: {Sans: ["variable.ttf"]})"#,
+        &SourceUri("next/skin.ron".into()),
+    )
+    .unwrap();
+    assert_eq!(replacement.fonts[&FontFamily::Sans], ["next/variable.ttf"]);
+    assert_eq!(
+        replacement.fonts[&FontFamily::Display],
+        ["child/display.ttf"]
+    );
+}
+
+#[kithara::test]
+fn a_font_source_cannot_escape_its_configured_root() {
+    for path in ["../../escape.ttf", "/escape.ttf"] {
+        let patch = format!(
+            r#"(schema: "kithara.skin", version: 1, id: "invalid", fonts: {{Sans: ["{path}"]}})"#
+        );
+        assert!(matches!(
+            parse_skin_over(
+                builtin::skin_doc(),
+                &patch,
+                &SourceUri("theme/skin.ron".into())
+            ),
+            Err(UiDocError::RootEscape { .. })
+        ));
+    }
 }
 
 /// An override is restated whole. A skin written over another that already

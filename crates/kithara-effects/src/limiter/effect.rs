@@ -157,48 +157,40 @@ impl PeakLimiter {
             let end = frames.min(start + Self::CHUNK_FRAMES);
             let count = end - start;
             let mut linked = ArrayVec::<f32, { Self::CHUNK_FRAMES }>::new();
-            let mut current = ArrayVec::new();
-            let mut peaks = ArrayVec::new();
-            for plane in [&mut linked, &mut peaks] {
-                plane.extend(std::iter::repeat_n(0.0, count));
-            }
-            let [linked, current, peaks] = [&mut linked, &mut current, &mut peaks];
-            if !reconstruct {
+            linked.extend(std::iter::repeat_n(0.0, count));
+            let linked = &mut linked;
+            if reconstruct {
+                let mut current = ArrayVec::<f32, { Self::CHUNK_FRAMES }>::new();
+                let mut peaks = ArrayVec::<f32, { Self::CHUNK_FRAMES }>::new();
+                peaks.extend(std::iter::repeat_n(0.0, count));
+                let [current, peaks] = [&mut current, &mut peaks];
+                for (index, channel) in channels.iter_mut().enumerate() {
+                    current.clear();
+                    current.extend(channel[start..end].iter().copied().map(sanitize_sample));
+                    let processed = self
+                        .detector
+                        .process(index, &channel[start..], current, peaks);
+                    peaks[processed..].fill(0.0);
+                    PeakHold::link(peaks, linked);
+                    channel[start..end].copy_from_slice(current);
+                }
+                for peak in linked.iter_mut() {
+                    *peak = if *peak > ceiling {
+                        ceiling / *peak
+                    } else {
+                        1.0
+                    };
+                }
+            } else {
                 for (index, channel) in channels.iter_mut().enumerate() {
                     sanitize(&mut channel[start..end]);
-                    let processed = self.detector.process(
-                        index,
-                        &channel[start..],
-                        &channel[start..end],
-                        peaks,
-                    );
-                    peaks[processed..].fill(0.0);
+                    self.detector
+                        .process(index, &channel[start..], &channel[start..end], linked);
+                }
+                if self.envelope.gain() == 1.0 {
+                    continue;
                 }
                 linked.fill(1.0);
-                self.envelope.process(linked);
-                if linked.iter().any(|&gain| gain != 1.0) {
-                    for channel in channels.iter_mut() {
-                        multiply_in_place(&mut channel[start..end], linked);
-                    }
-                }
-                continue;
-            }
-            for (index, channel) in channels.iter_mut().enumerate() {
-                current.clear();
-                current.extend(channel[start..end].iter().copied().map(sanitize_sample));
-                let processed = self
-                    .detector
-                    .process(index, &channel[start..], current, peaks);
-                peaks[processed..].fill(0.0);
-                PeakHold::link(peaks, linked);
-                channel[start..end].copy_from_slice(current);
-            }
-            for peak in linked.iter_mut() {
-                *peak = if *peak > ceiling {
-                    ceiling / *peak
-                } else {
-                    1.0
-                };
             }
             self.envelope.process(linked);
             for channel in channels.iter_mut() {
@@ -306,6 +298,10 @@ mod tests {
                     {
                         assert_eq!(actual.to_bits(), expected.to_bits());
                     }
+                    assert_eq!(
+                        actual.envelope.gain().to_bits(),
+                        reference.envelope.to_bits()
+                    );
                 }
             }
         }
@@ -378,6 +374,10 @@ mod tests {
                             .collect::<Vec<_>>()
                     );
                 }
+                assert_eq!(
+                    actual.envelope.gain().to_bits(),
+                    reference.envelope.to_bits()
+                );
                 if stage == 5 {
                     actual.reset();
                     reference.reset();
@@ -409,6 +409,10 @@ mod tests {
             {
                 assert_eq!(actual.to_bits(), expected.to_bits());
             }
+            assert_eq!(
+                actual.envelope.gain().to_bits(),
+                reference.envelope.to_bits()
+            );
         }
     }
 
