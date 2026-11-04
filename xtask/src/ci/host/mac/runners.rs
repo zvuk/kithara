@@ -58,12 +58,6 @@ impl<'a> RunnerManager<'a> {
         let home = self.ci_home();
         let config_root = home.join(".config/kithara-ci");
         let runner_root = home.join(".gitlab-runner");
-        let image_digest_path = config_root.join("linux-image.digest");
-        let expected_linux = read_trimmed(&image_digest_path)?;
-        let actual_linux = self.linux_image_digest(&home)?;
-        if expected_linux != actual_linux {
-            bail!("Linux CI image digest changed: expected {expected_linux}, found {actual_linux}");
-        }
         let tokens = Tokens::load(&config_root, self.config.host.job_concurrency)?;
         for path in [
             &config_root,
@@ -71,7 +65,6 @@ impl<'a> RunnerManager<'a> {
             &self.config.host.host_root.join("cache/gitlab-runner"),
             &self.config.host.host_root.join("toolchains/shared-bin"),
             &self.config.host.build_root().join("workspaces/gitlab"),
-            &self.config.host.build_root().join(consts::CONTAINER_BUILDS),
             &self.agent_root(),
         ] {
             fs::create_dir_all(path)
@@ -106,12 +99,12 @@ impl<'a> RunnerManager<'a> {
                 fs::create_dir_all(parent)
                     .with_context(|| format!("creating {}", parent.display()))?;
             }
-            // Readable by the container's user: the file names no secret.
+            // The file names scoped environment variables, not credential values.
             fs::write(&path, contents).with_context(|| format!("writing {}", path.display()))?;
         }
         write_secure(
             &runner_root.join("config.toml"),
-            &self.runner_config(&home, &tokens)?,
+            &self.runner_config(&tokens)?,
         )?;
         self.install_runner_agents(&home)?;
         self.process.run(
@@ -198,7 +191,7 @@ impl<'a> RunnerManager<'a> {
                 self.config.host.ci_user
             );
         }
-        for name in ["cleanup", "health", "colima", "gitlab-runner"] {
+        for name in ["cleanup", "health", "gitlab-runner"] {
             let label = format!("com.zvuk.kithara-ci.{name}");
             let plist = self.agent_root().join(format!("{label}.plist"));
             if !plist.is_file() {
@@ -258,46 +251,8 @@ impl<'a> RunnerManager<'a> {
         bail!("{service} is still loaded after being booted out")
     }
 
-    /// The Linux container's ceiling is deliberately below the VM's eight
-    /// gigabytes, so a runaway job cannot take the VM down with it. Five was
-    /// too low: one `rustc` compiling the largest test crate reached 3.3
-    /// gibibytes on its own and the kernel killed it, which Cargo reported
-    /// only as "could not compile" with no diagnostic at all.
-    ///
-    /// Two jobs at a time, not one. The machine has ten cores and twenty-four
-    /// gigabytes; a full workspace build peaks around six to eight of them, so
-    /// two fit with headroom and three do not. What this does not loosen is
-    /// measurement: `kithara-suite` still admits one suite, browser run or perf
-    /// lane at a time, so what runs beside another job is lint, a scan or a
-    /// framework build — never two things timing themselves.
-    ///
-    /// macOS is a shell runner on the host rather than a throwaway guest. The
-    /// guest cost more than the isolation was worth: it held twelve of the
-    /// machine's twenty-four gigabytes, its build tree started empty after every
-    /// recycle, and sccache died inside it often enough that jobs compiled
-    /// locally — a suite that runs in three minutes took an hour to reach.
-    /// It is registered once per admitted job, and each registration takes one
-    /// job at a time, so it checks every job out at the same path: a lane bound
-    /// to one finds the build root beside that checkout as it left it, where a
-    /// registration taking two jobs put the second at another path and a lane
-    /// landed on whichever was free.
-    ///
-    /// Every runner names one Cargo home and keeps it whatever the job's trust:
-    /// what it holds is fetched by checksum, and a home per trust gave the
-    /// compiler cache a key per home for every dependency. The shell runners
-    /// share theirs; the container's sits on the cache share, because Cargo's
-    /// package lock does not reach across the virtual machine. The container
-    /// also binds its builds directory from the host, so the checkouts and the
-    /// build roots beside them outlive the job the way the shell runners' do.
-    /// It binds a tree of its own there: a lock taken in the virtual machine is
-    /// invisible on the host and the reverse, so a reclaim on either side walks
-    /// only the build directories whose leases it sees.
-    ///
-    /// Each host runner names a compiler-cache socket of its own, which only
-    /// `production/main`'s jobs read while the host serves them: a job of this
-    /// layout names one per checkout, and a job's variable outranks the
-    /// runner's.
-    fn runner_config(&self, home: &Path, tokens: &Tokens) -> Result<String> {
+    /// Native runners share admission and Cargo inputs while keeping job sockets distinct.
+    fn runner_config(&self, tokens: &Tokens) -> Result<String> {
         let concurrency = self.config.host.job_concurrency;
         let cargo_build_jobs = self.cargo_build_jobs_env();
         let root = self.config.host.host_root.display();
@@ -319,13 +274,9 @@ impl<'a> RunnerManager<'a> {
             .join(" "),
         );
         let builds = self.config.host.build_root().display();
-        let container_builds = self.config.host.build_root().join(consts::CONTAINER_BUILDS);
-        let container_builds = container_builds.display();
         let url = self.config.host.gitlab_origin();
-        let cache = self.config.host.cache_root_linux.display();
         let lane_config = consts::MAC_CONFIG_PATH;
         let cargo_home = consts::CARGO_HOME_DIR;
-        let image = consts::LINUX_LATEST_IMAGE;
         let sccache_environment = self.store_environment()?;
         let kache = |file: PathBuf| {
             sccache_environment
@@ -333,25 +284,25 @@ impl<'a> RunnerManager<'a> {
                 .map(|_| ("KACHE_HOST_CONFIG".to_owned(), file.display().to_string()))
         };
         let shell_kache = kache(self.kache_root().join(consts::KACHE_HOST_FILE));
-        let docker_kache = kache(
-            self.config
-                .host
-                .cache_root_linux
-                .join(consts::KACHE_DIR)
-                .join(consts::KACHE_DOCKER_HOST_FILE),
-        );
         let sccache_s3 = sccache_environment
-            .clone()
             .into_iter()
             .flatten()
             .chain(shell_kache)
-            .map(|(name, value)| format!(", \"{name}={value}\""))
-            .collect::<String>();
-        let docker_sccache_s3 = sccache_environment
-            .map(docker_client_environment)
-            .into_iter()
-            .flatten()
-            .chain(docker_kache)
+            .chain([
+                (
+                    consts::KACHE_LOCAL_ROOT_ENV.to_owned(),
+                    self.config
+                        .host
+                        .host_root
+                        .join("cache")
+                        .display()
+                        .to_string(),
+                ),
+                (
+                    "SCCACHE_CACHE_SIZE".to_owned(),
+                    self.config.host.sccache_size.clone(),
+                ),
+            ])
             .map(|(name, value)| format!(", \"{name}={value}\""))
             .collect::<String>();
         let macos = tokens
@@ -360,88 +311,21 @@ impl<'a> RunnerManager<'a> {
             .zip(1..)
             .map(|(token, number)| {
                 format!(
-                    "[[runners]]\n  name = \"kithara-mac-mini-macos-{number}\"\n  url = \"{url}\"\n  token = \"{token}\"\n  limit = 1\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-macos-{number}-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n"
+                    "[[runners]]\n  name = \"kithara-mac-mini-macos-{number}\"\n  url = \"{url}\"\n  token = \"{token}\"\n  limit = 1\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"KITHARA_CI_PINS={root}/services/pins.toml\", \"KITHARA_CI_HOST_BINARY={root}/toolchains/shared-bin/kithara-ci\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-macos-{number}-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n"
                 )
             })
             .collect::<String>();
         Ok(format!(
             "concurrent = {concurrency}\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={cache}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\", \"{cargo_build_jobs}\"{docker_sccache_s3}]\n\
-             [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\", \"{container_builds}:{builds}/workspaces/gitlab:rw\"]\n\n\
              {macos}\
-             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-android-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-release-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n",
-            tokens.linux,
-            docker_host(home, &self.config.host.colima_profile),
-            tokens.android,
-            tokens.release,
+             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"KITHARA_CI_PINS={root}/services/pins.toml\", \"KITHARA_CI_HOST_BINARY={root}/toolchains/shared-bin/kithara-ci\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-android-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
+             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  pre_get_sources_script = {preflight}\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"KITHARA_CI_PINS={root}/services/pins.toml\", \"KITHARA_CI_HOST_BINARY={root}/toolchains/shared-bin/kithara-ci\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-release-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n",
+            tokens.android, tokens.release,
         ))
-    }
-
-    /// A bind mount is resolved by the Docker daemon, which lives inside
-    /// colima's virtual machine — not on the Mac. colima mounts the CI home
-    /// and nothing else, so every other source the runner binds was missing
-    /// there, and Docker substitutes an empty directory for a source it cannot
-    /// find rather than refusing. That is how the Linux lane ran with no host
-    /// profile and no shared cache, reporting only that the profile it was
-    /// handed had somehow become a directory.
-    ///
-    /// The mounts name siblings of the CI home rather than the volume root:
-    /// colima already mounts the home, and lima rejects one mount nested
-    /// inside another. The container's builds directory sits on the build
-    /// volume, beside none of them, and apart from the tree the host's runners
-    /// build in.
-    fn colima_args(&self, colima: &str) -> Vec<String> {
-        let root = &self.config.host.host_root;
-        let mut args: Vec<String> = [
-            colima,
-            "start",
-            "--profile",
-            self.config.host.colima_profile.as_str(),
-            "--foreground",
-            "--cpus",
-            "5",
-            // Linking is this workspace's memory peak, not compiling it. At
-            // five gigabytes the kernel killed `ld` outright in both the test
-            // and the coverage lane, leaving only "terminated with signal 9"
-            // behind. The macOS guest keeps twelve of the host's twenty-four
-            // and the two rarely peak together.
-            "--memory",
-            "8",
-            "--disk",
-            "100",
-            "--vm-type",
-            "vz",
-            "--vz-rosetta",
-            "--mount-type",
-            "virtiofs",
-        ]
-        .iter()
-        .map(|value| (*value).to_string())
-        .collect();
-        for mount in [
-            format!("{}:w", root.join("cache").display()),
-            format!("{}:w", root.join("services").display()),
-            format!(
-                "{}:w",
-                self.config
-                    .host
-                    .build_root()
-                    .join(consts::CONTAINER_BUILDS)
-                    .display()
-            ),
-        ] {
-            args.push("--mount".to_string());
-            args.push(mount);
-        }
-        args
     }
 
     fn install_runner_agents(&self, home: &Path) -> Result<()> {
         let logs = self.config.host.host_root.join("logs");
-        let colima = self.config.host.brew_tool("colima").display().to_string();
-        let colima_args = self.colima_args(&colima);
-        let colima_args: Vec<&str> = colima_args.iter().map(String::as_str).collect();
         let gitlab_runner = self
             .config
             .host
@@ -449,46 +333,34 @@ impl<'a> RunnerManager<'a> {
             .display()
             .to_string();
         let agent_path = self.config.host.agent_path(home);
-        let agents = [
-            (
-                "colima",
-                launchd(
-                    "com.zvuk.kithara-ci.colima",
-                    &colima_args,
-                    &logs.join("colima.log"),
-                    &agent_path,
-                    "<key>KeepAlive</key><true/><key>ProcessType</key><string>Background</string>",
-                ),
-            ),
-            (
-                "gitlab-runner",
-                launchd(
-                    "com.zvuk.kithara-ci.gitlab-runner",
-                    &[
-                        &gitlab_runner,
-                        "run",
-                        "--config",
-                        &home
-                            .join(".gitlab-runner/config.toml")
-                            .display()
-                            .to_string(),
-                        "--working-directory",
-                        &self
-                            .config
-                            .host
-                            .build_root()
-                            .join("workspaces/gitlab")
-                            .display()
-                            .to_string(),
-                    ],
-                    &logs.join("gitlab-runner.log"),
-                    &agent_path,
-                    "<key>KeepAlive</key><true/><key>ProcessType</key><string>Interactive</string>\
+        let agents = [(
+            "gitlab-runner",
+            launchd(
+                "com.zvuk.kithara-ci.gitlab-runner",
+                &[
+                    &gitlab_runner,
+                    "run",
+                    "--config",
+                    &home
+                        .join(".gitlab-runner/config.toml")
+                        .display()
+                        .to_string(),
+                    "--working-directory",
+                    &self
+                        .config
+                        .host
+                        .build_root()
+                        .join("workspaces/gitlab")
+                        .display()
+                        .to_string(),
+                ],
+                &logs.join("gitlab-runner.log"),
+                &agent_path,
+                "<key>KeepAlive</key><true/><key>ProcessType</key><string>Interactive</string>\
                      <key>SoftResourceLimits</key><dict>\
                      <key>NumberOfFiles</key><integer>65536</integer></dict>",
-                ),
             ),
-        ];
+        )];
         fs::create_dir_all(self.agent_root())?;
         for (name, contents) in agents {
             let path = self
@@ -513,35 +385,27 @@ impl<'a> RunnerManager<'a> {
         .with_context(|| format!("installing shared {name}"))
     }
 
-    /// kache's host files, by where they are written: one for the shell
-    /// runners and one for the container runner, which reaches the store and
-    /// the cache endpoint by other paths. Without a scoped store there is no
-    /// remote to name, and kache keeps its defaults.
-    ///
-    /// They sit in a namespace of the cache share, not in a trust's: a runner
-    /// serves every trust, and a job that places its own store does so in
-    /// its own configuration, which outranks this layer.
+    /// Native bootstrap configuration shared by runners; each job selects its trust scope.
     pub(super) fn kache_host_files(&self) -> Result<Vec<(PathBuf, String)>> {
         let Some(environment) = self.store_environment()? else {
             return Ok(Vec::new());
         };
         let shared = self.kache_root();
-        let inside = self.config.host.cache_root_linux.join(consts::KACHE_DIR);
         let size = &self.config.host.sccache_size;
-        Ok(vec![
-            (
-                shared.join(consts::KACHE_HOST_FILE),
-                kache::host_config(&environment, &shared.join(consts::KACHE_STORE), size)?,
-            ),
-            (
-                shared.join(consts::KACHE_DOCKER_HOST_FILE),
-                kache::host_config(
-                    &docker_client_environment(environment),
-                    &inside.join(consts::KACHE_STORE),
-                    size,
-                )?,
-            ),
-        ])
+        Ok(vec![(
+            shared.join(consts::KACHE_HOST_FILE),
+            kache::host_config(
+                &environment,
+                &self
+                    .config
+                    .host
+                    .host_root
+                    .join("cache/bootstrap")
+                    .join(format!("macos-{}", std::env::consts::ARCH))
+                    .join(consts::KACHE_DIR),
+                size,
+            )?,
+        )])
     }
 
     fn kache_root(&self) -> PathBuf {
@@ -552,7 +416,7 @@ impl<'a> RunnerManager<'a> {
             .join(consts::KACHE_DIR)
     }
 
-    fn store_environment(&self) -> Result<Option<BTreeMap<String, String>>> {
+    pub(super) fn store_environment(&self) -> Result<Option<BTreeMap<String, String>>> {
         self.config
             .host
             .sccache_s3_env_file
@@ -587,34 +451,8 @@ impl<'a> RunnerManager<'a> {
     }
 }
 
-pub(super) fn docker_socket(home: &Path, profile: &str) -> PathBuf {
-    home.join(".colima").join(profile).join("docker.sock")
-}
-
-pub(super) fn docker_host(home: &Path, profile: &str) -> String {
-    format!("unix://{}", docker_socket(home, profile).display())
-}
-
-fn docker_client_environment(
-    mut environment: BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    if let Some(endpoint) = environment.get_mut("SCCACHE_ENDPOINT") {
-        for prefix in ["http://127.0.0.1:", "https://127.0.0.1:"] {
-            if let Some(port) = endpoint.strip_prefix(prefix) {
-                let scheme = prefix
-                    .split_once("://")
-                    .map_or("http", |(scheme, _)| scheme);
-                *endpoint = format!("{scheme}://host.docker.internal:{port}");
-                break;
-            }
-        }
-    }
-    environment
-}
-
 pub(super) struct Tokens {
     pub(super) macos: Vec<String>,
-    linux: String,
     android: String,
     release: String,
 }
@@ -627,7 +465,6 @@ impl Tokens {
             macos: (1..=registrations)
                 .map(|number| read_token(root, &format!("macos-{number}")))
                 .collect::<Result<_>>()?,
-            linux: read_token(root, "linux")?,
             android: read_token(root, "android")?,
             release: read_token(root, "release")?,
         })
@@ -761,7 +598,6 @@ mod tests {
             macos: (1..=config.host.job_concurrency)
                 .map(|number| format!("glrt-macos-{number}"))
                 .collect(),
-            linux: "glrt-linux".into(),
             android: "glrt-android".into(),
             release: "glrt-release".into(),
         }
@@ -778,12 +614,8 @@ mod tests {
         install_double(&bin, "kithara-ci");
         let process = Process::new(directory.path(), BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
-        let rendered: toml::Value = toml::from_str(
-            &manager
-                .runner_config(&manager.ci_home(), &tokens(&config))
-                .unwrap(),
-        )
-        .unwrap();
+        let rendered: toml::Value =
+            toml::from_str(&manager.runner_config(&tokens(&config)).unwrap()).unwrap();
         for runner in rendered["runners"].as_array().unwrap() {
             if runner["executor"].as_str() != Some("shell") {
                 continue;
@@ -894,11 +726,9 @@ mod tests {
             .expect("render runner agents");
 
         let agents = manager.agent_root();
-        let colima = fs::read_to_string(agents.join("com.zvuk.kithara-ci.colima.plist"))
-            .expect("read colima agent");
         let runner = fs::read_to_string(agents.join("com.zvuk.kithara-ci.gitlab-runner.plist"))
             .expect("read GitLab runner agent");
-        assert!(colima.contains("<key>ProcessType</key><string>Background</string>"));
+        assert!(!agents.join("com.zvuk.kithara-ci.colima.plist").exists());
         assert!(runner.contains("<key>ProcessType</key><string>Interactive</string>"));
         assert!(!runner.contains("<key>ProcessType</key><string>Background</string>"));
     }
@@ -1066,15 +896,10 @@ mod tests {
         let config = fixture();
         let process = Process::new(&root, BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
-        let home = config
-            .host
-            .host_root
-            .join("home")
-            .join(&config.host.ci_user);
         let tokens = tokens(&config);
 
         let rendered: toml::Value =
-            toml::from_str(&manager.runner_config(&home, &tokens).unwrap()).unwrap();
+            toml::from_str(&manager.runner_config(&tokens).unwrap()).unwrap();
         let runners = rendered["runners"].as_array().unwrap();
         let runner = |token: &str| {
             runners
@@ -1082,7 +907,7 @@ mod tests {
                 .find(|runner| runner["token"].as_str() == Some(token))
                 .unwrap_or_else(|| panic!("{token} has no runner, so its jobs will never be taken"))
         };
-        for token in [&tokens.linux, &tokens.android, &tokens.release] {
+        for token in [&tokens.android, &tokens.release] {
             runner(token);
         }
         for token in &tokens.macos {
@@ -1103,7 +928,7 @@ mod tests {
         let tokens = tokens(&config);
         let rendered: toml::Value = toml::from_str(
             &manager
-                .runner_config(&manager.ci_home(), &tokens)
+                .runner_config(&tokens)
                 .expect("render runner config"),
         )
         .expect("runner config is TOML");
@@ -1155,7 +980,7 @@ mod tests {
             )
             .expect("write a runner token");
         };
-        for name in ["linux", "android", "release", "macos-1"] {
+        for name in ["android", "release", "macos-1"] {
             write(name);
         }
 
@@ -1181,15 +1006,10 @@ mod tests {
         let config = fixture();
         let process = Process::new(&root, BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
-        let home = config
-            .host
-            .host_root
-            .join("home")
-            .join(&config.host.ci_user);
         let tokens = tokens(&config);
 
         let rendered: toml::Value =
-            toml::from_str(&manager.runner_config(&home, &tokens).unwrap()).unwrap();
+            toml::from_str(&manager.runner_config(&tokens).unwrap()).unwrap();
         assert_eq!(
             rendered["concurrent"].as_integer(),
             Some(config.host.job_concurrency as i64)
@@ -1197,7 +1017,7 @@ mod tests {
         let runners = rendered["runners"].as_array().unwrap();
         assert_eq!(
             runners.len(),
-            3 + config.host.job_concurrency,
+            2 + config.host.job_concurrency,
             "one registration per runner token"
         );
         assert_eq!(
@@ -1205,8 +1025,8 @@ mod tests {
                 .iter()
                 .filter(|runner| runner["executor"].as_str() == Some("docker"))
                 .count(),
-            1,
-            "the disposable Linux platform has one registration"
+            0,
+            "Mac runners must not require a Linux guest"
         );
         assert_eq!(
             runners
@@ -1230,7 +1050,41 @@ mod tests {
                 .all(|roots| roots[0] == roots[1]),
             "all shell registrations must contend on one host-global slot root"
         );
+        let deployed_inputs = [
+            (
+                "KITHARA_CI_PINS=",
+                config.host.host_root.join("services/pins.toml"),
+            ),
+            (
+                "KITHARA_CI_HOST_BINARY=",
+                config
+                    .host
+                    .host_root
+                    .join("toolchains/shared-bin/kithara-ci"),
+            ),
+        ];
         for runner in runners {
+            let environment = runner["environment"].as_array().unwrap();
+            for (prefix, path) in &deployed_inputs {
+                let values: Vec<&str> = environment
+                    .iter()
+                    .filter_map(toml::Value::as_str)
+                    .filter(|entry| entry.starts_with(prefix))
+                    .collect();
+                if runner["executor"].as_str() == Some("shell") {
+                    assert_eq!(
+                        values,
+                        [format!("{prefix}{}", path.display())],
+                        "{} must use deployed host inputs",
+                        runner["name"]
+                    );
+                } else {
+                    assert!(
+                        values.is_empty(),
+                        "the guest cannot read host service paths"
+                    );
+                }
+            }
             assert!(
                 runner["environment"]
                     .as_array()
@@ -1243,23 +1097,6 @@ mod tests {
                 runner["name"]
             );
         }
-        let linux = runners
-            .iter()
-            .find(|runner| runner["name"].as_str() == Some("kithara-mac-mini-linux"))
-            .unwrap();
-        assert_eq!(
-            linux["docker"]["image"].as_str(),
-            Some(consts::LINUX_LATEST_IMAGE)
-        );
-        assert_eq!(linux["docker"]["pull_policy"].as_str(), Some("never"));
-        assert_eq!(
-            linux["docker"]["allowed_pull_policies"][0].as_str(),
-            Some("never")
-        );
-        assert_eq!(
-            linux["docker"]["allowed_images"][0].as_str(),
-            Some(consts::LINUX_LATEST_IMAGE)
-        );
     }
 
     fn scoped_config(directory: &Path) -> CiConfig {
@@ -1278,10 +1115,6 @@ mod tests {
         config
     }
 
-    /// A job that compiles before it places its own store — the xtask
-    /// bootstrap, a host job — reaches kache's remote and a store on the cache
-    /// share through the host file its runner names. The container reaches
-    /// both through its own paths.
     #[test]
     fn every_runner_names_a_kache_host_file_it_can_reach() {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -1291,28 +1124,21 @@ mod tests {
         let files = manager.kache_host_files().expect("the host files render");
         let rendered: toml::Value = toml::from_str(
             &manager
-                .runner_config(&manager.ci_home(), &tokens(&config))
+                .runner_config(&tokens(&config))
                 .expect("render runner config"),
         )
         .expect("runner config is TOML");
 
         let shared = config.host.host_root.join("cache").join(consts::KACHE_DIR);
-        let inside = config.host.cache_root_linux.join(consts::KACHE_DIR);
         for runner in rendered["runners"].as_array().expect("runners") {
-            let docker = runner.get("docker").is_some();
-            let (named, store, endpoint) = if docker {
-                (
-                    inside.join(consts::KACHE_DOCKER_HOST_FILE),
-                    inside.join(consts::KACHE_STORE),
-                    "http://host.docker.internal:19000",
-                )
-            } else {
-                (
-                    shared.join(consts::KACHE_HOST_FILE),
-                    shared.join(consts::KACHE_STORE),
-                    "http://127.0.0.1:19000",
-                )
-            };
+            let named = shared.join(consts::KACHE_HOST_FILE);
+            let store = config
+                .host
+                .host_root
+                .join("cache/bootstrap")
+                .join(format!("macos-{}", std::env::consts::ARCH))
+                .join(consts::KACHE_DIR);
+            let endpoint = "http://127.0.0.1:19000";
             let entry = format!("KACHE_HOST_CONFIG={}", named.display());
             assert!(
                 runner["environment"]
@@ -1343,6 +1169,28 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_compiler_stores_belong_to_their_execution_kernel() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let config = scoped_config(directory.path());
+        let process = Process::new(Path::new("/"), BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        for (path, contents) in manager.kache_host_files().expect("host files") {
+            let config: toml::Value = toml::from_str(&contents).expect("host configuration");
+            let store = Path::new(
+                config["cache"]["local_store"]
+                    .as_str()
+                    .expect("local store"),
+            );
+            assert_eq!(path.file_name(), Some(OsStr::new(consts::KACHE_HOST_FILE)));
+            assert!(
+                store
+                    .components()
+                    .any(|part| part.as_os_str().to_string_lossy().starts_with("macos-"))
+            );
+        }
+    }
+
+    #[test]
     fn every_runner_inherits_the_configured_s3_cache_environment() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -1363,17 +1211,12 @@ mod tests {
         let tokens = tokens(&config);
         let rendered: toml::Value = toml::from_str(
             &manager
-                .runner_config(&manager.ci_home(), &tokens)
+                .runner_config(&tokens)
                 .expect("render runner config"),
         )
         .expect("runner config is TOML");
 
-        for (index, runner) in rendered["runners"]
-            .as_array()
-            .expect("runners")
-            .iter()
-            .enumerate()
-        {
+        for runner in rendered["runners"].as_array().expect("runners") {
             assert!(
                 runner["environment"]
                     .as_array()
@@ -1383,11 +1226,7 @@ mod tests {
                 "{} does not inherit the S3 cache: {runner}",
                 runner["name"]
             );
-            let endpoint = if index == 0 {
-                "SCCACHE_ENDPOINT=http://host.docker.internal:19000"
-            } else {
-                "SCCACHE_ENDPOINT=http://127.0.0.1:19000"
-            };
+            let endpoint = "SCCACHE_ENDPOINT=http://127.0.0.1:19000";
             assert!(
                 runner["environment"]
                     .as_array()
@@ -1400,12 +1239,6 @@ mod tests {
         }
     }
 
-    /// A registration names what is the same for every checkout it holds:
-    /// one Cargo home per side of the VM boundary, kept on a cache cleanup
-    /// leaves alone. Each host runner also names a compiler-cache socket of
-    /// its own for `production/main`'s jobs, which name none, while the host
-    /// serves main: a job of this layout names one per checkout, and a job's
-    /// variable outranks the runner's.
     #[test]
     fn every_runner_names_one_cargo_home_and_a_compiler_cache_socket_of_its_own() {
         let config = fixture();
@@ -1414,7 +1247,7 @@ mod tests {
         let tokens = tokens(&config);
         let rendered: toml::Value = toml::from_str(
             &manager
-                .runner_config(&manager.ci_home(), &tokens)
+                .runner_config(&tokens)
                 .expect("render runner config"),
         )
         .expect("runner config is TOML");
@@ -1433,29 +1266,13 @@ mod tests {
                 .iter()
                 .find_map(|entry| entry.strip_prefix("CARGO_HOME="))
                 .unwrap_or_else(|| panic!("{name} names no Cargo home"));
-            if runner.get("docker").is_none() {
-                shell_homes.insert(name, home);
-                let socket = environment
-                    .iter()
-                    .find_map(|entry| entry.strip_prefix("SCCACHE_SERVER_UDS="))
-                    .unwrap_or_else(|| panic!("{name} names no compiler-cache socket"));
-                shell_sockets.insert(socket, name);
-                continue;
-            }
-            let namespace = Path::new(home)
-                .strip_prefix(&config.host.cache_root_linux)
-                .unwrap_or_else(|_| panic!("{name} keeps its Cargo home off the cache share"))
-                .components()
-                .next()
-                .expect("the home is a namespace of the share");
-            assert!(
-                config
-                    .host
-                    .cache_namespaces
-                    .iter()
-                    .any(|kept| OsStr::new(kept) == namespace.as_os_str()),
-                "{name} keeps its Cargo home in {namespace:?}, which cleanup takes whole"
-            );
+            assert!(runner.get("docker").is_none(), "Mac runners must be native");
+            shell_homes.insert(name, home);
+            let socket = environment
+                .iter()
+                .find_map(|entry| entry.strip_prefix("SCCACHE_SERVER_UDS="))
+                .unwrap_or_else(|| panic!("{name} names no compiler-cache socket"));
+            shell_sockets.insert(socket, name);
         }
         let homes: Vec<&&str> = shell_homes.values().collect();
         assert_eq!(
@@ -1478,188 +1295,6 @@ mod tests {
         );
     }
 
-    /// A lock taken inside the virtual machine is invisible on the host, and
-    /// the reverse, so a reclaim on either side may walk only build
-    /// directories whose leases it can see. The container's checkouts, and the
-    /// build roots beside them, sit in a host tree of their own: no host runner
-    /// builds in it, and the virtual machine sees no host runner's tree.
-    #[test]
-    fn the_container_builds_in_a_tree_no_host_runner_shares() {
-        let config = fixture();
-        let process = Process::new(Path::new("/"), BTreeMap::new());
-        let manager = RunnerManager::new(&config, &process);
-        let tokens = tokens(&config);
-        let rendered: toml::Value = toml::from_str(
-            &manager
-                .runner_config(&manager.ci_home(), &tokens)
-                .expect("render runner config"),
-        )
-        .expect("runner config is TOML");
-        let runners = rendered["runners"].as_array().expect("runners");
-        let builds = |runner: &toml::Value| -> PathBuf {
-            PathBuf::from(runner["builds_dir"].as_str().expect("a builds directory"))
-        };
-        let host_trees: Vec<PathBuf> = runners
-            .iter()
-            .filter(|runner| runner.get("docker").is_none())
-            .map(builds)
-            .collect();
-        assert!(!host_trees.is_empty(), "no runner builds on the host");
-        let shares = |path: &Path| {
-            host_trees
-                .iter()
-                .any(|tree| path.starts_with(tree) || tree.starts_with(path))
-        };
-
-        let args = manager.colima_args("colima");
-        for mount in args
-            .windows(2)
-            .filter(|pair| pair[0] == "--mount")
-            .map(|pair| Path::new(pair[1].trim_end_matches(":w")))
-        {
-            assert!(
-                !shares(mount),
-                "the virtual machine mounts {}, where a host runner builds",
-                mount.display()
-            );
-        }
-        let mut containers = 0;
-        for runner in runners
-            .iter()
-            .filter(|runner| runner.get("docker").is_some())
-        {
-            let name = runner["name"].as_str().expect("a runner has a name");
-            let destination = format!(":{}:rw", builds(runner).display());
-            let source = runner["docker"]["volumes"]
-                .as_array()
-                .expect("docker volumes")
-                .iter()
-                .filter_map(toml::Value::as_str)
-                .find_map(|volume| volume.strip_suffix(&destination))
-                .unwrap_or_else(|| panic!("{name} builds in a directory the host never sees"));
-            assert!(
-                !shares(Path::new(source)),
-                "{name} builds in {source}, where a host runner builds"
-            );
-            containers += 1;
-        }
-        assert!(containers > 0, "no runner builds in a container");
-    }
-
-    /// The runner config and the colima agent are written by two different
-    /// functions and read by two different programs; nothing but this test
-    /// says they have to agree. When they stopped agreeing, Docker filled the
-    /// gap with empty directories and the lane failed several steps later,
-    /// describing a file as a directory.
-    #[test]
-    fn colima_mounts_every_source_the_docker_runner_binds() {
-        let config = fixture();
-        let process = Process::new(Path::new("/"), BTreeMap::new());
-        let manager = RunnerManager::new(&config, &process);
-        let home = config
-            .host
-            .host_root
-            .join("home")
-            .join(&config.host.ci_user);
-        let tokens = tokens(&config);
-        let rendered: toml::Value = toml::from_str(&manager.runner_config(&home, &tokens).unwrap())
-            .expect("runner config is TOML");
-        // The pipeline builds `SCCACHE_DIR` out of this, so a runner that
-        // leaves it unset would resolve the compiler cache against the
-        // filesystem root and fail every build on that executor.
-        for runner in rendered["runners"].as_array().expect("runners is an array") {
-            let environment = runner["environment"]
-                .as_array()
-                .expect("every runner declares an environment");
-            assert!(
-                environment
-                    .iter()
-                    .filter_map(toml::Value::as_str)
-                    .any(|entry| entry.starts_with("KITHARA_CI_CACHE_ROOT=")),
-                "{} does not name a cache root",
-                runner["name"]
-            );
-        }
-
-        let volumes = rendered["runners"]
-            .as_array()
-            .expect("runners is an array")
-            .iter()
-            .filter_map(|runner| runner.get("docker")?.get("volumes")?.as_array())
-            .flatten()
-            .filter_map(toml::Value::as_str);
-
-        let args = manager.colima_args("colima");
-        let mounts: Vec<&str> = args
-            .windows(2)
-            .filter(|pair| pair[0] == "--mount")
-            .map(|pair| pair[1].trim_end_matches(":w"))
-            .collect();
-        assert!(!mounts.is_empty(), "the agent declares no mounts");
-
-        let mut checked = 0;
-        for volume in volumes {
-            let source = volume.split(':').next().expect("a volume has a source");
-            if !source.starts_with('/') || source.starts_with(home.to_str().expect("UTF-8 home")) {
-                continue;
-            }
-            assert!(
-                mounts.iter().any(|mount| source.starts_with(mount)),
-                "{source} is bound into containers but colima does not mount it"
-            );
-            checked += 1;
-        }
-        assert!(checked > 0, "no host-side bind sources were checked");
-    }
-
-    /// One colima instance carries the Linux lane, and the profile naming it is
-    /// read at three sites: the call that creates the instance, the socket the
-    /// runner config hands the Docker executor, and the socket cleanup prunes
-    /// the build cache through. A profile left at its default cannot tell a
-    /// site that reads the key from one that spells the name out, so this seeds
-    /// it away from the default.
-    #[test]
-    fn the_configured_colima_profile_reaches_the_instance_and_its_socket() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let mut config = fixture();
-        config.host.colima_profile = "kithara-probe".to_owned();
-        let process = Process::new(&root, BTreeMap::new());
-        let manager = RunnerManager::new(&config, &process);
-        let home = config
-            .host
-            .host_root
-            .join("home")
-            .join(&config.host.ci_user);
-        let tokens = tokens(&config);
-
-        let args = manager.colima_args("colima");
-        let named = args
-            .windows(2)
-            .find(|pair| pair[0] == "--profile")
-            .map(|pair| pair[1].as_str());
-        assert_eq!(named, Some("kithara-probe"));
-
-        let socket = docker_socket(&home, &config.host.colima_profile);
-        assert!(
-            socket.ends_with(".colima/kithara-probe/docker.sock"),
-            "{}",
-            socket.display()
-        );
-
-        let rendered = manager.runner_config(&home, &tokens).unwrap();
-        assert!(
-            rendered.contains(&docker_host(&home, &config.host.colima_profile)),
-            "the runner config does not point at the configured profile's socket: {rendered}"
-        );
-        assert!(
-            !rendered.contains(".colima/kithara/docker.sock"),
-            "the runner config still names the default profile's socket: {rendered}"
-        );
-    }
-
     #[test]
     fn generated_configs_trust_the_platform_store_only() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1669,14 +1304,9 @@ mod tests {
         let config = fixture();
         let process = Process::new(&root, BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
-        let home = config
-            .host
-            .host_root
-            .join("home")
-            .join(&config.host.ci_user);
         let tokens = tokens(&config);
 
-        let runner = manager.runner_config(&home, &tokens).unwrap();
+        let runner = manager.runner_config(&tokens).unwrap();
         for rendered in [&runner] {
             for forbidden in [
                 "tls-ca-file",

@@ -283,6 +283,7 @@ mod tests {
             suspended: false,
             now: Default::default(),
             delivery: Default::default(),
+            deck_delivery: Default::default(),
             output: &output,
             deck: &deck,
         };

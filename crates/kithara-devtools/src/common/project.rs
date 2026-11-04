@@ -32,6 +32,8 @@ pub(crate) fn load_optional_config<T: Default + DeserializeOwned>(
 #[config(builder(none), fields(nested))]
 pub struct ProjectConfig {
     pub architecture: ArchitectureConfig,
+    #[serde(rename = "ast-grep")]
+    pub ast_grep: AstGrepConfig,
     pub audit_clippy: AuditClippyConfig,
     pub ci_report: CiReportConfig,
     pub clippy: ClippyConfig,
@@ -49,6 +51,16 @@ pub struct ProjectConfig {
     pub tools: crate::common::tools::ToolsConfig,
     #[serde(default, rename = "workspace-scan")]
     pub workspace_scan: WorkspaceScan,
+}
+
+/// Source scope for the workspace's own ast-grep configuration.
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
+pub struct AstGrepConfig {
+    /// Retain an AST domain that also covers non-Rust project files.
+    pub default_roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]

@@ -12,21 +12,20 @@ where
     F: TrackFactory<S>,
 {
     fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+        let sent = sync_tracks(self.tracks_mut(), on, out)?;
         self.factory_mut().set_synced(on);
-        let mut sent = None;
-        for track in self.tracks_mut() {
-            let seq = track.sync(on, out)?;
-            if seq.is_some() {
-                sent = seq;
-            }
-        }
         Ok(sent)
     }
 
-    fn retime(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
+    fn retime(
+        &mut self,
+        trajectory: &TempoTrajectory,
+        frames: &[SessionFrame],
+        out: &mut Outbox<'_, S>,
+    ) {
         self.factory_mut().set_trajectory(trajectory);
         for track in self.tracks_mut() {
-            track.retime(trajectory, at, out);
+            track.retime(trajectory, frames, out);
         }
     }
 
@@ -36,9 +35,10 @@ where
         }
     }
 
-    fn synced(&self) -> bool {
-        self.current_track()
-            .map_or_else(|| self.factory().synced(), LinkedPlayer::synced)
+    delegate::delegate! {
+        to self.factory() {
+            fn synced(&self) -> bool;
+        }
     }
 
     fn lead(&self, delivery: FrameCount) -> Option<FrameCount> {
@@ -75,6 +75,33 @@ where
         self.factory_mut().set_trajectory(trajectory);
         for track in self.tracks_mut() {
             track.realign(trajectory, at, out);
+        }
+    }
+}
+
+/// Syncs each track in turn; a refusal turns back the tracks this call
+/// turned and answers the refusal.
+fn sync_tracks<'a, S, T>(
+    mut tracks: impl Iterator<Item = &'a mut T>,
+    on: bool,
+    out: &mut Outbox<'_, S>,
+) -> Result<Option<Seq>, PlayError>
+where
+    T: LinkedPlayer<S> + 'a,
+{
+    let Some(track) = tracks.next() else {
+        return Ok(None);
+    };
+    let before = track.synced();
+    let sent = track.sync(on, out)?;
+
+    match sync_tracks(tracks, on, out) {
+        Ok(later) => Ok(later.or(sent)),
+        Err(error) => {
+            if track.synced() != before {
+                track.sync(!on, out)?;
+            }
+            Err(error)
         }
     }
 }

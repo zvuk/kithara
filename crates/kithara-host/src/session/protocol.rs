@@ -4,8 +4,11 @@ use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 use kithara_play::PlayError;
 pub(crate) use kithara_play::{SessionError, SessionSampleRate};
 
-pub(crate) type StartStreamFn<T> =
-    Box<dyn FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static>;
+pub(crate) type StartStreamFn<T> = Box<
+    dyn FnMut(&mut FirewheelContext, u32) -> Result<super::state::SessionStream<T>, String>
+        + Send
+        + 'static,
+>;
 pub(crate) type HostPostbox<C> = Postbox<C, PlayError>;
 pub(crate) type HostMailbox<C> = Mailbox<C, PlayError>;
 
@@ -35,12 +38,11 @@ pub(crate) trait HostDispatcher<C>: MaybeSend + MaybeSync {
 pub(crate) fn ask<C, D: HostDispatcher<C> + ?Sized>(
     dispatcher: &D,
     command: C,
-    command_name: &str,
 ) -> Result<(), HostDispatchError> {
     let mut ticket = dispatcher.dispatch(command)?;
     loop {
         hang_tick!(format!(
-            "host command {command_name}, post {} has no owner answer",
+            "host command post {} has no owner answer",
             ticket.seq().get()
         ));
         match ticket
@@ -108,7 +110,7 @@ mod tests {
 
     #[kithara::test]
     fn a_post_the_session_drops_reads_unanswered() {
-        let asked = ask(&session(|| None), HostCommand::Restart, "Restart");
+        let asked = ask(&session(|| None), HostCommand::Restart);
 
         assert!(matches!(asked, Err(HostDispatchError::Unanswered)));
     }
@@ -118,7 +120,6 @@ mod tests {
         let asked = ask(
             &session(|| Some(Err(PlayError::Late))),
             HostCommand::Restart,
-            "Restart",
         );
 
         assert!(matches!(
@@ -129,7 +130,7 @@ mod tests {
 
     #[cfg(panic = "unwind")]
     #[kithara::test(hang_timeout_secs(1))]
-    fn an_unanswered_ask_fails_with_its_command_within_the_watchdog_budget() {
+    fn an_unanswered_ask_fails_with_its_post_within_the_watchdog_budget() {
         struct StalledSession {
             postbox: HostPostbox<BaseCommand>,
             _mailbox: Mutex<HostMailbox<BaseCommand>>,
@@ -152,7 +153,7 @@ mod tests {
             _mailbox: Mutex::new(mailbox),
         };
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = ask(&dispatcher, HostCommand::Restart, "Restart");
+            let _ = ask(&dispatcher, HostCommand::Restart);
         }))
         .expect_err("an unanswered ask must trip the watchdog");
         let reason = panic
@@ -168,7 +169,7 @@ mod tests {
             .expect("elapsed nanoseconds");
         assert!(elapsed_ns >= kithara_platform::time::Duration::from_secs(1).as_nanos());
         assert!(elapsed_ns < kithara_platform::time::Duration::from_secs(2).as_nanos());
-        assert!(reason.contains("host command Restart"), "{reason}");
+        assert!(reason.contains("host command post"), "{reason}");
         assert!(reason.contains("has no owner answer"), "{reason}");
     }
 }

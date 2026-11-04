@@ -11,13 +11,10 @@ message: |
       // ❌  items.iter().map(f).collect::<Vec<_>>().into_iter().filter(p).collect()
       // ✅  items.iter().map(f).filter(p).collect::<Vec<_>>()
 
-  Suppress with `// ast-grep-ignore: perf.no-collect-iter-roundtrip`
-  when the intermediate `Vec` is needed (e.g. converting to
-  `Arc<[T]>` via `.into()`, releasing a borrow before consuming).
 severity: warning
 language: Rust
 files:
-  - crates/**/*.rs
+  - "crates/**/*.rs"
 ignores:
   - "**/tests/**"
   - "**/test_*.rs"

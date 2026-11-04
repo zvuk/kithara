@@ -29,12 +29,19 @@ and pins under `/Volumes/KitharaCI/services` and publishes the profile where the
 lanes read it. Run the rest in the logged-in `kithara-ci` GUI session, against
 those installed copies.
 
-The Linux image is built from the pins alone: `RUST_VERSION` and
+On the Linux host, the image is built from the pins alone: `RUST_VERSION` and
 `RUST_BASE_DIGEST` select the base, every tool version arrives as a build
-argument. The runners name the floating tag — `kithara-ci:linux-latest` and
-its siblings — never the pin, so a pin bump cannot strand a lane on an image
+argument. The runners name the floating tag — the toolchain image and
+its runner siblings — never the pin, so a pin bump cannot strand a lane on an image
 nobody built: the pin says what to build, the floating tag says what to run,
 and whatever builds an image moves the tag onto it.
+
+Xcode follows the host installation rather than an exact repository version gate.
+Every Apple lane reports its version and requires completed first-launch setup.
+Target snapshot keys include the actual Xcode and macOS SDK builds; dependency
+source snapshots remain independent of the Apple toolchain. After an Xcode
+installation or update, finish its licence and first-launch components through
+host setup before admitting Apple jobs.
 
 Declared lanes select the checkout's nextest pin in child `PATH` from a
 versioned cache scoped to trust and host platform. A cache miss installs it as
@@ -45,8 +52,7 @@ and privileged fleet provisioning.
 
 `ci host provision` is the roll-out, run on the machine it provisions and
 reading everything from the commit it runs on. The macOS host reinstalls its
-services, rewrites its runner configuration, makes sure the pinned Linux image
-is present and reloads its agents; a Linux host builds the images its profile
+services, rewrites its native runner configuration and reloads its agents; a Linux host builds the images its profile
 asks for, creates every cache mount its runners use and hands it to the job
 user, and installs its units. Every step is idempotent — an image that is
 already there is only retagged — so a run costs seconds when nothing moved.
@@ -74,11 +80,12 @@ them:
 ## GitLab runners
 
 One `glrt-...` project runner token per file, mode `0600`, at
-`~/.config/kithara-ci/runner-<name>.token` for `macos`, `linux`, `android` and
+`~/.config/kithara-ci/runner-<name>.token` for `macos-1`, `macos-2`, `android` and
 `release`, tagged to match each lane's `tags:`; keep the release runner
-protected. `configure-runners` writes the executors, Docker for Linux and host
-shell for the rest, so the Apple lane reuses host filesystem and cache roots
-across jobs, not a machine per build.
+protected. `configure-runners` writes native shell executors. Apple and
+dependency-audit lanes share the host filesystem and cache roots across jobs.
+Linux and browser jobs run on the separate GitHub Linux fleet; the Mac has no
+Linux runner, Docker image builder or Colima launch agent.
 
 Set `build_root` when checkouts need a separate storage location from
 `host_root`; every runner uses it for `builds_dir`.
@@ -113,8 +120,7 @@ capture.
 
 The runner's launch agent uses launchd's `Interactive` process type and host
 shell jobs inherit that scheduling policy, so marking the parent `Background`
-throttles Cargo and the single-threaded source linters. Colima stays background;
-Linux work has its own container CPU limit.
+throttles Cargo and the single-threaded source linters.
 
 ## Pipeline scheduling
 
@@ -189,39 +195,36 @@ calling container's CPU count, so independent containers would otherwise
 compete for one container's slots. Other invocations retain their scheduler
 setting, enabled by default.
 
-Each host runs its own RustFS stack, the compose project `kithara-ci-cache`
-published on `127.0.0.1:19000`; the two hosts share no cache. Jobs reach it
-through the `rc` client.
-`docker/ci-cache.compose.yml` declares it, and
-`docker/ci-cache/linux.env.example` and `docker/ci-cache/macos.env.example`
-give the shape of the environment each is started with. The environment itself
-lives on the host, outside the repository, because it names directories and
-quotas of that machine.
+Each office has RustFS; their firewalls prevent a shared
+endpoint. No public S3 route is needed. Mac runs native RustFS under launchd
+on `127.0.0.1:9000`. Linux
+retains the Compose service published on `127.0.0.1:19000`.
 
-Everything the stack keeps - the admin credentials, the objects, the client
-keys - sits in a directory on the host's disk that the environment names. A
-named volume lives wherever the Docker daemon keeps it, inside colima's
-virtual machine on the Mac, so a reset of that daemon would take the store and
-the admin password with it, and every client key the runners hold would stop
-working.
+As the Mac CI user, run `ci host mac install-cache` with the profile and pins. It verifies the pinned archive, installs under `toolchains/rustfs/`
+and stages `com.zvuk.kithara-ci.cache.plist` without starting it. Scopes and
+quotas come from `services/ci-cache/macos.env`. The agent runs
+`ci cache serve --root <host-root>/services/ci-cache` with a private
+`admin-home` for rc; launchd restarts the supervisor when a child fails.
 
-The server needs RustFS 1.0.1 or later. 1.0.0 answers a bucket quota request
-with 503 for about ten seconds after it reports ready (rustfs/rustfs#8014), so
-a setup started on a fresh stack fails at its first quota request.
+Drain writers and retain an offline copy before replacing the old container.
+Never open the same writable data directory from both servers. Stop the old
+container, disable its restart, load the native agent, verify scoped writes
+and independent compiler reuse, update runner environments, then resume jobs.
+Rollback stops native RustFS before restoring the offline data, configuration
+and old container before the guest is retired. After native audit and cache
+acceptance, remove the obsolete Colima agent and profile with no jobs running.
+Its old RustFS bind mount names the native data directory: delete the VM through
+Colima, never the host-mounted service data.
 
-The stack is one container. Its image carries RustFS, `rc` and `xtask`, and
-runs `xtask ci cache serve`: it writes the administrator's credentials if
-there are none, starts RustFS as its child, waits for it to answer ready,
-creates each scope's bucket, lifecycle and client key, and then runs the
-evictor beside the store. They start and stop together: a stop signal is
-passed to RustFS and waited on, and when either RustFS or the evictor ends,
-the container ends and Docker restarts it. Every start applies the setup
-again, from the code the store is served with. `serve` builds every bucket
-policy from `ci::cache::provision`. So the copy of this repository the image
-was built from, not the repository itself, decides what the live policy says.
-The Linux host's deployment copy is `/etc/kithara-ci/cache-compose/source`;
-refreshing it is copying a tree over that path, keeping the one it replaces as
-`source.before-<stamp>` beside it, and rebuilding the image from it.
+Both supervisors preserve administrator and client identities, initialize
+scope buckets and lifecycle rules through `ci::cache::provision`, and run the
+audit receiver and evictor beside RustFS. State lives in host directories;
+Linux state must survive container resets; do not use Docker named volumes.
+
+Linux uses `docker/ci-cache.compose.yml` and a host-owned environment file.
+Docker init propagates stop signals.
+Refresh `/etc/kithara-ci/cache-compose/source`, retain the previous tree as
+`source.before-<stamp>`, and rebuild to deploy changed bucket policy.
 
 Which copy a running stack was actually started from is a question to ask the
 stack, not this page:
@@ -275,6 +278,12 @@ a per-scope quota never reached it, and every setup set each scope to
 `CACHE_ENV_FILE`, and the service reads it as its `env_file`. A copy of the
 source older than that still flattens the quotas: refresh it before starting
 the stack.
+
+Policy checks and routine counters read the pinned kache daemon's IPC
+statistics on Unix. They do not run `kache stats --json`, whose disk accounting
+walks blobs and synchronizes Linux extents. Full event reports remain available.
+Maintenance runs `kache gc` and checks its exit status; its JSON rendering also
+probes extents and must not run concurrently with normal CI work.
 
 The compiler cache has no age rule: a hit does not renew an object's date, so
 an age rule expires first the entries every build reads. The evictor keeps
@@ -332,26 +341,20 @@ is the whole answer.
 
 `build_cache_size` caps the build directories visible to one kernel together.
 Every CI lane enforces it before admission, even when free space is above the
-rejection floor. Mac cleanup owns native builds; containers own the separate
-Colima tree because advisory locks do not cross that boundary. Bootstrap xtask
+rejection floor. Mac cleanup owns native builds. Bootstrap xtask
 also collects superseded Cargo units under its build and Cargo profile locks,
 retaining the newest units, their reachable dependencies and a one-day window.
 RustFS holds reusable compiler entries; Cargo still materializes the binaries,
 linker inputs and build-script output a job executes in its local target.
 Warm builds are the last
-rung: when stale trees, the Docker build cache and the guest trim still leave
+rung: when stale trees and compiler-cache collection still leave
 the volume at `Aggressive` or worse, the pass reclaims what it is short of the
 soft floor, evicting past the cap. What its sweeps cannot show:
 
-- The Linux guest's `/var/lib/docker` data disk is not mounted `discard` as its
-  root is, so deleted layers stay allocated in a sparse file this volume pays
-  for; every cleanup holds Docker's build cache to `docker_build_cache_size` and
-  trims the `colima_profile` instance, whatever the pressure.
 - A cache namespace that stops being written to goes invisible rather than
   stale, leaving a retired tool's store behind; `cache_namespaces` lists the
   live ones and cleanup takes the rest whole. A namespace with an owner belongs
-  there even when it is quiet: `cargo` holds the Linux guest's Cargo home,
-  which a job fetches into only when its lockfile changes, and `kache` holds
+  there even when it is quiet: `cargo` holds downloaded packages and `kache` holds
   kache's host files and the store of compiles no job placed.
   An installed profile carries the list verbatim, so adding a name reaches a
   running host only by editing its `/etc/kithara-ci/mac-host.toml` as well.
@@ -370,8 +373,8 @@ soft floor, evicting past the cap. What its sweeps cannot show:
   and are pruned on age alone, an `lsof` walk per candidate costing hours over
   that backlog.
 
-Automatic cleanup preserves the shared Colima VM, its Docker data disk and the
-services running inside it. If safe cache reclamation cannot restore the free-space
+Automatic cleanup preserves service data and configuration. If safe cache
+reclamation cannot restore the free-space
 floor, cleanup reports failure and preflight refuses new jobs. Runtime deletion
 is an explicit maintenance operation, never a disk-pressure cleanup step.
 
@@ -384,8 +387,6 @@ bucket eviction bounds remote objects separately and cannot reclaim local copies
 Remote prediction hints expire after one day through bucket lifecycle; they are
 re-derived when absent. Compiler manifests and packs remain under the evictor's
 last-use policy, so reading an old result does not make it expire by write age.
-Stores mounted into the Linux guest stay with its owner: guest locks do not
-exclude host writers, so host collection cannot use those locks as a safety fence.
 
 Health and cleanup run through launchd, and directly as `ci host mac health` /
 `ci host mac cleanup`. A `KeepAlive` agent that dies on startup stays loaded

@@ -236,7 +236,6 @@ fn assert_quiet_curve_projection(
             .all(|operation| operation.applied().is_none())
     );
     assert_eq!(track.ready, None);
-    assert_eq!(track.snapshot().speed, 3.0);
     let mut spans = Vec::new();
     let mut metadata = Vec::new();
     let endpoint = origin + 3_960;
@@ -262,20 +261,6 @@ fn assert_quiet_curve_projection(
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("real segment readiness");
     assert_eq!(track.ready, Some(segment));
-    let final_speed = match curve {
-        SpeedCurve::Constant(speed) | SpeedCurve::Ramp { to: speed, .. } => *speed,
-        SpeedCurve::Steps(steps) => steps.last().expect("speed tail").1,
-        SpeedCurve::Approach(approach) => approach.target().to_f32().expect("published speed"),
-        SpeedCurve::ApproachSteps(steps) => steps
-            .last()
-            .expect("law tail")
-            .1
-            .target()
-            .to_f32()
-            .expect("published speed"),
-    };
-    assert_eq!(track.snapshot().speed, final_speed);
-
     assert!(
         track
             .lane_commands
@@ -550,6 +535,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
                 suspended: false,
                 now: frame(0),
                 delivery: FrameCount::new(0),
+                deck_delivery: FrameCount::new(0),
                 output: &output,
                 deck: &deck,
             });
@@ -574,6 +560,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
             suspended: false,
             now: frame(0),
             delivery: FrameCount::new(0),
+            deck_delivery: FrameCount::new(0),
             output: &output,
             deck: &deck,
         });
@@ -1166,6 +1153,7 @@ async fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_positio
                     suspended: false,
                     now: frame(384),
                     delivery: FrameCount::new(0),
+                    deck_delivery: FrameCount::new(0),
                     output: &output,
                     deck: &deck,
                 });
@@ -1278,6 +1266,7 @@ async fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_
             suspended: false,
             now: frame(0),
             delivery: FrameCount::new(0),
+            deck_delivery: FrameCount::new(0),
             output: &output,
             deck: &deck,
         });

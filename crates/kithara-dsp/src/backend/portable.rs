@@ -16,6 +16,19 @@ mod consts {
     pub(super) const PAIR_MEAN: f32 = 0.5;
 }
 
+pub(crate) fn multiply_in_place(samples: &mut [f32], gains: &[f32]) -> usize {
+    dispatch!(Level::new(), simd => multiply_in_place_kernel(simd, samples, gains))
+}
+
+#[inline(always)]
+pub(super) fn multiply_in_place_kernel<S: Simd>(
+    simd: S,
+    samples: &mut [f32],
+    gains: &[f32],
+) -> usize {
+    update(simd, samples, [gains], |x, [gain]| Mul::mul(x, gain))
+}
+
 pub(crate) fn deinterleave_pair(input: &[f32], left: &mut [f32], right: &mut [f32]) -> usize {
     dispatch!(Level::new(), simd => deinterleave_pair_kernel(simd, input, left, right))
 }

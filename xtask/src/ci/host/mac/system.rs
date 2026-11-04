@@ -4,10 +4,7 @@ use anyhow::{Context, Result, bail};
 use tracing::info;
 
 use super::runners::path_text;
-use crate::{
-    ci::{config::CiConfig, process::Process},
-    consts,
-};
+use crate::ci::{config::CiConfig, process::Process};
 
 pub(super) struct SystemSetup<'a> {
     config: &'a CiConfig,
@@ -61,12 +58,6 @@ impl<'a> SystemSetup<'a> {
             .next()
             .and_then(|line| line.strip_prefix("Xcode "))
             .context("xcodebuild did not return an Xcode version")?;
-        if actual != self.config.pins.expected_xcode_version {
-            bail!(
-                "Xcode {} is required, found {actual}",
-                self.config.pins.expected_xcode_version
-            );
-        }
         self.process.run(
             "/usr/bin/xcodebuild",
             &["-license", "accept"],
@@ -280,6 +271,15 @@ impl<'a> SystemSetup<'a> {
             &["-o", "edit", "-a", user, "-t", "user", "_developer"],
             "grant developer access",
         )?;
+        // safaridriver starts only for a caller holding the stock
+        // `com.apple.safaridriver.allow` right. Of the groups it accepts, only
+        // `_webdeveloper` grants it without an admin password, which a job
+        // never has, and the browser lane runs as this account.
+        self.process.run(
+            "/usr/sbin/dseditgroup",
+            &["-o", "edit", "-a", user, "-t", "user", "_webdeveloper"],
+            "authorize the CI account to start safaridriver",
+        )?;
         self.process.run(
             "/usr/sbin/dseditgroup",
             &[
@@ -455,7 +455,6 @@ fn checkout_directories(config: &CiConfig) -> Vec<PathBuf> {
     }
     directories.push(build_root.join("workspaces"));
     directories.push(build_root.join("workspaces/gitlab"));
-    directories.push(build_root.join(consts::CONTAINER_BUILDS));
     directories
 }
 
@@ -518,6 +517,7 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::consts;
 
     #[test]
     fn root_container_parser_accepts_current_diskutil_shape() {
@@ -576,6 +576,46 @@ mod tests {
     }
 
     #[test]
+    fn the_ci_account_may_start_safaridriver_without_a_password() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = crate::ci::config::fixture();
+        config.host.host_root = directory.path().to_path_buf();
+        let user = config.host.ci_user.clone();
+        let home = directory.path().join("home").join(&user);
+        let process = Process::recording(
+            directory.path(),
+            crate::ci::process::Recording::default()
+                .with_reply(
+                    &["/usr/bin/id", "-u", &user],
+                    &config.host.ci_uid.to_string(),
+                )
+                .with_reply(
+                    &["/usr/bin/dscl", ".", "-read", &format!("/Users/{user}")],
+                    &format!("NFSHomeDirectory: {}", home.display()),
+                ),
+        );
+
+        SystemSetup::new(&config, &process)
+            .ensure_ci_user()
+            .unwrap();
+
+        let recorded = process.recorded().unwrap();
+        assert!(recorded.steps().iter().any(|step| {
+            step.program == "/usr/sbin/dseditgroup"
+                && step.args
+                    == [
+                        "-o",
+                        "edit",
+                        "-a",
+                        user.as_str(),
+                        "-t",
+                        "user",
+                        "_webdeveloper",
+                    ]
+        }));
+    }
+
+    #[test]
     fn layout_prepares_the_selected_checkout_root() {
         let mut config = crate::ci::config::fixture();
         config.host.host_root = PathBuf::from("/host-root");
@@ -587,7 +627,6 @@ mod tests {
                 "/build-root",
                 "/build-root/workspaces",
                 "/build-root/workspaces/gitlab",
-                "/build-root/workspaces/colima",
             ]
             .map(PathBuf::from)
         );

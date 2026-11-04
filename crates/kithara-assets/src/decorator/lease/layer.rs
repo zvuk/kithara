@@ -201,6 +201,9 @@ where
                 Ok(AcquisitionResult::Pending(self.wrap_writer(key, w)?))
             }
             AcquisitionResult::Ready(r) => Ok(AcquisitionResult::Ready(self.wrap_reader(key, r)?)),
+            AcquisitionResult::Joined(r) => {
+                Ok(AcquisitionResult::Joined(self.wrap_reader(key, r)?))
+            }
         }
     }
 

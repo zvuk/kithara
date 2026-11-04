@@ -41,6 +41,14 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
             handle_deck(state, id, &msg);
             Task::none()
         }
+        Message::SetTempo(tempo) => {
+            state.send(Command::App(AppCmd::SetTempo(tempo)));
+            Task::none()
+        }
+        Message::StepTempo(steps) => {
+            state.send(Command::App(AppCmd::StepTempo(steps)));
+            Task::none()
+        }
         Message::SetEqMode(mode) => {
             state.send(Command::App(AppCmd::SetEqMode(mode)));
             Task::none()
