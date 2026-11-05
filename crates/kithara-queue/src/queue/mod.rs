@@ -1,6 +1,7 @@
 //! A queue is a deck: one owner drives its tracks through commands and receipts.
 
 mod command;
+mod gain;
 mod handle;
 mod hosted;
 mod lifecycle;

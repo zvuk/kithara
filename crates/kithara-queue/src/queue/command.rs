@@ -59,6 +59,10 @@ where
         to: Position,
     },
     ConfigureTrack(TrackSettingsChange, When<SessionFrame>),
+    GainProgram {
+        item: TrackId,
+        program: kithara_play::SlotGainProgram,
+    },
     ConfigureQueue(QueueSettingsChange, When<SessionFrame>),
     SetActionAtItemEnd(ActionAtItemEnd),
     SetPlaybackOrder(PlaybackOrder),
@@ -172,6 +176,21 @@ where
             QueueCommand::Pause { at } => self.pause_at(at, out),
             QueueCommand::Seek { to } => self.seek_to(to, out),
             QueueCommand::ConfigureTrack(change, at) => self.configure_tracks(change, at, out),
+            QueueCommand::GainProgram { item, program } => {
+                let index = self
+                    .active
+                    .position(|active| {
+                        active.role != Role::Leaving
+                            && active.track.snapshot().as_ref().item == item
+                    })
+                    .ok_or(PlayError::NotReady)?;
+                self.active
+                    .get_mut(index)
+                    .ok_or(PlayError::NotReady)?
+                    .track
+                    .apply(TrackCommand::GainProgram(program), out)
+                    .map_err(Into::into)
+            }
             QueueCommand::NotifyInterruption(kind) => {
                 self.deck.suspended = out.notify_interruption(kind)?;
                 Ok(None)
