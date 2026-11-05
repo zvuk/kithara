@@ -10,7 +10,9 @@ use ringbuf::{
     traits::{Consumer, Split},
 };
 
-use super::super::{PcmConsumer, PlayerResource, PlayerTrack, RtSink, TrackReadOutcome};
+use super::super::{
+    PcmConsumer, PlayerResource, PlayerTrack, RtSink, TrackBuffers, TrackReadOutcome,
+};
 use crate::{
     bridge::{DeckEvent, Fade, RtMetrics, Slot, TrackClock},
     mock::pcm_fixture::{PcmFixture, chunk},
@@ -87,11 +89,14 @@ impl Rig {
         );
         let outcome = self.track.render(
             Some(&self.context),
-            &mut [&mut left, &mut right],
-            &mut [&mut bus_left, &mut bus_right],
+            TrackBuffers {
+                scratch: &mut [&mut left, &mut right],
+                bus: &mut [&mut bus_left, &mut bus_right],
+            },
             0..BLOCK,
             &mut 16,
             &mut sink,
+            None,
         );
         while let Some(event) = consumer.try_pop() {
             self.events.push(event);

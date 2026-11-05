@@ -7,7 +7,7 @@ use kithara_events::TrackId;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 
-use super::{PlayerResource, RtSink, fade::TrackFade, gate::TrackGate};
+use super::{PlayerResource, RtSink, fade::TrackFade, gate::TrackGate, output::SlotOutput};
 use crate::{
     CrossfadeCurve, CrossfadeSettings,
     bridge::{DeckEvent, Fade, FadeDir, SlotMark, SlotState, TrackClock},
@@ -39,6 +39,8 @@ pub struct PlayerTrack {
     /// Lane frames dropped to pay the current dropout under session time.
     pub(super) paid: u32,
     pub(super) clock: TrackClock,
+    pub(super) output: SlotOutput,
+    pub(super) attachment: Option<Seq>,
     stop: StopState,
     sample_rate: NonZeroU32,
     declick: SmootherConfig,
@@ -52,6 +54,7 @@ impl PlayerTrack {
         #[builder(finish_fn)] mut resource: Box<PlayerResource>,
         item_id: TrackId,
         sample_rate: NonZeroU32,
+        attachment: Option<Seq>,
         #[builder(default = DEFAULT_DECLICK)] declick: SmootherConfig,
         #[builder(default = SegmentId::FIRST)] segment: SegmentId,
     ) -> Self {
@@ -65,6 +68,8 @@ impl PlayerTrack {
             gap: 0,
             paid: 0,
             clock: TrackClock::Media,
+            output: SlotOutput::default(),
+            attachment,
             stop: StopState::Idle,
             sample_rate,
             declick,

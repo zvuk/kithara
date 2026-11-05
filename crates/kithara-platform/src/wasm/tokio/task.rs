@@ -161,6 +161,7 @@ mod tests {
 
     #[kithara::test(wasm, flash(false))]
     async fn blocking_tasks_start_on_workers_and_can_spawn_nested_work() {
+        assert!(crate::thread::is_main_thread());
         let direct = spawn_blocking(crate::thread::is_worker_thread);
         let handled = spawn_blocking_on(&Handle, crate::thread::is_worker_thread);
         let nested = spawn_blocking(|| spawn_blocking(|| 7u32));
