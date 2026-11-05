@@ -25,6 +25,32 @@ const RESTART_SAMPLE: usize = 3;
 
 type Events = Rc<RefCell<Vec<JsValue>>>;
 
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+export function installWorkerDiagnostics() {
+    const NativeWorker = globalThis.Worker;
+    const channel = new BroadcastChannel("kithara-worker-diagnostics");
+    globalThis.Worker = class Worker extends NativeWorker {
+        constructor(...args) {
+            super(...args);
+            const url = String(args[0]);
+            const name = args[1]?.name ?? null;
+            channel.postMessage({ kind: "created", url, name });
+            this.addEventListener("error", event => channel.postMessage({
+                kind: "error", url, name, message: event.message,
+                filename: event.filename, line: event.lineno, column: event.colno,
+            }));
+            this.addEventListener("messageerror", () => channel.postMessage({
+                kind: "messageerror", url, name,
+            }));
+        }
+    };
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = installWorkerDiagnostics)]
+    fn install_worker_diagnostics();
+}
+
 struct BroadcastObservation {
     channel: BroadcastChannel,
     _listener: Closure<dyn FnMut(MessageEvent)>,
@@ -95,7 +121,7 @@ fn boolean(value: &JsValue, key: &str) -> bool {
 
 /// What a pass that never reached its end managed to publish, so a deadline
 /// says whether the analysis stalled at the start or merely ran out of budget.
-fn progress_report(events: &Events, diagnostics: &[BroadcastObservation; 2]) -> String {
+fn progress_report(events: &Events, diagnostics: &[BroadcastObservation; 3]) -> String {
     let received = events.borrow();
     let publications = match received.last() {
         Some(last) => format!(
@@ -109,9 +135,10 @@ fn progress_report(events: &Events, diagnostics: &[BroadcastObservation; 2]) -> 
         None => "no publication at all".to_string(),
     };
     format!(
-        "{publications}; kithara-reply={}; kithara-events (analysis arrays are lengths)={}",
+        "{publications}; kithara-reply={}; kithara-events (analysis arrays are lengths)={}; workers created on main thread={}",
         diagnostics[0].report(),
         diagnostics[1].report(),
+        diagnostics[2].report(),
     )
 }
 
@@ -123,15 +150,17 @@ fn revisions(events: &Events) -> Vec<f64> {
         .collect()
 }
 
-fn observed_player() -> (AudioPlayer, Events, [BroadcastObservation; 2]) {
+fn observed_player() -> (AudioPlayer, Events, [BroadcastObservation; 3]) {
     static BINDINGS: Once = Once::new();
-    BINDINGS.call_once(|| {
-        kithara_ffi::web::bindings::setup().expect("browser bindings initialized");
-    });
     let diagnostics = [
         BroadcastObservation::new("kithara-reply"),
         BroadcastObservation::new("kithara-events"),
+        BroadcastObservation::new("kithara-worker-diagnostics"),
     ];
+    BINDINGS.call_once(|| {
+        install_worker_diagnostics();
+        kithara_ffi::web::bindings::setup().expect("browser bindings initialized");
+    });
     let events: Events = Rc::new(RefCell::new(Vec::new()));
     let player = AudioPlayer::new_js();
 
