@@ -9,8 +9,8 @@ use std::{
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_dsp::{
     filter::{Biquad, Coefficients, Hertz, Type},
-    interp::{Interpolation, interpolate},
-    spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase},
+    interp::{Interpolation, interpolate, interpolate_frame, weighted_frames},
+    spectrum::{Autocorrelation, Fft, FftLen, prediction_difference},
 };
 use kithara_test_utils::bufpool::pools;
 use num_traits::ToPrimitive;
@@ -192,20 +192,20 @@ fn spectrum(c: &mut Criterion) {
     group.finish();
 }
 
-fn bins(c: &mut Criterion) {
-    let mut group = c.benchmark_group("bins");
-    for size in consts::SIZES {
-        group.throughput(Throughput::Elements(
-            u64::try_from(size).expect("size fits u64"),
-        ));
+fn prediction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("prediction_difference");
+    group.sample_size(20);
+    for size in [1, 3, 17, 64, 513, 1024] {
         let re = tone(size);
         let im: Vec<f32> = re.iter().rev().copied().collect();
-        let mut output = vec![0.0_f32; size];
-        group.bench_with_input(BenchmarkId::new("magnitude", size), &size, |b, _| {
-            b.iter(|| magnitude(black_box(&re), black_box(&im), &mut output));
-        });
-        group.bench_with_input(BenchmarkId::new("phase", size), &size, |b, _| {
-            b.iter(|| phase(black_box(&re), black_box(&im), &mut output));
+        let mut history: [Vec<f32>; 4] = std::array::from_fn(|_| vec![0.0; size + 1]);
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter(|| {
+                prediction_difference(
+                    [black_box(&re), black_box(&im)],
+                    black_box(&mut history).each_mut().map(Vec::as_mut_slice),
+                )
+            });
         });
     }
     group.finish();
@@ -340,6 +340,45 @@ fn interp(c: &mut Criterion) {
     group.finish();
 }
 
+fn source_frames(c: &mut Criterion) {
+    let mut group = c.benchmark_group("source_frames");
+    for channels in [1_usize, 2, 4, 6, 9] {
+        let samples = vec![0.25; channels * 33];
+        let offsets = std::array::from_fn::<_, 33, _>(|tap| tap * channels);
+        let weights = [0.125; 33];
+        let mut frame = vec![0.0; channels];
+        let mut sums = vec![0.0; channels];
+        group.throughput(Throughput::Elements(
+            u64::try_from(channels).expect("channels"),
+        ));
+        group.bench_function(BenchmarkId::new("interpolate", channels), |b| {
+            b.iter(|| {
+                interpolate_frame(
+                    black_box(&samples[..channels]),
+                    black_box(&samples[channels..2 * channels]),
+                    black_box(0.531_589_7),
+                    &mut frame,
+                );
+                black_box(&frame);
+            });
+        });
+        group.bench_function(BenchmarkId::new("weighted", channels), |b| {
+            b.iter(|| {
+                weighted_frames(
+                    black_box(&samples),
+                    black_box(&offsets),
+                    black_box(&weights),
+                    channels,
+                    &mut sums,
+                )
+                .expect("resolved taps");
+                black_box(&sums);
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     kernels,
@@ -348,8 +387,9 @@ criterion_group!(
     biquad,
     biquad_decay,
     interp,
+    source_frames,
     spectrum,
-    bins,
+    prediction,
     autocorrelation
 );
 criterion_main!(benches);

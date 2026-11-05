@@ -5,11 +5,11 @@ use std::num::NonZeroUsize;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 #[cfg(feature = "spectrum")]
-use kithara_dsp::spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase};
+use kithara_dsp::spectrum::{Autocorrelation, Fft, FftLen, prediction_difference};
 use kithara_dsp::{
     fade::{self, FadeCurve},
     filter::{Biquad, Coefficients, Hertz, Type},
-    interp::{InterpError, Interpolation, interpolate},
+    interp::{InterpError, Interpolation, interpolate, interpolate_frame, weighted_frames},
 };
 use kithara_test_utils::{bufpool::pools, kithara};
 
@@ -23,6 +23,36 @@ const TWELVE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(11);
 const PLANE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(FRAMES + 7);
 #[cfg(feature = "spectrum")]
 const LAGS: NonZeroUsize = NonZeroUsize::MIN.saturating_add(511);
+
+#[kithara::test(native)]
+fn source_frame_operations_never_allocate() {
+    let samples = [0.25; 6 * 33];
+    let offsets = std::array::from_fn::<_, 33, _>(|tap| tap * 6);
+    let weights = [0.125; 33];
+    let mut interpolated = [7.0; 6];
+    let mut weighted = [7.0; 6];
+    assert_no_alloc(|| {
+        for channels in [1, 2, 4, 6] {
+            for fraction in [0.0, 0.5, 1.0_f64.next_down()] {
+                assert_eq!(
+                    interpolate_frame(
+                        &samples[..channels],
+                        &samples[6..6 + channels],
+                        fraction,
+                        &mut interpolated
+                    ),
+                    channels
+                );
+            }
+            weighted_frames(&samples, &offsets, &weights, channels, &mut weighted)
+                .expect("resolved taps");
+            assert_eq!(
+                weighted_frames(&samples, &[usize::MAX], &[1.0], channels, &mut weighted),
+                Err(InterpError::InvalidShape)
+            );
+        }
+    });
+}
 
 #[kithara::test(native)]
 fn layout_and_sanitize_never_allocate() {
@@ -137,19 +167,10 @@ fn spectrum_never_allocates_after_construction() {
         Fft::new(FftLen::new(FRAMES).expect("1024 is an FFT length")).expect("the FFT builds");
     let mut spectrum = fft.spectrum(&pools()).expect("the planes fit the region");
     let frame = vec![0.25_f32; FRAMES];
-    let mut bins = vec![0.0_f32; FRAMES / 2 + 1];
     assert_no_alloc(|| {
         fft.forward(&frame, &mut spectrum).expect("the frame fits");
         fft.forward(&frame[..FRAMES / 2], &mut spectrum)
             .expect("a short frame fits");
-        assert_eq!(
-            magnitude(spectrum.re(), spectrum.im(), &mut bins),
-            FRAMES / 2 + 1
-        );
-        assert_eq!(
-            phase(spectrum.re(), spectrum.im(), &mut bins),
-            FRAMES / 2 + 1
-        );
     });
 }
 
@@ -226,6 +247,21 @@ fn downmix_never_allocates_at_any_channel_count() {
                 kithara_dsp::downmix(&interleaved, channels, &mut mono),
                 FRAMES
             );
+        }
+    });
+}
+
+#[cfg(feature = "spectrum")]
+#[kithara::test(native)]
+fn spectral_prediction_never_allocates() {
+    let re = vec![0.25; FRAMES / 2 + 1];
+    let im = vec![-0.5; re.len()];
+    let mut history: [Vec<f32>; 4] = std::array::from_fn(|_| vec![0.0; re.len()]);
+    assert_no_alloc(|| {
+        for _ in 0..3 {
+            let total =
+                prediction_difference([&re, &im], history.each_mut().map(Vec::as_mut_slice));
+            assert!(total.is_finite());
         }
     });
 }
