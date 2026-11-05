@@ -1,6 +1,6 @@
 use kithara::{
     audio::{AudioObserveError, AudioObserver},
-    bufpool::SampleBuffer,
+    bufpool::{PoolError, SampleBuffer},
     download::Downloader,
     effects::LimiterConfig,
     play::{DeckMixSettings, Position, Settled},
@@ -972,8 +972,17 @@ impl<'a> PhysicalCandidate<'a> {
     }
 }
 
+#[derive(Debug)]
+struct DecodedRejection {
+    vacant: usize,
+    samples: usize,
+    frames: usize,
+    channels: u16,
+    pool_error: Option<PoolError>,
+}
+
 pub(in super::super) struct DecodedRecorder {
-    incoming: HeapCons<Result<DecodedChunk, AudioObserveError>>,
+    incoming: HeapCons<Result<DecodedChunk, DecodedRejection>>,
     capture: DecodedCapture,
     chunk_limit: usize,
     sample_limit: usize,
@@ -1006,7 +1015,14 @@ impl DecodedRecorder {
             let (info, pcm) = match chunk {
                 Ok(chunk) => chunk,
                 Err(error) => {
-                    tracing::warn!(?error, "decoder observation intake rejected PCM");
+                    tracing::warn!(
+                        vacant = error.vacant,
+                        samples = error.samples,
+                        frames = error.frames,
+                        channels = error.channels,
+                        pool_error = ?error.pool_error,
+                        "decoder observation intake rejected PCM"
+                    );
                     self.capture.rejected = true;
                     continue;
                 }
@@ -1048,16 +1064,16 @@ impl DecodedRecorder {
 }
 
 pub(in super::super) struct DecodedObserver {
-    outgoing: Option<HeapProd<Result<DecodedChunk, AudioObserveError>>>,
+    outgoing: Option<HeapProd<Result<DecodedChunk, DecodedRejection>>>,
     pools: Pools,
 }
 
 impl DecodedObserver {
-    fn reject(&mut self) -> Result<(), AudioObserveError> {
+    fn reject(&mut self, error: DecodedRejection) -> Result<(), AudioObserveError> {
         if let Some(mut outgoing) = self.outgoing.take() {
             // Data offers always leave one slot for a sticky terminal failure.
             outgoing
-                .try_push(Err(AudioObserveError::Full))
+                .try_push(Err(error))
                 .expect("reserved decoder failure slot");
         }
         Err(AudioObserveError::Full)
@@ -1072,28 +1088,26 @@ impl AudioObserver for DecodedObserver {
             return Err(AudioObserveError::Closed);
         }
         let samples = chunk.as_ref();
-        if outgoing.vacant_len() <= 1
+        let rejection = DecodedRejection {
+            vacant: outgoing.vacant_len(),
+            samples: samples.len(),
+            frames: chunk.frames(),
+            channels: chunk.meta.spec.channels,
+            pool_error: None,
+        };
+        if rejection.vacant <= 1
             || samples.is_empty()
             || samples.len() > 32_768
             || samples.len() != chunk.frames() * usize::from(chunk.meta.spec.channels)
         {
-            tracing::warn!(
-                vacant = outgoing.vacant_len(),
-                samples = samples.len(),
-                frames = chunk.frames(),
-                channels = chunk.meta.spec.channels,
-                "decoder observation bounded intake refused chunk"
-            );
-            return self.reject();
+            return self.reject(rejection);
         }
         let mut pcm = self.pools.get::<f32>();
         if let Err(error) = pcm.try_extend_from_slice(samples) {
-            tracing::warn!(
-                ?error,
-                samples = samples.len(),
-                "decoder observation bounded PCM copy failed"
-            );
-            return self.reject();
+            return self.reject(DecodedRejection {
+                pool_error: Some(error),
+                ..rejection
+            });
         }
         self.outgoing
             .as_mut()
