@@ -52,7 +52,6 @@ struct Split {
     lowpass: Lr4,
     highpass: Lr4,
     allpass: Box<[Section]>,
-    prepared: Design,
 }
 
 #[derive(Clone, Copy)]
@@ -77,6 +76,7 @@ impl Design {
 pub struct Crossover {
     splits: Box<[Split]>,
     frame: Box<[f32]>,
+    prepared: Box<[Design]>,
     prepared_rate: Option<Hertz<f32>>,
 }
 
@@ -106,10 +106,10 @@ impl Crossover {
                         .skip(index.saturating_add(1))
                         .map(|later| Section::new(later.allpass))
                         .collect(),
-                    prepared: *design,
                 })
                 .collect(),
             frame: vec![0.0; frequencies.len().saturating_add(1)].into_boxed_slice(),
+            prepared: designs.into_boxed_slice(),
             prepared_rate: None,
         })
     }
@@ -204,8 +204,8 @@ impl Crossover {
     pub fn prepare_sample_rate(&mut self, sample_rate: Hertz<f32>) -> Result<(), FilterError> {
         self.prepared_rate = None;
         validate(self.splits.iter().map(|split| split.frequency), sample_rate)?;
-        for split in &mut self.splits {
-            split.prepared = Design::new(split.frequency, sample_rate)?;
+        for (split, prepared) in self.splits.iter().zip(self.prepared.iter_mut()) {
+            *prepared = Design::new(split.frequency, sample_rate)?;
         }
         self.prepared_rate = Some(sample_rate);
         Ok(())
@@ -227,14 +227,16 @@ impl Crossover {
     /// Returns its rate, or `None` without mutation when no preparation remains.
     pub fn apply_prepared_sample_rate(&mut self) -> Option<Hertz<f32>> {
         let rate = self.prepared_rate.take()?;
-        let mut splits = self.splits.as_mut();
-        while let Some((split, later)) = splits.split_first_mut() {
-            split.lowpass = Lr4::new(split.prepared.lowpass);
-            split.highpass = Lr4::new(split.prepared.highpass);
-            for (section, later) in split.allpass.iter_mut().zip(later.iter()) {
-                *section = Section::new(later.prepared.allpass);
+        for (index, (split, prepared)) in self.splits.iter_mut().zip(&self.prepared).enumerate() {
+            split.lowpass = Lr4::new(prepared.lowpass);
+            split.highpass = Lr4::new(prepared.highpass);
+            for (section, later) in split
+                .allpass
+                .iter_mut()
+                .zip(self.prepared.iter().skip(index.saturating_add(1)))
+            {
+                *section = Section::new(later.allpass);
             }
-            splits = later;
         }
         Some(rate)
     }
