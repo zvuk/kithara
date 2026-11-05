@@ -7,10 +7,7 @@ use kithara_play::{
     SeekBatch, Settled, Track, TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange,
     TrackStatus,
 };
-use kithara_render::{
-    bridge::{DeckEvent, DeckPart},
-    rt::DeckMixerConfig,
-};
+use kithara_render::{bridge::DeckPart, rt::DeckMixerConfig};
 use kithara_signal::{FrameCount, SessionFrame};
 use tracing::warn;
 
@@ -393,20 +390,14 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
             TrackCommand::Fade { at, settings, dir } if self.synced() => {
                 self.fade_synced(at, settings, dir, out)
             }
+            TrackCommand::Clock(_) => Err(PlayError::InvalidConfiguration {
+                reason: "SYNC owns the clock of a linked track".to_owned(),
+            }),
             other => self.inner.apply(other, out),
         }
     }
 
     fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
-        let snapshot = self.inner.snapshot();
-        let track = snapshot.as_ref();
-        let slot = track.slot;
-        let underrun = track.attached
-            && matches!(track.status, TrackStatus::Playing { .. })
-            && matches!(&receipt,
-                TrackReceipt::Event(DeckEvent::UnderrunEnded { slot: named, item, recovered: true, .. })
-                    if Some(*named) == slot && *item == track.item
-            );
         let mut settled = self.inner.settle(receipt, out);
         self.answer_reissued(&settled);
         if let Settled::Rejected {
@@ -432,16 +423,6 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                 }
             }
         }
-        // The dropout already broke the sound, so its end is a silent entry:
-        // the deck re-enters on the host phase rather than closing the gap
-        // with speed steps, which a short track may never have room for. A
-        // waiting seek already lands on the host phase, so it is kept.
-        if self.synced() && underrun {
-            self.waiting.get_or_insert_with(|| Waiting::Sync {
-                required: self.inner.snapshot().as_ref().position,
-            });
-            self.resume_wait(out);
-        }
         if self.cue.is_none() && matches!(self.waiting, Some(Waiting::Load { .. })) {
             self.resume_wait(out);
         }
@@ -449,6 +430,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
     }
 
     fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
+        self.keep_clock(out);
         self.inner.tick(now, out);
         self.drain_speed_receipts::<S>();
         self.update_correction::<S>();

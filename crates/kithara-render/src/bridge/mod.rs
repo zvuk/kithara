@@ -14,6 +14,6 @@ pub use mix::{
 };
 pub use protocol::{
     DeckEqChange, DeckEvent, DeckPart, DeckProtocol, DeckRefusal, Fade, FadeDir, PlaybackFault,
-    Returned, Slot, SlotState,
+    Returned, Slot, SlotState, TrackClock,
 };
 pub use snapshot::{DeckSnapshot, EqSnapshot, SlotSnapshot};

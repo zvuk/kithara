@@ -1,4 +1,5 @@
 mod batch;
+mod clock;
 mod core;
 mod fade_events;
 mod legacy_lifecycle;

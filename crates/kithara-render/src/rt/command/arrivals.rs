@@ -239,7 +239,10 @@ impl Deck {
                         }
                     }
                 }
-                DeckPart::Mix(_) | DeckPart::Eq(_) | DeckPart::Returned(_) => {}
+                DeckPart::Clock { .. }
+                | DeckPart::Mix(_)
+                | DeckPart::Eq(_)
+                | DeckPart::Returned(_) => {}
             }
         }
         Ok(())
