@@ -425,6 +425,10 @@ fn cache_exec_prepares_its_retained_ci_target_before_the_compiler_cache() {
         .env("CI", "true")
         .env("GITHUB_ACTIONS", "true")
         .env("CARGO_TARGET_DIR", target.path())
+        // This target owns its admission policy, independent of the CI runner.
+        .env_remove("KITHARA_CI_BUILD_SLOTS")
+        .env("KITHARA_CI_JOB_ROOM_BYTES", "1")
+        .env("KITHARA_CI_JOB_ROOM_WAIT_SECONDS", "0")
         .env_remove("KACHE_HOST_CONFIG")
         .env_remove("KACHE_RUNTIME_DIR")
         .env_remove("GIT_DIR")
