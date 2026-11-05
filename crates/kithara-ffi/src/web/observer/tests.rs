@@ -53,6 +53,14 @@ fn surface_player() -> AudioPlayer {
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 
+fn surface_player() -> AudioPlayer {
+    static BINDINGS: Once = Once::new();
+    BINDINGS.call_once(|| {
+        kithara_ffi::web::bindings::setup().expect("browser bindings initialized");
+    });
+    AudioPlayer::new_js()
+}
+
 fn surface_fixture_url() -> String {
     let wav = Uint8Array::from(
         &b"RIFF\x26\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x80\xbb\0\0\0\x77\x01\0\x02\0\x10\0data\x02\0\0\0\0\0"[..],
