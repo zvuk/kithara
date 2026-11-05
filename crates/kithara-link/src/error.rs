@@ -10,4 +10,9 @@ pub enum LinkError {
     /// The phase a slew may close must be a finite, positive number of beats.
     #[error("slew limit must be finite and positive, got {limit}")]
     SlewLimit { limit: f32 },
+    /// A speed plan must reach some time past its correction.
+    #[error("speed plan horizon must be positive, got {horizon:?}")]
+    Horizon {
+        horizon: kithara_platform::time::Duration,
+    },
 }

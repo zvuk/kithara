@@ -61,6 +61,15 @@ impl GaplessBlender {
         }
         if *frame >= *frames {
             self.join = JoinState::Steady;
+            kithara_test_macros::probe_event!(
+                gapless_join_completed,
+                variant = chunk.meta.variant_index,
+                end_ns = chunk
+                    .meta
+                    .source_geometry()
+                    .and_then(|span| span.position_at(u64::from(chunk.meta.frames)))
+                    .and_then(|end| u64::try_from(end.as_nanos()).ok()),
+            );
         }
     }
 
