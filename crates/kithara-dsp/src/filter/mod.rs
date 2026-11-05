@@ -11,3 +11,4 @@ pub use crossover::Crossover;
 pub use error::FilterError;
 
 pub use self::biquad::Biquad;
+pub use crate::backend::Fir;

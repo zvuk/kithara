@@ -11,5 +11,7 @@ pub mod node;
 pub use gain_db::GainDb;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
-pub use limiter::{LimiterConfig, LimiterError, PeakLimiter};
+pub use limiter::{
+    Ceiling, CeilingError, LimiterConfig, LimiterError, PeakLimiter, ReleaseMs, ReleaseMsError,
+};
 mod consts;
