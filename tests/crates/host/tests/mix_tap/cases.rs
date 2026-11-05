@@ -15,10 +15,10 @@ use kithara_test_fixtures::assets;
 
 use crate::underrun;
 
-const SAMPLE_RATE: u32 = 44_100;
-const BLOCK_FRAMES: usize = 512;
+pub(super) const SAMPLE_RATE: u32 = 44_100;
+pub(super) const BLOCK_FRAMES: usize = 512;
 const BLOCKS: usize = 20;
-pub(super) const ROOMY_CAPACITY: usize = 65_536;
+pub(crate) const ROOMY_CAPACITY: usize = 65_536;
 
 #[kithara::test(tokio)]
 async fn deck_eq_processes_the_crossfade_sum() {
@@ -130,7 +130,7 @@ async fn crossfade_take(cut: Option<kithara::effects::GainDb>) -> Vec<f32> {
 
 // Advance one callback period between reads instead of draining an offline burst.
 #[kithara::flash(true)]
-async fn render_effect_window(harness: &OfflinePlayer, frames: usize) -> Vec<f32> {
+pub(super) async fn render_effect_window(harness: &OfflinePlayer, frames: usize) -> Vec<f32> {
     use kithara::platform::time::{self, Duration};
 
     let sample_rate = harness.host().spec().await.sample_rate.get();
@@ -252,7 +252,7 @@ async fn play_constant(harness: OfflinePlayer) -> OfflinePlayer {
 
 /// Queues the resource `make` builds on `harness`'s player, plays it and
 /// renders the first block.
-pub(super) async fn play_resource(
+pub(crate) async fn play_resource(
     harness: OfflinePlayer,
     make: impl FnOnce() -> Resource + Send + 'static,
 ) -> OfflinePlayer {
@@ -260,7 +260,7 @@ pub(super) async fn play_resource(
     play_source(harness, deck_source).await
 }
 
-pub(super) async fn play_source(
+pub(crate) async fn play_source(
     harness: OfflinePlayer,
     deck_source: TrackSource<TestPools>,
 ) -> OfflinePlayer {
@@ -270,7 +270,10 @@ pub(super) async fn play_source(
     harness
 }
 
-async fn load_source(harness: OfflinePlayer, deck_source: TrackSource<TestPools>) -> OfflinePlayer {
+pub(super) async fn load_source(
+    harness: OfflinePlayer,
+    deck_source: TrackSource<TestPools>,
+) -> OfflinePlayer {
     let deck_id = harness
         .with_queue(move |player| {
             let deck_id = TrackId::allocate();
@@ -294,13 +297,13 @@ async fn load_source(harness: OfflinePlayer, deck_source: TrackSource<TestPools>
     harness
 }
 
-pub(super) async fn playing_harness() -> OfflinePlayer {
+pub(crate) async fn playing_harness() -> OfflinePlayer {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
     play_constant(harness).await
 }
 
-pub(super) async fn render_blocks(harness: &OfflinePlayer, blocks: usize) -> Vec<f32> {
+pub(crate) async fn render_blocks(harness: &OfflinePlayer, blocks: usize) -> Vec<f32> {
     let mut rendered = Vec::with_capacity(blocks * BLOCK_FRAMES * 2);
     for _ in 0..blocks {
         rendered.extend_from_slice(&harness.render(BLOCK_FRAMES).await);
