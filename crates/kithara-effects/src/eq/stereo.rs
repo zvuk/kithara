@@ -279,15 +279,14 @@ fn render_stereo(
     right: &mut [f32],
 ) {
     let frames = left.len().min(right.len());
-    for (left, right) in left[..frames]
+    let left = left.split_at_mut(frames).0;
+    let right = right.split_at_mut(frames).0;
+    for (left, right) in left
         .chunks_mut(EQ_BLOCK_FRAMES)
-        .zip(right[..frames].chunks_mut(EQ_BLOCK_FRAMES))
+        .zip(right.chunks_mut(EQ_BLOCK_FRAMES))
     {
-        let frames = left.len();
-        let mut wet_left = [0.0; EQ_BLOCK_FRAMES];
-        let mut wet_right = [0.0; EQ_BLOCK_FRAMES];
-        active.left.process(left, &mut wet_left[..frames]);
-        active.right.process(right, &mut wet_right[..frames]);
+        let wet_left = active.left.process_block(left);
+        let wet_right = active.right.process_block(right);
         for ((left, right), (wet_left, wet_right)) in left
             .iter_mut()
             .zip(right.iter_mut())

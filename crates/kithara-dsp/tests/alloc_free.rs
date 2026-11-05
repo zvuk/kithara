@@ -112,8 +112,13 @@ fn crossover_never_allocates_after_construction() {
         .expect("valid crossover");
     let input = [0.25; FRAMES];
     let mut bands = vec![vec![0.0; FRAMES]; 3];
+    let gains = vec![vec![0.5; 2]; 3];
+    let mut summed = input;
     assert_no_alloc(|| {
         assert_eq!(filter.split(&input, &mut bands), FRAMES);
+        filter.reset();
+        assert_eq!(filter.sum(&mut summed, &gains), 2);
+        assert_eq!(&summed[2..], &input[2..]);
         filter.reset();
         filter
             .prepare_sample_rate(hz(44_100.0))

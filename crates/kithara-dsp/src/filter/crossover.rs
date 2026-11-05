@@ -1,4 +1,7 @@
-use std::{f32::consts::FRAC_1_SQRT_2, ops::DerefMut};
+use std::{
+    f32::consts::FRAC_1_SQRT_2,
+    ops::{Deref, DerefMut},
+};
 
 use biquad::{Biquad, Coefficients, DirectForm1, Hertz, Type};
 
@@ -118,20 +121,51 @@ impl Crossover {
         let count = bands
             .iter()
             .fold(input.len(), |count, band| count.min(band.len()));
-        let Some((high, lower)) = bands.split_last_mut() else {
-            return 0;
-        };
-        high[..count].copy_from_slice(&input[..count]);
-        for (split, low) in self.splits.iter_mut().zip(lower) {
-            for (low, high) in low[..count].iter_mut().zip(&mut high[..count]) {
-                *low = split.lowpass.process(*high);
-                *high = split.highpass.process(*high);
-                for section in &mut split.allpass {
-                    *low = section.run(*low);
-                }
-            }
+        for (frame, &sample) in input.iter().take(count).enumerate() {
+            self.sample(sample, |band, value| {
+                *bands
+                    .get_mut(band)
+                    .and_then(|plane| plane.get_mut(frame))
+                    .expect("band and frame belong to the validated common prefix") = value;
+            });
         }
         count
+    }
+
+    /// Sums ascending bands in place with fused per-frame gains.
+    /// Missing required gain planes is a no-op; short planes bound the processed prefix.
+    /// Extra gain planes and the remaining samples stay untouched.
+    pub fn sum<P: Deref<Target = [f32]>>(&mut self, samples: &mut [f32], gains: &[P]) -> usize {
+        let Some(gains) = gains.get(..self.splits.len().saturating_add(1)) else {
+            return 0;
+        };
+        let count = gains
+            .iter()
+            .fold(samples.len(), |n, gain| n.min(gain.len()));
+        for (frame, sample) in samples.iter_mut().take(count).enumerate() {
+            let mut output = 0.0;
+            self.sample(*sample, |band, value| {
+                let gain = gains
+                    .get(band)
+                    .and_then(|plane| plane.get(frame))
+                    .expect("band and frame belong to the validated common prefix");
+                output = value.mul_add(*gain, output);
+            });
+            *sample = output;
+        }
+        count
+    }
+
+    fn sample(&mut self, mut high: f32, mut output: impl FnMut(usize, f32)) {
+        for (band, split) in self.splits.iter_mut().enumerate() {
+            let mut low = split.lowpass.process(high);
+            high = split.highpass.process(high);
+            for section in &mut split.allpass {
+                low = section.run(low);
+            }
+            output(band, low);
+        }
+        output(self.splits.len(), high);
     }
 
     /// Clears every section's history without allocation or coefficient changes.

@@ -16,7 +16,7 @@ use crate::{GainDb, consts::EQ_BLOCK_FRAMES};
 #[non_exhaustive]
 pub struct IsolatorEq {
     filters: Crossover,
-    bands: Vec<SampleBuffer>,
+    output: SampleBuffer,
     gain_blocks: Vec<SampleBuffer>,
     gains: GainBank,
     bypass: MixDSP,
@@ -64,9 +64,7 @@ impl IsolatorEq {
             bypass: MixDSP::new(bypass, FadeCurve::Linear, config.smoothing(), rate),
             silence: MixDSP::new(silence, FadeCurve::Linear, config.smoothing(), rate),
             filters,
-            bands: (0..if bands.len() > 1 { bands.len() } else { 0 })
-                .map(|_| config.pools().get_with_len::<f32>(EQ_BLOCK_FRAMES))
-                .collect::<Result<_, _>>()?,
+            output: config.pools().get_with_len::<f32>(EQ_BLOCK_FRAMES)?,
             gain_blocks: (0..bands.len())
                 .map(|_| config.pools().get_with_len::<f32>(EQ_BLOCK_FRAMES))
                 .collect::<Result<_, _>>()?,
@@ -81,54 +79,50 @@ impl IsolatorEq {
     #[inline]
     pub fn process_sample(&mut self, input: f32) -> f32 {
         let mut output = [0.0];
-        self.process_block::<1>(&[input], &mut output);
+        self.process(&[input], &mut output);
         output[0]
     }
 
     /// Processes the common input/output prefix; the remaining output stays untouched.
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) -> usize {
         let count = input.len().min(output.len());
-        for (input, output) in input[..count]
+        let input = input.split_at(count).0;
+        let output = output.split_at_mut(count).0;
+        for (input, output) in input
             .chunks(EQ_BLOCK_FRAMES)
-            .zip(output[..count].chunks_mut(EQ_BLOCK_FRAMES))
+            .zip(output.chunks_mut(EQ_BLOCK_FRAMES))
         {
-            self.process_block::<EQ_BLOCK_FRAMES>(input, output);
+            output.copy_from_slice(self.process_block(input));
         }
         count
     }
 
-    fn process_block<const N: usize>(&mut self, input: &[f32], output: &mut [f32]) {
-        let frames = input.len();
-        let mut dry = [0.0; N];
-        for (dry, &input) in dry.iter_mut().zip(input) {
-            *dry = sanitize_sample(input);
+    pub(super) fn process_block(&mut self, input: &[f32]) -> &mut [f32] {
+        let frames = input.len().min(self.output.len());
+        let output = self.output.split_at_mut(frames).0;
+        for (output, &input) in output.iter_mut().zip(input) {
+            *output = sanitize_sample(input);
         }
         self.gains.fill(&mut self.gain_blocks, frames);
-        let mut wet = [0.0; N];
-        match self.gains.len() {
-            0 => wet[..frames].copy_from_slice(&dry[..frames]),
-            1 => {
-                for ((wet, dry), gain) in wet[..frames]
-                    .iter_mut()
-                    .zip(&dry[..frames])
-                    .zip(&self.gain_blocks[0][..frames])
-                {
-                    *wet = dry * gain;
+        match self.gain_blocks.as_slice() {
+            [] => {}
+            [gain] => {
+                for (output, gain) in output.iter_mut().zip(gain.iter()) {
+                    *output *= gain;
                 }
             }
-            _ => {
-                self.filters.split(&dry[..frames], &mut self.bands);
-                for (band, gains) in self.bands.iter().zip(&self.gain_blocks) {
-                    kithara_dsp::mul_add(&band[..frames], &gains[..frames], &mut wet[..frames]);
-                }
+            gains => {
+                self.filters.sum(output, gains);
             }
         }
-        for ((output, dry), wet) in output.iter_mut().zip(dry).zip(wet) {
-            let mut wet = [sanitize_sample(wet)];
+        for (output, &input) in output.iter_mut().zip(input) {
+            let dry = sanitize_sample(input);
+            let mut wet = [sanitize_sample(*output)];
             self.bypass.mix_dry_into_wet_mono(&[dry], &mut wet, 1);
             self.silence.mix_dry_into_wet_mono(&[0.0], &mut wet, 1);
             *output = sanitize_sample(wet[0]);
         }
+        output
     }
 
     pub fn reset(&mut self) {

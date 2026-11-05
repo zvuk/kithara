@@ -76,7 +76,7 @@ assert_eq!(samples, [0.0, 0.5]);
 
 <tr><td><code>filter::Coefficients</code></td><td>The <code>biquad</code> crate's RBJ cookbook designs (with <code>Type</code>, <code>Hertz</code> and <code>Errors</code>), re-exported as the one import path</td></tr>
 
-<tr><td><code>filter::Crossover</code></td><td>Mono LR4/allpass state; <code>split</code> writes ascending bands over the common slice prefix, while reset and rate changes clear history without allocation</td></tr>
+<tr><td><code>filter::Crossover</code></td><td>Mono LR4/allpass state; <code>split</code> writes ascending bands, <code>sum</code> applies fused per-frame gains; reset and rate changes clear history without allocation</td></tr>
 
 <tr><td><code>interp::interpolate</code></td><td>Reads a window at fractional positions with an <code>interp::Interpolation</code> method (linear, quadratic, Hermite, Watte); a position outside the window is an error and leaves the output untouched</td></tr>
 
