@@ -164,7 +164,6 @@ impl Crossover {
         count
     }
 
-    #[inline]
     fn filter_sample(&mut self, mut high: f32) -> &[f32] {
         let (high_band, lower) = self
             .frame
@@ -179,15 +178,16 @@ impl Crossover {
             *low = lowpass.process(high);
             high = highpass.process(high);
         }
-        let mut allpass = self.allpass.iter_mut();
-        for (band, low) in lower.iter_mut().enumerate() {
-            for section in allpass.by_ref().take(
-                self.frequencies
-                    .len()
-                    .saturating_sub(band.saturating_add(1)),
-            ) {
-                *low = section.run(*low);
+        let count = lower.len();
+        let mut allpass = self.allpass.as_mut();
+        for (band, low) in lower.iter_mut().take(count.saturating_sub(1)).enumerate() {
+            let (sections, remaining) = allpass.split_at_mut(count - band - 1);
+            let mut value = *low;
+            for section in sections {
+                value = section.run(value);
             }
+            *low = value;
+            allpass = remaining;
         }
         *high_band = high;
         &self.frame
