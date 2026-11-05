@@ -5,7 +5,10 @@ use ::kithara::{
         BeatGridModel, BeatGridState, GRID_SCHEMA_VERSION, GridBeat, GridDownbeat, Meter,
         RawBeatGrid,
     },
-    host::{HostSettingsControl, api::Tempo},
+    host::{
+        HostSettingsControl,
+        api::{SESSION_BEATS_PER_BAR, Tempo},
+    },
     output::{RenderSink, RenderSinkError},
     platform::{
         sync::Arc,
@@ -35,7 +38,8 @@ use crate::{
 mod consts {
     use super::Duration;
 
-    pub(super) const BEATS_PER_BAR: u16 = 4;
+    /// Beats in one bar of the fixture tracks' own grid.
+    pub(super) const TRACK_BEATS_PER_BAR: u16 = 4;
     pub(super) const BEAT: Duration = Duration::from_millis(500);
     pub(super) const BLOCK_FRAMES: u64 = 1_024;
     pub(super) const CHANNELS: u16 = 2;
@@ -81,7 +85,7 @@ fn rhythm_grid() -> BeatGridModel {
             })
             .collect(),
         downbeats: (0..consts::TRACK_BEATS)
-            .step_by(usize::from(consts::BEATS_PER_BAR))
+            .step_by(usize::from(consts::TRACK_BEATS_PER_BAR))
             .map(|ordinal| GridDownbeat {
                 at: at(ordinal),
                 beat_ordinal: ordinal,
@@ -89,7 +93,7 @@ fn rhythm_grid() -> BeatGridModel {
             })
             .collect(),
         meter: Some(Meter {
-            beats_per_bar: NonZeroU16::new(consts::BEATS_PER_BAR).expect("a bar holds beats"),
+            beats_per_bar: NonZeroU16::new(consts::TRACK_BEATS_PER_BAR).expect("a bar holds beats"),
             origin_beat_ordinal: 0,
         }),
     })
@@ -158,14 +162,14 @@ fn grid_two_beats_off_the_bar() -> BeatGridModel {
     let mut raw = rhythm_grid().as_raw().clone();
     raw.state = BeatGridState::Provisional;
     raw.meter = Some(Meter {
-        beats_per_bar: NonZeroU16::new(consts::BEATS_PER_BAR).expect("a bar holds beats"),
+        beats_per_bar: NonZeroU16::new(consts::TRACK_BEATS_PER_BAR).expect("a bar holds beats"),
         origin_beat_ordinal: 2,
     });
     raw.downbeats = raw
         .beats
         .iter()
         .skip(2)
-        .step_by(usize::from(consts::BEATS_PER_BAR))
+        .step_by(usize::from(consts::TRACK_BEATS_PER_BAR))
         .map(|beat| GridDownbeat {
             at: beat.at,
             beat_ordinal: beat.ordinal,
@@ -218,7 +222,7 @@ fn capture(rig: &mut Rig, length: Duration) -> Rendered {
 
 /// One host bar at `bpm`.
 fn bar(bpm: f64) -> Duration {
-    Duration::from_secs_f64(60.0 / bpm * f64::from(consts::BEATS_PER_BAR))
+    Duration::from_secs_f64(60.0 / bpm * f64::from(SESSION_BEATS_PER_BAR.get()))
 }
 
 fn frames(rig: &mut Rig, length: Duration) -> u64 {
@@ -302,7 +306,7 @@ fn beat_frame(grid: &BeatGridSnapshot, beat: f64) -> i64 {
 fn next_bar(rig: &mut Rig, beats: f64) -> i64 {
     let grid = mock::host(rig).snapshot();
     let now = i64::try_from(rig.rendered_frames).expect("rendered frames fit the session axis");
-    let bar = f64::from(consts::BEATS_PER_BAR);
+    let bar = f64::from(SESSION_BEATS_PER_BAR.get());
     beat_frame(&grid, ((host_beat(&grid, now) + beats) / bar).ceil() * bar)
 }
 
@@ -425,8 +429,8 @@ fn assert_clicks_on_host_beats(rig: &mut Rig, found: &[Onset]) {
     let grid = mock::host(rig).snapshot();
     let tolerance =
         i64::try_from(frames(rig, consts::ONSET_TOLERANCE)).expect("tolerance fits i64");
-    let bar = i64::from(consts::BEATS_PER_BAR);
-    let mut loudness = vec![(0.0_f32, 0_u16); usize::from(consts::BEATS_PER_BAR)];
+    let bar = i64::from(SESSION_BEATS_PER_BAR.get());
+    let mut loudness = vec![(0.0_f32, 0_u16); usize::from(SESSION_BEATS_PER_BAR.get())];
     let mut off_beat = Vec::new();
     for onset in found {
         let beat = host_beat(&grid, onset.frame).round();
@@ -479,7 +483,7 @@ async fn a_seek_on_a_synced_deck_shows_the_position_moving_on(rhythm_a_wav: Stri
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
     rig.call(|rig| {
         let _ = capture(rig, consts::SETTLE);
-        let bar = f64::from(consts::BEATS_PER_BAR) * 60.0 / consts::TRACK_BPM;
+        let bar = f64::from(consts::TRACK_BEATS_PER_BAR) * 60.0 / consts::TRACK_BPM;
         let half_bar = bar / 2.0;
         let duration = rig.queues[0]
             .duration_seconds()
@@ -1048,7 +1052,7 @@ async fn play_on_a_synced_deck_paused_before_the_first_beat_sounds(rhythm_a_wav:
             .round()
             .as_();
         assert_eq!(
-            beat.rem_euclid(i64::from(consts::BEATS_PER_BAR)),
+            beat.rem_euclid(i64::from(SESSION_BEATS_PER_BAR.get())),
             0,
             "the first beat sounds on a host downbeat: {found:?}"
         );

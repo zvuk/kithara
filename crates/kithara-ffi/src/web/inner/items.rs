@@ -286,6 +286,7 @@ mod tests {
             deck_delivery: Default::default(),
             output: &output,
             deck: &deck,
+            planned_tempo: &::kithara::play::mock::planned_tempo(),
         };
         let mut scope = ring.scope(scope).expect("borrow deck scope");
         let mut out = Outbox::new(&mut scope, &mut dispatcher).in_pass(pass);

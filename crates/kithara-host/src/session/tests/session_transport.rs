@@ -109,8 +109,8 @@ fn transport_commit_is_published_to_every_registered_player_bus() {
 
     set_tempo(&session, 90.0);
     session
-        .credit(1)
-        .expect("invariant: the tempo change renders");
+        .credit(2)
+        .expect("invariant: the tempo change reaches its render boundary");
     let committed = snapshot(&session);
     let expected = vec![TransportEvent::TempoCommitted {
         beats_per_minute: 90.0,

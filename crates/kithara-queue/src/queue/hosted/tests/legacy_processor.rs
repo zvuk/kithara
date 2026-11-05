@@ -295,6 +295,7 @@ impl ThresholdRig {
                     deck_delivery: delivery,
                     output: &output,
                     deck: &deck,
+                    planned_tempo: &mock::planned_tempo(),
                 };
                 HostedDeck::tick(queue, pass, out);
                 run(queue, out)
@@ -745,6 +746,7 @@ fn real_outbox<Value>(
         deck_delivery: FrameCount::new(usize::try_from(frames).expect("delivery frames fit usize")),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut scope = mixer.ring.scope(mixer.scope).expect("real deck scope");
     run(

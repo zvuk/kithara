@@ -21,6 +21,7 @@ use num_traits::ToPrimitive;
 
 use crate::{
     PlayError,
+    api::SESSION_BEATS_PER_BAR,
     session::{Span, applied_spans},
 };
 
@@ -41,8 +42,6 @@ mod consts {
     /// under a thousandth up to 16 kHz, under a hundredth up to 20 kHz, under
     /// four hundredths up to 21 kHz, and about 3.7 dB at 22 kHz.
     pub(super) const ATTACK_SECONDS: f64 = 0.002;
-    /// The session transport counts bars of four beats from session beat 0.
-    pub(super) const BEATS_PER_BAR: i64 = 4;
     /// Peak of a beat click relative to a downbeat click.
     pub(super) const BEAT_RATIO: f64 = 0.625;
     /// The metronome stays silent until switched on.
@@ -392,7 +391,7 @@ impl Metronome {
                 self.continue_click(left_run, right_run);
                 let from = self.click.as_ref().map_or(0.0, Click::duck);
                 self.click = Some(Click::new(
-                    beat.rem_euclid(consts::BEATS_PER_BAR) == 0,
+                    beat.rem_euclid(i64::from(SESSION_BEATS_PER_BAR.get())) == 0,
                     anchor.sample_rate(),
                     level,
                     shape,

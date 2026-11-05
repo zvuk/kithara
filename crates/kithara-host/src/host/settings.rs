@@ -1,10 +1,12 @@
 use std::num::NonZeroU32;
 
 use kithara_config::Config;
+use kithara_signal::SessionFrame;
+use kithara_sync::{SessionBeat, TempoStep, TempoTrajectory};
 
 use crate::{
     MetronomeConfig, PlayError,
-    api::{SessionDuckingMode, Tempo},
+    api::{SESSION_BEATS_PER_BAR, SessionDuckingMode, Tempo},
     consts,
 };
 
@@ -36,4 +38,22 @@ pub struct HostSettings {
     /// not at all unless changed.
     #[config(live, builder(default))]
     ducking: SessionDuckingMode,
+}
+
+impl HostSettings {
+    /// The accepted tempo map a session starts from: session beat 0 on frame
+    /// 0 at these settings' tempo and rate, [`SESSION_BEATS_PER_BAR`] beats
+    /// to the bar.
+    #[must_use]
+    pub fn trajectory(&self) -> TempoTrajectory {
+        TempoTrajectory::new(
+            TempoStep {
+                frame: SessionFrame::new(0),
+                beat: SessionBeat::default(),
+                tempo: self.tempo,
+            },
+            SESSION_BEATS_PER_BAR,
+            self.sample_rate,
+        )
+    }
 }

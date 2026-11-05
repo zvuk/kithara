@@ -53,6 +53,7 @@ fn eq_call(
             deck_delivery: FrameCount::new(128),
             output: &output,
             deck,
+            planned_tempo: &mock::planned_tempo(),
         };
         let mut scope = mixer.ring.scope(mixer.scope).expect("mixer scope");
         let mut out = Outbox::new(&mut scope, &mut loads.dispatcher).in_pass(pass);
@@ -74,6 +75,7 @@ fn eq_call(
         deck_delivery: FrameCount::new(128),
         output: &output,
         deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     while let Some(kithara_command::ScopedReceipt::Scope(_, receipt)) = mixer.ring.receipt() {
         hang_tick!();
@@ -216,6 +218,7 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
                 deck_delivery: FrameCount::new(128),
                 output: &output,
                 deck: &deck,
+                planned_tempo: &mock::planned_tempo(),
             };
             let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
             let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);

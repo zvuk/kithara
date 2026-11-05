@@ -90,6 +90,7 @@ fn mix_command(
         deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
     let mut out = Outbox::new(&mut scope, &mut rig.dispatcher)
@@ -190,6 +191,7 @@ fn rejected_slot_volume_leaves_live_values_unchanged() {
         deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut scope = idle.ring.scope(idle.scope).expect("idle scope");
     let mut out = Outbox::new(&mut scope, &mut idle.dispatcher).in_pass(pass);
@@ -740,6 +742,7 @@ fn a_host_pass_publishes_the_deck_mixer_counters() {
         deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut rig = mock::DeckRig::new(DeckMixerConfig::default()).expect("deck rig");
     let mut scope = rig.ring.scope(rig.scope).expect("deck scope");

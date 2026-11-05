@@ -2,6 +2,7 @@ use std::task::Waker;
 
 use kithara_render::{bridge::DeckSnapshot, rt::DeckMixerConfig};
 use kithara_signal::{FrameCount, SessionFrame};
+use kithara_sync::TempoTrajectory;
 
 use super::{Outbox, TrackReceipt};
 use crate::{OutputSnapshot, PlayError, PlayWorker, ResourcePrep};
@@ -74,6 +75,9 @@ pub struct DeckPass<'a> {
     pub output: &'a OutputSnapshot,
     /// What the mixer last published of the deck's slots.
     pub deck: &'a DeckSnapshot,
+    /// The session tempo the Host accepted: the applied steps and the
+    /// accepted ones the session has not reached yet.
+    pub planned_tempo: &'a TempoTrajectory,
 }
 
 impl DeckPass<'_> {

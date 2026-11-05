@@ -6,7 +6,7 @@ use kithara::{
     effects::LimiterConfig,
     host::{
         HostConfig, HostSettings, HostSettingsChange, HostSettingsControl, MetronomeConfig,
-        MetronomeConfigChange, MetronomeConfigControl, Tap,
+        MetronomeConfigChange, MetronomeConfigControl, Tap, api::SESSION_BEATS_PER_BAR,
     },
     play::{PlayError, Tempo},
     signal::SessionFrame,
@@ -37,7 +37,6 @@ mod consts {
     /// lands on a frame the anchor rounds to.
     pub(super) const BPM: f64 = 124.0;
     pub(super) const BLOCKS: u64 = 700;
-    pub(super) const BEATS_PER_BAR: i64 = 4;
     /// Peak of a downbeat click at the default metronome level: the default
     /// limiter ceiling.
     pub(super) const DOWNBEAT_PEAK: f32 = 0.98;
@@ -216,7 +215,7 @@ fn host_beats(grid: &BeatGridSnapshot, frames: std::ops::Range<u64>) -> Vec<(u64
         .map(|ordinal| {
             (
                 beat_frame(grid, ordinal),
-                ordinal % consts::BEATS_PER_BAR == 0,
+                ordinal % i64::from(SESSION_BEATS_PER_BAR.get()) == 0,
             )
         })
         .take_while(|(frame, _)| *frame < frames.end)
@@ -231,7 +230,7 @@ fn beat_from(grid: &BeatGridSnapshot, frame: u64) -> (u64, bool) {
         .map(|ordinal| {
             (
                 beat_frame(grid, ordinal),
-                ordinal % consts::BEATS_PER_BAR == 0,
+                ordinal % i64::from(SESSION_BEATS_PER_BAR.get()) == 0,
             )
         })
         .find(|(beat, _)| *beat >= frame)
@@ -337,7 +336,7 @@ async fn the_engine_metronome_clicks_on_every_host_beat_with_no_deck_playing() {
     let beats = host_beats(&grid, 0..frames);
     let heard = clicks(&pcm);
     assert!(
-        beats.len() >= 3 * usize::try_from(consts::BEATS_PER_BAR).expect("bar length"),
+        beats.len() >= 3 * usize::from(SESSION_BEATS_PER_BAR.get()),
         "the render spans several bars: {beats:?}"
     );
     assert_eq!(
@@ -1319,7 +1318,7 @@ async fn two_tempo_changes_inside_one_block_keep_the_click_before_them_on_its_be
         .chain((2..=3).map(|ordinal| {
             (
                 beat_frame(&committed, ordinal),
-                ordinal % consts::BEATS_PER_BAR == 0,
+                ordinal % i64::from(SESSION_BEATS_PER_BAR.get()) == 0,
             )
         }))
         .collect();

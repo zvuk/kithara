@@ -33,6 +33,7 @@ impl HandoverRig {
             deck_delivery: FrameCount::new(128),
             output: &output,
             deck: &deck,
+            planned_tempo: &mock::planned_tempo(),
         };
         let mut scope = self.deck.ring.scope(self.deck.scope).expect("deck scope");
         let mut out = Outbox::new(&mut scope, &mut self.deck.dispatcher).in_pass(pass);

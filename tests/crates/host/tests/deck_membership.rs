@@ -1,16 +1,16 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{
-    num::{NonZeroU16, NonZeroU32, NonZeroUsize},
+    num::{NonZeroU32, NonZeroUsize},
     task::Waker,
 };
 
 use delegate::delegate;
 use kithara::{
-    host::{DeckId, HostConfig, HostCore, HostOwned, HostSettings, api::Tempo},
+    host::{DeckId, HostConfig, HostCore, HostOwned, HostSettings},
     link::{
         LinkedConfig, LinkedFactory, LinkedHost, LinkedHostCommand, LinkedHostConfig,
-        LinkedHostDeck, TempoStep, TempoTrajectory, Unlinked,
+        LinkedHostDeck, TempoTrajectory, Unlinked,
     },
     platform::{
         sync::{Arc, Mutex},
@@ -22,8 +22,6 @@ use kithara::{
         TrackReceipt,
     },
     queue::{Queue, QueueConfig},
-    signal::SessionFrame,
-    sync::SessionBeat,
     warp::WarpConfig,
     worker::DispatcherConfig,
 };
@@ -322,28 +320,15 @@ async fn a_decorated_host_answers_registration_and_holds_both_deck_domains() {
     type LinkedOwner = LinkedHost<TestPools, HostCore<TestPools, LinkedHostDeck<TestPools>>>;
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region.clone()).build());
-    let trajectory = TempoTrajectory::new(
-        TempoStep {
-            frame: SessionFrame::new(0),
-            beat: SessionBeat::default(),
-            tempo: Tempo::DEFAULT,
-        },
-        NonZeroU16::new(4).expect("meter"),
-        sample_rate(),
-    );
-    let axis = trajectory.clone();
+    let settings = HostSettings::builder().sample_rate(sample_rate()).build();
+    let trajectory = settings.trajectory();
     let config = HostConfig::offline(region)
-        .settings(HostSettings::builder().sample_rate(sample_rate()).build())
+        .settings(settings)
         .max_block_frames(block_frames())
         .build();
     let host: OfflineHostHarness<TestPools, LinkedOwner> =
-        OfflineHostHarness::layered(config, None, move |core| {
-            LinkedHost::new(
-                LinkedHostConfig::builder()
-                    .inner(core)
-                    .trajectory(axis)
-                    .build(),
-            )
+        OfflineHostHarness::layered(config, None, |core| {
+            LinkedHost::new(LinkedHostConfig::builder().inner(core).build())
         })
         .await
         .expect("decorated offline host");

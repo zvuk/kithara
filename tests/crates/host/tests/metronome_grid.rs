@@ -5,7 +5,8 @@ use std::num::NonZeroU32;
 use kithara::{
     audio::mock::TestPcmReader,
     host::{
-        HostConfig, HostSettings, HostSettingsControl, MetronomeConfig, MetronomeConfigControl, Tap,
+        HostConfig, HostSettings, HostSettingsControl, MetronomeConfig, MetronomeConfigControl,
+        Tap, api::SESSION_BEATS_PER_BAR,
     },
     play::Tempo,
     signal::AudioSpec,
@@ -26,7 +27,6 @@ mod consts {
     pub(super) const SAMPLE_RATE: u32 = 44_100;
     pub(super) const BLOCK_FRAMES: u32 = 512;
     pub(super) const CHANNELS: u16 = 2;
-    pub(super) const BEATS_PER_BAR: u32 = 4;
     /// The Host eases a tempo change in: the tempo approaches the new one as
     /// `e^(-t/τ)` with this time constant, in seconds.
     pub(super) const TEMPO_SMOOTH_SECONDS: f64 = 0.005;
@@ -148,7 +148,8 @@ struct ComputedBeat {
 
 impl ComputedBeat {
     fn downbeat(self) -> bool {
-        self.ordinal.is_multiple_of(consts::BEATS_PER_BAR)
+        self.ordinal
+            .is_multiple_of(u32::from(SESSION_BEATS_PER_BAR.get()))
     }
 }
 
@@ -198,11 +199,11 @@ fn computed_beats(stretches: &[Stretch], end: u64) -> Vec<ComputedBeat> {
     beats
 }
 
-/// One tempo of a ride: its BPM, the frame it was set on and the grid the
+/// One tempo of a ride: its BPM, the frame it commits on and the grid the
 /// Host published for it.
 struct RideStep {
     bpm: u32,
-    requested: u64,
+    at: u64,
     grid: BeatGridSnapshot,
 }
 
@@ -218,13 +219,13 @@ struct HostRide {
 impl HostRide {
     /// The stretches the math places the ride's beats with: the Host runs at
     /// the first tempo from the first frame it renders, and each change
-    /// commits on the frame it is set on, where the next block starts.
+    /// commits on its scheduled frame, where the next block starts.
     fn stretches(&self) -> Vec<Stretch> {
         let mut stretches: Vec<Stretch> = Vec::with_capacity(self.steps.len());
         for step in &self.steps {
             let stretch = stretches.last().map_or_else(
                 || Stretch::first(self.start, step.bpm),
-                |last| last.then(step.requested, step.bpm),
+                |last| last.then(step.at, step.bpm),
             );
             stretches.push(stretch);
         }
@@ -260,15 +261,20 @@ async fn host_ride() -> HostRide {
     host.render_forward(block).await;
 
     let mut ride = Vec::new();
+    let mut at = host.position();
     for bpm in consts::RIDE_FROM_BPM..=consts::RIDE_TO_BPM {
-        let requested = host.position();
         let tempo = Tempo::new(f64::from(bpm)).expect("ride tempo");
         if host.with(|host| host.tempo()).await != tempo {
+            assert_eq!(
+                host.position() + block,
+                at,
+                "one delivery before the change"
+            );
             let revision = host.session_grid().await.revision();
             host.with(move |host| host.set_tempo(tempo))
                 .await
                 .expect("Host tempo");
-            host.render_forward(block).await;
+            host.render_forward(2 * block).await;
             assert_ne!(
                 host.session_grid().await.revision(),
                 revision,
@@ -277,7 +283,7 @@ async fn host_ride() -> HostRide {
         }
         ride.push(RideStep {
             bpm,
-            requested,
+            at,
             grid: host.session_grid().await,
         });
         let hold = if bpm == consts::RIDE_TO_BPM {
@@ -285,9 +291,11 @@ async fn host_ride() -> HostRide {
         } else {
             consts::STEP_BLOCKS
         };
-        let until = requested + hold * block;
-        host.render_forward(until - host.position()).await;
+        let until = at + hold * block;
+        host.render_forward(until - block - host.position()).await;
+        at = until;
     }
+    host.render_forward(block).await;
     let end = host.position();
     host.close().await;
 
@@ -509,7 +517,7 @@ async fn the_live_metronome_lands_on_its_own_recording_with_no_flam() {
     // the recording's beat 0 meets a live downbeat on another phase of a
     // render block than it was recorded on. The probe pads a beat, so the
     // deck's first sound renders after the taps attach.
-    let bar = consts::OVERLAY_PERIOD * u64::from(consts::BEATS_PER_BAR);
+    let bar = consts::OVERLAY_PERIOD * u64::from(SESSION_BEATS_PER_BAR.get());
     let probe = recording_start(&recording, consts::OVERLAY_PERIOD).await;
     let pad = consts::OVERLAY_PERIOD + bar - probe % bar;
     let at = recording_start(&recording, pad).await;
@@ -530,7 +538,8 @@ async fn the_live_metronome_lands_on_its_own_recording_with_no_flam() {
         .expect("output tap");
     // WHY: A metronome switched on clicks from the next beat: switched on in
     // the block before the recording, it clicks from the recording's beat 0.
-    while host.position() + u64::from(consts::BLOCK_FRAMES) < at {
+    // Admission precedes that block by one delivery.
+    while host.position() + 2 * u64::from(consts::BLOCK_FRAMES) < at {
         render_blocks(&harness, 1).await;
     }
     host.with(|host| host.metronome().set_enabled(true))

@@ -502,38 +502,24 @@ impl ProductHarness {
             u32::try_from(block_frames).expect("offline render block count fits u32"),
         )
         .expect("offline render block count is non-zero");
-        let session = HostConfig::offline(pools)
-            .max_block_frames(render_block_frames)
-            .settings(
-                HostSettings::builder()
-                    .sample_rate(sample_rate)
-                    .metronome(
-                        MetronomeConfig::builder()
-                            .level(METRONOME_DUCK)
-                            .duck(METRONOME_DUCK)
-                            .build(),
-                    )
+        let settings = HostSettings::builder()
+            .sample_rate(sample_rate)
+            .tempo(Tempo::new(START_BPM).expect("initial tempo"))
+            .metronome(
+                MetronomeConfig::builder()
+                    .level(METRONOME_DUCK)
+                    .duck(METRONOME_DUCK)
                     .build(),
             )
             .build();
+        let trajectory = settings.trajectory();
+        let session = HostConfig::offline(pools)
+            .max_block_frames(render_block_frames)
+            .settings(settings)
+            .build();
         let trace = usdt_trace::scope();
-        let trajectory = TempoTrajectory::new(
-            TempoStep {
-                frame: SessionFrame::new(0),
-                beat: SessionBeat::default(),
-                tempo: Tempo::new(START_BPM).expect("initial tempo"),
-            },
-            std::num::NonZeroU16::new(4).expect("fixture meter"),
-            sample_rate,
-        );
-        let host_axis = trajectory.clone();
-        let host = OfflineHostHarness::layered(session, None, move |core| {
-            LinkedHost::new(
-                LinkedHostConfig::builder()
-                    .inner(core)
-                    .trajectory(host_axis)
-                    .build(),
-            )
+        let host = OfflineHostHarness::layered(session, None, |core| {
+            LinkedHost::new(LinkedHostConfig::builder().inner(core).build())
         })
         .await
         .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));

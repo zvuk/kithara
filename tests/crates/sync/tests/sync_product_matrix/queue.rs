@@ -1,6 +1,6 @@
 #![cfg(not(target_os = "android"))]
 
-use std::{collections::BTreeMap, num::NonZeroU16, ops::Range};
+use std::{collections::BTreeMap, ops::Range};
 
 use kithara::{
     events::TrackId,
@@ -710,37 +710,22 @@ impl QueueMusic {
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let initial = Tempo::new(100.0).expect("initial Host tempo");
-        let trajectory = TempoTrajectory::new(
-            TempoStep {
-                frame: SessionFrame::new(0),
-                beat: SessionBeat::default(),
-                tempo: initial,
-            },
-            NonZeroU16::new(4).expect("meter"),
-            sample_rate,
-        );
-        let axis = trajectory.clone();
         let metronome = MetronomeConfig::builder().level(0.25).duck(0.25).build();
+        let settings = HostSettings::builder()
+            .sample_rate(sample_rate)
+            .tempo(initial)
+            .metronome(metronome)
+            .build();
+        let trajectory = settings.trajectory();
         let config = HostConfig::offline(pools)
             .max_block_frames(
                 NonZeroU32::new(BLOCK.try_into().expect("block frames fit u32")).expect("block"),
             )
-            .settings(
-                HostSettings::builder()
-                    .sample_rate(sample_rate)
-                    .tempo(initial)
-                    .metronome(metronome)
-                    .build(),
-            )
+            .settings(settings)
             .build();
         let host: OfflineHostHarness<TestPools, LinkedOwner<TestPools>> =
-            OfflineHostHarness::layered(config, None, move |core| {
-                LinkedHost::new(
-                    LinkedHostConfig::builder()
-                        .inner(core)
-                        .trajectory(axis)
-                        .build(),
-                )
+            OfflineHostHarness::layered(config, None, |core| {
+                LinkedHost::new(LinkedHostConfig::builder().inner(core).build())
             })
             .await
             .expect("real offline Host");

@@ -287,6 +287,7 @@ pub(super) fn in_pass<R>(
         deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut scope = rig
         .deck
@@ -512,6 +513,7 @@ async fn a_rejected_launch_leaves_the_member_silent() {
         deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &snapshot,
+        planned_tempo: &mock::planned_tempo(),
     };
     let seq = {
         let mut scope = mixer.ring.scope(mixer.scope).expect("live scope");
@@ -970,6 +972,7 @@ async fn a_zero_frame_observation_retains_the_exact_commanded_cue(
         deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     for _ in 0..2 {
         let mut scope = rig.deck.ring.scope(rig.deck.scope).expect("live scope");
@@ -1118,6 +1121,7 @@ async fn processor_set_paused_updates_playback(#[case] mapped: bool) {
         deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     {
         let mut scope = rig.deck.ring.scope(rig.deck.scope).expect("live scope");
@@ -1342,6 +1346,7 @@ fn a_relocation_is_refused_off_the_applied_lane(#[case] invalid: u8) {
         deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let refused = {
         let mut scope = rig
@@ -1597,6 +1602,7 @@ async fn play_after_an_ended_seek_preserves_its_segment_and_receipt(#[case] offs
     };
     let fixture = &mut *rig;
     let mut scope = fixture.ring.scope(fixture.scope).expect("live scope");
+    let planned_tempo = mock::planned_tempo();
     let out = Outbox::new(&mut scope, &mut fixture.dispatcher).in_pass(crate::DeckPass {
         mix: DeckMixSettings::default(),
         suspended: false,
@@ -1605,6 +1611,7 @@ async fn play_after_an_ended_seek_preserves_its_segment_and_receipt(#[case] offs
         deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
+        planned_tempo: &planned_tempo,
     });
     track.observe(&out);
     assert_eq!(track.snapshot().position, advanced);
@@ -1742,6 +1749,7 @@ fn withdrawing_the_newest_epoch_unpublishes_the_seek() {
         deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let seq = receipt.seq();
     let (outcome, mut batch) = receipt.into();
@@ -1847,6 +1855,7 @@ fn an_epoch_adopted_before_it_is_published_reports_the_audio_thread() {
         deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     {
         let mut scope = rig
@@ -2670,6 +2679,7 @@ async fn a_native_stop_answers_without_overwriting_a_new_segments_position(
         deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut scope = rig.deck.ring.scope(rig.deck.scope).expect("live scope");
     let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(pass);
@@ -2777,6 +2787,7 @@ async fn an_evicting_track_takes_the_slot_over_on_its_frame() {
         deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let seq = {
         let mut scope = rig
@@ -2969,6 +2980,7 @@ async fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
     };
     let seq = {
         let mut scope = rig.deck.ring.scope(rig.deck.scope).expect("deck scope");
+        let planned_tempo = mock::planned_tempo();
         let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(crate::DeckPass {
             mix: DeckMixSettings::default(),
             suspended: false,
@@ -2977,6 +2989,7 @@ async fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
             deck_delivery: FrameCount::new(0),
             output: &output,
             deck: &deck,
+            planned_tempo: &planned_tempo,
         });
         let at = When::At(frame(1_024));
         let (_, seq) = out
@@ -3042,6 +3055,7 @@ pub(super) fn with_mixer<R>(
     let output = mock::output(None).get();
     let deck = mixer.ends.snapshot.read();
     let mut scope = mixer.ring.scope(mixer.scope).expect("live mixer scope");
+    let planned_tempo = mock::planned_tempo();
     let mut out = Outbox::new(&mut scope, dispatcher).in_pass(crate::DeckPass {
         mix: DeckMixSettings::default(),
         suspended: false,
@@ -3050,6 +3064,7 @@ pub(super) fn with_mixer<R>(
         deck_delivery: FrameCount::new(0),
         output: &output,
         deck,
+        planned_tempo: &planned_tempo,
     });
     run(&mut out)
 }

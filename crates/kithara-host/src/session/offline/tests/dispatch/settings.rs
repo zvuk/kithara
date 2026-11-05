@@ -108,7 +108,10 @@ fn changes_past_the_queue_capacity_flow_while_blocks_render_without_a_tick() {
     let mut state = test_state(start_route_loss_stream);
     insert(&mut state);
     let mut clock = 0;
-    let mut applied = state.settings.config().metronome().level();
+    let initial = state.settings.config().metronome().level();
+    // A change for the next moment lands one block of delivery after its
+    // pass, so the block after the next one applies it.
+    let mut applied = [initial, initial];
     for step in 0..2 * host_queue_capacity() {
         let (level, change) = level_change(step);
         assert!(
@@ -117,11 +120,11 @@ fn changes_past_the_queue_capacity_flow_while_blocks_render_without_a_tick() {
         );
         assert_eq!(
             state.settings.config().metronome().level(),
-            applied,
+            applied[0],
             "the Host reads the change the last block applied"
         );
         render_left(&mut state, &mut clock, 1);
-        applied = level;
+        applied = [applied[1], level];
     }
 }
 
@@ -156,6 +159,14 @@ fn a_full_queue_refuses_a_change_until_a_block_answers_the_ones_in_flight() {
     );
 
     let mut clock = 0;
+    render_left(&mut state, &mut clock, 1);
+    assert!(
+        matches!(
+            configure_next(&mut state, level_change(capacity).1),
+            Err(PlayError::Session(SessionError::HostQueueFull))
+        ),
+        "the changes in flight wait one block of delivery for their frame"
+    );
     render_left(&mut state, &mut clock, 1);
     assert!(matches!(
         configure_next(&mut state, level_change(capacity).1),

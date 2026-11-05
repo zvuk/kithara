@@ -97,8 +97,6 @@ pub trait HostOwner<S>:
     fn begin_pass(&mut self);
     /// A release post waits for this deck's scope retirement.
     fn release_id(command: &Self::Command) -> Option<DeckId>;
-    /// Identifies consecutive next-block tempo posts that share one winner.
-    fn is_next_tempo(command: &Self::Command) -> bool;
     /// Settles executor receipts and publishes the owner snapshot.
     fn pass(&mut self) -> Vec<HostSettled>;
 }
