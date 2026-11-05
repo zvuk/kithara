@@ -20,8 +20,8 @@ bitflags = { version = "2", default-features = false, features = ["serde"] }
 crossbeam-utils = { version = "0.8" }
 dashmap = { version = "6", default-features = false, features = ["serde"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
-firewheel = { version = "0.14", default-features = false, features = ["cpal", "scheduled_events", "tracing"] }
-firewheel-core = { version = "0.14", default-features = false, features = ["scheduled_events", "serde", "std"] }
+firewheel = { git = "https://github.com/gerasim13/Firewheel", rev = "a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9", default-features = false, features = ["cpal", "scheduled_events", "tracing"] }
+firewheel-core = { git = "https://github.com/gerasim13/Firewheel", rev = "a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9", default-features = false, features = ["scheduled_events", "serde", "std"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
@@ -56,8 +56,8 @@ bitflags = { version = "2", default-features = false, features = ["serde"] }
 crossbeam-utils = { version = "0.8" }
 dashmap = { version = "6", default-features = false, features = ["serde"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
-firewheel = { version = "0.14", default-features = false, features = ["cpal", "scheduled_events", "tracing"] }
-firewheel-core = { version = "0.14", default-features = false, features = ["scheduled_events", "serde", "std"] }
+firewheel = { git = "https://github.com/gerasim13/Firewheel", rev = "a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9", default-features = false, features = ["cpal", "scheduled_events", "tracing"] }
+firewheel-core = { git = "https://github.com/gerasim13/Firewheel", rev = "a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9", default-features = false, features = ["scheduled_events", "serde", "std"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
@@ -198,6 +198,7 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
@@ -246,6 +247,7 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
@@ -292,6 +294,7 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
@@ -340,6 +343,7 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
@@ -378,6 +382,7 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
@@ -408,6 +413,7 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
@@ -441,6 +447,7 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
@@ -483,6 +490,7 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
@@ -523,6 +531,7 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
@@ -565,6 +574,7 @@ form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
@@ -595,8 +605,8 @@ tracing = { version = "0.1", default-features = false, features = ["log"] }
 arrayvec = { version = "0.7" }
 bevy_platform = { version = "0.19", default-features = false, features = ["std", "web"] }
 bitflags = { version = "2", default-features = false, features = ["std"] }
-firewheel = { version = "0.14", default-features = false, features = ["wasm-bindgen"] }
-firewheel-graph = { version = "0.14", default-features = false, features = ["scheduled_events", "tracing", "wasm-bindgen"] }
+firewheel = { git = "https://github.com/gerasim13/Firewheel", rev = "a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9", default-features = false, features = ["wasm-bindgen"] }
+firewheel-graph = { git = "https://github.com/gerasim13/Firewheel", rev = "a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9", default-features = false, features = ["scheduled_events", "tracing", "wasm-bindgen"] }
 futures-channel = { version = "0.3" }
 futures-util = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng", "wasm_js"] }
@@ -616,8 +626,8 @@ web-sys = { version = "0.3", features = ["AbortController", "AbortSignal", "Audi
 arrayvec = { version = "0.7" }
 bevy_platform = { version = "0.19", default-features = false, features = ["std", "web"] }
 bitflags = { version = "2", default-features = false, features = ["std"] }
-firewheel = { version = "0.14", default-features = false, features = ["wasm-bindgen"] }
-firewheel-graph = { version = "0.14", default-features = false, features = ["scheduled_events", "tracing", "wasm-bindgen"] }
+firewheel = { git = "https://github.com/gerasim13/Firewheel", rev = "a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9", default-features = false, features = ["wasm-bindgen"] }
+firewheel-graph = { git = "https://github.com/gerasim13/Firewheel", rev = "a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9", default-features = false, features = ["scheduled_events", "tracing", "wasm-bindgen"] }
 futures-channel = { version = "0.3" }
 futures-util = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng", "wasm_js"] }

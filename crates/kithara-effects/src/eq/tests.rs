@@ -40,6 +40,11 @@ fn a_layout_the_pool_cannot_afford_is_refused_where_it_is_built() {
     assert!(EqLayout::new(&config, &generate_log_spaced_bands(10), TEST_RATE).is_err());
 }
 
+fn take_layout(eq: &mut StereoEq, mut layout: Box<EqLayout>) -> Option<Box<EqLayout>> {
+    layout.prepare_sample_rate(TEST_RATE).expect("valid layout");
+    eq.take_prepared_layout(layout)
+}
+
 /// Crosses over to the waiting layout and lets the crossover settle.
 fn cross_over(eq: &mut StereoEq) {
     let (mut left, mut right) = ([0.5; 64], [0.5; 64]);
@@ -59,28 +64,19 @@ fn bands(layout: Option<Box<EqLayout>>) -> Option<usize> {
 fn a_layout_taken_hands_back_the_one_it_displaces() {
     let mut eq = StereoEq::new(&EqConfig::builder(pools()).build(), TEST_RATE);
 
+    assert_eq!(bands(take_layout(&mut eq, layout(3))), None);
     assert_eq!(
-        bands(eq.take_layout(layout(3)).expect("valid layout")),
-        None
-    );
-    assert_eq!(
-        bands(eq.take_layout(layout(4)).expect("valid layout")),
+        bands(take_layout(&mut eq, layout(4))),
         Some(3),
         "the waiting one"
     );
     cross_over(&mut eq);
-    assert_eq!(
-        bands(eq.take_layout(layout(5)).expect("valid layout")),
-        None
-    );
+    assert_eq!(bands(take_layout(&mut eq, layout(5))), None);
+    cross_over(&mut eq);
+    assert_eq!(bands(take_layout(&mut eq, layout(6))), None);
     cross_over(&mut eq);
     assert_eq!(
-        bands(eq.take_layout(layout(6)).expect("valid layout")),
-        None
-    );
-    cross_over(&mut eq);
-    assert_eq!(
-        bands(eq.take_layout(layout(7)).expect("valid layout")),
+        bands(take_layout(&mut eq, layout(7))),
         Some(4),
         "the one the last crossover retired"
     );

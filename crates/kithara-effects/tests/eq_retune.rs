@@ -20,12 +20,17 @@ fn stereo_eq_preparation_and_commit_preserve_pcm_without_allocation() {
     let layout = |count| {
         Box::new(EqLayout::new(&config, &generate_log_spaced_bands(count), initial).unwrap())
     };
+    let prepare = |count, rate| {
+        let mut incoming = layout(count);
+        incoming.prepare_sample_rate(rate).unwrap();
+        incoming
+    };
     let make = || {
         let mut eq = StereoEq::with_layout(&config, initial, layout(3)).unwrap();
         eq.set_gain(0, GainDb::from(-12.0));
-        assert!(eq.take_layout(layout(3)).unwrap().is_none());
+        assert!(eq.take_prepared_layout(prepare(3, initial)).is_none());
         eq.process(&mut [0.25], &mut [-0.125]);
-        assert!(eq.take_layout(layout(10)).unwrap().is_none());
+        assert!(eq.take_prepared_layout(prepare(10, initial)).is_none());
         eq.set_gain(2, GainDb::from(6.0));
         eq
     };
@@ -60,7 +65,7 @@ fn stereo_eq_preparation_and_commit_preserve_pcm_without_allocation() {
         assert_eq!(right.map(f32::to_bits), expected_right.map(f32::to_bits));
     }
     actual.prepare_sample_rate(initial).unwrap();
-    let displaced = actual.take_layout(layout(3)).unwrap();
+    let displaced = actual.take_prepared_layout(prepare(3, rate));
     assert_eq!(actual.apply_prepared_sample_rate(), None);
     drop(displaced);
 }

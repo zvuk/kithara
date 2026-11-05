@@ -149,22 +149,6 @@ impl StereoEq {
         })
     }
 
-    /// Takes `layout`, retuned to this EQ's rate, to cross over to once the crossover in
-    /// progress settles, and hands back the layout it displaces: one still waiting, or the one
-    /// the last crossover retired. Nothing it held is freed here.
-    ///
-    /// # Errors
-    /// Returns the design error and owning incoming layout without replacing live state.
-    pub fn take_layout(
-        &mut self,
-        mut layout: Box<EqLayout>,
-    ) -> Result<Option<Box<EqLayout>>, (FilterError, Box<EqLayout>)> {
-        if let Err(error) = layout.prepare_sample_rate(self.sample_rate) {
-            return Err((error, layout));
-        }
-        Ok(self.take_prepared_layout(layout))
-    }
-
     /// Takes a layout already prepared for this equaliser's sample rate.
     ///
     /// # Panics
