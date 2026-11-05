@@ -44,18 +44,13 @@ extern "C" {
     fn report_worker_diagnostics() -> String;
 }
 
-fn surface_player() -> AudioPlayer {
-    static DIAGNOSTICS: Once = Once::new();
-    DIAGNOSTICS.call_once(install_worker_diagnostics);
-    AudioPlayer::new_js()
-}
-
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 
 fn surface_player() -> AudioPlayer {
-    static BINDINGS: Once = Once::new();
-    BINDINGS.call_once(|| {
+    static STARTUP: Once = Once::new();
+    STARTUP.call_once(|| {
+        install_worker_diagnostics();
         kithara_ffi::web::bindings::setup().expect("browser bindings initialized");
     });
     AudioPlayer::new_js()

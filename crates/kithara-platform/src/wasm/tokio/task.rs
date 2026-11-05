@@ -82,8 +82,7 @@ where
 
 /// Run a blocking closure on a dedicated Web Worker thread.
 ///
-/// On a Web Worker, spawns via `crate::thread::spawn`.
-/// On main thread, delegates to `tokio_with_wasm`'s worker pool.
+/// Uses the platform thread bootstrap on both main and worker threads.
 ///
 /// The returned abort handle stays inert, since blocking work has no yield point to cancel at.
 pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
@@ -94,13 +93,9 @@ where
     let (tx, rx) = oneshot::channel();
     let (abort_handle, _registration) = FutureAbortHandle::new_pair();
 
-    if crate::thread::is_worker_thread() {
-        drop(crate::thread::spawn(move || {
-            drop(tx.send(Ok(f())));
-        }));
-    } else {
-        forward_tww_handle(tx, tww_task::spawn_blocking(move || Ok(f())));
-    }
+    drop(crate::thread::spawn(move || {
+        drop(tx.send(Ok(f())));
+    }));
 
     JoinHandle { rx, abort_handle }
 }
@@ -161,8 +156,27 @@ mod tests {
 
     use kithara_test_utils::kithara;
 
-    use super::{Handle, spawn, spawn_on};
+    use super::{Handle, spawn, spawn_blocking, spawn_blocking_on, spawn_on};
     use crate::{consts, time::sleep};
+
+    #[kithara::test(wasm, flash(false))]
+    async fn blocking_tasks_start_on_workers_and_can_spawn_nested_work() {
+        let direct = spawn_blocking(crate::thread::is_worker_thread);
+        let handled = spawn_blocking_on(&Handle, crate::thread::is_worker_thread);
+        let nested = spawn_blocking(|| spawn_blocking(|| 7u32));
+        nested.abort();
+
+        assert!(direct.await.expect("main-thread task runs on a worker"));
+        assert!(handled.await.expect("runtime task runs on a worker"));
+        assert_eq!(
+            nested
+                .await
+                .expect("blocking task cannot be aborted")
+                .await
+                .expect("worker can spawn another blocking task"),
+            7
+        );
+    }
 
     #[kithara::test(wasm, flash(false))]
     async fn abort_stops_the_task_and_the_join_reports_cancelled() {

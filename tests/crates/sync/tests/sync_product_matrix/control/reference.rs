@@ -11,7 +11,10 @@ use kithara_integration_tests::{
     pcm_oracle::Audio,
 };
 use kithara_render::bridge::DeckSnapshot;
-use kithara_test_utils::bufpool::{Pools, pools_with_budget, sample_buffer};
+use kithara_test_utils::{
+    bufpool::{Pools, pools_with_budget, sample_buffer},
+    tracing,
+};
 use num_traits::ToPrimitive;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
@@ -1000,16 +1003,40 @@ impl DecodedRecorder {
 
     pub(in super::super) fn view(&mut self) -> &DecodedCapture {
         while let Some(chunk) = self.incoming.try_pop() {
-            let Ok((info, pcm)) = chunk else {
-                self.capture.rejected = true;
-                continue;
+            let (info, pcm) = match chunk {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    tracing::warn!(?error, "decoder observation intake rejected PCM");
+                    self.capture.rejected = true;
+                    continue;
+                }
             };
             let key = (info.source_revision, info.frame_offset);
             if let Some((previous, samples)) = self.capture.chunks.get(&key) {
-                self.capture.rejected |= *previous != info || samples[..] != pcm[..];
+                let conflict = *previous != info || samples[..] != pcm[..];
+                if conflict && !self.capture.rejected {
+                    tracing::warn!(
+                        ?previous,
+                        incoming = ?info,
+                        previous_samples = samples.len(),
+                        incoming_samples = pcm.len(),
+                        "decoder observation has conflicting source chunks"
+                    );
+                }
+                self.capture.rejected |= conflict;
             } else if self.capture.chunks.len() >= self.chunk_limit
                 || self.capture.samples + pcm.len() > self.sample_limit
             {
+                if !self.capture.rejected {
+                    tracing::warn!(
+                        chunks = self.capture.chunks.len(),
+                        chunk_limit = self.chunk_limit,
+                        samples = self.capture.samples,
+                        incoming_samples = pcm.len(),
+                        sample_limit = self.sample_limit,
+                        "decoder observation capture limit exceeded"
+                    );
+                }
                 self.capture.rejected = true;
             } else {
                 self.capture.samples += pcm.len();
@@ -1050,10 +1077,22 @@ impl AudioObserver for DecodedObserver {
             || samples.len() > 32_768
             || samples.len() != chunk.frames() * usize::from(chunk.meta.spec.channels)
         {
+            tracing::warn!(
+                vacant = outgoing.vacant_len(),
+                samples = samples.len(),
+                frames = chunk.frames(),
+                channels = chunk.meta.spec.channels,
+                "decoder observation bounded intake refused chunk"
+            );
             return self.reject();
         }
         let mut pcm = self.pools.get::<f32>();
-        if pcm.try_extend_from_slice(samples).is_err() {
+        if let Err(error) = pcm.try_extend_from_slice(samples) {
+            tracing::warn!(
+                ?error,
+                samples = samples.len(),
+                "decoder observation bounded PCM copy failed"
+            );
             return self.reject();
         }
         self.outgoing
