@@ -76,6 +76,7 @@ impl Design {
 #[non_exhaustive]
 pub struct Crossover {
     splits: Box<[Split]>,
+    frame: Box<[f32]>,
     prepared_rate: Option<Hertz<f32>>,
 }
 
@@ -108,12 +109,16 @@ impl Crossover {
                     prepared: *design,
                 })
                 .collect(),
+            frame: vec![0.0; frequencies.len().saturating_add(1)].into_boxed_slice(),
             prepared_rate: None,
         })
     }
 
     /// Writes ascending band planes over their common input prefix, returning its length.
     /// Fewer than `frequencies.len()` + 1 planes is a no-op; extra planes and tails stay untouched.
+    ///
+    /// # Panics
+    /// Panics if a plane changes length between dereferences during processing.
     pub fn split<P: DerefMut<Target = [f32]>>(&mut self, input: &[f32], bands: &mut [P]) -> usize {
         let Some(bands) = bands.get_mut(..self.splits.len().saturating_add(1)) else {
             return 0;
@@ -122,12 +127,11 @@ impl Crossover {
             .iter()
             .fold(input.len(), |count, band| count.min(band.len()));
         for (frame, &sample) in input.iter().take(count).enumerate() {
-            self.sample(sample, |band, value| {
-                *bands
-                    .get_mut(band)
-                    .and_then(|plane| plane.get_mut(frame))
-                    .expect("band and frame belong to the validated common prefix") = value;
-            });
+            for (band, value) in bands.iter_mut().zip(self.filter_sample(sample)) {
+                *band
+                    .get_mut(frame)
+                    .expect("frame belongs to the validated common prefix") = *value;
+            }
         }
         count
     }
@@ -135,6 +139,9 @@ impl Crossover {
     /// Sums ascending bands in place with fused per-frame gains.
     /// Missing required gain planes is a no-op; short planes bound the processed prefix.
     /// Extra gain planes and the remaining samples stay untouched.
+    ///
+    /// # Panics
+    /// Panics if a gain plane changes length between dereferences during processing.
     pub fn sum<P: Deref<Target = [f32]>>(&mut self, samples: &mut [f32], gains: &[P]) -> usize {
         let Some(gains) = gains.get(..self.splits.len().saturating_add(1)) else {
             return 0;
@@ -143,29 +150,36 @@ impl Crossover {
             .iter()
             .fold(samples.len(), |n, gain| n.min(gain.len()));
         for (frame, sample) in samples.iter_mut().take(count).enumerate() {
-            let mut output = 0.0;
-            self.sample(*sample, |band, value| {
-                let gain = gains
-                    .get(band)
-                    .and_then(|plane| plane.get(frame))
-                    .expect("band and frame belong to the validated common prefix");
-                output = value.mul_add(*gain, output);
-            });
-            *sample = output;
+            *sample =
+                self.filter_sample(*sample)
+                    .iter()
+                    .zip(gains)
+                    .fold(0.0, |output, (value, gain)| {
+                        value.mul_add(
+                            *gain
+                                .get(frame)
+                                .expect("frame belongs to the validated common prefix"),
+                            output,
+                        )
+                    });
         }
         count
     }
 
-    fn sample(&mut self, mut high: f32, mut output: impl FnMut(usize, f32)) {
-        for (band, split) in self.splits.iter_mut().enumerate() {
-            let mut low = split.lowpass.process(high);
+    fn filter_sample(&mut self, mut high: f32) -> &[f32] {
+        let (high_band, lower) = self
+            .frame
+            .split_last_mut()
+            .expect("one high band after the crossovers");
+        for (split, low) in self.splits.iter_mut().zip(lower) {
+            *low = split.lowpass.process(high);
             high = split.highpass.process(high);
             for section in &mut split.allpass {
-                low = section.run(low);
+                *low = section.run(*low);
             }
-            output(band, low);
         }
-        output(self.splits.len(), high);
+        *high_band = high;
+        &self.frame
     }
 
     /// Clears every section's history without allocation or coefficient changes.
