@@ -108,10 +108,10 @@ impl Biquad {
         planes: &mut [P],
         frame: usize,
     ) -> usize {
-        let input = peak(planes, frame);
+        let input_quiet = quiet(planes, frame);
         let next = frame.saturating_add(1);
         self.cascade.run(planes, frame..next);
-        self.count(input.max(peak(planes, frame)));
+        self.count(input_quiet && quiet(planes, frame));
         next
     }
 
@@ -132,12 +132,8 @@ impl Biquad {
         self.cascade.run(planes, run.clone());
         self.silent = false;
         for (offset, frame) in run.clone().enumerate() {
-            let input = self
-                .scratch
-                .iter()
-                .filter_map(|saved| saved.get(offset))
-                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
-            if self.count(input.max(peak(planes, frame))) {
+            let frame_quiet = quiet(&self.scratch, offset) && quiet(planes, frame);
+            if self.count(frame_quiet) {
                 let next = frame.saturating_add(1);
                 let kept = offset.saturating_add(1)..run.len();
                 for (saved, plane) in self.scratch.iter().zip(planes.iter_mut()) {
@@ -153,9 +149,9 @@ impl Biquad {
         run.end
     }
 
-    /// Counts a frame of `peak`; a full quiet run resets the state.
-    fn count(&mut self, peak: f32) -> bool {
-        self.quiet = if peak <= consts::SILENT_PEAK {
+    /// Counts a quiet frame; a full quiet run resets the state.
+    fn count(&mut self, quiet: bool) -> bool {
+        self.quiet = if quiet {
             self.quiet.saturating_add(1).min(consts::SECTION_MEMORY)
         } else {
             0
@@ -204,14 +200,6 @@ impl Biquad {
         self.silent = source.silent;
         Ok(())
     }
-}
-
-/// The largest `|x|` of `frame` over every plane.
-fn peak<P: Deref<Target = [f32]>>(planes: &[P], frame: usize) -> f32 {
-    planes
-        .iter()
-        .filter_map(|plane| plane.get(frame))
-        .fold(0.0, |peak, sample| peak.max(sample.abs()))
 }
 
 /// Every plane stays at or below the silence level at `frame`.

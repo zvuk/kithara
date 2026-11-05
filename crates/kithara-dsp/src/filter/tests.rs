@@ -300,3 +300,55 @@ fn identity_sections_preserve_small_nonzero_output_bits() {
         }
     }
 }
+
+fn half_decay() -> Biquad {
+    let mut filter =
+        Biquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("one channel and section");
+    filter
+        .retune(
+            0,
+            Coefficients {
+                a1: -0.5,
+                a2: 0.0,
+                b0: 1.0,
+                b1: 0.0,
+                b2: 0.0,
+            },
+        )
+        .expect("stable exact half decay");
+    filter
+}
+
+#[kithara::test]
+fn copy_state_preserves_a_partial_quiet_run() {
+    let amplitude = 2.0e-9_f32;
+    let mut source = half_decay();
+    let mut prefix = vec![vec![amplitude, 0.0]];
+    source.process(&mut prefix, 0..2).expect("prefix shape");
+    assert_eq!(prefix[0], [amplitude, amplitude * 0.5]);
+    let mut copied = half_decay();
+    copied.copy_state(&source).expect("matching shape");
+    let mut original_tail = vec![vec![0.0; 3]];
+    let mut copied_tail = original_tail.clone();
+    source
+        .process(&mut original_tail, 0..3)
+        .expect("source tail");
+    copied.process(&mut copied_tail, 0..3).expect("copied tail");
+    let expected = vec![vec![amplitude * 0.25, 0.0, 0.0]];
+    assert_eq!(bits(&original_tail), bits(&expected));
+    assert_eq!(bits(&copied_tail), bits(&expected));
+}
+
+#[kithara::test]
+fn nan_input_is_nonquiet_under_every_partition() {
+    let mut whole = vec![vec![1.0, 0.0, f32::NAN, 1.0e-10, 1.0]];
+    let mut split = whole.clone();
+    half_decay()
+        .process(&mut whole, 0..5)
+        .expect("whole stream");
+    let mut filter = half_decay();
+    filter.process(&mut split, 0..2).expect("prefix");
+    filter.process(&mut split, 2..5).expect("suffix");
+    assert_eq!(bits(&whole), bits(&split));
+    assert!(whole[0][4].is_nan());
+}

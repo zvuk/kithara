@@ -557,7 +557,7 @@ fn portable_fallback_run(planes: &mut [Vec<f32>], halves: &[Vec<[f32; 5]>; 2]) {
                 .set_section(section, *coefficients)
                 .expect("section");
         }
-        dispatch!(Level::fallback(), simd => cascade::cascade_kernel(simd, &mut cascade, planes, range));
+        cascade::cascade_kernel(Level::fallback(), &mut cascade, planes, range);
     }
 }
 
@@ -600,7 +600,7 @@ fn native_call(cascade: &mut cascade::Cascade, planes: &mut [Vec<f32>], range: R
 }
 
 fn fallback_call(cascade: &mut cascade::Cascade, planes: &mut [Vec<f32>], range: Range<usize>) {
-    dispatch!(Level::fallback(), simd => cascade::cascade_kernel(simd, cascade, planes, range));
+    cascade::cascade_kernel(Level::fallback(), cascade, planes, range);
 }
 
 /// Channel 0 plays a tone while channel 1 rings out from one impulse through

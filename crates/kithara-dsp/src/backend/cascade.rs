@@ -82,7 +82,7 @@ impl Cascade {
         planes: &mut [P],
         range: Range<usize>,
     ) {
-        dispatch!(Level::new(), simd => cascade_kernel(simd, self, planes, range));
+        cascade_kernel(Level::new(), self, planes, range);
     }
 
     pub(crate) fn reset(&mut self) {
@@ -102,8 +102,8 @@ impl Cascade {
 /// checked the shape. A pass carries up to four sections in registers, so
 /// each frame runs through all of them before the next one starts.
 #[inline(always)]
-pub(super) fn cascade_kernel<S: Simd, P: DerefMut<Target = [f32]>>(
-    simd: S,
+pub(super) fn cascade_kernel<P: DerefMut<Target = [f32]>>(
+    level: Level,
     cascade: &mut Cascade,
     planes: &mut [P],
     range: Range<usize>,
@@ -120,7 +120,7 @@ pub(super) fn cascade_kernel<S: Simd, P: DerefMut<Target = [f32]>>(
             *reference = &mut **plane;
         }
         group_kernel(
-            simd,
+            level,
             &cascade.coefficients,
             states,
             &mut borrowed[..channels],
@@ -132,7 +132,18 @@ pub(super) fn cascade_kernel<S: Simd, P: DerefMut<Target = [f32]>>(
 /// The hot core takes borrowed planes, so callers do not instantiate it at
 /// their own optimization level. No sample copy or allocation crosses it.
 #[inline(never)]
-fn group_kernel<S: Simd>(
+fn group_kernel(
+    level: Level,
+    coefficients: &[[f32; 5]],
+    states: &mut [[f32; 4]],
+    planes: &mut [&mut [f32]],
+    range: Range<usize>,
+) {
+    dispatch!(level, simd => section_kernel(simd, coefficients, states, planes, range));
+}
+
+#[inline(always)]
+fn section_kernel<S: Simd>(
     simd: S,
     coefficients: &[[f32; 5]],
     states: &mut [[f32; 4]],

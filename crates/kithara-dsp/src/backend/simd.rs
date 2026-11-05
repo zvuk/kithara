@@ -104,8 +104,8 @@ pub(super) fn mul_add_kernel<S: Simd>(simd: S, x: &[f32], y: &[f32], acc: &mut [
     update(simd, acc, [x, y], |acc, [x, y]| x.mul_add_precise(y, acc))
 }
 
-/// The first frame of `range` where every plane holds `|x| <= limit`, or the
-/// end of `range`; a frame a plane does not cover counts as quiet there.
+/// The first frame of `range` where every plane holds `|x| <= limit`, or its
+/// end. The caller has checked that every plane covers the entire range.
 pub(crate) fn first_quiet<P: Deref<Target = [f32]>>(
     planes: &[P],
     range: Range<usize>,
