@@ -31,7 +31,6 @@ impl TrackFactory<TestPools> for SnapshotFactory {
     fn track(&self, config: PlayerConfig) -> Result<Self::Track, PlayError> {
         Ok(SnapshotTrack(
             TrackSnapshot {
-                effects: Vec::new(),
                 item: config.item,
                 slot: config.slot,
                 status: PlayerTrackStatus::Loaded,

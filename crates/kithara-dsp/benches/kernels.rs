@@ -1,8 +1,5 @@
 #![forbid(unsafe_code)]
 
-#[path = "support/crossover.rs"]
-mod crossover_control;
-
 use std::{
     f64::consts::{FRAC_1_SQRT_2, TAU},
     hint::black_box,
@@ -11,9 +8,9 @@ use std::{
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_dsp::{
-    filter::{Biquad, Coefficients, Crossover, Hertz, Type},
+    filter::{Biquad, Coefficients, Hertz, Type},
     interp::{Interpolation, interpolate},
-    spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase},
+    spectrum::{Autocorrelation, Fft, FftLen, prediction_difference},
 };
 use kithara_test_utils::bufpool::pools;
 use num_traits::ToPrimitive;
@@ -195,20 +192,20 @@ fn spectrum(c: &mut Criterion) {
     group.finish();
 }
 
-fn bins(c: &mut Criterion) {
-    let mut group = c.benchmark_group("bins");
-    for size in consts::SIZES {
-        group.throughput(Throughput::Elements(
-            u64::try_from(size).expect("size fits u64"),
-        ));
+fn prediction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("prediction_difference");
+    group.sample_size(20);
+    for size in [1, 3, 17, 64, 513, 1024] {
         let re = tone(size);
         let im: Vec<f32> = re.iter().rev().copied().collect();
-        let mut output = vec![0.0_f32; size];
-        group.bench_with_input(BenchmarkId::new("magnitude", size), &size, |b, _| {
-            b.iter(|| magnitude(black_box(&re), black_box(&im), &mut output));
-        });
-        group.bench_with_input(BenchmarkId::new("phase", size), &size, |b, _| {
-            b.iter(|| phase(black_box(&re), black_box(&im), &mut output));
+        let mut history: [Vec<f32>; 4] = std::array::from_fn(|_| vec![0.0; size + 1]);
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter(|| {
+                prediction_difference(
+                    [black_box(&re), black_box(&im)],
+                    black_box(&mut history).each_mut().map(Vec::as_mut_slice),
+                )
+            });
         });
     }
     group.finish();
@@ -300,52 +297,6 @@ fn biquad_decay(c: &mut Criterion) {
     group.finish();
 }
 
-fn crossover(c: &mut Criterion) {
-    for frequencies in [
-        &[250.0, 2_500.0][..],
-        &[
-            100.0, 250.0, 500.0, 1_000.0, 2_000.0, 4_000.0, 6_000.0, 9_000.0, 12_000.0,
-        ][..],
-    ] {
-        let frequencies_hz: Vec<_> = frequencies
-            .iter()
-            .map(|&frequency| Hertz::from_hz(frequency).expect("positive benchmark frequency"))
-            .collect();
-        let mut filter = Crossover::new(
-            &frequencies_hz,
-            Hertz::from_hz(48_000.0).expect("benchmark rate"),
-        )
-        .expect("valid benchmark crossover");
-        let mut original = crossover_control::Original::new(frequencies);
-        for input in [tone(257), vec![f32::MIN_POSITIVE; 257], vec![f32::MAX; 257]] {
-            let mut actual = vec![vec![0.0; input.len()]; frequencies.len() + 1];
-            let mut expected = actual.clone();
-            assert_eq!(filter.split(&input, &mut actual), input.len());
-            assert_eq!(original.split(&input, &mut expected), input.len());
-            assert!(
-                actual
-                    .iter()
-                    .flatten()
-                    .zip(expected.iter().flatten())
-                    .all(|(a, b)| a.to_bits() == b.to_bits()),
-                "original crossover control must preserve every band"
-            );
-        }
-    }
-    crossover_control::bench(c, |frequencies| {
-        let frequencies_hz: Vec<_> = frequencies
-            .iter()
-            .map(|&frequency| Hertz::from_hz(frequency).expect("positive benchmark frequency"))
-            .collect();
-        let mut filter = Crossover::new(
-            &frequencies_hz,
-            Hertz::from_hz(48_000.0).expect("benchmark rate"),
-        )
-        .expect("valid benchmark crossover");
-        move |input: &[f32], bands: &mut [Vec<f32>]| filter.split(input, bands)
-    });
-}
-
 fn interp(c: &mut Criterion) {
     const FRAMES: usize = 1_024;
     let window: Vec<f32> = std::iter::successors(Some(0.0_f32), |phase| Some(phase + 0.05))
@@ -396,10 +347,9 @@ criterion_group!(
     downmix,
     biquad,
     biquad_decay,
-    crossover,
     interp,
     spectrum,
-    bins,
+    prediction,
     autocorrelation
 );
 criterion_main!(benches);

@@ -7,4 +7,7 @@ pub enum LinkError {
     /// Correction steps require a finite, positive speed limit.
     #[error("correction epsilon must be finite and positive, got {epsilon}")]
     Epsilon { epsilon: f32 },
+    /// The phase a slew may close must be a finite, positive number of beats.
+    #[error("slew limit must be finite and positive, got {limit}")]
+    SlewLimit { limit: f32 },
 }

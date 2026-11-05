@@ -2,7 +2,6 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::{AudioSource, Fetch, SeekOutcome, SourceEnd, TrackStep};
 use kithara_command::{ChannelConfig, Sender, channel};
-use kithara_effects::EffectDrain;
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -70,8 +69,6 @@ where
     let source = WarpSource::new(
         source,
         Warp::new((), &config).renderer(spec, pools.clone()),
-        Vec::new(),
-        EffectDrain::new(0, &pools).expect("drain"),
         spec,
         pools.clone(),
         crate::LaneSetup {

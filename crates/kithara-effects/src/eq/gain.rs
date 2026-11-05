@@ -30,13 +30,6 @@ impl SmoothedGain {
         self.filter.z1
     }
 
-    #[cfg(test)]
-    fn is_smoothing(&self, smoothing: SmootherConfig) -> bool {
-        !self.filter.has_settled(self.target_linear)
-            && (self.filter.z1 - self.target_linear).abs()
-                >= DEFAULT_GAIN_SPAN * smoothing.settle_ratio
-    }
-
     fn set_target(&mut self, target: GainDb) {
         if target == self.target {
             return;
@@ -75,22 +68,9 @@ impl GainBank {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn is_smoothing(&self) -> bool {
-        self.gains
-            .iter()
-            .any(|gain| gain.is_smoothing(self.smoothing))
-    }
-
     pub(crate) fn reset(&mut self) {
         for gain in &mut self.gains {
             *gain = SmoothedGain::new(GainDb::default());
-        }
-    }
-
-    pub(crate) fn reset_to_targets(&mut self) {
-        for gain in &mut self.gains {
-            gain.filter = SmoothingFilter::new(gain.target_linear);
         }
     }
 

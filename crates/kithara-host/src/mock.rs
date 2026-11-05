@@ -23,13 +23,17 @@ mod fixture {
         rt::SessionOutput,
         session::{
             decks::{DeckInbox, DeckMsg},
-            state::{HostRoot, RootView, SessionBufferConfig, SessionState, SessionStream},
+            state::{
+                DeviceBackend, HostRoot, RootView, SessionBufferConfig, SessionState, SessionStream,
+            },
         },
     };
 
     fn session_state(
-        start: impl FnMut(&mut FirewheelContext, u32) -> Result<SessionStream, String> + Send + 'static,
-    ) -> SessionState<SessionStream, TestPools> {
+        mut start: impl FnMut(&mut FirewheelContext, u32) -> Result<SessionStream, String>
+        + Send
+        + 'static,
+    ) -> SessionState<DeviceBackend, TestPools> {
         let rate = NonZeroU32::new(44_100).expect("fixture rate");
         let root = HostRoot::new(BeatGridId::allocate().expect("fixture grid id"), rate);
         let settings = HostSettings::builder().sample_rate(rate).build();
@@ -44,7 +48,7 @@ mod fixture {
                 .settings(settings)
                 .build()
                 .channel_config(),
-            start,
+            move |ctx, rate, _decks| start(ctx, rate),
         )
     }
 
@@ -78,7 +82,7 @@ mod fixture {
         pub(crate) messages: kithara_platform::sync::mpsc::Receiver<DeckMsg>,
     }
     impl<D: HostedDeck<TestPools>> std::ops::Deref for TestState<D> {
-        type Target = SessionState<SessionStream, TestPools>;
+        type Target = SessionState<DeviceBackend, TestPools>;
         fn deref(&self) -> &Self::Target {
             &self.owner.session
         }
@@ -144,11 +148,9 @@ mod fixture {
         kithara_platform::flash::participate_sync(|| {
             hang_tick!();
             let mut block = vec![0.0; 1024];
-            let SessionStream::Offline(stream) = state.stream.as_mut().expect("stream") else {
-                panic!("offline fixture")
-            };
-            stream
-                .render(clock, 512, &mut block)
+            state
+                .owner
+                .render_offline(clock, 512, &mut block)
                 .expect("offline render");
             hang_tick!();
             block

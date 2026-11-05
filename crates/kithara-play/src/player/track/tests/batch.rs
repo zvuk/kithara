@@ -948,6 +948,7 @@ fn a_ready_paused_segment_keeps_its_cue_over_an_old_slot_snapshot() {
         suspended: false,
         now: frame(0),
         delivery: FrameCount::new(0),
+        deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &snapshot,
     };

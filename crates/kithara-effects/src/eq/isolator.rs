@@ -9,8 +9,8 @@ use kithara_dsp::{
 use kithara_signal::sanitize_sample;
 use num_traits::cast::AsPrimitive;
 
-use super::{EqBandConfig, EqConfig, gain::GainBank};
-use crate::{EffectPrepareError, GainDb, consts::EQ_BLOCK_FRAMES};
+use super::{EqBandConfig, EqConfig, EqError, gain::GainBank};
+use crate::{GainDb, consts::EQ_BLOCK_FRAMES};
 
 /// Single-channel isolator crossover EQ.
 #[non_exhaustive]
@@ -28,12 +28,12 @@ impl IsolatorEq {
     ///
     /// # Errors
     ///
-    /// Returns [`EffectPrepareError`] for an invalid crossover design or exhausted pool.
+    /// Returns [`EqError`] for an invalid crossover design or exhausted pool.
     pub fn new<S>(
         config: &EqConfig<S>,
         bands: &[EqBandConfig],
         sample_rate: u32,
-    ) -> Result<Self, EffectPrepareError>
+    ) -> Result<Self, EqError>
     where
         S: HasPool<f32>,
     {
@@ -108,11 +108,10 @@ impl IsolatorEq {
         match self.gains.len() {
             0 => wet[..frames].copy_from_slice(&dry[..frames]),
             1 => {
-                for ((wet, dry), gain) in wet
+                for ((wet, dry), gain) in wet[..frames]
                     .iter_mut()
-                    .zip(dry)
-                    .zip(self.gain_blocks[0].iter())
-                    .take(frames)
+                    .zip(&dry[..frames])
+                    .zip(&self.gain_blocks[0][..frames])
                 {
                     *wet = dry * gain;
                 }
@@ -134,11 +133,6 @@ impl IsolatorEq {
 
     pub fn reset(&mut self) {
         self.gains.reset();
-        self.reset_history();
-    }
-
-    pub(crate) fn reset_to_targets(&mut self) {
-        self.gains.reset_to_targets();
         self.reset_history();
     }
 
@@ -209,8 +203,6 @@ impl IsolatorEq {
             #[must_use]
             #[call(target)]
             pub fn target_gain(&self, band: usize) -> Option<GainDb>;
-            #[cfg(test)]
-            pub(crate) fn is_smoothing(&self) -> bool;
         }
     }
 }

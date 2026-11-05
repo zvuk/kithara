@@ -2,12 +2,15 @@ use std::{marker::PhantomData, num::NonZeroU32, ops::Range};
 
 use firewheel::{
     StreamInfo,
-    node::{AudioNodeProcessor, NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
+    node::{
+        AudioNodeProcessor, NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx,
+        ProcessStatus,
+    },
 };
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_command::{LevelInbox, ScopeId, Target};
 use kithara_dsp::param::SmootherConfig;
-use kithara_effects::EffectPrepareError;
+use kithara_effects::eq::EqError;
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;
@@ -25,7 +28,7 @@ use super::{
 };
 use crate::{
     bridge::{
-        DeckEvent, DeckMixSettings, DeckProtocol, DeckSnapshot, MixerInputs, RtMetrics,
+        DeckEvent, DeckMixSettings, DeckPart, DeckProtocol, DeckSnapshot, MixerInputs, RtMetrics,
         SessionInbox, Slot, SlotSnapshot, SlotState,
     },
     rt::{RenderPass, TrackSlots},
@@ -60,6 +63,10 @@ pub(in crate::rt) struct Deck {
     pub(in crate::rt) declick: SmootherConfig,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("the negotiated stream exceeds the deck's prepared buffer capacity")]
+pub(in crate::rt) struct StreamCapacityExceeded;
+
 pub(in crate::rt) struct PreparedDeck {
     shape: StreamShape,
     scratch: [SampleBuffer; crate::consts::MIN_STEREO],
@@ -81,7 +88,7 @@ impl<E: SessionInbox> DeckMixer<E> {
         inputs: MixerInputs,
         shape: StreamShape,
         pools: &PoolRegion<S>,
-    ) -> Result<Self, EffectPrepareError>
+    ) -> Result<Self, EqError>
     where
         S: HasPool<f32>,
     {
@@ -93,19 +100,28 @@ impl<E: SessionInbox> DeckMixer<E> {
         inputs: &MixerInputs,
         shape: StreamShape,
         pools: &PoolRegion<S>,
-    ) -> Result<PreparedDeck, EffectPrepareError>
-    where S: HasPool<f32>,
+    ) -> Result<PreparedDeck, EqError>
+    where
+        S: HasPool<f32>,
     {
         let config = inputs.config;
         let slots = config.slots();
         let capacity = usize::try_from(shape.max_block_frames.get()).unwrap_or(usize::MAX);
-        let tail_frames = FrameCount::new(config.declick_frames(shape.sample_rate).get().max(config.evict_fade().get()));
+        let tail_frames = FrameCount::new(
+            config
+                .declick_frames(shape.sample_rate)
+                .get()
+                .max(config.evict_fade().get()),
+        );
         Ok(PreparedDeck {
             shape,
             tails: (0..slots.get())
                 .map(|_| SlotTail::new(pools, tail_frames))
                 .collect::<Result<Vec<_>, _>>()?,
-            scratch: [pools.get_with_len::<f32>(capacity)?, pools.get_with_len::<f32>(capacity)?],
+            scratch: [
+                pools.get_with_len::<f32>(capacity)?,
+                pools.get_with_len::<f32>(capacity)?,
+            ],
             render: RenderPass::new(pools, shape, config.mix().gain(), config)?,
             tracks: TrackSlots::new(slots),
             armed: vec![None; slots.get()],
@@ -151,6 +167,92 @@ impl<E: SessionInbox> DeckMixer<E> {
                 declick: config.declick(),
             },
         }
+    }
+
+    pub(in crate::rt) fn prepare_stream(&mut self, shape: StreamShape) -> Result<(), NodeError> {
+        self.deck.render.discard_prepared_sample_rate();
+        let capacity = usize::try_from(shape.max_block_frames.get()).unwrap_or(usize::MAX);
+        let declick_frames =
+            super::super::config::declick_frame_count(self.deck.declick, shape.sample_rate).get();
+        if capacity > self.capacity
+            || self
+                .deck
+                .tails
+                .iter()
+                .any(|tail| tail.capacity() < declick_frames.max(self.deck.evict_frames))
+        {
+            return Err(NodeError(Box::new(StreamCapacityExceeded)));
+        }
+        if self.deck.sample_rate != shape.sample_rate {
+            self.deck
+                .render
+                .prepare_sample_rate(shape.sample_rate)
+                .map_err(|error| NodeError(Box::new(EqError::from(error))))?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::rt) fn commit_stream(&mut self) {
+        self.deck.apply_prepared_host_sample_rate();
+    }
+
+    pub(in crate::rt) fn prepare_offline(
+        &mut self,
+        level: Option<LevelInbox<'_, DeckProtocol>>,
+        start: SessionFrame,
+        frames: usize,
+    ) -> usize {
+        let frames = frames.min(self.capacity);
+        let Some(mut level) = level.filter(|_| !self.retired) else {
+            return frames;
+        };
+        let waits = self
+            .deck
+            .tracks
+            .iter_mut()
+            .any(|(_, track)| track.waits_offline())
+            || level.pending_commands().any(|part| match part {
+                DeckPart::Attach { pcm, .. } | DeckPart::Replace { pcm, .. } => pcm.waits_offline(),
+                _ => false,
+            });
+        if !waits {
+            return frames;
+        }
+        self.deck.recycle.fill(usize::MAX);
+        self.deck.arrivals(&mut level);
+        loop {
+            let Some(due) = level.next_due(start, 1) else {
+                break;
+            };
+            self.deck.take_due(due, true, true);
+            self.deck.resolve_armed(&mut level, start, start);
+        }
+        loop {
+            self.deck.maintain();
+            for (_, track) in self.deck.tracks.iter_mut() {
+                track.prepare_offline();
+            }
+            let ended = self.deck.observe_ends(0, start);
+            self.deck.fire_ended(&mut level, start, start, true, true);
+            if !ended {
+                break;
+            }
+        }
+        let commands = level
+            .frames_until_due(start)
+            .and_then(|frames| usize::try_from(frames).ok())
+            .unwrap_or(frames);
+        self.deck
+            .tracks
+            .iter_mut()
+            .filter_map(|(_, track)| {
+                track
+                    .prepare_offline()
+                    .then(|| track.frames_until_boundary(start))
+                    .flatten()
+            })
+            .fold(frames.min(commands), usize::min)
+            .max(1)
     }
 
     #[must_use]
@@ -218,14 +320,15 @@ impl<E: SessionInbox> DeckMixer<E> {
                 let Some(due) = level.next_due(start, cursor.saturating_add(1)) else {
                     break;
                 };
-                self.deck.take_due(due, context.is_some());
+                self.deck.take_due(due, context.is_some(), false);
                 self.deck.resolve_armed(level, start, at);
             }
             self.deck.maintain();
             if context.is_some() {
                 self.deck.observe_ends(cursor, start);
             }
-            self.deck.fire_ended(level, start, at, context.is_some());
+            self.deck
+                .fire_ended(level, start, at, context.is_some(), false);
             let command_frames = level
                 .frames_until_due(at)
                 .and_then(|count| usize::try_from(count).ok())
@@ -327,11 +430,13 @@ impl Deck {
         }
     }
 
-    fn observe_ends(&mut self, cursor: usize, start: SessionFrame) {
+    fn observe_ends(&mut self, cursor: usize, start: SessionFrame) -> bool {
+        let mut ended = false;
         for (slot, track) in self.tracks.iter_mut() {
             let mut sink = RtSink::new(&mut self.events, &self.metrics, slot, start);
-            track.poll_end(cursor, &mut self.recycle[slot.index()], &mut sink);
+            ended |= track.poll_end(cursor, &mut self.recycle[slot.index()], &mut sink);
         }
+        ended
     }
 
     fn render_range(
@@ -409,7 +514,9 @@ impl Deck {
     }
 
     fn apply_prepared_host_sample_rate(&mut self) {
-        let Some(sample_rate) = self.render.apply_prepared_sample_rate() else { return; };
+        let Some(sample_rate) = self.render.apply_prepared_sample_rate() else {
+            return;
+        };
         self.sample_rate = sample_rate;
         self.declick_frames =
             super::super::config::declick_frame_count(self.declick, sample_rate).get();
@@ -421,21 +528,14 @@ impl Deck {
 
 impl<E: SessionInbox> AudioNodeProcessor for DeckMixer<E> {
     fn prepare_new_stream(&mut self, stream_info: &StreamInfo) -> Result<(), NodeError> {
-        self.deck.render.discard_prepared_sample_rate();
-        let capacity = usize::try_from(stream_info.max_block_frames.get()).unwrap_or(usize::MAX);
-        let declick_frames = super::super::config::declick_frame_count(self.deck.declick, stream_info.sample_rate).get();
-        if capacity > self.capacity || self.deck.tails.iter().any(|tail| tail.capacity() < declick_frames.max(self.deck.evict_frames)) {
-            return Err(NodeError(Box::new(EffectPrepareError::Shape)));
-        }
-        if self.deck.sample_rate != stream_info.sample_rate {
-            self.deck.render.prepare_sample_rate(stream_info.sample_rate)
-                .map_err(|error| NodeError(Box::new(EffectPrepareError::from(error))))?;
-        }
-        Ok(())
+        self.prepare_stream(StreamShape::new(
+            stream_info.max_block_frames,
+            stream_info.sample_rate,
+        ))
     }
 
     fn new_stream(&mut self, _stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
-        self.deck.apply_prepared_host_sample_rate();
+        self.commit_stream();
     }
 
     #[kithara::rtsan_forbid_blocking]

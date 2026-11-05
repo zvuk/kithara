@@ -1,11 +1,13 @@
+use std::num::NonZeroU32;
+
 use kithara_bufpool::HasPool;
 use kithara_command::{Mailbox, Postbox, Seq, When};
 use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_play::{
     DeckEqChange, DeckMixSettingsChange, EqBandConfig, GainDb, InterruptionKind, Outbox,
-    OutputSnapshot, PlayError, Player, Position, Track, TrackCommand, TrackFactory, TrackSettings,
-    TrackSettingsChange, TrackStatus as PlayingStatus,
+    OutputSnapshot, PlayError, Player, Position, SeekBatch, Track, TrackCommand, TrackFactory,
+    TrackSettings, TrackSettingsChange, TrackStatus as PlayingStatus,
 };
 use kithara_signal::{FaderValue, SessionFrame};
 
@@ -57,13 +59,6 @@ where
         to: Position,
     },
     ConfigureTrack(TrackSettingsChange, When<SessionFrame>),
-    ConfigureEffect {
-        item: TrackId,
-        lane: kithara_play::LaneId,
-        target: kithara_play::EffectTarget,
-        change: kithara_play::EffectChange,
-        at: When<SessionFrame>,
-    },
     ConfigureQueue(QueueSettingsChange, When<SessionFrame>),
     SetActionAtItemEnd(ActionAtItemEnd),
     SetPlaybackOrder(PlaybackOrder),
@@ -177,37 +172,6 @@ where
             QueueCommand::Pause { at } => self.pause_at(at, out),
             QueueCommand::Seek { to } => self.seek_to(to, out),
             QueueCommand::ConfigureTrack(change, at) => self.configure_tracks(change, at, out),
-            QueueCommand::ConfigureEffect {
-                item,
-                lane,
-                target,
-                change,
-                at,
-            } => {
-                let index = self
-                    .active
-                    .position(|active| {
-                        let snapshot = active.track.snapshot();
-                        let snapshot = snapshot.as_ref();
-                        snapshot.item == item
-                            && snapshot.effects.iter().any(|effect| effect.lane() == lane)
-                    })
-                    .ok_or(PlayError::NotReady)?;
-                self.active
-                    .get_mut(index)
-                    .ok_or(PlayError::NotReady)?
-                    .track
-                    .apply(
-                        TrackCommand::ConfigureEffect {
-                            lane,
-                            target,
-                            change,
-                            at,
-                        },
-                        out,
-                    )
-                    .map_err(Into::into)
-            }
             QueueCommand::NotifyInterruption(kind) => {
                 self.deck.suspended = out.notify_interruption(kind)?;
                 Ok(None)
@@ -382,10 +346,7 @@ where
                 .set_playing(false);
             return self.transition_loaded(out).map_err(Into::into);
         }
-        if self.pending_handover.is_some()
-            && let Some(target) = self.target.as_mut()
-            && self.current == Some(target.to)
-        {
+        if let Some(target) = self.target.as_mut().filter(|target| !target.auto) {
             target.set_playing(false);
         }
         self.cancel_auto(out)?;
@@ -424,10 +385,7 @@ where
             );
         }
         if self.active_current_index().is_some() {
-            if self.pending_handover.is_some()
-                && let Some(target) = self.target.as_mut()
-                && self.current == Some(target.to)
-            {
+            if let Some(target) = self.target.as_mut().filter(|target| !target.auto) {
                 target.set_playing(true);
             }
             let sent = self.transport(TrackCommand::Play { at }, out)?;
@@ -626,7 +584,15 @@ where
             });
         }
         let prep = self.config.prep.as_ref().ok_or(PlayError::NotReady)?;
-        out.eq_layout(prep.worker.pools(), bands, self.config.mixer.sample_rate())
+        let rate = NonZeroU32::new(
+            out.pass()
+                .ok_or(PlayError::NotReady)?
+                .output
+                .sample_rate
+                .output(),
+        )
+        .ok_or(PlayError::NotReady)?;
+        out.eq_layout(prep.worker.pools(), bands, rate)
     }
 }
 
@@ -654,15 +620,15 @@ where
             return Ok(None);
         }
         let item = active.item;
-        let sent = active.track.apply(TrackCommand::Seek { to }, out)?;
+        let sent = active.track.seek(to, out)?;
         self.withdraw_auto(out)?;
-        self.held_position = sent.map(|seq| SeekPosition::Pending {
+        self.held_position = sent.map(|sent| SeekPosition::Pending {
             item,
-            seq,
+            sent,
             to,
             segment: None,
         });
-        Ok(sent)
+        Ok(sent.map(SeekBatch::seq))
     }
 }
 

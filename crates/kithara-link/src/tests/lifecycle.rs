@@ -1,14 +1,14 @@
 use kithara_command::{Outcome, Rejection, Seq, When};
 use kithara_play::{HostedDeck, Player, Settled, TrackCommand, TrackSnapshot, TrackStatus};
 use kithara_signal::{FrameCount, SessionFrame};
-use kithara_sync::SpeedCurve;
+use kithara_sync::{Slew, SlewCause, SpeedCurve, slew};
 use kithara_test_utils::{bufpool::TestPools, kithara};
 
 use super::fixtures::{
     Command, Control, Deck, Rig, answer, consume, grid, load, loaded, position, sounding,
     source_grid, trajectory,
 };
-use crate::{LinkedPlayer, SyncStatus};
+use crate::{LinkConfig, LinkedPlayer, SyncStatus};
 
 fn silent() -> (Deck, Control, Rig, Seq) {
     let (mut deck, control, mut rig, loading) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
@@ -45,7 +45,7 @@ fn a_parent_fact_commits_the_member_observation_it_was_staged_on() {
     .expect("future parent tempo");
     assert_eq!(host.beat_at(at), beat);
     rig.run(|out| {
-        LinkedPlayer::retime(&mut deck, &host, at, out);
+        LinkedPlayer::retime(&mut deck, &host, &[at], out);
     });
     let staged = control.commands();
     assert_eq!(staged.len(), 1);
@@ -136,7 +136,7 @@ fn a_receipt_under_other_facts_or_an_older_operation_commits_nothing() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(150.0, 4),
-            SessionFrame::new(36_000),
+            &[SessionFrame::new(36_000)],
             out,
         );
     });
@@ -244,7 +244,7 @@ fn a_tempo_retarget_continues_the_audible_source_without_a_new_beat() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(120.0, 4),
-            SessionFrame::new(96_000),
+            &[SessionFrame::new(96_000)],
             out,
         );
     });
@@ -280,7 +280,7 @@ fn a_rejected_retarget_returns_the_member_to_its_applied_map() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(150.0, 4),
-            SessionFrame::new(96_000),
+            &[SessionFrame::new(96_000)],
             out,
         );
     });
@@ -330,7 +330,12 @@ fn a_tempo_commit_retargets_only_the_member_holding_no_prepared_map() {
         control.clear();
         let before = deck.snapshot();
         rig.run(|out| {
-            LinkedPlayer::retime(deck, &trajectory(150.0, 4), SessionFrame::new(96_000), out);
+            LinkedPlayer::retime(
+                deck,
+                &trajectory(150.0, 4),
+                &[SessionFrame::new(96_000)],
+                out,
+            );
         });
         let commands = control.commands();
         if index < 2 {
@@ -361,7 +366,7 @@ fn a_presented_retarget_locks_the_member_on_its_new_map() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(150.0, 4),
-            SessionFrame::new(96_000),
+            &[SessionFrame::new(96_000)],
             out,
         );
     });
@@ -712,7 +717,12 @@ fn an_armed_preparation_survives_a_tempo_commit_and_then_converges() {
         .expect("start");
     control.clear();
     rig.run(|out| {
-        LinkedPlayer::retime(&mut deck, &trajectory(150.0, 4), SessionFrame::new(0), out);
+        LinkedPlayer::retime(
+            &mut deck,
+            &trajectory(150.0, 4),
+            &[SessionFrame::new(0)],
+            out,
+        );
     });
     let commands = control.commands();
     assert_eq!(commands.len(), 2);
@@ -802,7 +812,7 @@ fn stale_host_seek_owner_grid_stamp_commits_nothing_without_topology_change() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(150.0, 4),
-            SessionFrame::new(96_000),
+            &[SessionFrame::new(96_000)],
             out,
         );
     });
@@ -833,7 +843,7 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     .expect("future parent tempo");
     assert_eq!(host.beat_at(at), beat);
     rig.run(|out| {
-        LinkedPlayer::retime(&mut deck, &host, at, out);
+        LinkedPlayer::retime(&mut deck, &host, &[at], out);
     });
     let armed = control.commands()[0].0;
     control.clear();
@@ -841,22 +851,25 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     let start = rig.now + LinkedPlayer::<TestPools>::lead(&deck, rig.delivery).expect("lane lead");
     let (media, from) = kithara_play::Track::<TestPools>::planned(&deck, start, host.sample_rate())
         .expect("planned source");
+    let drift = SlewCause::Drift {
+        from,
+        limit: LinkConfig::default().slew_limit(),
+    };
     let uncovered = grid(24_000, 12_000, Some((4, 0)), 960_000);
-    assert!(
-        kithara_sync::corrected_speed_curve(
-            &host,
-            &source_grid(&uncovered),
-            media,
-            start,
-            from,
-            0.001,
-            false,
-        )
-        .is_none(),
-        "a half-beat correction cannot finish inside the served twenty seconds"
+    assert_eq!(
+        slew(&host, &source_grid(&uncovered), media, start, 0.001, drift),
+        Some(Slew::Relocate),
+        "a half-beat drift is past the slew limit"
     );
     answer(&mut deck, &mut rig, uncovered);
-    assert!(control.commands().is_empty());
+    assert!(
+        control
+            .commands()
+            .iter()
+            .any(|(_, command)| matches!(command, Command::Jump(..))),
+        "a correction that cannot finish relocates the deck"
+    );
+    control.clear();
     assert_track_unchanged(deck.snapshot().as_ref(), armed_snapshot.as_ref());
     assert_eq!(deck.snapshot().sync, armed_snapshot.sync);
     let revised = grid(24_000, 12, Some((4, 0)), 960_000);
@@ -890,16 +903,13 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
         applied.sync,
         "grid refinement remains pending"
     );
-    let (_, frame_count) = kithara_sync::corrected_speed_curve(
-        &host,
-        &source_grid(&revised),
-        media,
-        start,
-        from,
-        0.001,
-        false,
-    )
-    .expect("bounded revised correction");
+    let Some(Slew::Closes {
+        frames: frame_count,
+        ..
+    }) = slew(&host, &source_grid(&revised), media, start, 0.001, drift)
+    else {
+        panic!("bounded revised correction");
+    };
     let remaining = FrameCount::new(usize::try_from(frame_count).expect("correction frames"));
     assert!(remaining.get() > 0);
     rig.apply(&mut deck, replacement[0].0, i64::from(start));
@@ -961,7 +971,7 @@ fn free_leaves_the_beat_timeline() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(126.0, 4),
-            SessionFrame::new(120_000),
+            &[SessionFrame::new(120_000)],
             out,
         );
     });
@@ -977,7 +987,7 @@ fn rejected_free_geometry_receipt_clears_the_exact_preparing_state() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(150.0, 4),
-            SessionFrame::new(96_000),
+            &[SessionFrame::new(96_000)],
             out,
         );
     });

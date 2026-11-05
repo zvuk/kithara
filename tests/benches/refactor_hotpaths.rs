@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-mod eq;
-
 use std::{
     fs,
     hint::black_box,
@@ -516,7 +514,7 @@ async fn render_player(ducking: SessionDuckingMode) -> OfflinePlayer {
     player
 }
 
-#[path = "../support/render_buffers.rs"]
+#[path = "support/render_buffers.rs"]
 mod render_buffer_cases;
 
 fn bench_render_buffers(c: &mut Criterion) {
@@ -553,20 +551,13 @@ fn bench_render_buffers(c: &mut Criterion) {
     }
     group.finish();
 }
-#[path = "../support/effects.rs"]
-mod effect_controls;
-
 criterion_group!(
     benches,
-    effect_controls::controls,
-    effect_controls::empty_route,
-    effect_controls::configured_route,
     bench_resampler_process,
     bench_audio_file_new_and_read,
     bench_hls_stream_seek_read,
     bench_layout,
     bench_render_buffers,
-    render_buffer_cases::bench,
-    eq::bench
+    render_buffer_cases::bench
 );
 criterion_main!(benches);

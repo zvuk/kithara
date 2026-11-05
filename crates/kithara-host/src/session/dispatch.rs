@@ -218,7 +218,8 @@ pub(super) fn restart_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(),
         return Ok(());
     }
     let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-    let stream = (state.start_stream_fn)(fw_ctx, sample_rate).map_err(SessionError::StreamStart)?;
+    let stream = (state.start_stream_fn)(fw_ctx, sample_rate, &mut state.deck_nodes)
+        .map_err(SessionError::StreamStart)?;
     state.stream = Some(stream);
     state.reserved_session_grid = None;
     state.stream_needs_restart = false;

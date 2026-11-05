@@ -36,7 +36,7 @@ fn resource(receiver: PcmReceiver) -> PlayerResource {
 }
 
 fn observe(reader: &mut PlayerResource) -> Option<ReadOutcome> {
-    reader.poll_end(&mut 8)
+    reader.poll_end(&mut 8, false)
 }
 
 fn failed_packet(failure: TrackFailureKind) -> PcmPacket {

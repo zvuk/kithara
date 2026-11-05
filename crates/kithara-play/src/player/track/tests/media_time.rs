@@ -59,8 +59,6 @@ fn curve_source(
     kithara_render::WarpSource::new(
         kithara_render::mock::ScriptedSource::new(chunks),
         warp.renderer(spec, pools.clone()),
-        Vec::new(),
-        kithara_effects::EffectDrain::new(0, &pools).expect("drain"),
         spec,
         pools,
         kithara_render::LaneSetup {
@@ -535,6 +533,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
                 suspended: false,
                 now: frame(0),
                 delivery: FrameCount::new(0),
+                deck_delivery: FrameCount::new(0),
                 output: &output,
                 deck: &deck,
             });
@@ -559,6 +558,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
             suspended: false,
             now: frame(0),
             delivery: FrameCount::new(0),
+            deck_delivery: FrameCount::new(0),
             output: &output,
             deck: &deck,
         });
@@ -859,8 +859,6 @@ async fn assert_source_end_resume_endpoint() {
     let mut source = kithara_render::WarpSource::new(
         audio,
         warp.renderer(old_spec, pools.clone()),
-        Vec::new(),
-        kithara_effects::EffectDrain::new(0, &pools).expect("no effect tail"),
         old_spec,
         pools,
         kithara_render::LaneSetup {
@@ -1151,6 +1149,7 @@ async fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_positio
                     suspended: false,
                     now: frame(384),
                     delivery: FrameCount::new(0),
+                    deck_delivery: FrameCount::new(0),
                     output: &output,
                     deck: &deck,
                 });
@@ -1263,6 +1262,7 @@ async fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_
             suspended: false,
             now: frame(0),
             delivery: FrameCount::new(0),
+            deck_delivery: FrameCount::new(0),
             output: &output,
             deck: &deck,
         });

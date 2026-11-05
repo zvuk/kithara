@@ -1,6 +1,5 @@
 mod arena_contracts;
 mod core;
-mod cold;
 mod legacy_fixture;
 mod no_sync_deadline;
 mod player_processor_internal;

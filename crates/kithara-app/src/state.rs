@@ -466,7 +466,9 @@ pub(crate) async fn listen(
                     apply_event(&event, &queue, &state);
                     match event {
                         AnalysisEvent::Queue(
-                            QueueEvent::NextTrackReady { .. } | QueueEvent::CurrentTrackChanged { .. },
+                            QueueEvent::NextTrackReady { .. }
+                            | QueueEvent::CurrentTrackChanged { .. }
+                            | QueueEvent::UpcomingChanged,
                         )
                         | AnalysisEvent::Engine(EngineEvent::Started)
                         | AnalysisEvent::Session(SessionEvent::RouteChanged { .. }) => {
@@ -491,7 +493,7 @@ pub(crate) async fn listen(
     }
 }
 
-/// The current track's publication channel, and the loaded successor's.
+/// The current track's publication channel, and the loaded upcoming track's.
 struct HeldAnalysis {
     analysis: AnalysisHandle,
     queue: AppQueueControl,
@@ -569,8 +571,9 @@ impl HeldAnalysis {
         }
     }
 
-    /// Holds the current track and the nearest loaded track after it, as the
-    /// queue states them; a successor that became current keeps its channel.
+    /// Holds the current track and the loaded track the queue enters next, as
+    /// the queue states them; an upcoming track that became current keeps its
+    /// channel.
     async fn follow(&mut self, state: &Mutex<UiState>) {
         let st = state.lock();
         let shown = st
@@ -587,10 +590,16 @@ impl HeldAnalysis {
                 None => None,
             };
         }
-        let successor = self.successor(shown);
-        if self.next.as_ref().map(|next| next.track) != successor {
+        let upcoming = self.queue.upcoming().filter(|&id| {
+            Some(id) != shown
+                && self
+                    .queue
+                    .track(id)
+                    .is_some_and(|track| track.status == TrackStatus::Loaded)
+        });
+        if self.next.as_ref().map(|next| next.track) != upcoming {
             self.next = None;
-            self.next = successor.map(Held::new);
+            self.next = upcoming.map(Held::new);
         }
         let axis = self.axis();
         if let Some(held) = self.held.take() {
@@ -600,18 +609,6 @@ impl HeldAnalysis {
             self.next = Some(self.attach(next, axis).await);
         }
         self.mirror(state, Closed::Neither);
-    }
-
-    fn successor(&self, current: Option<TrackId>) -> Option<TrackId> {
-        let tracks = self.queue.tracks();
-        let start = current
-            .and_then(|id| tracks.iter().position(|track| track.id == id))
-            .map_or(0, |index| index + 1);
-        tracks
-            .iter()
-            .skip(start)
-            .find(|track| track.status == TrackStatus::Loaded)
-            .map(|track| track.id)
     }
 
     /// Answers `held` on `axis`, keeping a channel already answered there.
@@ -1029,9 +1026,10 @@ mod tests {
         let render_cancel = cancel.child();
         time::timeout(Duration::from_secs(2), async {
             let mut frame = 0;
-            while queue
-                .track(second_id)
-                .is_none_or(|entry| entry.status != TrackStatus::Loaded)
+            while queue.current_index() != Some(0)
+                || queue
+                    .track(second_id)
+                    .is_none_or(|entry| entry.status != TrackStatus::Loaded)
             {
                 let frames = frame..frame + 128;
                 frame += 128;
@@ -1045,7 +1043,7 @@ mod tests {
             }
         })
         .await
-        .expect("the queue loads its second track");
+        .expect("the queue enters its first track and loads its second");
         for _ in 0..=::kithara::events::DEFAULT_EVENT_BUS_CAPACITY {
             queue
                 .bus()
@@ -1057,7 +1055,7 @@ mod tests {
         let (asked, reply) = next_subscribe(&mut requests).await;
         assert_eq!(
             asked, second_id,
-            "the deck asks for the successor whose announcement the lag dropped"
+            "the deck asks for the upcoming track whose announcement the lag dropped"
         );
         let (_second, second_rx) = ::kithara::platform::tokio::sync::watch::channel(None);
         assert!(

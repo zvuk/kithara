@@ -292,6 +292,7 @@ impl ThresholdRig {
                     suspended,
                     now,
                     delivery,
+                    deck_delivery: delivery,
                     output: &output,
                     deck: &deck,
                 };
@@ -741,6 +742,7 @@ fn real_outbox<Value>(
         suspended: false,
         now: at,
         delivery: FrameCount::new(usize::try_from(frames).expect("delivery frames fit usize")),
+        deck_delivery: FrameCount::new(usize::try_from(frames).expect("delivery frames fit usize")),
         output: &output,
         deck: &deck,
     };

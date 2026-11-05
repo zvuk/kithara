@@ -126,12 +126,15 @@ fn ladder_url(server: &TestServerHelper) -> Url {
     server.asset("hls-rss/master.m3u8")
 }
 
-/// Reads `audio` to the end of the stream, sampling RSS after every read.
+/// Reads `audio` to the end of the stream, sampling RSS after every read that
+/// delivered frames.
 ///
 /// The reader is not paced against a clock, so the measurement window is the
 /// drain itself rather than any wall-clock span: the whole track comes out in
 /// a few seconds. That is why the samples are indexed by read below and not by
-/// elapsed time.
+/// elapsed time. Reads do not block, so a pending read is retried without a
+/// sample: the drain spins through hundreds of thousands of them, and sampling
+/// each one measures the growth of `samples` itself rather than of playback.
 fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
     let mut buf = vec![0f32; consts::READ_FRAMES];
     let mut samples = Vec::new();
@@ -143,7 +146,8 @@ fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
         }
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Eof { .. }) => break DrainEnd::Eof,
-            Ok(_) => {}
+            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Pending { .. }) => continue,
             Err(error) => break DrainEnd::Failed(error),
         }
         if let Some(rss) = physical_memory() {

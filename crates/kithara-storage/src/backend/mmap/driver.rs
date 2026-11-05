@@ -421,6 +421,50 @@ mod tests {
     }
 
     #[kithara::test]
+    #[case::committed(false)]
+    #[case::rewrite(true)]
+    fn an_empty_commit_preserves_the_previous_file_and_snapshot(#[case] rewrite: bool) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("empty-generation.dat");
+        let (driver, _) = MmapDriver::open(MmapOptions::for_path(path.clone()).build()).unwrap();
+        driver.write_at(0, b"payload", false).unwrap();
+        driver.commit(Some(7)).unwrap();
+        let previous = fs::File::open(&path).unwrap();
+        let snapshot = driver.committed.load_full().unwrap();
+        if rewrite {
+            driver.reactivate().unwrap();
+        }
+
+        driver.commit(Some(0)).unwrap();
+
+        assert_eq!(fs::metadata(&path).unwrap().len(), 0);
+        assert_eq!(driver.committed_len(), None);
+        assert_eq!(previous.metadata().unwrap().len(), 7);
+        let mut bytes = [0; 7];
+        snapshot.read_into(0, &mut bytes).unwrap();
+        assert_eq!(&bytes, b"payload");
+    }
+
+    #[kithara::test]
+    fn a_failed_empty_commit_preserves_the_committed_snapshot() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("failed-empty.dat");
+        let (mut driver, _) =
+            MmapDriver::open(MmapOptions::for_path(path.clone()).build()).unwrap();
+        driver.write_at(0, b"payload", false).unwrap();
+        driver.commit(Some(7)).unwrap();
+        driver.config.path = dir.path().join("missing").join("empty.dat");
+
+        assert!(driver.commit(Some(0)).is_err());
+
+        assert_eq!(driver.committed_len(), Some(7));
+        assert_eq!(fs::read(&path).unwrap(), b"payload");
+        let mut bytes = [0; 7];
+        assert_eq!(driver.read_committed(0, &mut bytes).unwrap(), Some(7));
+        assert_eq!(&bytes, b"payload");
+    }
+
+    #[kithara::test]
     fn release_backing_closes_quiesced_mapping() {
         let dir = TempDir::new().unwrap();
         let (driver, _) =

@@ -5,6 +5,9 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use syn::visit::{self, Visit};
+
+use crate::common::exclude::module_paths;
 
 /// Every file some `mod` declaration names, whatever gates it.
 ///
@@ -24,7 +27,7 @@ pub(super) fn declared_files(src: &Path, build_script: Option<&Path>) -> Result<
     if let Some(script) = build_script {
         let text =
             fs::read_to_string(script).with_context(|| format!("read {}", script.display()))?;
-        collect(script, &text, &mut declared);
+        collect(script, &text, &mut declared)?;
     }
     Ok(declared)
 }
@@ -42,71 +45,68 @@ fn walk(dir: &Path, declared: &mut HashSet<PathBuf>) -> Result<()> {
         } else if path.extension().is_some_and(|ext| ext == "rs") {
             let text =
                 fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-            collect(&path, &text, declared);
+            collect(&path, &text, declared)?;
         }
     }
     Ok(())
 }
 
-/// A `#[path]` resolves against the directory of the file carrying it, not against the directory
-/// the module would own. A crate or module root owns its own directory; any other file owns the
-/// directory named after it.
-fn collect(file: &Path, text: &str, declared: &mut HashSet<PathBuf>) {
-    let Some(dir) = file.parent() else { return };
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some(target) = path_attribute(line) {
-            declared.insert(normalize(&dir.join(target)));
-        } else if let Some(name) = module_declaration(line) {
-            let base = if owns_its_directory(file) {
-                dir.to_owned()
-            } else {
-                dir.join(file.file_stem().unwrap_or_default())
-            };
-            declared.insert(base.join(format!("{name}.rs")));
-            declared.insert(base.join(name).join("mod.rs"));
-        }
-    }
-}
-
-/// Reads the target of a `#[path]` or `#[cfg_attr(.., path = "..")]`. Every
-/// such attribute in this workspace is written on one line, so the value is
-/// read where the attribute starts.
-fn path_attribute(line: &str) -> Option<&str> {
-    if !line.starts_with("#[") {
-        return None;
-    }
-    let mut rest = line;
-    while let Some(at) = rest.find("path") {
-        rest = rest.get(at + "path".len()..)?;
-        let value = rest.trim_start().strip_prefix('=').map(str::trim_start);
-        if let Some(quoted) = value.and_then(|value| value.strip_prefix('"')) {
-            return quoted.split_once('"').map(|(target, _)| target);
-        }
-    }
-    None
-}
-
-fn module_declaration(line: &str) -> Option<&str> {
-    let name = strip_visibility(line.strip_suffix(';')?)
-        .strip_prefix("mod ")?
-        .trim();
-    let named = !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_');
-    named.then_some(name)
-}
-
-fn strip_visibility(line: &str) -> &str {
-    let line = line.trim_start();
-    let Some(rest) = line.strip_prefix("pub") else {
-        return line;
+/// Resolve declarations from syntax so inline modules retain their directory.
+fn collect(file: &Path, text: &str, declared: &mut HashSet<PathBuf>) -> Result<()> {
+    let Some(dir) = file.parent() else {
+        return Ok(());
     };
-    if !rest.starts_with(['(', ' ', '\t']) {
-        return line;
+    let syntax = syn::parse_file(text).with_context(|| format!("parse {}", file.display()))?;
+    let directory = if owns_its_directory(file) {
+        dir.to_owned()
+    } else {
+        dir.join(file.file_stem().unwrap_or_default())
+    };
+    Declarations {
+        directory,
+        path_base: dir.to_owned(),
+        files: declared,
     }
-    let rest = rest.trim_start();
-    rest.strip_prefix('(')
-        .and_then(|scope| scope.split_once(')'))
-        .map_or(rest, |(_, after)| after.trim_start())
+    .visit_file(&syntax);
+    Ok(())
+}
+
+struct Declarations<'a> {
+    directory: PathBuf,
+    path_base: PathBuf,
+    files: &'a mut HashSet<PathBuf>,
+}
+
+impl<'ast> Visit<'ast> for Declarations<'_> {
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        let (explicit, conditional) = module_paths(&module.attrs);
+        let mut paths: HashSet<_> = explicit
+            .iter()
+            .map(|path| normalize(&self.path_base.join(path)))
+            .collect();
+        let conventional = self.directory.join(module.ident.to_string());
+        if module.content.is_some() {
+            if paths.is_empty() || conditional {
+                paths.insert(conventional);
+            }
+            for directory in paths {
+                visit::visit_item_mod(
+                    &mut Declarations {
+                        path_base: directory.clone(),
+                        directory,
+                        files: self.files,
+                    },
+                    module,
+                );
+            }
+        } else {
+            if paths.is_empty() || conditional {
+                paths.insert(conventional.with_extension("rs"));
+                paths.insert(conventional.join("mod.rs"));
+            }
+            self.files.extend(paths);
+        }
+    }
 }
 
 fn owns_its_directory(file: &Path) -> bool {
@@ -202,6 +202,39 @@ mod tests {
         let found = names(&[("scan.rs", "mod detail;\n")]);
 
         assert!(found.contains("scan/detail.rs"));
+    }
+
+    #[test]
+    fn inline_modules_keep_the_directory_of_their_children() {
+        let found = names(&[("lib.rs", "pub mod ci { pub mod bootstrap; }")]);
+
+        assert!(found.contains("ci/bootstrap/mod.rs"));
+        assert!(!found.contains("bootstrap/mod.rs"));
+    }
+
+    #[test]
+    fn nested_inline_modules_in_a_leaf_keep_their_full_directory() {
+        let found = names(&[("scan.rs", "mod outer { mod inner { mod detail; } }")]);
+
+        assert!(found.contains("scan/outer/inner/detail.rs"));
+    }
+
+    #[test]
+    fn inline_module_paths_resolve_inside_the_inline_directory() {
+        let found = names(&[(
+            "lib.rs",
+            "mod ci { #[path = \"bootstrap/mod.rs\"] mod bootstrap; }",
+        )]);
+
+        assert!(found.contains("ci/bootstrap/mod.rs"));
+        assert!(!found.contains("bootstrap/mod.rs"));
+    }
+
+    #[test]
+    fn commented_declarations_do_not_hide_an_orphan() {
+        let found = names(&[("lib.rs", "/*\nmod stray;\n*/")]);
+
+        assert!(!found.contains("stray.rs"));
     }
 
     /// The gate exists to find files nothing loads, so a `cfg` that is off in

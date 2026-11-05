@@ -38,7 +38,7 @@ use crate::{
     host::{HostSettings, HostSettingsChange, HostSettingsExec},
     session::{
         queue::{HostPart, HostProtocol, settle_receipt},
-        state::{SessionState, ensure_ctx},
+        state::{SessionState, SessionStream, ensure_ctx},
         tests::graph,
     },
 };
@@ -243,7 +243,9 @@ fn outcome(queue: &mut ScopedSender<HostProtocol, DeckProtocol>) -> Outcome<Host
 fn owned_session() -> SessionState<(), TestPools> {
     let sample_rate = NonZeroU32::new(consts::TRANSPORT_SAMPLE_RATE)
         .expect("invariant: the fixture rate is non-zero");
-    let mut state = graph::state_for(sample_rate, |_ctx, _sample_rate| Ok(()));
+    let mut state = graph::state_for(sample_rate, |_ctx, _sample_rate| {
+        Ok(SessionStream::Realtime { _backend: () })
+    });
     assert!(ensure_ctx(&mut state).is_ok());
     state
 }

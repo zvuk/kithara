@@ -1130,12 +1130,13 @@ cargo.packages = ["kithara-ui"]
 runner.cargo.doc = true
 
 [test.lanes.loom]
-cargo.workspace = true
-cargo.exclude = ["kithara-fuzz"]
+cargo.packages = ["kithara-platform"]
 cargo.profile = "test-release"
 runner.nextest.filter = "test(/(^|::)loom_model_/)"
-default_features = ["kithara/loom"]
+default_features = ["kithara-platform/loom"]
+default_backend = "none"
 default_flash = false
+undeclared_toggles = ["load"]
 
 # `test-release` is the profile every other lane builds in, and this one ran in
 # `test`. `just test all` therefore built the whole workspace a second time to
@@ -2474,6 +2475,11 @@ steps = [
     "run",
     "--touched",
     "--lane=tooling",
+  ], label = "build tooling suites this push touches", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1" } },
+  { args = [
+    "test",
+    "run",
+    "--touched",
     "--lane=harness",
     "--lane=fixtures",
     "--lane=net-host",
@@ -3433,7 +3439,11 @@ banned_symbol_needles = [
   "symphonia_format_riff",
   "fdk_aac",
 ]
-apple_proof_needles = ["AppleCodec", "AppleAudioFileDemuxer"]
+# The release slices are fat-LTO'd and stripped, so no Rust name survives in
+# them; the proof is AudioToolbox entry points that only the Apple decode
+# backend imports: the demuxer opens files through callbacks, and the codec
+# reads the format list a magic cookie describes.
+apple_proof_needles = ["AudioFileOpenWithCallbacks", "AudioFormatGetProperty"]
 
 [ext.apple.docgen]
 # DocC documentation-extension pages generated from Rust rustdoc JSON so the

@@ -724,7 +724,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-time",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -892,6 +892,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7eff00be299a18769011411c9def0d827e8f2d7bf0c3dbf53633147a8867fd1f"
 dependencies = [
  "no_std_io2",
+]
+
+[[package]]
+name = "blake3"
+version = "1.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d9e454fc11f76977dc803893aff6304ed33d6a26efae8696573bea74baa27ae"
+dependencies = [
+ "arrayvec",
+ "cc",
+ "cfg-if",
+ "constant_time_eq",
+ "cpufeatures 0.3.1",
 ]
 
 [[package]]
@@ -1615,6 +1628,12 @@ dependencies = [
  "quote",
  "unicode-xid",
 ]
+
+[[package]]
+name = "constant_time_eq"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "continue"
@@ -2545,7 +2564,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2711,11 +2730,11 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 [[package]]
 name = "firewheel"
 version = "0.14.0"
-source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "firewheel-core",
  "firewheel-cpal",
- "firewheel-graph 0.14.0 (git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb)",
+ "firewheel-graph",
  "firewheel-nodes",
  "firewheel-rtaudio",
  "firewheel-symphonium",
@@ -2725,7 +2744,7 @@ dependencies = [
 [[package]]
 name = "firewheel-core"
 version = "0.14.0"
-source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "arrayvec",
  "audioadapter",
@@ -2753,13 +2772,13 @@ dependencies = [
 [[package]]
 name = "firewheel-cpal"
 version = "0.14.0"
-source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "audioadapter-buffers",
  "bevy_platform",
  "cpal",
  "firewheel-core",
- "firewheel-graph 0.14.0 (git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb)",
+ "firewheel-graph",
  "fixed-resample",
  "thiserror 2.0.21",
  "tracing",
@@ -2768,29 +2787,7 @@ dependencies = [
 [[package]]
 name = "firewheel-graph"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b01684a0dcdbb5d2c7c543a96f5194174fb0e0b49ffab3f01552aa97e337805"
-dependencies = [
- "arrayvec",
- "audioadapter",
- "bevy_platform",
- "bevy_reflect",
- "bitflags 2.13.2",
- "firewheel-core",
- "num-traits",
- "ringbuf",
- "smallvec",
- "thiserror 2.0.21",
- "thunderdome",
- "tracing",
- "triple_buffer",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "firewheel-graph"
-version = "0.14.0"
-source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "arrayvec",
  "audioadapter",
@@ -2811,7 +2808,7 @@ dependencies = [
 [[package]]
 name = "firewheel-macros"
 version = "0.14.0"
-source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "bevy_macro_utils",
  "proc-macro2",
@@ -2823,7 +2820,7 @@ dependencies = [
 [[package]]
 name = "firewheel-nodes"
 version = "0.14.0"
-source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "bevy_ecs",
  "bevy_platform",
@@ -2836,12 +2833,12 @@ dependencies = [
 [[package]]
 name = "firewheel-rtaudio"
 version = "0.14.0"
-source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "audioadapter-buffers",
  "bevy_platform",
  "firewheel-core",
- "firewheel-graph 0.14.0 (git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb)",
+ "firewheel-graph",
  "rtaudio",
  "thiserror 2.0.21",
  "tracing",
@@ -2850,7 +2847,7 @@ dependencies = [
 [[package]]
 name = "firewheel-symphonium"
 version = "0.14.0"
-source = "git+https://github.com/gerasim13/Firewheel?rev=ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb#ed8b3b83eb0b6d5c2c90fbe574c695f2c55943eb"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "bevy_platform",
  "firewheel-core",
@@ -2860,7 +2857,7 @@ dependencies = [
 [[package]]
 name = "firewheel-web-audio"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/bevy_seedling?rev=18bbf168523175735d7ece9fb293cdf3de66b273#18bbf168523175735d7ece9fb293cdf3de66b273"
+source = "git+https://github.com/gerasim13/bevy_seedling?rev=873c1812c645ad3ee1fff03c1640f13edffb4786#873c1812c645ad3ee1fff03c1640f13edffb4786"
 dependencies = [
  "audioadapter",
  "bevy_platform",
@@ -3911,7 +3908,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.58.0",
 ]
 
 [[package]]
@@ -4337,7 +4334,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5242,18 +5239,15 @@ dependencies = [
  "kithara-config",
  "kithara-derive",
  "kithara-dsp",
- "kithara-effects",
  "kithara-fixture-media",
  "kithara-resampler",
  "kithara-signal",
  "kithara-test-fixtures",
- "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
  "serde",
  "thiserror 2.0.21",
- "unimock",
 ]
 
 [[package]]
@@ -5744,6 +5738,7 @@ dependencies = [
  "kithara-decode",
  "kithara-events",
  "kithara-host",
+ "kithara-platform",
  "kithara-play",
  "kithara-queue",
  "kithara-render",
@@ -5954,11 +5949,14 @@ name = "kithara-queue"
 version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
+ "async-trait",
+ "bytes",
  "delegate",
  "derive-where",
  "derive_more",
  "fieldwork",
  "getrandom 0.4.3",
+ "http",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
@@ -6540,6 +6538,7 @@ dependencies = [
 name = "kithara-warp-tests"
 version = "0.0.1-alpha5"
 dependencies = [
+ "delegate",
  "kithara",
  "kithara-derive",
  "kithara-integration-tests",
@@ -6625,7 +6624,7 @@ dependencies = [
  "either",
  "firewheel",
  "firewheel-core",
- "firewheel-graph 0.14.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "firewheel-graph",
  "foldhash 0.2.0",
  "form_urlencoded",
  "futures-channel",
@@ -7449,7 +7448,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8700,7 +8699,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9497,7 +9496,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9554,7 +9553,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -10540,10 +10539,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -12504,7 +12503,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -13042,6 +13041,7 @@ version = "0.0.1-alpha5"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "blake3",
  "cargo_metadata 0.23.1",
  "clap",
  "delegate",

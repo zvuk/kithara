@@ -42,6 +42,7 @@ impl SlotTail {
         frames: usize,
         metrics: &RtMetrics,
         budget: &mut usize,
+        wait_for_pcm: bool,
     ) {
         let remaining = self.len - self.pos;
         self.left.copy_within(self.pos..self.len, 0);
@@ -52,6 +53,7 @@ impl SlotTail {
             &mut self.incoming_right[..frames],
             metrics,
             budget,
+            wait_for_pcm,
         );
         self.len = remaining.max(written);
         self.left[remaining..self.len].fill(0.0);
@@ -169,7 +171,7 @@ mod tests {
                     expected_left[frame] += incoming;
                     expected_right[frame] += incoming;
                 }
-                tail.fill(&mut track, requested, &RtMetrics::default(), &mut 16);
+                tail.fill(&mut track, requested, &RtMetrics::default(), &mut 16, false);
                 assert_eq!(&*tail.left, expected_left);
                 assert_eq!(&*tail.right, expected_right);
                 assert_eq!(tail.len, len);

@@ -179,7 +179,7 @@ impl Owner {
                 Ok(rx) => rx,
                 Err(error) => {
                     warn!(%error, ?track_id, "analysis: pass could not open its ingress");
-                    entry.set_stage(Stage::Ended(axis));
+                    entry.set_stage(Stage::Failed(axis));
                     entry.release();
                     return None;
                 }

@@ -16,9 +16,15 @@ use crate::{
 };
 
 fn layout(gains: &[f32]) -> Vec<EqBandConfig> {
-    generate_log_spaced_bands(gains.len()).into_iter().zip(gains)
-        .map(|(center, gain)| EqBandConfig::builder()
-            .frequency(center.frequency()).gain_db((*gain).into()).build())
+    generate_log_spaced_bands(gains.len())
+        .into_iter()
+        .zip(gains)
+        .map(|(center, gain)| {
+            EqBandConfig::builder()
+                .frequency(center.frequency())
+                .gain_db((*gain).into())
+                .build()
+        })
         .collect()
 }
 
@@ -58,6 +64,7 @@ fn eq_call(
             suspended: false,
             now: SessionFrame::new(0),
             delivery: FrameCount::new(128),
+            deck_delivery: FrameCount::new(128),
             output: &output,
             deck,
         };
@@ -78,6 +85,7 @@ fn eq_call(
         suspended: false,
         now: SessionFrame::new(0),
         delivery: FrameCount::new(128),
+        deck_delivery: FrameCount::new(128),
         output: &output,
         deck,
     };
@@ -211,6 +219,7 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
                 suspended: false,
                 now: SessionFrame::new(0),
                 delivery: FrameCount::new(128),
+                deck_delivery: FrameCount::new(128),
                 output: &output,
                 deck: &deck,
             };

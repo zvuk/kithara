@@ -4,9 +4,11 @@ use num_traits::ToPrimitive;
 
 use super::{
     plan::{CorrectionPlan, CorrectionStep},
-    source::{self, Correction, SourceGrid},
+    source::{self, Correction, CurveError, SourceGrid},
 };
-use crate::{Bound, MIN_SPEED, SessionBeat, SpeedCurve, TempoTrajectory, TrackGrid};
+use crate::{
+    Bound, MIN_SPEED, SessionBeat, SpeedCurve, TempoTrajectory, TrackGrid, consts::MAX_SPEED,
+};
 
 /// Source beats ahead of the Host phase, modulo the stated beat period.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -16,10 +18,46 @@ pub struct PhaseError {
 }
 
 impl PhaseError {
-    pub(super) fn shortest(self) -> f64 {
-        let phase = self.beats.rem_euclid(1.0);
-        if phase > 0.5 { phase - 1.0 } else { phase }
+    /// The error wrapped to the nearest multiple of `period` beats.
+    pub(super) fn wrapped(self, period: f64) -> f64 {
+        let phase = self.beats.rem_euclid(period);
+        if phase > period / 2.0 {
+            phase - period
+        } else {
+            phase
+        }
     }
+}
+
+/// What asks a sounding deck to slew.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SlewCause {
+    /// A tempo command: the slew starts at the new reference speed and closes
+    /// the phase at any size.
+    Commanded,
+    /// Phase drift: the slew ramps from the deck's speed and closes the phase
+    /// up to a limit.
+    Drift {
+        /// Speed the deck plays at when the slew starts.
+        from: f64,
+        /// Largest phase, in beats, the slew closes.
+        limit: f32,
+    },
+}
+
+/// How a sounding deck closes its source beat phase.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Slew {
+    /// Bounded speed steps close the phase.
+    Closes {
+        /// Speed law from the correction start.
+        curve: SpeedCurve,
+        /// Frames from the correction start to the closed phase.
+        frames: u64,
+    },
+    /// The drift is over its limit, or the slew needs source beats past the
+    /// grid's end: the deck relocates.
+    Relocate,
 }
 
 /// Whether a position lies inside the grid's inclusive observed beat span.
@@ -69,33 +107,113 @@ pub fn speed_curve(
     at: SessionFrame,
     landing: Option<(Duration, SessionFrame)>,
 ) -> Option<SpeedCurve> {
-    source::curve(host, grid, position, at, landing, &[(0, 0.0)], None).map(|(curve, _)| curve)
+    source::curve(host, grid, position, at, landing, &[(0, 0.0)], None)
+        .ok()
+        .map(|(curve, _)| curve)
 }
 
-/// Replaces the remaining correction and closes source beat phase without a jump.
+/// What a slew starts from at its frame.
+struct SlewStart {
+    /// Source seconds per Host beat at the position.
+    local: f64,
+    /// Speed that holds the Host tempo at the position.
+    reference: f64,
+    /// Speed steps from the slew's start speed to the reference.
+    plan: CorrectionPlan,
+    /// Source phase ahead of the Host at the position.
+    error: PhaseError,
+}
+
+/// Plans the slew that replaces the remaining correction and closes source
+/// beat phase from `at`; `None` when the grid has no speed law there.
 #[must_use]
-pub fn corrected_speed_curve(
+pub fn slew(
     host: &TempoTrajectory,
     grid: &SourceGrid,
     position: Duration,
     at: SessionFrame,
-    from: f64,
     epsilon: f32,
-    commanded: bool,
-) -> Option<(SpeedCurve, u64)> {
-    let local = grid.slope_at(position.as_secs_f64())?;
-    let reference = host.anchor_at(at).tempo_at(at) * local;
-    let plan = checked_correction(if commanded { reference } else { from }, reference, epsilon)?;
-    let offsets = plan.media_offsets(host.sample_rate(), reference)?;
+    cause: SlewCause,
+) -> Option<Slew> {
+    let start = slew_start(host, grid, position, at, epsilon, cause)?;
+    if let SlewCause::Drift { limit, .. } = cause
+        && drift_phase(grid, position, &start)?.abs() > f64::from(limit)
+    {
+        return Some(Slew::Relocate);
+    }
+    close_slew(host, grid, position, at, epsilon, cause, &start)
+}
+
+/// The speed law that closes the phase from `start`, or a relocation when it
+/// needs source beats past the grid.
+fn close_slew(
+    host: &TempoTrajectory,
+    grid: &SourceGrid,
+    position: Duration,
+    at: SessionFrame,
+    epsilon: f32,
+    cause: SlewCause,
+    start: &SlewStart,
+) -> Option<Slew> {
+    let offsets = start
+        .plan
+        .media_offsets(host.sample_rate(), start.reference)?;
     let starts = offsets.last()?.0;
-    let error = phase_error(host, grid, position, at)?;
     let correction = Correction {
-        phase: error.shortest(),
-        starts: if commanded { starts.max(1) } else { starts },
+        phase: start.error.wrapped(1.0),
+        starts: match cause {
+            SlewCause::Commanded => starts.max(1),
+            SlewCause::Drift { .. } => starts,
+        },
         scale: grid.maximum_slope()?,
         epsilon,
     };
-    source::curve(host, grid, position, at, None, &offsets, Some(&correction))
+    match source::curve(host, grid, position, at, None, &offsets, Some(&correction)) {
+        Ok((curve, frames)) => Some(Slew::Closes { curve, frames }),
+        Err(CurveError::PastGrid) => Some(Slew::Relocate),
+        Err(CurveError::NoLaw) => None,
+    }
+}
+
+fn slew_start(
+    host: &TempoTrajectory,
+    grid: &SourceGrid,
+    position: Duration,
+    at: SessionFrame,
+    epsilon: f32,
+    cause: SlewCause,
+) -> Option<SlewStart> {
+    let local = grid.slope_at(position.as_secs_f64())?;
+    let reference = host.anchor_at(at).tempo_at(at) * local;
+    let from = match cause {
+        SlewCause::Commanded => reference,
+        SlewCause::Drift { from, .. } => from,
+    };
+    Some(SlewStart {
+        local,
+        reference,
+        plan: checked_correction(from, reference, epsilon)?,
+        error: phase_error(host, grid, position, at)?,
+    })
+}
+
+/// Source beats ahead of the Host a drift slew closes: the standing error, to
+/// the nearest bar when both sides count the same bar, plus what the speed
+/// ramp accrues before the closing starts.
+fn drift_phase(grid: &SourceGrid, position: Duration, start: &SlewStart) -> Option<f64> {
+    let ramp: f64 = start
+        .plan
+        .steps
+        .iter()
+        .map(|step| (step.speed - start.reference) * step.seconds)
+        .sum();
+    let (_, stride, _) = grid.phase_axes(position.as_secs_f64())?;
+    let bar = if stride == start.error.period {
+        stride
+    } else {
+        1.0
+    };
+    Some(start.error.wrapped(bar) + ramp / start.local)
 }
 
 /// The nearest in-phase entry on the requested side of a frame.
@@ -203,10 +321,9 @@ pub fn jump_target(
 /// Returns bounded correction steps, or `None` for invalid or unrepresentable inputs.
 #[must_use]
 pub fn checked_correction(from: f64, to: f64, epsilon: f32) -> Option<CorrectionPlan> {
-    if !from.is_finite()
-        || from < f64::from(MIN_SPEED)
-        || !to.is_finite()
-        || to < f64::from(MIN_SPEED)
+    let playable = f64::from(MIN_SPEED)..=f64::from(MAX_SPEED);
+    if !playable.contains(&from)
+        || !playable.contains(&to)
         || !epsilon.is_finite()
         || epsilon <= 0.0
     {

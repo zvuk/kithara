@@ -93,6 +93,7 @@ pub(super) fn start_route_loss_stream(
             .block_frames(NonZeroU32::new(512).expect("block"))
             .declared_latency(Duration::ZERO)
             .build(),
+        &mut [],
     )
     .map(|stream| SessionStream::Offline(Box::new(stream)))
     .map_err(|error| error.to_string())

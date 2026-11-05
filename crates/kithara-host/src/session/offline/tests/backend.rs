@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelConfig, FirewheelContext, channel_config::ChannelCount};
 use kithara_platform::time::Duration;
+use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
 
 use crate::session::offline::{
@@ -24,7 +25,7 @@ fn start_hands_firewheel_the_configured_block_latency_and_rate() {
         .declared_latency(declared_latency)
         .sample_rate(sample_rate)
         .build();
-    let _stream = OfflineStream::start(&mut ctx, config).expect("fixture offline stream");
+    let _stream = OfflineStream::start(&mut ctx, config, &mut []).expect("fixture offline stream");
 
     let stream = ctx
         .stream_info()
@@ -54,12 +55,19 @@ fn render_fills_the_requested_block() {
         .declared_latency(Duration::ZERO)
         .sample_rate(sample_rate)
         .build();
-    let mut stream = OfflineStream::start(&mut ctx, config).expect("fixture offline stream");
+    let mut stream =
+        OfflineStream::start(&mut ctx, config, &mut []).expect("fixture offline stream");
 
     let frames = 16;
     let mut output = vec![f32::NAN; frames * CHANNELS];
     stream
-        .render(0, frames, &mut output)
+        .render(
+            0,
+            SessionFrame::new(ctx.audio_clock().samples.0),
+            frames,
+            &mut output,
+            &mut [],
+        )
         .expect("the offline stream renders a block on demand");
 
     assert!(

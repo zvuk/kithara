@@ -327,6 +327,9 @@ pub(crate) const KACHE_LOCAL_ROOT_ENV: &str = "KITHARA_CI_COMPILER_CACHE_ROOT";
 /// `CARGO_HOME`, so a job that names no home and one that is told it key their
 /// compilations alike.
 pub(crate) const CARGO_HOME_MOUNT: &str = "/home/runner/.cargo";
+/// Where an Android runner mounts its Gradle user home: the default home of
+/// the image's user, so the wrapper and every build find it without being told.
+pub(crate) const GRADLE_HOME_MOUNT: &str = "/home/runner/.gradle";
 
 /// The host directory, under the cache root, that `production/main` claims its
 /// lane directories in, and where a Linux runner mounts it. A host deployed
@@ -561,6 +564,11 @@ pub(crate) const BUILD_ALIAS: &str = "build";
 
 /// The file in a build directory that records the content its builds read.
 pub(crate) const SOURCES_RECORD: &str = "sources.tsv";
+
+/// The scratch directory Cargo keeps in a build directory for tests
+/// (`CARGO_TARGET_TMPDIR`). No build reads it back, so a lane entering the
+/// directory sweeps it.
+pub(crate) const BUILD_SCRATCH: &str = "tmp";
 
 /// The header of a sources record a job still holds.
 pub(crate) const SOURCES_HELD: &str = "held";

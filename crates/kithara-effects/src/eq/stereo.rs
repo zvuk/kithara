@@ -7,8 +7,8 @@ use kithara_dsp::{
     param::{Mix, MixDSP},
 };
 
-use super::{EqBandConfig, EqConfig, IsolatorEq};
-use crate::{EffectPrepareError, GainDb, consts::EQ_BLOCK_FRAMES};
+use super::{EqBandConfig, EqConfig, EqError, IsolatorEq};
+use crate::{GainDb, consts::EQ_BLOCK_FRAMES};
 
 /// One band layout built for both channels of a stereo signal. It is built off the audio
 /// thread, so taking it in allocates nothing there.
@@ -23,12 +23,12 @@ impl EqLayout {
     ///
     /// # Errors
     ///
-    /// Returns [`EffectPrepareError`] for an invalid crossover design or exhausted pool.
+    /// Returns [`EqError`] for an invalid crossover design or exhausted pool.
     pub fn new<S>(
         config: &EqConfig<S>,
         bands: &[EqBandConfig],
         sample_rate: NonZeroU32,
-    ) -> Result<Self, EffectPrepareError>
+    ) -> Result<Self, EqError>
     where
         S: HasPool<f32>,
     {
@@ -159,14 +159,27 @@ impl StereoEq {
         &mut self,
         mut layout: Box<EqLayout>,
     ) -> Result<Option<Box<EqLayout>>, (FilterError, Box<EqLayout>)> {
-        if let Err(error) = layout.update_sample_rate(self.sample_rate) {
+        if let Err(error) = layout.prepare_sample_rate(self.sample_rate) {
             return Err((error, layout));
         }
+        Ok(self.take_prepared_layout(layout))
+    }
+
+    /// Takes a layout already prepared for this equaliser's sample rate.
+    ///
+    /// # Panics
+    /// The layout must have passed preparation for the current rate.
+    pub fn take_prepared_layout(&mut self, mut layout: Box<EqLayout>) -> Option<Box<EqLayout>> {
+        assert_eq!(
+            layout.prepared_rate,
+            Some(self.sample_rate),
+            "layout preparation precedes batch mutation"
+        );
+        layout.apply_sample_rate(self.sample_rate);
         self.prepared_rate = None;
-        Ok(self
-            .update
+        self.update
             .replace(LayoutUpdate::Pending(layout))
-            .map(LayoutUpdate::into_inner))
+            .map(LayoutUpdate::into_inner)
     }
 
     /// Ramps `band` to `gain_db` on the layout a gain speaks of: the one waiting to be crossed
@@ -196,17 +209,6 @@ impl StereoEq {
             }
         }
         layout.band_count()
-    }
-
-    /// Retunes every layout this EQ holds, and its crossover, to `sample_rate`.
-    ///
-    /// # Errors
-    /// Returns [`FilterError::Parameters`] before changing any active channel or mix state
-    /// if any retained layout cannot represent the rate.
-    pub fn update_sample_rate(&mut self, sample_rate: NonZeroU32) -> Result<(), FilterError> {
-        self.prepare_sample_rate(sample_rate)?;
-        let _ = self.apply_prepared_sample_rate();
-        Ok(())
     }
 
     /// Stages both channels of every retained layout without changing sounding state.

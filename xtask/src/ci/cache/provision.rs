@@ -111,7 +111,7 @@ fn size(value: &str) -> Result<u64> {
     Ok(bytes)
 }
 
-pub(super) fn scope_bucket(scope: &str) -> Result<String> {
+pub(in crate::ci) fn scope_bucket(scope: &str) -> Result<String> {
     ensure!(
         !scope.is_empty()
             && scope.len() <= 48

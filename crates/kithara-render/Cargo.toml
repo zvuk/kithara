@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Producer-side render stage: decoded audio through Warp and effects before the play ring."
+description = "Producer-side render stage: decoded audio through Warp before the play ring."
 keywords = ["audio", "playback", "render", "timestretch", "realtime"]
 categories = ["multimedia::audio"]
 
@@ -70,7 +70,6 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
-audioadapter-buffers = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-audio = { workspace = true, default-features = false, features = ["mock"] }
 kithara-beat = { workspace = true }
@@ -80,6 +79,8 @@ kithara-stream = { workspace = true, default-features = false, features = ["mock
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["mock", "hang"] }
 kithara-worker = { workspace = true, features = ["mock"] }
+
+audioadapter-buffers = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

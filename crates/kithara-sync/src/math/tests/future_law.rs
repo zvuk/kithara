@@ -9,7 +9,7 @@ use super::{
     fixtures::{grid, host, position, source_grid},
 };
 use crate::{
-    SessionBeat, SpeedCurve, Tempo, TempoStep, TempoTrajectory, corrected_speed_curve, speed_curve,
+    SessionBeat, Slew, SlewCause, SpeedCurve, Tempo, TempoStep, TempoTrajectory, slew, speed_curve,
 };
 
 fn approached(initial: f64, target: f64, frames: u64) -> f64 {
@@ -212,16 +212,23 @@ fn zero_correction_preserves_the_complete_future_law() {
             .beats,
         0.0,
     );
-    let (actual, end) = corrected_speed_curve(
+    let Some(Slew::Closes {
+        curve: actual,
+        frames: end,
+    }) = slew(
         &pending_targets(),
         &source_grid(&model),
         position(480),
         at,
-        1.0,
         0.001,
-        false,
+        SlewCause::Drift {
+            from: 1.0,
+            limit: f32::INFINITY,
+        },
     )
-    .expect("zero source phase");
+    else {
+        panic!("zero source phase");
+    };
 
     assert_eq!(end, 0);
     assert_eq!(actual, base);
@@ -333,16 +340,23 @@ fn correction_restores_an_approach_between_two_host_commands() {
         None,
     )
     .expect("local source law");
-    let (corrected, end) = corrected_speed_curve(
+    let Some(Slew::Closes {
+        curve: corrected,
+        frames: end,
+    }) = slew(
         &host,
         &source_grid(&model),
         cue,
         SessionFrame::new(0),
-        0.8,
         0.001,
-        false,
+        SlewCause::Drift {
+            from: 0.8,
+            limit: f32::INFINITY,
+        },
     )
-    .expect("true source phase correction");
+    else {
+        panic!("true source phase correction");
+    };
     let base_boundary = analytic_laws(&base)
         .into_iter()
         .find(|(at, _)| *at > 0)

@@ -74,6 +74,8 @@ unknown-registry = "deny"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
+  # Firewheel 0.14 cold admission prepares retained owners before stream commit.
+  "https://github.com/gerasim13/Firewheel",
   # WebSocket TLS uses the maintained webpki-roots release.
   "https://github.com/gerasim13/tokio-tungstenite",
   # Askama config parsing replaces the unmaintained basic-toml dependency.

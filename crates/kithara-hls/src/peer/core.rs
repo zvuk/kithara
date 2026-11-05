@@ -242,7 +242,7 @@ where
     /// active session is served first and a single slot is reserved for the incoming one, so a
     /// switch can never starve the audio currently playing.
     #[kithara::probe]
-    fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+    fn poll_next(&self, cx: &mut Context<'_>, budget: usize) -> Poll<Option<Vec<FetchCmd>>> {
         let outcome = match self.poll_state_phase(cx) {
             PollPhase::NotActivated => return Poll::Pending,
             PollPhase::Terminated => return Poll::Ready(None),
@@ -255,7 +255,12 @@ where
                 .broadcast_eviction(&outcome.ctx, &key, outcome.seg_at_reader);
         }
 
-        let cmds = self.session_turns.dispatch(&outcome.coord, &outcome.ctx);
+        if budget == 0 {
+            return Poll::Pending;
+        }
+        let cmds = self
+            .session_turns
+            .dispatch(&outcome.coord, &outcome.ctx, budget);
         if cmds.is_empty() {
             return Poll::Pending;
         }

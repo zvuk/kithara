@@ -350,7 +350,7 @@ async fn native_linked(
     let mut deck = Linked::new(
         LinkedConfig::builder()
             .inner(track)
-            .settings(LinkConfig::default())
+            .settings(LinkConfig::builder().preparation(position(0)).build())
             .trajectory(trajectory(120.0, 4))
             .build(),
     );
@@ -499,6 +499,7 @@ fn native_marked_at<R>(
         suspended: false,
         now: mark.session,
         delivery: FrameCount::new(0),
+        deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &snapshot,
     };

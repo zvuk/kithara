@@ -1908,49 +1908,73 @@
 # linux-support / branch
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+  just test run --touched --lane=tooling
+    CARGO_BUILD_JOBS=2
+    RTEN_NUM_THREADS=1
+  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-support / platforms
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+  just test run --touched --lane=tooling
+    CARGO_BUILD_JOBS=2
+    RTEN_NUM_THREADS=1
+  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-support / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+  just test run --touched --lane=tooling
+    CARGO_BUILD_JOBS=2
+    RTEN_NUM_THREADS=1
+  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-support / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+  just test run --touched --lane=tooling
+    CARGO_BUILD_JOBS=2
+    RTEN_NUM_THREADS=1
+  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-support / main
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+  just test run --touched --lane=tooling
+    CARGO_BUILD_JOBS=2
+    RTEN_NUM_THREADS=1
+  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-support / nightly
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+  just test run --touched --lane=tooling
+    CARGO_BUILD_JOBS=2
+    RTEN_NUM_THREADS=1
+  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-support / weekly
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+  just test run --touched --lane=tooling
+    CARGO_BUILD_JOBS=2
+    RTEN_NUM_THREADS=1
+  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-support / release
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
+  just test run --touched --lane=tooling
+    CARGO_BUILD_JOBS=2
+    RTEN_NUM_THREADS=1
+  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-test-real-clock / branch

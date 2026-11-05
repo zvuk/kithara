@@ -5,7 +5,6 @@ use biquad::{Biquad, Coefficients, DirectForm1, Hertz, Type};
 use super::FilterError;
 
 #[cfg(test)]
-#[path = "crossover_tests.rs"]
 mod tests;
 
 struct Section(DirectForm1<f32>);
@@ -122,11 +121,9 @@ impl Crossover {
         let Some((high, lower)) = bands.split_last_mut() else {
             return 0;
         };
-        for (output, &sample) in high.iter_mut().zip(input).take(count) {
-            *output = sample;
-        }
+        high[..count].copy_from_slice(&input[..count]);
         for (split, low) in self.splits.iter_mut().zip(lower) {
-            for (low, high) in low.iter_mut().zip(high.iter_mut()).take(count) {
+            for (low, high) in low[..count].iter_mut().zip(&mut high[..count]) {
                 *low = split.lowpass.process(*high);
                 *high = split.highpass.process(*high);
                 for section in &mut split.allpass {

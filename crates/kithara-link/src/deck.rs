@@ -11,13 +11,19 @@ use crate::{GridAnswer, LinkedPlayer, TempoTrajectory};
 
 /// Object-safe synchronization face of a deck held by the Host owner.
 pub trait LinkedDeck<S>: HostedDeck<S> {
-    /// Enables explicit phase alignment or disables future Host retimes.
+    /// Enables explicit phase alignment of the tracks not yet aligned, or
+    /// disables future Host retimes.
     ///
     /// # Errors
     /// Returns the refusal of an alignment batch.
     fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>;
     /// Delivers the planned Host trajectory to every active synchronized track.
-    fn retime(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>);
+    fn retime(
+        &mut self,
+        trajectory: &TempoTrajectory,
+        frames: &[SessionFrame],
+        out: &mut Outbox<'_, S>,
+    );
     /// Delivers analysis to the track owning the item.
     fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>);
     /// Whether this deck follows the Host's tempo.
@@ -39,8 +45,13 @@ impl<S, D: HostedDeck<S> + LinkedPlayer<S>> LinkedDeck<S> for D {
         LinkedPlayer::sync(self, on, out)
     }
 
-    fn retime(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
-        LinkedPlayer::retime(self, trajectory, at, out);
+    fn retime(
+        &mut self,
+        trajectory: &TempoTrajectory,
+        frames: &[SessionFrame],
+        out: &mut Outbox<'_, S>,
+    ) {
+        LinkedPlayer::retime(self, trajectory, frames, out);
     }
 
     fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>) {

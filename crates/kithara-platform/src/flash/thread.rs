@@ -61,10 +61,18 @@ impl<T> JoinHandle<T> {
         self.native.join()
     }
 
+    /// Whether the thread's closure has returned. This reads the exit that
+    /// [`Self::join`] waits on, published while the thread still holds its
+    /// participant credit: the OS thread ends later, after that credit is
+    /// released, so polling its end under flash lets the virtual clock run
+    /// ahead of a thread that has not finished.
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        *self.exit.done.lock()
+    }
+
     delegate::delegate! {
         to self.native {
-            #[must_use]
-            pub fn is_finished(&self) -> bool;
             #[must_use]
             pub fn thread(&self) -> &Thread;
         }

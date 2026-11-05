@@ -35,7 +35,12 @@ impl Deck {
         }
     }
 
-    pub(in crate::rt) fn take_due(&mut self, mut due: Due<'_, DeckProtocol>, context_valid: bool) {
+    pub(in crate::rt) fn take_due(
+        &mut self,
+        mut due: Due<'_, DeckProtocol>,
+        context_valid: bool,
+        wait_for_pcm: bool,
+    ) {
         if due
             .commands()
             .iter()
@@ -48,13 +53,15 @@ impl Deck {
             due.refuse(reason);
             return;
         }
-        // No command changes the deck rate; application consumes these cached designs.
-        let preparation = due.commands_mut().iter_mut().try_for_each(|part| {
-            match part {
-                DeckPart::Eq(DeckEqChange::Layout(layout)) => layout.prepare_sample_rate(self.sample_rate),
+        let preparation = due
+            .commands_mut()
+            .iter_mut()
+            .try_for_each(|part| match part {
+                DeckPart::Eq(DeckEqChange::Layout(layout)) => {
+                    layout.prepare_sample_rate(self.sample_rate)
+                }
                 _ => Ok(()),
-            }
-        });
+            });
         if let Err(error) = preparation {
             due.refuse(DeckRefusal::Eq(error));
             return;
@@ -67,14 +74,8 @@ impl Deck {
             if let Some(slot) = shifted_slot(&part) {
                 self.interrupt_stop(&mut due, slot, remaining);
             }
-            match self.apply(part, at, seq, context_valid) {
-                Ok(Some(returned)) => due.commands_mut().push(returned),
-                Ok(None) => {},
-                Err((reason, returned)) => {
-                    due.commands_mut().push(returned);
-                    due.refuse(reason);
-                    return;
-                }
+            if let Some(returned) = self.apply(part, at, seq, context_valid, wait_for_pcm) {
+                due.commands_mut().push(returned);
             }
         }
         if due
@@ -133,6 +134,7 @@ impl Deck {
         start: SessionFrame,
         at: SessionFrame,
         context_valid: bool,
+        wait_for_pcm: bool,
     ) {
         loop {
             let next = self
@@ -172,14 +174,8 @@ impl Deck {
                     }
                 }
             }
-            match self.apply(part, at, seq, context_valid) {
-                Ok(Some(returned)) => due.commands_mut().push(returned),
-                Ok(None) => {},
-                Err((reason, returned)) => {
-                    due.commands_mut().push(returned);
-                    due.refuse(reason);
-                    continue;
-                }
+            if let Some(returned) = self.apply(part, at, seq, context_valid, wait_for_pcm) {
+                due.commands_mut().push(returned);
             }
             due.apply(());
             self.resolve_armed(level, start, at);

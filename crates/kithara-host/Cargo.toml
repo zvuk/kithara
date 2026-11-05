@@ -88,7 +88,7 @@ send_wrapper = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-audio = { workspace = true, features = ["usdt", "mock"] }
 kithara-bufpool = { workspace = true }
-kithara-effects = { workspace = true, features = ["mock"] }
+kithara-effects = { workspace = true }
 kithara-fixture-media = { workspace = true, default-features = false }
 kithara-host = { workspace = true, default-features = false, features = ["mock", "offline"] }
 kithara-play = { workspace = true, default-features = false, features = ["mock"] }
