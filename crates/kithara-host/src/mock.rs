@@ -24,13 +24,14 @@ mod fixture {
         session::{
             decks::{DeckInbox, DeckMsg},
             state::{
-                DeviceBackend, HostRoot, RootView, SessionBufferConfig, SessionState, SessionStream,
+                DeckNode, DeviceBackend, HostRoot, RootView, SessionBufferConfig, SessionState,
+                SessionStream,
             },
         },
     };
 
     fn session_state(
-        mut start: impl FnMut(&mut FirewheelContext, u32) -> Result<SessionStream, String>
+        start: impl FnMut(&mut FirewheelContext, u32, &mut [DeckNode]) -> Result<SessionStream, String>
         + Send
         + 'static,
     ) -> SessionState<DeviceBackend, TestPools> {
@@ -48,7 +49,7 @@ mod fixture {
                 .settings(settings)
                 .build()
                 .channel_config(),
-            move |ctx, rate, _decks| start(ctx, rate),
+            start,
         )
     }
 
@@ -94,14 +95,20 @@ mod fixture {
     }
 
     pub(crate) fn test_state(
-        start: impl FnMut(&mut FirewheelContext, u32) -> Result<SessionStream, String> + Send + 'static,
+        start: impl FnMut(&mut FirewheelContext, u32, &mut [DeckNode]) -> Result<SessionStream, String>
+        + Send
+        + 'static,
     ) -> TestState {
         TestState::new(start)
     }
 
     impl<D: HostedDeck<TestPools>> TestState<D> {
         pub(crate) fn new(
-            start: impl FnMut(&mut FirewheelContext, u32) -> Result<SessionStream, String>
+            start: impl FnMut(
+                &mut FirewheelContext,
+                u32,
+                &mut [DeckNode],
+            ) -> Result<SessionStream, String>
             + Send
             + 'static,
         ) -> Self {
@@ -158,7 +165,9 @@ mod fixture {
     }
 
     pub(crate) fn probe_owner(
-        start: impl FnMut(&mut FirewheelContext, u32) -> Result<SessionStream, String> + Send + 'static,
+        start: impl FnMut(&mut FirewheelContext, u32, &mut [DeckNode]) -> Result<SessionStream, String>
+        + Send
+        + 'static,
     ) -> (
         HostCore<TestPools>,
         kithara_platform::sync::mpsc::Receiver<DeckMsg>,

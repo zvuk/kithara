@@ -147,7 +147,7 @@ fn stream_loss_seen_while_draining_host_commands_restarts_the_stream() {
 #[kithara::test]
 fn empty_host_drain_publishes_a_rendered_transport_commit() {
     let sample_rate = NonZeroU32::new(48_000).expect("test sample rate");
-    let mut state = test_state(move |ctx, _| {
+    let mut state = test_state(move |ctx, _, decks| {
         OfflineStream::start(
             ctx,
             BackendConfig::builder()
@@ -155,7 +155,7 @@ fn empty_host_drain_publishes_a_rendered_transport_commit() {
                 .block_frames(NonZeroU32::new(512).expect("block"))
                 .declared_latency(Duration::ZERO)
                 .build(),
-            &mut [],
+            decks,
         )
         .map(|stream| SessionStream::Offline(Box::new(stream)))
         .map_err(|error| error.to_string())

@@ -45,7 +45,5 @@ kithara-resampler = { workspace = true, default-features = false, features = ["r
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock"] }
 
-assert_no_alloc = { workspace = true }
-
 [lints]
 workspace = true

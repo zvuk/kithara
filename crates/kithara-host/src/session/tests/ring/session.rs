@@ -431,8 +431,9 @@ fn ring_session_thread(
     setup: RingSetup,
 ) {
     let mut backend_config = Some(backend_config);
-    let mut state =
-        GraphSession::<RingBackend>::with_sample_rate(session_rate, move |ctx, _sample_rate| {
+    let mut state = GraphSession::<RingBackend>::with_sample_rate(
+        session_rate,
+        move |ctx, _sample_rate, _decks| {
             let config = backend_config
                 .take()
                 .ok_or_else(|| String::from("ring backend cannot be restarted"))?;
@@ -446,7 +447,8 @@ fn ring_session_thread(
             }
             backend.arm();
             Ok(backend)
-        });
+        },
+    );
     let ready = bootstrap(&mut state, setup)
         .and_then(|()| snapshot(&mut state))
         .map(|snapshot| (snapshot, state.view()));

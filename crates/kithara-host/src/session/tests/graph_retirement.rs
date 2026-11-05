@@ -66,7 +66,11 @@ impl Drop for TestStream {
     }
 }
 
-fn start_test_stream(ctx: &mut FirewheelContext, sample_rate: u32) -> Result<TestStream, String> {
+fn start_test_stream(
+    ctx: &mut FirewheelContext,
+    sample_rate: u32,
+    _decks: &mut [crate::session::state::DeckNode],
+) -> Result<TestStream, String> {
     let stream = device(|dev| {
         dev.next_stream += 1;
         dev.next_stream

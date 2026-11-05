@@ -1,13 +1,6 @@
 pub(crate) fn start(
     context: &mut firewheel::FirewheelContext,
     sample_rate: u32,
-) -> Result<crate::session::state::SessionStream, String> {
-    start_with_decks(context, sample_rate, &mut [])
-}
-
-pub(crate) fn start_with_decks(
-    context: &mut firewheel::FirewheelContext,
-    sample_rate: u32,
     decks: &mut [crate::session::state::DeckNode],
 ) -> Result<crate::session::state::SessionStream, String> {
     let config = super::backend::BackendConfig::builder()

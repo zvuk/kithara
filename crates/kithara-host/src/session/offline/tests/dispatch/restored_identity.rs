@@ -128,7 +128,8 @@ fn sample_rate_query_separates_the_measured_stream_from_the_request() {
         }
     ));
 
-    let mut state = test_state(|context, _requested| start_route_loss_stream(context, 48_000));
+    let mut state =
+        test_state(|context, _requested, decks| start_route_loss_stream(context, 48_000, decks));
     assert_eq!(state.root_view.sample_rate().requested, 44_100);
     assert_eq!(state.root_view.sample_rate().measured, None);
     assert!(state.stream.is_none());

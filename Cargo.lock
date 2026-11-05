@@ -5228,7 +5228,6 @@ dependencies = [
 name = "kithara-effects"
 version = "0.0.1-alpha5"
 dependencies = [
- "assert_no_alloc",
  "bon",
  "delegate",
  "derive-where",
