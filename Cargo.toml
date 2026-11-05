@@ -698,6 +698,12 @@ strip = "symbols"
 [profile.release.package."*"]
 opt-level = 3
 
+# The vector kernels of the audio thread. At "z" the size heuristics keep
+# filter state on the stack and outline the inner loops;
+# `docs/guides/performance/dispatch-build.md` owns the measured cost.
+[profile.release.package.kithara-dsp]
+opt-level = 3
+
 # Best-of-both-worlds profile for maximum testing speed.
 # Combines release-grade runtime performance (opt-level 3) with fast
 # parallel compilation (codegen-units 16, LTO off).
