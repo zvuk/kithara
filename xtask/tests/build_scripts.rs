@@ -143,6 +143,41 @@ fn wasm_recipe_only_dispatches_to_its_rust_owner() {
     assert_eq!(commands, ["just _xtask wasm test \"$@\""]);
 }
 
+#[test]
+fn trunk_postbuild_hooks_use_the_cached_xtask_entry() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    for package in ["kithara-ffi", "kithara-app"] {
+        let source = fs::read_to_string(root.join(format!("crates/{package}/Trunk.toml")))
+            .expect("Trunk configuration is readable");
+        let config: toml::Value = toml::from_str(&source).expect("Trunk configuration parses");
+        let hook = config["hooks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|hook| hook["stage"].as_str() == Some("post_build"))
+            .expect("Trunk has a post-build hook");
+        assert_eq!(hook["command"].as_str(), Some("just"), "{package}");
+        let args: Vec<_> = hook["command_arguments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|arg| arg.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "tooling",
+                "xtask",
+                "wasm",
+                "postbuild",
+                "--package",
+                package
+            ],
+            "{package}"
+        );
+    }
+}
+
 /// What is wrong with a `main` that can return, or ends, before it names a
 /// path or a variable to cargo.
 fn main_problem(stmts: &[Stmt]) -> Option<&'static str> {
