@@ -329,7 +329,7 @@ fn unit_paths(profile: &Path) -> Result<Vec<(String, PathBuf)>> {
 fn scratch(dir: &Path) -> Result<u64> {
     let mut bytes = 0_u64;
     for target in targets(dir)? {
-        let tmp = target.join("tmp");
+        let tmp = target.join(consts::BUILD_SCRATCH);
         if tmp.is_dir() {
             bytes = bytes.saturating_add(remove(&tmp));
         }
