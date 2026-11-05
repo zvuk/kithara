@@ -8,6 +8,10 @@ repository.workspace = true
 description = "Cross-platform FFI adapter for the kithara audio player"
 publish = false
 
+[package.metadata.kithara.wasm-lib-tests]
+default-features = false
+features = ["wasm"]
+
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 
