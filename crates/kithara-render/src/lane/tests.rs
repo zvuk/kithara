@@ -121,7 +121,7 @@ impl LaneFixture {
             )
             .expect("segment command fits the channel");
         self.lane
-            .execute_due(&mut self.source, &mut self.renderer, self.spec, &mut [])
+            .execute_due(&mut self.source, &mut self.renderer, self.spec)
             .expect("synchronous segment preparation");
         self.entry = entering(self.spec, seq, from);
         seq
@@ -221,12 +221,7 @@ fn a_prepared_segment_receipt_keeps_its_actual_apply_point(#[case] when: When<La
         .expect("segment command fits the channel");
     fixture
         .lane
-        .execute_due(
-            &mut fixture.source,
-            &mut fixture.renderer,
-            fixture.spec,
-            &mut [],
-        )
+        .execute_due(&mut fixture.source, &mut fixture.renderer, fixture.spec)
         .expect("segment applies before its preload");
     assert_eq!(fixture.lane.cursor(), LaneFrame { segment, frame: 0 });
     assert!(!fixture.lane.is_preloaded());
@@ -275,12 +270,7 @@ fn a_prepared_segment_receipt_keeps_its_actual_apply_point(#[case] when: When<La
         .expect("deferred repeat");
     fixture
         .lane
-        .execute_due(
-            &mut fixture.source,
-            &mut fixture.renderer,
-            fixture.spec,
-            &mut [],
-        )
+        .execute_due(&mut fixture.source, &mut fixture.renderer, fixture.spec)
         .expect("repeat waits for EOF");
     let before = fixture.lane.cursor();
     let restore = fixture
@@ -299,12 +289,7 @@ fn a_prepared_segment_receipt_keeps_its_actual_apply_point(#[case] when: When<La
         .expect("cancel the pending repeat");
     fixture
         .lane
-        .execute_due(
-            &mut fixture.source,
-            &mut fixture.renderer,
-            fixture.spec,
-            &mut [],
-        )
+        .execute_due(&mut fixture.source, &mut fixture.renderer, fixture.spec)
         .expect("unchanged segment restored");
     assert_eq!(fixture.lane.cursor(), before);
     let receipt = fixture
@@ -347,22 +332,12 @@ fn a_prepared_segment_receipt_keeps_its_actual_apply_point(#[case] when: When<La
     send(&mut waiting, When::Deferred, repeat, repeat_target);
     waiting
         .lane
-        .execute_due(
-            &mut waiting.source,
-            &mut waiting.renderer,
-            waiting.spec,
-            &mut [],
-        )
+        .execute_due(&mut waiting.source, &mut waiting.renderer, waiting.spec)
         .expect("repeat waits for unresolved original");
     let cancelled = send(&mut waiting, When::Next, current, restore_target);
     waiting
         .lane
-        .execute_due(
-            &mut waiting.source,
-            &mut waiting.renderer,
-            waiting.spec,
-            &mut [],
-        )
+        .execute_due(&mut waiting.source, &mut waiting.renderer, waiting.spec)
         .expect("cancel queued repeat");
     assert_eq!(waiting.source.seeks, [original_target]);
     assert_eq!(waiting.renderer.render_revision(), revision);
@@ -449,23 +424,16 @@ fn a_prepared_segment_receipt_keeps_its_actual_apply_point(#[case] when: When<La
         let executing_repeat = send(&mut repeated, When::Deferred, repeat, repeat_target);
         repeated
             .lane
-            .execute_due(
-                &mut repeated.source,
-                &mut repeated.renderer,
-                repeated.spec,
-                &mut [],
-            )
+            .execute_due(&mut repeated.source, &mut repeated.renderer, repeated.spec)
             .expect("deferred repeat executes after terminal admission");
         assert_eq!(repeated.lane.cursor().segment, repeat);
         assert_eq!(repeated.lane.position(), None);
         let before_restore = repeated.source.seeks.len();
         let restore = send(&mut repeated, When::Next, old, restore_target);
-        let result = repeated.lane.execute_due(
-            &mut repeated.source,
-            &mut repeated.renderer,
-            repeated.spec,
-            &mut [],
-        );
+        let result =
+            repeated
+                .lane
+                .execute_due(&mut repeated.source, &mut repeated.renderer, repeated.spec);
         if let Some(actual) = actual {
             result.expect("known outgoing coordinate restores");
             assert_eq!(repeated.lane.cursor(), old_cursor);
@@ -522,12 +490,7 @@ fn a_prepared_segment_receipt_keeps_its_actual_apply_point(#[case] when: When<La
             repeated.lane.reject_preparation(TrackFailureKind::Render);
             repeated
                 .lane
-                .execute_due(
-                    &mut repeated.source,
-                    &mut repeated.renderer,
-                    repeated.spec,
-                    &mut [],
-                )
+                .execute_due(&mut repeated.source, &mut repeated.renderer, repeated.spec)
                 .expect("refused commands cannot run again");
             assert!(repeated.sender.receipts().next().is_none());
             assert_eq!(repeated.source.seeks.len(), before_restore);

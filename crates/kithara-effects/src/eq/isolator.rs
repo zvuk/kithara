@@ -87,11 +87,6 @@ impl IsolatorEq {
         self.reset_history();
     }
 
-    pub(crate) fn reset_to_targets(&mut self) {
-        self.gains.reset_to_targets();
-        self.reset_history();
-    }
-
     fn reset_history(&mut self) {
         self.filters.reset();
         self.update_mix();
@@ -142,8 +137,6 @@ impl IsolatorEq {
             #[must_use]
             #[call(target)]
             pub fn target_gain(&self, band: usize) -> Option<GainDb>;
-            #[cfg(test)]
-            pub(crate) fn is_smoothing(&self) -> bool;
         }
     }
 }

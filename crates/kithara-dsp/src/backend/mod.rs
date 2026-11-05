@@ -23,7 +23,7 @@ mod tests;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) use accelerate as platform;
 #[cfg(feature = "spectrum")]
-pub(crate) use bins::{magnitude, phase};
+pub(crate) use bins::prediction_difference;
 pub(crate) use envelope::attack_release;
 pub(crate) use fade::gains;
 pub use fir::Fir;

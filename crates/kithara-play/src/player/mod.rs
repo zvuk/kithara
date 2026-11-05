@@ -10,7 +10,4 @@ pub use outbox::{Bound, Outbox, Player, SeekBatch, Settled, TrackReceipt};
 pub use settings::{
     PlayerConfig, TrackSettings, TrackSettingsChange, TrackSettingsPatch, TrackSettingsPatchError,
 };
-pub use track::{
-    EffectConfigView, EffectSnapshot, PlayerImpl, Position, TrackCommand, TrackSnapshot,
-    TrackStatus,
-};
+pub use track::{PlayerImpl, Position, TrackCommand, TrackSnapshot, TrackStatus};
