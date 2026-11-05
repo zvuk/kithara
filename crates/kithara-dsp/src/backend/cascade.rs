@@ -201,12 +201,15 @@ fn pass<S: Simd, T: Stages<S>>(block: Block<'_, '_, S>) -> usize {
     } = block;
     let zero = S::f32s::splat(simd, 0.0);
     let mut stages = T::load(simd, coefficients, states, sections, first);
+    let active = states
+        .chunks(sections)
+        .fold(0_u64, |bits, _| bits.wrapping_shl(1) | 1);
     for frame in range {
         let mut x = zero;
         for (slot, plane) in x.as_mut_slice().iter_mut().zip(group.iter()) {
             *slot = plane.get(frame).copied().unwrap_or(0.0);
         }
-        let y = stages.tick(x);
+        let y = stages.tick(x, active);
         for (plane, sample) in group.iter_mut().zip(y.as_slice()) {
             if let Some(slot) = plane.get_mut(frame) {
                 *slot = *sample;
@@ -231,7 +234,7 @@ trait Stages<S: Simd>: Sized {
     ) -> Self;
 
     /// Filters one frame of every lane through each section.
-    fn tick(&mut self, x: S::f32s) -> S::f32s;
+    fn tick(&mut self, x: S::f32s, active: u64) -> S::f32s;
 
     /// Writes the memory back to `states`.
     fn store(&self, states: &mut [[f32; 4]], sections: usize, first: usize);
@@ -276,7 +279,7 @@ impl<S: Simd> Stages<S> for Section<S> {
     }
 
     #[inline(always)]
-    fn tick(&mut self, x: S::f32s) -> S::f32s {
+    fn tick(&mut self, x: S::f32s, active: u64) -> S::f32s {
         let [b0, b1, b2, na1, na2] = self.taps;
         let [x1, x2, y1, y2] = self.memory;
         let zero = S::f32s::splat(self.simd, 0.0);
@@ -285,11 +288,18 @@ impl<S: Simd> Stages<S> for Section<S> {
             b0,
             x1.mul_add(b1, x2.mul_add(b2, y1.mul_add(na1, y2.mul_add(na2, zero)))),
         );
-        let ringing = x.abs().simd_ge(floor)
-            | x1.abs().simd_ge(floor)
-            | y.abs().simd_ge(floor)
-            | y1.abs().simd_ge(floor);
-        self.memory = [x, x1, y, y1].map(|value| ringing.select(value, zero));
+        let input_live = x.abs().simd_ge(floor);
+        let memory = [x, x1, y, y1];
+        // A real input already above the floor keeps that channel's memory live.
+        self.memory = if input_live.to_bitmask() & active == active {
+            memory
+        } else {
+            let ringing = input_live
+                | x1.abs().simd_ge(floor)
+                | y.abs().simd_ge(floor)
+                | y1.abs().simd_ge(floor);
+            memory.map(|value| ringing.select(value, zero))
+        };
         y
     }
 
@@ -329,9 +339,9 @@ impl<S: Simd, A: Stages<S>, B: Stages<S>> Stages<S> for (A, B) {
     }
 
     #[inline(always)]
-    fn tick(&mut self, x: S::f32s) -> S::f32s {
-        let y = self.0.tick(x);
-        self.1.tick(y)
+    fn tick(&mut self, x: S::f32s, active: u64) -> S::f32s {
+        let y = self.0.tick(x, active);
+        self.1.tick(y, active)
     }
 
     #[inline(always)]

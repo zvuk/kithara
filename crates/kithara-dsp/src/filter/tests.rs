@@ -301,9 +301,9 @@ fn identity_sections_preserve_small_nonzero_output_bits() {
     }
 }
 
-fn half_decay() -> Biquad {
+fn half_decay(channels: NonZeroUsize) -> Biquad {
     let mut filter =
-        Biquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("one channel and section");
+        Biquad::new(channels, NonZeroUsize::MIN).expect("channel count and one section");
     filter
         .retune(
             0,
@@ -322,11 +322,11 @@ fn half_decay() -> Biquad {
 #[kithara::test]
 fn copy_state_preserves_a_partial_quiet_run() {
     let amplitude = 2.0e-9_f32;
-    let mut source = half_decay();
+    let mut source = half_decay(NonZeroUsize::MIN);
     let mut prefix = vec![vec![amplitude, 0.0]];
     source.process(&mut prefix, 0..2).expect("prefix shape");
     assert_eq!(prefix[0], [amplitude, amplitude * 0.5]);
-    let mut copied = half_decay();
+    let mut copied = half_decay(NonZeroUsize::MIN);
     copied.copy_state(&source).expect("matching shape");
     let mut original_tail = vec![vec![0.0; 3]];
     let mut copied_tail = original_tail.clone();
@@ -343,12 +343,32 @@ fn copy_state_preserves_a_partial_quiet_run() {
 fn nan_input_is_nonquiet_under_every_partition() {
     let mut whole = vec![vec![1.0, 0.0, f32::NAN, 1.0e-10, 1.0]];
     let mut split = whole.clone();
-    half_decay()
+    half_decay(NonZeroUsize::MIN)
         .process(&mut whole, 0..5)
         .expect("whole stream");
-    let mut filter = half_decay();
+    let mut filter = half_decay(NonZeroUsize::MIN);
     filter.process(&mut split, 0..2).expect("prefix");
     filter.process(&mut split, 2..5).expect("suffix");
     assert_eq!(bits(&whole), bits(&split));
     assert!(whole[0][4].is_nan());
+}
+
+#[kithara::test]
+fn normal_inputs_keep_the_exact_half_decay_trace_in_partial_groups() {
+    let levels = [0.25_f32, -0.5, 0.125, -0.0625, 0.75];
+    for channels in [1, 2, 3, 4, 5, 8] {
+        let mut filter = half_decay(NonZeroUsize::new(channels).expect("channel count"));
+        let input: Vec<_> = levels.into_iter().cycle().take(channels).collect();
+        let mut planes: Vec<_> = input.iter().map(|level| vec![*level; 4]).collect();
+        filter.process(&mut planes, 0..4).expect("complete planes");
+        let expected: Vec<_> = input
+            .iter()
+            .map(|level| {
+                [1.0, 1.5, 1.75, 1.875]
+                    .map(|factor| level * factor)
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(bits(&planes), bits(&expected));
+    }
 }
