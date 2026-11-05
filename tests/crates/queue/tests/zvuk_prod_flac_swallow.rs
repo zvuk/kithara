@@ -11,9 +11,9 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        time::{Duration, Instant, sleep},
+        time::{Duration, Instant, WallInstant, sleep},
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource},
+    play::{PlayWorker, PlayWorkerConfig},
     queue::TrackSource,
 };
 use kithara_app::{
@@ -22,8 +22,8 @@ use kithara_app::{
 };
 use kithara_integration_tests::{
     bufpool_ext::pools as test_pools,
-    kithara,
-    offline::{OfflinePlayer, app_disk_asset_store, app_drm, app_track_source, prod_document},
+    disk_asset_store, kithara,
+    offline::{OfflinePlayer, app_drm, app_track_source, prod_document},
     swallow_detector::assert_no_committed_swallow,
     usdt_trace,
 };
@@ -47,6 +47,8 @@ const PLAY_SECS: f64 = 90.0;
 /// swallow — the playhead leaping forward by seconds with no seek (app.log
 /// showed +10.4 s in one step).
 const MAX_COMMITTED_STEP_SECS: f64 = 1.5;
+/// Wall time the queue gets to commit the loaded track as current.
+const COMMIT_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Production FLAC "swallow" guard. Repeats the reported user scenario
 /// exactly: play a production DRM master, pin the Lossless (FLAC) variant
@@ -125,7 +127,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     let TrackSource::Config(cfg) = app_track_source(
         PROD_TRACK,
         &config,
-        app_disk_asset_store(&config, temp.path()),
+        disk_asset_store(temp.path()),
         backend,
         AbrMode::Auto(None),
         Some("t0"),
@@ -133,16 +135,32 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
         panic!("expected an HLS config source for {PROD_TRACK}");
     };
 
-    let resource = Resource::new(*cfg)
-        .await
-        .unwrap_or_else(|e| panic!("Resource::new failed [{PROD_TRACK}]: {e:?}"));
+    // Capture `write_playhead` USDT firings: each carries the committed
+    // playhead in nanoseconds.
+    let trace = usdt_trace::scope();
+
+    let mut player = OfflinePlayer::new(
+        HostConfig::offline(test_pools())
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
+                    .build(),
+            )
+            .build(),
+    )
+    .await;
+    let id = player.load_config(*cfg).await;
+    player
+        .render_until_current(id, BLOCK_FRAMES, WallInstant::now() + COMMIT_DEADLINE)
+        .await;
 
     // User scenario: switch quality to Lossless once. Pin the FLAC variant
     // (by codec/container, else the highest-bandwidth variant) and leave it —
     // no further ABR, no seeks.
-    let abr = resource
-        .abr_handle()
-        .expect("HLS resource exposes an ABR handle");
+    let abr = player
+        .player()
+        .current_abr_handle()
+        .expect("HLS track exposes an ABR handle");
     let variants = abr.variants();
     let is_flac = |s: &Option<String>| {
         s.as_deref()
@@ -163,22 +181,6 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
         variant_count = variants.len(),
         "pinned Lossless (FLAC) variant"
     );
-
-    // Capture `write_playhead` USDT firings: each carries the committed
-    // playhead in nanoseconds.
-    let trace = usdt_trace::scope();
-
-    let mut player = OfflinePlayer::new(
-        HostConfig::offline(test_pools())
-            .settings(
-                HostSettings::builder()
-                    .sample_rate(NonZeroU32::new(OUT_RATE).expect("output rate is non-zero"))
-                    .build(),
-            )
-            .build(),
-    )
-    .await;
-    player.load_and_fadein(resource).await;
 
     // Pace each render window at ~1x wall clock so the real-time deadline is
     // exercised — the condition under which the playhead swallows.

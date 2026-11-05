@@ -10,7 +10,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use kithara_dsp::{
     filter::{Biquad, Coefficients, Hertz, Type},
     interp::{Interpolation, interpolate, interpolate_frame, weighted_frames},
-    spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase},
+    spectrum::{Autocorrelation, Fft, FftLen, prediction_difference},
 };
 use kithara_test_utils::bufpool::pools;
 use num_traits::ToPrimitive;
@@ -192,20 +192,20 @@ fn spectrum(c: &mut Criterion) {
     group.finish();
 }
 
-fn bins(c: &mut Criterion) {
-    let mut group = c.benchmark_group("bins");
-    for size in consts::SIZES {
-        group.throughput(Throughput::Elements(
-            u64::try_from(size).expect("size fits u64"),
-        ));
+fn prediction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("prediction_difference");
+    group.sample_size(20);
+    for size in [1, 3, 17, 64, 513, 1024] {
         let re = tone(size);
         let im: Vec<f32> = re.iter().rev().copied().collect();
-        let mut output = vec![0.0_f32; size];
-        group.bench_with_input(BenchmarkId::new("magnitude", size), &size, |b, _| {
-            b.iter(|| magnitude(black_box(&re), black_box(&im), &mut output));
-        });
-        group.bench_with_input(BenchmarkId::new("phase", size), &size, |b, _| {
-            b.iter(|| phase(black_box(&re), black_box(&im), &mut output));
+        let mut history: [Vec<f32>; 4] = std::array::from_fn(|_| vec![0.0; size + 1]);
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter(|| {
+                prediction_difference(
+                    [black_box(&re), black_box(&im)],
+                    black_box(&mut history).each_mut().map(Vec::as_mut_slice),
+                )
+            });
         });
     }
     group.finish();
@@ -389,7 +389,7 @@ criterion_group!(
     interp,
     source_frames,
     spectrum,
-    bins,
+    prediction,
     autocorrelation
 );
 criterion_main!(benches);

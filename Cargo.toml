@@ -388,6 +388,7 @@ biquad = "0.6.0"
 
 # delegation
 bitflags = "2.13"
+blake3 = { version = "1.8", default-features = false }
 
 # Apple platform support
 block2 = "0.6.2"

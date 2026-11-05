@@ -312,7 +312,7 @@ mod tests {
         );
         assert_eq!(
             common[".measured"]["resource_group"].as_str(),
-            Some("kithara-suite")
+            Some("kithara-suite-$CI_JOB_NAME_SLUG")
         );
     }
 

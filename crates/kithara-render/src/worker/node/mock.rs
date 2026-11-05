@@ -2,7 +2,6 @@ use std::num::NonZeroUsize;
 
 use kithara_audio::TrackStep;
 use kithara_command::{ChannelConfig, Sender, channel};
-use kithara_effects::EffectDrain;
 use kithara_signal::{AudioChunk, AudioChunkInfo};
 use kithara_stream::{Activity, ActivityWriter};
 use kithara_warp::{Warp, WarpConfig};
@@ -38,8 +37,6 @@ impl NodeFixture {
         let source = WarpSource::new(
             ScriptedSource::new(steps),
             Warp::new((), &WarpConfig::builder().build()).renderer(spec, pools.clone()),
-            Vec::new(),
-            EffectDrain::new(0, &pools).expect("empty effect drain"),
             spec,
             pools.clone(),
             crate::LaneSetup {

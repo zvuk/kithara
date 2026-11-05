@@ -239,7 +239,7 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-shard-*
-          path: raw
+          path: ${{ runner.temp }}/kithara-stress/raw
           merge-multiple: true
 
       - name: Verify and render the stress evidence
@@ -257,9 +257,9 @@ jobs:
         run: |
           args=()
           # One root per shard: each artifact carries its evidence under `shard-<index>`.
-          for raw in "$GITHUB_WORKSPACE"/raw/shard-*; do args+=(--raw "$raw"); done
+          for raw in "$RUNNER_TEMP"/kithara-stress/raw/shard-*; do args+=(--raw "$raw"); done
           args+=(
-            --output "$GITHUB_WORKSPACE/target/stress-report.md"
+            --output "$RUNNER_TEMP/kithara-stress/stress-report.md"
             --expected-controller-sha "$CONTROLLER_SHA"
             --expected-subject-sha "$SUBJECT_SHA"
             --execute-result "$EXECUTE_RESULT"
@@ -282,8 +282,8 @@ jobs:
       - name: Add the stress summary
         if: always()
         run: |
-          if [[ -s "$GITHUB_WORKSPACE/target/stress-report.md" ]]; then
-            cat "$GITHUB_WORKSPACE/target/stress-report.md" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -s "$RUNNER_TEMP/kithara-stress/stress-report.md" ]]; then
+            cat "$RUNNER_TEMP/kithara-stress/stress-report.md" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Stress report was not produced." >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -294,6 +294,6 @@ jobs:
         with:
           name: stress-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            raw
-            target/stress-report.md
+            ${{ runner.temp }}/kithara-stress/raw
+            ${{ runner.temp }}/kithara-stress/stress-report.md
           retention-days: 14

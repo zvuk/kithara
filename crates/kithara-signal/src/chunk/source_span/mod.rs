@@ -4,4 +4,4 @@ mod mapping;
 mod ratio;
 mod span;
 
-pub use span::SourceSpan;
+pub use span::{SourceInverse, SourceSpan};

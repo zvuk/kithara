@@ -895,6 +895,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake3"
+version = "1.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d9e454fc11f76977dc803893aff6304ed33d6a26efae8696573bea74baa27ae"
+dependencies = [
+ "arrayvec",
+ "cc",
+ "cfg-if",
+ "constant_time_eq",
+ "cpufeatures 0.3.1",
+]
+
+[[package]]
 name = "block"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1615,6 +1628,12 @@ dependencies = [
  "quote",
  "unicode-xid",
 ]
+
+[[package]]
+name = "constant_time_eq"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "continue"
@@ -5217,7 +5236,6 @@ dependencies = [
 name = "kithara-effects"
 version = "0.0.1-alpha5"
 dependencies = [
- "assert_no_alloc",
  "biquad",
  "bon",
  "delegate",
@@ -5229,18 +5247,15 @@ dependencies = [
  "kithara-config",
  "kithara-derive",
  "kithara-dsp",
- "kithara-effects",
  "kithara-fixture-media",
  "kithara-resampler",
  "kithara-signal",
  "kithara-test-fixtures",
- "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
  "serde",
  "thiserror 2.0.21",
- "unimock",
 ]
 
 [[package]]
@@ -5942,11 +5957,14 @@ name = "kithara-queue"
 version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
+ "async-trait",
+ "bytes",
  "delegate",
  "derive-where",
  "derive_more",
  "fieldwork",
  "getrandom 0.4.3",
+ "http",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
@@ -6526,6 +6544,7 @@ dependencies = [
 name = "kithara-warp-tests"
 version = "0.0.1-alpha5"
 dependencies = [
+ "delegate",
  "kithara",
  "kithara-derive",
  "kithara-integration-tests",
@@ -13028,6 +13047,7 @@ version = "0.0.1-alpha5"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "blake3",
  "cargo_metadata 0.23.1",
  "clap",
  "delegate",

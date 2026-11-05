@@ -6,10 +6,9 @@ use ::kithara::{
         RawBeatGrid,
     },
     host::{HostSettingsControl, api::Tempo},
-    output::{OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError},
+    output::{RenderSink, RenderSinkError},
     platform::{
         sync::Arc,
-        thread,
         time::Duration,
         tokio::{
             sync::{mpsc, watch},
@@ -17,7 +16,7 @@ use ::kithara::{
         },
     },
     queue::{TrackId, TrackStatus, Transition},
-    signal::{AudioSpec, SessionFrame},
+    signal::SessionFrame,
     ui::render::ControlAction,
     warp::{Beat, BeatGrid, BeatGridQuery, BeatGridSnapshot, MapPoint, MapPosition},
 };
@@ -47,7 +46,6 @@ mod consts {
     pub(super) const MEASURED_BEATS: usize = 16;
     pub(super) const ONSET_THRESHOLD: f32 = 0.15;
     pub(super) const ONSET_TOLERANCE: Duration = Duration::from_millis(5);
-    pub(super) const PACE: Duration = Duration::from_millis(3);
     pub(super) const PAUSE: Duration = Duration::from_millis(200);
     pub(super) const PLAY_ANSWER: Duration = Duration::from_secs(4);
     pub(super) const PULSE: Duration = Duration::from_millis(40);
@@ -206,26 +204,21 @@ fn capture(rig: &mut Rig, length: Duration) -> Rendered {
     let start = rig.rendered_frames;
     let end = start + frames(rig, length);
     let mut sink = Capture::default();
-    let cancel = rig.shutdown.clone();
     while rig.rendered_frames < end {
-        let from = rig.rendered_frames;
-        let to = (from + consts::BLOCK_FRAMES).min(end);
-        let host = mock::host(rig);
-        let request = OfflineRenderRequest::builder()
-            .spec(AudioSpec::new(consts::CHANNELS, host.sample_rate()))
-            .frames(from..to)
-            .build();
-        host.render(&request, &cancel, &mut sink)
-            .expect("the offline app output renders");
-        rig.rendered_frames = to;
+        let block = consts::BLOCK_FRAMES.min(end - rig.rendered_frames);
+        mock::render_into(rig, block, &mut sink);
         rig.engine.tick();
         rig.engine.publish();
-        thread::sleep(consts::PACE);
     }
     Rendered {
         start: i64::try_from(start).expect("rendered frames fit the session axis"),
         pcm: sink.0,
     }
+}
+
+/// One host bar at `bpm`.
+fn bar(bpm: f64) -> Duration {
+    Duration::from_secs_f64(60.0 / bpm * f64::from(consts::BEATS_PER_BAR))
 }
 
 fn frames(rig: &mut Rig, length: Duration) -> u64 {
@@ -330,7 +323,7 @@ async fn synced<T: Send + 'static>(
 ) -> Synced<T> {
     let (analysis, requests) = AnalysisHandle::channel(watch::channel(Arc::default()).1);
     let rig = OffThread::spawn("engine", move || {
-        Ok::<_, Infallible>(Rig::playback_with(analysis))
+        Ok::<_, Infallible>(Rig::playback_with(analysis).on_device())
     })
     .await
     .expect("rig fixture is infallible");
@@ -466,7 +459,7 @@ fn assert_clicks_on_host_beats(rig: &mut Rig, found: &[Onset]) {
     );
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn sync_puts_the_deck_on_the_host_beat(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
     rig.call(|rig| {
@@ -481,7 +474,7 @@ async fn sync_puts_the_deck_on_the_host_beat(rhythm_a_wav: String) {
 /// The deck shows a seek landing on the in-phase position nearest the
 /// request, then plays on from it.
 #[cfg(not(feature = "broadcast"))]
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn a_seek_on_a_synced_deck_shows_the_position_moving_on(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
     rig.call(|rig| {
@@ -522,11 +515,11 @@ async fn a_seek_on_a_synced_deck_shows_the_position_moving_on(rhythm_a_wav: Stri
 }
 
 /// A refused SYNC leaves the deck free: a track it takes afterwards takes a speed.
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn a_refused_sync_leaves_a_later_track_free(rhythm_a_wav: String, rhythm_b_wav: String) {
     let (analysis, mut requests) = AnalysisHandle::channel(watch::channel(Arc::default()).1);
     let rig = OffThread::spawn("engine", move || {
-        Ok::<_, Infallible>(Rig::playback_with(analysis))
+        Ok::<_, Infallible>(Rig::playback_with(analysis).on_device())
     })
     .await
     .expect("rig fixture is infallible");
@@ -594,7 +587,7 @@ async fn a_refused_sync_leaves_a_later_track_free(rhythm_a_wav: String, rhythm_b
 /// A refusal after SYNC was accepted turns the indicator off and frees the
 /// tempo fader, which steps from the played speed; a grid that arrives later
 /// puts the track back on the host at the tempo the host holds by then.
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn a_ready_grid_after_a_refusal_turns_sync_back_on_at_the_host_tempo(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 126.0).await;
     let analysis = served.await.expect("the analysis fixture serves");
@@ -657,7 +650,7 @@ async fn a_ready_grid_after_a_refusal_turns_sync_back_on_at_the_host_tempo(rhyth
 
 /// A SYNC press on a deck the refusal turned off shows SYNC on while the deck
 /// waits for its grid.
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn a_sync_press_after_a_refusal_shows_sync_on_before_a_grid_arrives(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 126.0).await;
     let analysis = served.await.expect("the analysis fixture serves");
@@ -693,7 +686,7 @@ async fn a_sync_press_after_a_refusal_shows_sync_on_before_a_grid_arrives(rhythm
 
 /// A tempo the host takes while the current track is refused reaches the
 /// deck's next track, which sounds on the host beats of that tempo.
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn a_tempo_during_a_refusal_reaches_the_next_track(
     rhythm_a_wav: String,
     rhythm_b_wav: String,
@@ -742,7 +735,7 @@ async fn a_tempo_during_a_refusal_reaches_the_next_track(
         rig.pump();
         rig.until(
             "deck A crossfades into its next track",
-            Rig::DEADLINE,
+            Rig::playout(bar(124.0)),
             Rig::frame,
             |rig| rig.queues[0].current_index() == Some(1),
         );
@@ -755,7 +748,7 @@ async fn a_tempo_during_a_refusal_reaches_the_next_track(
 }
 
 /// A playing deck whose grid runs past its duration turns SYNC on.
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn sync_on_a_playing_deck_with_a_grid_past_its_end(rhythm_a_wav: String) {
     let Synced { rig, served } = synced(vec![rhythm_a_wav], 124.0, |requests, tracks| {
         task::spawn(fixtures::serve_grid(
@@ -802,7 +795,7 @@ async fn crossfade_into_the_next_track(first: String, second: String, ready: boo
         }
         rig.until(
             "deck A crossfades into its next track",
-            Rig::DEADLINE,
+            Rig::playout(bar(124.0)),
             Rig::frame,
             |rig| rig.queues[0].current_index() == Some(1),
         );
@@ -816,7 +809,7 @@ async fn crossfade_into_the_next_track(first: String, second: String, ready: boo
 
 /// A synced deck sounding on a grid with its bars two beats late hears the
 /// rhythm track on the host beats and bars soon after the true grid replaces it.
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn a_revision_of_the_bar_lands_on_the_host_downbeat(rhythm_a_wav: String) {
     let early = grid_two_beats_off_the_bar();
     let revised = watch::channel(Some(fixtures::supplied(early))).0;
@@ -841,7 +834,7 @@ async fn a_revision_of_the_bar_lands_on_the_host_downbeat(rhythm_a_wav: String) 
 
 /// A synced deck changes to a track the analysis has heard only roughly, and
 /// the true grid arrives once that track sounds.
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn a_track_change_into_a_track_analysed_late_ends_on_the_host_beat(
     rhythm_a_wav: String,
     rhythm_b_wav: String,
@@ -863,7 +856,7 @@ async fn a_track_change_into_a_track_analysed_late_ends_on_the_host_beat(
         rig.pump();
         rig.until(
             "deck A crossfades into its next track",
-            Rig::DEADLINE,
+            Rig::playout(bar(124.0)),
             Rig::frame,
             |rig| rig.queues[0].current_index() == Some(1),
         );
@@ -902,13 +895,14 @@ async fn synced_tracks(urls: Vec<String>) -> Synced<()> {
     .await
 }
 
-/// Renders until the deck holds `target` on every sample.
-fn until_level(rig: &mut Rig, what: &str, target: f32) {
+/// Renders until the deck holds `target` on every sample, within the audio
+/// `span` it takes to get there.
+fn until_level(rig: &mut Rig, what: &str, span: Duration, target: f32) {
     let level = Cell::new(None);
     let reached = |level: f32| (level - target).abs() < consts::LEVEL_TOLERANCE;
     rig.until(
         what,
-        Rig::DEADLINE,
+        Rig::playout(span),
         |rig| level.set(plateau(rig)),
         |_| level.get().is_some_and(reached),
     );
@@ -916,7 +910,7 @@ fn until_level(rig: &mut Rig, what: &str, target: f32) {
 
 /// A synced deck is sent to an already loaded track, which the list holds past
 /// another loaded track.
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn a_synced_deck_sounds_a_track_past_a_loaded_one(
     constant_fifth_wav: String,
     constant_tenth_wav: String,
@@ -945,7 +939,8 @@ async fn a_synced_deck_sounds_a_track_past_a_loaded_one(
         rig.queues[0]
             .select(last, Transition::Crossfade)
             .expect("deck A takes the selection");
-        until_level(rig, "deck A sounds the selected track", 2.0 * before);
+        let span = bar(consts::TRACK_BPM) + consts::CROSSFADE;
+        until_level(rig, "deck A sounds the selected track", span, 2.0 * before);
     })
     .await;
     rig.close().await;
@@ -961,7 +956,7 @@ fn peak(rig: &mut Rig, length: Duration) -> f32 {
 /// A pause on a synced deck also holds the track it was sent to, which waits
 /// for a grid: the grid starts nothing through the next host bar and the beat
 /// after it, and a Play then sounds the selected track.
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn a_paused_synced_deck_stays_silent_when_its_selected_track_gets_a_grid(
     constant_fifth_wav: String,
     constant_tenth_wav: String,
@@ -1009,7 +1004,8 @@ async fn a_paused_synced_deck_stays_silent_when_its_selected_track_gets_a_grid(
         );
         rig.send("deck-a/play", ControlAction::Activate);
         rig.pump();
-        until_level(rig, "Play sounds the selected track", 2.0 * level);
+        let span = bar(consts::TRACK_BPM) + consts::CROSSFADE;
+        until_level(rig, "Play sounds the selected track", span, 2.0 * level);
     })
     .await;
     rig.close().await;
@@ -1019,7 +1015,7 @@ async fn a_paused_synced_deck_stays_silent_when_its_selected_track_gets_a_grid(
 /// Play on a paused synced deck whose position lies before the first beat
 /// starts from that beat.
 #[cfg(not(feature = "broadcast"))]
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn play_on_a_synced_deck_paused_before_the_first_beat_sounds(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, consts::TRACK_BPM).await;
     rig.call(|rig| {
@@ -1077,7 +1073,7 @@ fn tap_pause(rig: &mut Rig) {
 
 /// A Play taking back a tap pause just after a host downbeat sounds before the
 /// next host bar, with every click on a host beat and the accents on the bar.
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn a_resume_on_a_synced_deck_sounds_at_once(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
     rig.call(|rig| {
@@ -1104,7 +1100,7 @@ async fn a_resume_on_a_synced_deck_sounds_at_once(rhythm_a_wav: String) {
     drop(served);
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn a_synced_deck_crossfades_into_a_next_track_analysed_before_it_loads(
     rhythm_a_wav: String,
     rhythm_b_wav: String,
@@ -1112,7 +1108,7 @@ async fn a_synced_deck_crossfades_into_a_next_track_analysed_before_it_loads(
     crossfade_into_the_next_track(rhythm_a_wav, rhythm_b_wav, true).await;
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn a_synced_deck_crossfades_into_a_next_track_analysed_after_it_loads(
     rhythm_a_wav: String,
     rhythm_b_wav: String,
@@ -1120,7 +1116,7 @@ async fn a_synced_deck_crossfades_into_a_next_track_analysed_after_it_loads(
     crossfade_into_the_next_track(rhythm_a_wav, rhythm_b_wav, false).await;
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn a_synced_deck_shows_the_played_speed_and_keeps_it_when_sync_ends(rhythm_a_wav: String) {
     let Synced { rig, served } = synced(vec![rhythm_a_wav], 126.0, |requests, tracks| {
         task::spawn(fixtures::serve_grid(
@@ -1171,11 +1167,13 @@ async fn a_synced_deck_shows_the_played_speed_and_keeps_it_when_sync_ends(rhythm
     drop(served);
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio)]
 async fn master_bpm_steps_add_up_whenever_the_engine_applies_them() {
-    let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::playback()))
-        .await
-        .expect("rig fixture is infallible");
+    let rig = OffThread::spawn("engine", || {
+        Ok::<_, Infallible>(Rig::playback().on_device())
+    })
+    .await
+    .expect("rig fixture is infallible");
     rig.call(|rig| {
         rig.frame();
         assert_eq!(
