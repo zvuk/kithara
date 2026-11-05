@@ -115,7 +115,6 @@ pub(super) fn cascade_kernel<P: DerefMut<Target = [f32]>>(
             .chunks_mut(crate::consts::LANES.saturating_mul(sections)),
     ) {
         let mut borrowed = std::array::from_fn::<_, { crate::consts::LANES }, _>(|_| &mut [][..]);
-        let channels = group.len();
         for (reference, plane) in borrowed.iter_mut().zip(group) {
             *reference = &mut **plane;
         }
@@ -123,7 +122,7 @@ pub(super) fn cascade_kernel<P: DerefMut<Target = [f32]>>(
             level,
             &cascade.coefficients,
             states,
-            &mut borrowed[..channels],
+            &mut borrowed,
             range.clone(),
         );
     }
@@ -136,7 +135,7 @@ fn group_kernel(
     level: Level,
     coefficients: &[[f32; 5]],
     states: &mut [[f32; 4]],
-    planes: &mut [&mut [f32]],
+    planes: &mut [&mut [f32]; crate::consts::LANES],
     range: Range<usize>,
 ) {
     dispatch!(level, simd => section_kernel(simd, coefficients, states, planes, range));

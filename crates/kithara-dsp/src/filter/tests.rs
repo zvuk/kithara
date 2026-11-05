@@ -283,7 +283,7 @@ fn every_partition_of_a_stream_yields_the_same_bits() {
 #[kithara::test]
 fn identity_sections_preserve_small_nonzero_output_bits() {
     let input = [1.0e-35_f32, -1.0e-35, 1.0e-30, -1.0e-30, 3.0e-31, -3.0e-31];
-    for channels in [1, 2, 8] {
+    for channels in [1, 2, 3, 4, 5, 8] {
         for block in [1, 2, 6] {
             let mut filter = Biquad::new(NonZeroUsize::new(channels).expect("channels"), TWO)
                 .expect("identity sections");

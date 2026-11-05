@@ -570,7 +570,7 @@ fn every_cascade_backend_tracks_the_f64_oracle_across_a_retune() {
         ),
         ("portable-fallback", portable_fallback_run),
     ]);
-    for channels in [1_usize, 2, 8] {
+    for channels in [1_usize, 2, 3, 4, 5, 8] {
         for sections in [1_usize, 4] {
             let halves = halves(sections);
             let input = tones(channels);
