@@ -53,6 +53,21 @@ jobs:
     timeout-minutes: 180
 
     steps:
+      - name: Inspect bootstrap storage
+        run: |
+          Get-PSDrive -PSProvider FileSystem | Select-Object Name, Root, Used, Free | Format-Table -AutoSize
+          $buildProcesses = @(Get-Process -Name cargo, rustc, link, xtask, ci-bootstrap, cargo-nextest -ErrorAction SilentlyContinue)
+          Write-Output ("Active build processes: {0}" -f $buildProcesses.Count)
+          $buildProcesses | Select-Object ProcessName, Id | Format-Table -AutoSize
+          $storage = foreach ($ciTree in @('C:\kithara-ci', $env:CARGO_TARGET_DIR)) {
+            Get-ChildItem -LiteralPath $ciTree -Directory -Force | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object {
+              $scanErrors = @()
+              $size = Get-ChildItem -LiteralPath $_.FullName -File -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable scanErrors | Measure-Object -Property Length -Sum
+              [PSCustomObject]@{ Path = $_.FullName; Bytes = $size.Sum; UnreadableEntries = $scanErrors.Count }
+            }
+          }
+          $storage | Sort-Object Bytes -Descending | Format-Table -AutoSize
+
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
