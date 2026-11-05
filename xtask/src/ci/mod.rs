@@ -17,7 +17,7 @@ mod run;
 mod verdict;
 mod xcresult;
 
-pub(crate) use build_cache::hold_target;
+pub(crate) use build_cache::{admit_linux_build, hold_target};
 #[cfg(test)]
 pub(crate) use build_dir::fixture;
 pub(crate) use build_dir::{Claim, claim_beside_alias, collect_garbage};

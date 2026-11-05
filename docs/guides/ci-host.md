@@ -144,6 +144,12 @@ Critical disk pressure refuses the job before checkout or compilation can spend
 the remaining space. Provisioning installs the executable, host profile and pins
 together; the admission hook uses that installed set.
 
+Network compilation phases and Stress units use the Linux executor's room gate
+as well. Stress passes its validated subject build after taking its lease;
+admission therefore measures the volume it actually builds on. Reclaim searches
+the executor's configured cache roots through the source-aware build walk and
+does not traverse build aliases as independent roots.
+
 Superseded branch and merge-request child pipelines cancel interruptible checks,
 including iOS and end-to-end review suites. Main, scheduled, release, and explicit
 platform runs retain their cancellation policy. Quarantine refs are unique per
@@ -177,6 +183,11 @@ uses the bucket named by the job's actual credentials; a claimed trust label
 does not select another bucket. Branch and quarantine runs only restore the
 layer. A main publisher fails if its upload fails. A main run on another host
 does not fill this host's store.
+
+Source snapshot archive and restore hold Cargo's package-cache download lock.
+That excludes concurrent source mutations and garbage collection while existing
+compiler readers continue. The publisher fetches before taking the lock and
+releases it before uploading the completed archive.
 
 Before its compiler daemon stops, a lane retains sanitized observations in
 a job-keyed file under `.ci-artifacts/cache/`. The report separates kache and sccache, records
@@ -260,24 +271,13 @@ Under the fleet's load that was about ten thousand refused writes a day on the
 Linux store, measured on 2026-10-06; each cost the writer a retry. A quota set
 by hand with `rc bucket quota set` brings that back until the next start.
 
-The two drift, and the drift is the danger: the live buckets had been raised by
-hand to 200 GiB trusted and 800 GiB review while the environment the stack was
-started with still said 50, and the per-fork scopes existed outside the
-`CACHE_SCOPES` it named - so a setup run would have flattened every quota
-and known nothing of half the buckets. A scope that needs
-its own size now names it, `CACHE_BUCKET_QUOTA_<SCOPE>`, and
-`CACHE_BUCKET_QUOTA` is what the scopes that say nothing are given. The
-environment on the host states what the buckets actually are, so applying it is
-no longer a way to lose them.
+The host environment must describe the live scopes and their quotas before
+provisioning. `CACHE_BUCKET_QUOTA_<SCOPE>` overrides `CACHE_BUCKET_QUOTA` for a
+scope named in `CACHE_SCOPES`; omitted scopes cannot be preserved by setup.
 
-That holds only if the setup sees the whole environment. Compose hands a
-container only the variables its file names, and `--env-file` only fills in
-the Compose file itself. Until 2026-10-02 the service named four variables, so
-a per-scope quota never reached it, and every setup set each scope to
-`CACHE_BUCKET_QUOTA`. `just ci cache` now passes the file's absolute path as
-`CACHE_ENV_FILE`, and the service reads it as its `env_file`. A copy of the
-source older than that still flattens the quotas: refresh it before starting
-the stack.
+Compose must receive the complete environment through `CACHE_ENV_FILE` and the
+service's `env_file`. `--env-file` alone only interpolates the Compose file.
+Refresh the host's source before restarting the stack.
 
 Policy checks and routine counters read the pinned kache daemon's IPC
 statistics on Unix. They do not run `kache stats --json`, whose disk accounting
@@ -299,14 +299,10 @@ reads to the `ci-cache-recency` bucket, one object per scope, so a restart of
 the evictor loses only the reads since; a record that does not read back is
 set aside. Either only makes entries look older than they are.
 
-Nothing else bounds a bucket. Between passes it can run past its quota by
-what the fleet writes in half an hour, and a pass that fails leaves it there
-until the next one; the disk is the last limit. The evictor and the store stop
-together, so a store that serves is a store being evicted. What the store
-could not deliver to the evictor waits in its memory up to the queue limit; a
-restart of the store loses it. A lost read only makes an entry look older than
-it is. `docker logs kithara-ci-cache` prints one line per pass among the
-store's own lines.
+Between evictions, writes can exceed the quota; a failed pass leaves its work
+for the next one. Physical free space remains the final bound. Store and
+evictor stop together. Undelivered audit events wait in bounded memory and are
+lost on restart, making affected entries look older. `docker logs kithara-ci-cache` includes each eviction pass.
 
 ## Storage policy
 

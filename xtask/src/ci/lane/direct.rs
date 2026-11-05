@@ -4,10 +4,9 @@ use std::{
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use clap::Args;
 use kithara_devtools::Ctx;
 use tracing::{info, warn};
@@ -168,16 +167,6 @@ fn ask_for_room(
     build: &BuildDir,
     var: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<()> {
-    let told = |name: &str| {
-        var(name)
-            .and_then(|value| value.into_string().ok())
-            .and_then(|value| value.parse::<u64>().ok())
-            .with_context(|| {
-                format!("a CI job told its build root must be told {name} as a whole number")
-            })
-    };
-    let required = told(consts::JOB_ROOM_BYTES_ENV)?;
-    let wait = Duration::from_secs(told(consts::JOB_ROOM_WAIT_ENV)?);
     let mut searched: Vec<&Path> = Vec::new();
     for directory in [alias.parent(), build.path().parent()]
         .into_iter()
@@ -191,13 +180,7 @@ fn ask_for_room(
         .iter()
         .map(|directory| directory.to_path_buf())
         .collect();
-    build_cache::admit(
-        build.path(),
-        &searched,
-        &|| Ok(roots.clone()),
-        required,
-        wait,
-    )
+    build_cache::admit_for_job(build.path(), &searched, &|| Ok(roots.clone()), var)
 }
 
 /// Publishes while the slot is still held. The job owns `RUNNER_TEMP`, which
