@@ -10,14 +10,12 @@ keywords = ["audio", "dsp", "equalizer", "limiter", "effects"]
 categories = ["multimedia::audio"]
 
 [package.metadata.cargo-machete]
-# `serde` is reached only through `#[derive(Ranged)]` and `unimock` only
-# through `#[kithara::mock]`; both are named by the expansion, never by a
-# source line in this crate.
-ignored = ["serde", "unimock"]
+# `serde` is reached only through `#[derive(Ranged)]`, named by the expansion,
+# never by a source line in this crate.
+ignored = ["serde"]
 
 [features]
 default = []
-mock = ["dep:unimock"]
 usdt = ["kithara-test-utils/usdt"]
 
 [dependencies]
@@ -26,7 +24,6 @@ kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["built-default", "ranged"] }
 kithara-dsp = { workspace = true }
 kithara-signal = { workspace = true }
-kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 
 biquad = { workspace = true }
@@ -39,22 +36,15 @@ firewheel = { workspace = true }
 num-traits = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
-unimock = { workspace = true, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-kithara-effects = { path = ".", default-features = false, features = ["mock"] }
 kithara-fixture-media = { workspace = true, default-features = false }
 kithara-resampler = { workspace = true, default-features = false, features = ["resample-rubato"] }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock"] }
-
-unimock = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-assert_no_alloc = { workspace = true }
 
 [lints]
 workspace = true

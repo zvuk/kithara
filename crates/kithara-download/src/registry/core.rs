@@ -48,19 +48,14 @@ pub(crate) struct Registry {
 }
 
 impl Registry {
-    pub(crate) fn reschedule(&mut self) {
+    fn reschedule(&mut self) {
         self.slots.reschedule(|peer| self.peers.priority(peer));
     }
 
-    async fn process_batch(&mut self, batch: BatchGroup, inner: &DownloaderInner) -> usize {
+    fn process_batch(&mut self, batch: BatchGroup, inner: &DownloaderInner) -> usize {
         let result = batch.process(inner);
-        let capacity_blocked = !result.pending.is_empty()
-            && inner.inflight.load(Ordering::Relaxed) >= inner.config.max_concurrent;
         self.slots
             .requeue_pending(result.pending, |peer| self.peers.priority(peer));
-        if capacity_blocked {
-            inner.capacity_notify.notified().await;
-        }
         result.dispatched
     }
 
@@ -70,6 +65,7 @@ impl Registry {
     /// Returns [`FetchProgress`] so quiet completion wakes cannot trigger the downloader watchdog.
     /// ABR deadlines, the tick timestamp, and batch enqueue stamps share the
     /// session clock.
+    /// Peer updates and cancellation reconcile even when no fetch slot is free.
     #[kithara::flash(true)]
     pub(crate) async fn tick(
         &mut self,
@@ -100,7 +96,9 @@ impl Registry {
             let stats = self.peers.poll(cx, inner, &mut self.slots);
             aggregate.drained_cmds += stats.drained_cmds;
             aggregate.peer_batches += stats.peer_batches;
-            if deadline_elapsed || aggregate.abr_ticked || self.slots.has_work() {
+            self.reschedule();
+            let capacity = inner.inflight.load(Ordering::Relaxed) < inner.config.max_concurrent;
+            if deadline_elapsed || aggregate.abr_ticked || (self.slots.has_work() && capacity) {
                 Poll::Ready(())
             } else {
                 Poll::Pending
@@ -116,7 +114,7 @@ impl Registry {
 
         let urgent_batch = self.slots.take(0..2);
         if !urgent_batch.is_empty() {
-            dispatched += self.process_batch(urgent_batch, inner).await;
+            dispatched += self.process_batch(urgent_batch, inner);
             return classify_progress(
                 inflight_enter,
                 inner.inflight.load(Ordering::Relaxed),
@@ -142,7 +140,7 @@ impl Registry {
 
         let demand_batch = self.slots.take(2..4);
         if !demand_batch.is_empty() {
-            dispatched += self.process_batch(demand_batch, inner).await;
+            dispatched += self.process_batch(demand_batch, inner);
         }
 
         classify_progress(

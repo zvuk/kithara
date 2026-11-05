@@ -4,8 +4,11 @@ use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 use kithara_play::PlayError;
 pub(crate) use kithara_play::{SessionError, SessionSampleRate};
 
-pub(crate) type StartStreamFn<T> =
-    Box<dyn FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static>;
+pub(crate) type StartStreamFn<T> = Box<
+    dyn FnMut(&mut FirewheelContext, u32) -> Result<super::state::SessionStream<T>, String>
+        + Send
+        + 'static,
+>;
 pub(crate) type HostPostbox<C> = Postbox<C, PlayError>;
 pub(crate) type HostMailbox<C> = Mailbox<C, PlayError>;
 

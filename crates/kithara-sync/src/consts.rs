@@ -12,3 +12,6 @@ pub(crate) const SMOOTH_SECONDS: f64 = 0.005;
 
 /// Lowest admissible media seconds consumed per output second.
 pub const MIN_SPEED: f32 = 0.05;
+
+/// Highest admissible media seconds consumed per output second.
+pub(crate) const MAX_SPEED: f32 = 4.0;

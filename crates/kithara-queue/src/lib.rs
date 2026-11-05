@@ -21,8 +21,6 @@ pub use kithara_play::{CrossfadeCurve, CrossfadeSettings};
 #[doc(hidden)]
 pub use loading::LoadReport;
 pub use navigation::{ActionAtItemEnd, NavigationState, PlaybackOrder, RepeatMode};
-pub use queue::{
-    EffectControl, PlaybackView, Queue, QueueCommand, QueueControl, QueueSnapshot, Transition,
-};
+pub use queue::{PlaybackView, Queue, QueueCommand, QueueControl, QueueSnapshot, Transition};
 pub use track::{TrackEntry, TrackSource};
 mod consts;

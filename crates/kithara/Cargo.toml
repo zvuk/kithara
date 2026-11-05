@@ -349,7 +349,6 @@ mock = [
     "kithara-assets?/mock",
     "kithara-audio?/mock",
     "kithara-decode?/mock",
-    "kithara-effects?/mock",
     "kithara-net?/mock",
     "kithara-play?/mock",
     "kithara-storage?/mock",

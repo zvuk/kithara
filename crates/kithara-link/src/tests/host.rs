@@ -1,5 +1,7 @@
 use kithara_command::{Batch, Outcome, Rejection, Seq, When};
-use kithara_host::{DeckId, HostCommand, HostOwner, HostSettingsChange, HostSettled, api::Tempo};
+use kithara_host::{
+    DeckId, HostCommand, HostOwner, HostSettingsChange, HostSettled, PassClock, api::Tempo,
+};
 use kithara_play::{HostedDeck, PlayError, SessionError, TrackCommand, TrackReceipt};
 use kithara_render::bridge::{DeckProtocol, Slot};
 use kithara_signal::{FrameCount, SessionFrame};
@@ -7,7 +9,10 @@ use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 
 use super::{
-    fixtures::{Command, deck as new_deck, grid, loaded, ordinary, position, sounding, trajectory},
+    fixtures::{
+        A_THIRD_OF_A_BEAT_BEHIND, Command, NEAR_THE_COVERED_END, deck as new_deck, grid, jumps,
+        loaded, ordinary, position, sound, sounding, synced, trajectory,
+    },
     host_fixture::{Host, Probe, finish, host, next_tempo, register, register_ordinary, tempo},
 };
 use crate::{GridAnswer, LinkedHostCommand, LinkedPlayer, SyncStatus};
@@ -339,6 +344,63 @@ fn an_observation_cannot_replace_geometry_without_a_new_route_axis() {
     assert_eq!(beats(&observed, 48_000), 2.0);
 }
 
+/// A tempo action moves a sounding deck once, onto the host's bar, when a
+/// slew cannot close its phase, and keeps a slew for every frame of a deck
+/// already in phase.
+#[kithara::test]
+#[case::off_the_beat_near_the_covered_end(
+    480_000,
+    NEAR_THE_COVERED_END,
+    A_THIRD_OF_A_BEAT_BEHIND,
+    477_000,
+    476_000,
+    true
+)]
+#[case::in_phase(960_000, 0, 0, 96_000, 48_000, false)]
+fn a_tempo_action_moves_a_deck_once_only_past_what_a_slew_closes(
+    #[case] covered: u32,
+    #[case] now: u32,
+    #[case] at: u32,
+    #[case] later: i64,
+    #[case] step: i64,
+    #[case] moves: bool,
+) {
+    let (mut host, clock) = host();
+    clock.at(i64::from(now));
+    let (deck, control, mut rig, _) = synced(grid(24_000, 0, Some((4, 0)), covered));
+    sound(&control, &mut rig, now, at);
+    let (_, probe) = register(&mut host, deck, &control);
+    let committed = tempo(&mut host, 120.5, later)
+        .expect("later tempo")
+        .expect("later sequence");
+    clock.answer(committed, 120.5, Ok(SessionFrame::new(later)));
+    finish(&mut host);
+    control.clear();
+    tempo(&mut host, 121.0, step)
+        .expect("tempo")
+        .expect("sequence");
+    let commands = control.commands();
+    if moves {
+        let landings = jumps(&control);
+        let [(to, at)] = landings.as_slice() else {
+            panic!("one jump: {commands:?}");
+        };
+        let bar = (to.as_secs_f64() * 2.0 - beats(&probe, i64::from(*at))).rem_euclid(4.0);
+        assert!(
+            bar.min(4.0 - bar) < 1e-3,
+            "{to:?} on {at:?} lands {bar} beats off the host bar: {commands:?}"
+        );
+    } else {
+        assert_eq!(commands.len(), 2, "{commands:?}");
+        assert!(
+            commands
+                .iter()
+                .all(|(_, command)| matches!(command, Command::Speed(..))),
+            "{commands:?}"
+        );
+    }
+}
+
 #[kithara::test]
 fn host_tempo_commit_keeps_the_beat_continuous() {
     let (mut host, clock) = host();
@@ -520,6 +582,11 @@ fn route_restart_preserves_modes_and_media_grids_on_a_new_rate() {
     });
     off_probe.read(|observation| assert_eq!(observation.snapshot.sync, SyncStatus::Off));
     assert!(off_control.commands().is_empty());
+    host.apply(LinkedHostCommand::Sync {
+        deck: id,
+        on: false,
+    })
+    .expect("off");
     on_control.clear();
     host.apply(LinkedHostCommand::Sync { deck: id, on: true })
         .expect("explicit alignment with preserved grid");
@@ -905,7 +972,7 @@ fn a_newer_tempo_replaces_what_it_can(#[case] standing: Older, #[case] arriving:
 #[kithara::test]
 fn ordinary_members_keep_their_law_while_linked_members_follow_host_tempo() {
     let (mut host, clock) = host();
-    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
+    clock.edit(|script| script.clock = Some(PassClock::default()));
     let (plain, ordinary) = ordinary();
     let ordinary_id = register_ordinary(&mut host, plain);
     let (linked, linked_control, _, _) = sounding();

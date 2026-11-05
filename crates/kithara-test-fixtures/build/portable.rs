@@ -68,26 +68,6 @@ pub(super) fn generate(output: &Path) {
                 / 32_768.0
         }),
     );
-
-    let circle = (0..64_u16).flat_map(|step| {
-        let angle = f32::from(step) * (std::f32::consts::TAU / f32::from(64_u16));
-        [1.0e-3, 1.0, 4_096.0].map(|radius| (radius * angle.cos(), radius * angle.sin()))
-    });
-    let points: Vec<_> = circle
-        .chain([
-            (0.0, 0.0),
-            (-0.0, 0.0),
-            (0.0, -0.0),
-            (-0.0, -0.0),
-            (1.0, 0.0),
-            (-1.0, 0.0),
-            (-1.0, -0.0),
-            (0.0, 1.0),
-            (0.0, -1.0),
-        ])
-        .collect();
-    write_pcm(output, "polar_re", points.iter().map(|point| point.0));
-    write_pcm(output, "polar_im", points.iter().map(|point| point.1));
 }
 
 fn normalized(wave: Wave, rate: u32, frames: usize) -> impl Iterator<Item = f32> {

@@ -7,7 +7,7 @@ use kithara_events::EventBus;
 use kithara_platform::thread::{keep_worker_alive, spawn};
 use kithara_platform::{
     CancelScope, CancelToken,
-    sync::{Arc, Mutex, Notify},
+    sync::{Arc, Mutex},
     time::Duration,
     tokio,
     tokio::{sync::mpsc, task},
@@ -77,10 +77,6 @@ pub(super) struct DownloaderInner {
     /// Waker fired when a fetch task completes (inflight decremented).
     /// Wakes `poll_fn` in `Registry::tick` so it can spawn more work.
     pub(super) fetch_waker: Arc<AtomicWaker>,
-    /// Completion edge consumed when queued work is blocked only by the global
-    /// concurrency limit. Unlike the fetch waker, this retains one permit
-    /// across the check-to-await window.
-    pub(super) capacity_notify: Arc<Notify>,
     /// Global in-flight fetch counter. Limits total concurrent HTTP
     /// connections across all peers and command types.
     pub(super) inflight: Arc<AtomicUsize>,
@@ -136,7 +132,6 @@ impl Downloader {
                 cancel,
                 inflight: Arc::new(AtomicUsize::new(0)),
                 fetch_waker: Arc::new(AtomicWaker::new()),
-                capacity_notify: Arc::new(Notify::default()),
                 register_tx: tx,
                 register_rx: Mutex::new(Some(rx)),
                 next_request_id: AtomicU64::new(1),
@@ -221,8 +216,6 @@ impl Downloader {
                 }
                 FetchProgress::Idle => {}
             }
-
-            registry.reschedule();
         }
     }
 

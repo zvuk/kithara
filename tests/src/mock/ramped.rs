@@ -11,7 +11,7 @@ use kithara::{
     },
     play::{
         Bound, Outbox, PlayError, Player, PlayerConfig, PlayerFactory, PlayerImpl, ResourceLoad,
-        Settled, Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings,
+        SeekBatch, Settled, Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings,
         TrackSettingsChange, TrackSnapshot,
     },
     signal::SessionFrame,
@@ -123,6 +123,8 @@ impl Track<TestPools> for RampedTrack {
             fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;
             fn speed_receipt(&mut self) -> Option<Settled>;
             fn speed_applied(&mut self, seq: Seq) -> Option<bool>;
+            fn seek(&mut self, to: Duration, out: &mut Outbox<'_, TestPools>) -> Result<Option<SeekBatch>, PlayError>;
+            fn seek_applied(&mut self, seq: Seq) -> Option<bool>;
             fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);
             fn cue(&mut self, position: Duration, speed: SpeedCurve, out: &mut Outbox<'_, TestPools>) -> Result<Option<Seq>, PlayError>;
         }

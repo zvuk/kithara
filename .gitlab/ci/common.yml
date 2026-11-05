@@ -146,7 +146,11 @@
 
 # Dropping the serial chain let two runners work at once, which is the point —
 # but a full suite, a browser run, and every perf measurement report on how
-# loaded the host was, not only on the commit. Those take this group, so one of
-# them holds the machine at a time while lint, checks, and scans run alongside.
+# loaded the host was, not only on the commit. Each takes a group named after
+# its own job, so no measurement shares the host with another run of itself.
+# Different measured jobs may overlap, and the load a report describes then
+# includes theirs. One group for all of them queued every measured job behind
+# every other: on 2026-11-04 `apple:test` waited a median of 82 minutes for an
+# 11-minute run, and `apple:ios-test` 131.
 .measured:
-  resource_group: kithara-suite
+  resource_group: kithara-suite-$CI_JOB_NAME_SLUG

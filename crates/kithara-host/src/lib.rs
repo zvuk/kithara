@@ -28,5 +28,5 @@ mod consts;
 pub mod mock;
 
 pub use owner::{
-    DeckControl, DeckId, HostCommand, HostCore, HostOwner, HostRegistration, HostSettled,
+    DeckControl, DeckId, HostCommand, HostCore, HostOwner, HostRegistration, HostSettled, PassClock,
 };

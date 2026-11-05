@@ -35,7 +35,17 @@ where
         .session_output_node_id
         .ok_or(SessionError::NoContext)?;
     let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-    let node = add_graph_node(ctx, PlayerNode::<S, TransportState>::new(inputs, pools))?;
+    #[cfg(feature = "offline")]
+    let (player, offline) = if matches!(state.stream, Some(super::state::SessionStream::Offline(_)))
+    {
+        let (player, offline) = PlayerNode::<S, TransportState>::offline(inputs, pools);
+        (player, Some(offline))
+    } else {
+        (PlayerNode::<S, TransportState>::new(inputs, pools), None)
+    };
+    #[cfg(not(feature = "offline"))]
+    let player = PlayerNode::<S, TransportState>::new(inputs, pools);
+    let node = add_graph_node(ctx, player)?;
     let installed =
         connect_stereo(ctx, node, master, "connect deck mixer to master").and_then(|()| {
             ctx.update()
@@ -47,7 +57,13 @@ where
         }
         return Err(error);
     }
-    state.deck_nodes.push(DeckNode { id, node, bus });
+    state.deck_nodes.push(DeckNode {
+        id,
+        node,
+        bus,
+        #[cfg(feature = "offline")]
+        offline,
+    });
     Ok(())
 }
 

@@ -327,7 +327,7 @@ impl<'ast> Visit<'ast> for LocalModules<'_> {
 }
 
 /// All concrete candidates are kept when source selection is uncertain.
-fn module_paths(attrs: &[Attribute]) -> (Vec<PathBuf>, bool) {
+pub(crate) fn module_paths(attrs: &[Attribute]) -> (Vec<PathBuf>, bool) {
     let mut paths = Vec::new();
     let mut conditional = false;
     for attr in attrs {

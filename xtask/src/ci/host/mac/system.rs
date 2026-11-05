@@ -271,6 +271,15 @@ impl<'a> SystemSetup<'a> {
             &["-o", "edit", "-a", user, "-t", "user", "_developer"],
             "grant developer access",
         )?;
+        // safaridriver starts only for a caller holding the stock
+        // `com.apple.safaridriver.allow` right. Of the groups it accepts, only
+        // `_webdeveloper` grants it without an admin password, which a job
+        // never has, and the browser lane runs as this account.
+        self.process.run(
+            "/usr/sbin/dseditgroup",
+            &["-o", "edit", "-a", user, "-t", "user", "_webdeveloper"],
+            "authorize the CI account to start safaridriver",
+        )?;
         self.process.run(
             "/usr/sbin/dseditgroup",
             &[
@@ -564,6 +573,46 @@ mod tests {
                  config resolves to"
             );
         }
+    }
+
+    #[test]
+    fn the_ci_account_may_start_safaridriver_without_a_password() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = crate::ci::config::fixture();
+        config.host.host_root = directory.path().to_path_buf();
+        let user = config.host.ci_user.clone();
+        let home = directory.path().join("home").join(&user);
+        let process = Process::recording(
+            directory.path(),
+            crate::ci::process::Recording::default()
+                .with_reply(
+                    &["/usr/bin/id", "-u", &user],
+                    &config.host.ci_uid.to_string(),
+                )
+                .with_reply(
+                    &["/usr/bin/dscl", ".", "-read", &format!("/Users/{user}")],
+                    &format!("NFSHomeDirectory: {}", home.display()),
+                ),
+        );
+
+        SystemSetup::new(&config, &process)
+            .ensure_ci_user()
+            .unwrap();
+
+        let recorded = process.recorded().unwrap();
+        assert!(recorded.steps().iter().any(|step| {
+            step.program == "/usr/sbin/dseditgroup"
+                && step.args
+                    == [
+                        "-o",
+                        "edit",
+                        "-a",
+                        user.as_str(),
+                        "-t",
+                        "user",
+                        "_webdeveloper",
+                    ]
+        }));
     }
 
     #[test]

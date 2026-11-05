@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use num_traits::ToPrimitive;
 
-use crate::MIN_SPEED;
+use crate::{MIN_SPEED, consts::MAX_SPEED};
 /// One speed and its residence time in output seconds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CorrectionStep {
@@ -39,8 +39,7 @@ impl CorrectionPlan {
         let mut seconds = 0.0;
         let mut previous: Option<u64> = None;
         self.steps.iter().map(move |step| {
-            if !step.speed.is_finite()
-                || step.speed < f64::from(MIN_SPEED)
+            if !(f64::from(MIN_SPEED)..=f64::from(MAX_SPEED)).contains(&step.speed)
                 || !step.seconds.is_finite()
                 || step.seconds < 0.0
             {

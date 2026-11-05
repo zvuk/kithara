@@ -1181,6 +1181,13 @@ mod tests {
             assert!(matches!(events.try_recv(), Ok(Envelope {
                 event: QueueEvent::TrackStatusChanged { id: changed, status }, ..
             }) if changed == id && status == TrackStatus::Failed(reason.clone())));
+            assert!(matches!(
+                events.try_recv(),
+                Ok(Envelope {
+                    event: QueueEvent::UpcomingChanged,
+                    ..
+                })
+            ));
         }
         assert!(
             events.try_recv().is_err(),

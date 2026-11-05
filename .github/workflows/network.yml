@@ -22,7 +22,7 @@ jobs:
   network:
     name: network
     if: vars.KITHARA_RUNNER_LABELS != ''
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    runs-on: [self-hosted, linux, x64, kithara-network]
     timeout-minutes: 180
 
     steps:
@@ -42,16 +42,14 @@ jobs:
           KITHARA_DRM_PROD_SP_ZV_TOKEN: ${{ secrets.KITHARA_DRM_PROD_SP_ZV_TOKEN }}
           KITHARA_DRM_STAGE_KEY: ${{ secrets.KITHARA_DRM_STAGE_KEY }}
           KITHARA_DRM_STAGE_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_STAGE_AUTH_TOKEN }}
-        # A build of its own, because these binaries carry production keys
-        # the declared lanes' do not - but on the volume the other lanes build
-        # on, not in the checkout that is deleted before this job starts. A
-        # child of the volume root is the shape the build-cache budget reads:
-        # its own eviction unit, with its own lease while it runs.
-        run: CARGO_TARGET_DIR=/cache/target/lane-network just test run --lane=network
+        # The dedicated runner mounts only its private cache scope. Keep the
+        # build as one leased eviction unit under its persistent target root.
+        run: CARGO_TARGET_DIR=/cache/target/lane-network just ci cache-exec network just test run --lane=network
 
-      # Declared lanes report what the compiler cache carried through `ci lane`;
-      # this one never enters it, so it prints the counts itself. A write-error
-      # count equal to the misses means nothing it compiled was stored.
-      - name: Compiler cache
-        if: always()
-        run: sccache --show-stats
+      - name: Upload compiler-cache evidence
+        if: ${{ always() && hashFiles(format('.ci-artifacts/cache/github-{0}-{1}-*.json', github.run_id, github.run_attempt)) != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compiler-cache-network-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json
+          if-no-files-found: error

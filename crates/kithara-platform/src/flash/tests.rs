@@ -2914,6 +2914,50 @@ fn a_timed_panicking_child_releases_its_joiner_and_preserves_the_payload() {
     assert_eq!(super::system::FLASH.timed_count(), 0);
 }
 
+#[cfg(not(feature = "loom"))]
+#[kithara::test(native, flash(false), timeout(Duration::from_secs(2)))]
+fn a_platform_thread_is_finished_when_its_closure_returns() {
+    /// Holds the OS thread past its closure until the test lets it go.
+    struct HeldTeardown(mpsc::Receiver<()>);
+    impl Drop for HeldTeardown {
+        fn drop(&mut self) {
+            let _ = self.0.recv();
+        }
+    }
+    thread_local! {
+        static TEARDOWN: std::cell::RefCell<Option<HeldTeardown>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    let _g = guard();
+    reset();
+    let _ambient = ambient_scope(true);
+    let _flash = enter_dynamic(true);
+    let started = Instant::now();
+    let (release, held) = mpsc::channel();
+    let finished = super::participate_sync(|| {
+        let child = crate::thread::spawn_named("held-teardown-child", move || {
+            TEARDOWN.with(|teardown| *teardown.borrow_mut() = Some(HeldTeardown(held)));
+        });
+        let mut polls = 0;
+        while !child.is_finished() && polls < 1_000 {
+            crate::thread::sleep(Duration::from_millis(1));
+            polls += 1;
+        }
+        let finished = child.is_finished();
+        release
+            .send(())
+            .expect("the child's teardown waits for release");
+        child.join().expect("the child returns");
+        finished
+    });
+    assert!(
+        finished,
+        "a returned closure is finished before its OS thread ends"
+    );
+    assert!(started.elapsed() <= Duration::from_millis(1));
+}
+
 #[kithara::test(loom)]
 fn a_platform_thread_join_preserves_native_result_ownership() {
     let child = crate::thread::spawn(|| 7_u8);

@@ -227,6 +227,8 @@ impl Drop for Engine {
 
 #[cfg(all(test, feature = "mock", feature = "gui"))]
 pub(crate) mod mock {
+    use kithara::{host::HostSettingsControl, output::RenderSink, signal::AudioSpec};
+
     use crate::gui::rig::Rig;
 
     pub(crate) fn host(rig: &mut Rig) -> &mut crate::pools::AppHost {
@@ -234,10 +236,18 @@ pub(crate) mod mock {
     }
 
     pub(crate) fn render(rig: &mut Rig, frames: u64) {
+        render_into(rig, frames, &mut crate::mock::Discard);
+    }
+
+    /// Renders the rig's next `frames` into `sink` once its device is due.
+    pub(crate) fn render_into<S: RenderSink>(rig: &mut Rig, frames: u64, sink: &mut S) {
         let host = crate::deck::mock::host(&mut rig.engine.session);
         let start = rig.rendered_frames;
         let end = start.checked_add(frames).expect("fixture frame range");
-        let report = crate::mock::render_host(host, start..end, &rig.shutdown)
+        if let Some(device) = &mut rig.device {
+            device.wait(AudioSpec::new(2, host.sample_rate()), start);
+        }
+        let report = crate::mock::render_into(host, start..end, &rig.shutdown, sink)
             .expect("the offline app output renders");
         assert_eq!(report.frames, frames);
         rig.rendered_frames = end;

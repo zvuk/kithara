@@ -31,9 +31,9 @@ for lane in $LANE; do args+=(--lane "$lane"); done
 just ci stress "${args[@]}""#;
 const STRESS_REPORT_COMMAND: &str = r#"args=()
 # One root per shard: each artifact carries its evidence under `shard-<index>`.
-for raw in "$GITHUB_WORKSPACE"/raw/shard-*; do args+=(--raw "$raw"); done
+for raw in "$RUNNER_TEMP"/kithara-stress/raw/shard-*; do args+=(--raw "$raw"); done
 args+=(
-  --output "$GITHUB_WORKSPACE/target/stress-report.md"
+  --output "$RUNNER_TEMP/kithara-stress/stress-report.md"
   --expected-controller-sha "$CONTROLLER_SHA"
   --expected-subject-sha "$SUBJECT_SHA"
   --execute-result "$EXECUTE_RESULT"
@@ -1225,7 +1225,9 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
         mapping_field(inputs, "pattern").as_str(),
         Some("stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-shard-*")
     );
-    assert_eq!(mapping_field(inputs, "path").as_str(), Some("raw"));
+    // The report runner keeps its workspace between jobs; `runner.temp` is
+    // emptied before each one, so only this run's shards reach the verifier.
+    assert_eq!(mapping_field(inputs, "path").as_str(), Some(STRESS_RAW_DIR));
     // A single matching artifact is extracted straight into `path`, several
     // into one directory each; merging keeps the layout the same for any
     // shard count, and each shard's `shard-<index>` root keeps them apart.
@@ -1286,15 +1288,19 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
     let summary_script = mapping_field(summary, "run")
         .as_str()
         .expect("summary command is a string");
-    assert!(summary_script.contains("[[ -s \"$GITHUB_WORKSPACE/target/stress-report.md\" ]]"));
-    assert!(
-        summary_script.contains(
-            "cat \"$GITHUB_WORKSPACE/target/stress-report.md\" >> \"$GITHUB_STEP_SUMMARY\""
-        )
-    );
+    assert!(summary_script.contains("[[ -s \"$RUNNER_TEMP/kithara-stress/stress-report.md\" ]]"));
+    assert!(summary_script.contains(
+        "cat \"$RUNNER_TEMP/kithara-stress/stress-report.md\" >> \"$GITHUB_STEP_SUMMARY\""
+    ));
 
     let evidence_upload = named_step(report, "Upload the stress evidence");
-    assert_uploads(evidence_upload, &["raw", "target/stress-report.md"]);
+    assert_uploads(
+        evidence_upload,
+        &[
+            STRESS_RAW_DIR,
+            "${{ runner.temp }}/kithara-stress/stress-report.md",
+        ],
+    );
     assert_eq!(
         mapping_field(
             mapping_field(evidence_upload, "with")

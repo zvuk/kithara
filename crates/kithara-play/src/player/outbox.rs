@@ -213,7 +213,7 @@ impl<'a, S> Outbox<'a, S> {
     fn check_when(&self, at: When<SessionFrame>) -> Result<(), PlayError> {
         if let When::At(frame) = at {
             let pass = self.pass.ok_or(PlayError::Untimed)?;
-            if frame < pass.earliest() {
+            if frame < pass.deck_earliest() {
                 return Err(PlayError::Late);
             }
         }
@@ -486,6 +486,23 @@ pub enum Settled {
         seq: Seq,
         reason: Rejection<PlayError>,
     },
+}
+
+/// The batch that answers a seek, named on the channel it went out on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeekBatch {
+    Deck(Seq),
+    Lane(Seq),
+}
+
+impl SeekBatch {
+    /// The number the batch took on its channel.
+    #[must_use]
+    pub const fn seq(self) -> Seq {
+        match self {
+            Self::Deck(seq) | Self::Lane(seq) => seq,
+        }
+    }
 }
 
 /// What comes back to a player: a receipt of its deck's mixer, shared by every

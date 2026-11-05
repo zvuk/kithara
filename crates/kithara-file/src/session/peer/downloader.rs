@@ -386,7 +386,7 @@ impl<S> Peer for FilePeer<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+    fn poll_next(&self, cx: &mut Context<'_>, budget: usize) -> Poll<Option<Vec<FetchCmd>>> {
         let Some(inner) = self.inner.upgrade() else {
             return Poll::Ready(None);
         };
@@ -395,7 +395,7 @@ where
         };
 
         lease.register_peer_waker(cx.waker());
-        if self.park_on_running_fetch(&inner) {
+        if self.park_on_running_fetch(&inner) || budget == 0 {
             return Poll::Pending;
         }
         match self.next_action(&inner, lease) {
@@ -811,7 +811,7 @@ mod tests {
             let peer = make_peer(&inner, Some(writer));
             let mut cx = Context::from_waker(Waker::noop());
 
-            assert!(matches!(Peer::poll_next(&peer, &mut cx), Poll::Pending));
+            assert!(matches!(Peer::poll_next(&peer, &mut cx, 1), Poll::Pending));
         }
 
         #[kithara::test(native, timeout(Duration::from_secs(2)))]
@@ -826,7 +826,7 @@ mod tests {
             inner.arm_reader_waker();
             let peer = FilePeer::new(&inner, Some(writer));
             let mut cx = Context::from_waker(Waker::noop());
-            let Poll::Ready(Some(mut fetches)) = Peer::poll_next(&peer, &mut cx) else {
+            let Poll::Ready(Some(mut fetches)) = Peer::poll_next(&peer, &mut cx, 1) else {
                 panic!("missing bytes must start a fetch");
             };
             let mut fetch = fetches.remove(0);
@@ -1239,12 +1239,15 @@ mod tests {
             let wake = Arc::new(CountingWake::default());
             let waker = Waker::from(Arc::clone(&wake));
             let mut cx = Context::from_waker(&waker);
-            assert!(matches!(Peer::poll_next(&peer, &mut cx), Poll::Pending));
+            assert!(matches!(Peer::poll_next(&peer, &mut cx, 1), Poll::Pending));
 
             scope.cancel();
             assert_eq!(wake.count(), 1, "source cancellation must wake its peer");
 
-            assert!(matches!(Peer::poll_next(&peer, &mut cx), Poll::Ready(None)));
+            assert!(matches!(
+                Peer::poll_next(&peer, &mut cx, 1),
+                Poll::Ready(None)
+            ));
             assert!(peer.writer.lock().is_none());
             assert!(follower_lease.try_take_writer().is_some());
         }
@@ -1276,12 +1279,15 @@ mod tests {
             let wake = Arc::new(CountingWake::default());
             let waker = Waker::from(Arc::clone(&wake));
             let mut cx = Context::from_waker(&waker);
-            assert!(matches!(Peer::poll_next(&peer, &mut cx), Poll::Pending));
+            assert!(matches!(Peer::poll_next(&peer, &mut cx, 1), Poll::Pending));
 
             store_scope.cancel();
             assert_eq!(wake.count(), 1, "session cancellation must wake its peer");
 
-            assert!(matches!(Peer::poll_next(&peer, &mut cx), Poll::Ready(None)));
+            assert!(matches!(
+                Peer::poll_next(&peer, &mut cx, 1),
+                Poll::Ready(None)
+            ));
             assert!(peer.writer.lock().is_none());
             assert!(follower_lease.try_take_writer().is_none());
         }
@@ -1307,7 +1313,7 @@ mod tests {
                 attach_pending(&store, &key, &follower_coord, Some(4));
             assert!(follower_writer.is_none());
             let mut cx = Context::from_waker(Waker::noop());
-            let Poll::Ready(Some(fetches)) = Peer::poll_next(&peer, &mut cx) else {
+            let Poll::Ready(Some(fetches)) = Peer::poll_next(&peer, &mut cx, 1) else {
                 panic!("missing bytes must start the first fetch");
             };
             drop(fetches);
@@ -1319,7 +1325,10 @@ mod tests {
             );
             *peer.inflight.lock() = None;
 
-            assert!(matches!(Peer::poll_next(&peer, &mut cx), Poll::Ready(None)));
+            assert!(matches!(
+                Peer::poll_next(&peer, &mut cx, 1),
+                Poll::Ready(None)
+            ));
             assert!(peer.writer.lock().is_none());
             assert!(follower_lease.try_take_writer().is_none());
         }
@@ -1531,7 +1540,7 @@ mod tests {
             let peer = FilePeer::new(&inner, Some(writer));
             let mut cx = Context::from_waker(Waker::noop());
 
-            let Poll::Ready(Some(fetches)) = Peer::poll_next(&peer, &mut cx) else {
+            let Poll::Ready(Some(fetches)) = Peer::poll_next(&peer, &mut cx, 1) else {
                 panic!("a resource missing every byte must start a fetch");
             };
             let running = fetches[0]
@@ -1541,7 +1550,7 @@ mod tests {
 
             inner.source.coord.set_position(3072);
 
-            assert!(matches!(Peer::poll_next(&peer, &mut cx), Poll::Pending));
+            assert!(matches!(Peer::poll_next(&peer, &mut cx, 1), Poll::Pending));
             assert!(running.is_cancelled());
         }
 
@@ -1557,7 +1566,7 @@ mod tests {
             let waker = Waker::from(Arc::clone(&wake));
             let mut cx = Context::from_waker(&waker);
 
-            let Poll::Ready(Some(mut fetches)) = Peer::poll_next(&peer, &mut cx) else {
+            let Poll::Ready(Some(mut fetches)) = Peer::poll_next(&peer, &mut cx, 1) else {
                 panic!("a resource missing every byte must start a fetch");
             };
             let on_complete = fetches
@@ -1566,7 +1575,7 @@ mod tests {
                 .expect("completion callback");
 
             inner.source.coord.set_position(3072);
-            assert!(matches!(Peer::poll_next(&peer, &mut cx), Poll::Pending));
+            assert!(matches!(Peer::poll_next(&peer, &mut cx, 1), Poll::Pending));
             let parked = wake.count();
 
             on_complete(0, None, Some(&NetError::Cancelled));
@@ -1586,7 +1595,7 @@ mod tests {
             let peer = FilePeer::new(&inner, Some(writer));
             let mut cx = Context::from_waker(Waker::noop());
 
-            let Poll::Ready(Some(fetches)) = Peer::poll_next(&peer, &mut cx) else {
+            let Poll::Ready(Some(fetches)) = Peer::poll_next(&peer, &mut cx, 1) else {
                 panic!("a resource missing every byte must start a fetch");
             };
             let running = fetches[0]
@@ -1600,7 +1609,7 @@ mod tests {
             ));
             inner.source.coord.set_position(256);
 
-            assert!(matches!(Peer::poll_next(&peer, &mut cx), Poll::Pending));
+            assert!(matches!(Peer::poll_next(&peer, &mut cx, 1), Poll::Pending));
             assert!(!running.is_cancelled());
         }
 
@@ -1665,7 +1674,7 @@ mod tests {
             let peer = FilePeer::new(&inner, Some(writer));
             let mut cx = Context::from_waker(Waker::noop());
 
-            let Poll::Ready(Some(fetches)) = Peer::poll_next(&peer, &mut cx) else {
+            let Poll::Ready(Some(fetches)) = Peer::poll_next(&peer, &mut cx, 1) else {
                 panic!("a resource missing its head must fetch");
             };
             let backfill = fetches[0]
@@ -1675,7 +1684,7 @@ mod tests {
 
             inner.source.coord.set_position(4096);
 
-            assert!(matches!(Peer::poll_next(&peer, &mut cx), Poll::Pending));
+            assert!(matches!(Peer::poll_next(&peer, &mut cx, 1), Poll::Pending));
             assert!(!backfill.is_cancelled());
         }
 
@@ -1735,7 +1744,7 @@ mod tests {
             let peer = FilePeer::new(&inner, Some(writer));
             let mut cx = Context::from_waker(Waker::noop());
 
-            let Poll::Ready(Some(fetches)) = Peer::poll_next(&peer, &mut cx) else {
+            let Poll::Ready(Some(fetches)) = Peer::poll_next(&peer, &mut cx, 1) else {
                 panic!("a resource missing every byte must start a fetch");
             };
             let head = fetches[0]
@@ -1745,7 +1754,7 @@ mod tests {
 
             inner.source.coord.set_position(3072);
 
-            assert!(matches!(Peer::poll_next(&peer, &mut cx), Poll::Pending));
+            assert!(matches!(Peer::poll_next(&peer, &mut cx, 1), Poll::Pending));
             assert!(!head.is_cancelled());
         }
     }

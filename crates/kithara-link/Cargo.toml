@@ -53,6 +53,7 @@ kithara-command = { workspace = true }
 kithara-config = { workspace = true }
 kithara-events = { workspace = true }
 kithara-host = { workspace = true, default-features = false }
+kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
 kithara-queue = { workspace = true, default-features = false }
 kithara-render = { workspace = true }

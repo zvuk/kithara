@@ -84,6 +84,10 @@ kithara-worker = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+
+async-trait = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
 serde_yaml_ng = { workspace = true }
 
 [lints]

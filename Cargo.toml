@@ -388,6 +388,7 @@ biquad = "0.6.0"
 
 # delegation
 bitflags = "2.13"
+blake3 = { version = "1.8", default-features = false }
 
 # Apple platform support
 block2 = "0.6.2"
@@ -695,6 +696,12 @@ strip = "symbols"
 # rebuilt sysroot under `-Z build-std`. `docs/guides/performance/dispatch-build.md`
 # owns the measured cost and the per-build-system detail.
 [profile.release.package."*"]
+opt-level = 3
+
+# The vector kernels of the audio thread. At "z" the size heuristics keep
+# filter state on the stack and outline the inner loops;
+# `docs/guides/performance/dispatch-build.md` owns the measured cost.
+[profile.release.package.kithara-dsp]
 opt-level = 3
 
 # Best-of-both-worlds profile for maximum testing speed.

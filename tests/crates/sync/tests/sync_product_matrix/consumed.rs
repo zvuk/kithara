@@ -24,6 +24,15 @@ pub(super) struct SourceIdentity {
     pub(super) media_origin: Option<Duration>,
 }
 
+impl SourceIdentity {
+    /// Whether `chunk` was decoded from this source identity.
+    pub(super) fn describes(&self, chunk: &AudioChunkInfo) -> bool {
+        chunk.source_revision == self.source_revision
+            && chunk.spec == self.spec
+            && chunk.media_origin == self.media_origin
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Interval {
     pub(super) identity: SourceIdentity,

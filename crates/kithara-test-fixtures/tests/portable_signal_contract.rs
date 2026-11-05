@@ -90,36 +90,6 @@ fn prepared_glide_mixture_preserves_every_host_sample_bit() {
     );
 }
 
-#[kithara::test(native)]
-fn prepared_polar_points_preserve_every_host_bit_including_signed_zeros() {
-    let (re, im) = portable::polar_points();
-    assert_bytes(
-        re,
-        include_bytes!(concat!(env!("OUT_DIR"), "/polar_re.f32le")),
-        201,
-    );
-    assert_bytes(
-        im,
-        include_bytes!(concat!(env!("OUT_DIR"), "/polar_im.f32le")),
-        201,
-    );
-    let edges = [
-        (0.0_f32, 0.0_f32),
-        (-0.0, 0.0),
-        (0.0, -0.0),
-        (-0.0, -0.0),
-        (1.0, 0.0),
-        (-1.0, 0.0),
-        (-1.0, -0.0),
-        (0.0, 1.0),
-        (0.0, -1.0),
-    ];
-    for ((re, im), (expected_re, expected_im)) in re[192..].iter().zip(&im[192..]).zip(edges) {
-        assert_eq!(re.to_bits(), expected_re.to_bits());
-        assert_eq!(im.to_bits(), expected_im.to_bits());
-    }
-}
-
 #[kithara::test]
 fn prepared_metronome_mixes_preserve_every_portable_host_byte() {
     assert_bytes(

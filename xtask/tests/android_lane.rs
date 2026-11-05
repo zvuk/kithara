@@ -101,11 +101,16 @@ api_level = "26"
     }
 
     fn run_tests(&self) -> Result<Output> {
+        let rustup_home = env::var_os("RUSTUP_HOME")
+            .map(PathBuf::from)
+            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".rustup")))
+            .context("resolve the installed toolchain before isolating HOME")?;
         Command::new(env!("CARGO_BIN_EXE_xtask"))
             .args(["android", "test", "--skip-build", "--serial", SERIAL])
             .current_dir(&self.root)
             .env("CARGO", &self.cargo)
             .env("HOME", &self.home)
+            .env("RUSTUP_HOME", rustup_home)
             .env("ANDROID_HOME", &self.sdk)
             .env("PATH", &self.path)
             .env_remove("ANDROID_SDK_ROOT")

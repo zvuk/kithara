@@ -20,7 +20,7 @@ fn ewma(prev: f32, sample: f32) -> f32 {
     }
 }
 
-/// Live cost of the audio worker's decode+effects pipeline.
+/// Live cost of the audio worker's decode and Warp pipeline.
 /// The atomics double as the EWMA state. There is a single writer (the
 /// worker thread; every track's node ticks on it). Values stay at `0.0` until
 /// the first chunk, so `realtime == 0` means "no measurement yet" (paused
