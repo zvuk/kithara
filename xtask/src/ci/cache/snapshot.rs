@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     env,
+    ffi::OsString,
     fs::{self, File},
     io::Read,
     path::{Component, Path, PathBuf},
@@ -160,7 +161,12 @@ pub(crate) enum Restored {
 
 /// Fill `cargo_home` with the dependency sources this `Cargo.lock` names, so
 /// the job compiles instead of fetching.
-pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Result<Restored> {
+pub(crate) fn restore_sources(
+    root: &Path,
+    cargo_home: &Path,
+    build: &Path,
+    rc: &Path,
+) -> Result<Restored> {
     let fingerprint = sources_fingerprint(root)?;
     if read_marker(cargo_home)?.as_deref() == Some(fingerprint.as_str()) {
         return Ok(Restored::AlreadyPresent);
@@ -170,7 +176,7 @@ pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Resu
         return Ok(Restored::Absent);
     };
     let expected = checksum_of(&object)?;
-    let archive = NamedTempFile::new().context("create source snapshot download")?;
+    let archive = staged_archive(build)?;
     client.copy_from(&object, archive.path())?;
     ensure!(
         sha256(archive.path())? == expected,
@@ -193,7 +199,12 @@ pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Resu
 }
 
 /// Publish all locked dependency sources into this job's own scope's bucket.
-pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Result<()> {
+pub(crate) fn publish_sources(
+    root: &Path,
+    cargo_home: &Path,
+    build: &Path,
+    rc: &Path,
+) -> Result<()> {
     let client = Client::load(rc)?;
     let fingerprint = sources_fingerprint(root)?;
     if let Some(object) = client.latest(Sources::PREFIX, &fingerprint)? {
@@ -215,7 +226,7 @@ pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Resu
         !present.is_empty(),
         "cargo home carries no sources to publish"
     );
-    let archive = NamedTempFile::new().context("create source snapshot archive")?;
+    let archive = staged_archive(build)?;
     let mut command = Command::new("tar");
     command
         .args(["--create", "--zstd", "--file"])
@@ -365,11 +376,19 @@ fn fingerprint(
 fn publish(target: &Path, fingerprint: &str, rc: &Path) -> Result<()> {
     validate_fingerprint(fingerprint)?;
     require_target(target, false)?;
-    let archive = NamedTempFile::new().context("create target snapshot archive")?;
+    let archive = staged_archive(target)?;
+    let mut staged = OsString::from("--exclude=");
+    staged.push(
+        archive
+            .path()
+            .file_name()
+            .context("a staged archive has a file name")?,
+    );
     run_command(
         Command::new("tar")
             .args(["--create", "--format=pax", "--zstd", "--file"])
             .arg(archive.path())
+            .arg(staged)
             .arg(format!("--exclude={}", lease::FILE))
             .arg(format!(
                 "--exclude={heartbeat}",
@@ -402,7 +421,7 @@ fn restore(target: &Path, fingerprint: &str, rc: &Path) -> Result<bool> {
         return Ok(false);
     };
     let expected = checksum_of(&object)?;
-    let archive = NamedTempFile::new().context("create target snapshot download")?;
+    let archive = staged_archive(target)?;
     client.copy_from(&object, archive.path())?;
     ensure!(
         sha256(archive.path())? == expected,
@@ -419,6 +438,19 @@ fn restore(target: &Path, fingerprint: &str, rc: &Path) -> Result<bool> {
     )?;
     info!(%fingerprint, object, "restored immutable target snapshot");
     Ok(true)
+}
+
+/// Where a cache archive is written on its way to or from the store: the
+/// scratch of the build directory it belongs to. The job's temporary directory
+/// can be a memory mount sized for test files, and a layer runs to gigabytes;
+/// the build directory sits on the disk that holds the build, and a lane
+/// entering it sweeps whatever a stopped job left in its scratch.
+fn staged_archive(build: &Path) -> Result<NamedTempFile> {
+    let scratch = build.join(consts::BUILD_SCRATCH);
+    fs::create_dir_all(&scratch)
+        .with_context(|| format!("create build scratch {}", scratch.display()))?;
+    NamedTempFile::new_in(&scratch)
+        .with_context(|| format!("stage a cache archive in {}", scratch.display()))
 }
 
 fn require_target(target: &Path, may_create: bool) -> Result<()> {
@@ -1010,15 +1042,39 @@ object)
     done
     printf '],"truncated":false}}' ;;
   esac ;;
-put) mkdir -p "$store/$(dirname "$3")" && cp "$2" "$store/$3" ;;
-get) cp "$store/$2" "$3" ;;
+put) echo "$2" >> '{transfers}' && mkdir -p "$store/$(dirname "$3")" && cp "$2" "$store/$3" ;;
+get) echo "$3" >> '{transfers}' && cp "$store/$2" "$3" ;;
 *) echo "unexpected: $*" >&2; exit 2 ;;
 esac
 "#,
-                store = store.display()
+                store = store.display(),
+                transfers = transfers(directory).display()
             ),
         );
         program
+    }
+
+    /// The local file of every archive the fake `rc` uploaded or downloaded.
+    fn transfers(directory: &Path) -> PathBuf {
+        directory.join("transfers")
+    }
+
+    /// Every archive a lane moved sat in the scratch of its build directory,
+    /// and none outlived the move.
+    fn assert_staged_in_scratch(directory: &Path, build: &Path, moves: usize) {
+        let scratch = build.join(consts::BUILD_SCRATCH);
+        let transfers = fs::read_to_string(transfers(directory)).unwrap_or_default();
+        let staged: Vec<&Path> = transfers.lines().map(Path::new).collect();
+        assert_eq!(staged.len(), moves, "archives moved: {staged:?}");
+        for archive in staged {
+            assert!(
+                archive.parent() == Some(scratch.as_path()),
+                "{} was staged outside {}",
+                archive.display(),
+                scratch.display()
+            );
+            assert!(!archive.exists(), "{} outlived its move", archive.display());
+        }
     }
 
     fn client(program: PathBuf) -> Client {
@@ -1077,7 +1133,8 @@ esac
         fs::create_dir_all(recorded.join("registry/cache")).unwrap();
         fs::write(recorded.join("registry/cache/dependency.crate"), b"crate").unwrap();
 
-        let error = publish_sources(&root, &recorded, &rc)
+        let build = directory.join("build");
+        let error = publish_sources(&root, &recorded, &build, &rc)
             .expect_err("failed fetch cannot publish an incomplete layer");
         assert!(
             error
@@ -1091,12 +1148,13 @@ esac
             "[package]\nname = \"source-fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\npath = \"lib.rs\"\n",
         )
         .unwrap();
-        publish_sources(&root, &recorded, &rc).expect("the default branch publishes");
+        publish_sources(&root, &recorded, &build, &rc).expect("the default branch publishes");
         fs::remove_dir_all(&recorded).unwrap();
-        publish_sources(&root, &recorded, &rc)
+        publish_sources(&root, &recorded, &build, &rc)
             .expect("a complete source layer is reused without reading the local Cargo home");
         let read = directory.join("read");
-        let restored = restore_sources(&root, &read, &rc).expect("a branch restores");
+        let restored = restore_sources(&root, &read, &build, &rc).expect("a branch restores");
+        assert_staged_in_scratch(&directory, &build, 2);
 
         let Restored::Layer(object) = restored else {
             panic!("the layer the scope published was not found: {restored:?}");
@@ -1169,6 +1227,7 @@ esac
             restore_for_lane("lint", &target, &root, &home, &rc).unwrap(),
             None
         );
+        assert_staged_in_scratch(&directory, &target, 2);
         assert_eq!(
             fs::read_to_string(&output).unwrap(),
             "pub const VALUE: u8 = 7;"
