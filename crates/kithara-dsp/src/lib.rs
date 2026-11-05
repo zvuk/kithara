@@ -20,6 +20,8 @@ mod backend;
 mod consts;
 /// Prepared planar frame history read before each write.
 pub mod delay;
+/// Ordered target-gain recursion and stateless interval peak linking.
+pub mod envelope;
 /// Fade curves: one lexicon for firewheel's `MixDSP` and every crossfade gain.
 pub mod fade;
 /// Biquad cascades over channel planes and the designs that feed them.

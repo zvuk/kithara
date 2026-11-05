@@ -26,11 +26,11 @@ kithara-dsp = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-test-utils = { workspace = true }
 
+arrayvec = { workspace = true }
 biquad = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
-fearless_simd = { workspace = true }
 fieldwork = { workspace = true }
 firewheel = { workspace = true }
 num-traits = { workspace = true }
@@ -45,6 +45,9 @@ kithara-fixture-media = { workspace = true, default-features = false }
 kithara-resampler = { workspace = true, default-features = false, features = ["resample-rubato"] }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+assert_no_alloc = { workspace = true }
 
 [lints]
 workspace = true
