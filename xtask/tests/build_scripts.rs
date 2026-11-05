@@ -144,6 +144,23 @@ fn wasm_recipe_only_dispatches_to_its_rust_owner() {
 }
 
 #[test]
+fn apple_recipe_only_dispatches_to_its_rust_owner() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let source = fs::read_to_string(root.join(".config/just/platform.just")).unwrap();
+    let body = source
+        .split("apple MODE=\"xcframework\" *ARGS:\n")
+        .nth(1)
+        .expect("apple recipe");
+    let commands: Vec<_> = body
+        .lines()
+        .take_while(|line| line.starts_with(' '))
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    assert_eq!(commands, ["just _xtask apple \"$@\""]);
+}
+
+#[test]
 fn trunk_postbuild_hooks_use_the_cached_xtask_entry() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     for package in ["kithara-ffi", "kithara-app"] {
