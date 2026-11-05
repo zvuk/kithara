@@ -11,7 +11,6 @@ pub(super) fn verify(output: &Path) {
     prepared_sawtooth_preserves_every_original_sample_bit(output);
     prepared_spectrum_mix_preserves_the_original_fused_sample_bits(output);
     prepared_glide_mixture_preserves_every_original_sample_bit(output);
-    prepared_polar_points_preserve_every_original_bit_including_signed_zeros(output);
 }
 
 fn prepared_eq_sine_preserves_the_original_unquantized_f32_law(output: &Path) {
@@ -138,31 +137,6 @@ fn prepared_glide_mixture_preserves_every_original_sample_bit(output: &Path) {
                 / 32_768.0
         }),
     );
-}
-
-fn prepared_polar_points_preserve_every_original_bit_including_signed_zeros(output: &Path) {
-    let circle = (0..64_u16).flat_map(|step| {
-        let angle = f32::from(step) * (std::f32::consts::TAU / f32::from(64_u16));
-        [1.0e-3, 1.0, 4_096.0].map(|radius| (radius * angle.cos(), radius * angle.sin()))
-    });
-    let edges = [
-        (0.0, 0.0),
-        (-0.0, 0.0),
-        (0.0, -0.0),
-        (-0.0, -0.0),
-        (1.0, 0.0),
-        (-1.0, 0.0),
-        (-1.0, -0.0),
-        (0.0, 1.0),
-        (0.0, -1.0),
-    ];
-    let (expected_re, expected_im): (Vec<_>, Vec<_>) = circle.chain(edges).unzip();
-    let re = read(output, "polar_re");
-    let im = read(output, "polar_im");
-    assert_eq!(re.len(), 201);
-    assert_eq!(im.len(), 201);
-    assert_bits(&re, expected_re.into_iter());
-    assert_bits(&im, expected_im.into_iter());
 }
 
 fn prepared_metronome_mixes_preserve_the_original_ceiling_and_sample_bits(output: &Path) {

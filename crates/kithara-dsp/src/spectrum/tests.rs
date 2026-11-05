@@ -6,9 +6,7 @@ use kithara_test_utils::{
 };
 use num_traits::ToPrimitive;
 
-use super::{
-    Autocorrelation, Fft, FftLen, Spectrum, SpectrumError, fft::hann, magnitude, oracle, phase,
-};
+use super::{Autocorrelation, Fft, FftLen, Spectrum, SpectrumError, fft::hann, oracle};
 
 const VALID: [usize; 9] = [16, 32, 48, 64, 80, 240, 1024, 3072, 4096];
 const INVALID: [usize; 10] = [0, 1, 2, 8, 12, 17, 24, 40, 112, 144];
@@ -21,9 +19,6 @@ const NOVELTY_A0: f32 = 0.5;
 /// The periodicity window of beat's period stage.
 const LAGS: usize = 512;
 const SHORT_LAGS: usize = 300;
-/// Float offsets that step a slice through every four-byte slot of a
-/// 64-byte line.
-const SHIFTS: usize = 16;
 
 fn fft(len: usize) -> Fft {
     Fft::new(FftLen::new(len).expect("the test lengths are FFT lengths"))
@@ -153,7 +148,7 @@ fn a_long_frame_or_a_foreign_spectrum_is_a_shape_error() {
 }
 
 #[kithara::test]
-fn silence_has_a_zero_spectrum_and_a_finite_phase() {
+fn silence_has_a_zero_spectrum() {
     let fft = fft(FRAME);
     let mut spectrum = spectrum(&fft);
     fft.forward(&[0.0_f32; FRAME], &mut spectrum)
@@ -163,61 +158,6 @@ fn silence_has_a_zero_spectrum_and_a_finite_phase() {
         re.iter().chain(im).all(|value| *value == 0.0),
         "silence has no spectrum"
     );
-    let bins = fft.size().bins();
-    let (mut magnitudes, mut phases) = (vec![UNWRITTEN; bins], vec![UNWRITTEN; bins]);
-    assert_eq!(magnitude(re, im, &mut magnitudes), bins);
-    assert_eq!(phase(re, im, &mut phases), bins);
-    assert!(
-        magnitudes.iter().all(|value| *value == 0.0),
-        "silence has no magnitude"
-    );
-    assert!(
-        phases.iter().all(|value| value.is_finite()),
-        "silence has a finite phase"
-    );
-}
-
-/// A bin's magnitude is a function of the bin alone: the bins of one
-/// spectrum read from and into slices at every four-byte offset of a
-/// 64-byte line give the same bits.
-#[kithara::test]
-fn a_magnitude_does_not_depend_on_where_the_slices_sit() {
-    for len in LENGTHS {
-        let fft = fft(len);
-        let mut spectrum = spectrum(&fft);
-        fft.forward(&oracle::mix(len), &mut spectrum)
-            .expect("the frame fits");
-        let bins = fft.size().bins();
-        let mut reference = vec![UNWRITTEN; bins];
-        assert_eq!(
-            magnitude(spectrum.re(), spectrum.im(), &mut reference),
-            bins
-        );
-        for shift in 1..SHIFTS {
-            let placed = |plane: &[f32]| -> Vec<f32> {
-                std::iter::repeat_n(UNWRITTEN, shift)
-                    .chain(plane.iter().copied())
-                    .collect()
-            };
-            let (re, im) = (placed(spectrum.re()), placed(spectrum.im()));
-            let mut output = vec![UNWRITTEN; shift.saturating_add(bins)];
-            let output = output.get_mut(shift..).expect("the output holds its shift");
-            assert_eq!(
-                magnitude(
-                    re.get(shift..).expect("the plane holds its shift"),
-                    im.get(shift..).expect("the plane holds its shift"),
-                    output
-                ),
-                bins,
-                "{len}: bins"
-            );
-            assert_eq!(
-                bits(output),
-                bits(&reference),
-                "{len}: slices {shift} floats on"
-            );
-        }
-    }
 }
 
 #[kithara::test]
