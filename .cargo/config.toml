@@ -62,6 +62,8 @@ rustflags = [
 # Cargo also applies these pins when a tool builds an external manifest from
 # this workspace, including the temporary consumer used by semver-checks.
 [patch.crates-io]
+# wasmtimer replaces the unmaintained pin-utils projection dependency.
+wasmtimer = { git = "https://github.com/gerasim13/wasmtimer-rs", rev = "c5d137cead6335f9398226a1af55ae75bad30d60" }
 firewheel-web-audio = { git = "https://github.com/gerasim13/bevy_seedling", rev = "873c1812c645ad3ee1fff03c1640f13edffb4786" }
 # The renderer's bump-allocated buffers are hand-picked constants sized for
 # vello's own 8K test scenes, so a window pays 165 MiB on its first frame
