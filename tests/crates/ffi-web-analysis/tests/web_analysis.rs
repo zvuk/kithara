@@ -25,37 +25,7 @@ const RESTART_SAMPLE: usize = 3;
 
 type Events = Rc<RefCell<Vec<JsValue>>>;
 
-#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
-export function installWorkerDiagnostics() {
-    const NativeWorker = globalThis.Worker;
-    const channel = new BroadcastChannel("kithara-worker-diagnostics");
-    globalThis.Worker = class Worker extends NativeWorker {
-        constructor(...args) {
-            super(...args);
-            const url = String(args[0]);
-            const name = args[1]?.name ?? null;
-            channel.postMessage({ kind: "created", url, name });
-            this.addEventListener("message", event => {
-                const data = event.data;
-                if (data?.__wasm_safe_thread_exit || data?.__wasm_safe_thread_error) {
-                    channel.postMessage({
-                        kind: data.__wasm_safe_thread_exit ? "exit" : "worker_error",
-                        url, name, workerId: data.__wst_id,
-                        message: data.__wasm_safe_thread_error ?? null,
-                    });
-                }
-            });
-            this.addEventListener("error", event => channel.postMessage({
-                kind: "error", url, name, message: event.message,
-                filename: event.filename, line: event.lineno, column: event.colno,
-            }));
-            this.addEventListener("messageerror", () => channel.postMessage({
-                kind: "messageerror", url, name,
-            }));
-        }
-    };
-}
-"#)]
+#[wasm_bindgen::prelude::wasm_bindgen(module = "/../../fixtures/worker_diagnostics.js")]
 extern "C" {
     #[wasm_bindgen::prelude::wasm_bindgen(js_name = installWorkerDiagnostics)]
     fn install_worker_diagnostics();

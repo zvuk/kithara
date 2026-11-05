@@ -1,5 +1,7 @@
 #![cfg(target_arch = "wasm32")]
 
+use std::sync::Once;
+
 use js_sys::{Array, Function, Reflect, Uint8Array};
 use kithara::{
     events::TrackId,
@@ -34,6 +36,20 @@ use types::{
     FfiStretchBackendKind, FfiTrackFailureKind, FfiTrackStatus,
 };
 
+#[wasm_bindgen::prelude::wasm_bindgen(module = "/../../tests/fixtures/worker_diagnostics.js")]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = installWorkerDiagnostics)]
+    fn install_worker_diagnostics();
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = reportWorkerDiagnostics)]
+    fn report_worker_diagnostics() -> String;
+}
+
+fn surface_player() -> AudioPlayer {
+    static DIAGNOSTICS: Once = Once::new();
+    DIAGNOSTICS.call_once(install_worker_diagnostics);
+    AudioPlayer::new_js()
+}
+
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 
@@ -57,14 +73,19 @@ fn surface_fixture_url() -> String {
 
 async fn surface_ids_fixture() -> (AudioPlayer, String, f64) {
     let url = surface_fixture_url();
-    let player = AudioPlayer::new_js();
+    let player = surface_player();
     let id = player.insert_js(url.clone(), -1.0).expect("insert fixture");
     wait_until(Duration::from_secs(5), "fixture insertion", || {
         player.tick_js();
         player.item_count_js() == 1
     })
     .await
-    .expect("owner admits fixture insertion");
+    .unwrap_or_else(|error| {
+        panic!(
+            "owner admits fixture insertion: {error}; workers created on main thread={}",
+            report_worker_diagnostics()
+        )
+    });
     (player, url, id)
 }
 
@@ -160,7 +181,7 @@ async fn surface_ids_malformed_observer_id_is_rejected() {
 
 #[wasm_bindgen_test]
 async fn surface_dependent_commands_share_owner_order_before_publication() {
-    let player = Arc::new(AudioPlayer::new_js());
+    let player = Arc::new(surface_player());
     let url = surface_fixture_url();
     let events = Arc::new(Mutex::new(Vec::new()));
     player.set_observer(Arc::new(Events(Arc::clone(&events))));
@@ -213,7 +234,9 @@ async fn surface_dependent_commands_share_owner_order_before_publication() {
             })
     })
     .await
-    .expect("the owner applies dependent commands in posted order");
+    .unwrap_or_else(|error| {
+        panic!("the owner applies dependent commands in posted order: {error}; workers created on main thread={}", report_worker_diagnostics())
+    });
     let ids: Vec<f64> = player
         .items()
         .iter()
@@ -260,7 +283,7 @@ impl SeekCallback for Seeks {
 
 #[wasm_bindgen_test]
 async fn surface_settings_follow_owner_publication_and_report_refusal() {
-    let player = Arc::new(AudioPlayer::new_js());
+    let player = Arc::new(surface_player());
     let events = Arc::new(Mutex::new(Vec::new()));
     player.set_observer(Arc::new(Events(Arc::clone(&events))));
     let original_rate = player.playing_rate();
@@ -297,12 +320,13 @@ async fn surface_settings_follow_owner_publication_and_report_refusal() {
     .await
     .unwrap_or_else(|error| {
         panic!(
-            "{error}; rate={}, volume={}, muted={}, process_calls={}, events={:?}",
+            "{error}; rate={}, volume={}, muted={}, process_calls={}, events={:?}; workers created on main thread={}",
             player.playing_rate(),
             player.volume(),
             player.is_muted(),
             player.rt_process_calls_js(),
             *events.lock(),
+            report_worker_diagnostics(),
         )
     });
     player
