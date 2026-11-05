@@ -2935,6 +2935,91 @@ fn the_windows_lane_keeps_the_xtask_build_the_guest_keeps() {
     );
 }
 
+#[test]
+fn windows_diagnostics_cannot_schedule_the_acceptance_suite() {
+    let workflow = github_workflow("windows.yml");
+    let inputs = &workflow["on"]["workflow_dispatch"]["inputs"];
+    assert_eq!(inputs["diagnostics"]["type"].as_str(), Some("boolean"));
+    assert_eq!(inputs["diagnostics"]["default"].as_bool(), Some(false));
+    assert_eq!(inputs["test-filter"]["default"].as_str(), Some(""));
+    let suite = workflow_job(workflow_jobs(&workflow), "windows");
+    let condition = suite["if"].as_str().unwrap();
+    assert!(condition.contains("!inputs.diagnostics"));
+    assert!(condition.contains("(inputs.test-filter || '') == ''"));
+    let diagnostic = workflow_job(workflow_jobs(&workflow), "diagnostics");
+    assert_ne!(diagnostic["name"], suite["name"]);
+    let condition = diagnostic["if"].as_str().unwrap();
+    assert!(condition.contains("github.actor == github.repository_owner"));
+    assert!(condition.contains("vars.KITHARA_WINDOWS_RUNNER_LABELS != ''"));
+    assert!(condition.contains("inputs.diagnostics"));
+    assert!(
+        workflow["run-name"]
+            .as_str()
+            .unwrap()
+            .contains("diagnostics")
+    );
+}
+
+#[test]
+fn windows_diagnostics_preserve_old_evidence_before_a_scoped_probe() {
+    let workflow = github_workflow("windows.yml");
+    let diagnostic = workflow_job(workflow_jobs(&workflow), "diagnostics");
+    let steps = diagnostic["steps"].as_sequence().unwrap();
+    let index = |name| {
+        steps
+            .iter()
+            .position(|step| step["name"].as_str() == Some(name))
+            .unwrap()
+    };
+    let capture = index("Capture existing Windows evidence");
+    let upload = index("Preserve existing Windows evidence");
+    let controller = index("Checkout diagnostics controller");
+    let probe = index("Run diagnostic test selection");
+    assert!(controller < capture && capture < upload && upload < probe);
+    assert_eq!(
+        steps[controller]["with"]["path"].as_str(),
+        Some("diagnostics-controller")
+    );
+    assert_eq!(
+        steps[capture]["run"].as_str(),
+        Some(
+            "just --justfile diagnostics-controller/justfile ci windows-diagnostics --output \"$env:RUNNER_TEMP/windows-diagnostics\""
+        )
+    );
+    assert_eq!(
+        steps[probe]["run"].as_str(),
+        Some(
+            "just ci cache-exec windows-diagnostic just test run --net-backend=none \"--narrow=$env:TEST_FILTER\" --retries=0"
+        )
+    );
+    for index in [index("Verify probe compiler cache"), probe] {
+        assert_eq!(
+            steps[index]["working-directory"].as_str(),
+            Some("diagnostics-controller")
+        );
+        assert!(
+            steps[index]["if"]
+                .as_str()
+                .unwrap()
+                .contains("inputs.test-filter")
+        );
+    }
+    assert_eq!(
+        steps
+            .iter()
+            .filter(|step| step
+                .get("uses")
+                .and_then(Value::as_str)
+                .is_some_and(|uses| uses.starts_with("actions/checkout@")))
+            .count(),
+        1
+    );
+    assert_eq!(
+        steps[index("Upload probe evidence")]["if"].as_str(),
+        Some("always()")
+    );
+}
+
 /// The guest carries `FFmpeg` and libclang, and the build scripts find them only
 /// through these. Without `FFMPEG_DIR` the crate falls through to vcpkg and
 /// then pkg-config, the guest has neither; without `LIBCLANG_PATH` bindgen

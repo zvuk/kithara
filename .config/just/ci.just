@@ -70,6 +70,10 @@ health:
 report *ARGS:
     just _xtask ci-report "$@"
 
+[positional-arguments]
+windows-diagnostics *ARGS:
+    just _xtask ci windows-diagnostics "$@"
+
 # Full CI cycle with independent stage logs.
 full OUTPUT:
     #!/usr/bin/env bash

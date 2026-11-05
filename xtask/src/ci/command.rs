@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 use kithara_devtools::Ctx;
@@ -38,6 +40,11 @@ enum CiCommand {
     Touched(TouchedArgs),
     /// Record what the default branch fails, and hold a run that fails more.
     Verdict(VerdictArgs),
+    /// Capture native Windows counters and retained test failure evidence.
+    WindowsDiagnostics {
+        #[arg(long)]
+        output: PathBuf,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -65,7 +72,11 @@ pub(crate) fn run_standalone(args: &CiArgs) -> Result<()> {
         CiCommand::Host(args) => super::host::run(args),
         CiCommand::Image(args) => super::image::run(args),
         CiCommand::Verdict(args) => super::verdict::run(args),
-        CiCommand::Run(_) | CiCommand::Lane(_) | CiCommand::Lanes(_) | CiCommand::Touched(_) => {
+        CiCommand::Run(_)
+        | CiCommand::Lane(_)
+        | CiCommand::Lanes(_)
+        | CiCommand::Touched(_)
+        | CiCommand::WindowsDiagnostics { .. } => {
             bail!("repository CI lanes require a workspace")
         }
     }
@@ -81,6 +92,7 @@ pub(crate) fn run(args: &CiArgs, ctx: &Ctx) -> Result<()> {
         CiCommand::Run(args) => super::run::run(args, ctx),
         CiCommand::Lane(args) => super::lane::direct::run(args, ctx),
         CiCommand::Lanes(args) => super::lane::select::run(args, ctx),
+        CiCommand::WindowsDiagnostics { output } => super::windows_diagnostics::run(output, ctx),
         CiCommand::Touched(args) => {
             let touched = kithara_devtools::test::touches_lanes(
                 &ctx.config.test,

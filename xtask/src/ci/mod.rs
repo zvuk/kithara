@@ -15,6 +15,7 @@ pub(crate) mod process;
 mod release;
 mod run;
 mod verdict;
+mod windows_diagnostics;
 mod xcresult;
 
 pub(crate) use build_cache::{admit_linux_build, hold_target};

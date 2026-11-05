@@ -5,6 +5,23 @@ use std::{
 
 pub(crate) const INPUT_BYTES: usize = 32 * 1024 * 1024;
 
+pub(crate) const WINDOWS_DIAGNOSTIC_REPORTS: usize = 64;
+pub(crate) const WINDOWS_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const WINDOWS_DIAGNOSTIC_OUTPUT_BYTES: usize = 64 * 1024;
+#[cfg(windows)]
+pub(crate) const WINDOWS_REPARSE_POINT: u32 = 0x400;
+
+pub(crate) const WINDOWS_DIAGNOSTIC_SYSTEM: &str = r#"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+[ordered]@{
+  Drives = @(Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free)
+  Memory = Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize, FreePhysicalMemory, TotalVirtualMemorySize, FreeVirtualMemory
+  Processors = @(Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors)
+  Processes = @(Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 16 ProcessName, Id, CPU, WorkingSet64)
+} | ConvertTo-Json -Depth 4
+"#;
+
 pub(crate) const WASM_TEST_ARGS: &[&str] = &[
     "test",
     "--profile",
