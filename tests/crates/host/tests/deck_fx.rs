@@ -341,6 +341,54 @@ async fn deck_chain_trim_scales_fx_input() {
 }
 
 #[kithara::test(tokio)]
+async fn deck_fx_observes_the_slot_gain_program_at_its_frame() {
+    use kithara::play::{CurveShape, ParameterKnot, SlotGainProgram};
+
+    let harness = deck(None, DeckMixSettings::default()).await;
+    send(
+        &harness,
+        When::Next,
+        insert(0, Curve(|sample| sample * sample)),
+    )
+    .await;
+    let harness = load_source(
+        harness,
+        asset_source(&assets::fixed_constant_wav_cd_half_44100()).into(),
+    )
+    .await;
+    let warm = render(&harness, LEAD).await;
+    assert!(
+        warm[warm.len() - CALLBACK * CHANNELS..]
+            .iter()
+            .all(|sample| *sample == 0.25)
+    );
+    let item = harness.player().current().expect("sounding item").id;
+    let offset = LEAD + 37;
+    let start = harness.host().position() + u64::try_from(offset).expect("gain offset");
+    let start = SessionFrame::new(i64::try_from(start).expect("gain frame"));
+    let program = SlotGainProgram::new(vec![
+        ParameterKnot::new(start, 0.5, CurveShape::HOLD).expect("half amplitude"),
+    ])
+    .expect("constant slot gain program");
+    harness
+        .with_queue(move |queue| queue.gain_program(item, program))
+        .await
+        .expect("the slot takes the gain program");
+    let output = render(&harness, LEAD + 2 * CALLBACK).await;
+    for (index, frame) in output.as_chunks::<CHANNELS>().0.iter().enumerate() {
+        let expected = if index < offset { 0.25_f32 } else { 0.0625_f32 };
+        assert!(
+            frame
+                .iter()
+                .all(|sample| sample.to_bits() == expected.to_bits()),
+            "slot gain reaches the nonlinear FX at capture frame {index}"
+        );
+    }
+    assert_eq!(harness.metrics().underruns(), 0);
+    harness.close().await;
+}
+
+#[kithara::test(tokio)]
 async fn deck_chain_fader_zero_leaves_fx_input_and_silences_output() {
     let open = Arc::new(Mutex::new(Vec::with_capacity(TAKE)));
     let closed = Arc::new(Mutex::new(Vec::with_capacity(TAKE)));
