@@ -7,8 +7,6 @@ use biquad::{Biquad, Coefficients, DirectForm1, Hertz, Type};
 
 use super::FilterError;
 
-const BLOCK_FRAMES: usize = 128;
-
 #[cfg(test)]
 mod tests;
 
@@ -108,14 +106,7 @@ impl Crossover {
                         .map(|design| Section::new(design.allpass))
                 })
                 .collect(),
-            frame: vec![
-                0.0;
-                frequencies
-                    .len()
-                    .saturating_add(1)
-                    .saturating_mul(BLOCK_FRAMES)
-            ]
-            .into_boxed_slice(),
+            frame: vec![0.0; frequencies.len().saturating_add(1)].into_boxed_slice(),
             prepared: designs.into_boxed_slice(),
             prepared_rate: None,
         })
@@ -133,21 +124,13 @@ impl Crossover {
         let count = bands
             .iter()
             .fold(input.len(), |count, band| count.min(band.len()));
-        let mut offset = 0;
-        for input in input.split_at(count).0.chunks(BLOCK_FRAMES) {
-            for (frame, values) in self
-                .filter_frames(input)
-                .chunks_exact(bands.len())
-                .enumerate()
-            {
-                for (band, value) in bands.iter_mut().zip(values) {
-                    *band
-                        .get_mut(offset + frame)
-                        .expect("frame belongs to the validated common prefix") = *value;
-                }
+        self.split_frames(input.split_at(count).0, &mut |frame, values| {
+            for (band, value) in bands.iter_mut().zip(values) {
+                *band
+                    .get_mut(frame)
+                    .expect("frame belongs to the validated common prefix") = *value;
             }
-            offset += input.len();
-        }
+        });
         count
     }
 
@@ -164,65 +147,50 @@ impl Crossover {
         let count = gains
             .iter()
             .fold(samples.len(), |n, gain| n.min(gain.len()));
-        let mut offset = 0;
-        for samples in samples.split_at_mut(count).0.chunks_mut(BLOCK_FRAMES) {
-            let frames = self.filter_frames(samples);
-            for (frame, (sample, values)) in samples
-                .iter_mut()
-                .zip(frames.chunks_exact(gains.len()))
-                .enumerate()
-            {
-                *sample = values.iter().zip(gains).fold(0.0, |output, (value, gain)| {
-                    value.mul_add(
-                        *gain
-                            .get(offset + frame)
-                            .expect("frame belongs to the validated common prefix"),
-                        output,
-                    )
-                });
-            }
-            offset += samples.len();
-        }
+        self.sum_frames(samples.split_at_mut(count).0, &mut |frame, values| {
+            values.iter().zip(gains).fold(0.0, |output, (value, gain)| {
+                value.mul_add(
+                    *gain
+                        .get(frame)
+                        .expect("frame belongs to the validated common prefix"),
+                    output,
+                )
+            })
+        });
         count
     }
 
-    fn filter_frames(&mut self, input: &[f32]) -> &[f32] {
-        let width = self.frequencies.len().saturating_add(1);
-        let frames = self.frame.split_at_mut(input.len() * width).0;
-        for (&sample, frame) in input.iter().zip(frames.chunks_exact_mut(width)) {
-            Self::filter_sample(
-                sample,
-                &mut self.lowpass,
-                &mut self.highpass,
-                &mut self.allpass,
-                frame,
-            );
+    fn split_frames(&mut self, input: &[f32], write: &mut dyn FnMut(usize, &[f32])) {
+        for (frame, &sample) in input.iter().enumerate() {
+            write(frame, self.filter_sample(sample));
         }
-        frames
+    }
+
+    fn sum_frames(&mut self, samples: &mut [f32], combine: &mut dyn FnMut(usize, &[f32]) -> f32) {
+        for (frame, sample) in samples.iter_mut().enumerate() {
+            *sample = combine(frame, self.filter_sample(*sample));
+        }
     }
 
     #[inline]
-    fn filter_sample(
-        mut high: f32,
-        lowpass: &mut [Lr4],
-        highpass: &mut [Lr4],
-        mut allpass: &mut [Section],
-        frame: &mut [f32],
-    ) {
-        let (high_band, lower) = frame
+    fn filter_sample(&mut self, mut high: f32) -> &[f32] {
+        let (high_band, lower) = self
+            .frame
             .split_last_mut()
             .expect("one high band after the crossovers");
-        for ((lowpass, highpass), low) in lowpass
+        for ((lowpass, highpass), low) in self
+            .lowpass
             .iter_mut()
-            .zip(highpass.iter_mut())
+            .zip(self.highpass.iter_mut())
             .zip(lower.iter_mut())
         {
             *low = lowpass.process(high);
             high = highpass.process(high);
         }
         let count = lower.len();
-        for (band, low) in lower.iter_mut().take(count.saturating_sub(1)).enumerate() {
-            let (sections, remaining) = allpass.split_at_mut(count - band - 1);
+        let mut allpass = self.allpass.as_mut();
+        for (size, low) in (1..count).rev().zip(lower.iter_mut()) {
+            let (sections, remaining) = allpass.split_at_mut(size);
             let mut value = *low;
             for section in sections {
                 value = section.run(value);
@@ -231,6 +199,7 @@ impl Crossover {
             allpass = remaining;
         }
         *high_band = high;
+        &self.frame
     }
 
     /// Clears every section's history without allocation or coefficient changes.
