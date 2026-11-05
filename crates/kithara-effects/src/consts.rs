@@ -30,8 +30,6 @@ pub(crate) const DEFAULT_EQ_SMOOTHING: SmootherConfig = SmootherConfig {
 
 pub(crate) const DB_DIVISOR: f32 = 20.0;
 pub(crate) const DB_LOG_BASE: f32 = 10.0;
-pub(crate) const DEFAULT_CEILING: f32 = 0.98;
-pub(crate) const DEFAULT_RELEASE_MS: f32 = 50.0;
 
 /// Milliseconds per second: the release time arrives in ms, the coefficient
 /// is computed in samples.
