@@ -225,8 +225,12 @@ fn binding_speed(
             / grid_tempo(source, media_seconds_position(start, rate)?)?)
         .as_());
     }
-    let end = source_media_for_beat(source, to, rate)?;
-    Ok(((end - start) * f64::from(host.axis().sample_rate().get())).as_())
+    let start = source_frame_for_beat(source, from)?;
+    let end = source_frame_for_beat(source, to)?;
+    Ok(
+        ((end - start) * (f64::from(host.axis().sample_rate().get()) / f64::from(rate.get())))
+            .as_(),
+    )
 }
 
 struct AppliedCurve<'a> {
@@ -404,16 +408,33 @@ fn configured_speed_failures(
     segment: SegmentId,
     curves: &[AppliedCurve<'_>],
     configured_speed: f32,
+    consumed: SessionFrame,
 ) -> Result<Vec<String>, String> {
-    let (seq, curve) = if let Some(applied) = curves.last() {
-        (applied.command.seq, &applied.command.curve)
+    // A bounded plan is renewed ahead of the consumed frame, so the published
+    // speed lies on a law confirmed from the one in force there onward.
+    let confirmed = &curves[curves
+        .iter()
+        .rposition(|curve| curve.at <= consumed)
+        .unwrap_or(0)..];
+    let (seq, laws) = if let Some(applied) = confirmed.last() {
+        (
+            applied.command.seq,
+            confirmed
+                .iter()
+                .map(|applied| &applied.command.curve)
+                .collect::<Vec<_>>(),
+        )
     } else {
         let cue = owned_cue(observation, item, segment)?;
-        (cue.seq, &cue.curve)
+        (cue.seq, vec![&cue.curve])
     };
-    let parts = analytic_parts(curve)?;
-    if parts.is_empty() {
-        return Err("confirmed curve is empty".to_owned());
+    let mut parts = Vec::new();
+    for curve in laws {
+        let curve_parts = analytic_parts(curve)?;
+        if curve_parts.is_empty() {
+            return Err("confirmed curve is empty".to_owned());
+        }
+        parts.extend(curve_parts);
     }
     let reached = parts.iter().any(|(_, law)| {
         [law.initial(), law.target()]
@@ -850,12 +871,16 @@ fn source_media_for_beat(
     beat: f64,
     rate: NonZeroU32,
 ) -> Result<f64, String> {
+    Ok(source_frame_for_beat(grid, beat)? / f64::from(rate.get()))
+}
+
+fn source_frame_for_beat(grid: &BeatGridSnapshot, beat: f64) -> Result<f64, String> {
     match grid.position_at(MapPoint::new(
         grid.stamp(),
         Beat::new(beat).map_err(|error| error.to_string())?,
     )) {
         BeatGridQuery::Resolved(position) => match position.value().value() {
-            MapPosition::Asset(frame) => Ok(f64::from(*frame) / f64::from(rate.get())),
+            MapPosition::Asset(frame) => Ok(f64::from(*frame)),
             _ => Err("declared inverse source geometry has a different axis".to_owned()),
         },
         other => Err(format!(
@@ -2068,6 +2093,7 @@ pub(super) fn executed_law(
         mark.lane.segment,
         &curves,
         configured_speed,
+        mark.session,
     )?;
     let (host_history_input, _) = owned_host_history(observation, rate)?;
     let mut reference =
@@ -2267,6 +2293,7 @@ pub(super) fn queue_observation(
         mark.lane.segment,
         &curves,
         snapshot.track.speed,
+        mark.session,
     )?;
     let speed = if let Some(applied) = curves.iter().rev().find(|curve| curve.at <= mark.session) {
         curve_rate(
@@ -2325,7 +2352,7 @@ impl QueueLaw {
             .ok_or_else(|| "Queue applied law has no typed public operation input".to_owned())?;
         let commanded = match input.kind {
             LinkOwnerInputKind::Retime => true,
-            LinkOwnerInputKind::Realign => false,
+            LinkOwnerInputKind::Realign | LinkOwnerInputKind::Renewal => false,
             _ => return Err("Queue applied correction has an unexpected public cause".to_owned()),
         };
         if input.at != Some(applied.at) {
@@ -3381,6 +3408,69 @@ async fn supplied_grids_bind_consumed_pcm_marks_to_the_host(
         "direct grid binding failed: {}",
         failures.join("\n")
     );
+}
+
+#[kithara::test(native)]
+fn binding_speed_preserves_the_local_law_when_a_frame_ends_at_a_rounded_beat() {
+    let rate = NonZeroU32::new(48_000).expect("sample rate");
+    let ArtifactSource::Value(model) = synthetic_grid() else {
+        panic!("declared source grid");
+    };
+    let mut raw = model.as_raw().clone();
+    raw.duration = None;
+    raw.meter = None;
+    raw.downbeats.clear();
+    raw.beats = [
+        (95, 43.1818125),
+        (96, 43.63635416666666),
+        (97, 44.090916666666665),
+        (98, 44.545458333333336),
+        (99, 45.0),
+    ]
+    .into_iter()
+    .map(|(ordinal, at)| GridBeat {
+        at,
+        ordinal,
+        confidence: None,
+    })
+    .collect();
+    let model = BeatGridModel::try_from(raw).expect("source grid");
+    let source = source_with_duration(&model, rate, None).expect("source geometry");
+    let frame = SessionFrame::new(3_064_028);
+    let host_beat = 112.99995833333333;
+    let anchor = SessionAnchor::new(
+        frame,
+        SessionBeat::new(host_beat).expect("Host beat"),
+        2.0,
+        rate,
+    )
+    .expect("Host anchor");
+    let host = BeatGridSnapshot::session(
+        BeatGridId::allocate().expect("Host grid id"),
+        BeatGridRevision::first(),
+        SessionEpoch::new(0),
+        anchor,
+        None,
+    );
+    for source_beat in [
+        96.99995833333333,
+        96.99995833333334,
+        96.99995833333336,
+        96.99995833333337,
+        96.9999583333334,
+    ] {
+        let reference = SelectedBinding {
+            media: Duration::from_nanos(44_090_897_726),
+            source_beat,
+            host_beat,
+            frame,
+        };
+        assert_eq!(
+            binding_speed(&source, &host, frame, reference).expect("one-frame speed"),
+            0.909125_f32,
+            "source beat {source_beat:.17}",
+        );
+    }
 }
 
 #[kithara::test(native)]
@@ -4551,8 +4641,15 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     };
     let check_config = |observation: &LinkObservation, speed| {
         let curves = applied_curves(observation, item, mark, rate).expect("actual outcomes");
-        configured_speed_failures(observation, item, mark.lane.segment, &curves, speed)
-            .expect("confirmed target")
+        configured_speed_failures(
+            observation,
+            item,
+            mark.lane.segment,
+            &curves,
+            speed,
+            mark.session,
+        )
+        .expect("confirmed target")
     };
     for at in [95, 96, 97] {
         observation.speeds[0].at = When::At(SessionFrame::new(at));
@@ -4629,7 +4726,17 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     }
     observation.ready_cues.clear();
     observation.speeds.clear();
-    assert!(configured_speed_failures(&observation, item, mark.lane.segment, &[], 1.0).is_err());
+    assert!(
+        configured_speed_failures(
+            &observation,
+            item,
+            mark.lane.segment,
+            &[],
+            1.0,
+            mark.session
+        )
+        .is_err()
+    );
 
     let ArtifactSource::Value(model) = synthetic_grid() else {
         panic!("declared source grid");

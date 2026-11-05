@@ -388,8 +388,8 @@ pub(super) struct Correction {
 /// How far a speed plan follows the source grid.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Coverage {
-    /// The plan holds its laws for output frames before this one, counted
-    /// from its start; past it the last law holds until a renewal.
+    /// The plan's last law starts on this output frame, counted from its
+    /// start, and holds from there until a renewal.
     Until(u64),
     /// The plan follows the source grid to its end.
     GridEnd,
@@ -643,7 +643,8 @@ fn bridge_source_law(
         offset,
         rate,
     )?;
-    let speed = (source.media_at(reached)? - source.media_at(preceding)?) * rate;
+    let advance = source.frame_at_beat(reached)? - source.frame_at_beat(preceding)?;
+    let speed = advance * (rate / f64::from(source.rate.get()));
     Some((reached, speed))
 }
 
@@ -687,8 +688,8 @@ fn speed_curve(laws: Vec<(u64, ExponentialApproach)>) -> Option<SpeedCurve> {
     }
 }
 
-/// Whether the plan has reached its horizon at `frame`: past the correction
-/// end and the landing, which both still need their laws, by the horizon.
+/// Whether the plan, holding its law from `frame`, has reached its horizon:
+/// the horizon past the correction end and the landing.
 fn reached_horizon(
     frame: u64,
     terminal: Option<(u64, f64)>,
@@ -747,6 +748,10 @@ pub(super) fn curve(
         }
         let (law, offset) = source_law(host, start, frame, slope, terminal, offsets, &mut laws)
             .ok_or(CurveError::NoLaw)?;
+        if reached_horizon(frame, terminal, landing, correction, horizon) {
+            coverage = Coverage::Until(frame);
+            break;
+        }
         let next = boundaries.iter().copied().find(|next| *next > frame);
         let Some(CurveCrossing {
             through,
@@ -766,10 +771,6 @@ pub(super) fn curve(
         )
         .ok_or(CurveError::NoLaw)?;
         frame = through;
-        if reached_horizon(frame, terminal, landing, correction, horizon) {
-            coverage = Coverage::Until(frame);
-            break;
-        }
     }
     let frames = terminal.map_or(0, |(end, _)| end);
     Ok((

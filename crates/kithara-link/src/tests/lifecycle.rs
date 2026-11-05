@@ -904,7 +904,6 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     assert_eq!(law.time_constant(), 240.0);
     let reached = 130.0 / 120.0 - (10.0 / 120.0) * (-1.0_f64).exp();
     assert!((law.rate_at(240.0).expect("5ms rate") - reached).abs() < 1e-12);
-    assert_eq!(steps.last().expect("final law").1.target(), 130.0 / 120.0);
     assert_track_unchanged(deck.snapshot().as_ref(), applied.as_ref());
     assert_eq!(
         deck.snapshot().sync,
@@ -912,6 +911,7 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
         "grid refinement remains pending"
     );
     let Some(Slew::Closes {
+        curve: expected_curve,
         frames: frame_count,
         ..
     }) = slew(
@@ -926,6 +926,7 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     else {
         panic!("bounded revised correction");
     };
+    assert_eq!(SpeedCurve::ApproachSteps(steps.clone()), expected_curve);
     let remaining = FrameCount::new(usize::try_from(frame_count).expect("correction frames"));
     assert!(remaining.get() > 0);
     rig.apply(&mut deck, replacement[0].0, i64::from(start));

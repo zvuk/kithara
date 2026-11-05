@@ -2,6 +2,8 @@ use std::ops::Range;
 
 use kithara_beat::BeatGridModel;
 use kithara_command::When;
+use kithara_config::CheckedConfig;
+use kithara_platform::time::Duration;
 use kithara_play::HostedDeck;
 use kithara_signal::{FrameCount, SessionFrame};
 use kithara_sync::SpeedCurve;
@@ -10,7 +12,22 @@ use kithara_test_utils::kithara;
 use super::fixtures::{
     Command, Control, Deck, Rig, answer, deck, grid, horizon, load, sound, trajectory,
 };
-use crate::LinkedPlayer;
+use crate::{LinkConfig, LinkError, LinkedPlayer};
+
+#[kithara::test]
+fn a_speed_plan_horizon_defaults_to_four_seconds_and_refuses_zero() {
+    let default = LinkConfig::default().validated().expect("default policy");
+    assert_eq!(default.horizon(), Duration::from_secs(4));
+    let zero = LinkConfig::builder().horizon(Duration::ZERO).build();
+    assert!(matches!(zero.validated(), Err(LinkError::Horizon { horizon }) if horizon.is_zero()));
+    let horizon = Duration::from_millis(250);
+    let configured = LinkConfig::builder()
+        .horizon(horizon)
+        .build()
+        .validated()
+        .expect("positive horizon");
+    assert_eq!(configured.horizon(), horizon);
+}
 
 /// Output frames between two deck passes.
 const PASS: i64 = 1_024;
@@ -119,8 +136,10 @@ fn a_steady_deck_renews_its_plan_every_half_horizon() {
         let SpeedCurve::ApproachSteps(laws) = curve else {
             panic!("a steady grid plans stepped laws at {at:?}, got {curve:?}");
         };
+        // A law and a seam bridge per beat, the beat the cut lands past, and
+        // the correction's steps.
         assert!(
-            laws.len() <= 2 * beats_in_horizon + 4,
+            laws.len() <= 2 * (beats_in_horizon + 1) + 4,
             "{} laws at {at:?} for {beats_in_horizon} beats in a horizon",
             laws.len()
         );

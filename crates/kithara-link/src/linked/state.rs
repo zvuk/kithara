@@ -178,8 +178,8 @@ pub struct Linked<P> {
     pub(super) waiting: Option<Waiting>,
     pub(super) correction: Option<(Seq, RunningCorrection)>,
     pub(super) alignment: Option<Cause>,
-    /// The first frame the last sent speed plan no longer covers; `None`
-    /// when it follows the grid to its end or none is sent.
+    /// The last law's start in a bounded plan; `None` for a plan through
+    /// the grid's end or when no plan is sent.
     pub(super) plan_end: Option<SessionFrame>,
     pub(super) speeds: Vec<(Seq, SpeedOperation)>,
     pub(super) start: Option<Seq>,

@@ -5,7 +5,10 @@ use kithara_signal::{ExponentialApproach, SessionFrame};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::{Correction, Coverage, Interval, SourceGrid, SourceGridError, Span, curve};
+use super::{
+    Correction, CorrectionOffset, Coverage, Interval, SourceGrid, SourceGridError, Span,
+    bridge_source_law, curve,
+};
 use crate::{SpeedCurve, TrackBeat, TrackGrid};
 
 fn reference_by_frame(grid: &SourceGrid, frame: f64) -> Option<&Interval> {
@@ -269,8 +272,9 @@ fn plan(
     (laws(&curve), frames, coverage)
 }
 
-/// The bounded plan is the unbounded plan cut at its coverage, and that cut
-/// is the first source boundary at or past `reach`.
+/// The bounded plan is the unbounded plan through its coverage: the law the
+/// unbounded plan starts there is the bounded plan's last, and it starts on
+/// the first boundary at or past `reach`.
 fn assert_cut(
     bounded: &[(u64, ExponentialApproach)],
     coverage: Coverage,
@@ -284,19 +288,16 @@ fn assert_cut(
     let prefix: Vec<_> = unbounded
         .iter()
         .copied()
-        .take_while(|(at, _)| *at < until)
+        .take_while(|(at, _)| *at <= until)
         .collect();
     assert_eq!(bounded, prefix.as_slice());
-    assert!(
-        unbounded.iter().any(|(at, _)| *at == until),
-        "coverage {until} is a law boundary of the unbounded plan"
-    );
+    assert_eq!(bounded.last().map(|(at, _)| *at), Some(until));
     assert!(
         bounded
             .iter()
             .filter(|(at, _)| *at >= reach)
-            .all(|(at, _)| *at + 1 == until),
-        "only the bridge law into the cut may start past the reach"
+            .all(|(at, _)| *at + 1 >= until),
+        "only the bridge into the last law and the last law start past {reach}"
     );
 }
 
@@ -345,10 +346,53 @@ fn a_grid_ending_inside_the_horizon_is_followed_to_its_end() {
     assert_eq!(bounded, unbounded);
 }
 
+#[kithara::test]
+fn a_bridge_keeps_native_frame_precision_at_a_rounded_source_beat() {
+    let beats = [
+        (95, 43.1818125),
+        (96, 43.63635416666666),
+        (97, 44.090916666666665),
+        (98, 44.545458333333336),
+        (99, 45.0),
+    ]
+    .into_iter()
+    .map(|(ordinal, at)| TrackBeat { at, ordinal })
+    .collect();
+    let model = TrackGrid::new(beats, Vec::new(), None, 132.0, None).expect("source grid");
+    let source = SourceGrid::new(&model, NonZeroU32::new(RATE).expect("rate"), None, false)
+        .expect("source geometry");
+    let host = steady_host();
+    let law = ExponentialApproach::new(2.0, 2.0, 0.0).expect("Host law");
+    for beat in [
+        96.99995833333333,
+        96.99995833333334,
+        96.99995833333336,
+        96.99995833333337,
+        96.9999583333334,
+    ] {
+        let (_, speed) = bridge_source_law(
+            &source,
+            &host,
+            SessionFrame::new(0),
+            0..1,
+            beat,
+            law,
+            CorrectionOffset::Beat(0.0),
+        )
+        .expect("crossing source law");
+        assert_eq!(speed.to_f32(), Some(0.909125_f32), "source beat {beat:.17}");
+    }
+}
+
 /// Output frames advanced by stepped laws over `start..end`.
 fn advance(laws: &[(u64, ExponentialApproach)], start: u64, end: u64) -> f64 {
     laws.iter()
         .enumerate()
+        .skip(
+            laws.partition_point(|(at, _)| *at <= start)
+                .saturating_sub(1),
+        )
+        .take_while(|(_, (at, _))| *at < end)
         .filter_map(|(index, (at, law))| {
             let after = laws.get(index + 1).map_or(end, |(next, _)| *next);
             let from = start.max(*at);
@@ -365,11 +409,11 @@ fn advance(laws: &[(u64, ExponentialApproach)], start: u64, end: u64) -> f64 {
 }
 
 fn rate_at(laws: &[(u64, ExponentialApproach)], frame: u64) -> f64 {
-    let (at, law) = laws
-        .iter()
-        .rev()
-        .find(|(at, _)| *at <= frame)
+    let index = laws
+        .partition_point(|(at, _)| *at <= frame)
+        .checked_sub(1)
         .expect("a law covers the frame");
+    let (at, law) = &laws[index];
     law.rate_at((frame - at).to_f64().expect("offset"))
         .expect("valid law")
 }
@@ -398,18 +442,18 @@ fn a_renewal_from_the_planned_position_continues_the_unbounded_plan() {
     )
     .expect("renewed plan");
     let second = laws(&second);
-    for offset in [0, 1, 4_799, 48_000, 96_001, horizon - 1] {
+    for offset in 0..horizon {
         let renewed = rate_at(&second, offset);
         let whole = rate_at(&unbounded, seam + offset);
         assert!(
             (renewed - whole).abs() < 1e-9,
             "rate {offset} past the seam: {renewed} vs {whole}"
         );
+        let renewed = advance(&second, 0, offset + 1);
+        let whole = advance(&unbounded, seam, seam + offset + 1);
+        assert!(
+            (renewed - whole).abs() < 1e-3,
+            "media frames {offset} past the seam: {renewed} vs {whole}"
+        );
     }
-    let renewed = advance(&second, 0, horizon);
-    let whole = advance(&unbounded, seam, seam + horizon);
-    assert!(
-        (renewed - whole).abs() < 1e-3,
-        "media frames past the seam: {renewed} vs {whole}"
-    );
 }
