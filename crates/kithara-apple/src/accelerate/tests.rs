@@ -2,10 +2,9 @@ use kithara_test_fixtures::unit_fixtures::{accelerate_ramp, accelerate_wave};
 use kithara_test_utils::kithara;
 
 use super::{
-    DftError, OutOfWindow, RealDft, add_f32, affine_f32,
-    correlate_f32, deinterleave_pair_f32, downmix_pair_f32, interleave_pair_f32,
-    linear_interpolate_f32, multiply_f32, multiply_in_place_f32,
-    quadratic_interpolate_f32, scale_add_f32, sub_f32, sum_squares_f32,
+    DftError, OutOfWindow, RealDft, add_f32, affine_f32, correlate_f32, deinterleave_pair_f32,
+    downmix_pair_f32, interleave_pair_f32, linear_interpolate_f32, multiply_f32,
+    multiply_in_place_f32, quadratic_interpolate_f32, scale_add_f32, sub_f32, sum_squares_f32,
 };
 
 const SPECIALS: [f32; 8] = [

@@ -93,14 +93,21 @@ impl Biquad {
             } else if self.quiet > 0 {
                 self.quiet_frame(planes, cursor)
             } else {
-                self.quiet_run(planes, cursor..rest.end.min(cursor.saturating_add(consts::SETTLE_CHUNK)))
+                self.quiet_run(
+                    planes,
+                    cursor..rest.end.min(cursor.saturating_add(consts::SETTLE_CHUNK)),
+                )
             };
         }
         Ok(())
     }
 
     /// Filters `frame` and resets the state when it completes a quiet run.
-    fn quiet_frame<P: DerefMut<Target = [f32]>>(&mut self, planes: &mut [P], frame: usize) -> usize {
+    fn quiet_frame<P: DerefMut<Target = [f32]>>(
+        &mut self,
+        planes: &mut [P],
+        frame: usize,
+    ) -> usize {
         let input = peak(planes, frame);
         let next = frame.saturating_add(1);
         self.cascade.run(planes, frame..next);
@@ -111,9 +118,14 @@ impl Biquad {
     /// Filters `run`, which starts with a quiet input frame, then rewinds to
     /// the first frame that resets the state: the frames after it keep their
     /// input and run again from the reset state.
-    fn quiet_run<P: DerefMut<Target = [f32]>>(&mut self, planes: &mut [P], run: Range<usize>) -> usize {
+    fn quiet_run<P: DerefMut<Target = [f32]>>(
+        &mut self,
+        planes: &mut [P],
+        run: Range<usize>,
+    ) -> usize {
         for (saved, plane) in self.scratch.iter_mut().zip(planes.iter()) {
-            if let (Some(saved), Some(input)) = (saved.get_mut(..run.len()), plane.get(run.clone())) {
+            if let (Some(saved), Some(input)) = (saved.get_mut(..run.len()), plane.get(run.clone()))
+            {
                 saved.copy_from_slice(input);
             }
         }
@@ -129,7 +141,9 @@ impl Biquad {
                 let next = frame.saturating_add(1);
                 let kept = offset.saturating_add(1)..run.len();
                 for (saved, plane) in self.scratch.iter().zip(planes.iter_mut()) {
-                    if let (Some(saved), Some(output)) = (saved.get(kept.clone()), plane.get_mut(next..run.end)) {
+                    if let (Some(saved), Some(output)) =
+                        (saved.get(kept.clone()), plane.get_mut(next..run.end))
+                    {
                         output.copy_from_slice(saved);
                     }
                 }
@@ -202,9 +216,11 @@ fn peak<P: Deref<Target = [f32]>>(planes: &[P], frame: usize) -> f32 {
 
 /// Every plane stays at or below the silence level at `frame`.
 fn quiet<P: Deref<Target = [f32]>>(planes: &[P], frame: usize) -> bool {
-    planes
-        .iter()
-        .all(|plane| plane.get(frame).is_none_or(|sample| sample.abs() <= consts::SILENT_PEAK))
+    planes.iter().all(|plane| {
+        plane
+            .get(frame)
+            .is_none_or(|sample| sample.abs() <= consts::SILENT_PEAK)
+    })
 }
 
 /// Every plane holds an exact zero at `frame`.

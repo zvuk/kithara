@@ -223,7 +223,9 @@ fn sound_then_silence(frames: usize) -> Vec<Vec<f32>> {
 
 fn ringing() -> Biquad {
     let mut filter = Biquad::new(TWO, TWO).expect("filter builds");
-    filter.retune(0, low_pass(1_000.0)).expect("section 0 exists");
+    filter
+        .retune(0, low_pass(1_000.0))
+        .expect("section 0 exists");
     filter
         .retune(1, design(RATE, 200.0, 4.0))
         .expect("section 1 exists");
@@ -275,5 +277,26 @@ fn every_partition_of_a_stream_yields_the_same_bits() {
             first, None,
             "calls of {lengths:?} first differ at frame {first:?}"
         );
+    }
+}
+
+#[kithara::test]
+fn identity_sections_preserve_small_nonzero_output_bits() {
+    let input = [1.0e-35_f32, -1.0e-35, 1.0e-30, -1.0e-30, 3.0e-31, -3.0e-31];
+    for channels in [1, 2, 8] {
+        for block in [1, 2, 6] {
+            let mut filter = Biquad::new(NonZeroUsize::new(channels).expect("channels"), TWO)
+                .expect("identity sections");
+            let mut planes = vec![input.to_vec(); channels];
+            for start in (0..input.len()).step_by(block) {
+                filter
+                    .process(&mut planes, start..(start + block).min(input.len()))
+                    .expect("complete planes");
+            }
+            assert_eq!(
+                bits(&planes),
+                vec![input.map(f32::to_bits).to_vec(); channels]
+            );
+        }
     }
 }

@@ -9,6 +9,6 @@ pub(crate) use kithara_apple::accelerate::{
     sum_squares_f32 as sum_squares,
 };
 
+pub(crate) use self::interpolate::interpolate;
 #[cfg(feature = "spectrum")]
 pub(crate) use self::spectrum::{Dft, Work, correlate, multiply};
-pub(crate) use self::interpolate::interpolate;

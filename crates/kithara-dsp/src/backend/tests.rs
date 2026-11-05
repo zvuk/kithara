@@ -1432,26 +1432,27 @@ fn fade_gains_track_the_f64_curves_at_every_level() {
     }
 }
 
-#[test]
-fn zz_probe_timing() {
-    use std::time::Instant;
-    let lp = Coefficients::<f64>::from_params(Type::LowPass, Hertz::<f64>::from_hz(48_000.0).unwrap(), Hertz::<f64>::from_hz(1_000.0).unwrap(), 0.707).unwrap();
-    let taps = [lp.b0, lp.b1, lp.b2, lp.a1, lp.a2].map(|v| v as f32);
-    for ch in [1usize, 2] {
-        let mut c = cascade::Cascade::new(NonZeroUsize::new(ch).unwrap(), NonZeroUsize::MIN).unwrap();
-        c.set_section(0, taps).unwrap();
-        let mut planes = vec![vec![0.25_f32; 1024]; ch];
-        let t = Instant::now();
-        for _ in 0..10_000 { c.run(&mut planes, 0..1024); }
-        eprintln!("cascade run {ch}ch/1: {:?}", t.elapsed() / 10_000);
-        let t = Instant::now();
-        let mut n = 0;
-        for _ in 0..10_000 { n += super::first_quiet(std::hint::black_box(&planes), 0..1024, 1e-9); }
-        eprintln!("first_quiet {ch}ch: {:?} {n}", t.elapsed() / 10_000);
-        let mut f = crate::filter::Biquad::new(NonZeroUsize::new(ch).unwrap(), NonZeroUsize::MIN).unwrap();
-        f.retune(0, lp).unwrap();
-        let t = Instant::now();
-        for _ in 0..10_000 { f.process(&mut planes, 0..1024).unwrap(); }
-        eprintln!("biquad process {ch}ch/1: {:?}", t.elapsed() / 10_000);
-    }
+#[kithara::test]
+fn cascade_reset_and_copy_keep_memory_retirement() {
+    let make = || {
+        let mut cascade = cascade::Cascade::new(stride(1), stride(1)).expect("cascade");
+        cascade
+            .set_section(0, [1.0, 0.0, 0.0, -0.99, 0.0])
+            .expect("section");
+        cascade
+    };
+    let mut used = make();
+    used.process(&mut [vec![1.0; 5]], 0..5).expect("warm state");
+    used.reset();
+    let input: Vec<f32> = std::iter::repeat_n(0.0, 62)
+        .chain(std::iter::repeat_n(5.0e-10, 66))
+        .collect();
+    let mut actual = [input.clone()];
+    let mut expected = [input];
+    used.process(&mut actual, 0..63).expect("prefix");
+    let mut copied = make();
+    copied.copy_state_from(&used).expect("matching state");
+    copied.process(&mut actual, 63..128).expect("suffix");
+    make().process(&mut expected, 0..128).expect("whole stream");
+    assert_eq!(bits(&actual[0]), bits(&expected[0]));
 }

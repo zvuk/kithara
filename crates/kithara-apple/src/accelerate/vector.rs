@@ -1,8 +1,6 @@
 use std::ptr;
 
-use super::ffi::{
-    vDSP_conv, vDSP_svesq, vDSP_vadd, vDSP_vmul, vDSP_vsma, vDSP_vsmsa, vDSP_vsub,
-};
+use super::ffi::{vDSP_conv, vDSP_svesq, vDSP_vadd, vDSP_vmul, vDSP_vsma, vDSP_vsmsa, vDSP_vsub};
 
 /// `output[i] = a[i] · b[i]` over the common prefix of the three slices;
 /// returns its length.

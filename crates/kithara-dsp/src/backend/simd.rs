@@ -104,8 +104,6 @@ pub(super) fn mul_add_kernel<S: Simd>(simd: S, x: &[f32], y: &[f32], acc: &mut [
     update(simd, acc, [x, y], |acc, [x, y]| x.mul_add_precise(y, acc))
 }
 
-/// `target[i] = f(target[i], [inputs[0][i], ...])` over the common prefix of
-/// the target and the inputs, a vector at a time; returns the prefix length.
 /// The first frame of `range` where every plane holds `|x| <= limit`, or the
 /// end of `range`; a frame a plane does not cover counts as quiet there.
 pub(crate) fn first_quiet<P: Deref<Target = [f32]>>(
@@ -153,6 +151,8 @@ pub(super) fn first_quiet_kernel<S: Simd, P: Deref<Target = [f32]>>(
         .unwrap_or(range.end)
 }
 
+/// `target[i] = f(target[i], [inputs[0][i], ...])` over the common prefix of
+/// the target and the inputs, a vector at a time; returns the prefix length.
 #[inline(always)]
 pub(super) fn update<S: Simd, I: Inputs<S>>(
     simd: S,
