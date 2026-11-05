@@ -275,7 +275,8 @@ fn restore_source_layer(process: &Process, tools: &ToolsConfig) {
         return;
     };
     let started = Instant::now();
-    let outcome = snapshot::restore_sources(process.root(), &cargo_home, &rc);
+    let outcome =
+        snapshot::restore_sources(process.root(), &cargo_home, &process.target_dir(), &rc);
     let took = format!("{:.1} s", started.elapsed().as_secs_f64());
     match outcome {
         Ok(snapshot::Restored::AlreadyPresent) => {
@@ -321,8 +322,9 @@ fn publish_source_layer(process: &Process, tools: &ToolsConfig, kind: &str) -> R
         return Ok(());
     };
     let started = Instant::now();
-    let published = snapshot::publish_sources(process.root(), &cargo_home, &rc)
-        .context("publish the dependency sources");
+    let published =
+        snapshot::publish_sources(process.root(), &cargo_home, &process.target_dir(), &rc)
+            .context("publish the dependency sources");
     let took = format!("{:.1} s", started.elapsed().as_secs_f64());
     match &published {
         Ok(()) => {
