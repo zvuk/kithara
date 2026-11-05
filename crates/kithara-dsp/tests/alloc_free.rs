@@ -9,7 +9,7 @@ use kithara_dsp::spectrum::{Autocorrelation, Fft, FftLen, prediction_difference}
 use kithara_dsp::{
     fade::{self, FadeCurve},
     filter::{Biquad, Coefficients, Hertz, Type},
-    interp::{InterpError, Interpolation, interpolate},
+    interp::{InterpError, Interpolation, interpolate, interpolate_frame, weighted_frames},
 };
 use kithara_test_utils::{bufpool::pools, kithara};
 
@@ -24,6 +24,36 @@ const PLANE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(FRAMES + 7);
 const WINDOW: NonZeroUsize = NonZeroUsize::MIN.saturating_add(299);
 #[cfg(feature = "spectrum")]
 const LAGS: NonZeroUsize = NonZeroUsize::MIN.saturating_add(511);
+
+#[kithara::test(native)]
+fn source_frame_operations_never_allocate() {
+    let samples = [0.25; 6 * 33];
+    let offsets = std::array::from_fn::<_, 33, _>(|tap| tap * 6);
+    let weights = [0.125; 33];
+    let mut interpolated = [7.0; 6];
+    let mut weighted = [7.0; 6];
+    assert_no_alloc(|| {
+        for channels in [1, 2, 4, 6] {
+            for fraction in [0.0, 0.5, 1.0_f64.next_down()] {
+                assert_eq!(
+                    interpolate_frame(
+                        &samples[..channels],
+                        &samples[6..6 + channels],
+                        fraction,
+                        &mut interpolated
+                    ),
+                    channels
+                );
+            }
+            weighted_frames(&samples, &offsets, &weights, channels, &mut weighted)
+                .expect("resolved taps");
+            assert_eq!(
+                weighted_frames(&samples, &[usize::MAX], &[1.0], channels, &mut weighted),
+                Err(InterpError::InvalidShape)
+            );
+        }
+    });
+}
 
 #[kithara::test(native)]
 fn layout_and_sanitize_never_allocate() {
@@ -238,51 +268,6 @@ fn spectral_prediction_never_allocates() {
 }
 
 #[kithara::test(native)]
-fn fir_history_peak_linking_and_envelope_never_allocate() {
-    let mut detector = kithara_dsp::filter::Fir::<17, 7, 2, 9>::new([[0.125; 17]; 7]);
-    let mut envelope = kithara_dsp::envelope::AttackRelease::new(0.999);
-    let mut left = [2.0; 600];
-    let mut right = [-2.0; 607];
-    let mut peaks = [0.0; 600];
-    let mut linked = peaks;
-    assert_no_alloc(|| {
-        for frames in [600, 1, 0, 7, 255, 256, 257, 1, 0, 600] {
-            detector.begin_block(&[&mut left[..frames], &mut right[..frames + 7]], 0.98);
-            linked.fill(0.0);
-            assert_eq!(
-                detector.process(0, &left[..frames], &left[..frames], &mut peaks[..frames]),
-                frames
-            );
-            assert_eq!(
-                kithara_dsp::envelope::PeakHold::link(&peaks[..frames], &mut linked[..frames]),
-                frames
-            );
-            assert_eq!(
-                detector.process(
-                    1,
-                    &right[..frames + 7],
-                    &right[..frames],
-                    &mut peaks[..frames]
-                ),
-                frames
-            );
-            assert_eq!(
-                kithara_dsp::envelope::PeakHold::link(&peaks[..frames], &mut linked[..frames]),
-                frames
-            );
-            for target in &mut linked[..frames] {
-                *target = if *target > 0.98 { 0.98 / *target } else { 1.0 };
-            }
-            assert_eq!(envelope.process(&mut linked[..frames]), frames);
-            kithara_dsp::multiply_in_place(&mut left[..frames], &linked[..frames]);
-            kithara_dsp::multiply_in_place(&mut right[..frames], &linked[..frames]);
-        }
-        detector.reset();
-        envelope.reset();
-    });
-}
-
-#[kithara::test(native)]
 fn minimum_window_process_set_len_and_reset_never_allocate() {
     let mut window = kithara_dsp::envelope::MinimumWindow::new(WINDOW, &pools())
         .expect("the older targets fit the region");
@@ -336,4 +321,49 @@ fn delay_reads_writes_and_reset_never_allocate() {
         line.reset();
     });
     assert!(output.iter().all(|sample| *sample == 0.25));
+}
+
+#[kithara::test(native)]
+fn fir_history_peak_linking_and_envelope_never_allocate() {
+    let mut detector = kithara_dsp::filter::Fir::<17, 7, 2, 9>::new([[0.125; 17]; 7]);
+    let mut envelope = kithara_dsp::envelope::AttackRelease::new(0.999);
+    let mut left = [2.0; 600];
+    let mut right = [-2.0; 607];
+    let mut peaks = [0.0; 600];
+    let mut linked = peaks;
+    assert_no_alloc(|| {
+        for frames in [600, 1, 0, 7, 255, 256, 257, 1, 0, 600] {
+            detector.begin_block(&[&mut left[..frames], &mut right[..frames + 7]], 0.98);
+            linked.fill(0.0);
+            assert_eq!(
+                detector.process(0, &left[..frames], &left[..frames], &mut peaks[..frames]),
+                frames
+            );
+            assert_eq!(
+                kithara_dsp::envelope::PeakHold::link(&peaks[..frames], &mut linked[..frames]),
+                frames
+            );
+            assert_eq!(
+                detector.process(
+                    1,
+                    &right[..frames + 7],
+                    &right[..frames],
+                    &mut peaks[..frames]
+                ),
+                frames
+            );
+            assert_eq!(
+                kithara_dsp::envelope::PeakHold::link(&peaks[..frames], &mut linked[..frames]),
+                frames
+            );
+            for target in &mut linked[..frames] {
+                *target = if *target > 0.98 { 0.98 / *target } else { 1.0 };
+            }
+            assert_eq!(envelope.process(&mut linked[..frames]), frames);
+            kithara_dsp::multiply_in_place(&mut left[..frames], &linked[..frames]);
+            kithara_dsp::multiply_in_place(&mut right[..frames], &linked[..frames]);
+        }
+        detector.reset();
+        envelope.reset();
+    });
 }
