@@ -246,6 +246,8 @@ pub(crate) fn run(args: &CacheArgs) -> Result<()> {
         CacheCommand::Verify { env_file } => verify::run(env_file.as_deref()),
         CacheCommand::Record { phase } => evidence::record(phase),
         CacheCommand::Exec { phase, arguments } => {
+            let root = env::current_dir().context("resolve compilation checkout")?;
+            let _target = crate::ci::hold_target(&root, &|name| env::var_os(name))?;
             let status = bootstrap::run(
                 [OsString::from("cache"), phase.into()]
                     .into_iter()
