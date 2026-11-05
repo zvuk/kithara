@@ -291,9 +291,10 @@ fn rejected_and_prepared_retunes_leave_every_active_state_unchanged() {
     let mut actual = crossover(&frequencies, 48_000.0);
     let mut reference = crossover(&frequencies, 48_000.0);
     let source = input();
+    let prefix = source.get(..7).expect("seven-frame fixture");
     let mut outputs = [vec![vec![0.0; 7]; 4], vec![vec![0.0; 7]; 4]];
     for (filter, output) in [&mut actual, &mut reference].into_iter().zip(&mut outputs) {
-        filter.split(&source[..7], output);
+        filter.split(prefix, output);
     }
     actual
         .prepare_sample_rate(hz(44_100.0))
@@ -310,7 +311,7 @@ fn rejected_and_prepared_retunes_leave_every_active_state_unchanged() {
         );
         assert_eq!(actual.apply_prepared_sample_rate(), None);
         for (filter, output) in [&mut actual, &mut reference].into_iter().zip(&mut outputs) {
-            filter.split(&source[..7], output);
+            filter.split(prefix, output);
         }
         assert_eq!(
             outputs[0]
@@ -329,7 +330,7 @@ fn rejected_and_prepared_retunes_leave_every_active_state_unchanged() {
         .prepare_sample_rate(hz(44_100.0))
         .expect("valid preparation");
     for (filter, output) in [&mut actual, &mut reference].into_iter().zip(&mut outputs) {
-        filter.split(&source[..7], output);
+        filter.split(prefix, output);
     }
     assert_eq!(
         outputs[0], outputs[1],
@@ -340,7 +341,7 @@ fn rejected_and_prepared_retunes_leave_every_active_state_unchanged() {
         .expect("commit prepared design");
     let mut fresh = crossover(&frequencies, 44_100.0);
     for (filter, output) in [&mut actual, &mut fresh].into_iter().zip(&mut outputs) {
-        filter.split(&source[..7], output);
+        filter.split(prefix, output);
     }
     assert_eq!(
         outputs[0]
