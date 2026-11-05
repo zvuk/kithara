@@ -1,13 +1,13 @@
 use std::fmt;
 
 use kithara_audio::TrackFailureKind;
-use kithara_command::{Protocol, Target};
+use kithara_command::{Protocol, Seq, Target};
 use kithara_effects::{GainDb, eq::EqLayout};
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_signal::{SegmentId, SessionFrame};
 
-use super::{DeckMixSettingsChange, SlotMark};
+use super::{DeckMixSettingsChange, SlotBinding, SlotGainProgram, SlotMark};
 use crate::{CrossfadeSettings, rt::track::PlayerResource};
 
 /// One scoped deck's commands, clock and verdicts.
@@ -110,6 +110,12 @@ pub enum DeckPart {
     },
     Mix(DeckMixSettingsChange),
     Eq(DeckEqChange),
+    GainProgram {
+        slot: Slot,
+        binding: SlotBinding,
+        authority: Option<Seq>,
+        program: SlotGainProgram,
+    },
     Returned(Returned),
 }
 
@@ -223,6 +229,18 @@ impl fmt::Debug for DeckPart {
                 .finish(),
             Self::Mix(change) => formatter.debug_tuple("Mix").field(change).finish(),
             Self::Eq(change) => formatter.debug_tuple("Eq").field(change).finish(),
+            Self::GainProgram {
+                slot,
+                binding,
+                authority,
+                program,
+            } => formatter
+                .debug_struct("GainProgram")
+                .field("slot", slot)
+                .field("binding", binding)
+                .field("authority", authority)
+                .field("program", program)
+                .finish(),
             Self::Returned(returned) => formatter.debug_tuple("Returned").field(returned).finish(),
         }
     }
