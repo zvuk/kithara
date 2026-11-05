@@ -2910,6 +2910,31 @@ fn the_windows_lane_runs_the_backend_the_platform_ships() {
     );
 }
 
+/// xtask builds itself before the lane's first phase. The guest wipes the
+/// checkout on every run, so a build left there compiled xtask from source each
+/// time; inside the build directory the guest keeps, it is reused.
+#[test]
+fn the_windows_lane_keeps_the_xtask_build_the_guest_keeps() {
+    let workflow = github_workflow("windows.yml");
+    let env = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "env")
+        .as_mapping()
+        .expect("workflow env is a mapping");
+    let kept = mapping_field(env, "CARGO_TARGET_DIR")
+        .as_str()
+        .expect("the lane names the build directory the guest keeps");
+    let xtask = mapping_field(env, "KITHARA_XTASK_TARGET")
+        .as_str()
+        .expect("the lane names where xtask builds itself");
+
+    assert!(
+        xtask
+            .strip_prefix(kept)
+            .and_then(|rest| rest.strip_prefix('\\'))
+            .is_some_and(|name| !name.is_empty()),
+        "xtask builds in `{xtask}`, outside `{kept}`, so the wiped checkout takes it"
+    );
+}
+
 /// The guest carries `FFmpeg` and libclang, and the build scripts find them only
 /// through these. Without `FFMPEG_DIR` the crate falls through to vcpkg and
 /// then pkg-config, the guest has neither; without `LIBCLANG_PATH` bindgen

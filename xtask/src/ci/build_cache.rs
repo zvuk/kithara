@@ -9,7 +9,7 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use fs4::TryLockError;
 use kithara_devtools::{lease, lock::FileLock};
 use tracing::{info, warn};
@@ -569,6 +569,10 @@ pub(crate) struct HeldTarget {
 /// A CI job claims the directory for `checkout` too where its lanes claim
 /// theirs, as [`claim_beside_alias`] says.
 ///
+/// An idle CI target collects superseded Cargo units before the shared lease
+/// is taken. Another holder keeps all its units; nested commands share that
+/// holder's target without collecting files it may still be executing.
+///
 /// A build alias is skipped: it is a link `ci lane` points at the lane's own
 /// directory, and holds that directory itself once it knows the lane.
 pub(crate) fn hold_target(
@@ -579,6 +583,16 @@ pub(crate) fn hold_target(
         .map(PathBuf::from)
         .filter(|target| target.file_name() != Some(OsStr::new(consts::BUILD_ALIAS)))
         .map(|target| {
+            if super::ci_in(var) {
+                let directory = collection_directory(&target)?;
+                if let Some(_idle) = lease::evict(&directory)
+                    .with_context(|| format!("fence idle CI target {}", target.display()))?
+                {
+                    super::build_dir::collect_garbage(&directory, consts::GARBAGE_WINDOW)?;
+                } else {
+                    info!(path = %target.display(), "keeping build units while a job holds the target");
+                }
+            }
             let lease =
                 lease::hold(&target).with_context(|| format!("lease {}", target.display()))?;
             Ok(HeldTarget {
@@ -587,6 +601,17 @@ pub(crate) fn hold_target(
             })
         })
         .transpose()
+}
+
+fn collection_directory(target: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(target).with_context(|| format!("create CI target {}", target.display()))?;
+    let directory = fs::canonicalize(target)
+        .with_context(|| format!("resolve CI target {}", target.display()))?;
+    ensure!(
+        directory.parent().is_some(),
+        "CI target collection cannot use a filesystem root"
+    );
+    Ok(directory)
 }
 
 /// Every build root under `root`, so a caller can hand them to
@@ -1480,5 +1505,123 @@ mod tests {
             .expect("reading an entry that is there")
             .expect("an entry that is there is measured");
         assert!(present.file_type().is_dir());
+    }
+
+    #[test]
+    fn an_idle_ci_target_collects_superseded_cargo_units() {
+        use std::process::Command;
+
+        let checkout = git_checkout(&[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"target_gc\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n[lib]\npath = \"lib.rs\"\n",
+            ),
+            ("lib.rs", "pub fn value() -> u8 { 7 }\n"),
+        ]);
+        let target = tempfile::tempdir().unwrap();
+        let compile = |debug: &str| {
+            let output = Command::new("cargo")
+                .args(["check", "--offline", "--lib", "--target-dir"])
+                .arg(target.path())
+                .current_dir(checkout.path())
+                .env("RUSTC_WRAPPER", "")
+                .env("RUSTC_WORKSPACE_WRAPPER", "")
+                .env_remove("CARGO_ENCODED_RUSTFLAGS")
+                .env("RUSTFLAGS", format!("-Cdebuginfo={debug}"))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        compile("0");
+        let artifacts = || {
+            fs::read_dir(target.path().join("debug/deps"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| path.extension() == Some(OsStr::new("rmeta")))
+                .collect::<Vec<_>>()
+        };
+        let old = artifacts();
+        assert_eq!(old.len(), 1, "one fixture library was compiled");
+        let old_time = SystemTime::now() - consts::GARBAGE_WINDOW * 2;
+        for unit in fs::read_dir(target.path().join("debug/.fingerprint")).unwrap() {
+            for entry in fs::read_dir(unit.unwrap().path()).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_file() {
+                    File::open(path).unwrap().set_modified(old_time).unwrap();
+                }
+            }
+        }
+        compile("1");
+        let current: Vec<_> = artifacts()
+            .into_iter()
+            .filter(|path| !old.contains(path))
+            .collect();
+        assert_eq!(
+            current.len(),
+            1,
+            "the second configuration has its own artifact"
+        );
+        let _held = hold_target(checkout.path(), &|name| match name {
+            "CARGO_TARGET_DIR" => Some(target.path().as_os_str().to_owned()),
+            "CI" => Some(OsString::from("true")),
+            _ => None,
+        })
+        .unwrap();
+        assert!(
+            old.iter().all(|path| !path.exists()),
+            "superseded Cargo outputs still occupy the CI target"
+        );
+        assert!(
+            current.iter().all(|path| path.is_file()),
+            "the current build must remain reusable"
+        );
+    }
+
+    #[test]
+    fn a_nested_ci_target_keeps_the_active_holders_scratch() {
+        let checkout = git_checkout(&[("Cargo.toml", "")]);
+        let target = tempfile::tempdir().unwrap();
+        let scratch = target.path().join(consts::BUILD_SCRATCH).join("in-use");
+        fs::create_dir_all(scratch.parent().unwrap()).unwrap();
+        fs::write(&scratch, b"active fixture").unwrap();
+        let first = lease::hold(target.path()).unwrap();
+        let second = hold_target(checkout.path(), &|name| match name {
+            "CARGO_TARGET_DIR" => Some(target.path().as_os_str().to_owned()),
+            "CI" => Some(OsString::from("true")),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(fs::read(&scratch).unwrap(), b"active fixture");
+        assert!(lease::evict(target.path()).unwrap().is_none());
+        drop((first, second));
+        assert!(lease::evict(target.path()).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_local_target_keeps_its_scratch() {
+        let checkout = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let scratch = target.path().join(consts::BUILD_SCRATCH).join("local");
+        fs::create_dir_all(scratch.parent().unwrap()).unwrap();
+        fs::write(&scratch, b"local work").unwrap();
+        let _held = hold_target(checkout.path(), &|name| {
+            (name == "CARGO_TARGET_DIR").then(|| target.path().as_os_str().to_owned())
+        })
+        .unwrap();
+        assert_eq!(fs::read(&scratch).unwrap(), b"local work");
+    }
+
+    #[test]
+    fn ci_collection_refuses_a_filesystem_root_before_collecting() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .last()
+            .unwrap();
+        let error = collection_directory(root).unwrap_err();
+        assert!(error.to_string().contains("filesystem root"), "{error:#}");
     }
 }

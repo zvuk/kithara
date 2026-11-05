@@ -384,3 +384,44 @@ fn the_initial_runtime_cannot_delete_other_data_or_follow_a_symlink() {
         assert!(alias.is_symlink());
     }
 }
+
+#[test]
+fn cache_exec_prepares_its_retained_ci_target_before_the_compiler_cache() {
+    let target = tempfile::tempdir().unwrap();
+    let scratch = target.path().join("tmp").join("interrupted-test");
+    fs::create_dir_all(scratch.parent().unwrap()).unwrap();
+    fs::write(&scratch, b"disposable build scratch").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["ci", "cache", "exec", "probe", "sh", "-c", "exit 7"])
+        .env("GITHUB_RUN_ID", "retained-target-fixture")
+        .env("CI", "true")
+        .env("GITHUB_ACTIONS", "true")
+        .env("CARGO_TARGET_DIR", target.path())
+        .env_remove("KACHE_HOST_CONFIG")
+        .env_remove("KACHE_RUNTIME_DIR")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_WORK_TREE")
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "a missing cache configuration must still refuse compilation"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("KACHE_HOST_CONFIG"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !scratch.exists(),
+        "cache-exec left disposable files in its retained CI target: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        kithara_devtools::lease::evict(target.path())
+            .unwrap()
+            .is_some(),
+        "the failed phase must release its target"
+    );
+}
