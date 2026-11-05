@@ -171,9 +171,11 @@ impl Crossover {
             .frame
             .split_last_mut()
             .expect("one high band after the crossovers");
-        for (split, low) in self.splits.iter_mut().zip(lower) {
+        for (split, low) in self.splits.iter_mut().zip(lower.iter_mut()) {
             *low = split.lowpass.process(high);
             high = split.highpass.process(high);
+        }
+        for (split, low) in self.splits.iter_mut().zip(lower) {
             for section in &mut split.allpass {
                 *low = section.run(*low);
             }
