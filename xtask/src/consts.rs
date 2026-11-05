@@ -282,6 +282,13 @@ pub(crate) const OPEN_FILES: u64 = 65536;
 /// on rather than the scale a compiler writes files on.
 pub(crate) const JOB_ROOM_POLL: Duration = Duration::from_secs(15);
 
+/// The bytes a CI job needs free on the volume it builds on, told by the
+/// executor that names its build root.
+pub(crate) const JOB_ROOM_BYTES_ENV: &str = "KITHARA_CI_JOB_ROOM_BYTES";
+
+/// How many seconds a CI job waits for that room before refusing to start.
+pub(crate) const JOB_ROOM_WAIT_ENV: &str = "KITHARA_CI_JOB_ROOM_WAIT_SECONDS";
+
 #[cfg(test)]
 #[cfg(unix)]
 pub(crate) const CACHE_ROOT: &str = "KITHARA_TEST_CACHE_ROOT";
