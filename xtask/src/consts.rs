@@ -565,6 +565,11 @@ pub(crate) const BUILD_ALIAS: &str = "build";
 /// The file in a build directory that records the content its builds read.
 pub(crate) const SOURCES_RECORD: &str = "sources.tsv";
 
+/// The scratch directory Cargo keeps in a build directory for tests
+/// (`CARGO_TARGET_TMPDIR`). No build reads it back, so a lane entering the
+/// directory sweeps it.
+pub(crate) const BUILD_SCRATCH: &str = "tmp";
+
 /// The header of a sources record a job still holds.
 pub(crate) const SOURCES_HELD: &str = "held";
 
