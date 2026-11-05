@@ -1,4 +1,4 @@
-use std::num::NonZeroUsize;
+use std::{iter, num::NonZeroUsize};
 
 use kithara_test_fixtures::portable::sine_440;
 use kithara_test_utils::kithara;
@@ -204,4 +204,76 @@ fn a_mismatched_shape_is_an_error() {
     assert_eq!(filter.retune(1, low_pass(1_000.0)), Err(FilterError::Shape));
     assert_eq!(filter.settle(&[0.0]), Err(FilterError::Shape));
     assert_eq!(filter.copy_state(&other), Err(FilterError::Shape));
+}
+
+/// One stream through two low-pass sections: a tone until frame 6096, then
+/// silence while the sections ring out through `1e-9` to exact zero.
+fn sound_then_silence(frames: usize) -> Vec<Vec<f32>> {
+    const SOUND: usize = 6_096;
+    let plane: Vec<f32> = sine_440()
+        .iter()
+        .cycle()
+        .take(SOUND)
+        .map(|sample| sample * 0.5)
+        .chain(iter::repeat(0.0))
+        .take(frames)
+        .collect();
+    vec![plane.clone(), plane]
+}
+
+fn ringing() -> Biquad {
+    let mut filter = Biquad::new(TWO, TWO).expect("filter builds");
+    filter.retune(0, low_pass(1_000.0)).expect("section 0 exists");
+    filter
+        .retune(1, design(RATE, 200.0, 4.0))
+        .expect("section 1 exists");
+    filter
+}
+
+/// Filters `planes` in consecutive calls whose lengths repeat `lengths`.
+fn in_calls(planes: &mut [Vec<f32>], lengths: &[usize]) {
+    let mut filter = ringing();
+    let frames = planes.first().map_or(0, Vec::len);
+    let mut start = 0;
+    for length in lengths.iter().cycle() {
+        if start >= frames {
+            break;
+        }
+        let end = start.saturating_add(*length).min(frames);
+        filter.process(planes, start..end).expect("shape matches");
+        start = end;
+    }
+}
+
+#[kithara::test]
+fn every_partition_of_a_stream_yields_the_same_bits() {
+    const FRAMES: usize = 32_768;
+    let mut whole = sound_then_silence(FRAMES);
+    in_calls(&mut whole, &[FRAMES]);
+    let tail = whole
+        .first()
+        .and_then(|plane| plane.get(6_096..))
+        .unwrap_or_default();
+    assert!(
+        tail.iter()
+            .any(|sample| *sample != 0.0 && sample.abs() < 1.0e-9),
+        "the tail never rings below 1e-9"
+    );
+    assert_eq!(tail.last().map(|sample| sample.to_bits()), Some(0));
+    for lengths in [&[64][..], &[1], &[1, 2, 3, 5, 7, 11, 13, 64, 127, 1_000]] {
+        let mut split = sound_then_silence(FRAMES);
+        in_calls(&mut split, lengths);
+        let first = bits(&split)
+            .iter()
+            .zip(bits(&whole))
+            .find_map(|(left, right)| {
+                left.iter()
+                    .zip(&right)
+                    .position(|(left, right)| left != right)
+            });
+        assert_eq!(
+            first, None,
+            "calls of {lengths:?} first differ at frame {first:?}"
+        );
+    }
 }
