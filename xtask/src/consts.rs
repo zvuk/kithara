@@ -5,6 +5,90 @@ use std::{
 
 pub(crate) const INPUT_BYTES: usize = 32 * 1024 * 1024;
 
+pub(crate) const WASM_TEST_ARGS: &[&str] = &[
+    "test",
+    "--profile",
+    "test-release",
+    "--target",
+    "wasm32-unknown-unknown",
+    "-Z",
+    "build-std=std,panic_abort,core,alloc",
+    "-Z",
+    "build-std-features=optimize_for_size",
+];
+
+pub(crate) const WASM_ENCODER_TEST: &[&str] = &[
+    "-p",
+    "kithara-encode",
+    "--no-default-features",
+    "--features",
+    "client-reqwest,tls-rustls",
+    "--test",
+    "session",
+];
+
+pub(crate) const WASM_OBSERVER_TEST: &[&str] = &[
+    "-p",
+    "kithara-ffi",
+    "--test",
+    "web-observer",
+    "--no-default-features",
+    "--features",
+    "wasm",
+];
+
+pub(crate) const WASM_LAYOUT_TEST: &[&str] = &[
+    "-p",
+    "kithara-dsp",
+    "--test",
+    "layout",
+    "--features",
+    "spectrum",
+];
+
+pub(crate) const WASM_ANALYSIS_TEST: &[&str] = &[
+    "-p",
+    "kithara-ffi-web-analysis-tests",
+    "--features",
+    "browser",
+    "--test",
+    "web-analysis",
+];
+
+pub(crate) const WASM_INTEGRATION_TEST: &[&str] = &[
+    "-p",
+    "kithara-ffi-web-tests",
+    "-p",
+    "kithara-integration-tests",
+    "--no-default-features",
+    "--features",
+    "kithara-integration-tests/wasm",
+    "--test",
+    "ffi_web",
+    "--test",
+    "suite_heavy",
+];
+
+pub(crate) const WASM_LIVE_GRAPH_TEST: &[&str] = &[
+    "-p",
+    "kithara-integration-tests",
+    "--no-default-features",
+    "--features",
+    "kithara-integration-tests/wasm",
+    "--test",
+    "suite_live_web_audio",
+];
+
+pub(crate) const WASM_WEBCODECS_TEST: &[&str] = &[
+    "-p",
+    "kithara-decode",
+    "--no-default-features",
+    "--features",
+    "symphonia,webcodecs,client-reqwest,tls-rustls",
+    "--test",
+    "webcodecs_browser",
+];
+
 pub(crate) const PATCH_BYTES: usize = 16 * 1024 * 1024;
 
 pub(crate) const PATCH_OPERATIONS: usize = 4096;
