@@ -102,8 +102,8 @@ where
         cx: ConstructProcessorContext,
     ) -> Result<impl AudioNodeProcessor, NodeError> {
         let shape = StreamShape::new(cx.stream_info.max_block_frames, cx.stream_info.sample_rate);
-        let mut inputs = self.inputs.lock();
-        let borrowed = inputs
+        let mut guard = self.inputs.lock();
+        let borrowed = guard
             .as_ref()
             .ok_or_else(|| NodeError(Box::new(ProcessorInputsTaken)))?;
         let prepared = DeckMixer::<E>::prepare(&borrowed.mixer, shape, &self.pools)
@@ -113,9 +113,10 @@ where
                 .check_install()
                 .map_err(|error| NodeError(Box::new(error)))?;
         }
-        let inputs = inputs
+        let inputs = guard
             .take()
             .ok_or_else(|| NodeError(Box::new(ProcessorInputsTaken)))?;
+        drop(guard);
         let mixer = Box::new(DeckMixer::<E>::assemble(inputs.mixer, prepared));
         match inputs.offline {
             Some(mut processor) => {
