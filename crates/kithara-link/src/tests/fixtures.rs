@@ -776,6 +776,12 @@ pub(super) fn consume(control: &Control, frame: u32) {
     });
 }
 
+/// The default plan horizon in fixture frames.
+pub(super) fn horizon() -> u64 {
+    u64::try_from(LinkConfig::default().horizon().as_nanos() * 48_000 / 1_000_000_000)
+        .expect("fixture horizon")
+}
+
 pub(super) fn source_grid(model: &BeatGridModel) -> kithara_sync::SourceGrid {
     kithara_sync::SourceGrid::new(
         model.geometry(),
