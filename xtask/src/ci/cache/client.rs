@@ -11,7 +11,14 @@ use clap::{Args, Subcommand};
 use xtask::ci::bootstrap;
 
 use super::{super::config::CiPins, evidence, serve, snapshot, snapshot::SnapshotArgs, verify};
-use crate::{ci::host::mac::read_secret, consts};
+use crate::{
+    ci::{
+        build_cache,
+        environment::{ci_in, process_var},
+        host::mac::read_secret,
+    },
+    consts,
+};
 
 /// Everything else a client is told, fixed by how a scope is provisioned.
 ///
@@ -247,7 +254,12 @@ pub(crate) fn run(args: &CacheArgs) -> Result<()> {
         CacheCommand::Record { phase } => evidence::record(phase),
         CacheCommand::Exec { phase, arguments } => {
             let root = env::current_dir().context("resolve compilation checkout")?;
-            let _target = crate::ci::hold_target(&root, &|name| env::var_os(name))?;
+            let _target = crate::ci::hold_target(&root, &process_var)?;
+            if ci_in(&process_var) {
+                let target = env::var_os("CARGO_TARGET_DIR")
+                    .context("a CI compilation phase must name CARGO_TARGET_DIR")?;
+                build_cache::admit_linux_build(Path::new(&target), &process_var)?;
+            }
             let status = bootstrap::run(
                 [OsString::from("cache"), phase.into()]
                     .into_iter()

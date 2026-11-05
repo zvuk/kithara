@@ -144,6 +144,12 @@ It reclaims and reports pressure; the job's own gate, which waits and reclaims,
 decides whether it has room. Provisioning installs the executable, host profile
 and pins together; the admission hook uses that installed set.
 
+Network compilation phases and Stress units use the Linux executor's room gate
+as well. Stress passes its validated subject build after taking its lease;
+admission therefore measures the volume it actually builds on. Reclaim searches
+the executor's configured cache roots through the source-aware build walk and
+does not traverse build aliases as independent roots.
+
 Superseded branch and merge-request child pipelines cancel interruptible checks,
 including iOS and end-to-end review suites. Main, scheduled, release, and explicit
 platform runs retain their cancellation policy. Quarantine refs are unique per
@@ -177,6 +183,11 @@ uses the bucket named by the job's actual credentials; a claimed trust label
 does not select another bucket. Branch and quarantine runs only restore the
 layer. A main publisher fails if its upload fails. A main run on another host
 does not fill this host's store.
+
+Source snapshot archive and restore hold Cargo's package-cache download lock.
+That excludes concurrent source mutations and garbage collection while existing
+compiler readers continue. The publisher fetches before taking the lock and
+releases it before uploading the completed archive.
 
 Before its compiler daemon stops, a lane retains sanitized observations in
 a job-keyed file under `.ci-artifacts/cache/`. The report separates kache and sccache, records

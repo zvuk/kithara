@@ -15,6 +15,34 @@ fn executable(path: &Path, contents: &str) {
         .expect("make compiler-cache fixture executable runnable");
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn cache_exec_refuses_a_full_volume_before_starting_the_compiler_cache() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("target");
+    let required = u64::MAX.to_string();
+    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["ci", "cache", "exec", "network", "sh", "-c", "exit 19"])
+        .current_dir(temp.path())
+        .env("CI", "true")
+        .env("CARGO_TARGET_DIR", &target)
+        .env_remove("KITHARA_CI_BUILD_SLOTS")
+        .env("KITHARA_CI_JOB_ROOM_BYTES", &required)
+        .env("KITHARA_CI_JOB_ROOM_WAIT_SECONDS", "0")
+        .env("KACHE_HOST_CONFIG", temp.path().join("absent-host.toml"))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains(&target.display().to_string()), "{stderr}");
+    assert!(
+        stderr.contains(&format!("job needs {required}")),
+        "{stderr}"
+    );
+    assert!(kithara_devtools::lease::evict(&target).unwrap().is_some());
+}
+
 #[test]
 fn bootstrap_compiles_only_with_a_writable_s3_daemon() {
     let ready =

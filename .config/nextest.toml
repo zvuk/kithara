@@ -70,6 +70,19 @@ retries = 1
 [profile.ci.junit]
 path = "junit.xml"
 
+# Miri runs one interpreter per test so independent tests use the executor's
+# available CPUs. Keep Cargo libtest's slow-test reporting and the CI job's
+# overall deadline; native wall-time backstops do not bound interpreted work.
+[profile.miri]
+default-filter = 'all()'
+fail-fast = false
+retries = 0
+slow-timeout = { period = "60s" }
+
+[profile.miri.junit]
+path = "junit.xml"
+store-failure-output = true
+
 # Android runs a whole binary behind the first nextest request. The adapter
 # owns its one-hour process deadline and preserves partial libtest results.
 # Nextest reports slow batches without killing an already-passed first test.

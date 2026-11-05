@@ -139,6 +139,66 @@ pub(crate) fn admit(
     }
 }
 
+/// Applies the room and wait policy supplied by the CI executor.
+pub(crate) fn admit_for_job(
+    volume: &Path,
+    searched: &[&Path],
+    roots: &dyn Fn() -> Result<Vec<PathBuf>>,
+    var: &dyn Fn(&str) -> Option<OsString>,
+) -> Result<()> {
+    let told = |name: &str| {
+        var(name)
+            .and_then(|value| value.into_string().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .with_context(|| {
+                format!("a CI job told its build root must be told {name} as a whole number")
+            })
+    };
+    admit(
+        volume,
+        searched,
+        roots,
+        told(consts::JOB_ROOM_BYTES_ENV)?,
+        Duration::from_secs(told(consts::JOB_ROOM_WAIT_ENV)?),
+    )
+}
+
+/// Admits a leased build selected outside the declared Linux lane adapter.
+pub(crate) fn admit_linux_build(
+    build: &Path,
+    var: &dyn Fn(&str) -> Option<OsString>,
+) -> Result<()> {
+    if !cfg!(target_os = "linux") || !super::environment::ci_in(var) {
+        return Ok(());
+    }
+    admit_named_build(build, var)
+}
+
+fn admit_named_build(build: &Path, var: &dyn Fn(&str) -> Option<OsString>) -> Result<()> {
+    let mut searched: Vec<PathBuf> = ["CARGO_TARGET_DIR", consts::BUILD_SLOTS_ENV]
+        .into_iter()
+        .filter_map(var)
+        .map(PathBuf::from)
+        .collect();
+    searched.sort();
+    searched.dedup();
+    let paths: Vec<&Path> = searched.iter().map(PathBuf::as_path).collect();
+    admit_for_job(
+        build,
+        &paths,
+        &|| {
+            let mut roots = Vec::new();
+            for directory in &searched {
+                roots.extend(build_roots(directory)?);
+            }
+            roots.sort();
+            roots.dedup();
+            Ok(roots)
+        },
+        var,
+    )
+}
+
 /// Return what the host accumulated for itself before deciding there is no
 /// room for the job, and say how many build roots there were to take it from.
 ///
@@ -777,7 +837,9 @@ fn collection_directory(target: &Path) -> Result<PathBuf> {
 /// keeps that one, and its bytes are charged against the ceiling, which is
 /// what leaves the idle builds beside it payable.
 pub(crate) fn build_roots(root: &Path) -> Result<Vec<PathBuf>> {
-    if !root.is_dir() {
+    let metadata = still_there(fs::symlink_metadata(root))
+        .with_context(|| format!("reading CI workspace metadata for {}", root.display()))?;
+    if !metadata.is_some_and(|metadata| metadata.file_type().is_dir()) {
         return Ok(Vec::new());
     }
 
@@ -1004,6 +1066,55 @@ mod tests {
 
     fn occupied(root: &Path) -> u64 {
         total_bytes(&candidate_entries(root).unwrap().entries)
+    }
+
+    #[test]
+    fn named_build_admission_reclaims_only_idle_outputs_and_preserves_sources() {
+        let checkout = git_checkout(&[("Cargo.toml", "[workspace]\n")]);
+        let build = build_dir(checkout.path(), "target-stress", 4096);
+        let idle = build_dir(checkout.path(), "target-old", 4096);
+        for path in [&build, &idle] {
+            fs::write(path.join(".rustc_info.json"), "{}").unwrap();
+        }
+        drop(lease::hold(&idle).unwrap());
+        let held = lease::hold(&build).unwrap();
+        let source = checkout.path().join("source/preserved.rs");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, "source bytes").unwrap();
+
+        let error = admit_named_build(&build, &|name| match name {
+            "CARGO_TARGET_DIR" => Some(checkout.path().as_os_str().to_owned()),
+            consts::JOB_ROOM_BYTES_ENV => Some(u64::MAX.to_string().into()),
+            consts::JOB_ROOM_WAIT_ENV => Some("0".into()),
+            _ => None,
+        })
+        .expect_err("the volume cannot provide u64::MAX free bytes");
+
+        assert!(format!("{error:#}").contains("job needs"), "{error:#}");
+        assert!(!idle.exists(), "idle Cargo output must be reclaimed");
+        assert!(build.join("debug/artifact").exists());
+        assert_eq!(fs::read_to_string(source).unwrap(), "source bytes");
+        assert!(checkout.path().join("Cargo.toml").is_file());
+        drop(held);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_build_alias_is_not_walked_as_an_unleased_profile_root() {
+        let root = tempfile::tempdir().unwrap();
+        let build = build_dir(root.path(), "target", 4096);
+        fs::create_dir_all(build.join("debug/build")).unwrap();
+        fs::write(build.join(".rustc_info.json"), "{}").unwrap();
+        let held = lease::hold(&build).unwrap();
+        let alias = root.path().join("alias");
+        std::os::unix::fs::symlink(&build, &alias).unwrap();
+
+        let roots = build_roots(&alias).unwrap();
+        enforce_budget(&roots, 0).unwrap();
+
+        assert!(roots.is_empty(), "aliases are not independent build roots");
+        assert!(build.join("debug/artifact").exists());
+        drop(held);
     }
 
     #[test]

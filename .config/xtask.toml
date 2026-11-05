@@ -1890,7 +1890,7 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just"]
+tools = ["cargo", "cargo-nextest", "just"]
 program = "just"
 steps = [{ args = ["test", "miri"], label = "Miri interpreter run" }]
 role = "deep"
@@ -1898,6 +1898,7 @@ kinds = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
 timeout_minutes = 240
+artifact = { name = "miri-junit", path = "target/nextest/miri/junit.xml", when = "always" }
 
 # libFuzzer needs the nightly sanitizer flags, so the targets build on the
 # pinned nightly the image links as `nightly`. Each target runs for a fixed
