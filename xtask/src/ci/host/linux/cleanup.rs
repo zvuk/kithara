@@ -1,6 +1,10 @@
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    fmt::Display,
+    path::{Path, PathBuf},
+};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use tracing::info;
 
 use super::{container::Container, profile::LinuxHost};
@@ -30,6 +34,43 @@ pub(super) fn run(process: &Process, host: &LinuxHost, keep: &[String]) -> Resul
         .first()
         .context("cleanup was given no image to keep; reinstall the services to name them")?;
 
+    // Each step reclaims a store of its own, and the build-cache budget is the
+    // one a job's room depends on, so it goes first. Chained, a compiler store
+    // kache could not collect left every build cache over its budget for as
+    // long as the store stayed broken. A step that fails leaves only its own
+    // store to the next tick, and its failure is still this tick's result, so
+    // the unit reports it.
+    every_step([
+        (
+            "hold the build caches to their budget",
+            hold_build_caches(host),
+        ),
+        (
+            "remove superseded project images",
+            reclaim_images(process, keep),
+        ),
+        ("remove dead project volumes", reclaim_volumes(process)),
+        (
+            "collect the local compiler stores",
+            reclaim_compiler_stores(process, host, image),
+        ),
+    ])
+    .context("cleanup left work undone")
+}
+
+/// Every step's outcome, failing with each step that left work undone.
+fn every_step<S: Display>(steps: impl IntoIterator<Item = (S, Result<()>)>) -> Result<()> {
+    let failures: Vec<String> = steps
+        .into_iter()
+        .filter_map(|(step, outcome)| outcome.err().map(|error| format!("{step}: {error:#}")))
+        .collect();
+    if failures.is_empty() {
+        return Ok(());
+    }
+    bail!("{}", failures.join("; "))
+}
+
+fn reclaim_images(process: &Process, keep: &[String]) -> Result<()> {
     let listed = process.capture(
         "docker",
         &[
@@ -49,7 +90,11 @@ pub(super) fn run(process: &Process, host: &LinuxHost, keep: &[String]) -> Resul
         kept = keep.len(),
         "superseded project images removed"
     );
+    Ok(())
+}
 
+/// The volumes no container holds, and Docker's old build cache.
+fn reclaim_volumes(process: &Process) -> Result<()> {
     let dangling = process.capture(
         "docker",
         &[
@@ -84,51 +129,64 @@ pub(super) fn run(process: &Process, host: &LinuxHost, keep: &[String]) -> Resul
         ],
         "prune the build cache",
     );
-    reclaim_compiler_stores(process, host, image)?;
-    let target_dirs = target_dirs(host)?;
-    build_cache::enforce_budget(&target_dirs, host.build_cache_budget_bytes()?)?;
     Ok(())
+}
+
+fn hold_build_caches(host: &LinuxHost) -> Result<()> {
+    build_cache::enforce_budget(&target_dirs(host)?, host.build_cache_budget_bytes()?)
 }
 
 // Automatic GC protects recent imports for six hours above the size limit.
 // The installed image's CLI applies the host budget without that retention.
+// Each store is collected on its own, so a store kache cannot collect leaves
+// the others to theirs.
 fn reclaim_compiler_stores(process: &Process, host: &LinuxHost, image: &str) -> Result<()> {
-    for store in compiler_stores(host)? {
-        let report = process.capture(
-            "docker",
-            &[
-                "run",
-                "--rm",
-                "--init",
-                "--pull=never",
-                "--network=none",
-                &format!("--user={user}:{user}", user = consts::JOB_USER),
-                "--read-only",
-                "--tmpfs=/tmp:rw,nosuid,nodev",
-                "--volume",
-                &format!("{}:/store:rw", store.display()),
-                "--env=HOME=/tmp",
-                "--env=KACHE_CONFIG=/dev/null",
-                "--env=KACHE_HOST_CONFIG=/dev/null",
-                "--env=KACHE_LOCAL_ONLY=1",
-                "--env=KACHE_CACHE_DIR=/store",
-                "--env=KACHE_RUNTIME_DIR=/tmp/kache",
-                "--env=KACHE_PREFETCH_ENABLED=false",
-                &format!("--env=KACHE_MAX_SIZE={}", host.compiler_cache_size),
-                "--entrypoint=/usr/bin/ionice",
-                image,
-                "-c",
-                "3",
-                "/usr/bin/nice",
-                "-n",
-                "15",
-                "kache",
-                "gc",
-            ],
-            "collect the local compiler store",
-        )?;
-        info!(path = %store.display(), %report, "local compiler store collected");
-    }
+    every_step(compiler_stores(host)?.into_iter().map(|store| {
+        let outcome = collect_compiler_store(process, host, image, &store);
+        (store.display().to_string(), outcome)
+    }))
+}
+
+fn collect_compiler_store(
+    process: &Process,
+    host: &LinuxHost,
+    image: &str,
+    store: &Path,
+) -> Result<()> {
+    let report = process.capture(
+        "docker",
+        &[
+            "run",
+            "--rm",
+            "--init",
+            "--pull=never",
+            "--network=none",
+            &format!("--user={user}:{user}", user = consts::JOB_USER),
+            "--read-only",
+            "--tmpfs=/tmp:rw,nosuid,nodev",
+            "--volume",
+            &format!("{}:/store:rw", store.display()),
+            "--env=HOME=/tmp",
+            "--env=KACHE_CONFIG=/dev/null",
+            "--env=KACHE_HOST_CONFIG=/dev/null",
+            "--env=KACHE_LOCAL_ONLY=1",
+            "--env=KACHE_CACHE_DIR=/store",
+            "--env=KACHE_RUNTIME_DIR=/tmp/kache",
+            "--env=KACHE_PREFETCH_ENABLED=false",
+            &format!("--env=KACHE_MAX_SIZE={}", host.compiler_cache_size),
+            "--entrypoint=/usr/bin/ionice",
+            image,
+            "-c",
+            "3",
+            "/usr/bin/nice",
+            "-n",
+            "15",
+            "kache",
+            "gc",
+        ],
+        "collect the local compiler store",
+    )?;
+    info!(path = %store.display(), %report, "local compiler store collected");
     Ok(())
 }
 
@@ -274,6 +332,108 @@ mod tests {
             assert!(call.ends_with("kache gc"));
             assert!(!call.contains("AWS_"));
         }
+    }
+
+    /// A job's room depends on the build-cache budget, so a compiler store
+    /// kache cannot collect must not leave the builds unheld, and the tick
+    /// still answers for the store it left.
+    #[cfg(unix)]
+    #[test]
+    fn a_compiler_store_that_fails_to_collect_leaves_the_builds_held_to_their_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut host = super::super::profile::tests::host_fixture();
+        host.cache_root = directory.path().join("cache");
+        for runner in &host.runners {
+            fs::create_dir_all(Container::build_root(&host, runner)).unwrap();
+            fs::create_dir_all(Container::build_slots(&host, runner)).unwrap();
+            let store = Container::kache(&host, runner).join(consts::KACHE_STORE);
+            fs::create_dir_all(&store).unwrap();
+            fs::write(store.join("index.db"), []).unwrap();
+        }
+        fs::create_dir_all(host.cache_root.join(consts::PREVIOUS_LANES)).unwrap();
+        // Only a budget pass removes an eviction's leftover, so its absence is
+        // what says the pass ran.
+        let leftover = Container::build_root(&host, &host.runners[0])
+            .join(format!("{}lane", consts::EVICTING_PREFIX));
+        fs::create_dir_all(&leftover).unwrap();
+        let bin = directory.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        crate::testing::install_script(
+            &bin.join("docker"),
+            "#!/bin/sh\nif [ \"$1\" = run ]; then exit 1; fi\n",
+        );
+        let paths = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .unwrap();
+        let process = Process::new(directory.path(), BTreeMap::from([("PATH".into(), paths)]));
+
+        let error = run(&process, &host, &keep(&["installed:reviewed"]))
+            .expect_err("a store kache could not collect fails the tick");
+
+        assert!(
+            !leftover.exists(),
+            "the builds are held to their budget after the compiler collection failed"
+        );
+        assert!(
+            format!("{error:#}").contains("collect the local compiler stores"),
+            "the failure names the step that left work undone: {error:#}"
+        );
+    }
+
+    /// Each scope's store is its own: one kache cannot collect must not leave
+    /// the others uncollected.
+    #[cfg(unix)]
+    #[test]
+    fn a_store_kache_cannot_collect_leaves_the_other_stores_collected() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut host = super::super::profile::tests::host_fixture();
+        host.cache_root = directory.path().join("cache");
+        let stores: BTreeSet<PathBuf> = host
+            .runners
+            .iter()
+            .map(|runner| Container::kache(&host, runner).join(consts::KACHE_STORE))
+            .collect();
+        assert!(stores.len() > 1, "the fixture has more than one scope");
+        for store in &stores {
+            fs::create_dir_all(store).unwrap();
+            fs::write(store.join("index.db"), []).unwrap();
+        }
+        let mut stores = stores.into_iter();
+        let broken = stores.next().unwrap();
+        let bin = directory.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let trace = directory.path().join("collected");
+        crate::testing::install_script(
+            &bin.join("docker"),
+            &format!(
+                "#!/bin/sh\ncase \"$*\" in *'{}:'*) exit 1 ;; esac\nprintf '%s\\n' \"$*\" >> '{}'\n",
+                broken.display(),
+                trace.display()
+            ),
+        );
+        let paths = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .unwrap();
+        let process = Process::new(directory.path(), BTreeMap::from([("PATH".into(), paths)]));
+
+        let error = reclaim_compiler_stores(&process, &host, "installed:reviewed")
+            .expect_err("a store kache could not collect fails the step");
+
+        let collected = fs::read_to_string(&trace).unwrap_or_default();
+        for store in stores {
+            assert!(
+                collected.contains(&format!("{}:/store:rw", store.display())),
+                "{} is collected after {} failed",
+                store.display(),
+                broken.display()
+            );
+        }
+        assert!(
+            format!("{error:#}").contains(&broken.display().to_string()),
+            "the failure names the store left uncollected: {error:#}"
+        );
     }
 
     #[cfg(unix)]
