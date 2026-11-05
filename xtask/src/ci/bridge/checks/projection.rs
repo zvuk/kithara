@@ -75,7 +75,7 @@ fn project_source(
     let mut snapshot = match observed {
         Ok(snapshot) => snapshot,
         Err(error) => {
-            tracing::warn!(source = prefix, %error, "reading PR checks failed");
+            tracing::warn!(source = prefix, error = %format_args!("{error:#}"), "reading PR checks failed");
             Snapshot {
                 statuses: vec![check(
                     summary,
@@ -193,6 +193,32 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn source_read_errors_log_the_transport_cause_and_remain_errors() {
+        let log = tempfile::NamedTempFile::new().unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(log.reopen().unwrap())
+            .finish();
+        let statuses = tracing::subscriber::with_default(subscriber, || {
+            project_source(
+                "GitHub / ",
+                "kithara/github-ci",
+                Err(anyhow!("connection closed before response headers")
+                    .context("GET https://api.github.com/repos/owner/repo/actions/runs failed")),
+                &BTreeMap::new(),
+            )
+        });
+        let warning = std::fs::read_to_string(log.path()).unwrap();
+        assert!(warning.contains("reading PR checks failed"));
+        assert!(warning.contains("GET https://api.github.com/"));
+        assert!(warning.contains("connection closed before response headers"));
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].context, "kithara/github-ci");
+        assert_eq!(statuses[0].state, "error");
+    }
 
     #[test]
     fn review_limit_uses_the_configured_boundary() {
