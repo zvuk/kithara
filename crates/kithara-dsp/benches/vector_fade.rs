@@ -158,5 +158,68 @@ fn render_products(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, vector, fade_gains, render_products);
+fn detector(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fir_history");
+    group.sample_size(20);
+    for frames in [128, 256, 257, 600] {
+        for (label, amplitude) in [("quiet", 0.125), ("overloaded", 2.0)] {
+            let input: Vec<f32> = tone(frames)
+                .into_iter()
+                .map(|sample| sample * amplitude)
+                .collect();
+            let detector = kithara_dsp::filter::Fir::<17, 7, 1, 9>::new([[0.125; 17]; 7]);
+            let mut output = vec![0.0; frames];
+            group.bench_function(BenchmarkId::new(label, frames), |b| {
+                b.iter_batched_ref(
+                    || (detector.clone(), input.clone()),
+                    |(detector, input)| {
+                        detector.begin_block(&[input.as_mut_slice()], 0.98);
+                        detector.process(
+                            0,
+                            black_box(input.as_slice()),
+                            black_box(input.as_slice()),
+                            black_box(output.as_mut_slice()),
+                        );
+                        black_box(&output);
+                    },
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
+fn envelope(c: &mut Criterion) {
+    let mut group = c.benchmark_group("attack_release");
+    group.sample_size(20);
+    for frames in [128, 256, 257, 600] {
+        let envelope = kithara_dsp::envelope::AttackRelease::new(0.999_583_4);
+        let targets: Vec<f32> = [1.0, 0.25, 0.8, 0.99]
+            .into_iter()
+            .cycle()
+            .take(frames)
+            .collect();
+        group.bench_function(BenchmarkId::from_parameter(frames), |b| {
+            b.iter_batched_ref(
+                || (envelope.clone(), targets.clone()),
+                |(envelope, targets)| {
+                    envelope.process(black_box(targets.as_mut_slice()));
+                    black_box(targets.as_slice());
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    vector,
+    fade_gains,
+    render_products,
+    detector,
+    envelope
+);
 criterion_main!(benches);

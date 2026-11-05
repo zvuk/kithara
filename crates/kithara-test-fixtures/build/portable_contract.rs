@@ -140,7 +140,7 @@ fn prepared_glide_mixture_preserves_every_original_sample_bit(output: &Path) {
 }
 
 fn prepared_metronome_mixes_preserve_the_original_ceiling_and_sample_bits(output: &Path) {
-    let ceiling = kithara_effects::LimiterConfig::default().ceiling();
+    let ceiling = f32::from(kithara_effects::LimiterConfig::default().ceiling());
     let held: Vec<_> = (0..8_192_u16)
         .map(|frame| {
             let rise = (f32::from(frame) / 512.0).min(1.0);
