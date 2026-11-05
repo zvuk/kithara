@@ -449,15 +449,6 @@ const CUTOFFS: [[f64; 4]; 2] = [
     [1_000.0, 2_000.0, 4_000.0, 8_000.0],
     [3_000.0, 5_000.0, 7_000.0, 9_000.0],
 ];
-/// Peak inputs: specials without `NaN` and subnormals, which `max` orders differently.
-const PEAK_SPECIALS: [f32; 6] = [
-    0.0,
-    -0.0,
-    f32::MIN_POSITIVE,
-    f32::MAX,
-    f32::INFINITY,
-    f32::NEG_INFINITY,
-];
 
 /// Section coefficients per half of the stream: the second half retunes.
 fn halves(sections: usize) -> [Vec<[f32; 5]>; 2] {
@@ -578,8 +569,6 @@ fn every_cascade_backend_tracks_the_f64_oracle_across_a_retune() {
             handover_run!(cascade::Cascade) as RunCascade,
         ),
         ("portable-fallback", portable_fallback_run),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        ("accelerate", handover_run!(accelerate::Cascade)),
     ]);
     for channels in [1_usize, 2, 8] {
         for sections in [1_usize, 4] {
@@ -657,45 +646,6 @@ fn a_silent_channel_beside_a_playing_one_never_reaches_subnormals() {
             subnormal, 0,
             "{name}: the silent channel rang in subnormals"
         );
-    }
-}
-
-fn fallback_peak(samples: &[f32]) -> f32 {
-    dispatch!(Level::fallback(), simd => portable::peak_kernel(simd, samples))
-}
-
-#[kithara::test]
-fn peak_matches_the_scalar_maximum_on_every_backend() {
-    type Peak = fn(&[f32]) -> f32;
-    let backends: Vec<(&str, Peak)> = Vec::from([
-        ("portable-native", portable::peak as Peak),
-        ("portable-fallback", fallback_peak),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        ("accelerate", accelerate::peak),
-    ]);
-    for len in SIZES {
-        let sine: Vec<f32> = signal(len.saturating_add(SPECIALS.len()), sine_440())
-            .into_iter()
-            .skip(SPECIALS.len())
-            .collect();
-        let with_specials: Vec<f32> = PEAK_SPECIALS
-            .iter()
-            .copied()
-            .chain(sine.iter().copied())
-            .take(len)
-            .collect();
-        for samples in [&sine, &with_specials] {
-            let expected = samples
-                .iter()
-                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
-            for (name, peak) in &backends {
-                assert_eq!(
-                    peak(samples).to_bits(),
-                    expected.to_bits(),
-                    "{name} at {len}"
-                );
-            }
-        }
     }
 }
 
@@ -1479,5 +1429,29 @@ fn fade_gains_track_the_f64_curves_at_every_level() {
             3,
             "{name}: the shortest side bounds the prefix"
         );
+    }
+}
+
+#[test]
+fn zz_probe_timing() {
+    use std::time::Instant;
+    let lp = Coefficients::<f64>::from_params(Type::LowPass, Hertz::<f64>::from_hz(48_000.0).unwrap(), Hertz::<f64>::from_hz(1_000.0).unwrap(), 0.707).unwrap();
+    let taps = [lp.b0, lp.b1, lp.b2, lp.a1, lp.a2].map(|v| v as f32);
+    for ch in [1usize, 2] {
+        let mut c = cascade::Cascade::new(NonZeroUsize::new(ch).unwrap(), NonZeroUsize::MIN).unwrap();
+        c.set_section(0, taps).unwrap();
+        let mut planes = vec![vec![0.25_f32; 1024]; ch];
+        let t = Instant::now();
+        for _ in 0..10_000 { c.run(&mut planes, 0..1024); }
+        eprintln!("cascade run {ch}ch/1: {:?}", t.elapsed() / 10_000);
+        let t = Instant::now();
+        let mut n = 0;
+        for _ in 0..10_000 { n += super::first_quiet(std::hint::black_box(&planes), 0..1024, 1e-9); }
+        eprintln!("first_quiet {ch}ch: {:?} {n}", t.elapsed() / 10_000);
+        let mut f = crate::filter::Biquad::new(NonZeroUsize::new(ch).unwrap(), NonZeroUsize::MIN).unwrap();
+        f.retune(0, lp).unwrap();
+        let t = Instant::now();
+        for _ in 0..10_000 { f.process(&mut planes, 0..1024).unwrap(); }
+        eprintln!("biquad process {ch}ch/1: {:?}", t.elapsed() / 10_000);
     }
 }

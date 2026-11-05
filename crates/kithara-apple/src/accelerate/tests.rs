@@ -1,12 +1,10 @@
-use std::num::NonZeroUsize;
-
 use kithara_test_fixtures::unit_fixtures::{accelerate_ramp, accelerate_wave};
 use kithara_test_utils::kithara;
 
 use super::{
-    BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, add_f32, affine_f32,
+    DftError, OutOfWindow, RealDft, add_f32, affine_f32,
     correlate_f32, deinterleave_pair_f32, downmix_pair_f32, interleave_pair_f32,
-    linear_interpolate_f32, max_magnitude_f32, multiply_f32, multiply_in_place_f32,
+    linear_interpolate_f32, multiply_f32, multiply_in_place_f32,
     quadratic_interpolate_f32, scale_add_f32, sub_f32, sum_squares_f32,
 };
 
@@ -144,35 +142,6 @@ fn layout_moves_special_values_bit_for_bit() {
     );
     assert_eq!(bits(left), bits(SPECIALS));
     assert_eq!(bits(right), bits(SPECIALS));
-}
-
-#[kithara::test(native)]
-fn multichannel_biquad_rejects_a_shape_it_was_not_built_for() {
-    let two = NonZeroUsize::MIN.saturating_add(1);
-    let mut filter = MultichannelBiquad::new(two, NonZeroUsize::MIN)
-        .unwrap_or_else(|err| panic!("vDSP setup: {err}"));
-    let mut one = [vec![0.0_f32; 8]];
-    let mut short = [vec![0.0_f32; 8], vec![0.0_f32; 4]];
-    let other = MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN)
-        .unwrap_or_else(|err| panic!("vDSP setup: {err}"));
-
-    assert_eq!(filter.process(&mut one, 0..8), Err(BiquadError::Shape));
-    assert_eq!(filter.process(&mut short, 0..8), Err(BiquadError::Shape));
-    assert_eq!(
-        filter.set_section(1, [1.0, 0.0, 0.0, 0.0, 0.0]),
-        Err(BiquadError::Shape)
-    );
-    assert_eq!(filter.copy_state_from(&other), Err(BiquadError::Shape));
-    assert_eq!(filter.process(&mut short, 2..4), Ok(()));
-}
-
-#[kithara::test(native)]
-fn max_magnitude_reads_the_largest_absolute_value() {
-    assert_eq!(
-        max_magnitude_f32(&[0.5, -2.0, 1.0]).to_bits(),
-        2.0_f32.to_bits()
-    );
-    assert_eq!(max_magnitude_f32(&[]).to_bits(), 0.0_f32.to_bits());
 }
 
 #[kithara::test(native)]

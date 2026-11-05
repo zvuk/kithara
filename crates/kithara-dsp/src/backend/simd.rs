@@ -1,4 +1,4 @@
-use std::ops::{Add, Div, Mul};
+use std::ops::{Add, Deref, Div, Mul, Range};
 
 use fearless_simd::{Level, dispatch, prelude::*};
 
@@ -106,6 +106,53 @@ pub(super) fn mul_add_kernel<S: Simd>(simd: S, x: &[f32], y: &[f32], acc: &mut [
 
 /// `target[i] = f(target[i], [inputs[0][i], ...])` over the common prefix of
 /// the target and the inputs, a vector at a time; returns the prefix length.
+/// The first frame of `range` where every plane holds `|x| <= limit`, or the
+/// end of `range`; a frame a plane does not cover counts as quiet there.
+pub(crate) fn first_quiet<P: Deref<Target = [f32]>>(
+    planes: &[P],
+    range: Range<usize>,
+    limit: f32,
+) -> usize {
+    dispatch!(Level::new(), simd => first_quiet_kernel(simd, planes, range, limit))
+}
+
+#[inline(always)]
+pub(super) fn first_quiet_kernel<S: Simd, P: Deref<Target = [f32]>>(
+    simd: S,
+    planes: &[P],
+    range: Range<usize>,
+    limit: f32,
+) -> usize {
+    let bound = S::f32s::splat(simd, limit);
+    let mut frame = range.start;
+    while let Some(end) = frame
+        .checked_add(S::f32s::LEN)
+        .filter(|end| *end <= range.end)
+    {
+        let mut quiet = u64::MAX;
+        for plane in planes {
+            if let Some(block) = plane.get(frame..end) {
+                quiet &= S::f32s::from_slice(simd, block)
+                    .abs()
+                    .simd_le(bound)
+                    .to_bitmask();
+            }
+        }
+        if quiet != 0 {
+            let lane = usize::try_from(quiet.trailing_zeros()).unwrap_or(0);
+            return frame.saturating_add(lane);
+        }
+        frame = end;
+    }
+    (frame..range.end)
+        .find(|frame| {
+            planes
+                .iter()
+                .all(|plane| plane.get(*frame).is_none_or(|sample| sample.abs() <= limit))
+        })
+        .unwrap_or(range.end)
+}
+
 #[inline(always)]
 pub(super) fn update<S: Simd, I: Inputs<S>>(
     simd: S,

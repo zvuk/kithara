@@ -2,7 +2,6 @@
 pub(crate) mod accelerate;
 #[cfg(feature = "spectrum")]
 mod bins;
-#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 mod cascade;
 mod fade;
 mod interpolate;
@@ -22,10 +21,11 @@ mod tests;
 pub(crate) use accelerate as platform;
 #[cfg(feature = "spectrum")]
 pub(crate) use bins::prediction_difference;
+pub(crate) use cascade::Cascade;
 pub(crate) use fade::gains;
 pub(crate) use interpolate::quadratic;
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use portable as platform;
 pub use simd::sanitize;
-pub(crate) use simd::{div, mul_add, ramp, scale_in_place};
+pub(crate) use simd::{div, first_quiet, mul_add, ramp, scale_in_place};
 pub(crate) use strided::{gather, scatter};

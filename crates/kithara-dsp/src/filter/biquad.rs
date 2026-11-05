@@ -6,31 +6,42 @@ use std::{
 use num_traits::ToPrimitive;
 
 use super::{Coefficients, FilterError};
-use crate::{backend::platform, consts};
+use crate::{
+    backend::{self, Cascade},
+    consts,
+};
 
 /// Cascaded biquad sections applied in place to channel planes.
 ///
 /// Sections start as identity. The state carries over between calls, so a
-/// stream split into any chunks yields the same samples. A call of at least
-/// two frames whose input and output both stay at or below `1e-9` resets the
-/// state, so silence never decays into denormals.
+/// stream split into any chunks yields the same samples. Two consecutive
+/// frames whose input and output both stay at or below `1e-9` on every
+/// channel reset the state; frames of exact zeros on a reset state pass
+/// through untouched.
 pub struct Biquad {
-    cascade: platform::Cascade,
+    cascade: Cascade,
     decay: Box<[usize]>,
+    /// Settle input, and the input of a quiet run kept until its outputs
+    /// show where the state resets.
     scratch: Box<[Box<[f32]>]>,
+    /// Consecutive quiet frames just processed, up to `SECTION_MEMORY`.
+    quiet: usize,
+    /// The state is zero since the last reset.
+    silent: bool,
 }
 
 impl Biquad {
     /// # Errors
-    /// [`FilterError::Shape`] when `channels × sections` overflows,
-    /// [`FilterError::Setup`] when the platform refuses the filter.
+    /// [`FilterError::Shape`] when `channels × sections` overflows.
     pub fn new(channels: NonZeroUsize, sections: NonZeroUsize) -> Result<Self, FilterError> {
         Ok(Self {
-            cascade: platform::Cascade::new(channels, sections)?,
+            cascade: Cascade::new(channels, sections)?,
             decay: vec![1; sections.get()].into_boxed_slice(),
             scratch: (0..channels.get())
                 .map(|_| vec![0.0; consts::SETTLE_CHUNK].into_boxed_slice())
                 .collect(),
+            quiet: 0,
+            silent: true,
         })
     }
 
@@ -62,15 +73,85 @@ impl Biquad {
         planes: &mut [P],
         range: Range<usize>,
     ) -> Result<(), FilterError> {
-        if range.len() < consts::SECTION_MEMORY {
-            return self.cascade.process(planes, range);
-        }
-        let input = peak(planes, &range);
-        self.cascade.process(planes, range.clone())?;
-        if input.max(peak(planes, &range)) <= consts::SILENT_PEAK {
-            self.cascade.reset();
+        self.cascade.check(planes, &range)?;
+        let mut cursor = range.start;
+        while cursor < range.end {
+            let rest = cursor..range.end;
+            cursor = if self.quiet == 0 && !quiet(planes, cursor) {
+                let sound = backend::first_quiet(planes, rest, consts::SILENT_PEAK);
+                self.cascade.run(planes, cursor..sound);
+                self.silent = false;
+                sound
+            } else if self.silent && zero(planes, cursor) {
+                let skipped = rest.clone().find(|frame| !zero(planes, *frame));
+                let end = skipped.unwrap_or(rest.end);
+                self.quiet = self
+                    .quiet
+                    .saturating_add(end.saturating_sub(cursor))
+                    .min(consts::SECTION_MEMORY);
+                end
+            } else if self.quiet > 0 {
+                self.quiet_frame(planes, cursor)
+            } else {
+                self.quiet_run(planes, cursor..rest.end.min(cursor.saturating_add(consts::SETTLE_CHUNK)))
+            };
         }
         Ok(())
+    }
+
+    /// Filters `frame` and resets the state when it completes a quiet run.
+    fn quiet_frame<P: DerefMut<Target = [f32]>>(&mut self, planes: &mut [P], frame: usize) -> usize {
+        let input = peak(planes, frame);
+        let next = frame.saturating_add(1);
+        self.cascade.run(planes, frame..next);
+        self.count(input.max(peak(planes, frame)));
+        next
+    }
+
+    /// Filters `run`, which starts with a quiet input frame, then rewinds to
+    /// the first frame that resets the state: the frames after it keep their
+    /// input and run again from the reset state.
+    fn quiet_run<P: DerefMut<Target = [f32]>>(&mut self, planes: &mut [P], run: Range<usize>) -> usize {
+        for (saved, plane) in self.scratch.iter_mut().zip(planes.iter()) {
+            if let (Some(saved), Some(input)) = (saved.get_mut(..run.len()), plane.get(run.clone())) {
+                saved.copy_from_slice(input);
+            }
+        }
+        self.cascade.run(planes, run.clone());
+        self.silent = false;
+        for (offset, frame) in run.clone().enumerate() {
+            let input = self
+                .scratch
+                .iter()
+                .filter_map(|saved| saved.get(offset))
+                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+            if self.count(input.max(peak(planes, frame))) {
+                let next = frame.saturating_add(1);
+                let kept = offset.saturating_add(1)..run.len();
+                for (saved, plane) in self.scratch.iter().zip(planes.iter_mut()) {
+                    if let (Some(saved), Some(output)) = (saved.get(kept.clone()), plane.get_mut(next..run.end)) {
+                        output.copy_from_slice(saved);
+                    }
+                }
+                return next;
+            }
+        }
+        run.end
+    }
+
+    /// Counts a frame of `peak`; a full quiet run resets the state.
+    fn count(&mut self, peak: f32) -> bool {
+        self.quiet = if peak <= consts::SILENT_PEAK {
+            self.quiet.saturating_add(1).min(consts::SECTION_MEMORY)
+        } else {
+            0
+        };
+        let reset = self.quiet == consts::SECTION_MEMORY;
+        if reset {
+            self.cascade.reset();
+        }
+        self.silent = reset;
+        reset
     }
 
     /// Puts channel `c` in the steady state for the constant input `levels[c]`.
@@ -94,6 +175,8 @@ impl Biquad {
             self.cascade
                 .process(&mut self.scratch, 0..consts::SETTLE_CHUNK)?;
         }
+        self.quiet = 0;
+        self.silent = false;
         Ok(())
     }
 
@@ -102,16 +185,33 @@ impl Biquad {
     /// # Errors
     /// [`FilterError::Shape`] when channel or section counts differ.
     pub fn copy_state(&mut self, source: &Self) -> Result<(), FilterError> {
-        self.cascade.copy_state_from(&source.cascade)
+        self.cascade.copy_state_from(&source.cascade)?;
+        self.quiet = source.quiet;
+        self.silent = source.silent;
+        Ok(())
     }
 }
 
-fn peak<P: Deref<Target = [f32]>>(planes: &[P], range: &Range<usize>) -> f32 {
+/// The largest `|x|` of `frame` over every plane.
+fn peak<P: Deref<Target = [f32]>>(planes: &[P], frame: usize) -> f32 {
     planes
         .iter()
-        .filter_map(|plane| plane.get(range.clone()))
-        .map(platform::peak)
-        .fold(0.0, f32::max)
+        .filter_map(|plane| plane.get(frame))
+        .fold(0.0, |peak, sample| peak.max(sample.abs()))
+}
+
+/// Every plane stays at or below the silence level at `frame`.
+fn quiet<P: Deref<Target = [f32]>>(planes: &[P], frame: usize) -> bool {
+    planes
+        .iter()
+        .all(|plane| plane.get(frame).is_none_or(|sample| sample.abs() <= consts::SILENT_PEAK))
+}
+
+/// Every plane holds an exact zero at `frame`.
+fn zero<P: Deref<Target = [f32]>>(planes: &[P], frame: usize) -> bool {
+    planes
+        .iter()
+        .all(|plane| plane.get(frame).is_none_or(|sample| *sample == 0.0))
 }
 
 /// `[b0, b1, b2, a1, a2]` rounded to `f32`, when every value stays finite

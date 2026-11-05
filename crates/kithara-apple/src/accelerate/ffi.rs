@@ -1,4 +1,3 @@
-pub(super) type VdspBiquadmSetup = *mut std::ffi::c_void;
 pub(super) type VdspDftSetup = *mut std::ffi::c_void;
 pub(super) type VdspLength = usize;
 pub(super) type VdspStride = isize;
@@ -35,39 +34,6 @@ unsafe extern "C" {
         direction: i32,
     ) -> VdspDftSetup;
 
-    pub(super) fn vDSP_biquadm(
-        setup: VdspBiquadmSetup,
-        x: *mut *const f32,
-        ix: VdspStride,
-        y: *mut *mut f32,
-        iy: VdspStride,
-        n: VdspLength,
-    );
-
-    pub(super) fn vDSP_biquadm_CopyState(
-        destination: VdspBiquadmSetup,
-        source: *const std::ffi::c_void,
-    );
-
-    pub(super) fn vDSP_biquadm_CreateSetup(
-        coefficients: *const f64,
-        sections: VdspLength,
-        channels: VdspLength,
-    ) -> VdspBiquadmSetup;
-
-    pub(super) fn vDSP_biquadm_DestroySetup(setup: VdspBiquadmSetup);
-
-    pub(super) fn vDSP_biquadm_ResetState(setup: VdspBiquadmSetup);
-
-    pub(super) fn vDSP_biquadm_SetCoefficientsDouble(
-        setup: VdspBiquadmSetup,
-        coefficients: *const f64,
-        start_section: VdspLength,
-        start_channel: VdspLength,
-        sections: VdspLength,
-        channels: VdspLength,
-    );
-
     pub(super) fn vDSP_conv(
         a: *const f32,
         ia: VdspStride,
@@ -86,8 +52,6 @@ unsafe extern "C" {
         split_stride: VdspStride,
         n: VdspLength,
     );
-
-    pub(super) fn vDSP_maxmgv(a: *const f32, ia: VdspStride, c: *mut f32, n: VdspLength);
 
     pub(super) fn vDSP_svesq(a: *const f32, ia: VdspStride, c: *mut f32, n: VdspLength);
 

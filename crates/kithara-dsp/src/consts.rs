@@ -13,13 +13,15 @@ pub(crate) const LANES: usize = 4;
 /// Interpolation positions are `f32`: every frame index below `2²⁴` is exact.
 pub(crate) const MAX_WINDOW: u32 = 1 << 24;
 
-/// Frames per biquad settle pass; the scratch planes hold this many.
+/// Frames per biquad settle pass and per checked quiet run; the scratch
+/// planes hold this many.
 pub(crate) const SETTLE_CHUNK: usize = 64;
 /// `log2` of the residue a biquad transient decays to before it counts as
 /// settled.
 pub(crate) const SETTLE_FLOOR_LOG2: f64 = -24.0;
-/// Biquad input and output peaks at or below this reset the state.
+/// Biquad frames whose input and output peaks stay at or below this count
+/// as quiet.
 pub(crate) const SILENT_PEAK: f32 = 1.0e-9;
-/// Frames a biquad section remembers: a quiet call proves the state silent
-/// only when it covers them.
+/// Frames a biquad section remembers: this many consecutive quiet frames
+/// prove the state silent.
 pub(crate) const SECTION_MEMORY: usize = 2;
