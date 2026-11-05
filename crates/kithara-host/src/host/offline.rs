@@ -355,8 +355,12 @@ mod tests {
         ));
     }
 
+    /// The output block of [`tempo_host`]: one block is the delivery of a
+    /// change its owner pass sends.
+    const BLOCK_FRAMES: u32 = 128;
+
     fn tempo_host() -> Host<TestPools> {
-        let block_frames = NonZeroU32::new(128).expect("test block size is non-zero");
+        let block_frames = NonZeroU32::new(BLOCK_FRAMES).expect("test block size is non-zero");
         let config = HostConfig::offline(pools())
             .max_block_frames(block_frames)
             .build();
@@ -493,22 +497,32 @@ mod tests {
     }
 
     #[kithara::test(native)]
-    fn an_offline_metronome_level_change_sounds_in_the_block_it_is_set_before() {
+    fn an_offline_metronome_level_change_sounds_from_the_first_frame_its_pass_reaches() {
         // Beat 1 at 120 BPM falls on frame 22 050, inside the block from 22 016.
         let beat_block = 22_016..22_144;
+        // A change for the next moment lands one delivery after its pass.
+        let pass_block = beat_block.start - u64::from(BLOCK_FRAMES)..beat_block.start;
         let mut full_host = tempo_host();
         let mut quiet_host = tempo_host();
         for host in [&mut full_host, &mut quiet_host] {
             host.metronome()
                 .set_enabled(true)
                 .expect("the metronome switches on");
-            render_frames(host, 0..beat_block.start);
+            render_frames(host, 0..pass_block.start);
         }
 
         quiet_host
             .metronome()
             .set_level(0.5)
             .expect("half level is in bounds");
+        for host in [&mut full_host, &mut quiet_host] {
+            render_frames(host, pass_block.clone());
+        }
+        assert_eq!(
+            quiet_host.metronome().level(),
+            1.0,
+            "the change waits for the first frame its pass can reach"
+        );
         let full = render_samples(&mut full_host, beat_block.clone());
         let quiet = render_samples(&mut quiet_host, beat_block);
 

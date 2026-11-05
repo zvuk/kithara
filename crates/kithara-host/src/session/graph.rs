@@ -119,6 +119,9 @@ pub(crate) fn idle<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionEr
         .publish_unavailable(stamp, axis.sample_rate(), generation.epoch());
     state.reserved_session_grid = Some(generation);
     state.iteration_clock = None;
+    // The stream's axis ends here: what the owner staged for it goes to the
+    // transport first, which refuses its frames along with the axis.
+    state.publish_staged();
     state
         .ctx
         .as_mut()
@@ -143,6 +146,8 @@ pub(crate) fn drop_idle_context<T, S>(state: &mut SessionState<T, S>) -> Result<
     }
     settle_root_receipts(state);
     state.settings.abandon();
+    let abandoned = state.timeline.abandon();
+    state.settled.extend(abandoned);
     state.ctx.take();
     state.channel = None;
     state.transport_observation = None;

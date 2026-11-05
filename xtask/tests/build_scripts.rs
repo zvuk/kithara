@@ -170,6 +170,10 @@ else:
     resolved = shutil.which(runner)
     assert resolved == str(target / "debug/wasm_test_runner"), "runner must be prebuilt"
     assert (target / "debug/test_server").is_file(), "fixture server must be beside runner"
+    if "-p" in args and args[args.index("-p") + 1] == "kithara-ffi" and "--lib" in args:
+        assert "--no-default-features" in args, args
+        assert args[args.index("--features") + 1] == "wasm", args
+        (target / "ffi-lib-ran").touch()
     subprocess.run([resolved], check=True)
 "#,
     )
@@ -185,7 +189,7 @@ else:
         .arg(root.join("justfile"))
         .args(["test", "wasm", "chrome", "webcodecs", "include"])
         .env("PATH", path)
-        .env("CARGO_TARGET_DIR", target)
+        .env("CARGO_TARGET_DIR", &target)
         .env("WASM_RECIPE_RUNS", &runs)
         .env_remove("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER")
         .output()
@@ -195,12 +199,16 @@ else:
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(
+        target.join("ffi-lib-ran").is_file(),
+        "the browser recipe runs the FFI library tests"
+    );
     assert_eq!(
         fs::read_to_string(runs)
             .expect("runner invocations are recorded")
             .lines()
             .count(),
-        10,
+        11,
         "every browser test command uses the native runner"
     );
 }

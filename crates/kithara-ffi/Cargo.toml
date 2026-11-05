@@ -220,7 +220,7 @@ tempfile = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-kithara = { workspace = true, features = ["decode", "signal"] }
+kithara = { workspace = true, features = ["decode", "mock", "signal"] }
 kithara-test-utils = { workspace = true, features = ["mock", "subscriber"] }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }

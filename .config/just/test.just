@@ -83,6 +83,13 @@ wasm BROWSER="chrome" SUITE="all" REAL_AUDIO_ROUTE="exclude":
       -Z build-std-features=optimize_for_size \
       -p kithara-host --lib --no-default-features \
       --features symphonia,webcodecs,resample-rubato,stretch-identity,client-reqwest,tls-rustls
+    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+      cargo "+$toolchain" test --profile test-release \
+      --target wasm32-unknown-unknown \
+      -Z build-std=std,panic_abort,core,alloc \
+      -Z build-std-features=optimize_for_size \
+      -p kithara-ffi --lib --no-default-features \
+      --features wasm
     if [[ "$real_audio_route" == "include" ]]; then
       WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
         cargo "+$toolchain" test --profile test-release \
