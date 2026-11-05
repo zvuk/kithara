@@ -62,8 +62,6 @@ jobs:
       && !inputs.diagnostics && (inputs.test-filter || '') == ''
     runs-on: ${{ fromJSON(vars.KITHARA_WINDOWS_RUNNER_LABELS) }}
     timeout-minutes: 180
-    env:
-      KITHARA_HANG_DUMP_DIR: ${{ runner.temp }}/kithara-windows-hang
 
     steps:
       - name: Inspect bootstrap storage
@@ -97,6 +95,8 @@ jobs:
       # which the guest has no more than it has the product that would use it,
       # so the lane names the backend the platform actually carries.
       - name: Run tests
+        env:
+          KITHARA_HANG_DUMP_DIR: ${{ runner.temp }}/kithara-windows-hang
         run: just ci cache-exec windows-test just test run --net-backend=none
 
       - name: Upload compiler-cache evidence
@@ -112,7 +112,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-hang-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.KITHARA_HANG_DUMP_DIR }}
+          path: ${{ runner.temp }}/kithara-windows-hang
           if-no-files-found: warn
 
   diagnostics:
@@ -124,7 +124,6 @@ jobs:
     timeout-minutes: 180
     env:
       TEST_FILTER: ${{ inputs.test-filter || '' }}
-      KITHARA_HANG_DUMP_DIR: ${{ runner.temp }}/windows-diagnostics/probe-hang
     steps:
       - name: Checkout diagnostics controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -149,6 +148,8 @@ jobs:
       - name: Run diagnostic test selection
         if: ${{ (inputs.test-filter || '') != '' }}
         working-directory: diagnostics-controller
+        env:
+          KITHARA_HANG_DUMP_DIR: ${{ runner.temp }}/windows-diagnostics/probe-hang
         run: just ci cache-exec windows-diagnostic just test run --net-backend=none "--narrow=$env:TEST_FILTER" --retries=0
 
       - name: Upload probe evidence

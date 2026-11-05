@@ -2961,6 +2961,34 @@ fn windows_diagnostics_cannot_schedule_the_acceptance_suite() {
 }
 
 #[test]
+fn windows_runner_context_is_bound_only_after_runner_assignment() {
+    let workflow = github_workflow("windows.yml");
+    for job in workflow_jobs(&workflow).values() {
+        if let Some(env) = job.get("env") {
+            assert!(!serde_yaml_ng::to_string(env).unwrap().contains("runner."));
+        }
+    }
+    for (job, step_name) in [
+        ("windows", "Run tests"),
+        ("diagnostics", "Run diagnostic test selection"),
+    ] {
+        let steps = workflow_job(workflow_jobs(&workflow), job)["steps"]
+            .as_sequence()
+            .unwrap();
+        let step = steps
+            .iter()
+            .find(|step| step["name"].as_str() == Some(step_name))
+            .unwrap();
+        assert!(
+            step["env"]["KITHARA_HANG_DUMP_DIR"]
+                .as_str()
+                .unwrap()
+                .contains("runner.temp")
+        );
+    }
+}
+
+#[test]
 fn windows_diagnostics_preserve_old_evidence_before_a_scoped_probe() {
     let workflow = github_workflow("windows.yml");
     let diagnostic = workflow_job(workflow_jobs(&workflow), "diagnostics");
