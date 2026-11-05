@@ -175,7 +175,7 @@ impl<E: SessionInbox> OfflineProcessor<E> {
 impl<E: SessionInbox> AudioNodeProcessor for OfflineProcessor<E> {
     fn prepare_new_stream(&mut self, info: &StreamInfo) -> Result<(), NodeError> {
         let shape = StreamShape::new(info.max_block_frames, info.sample_rate);
-        for mixer in &mut self.mixer {
+        if let Some(mixer) = self.mixer.as_mut() {
             mixer.prepare_stream(shape)?;
         }
         for (mixer, _) in self.from_owner.iter_mut() {
@@ -185,7 +185,7 @@ impl<E: SessionInbox> AudioNodeProcessor for OfflineProcessor<E> {
     }
 
     fn new_stream(&mut self, _info: &StreamInfo, _context: &mut ProcStreamCtx) {
-        for mixer in &mut self.mixer {
+        if let Some(mixer) = self.mixer.as_mut() {
             mixer.commit_stream();
         }
         for (mixer, _) in self.from_owner.iter_mut() {
