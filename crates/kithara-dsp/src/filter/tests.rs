@@ -290,7 +290,10 @@ fn identity_sections_preserve_small_nonzero_output_bits() {
             let mut planes = vec![input.to_vec(); channels];
             for start in (0..input.len()).step_by(block) {
                 filter
-                    .process(&mut planes, start..(start + block).min(input.len()))
+                    .process(
+                        &mut planes,
+                        start..start.saturating_add(block).min(input.len()),
+                    )
                     .expect("complete planes");
             }
             assert_eq!(
@@ -325,7 +328,7 @@ fn copy_state_preserves_a_partial_quiet_run() {
     let mut source = half_decay(NonZeroUsize::MIN);
     let mut prefix = vec![vec![amplitude, 0.0]];
     source.process(&mut prefix, 0..2).expect("prefix shape");
-    assert_eq!(prefix[0], [amplitude, amplitude * 0.5]);
+    assert_eq!(bits(&prefix), bits(&[vec![amplitude, amplitude * 0.5]]));
     let mut copied = half_decay(NonZeroUsize::MIN);
     copied.copy_state(&source).expect("matching shape");
     let mut original_tail = vec![vec![0.0; 3]];
@@ -350,7 +353,12 @@ fn nan_input_is_nonquiet_under_every_partition() {
     filter.process(&mut split, 0..2).expect("prefix");
     filter.process(&mut split, 2..5).expect("suffix");
     assert_eq!(bits(&whole), bits(&split));
-    assert!(whole[0][4].is_nan());
+    assert!(
+        whole
+            .first()
+            .and_then(|plane| plane.get(4))
+            .is_some_and(|sample| sample.is_nan())
+    );
 }
 
 #[kithara::test]
