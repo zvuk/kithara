@@ -235,35 +235,3 @@ pub(super) fn padded<S: Simd>(simd: S, tail: &[f32]) -> S::f32s {
     }
     vector
 }
-
-/// `output[i] = f(a[i], b[i])` over the common prefix of the three
-/// slices, a vector at a time; returns the prefix length.
-#[cfg(feature = "spectrum")]
-#[inline(always)]
-pub(super) fn zip_map<S: Simd, F: Fn(S::f32s, S::f32s) -> S::f32s>(
-    simd: S,
-    [a, b]: [&[f32]; 2],
-    output: &mut [f32],
-    f: F,
-) -> usize {
-    let len = a.len().min(b.len()).min(output.len());
-    let (Some(a), Some(b), Some(output)) = (a.get(..len), b.get(..len), output.get_mut(..len))
-    else {
-        return 0;
-    };
-    let lanes = S::f32s::LEN;
-    let mut lefts = a.chunks_exact(lanes);
-    let mut rights = b.chunks_exact(lanes);
-    let mut outputs = output.chunks_exact_mut(lanes);
-    for ((x, y), out) in (&mut lefts).zip(&mut rights).zip(&mut outputs) {
-        f(S::f32s::from_slice(simd, x), S::f32s::from_slice(simd, y)).store_slice(out);
-    }
-    let tail = f(
-        padded(simd, lefts.remainder()),
-        padded(simd, rights.remainder()),
-    );
-    for (slot, value) in outputs.into_remainder().iter_mut().zip(tail.as_slice()) {
-        *slot = *value;
-    }
-    len
-}
