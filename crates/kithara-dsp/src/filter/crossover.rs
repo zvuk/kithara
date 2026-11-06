@@ -82,31 +82,36 @@ impl Section {
     }
 }
 
-struct Lr4 {
-    coefficients: Coefficients<f32>,
-    first: Df1State,
-    second: Df1State,
+struct Lr4Pair {
+    coefficients: [[f32; 2]; 5],
+    low_first: Df1State,
+    low_second: Df1State,
+    high_first: Df1State,
+    high_second: Df1State,
 }
 
-impl Lr4 {
-    const fn new(coefficients: Coefficients<f32>) -> Self {
+impl Lr4Pair {
+    const fn new(low: Coefficients<f32>, high: Coefficients<f32>) -> Self {
         Self {
-            coefficients,
-            first: Df1State::new(),
-            second: Df1State::new(),
+            coefficients: [
+                [low.b0, high.b0],
+                [low.b1, high.b1],
+                [low.b2, high.b2],
+                [low.a1, high.a1],
+                [low.a2, high.a2],
+            ],
+            low_first: Df1State::new(),
+            low_second: Df1State::new(),
+            high_first: Df1State::new(),
+            high_second: Df1State::new(),
         }
     }
 
     #[inline(always)]
-    fn process_pair(&mut self, highpass: &mut Self, input: f32) -> (f32, f32) {
+    fn process(&mut self, input: f32) -> (f32, f32) {
         dispatch!(Level::baseline(), simd => {
             let pair = |low, high| f32x4::simd_from(simd, [low, high, 0.0, 0.0]);
-            let (low, high) = (&self.coefficients, &highpass.coefficients);
-            let b0 = pair(low.b0, high.b0);
-            let b1 = pair(low.b1, high.b1);
-            let b2 = pair(low.b2, high.b2);
-            let a1 = pair(low.a1, high.a1);
-            let a2 = pair(low.a2, high.a2);
+            let [b0, b1, b2, a1, a2] = self.coefficients.map(|[low, high]| pair(low, high));
             let run = |low: &Df1State, high: &Df1State, input: f32x4<_>| {
                 let output = b0.mul(input)
                     .add(b1.mul(pair(low.x1, high.x1)))
@@ -116,18 +121,18 @@ impl Lr4 {
                 let [low, high, ..] = <[f32; 4]>::from(output);
                 [low, high]
             };
-            let [low, high] = run(&self.first, &highpass.first, pair(input, input));
-            let low = self.first.commit(input, low);
+            let [low, high] = run(&self.low_first, &self.high_first, pair(input, input));
+            let low = self.low_first.commit(input, low);
             // Preview the high stage without committing it before the low cascade.
             let next_high = if Df1State::reset_needed(input, high) {
                 0.0
             } else {
                 high
             };
-            let [next_low, next_high] = run(&self.second, &highpass.second, pair(low, next_high));
-            let low = self.second.commit(low, next_low);
-            let high = highpass.first.commit(input, high);
-            let high = highpass.second.commit(high, next_high);
+            let [next_low, next_high] = run(&self.low_second, &self.high_second, pair(low, next_high));
+            let low = self.low_second.commit(low, next_low);
+            let high = self.high_first.commit(input, high);
+            let high = self.high_second.commit(high, next_high);
             (low, high)
         })
     }
@@ -154,8 +159,7 @@ impl Design {
 #[non_exhaustive]
 pub struct Crossover {
     frequencies: Box<[Hertz<f32>]>,
-    lowpass: Box<[Lr4]>,
-    highpass: Box<[Lr4]>,
+    splits: Box<[Lr4Pair]>,
     allpass: Box<[Section]>,
     frame: Box<[f32]>,
     prepared: Box<[Design]>,
@@ -176,13 +180,9 @@ impl Crossover {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             frequencies: frequencies.into(),
-            lowpass: designs
+            splits: designs
                 .iter()
-                .map(|design| Lr4::new(design.lowpass))
-                .collect(),
-            highpass: designs
-                .iter()
-                .map(|design| Lr4::new(design.highpass))
+                .map(|design| Lr4Pair::new(design.lowpass, design.highpass))
                 .collect(),
             allpass: (1..designs.len())
                 .flat_map(|start| {
@@ -276,13 +276,8 @@ impl Crossover {
     #[inline(always)]
     fn filter_sample(&mut self, mut high: f32) -> f32 {
         let lower = self.frame.as_mut();
-        for ((lowpass, highpass), low) in self
-            .lowpass
-            .iter_mut()
-            .zip(self.highpass.iter_mut())
-            .zip(lower.iter_mut())
-        {
-            (*low, high) = lowpass.process_pair(highpass, high);
+        for (split, low) in self.splits.iter_mut().zip(lower.iter_mut()) {
+            (*low, high) = split.process(high);
         }
         let count = lower.len();
         let mut allpass = self.allpass.as_mut();
@@ -300,9 +295,13 @@ impl Crossover {
 
     /// Clears every section's history without allocation or coefficient changes.
     pub fn reset(&mut self) {
-        for filter in self.lowpass.iter_mut().chain(self.highpass.iter_mut()) {
-            filter.first.reset();
-            filter.second.reset();
+        for split in &mut self.splits {
+            split.low_first.reset();
+            split.low_second.reset();
+        }
+        for split in &mut self.splits {
+            split.high_first.reset();
+            split.high_second.reset();
         }
         for section in &mut self.allpass {
             section.state.reset();
@@ -341,14 +340,8 @@ impl Crossover {
     /// Returns its rate, or `None` without mutation when no preparation remains.
     pub fn apply_prepared_sample_rate(&mut self) -> Option<Hertz<f32>> {
         let rate = self.prepared_rate.take()?;
-        for ((lowpass, highpass), prepared) in self
-            .lowpass
-            .iter_mut()
-            .zip(self.highpass.iter_mut())
-            .zip(&self.prepared)
-        {
-            *lowpass = Lr4::new(prepared.lowpass);
-            *highpass = Lr4::new(prepared.highpass);
+        for (split, prepared) in self.splits.iter_mut().zip(&self.prepared) {
+            *split = Lr4Pair::new(prepared.lowpass, prepared.highpass);
         }
         let mut allpass = self.allpass.iter_mut();
         for index in 0..self.prepared.len() {
