@@ -124,13 +124,13 @@ impl Crossover {
         let count = bands
             .iter()
             .fold(input.len(), |count, band| count.min(band.len()));
-        self.split_frames(input.split_at(count).0, &mut |frame, values| {
-            for (band, value) in bands.iter_mut().zip(values) {
+        for (frame, &sample) in input.iter().take(count).enumerate() {
+            for (band, value) in bands.iter_mut().zip(self.filter_sample(sample)) {
                 *band
                     .get_mut(frame)
                     .expect("frame belongs to the validated common prefix") = *value;
             }
-        });
+        }
         count
     }
 
@@ -147,29 +147,24 @@ impl Crossover {
         let count = gains
             .iter()
             .fold(samples.len(), |n, gain| n.min(gain.len()));
-        self.sum_frames(samples.split_at_mut(count).0, &mut |frame, values| {
-            values.iter().zip(gains).fold(0.0, |output, (value, gain)| {
-                value.mul_add(
-                    *gain
-                        .get(frame)
-                        .expect("frame belongs to the validated common prefix"),
-                    output,
-                )
-            })
-        });
+        for (frame, sample) in samples.iter_mut().take(count).enumerate() {
+            *sample = self.filtered_frame(*sample).iter().zip(gains).fold(
+                0.0,
+                |output, (value, gain)| {
+                    value.mul_add(
+                        *gain
+                            .get(frame)
+                            .expect("frame belongs to the validated common prefix"),
+                        output,
+                    )
+                },
+            );
+        }
         count
     }
 
-    fn split_frames(&mut self, input: &[f32], write: &mut dyn FnMut(usize, &[f32])) {
-        for (frame, &sample) in input.iter().enumerate() {
-            write(frame, self.filter_sample(sample));
-        }
-    }
-
-    fn sum_frames(&mut self, samples: &mut [f32], combine: &mut dyn FnMut(usize, &[f32]) -> f32) {
-        for (frame, sample) in samples.iter_mut().enumerate() {
-            *sample = combine(frame, self.filter_sample(*sample));
-        }
+    fn filtered_frame(&mut self, input: f32) -> &[f32] {
+        self.filter_sample(input)
     }
 
     #[inline]
