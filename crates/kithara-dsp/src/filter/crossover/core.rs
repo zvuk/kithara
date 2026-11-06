@@ -122,11 +122,8 @@ impl Crossover {
             .iter()
             .fold(input.len(), |count, band| count.min(band.len()));
         for (frame, &sample) in input.iter().take(count).enumerate() {
-            let mut outputs = bands.iter_mut();
-            filtered_bands(&mut self.splits, sample, |value| {
-                *outputs
-                    .next()
-                    .expect("one output plane per validated band")
+            filtered_bands(&mut self.splits, sample, bands, |band, value| {
+                *band
                     .get_mut(frame)
                     .expect("frame belongs to the validated common prefix") = value;
             });
@@ -160,11 +157,15 @@ impl Crossover {
 
     #[inline(never)]
     fn weighted_sample(&mut self, sample: f32) -> f32 {
-        let mut gains = self.gain_frame.iter();
         let mut output = 0.0;
-        filtered_bands(&mut self.splits, sample, |value| {
-            output = value.mul_add(*gains.next().expect("one prepared gain per band"), output);
-        });
+        filtered_bands(
+            &mut self.splits,
+            sample,
+            &mut self.gain_frame,
+            |gain, value| {
+                output = value.mul_add(*gain, output);
+            },
+        );
         output
     }
 
@@ -229,14 +230,22 @@ impl Crossover {
 }
 
 #[inline(always)]
-fn filtered_bands(splits: &mut [Split], mut high: f32, mut consume: impl FnMut(f32)) {
-    for split in splits {
+fn filtered_bands<T>(
+    splits: &mut [Split],
+    mut high: f32,
+    outputs: &mut [T],
+    mut consume: impl FnMut(&mut T, f32),
+) {
+    let (high_output, lower) = outputs
+        .split_last_mut()
+        .expect("validated bands include the final high output");
+    for (split, output) in splits.iter_mut().zip(lower) {
         let mut low = split.lowpass.process(high);
         high = split.highpass.process(high);
         for section in &mut split.allpass {
             low = section.run(low);
         }
-        consume(low);
+        consume(output, low);
     }
-    consume(high);
+    consume(high_output, high);
 }
