@@ -17,6 +17,8 @@ extern "C" {
     fn worklet_imports() -> u32;
     #[wasm_bindgen(js_name = bootstrapRequests)]
     fn bootstrap_requests() -> u32;
+    #[wasm_bindgen(js_name = audioContexts)]
+    fn audio_contexts() -> String;
 }
 
 #[wasm_bindgen_test]
@@ -49,12 +51,18 @@ async fn worklet_import_waits_for_worker_bootstrap_admission() {
         .expect("browser window")
         .document()
         .expect("browser document");
-    wait_until(Duration::from_secs(5), "owner after bootstrap", || {
+    let ready = wait_until(Duration::from_secs(5), "owner after bootstrap", || {
         player.tick_js();
         let click = web_sys::Event::new("click").expect("click event");
         document.dispatch_event(&click).expect("dispatch click");
         player.volume() == 0.25 && player.rt_process_calls_js() > 0
     })
-    .await
-    .expect("the real mixer and owner run after admission is released");
+    .await;
+    wasm_bindgen_test::console_log!(
+        "BOOTSTRAP_READY volume={} mixer_blocks={} audio_contexts={}",
+        player.volume(),
+        player.rt_process_calls_js(),
+        audio_contexts(),
+    );
+    ready.expect("the real mixer and owner run after admission is released");
 }

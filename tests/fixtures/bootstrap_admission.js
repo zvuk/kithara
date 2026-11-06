@@ -6,6 +6,7 @@ let descriptor;
 let moduleCalls = 0;
 let requests = 0;
 const worklets = [];
+const contexts = [];
 
 export async function holdBootstrapImports() {
     const locks = navigator.locks;
@@ -33,6 +34,7 @@ export async function holdBootstrapImports() {
                     return original.apply(this, args);
                 };
                 worklets.push(worklet);
+                contexts.push(this);
             }
             return worklet;
         },
@@ -41,6 +43,13 @@ export async function holdBootstrapImports() {
 
 export function workletImports() { return moduleCalls; }
 export function bootstrapRequests() { return requests; }
+export function audioContexts() {
+    return JSON.stringify(contexts.map(context => ({
+        state: context.state,
+        currentTime: context.currentTime,
+        sampleRate: context.sampleRate,
+    })));
+}
 
 export async function releaseBootstrapImports() {
     navigator.locks.request = originalRequest;
