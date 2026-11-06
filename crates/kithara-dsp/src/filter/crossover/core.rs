@@ -23,29 +23,86 @@ impl Section {
     }
 }
 
-struct Lr4 {
-    first: Section,
-    second: Section,
+#[derive(Default)]
+struct BranchState {
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
 }
 
-impl Lr4 {
-    const fn new(coefficients: Coefficients<f32>) -> Self {
+impl BranchState {
+    #[inline(always)]
+    fn commit(&mut self, input: f32, output: f32, retired: bool) {
+        if retired {
+            *self = Self::default();
+        } else {
+            self.x2 = self.x1;
+            self.x1 = input;
+            self.y2 = self.y1;
+            self.y1 = output;
+        }
+    }
+}
+
+struct Lr4Pair {
+    coefficients: [[f32; 2]; 5],
+    low: [BranchState; 2],
+    high: [BranchState; 2],
+}
+
+impl Lr4Pair {
+    fn new(low: Coefficients<f32>, high: Coefficients<f32>) -> Self {
         Self {
-            first: Section::new(coefficients),
-            second: Section::new(coefficients),
+            coefficients: [
+                [low.b0, high.b0],
+                [low.b1, high.b1],
+                [low.b2, high.b2],
+                [low.a1, high.a1],
+                [low.a2, high.a2],
+            ],
+            low: std::array::from_fn(|_| BranchState::default()),
+            high: std::array::from_fn(|_| BranchState::default()),
         }
     }
 
-    #[inline]
-    fn process(&mut self, input: f32) -> f32 {
-        self.second.run(self.first.run(input))
+    #[inline(always)]
+    fn evaluate(&self, stage: usize, input: [f32; 2]) -> ([f32; 2], [bool; 2]) {
+        let low = self.low.get(stage).expect("two LR4 stages");
+        let high = self.high.get(stage).expect("two LR4 stages");
+        let [[b00, b01], [b10, b11], [b20, b21], [a10, a11], [a20, a21]] = self.coefficients;
+        let [left, right] = input;
+        let l = b00 * left + b10 * low.x1 + b20 * low.x2 - a10 * low.y1 - a20 * low.y2;
+        let r = b01 * right + b11 * high.x1 + b21 * high.x2 - a11 * high.y1 - a21 * high.y2;
+        let rl = l.is_subnormal() && left.abs() < f32::MIN_POSITIVE;
+        let rh = r.is_subnormal() && right.abs() < f32::MIN_POSITIVE;
+        (
+            [if rl { 0.0 } else { l }, if rh { 0.0 } else { r }],
+            [rl, rh],
+        )
+    }
+
+    #[inline(always)]
+    fn process(&mut self, input: f32) -> [f32; 2] {
+        let ([l1, h1], [rl1, rh1]) = self.evaluate(0, [input, input]);
+        let ([low, high], [rl2, rh2]) = self.evaluate(1, [l1, h1]);
+        self.low[0].commit(input, l1, rl1);
+        self.low[1].commit(l1, low, rl2);
+        self.high[0].commit(input, h1, rh1);
+        self.high[1].commit(h1, high, rh2);
+        [low, high]
+    }
+
+    fn reset(&mut self) {
+        for state in self.low.iter_mut().chain(&mut self.high) {
+            *state = BranchState::default();
+        }
     }
 }
 
 struct Split {
     frequency: Hertz<f32>,
-    lowpass: Lr4,
-    highpass: Lr4,
+    branches: Lr4Pair,
     allpass: Box<[Section]>,
 }
 
@@ -94,8 +151,7 @@ impl Crossover {
                 .enumerate()
                 .map(|(index, (&frequency, design))| Split {
                     frequency,
-                    lowpass: Lr4::new(design.lowpass),
-                    highpass: Lr4::new(design.highpass),
+                    branches: Lr4Pair::new(design.lowpass, design.highpass),
                     allpass: designs
                         .iter()
                         .skip(index.saturating_add(1))
@@ -168,10 +224,7 @@ impl Crossover {
     /// Clears every section's history without allocation or coefficient changes.
     pub fn reset(&mut self) {
         for split in &mut self.splits {
-            split.lowpass.first.0.reset_state();
-            split.lowpass.second.0.reset_state();
-            split.highpass.first.0.reset_state();
-            split.highpass.second.0.reset_state();
+            split.branches.reset();
             for section in &mut split.allpass {
                 section.0.reset_state();
             }
@@ -211,8 +264,7 @@ impl Crossover {
     pub fn apply_prepared_sample_rate(&mut self) -> Option<Hertz<f32>> {
         let rate = self.prepared_rate.take()?;
         for (index, (split, prepared)) in self.splits.iter_mut().zip(&self.prepared).enumerate() {
-            split.lowpass = Lr4::new(prepared.lowpass);
-            split.highpass = Lr4::new(prepared.highpass);
+            split.branches = Lr4Pair::new(prepared.lowpass, prepared.highpass);
             for (section, later) in split
                 .allpass
                 .iter_mut()
@@ -233,8 +285,8 @@ fn filtered_bands(splits: &mut [Split], input: f32) -> impl Iterator<Item = f32>
         let sample = high?;
         match splits.next() {
             Some(split) => {
-                let mut low = split.lowpass.process(sample);
-                high = Some(split.highpass.process(sample));
+                let [mut low, next_high] = split.branches.process(sample);
+                high = Some(next_high);
                 for section in &mut split.allpass {
                     low = section.run(low);
                 }
