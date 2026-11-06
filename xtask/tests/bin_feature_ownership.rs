@@ -1,7 +1,14 @@
-use std::{fs, path::Path};
+use std::{fs, path::PathBuf};
 
 use cargo_metadata::MetadataCommand;
 use syn::{Expr, ExprMethodCall, Lit, visit::Visit};
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+        .parent()
+        .expect("xtask has a workspace root")
+        .to_path_buf()
+}
 
 #[derive(Default)]
 struct Requests(Vec<Vec<Option<String>>>);
@@ -31,7 +38,7 @@ impl<'ast> Visit<'ast> for Requests {
 
 #[test]
 fn explicit_binary_features_are_owned_by_the_manifest() {
-    let tooling = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let tooling = workspace_root().join("xtask");
     let metadata = MetadataCommand::new()
         .manifest_path(tooling.join("Cargo.toml"))
         .no_deps()

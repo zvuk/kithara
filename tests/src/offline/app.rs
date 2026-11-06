@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use keyring_core::sample::Store;
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
@@ -21,7 +19,7 @@ use kithara_app::{
     config::{AppConfig, AppDrm},
     document::Config,
     plugins,
-    pools::{AppPools, AppStore, PoolsSection, build as app_pools},
+    pools::{AppPools, PoolsSection, build as app_pools},
     secret,
 };
 use kithara_app_library::{Environment, Secrets};
@@ -108,9 +106,12 @@ pub async fn app_queue(document: Config) -> AppQueueFixture {
     });
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
+    let cache = TestTempDir::new();
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
-        .backend(StorageBackend::default())
+        .backend(StorageBackend::Disk {
+            root: cache.path().to_path_buf(),
+        })
         .flush_hub(flush_hub)
         .layouts(document.asset_layouts())
         .build();
@@ -150,16 +151,9 @@ pub async fn app_queue(document: Config) -> AppQueueFixture {
     AppQueueFixture {
         config,
         queue,
-        cache: TestTempDir::new(),
+        cache,
         ticker,
     }
-}
-
-/// A disk-backed asset store under `root`, built from the app pools.
-pub fn app_disk_asset_store(config: &AppConfig, root: impl Into<PathBuf>) -> AppStore {
-    AssetStore::builder(config.worker.pools().clone())
-        .backend(StorageBackend::Disk { root: root.into() })
-        .build()
 }
 
 /// A track source configured the way the app configures one: its DRM keys and

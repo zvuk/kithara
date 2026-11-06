@@ -15,6 +15,34 @@ fn executable(path: &Path, contents: &str) {
         .expect("make compiler-cache fixture executable runnable");
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn cache_exec_refuses_a_full_volume_before_starting_the_compiler_cache() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("target");
+    let required = u64::MAX.to_string();
+    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["ci", "cache", "exec", "network", "sh", "-c", "exit 19"])
+        .current_dir(temp.path())
+        .env("CI", "true")
+        .env("CARGO_TARGET_DIR", &target)
+        .env_remove("KITHARA_CI_BUILD_SLOTS")
+        .env("KITHARA_CI_JOB_ROOM_BYTES", &required)
+        .env("KITHARA_CI_JOB_ROOM_WAIT_SECONDS", "0")
+        .env("KACHE_HOST_CONFIG", temp.path().join("absent-host.toml"))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains(&target.display().to_string()), "{stderr}");
+    assert!(
+        stderr.contains(&format!("job needs {required}")),
+        "{stderr}"
+    );
+    assert!(kithara_devtools::lease::evict(&target).unwrap().is_some());
+}
+
 #[test]
 fn bootstrap_compiles_only_with_a_writable_s3_daemon() {
     let ready =
@@ -383,4 +411,49 @@ fn the_initial_runtime_cannot_delete_other_data_or_follow_a_symlink() {
         assert_eq!(fs::read_to_string(&file).unwrap(), "keep");
         assert!(alias.is_symlink());
     }
+}
+
+#[test]
+fn cache_exec_prepares_its_retained_ci_target_before_the_compiler_cache() {
+    let target = tempfile::tempdir().unwrap();
+    let scratch = target.path().join("tmp").join("interrupted-test");
+    fs::create_dir_all(scratch.parent().unwrap()).unwrap();
+    fs::write(&scratch, b"disposable build scratch").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["ci", "cache", "exec", "probe", "sh", "-c", "exit 7"])
+        .env("GITHUB_RUN_ID", "retained-target-fixture")
+        .env("CI", "true")
+        .env("GITHUB_ACTIONS", "true")
+        .env("CARGO_TARGET_DIR", target.path())
+        // This target owns its admission policy, independent of the CI runner.
+        .env_remove("KITHARA_CI_BUILD_SLOTS")
+        .env("KITHARA_CI_JOB_ROOM_BYTES", "1")
+        .env("KITHARA_CI_JOB_ROOM_WAIT_SECONDS", "0")
+        .env_remove("KACHE_HOST_CONFIG")
+        .env_remove("KACHE_RUNTIME_DIR")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_WORK_TREE")
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "a missing cache configuration must still refuse compilation"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("KACHE_HOST_CONFIG"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !scratch.exists(),
+        "cache-exec left disposable files in its retained CI target: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        kithara_devtools::lease::evict(target.path())
+            .unwrap()
+            .is_some(),
+        "the failed phase must release its target"
+    );
 }

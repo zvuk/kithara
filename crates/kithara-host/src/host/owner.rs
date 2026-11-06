@@ -111,6 +111,16 @@ pub(in crate::host) struct SessionRoot {
 }
 
 impl<S, O: HostOwner<S>> Host<S, O> {
+    /// Whether the session is driven by offline render requests.
+    #[must_use]
+    pub const fn is_offline(&self) -> bool {
+        match &self._session {
+            SessionRuntime::Realtime { .. } => false,
+            #[cfg(feature = "offline")]
+            SessionRuntime::Offline { .. } => true,
+        }
+    }
+
     delegate::delegate! {
         to self.root_view {
             /// Whether the session holds no deck.

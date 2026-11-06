@@ -187,7 +187,7 @@ impl<P> Linked<P> {
         let target = jump_target(&self.host, source, to, at).ok_or(PlayError::NotReady)?;
         let start = at - self.inner.snapshot().as_ref().declick;
         let (position, _) = self.planned::<S>(start)?;
-        let speed = self.curve(source, position, start, Some((target, at)))?;
+        let (speed, coverage) = self.curve(source, position, start, Some((target, at)))?;
         if matches!(&speed, SpeedCurve::Constant(value) if self.inner.projected().speed() == *value)
         {
             return self.inner.apply(TrackCommand::Jump { to: target, at }, out);
@@ -203,6 +203,7 @@ impl<P> Linked<P> {
         )?;
         if let Some(seq) = sent {
             self.speeds.push((seq, SpeedOperation::Relocation { to }));
+            self.plan_sent(start, coverage);
         }
         Ok(sent)
     }
@@ -228,12 +229,16 @@ impl<P> Linked<P> {
             let source = self.source(grid)?;
             if self.inner.entry(Bound::AtOrAfter(frame)).is_none()
                 || self.inner.prepared_speed()
-                    != Some(&self.curve(
-                        &source,
-                        cue_position(self.inner.snapshot().as_ref()),
-                        frame,
-                        None,
-                    )?)
+                    != Some(
+                        &self
+                            .curve(
+                                &source,
+                                cue_position(self.inner.snapshot().as_ref()),
+                                frame,
+                                None,
+                            )?
+                            .0,
+                    )
             {
                 return Err(PlayError::NotReady);
             }

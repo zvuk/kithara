@@ -1,4 +1,5 @@
 name: Windows
+run-name: ${{ (inputs.diagnostics || (inputs.test-filter || '') != '') && 'Windows diagnostics (not acceptance)' || 'Windows' }}
 
 # Cross-compiling to MSVC answers whether the code builds on Windows. Whether
 # it runs there is a question only a Windows machine answers.
@@ -6,6 +7,14 @@ on:
   workflow_call:
   workflow_dispatch:
     inputs:
+      diagnostics:
+        description: Capture native state and existing failure reports without running the acceptance suite.
+        type: boolean
+        default: false
+      test-filter:
+        description: Optional diagnostic Nextest filter. Its result does not qualify the full suite.
+        type: string
+        default: ""
       fixture-refresh:
         description: >-
           Comma-separated fixture names, or producing-function names, to
@@ -32,6 +41,12 @@ env:
   # wiped on every run, so leaving this unset rebuilt the workspace - the part
   # of this lane that costs hours - from source each time.
   CARGO_TARGET_DIR: C:\kithara-ci\target
+  # xtask builds itself before the first phase. Left unset, that build lands
+  # in the checkout and is wiped with it, so every run compiled xtask from
+  # source before the cache check could start. Beside the workspace build it
+  # is reused, where Linux runners keep it too, and the job leases it for as
+  # long as xtask runs.
+  KITHARA_XTASK_TARGET: C:\kithara-ci\target\xtask
 
 concurrency:
   group: windows-${{ github.ref }}
@@ -42,11 +57,28 @@ jobs:
     name: Suite on Windows
     # Set only where a Windows runner is attached, so a copy of this repository
     # without one never starts the job. See .github/workflows/ci.yml.
-    if: vars.KITHARA_WINDOWS_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    if: >-
+      vars.KITHARA_WINDOWS_RUNNER_LABELS != '' && github.actor == github.repository_owner
+      && !inputs.diagnostics && (inputs.test-filter || '') == ''
     runs-on: ${{ fromJSON(vars.KITHARA_WINDOWS_RUNNER_LABELS) }}
     timeout-minutes: 180
 
     steps:
+      - name: Inspect bootstrap storage
+        run: |
+          Get-PSDrive -PSProvider FileSystem | Select-Object Name, Root, Used, Free | Format-Table -AutoSize
+          $buildProcesses = @(Get-Process -Name cargo, rustc, link, xtask, ci-bootstrap, cargo-nextest -ErrorAction SilentlyContinue)
+          Write-Output ("Active build processes: {0}" -f $buildProcesses.Count)
+          $buildProcesses | Select-Object ProcessName, Id | Format-Table -AutoSize
+          $storage = foreach ($ciTree in @('C:\kithara-ci', $env:CARGO_TARGET_DIR)) {
+            Get-ChildItem -LiteralPath $ciTree -Directory -Force | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object {
+              $scanErrors = @()
+              $size = Get-ChildItem -LiteralPath $_.FullName -File -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable scanErrors | Measure-Object -Property Length -Sum
+              [PSCustomObject]@{ Path = $_.FullName; Bytes = $size.Sum; UnreadableEntries = $scanErrors.Count }
+            }
+          }
+          $storage | Sort-Object Bytes -Descending | Format-Table -AutoSize
+
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -63,6 +95,8 @@ jobs:
       # which the guest has no more than it has the product that would use it,
       # so the lane names the backend the platform actually carries.
       - name: Run tests
+        env:
+          KITHARA_HANG_DUMP_DIR: ${{ runner.temp }}/kithara-windows-hang
         run: just ci cache-exec windows-test just test run --net-backend=none
 
       - name: Upload compiler-cache evidence
@@ -71,4 +105,58 @@ jobs:
         with:
           name: compiler-cache-windows-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json
+          if-no-files-found: error
+
+      - name: Upload Windows hang evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-hang-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kithara-windows-hang
+          if-no-files-found: warn
+
+  diagnostics:
+    name: Windows diagnostics
+    if: >-
+      vars.KITHARA_WINDOWS_RUNNER_LABELS != '' && github.actor == github.repository_owner
+      && (inputs.diagnostics || (inputs.test-filter || '') != '')
+    runs-on: ${{ fromJSON(vars.KITHARA_WINDOWS_RUNNER_LABELS) }}
+    timeout-minutes: 180
+    env:
+      TEST_FILTER: ${{ inputs.test-filter || '' }}
+    steps:
+      - name: Checkout diagnostics controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: diagnostics-controller
+
+      - name: Capture existing Windows evidence
+        run: just --justfile diagnostics-controller/justfile ci windows-diagnostics --output "$env:RUNNER_TEMP/windows-diagnostics"
+
+      - name: Preserve existing Windows evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-before-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-diagnostics
+          if-no-files-found: error
+
+      - name: Verify probe compiler cache
+        if: ${{ (inputs.test-filter || '') != '' }}
+        working-directory: diagnostics-controller
+        run: just ci cache-verify
+
+      - name: Run diagnostic test selection
+        if: ${{ (inputs.test-filter || '') != '' }}
+        working-directory: diagnostics-controller
+        env:
+          KITHARA_FLASH_SYNC_TRACE: "1"
+          KITHARA_HANG_DUMP_DIR: ${{ runner.temp }}/windows-diagnostics/probe-hang
+        run: just ci cache-exec windows-diagnostic just test run --net-backend=none "--narrow=$env:TEST_FILTER" --retries=0
+
+      - name: Upload probe evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-diagnostics
           if-no-files-found: error

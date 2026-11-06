@@ -141,9 +141,12 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
     let document = prod_document();
+    let temp = TestTempDir::new();
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
-        .backend(StorageBackend::default())
+        .backend(StorageBackend::Disk {
+            root: temp.path().join("app"),
+        })
         .flush_hub(flush_hub)
         .layouts(document.asset_layouts())
         .build();
@@ -160,12 +163,10 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         .worker(worker)
         .store(store)
         .build();
-    let temp = TestTempDir::new();
-
     let TrackSource::Config(cfg) = app_track_source(
         PROD_TRACK,
         &config,
-        disk_asset_store(temp.path()),
+        disk_asset_store(temp.path().join("playback")),
         backend,
         AbrMode::manual(START_VARIANT),
         Some(TRACK_NAME),

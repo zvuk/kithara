@@ -1,4 +1,5 @@
 name: Android
+run-name: ${{ (inputs.filter || '') != '' && 'Android diagnostics (not acceptance)' || 'Android' }}
 
 # The instrumented tests need a device. On a machine whose processor matches
 # the guest's, the emulator is a virtual machine rather than an interpreter,
@@ -27,7 +28,7 @@ concurrency:
 
 jobs:
   android:
-    name: Android baseline on an emulator
+    name: ${{ (inputs.filter || '') != '' && 'Android diagnostic selection on an emulator' || 'Android baseline on an emulator' }}
     # Set only where a runner with an emulator is attached, so a copy of this
     # repository without one never starts the job.
     # See .github/workflows/ci.yml.
