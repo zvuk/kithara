@@ -1,140 +1,44 @@
-use std::{
-    f32::consts::FRAC_1_SQRT_2,
-    ops::{Add, Deref, DerefMut, Mul, Sub},
-};
+use std::ops::{Deref, DerefMut};
 
-use biquad::{Coefficients, Hertz, Type};
-use fearless_simd::{Level, SimdFrom, dispatch, f32x4};
+use biquad::{Biquad, Coefficients, DirectForm1, Hertz, Type};
 
-use super::FilterError;
+use super::{coefficients, validate};
+use crate::filter::FilterError;
 
-#[cfg(test)]
-mod tests;
-
-struct Df1State {
-    y1: f32,
-    y2: f32,
-    x1: f32,
-    x2: f32,
-}
-
-impl Df1State {
-    const fn new() -> Self {
-        Self {
-            y1: 0.0,
-            y2: 0.0,
-            x1: 0.0,
-            x2: 0.0,
-        }
-    }
-
-    #[inline]
-    fn run(&mut self, input: f32, coefficients: &Coefficients<f32>) -> f32 {
-        let output =
-            coefficients.b0 * input + coefficients.b1 * self.x1 + coefficients.b2 * self.x2
-                - coefficients.a1 * self.y1
-                - coefficients.a2 * self.y2;
-        self.commit(input, output)
-    }
-
-    #[inline]
-    fn commit(&mut self, input: f32, output: f32) -> f32 {
-        self.x2 = self.x1;
-        self.x1 = input;
-        self.y2 = self.y1;
-        self.y1 = output;
-        if Self::reset_needed(input, output) {
-            self.reset();
-            return 0.0;
-        }
-        output
-    }
-
-    #[inline]
-    fn reset_needed(input: f32, output: f32) -> bool {
-        output.is_subnormal() && input.abs() < f32::MIN_POSITIVE
-    }
-
-    fn reset(&mut self) {
-        self.x1 = 0.0;
-        self.x2 = 0.0;
-        self.y1 = 0.0;
-        self.y2 = 0.0;
-    }
-}
-
-struct Section {
-    state: Df1State,
-    coefficients: Coefficients<f32>,
-}
+struct Section(DirectForm1<f32>);
 
 impl Section {
     const fn new(coefficients: Coefficients<f32>) -> Self {
-        Self {
-            state: Df1State::new(),
-            coefficients,
-        }
+        Self(DirectForm1::new(coefficients))
     }
 
     #[inline]
     fn run(&mut self, input: f32) -> f32 {
-        self.state.run(input, &self.coefficients)
+        let output = self.0.run(input);
+        if output.is_subnormal() && input.abs() < f32::MIN_POSITIVE {
+            self.0.reset_state();
+            return 0.0;
+        }
+        output
     }
 }
 
-struct Lr4Pair {
-    coefficients: [[f32; 2]; 5],
-    low_first: Df1State,
-    low_second: Df1State,
-    high_first: Df1State,
-    high_second: Df1State,
+struct Lr4 {
+    first: Section,
+    second: Section,
 }
 
-impl Lr4Pair {
-    const fn new(low: Coefficients<f32>, high: Coefficients<f32>) -> Self {
+impl Lr4 {
+    const fn new(coefficients: Coefficients<f32>) -> Self {
         Self {
-            coefficients: [
-                [low.b0, high.b0],
-                [low.b1, high.b1],
-                [low.b2, high.b2],
-                [low.a1, high.a1],
-                [low.a2, high.a2],
-            ],
-            low_first: Df1State::new(),
-            low_second: Df1State::new(),
-            high_first: Df1State::new(),
-            high_second: Df1State::new(),
+            first: Section::new(coefficients),
+            second: Section::new(coefficients),
         }
     }
 
-    #[inline(always)]
-    fn process(&mut self, input: f32) -> (f32, f32) {
-        dispatch!(Level::baseline(), simd => {
-            let pair = |low, high| f32x4::simd_from(simd, [low, high, 0.0, 0.0]);
-            let [b0, b1, b2, a1, a2] = self.coefficients.map(|[low, high]| pair(low, high));
-            let run = |low: &Df1State, high: &Df1State, input: f32x4<_>| {
-                let output = b0.mul(input)
-                    .add(b1.mul(pair(low.x1, high.x1)))
-                    .add(b2.mul(pair(low.x2, high.x2)))
-                    .sub(a1.mul(pair(low.y1, high.y1)))
-                    .sub(a2.mul(pair(low.y2, high.y2)));
-                let [low, high, ..] = <[f32; 4]>::from(output);
-                [low, high]
-            };
-            let [low, high] = run(&self.low_first, &self.high_first, pair(input, input));
-            let low = self.low_first.commit(input, low);
-            // Preview the high stage without committing it before the low cascade.
-            let next_high = if Df1State::reset_needed(input, high) {
-                0.0
-            } else {
-                high
-            };
-            let [next_low, next_high] = run(&self.low_second, &self.high_second, pair(low, next_high));
-            let low = self.low_second.commit(low, next_low);
-            let high = self.high_first.commit(input, high);
-            let high = self.high_second.commit(high, next_high);
-            (low, high)
-        })
+    #[inline]
+    fn process(&mut self, input: f32) -> f32 {
+        self.second.run(self.first.run(input))
     }
 }
 
@@ -158,10 +62,11 @@ impl Design {
 /// Mono LR4 crossovers with later-frequency allpass compensation, computed in f32.
 #[non_exhaustive]
 pub struct Crossover {
-    frequencies: Box<[Hertz<f32>]>,
-    splits: Box<[Lr4Pair]>,
-    allpass: Box<[Section]>,
+    lowpass: Vec<Lr4>,
+    highpass: Vec<Lr4>,
     frame: Box<[f32]>,
+    allpass: Vec<Section>,
+    frequencies: Box<[Hertz<f32>]>,
     prepared: Box<[Design]>,
     prepared_rate: Option<Hertz<f32>>,
 }
@@ -180,9 +85,13 @@ impl Crossover {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             frequencies: frequencies.into(),
-            splits: designs
+            lowpass: designs
                 .iter()
-                .map(|design| Lr4Pair::new(design.lowpass, design.highpass))
+                .map(|design| Lr4::new(design.lowpass))
+                .collect(),
+            highpass: designs
+                .iter()
+                .map(|design| Lr4::new(design.highpass))
                 .collect(),
             allpass: (1..designs.len())
                 .flat_map(|start| {
@@ -192,7 +101,7 @@ impl Crossover {
                         .map(|design| Section::new(design.allpass))
                 })
                 .collect(),
-            frame: vec![0.0; frequencies.len()].into_boxed_slice(),
+            frame: vec![0.0; frequencies.len().saturating_add(1)].into_boxed_slice(),
             prepared: designs.into_boxed_slice(),
             prepared_rate: None,
         })
@@ -205,25 +114,21 @@ impl Crossover {
     /// Panics if a plane changes length between dereferences during processing.
     #[inline(always)]
     pub fn split<P: DerefMut<Target = [f32]>>(&mut self, input: &[f32], bands: &mut [P]) -> usize {
-        let Some(bands) = bands.get_mut(..self.frequencies.len().saturating_add(1)) else {
+        let Some(bands) = bands.get_mut(..self.lowpass.len().saturating_add(1)) else {
             return 0;
         };
         let count = bands
             .iter()
             .fold(input.len(), |count, band| count.min(band.len()));
-        let (high_band, low_bands) = bands
-            .split_last_mut()
-            .expect("one high band after the crossovers");
         for (frame, &sample) in input.iter().take(count).enumerate() {
-            let high = self.filter_sample(sample);
-            for (band, value) in low_bands.iter_mut().zip(self.frame.iter()) {
-                *band
+            for (band, value) in bands.iter_mut().zip(self.filter_frame(sample)) {
+                let prefix = band
+                    .get_mut(..count)
+                    .expect("validated common prefix remains available");
+                *prefix
                     .get_mut(frame)
                     .expect("frame belongs to the validated common prefix") = *value;
             }
-            *high_band
-                .get_mut(frame)
-                .expect("frame belongs to the validated common prefix") = high;
         }
         count
     }
@@ -235,7 +140,7 @@ impl Crossover {
     /// # Panics
     /// Panics if a gain plane changes length between dereferences during processing.
     pub fn sum<P: Deref<Target = [f32]>>(&mut self, samples: &mut [f32], gains: &[P]) -> usize {
-        let Some(gains) = gains.get(..self.frequencies.len().saturating_add(1)) else {
+        let Some(gains) = gains.get(..self.lowpass.len().saturating_add(1)) else {
             return 0;
         };
         let count = gains
@@ -270,17 +175,29 @@ impl Crossover {
 
     #[inline(never)]
     fn filtered_high(&mut self, input: f32) -> f32 {
-        self.filter_sample(input)
+        *self
+            .filter_frame(input)
+            .last()
+            .expect("one high band after the crossovers")
     }
 
     #[inline(always)]
-    fn filter_sample(&mut self, mut high: f32) -> f32 {
-        let lower = self.frame.as_mut();
-        for (split, low) in self.splits.iter_mut().zip(lower.iter_mut()) {
-            (*low, high) = split.process(high);
+    fn filter_frame(&mut self, mut high: f32) -> &[f32] {
+        let (high_band, lower) = self
+            .frame
+            .split_last_mut()
+            .expect("one high band after the crossovers");
+        for ((lowpass, highpass), low) in self
+            .lowpass
+            .iter_mut()
+            .zip(self.highpass.iter_mut())
+            .zip(lower.iter_mut())
+        {
+            *low = lowpass.process(high);
+            high = highpass.process(high);
         }
         let count = lower.len();
-        let mut allpass = self.allpass.as_mut();
+        let mut allpass = self.allpass.as_mut_slice();
         for (size, low) in (1..count).rev().zip(lower.iter_mut()) {
             let (sections, remaining) = allpass.split_at_mut(size);
             let mut value = *low;
@@ -290,21 +207,18 @@ impl Crossover {
             *low = value;
             allpass = remaining;
         }
-        high
+        *high_band = high;
+        &self.frame
     }
 
     /// Clears every section's history without allocation or coefficient changes.
     pub fn reset(&mut self) {
-        for split in &mut self.splits {
-            split.low_first.reset();
-            split.low_second.reset();
-        }
-        for split in &mut self.splits {
-            split.high_first.reset();
-            split.high_second.reset();
+        for filter in self.lowpass.iter_mut().chain(self.highpass.iter_mut()) {
+            filter.first.0.reset_state();
+            filter.second.0.reset_state();
         }
         for section in &mut self.allpass {
-            section.state.reset();
+            section.0.reset_state();
         }
     }
 
@@ -340,8 +254,14 @@ impl Crossover {
     /// Returns its rate, or `None` without mutation when no preparation remains.
     pub fn apply_prepared_sample_rate(&mut self) -> Option<Hertz<f32>> {
         let rate = self.prepared_rate.take()?;
-        for (split, prepared) in self.splits.iter_mut().zip(&self.prepared) {
-            *split = Lr4Pair::new(prepared.lowpass, prepared.highpass);
+        for ((lowpass, highpass), prepared) in self
+            .lowpass
+            .iter_mut()
+            .zip(self.highpass.iter_mut())
+            .zip(&self.prepared)
+        {
+            *lowpass = Lr4::new(prepared.lowpass);
+            *highpass = Lr4::new(prepared.highpass);
         }
         let mut allpass = self.allpass.iter_mut();
         for index in 0..self.prepared.len() {
@@ -356,41 +276,4 @@ impl Crossover {
         }
         Some(rate)
     }
-}
-
-fn validate(
-    frequencies: impl Iterator<Item = Hertz<f32>>,
-    sample_rate: Hertz<f32>,
-) -> Result<(), FilterError> {
-    let rate = sample_rate.hz();
-    if !rate.is_finite() || rate <= 0.0 {
-        return Err(FilterError::Parameters);
-    }
-    let mut previous = 0.0;
-    for frequency in frequencies {
-        let frequency = frequency.hz();
-        if !frequency.is_finite() || frequency <= previous || frequency >= rate * 0.5 {
-            return Err(FilterError::Parameters);
-        }
-        previous = frequency;
-    }
-    Ok(())
-}
-
-fn coefficients(
-    kind: Type<f32>,
-    frequency: Hertz<f32>,
-    sample_rate: Hertz<f32>,
-) -> Result<Coefficients<f32>, FilterError> {
-    let coefficients = Coefficients::from_normalized_params(
-        kind,
-        2.0 * frequency.hz() / sample_rate.hz(),
-        FRAC_1_SQRT_2,
-    )
-    .map_err(|_| FilterError::Parameters)?;
-    let Coefficients { a1, a2, b0, b1, b2 } = coefficients;
-    if [a1, a2, b0, b1, b2].iter().any(|value| !value.is_finite()) {
-        return Err(FilterError::Parameters);
-    }
-    Ok(coefficients)
 }
