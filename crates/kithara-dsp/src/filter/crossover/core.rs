@@ -5,6 +5,10 @@ use biquad::{Biquad, Coefficients, DirectForm1, Hertz, Type};
 use super::{coefficients, validate};
 use crate::filter::FilterError;
 
+// Keep each band's working window to 256 bytes; input length remains unrestricted.
+const BLOCK_FRAMES: usize = 64;
+
+#[derive(Clone, Copy)]
 struct Section(DirectForm1<f32>);
 
 impl Section {
@@ -21,8 +25,18 @@ impl Section {
         }
         output
     }
+
+    #[inline(always)]
+    fn process_block(&mut self, samples: &mut [f32]) {
+        let mut section = *self;
+        for sample in samples {
+            *sample = section.run(*sample);
+        }
+        *self = section;
+    }
 }
 
+#[derive(Clone, Copy)]
 struct Lr4 {
     first: Section,
     second: Section,
@@ -39,6 +53,15 @@ impl Lr4 {
     #[inline]
     fn process(&mut self, input: f32) -> f32 {
         self.second.run(self.first.run(input))
+    }
+
+    #[inline(always)]
+    fn process_block(&mut self, samples: &mut [f32]) {
+        let mut cascade = *self;
+        for sample in samples {
+            *sample = cascade.process(*sample);
+        }
+        *self = cascade;
     }
 }
 
@@ -64,8 +87,8 @@ impl Design {
 pub struct Crossover {
     lowpass: Vec<Lr4>,
     highpass: Vec<Lr4>,
-    frame: Box<[f32]>,
-    gain_frame: Box<[f32]>,
+    band_blocks: Box<[[f32; BLOCK_FRAMES]]>,
+    gain_blocks: Box<[[f32; BLOCK_FRAMES]]>,
     allpass: Vec<Section>,
     frequencies: Box<[Hertz<f32>]>,
     prepared: Box<[Design]>,
@@ -102,8 +125,10 @@ impl Crossover {
                         .map(|design| Section::new(design.allpass))
                 })
                 .collect(),
-            frame: vec![0.0; frequencies.len()].into_boxed_slice(),
-            gain_frame: vec![0.0; frequencies.len().saturating_add(1)].into_boxed_slice(),
+            band_blocks: vec![[0.0; BLOCK_FRAMES]; frequencies.len().saturating_add(1)]
+                .into_boxed_slice(),
+            gain_blocks: vec![[0.0; BLOCK_FRAMES]; frequencies.len().saturating_add(1)]
+                .into_boxed_slice(),
             prepared: designs.into_boxed_slice(),
             prepared_rate: None,
         })
@@ -122,21 +147,27 @@ impl Crossover {
         let count = bands
             .iter()
             .fold(input.len(), |count, band| count.min(band.len()));
-        for (frame, &sample) in input.iter().take(count).enumerate() {
-            let filtered = filtered_bands(
-                &mut self.lowpass,
-                &mut self.highpass,
-                &mut self.frame,
-                &mut self.allpass,
-                sample,
-            );
-            for (band, value) in bands.iter_mut().zip(filtered) {
-                let prefix = band
-                    .get_mut(..count)
-                    .expect("validated common prefix remains available");
-                *prefix
-                    .get_mut(frame)
-                    .expect("frame belongs to the validated common prefix") = value;
+        for (index, input) in input
+            .get(..count)
+            .expect("validated input prefix")
+            .chunks(BLOCK_FRAMES)
+            .enumerate()
+        {
+            let start = index
+                .checked_mul(BLOCK_FRAMES)
+                .expect("chunk starts within the input prefix");
+            let end = start
+                .checked_add(input.len())
+                .expect("chunk ends within the input prefix");
+            self.filter_block(input);
+            for (output, band) in bands.iter_mut().zip(self.band_blocks.iter()) {
+                output
+                    .get_mut(start..end)
+                    .expect("validated common prefix remains available")
+                    .copy_from_slice(
+                        band.get(..input.len())
+                            .expect("chunk fits the filter window"),
+                    );
             }
         }
         count
@@ -155,28 +186,80 @@ impl Crossover {
         let count = gains
             .iter()
             .fold(samples.len(), |n, gain| n.min(gain.len()));
-        for (frame, sample) in samples.iter_mut().take(count).enumerate() {
-            for (value, gain) in self.gain_frame.iter_mut().zip(gains) {
-                *value = *gain
-                    .get(frame)
-                    .expect("frame belongs to the validated common prefix");
+        for (index, samples) in samples
+            .get_mut(..count)
+            .expect("validated output prefix")
+            .chunks_mut(BLOCK_FRAMES)
+            .enumerate()
+        {
+            let start = index
+                .checked_mul(BLOCK_FRAMES)
+                .expect("chunk starts within the output prefix");
+            let end = start
+                .checked_add(samples.len())
+                .expect("chunk ends within the output prefix");
+            for (row, gain) in self.gain_blocks.iter_mut().zip(gains) {
+                row.get_mut(..samples.len())
+                    .expect("chunk fits the gain window")
+                    .copy_from_slice(
+                        gain.get(start..end)
+                            .expect("validated gain prefix remains available"),
+                    );
             }
-            *sample = self.weighted_sample(*sample);
+            self.weighted_block(samples);
         }
         count
     }
 
     #[inline(never)]
-    fn weighted_sample(&mut self, input: f32) -> f32 {
-        filtered_bands(
-            &mut self.lowpass,
-            &mut self.highpass,
-            &mut self.frame,
-            &mut self.allpass,
-            input,
-        )
-        .zip(self.gain_frame.iter())
-        .fold(0.0, |output, (band, gain)| band.mul_add(*gain, output))
+    fn weighted_block(&mut self, samples: &mut [f32]) {
+        self.filter_block(samples);
+        samples.fill(0.0);
+        for (band, gain) in self.band_blocks.iter().zip(self.gain_blocks.iter()) {
+            crate::mul_add(
+                band.get(..samples.len())
+                    .expect("chunk fits the filter window"),
+                gain.get(..samples.len())
+                    .expect("chunk fits the gain window"),
+                samples,
+            );
+        }
+    }
+
+    #[inline(never)]
+    fn filter_block(&mut self, input: &[f32]) {
+        let (high, low) = self
+            .band_blocks
+            .split_last_mut()
+            .expect("one high band after the crossovers");
+        let high = high
+            .get_mut(..input.len())
+            .expect("chunk fits the filter window");
+        high.copy_from_slice(input);
+        for ((lowpass, highpass), low) in self
+            .lowpass
+            .iter_mut()
+            .zip(self.highpass.iter_mut())
+            .zip(low.iter_mut())
+        {
+            let low = low
+                .get_mut(..input.len())
+                .expect("chunk fits the filter window");
+            low.copy_from_slice(high);
+            lowpass.process_block(low);
+            highpass.process_block(high);
+        }
+        let mut allpass = self.allpass.as_mut_slice();
+        for (size, low) in (1..low.len()).rev().zip(low.iter_mut()) {
+            let (sections, rest) = allpass.split_at_mut(size);
+            allpass = rest;
+            let low = low
+                .get_mut(..input.len())
+                .expect("chunk fits the filter window");
+            for section in sections {
+                section.process_block(low);
+            }
+        }
     }
 
     /// Clears every section's history without allocation or coefficient changes.
@@ -244,34 +327,4 @@ impl Crossover {
         }
         Some(rate)
     }
-}
-
-#[inline(always)]
-fn filtered_bands<'a>(
-    lowpass: &mut [Lr4],
-    highpass: &mut [Lr4],
-    frame: &'a mut [f32],
-    allpass: &'a mut [Section],
-    mut high: f32,
-) -> impl Iterator<Item = f32> + 'a {
-    for ((lowpass, highpass), low) in lowpass
-        .iter_mut()
-        .zip(highpass.iter_mut())
-        .zip(frame.iter_mut())
-    {
-        *low = lowpass.process(high);
-        high = highpass.process(high);
-    }
-    let mut remaining = allpass;
-    (0..frame.len())
-        .rev()
-        .zip(frame.iter())
-        .map(move |(size, &low)| {
-            let (sections, rest) = std::mem::take(&mut remaining).split_at_mut(size);
-            remaining = rest;
-            sections
-                .iter_mut()
-                .fold(low, |value, section| section.run(value))
-        })
-        .chain(std::iter::once(high))
 }
