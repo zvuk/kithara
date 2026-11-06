@@ -153,7 +153,12 @@ async fn deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
     deck_eq_format_change(true).await;
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(
+    tokio,
+    tracing(
+        "warn,kithara_render_probe=trace,kithara_worker_probe=trace,kithara_test::host_rate_telemetry=info"
+    )
+)]
 async fn nonblocking_deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
     deck_eq_format_change(false).await;
 }
@@ -191,8 +196,8 @@ async fn deck_eq_format_change(block_on_underrun: bool) {
     )
     .await;
     let _ = render_effect_window(&harness, 4096).await;
-    assert_eq!(harness.metrics().underruns(), 0, "initial deck playback");
     underruns.checkpoint(harness.metrics(), true, "initial ready playback");
+    assert_eq!(harness.metrics().underruns(), 0, "initial deck playback");
     assert_eq!(harness.player().eq_gain(1), Some(6.0));
     let mut tap = harness
         .host()
@@ -270,7 +275,7 @@ pub(crate) async fn play_source(
     harness
 }
 
-pub(super) async fn load_source(
+pub(crate) async fn load_source(
     harness: OfflinePlayer,
     deck_source: TrackSource<TestPools>,
 ) -> OfflinePlayer {
@@ -295,6 +300,68 @@ pub(super) async fn load_source(
     .await
     .expect("PCM deck loads before the first render");
     harness
+}
+
+/// Installs, changes and clears a deck effect while the deck plays. Under the
+/// realtime sanitizer the callback must neither allocate nor free: the cleared
+/// effect leaves through the receipt.
+#[kithara::test(tokio)]
+async fn deck_fx_install_change_and_clear_during_playback() {
+    use kithara::play::{DeckFxChange, FxMix};
+    use kithara_command::When;
+
+    use crate::deck_fx::{Echo, insert};
+
+    const ECHO: usize = 16 * BLOCK_FRAMES;
+    let level = 0.2_f32.to_bits();
+    let steady = |take: &[f32]| take.iter().all(|sample| sample.to_bits() == level);
+    let harness = play_source(
+        OfflinePlayer::with_sample_rate(
+            OfflinePlayerOptions::builder()
+                .block_on_underrun(true)
+                .build(),
+            SAMPLE_RATE,
+        )
+        .await,
+        asset_source(&assets::fixed_constant_wav_cd_fifth_1323000()).into(),
+    )
+    .await;
+    let send =
+        |changes: Vec<DeckFxChange>| harness.with_queue(move |queue| queue.fx(When::Next, changes));
+    assert!(steady(&render_blocks(&harness, 2).await), "the dry deck");
+
+    send(insert(0, Echo::new(ECHO)))
+        .await
+        .expect("install the echo");
+    let wet = render_blocks(&harness, 2 * ECHO / BLOCK_FRAMES).await;
+    assert!(wet.contains(&0.0), "the fully wet echo starts silent");
+    assert!(
+        steady(&wet[wet.len() - BLOCK_FRAMES * 2..]),
+        "the echo repeats the deck"
+    );
+
+    let half = FxMix::checked(0.5).expect("half is a dry/wet");
+    send(vec![DeckFxChange::Mix {
+        unit: 0,
+        value: half,
+    }])
+    .await
+    .expect("change the dry/wet");
+    let mixed = render_blocks(&harness, 4).await;
+    assert!(
+        steady(&mixed[mixed.len() - BLOCK_FRAMES * 2..]),
+        "half dry, half echo"
+    );
+
+    send(vec![DeckFxChange::Clear { unit: 0 }])
+        .await
+        .expect("clear the unit");
+    assert!(
+        steady(&render_blocks(&harness, 2).await),
+        "the cleared deck is dry"
+    );
+    assert_eq!(harness.metrics().underruns(), 0);
+    harness.close().await;
 }
 
 pub(crate) async fn playing_harness() -> OfflinePlayer {

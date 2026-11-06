@@ -748,7 +748,14 @@ pub(in super::super) async fn capture(
     let harness = OfflinePlayer::with_factory(
         OfflinePlayerOptions::builder()
             .eq_layout(Vec::new())
-            .mix(DeckMixSettings::builder().level(CONTROL_GAIN).build())
+            .mix(
+                DeckMixSettings::builder()
+                    .crossfader(
+                        kithara::play::CrossfaderGain::checked(CONTROL_GAIN)
+                            .expect("the control gain is a crossfader gain"),
+                    )
+                    .build(),
+            )
             .crossfade_duration(0.0)
             .block_on_underrun(true)
             .warp(

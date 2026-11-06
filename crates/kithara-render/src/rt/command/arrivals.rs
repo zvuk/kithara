@@ -5,7 +5,7 @@ use super::{
     super::{processor::Deck, track::PlayerTrack},
     state::*,
 };
-use crate::bridge::{DeckPart, DeckProtocol, DeckRefusal, Slot};
+use crate::bridge::{DeckFxChange, DeckPart, DeckProtocol, DeckRefusal, Slot};
 
 impl Deck {
     pub(in crate::rt) fn arrivals(&mut self, level: &mut LevelInbox<'_, DeckProtocol>) {
@@ -253,6 +253,17 @@ impl Deck {
                         if !self.held.get(slot.index()).is_some_and(Option::is_some) {
                             return Err(DeckRefusal::Empty { slot });
                         }
+                    }
+                }
+                DeckPart::Fx(change) => {
+                    let unit = change.unit();
+                    if unit >= self.render.fx_units() {
+                        return Err(DeckRefusal::MissingFxUnit { unit });
+                    }
+                    if let DeckFxChange::Param { change, .. } = change
+                        && !self.render.accepts_fx(unit, *change)
+                    {
+                        return Err(DeckRefusal::RefusedFxParam { unit });
                     }
                 }
                 DeckPart::Mix(_)
