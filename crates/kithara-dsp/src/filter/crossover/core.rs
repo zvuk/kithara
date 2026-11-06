@@ -68,7 +68,7 @@ impl CrossoverState {
         for ((&initial, count), output) in self
             .frame
             .iter()
-            .zip((0..self.frame.len()).rev())
+            .zip((0..self.lowpass.len()).rev())
             .zip(lower)
         {
             let (sections, tail) = remaining.split_at_mut(count);
@@ -152,7 +152,7 @@ impl Crossover {
     /// Panics if a plane changes length between dereferences during processing.
     #[inline(always)]
     pub fn split<P: DerefMut<Target = [f32]>>(&mut self, input: &[f32], bands: &mut [P]) -> usize {
-        let Some(bands) = bands.get_mut(..self.frequencies.len().saturating_add(1)) else {
+        let Some(bands) = bands.get_mut(..self.state.lowpass.len().saturating_add(1)) else {
             return 0;
         };
         let count = bands
@@ -175,7 +175,7 @@ impl Crossover {
     /// # Panics
     /// Panics if a gain plane changes length between dereferences during processing.
     pub fn sum<P: Deref<Target = [f32]>>(&mut self, samples: &mut [f32], gains: &[P]) -> usize {
-        let Some(gains) = gains.get(..self.frequencies.len().saturating_add(1)) else {
+        let Some(gains) = gains.get(..self.state.lowpass.len().saturating_add(1)) else {
             return 0;
         };
         let count = gains
