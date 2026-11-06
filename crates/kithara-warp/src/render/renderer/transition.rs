@@ -1,6 +1,7 @@
-use std::mem;
+use std::{mem, num::NonZeroUsize};
 
 use kithara_bufpool::HasPool;
+use kithara_dsp::crossfade_linear;
 use kithara_signal::SourceSpan;
 use kithara_stretch::{ElasticCapabilities, ElasticError};
 use num_traits::ToPrimitive;
@@ -29,25 +30,15 @@ impl RetiringTarget {
             .scratch
             .as_ref()
             .ok_or(ElasticError::PoolCapacity)?;
-        for (frame, (old, output)) in old
-            .chunks_exact(channels)
-            .zip(output.chunks_exact_mut(channels))
-            .take(frames)
-            .enumerate()
-        {
-            let mix = (self.rendered + frame + 1)
-                .to_f32()
-                .ok_or(ElasticError::SampleCountOverflow)?
-                / self
-                    .frames
-                    .to_f32()
-                    .ok_or(ElasticError::SampleCountOverflow)?;
-            for (old, output) in old.iter().zip(output) {
-                if old != output {
-                    *output = old.mul_add(1.0 - mix, *output * mix);
-                }
-            }
-        }
+        let channels = NonZeroUsize::new(channels).ok_or(ElasticError::SampleCountOverflow)?;
+        let samples = old.len().min(frames.saturating_mul(channels.get()));
+        crossfade_linear(
+            &old[..samples],
+            output,
+            channels,
+            self.rendered + 1,
+            self.frames,
+        );
         self.rendered += frames;
         Ok(())
     }
