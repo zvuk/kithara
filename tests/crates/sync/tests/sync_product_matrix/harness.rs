@@ -1800,6 +1800,7 @@ impl ProductHarness {
                         "item": u64::from(item), "start_seq": seq.get(), "start_applied": at,
                         "declick_frames": declick, "stable_at": stable_at,
                         "consumed_at": i64::from(mark.session), "segment": info.segment.get(), "slot_gain": slot.gain,
+                        "timeline": observation.timeline,
                     }))
                 })
             }).collect();
