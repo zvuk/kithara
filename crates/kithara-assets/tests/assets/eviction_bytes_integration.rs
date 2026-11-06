@@ -47,14 +47,15 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
+    let store =
+        asset_scope_with_root_and_limit(&temp_dir, asset_a_name, Some(100), cancel_token.clone())
+            .store()
+            .clone();
 
     {
-        let scope_a = asset_scope_with_root_and_limit(
-            &temp_dir,
-            asset_a_name,
-            Some(100),
-            cancel_token.clone(),
-        );
+        let scope_a = store
+            .scope::<LiteralLayout>(&source(asset_a_name))
+            .expect("scope");
         let key_a = scope_a.key(&resource("media/a.bin")).unwrap();
         let AcquisitionResult::Pending(writer_a) =
             scope_a.store().acquire_resource(&key_a, None).unwrap()
@@ -70,12 +71,9 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     sleep(Duration::from_millis(50)).await;
 
     {
-        let scope_b = asset_scope_with_root_and_limit(
-            &temp_dir,
-            asset_b_name,
-            Some(100),
-            cancel_token.clone(),
-        );
+        let scope_b = store
+            .scope::<LiteralLayout>(&source(asset_b_name))
+            .expect("scope");
         let key_b = scope_b.key(&resource("media/b.bin")).unwrap();
         let AcquisitionResult::Pending(writer_b) =
             scope_b.store().acquire_resource(&key_b, None).unwrap()
@@ -91,12 +89,9 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     sleep(Duration::from_millis(50)).await;
 
     {
-        let scope_c = asset_scope_with_root_and_limit(
-            &temp_dir,
-            asset_c_name,
-            Some(100),
-            cancel_token.clone(),
-        );
+        let scope_c = store
+            .scope::<LiteralLayout>(&source(asset_c_name))
+            .expect("scope");
         let key_c = scope_c.key(&resource("media/c.bin")).unwrap();
         let AcquisitionResult::Pending(writer_c) =
             scope_c.store().acquire_resource(&key_c, None).unwrap()
@@ -150,14 +145,17 @@ fn eviction_corner_cases_different_byte_limits(
 
     let asset_sizes = [max_bytes / 3, max_bytes / 3];
     let asset_names = vec!["asset-corner-1", "asset-corner-2"];
+    let store = asset_scope_with_root_and_limit(
+        &temp_dir,
+        asset_names[0],
+        Some(max_bytes as u64),
+        cancel.clone(),
+    )
+    .store()
+    .clone();
 
     for (i, (size, name)) in asset_sizes.iter().zip(asset_names.iter()).enumerate() {
-        let scope = asset_scope_with_root_and_limit(
-            &temp_dir,
-            name,
-            Some(max_bytes as u64),
-            cancel.clone(),
-        );
+        let scope = store.scope::<LiteralLayout>(&source(name)).expect("scope");
         let key = scope.key(&resource(format!("data{}.bin", i))).unwrap();
 
         let AcquisitionResult::Pending(writer) =
@@ -171,12 +169,9 @@ fn eviction_corner_cases_different_byte_limits(
     }
 
     {
-        let scope = asset_scope_with_root_and_limit(
-            &temp_dir,
-            "asset-trigger",
-            Some(max_bytes as u64),
-            cancel.clone(),
-        );
+        let scope = store
+            .scope::<LiteralLayout>(&source("asset-trigger"))
+            .expect("scope");
         let trigger_key = scope.key(&resource("trigger.bin")).unwrap();
 
         let AcquisitionResult::Pending(writer) =
@@ -190,12 +185,9 @@ fn eviction_corner_cases_different_byte_limits(
     }
 
     {
-        let scope = asset_scope_with_root_and_limit(
-            &temp_dir,
-            "asset-probe",
-            Some(max_bytes as u64),
-            cancel.clone(),
-        );
+        let scope = store
+            .scope::<LiteralLayout>(&source("asset-probe"))
+            .expect("scope");
         let probe_key = scope.key(&resource("probe.bin")).unwrap();
         let AcquisitionResult::Pending(probe) =
             scope.store().acquire_resource(&probe_key, None).unwrap()
