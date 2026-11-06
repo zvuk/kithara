@@ -1,6 +1,7 @@
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Mul};
 
 use biquad::{Coefficients, Hertz, Type};
+use fearless_simd::{Level, SimdFrom, dispatch, f32x4};
 
 use super::{coefficients, validate};
 use crate::filter::FilterError;
@@ -24,10 +25,13 @@ impl Df1State {
 
     #[inline]
     fn run(&mut self, input: f32, coefficients: &Coefficients<f32>) -> f32 {
-        let output =
-            coefficients.b0 * input + coefficients.b1 * self.x1 + coefficients.b2 * self.x2
-                - coefficients.a1 * self.y1
-                - coefficients.a2 * self.y2;
+        let direct = coefficients.b0 * input;
+        let [feed1, feed2, feedback1, feedback2] = dispatch!(Level::baseline(), simd => {
+            let factors = f32x4::simd_from(simd, [coefficients.b1, coefficients.b2, coefficients.a1, coefficients.a2]);
+            let history = f32x4::simd_from(simd, [self.x1, self.x2, self.y1, self.y2]);
+            <[f32; 4]>::from(factors.mul(history))
+        });
+        let output = direct + feed1 + feed2 - feedback1 - feedback2;
         self.x2 = self.x1;
         self.x1 = input;
         self.y2 = self.y1;
@@ -119,7 +123,6 @@ impl Design {
 pub struct Crossover {
     splits: Box<[Split]>,
     gain_frame: Box<[f32]>,
-    band_frame: Box<[f32]>,
     prepared: Box<[Design]>,
     prepared_rate: Option<Hertz<f32>>,
 }
@@ -153,7 +156,6 @@ impl Crossover {
                 })
                 .collect(),
             gain_frame: vec![0.0; frequencies.len().saturating_add(1)].into_boxed_slice(),
-            band_frame: vec![0.0; frequencies.len().saturating_add(1)].into_boxed_slice(),
             prepared: designs.into_boxed_slice(),
             prepared_rate: None,
         })
@@ -173,12 +175,11 @@ impl Crossover {
             .iter()
             .fold(input.len(), |count, band| count.min(band.len()));
         for (frame, &sample) in input.iter().take(count).enumerate() {
-            filter_frame(&mut self.splits, &mut self.band_frame, sample);
-            for (band, &value) in bands.iter_mut().zip(self.band_frame.iter()) {
+            filtered_bands(&mut self.splits, sample, bands, |band, value| {
                 *band
                     .get_mut(frame)
                     .expect("frame belongs to the validated common prefix") = value;
-            }
+            });
         }
         count
     }
@@ -209,11 +210,16 @@ impl Crossover {
 
     #[inline(never)]
     fn weighted_sample(&mut self, sample: f32) -> f32 {
-        filter_frame(&mut self.splits, &mut self.band_frame, sample);
-        self.band_frame
-            .iter()
-            .zip(&self.gain_frame)
-            .fold(0.0, |output, (value, gain)| value.mul_add(*gain, output))
+        let mut output = 0.0;
+        filtered_bands(
+            &mut self.splits,
+            sample,
+            &mut self.gain_frame,
+            |gain, value| {
+                output = value.mul_add(*gain, output);
+            },
+        );
+        output
     }
 
     /// Clears every section's history without allocation or coefficient changes.
@@ -277,18 +283,22 @@ impl Crossover {
 }
 
 #[inline(always)]
-fn filter_frame(splits: &mut [Split], bands: &mut [f32], mut high: f32) {
-    let (high_output, lower) = bands
+fn filtered_bands<T>(
+    splits: &mut [Split],
+    mut high: f32,
+    outputs: &mut [T],
+    mut consume: impl FnMut(&mut T, f32),
+) {
+    let (high_output, lower) = outputs
         .split_last_mut()
-        .expect("construction reserves the final high band");
-    for (split, output) in splits.iter_mut().zip(lower.iter_mut()) {
-        *output = split.lowpass.process(high);
-        high = split.highpass.process(high);
-    }
-    *high_output = high;
+        .expect("validated bands include the final high output");
     for (split, output) in splits.iter_mut().zip(lower) {
+        let mut low = split.lowpass.process(high);
+        high = split.highpass.process(high);
         for section in &mut split.allpass {
-            *output = section.run(*output);
+            low = section.run(low);
         }
+        consume(output, low);
     }
+    consume(high_output, high);
 }
