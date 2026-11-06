@@ -845,9 +845,14 @@ where
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
-    /// Retire mapped output on its source span; drain an unmapped engine's tail.
+    /// Retire the current engine without detaching its output from the handoff.
     pub(in crate::render) fn retire_for_reprime(&mut self) -> Result<(), ElasticError> {
-        if self.mapped_render {
+        let speed_reprime = self.reprime_pending
+            && self.current_keylock
+            && !self.keylocked_unity()
+            && self.stretch_target() == (self.current_kind, self.current_keylock)
+            && self.retiring_target.is_none();
+        if self.mapped_render && !speed_reprime {
             self.retire_mapped_target()?;
             let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
             resident.replacement.clear();
@@ -871,6 +876,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 self.pending_meta = None;
                 self.output_remainder = 0.0;
                 self.resident_feed = None;
+                self.rebuild_pending |= self.mapped_render && speed_reprime;
                 Ok(())
             }
             Err(error) => {
@@ -881,23 +887,40 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
     }
 
-    /// Drain the running engine's tail into the replacement the next engine
-    /// fades from. A fade still under way blends into that tail on the way, so
-    /// the next fade starts from what sounds now.
+    /// Keep the source-supported output prefix for a continuing handoff.
+    /// A fade still under way blends into that prefix, so the next fade starts
+    /// from what sounds now.
     #[kithara::hang_watchdog]
     fn retain_replacement(&mut self) -> Result<(), ElasticError> {
         let channels = usize::from(self.spec.channels.max(1));
-        let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
-        resident.next_replacement.clear();
-        let capacity = resident.next_replacement.capacity() / channels;
-        let quantum = self
+        let cached_frames = self
+            .projection
+            .as_ref()
+            .filter(|projection| self.mapped_render && projection.feed.is_some())
+            .map(|projection| {
+                projection.buffers[0]
+                    .len()
+                    .checked_sub(projection.offset)
+                    .map(|samples| samples / channels)
+                    .ok_or(ElasticError::SampleCountOverflow)
+            })
+            .transpose()?
+            .unwrap_or(0);
+        let output_latency = self
             .engine
             .as_ref()
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities()
             .latency()
-            .second()
-            .max(1);
+            .second();
+        let supported_samples = cached_frames
+            .checked_add(output_latency)
+            .and_then(|frames| frames.checked_mul(channels))
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
+        resident.next_replacement.clear();
+        let capacity = resident.next_replacement.capacity() / channels;
+        let quantum = output_latency.max(1);
         for _ in 0..=capacity.div_ceil(quantum) {
             hang_tick!();
             self.scratch
@@ -921,6 +944,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             }
             output.clear();
             if complete {
+                // Terminal zero-padding has no future source context for a continuing handoff.
+                resident.next_replacement.truncate(supported_samples);
                 mem::swap(&mut resident.replacement, &mut resident.next_replacement);
                 resident.next_replacement.clear();
                 resident.replacement_offset = 0;
