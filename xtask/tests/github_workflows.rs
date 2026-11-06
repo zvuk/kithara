@@ -59,11 +59,15 @@ fn github_workflow_text(name: &str) -> String {
     fs::read_to_string(workflows_dir().join(name)).expect("workflow is readable")
 }
 
-fn workflows_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+fn workspace_root() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
         .parent()
         .expect("xtask has a workspace root")
-        .join(".github/workflows")
+        .to_path_buf()
+}
+
+fn workflows_dir() -> PathBuf {
+    workspace_root().join(".github/workflows")
 }
 
 fn workflow_file_names() -> BTreeSet<String> {
@@ -79,6 +83,47 @@ fn workflow_file_names() -> BTreeSet<String> {
         })
         .filter(|name| name.ends_with(".yml"))
         .collect()
+}
+
+#[test]
+fn workflow_reads_follow_the_running_checkout() {
+    if std::env::var_os("KITHARA_WORKFLOW_RELOCATION_TEST").is_some() {
+        assert_eq!(
+            github_workflow_text("relocation.yml"),
+            "workflow from relocated package\n"
+        );
+        return;
+    }
+    let directory = tempfile::tempdir().expect("relocated checkout");
+    let package = directory.path().join("xtask");
+    fs::create_dir(&package).expect("relocated test package");
+    let workflows = directory.path().join(".github/workflows");
+    fs::create_dir_all(&workflows).expect("relocated workflows");
+    fs::write(
+        workflows.join("relocation.yml"),
+        "workflow from relocated package\n",
+    )
+    .expect("relocated workflow");
+    let output = Command::new(std::env::current_exe().expect("current test binary"))
+        .args([
+            "--exact",
+            "workflow_reads_follow_the_running_checkout",
+            "--nocapture",
+        ])
+        .env("CARGO_MANIFEST_DIR", package)
+        .env("KITHARA_WORKFLOW_RELOCATION_TEST", "1")
+        .output()
+        .expect("run the cached binary against a different checkout");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("running 1 test"),
+        "child did not execute: {stdout} {stderr}"
+    );
+    assert!(
+        output.status.success(),
+        "relocated workflow read failed: {stdout} {stderr}"
+    );
 }
 
 fn configured_stress_prekill_secs(root: &Path) -> u64 {
@@ -749,9 +794,7 @@ fn independent_roles_and_branches_do_not_share_admission() {
 // investigation sets `KITHARA_RTSAN_BACKEND` for itself.
 #[test]
 fn standalone_rtsan_is_fail_closed_before_expanding_every_lane() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
@@ -1049,9 +1092,7 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
         mapping_field(execute, "runs-on").as_str(),
         Some("${{ fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS) }}")
     );
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
@@ -1315,9 +1356,7 @@ fn stress_dispatch_keeps_its_tiers_and_admission_guards() {
         .expect("scheduled stress names its tier");
     assert_eq!(mapping_field(with, "tier").as_str(), Some(cadence.as_str()));
 
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
@@ -1617,9 +1656,7 @@ fn a_newer_dispatch_of_one_selection_supersedes_the_older() {
 
 #[test]
 fn stress_profile_records_failures_with_a_dump_aware_outer_backstop() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let nextest: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/nextest.toml")).expect("nextest config is readable"),
     )
@@ -1643,7 +1680,7 @@ fn stress_profile_records_failures_with_a_dump_aware_outer_backstop() {
         .and_then(|count| u64::try_from(count).ok())
         .expect("stress termination count is positive");
     let outer = period * terminate_after;
-    let prekill = configured_stress_prekill_secs(root);
+    let prekill = configured_stress_prekill_secs(&root);
     assert!(outer >= prekill + 30);
 
     let junit = stress["junit"].as_table().expect("stress JUnit is a table");
@@ -1653,11 +1690,9 @@ fn stress_profile_records_failures_with_a_dump_aware_outer_backstop() {
 
 #[test]
 fn stress_backstop_covers_every_kithara_test_timeout() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let mut observed_max = 0_u64;
-    let prekill = configured_stress_prekill_secs(root);
+    let prekill = configured_stress_prekill_secs(&root);
     let mut excessive = Vec::new();
     let mut unsupported = Vec::new();
     let mut observed = 0_usize;
@@ -2381,9 +2416,7 @@ fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
     // Nothing selects the lane it names, on either provider, so this workflow
     // is the only caller that can start it. A kind appearing here would put a
     // GPU suite on a pool with no graphics device.
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
