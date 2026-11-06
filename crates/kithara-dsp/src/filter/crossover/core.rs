@@ -20,16 +20,10 @@ impl Section {
     fn run(&mut self, input: f32) -> f32 {
         let output = self.0.run(input);
         if output.is_subnormal() && input.abs() < f32::MIN_POSITIVE {
-            return self.retire();
+            self.0.reset_state();
+            return 0.0;
         }
         output
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn retire(&mut self) -> f32 {
-        self.0.reset_state();
-        0.0
     }
 
     #[inline(always)]
