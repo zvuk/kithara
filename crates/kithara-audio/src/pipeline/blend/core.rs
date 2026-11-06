@@ -1,4 +1,7 @@
+use std::num::NonZeroUsize;
+
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
+use kithara_dsp::crossfade_linear;
 use kithara_signal::{AudioChunk, AudioSpec};
 
 use crate::consts;
@@ -43,22 +46,18 @@ impl GaplessBlender {
         let JoinState::Active { frame, frames } = &mut self.join else {
             return;
         };
-        let channels = usize::from(chunk.spec().channels.max(1));
-        for samples in chunk.samples.chunks_exact_mut(channels) {
-            if *frame >= *frames {
-                break;
-            }
-            let incoming_gain = f32::from(*frame) / f32::from(*frames);
-            let outgoing_gain = 1.0 - incoming_gain;
-            let outgoing_start = usize::from(*frame).saturating_mul(channels);
-            for (channel, sample) in samples.iter_mut().enumerate() {
-                let outgoing = self.outgoing[outgoing_start + channel];
-                if outgoing.to_bits() != sample.to_bits() {
-                    *sample = outgoing.mul_add(outgoing_gain, *sample * incoming_gain);
-                }
-            }
-            *frame = frame.saturating_add(1);
-        }
+        let channels =
+            NonZeroUsize::new(usize::from(chunk.spec().channels)).unwrap_or(NonZeroUsize::MIN);
+        let outgoing_start = usize::from(*frame).saturating_mul(channels.get());
+        let outgoing_end = usize::from(*frames).saturating_mul(channels.get());
+        let processed = crossfade_linear(
+            &self.outgoing[outgoing_start..outgoing_end],
+            &mut chunk.samples,
+            channels,
+            usize::from(*frame),
+            usize::from(*frames),
+        );
+        *frame = frame.saturating_add(u16::try_from(processed).unwrap_or(u16::MAX));
         if *frame >= *frames {
             self.join = JoinState::Steady;
         }
