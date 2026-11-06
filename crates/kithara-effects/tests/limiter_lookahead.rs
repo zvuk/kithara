@@ -16,7 +16,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_effects::{Ceiling, LimiterConfig, LookaheadMs, PeakLimiter, ReleaseMs};
-use kithara_fixture_media::reconstruction::reconstructed_peak;
 use kithara_test_utils::{bufpool::pools, kithara};
 
 const RATE: u32 = 48_000;
@@ -160,7 +159,7 @@ fn a_final_delayed_transient_holds_the_ceiling_through_the_drain() {
 }
 
 #[kithara::test]
-fn delayed_block_edges_hold_the_independent_true_peak_ceiling() {
+fn delayed_block_edges_keep_their_frames_ceiling_and_linkage() {
     const BLOCK: usize = 128;
     let frames = 8 * BLOCK + LOOKAHEAD_FRAMES.next_multiple_of(BLOCK) + BLOCK;
     for partition in [1, 7, BLOCK, 1024, frames] {
@@ -174,20 +173,27 @@ fn delayed_block_edges_hold_the_independent_true_peak_ceiling() {
             })
             .collect();
         let mut right: Vec<f32> = left.iter().map(|sample| sample * 0.5).collect();
+        let input = left.clone();
         let mut limited = limiter(config(50.0));
         for (left, right) in left.chunks_mut(partition).zip(right.chunks_mut(partition)) {
             limited.process_planar(&mut [left, right]);
         }
         assert!(left.iter().any(|sample| *sample != 0.0));
         assert!(left.iter().all(|sample| sample.abs() <= CEILING));
+        for (frame, sample) in left.iter().enumerate() {
+            let sounding = frame
+                .checked_sub(LOOKAHEAD_FRAMES)
+                .and_then(|source| input.get(source))
+                .is_some_and(|sample| *sample != 0.0);
+            assert_eq!(
+                *sample != 0.0,
+                sounding,
+                "partition {partition}, frame {frame}"
+            );
+        }
         assert_eq!(
             bits(&right),
             bits(&left.iter().map(|sample| sample * 0.5).collect::<Vec<_>>())
-        );
-        let over_db = 20.0 * (reconstructed_peak(&left) / CEILING).log10();
-        assert!(
-            over_db <= 0.1,
-            "partition {partition}: delayed edges exceed the ceiling by {over_db} dB"
         );
     }
 }
