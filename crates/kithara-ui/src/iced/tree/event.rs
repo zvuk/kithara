@@ -3,10 +3,7 @@ use iced::{Element, widget::canvas::Action};
 use crate::{
     engine::EngineEvent,
     hosts::event::{carry_event, control_event},
-    interact::{
-        Outcome,
-        recognizers::{DragEvent, StepEvent},
-    },
+    interact::{Outcome, recognizers::DragEvent},
     render::{Carry, ControlAction, Published, WindowCommand},
 };
 
@@ -42,16 +39,8 @@ pub(crate) fn scalar(path: &str, outcome: Outcome<f64>) -> Option<Action<Publish
     action(outcome, |value| set_scalar(path, value))
 }
 
-pub(crate) fn step(path: &str, outcome: Outcome<StepEvent>) -> Option<Action<Published>> {
-    action(outcome, |event| {
-        control_event(
-            path,
-            match event {
-                StepEvent::By(steps) => ControlAction::StepScalar(steps),
-                StepEvent::Activate => ControlAction::Activate,
-            },
-        )
-    })
+pub(crate) fn step(path: &str, outcome: Outcome<ControlAction>) -> Option<Action<Published>> {
+    action(outcome, |event| control_event(path, event))
 }
 
 pub(crate) fn activate(path: &str, outcome: Outcome<()>) -> Option<Action<Published>> {

@@ -363,7 +363,9 @@ mod tests {
     fn pending(acq: AcquisitionResult<BaseWriter, BaseReader>) -> BaseWriter {
         match acq {
             AcquisitionResult::Pending(w) => w,
-            AcquisitionResult::Ready(_) => panic!("expected a fresh Pending writer"),
+            AcquisitionResult::Ready(_) | AcquisitionResult::Joined(_) => {
+                panic!("expected a fresh Pending writer")
+            }
         }
     }
 

@@ -20,6 +20,12 @@ choice of face for a family and weight, the fallback faces for scripts the
 display family does not carry, and whether the machine's own fonts may answer.
 It knows no toolkit: a backend paints the `GlyphRun` it returns.
 
+`TextResources::with_fonts` registers skin-owned font bytes for selected style
+families. Each context created from those resources measures and shapes with
+the same private family aliases; the resulting glyph segments retain the exact
+font bytes for the backend. Resources with no declared fonts keep the embedded
+catalog unchanged.
+
 ## Usage
 
 ```rust

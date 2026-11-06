@@ -267,7 +267,7 @@ impl Process {
 
     /// Record how long a step took. A step that never ran is not recorded, so
     /// the sum of these is the time the lane actually spent.
-    fn time(&self, label: &str, elapsed: Duration, ok: bool) {
+    pub(super) fn time(&self, label: &str, elapsed: Duration, ok: bool) {
         if let Ok(mut journal) = self.journal.lock() {
             journal.steps.push(Timing {
                 elapsed,

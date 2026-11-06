@@ -10,7 +10,6 @@ use kithara_audio::{
 #[cfg(feature = "stretch-identity")]
 use kithara_command::Batch;
 use kithara_command::{ChannelConfig, Outcome, Rejection, When, channel};
-use kithara_effects::{AudioEffect, EffectDrain, held_source_frames};
 use kithara_platform::{
     sync::{
         Arc, Mutex,

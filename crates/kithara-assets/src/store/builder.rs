@@ -355,7 +355,9 @@ mod tests {
     fn pending(acq: TestResourceAcquisition) -> TestAssetWriter {
         match acq {
             AcquisitionResult::Pending(w) => w,
-            AcquisitionResult::Ready(_) => panic!("expected a Pending writer"),
+            AcquisitionResult::Ready(_) | AcquisitionResult::Joined(_) => {
+                panic!("expected a Pending writer")
+            }
         }
     }
 

@@ -71,6 +71,10 @@ impl Router {
             .unwrap_or(CursorShape::None)
     }
 
+    pub(super) fn focus(&mut self, path: &str) {
+        self.focus = Some(path.to_owned());
+    }
+
     pub(crate) fn focused_path(&self) -> Option<&str> {
         self.focus.as_deref()
     }

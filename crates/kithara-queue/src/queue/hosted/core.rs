@@ -253,7 +253,7 @@ where
                 );
                 if let Some(super::super::types::SeekPosition::Pending {
                     item,
-                    seq: caller,
+                    sent: kithara_play::SeekBatch::Deck(caller),
                     segment,
                     ..
                 }) = &mut self.held_position

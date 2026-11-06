@@ -21,17 +21,7 @@ pub type Position = Duration;
 
 /// What a track is told to do.
 pub enum TrackCommand<S> {
-    EffectProgram {
-        lane: kithara_render::LaneId,
-        program: kithara_render::bridge::EffectProgram,
-    },
     GainProgram(kithara_render::bridge::SlotGainProgram),
-    ConfigureEffect {
-        lane: kithara_render::LaneId,
-        target: kithara_effects::EffectTarget,
-        change: kithara_effects::EffectChange,
-        at: When<SessionFrame>,
-    },
     Load {
         item: ResourceLoad<S>,
         position: Position,
@@ -110,14 +100,21 @@ pub enum TrackStatus {
 }
 
 /// The owner's settled track state and the latest mixer observation.
+///
+/// A track carries no effects; they belong to its deck:
+/// ```compile_fail
+/// fn count(snapshot: &kithara_play::TrackSnapshot) -> usize {
+///     snapshot.effects.len()
+/// }
+/// ```
 #[derive(Clone)]
 pub struct TrackSnapshot {
     pub output: kithara_render::bridge::SlotOutputSnapshot,
-    pub effects: Vec<super::effects::EffectSnapshot>,
     pub item: TrackId,
     /// None while a background load holds the track off the deck.
     pub slot: Option<Slot>,
     pub status: TrackStatus,
+    /// The speed at the last consumed frame.
     pub speed: f32,
     /// Last known media position; an unconsumed segment retains its exact entry mark.
     pub position: Position,
@@ -139,7 +136,6 @@ impl std::fmt::Debug for TrackSnapshot {
         formatter
             .debug_struct("TrackSnapshot")
             .field("output", &self.output)
-            .field("effects", &self.effects)
             .field("item", &self.item)
             .field("slot", &self.slot)
             .field("status", &self.status)
@@ -199,13 +195,6 @@ pub(super) struct LaneOperation {
 }
 
 impl LaneOperation {
-    pub(super) fn changes_time(&self) -> bool {
-        !matches!(
-            self.command,
-            LaneCommand::EffectProgram { .. } | LaneCommand::ConfigureEffect { .. }
-        )
-    }
-
     pub(super) fn applied(&self) -> Option<bool> {
         self.verdict.map(|verdict| verdict.is_ok())
     }

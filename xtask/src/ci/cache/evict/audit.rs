@@ -170,7 +170,7 @@ mod tests {
     /// A miss is the request a compile makes before it writes the entry, so
     /// it says nothing about the entry's last use.
     #[test]
-    fn a_miss_a_snapshot_or_a_delete_is_no_use() {
+    fn a_miss_an_unmanaged_object_or_a_delete_is_no_use() {
         for body in [
             delivery("s3:GetObject", "kithara-trusted", &entry_object(), 404),
             delivery(
@@ -183,6 +183,17 @@ mod tests {
         ] {
             assert!(events(body.as_bytes(), &managed()).is_empty(), "{body}");
         }
+    }
+
+    #[test]
+    fn reading_a_snapshot_keeps_it_recent_in_its_scope() {
+        let hash = consts::ENTRY_HASH;
+        let object = format!("target-snapshots/{hash}/{hash}.tar");
+        let body = delivery("s3:GetObject", "kithara-review", &object, 200);
+        let recorded = events(body.as_bytes(), &managed());
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].entry, Entry::parse(&object).unwrap());
+        assert_eq!(recorded[0].scope, 1);
     }
 
     /// The store reports every bucket it serves, the evictor's own record

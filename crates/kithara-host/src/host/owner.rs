@@ -40,6 +40,29 @@ impl<D: DeckControl> Deref for HostOwned<D> {
     }
 }
 
+/// Posts owner commands to a Host's session from another task.
+pub struct HostPoster<C> {
+    dispatcher: Arc<dyn HostDispatcher<C>>,
+}
+
+impl<C> Clone for HostPoster<C> {
+    fn clone(&self) -> Self {
+        Self {
+            dispatcher: Arc::clone(&self.dispatcher),
+        }
+    }
+}
+
+impl<C> HostPoster<C> {
+    /// Posts an owner command and retains its answer ticket.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::SessionGone`] if the owner no longer accepts posts.
+    pub fn send(&self, command: C) -> Result<Ticket<PlayError>, PlayError> {
+        self.dispatcher.dispatch(command).map_err(Into::into)
+    }
+}
+
 /// A handle whose session drives one canonical owner, optionally decorated.
 pub struct Host<S: 'static, O: HostOwner<S> = HostCore<S>> {
     pub(in crate::host) dispatcher: Arc<dyn HostDispatcher<O::Command>>,
@@ -110,6 +133,14 @@ impl<S, O: HostOwner<S>> Host<S, O> {
         self.dispatcher.dispatch(command).map_err(Into::into)
     }
 
+    /// A poster for tasks that hold no handle to this Host.
+    #[must_use]
+    pub fn poster(&self) -> HostPoster<O::Command> {
+        HostPoster {
+            dispatcher: Arc::clone(&self.dispatcher),
+        }
+    }
+
     /// Allocates a fresh identity for a deck registered through this handle.
     ///
     /// # Errors
@@ -119,18 +150,14 @@ impl<S, O: HostOwner<S>> Host<S, O> {
         DeckId::allocate().map_err(|error| SessionError::from(error).into())
     }
 
-    fn ask(&self, command: HostCommand<S, O::Deck>) -> Result<(), PlayError> {
-        let command_name = match &command {
-            HostCommand::Register { .. } => "Register",
-            HostCommand::Configure(..) => "Configure",
-            HostCommand::Close(_) => "Close",
-            HostCommand::Release(_) => "Release",
-            HostCommand::AttachOutputs { .. } => "AttachOutputs",
-            HostCommand::DetachOutputs { .. } => "DetachOutputs",
-            HostCommand::Restart => "Restart",
-            HostCommand::_Marker(_) => "_Marker",
-        };
-        ask(&*self.dispatcher, command.into(), command_name).map_err(Into::into)
+    /// Posts an owner command and waits for its answer; the command names
+    /// itself if no answer comes.
+    ///
+    /// # Errors
+    /// Returns the owner's refusal, or [`PlayError::SessionGone`] if the owner
+    /// stops or drops the post.
+    pub fn ask<C: Into<O::Command>>(&self, command: C) -> Result<(), PlayError> {
+        ask(&*self.dispatcher, command.into()).map_err(Into::into)
     }
 
     /// Transfers a fully constructed deck, retaining only its public control handle.

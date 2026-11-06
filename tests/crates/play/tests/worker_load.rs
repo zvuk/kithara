@@ -285,6 +285,7 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
             suspended: false,
             now,
             delivery: FrameCount::new(0),
+            deck_delivery: FrameCount::new(0),
             output,
             deck,
         });

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     net::Ipv4Addr,
     path::{Path, PathBuf},
@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::ci::{
+    cache::scope_bucket,
     config::{default_build_cache_size, is_whole_gigabytes, parse_build_cache_size},
     environment::CacheTrust,
 };
@@ -26,6 +27,8 @@ pub(crate) struct LinuxHost {
     pub(crate) build_cache_size: String,
     /// Directory holding the caches jobs keep between runs.
     pub(crate) cache_root: PathBuf,
+    /// Scoped credentials with an endpoint reachable from image builds.
+    pub(crate) image_cache_env_file: PathBuf,
     /// Whole gigabytes, such as `50G`, each trust's compiler-cache store may
     /// hold. Defaulted: installed profiles predate the store.
     #[serde(default = "default_compiler_cache_size")]
@@ -71,6 +74,8 @@ pub(crate) struct WindowsGuest {
     pub(crate) name: String,
     /// Which repository of [`LinuxHost::repositories`] this guest enrols with.
     pub(crate) repository: String,
+    /// Scoped credentials with an endpoint reachable from the guest network.
+    pub(crate) sccache_s3_env_file: PathBuf,
     pub(crate) vcpus: u32,
     pub(crate) memory_mib: u32,
     pub(crate) disk_gib: u32,
@@ -101,6 +106,8 @@ pub(crate) struct LinuxRunner {
     pub(crate) sccache_s3_env_file: PathBuf,
     /// Whether these credentials may publish immutable target snapshots.
     pub(crate) cache_trust: CacheTrust,
+    /// Isolates mutable cache files for runners sharing the same credentials and trust.
+    pub(crate) cache_scope: String,
     /// How many cores one job may use. Handed to the container as a set of
     /// core numbers rather than a share of the machine: a share is a CFS
     /// quota, which throttles a job without telling it anything, so `nproc`
@@ -133,8 +140,8 @@ pub(crate) enum RunnerFlavor {
     Android,
 }
 
-/// What one trust's store may hold when the profile does not say: every
-/// runner of the trust shares it, and kache evicts to it.
+/// What one scope's store may hold when the profile does not say: every
+/// runner of the scope shares it, and kache evicts to it.
 fn default_compiler_cache_size() -> String {
     "50G".to_owned()
 }
@@ -162,6 +169,9 @@ impl LinuxHost {
         if !self.cache_root.is_absolute() {
             bail!("Linux CI profile cache_root must be an absolute path");
         }
+        if !self.image_cache_env_file.is_absolute() {
+            bail!("Linux CI image builds must name their S3 environment by absolute path");
+        }
         if !safe_name(&self.network) {
             bail!("Linux CI profile network contains unsupported characters");
         }
@@ -187,11 +197,28 @@ impl LinuxHost {
             self.credential(&windows.repository)?;
         }
         let mut seen = BTreeSet::new();
+        let mut scopes = BTreeMap::new();
+        let mut credential_roles = BTreeMap::new();
         for runner in &self.runners {
             runner.validate()?;
             self.credential(&runner.repository)?;
             if !seen.insert(runner.name.as_str()) {
                 bail!("Linux CI profile defines runner {} twice", runner.name);
+            }
+            let binding = (runner.cache_trust, &runner.sccache_s3_env_file);
+            if let Some(previous) = scopes.insert(&runner.cache_scope, binding)
+                && previous != binding
+            {
+                bail!(
+                    "Linux CI cache scope {} binds different credentials or trust levels",
+                    runner.cache_scope
+                );
+            }
+            if let Some(network) =
+                credential_roles.insert(&runner.sccache_s3_env_file, runner.is_network())
+                && network != runner.is_network()
+            {
+                bail!("Network cache credentials cannot be shared with ordinary runners");
             }
         }
         Ok(())
@@ -241,6 +268,9 @@ impl RepositoryCredential {
 
 impl WindowsGuest {
     fn validate(&self) -> Result<()> {
+        if !self.sccache_s3_env_file.is_absolute() {
+            bail!("the Windows guest must name its S3 cache environment by absolute path");
+        }
         if !safe_name(&self.name) {
             bail!("Linux CI profile's Windows guest name is unusable");
         }
@@ -260,7 +290,15 @@ impl WindowsGuest {
 }
 
 impl LinuxRunner {
+    fn is_network(&self) -> bool {
+        self.labels
+            .iter()
+            .any(|label| label.eq_ignore_ascii_case("kithara-network"))
+    }
+
     fn validate(&self) -> Result<()> {
+        scope_bucket(&self.cache_scope)
+            .with_context(|| format!("Linux CI runner {} has an invalid cache scope", self.name))?;
         if !safe_name(&self.name) {
             bail!("Linux CI runner name contains unsupported characters");
         }
@@ -278,6 +316,19 @@ impl LinuxRunner {
         }
         if self.labels.is_empty() || self.labels.iter().any(|label| !safe_label(label)) {
             bail!("Linux CI runner {} has an unusable label", self.name);
+        }
+        if self.is_network()
+            && self.labels.iter().any(|label| {
+                !matches!(
+                    label.to_ascii_lowercase().as_str(),
+                    "self-hosted" | "linux" | "x64" | "kithara-network"
+                )
+            })
+        {
+            bail!(
+                "Network runner {} advertises ordinary workflow labels",
+                self.name
+            );
         }
         if self.devices.iter().any(|device| !device.is_absolute()) {
             bail!("Linux CI runner {} names a relative device", self.name);
@@ -412,6 +463,69 @@ pub(crate) mod tests {
         let host = host_fixture();
         assert!(host.runner("kithara-ci-octocat").is_ok());
         assert!(host.runner("absent").is_err());
+    }
+
+    #[test]
+    fn a_cache_scope_cannot_bind_different_credentials() {
+        let mut host = host_fixture();
+        host.runners[1].sccache_s3_env_file = "/etc/kithara-ci/cache/network.env".into();
+        let error = host
+            .validate()
+            .expect_err("a scope must have one credential file");
+        assert!(
+            error
+                .to_string()
+                .contains("binds different credentials or trust")
+        );
+    }
+
+    #[test]
+    fn a_cache_scope_cannot_bind_different_trust_levels() {
+        let mut host = host_fixture();
+        host.runners[1].cache_trust = CacheTrust::Trusted;
+        let error = host
+            .validate()
+            .expect_err("a scope must have one trust level");
+        assert!(
+            error
+                .to_string()
+                .contains("binds different credentials or trust")
+        );
+    }
+
+    #[test]
+    fn a_cache_scope_cannot_escape_the_host_cache_root() {
+        let mut host = host_fixture();
+        "../network".clone_into(&mut host.runners[0].cache_scope);
+        assert!(host.validate().is_err());
+    }
+
+    #[test]
+    fn network_runners_cannot_share_credentials_or_labels_with_general_jobs() {
+        let mut host = host_fixture();
+        "network".clone_into(&mut host.runners[0].cache_scope);
+        host.runners[0].sccache_s3_env_file = "/etc/kithara-ci/cache/network.env".into();
+        host.runners[0].labels = ["self-hosted", "linux", "x64", "Kithara-Network"]
+            .map(String::from)
+            .into();
+        host.validate()
+            .expect("the private Network runner is valid");
+
+        host.runners[0].labels.push("kithara".into());
+        assert!(
+            host.validate()
+                .expect_err("no ordinary jobs")
+                .to_string()
+                .contains("ordinary workflow labels")
+        );
+        assert_eq!(host.runners[0].labels.pop().as_deref(), Some("kithara"));
+        host.runners[0].sccache_s3_env_file = host.runners[1].sccache_s3_env_file.clone();
+        assert!(
+            host.validate()
+                .expect_err("no shared credentials")
+                .to_string()
+                .contains("credentials cannot be shared")
+        );
     }
 
     /// The point of the split: one machine, two repositories, and each runner

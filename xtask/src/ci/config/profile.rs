@@ -85,7 +85,7 @@ mod tests {
         }
 
         let produced = format!("target/nextest/ci/{path}");
-        for lane in ["apple", "linux", "windows"] {
+        for lane in ["apple", "windows"] {
             let yaml = fs::read_to_string(workspace_root().join(format!(".gitlab/ci/{lane}.yml")))
                 .unwrap();
             let declared = yaml

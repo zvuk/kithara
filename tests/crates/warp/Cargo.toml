@@ -18,6 +18,7 @@ playback = [
     "kithara/queue",
     "kithara/resampler",
     "kithara/tokio-rt-multi-thread",
+    "dep:delegate",
     "dep:kithara-derive",
     "dep:kithara-integration-tests",
     "dep:serde",
@@ -35,6 +36,8 @@ kithara = { workspace = true, features = ["beat", "mock", "platform", "signal", 
 kithara-derive = { workspace = true, optional = true }
 kithara-integration-tests = { workspace = true, optional = true, features = ["all", "analysis"] }
 kithara-test-utils = { workspace = true, features = ["temp-dir"] }
+
+delegate = { workspace = true, optional = true }
 num-traits = { workspace = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }

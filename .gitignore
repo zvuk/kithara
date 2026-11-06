@@ -1,5 +1,6 @@
 # Rust / Cargo
 /target
+/.ci-bootstrap
 **/target/
 /xtask/.agent-hook-cache*
 /xtask/.xtask-cache*

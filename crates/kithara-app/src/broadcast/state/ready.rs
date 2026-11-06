@@ -56,7 +56,7 @@ impl Packager for Ready {
 fn an_ended_stream_is_noticed_by_the_next_poll() {
     let mut broadcaster = Broadcaster::<Ready>::new(());
     let pools = crate::pools::build(&crate::pools::PoolsSection::default()).expect("app pools");
-    let host = AppHost::new(HostConfig::offline(pools).build()).expect("test host");
+    let host = crate::pools::host(HostConfig::offline(pools).build()).expect("test host");
     broadcaster.toggle(&host);
     broadcaster.poll(&host);
     assert!(broadcaster.is_on_air());

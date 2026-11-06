@@ -366,10 +366,10 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
 
 /// The kinds a lane enters the GitHub fan-out under: its own `kinds_github`
 /// where it is declared, the shared `kinds` otherwise, and none at all for a lane
-/// that is not Linux-only, because that fan-out has only Linux machines.
+/// that cannot run on Linux, because that fan-out has only Linux machines.
 fn github_membership(lane: &toml::Value) -> Vec<&str> {
     let os = lane.get("os").map_or_else(Vec::new, strings);
-    if os != ["linux"] {
+    if !os.contains(&"linux") {
         return Vec::new();
     }
     lane.get("kinds_github")
@@ -397,6 +397,20 @@ fn xtask_config() -> toml::Value {
             .expect("xtask config is readable"),
     )
     .expect("xtask config is valid TOML")
+}
+
+#[test]
+fn both_hosts_restore_lint_builds_after_local_eviction() {
+    let config = xtask_config();
+    for name in ["apple-lint", "linux-lint"] {
+        assert_eq!(
+            ci_lanes(&config)[name]
+                .get("target_snapshot")
+                .and_then(toml::Value::as_str),
+            Some(name),
+            "{name} must restore build-script output as well as compiler entries"
+        );
+    }
 }
 
 /// On GitHub a push with a pull request ready for review is a `merge-request`

@@ -61,6 +61,14 @@ pub(crate) const V2_FIXTURE: &[u8] = &[
 ];
 
 pub(crate) const SECONDS_PER_MINUTE: f64 = 60.0;
+pub(crate) const NANOS_PER_SECOND: f64 = 1e9;
+
+/// How far a beat may sit from a steady tempo and still be read as that tempo:
+/// two frames of the 50 fps detector.
+pub(crate) const STEADY_TOLERANCE_SECONDS: f64 = 0.04;
+
+/// The shortest run of beats that states a tempo of its own.
+pub(crate) const MIN_STEADY_BEATS: usize = 16;
 
 #[cfg(test)]
 pub(crate) const BPM: f64 = 120.0;

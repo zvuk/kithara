@@ -6,7 +6,7 @@ mod platform;
 mod settings;
 
 pub use config::HostConfig;
-pub use owner::{Host, HostOwned};
+pub use owner::{Host, HostOwned, HostPoster};
 pub use settings::{HostSettings, HostSettingsChange, HostSettingsControl, HostSettingsExec};
 
 #[cfg(test)]

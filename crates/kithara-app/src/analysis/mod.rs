@@ -12,7 +12,7 @@ mod supply;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use artifacts::{TrackArtifacts, WaveformId};
+pub(crate) use artifacts::{ArtifactId, GridState, TrackArtifacts};
 #[cfg(test)]
 pub(crate) use entry::Entry;
 pub(crate) use handle::AnalysisHandle;

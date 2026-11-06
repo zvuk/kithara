@@ -182,6 +182,7 @@ fn text(endpoint: &str) -> &'static str {
         "deck.playback.tempo" => "+0.0%",
         "deck.stream.quality" => "320 kbps",
         "broadcast.url" => "OFF AIR",
+        "clock.bpm" => "124.00",
         _ => "Fixture",
     }
 }

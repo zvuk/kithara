@@ -10,7 +10,7 @@ use crate::FontId;
 pub enum GlyphFace {
     /// A face from the embedded catalog.
     Embedded(FontId),
-    /// A face resolved from the machine's system collection.
+    /// A face resolved from skin-owned bytes or the machine's system collection.
     System(FontData),
 }
 

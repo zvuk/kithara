@@ -50,6 +50,8 @@ struct GuestSettings<'a> {
     monkeys_audio_source_sha256: &'a str,
     git_sha256: &'a str,
     git_url: String,
+    kache_sha256: &'a str,
+    kache_url: String,
     runner_sha256: &'a str,
     runner_url: String,
     rustup_sha256: &'a str,
@@ -185,14 +187,17 @@ fn creation_args(
     Ok([
         "--name",
         &guest.name,
+        "--autostart",
         "--osinfo",
         "win11",
         "--boot",
         "uefi",
         "--tpm",
         "backend.type=emulator,backend.version=2.0,model=tpm-crb",
+        // Without a topology every processor is a socket of its own, and a
+        // Windows client edition schedules onto only a few sockets.
         "--vcpus",
-        &guest.vcpus.to_string(),
+        &format!("{0},sockets=1,cores={0},threads=1", guest.vcpus),
         "--memory",
         &guest.memory_mib.to_string(),
         "--disk",
@@ -568,6 +573,7 @@ fn build_enrolment_media(
         fs::remove_dir_all(&staging).with_context(|| format!("clearing {}", staging.display()))?;
     }
     fs::create_dir_all(&staging).with_context(|| format!("creating {}", staging.display()))?;
+    super::permissions::set_mode(&staging, consts::OWNER_DIRECTORY)?;
 
     let enrolment = Enrolment {
         labels: guest.labels.join(","),
@@ -663,8 +669,13 @@ fn build_answer_media(
         fs::remove_dir_all(&staging).with_context(|| format!("clearing {}", staging.display()))?;
     }
     fs::create_dir_all(&staging).with_context(|| format!("creating {}", staging.display()))?;
+    super::permissions::set_mode(&staging, consts::OWNER_DIRECTORY)?;
 
-    for source in [consts::GUEST_ANSWER_FILE, consts::GUEST_PROVISION_SCRIPT] {
+    for source in [
+        consts::GUEST_ANSWER_FILE,
+        consts::GUEST_PROVISION_SCRIPT,
+        ".config/windows/cache.ps1",
+    ] {
         let name = Path::new(source)
             .file_name()
             .context("a tracked file with no name")?;
@@ -678,6 +689,26 @@ fn build_answer_media(
             .context("serialising the guest settings")?,
     )
     .context("writing the guest settings")?;
+    let guest = host
+        .windows
+        .as_ref()
+        .context("no Windows guest configured")?;
+    let environment = crate::ci::cache::client_environment(&guest.sccache_s3_env_file)?;
+    fs::write(
+        staging.join("cache.env"),
+        environment
+            .iter()
+            .map(|(key, value)| format!("{key}={value}\n"))
+            .collect::<String>(),
+    )?;
+    fs::write(
+        staging.join("kache-host.toml"),
+        crate::ci::kache::host_config(
+            &environment,
+            Path::new("C:/kithara-ci/cache/kache/store"),
+            &host.compiler_cache_size,
+        )?,
+    )?;
 
     let media = host.cache_root.join("windows-answers.iso");
     let mut command = process.command("xorriso");
@@ -694,6 +725,7 @@ fn build_answer_media(
         path_text(&staging)?,
     ]);
     process.run_command(&mut command, "build the answer media")?;
+    super::permissions::set_mode(&media, consts::OWNER_ONLY)?;
     Ok(media)
 }
 
@@ -721,6 +753,11 @@ fn guest_settings(pins: &CiPins) -> Result<GuestSettings<'_>> {
         ),
         git_sha256: &pins.git_windows_sha256,
         git_url: pins.git_windows_url.clone(),
+        kache_sha256: &pins.kache_windows_amd64_sha256,
+        kache_url: format!(
+            "https://github.com/kunobi-ninja/kache/releases/download/v{}/kache-x86_64-pc-windows-msvc.exe",
+            pins.cargo_tool_version("kache")?
+        ),
         runner_sha256: &pins.actions_runner_windows_sha256,
         runner_url: format!(
             "https://github.com/actions/runner/releases/download/v{version}/actions-runner-win-x64-{version}.zip",
@@ -986,6 +1023,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn guest_creation_enables_hypervisor_autostart() {
+        let host = super::super::profile::tests::host_fixture();
+        let guest = host.windows.clone().unwrap();
+        let args = creation_args(
+            &host,
+            &guest,
+            Path::new("/iso/windows.iso"),
+            Path::new("/iso/answers.iso"),
+        )
+        .unwrap();
+
+        assert!(args.iter().any(|arg| arg == "--autostart"), "{args:?}");
+    }
+
     /// The suite opens the machine's default audio output, and Windows has one
     /// only for a sound card it can see. A guest created without one fails
     /// every test that plays through it, and nothing before the suite says why.
@@ -1009,6 +1061,36 @@ mod tests {
         assert!(
             model.is_some_and(|model| model.starts_with("model=")),
             "{args:?}"
+        );
+    }
+
+    /// Left to itself libvirt gives each processor a socket of its own, and a
+    /// Windows client edition schedules onto only a few sockets. An eight-way
+    /// guest built that way ran its whole suite on four processors while the
+    /// other four stayed idle.
+    #[test]
+    fn every_guest_processor_sits_in_one_socket() {
+        let host = super::super::profile::tests::host_fixture();
+        let guest = host.windows.clone().unwrap();
+
+        let args = creation_args(
+            &host,
+            &guest,
+            Path::new("/iso/windows.iso"),
+            Path::new("/iso/answers.iso"),
+        )
+        .unwrap();
+
+        let vcpus = args
+            .iter()
+            .position(|arg| arg == "--vcpus")
+            .and_then(|at| args.get(at + 1))
+            .expect("the guest is given processors");
+        let options: Vec<&str> = vcpus.split(',').collect();
+        assert!(options.contains(&"sockets=1"), "{vcpus}");
+        assert!(
+            options.contains(&format!("cores={}", guest.vcpus).as_str()),
+            "{vcpus}"
         );
     }
 

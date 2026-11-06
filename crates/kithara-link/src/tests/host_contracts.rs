@@ -1,6 +1,6 @@
 use kithara_host::{DeckId, HostOwner};
 use kithara_play::{HostedDeck, PlayError, SessionError, TrackSnapshot, TrackStatus};
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
 
 use super::{
@@ -72,7 +72,7 @@ fn a_host_is_a_session_root_and_refuses_every_parent_fact() {
         root.session_grid().axis(),
         kithara_warp::MapAxis::Session(_)
     ));
-    let (deck, control, _, load) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
+    let (deck, control, _, _) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
     let (id, probe) = register(&mut host, deck, &control);
     let item = probe.read(|observation| observation.snapshot.as_ref().item);
     let canonical = format!("{:?}", probe.trajectory());
@@ -88,7 +88,7 @@ fn a_host_is_a_session_root_and_refuses_every_parent_fact() {
         assert!(matches!(
             host.apply(LinkedHostCommand::Grid {
                 deck: id,
-                answer: crate::GridAnswer { item, load, model },
+                answer: crate::GridAnswer { item, model },
             }),
             Ok(None)
         ));
@@ -120,7 +120,6 @@ fn a_host_is_a_session_root_and_refuses_every_parent_fact() {
     );
 }
 
-// Ruling: spec 4.6 routes synchronization by registered DeckId, not topology membership.
 #[kithara::test]
 fn a_member_absent_from_the_group_is_not_prepared() {
     let (mut host, _) = host();
@@ -244,7 +243,6 @@ fn a_local_tempo_is_approached_from_the_tempo_already_playing() {
     assert!((axis.tempo_at(SessionFrame::new(96_000)).beats_per_minute() - 180.0).abs() < 1e-9);
 }
 
-// Ruling: spec 4.6 replaces parent grid anchors with a Host route observation; a rate change requires a new epoch.
 #[kithara::test]
 fn rejected_parent_anchor_preserves_the_committed_grid_and_anchor() {
     let (mut host, clock) = host();
@@ -272,13 +270,12 @@ fn rejected_parent_anchor_preserves_the_committed_grid_and_anchor() {
     }
 }
 
-// Ruling: spec 4.5/4.6 replaces Off/LocalSync/HostSync with off-held/off-manual/on; only on lanes receive tempo.
 #[kithara::test]
 fn parent_tempo_reaches_only_a_host_synced_group() {
     let (mut host, clock) = host();
     clock.axis(0, -96_000, -4.0, 120.0, 48_000);
     host.begin_pass();
-    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
+    clock.edit(|script| script.clock = Some(kithara_host::PassClock::default()));
     let mut decks = Vec::new();
     for synced in [false, false, true] {
         let (mut deck, control, mut rig, _) = sounding();
@@ -319,13 +316,12 @@ fn parent_tempo_reaches_only_a_host_synced_group() {
     }
 }
 
-// Ruling: spec 4.6 deletes intermediate groups; every formerly nested on deck receives the same Host trajectory.
 #[kithara::test]
 fn a_session_publication_reaches_host_synced_descendants_on_every_level() {
     let (mut host, clock) = host();
     clock.axis(0, -96_000, -4.0, 120.0, 48_000);
     host.begin_pass();
-    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
+    clock.edit(|script| script.clock = Some(kithara_host::PassClock::default()));
     let mut decks = Vec::new();
     for synced in [true, true, false] {
         let (mut deck, control, mut rig, _) = sounding();
@@ -370,11 +366,10 @@ fn a_session_publication_reaches_host_synced_descendants_on_every_level() {
     }
 }
 
-// Ruling: spec 4.6 replaces hierarchical revision admission with an atomic Host/lane capacity admission.
 #[kithara::test]
 fn a_child_refusing_the_segment_leaves_the_whole_tree_unchanged() {
     let (mut host, clock) = host();
-    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
+    clock.edit(|script| script.clock = Some(kithara_host::PassClock::default()));
     let mut decks = Vec::new();
     for room in [32, 0] {
         let (deck, control, _, _) = sounding();
@@ -408,7 +403,6 @@ fn a_child_refusing_the_segment_leaves_the_whole_tree_unchanged() {
     );
 }
 
-// Ruling: spec 4.6/8 reanchors a route without discarding media grids; all modes keep their playback and mode.
 #[kithara::test]
 fn a_physical_epoch_invalidates_every_mode() {
     let (mut host, clock) = host();
@@ -439,6 +433,11 @@ fn a_physical_epoch_invalidates_every_mode() {
                 }
             );
         });
+        host.apply(LinkedHostCommand::Sync {
+            deck: id,
+            on: false,
+        })
+        .expect("off");
         control.clear();
         host.apply(LinkedHostCommand::Sync { deck: id, on: true })
             .expect("preserved grid aligns");
@@ -446,13 +445,12 @@ fn a_physical_epoch_invalidates_every_mode() {
     }
 }
 
-// Ruling: spec 4.6 transfers even off decks to the new Host axis; flat registration replaces recursive propagation.
 #[kithara::test]
 fn a_new_session_axis_reaches_every_descendant_in_every_mode() {
     let (mut host, clock) = host();
     clock.axis(0, -96_000, -4.0, 120.0, 48_000);
     host.begin_pass();
-    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
+    clock.edit(|script| script.clock = Some(kithara_host::PassClock::default()));
     let mut probes = Vec::new();
     for synced in [true, false] {
         let (mut deck, control, mut rig, _) = sounding();
@@ -479,7 +477,6 @@ fn a_new_session_axis_reaches_every_descendant_in_every_mode() {
     }
 }
 
-// Ruling: spec 4.6 registration adopts the current Host epoch, without replaying unseen group boundaries.
 #[kithara::test]
 fn a_group_joins_its_parent_on_the_parent_axis_after_epochs_it_never_saw() {
     let (mut host, clock) = host();
@@ -507,7 +504,6 @@ fn a_group_joins_its_parent_on_the_parent_axis_after_epochs_it_never_saw() {
     }
 }
 
-// Ruling: spec 4.6 replaces unavailable grid boundaries with authoritative Host epoch observations, including skipped epochs.
 #[kithara::test]
 fn group_requires_each_unavailable_route_boundary() {
     let (mut host, clock) = host();
@@ -543,7 +539,6 @@ fn group_requires_each_unavailable_route_boundary() {
     assert!(control.commands().is_empty());
 }
 
-// Ruling: spec 4.6 replaces old-axis preparations with new Host-axis entries while retaining the media grid.
 #[kithara::test]
 fn a_route_boundary_drops_the_preparation_planned_on_the_previous_axis() {
     use kithara_command::{Batch, Outcome, When};
@@ -595,7 +590,6 @@ fn a_route_boundary_drops_the_preparation_planned_on_the_previous_axis() {
     });
 }
 
-// Ruling: spec 4.5 removes Free handoff geometry; off sends nothing on a route change, but an already sent speed finishes.
 #[kithara::test]
 fn a_route_boundary_drops_the_free_handoff_planned_on_the_previous_axis() {
     use kithara_command::{Batch, Outcome};
@@ -608,7 +602,7 @@ fn a_route_boundary_drops_the_free_handoff_planned_on_the_previous_axis() {
         LinkedPlayer::retime(
             &mut deck,
             &trajectory(150.0, 4),
-            SessionFrame::new(96_000),
+            &[SessionFrame::new(96_000)],
             out,
         );
     });
@@ -658,7 +652,6 @@ fn a_route_boundary_drops_the_free_handoff_planned_on_the_previous_axis() {
     assert!(control.commands().is_empty());
 }
 
-// Ruling: spec 4.5/4.6 deletes root Free; explicitly releasing all linked descendants preserves each source and off sibling.
 #[kithara::test]
 fn leaving_the_timeline_releases_every_host_synced_descendant() {
     let (mut host, clock) = host();

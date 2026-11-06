@@ -41,6 +41,16 @@ impl<'a> ServiceInstaller<'a> {
         Ok(())
     }
 
+    pub(super) fn install_cache(&self, binary_directory: &Path) -> Result<()> {
+        require_macos()?;
+        let root = self.service_root().join("ci-cache");
+        fs::create_dir_all(root.join("admin-home/.config"))?;
+        let settings = fs::read_to_string(root.join("macos.env"))
+            .context("read native cache scopes and budgets")?;
+        let definition = super::cache::launchd(self.config, binary_directory, &settings)?;
+        self.write_agent("cache", &definition)
+    }
+
     pub(super) fn activate_bridge(&self) -> Result<()> {
         require_macos()?;
         self.require_root()?;

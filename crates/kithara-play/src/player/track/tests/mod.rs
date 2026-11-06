@@ -1,8 +1,5 @@
 mod batch;
 mod core;
-mod curve_refusals;
-mod curves;
-mod effects;
 mod fade_events;
 mod gain;
 mod legacy_lifecycle;

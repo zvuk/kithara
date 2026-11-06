@@ -384,7 +384,7 @@ impl Abr for QueuedPeer {
     }
 }
 impl Peer for QueuedPeer {
-    fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+    fn poll_next(&self, _cx: &mut Context<'_>, _budget: usize) -> Poll<Option<Vec<FetchCmd>>> {
         let Some(cmds) = self.cmds.lock().take() else {
             return Poll::Pending;
         };
@@ -435,6 +435,73 @@ async fn downloader_shutdown_cancels_queued_commands() {
     for error in errors.iter() {
         assert!(matches!(error, Some(FetchError::Cancelled)));
     }
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn a_new_peer_is_polled_while_fetch_capacity_is_full() {
+    let url = Url::parse("http://example.test/queued").expect("valid test URL");
+    let cancel = CancelToken::never();
+    let gate = CompletionGate::new(2);
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let dl = Downloader::new(DownloaderConfig {
+        cancel: Some(cancel.clone()),
+        max_concurrent: 0,
+        ..test_config()
+    });
+    let first = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(vec![cancellation_cmd(&url, &gate, &errors)])),
+        yielded: Notify::default(),
+    });
+    let _first_handle = dl.register(first.clone(), None);
+    first.yielded.notified().await;
+
+    let second = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(vec![cancellation_cmd(&url, &gate, &errors)])),
+        yielded: Notify::default(),
+    });
+    let _second_handle = dl.register(second.clone(), None);
+    second.yielded.notified().await;
+
+    cancel.cancel();
+    gate.wait().await;
+    assert_eq!(gate.done.load(Ordering::SeqCst), 2);
+    assert!(matches!(
+        errors.lock().as_slice(),
+        [Some(FetchError::Cancelled), Some(FetchError::Cancelled)]
+    ));
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn a_cancelled_queued_fetch_settles_without_capacity() {
+    let url = Url::parse("http://example.test/queued").expect("valid test URL");
+    let epoch = CancelToken::never();
+    let gate = CompletionGate::new(1);
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let mut command = cancellation_cmd(&url, &gate, &errors);
+    command.cancel = Some(epoch.clone());
+    let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(vec![command])),
+        yielded: Notify::default(),
+    });
+    let dl = Downloader::new(DownloaderConfig {
+        max_concurrent: 0,
+        ..test_config()
+    });
+    let _handle = dl.register(peer.clone(), None);
+    peer.yielded.notified().await;
+
+    epoch.cancel();
+    let _new_handle = dl.register(Arc::new(MockPeer::new()), None);
+    gate.wait().await;
+
+    assert_eq!(gate.done.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        errors.lock().as_slice(),
+        [Some(FetchError::Cancelled)]
+    ));
 }
 
 /// A downloader with no parent cancel is shut down by its last handle: the loop
@@ -903,13 +970,16 @@ async fn poll_next_respects_max_concurrent() {
             RequestPriority::Low
         }
 
-        fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+        fn poll_next(&self, cx: &mut Context<'_>, budget: usize) -> Poll<Option<Vec<FetchCmd>>> {
             let (batch_size, more) = {
                 let mut rem = self.remaining.lock();
                 if *rem == 0 {
                     return Poll::Ready(None);
                 }
-                let batch_size = (*rem).min(FLOOD_BATCH_SIZE);
+                if budget == 0 {
+                    return Poll::Pending;
+                }
+                let batch_size = (*rem).min(FLOOD_BATCH_SIZE).min(budget);
                 *rem -= batch_size;
                 (batch_size, *rem > 0)
             };
@@ -1171,7 +1241,7 @@ async fn soft_timeout_covers_response_body() {
     assert!(seen_slow, "body-only stall must publish LoadSlow");
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PeerTag {
     Active,
     Preload,
@@ -1219,13 +1289,16 @@ impl Abr for TaggedPriorityPeer {
     }
 }
 impl Peer for TaggedPriorityPeer {
-    fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+    fn poll_next(&self, cx: &mut Context<'_>, budget: usize) -> Poll<Option<Vec<FetchCmd>>> {
         let (take, more) = {
             let mut rem = self.remaining.lock();
             if *rem == 0 {
                 return Poll::Pending;
             }
-            let take = (*rem).min(FLOOD_BATCH_SIZE);
+            if budget == 0 {
+                return Poll::Pending;
+            }
+            let take = (*rem).min(FLOOD_BATCH_SIZE).min(budget);
             *rem -= take;
             (take, *rem > 0)
         };
@@ -1712,6 +1785,53 @@ async fn a_dropped_demand_yields_to_a_newly_demanded_command() {
         order[4], "stale",
         "the command whose demand dropped yields to the queue: {order:?}"
     );
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[case::equal_priority(false)]
+#[case::later_active_peer(true)]
+async fn admission_capacity_is_shared_by_peer_priority(#[case] later_active: bool) {
+    const COMMANDS: usize = 4;
+    let server = spawn_slow_server(10).await;
+    let downloader = Downloader::new(DownloaderConfig {
+        max_concurrent: 1,
+        ..test_config()
+    });
+    let gate = CompletionGate::new(COMMANDS * 2);
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let first = Arc::new(TaggedPriorityPeer::new(
+        PeerTag::Preload,
+        Arc::new(AtomicBool::new(false)),
+        server.url("/data"),
+        COMMANDS,
+        &gate,
+        &log,
+    ));
+    let later = Arc::new(TaggedPriorityPeer::new(
+        PeerTag::Active,
+        Arc::new(AtomicBool::new(later_active)),
+        server.url("/data"),
+        COMMANDS,
+        &gate,
+        &log,
+    ));
+    let _first = downloader.register(first, None);
+    let _later = downloader.register(later, None);
+    gate.wait().await;
+    let log = log.lock();
+    assert_eq!(log.len(), COMMANDS * 2);
+    if later_active {
+        assert!(
+            log[..COMMANDS]
+                .iter()
+                .all(|(tag, _)| *tag == PeerTag::Active)
+        );
+    } else {
+        assert_ne!(
+            log[0].0, log[1].0,
+            "equal-priority peers share successive slots"
+        );
+    }
 }
 
 /// Negative case: when both peers are idle (PLAYING=false), the

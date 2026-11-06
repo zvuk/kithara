@@ -190,20 +190,13 @@ fn cleanup_unit(keep: &[String]) -> String {
     )
 }
 
-/// Every two hours, because the fleet fills faster than a day. Measured across
-/// one day of this timer on the Linux host: the build caches waiting at a pass
-/// ranged from 20 GB to 515 GB, each amount accumulated inside a single
-/// two-hour window, against 3.0 TB free. A daily timer would meet twelve such
-/// windows at once, which a busy day does not fit on the volume — so the host
-/// this shipped to had been carrying a hand-written drop-in overriding the
-/// cadence, a second source of truth this file could not see. A pass over a
-/// volume already inside its budget frees nothing and costs seconds, so the
-/// frequency is only paid for when it is needed.
+/// Check budgets frequently enough to limit growth between cleanup passes.
+/// Active builds retain their leases while idle outputs can be reclaimed.
 fn cleanup_timer() -> &'static str {
     "[Unit]\n\
      Description=Kithara CI cleanup\n\n\
      [Timer]\n\
-     OnCalendar=*-*-* 00/2:00:00\n\
+     OnCalendar=*-*-* *:00/10:00\n\
      Persistent=true\n\n\
      [Install]\n\
      WantedBy=timers.target\n"
@@ -380,13 +373,14 @@ fn unit(
     let job = container(host, runner, cpuset.to_owned(), pins)?;
     write!(
         unit,
-        "\nExecStart=/usr/bin/docker run --rm --name {name} \
+        "\nExecStart=/usr/bin/docker run --init --rm --name {name} \
          --network {network} \
          --cpuset-cpus {cpuset} \
          --memory {memory} \
          --cgroup-parent {cgroup_parent} \
          --pids-limit {pids} \
          --ulimit nice={nice}:{nice} \
+         --tmpfs {tmpfs} \
          --security-opt no-new-privileges \
          --env-file {env_file}",
         name = job.name,
@@ -396,6 +390,7 @@ fn unit(
         cgroup_parent = job.cgroup_parent,
         pids = Container::PIDS_LIMIT,
         nice = Container::NICE_LIMIT,
+        tmpfs = Container::tmpfs(),
         env_file = job.env_file,
     )?;
     for entry in Container::environment(runner) {
@@ -540,14 +535,11 @@ mod tests {
         assert!(Cli::try_parse_from(argv).is_ok(), "{command:?}");
     }
 
-    /// The cadence is the whole of the disk policy: the cleaner runs when the
-    /// timer says so and at no other time. A daily pass was measured arriving
-    /// at up to 515 GB of build caches, and that was one two-hour window's
-    /// worth.
+    /// Frequent passes bound idle cache growth between budget checks.
     #[test]
     fn the_cleanup_timer_outpaces_what_the_fleet_accumulates() {
         assert!(
-            cleanup_timer().contains("OnCalendar=*-*-* 00/2:00:00"),
+            cleanup_timer().contains("OnCalendar=*-*-* *:00/10:00"),
             "{}",
             cleanup_timer()
         );
@@ -640,6 +632,22 @@ mod tests {
             text.contains(&format!("--env-file {}", env_file(runner))),
             "{text}"
         );
+    }
+
+    #[test]
+    fn every_runner_reaps_orphaned_job_processes() {
+        let host = host_fixture();
+        for runner in &host.runners {
+            let text = unit(
+                &host,
+                runner,
+                "0,1,2",
+                &fixture().pins,
+                "/usr/local/bin/kithara-ci",
+            )
+            .expect("the unit must render");
+            assert!(text.contains("docker run --init "), "{text}");
+        }
     }
 
     /// No single runner's ceiling ever fired: the host died of the sum of them.

@@ -1,10 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    ffi::OsString,
-    path::{Path, PathBuf},
-    thread,
-    time::Duration,
-};
+use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, thread, time::Duration};
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
@@ -19,7 +13,7 @@ use super::{
     windows::{Boot, WindowsHost},
 };
 use crate::{
-    ci::{config::CiConfig, host::provision::Provision, image::ImageCommand, process::Process},
+    ci::{config::CiConfig, host::provision::Provision, process::Process},
     consts,
 };
 
@@ -45,6 +39,8 @@ enum MacCommand {
     InstallHostTools,
     /// Install pinned Rust and Android tools for the CI account.
     InstallUserTools,
+    /// Install pinned native `RustFS` and stage its launch agent without starting it.
+    InstallCache,
     /// Install the current Rust executable and launchd service definitions.
     InstallServices,
     /// Validate credentials and activate the repository bridge daemon.
@@ -55,13 +51,6 @@ enum MacCommand {
     Activate,
     /// Prepare a throwaway macOS guest before `GitLab` Runner starts.
     GuestPrepare,
-    /// Build and pin the Linux runner image.
-    BuildLinuxImage {
-        /// Dockerfile used to build the pinned Linux image.
-        dockerfile: PathBuf,
-    },
-    /// Verify the pinned Linux runner image and its required tools.
-    SmokeLinux,
     /// Boot the Android emulator and verify it reaches a ready state.
     SmokeAndroid,
     /// Serve `GitLab` jobs from throwaway macOS VMs.
@@ -84,10 +73,8 @@ enum MacCommand {
 /// Bring this machine up to what the current commit describes.
 ///
 /// Every step is one this host already owns and every one of them is
-/// idempotent, so a pipeline can run this as often as it likes: the image
-/// build reuses what is already there and only moves the floating tag, the
-/// runner configuration is rewritten from the same profile, and the agents are
-/// reloaded from the definitions that were just installed.
+/// idempotent: runner configuration is rewritten from the same profile and
+/// agents are loaded from the installed definitions.
 pub(in crate::ci::host) fn provision(provision: &Provision<'_>) -> Result<()> {
     provision.as_root("mac", "install-services")?;
     let config = CiConfig::load(provision.config, provision.pins)?;
@@ -100,8 +87,6 @@ pub(in crate::ci::host) fn provision(provision: &Provision<'_>) -> Result<()> {
     let process = Process::new(&std::env::current_dir()?, vars);
     let runners = RunnerManager::new(&config, &process);
     runners.configure()?;
-    runners.build_linux_image(Path::new(ImageCommand::Toolchain.dockerfile()))?;
-    runners.smoke_linux()?;
     runners.activate()?;
     info!(platform = "mac", "host provisioned from this commit");
     Ok(())
@@ -129,6 +114,10 @@ pub(crate) fn run(args: &MacArgs) -> Result<()> {
         MacCommand::InstallUserTools => {
             ToolchainInstaller::new(&config, &process).install_user_tools()
         }
+        MacCommand::InstallCache => {
+            let directory = ToolchainInstaller::new(&config, &process).install_cache()?;
+            ServiceInstaller::new(&config, &process).install_cache(&directory)
+        }
         MacCommand::InstallServices => {
             ServiceInstaller::new(&config, &process).install(&args.config, &args.pins)
         }
@@ -136,10 +125,6 @@ pub(crate) fn run(args: &MacArgs) -> Result<()> {
         MacCommand::ConfigureRunners => RunnerManager::new(&config, &process).configure(),
         MacCommand::Activate => RunnerManager::new(&config, &process).activate(),
         MacCommand::GuestPrepare => RunnerManager::new(&config, &process).prepare_guest(),
-        MacCommand::BuildLinuxImage { dockerfile } => {
-            RunnerManager::new(&config, &process).build_linux_image(dockerfile)
-        }
-        MacCommand::SmokeLinux => RunnerManager::new(&config, &process).smoke_linux(),
         MacCommand::SmokeAndroid => RunnerManager::new(&config, &process).smoke_android(),
         MacCommand::RunMacosRunner => RunnerManager::new(&config, &process).run_macos_runner(),
         MacCommand::RunWindowsGuest { install } => {
@@ -231,13 +216,12 @@ mod tests {
             ["finish"].as_slice(),
             ["install-host-tools"].as_slice(),
             ["install-user-tools"].as_slice(),
+            ["install-cache"].as_slice(),
             ["install-services"].as_slice(),
             ["activate-bridge"].as_slice(),
             ["configure-runners"].as_slice(),
             ["activate"].as_slice(),
             ["guest-prepare"].as_slice(),
-            ["build-linux-image", "docker/ci.Dockerfile"].as_slice(),
-            ["smoke-linux"].as_slice(),
             ["smoke-android"].as_slice(),
             ["run-macos-runner"].as_slice(),
             ["preflight"].as_slice(),

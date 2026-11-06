@@ -316,6 +316,7 @@ impl GitRepo {
                 "-c",
                 "user.email=kithara-bridge@localhost",
                 "commit",
+                "--no-gpg-sign",
                 "--quiet",
                 "--message",
                 &message,
@@ -546,6 +547,7 @@ fn merge_base_into(tree: &Path, base: &str) -> Result<bool> {
             "-c",
             "user.email=kithara-bridge@localhost",
             "merge",
+            "--no-gpg-sign",
             "--quiet",
             "--no-ff",
             "--message",
@@ -629,6 +631,7 @@ mod tests {
         git(&work, &["init", "--quiet", "--initial-branch=main"]);
         git(&work, &["config", "user.email", "t@e.st"]);
         git(&work, &["config", "user.name", "test"]);
+        git(&work, &["config", "commit.gpgsign", "false"]);
         fs::create_dir_all(work.join("xtask/src")).unwrap();
         fs::create_dir_all(work.join(".config")).unwrap();
         fs::write(work.join("xtask/src/main.rs"), "// trusted\n").unwrap();
@@ -895,6 +898,22 @@ mod tests {
     #[test]
     fn judged_commit_is_deterministic_for_the_exact_key() {
         let (_state, repo, base, _product, head, _additive) = repository();
+        assert_eq!(
+            judged(&repo, &base, &head, true),
+            judged(&repo, &base, &head, true)
+        );
+    }
+
+    #[test]
+    fn judged_commit_does_not_inherit_interactive_signing() {
+        let (state, repo, base, _product, head, _additive) = repository();
+        let signer = crate::testing::install_double(&state.path().join("tools"), "gpg");
+        git(&repo.root, &["config", "commit.gpgsign", "true"]);
+        git(&repo.root, &["config", "gpg.format", "openpgp"]);
+        git(
+            &repo.root,
+            &["config", "gpg.program", signer.to_str().unwrap()],
+        );
         assert_eq!(
             judged(&repo, &base, &head, true),
             judged(&repo, &base, &head, true)

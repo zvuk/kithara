@@ -21,7 +21,7 @@ use crate::{
     config::AppConfig,
     document::Config,
     engine::{self, Engine, EngineError, EngineSnapshot, Envelope},
-    pools::{AppPools, Pools},
+    pools::{AppHostOwner, AppPools, Pools},
 };
 
 /// Builds and runs the engine on a Worker. The first receiver hears whether
@@ -32,7 +32,7 @@ pub(super) fn spawn(
     pools: Pools,
     net: HttpClient,
     grants: Vec<KeyAccess>,
-    host: wasm::HostSender<AppPools>,
+    host: wasm::HostSender<AppPools, AppHostOwner>,
     snapshots: Arc<ArcSwap<EngineSnapshot>>,
     commands: UnboundedReceiver<Envelope>,
     shutdown: CancelToken,

@@ -404,6 +404,7 @@ fn row(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         active_frame_color: None,
         write: None,
         reset: None,
+        entry: None,
     }
 }
 
@@ -424,6 +425,7 @@ fn column(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         background_alpha: None,
         write: None,
         reset: None,
+        entry: None,
     }
 }
 

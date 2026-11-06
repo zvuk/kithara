@@ -51,6 +51,12 @@ impl<'a> TextInputPaint<'a> {
         }
     }
 
+    /// The same field, showing nothing while it is empty.
+    pub(crate) const fn without_placeholder(mut self) -> Self {
+        self.placeholder = "";
+        self
+    }
+
     pub(crate) fn paint(
         &self,
         list: &mut DrawListBuilder,
@@ -86,7 +92,7 @@ impl<'a> TextInputPaint<'a> {
                 self.skin.rgba(self.skin.tree.search_text.color),
                 bounds,
             );
-        } else if !has_preedit {
+        } else if !has_preedit && !self.placeholder.is_empty() {
             self.paint_text(
                 &mut content,
                 self.placeholder,

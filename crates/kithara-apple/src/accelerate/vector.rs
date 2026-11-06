@@ -31,6 +31,32 @@ pub fn multiply_f32(a: &[f32], b: &[f32], output: &mut [f32]) -> usize {
     len
 }
 
+/// `samples[i] *= gains[i]` over the common prefix; returns its length.
+#[must_use]
+#[inline(always)]
+pub fn multiply_in_place_f32(samples: &mut [f32], gains: &[f32]) -> usize {
+    match (samples, gains) {
+        ([sample], [gain, ..]) | ([sample, ..], [gain]) => {
+            *sample *= *gain;
+            1
+        }
+        (samples, gains) => multiply_in_place_vdsp(samples, gains),
+    }
+}
+
+#[inline(never)]
+fn multiply_in_place_vdsp(samples: &mut [f32], gains: &[f32]) -> usize {
+    let len = samples.len().min(gains.len());
+    if len == 0 {
+        return 0;
+    }
+    let values = samples.as_mut_ptr();
+    // SAFETY: both slices hold len floats; vDSP permits input/output aliasing
+    // SAFETY: at stride one. The exclusive samples borrow cannot overlap gains.
+    unsafe { vDSP_vmul(values.cast_const(), 1, gains.as_ptr(), 1, values, 1, len) };
+    len
+}
+
 /// `output[k] = Σ_j signal[k + j]·kernel[j]` for every lag `k` at which the
 /// kernel fits inside `signal`, as many as `output` holds; returns the lag
 /// count.

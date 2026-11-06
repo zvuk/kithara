@@ -35,6 +35,14 @@
                         write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
                     ),
                     Button(
+                        id: "sync",
+                        size: (w: Fixed(58.0), h: Fill),
+                        label: "@deck.transport.sync",
+                        style: Transport,
+                        read: Telemetry(id: "deck.playback.synced", with: { "deck": "$deck" }),
+                        write: Command(id: "deck.transport.toggle_sync", with: { "deck": "$deck" }),
+                    ),
+                    Button(
                         id: "prev",
                         size: (w: Fixed(40.0), h: Fill),
                         label: "",

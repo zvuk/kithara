@@ -1,12 +1,14 @@
+use std::collections::BTreeMap;
+
 use kithara_platform::sync::Arc;
 use parley::{
     FontData,
-    fontique::{Blob, Collection, CollectionOptions, FallbackKey, Script},
+    fontique::{Blob, Collection, CollectionOptions, FallbackKey, FontInfoOverride, Script},
 };
 use skrifa::{FontRef, outline::OutlineGlyphCollection, raw::ReadError};
 use thiserror::Error;
 
-use crate::{FontId, FontPolicy, GlyphFace};
+use crate::{FontFamily, FontId, FontPolicy, GlyphFace};
 
 /// Failure to construct the embedded text resources.
 #[derive(Clone, Debug, Error, PartialEq)]
@@ -22,6 +24,16 @@ pub enum TextError {
     Registration { font: FontId },
     #[error("embedded fallback for script {script} could not be registered")]
     Fallback { script: Script },
+    #[error("font family {family:?} declares no source files")]
+    EmptyFamily { family: FontFamily },
+    #[error("font source for {family:?} is invalid: {source}")]
+    InvalidSource {
+        family: FontFamily,
+        #[source]
+        source: ReadError,
+    },
+    #[error("font source for {family:?} could not be registered")]
+    SourceRegistration { family: FontFamily },
 }
 
 /// Maps a registered Fontique blob back to the face it was registered for.
@@ -59,6 +71,10 @@ pub struct TextResources {
     policy: FontPolicy,
     #[debug(skip)]
     outlines: Vec<OutlineGlyphCollection<'static>>,
+    #[field(get, vis = "pub(super)")]
+    families: BTreeMap<&'static str, &'static str>,
+    #[debug(skip)]
+    sources: BTreeMap<FontFamily, Vec<Arc<[u8]>>>,
 }
 
 impl TextResources {
@@ -70,6 +86,21 @@ impl TextResources {
     /// Returns [`TextError`] when an embedded face or fallback cannot be
     /// registered.
     pub fn new(policy: FontPolicy) -> Result<Self, TextError> {
+        Self::with_fonts(policy, BTreeMap::new())
+    }
+
+    /// Registers skin-owned font files in place of the named style families.
+    /// Each family may carry static faces or one variable font. The bytes stay
+    /// with the collection and the shaped result; embedded defaults and Lucide
+    /// remain independent of these private family aliases.
+    ///
+    /// # Errors
+    /// Returns [`TextError`] for an empty family, invalid font, or failed
+    /// registration.
+    pub fn with_fonts(
+        policy: FontPolicy,
+        sources: BTreeMap<FontFamily, Vec<Arc<[u8]>>>,
+    ) -> Result<Self, TextError> {
         let mut collection = Collection::new(CollectionOptions {
             shared: false,
             system_fonts: policy.system_fonts(),
@@ -83,6 +114,33 @@ impl TextResources {
             }
         }
         register_fallbacks(&mut collection)?;
+        let mut families = BTreeMap::new();
+        for (&family, files) in &sources {
+            if files.is_empty() {
+                return Err(TextError::EmptyFamily { family });
+            }
+            let alias = match family {
+                FontFamily::Sans => "kithara-skin-sans",
+                FontFamily::Mono => "kithara-skin-mono",
+                FontFamily::Display => "kithara-skin-display",
+            };
+            for bytes in files {
+                FontRef::new(bytes)
+                    .map_err(|source| TextError::InvalidSource { family, source })?;
+                let data = Blob::new(Arc::new(bytes.clone()));
+                let info = FontInfoOverride {
+                    family_name: Some(alias),
+                    ..FontInfoOverride::default()
+                };
+                if collection.register_fonts(data, Some(info)).is_empty() {
+                    return Err(TextError::SourceRegistration { family });
+                }
+            }
+            families.insert(
+                FontId::select(family, crate::FontWeight::Normal).family_name(),
+                alias,
+            );
+        }
         Ok(Self {
             collection,
             policy,
@@ -92,6 +150,8 @@ impl TextResources {
                 .into_iter()
                 .map(outline_collection)
                 .collect::<Result<_, _>>()?,
+            families,
+            sources,
         })
     }
 
@@ -108,7 +168,7 @@ impl TextResources {
 
 impl PartialEq for TextResources {
     fn eq(&self, other: &Self) -> bool {
-        self.fonts == other.fonts && self.policy == other.policy
+        self.fonts == other.fonts && self.policy == other.policy && self.sources == other.sources
     }
 }
 

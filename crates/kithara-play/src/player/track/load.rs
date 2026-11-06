@@ -29,7 +29,6 @@ impl<S> PlayerImpl<S> {
         }
         let (lane, inbox) = item.lane_channel()?;
         let (ring_depth, declick) = item.lane_geometry()?;
-        let effects = super::effects::TrackEffects::new(&item.effects)?;
         self.class = if self.slot.is_some() {
             ServiceClass::Warm
         } else {
@@ -43,7 +42,6 @@ impl<S> PlayerImpl<S> {
             inbox,
         })?;
         self.lane = Some(lane);
-        self.effects = effects;
         self.ring_depth = ring_depth;
         self.declick = declick;
         self.position = position;

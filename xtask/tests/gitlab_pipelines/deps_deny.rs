@@ -31,7 +31,7 @@ fn dependency_audit_publishes_raw_evidence_on_every_job_outcome() {
     assert_eq!(paths[0].as_str(), Some(".ci-artifacts/deps-deny/"));
     assert_eq!(
         paths[1].as_str(),
-        Some(".ci-artifacts/cache/gitlab-$CI_JOB_ID.json")
+        Some(".ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json")
     );
 }
 

@@ -42,7 +42,7 @@ impl PacketRing {
         )
     }
 
-    pub(in crate::worker) fn with_wake(
+    pub(crate) fn with_wake(
         spec: AudioSpec,
         duration: Duration,
         capacity: usize,
@@ -189,6 +189,7 @@ impl PacketRing {
             .forward
             .try_push(packet)
             .expect("packet ring space");
+        self.producer.signal();
     }
 
     pub fn returned(&mut self) -> Option<PcmPacket> {

@@ -74,7 +74,9 @@ impl TryFrom<&TrackAnalysis> for BeatGridModel {
                     })
             })
             .transpose()?;
-        let placed = place(snapshot, rate, bpm, duration, origin);
+        let mut placed = place(snapshot, rate, bpm, duration, origin);
+        straighten(&mut placed);
+        placed.retain(|(_, beat)| !duration.is_some_and(|duration| beat.at > duration));
         let (downbeats, meter) = bars(snapshot, &placed);
         Ok(Self::try_from(RawBeatGrid {
             duration,
@@ -160,6 +162,67 @@ fn place(
         beat.ordinal -= first.ordinal;
     }
     kept
+}
+
+/// Moves beats onto the steady tempo they keep, so a tempo reads as the music's
+/// and not as the detector's frame rounding.
+///
+/// A run no single tempo fits is halved until one does; a run too short to halve
+/// that still fits none stands as heard. A beat lands on a whole nanosecond of
+/// the media clock, so a cue set to it starts on it.
+fn straighten(beats: &mut [(u64, GridBeat)]) {
+    let Some(line) = SteadyTempo::fit(beats) else {
+        return;
+    };
+    if beats.iter().all(|(_, beat)| {
+        (beat.at - line.at(beat.ordinal)).abs() <= consts::STEADY_TOLERANCE_SECONDS
+    }) {
+        for (_, beat) in beats.iter_mut() {
+            beat.at = (line.at(beat.ordinal) * consts::NANOS_PER_SECOND).round()
+                / consts::NANOS_PER_SECOND;
+            beat.at = beat.at.max(0.0);
+        }
+    } else if beats.len() >= 2 * consts::MIN_STEADY_BEATS {
+        let (head, tail) = beats.split_at_mut(beats.len() / 2);
+        straighten(head);
+        straighten(tail);
+    }
+}
+
+/// A least-squares line through beat times over their ordinals.
+struct SteadyTempo {
+    intercept: f64,
+    period: f64,
+}
+
+impl SteadyTempo {
+    fn fit(beats: &[(u64, GridBeat)]) -> Option<Self> {
+        let count = beats.len().to_f64()?;
+        let mean_x = beats.iter().map(|(_, beat)| ordinal(beat)).sum::<f64>() / count;
+        let mean_y = beats.iter().map(|(_, beat)| beat.at).sum::<f64>() / count;
+        let (variance, covariance) =
+            beats
+                .iter()
+                .fold((0.0, 0.0), |(variance, covariance), (_, beat)| {
+                    let dx = ordinal(beat) - mean_x;
+                    (variance + dx * dx, covariance + dx * (beat.at - mean_y))
+                });
+        (variance > 0.0).then(|| {
+            let period = covariance / variance;
+            Self {
+                intercept: mean_y - period * mean_x,
+                period,
+            }
+        })
+    }
+
+    fn at(&self, ordinal: i64) -> f64 {
+        self.intercept + self.period * ordinal.to_f64().unwrap_or(f64::INFINITY)
+    }
+}
+
+fn ordinal(beat: &GridBeat) -> f64 {
+    beat.ordinal.to_f64().unwrap_or(f64::INFINITY)
 }
 
 /// Where the longest run of markers each a whole beat after the one before
@@ -252,6 +315,7 @@ mod tests {
     use kithara_platform::time::Duration;
     use kithara_sync::Meter;
     use kithara_test_utils::kithara;
+    use num_traits::cast::ToPrimitive;
 
     use super::{BeatGridUnavailable, BeatSnapshot, BeatState, TrackAnalysis};
     use crate::{BeatArtifact, artifact::track::AnalysisToken, consts};
@@ -340,6 +404,68 @@ mod tests {
             "the extent states the length"
         );
         assert_eq!(times(&model), [(0, 0.0), (1, 0.5), (2, 1.0), (3, 1.5)]);
+    }
+
+    fn tempos(model: &BeatGridModel) -> Vec<f64> {
+        model
+            .as_raw()
+            .beats
+            .windows(2)
+            .map(|pair| 60.0 / (pair[1].at - pair[0].at))
+            .collect()
+    }
+
+    /// A detector reads beats on its own frame clock, so a steady track
+    /// arrives with gaps a whole detector frame apart; the tempo is the
+    /// track's, and the rounding is not.
+    #[kithara::test(native, flash(false))]
+    fn beats_rounded_to_the_detector_clock_state_the_steady_tempo() {
+        const DETECTOR_FPS: f64 = 50.0;
+        const TEMPO: f64 = 120.02;
+        let beats: Vec<u64> = (0..=100)
+            .map(|beat| {
+                let at = 0.013 + f64::from(beat) * 60.0 / TEMPO;
+                let rounded = (at * DETECTOR_FPS).round() / DETECTOR_FPS;
+                (rounded * f64::from(consts::RATE_48))
+                    .round()
+                    .to_u64()
+                    .expect("a beat before the media end is a frame")
+            })
+            .collect();
+        let model = grid(&analysis(
+            consts::RATE_48,
+            &beats,
+            &[],
+            beats.last().copied(),
+            BeatState::Final,
+        ));
+
+        for tempo in tempos(&model) {
+            assert!((tempo - TEMPO).abs() < 0.1, "a beat states {tempo} BPM");
+        }
+    }
+
+    /// A tempo the music really changes is not rounding: each side keeps its own.
+    #[kithara::test(native, flash(false))]
+    fn a_real_tempo_change_keeps_both_tempos() {
+        let slow = consts::PERIOD_48;
+        let fast = consts::PERIOD_48 * 20 / 21;
+        let beats: Vec<u64> = (0..64)
+            .map(|beat| beat * slow)
+            .chain((0..64).map(|beat| 64 * slow + beat * fast))
+            .collect();
+        let model = grid(&analysis(
+            consts::RATE_48,
+            &beats,
+            &[],
+            None,
+            BeatState::Final,
+        ));
+
+        let tempos = tempos(&model);
+        assert!((tempos[0] - 120.0).abs() < 0.1, "opens at {}", tempos[0]);
+        let end = tempos[tempos.len() - 1];
+        assert!((end - 126.0).abs() < 0.1, "ends at {end}");
     }
 
     /// The model carries no sample rate, so two passes over the same music

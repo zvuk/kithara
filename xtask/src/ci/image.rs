@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use tracing::info;
 
-use super::{config::CiPins, process::Process};
+use super::{cache, config::CiPins, kache::BuildSecrets, process::Process};
 use crate::consts;
 
 #[derive(Debug, Args)]
@@ -15,6 +15,9 @@ pub(crate) struct ImageArgs {
     /// Tag a disposable validation image without replacing the pinned fleet image.
     #[arg(long)]
     tag: Option<String>,
+    /// Scoped credentials and endpoint reachable from `BuildKit`.
+    #[arg(long, env = "KITHARA_CI_CACHE_ENV_FILE")]
+    cache_env_file: Option<PathBuf>,
     #[command(subcommand)]
     command: ImageCommand,
 }
@@ -69,24 +72,36 @@ pub(crate) fn run(args: &ImageArgs) -> Result<()> {
     // A disposable validation image is not what the fleet runs, so it builds
     // under its own tag and leaves the floating one where it was.
     let Some(disposable) = args.tag.as_deref() else {
-        return build_pinned(&process, args.command, &pins);
+        return build_pinned(
+            &process,
+            args.command,
+            &pins,
+            args.cache_env_file.as_deref(),
+        );
     };
     build(
         &process,
         args.command.dockerfile(),
         disposable,
         &args.command.build_args(&pins)?,
+        args.cache_env_file.as_deref(),
     )
 }
 
 /// Build one pinned image and move the floating tag the hosts run onto it.
-pub(crate) fn build_pinned(process: &Process, command: ImageCommand, pins: &CiPins) -> Result<()> {
+pub(crate) fn build_pinned(
+    process: &Process,
+    command: ImageCommand,
+    pins: &CiPins,
+    cache_env_file: Option<&std::path::Path>,
+) -> Result<()> {
     let tag = command.tag(pins);
     build(
         process,
         command.dockerfile(),
         tag,
         &command.build_args(pins)?,
+        cache_env_file,
     )?;
     let floating = floating_tag(tag)?;
     process.run(
@@ -122,11 +137,18 @@ fn build(
     dockerfile: &str,
     tag: &str,
     arguments: &[(&'static str, String)],
+    cache_env_file: Option<&std::path::Path>,
 ) -> Result<()> {
+    let environment = match cache_env_file {
+        Some(path) => cache::client_environment(path)?,
+        None => cache::current_client_environment()?,
+    };
+    let secrets = BuildSecrets::new(&environment)?;
     let recipe =
         fs::File::open(dockerfile).with_context(|| format!("reading Dockerfile {dockerfile}"))?;
     let mut command = process.command("docker");
     command.args(["build", "--tag", tag]);
+    secrets.apply(&mut command);
     for (name, value) in arguments {
         command.arg("--build-arg").arg(format!("{name}={value}"));
     }
@@ -141,6 +163,8 @@ fn build(
 pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, String)>> {
     let mut args = vec![
         ("RUST_VERSION", pins.stable_toolchain.clone()),
+        ("KACHE_AMD64_SHA256", pins.kache_linux_amd64_sha256.clone()),
+        ("KACHE_ARM64_SHA256", pins.kache_linux_arm64_sha256.clone()),
         ("RUST_BASE_DIGEST", pins.linux_base_digest.clone()),
         ("CACHE_CLIENT_IMAGE", pins.cache_client_image.clone()),
         ("MSRV_TOOLCHAIN", pins.msrv_toolchain.clone()),

@@ -177,16 +177,19 @@ fn correction_bounds_every_step_and_cancels_the_phase_integral() {
         let cue = Position::from_secs_f64(1.0 + seconds.rem_euclid(0.5));
         let error = phase_error(&host, &source_grid(&model), cue, SessionFrame::new(0))
             .expect("source phase");
-        let (curve, end) = corrected_speed_curve(
+        let Some(Slew::Closes { curve, frames: end }) = slew(
             &host,
             &source_grid(&model),
             cue,
             SessionFrame::new(0),
-            from,
             epsilon,
-            false,
-        )
-        .expect("source-aware correction");
+            SlewCause::Drift {
+                from,
+                limit: f32::INFINITY,
+            },
+        ) else {
+            panic!("source-aware correction");
+        };
         let actual = cue.as_secs_f64() + future_law::advance(&curve, 0, end) / 48_000.0;
         let geometry = source_grid(&model);
         let expected = geometry
@@ -194,10 +197,26 @@ fn correction_bounds_every_step_and_cancels_the_phase_integral() {
                 geometry
                     .beat_at(cue.as_secs_f64())
                     .expect("initial source beat")
-                    - error.shortest()
+                    - error.wrapped(1.0)
                     + 2.0 * to * end.to_f64().expect("deadline") / 48_000.0,
             )
             .expect("phase closure inside source geometry");
         assert!((actual - expected).abs() < 1e-8);
     }
+
+    assert_eq!(
+        slew(
+            &fixtures::host(120.0 * 5.0, 4),
+            &source_grid(&model),
+            Position::from_secs_f64(1.0),
+            SessionFrame::new(0),
+            epsilon,
+            SlewCause::Drift {
+                from: 1.0,
+                limit: 0.5,
+            },
+        ),
+        None,
+        "a drift toward a speed past the playable range has no plan"
+    );
 }

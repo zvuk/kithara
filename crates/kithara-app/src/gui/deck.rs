@@ -28,6 +28,7 @@ pub(crate) enum DeckMsg {
     DeleteTrack,
     SetTempo(TempoPercent),
     SetQuality(Option<usize>),
+    ToggleSync,
 }
 
 pub(crate) fn command(shown: &DeckSnapshot, eq_mode: EqMode, msg: &DeckMsg) -> Option<DeckCmd> {
@@ -47,6 +48,7 @@ pub(crate) fn command(shown: &DeckSnapshot, eq_mode: EqMode, msg: &DeckMsg) -> O
         }
         DeckMsg::SetTempo(tempo) => DeckCmd::SetTempo(tempo),
         DeckMsg::SetQuality(variant) => DeckCmd::SetQuality(variant),
+        DeckMsg::ToggleSync => DeckCmd::ToggleSync,
     })
 }
 

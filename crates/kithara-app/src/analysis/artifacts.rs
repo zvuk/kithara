@@ -1,17 +1,26 @@
 use kithara::{
     analysis::{AnalysisToken, BeatGridModel, TrackAnalysis, Waveform},
+    link::GridRefusal,
     platform::sync::Arc,
 };
 
-use super::supply::Prepared;
+use super::supply::{Prepared, Supply};
 
-/// Identity of the waveform a publication carries. A supplied waveform is
+/// Identity of an artifact a publication carries. A supplied artifact is
 /// identified by the value the caller handed over, which never changes under
 /// the track; an analysed one by the pass revision that produced it.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WaveformId {
+pub(crate) enum ArtifactId {
     Supplied(usize),
     Analysed(AnalysisToken, u64),
+}
+
+/// A publication's word on its track's grid: one may still come, here it is,
+/// or none will.
+pub(crate) enum GridState<'a> {
+    Pending,
+    Ready(&'a BeatGridModel),
+    Refused(GridRefusal),
 }
 
 /// One track's published artifacts, whatever their origin: a beat grid or a
@@ -24,11 +33,20 @@ pub(crate) enum WaveformId {
 pub(crate) struct TrackArtifacts {
     analysis: Option<TrackAnalysis>,
     prepared: Prepared,
+    pass_failed: bool,
 }
 
 impl TrackArtifacts {
-    pub(crate) fn new(analysis: Option<TrackAnalysis>, prepared: Prepared) -> Self {
-        Self { analysis, prepared }
+    pub(crate) fn new(
+        analysis: Option<TrackAnalysis>,
+        prepared: Prepared,
+        pass_failed: bool,
+    ) -> Self {
+        Self {
+            analysis,
+            prepared,
+            pass_failed,
+        }
     }
 
     delegate::delegate! {
@@ -57,6 +75,32 @@ impl TrackArtifacts {
             .or_else(|| analysis.and_then(TrackAnalysis::grid))
     }
 
+    /// What this publication settles on for its track's grid.
+    pub(crate) fn grid_state(&self) -> GridState<'_> {
+        let refused = |reason: &str| {
+            GridState::Refused(GridRefusal {
+                reason: reason.to_owned(),
+            })
+        };
+        match &self.prepared.beat_grid {
+            Supply::Ready(grid) => GridState::Ready(grid.as_ref()),
+            Supply::Pending => GridState::Pending,
+            Supply::Failed => refused("the supplied beat grid did not load"),
+            Supply::Missing => match self.analysis.as_ref().and_then(TrackAnalysis::grid) {
+                Some(grid) => GridState::Ready(grid),
+                None if self.pass_failed => refused("the analysis pass failed"),
+                None if self
+                    .analysis
+                    .as_ref()
+                    .is_some_and(TrackAnalysis::is_settled) =>
+                {
+                    refused("the analysis found no beat grid")
+                }
+                None => GridState::Pending,
+            },
+        }
+    }
+
     /// The waveform to draw.
     pub(crate) fn waveform(&self) -> Option<&Waveform> {
         self.prepared
@@ -67,24 +111,26 @@ impl TrackArtifacts {
     }
 
     /// What names the waveform this publication draws.
-    pub(crate) fn waveform_id(&self) -> Option<WaveformId> {
-        self.prepared
-            .waveform
-            .value()
-            .map(|waveform| WaveformId::Supplied(Arc::as_ptr(waveform).cast::<()>() as usize))
-            .or_else(|| {
-                self.analysis
-                    .as_ref()
-                    .filter(|analysis| analysis.waveform().is_some())
-                    .map(|analysis| {
-                        WaveformId::Analysed(analysis.token().clone(), analysis.revision())
-                    })
-            })
+    pub(crate) fn waveform_id(&self) -> Option<ArtifactId> {
+        self.prepared.waveform.value().map(supplied).or_else(|| {
+            self.analysis
+                .as_ref()
+                .filter(|analysis| analysis.waveform().is_some())
+                .map(analysed)
+        })
     }
+}
+
+fn supplied<T>(value: &Arc<T>) -> ArtifactId {
+    ArtifactId::Supplied(Arc::as_ptr(value).cast::<()>() as usize)
+}
+
+fn analysed(analysis: &TrackAnalysis) -> ArtifactId {
+    ArtifactId::Analysed(analysis.token().clone(), analysis.revision())
 }
 
 impl From<TrackAnalysis> for TrackArtifacts {
     fn from(analysis: TrackAnalysis) -> Self {
-        Self::new(Some(analysis), Prepared::default())
+        Self::new(Some(analysis), Prepared::default(), false)
     }
 }

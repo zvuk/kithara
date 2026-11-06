@@ -18,7 +18,7 @@ pub use deck::{LinkedDeck, LinkedHostDeck, Unlinked};
 pub use error::LinkError;
 pub use factory::LinkedFactory;
 pub use grid::{GridAnswer, GridRefusal};
-pub use host::{LinkedHost, LinkedHostCommand, PendingTempo};
+pub use host::{LinkedHost, LinkedHostCommand};
 pub use kithara_sync::{
     CorrectionPlan, CorrectionStep, PhaseError, SourceGrid, TempoStep, TempoTrajectory, covers,
     entry, jump_target, phase_error, speed,

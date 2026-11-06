@@ -31,7 +31,6 @@ pub struct PlayerImpl<S> {
     pub(super) lane: Option<Sender<LaneProtocol>>,
     pub(super) lane_id: Option<LaneId>,
     pub(super) settings: Live<TrackSettings, LaneProtocol>,
-    pub(super) effects: super::effects::TrackEffects,
     pub(super) output: kithara_render::bridge::SlotOutputSnapshot,
     pub(super) status: TrackStatus,
     pub(super) loading: Option<Loading>,
@@ -81,7 +80,6 @@ impl<S> PlayerImpl<S> {
             lane: None,
             lane_id: None,
             settings: Live::new(config.settings)?,
-            effects: super::effects::TrackEffects::default(),
             output: kithara_render::bridge::SlotOutputSnapshot::default(),
             status: TrackStatus::Idle,
             loading: None,
@@ -299,7 +297,7 @@ impl<S> PlayerImpl<S> {
             let origin = self
                 .attach_at
                 .map_or(pass.now, |attach| attach.max(pass.now));
-            if frame < origin + pass.delivery {
+            if frame < origin + pass.deck_delivery {
                 return Err(PlayError::Late);
             }
             if self.attach_at.is_none() {
@@ -358,8 +356,6 @@ impl<S> PlayerImpl<S> {
         };
         let lane = self.lane.as_mut().ok_or(PlayError::NotReady)?;
         let seq = Outbox::<S>::lane(lane, when, commands.clone())?;
-        self.lane_commands
-            .retain(|operation| operation.changes_time() || operation.applied().is_none());
         self.lane_commands
             .extend(commands.into_iter().map(|command| {
                 tracing::debug!(
@@ -421,16 +417,21 @@ impl<S> PlayerImpl<S> {
         self.lane_when(When::At(start), out)
     }
 
+    /// Drops the start this track still owes, with its pending attachment's.
+    pub(super) fn withdraw_play(&mut self) {
+        self.play = None;
+        if let Some(attaching) = self.attaching.as_mut() {
+            attaching.play = None;
+        }
+    }
+
     pub(super) fn pause(
         &mut self,
         at: When<SessionFrame>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         self.check_when(at, out)?;
-        self.play = None;
-        if let Some(attaching) = self.attaching.as_mut() {
-            attaching.play = None;
-        }
+        self.withdraw_play();
         if !self.attached() {
             return Ok(None);
         }

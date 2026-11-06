@@ -948,6 +948,7 @@ fn a_ready_paused_segment_keeps_its_cue_over_an_old_slot_snapshot() {
         suspended: false,
         now: frame(0),
         delivery: FrameCount::new(0),
+        deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &snapshot,
     };
@@ -994,7 +995,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
     )
     .expect("alignment batch");
     assert_eq!(track.lane.as_ref().expect("lane").available(), 0);
-    assert_eq!(track.snapshot().speed, 1.0);
+    assert_eq!(track.snapshot().speed, 1.5);
     inbox.drain();
     let at = LaneFrame {
         segment: SegmentId::FIRST,

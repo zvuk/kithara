@@ -2,13 +2,16 @@
 //!
 //! One definition each, shared via `kithara_integration_tests::reads`. Every
 //! test that drains an `Audio<Stream<S>>` uses these instead of hand-rolling a
-//! read loop, so the read contract (engine-aware blocking, finiteness checks,
-//! `Pending => re-park`) lives in exactly one place.
-use kithara::audio::{AudioRead, ReadOutcome};
+//! read loop, so the read contract (finiteness checks, `Pending => yield`)
+//! lives in exactly one place.
+#[cfg(target_arch = "wasm32")]
+use kithara::platform::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::platform::tokio::task::spawn_blocking;
-#[cfg(target_arch = "wasm32")]
-use kithara::platform::{thread, time::Duration};
+use kithara::{
+    audio::{AudioRead, ReadOutcome},
+    platform::thread,
+};
 use kithara_test_utils::kithara as watchdog;
 
 /// Default audio read buffer; large enough to keep syscall overhead low but
@@ -37,10 +40,12 @@ where
 /// Read `audio` to natural EOF, asserting every sample is finite; returns total
 /// samples read.
 ///
-/// `Audio::read` is engine-aware blocking — it parks until the worker commits a
-/// chunk or the stream truly ends — so `ReadOutcome::Pending` is transient and
-/// we re-park (`continue`) rather than guess EOF from elapsed time. The pump
-/// terminates on the real `ReadOutcome::Eof`; a watchdog catches a wedged pipeline.
+/// `ReadOutcome::Pending` means no PCM is ready yet. The pump answers it with
+/// [`thread::yield_now`], which hands a flash participant's credit to the
+/// quiescence engine so the virtual clock can reach the producer's timers; a
+/// bare `continue` keeps that credit and freezes the clock the producer waits
+/// on. The pump terminates on the real `ReadOutcome::Eof` rather than guessing
+/// EOF from elapsed time; a watchdog catches a wedged pipeline.
 pub fn read_to_eof<R: AudioRead + ?Sized>(audio: &mut R) -> u64 {
     read_samples(audio, None)
 }
@@ -55,7 +60,7 @@ fn read_samples<R: AudioRead + ?Sized>(audio: &mut R, target: Option<u64>) -> u6
             return total;
         }
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Pending { .. }) => continue,
+            Ok(ReadOutcome::Pending { .. }) => thread::yield_now(),
             Ok(ReadOutcome::Frames { count, .. }) => {
                 let n = count.get();
                 for &s in &buf[..n] {
@@ -74,8 +79,8 @@ fn read_samples<R: AudioRead + ?Sized>(audio: &mut R, target: Option<u64>) -> u6
 /// whichever comes first; returns total samples read.
 ///
 /// State-driven warmup: gates on decoded-sample COUNT (real produced state),
-/// never on elapsed (virtual-under-flash) time. Same engine-aware blocking
-/// `Pending => continue` model as [`read_to_eof`].
+/// never on elapsed (virtual-under-flash) time. Same `Pending => yield` model
+/// as [`read_to_eof`].
 pub fn read_until_samples<R: AudioRead + ?Sized>(audio: &mut R, target: u64) -> u64 {
     read_samples(audio, Some(target))
 }

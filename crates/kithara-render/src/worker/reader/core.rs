@@ -214,6 +214,10 @@ impl PcmReceiver {
         packet
     }
 
+    pub(crate) fn waits_offline(&self) -> bool {
+        self.ready.is_some()
+    }
+
     /// Wait for a packet or producer closure only when offline blocking is enabled.
     #[kithara::flash(true)]
     #[kithara::measure(label = "render.pcm.wait")]

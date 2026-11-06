@@ -10,11 +10,11 @@
 // bad: one vtable call per sample
 for x in buf.iter_mut() { *x = effect.process_sample(*x); }
 // good: one vtable call per block, monomorphic loop inside the impl
-for effect in &mut self.effects { effect.process(buf); } // Vec<Box<dyn AudioEffect>>
+for effect in &mut self.effects { effect.process(buf); } // Vec<Box<dyn Stage>>
 ```
 
 Closed sets -> `enum` + `match`; keep `dyn` only where the backend is runtime-selected (`Box<dyn Decoder>` per track, `Box<dyn StretchBackend>` per stream).
-*tier: hot | detector: manual (dyn-in-hot-loop rule proposed, not wired) | present in kithara (Decoder/AudioEffect/StretchBackend all dispatch coarsely)*
+*tier: hot | detector: manual (dyn-in-hot-loop rule proposed, not wired) | present in kithara (Decoder/StretchBackend dispatch coarsely)*
 
 **Monomorphization bloat** - split a large generic fn so a tiny type-parametric shell delegates to one non-generic core; only the shell is duplicated per instantiation.
 
@@ -73,7 +73,7 @@ What the glob costs, measured rather than argued:
 Two things the glob reaches that a named list would not. The rebuilt sysroot under `-Z build-std` is non-workspace, so its codegen moves to 3 while `build-std-features = ["optimize_for_size"]` in `crates/kithara-ffi/.cargo/config.toml` still applies. And the TLS natives grow without any symmetric-crypto gain: their AES, ChaCha20-Poly1305 and SHA kernels are hand-written assembly (123 assembled `.S` objects in `btls-sys`, 98 in `aws-lc-sys`), and those objects are byte-identical at `-Os` and `-O3` - assembling is transliteration, not compilation. The growth is all C glue: BoringSSL `libcrypto` `__TEXT` +55%. `[profile.release.package.<name>]` beats the glob, so pinning one back is a three-line change; `build-override` does *not* beat it and cannot be used to keep build scripts cheap.
 
 Verify kernels vectorize with `cargo-show-asm`. Cargo caveat: a per-package override sets `opt-level` but *not* `lto`/`panic`.
-*tier: hot | detector: manual (Cargo.toml census) | every third-party package is at 3, including the pure-Rust DSP (`rubato`, `rustfft`, `symphonia*`) the `[profile.dev.package.*]` block names as hot. The workspace's own crates (`kithara-audio`, `-decode`, `-resampler`) stay at `"z"` - moving them is a separate measured change*
+*tier: hot | detector: manual (Cargo.toml census) | every third-party package is at 3, including the pure-Rust DSP (`rubato`, `rustfft`, `symphonia*`) the `[profile.dev.package.*]` block names as hot. `kithara-dsp` is at 3 by name: its 206 Criterion benches run 1.54x faster (geometric mean, Mac), Apple release build CPU goes 835 -> 829 s (run-to-run noise), linked `__text` moves 2142868 -> 2142076 bytes, the `web-size` dist moves 4207 -> 4201 KiB, and `test-release` is untouched because it already builds every unit at 3. Its generic kernels still monomorphize in the calling crate and take that crate's level. The other workspace crates (`kithara-audio`, `-decode`, `-resampler`) stay at `"z"` - moving them is a separate measured change*
 
 **wasm ships scalar** (pairs with the above) - no wasm lane enables `+simd128` and the trunk `wasm-opt` params omit `--enable-simd`.
 

@@ -19,7 +19,7 @@ use kithara_assets::{
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_storage::ResourceStatus;
+use kithara_storage::{ResourceStatus, WaitOutcome};
 use kithara_test_utils::kithara;
 use support::{Test, resource, source};
 use tempfile::tempdir;
@@ -296,4 +296,122 @@ fn reopened_large_committed_drm_processed_resource_without_ctx_reads_committed_b
 
     assert_eq!(read, plaintext.len());
     assert_eq!(buf, plaintext);
+}
+
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[case::memory_second_ends_first(false, false)]
+#[case::memory_first_commits_first(false, true)]
+#[case::disk_second_ends_first(true, false)]
+#[case::disk_first_commits_first(true, true)]
+fn a_second_party_ending_leaves_the_committed_bytes_readable(
+    #[case] disk: bool,
+    #[case] commit_first: bool,
+) {
+    const PLAINTEXT: &[u8] = b"shared-segment";
+
+    let dir = tempdir().unwrap();
+    let backend = if disk {
+        StorageBackend::Disk {
+            root: (dir.path()).into(),
+        }
+    } else {
+        StorageBackend::Memory
+    };
+    let store = AssetStore::builder(support::pools())
+        .backend(backend)
+        .build();
+    let scope = store.scope::<Test>(&source(ROOT)).unwrap();
+    let key = scope.key(&resource("segments/0000.bin")).unwrap();
+    let proc = xor_processor(0x5A, None);
+    let expected: Vec<u8> = PLAINTEXT.iter().map(|byte| byte ^ 0x5A).collect();
+    let acquire = || {
+        scope
+            .store()
+            .acquire_resource_with_ctx(&key, None, Some(Arc::clone(&proc)))
+            .unwrap()
+    };
+
+    let AcquisitionResult::Pending(first) = acquire() else {
+        panic!("the first party must own the writer");
+    };
+    let second = acquire();
+    assert!(matches!(second, AcquisitionResult::Joined(_)));
+    first.write_at(0, PLAINTEXT).unwrap();
+    if commit_first {
+        drop(first.commit(Some(PLAINTEXT.len() as u64)).unwrap());
+        drop(second);
+    } else {
+        drop(second);
+        drop(first.commit(Some(PLAINTEXT.len() as u64)).unwrap());
+    }
+
+    let mut bytes = vec![0; PLAINTEXT.len()];
+    let opened = scope.store().open_resource(&key, None).unwrap();
+    opened.read_at(0, &mut bytes).unwrap();
+    assert_eq!(bytes, expected);
+
+    let AcquisitionResult::Ready(reacquired) = acquire() else {
+        panic!("a committed resource must acquire as Ready");
+    };
+    reacquired.read_at(0, &mut bytes).unwrap();
+    assert_eq!(bytes, expected);
+}
+
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[case::memory_drop(false, false)]
+#[case::memory_abandon(false, true)]
+#[case::disk_drop(true, false)]
+#[case::disk_abandon(true, true)]
+fn a_dead_generation_gives_way_to_a_fresh_one(#[case] disk: bool, #[case] abandon: bool) {
+    const PLAINTEXT: &[u8] = b"shared-segment";
+
+    let dir = tempdir().unwrap();
+    let backend = if disk {
+        StorageBackend::Disk {
+            root: (dir.path()).into(),
+        }
+    } else {
+        StorageBackend::Memory
+    };
+    let store = AssetStore::builder(support::pools())
+        .backend(backend)
+        .build();
+    let scope = store.scope::<Test>(&source(ROOT)).unwrap();
+    let key = scope.key(&resource("segments/0000.bin")).unwrap();
+    let proc = xor_processor(0x5A, None);
+    let expected: Vec<u8> = PLAINTEXT.iter().map(|byte| byte ^ 0x5A).collect();
+    let acquire = || {
+        scope
+            .store()
+            .acquire_resource_with_ctx(&key, None, Some(Arc::clone(&proc)))
+            .unwrap()
+    };
+
+    let AcquisitionResult::Pending(first) = acquire() else {
+        panic!("the first party must own the writer");
+    };
+    let AcquisitionResult::Joined(joined) = acquire() else {
+        panic!("the second party must join the live writer");
+    };
+    first.write_at(0, PLAINTEXT).unwrap();
+    if abandon {
+        first.abandon();
+    } else {
+        drop(first);
+    }
+    assert_eq!(
+        joined.wait_range(0..PLAINTEXT.len() as u64).unwrap(),
+        WaitOutcome::Interrupted
+    );
+
+    let AcquisitionResult::Pending(fresh) = acquire() else {
+        panic!("a dead generation must start a fresh one");
+    };
+    fresh.write_at(0, PLAINTEXT).unwrap();
+    drop(fresh.commit(Some(PLAINTEXT.len() as u64)).unwrap());
+
+    let mut bytes = vec![0; PLAINTEXT.len()];
+    let opened = scope.store().open_resource(&key, None).unwrap();
+    opened.read_at(0, &mut bytes).unwrap();
+    assert_eq!(bytes, expected);
 }

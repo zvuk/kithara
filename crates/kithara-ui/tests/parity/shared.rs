@@ -9,6 +9,7 @@ use kithara_ui::{
 
 pub(super) struct Endpoints {
     hidden: EndpointDesc,
+    label: EndpointDesc,
     open: EndpointDesc,
     press: EndpointDesc,
     rate: EndpointDesc,
@@ -18,6 +19,7 @@ impl Default for Endpoints {
     fn default() -> Self {
         Self {
             hidden: EndpointDesc::new(ValueKind::Bool),
+            label: EndpointDesc::new(ValueKind::Text),
             rate: EndpointDesc::new(ValueKind::Scalar),
             open: EndpointDesc::new(ValueKind::Bool),
             press: EndpointDesc::new(ValueKind::Trigger),
@@ -29,6 +31,7 @@ impl EndpointRegistry for Endpoints {
     fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
         match (category, id.0.as_str()) {
             (EndpointCategory::Model, "fixture.hidden") => Some(&self.hidden),
+            (EndpointCategory::Model, "fixture.label") => Some(&self.label),
             (EndpointCategory::Model, "fixture.menu") => Some(&self.open),
             (EndpointCategory::Command, "fixture.toggle") => Some(&self.press),
             (EndpointCategory::Parameter, "fixture.rate") => Some(&self.rate),

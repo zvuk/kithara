@@ -101,5 +101,10 @@ cache ENV_FILE *ARGS:
 
 # Prove reuse between two independent compiler-cache daemons.
 [positional-arguments]
-cache-verify ENV_FILE:
+cache-verify *ARGS:
     just _xtask ci cache verify "$@"
+
+# Compile outside a declared lane with the same required RustFS policy.
+[positional-arguments]
+cache-exec PHASE +ARGS:
+    just _xtask ci cache exec "$@"

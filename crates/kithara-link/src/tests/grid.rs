@@ -3,12 +3,13 @@ use kithara_command::When;
 use kithara_events::TrackId;
 use kithara_play::{Bound, HostedDeck, Player, TrackCommand};
 use kithara_signal::SessionFrame;
+use kithara_sync::{Slew, SlewCause, slew};
 use kithara_test_utils::{bufpool::TestPools, kithara};
 
 use super::fixtures::{
     Command, answer, grid, load, loaded, position, sounding, source_grid, trajectory,
 };
-use crate::{GridAnswer, LinkedPlayer, SyncStatus};
+use crate::{GridAnswer, LinkConfig, LinkedPlayer, SyncStatus};
 
 fn served_grid() -> BeatGridModel {
     use kithara_beat::{GridBeat, RawBeatGrid, SCHEMA_VERSION};
@@ -104,7 +105,7 @@ fn a_rate_change_reprojects_the_model_it_already_holds() {
         super::fixtures::rate(96_000),
     );
     control.clear();
-    rig.run(|out| LinkedPlayer::retime(&mut deck, &doubled, SessionFrame::new(0), out));
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &doubled, &[SessionFrame::new(0)], out));
     let replacement = control.commands()[0].0;
     assert_eq!(
         deck.entry(Bound::AtOrAfter(SessionFrame::new(1))),
@@ -129,7 +130,7 @@ fn a_rate_change_reprojects_the_model_it_already_holds() {
 }
 
 #[kithara::test]
-fn a_source_that_answers_late_reaches_the_load_that_asked() {
+fn a_source_that_answers_late_reaches_the_track_of_its_item() {
     let (mut deck, control) = super::fixtures::deck(trajectory(120.0, 4));
     let mut rig = super::fixtures::Rig::new(0);
     let loading = load(&mut deck, &mut rig, 0);
@@ -143,7 +144,7 @@ fn a_source_that_answers_late_reaches_the_load_that_asked() {
         "a load still reading its source publishes no geometry"
     );
     control.clear();
-    answer(&mut deck, &mut rig, loading, served_grid());
+    answer(&mut deck, &mut rig, served_grid());
     let replacement = control.commands()[0].0;
     assert_eq!(
         deck.entry(Bound::AtOrAfter(SessionFrame::new(1))),
@@ -170,7 +171,7 @@ fn a_source_that_answers_late_reaches_the_load_that_asked() {
 
 #[kithara::test]
 fn an_unchanged_slot_does_not_move_the_revision() {
-    let (mut deck, control, mut rig, loading) = loaded(served_grid());
+    let (mut deck, control, mut rig, _) = loaded(served_grid());
     let seq = rig
         .run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("sync")
@@ -178,7 +179,7 @@ fn an_unchanged_slot_does_not_move_the_revision() {
     rig.apply(&mut deck, seq, 0);
     let first = deck.entry(Bound::AtOrAfter(SessionFrame::new(1)));
     control.clear();
-    answer(&mut deck, &mut rig, loading, served_grid());
+    answer(&mut deck, &mut rig, served_grid());
     assert_eq!(
         first,
         deck.entry(Bound::AtOrAfter(SessionFrame::new(1))),
@@ -227,7 +228,7 @@ fn releasing_a_track_leaves_the_grid_unavailable() {
 
 #[kithara::test]
 fn foreign_grid_answers_preserve_the_current_load() {
-    let (mut deck, control, mut rig, load) = sounding();
+    let (mut deck, control, mut rig, _) = sounding();
     let before = deck.snapshot();
     let entry = deck.entry(Bound::AtOrAfter(SessionFrame::new(1)));
     rig.run(|out| {
@@ -235,7 +236,6 @@ fn foreign_grid_answers_preserve_the_current_load() {
             &mut deck,
             GridAnswer {
                 item: TrackId::allocate(),
-                load,
                 model: Ok(grid(32_000, 0, None, 960_000)),
             },
             out,
@@ -248,27 +248,13 @@ fn foreign_grid_answers_preserve_the_current_load() {
 }
 
 #[kithara::test]
-fn grid_admission_follows_the_current_load_not_an_old_answer() {
-    let (mut deck, control, mut rig, old_load) = sounding();
-    let new_load = load(&mut deck, &mut rig, 6_000);
-    rig.apply(&mut deck, new_load, 0);
+fn a_reload_takes_the_item_grid_again() {
+    let (mut deck, control, mut rig, _) = sounding();
+    let reload = load(&mut deck, &mut rig, 6_000);
+    rig.apply(&mut deck, reload, 0);
     control.clear();
-    let before = deck.snapshot().sync;
-    answer(
-        &mut deck,
-        &mut rig,
-        old_load,
-        grid(24_000, 0, None, 480_000),
-    );
-    assert_eq!(deck.snapshot().sync, before);
-    assert!(control.commands().is_empty());
     assert_eq!(deck.entry(Bound::AtOrAfter(SessionFrame::new(0))), None);
-    answer(
-        &mut deck,
-        &mut rig,
-        new_load,
-        grid(30_000, 0, None, 480_000),
-    );
+    answer(&mut deck, &mut rig, grid(30_000, 0, None, 480_000));
     assert_eq!(control.commands().len(), 2);
     assert_eq!(
         deck.snapshot().sync,
@@ -276,33 +262,41 @@ fn grid_admission_follows_the_current_load_not_an_old_answer() {
             required: position(30_000)
         }
     );
-    assert_ne!(old_load, new_load);
 }
 
 #[kithara::test]
 fn repeating_the_same_grid_does_not_restart_a_correction() {
-    let (mut deck, control, mut rig, load) = sounding();
+    let (mut deck, control, mut rig, _) = sounding();
     let host = trajectory(120.0, 4);
     let at = rig.now + LinkedPlayer::<TestPools>::lead(&deck, rig.delivery).expect("lane lead");
     let (media, from) = kithara_play::Track::<TestPools>::planned(&deck, at, host.sample_rate())
         .expect("planned source");
     let uncovered = grid(32_000, 0, Some((4, 0)), 960_000);
-    assert!(
-        kithara_sync::corrected_speed_curve(
+    assert_eq!(
+        slew(
             &host,
             &source_grid(&uncovered),
             media,
             at,
-            from,
             0.001,
-            false,
-        )
-        .is_none(),
-        "the media slew cannot finish inside the served twenty seconds"
+            SlewCause::Drift {
+                from,
+                limit: LinkConfig::default().slew_limit(),
+            },
+        ),
+        Some(Slew::Relocate),
+        "the served grid puts the deck past the slew limit"
     );
     let unchanged = deck.snapshot();
-    answer(&mut deck, &mut rig, load, uncovered);
-    assert!(control.commands().is_empty());
+    answer(&mut deck, &mut rig, uncovered);
+    assert!(
+        control
+            .commands()
+            .iter()
+            .any(|(_, command)| matches!(command, Command::Jump(..))),
+        "a correction that cannot finish relocates the deck"
+    );
+    control.clear();
     let actual = deck.snapshot();
     assert_eq!(actual.as_ref().item, unchanged.as_ref().item);
     assert_eq!(actual.as_ref().position, unchanged.as_ref().position);
@@ -315,7 +309,7 @@ fn repeating_the_same_grid_does_not_restart_a_correction() {
     );
     assert_eq!(deck.snapshot().sync, unchanged.sync);
     let revised = grid(23_999, 0, Some((4, 0)), 960_000);
-    answer(&mut deck, &mut rig, load, revised.clone());
+    answer(&mut deck, &mut rig, revised.clone());
     assert!(!control.commands().is_empty());
     let pending = control.commands();
     let before = deck.snapshot().sync;
@@ -324,7 +318,7 @@ fn repeating_the_same_grid_does_not_restart_a_correction() {
         "revised grid submission remains pending"
     );
     control.clear();
-    answer(&mut deck, &mut rig, load, revised.clone());
+    answer(&mut deck, &mut rig, revised.clone());
     assert!(control.commands().is_empty());
     assert_eq!(deck.snapshot().sync, before);
     let Command::Speed(_, When::At(start)) = &pending[0].1 else {
@@ -345,7 +339,7 @@ fn repeating_the_same_grid_does_not_restart_a_correction() {
     rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
     let active = deck.snapshot().sync;
     assert!(matches!(active, SyncStatus::Correcting { remaining } if remaining.get() > 0));
-    answer(&mut deck, &mut rig, load, revised);
+    answer(&mut deck, &mut rig, revised);
     assert!(control.commands().is_empty());
     assert_eq!(deck.snapshot().sync, active);
 }
@@ -355,7 +349,7 @@ fn newer_analysis_can_skip_unpublished_revisions() {
     let mut raw = grid(30_000, 0, None, 480_000).as_raw().clone();
     raw.state = BeatGridState::Provisional;
     raw.revision = 1;
-    let (mut deck, control, mut rig, load) =
+    let (mut deck, control, mut rig, _) =
         loaded(BeatGridModel::try_from(raw).expect("provisional grid"));
     control.edit(|script| script.snapshot.position = position(6_000));
     let seq = rig
@@ -372,7 +366,6 @@ fn newer_analysis_can_skip_unpublished_revisions() {
     answer(
         &mut deck,
         &mut rig,
-        load,
         BeatGridModel::try_from(raw).expect("final grid"),
     );
     assert_eq!(
@@ -391,10 +384,9 @@ fn newer_analysis_can_skip_unpublished_revisions() {
     );
 }
 
-// Ruling: spec 4.8 replaces group grid identity with the current track item; a foreign answer preserves all observables.
 #[kithara::test]
 fn group_rejects_foreign_grid_identity() {
-    let (mut deck, control, mut rig, loading) = sounding();
+    let (mut deck, control, mut rig, _) = sounding();
     let before = deck.snapshot();
     let entry = deck.entry(Bound::AtOrAfter(SessionFrame::new(96_000)));
     rig.run(|out| {
@@ -402,7 +394,6 @@ fn group_rejects_foreign_grid_identity() {
             &mut deck,
             GridAnswer {
                 item: TrackId::allocate(),
-                load: loading,
                 model: Ok(grid(32_000, 0, None, 960_000)),
             },
             out,
@@ -423,33 +414,13 @@ fn group_rejects_foreign_grid_identity() {
     assert!(control.commands().is_empty());
 }
 
-// Ruling: spec 4.8 replaces grid revision successors with current-load admission and explicit analysis refusal.
 #[kithara::test]
-fn group_enforces_grid_successors() {
-    let (mut deck, control, mut rig, obsolete) = sounding();
+fn group_takes_the_item_grid_and_its_refusal() {
+    let (mut deck, control, mut rig, _) = sounding();
     let loading = load(&mut deck, &mut rig, 0);
     rig.apply(&mut deck, loading, 0);
     control.clear();
-    for beat_frames in [24_000, 32_000] {
-        let before = deck.snapshot();
-        answer(
-            &mut deck,
-            &mut rig,
-            obsolete,
-            grid(beat_frames, 0, None, 480_000),
-        );
-        assert_eq!(deck.snapshot().sync, before.sync);
-        assert_eq!(deck.snapshot().as_ref().position, before.as_ref().position);
-        assert_eq!(deck.snapshot().as_ref().speed, before.as_ref().speed);
-        assert_eq!(deck.snapshot().as_ref().status, before.as_ref().status);
-        assert_eq!(
-            deck.snapshot().as_ref().pending_lane,
-            before.as_ref().pending_lane
-        );
-        assert_eq!(deck.entry(Bound::AtOrAfter(SessionFrame::new(0))), None);
-        assert!(control.commands().is_empty());
-    }
-    answer(&mut deck, &mut rig, loading, grid(24_000, 0, None, 480_000));
+    answer(&mut deck, &mut rig, grid(24_000, 0, None, 480_000));
     let seq = control.commands()[0].0;
     rig.apply(&mut deck, seq, 0);
     assert_eq!(deck.snapshot().sync, SyncStatus::On);
@@ -464,26 +435,6 @@ fn group_enforces_grid_successors() {
             &mut deck,
             GridAnswer {
                 item,
-                load: obsolete,
-                model: Err(crate::GridRefusal {
-                    reason: "obsolete unavailable grid".into(),
-                }),
-            },
-            out,
-        );
-    });
-    assert_eq!(deck.snapshot().sync, SyncStatus::On);
-    assert_eq!(
-        deck.entry(Bound::AtOrAfter(SessionFrame::new(0))),
-        Some(SessionFrame::new(0))
-    );
-    assert!(control.commands().is_empty());
-    rig.run(|out| {
-        LinkedPlayer::grid(
-            &mut deck,
-            GridAnswer {
-                item,
-                load: loading,
                 model: Err(crate::GridRefusal {
                     reason: "current analysis cannot supply geometry".into(),
                 }),
@@ -496,16 +447,15 @@ fn group_enforces_grid_successors() {
     assert!(control.commands().is_empty());
 }
 
-// Ruling: spec 4.8 uses immutable model equality for idempotence rather than a mutable owner-grid stamp.
 #[kithara::test]
 fn group_treats_same_grid_stamp_as_idempotent_publication() {
-    let (mut deck, control, mut rig, loading) = sounding();
+    let (mut deck, control, mut rig, _) = sounding();
     let model = grid(32_000, 0, Some((4, 0)), 960_000);
-    answer(&mut deck, &mut rig, loading, model.clone());
+    answer(&mut deck, &mut rig, model.clone());
     let before = deck.snapshot();
     let entry = deck.entry(Bound::AtOrAfter(SessionFrame::new(96_000)));
     control.clear();
-    answer(&mut deck, &mut rig, loading, model);
+    answer(&mut deck, &mut rig, model);
     assert_eq!(deck.snapshot().sync, before.sync);
     assert_eq!(deck.snapshot().as_ref().item, before.as_ref().item);
     assert_eq!(deck.snapshot().as_ref().speed, before.as_ref().speed);
@@ -522,10 +472,9 @@ fn group_treats_same_grid_stamp_as_idempotent_publication() {
     assert!(control.commands().is_empty());
 }
 
-// Ruling: spec 4.8 admits the latest current-load model without replaying unpublished owner-grid revisions.
 #[kithara::test]
 fn group_accepts_latest_grid_after_unpublished_revisions() {
-    let (mut deck, control, mut rig, loading) = loaded(grid(30_000, 0, None, 480_000));
+    let (mut deck, control, mut rig, _) = loaded(grid(30_000, 0, None, 480_000));
     let seq = rig
         .run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("sync")
@@ -536,7 +485,6 @@ fn group_accepts_latest_grid_after_unpublished_revisions() {
     answer(
         &mut deck,
         &mut rig,
-        loading,
         BeatGridModel::try_from(raw).expect("latest grid"),
     );
     assert_eq!(
@@ -544,6 +492,8 @@ fn group_accepts_latest_grid_after_unpublished_revisions() {
         Some(SessionFrame::new(48_000))
     );
     assert_eq!(deck.snapshot().sync, SyncStatus::On);
+    rig.run(|out| LinkedPlayer::sync(&mut deck, false, out))
+        .expect("off");
     control.clear();
     let seq = rig
         .run(|out| LinkedPlayer::sync(&mut deck, true, out))

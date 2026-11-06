@@ -522,6 +522,7 @@ fn the_bar_reveals_its_telemetry_as_the_window_widens() {
                 ((1250.0, None), "bar/brand"),
                 ((0.0, None), "bar/drag"),
                 ((1120.0, None), "bar/cpu-block"),
+                ((0.0, None), "bar/before-master"),
                 ((0.0, None), "bar/broadcast-block"),
                 ((0.0, None), "bar/before-settings"),
                 ((0.0, None), "bar/window-block"),
@@ -855,10 +856,11 @@ fn every_eq_bank_carries_its_pointer_menu() {
 
 #[kithara::test]
 fn hosted_studio_controls_claimed_by_the_engine_keep_descriptor_shapes() {
-    const SINGLE_HOSTED_CLAIMS: [(&str, &str); 15] = [
+    const SINGLE_HOSTED_CLAIMS: [(&str, &str); 16] = [
         ("deck-a/next", "activation"),
         ("deck-a/play", "activation"),
         ("deck-a/prev", "activation"),
+        ("deck-a/sync", "activation"),
         ("deck-a/wave", "hero-wave"),
         ("deck-a/zoom-in", "activation"),
         ("deck-a/zoom-out", "activation"),
@@ -873,16 +875,18 @@ fn hosted_studio_controls_claimed_by_the_engine_keep_descriptor_shapes() {
         ("overview/a/wave", "wave"),
     ];
 
-    const DUAL_HOSTED_CLAIMS: [(&str, &str); 31] = [
+    const DUAL_HOSTED_CLAIMS: [(&str, &str); 33] = [
         ("deck-a/next", "activation"),
         ("deck-a/play", "activation"),
         ("deck-a/prev", "activation"),
+        ("deck-a/sync", "activation"),
         ("deck-a/wave", "hero-wave"),
         ("deck-a/zoom-in", "activation"),
         ("deck-a/zoom-out", "activation"),
         ("deck-b/next", "activation"),
         ("deck-b/play", "activation"),
         ("deck-b/prev", "activation"),
+        ("deck-b/sync", "activation"),
         ("deck-b/wave", "hero-wave"),
         ("deck-b/zoom-in", "activation"),
         ("deck-b/zoom-out", "activation"),
@@ -1943,10 +1947,13 @@ fn every_control_the_studio_draws_declares_the_write_it_makes() {
 mod answered {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use ::kithara::ui::{
-        expand::{Binding, BindingKind},
-        geom::Pt,
-        render::{Scope, WindowCommand},
+    use ::kithara::{
+        host::api::Tempo,
+        ui::{
+            expand::{Binding, BindingKind},
+            geom::Pt,
+            render::{Scope, WindowCommand},
+        },
     };
     use kithara_test_utils::kithara;
 
@@ -2122,6 +2129,9 @@ mod answered {
                 Some(Message::Window(WindowCommand::ToggleFullScreen))
             ),
             "broadcast.toggle" => matches!(answer, Some(Message::BroadcastToggle)),
+            "clock.tempo" => {
+                matches!(answer, Some(Message::SetTempo(_) | Message::StepTempo(_)))
+            }
             "ui.library.add_folder" => matches!(answer, Some(Message::AddMusicFolder)),
             "mix.crossfader" => matches!(answer, Some(Message::Mix(MixCmd::Crossfader(_)))),
             "mixer.trim" => {
@@ -2155,6 +2165,7 @@ mod answered {
                 Some(target) == deck_id
                     && match id {
                         "deck.transport.toggle_play" => matches!(msg, DeckMsg::TogglePlayPause),
+                        "deck.transport.toggle_sync" => matches!(msg, DeckMsg::ToggleSync),
                         "deck.transport.prev" => matches!(msg, DeckMsg::Prev),
                         "deck.transport.next" => matches!(msg, DeckMsg::Next),
                         "deck.transport.seek_normalized" => matches!(msg, DeckMsg::SeekTo(_)),
@@ -2168,6 +2179,25 @@ mod answered {
                     }
             }
         }
+    }
+
+    #[kithara::test(native, flash(false))]
+    #[kithara::hang_watchdog]
+    fn a_number_written_to_the_tempo_sets_that_tempo() {
+        let mut rig = Rig::offline();
+
+        let answer = translate(
+            &mut rig.ui,
+            UiEvent::Write {
+                key: "clock.tempo".to_owned(),
+                value: WriteValue::Scalar(128.5),
+            },
+        );
+
+        assert!(
+            matches!(answer, Some(Message::SetTempo(tempo)) if Tempo::new(128.5).ok() == Some(tempo)),
+            "a number typed for the tempo must ask for that tempo: {answer:?}"
+        );
     }
 
     #[kithara::test(native, flash(false))]

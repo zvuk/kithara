@@ -1,7 +1,7 @@
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;
-use kithara_stream::PrerollHint;
+use kithara_stream::{AudioCodec, PrerollHint};
 use kithara_test_fixtures::mock_fixtures::zero_packet;
 use kithara_test_utils::kithara;
 
@@ -14,6 +14,7 @@ use crate::{
     CodecPriming, DecodeResult, Decoder, DecoderChunkOutcome,
     codec::FrameCodec,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, TrackInfo},
+    fmp4::parsing::{CodecConfig, Fmp4InitInfo},
 };
 
 struct NativeClock {
@@ -140,51 +141,63 @@ fn media_zero_uses_native_translation_and_codec_rebase_without_observing_pcm(
     assert_eq!(replayed.samples.as_ref(), first.samples.as_ref());
 }
 
+/// How a demuxer turns a container tick count into packet time.
+#[derive(Clone, Copy, Debug)]
+enum Clock {
+    /// The tick time itself: up to half a tick off the PCM lattice.
+    Tick,
+    /// The fMP4 demuxer's clock: the time of the native sample a tick count
+    /// stands for.
+    Fmp4,
+}
+
 /// Packet times of a track whose container timescale differs from its sample
-/// rate: each one is rounded to a whole tick, so it sits up to half a tick off
-/// the PCM lattice.
+/// rate: each one is rounded to a whole tick, then read by `clock`.
 fn tick_rounded_frames(
-    rate: u64,
-    timescale: u64,
+    rate: u32,
+    timescale: u32,
     packet_frames: u64,
     packets: u64,
+    clock: Clock,
 ) -> Vec<BoundaryFrame> {
-    let ticks_to_time = |ticks: u64| Duration::from_nanos(ticks * 1_000_000_000 / timescale);
-    let ticks_at = |packet: u64| (packet * packet_frames * timescale + rate / 2) / rate;
+    let init = Fmp4InitInfo {
+        codec: AudioCodec::AacLc,
+        config: CodecConfig::Aac(Vec::new()),
+        gapless: None,
+        channels: 2,
+        sample_rate: rate,
+        timescale,
+        track_id: 1,
+    };
+    let time_at = |ticks: u64| match clock {
+        Clock::Tick => Duration::from_nanos(ticks * 1_000_000_000 / u64::from(timescale)),
+        Clock::Fmp4 => init.time_at(ticks),
+    };
+    let ticks_at = |packet: u64| {
+        (packet * packet_frames * u64::from(timescale) + u64::from(rate) / 2) / u64::from(rate)
+    };
     (0..packets)
         .map(|packet| BoundaryFrame {
-            pts: ticks_to_time(ticks_at(packet)),
-            duration: ticks_to_time(ticks_at(packet + 1) - ticks_at(packet)),
+            pts: time_at(ticks_at(packet)),
+            duration: time_at(ticks_at(packet + 1)) - time_at(ticks_at(packet)),
         })
         .collect()
 }
 
-#[kithara::test]
-#[case::aac_44k_in_90k(44_100, 90_000, 1_024, None)]
-#[case::aac_44k_in_90k_after_seek(44_100, 90_000, 1_024, Some(Duration::from_millis(1_234)))]
-#[case::aac_48k_in_90k(48_000, 90_000, 1_024, None)]
-#[case::aac_48k_in_90k_after_seek(48_000, 90_000, 1_024, Some(Duration::from_millis(987)))]
-#[case::aac_22k_in_90k(22_050, 90_000, 1_024, None)]
-#[case::mp3_44k_in_90k_after_seek(44_100, 90_000, 1_152, Some(Duration::from_millis(2_001)))]
-#[case::flac_44k_in_90k(44_100, 90_000, 4_096, None)]
-#[case::opus_48k_in_48k(48_000, 48_000, 960, Some(Duration::from_millis(1_500)))]
-fn tick_rounded_packet_times_keep_chunks_on_one_source_timeline(
+/// Decodes one tick-rounded track from `seek`, as one decoder instance.
+fn tick_rounded_chunks(
     zero_packet: &'static [u8],
-    #[case] rate: u32,
-    #[case] timescale: u64,
-    #[case] packet_frames: u32,
-    #[case] seek: Option<Duration>,
-) {
+    rate: u32,
+    timescale: u32,
+    packet_frames: u32,
+    seek: Option<Duration>,
+    clock: Clock,
+) -> Vec<kithara_signal::AudioChunkInfo> {
     const PACKETS: u64 = 256;
     let spec = test_spec(rate);
     let demuxer = BoundaryFrameDemuxer {
         track: track_with_rate(rate),
-        frames: tick_rounded_frames(
-            u64::from(rate),
-            timescale,
-            u64::from(packet_frames),
-            PACKETS,
-        ),
+        frames: tick_rounded_frames(rate, timescale, u64::from(packet_frames), PACKETS, clock),
         held: zero_packet.to_vec(),
         idx: 0,
     };
@@ -197,23 +210,132 @@ fn tick_rounded_packet_times_keep_chunks_on_one_source_timeline(
     if let Some(target) = seek {
         decoder.seek(target).expect("seek lands");
     }
-    let mut previous: Option<kithara_signal::AudioChunkInfo> = None;
-    let mut joined = 0;
+    let mut chunks = Vec::new();
     while let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("decoded PCM") {
-        if let Some(previous) = previous {
-            let span = previous.source_geometry().expect("previous geometry");
-            let next = chunk.meta.source_geometry().expect("next geometry");
-            assert!(
-                span.followed_by(next).is_some(),
-                "chunk at frame {} ({:?}) does not continue the chunk at frame {} ({:?})",
-                chunk.meta.frame_offset,
-                chunk.meta.timestamp,
-                previous.frame_offset,
-                previous.timestamp,
-            );
-            joined += 1;
-        }
-        previous = Some(chunk.meta);
+        chunks.push(chunk.meta);
     }
+    chunks
+}
+
+fn assert_consecutive_chunks_join(chunks: &[kithara_signal::AudioChunkInfo]) -> usize {
+    for [previous, chunk] in chunks.array_windows() {
+        let span = previous.source_geometry().expect("previous geometry");
+        let next = chunk.source_geometry().expect("next geometry");
+        assert!(
+            span.followed_by(next).is_some(),
+            "chunk at frame {} ({:?}) does not continue the chunk at frame {} ({:?})",
+            chunk.frame_offset,
+            chunk.timestamp,
+            previous.frame_offset,
+            previous.timestamp,
+        );
+    }
+    chunks.len().saturating_sub(1)
+}
+
+/// A variant switch hands the timeline to a second decoder instance: the
+/// target variant, opened at `at` with its own packet layout on the same
+/// container clock.
+#[derive(Clone, Copy, Debug)]
+struct Switch {
+    packet_frames: u32,
+    at: Duration,
+}
+
+#[kithara::test]
+#[case::aac_44k_in_90k(44_100, 90_000, 1_024, None, None, Clock::Tick)]
+#[case::aac_44k_in_90k_after_seek(
+    44_100,
+    90_000,
+    1_024,
+    Some(Duration::from_millis(1_234)),
+    None,
+    Clock::Tick
+)]
+#[case::aac_48k_in_90k(48_000, 90_000, 1_024, None, None, Clock::Tick)]
+#[case::aac_48k_in_90k_after_seek(
+    48_000,
+    90_000,
+    1_024,
+    Some(Duration::from_millis(987)),
+    None,
+    Clock::Tick
+)]
+#[case::aac_22k_in_90k(22_050, 90_000, 1_024, None, None, Clock::Tick)]
+#[case::mp3_44k_in_90k_after_seek(
+    44_100,
+    90_000,
+    1_152,
+    Some(Duration::from_millis(2_001)),
+    None,
+    Clock::Tick
+)]
+#[case::flac_44k_in_90k(44_100, 90_000, 4_096, None, None, Clock::Tick)]
+#[case::opus_48k_in_48k(
+    48_000,
+    48_000,
+    960,
+    Some(Duration::from_millis(1_500)),
+    None,
+    Clock::Tick
+)]
+#[case::aac_switch_to_aac_44k_in_90k(
+    44_100,
+    90_000,
+    1_024,
+    Some(Duration::from_millis(1_234)),
+    Some(Switch { packet_frames: 1_024, at: Duration::from_millis(2_000) }),
+    Clock::Fmp4
+)]
+#[case::aac_switch_to_flac_44k_in_90k(
+    44_100,
+    90_000,
+    1_024,
+    Some(Duration::from_millis(1_234)),
+    Some(Switch { packet_frames: 4_096, at: Duration::from_millis(2_000) }),
+    Clock::Fmp4
+)]
+fn tick_rounded_packet_times_keep_chunks_on_one_source_timeline(
+    zero_packet: &'static [u8],
+    #[case] rate: u32,
+    #[case] timescale: u32,
+    #[case] packet_frames: u32,
+    #[case] seek: Option<Duration>,
+    #[case] switch: Option<Switch>,
+    #[case] clock: Clock,
+) {
+    let chunks = tick_rounded_chunks(zero_packet, rate, timescale, packet_frames, seek, clock);
+    let joined = assert_consecutive_chunks_join(&chunks);
     assert!(joined > 100, "only {joined} chunk joins were checked");
+    let Some(switch) = switch else {
+        return;
+    };
+
+    let target = tick_rounded_chunks(
+        zero_packet,
+        rate,
+        timescale,
+        switch.packet_frames,
+        Some(switch.at),
+        clock,
+    );
+    assert_consecutive_chunks_join(&target);
+    let entry = target.first().expect("the target variant decodes PCM");
+    let frame = entry.frame_offset;
+    let source = chunks
+        .iter()
+        .find(|chunk| chunk.frame_offset < frame && frame <= chunk.frame_range().end)
+        .expect("the source variant covers the switch frame");
+    let head = source
+        .source_geometry()
+        .and_then(|span| span.for_output_range(0..frame - source.frame_offset))
+        .expect("source geometry up to the switch frame");
+    let entry_span = entry.source_geometry().expect("target geometry");
+    assert!(
+        head.followed_by(entry_span).is_some(),
+        "the target variant at frame {frame} ({:?}) does not continue the source variant ({:?}, chunk at frame {})",
+        entry.timestamp,
+        source.timestamp,
+        source.frame_offset,
+    );
 }

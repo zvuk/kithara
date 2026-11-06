@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use firewheel::{
     channel_config::{ChannelConfig, ChannelCount},
     diff::{Diff, Patch, PatchError},
@@ -12,7 +10,7 @@ use firewheel::{
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::{Arc, Mutex};
 
-use super::processor::{DeckMixer, StreamShape};
+use super::processor::{DeckMixer, OfflineDeck, OfflineProcessor, PlayerProcessor, StreamShape};
 use crate::bridge::{MixerInputs, SessionInbox};
 
 /// A deck node whose processor borrows its commands from the Host's session store.
@@ -21,11 +19,9 @@ use crate::bridge::{MixerInputs, SessionInbox};
 pub struct PlayerNode<S, E: SessionInbox> {
     pub(crate) active: bool,
     #[diff(skip)]
-    inputs: Arc<Mutex<Option<MixerInputs>>>,
+    inputs: Arc<Mutex<Option<ProcessorInputs<E>>>>,
     #[diff(skip)]
     pools: PoolRegion<S>,
-    #[diff(skip)]
-    session: PhantomData<fn() -> E>,
 }
 
 #[non_exhaustive]
@@ -50,13 +46,42 @@ impl<S, E: SessionInbox> Patch for PlayerNode<S, E> {
     }
 }
 
+struct ProcessorInputs<E: SessionInbox> {
+    mixer: MixerInputs,
+    offline: Option<OfflineProcessor<E>>,
+}
+
 impl<S, E: SessionInbox> PlayerNode<S, E> {
     pub fn new(inputs: MixerInputs, pools: PoolRegion<S>) -> Self {
+        Self::with_inputs(
+            ProcessorInputs {
+                mixer: inputs,
+                offline: None,
+            },
+            pools,
+        )
+    }
+
+    /// Creates an offline node whose mixer belongs to the session between graph turns.
+    pub fn offline(inputs: MixerInputs, pools: PoolRegion<S>) -> (Self, OfflineDeck<E>) {
+        let (owner, processor) = OfflineDeck::channel(inputs.scope);
+        (
+            Self::with_inputs(
+                ProcessorInputs {
+                    mixer: inputs,
+                    offline: Some(processor),
+                },
+                pools,
+            ),
+            owner,
+        )
+    }
+
+    fn with_inputs(inputs: ProcessorInputs<E>, pools: PoolRegion<S>) -> Self {
         Self {
             pools,
             active: true,
             inputs: Arc::new(Mutex::new(Some(inputs))),
-            session: PhantomData,
         }
     }
 }
@@ -82,7 +107,19 @@ where
             .lock()
             .take()
             .ok_or_else(|| NodeError(Box::new(ProcessorInputsTaken)))?;
-        DeckMixer::<E>::new(inputs, shape, &self.pools).map_err(|error| NodeError(Box::new(error)))
+        let mixer = Box::new(
+            DeckMixer::<E>::new(inputs.mixer, shape, &self.pools)
+                .map_err(|error| NodeError(Box::new(error)))?,
+        );
+        match inputs.offline {
+            Some(mut processor) => {
+                processor
+                    .install(mixer)
+                    .map_err(|error| NodeError(Box::new(error)))?;
+                Ok(PlayerProcessor::Offline(processor))
+            }
+            None => Ok(PlayerProcessor::Native(mixer)),
+        }
     }
 
     fn info(&self, _config: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
@@ -186,7 +223,7 @@ mod tests {
             .as_mut()
             .map(|inputs| {
                 inbox
-                    .scope(inputs.scope)
+                    .scope(inputs.mixer.scope)
                     .expect("deck level")
                     .next_due(SessionFrame::default(), 1)
                     .map(|due| {

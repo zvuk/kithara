@@ -104,7 +104,6 @@ impl Consumer<'_> {
             "RUSTFLAGS",
             "CARGO_ENCODED_RUSTFLAGS",
             "RUSTDOCFLAGS",
-            "RUSTC_WRAPPER",
             "RUSTC_WORKSPACE_WRAPPER",
         ] {
             command.env_remove(name);
@@ -453,7 +452,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn direct_children_run_inside_the_external_consumer() -> Result<()> {
+    fn direct_children_keep_the_consumer_and_compiler_cache_setup() -> Result<()> {
         let _signals = signals();
         let cancel = child::Cancel::install()?;
         let root = tempfile::tempdir()?;
@@ -471,6 +470,13 @@ mod tests {
         assert_eq!(
             Path::new(cwd.trim()).canonicalize()?,
             directory.canonicalize()?
+        );
+        assert!(
+            !consumer
+                .cargo(&["check"])
+                .get_envs()
+                .any(|(name, value)| name == "RUSTC_WRAPPER" && value.is_none()),
+            "nested native and WASM compilations must inherit the compiler cache"
         );
         Ok(())
     }

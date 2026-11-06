@@ -50,6 +50,7 @@ fn eq_call(
             suspended: false,
             now: SessionFrame::new(0),
             delivery: FrameCount::new(128),
+            deck_delivery: FrameCount::new(128),
             output: &output,
             deck,
         };
@@ -70,6 +71,7 @@ fn eq_call(
         suspended: false,
         now: SessionFrame::new(0),
         delivery: FrameCount::new(128),
+        deck_delivery: FrameCount::new(128),
         output: &output,
         deck,
     };
@@ -211,6 +213,7 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
                 suspended: false,
                 now: SessionFrame::new(0),
                 delivery: FrameCount::new(128),
+                deck_delivery: FrameCount::new(128),
                 output: &output,
                 deck: &deck,
             };

@@ -3,12 +3,11 @@ use std::num::NonZeroU32;
 use kithara::{
     host::{
         DeckControl, DeckId, HostOwner, HostRegistration, HostSettingsChange, HostSettingsExec,
-        HostSettled,
+        HostSettled, PassClock,
         api::{SessionTransportSnapshot, Tempo},
     },
     platform::{time::Instant, tokio::sync::watch},
     play::{DeckPass, Outbox, PlayError},
-    signal::{FrameCount, SessionFrame},
 };
 use kithara_command::Seq;
 
@@ -65,7 +64,7 @@ impl<S, O: HostOwner<S>> HostOwner<S> for RenderClock<O> {
                 id: DeckId,
                 visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),
             ) -> Result<(), PlayError>;
-            fn clock(&self) -> Option<(SessionFrame, FrameCount)>;
+            fn clock(&self) -> Option<PassClock>;
             fn prepare_offline(&mut self) -> Result<(), PlayError>;
             fn transport(&mut self) -> Option<SessionTransportSnapshot>;
             fn host_room(&self) -> usize;

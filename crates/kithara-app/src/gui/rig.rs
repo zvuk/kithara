@@ -6,7 +6,7 @@ use kithara::{
         CancelToken,
         sync::Arc,
         thread,
-        time::{Duration, WallInstant},
+        time::{Duration, Instant, WallInstant},
         tokio::{
             runtime::Runtime,
             sync::{
@@ -15,6 +15,7 @@ use kithara::{
             },
         },
     },
+    signal::AudioSpec,
     ui::render::{ControlAction, Published, ReadValue, Reads, Walk},
 };
 use kithara_test_utils::{clock::real_clock_verdict, kithara as test_attrs};
@@ -27,8 +28,29 @@ use crate::{
     deck::{self, DeckSet, EqMode},
     engine::{Engine, EngineSnapshot, Envelope},
     pools::{AppHost, AppQueue, AppQueueControl},
-    state::StateController,
+    state::{GridPost, StateController},
 };
+
+/// The clock a device plays the rig's output on.
+///
+/// A block is due once the audio before it has played, counted from the
+/// first block the device renders, and a late block renders at once: the
+/// schedule of `OffThread::spawn_paced`, keyed by frames.
+#[derive(Default)]
+pub(crate) struct Device {
+    origin: Option<(Instant, u64)>,
+}
+
+impl Device {
+    /// Waits until the block starting at `frame` is due.
+    pub(crate) fn wait(&mut self, spec: AudioSpec, frame: u64) {
+        let (started, first) = *self.origin.get_or_insert_with(|| (Instant::now(), frame));
+        let played = spec
+            .duration_for(frame - first)
+            .expect("the rig's output fits a duration");
+        kithara_test_utils::pace((started + played).saturating_duration_since(Instant::now()));
+    }
+}
 
 pub(crate) struct Rig {
     pub(crate) snapshots: Arc<ArcSwap<EngineSnapshot>>,
@@ -39,6 +61,9 @@ pub(crate) struct Rig {
     pub(crate) deck_tokens: Vec<CancelToken>,
     pub(crate) shutdown: CancelToken,
     pub(crate) rendered_frames: u64,
+    /// The device the output plays on; without one the rig renders as fast
+    /// as it is asked to.
+    pub(crate) device: Option<Device>,
     #[cfg(not(feature = "broadcast"))]
     states: Vec<(
         kithara::host::DeckId,
@@ -52,15 +77,17 @@ impl Rig {
     /// snapshot publishes, a deck reports what it opened.
     pub(crate) const DEADLINE: Duration = Duration::from_secs(2);
 
-    /// Budget for a wait that only ends once a track reaches its own end.
+    /// Budget for a wait that only ends once `audio` has played: a track
+    /// reaching its own end, an entry quantized to the host's bar, a
+    /// crossfade running out.
     ///
-    /// Playing the track out IS the wait, so the audio is not slack inside
-    /// [`DEADLINE`](Self::DEADLINE) — a fixture as long as that constant
-    /// leaves the engine no time at all to answer, and the assert fires on a
-    /// deadline no run could have met. The track's own length carries the
-    /// budget and `DEADLINE` is what remains for the answer.
-    pub(crate) const fn playout(track: Duration) -> Duration {
-        track.saturating_add(Self::DEADLINE)
+    /// Playing that audio IS the wait, so it is not slack inside
+    /// [`DEADLINE`](Self::DEADLINE) — a span as long as that constant leaves
+    /// the engine no time at all to answer, and the assert fires on a
+    /// deadline no run could have met. The audio carries the budget and
+    /// `DEADLINE` is what remains for the answer.
+    pub(crate) const fn playout(audio: Duration) -> Duration {
+        audio.saturating_add(Self::DEADLINE)
     }
 
     pub(crate) fn applied_seq(&self) -> u64 {
@@ -74,12 +101,12 @@ impl Rig {
         host: AppHost,
         broadcast: Broadcaster,
         analysis: AnalysisHandle,
-        mut model: impl FnMut(&HostOwned<AppQueue>, &CancelToken) -> StateController,
+        mut model: impl FnMut(&HostOwned<AppQueue>, &CancelToken, GridPost) -> StateController,
     ) -> Self {
         let mut deck_tokens = Vec::new();
-        let mut session = DeckSet::new(config, host, |queue, cancel| {
+        let mut session = DeckSet::new(config, host, |queue, cancel, grids| {
             deck_tokens.push(cancel.child());
-            model(queue, cancel)
+            model(queue, cancel, grids)
         })
         .expect("host accepts the test decks");
 
@@ -132,7 +159,14 @@ impl Rig {
             states: Vec::new(),
             shutdown: config.shutdown.clone(),
             rendered_frames: if config.eq_bands > 3 { 128 } else { 0 },
+            device: None,
         }
+    }
+
+    /// The rig with its output played on a device at 1x.
+    pub(crate) fn on_device(mut self) -> Self {
+        self.device = Some(Device::default());
+        self
     }
 
     /// The host id of the deck the engine published under `letter`.
@@ -172,18 +206,7 @@ impl Rig {
     /// without depending on a device.
     #[cfg(feature = "broadcast")]
     pub(crate) fn on_air() -> Self {
-        use kithara::worker::{Worker, WorkerConfig};
-
-        let (runtime, config) = test_fixture::runtime_and_config();
-        let broadcast = AppBroadcastConfig::builder(
-            Worker::new(WorkerConfig::new()),
-            config.worker.pools().clone(),
-        )
-        .cancel(config.shutdown.child())
-        .build();
-        let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
-            .expect("test host");
-        Self::with_host(runtime, &config, host, Broadcaster::new(broadcast))
+        Self::playback()
     }
 
     #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
@@ -215,16 +238,21 @@ impl Rig {
         applied
     }
 
-    #[cfg(not(feature = "broadcast"))]
     pub(crate) fn playback() -> Self {
+        Self::playback_with(AnalysisHandle::channel(watch::channel(Arc::default()).1).0)
+    }
+
+    /// A playback rig whose decks ask `analysis` for their tracks.
+    pub(crate) fn playback_with(analysis: AnalysisHandle) -> Self {
         let (runtime, config) = test_fixture::runtime_and_config();
-        let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
+        let host = crate::pools::host(HostConfig::offline(config.worker.pools().clone()).build())
             .expect("test host");
         Self::with_host(
             runtime,
             &config,
             host,
-            Broadcaster::new(AppBroadcastConfig::default()),
+            Broadcaster::new(idle_broadcast(&config)),
+            analysis,
         )
     }
 
@@ -233,16 +261,22 @@ impl Rig {
         config: &AppConfig,
         host: AppHost,
         broadcast: Broadcaster,
+        analysis: AnalysisHandle,
     ) -> Self {
-        let (analysis, _) = AnalysisHandle::channel(watch::channel(Arc::default()).1);
+        let decks = analysis.clone();
         Self::build(
             runtime,
             config,
             host,
             broadcast,
-            analysis.clone(),
-            |queue, cancel| {
-                StateController::new(queue.control().clone(), cancel.child(), analysis.clone())
+            analysis,
+            move |queue, cancel, grids| {
+                StateController::new(
+                    queue.control().clone(),
+                    cancel.child(),
+                    decks.clone(),
+                    grids,
+                )
             },
         )
     }
@@ -277,7 +311,6 @@ impl Rig {
         self.ui.refresh();
     }
 
-    #[cfg(not(feature = "broadcast"))]
     pub(crate) fn text(&self, key: &str) -> Option<String> {
         let root = ReadRoot::new(&self.ui);
         match Walk::new(&root).get(key) {
@@ -290,7 +323,6 @@ impl Rig {
     ///
     /// The wall-clock budget bounds fixture I/O as well as engine work. A
     /// playing deck's position or an applied command resets its idle budget.
-    #[test_attrs::flash(io)]
     #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
     pub(crate) fn until(
         &mut self,
@@ -357,7 +389,7 @@ impl Rig {
     pub(crate) fn offline_with(configure: impl FnOnce(&mut AppConfig)) -> Self {
         let (runtime, mut config) = test_fixture::runtime_and_config();
         configure(&mut config);
-        let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
+        let host = crate::pools::host(HostConfig::offline(config.worker.pools().clone()).build())
             .expect("test host");
 
         let mut states = Vec::new();
@@ -367,7 +399,7 @@ impl Rig {
             host,
             Broadcaster::new(AppBroadcastConfig::default()),
             AnalysisHandle::channel(watch::channel(Arc::default()).1).0,
-            |queue, cancel| {
+            |queue, cancel, _grids| {
                 let state = Arc::new(kithara::platform::sync::Mutex::new(
                     crate::state::UiState::new(queue.control()),
                 ));
@@ -392,4 +424,21 @@ impl Rig {
         );
         self.pump();
     }
+}
+
+#[cfg(feature = "broadcast")]
+fn idle_broadcast(config: &AppConfig) -> AppBroadcastConfig {
+    use kithara::worker::{Worker, WorkerConfig};
+
+    AppBroadcastConfig::builder(
+        Worker::new(WorkerConfig::new()),
+        config.worker.pools().clone(),
+    )
+    .cancel(config.shutdown.child())
+    .build()
+}
+
+#[cfg(not(feature = "broadcast"))]
+fn idle_broadcast(_config: &AppConfig) -> AppBroadcastConfig {
+    AppBroadcastConfig::default()
 }

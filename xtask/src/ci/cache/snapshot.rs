@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     env,
+    ffi::OsString,
     fs::{self, File},
     io::Read,
     path::{Component, Path, PathBuf},
@@ -16,11 +17,12 @@ use tempfile::NamedTempFile;
 use tracing::info;
 
 use super::{current_client_environment, require_success};
+use crate::consts;
 
 struct Snapshot;
 
 impl Snapshot {
-    const SCHEMA: &str = "kithara-target-snapshot-v3";
+    const SCHEMA: &str = "kithara-target-snapshot-v4";
     const PREFIX: &str = "target-snapshots";
 
     fn object(fingerprint: &str, checksum: &str) -> String {
@@ -37,7 +39,7 @@ impl Snapshot {
 struct Sources;
 
 impl Sources {
-    const SCHEMA: &str = "kithara-source-snapshot-v1";
+    const SCHEMA: &str = "kithara-source-snapshot-v2";
     const PREFIX: &str = "source-snapshots";
     /// Records which layer a `CARGO_HOME` already carries, so a job that
     /// already has it neither downloads it again nor unpacks over a live one.
@@ -123,6 +125,13 @@ pub(crate) fn restore_for_lane(
     cargo_home: &Path,
     rc: &Path,
 ) -> Result<Option<String>> {
+    if target.is_dir() {
+        require_target(target, false)?;
+        if !target_is_empty(target)? {
+            info!(path = %target.display(), "retained warm target directory");
+            return Ok(None);
+        }
+    }
     let fingerprint = fingerprint(key, "cargo", "host", root, cargo_home)?;
     let restored = restore(target, &fingerprint, rc)?;
     Ok(snapshot_to_publish(fingerprint, restored))
@@ -152,7 +161,12 @@ pub(crate) enum Restored {
 
 /// Fill `cargo_home` with the dependency sources this `Cargo.lock` names, so
 /// the job compiles instead of fetching.
-pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Result<Restored> {
+pub(crate) fn restore_sources(
+    root: &Path,
+    cargo_home: &Path,
+    build: &Path,
+    rc: &Path,
+) -> Result<Restored> {
     let fingerprint = sources_fingerprint(root)?;
     if read_marker(cargo_home)?.as_deref() == Some(fingerprint.as_str()) {
         return Ok(Restored::AlreadyPresent);
@@ -162,7 +176,7 @@ pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Resu
         return Ok(Restored::Absent);
     };
     let expected = checksum_of(&object)?;
-    let archive = NamedTempFile::new().context("create source snapshot download")?;
+    let archive = staged_archive(build)?;
     client.copy_from(&object, archive.path())?;
     ensure!(
         sha256(archive.path())? == expected,
@@ -184,10 +198,26 @@ pub(crate) fn restore_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Resu
     Ok(Restored::Layer(object))
 }
 
-/// Publish the sources this job ended up with into its own scope's bucket.
-pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Result<()> {
+/// Publish all locked dependency sources into this job's own scope's bucket.
+pub(crate) fn publish_sources(
+    root: &Path,
+    cargo_home: &Path,
+    build: &Path,
+    rc: &Path,
+) -> Result<()> {
     let client = Client::load(rc)?;
     let fingerprint = sources_fingerprint(root)?;
+    if let Some(object) = client.latest(Sources::PREFIX, &fingerprint)? {
+        info!(%fingerprint, object, "dependency sources already published");
+        return Ok(());
+    }
+    run_command(
+        Command::new("cargo")
+            .args(["fetch", "--locked", "--manifest-path", "Cargo.toml"])
+            .current_dir(root)
+            .env("CARGO_HOME", cargo_home),
+        "fetch locked dependency sources",
+    )?;
     let present: Vec<&str> = Sources::PATHS
         .into_iter()
         .filter(|path| cargo_home.join(path).is_dir())
@@ -196,7 +226,7 @@ pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Resu
         !present.is_empty(),
         "cargo home carries no sources to publish"
     );
-    let archive = NamedTempFile::new().context("create source snapshot archive")?;
+    let archive = staged_archive(build)?;
     let mut command = Command::new("tar");
     command
         .args(["--create", "--zstd", "--file"])
@@ -210,6 +240,7 @@ pub(crate) fn publish_sources(root: &Path, cargo_home: &Path, rc: &Path) -> Resu
     let checksum = sha256(archive.path())?;
     let object = Sources::object(&fingerprint, &checksum);
     if client.exists(&object)? {
+        write_marker(cargo_home, &fingerprint)?;
         info!(%fingerprint, %checksum, "source snapshot already exists");
         return Ok(());
     }
@@ -298,6 +329,25 @@ fn fingerprint(
     let rustflags = env::var("RUSTFLAGS").unwrap_or_default();
     let encoded_rustflags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
     let mut hash = Sha256::new();
+    #[cfg(target_os = "macos")]
+    for (program, args, label) in [
+        (
+            "xcodebuild",
+            ["-version"].as_slice(),
+            "read Xcode build identity",
+        ),
+        (
+            "xcrun",
+            ["--sdk", "macosx", "--show-sdk-build-version"].as_slice(),
+            "read Apple SDK build identity",
+        ),
+    ] {
+        let output = Command::new(program).args(args).output().context(label)?;
+        require_success(&output, label)?;
+        hash.update((output.stdout.len() as u64).to_le_bytes());
+        hash.update(output.stdout);
+    }
+
     for value in [
         Snapshot::SCHEMA.as_bytes(),
         lane.as_bytes(),
@@ -326,16 +376,25 @@ fn fingerprint(
 fn publish(target: &Path, fingerprint: &str, rc: &Path) -> Result<()> {
     validate_fingerprint(fingerprint)?;
     require_target(target, false)?;
-    let archive = NamedTempFile::new().context("create target snapshot archive")?;
+    let archive = staged_archive(target)?;
+    let mut staged = OsString::from("--exclude=");
+    staged.push(
+        archive
+            .path()
+            .file_name()
+            .context("a staged archive has a file name")?,
+    );
     run_command(
         Command::new("tar")
-            .args(["--create", "--zstd", "--file"])
+            .args(["--create", "--format=pax", "--zstd", "--file"])
             .arg(archive.path())
-            .arg("--exclude=.kithara-ci-lease")
+            .arg(staged)
+            .arg(format!("--exclude={}", lease::FILE))
             .arg(format!(
                 "--exclude={heartbeat}",
                 heartbeat = lease::HEARTBEAT
             ))
+            .arg(format!("--exclude={}", consts::SOURCES_RECORD))
             .arg("--directory")
             .arg(target)
             .arg("."),
@@ -362,7 +421,7 @@ fn restore(target: &Path, fingerprint: &str, rc: &Path) -> Result<bool> {
         return Ok(false);
     };
     let expected = checksum_of(&object)?;
-    let archive = NamedTempFile::new().context("create target snapshot download")?;
+    let archive = staged_archive(target)?;
     client.copy_from(&object, archive.path())?;
     ensure!(
         sha256(archive.path())? == expected,
@@ -381,6 +440,19 @@ fn restore(target: &Path, fingerprint: &str, rc: &Path) -> Result<bool> {
     Ok(true)
 }
 
+/// Where a cache archive is written on its way to or from the store: the
+/// scratch of the build directory it belongs to. The job's temporary directory
+/// can be a memory mount sized for test files, and a layer runs to gigabytes;
+/// the build directory sits on the disk that holds the build, and a lane
+/// entering it sweeps whatever a stopped job left in its scratch.
+fn staged_archive(build: &Path) -> Result<NamedTempFile> {
+    let scratch = build.join(consts::BUILD_SCRATCH);
+    fs::create_dir_all(&scratch)
+        .with_context(|| format!("create build scratch {}", scratch.display()))?;
+    NamedTempFile::new_in(&scratch)
+        .with_context(|| format!("stage a cache archive in {}", scratch.display()))
+}
+
 fn require_target(target: &Path, may_create: bool) -> Result<()> {
     ensure!(
         target.is_absolute(),
@@ -394,19 +466,25 @@ fn require_target(target: &Path, may_create: bool) -> Result<()> {
     ensure!(target.is_dir(), "target snapshot path is not a directory");
     if may_create {
         ensure!(
-            fs::read_dir(target)?.all(|entry| {
-                let Ok(entry) = entry else {
-                    return false;
-                };
-                matches!(
-                    entry.file_name().to_str(),
-                    Some(name) if name == lease::FILE || name == lease::HEARTBEAT
-                ) && entry.file_type().is_ok_and(|file_type| file_type.is_file())
-            }),
+            target_is_empty(target)?,
             "target snapshot restore requires an empty private target directory except its live job markers"
         );
     }
     Ok(())
+}
+
+fn target_is_empty(target: &Path) -> Result<bool> {
+    for entry in fs::read_dir(target)? {
+        let entry = entry?;
+        if !matches!(
+            entry.file_name().to_str(),
+            Some(name) if name == lease::FILE || name == lease::HEARTBEAT || name == consts::SOURCES_RECORD
+        ) || !entry.file_type()?.is_file()
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn validate_fingerprint(value: &str) -> Result<()> {
@@ -450,6 +528,16 @@ fn verify_archive(archive: &Path) -> Result<()> {
                     .all(|component| matches!(component, Component::CurDir | Component::Normal(_))),
             "target snapshot archive contains unsafe path {}",
             path.display()
+        );
+        let relative: PathBuf = path
+            .components()
+            .filter(|part| *part != Component::CurDir)
+            .collect();
+        ensure!(
+            ![lease::FILE, lease::HEARTBEAT, consts::SOURCES_RECORD]
+                .iter()
+                .any(|name| relative == Path::new(name)),
+            "snapshot archive contains live build ownership metadata"
         );
     }
     Ok(())
@@ -496,6 +584,7 @@ struct Client {
     endpoint: String,
     environment: BTreeMap<String, String>,
     program: PathBuf,
+    configuration: tempfile::TempDir,
 }
 
 impl Client {
@@ -517,6 +606,7 @@ impl Client {
             endpoint,
             environment,
             program: program.to_owned(),
+            configuration: tempfile::tempdir().context("create snapshot client configuration")?,
         })
     }
 
@@ -529,14 +619,22 @@ impl Client {
             .environment
             .get("AWS_SECRET_ACCESS_KEY")
             .context("cache secret missing")?;
-        let output = Command::new(&self.program)
+        let command = || {
+            let mut command = Command::new(&self.program);
+            command
+                .env("HOME", self.configuration.path())
+                .env("XDG_CONFIG_HOME", self.configuration.path())
+                .env("APPDATA", self.configuration.path());
+            command
+        };
+        let output = command()
             .args(["alias", "set", "snapshot", &self.endpoint, key, secret])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .output()
             .context("configure snapshot storage client")?;
         require_success(&output, "configure snapshot storage client")?;
-        Ok(Command::new(&self.program))
+        Ok(command())
     }
 
     /// Only an object that is not there reads as absent. A lookup the store
@@ -706,6 +804,7 @@ mod tests {
             endpoint: String::new(),
             environment: BTreeMap::new(),
             program: PathBuf::from("rc"),
+            configuration: tempfile::tempdir().expect("private snapshot client configuration"),
         };
 
         assert_eq!(
@@ -720,6 +819,59 @@ mod tests {
         assert_eq!(
             snapshot_to_publish("miss".to_owned(), false),
             Some("miss".to_owned())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fingerprint_changes_when_xcode_changes() {
+        if let Some(root) = env::var_os("KITHARA_XCODE_FINGERPRINT_TEST_ROOT") {
+            let root = Path::new(&root);
+            let key =
+                fingerprint("apple-lint", "cargo", "host", root, &root.join("cargo")).unwrap();
+            fs::write(
+                env::var_os("KITHARA_XCODE_FINGERPRINT_TEST_OUTPUT").unwrap(),
+                key,
+            )
+            .unwrap();
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join(".config")).unwrap();
+        fs::write(root.path().join("Cargo.lock"), "lock").unwrap();
+        fs::write(root.path().join(".config/ci-pins.toml"), "pins").unwrap();
+        let bin = root.path().join("bin");
+        crate::testing::install_double(&bin, "xcodebuild");
+        let path = env::join_paths(
+            std::iter::once(bin).chain(env::split_paths(&env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let keys: Vec<String> = [
+            "Xcode 26.6\nBuild version 26G1",
+            "Xcode 27.2\nBuild version 27B52",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(index, version)| {
+            let output = root.path().join(format!("key-{index}"));
+            let status = Command::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "ci::cache::snapshot::tests::fingerprint_changes_when_xcode_changes",
+                ])
+                .env("KITHARA_XCODE_FINGERPRINT_TEST_ROOT", root.path())
+                .env("KITHARA_XCODE_FINGERPRINT_TEST_OUTPUT", &output)
+                .env("KITHARA_TEST_STDOUT", version)
+                .env("PATH", &path)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            fs::read_to_string(output).unwrap()
+        })
+        .collect();
+        assert_ne!(
+            keys[0], keys[1],
+            "a target snapshot must not cross an Xcode build change"
         );
     }
 
@@ -792,8 +944,49 @@ mod tests {
         require_target(&target, true).unwrap();
         fs::write(target.join(lease::FILE), "held").unwrap();
         fs::write(target.join(lease::HEARTBEAT), "alive").unwrap();
+        fs::write(target.join(consts::SOURCES_RECORD), "live claim").unwrap();
 
         assert!(require_target(&target, true).is_ok());
+    }
+
+    #[test]
+    fn a_warm_lane_keeps_its_build_without_contacting_the_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("artifact"), "warm").unwrap();
+
+        assert_eq!(
+            restore_for_lane(
+                "lint",
+                &target,
+                directory.path(),
+                directory.path(),
+                Path::new("no-client")
+            )
+            .expect("a warm build needs no remote restore"),
+            None
+        );
+        assert_eq!(fs::read(target.join("artifact")).unwrap(), b"warm");
+    }
+
+    #[test]
+    fn an_archive_cannot_replace_live_build_ownership() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in [lease::FILE, lease::HEARTBEAT, consts::SOURCES_RECORD] {
+            fs::write(directory.path().join(name), "foreign owner").unwrap();
+            let archive = directory.path().join("snapshot.tar");
+            let status = Command::new("tar")
+                .args(["--create", "--zstd", "--file"])
+                .arg(&archive)
+                .arg("--directory")
+                .arg(directory.path())
+                .arg(name)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            assert!(verify_archive(&archive).is_err(), "{name}");
+        }
     }
 
     #[test]
@@ -849,15 +1042,39 @@ object)
     done
     printf '],"truncated":false}}' ;;
   esac ;;
-put) mkdir -p "$store/$(dirname "$3")" && cp "$2" "$store/$3" ;;
-get) cp "$store/$2" "$3" ;;
+put) echo "$2" >> '{transfers}' && mkdir -p "$store/$(dirname "$3")" && cp "$2" "$store/$3" ;;
+get) echo "$3" >> '{transfers}' && cp "$store/$2" "$3" ;;
 *) echo "unexpected: $*" >&2; exit 2 ;;
 esac
 "#,
-                store = store.display()
+                store = store.display(),
+                transfers = transfers(directory).display()
             ),
         );
         program
+    }
+
+    /// The local file of every archive the fake `rc` uploaded or downloaded.
+    fn transfers(directory: &Path) -> PathBuf {
+        directory.join("transfers")
+    }
+
+    /// Every archive a lane moved sat in the scratch of its build directory,
+    /// and none outlived the move.
+    fn assert_staged_in_scratch(directory: &Path, build: &Path, moves: usize) {
+        let scratch = build.join(consts::BUILD_SCRATCH);
+        let transfers = fs::read_to_string(transfers(directory)).unwrap_or_default();
+        let staged: Vec<&Path> = transfers.lines().map(Path::new).collect();
+        assert_eq!(staged.len(), moves, "archives moved: {staged:?}");
+        for archive in staged {
+            assert!(
+                archive.parent() == Some(scratch.as_path()),
+                "{} was staged outside {}",
+                archive.display(),
+                scratch.display()
+            );
+            assert!(!archive.exists(), "{} outlived its move", archive.display());
+        }
     }
 
     fn client(program: PathBuf) -> Client {
@@ -869,6 +1086,7 @@ esac
                 ("AWS_SECRET_ACCESS_KEY".to_owned(), "secret".to_owned()),
             ]),
             program,
+            configuration: tempfile::tempdir().expect("private snapshot client configuration"),
         }
     }
 
@@ -905,14 +1123,38 @@ esac
         let rc = rc(&directory);
         let root = directory.join("checkout");
         fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("Cargo.lock"), "version = 4\n").unwrap();
+        fs::write(
+            root.join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"source-fixture\"\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("lib.rs"), "").unwrap();
         let recorded = directory.join("recorded");
         fs::create_dir_all(recorded.join("registry/cache")).unwrap();
         fs::write(recorded.join("registry/cache/dependency.crate"), b"crate").unwrap();
 
-        publish_sources(&root, &recorded, &rc).expect("the default branch publishes");
+        let build = directory.join("build");
+        let error = publish_sources(&root, &recorded, &build, &rc)
+            .expect_err("failed fetch cannot publish an incomplete layer");
+        assert!(
+            error
+                .to_string()
+                .contains("fetch locked dependency sources")
+        );
+        assert!(!directory.join("store").exists());
+        assert!(!recorded.join(Sources::MARKER).exists());
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"source-fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\npath = \"lib.rs\"\n",
+        )
+        .unwrap();
+        publish_sources(&root, &recorded, &build, &rc).expect("the default branch publishes");
+        fs::remove_dir_all(&recorded).unwrap();
+        publish_sources(&root, &recorded, &build, &rc)
+            .expect("a complete source layer is reused without reading the local Cargo home");
         let read = directory.join("read");
-        let restored = restore_sources(&root, &read, &rc).expect("a branch restores");
+        let restored = restore_sources(&root, &read, &build, &rc).expect("a branch restores");
+        assert_staged_in_scratch(&directory, &build, 2);
 
         let Restored::Layer(object) = restored else {
             panic!("the layer the scope published was not found: {restored:?}");
@@ -927,6 +1169,78 @@ esac
         assert_eq!(
             fs::read(read.join("registry/cache/dependency.crate")).unwrap(),
             b"crate"
+        );
+    }
+
+    #[test]
+    fn an_evicted_lane_restores_its_outputs_and_keeps_its_live_lease() {
+        const CHILD: &str = "KITHARA_TARGET_LAYER_TEST";
+        let Some(directory) = env::var_os(CHILD).map(PathBuf::from) else {
+            let directory = tempfile::tempdir().unwrap();
+            let output = Command::new(env::current_exe().unwrap())
+                .args(["--exact", "ci::cache::snapshot::client_tests::an_evicted_lane_restores_its_outputs_and_keeps_its_live_lease", "--nocapture"])
+                .env(CHILD, directory.path())
+                .env("SCCACHE_BUCKET", "kithara-review")
+                .env("SCCACHE_ENDPOINT", "http://cache:9000")
+                .env("AWS_ACCESS_KEY_ID", "key")
+                .env("AWS_SECRET_ACCESS_KEY", "secret")
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let rc = rc(&directory);
+        let root = directory.join("checkout");
+        fs::create_dir_all(root.join(".config")).unwrap();
+        fs::write(root.join("Cargo.lock"), "version = 4\n").unwrap();
+        fs::write(root.join(".config/ci-pins.toml"), "pins").unwrap();
+        let target = directory.join("target");
+        fs::create_dir_all(&target).unwrap();
+        let home = directory.join("cargo");
+        fs::write(target.join(consts::SOURCES_RECORD), "initial claim").unwrap();
+        let fingerprint = restore_for_lane("lint", &target, &root, &home, &rc)
+            .unwrap()
+            .expect("an empty store needs a publisher");
+        let output = target.join("debug/build/dependency/out/generated.rs");
+        fs::create_dir_all(output.parent().unwrap()).unwrap();
+        fs::write(&output, "pub const VALUE: u8 = 7;").unwrap();
+        filetime::set_file_mtime(
+            &output,
+            filetime::FileTime::from_unix_time(1_600_000_000, 123_456_789),
+        )
+        .unwrap();
+        let modified = fs::metadata(&output).unwrap().modified().unwrap();
+        fs::write(target.join(lease::FILE), "old lease").unwrap();
+        fs::write(target.join(lease::HEARTBEAT), "old heartbeat").unwrap();
+        publish_for_lane(&target, &fingerprint, &rc).unwrap();
+
+        fs::remove_dir_all(&target).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join(lease::FILE), "live lease").unwrap();
+        fs::write(target.join(lease::HEARTBEAT), "live heartbeat").unwrap();
+        fs::write(target.join(consts::SOURCES_RECORD), "current claim").unwrap();
+        assert_eq!(
+            restore_for_lane("lint", &target, &root, &home, &rc).unwrap(),
+            None
+        );
+        assert_staged_in_scratch(&directory, &target, 2);
+        assert_eq!(
+            fs::read_to_string(&output).unwrap(),
+            "pub const VALUE: u8 = 7;"
+        );
+        assert_eq!(fs::metadata(&output).unwrap().modified().unwrap(), modified);
+        assert_eq!(fs::read(target.join(lease::FILE)).unwrap(), b"live lease");
+        assert_eq!(
+            fs::read(target.join(lease::HEARTBEAT)).unwrap(),
+            b"live heartbeat"
+        );
+        assert_eq!(
+            fs::read(target.join(consts::SOURCES_RECORD)).unwrap(),
+            b"current claim"
         );
     }
 

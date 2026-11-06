@@ -1,14 +1,16 @@
 use std::{
     collections::BTreeMap,
     env,
+    ffi::OsString,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Subcommand};
+use xtask::ci::bootstrap;
 
-use super::{super::config::CiPins, serve, snapshot, snapshot::SnapshotArgs, verify};
+use super::{super::config::CiPins, evidence, serve, snapshot, snapshot::SnapshotArgs, verify};
 use crate::{ci::host::mac::read_secret, consts};
 
 /// Everything else a client is told, fixed by how a scope is provisioned.
@@ -148,6 +150,9 @@ fn complete_client_environment(
 
 #[derive(Debug, Args)]
 pub(crate) struct CacheArgs {
+    /// Scoped credentials for compiling the cache service image.
+    #[arg(long, env = "KITHARA_CI_CACHE_ENV_FILE")]
+    cache_env_file: Option<PathBuf>,
     #[command(subcommand)]
     command: CacheCommand,
 }
@@ -160,12 +165,20 @@ enum CacheCommand {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         arguments: Vec<String>,
     },
-    /// Run the cache stack inside its container: the store, its buckets and
+    /// Run the cache service: the store, its buckets and
     /// client credentials, and the evictor keeping each scope's compiler cache
     /// under its budget by last use.
-    Serve,
+    Serve(serve::ServeArgs),
     /// Verify cache reuse between two independent compiler daemons.
-    Verify { env_file: PathBuf },
+    Verify { env_file: Option<PathBuf> },
+    /// Retain bounded observations for a compilation phase outside a lane.
+    Record { phase: String },
+    /// Run a compilation phase with a verified, isolated `RustFS` daemon.
+    Exec {
+        phase: String,
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        arguments: Vec<OsString>,
+    },
     /// Restore and publish immutable trusted Cargo target snapshots.
     Snapshot(SnapshotArgs),
 }
@@ -193,19 +206,54 @@ pub(crate) fn run(args: &CacheArgs) -> Result<()> {
             arguments,
         } => {
             let pins = CiPins::load(Path::new(consts::PINS_PATH))?;
-            let status = compose(env_file)?
+            let secrets = if arguments
+                .iter()
+                .any(|arg| matches!(arg.as_str(), "build" | "up" | "create" | "run"))
+            {
+                let environment = match args.cache_env_file.as_deref() {
+                    Some(path) => client_environment(path)?,
+                    None => current_client_environment()?,
+                };
+                Some(crate::ci::kache::BuildSecrets::new(&environment)?)
+            } else {
+                None
+            };
+            let mut command = compose(env_file)?;
+            if let Some(secrets) = &secrets {
+                command
+                    .env(
+                        "KITHARA_BUILD_CACHE_ENV",
+                        secrets.directory().join("environment"),
+                    )
+                    .env(
+                        "KITHARA_BUILD_KACHE_HOST",
+                        secrets.directory().join("host.toml"),
+                    );
+            }
+            let status = command
                 .args(arguments)
                 .env("KITHARA_CACHE_SERVER_IMAGE", &pins.cache_server_image)
                 .env("KITHARA_CACHE_CLIENT_IMAGE", &pins.cache_client_image)
                 .env("KITHARA_RUST_VERSION", &pins.stable_toolchain)
                 .env("KITHARA_RUST_DIGEST", &pins.linux_base_digest)
+                .env("KITHARA_CI_IMAGE", &pins.linux_image)
                 .status()
                 .context("run cache Compose")?;
             ensure!(status.success(), "cache Compose exited with {status}");
             Ok(())
         }
-        CacheCommand::Serve => serve::run(),
-        CacheCommand::Verify { env_file } => verify::run(env_file),
+        CacheCommand::Serve(args) => serve::run(args),
+        CacheCommand::Verify { env_file } => verify::run(env_file.as_deref()),
+        CacheCommand::Record { phase } => evidence::record(phase),
+        CacheCommand::Exec { phase, arguments } => {
+            let status = bootstrap::run(
+                [OsString::from("cache"), phase.into()]
+                    .into_iter()
+                    .chain(arguments.iter().cloned()),
+            )?;
+            ensure!(status.success(), "compilation phase failed: {status}");
+            Ok(())
+        }
         CacheCommand::Snapshot(args) => snapshot::run(args),
     }
 }
@@ -235,6 +283,19 @@ mod tests {
 
     use super::*;
     use crate::ci::config::workspace_root;
+
+    #[test]
+    fn the_native_cache_service_accepts_its_host_directory() {
+        crate::Cli::try_parse_from([
+            "xtask",
+            "ci",
+            "cache",
+            "serve",
+            "--root",
+            "/Volumes/KitharaCI/services/ci-cache",
+        ])
+        .expect("the native service names its persistent root");
+    }
 
     fn host_file(contents: &str) -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
@@ -452,42 +513,11 @@ mod tests {
         assert_eq!(cache["init"].as_bool(), Some(true));
     }
 
-    /// The store posts its audit log to the evictor beside it, and its egress
-    /// filter refuses even loopback unless the origin is allowed. An endpoint
-    /// that drifted from where the evictor listens would leave every read
-    /// unseen, and the evictor would age entries by their writes alone. The
-    /// evictor takes every delivery on trust, so it listens where no job
-    /// reaches.
     #[test]
-    fn the_store_sends_its_audit_log_to_the_evictor_beside_it() {
+    fn the_container_keeps_its_audit_queue_in_memory() {
         let stack = stack();
         let cache = &stack["services"]["cache"];
-        let environment = &cache["environment"];
-        let setting = |name: &str| {
-            environment[name]
-                .as_str()
-                .unwrap_or_else(|| panic!("the store sets no {name}"))
-        };
-
-        let endpoint =
-            reqwest::Url::parse(setting("RUSTFS_AUDIT_WEBHOOK_ENDPOINT_RECENCY")).unwrap();
-
-        assert_eq!(setting("RUSTFS_AUDIT_ENABLE"), "true");
-        assert_eq!(setting("RUSTFS_AUDIT_WEBHOOK_ENABLE_RECENCY"), "on");
-        assert!(consts::EVICT_LISTEN.ip().is_loopback());
-        assert_eq!(
-            endpoint.host_str(),
-            Some(consts::EVICT_LISTEN.ip().to_string().as_str())
-        );
-        assert_eq!(endpoint.port(), Some(consts::EVICT_LISTEN.port()));
-        let origin = endpoint.origin().ascii_serialization();
-        assert!(
-            setting("RUSTFS_OUTBOUND_ALLOW_ORIGINS")
-                .split(',')
-                .any(|allowed| allowed == origin),
-            "the store's egress filter refuses {origin}"
-        );
-        let queue = setting("RUSTFS_AUDIT_WEBHOOK_QUEUE_DIR_RECENCY");
+        let queue = "/audit";
         assert!(
             cache["tmpfs"]
                 .as_sequence()

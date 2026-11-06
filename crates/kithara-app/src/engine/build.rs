@@ -49,8 +49,13 @@ pub(crate) fn build(
     let (analysis, handle) = AnalysisService::new(&config, persistence, config.shutdown.child());
     task::spawn(analysis.run());
 
-    let mut session = DeckSet::new(&config, host, |queue, cancel| {
-        StateController::new(queue.control().clone(), cancel.child(), handle.clone())
+    let mut session = DeckSet::new(&config, host, |queue, cancel, grids| {
+        StateController::new(
+            queue.control().clone(),
+            cancel.child(),
+            handle.clone(),
+            grids,
+        )
     })?;
     session.send_levels()?;
 

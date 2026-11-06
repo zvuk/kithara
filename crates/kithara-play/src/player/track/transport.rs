@@ -38,12 +38,9 @@ impl<S> PlayerImpl<S> {
         &mut self,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        self.play = None;
+        self.withdraw_play();
         if let Some(loading) = self.loading.as_mut() {
             loading.speed = None;
-        }
-        if let Some(attaching) = self.attaching.as_mut() {
-            attaching.play = None;
         }
         if let Some(seq) = self.playback_commands.iter().rev().find_map(|operation| {
             operation
@@ -160,7 +157,7 @@ impl<S> PlayerImpl<S> {
         }
         self.lane_commands
             .iter()
-            .filter(|operation| operation.changes_time() && operation.applied() != Some(false))
+            .filter(|operation| operation.applied() != Some(false))
             .find(|operation| match operation.when {
                 When::At(frame) => {
                     frame.segment == resume.lane.segment && frame.frame > resume.lane.frame

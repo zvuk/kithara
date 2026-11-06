@@ -10,6 +10,16 @@ pub(super) struct Schedule<P: Protocol> {
 }
 
 impl<P: Protocol> Schedule<P> {
+    delegate::delegate! {
+        to self.items {
+            #[expr($.map(|sent| sent.when))]
+            #[call(last)]
+            pub(super) fn peek(&self) -> Option<When<P::Clock>>;
+            pub(super) fn pop(&mut self) -> Option<Sent<P>>;
+            pub(super) fn iter(&self) -> impl Iterator<Item = &Sent<P>>;
+        }
+    }
+
     pub(super) fn new(capacity: usize) -> Self {
         Self {
             items: Vec::with_capacity(capacity),
@@ -40,14 +50,5 @@ impl<P: Protocol> Schedule<P> {
             .iter()
             .rposition(|sent| ledger.outdates(&sent.batch.basis))?;
         Some(self.items.remove(index))
-    }
-
-    delegate::delegate! {
-        to self.items {
-            #[expr($.map(|sent| sent.when))]
-            #[call(last)]
-            pub(super) fn peek(&self) -> Option<When<P::Clock>>;
-            pub(super) fn pop(&mut self) -> Option<Sent<P>>;
-        }
     }
 }

@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
-    path::Path,
+    path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, RecvTimeoutError},
     thread,
     time::{Duration, Instant},
@@ -42,6 +42,7 @@ pub(in crate::ci::cache) fn buckets() -> Result<Vec<(String, u64)>> {
 pub(in crate::ci::cache) struct Evictor {
     buckets: Vec<(String, u64)>,
     deliveries: Receiver<Delivery>,
+    config: PathBuf,
 }
 
 impl Evictor {
@@ -49,7 +50,11 @@ impl Evictor {
     /// its webhook once, as it starts, and never again, so the stack listens
     /// before it starts the store; what the log reports until [`Self::run`]
     /// reaches the store waits for it.
-    pub(in crate::ci::cache) fn listen(server: Server, buckets: Vec<(String, u64)>) -> Self {
+    pub(in crate::ci::cache) fn listen(
+        server: Server,
+        buckets: Vec<(String, u64)>,
+        config: PathBuf,
+    ) -> Self {
         let (sender, deliveries) = mpsc::sync_channel(Owner::CHANNEL);
         let managed = buckets
             .iter()
@@ -59,16 +64,16 @@ impl Evictor {
         Self {
             buckets,
             deliveries,
+            config,
         }
     }
 
     /// Evicts from the store the stack has brought up.
     pub(in crate::ci::cache) fn run(self) -> Result<Infallible> {
-        let config = Path::new("/config");
         let store = Store::connect(
             Path::new("rc"),
-            &read_secret(&config.join("admin-user"))?,
-            &read_secret(&config.join("admin-password"))?,
+            &read_secret(&self.config.join("admin-user"))?,
+            &read_secret(&self.config.join("admin-password"))?,
         )?;
         Owner::start(store, self.buckets, self.deliveries)?.serve()
     }
@@ -378,7 +383,11 @@ esac
     fn the_audit_log_is_heard_from_the_moment_the_evictor_listens() {
         let server = Server::http("127.0.0.1:0").expect("the evictor binds its listener");
         let address = server.server_addr().to_ip().expect("the listener uses IP");
-        let evictor = Evictor::listen(server, vec![("kithara-review".to_owned(), 1000)]);
+        let evictor = Evictor::listen(
+            server,
+            vec![("kithara-review".to_owned(), 1000)],
+            PathBuf::from("/config"),
+        );
         let body = serde_json::json!({"Records": [{
             "time": 400_000_u64,
             "api": {

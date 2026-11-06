@@ -3,8 +3,10 @@
 //! operations need no plane-reference slices. Apple uses Accelerate; other targets
 //! select `fearless_simd` by CPU capability. `filter` supplies denormal-safe biquads,
 //! `interp` supplies fractional sampling and rate ramps, and feature-gated
-//! `spectrum` supplies Hann-windowed real FFT, bin magnitude/phase and
-//! autocorrelation. `sum_squares` reduces energy; `downmix` averages channels.
+//! `spectrum` supplies Hann-windowed real FFT, complex spectral difference
+//! and autocorrelation. `delay` holds planar frame history in storage taken
+//! from the caller's buffer region. `sum_squares` reduces energy; `downmix`
+//! averages channels.
 //! Element-wise kernels (`ramp`, `div`, `affine`, `sub`, `scale_add`,
 //! `mul_add`, `add`) and `fade::gains` compose vector fades.
 #![forbid(unsafe_code)]
@@ -16,8 +18,12 @@
 
 mod backend;
 mod consts;
-/// Clock-free normalized progression for prepared parameter segments.
+/// Clock-free parameter progression in f64.
 pub mod curve;
+/// Prepared planar frame history read before each write.
+pub mod delay;
+/// Ordered target-gain recursion and stateless interval peak linking.
+pub mod envelope;
 /// Fade curves: one lexicon for firewheel's `MixDSP` and every crossfade gain.
 pub mod fade;
 /// Biquad cascades over channel planes and the designs that feed them.
@@ -31,8 +37,8 @@ mod layout;
 /// type of the same name without touching consumers.
 pub mod param;
 /// Real FFT lengths every backend runs; with the `spectrum` feature, the real
-/// FFT over a Hann window, the magnitude and phase of its bins, and the
-/// autocorrelation of a frame.
+/// FFT over a Hann window, the complex spectral difference of its bins, and
+/// the autocorrelation of a frame.
 pub mod spectrum;
 mod vector;
 
@@ -40,4 +46,7 @@ pub use backend::sanitize;
 pub use layout::{
     deinterleave_channel_major, deinterleave_variable, downmix, interleave_channel_major,
 };
-pub use vector::{add, affine, div, mul_add, ramp, scale_add, sub, sum_squares};
+pub use vector::{
+    add, affine, crossfade_linear, div, mul_add, multiply_in_place, ramp, scale_add,
+    scale_in_place, sub, sum_squares,
+};

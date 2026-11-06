@@ -1,5 +1,5 @@
 use kithara::{
-    host::DeckId,
+    host::{DeckId, api::Tempo},
     ui::render::{Published, WindowCommand},
 };
 
@@ -15,6 +15,9 @@ pub(crate) enum Message {
     #[cfg(not(target_arch = "wasm32"))]
     AddMusicFolder,
     BroadcastToggle,
+    /// Move the host tempo.
+    SetTempo(Tempo),
+    StepTempo(f32),
     /// What the compiled UI published; settled against the document's
     /// writes, then translated by [`super::ui::translate`].
     Ui(Published),

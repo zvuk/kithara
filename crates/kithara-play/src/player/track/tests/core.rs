@@ -284,6 +284,7 @@ pub(super) fn in_pass<R>(
         suspended: false,
         now,
         delivery: FrameCount::new(0),
+        deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
     };
@@ -508,6 +509,7 @@ async fn a_rejected_launch_leaves_the_member_silent() {
         suspended: false,
         now: frame(128),
         delivery: FrameCount::new(0),
+        deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &snapshot,
     };
@@ -965,6 +967,7 @@ async fn a_zero_frame_observation_retains_the_exact_commanded_cue(
         suspended: false,
         now: frame(0),
         delivery: FrameCount::new(0),
+        deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
     };
@@ -1112,6 +1115,7 @@ async fn processor_set_paused_updates_playback(#[case] mapped: bool) {
         suspended: false,
         now: frame(0),
         delivery: FrameCount::new(0),
+        deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
     };
@@ -1335,6 +1339,7 @@ fn a_relocation_is_refused_off_the_applied_lane(#[case] invalid: u8) {
         suspended: false,
         now: frame(0),
         delivery: FrameCount::new(0),
+        deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
     };
@@ -1597,6 +1602,7 @@ async fn play_after_an_ended_seek_preserves_its_segment_and_receipt(#[case] offs
         suspended: false,
         now: frame(12_113),
         delivery: FrameCount::new(0),
+        deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
     });
@@ -1733,6 +1739,7 @@ fn withdrawing_the_newest_epoch_unpublishes_the_seek() {
         suspended: false,
         now: frame(0),
         delivery: FrameCount::new(0),
+        deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
     };
@@ -1837,6 +1844,7 @@ fn an_epoch_adopted_before_it_is_published_reports_the_audio_thread() {
         suspended: false,
         now: frame(0),
         delivery: FrameCount::new(0),
+        deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
     };
@@ -2659,6 +2667,7 @@ async fn a_native_stop_answers_without_overwriting_a_new_segments_position(
         suspended: false,
         now: frame(0),
         delivery: FrameCount::new(0),
+        deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
     };
@@ -2765,6 +2774,7 @@ async fn an_evicting_track_takes_the_slot_over_on_its_frame() {
         suspended: false,
         now: frame(0),
         delivery: FrameCount::new(0),
+        deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &deck,
     };
@@ -2964,6 +2974,7 @@ async fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
             suspended: false,
             now: frame(0),
             delivery: FrameCount::new(0),
+            deck_delivery: FrameCount::new(0),
             output: &output,
             deck: &deck,
         });
@@ -3036,6 +3047,7 @@ pub(super) fn with_mixer<R>(
         suspended: false,
         now,
         delivery: FrameCount::new(0),
+        deck_delivery: FrameCount::new(0),
         output: &output,
         deck,
     });
@@ -3398,8 +3410,8 @@ async fn a_loaded_track_sends_each_change_to_its_lane() {
         "{commands:?}"
     );
     assert!(
-        (track.snapshot().speed - 1.0).abs() < f32::EPSILON,
-        "the speed shows once the lane applied it"
+        (track.snapshot().speed - 2.0).abs() < f32::EPSILON,
+        "the segment the lane starts from states its speed"
     );
     due.apply(kithara_render::LaneApplied {
         source_basis: None,
@@ -3588,7 +3600,11 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
         });
         rig.with_outbox(|out| track.tick(frame(0), out))
             .expect("ramp applies");
-        assert_eq!(track.snapshot().speed, 1.5);
+        assert_eq!(
+            track.snapshot().speed,
+            if sounding { 1.5 } else { 1.0 },
+            "a silent segment holds the start of its ramp, a sounding one has played through it"
+        );
         assert!(
             command_at_zero(
                 &mut track,
@@ -3817,7 +3833,7 @@ async fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
     });
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("native speed receipt");
-    assert_eq!(track.snapshot().speed, 2.0);
+    assert_eq!(track.snapshot().speed, 1.25, "the ramp has only begun");
     assert_eq!(track.ready, Some(segment));
     let attach = track
         .attaching
@@ -3847,7 +3863,7 @@ async fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
             .speed
             .is_none()
     );
-    assert_eq!(track.snapshot().speed, 2.0);
+    assert_eq!(track.snapshot().speed, 3.0);
     assert_eq!(track.projected().speed(), 3.0);
     let latest = track.segment;
     assert_eq!(latest, segment.next());

@@ -1,15 +1,15 @@
+use sha2::{Digest, Sha256};
+
 use crate::consts;
 
-/// One compiler-cache entry, named by the hash its compiler cache stores it
-/// under.
+/// One evictable cache result, identified by its stored objects.
 ///
 /// sccache writes `<prefix>/<h0>/<h1>/<h2>/<hash>`, the first three characters
 /// of the hash repeated as directories. kache writes one compile as
 /// `<prefix>/v3/manifests/<crate>/<hash>.json` and
 /// `<prefix>/v3/packs/<crate>/<hash>.tar.zst`, one entry in two objects.
-/// Everything else in a scope's bucket - the startup probe, kache's build
-/// index and predictions, the snapshot layers - is not an entry, so it is
-/// counted against the budget and never evicted.
+/// Snapshot archives use their whole object name as a domain-separated key.
+/// Probes, build indexes and predictions are counted but never evicted here.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::From, derive_more::Into,
 )]
@@ -21,19 +21,29 @@ impl Entry {
         let hash = match prefix {
             consts::SCCACHE_PREFIX => sccache_hash(path)?,
             consts::KACHE_PREFIX => kache_hash(path)?,
+            "target-snapshots" | "source-snapshots" => {
+                let (fingerprint, archive) = path.split_once('/')?;
+                hash_bytes(fingerprint)?;
+                hash_bytes(archive.strip_suffix(".tar")?)?;
+                return Some(Self(Sha256::digest(object.as_bytes()).into()));
+            }
             _ => return None,
         };
-        if hash.len() != 64
-            || !hash
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return None;
-        }
-        let mut bytes = [0; 32];
-        hex::decode_to_slice(hash, &mut bytes).ok()?;
-        Some(Self(bytes))
+        Some(Self(hash_bytes(hash)?))
     }
+}
+
+fn hash_bytes(hash: &str) -> Option<[u8; 32]> {
+    if hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    let mut bytes = [0; 32];
+    hex::decode_to_slice(hash, &mut bytes).ok()?;
+    Some(bytes)
 }
 
 fn sccache_hash(path: &str) -> Option<&str> {
@@ -108,9 +118,7 @@ mod tests {
         }
     }
 
-    /// The startup probe sits directly under the prefix and the snapshot
-    /// layers beside it. Read as entries, they would be evicted, and a lane
-    /// whose probe is gone starts its compiler cache read-only.
+    /// A lane whose startup probe is gone starts its compiler cache read-only.
     #[test]
     fn only_what_sccache_writes_is_an_entry() {
         for object in [
@@ -121,9 +129,25 @@ mod tests {
             format!("sccache/a/b/c/{ENTRY_HASH}/more"),
             format!("sccache/a/b/c/{}", &ENTRY_HASH[..63]),
             format!("elsewhere/a/b/c/{ENTRY_HASH}"),
-            format!("target-snapshots/{ENTRY_HASH}/{ENTRY_HASH}.tar"),
+            format!("target-snapshots/invalid/{ENTRY_HASH}.tar"),
         ] {
             assert_eq!(Entry::parse(&object), None, "{object}");
         }
+    }
+
+    #[test]
+    fn snapshot_namespaces_and_fingerprints_keep_distinct_recency() {
+        let target = Entry::parse(&format!("target-snapshots/{ENTRY_HASH}/{ENTRY_HASH}.tar"))
+            .expect("a target snapshot is evictable");
+        let source = Entry::parse(&format!("source-snapshots/{ENTRY_HASH}/{ENTRY_HASH}.tar"))
+            .expect("a source snapshot is evictable");
+        let other = Entry::parse(&format!(
+            "target-snapshots/{}/{ENTRY_HASH}.tar",
+            "1".repeat(64)
+        ))
+        .expect("another target fingerprint");
+        assert_ne!(target, source);
+        assert_ne!(target, other);
+        assert_ne!(target, Entry::from(hash_bytes(ENTRY_HASH).unwrap()));
     }
 }

@@ -83,12 +83,15 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
              image: {image}\n    \
              container_name: {container}\n    \
              restart: \"no\"\n    \
+             init: true\n    \
              cpuset: \"{cpuset}\"\n    \
              mem_limit: {memory}\n    \
              cgroup_parent: {cgroup_parent}\n    \
              pids_limit: {pids}\n    \
              ulimits:\n      \
              nice: {nice}\n    \
+             tmpfs:\n      \
+             - \"{tmpfs}\"\n    \
              security_opt: [\"no-new-privileges\"]\n    \
              env_file: [\"{env_file}\"]",
             name = runner.name,
@@ -99,6 +102,7 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
             cgroup_parent = unit.cgroup_parent,
             pids = Container::PIDS_LIMIT,
             nice = Container::NICE_LIMIT,
+            tmpfs = Container::tmpfs(),
             env_file = unit.env_file,
         )?;
         writeln!(yaml, "    environment:")?;
@@ -179,6 +183,17 @@ mod tests {
         );
         assert!(
             yaml.contains("/var/lib/kithara-ci/target/kithara-ci-octocat:/cache/target"),
+            "{yaml}"
+        );
+    }
+
+    #[test]
+    fn every_service_reaps_orphaned_job_processes() {
+        let host = host_fixture();
+        let yaml = project(&host, &fixture().pins, 32).expect("the project must render");
+        assert_eq!(
+            yaml.matches("init: true\n").count(),
+            host.runners.len(),
             "{yaml}"
         );
     }

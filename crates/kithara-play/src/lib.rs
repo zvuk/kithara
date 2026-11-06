@@ -30,10 +30,7 @@ pub use api::{
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
-pub use kithara_effects::{
-    EffectChange, EffectConfig, EffectParameter, EffectTarget, GainDb,
-    eq::{EqBandConfig, EqBandConfigChange, EqBandConfigControl},
-};
+pub use kithara_effects::{GainDb, eq::EqBandConfig};
 pub use kithara_net::Headers;
 pub use kithara_render::{
     CrossfadeCurve, CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError,
@@ -41,9 +38,9 @@ pub use kithara_render::{
     PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
     bridge::{
         CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckMixSettings,
-        DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, EffectProgram,
-        EqSnapshot, FadeDir, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault,
-        Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot,
+        DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, EqSnapshot,
+        FadeDir, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault, Returned,
+        RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot,
     },
     dispatch,
     rt::{
@@ -54,10 +51,10 @@ pub use kithara_render::{
 pub use kithara_sync::MIN_SPEED;
 pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
 pub use player::{
-    Bound, DeckControl, DeckPass, EffectConfigView, EffectSnapshot, HostedDeck, Outbox, Player,
-    PlayerConfig, PlayerFactory, PlayerImpl, Position, Settled, Track, TrackCommand, TrackFactory,
-    TrackReceipt, TrackSettings, TrackSettingsChange, TrackSettingsPatch, TrackSettingsPatchError,
-    TrackSnapshot, TrackStatus,
+    Bound, DeckControl, DeckPass, HostedDeck, Outbox, Player, PlayerConfig, PlayerFactory,
+    PlayerImpl, Position, SeekBatch, Settled, Track, TrackCommand, TrackFactory, TrackReceipt,
+    TrackSettings, TrackSettingsChange, TrackSettingsPatch, TrackSettingsPatchError, TrackSnapshot,
+    TrackStatus,
 };
 pub use resource::{
     ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,

@@ -95,13 +95,9 @@ fn an_offline_session_ticks_its_decks_only_ahead_of_a_block() {
     let session = DeckSession::spawn();
     let (id, deck, seen) = probe();
 
-    ask(
-        &*session.client,
-        crate::HostCommand::Register { id, deck },
-        "Register",
-    )
-    .map_err(PlayError::from)
-    .expect("the session takes the deck");
+    ask(&*session.client, crate::HostCommand::Register { id, deck })
+        .map_err(PlayError::from)
+        .expect("the session takes the deck");
     hang_park!(
         |remaining: Duration| sleep((SESSION_PUMP_INTERVAL * 3).min(remaining)),
         "offline idle control awaits its observation window".to_owned()
@@ -129,13 +125,9 @@ fn an_offline_session_ticks_its_decks_only_ahead_of_a_block() {
 fn an_offline_deck_drains_on_its_wake_with_no_block_rendered() {
     let session = DeckSession::spawn();
     let (id, deck, seen) = probe();
-    ask(
-        &*session.client,
-        crate::HostCommand::Register { id, deck },
-        "Register",
-    )
-    .map_err(PlayError::from)
-    .expect("the session takes the deck");
+    ask(&*session.client, crate::HostCommand::Register { id, deck })
+        .map_err(PlayError::from)
+        .expect("the session takes the deck");
     let Seen::Held(waker) = next(&seen) else {
         panic!("the session holds the deck before anything else");
     };

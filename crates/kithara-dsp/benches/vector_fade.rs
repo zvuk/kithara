@@ -2,7 +2,7 @@
 
 use std::hint::black_box;
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_dsp::fade::{self, FadeCurve};
 use num_traits::ToPrimitive;
 
@@ -33,6 +33,12 @@ fn vector(c: &mut Criterion) {
         });
         group.bench_with_input(BenchmarkId::new("div", size), &size, |b, _| {
             b.iter(|| kithara_dsp::div(black_box(&mut output), -1.0));
+        });
+        group.bench_with_input(BenchmarkId::new("scale_in_place", size), &size, |b, _| {
+            b.iter(|| {
+                let samples: &mut Vec<f32> = black_box(&mut output);
+                kithara_dsp::scale_in_place(samples, -1.0)
+            });
         });
         group.bench_with_input(BenchmarkId::new("affine", size), &size, |b, _| {
             b.iter(|| kithara_dsp::affine(black_box(&mut output), 0.5, 0.25));
@@ -95,5 +101,125 @@ fn fade_gains(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, vector, fade_gains);
+fn render_products(c: &mut Criterion) {
+    let mut group = c.benchmark_group("render_products");
+    for size in [1, 128, 257, 1023] {
+        let samples: Vec<_> = tone(size)
+            .into_iter()
+            .map(|sample| sample + 0.125)
+            .collect();
+        let gains = vec![0.7; size];
+        group.bench_with_input(BenchmarkId::new("scalar_scale", size), &size, |b, _| {
+            b.iter_batched_ref(
+                || samples.clone(),
+                |samples| {
+                    let gain = black_box(0.7);
+                    for sample in black_box(samples) {
+                        *sample *= gain;
+                    }
+                },
+                BatchSize::SmallInput,
+            );
+        });
+        group.bench_with_input(BenchmarkId::new("scale", size), &size, |b, _| {
+            b.iter_batched_ref(
+                || samples.clone(),
+                |samples| {
+                    let samples: &mut Vec<f32> = black_box(samples);
+                    let gain = black_box(0.7);
+                    kithara_dsp::scale_in_place(samples, gain)
+                },
+                BatchSize::SmallInput,
+            );
+        });
+        group.bench_with_input(BenchmarkId::new("scalar_product", size), &size, |b, _| {
+            b.iter_batched_ref(
+                || samples.clone(),
+                |samples| {
+                    for (sample, gain) in black_box(samples).iter_mut().zip(black_box(&gains)) {
+                        *sample *= *gain;
+                    }
+                },
+                BatchSize::SmallInput,
+            );
+        });
+        group.bench_with_input(BenchmarkId::new("product", size), &size, |b, _| {
+            b.iter_batched_ref(
+                || samples.clone(),
+                |samples| {
+                    let samples: &mut Vec<f32> = black_box(samples);
+                    let gains: &Vec<f32> = black_box(&gains);
+                    kithara_dsp::multiply_in_place(samples, gains)
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+fn detector(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fir_history");
+    group.sample_size(20);
+    for frames in [128, 256, 257, 600] {
+        for (label, amplitude) in [("quiet", 0.125), ("overloaded", 2.0)] {
+            let input: Vec<f32> = tone(frames)
+                .into_iter()
+                .map(|sample| sample * amplitude)
+                .collect();
+            let detector = kithara_dsp::filter::Fir::<17, 7, 1, 9>::new([[0.125; 17]; 7]);
+            let mut output = vec![0.0; frames];
+            group.bench_function(BenchmarkId::new(label, frames), |b| {
+                b.iter_batched_ref(
+                    || (detector.clone(), input.clone()),
+                    |(detector, input)| {
+                        detector.begin_block(&[input.as_mut_slice()], 0.98);
+                        detector.process(
+                            0,
+                            black_box(input.as_slice()),
+                            black_box(input.as_slice()),
+                            black_box(output.as_mut_slice()),
+                        );
+                        black_box(&output);
+                    },
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
+fn envelope(c: &mut Criterion) {
+    let mut group = c.benchmark_group("attack_release");
+    group.sample_size(20);
+    for frames in [128, 256, 257, 600] {
+        let envelope = kithara_dsp::envelope::AttackRelease::new(0.999_583_4);
+        let targets: Vec<f32> = [1.0, 0.25, 0.8, 0.99]
+            .into_iter()
+            .cycle()
+            .take(frames)
+            .collect();
+        group.bench_function(BenchmarkId::from_parameter(frames), |b| {
+            b.iter_batched_ref(
+                || (envelope.clone(), targets.clone()),
+                |(envelope, targets)| {
+                    envelope.process(black_box(targets.as_mut_slice()));
+                    black_box(targets.as_slice());
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    vector,
+    fade_gains,
+    render_products,
+    detector,
+    envelope
+);
 criterion_main!(benches);

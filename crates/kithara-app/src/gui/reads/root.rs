@@ -2,6 +2,7 @@ use kithara::ui::render::{Node, Scope};
 
 use super::{
     broadcast::BroadcastNode,
+    clock::ClockNode,
     deck::{DeckNode, DecksNode, EngineNode},
     library::{LibraryNode, SourcesNode},
     mix::{MixNode, PlayerNode, StripsNode},
@@ -12,6 +13,7 @@ use crate::{broadcast::Broadcaster, gui::app::Kithara};
 
 pub(in crate::gui) struct ReadRoot<'a> {
     broadcast: BroadcastNode<'a>,
+    clock: ClockNode<'a>,
     engine: EngineNode,
     library: LibraryNode<'a>,
     mix: MixNode<'a>,
@@ -57,6 +59,7 @@ impl<'a> ReadRoot<'a> {
 
         Self {
             decks,
+            clock: ClockNode::new(&cache.master_bpm, f64::from(snapshot.tempo)),
             engine,
             library: LibraryNode::new(&state.library, !Kithara::PICKS_FOLDERS),
             source: SourcesNode::new(&state.library, &snapshot.track_bpms),
@@ -84,6 +87,7 @@ impl<'a, 'b: 'a> Node<'a> for &'a ReadRoot<'b> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let node: Box<dyn Node<'a> + 'a> = match segment {
             "broadcast" => Box::new(self.broadcast),
+            "clock" => Box::new(self.clock),
             "library" => Box::new(&self.library),
             "deck" => Box::new(DecksNode::new(&self.decks)),
             "engine" => Box::new(self.engine),
@@ -191,6 +195,7 @@ mod tests {
 
             ReadRoot {
                 decks,
+                clock: ClockNode::new("124.00", 124.0),
                 library: LibraryNode::new(&self.library, true),
                 source: SourcesNode::new(&self.library, &self.bpms),
                 engine,
@@ -219,6 +224,7 @@ mod tests {
                         MixStrip::new(at, count),
                         eq_bands.clone(),
                         TempoPercent::DEFAULT,
+                        false,
                         ui,
                     )
                 })

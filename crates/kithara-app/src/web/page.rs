@@ -21,7 +21,7 @@ use crate::{
     engine::{EngineError, EngineSnapshot},
     gui::{Boot, FrontendError, immediate},
     plugins,
-    pools::{self, AppHost, AppPools},
+    pools::{self, AppHost, AppHostOwner, AppPools},
     theme::Palette,
 };
 
@@ -47,7 +47,7 @@ pub async fn run(shutdown: CancelToken) -> Result<(), FrontendError> {
     let mut palette = Palette::default();
     palette.apply(app.palette);
     let pools = pools::build(&document.pools())?;
-    let host = AppHost::new(
+    let host = pools::host(
         HostConfig::builder()
             .settings(
                 HostSettings::builder()
@@ -106,7 +106,11 @@ pub async fn run(shutdown: CancelToken) -> Result<(), FrontendError> {
     started
 }
 
-async fn pump(host: AppHost, receiver: wasm::HostReceiver<AppPools>, cancel: CancelToken) {
+async fn pump(
+    host: AppHost,
+    receiver: wasm::HostReceiver<AppPools, AppHostOwner>,
+    cancel: CancelToken,
+) {
     const INTERVAL: Duration = Duration::from_millis(16);
 
     let _host = host;

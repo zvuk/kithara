@@ -1,9 +1,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# Empty when absent: cargo reads that as "no wrapper", not as an error. Empty on
-# Windows as well: sccache cannot spawn the compiler `ffmpeg-sys-next` asks for
-# there.
-sccache := if os_family() == "windows" { "" } else { `command -v sccache 2>/dev/null || true` }
+# Cargo resolves these names through the same PATH on every platform.
+sccache := `command -v sccache >/dev/null 2>&1 && printf sccache || true`
 
 # sccache keys a Rust compile on its working directory, every `CARGO_*` value
 # and `OUT_DIR`, so two builds share an entry only when they build at the same
@@ -11,8 +9,8 @@ sccache := if os_family() == "windows" { "" } else { `command -v sccache 2>/dev/
 # that reason; nothing here rewrites the key. kache keys a compile without the
 # checkout's path, so worktrees on one machine reuse what each other built; a
 # machine that has it caches with it and hands sccache what it cannot cache.
-kache := if os_family() == "windows" { "" } else { `command -v kache 2>/dev/null || true` }
-export RUSTC_WRAPPER := if kache == "" { sccache } else { kache }
+kache := `command -v kache >/dev/null 2>&1 && printf kache || true`
+export RUSTC_WRAPPER := if env_var_or_default("CI_JOB_ID", "") + env_var_or_default("GITHUB_RUN_ID", "") != "" { "kache" } else { if kache == "" { sccache } else { kache } }
 export KACHE_FALLBACK := if kache == "" { "" } else { sccache }
 
 # cc-rs puts kache in front of a build script's C compile on its own; a CMake
@@ -37,7 +35,7 @@ export SCCACHE_BASEDIRS := if sccache == "" { "" } else { justfile_directory() }
 # than in whichever shell happened to start the server, so it is named here.
 # The server reads this once, when it starts, so a machine whose server is
 # already up keeps its old limit until `sccache --stop-server`.
-export SCCACHE_CACHE_SIZE := if sccache == "" { "" } else { "200G" }
+export SCCACHE_CACHE_SIZE := if sccache == "" { "" } else { env_var_or_default("SCCACHE_CACHE_SIZE", "200G") }
 
 # Where this machine keeps the FFmpeg line the workspace binds to. `ffmpeg-next`
 # generates its bindings from the headers pkg-config finds, so a host whose
@@ -89,6 +87,8 @@ mod perf ".config/just/perf.just"
 mod platform ".config/just/platform.just"
 mod release ".config/just/release.just"
 mod ci ".config/just/ci.just"
+bootstrap_temp := if os_family() == "windows" { '${TMP:-$TEMP}' } else { '${TMPDIR:-/tmp}' }
+
 mod tooling ".config/just/tooling.just"
 
 # Human-facing overview. Agents use the exact paths documented in AGENTS.md.
@@ -117,7 +117,7 @@ _desktop-ready:
 [no-exit-message]
 [positional-arguments]
 _xtask *ARGS:
-    @if [[ -z "${KITHARA_XTASK_TARGET:-}" ]]; then exec just _xtask-unleased "$@"; fi; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; exec "$helper" "$KITHARA_XTASK_TARGET" just _xtask-unleased "$@"
+    @if [[ -z "${KITHARA_XTASK_TARGET:-}" ]]; then exec just _xtask-unleased "$@"; fi; host=$(rustc --print host-tuple); runtime=$(mktemp -d "{{ bootstrap_temp }}/kithara-bootstrap.XXXXXX"); env -u KACHE_SOCKET_PATH GITHUB_ACTIONS= GITLAB_CI= KACHE_RUNTIME_DIR="$runtime" KACHE_DAEMON_IDLE_TIMEOUT=180 KACHE_PREFETCH_ENABLED=false cargo build --quiet --locked --manifest-path "$PWD/Cargo.toml" --target-dir "$PWD/.ci-bootstrap" --target "$host" -p xtask --no-default-features --bin ci-bootstrap; exec "$PWD/.ci-bootstrap/$host/debug/ci-bootstrap{{ if os_family() == "windows" { ".exe" } else { "" } }}" --bootstrap-runtime "$runtime" lease "$KITHARA_XTASK_TARGET" bootstrap just _xtask-unleased "$@"
 
 [no-exit-message]
 [positional-arguments]
@@ -157,7 +157,7 @@ _xtask-self-target:
 [positional-arguments]
 [private]
 _xtask-bootstrap *ARGS:
-    @target=$(just _xtask-self-target) || exit $?; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
+    @target=$(just _xtask-self-target) || exit $?; export CARGO_TARGET_DIR="$target"; host=$(rustc --print host-tuple); runtime=$(mktemp -d "{{ bootstrap_temp }}/kithara-bootstrap.XXXXXX"); env -u KACHE_SOCKET_PATH GITHUB_ACTIONS= GITLAB_CI= KACHE_RUNTIME_DIR="$runtime" KACHE_DAEMON_IDLE_TIMEOUT=180 KACHE_PREFETCH_ENABLED=false cargo build --quiet --locked --manifest-path "$PWD/Cargo.toml" --target-dir "$PWD/.ci-bootstrap" --target "$host" -p xtask --no-default-features --bin ci-bootstrap; exec "$PWD/.ci-bootstrap/$host/debug/ci-bootstrap{{ if os_family() == "windows" { ".exe" } else { "" } }}" --bootstrap-runtime "$runtime" cache bootstrap cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
 
 # The pointer to the active generation lives beside the generations it names,
 # inside the Git directory. A CI runner cleans the working tree before every

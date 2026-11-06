@@ -1,6 +1,5 @@
 pub mod channels;
 mod curve;
-mod effect;
 mod gain;
 mod mark;
 pub mod metrics;
@@ -11,7 +10,6 @@ pub mod snapshot;
 pub use channels::{DeckEnds, DeckEvents, MixTapWriter, MixerInputs, SessionInbox, scope_channels};
 pub(crate) use curve::ParameterCurve;
 pub use curve::{ParameterCurveError, ParameterKnot};
-pub use effect::EffectProgram;
 pub use gain::{SlotBinding, SlotGainProgram, SlotOutputSnapshot};
 pub use kithara_dsp::curve::{CurveShape, CurveShapeError};
 pub use mark::SlotMark;

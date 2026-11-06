@@ -107,7 +107,7 @@ pub(in crate::ci::host) fn provision(
     let pins = CiPins::load(pins)?;
     process.require_tools(&["docker"])?;
     for image in required_builds(&host) {
-        image::build_pinned(process, image, &pins)?;
+        image::build_pinned(process, image, &pins, Some(&host.image_cache_env_file))?;
     }
     for step in consts::LINUX_PROVISION_STEPS {
         provision.as_root("linux", step)?;

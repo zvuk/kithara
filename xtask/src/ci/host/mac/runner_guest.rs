@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use tracing::info;
 
 use super::runners::{RunnerManager, path_text, require_macos};
 use crate::consts;
@@ -143,15 +144,12 @@ impl RunnerManager<'_> {
         let xcode =
             self.process
                 .capture("/usr/bin/xcodebuild", &["-version"], "guest Xcode version")?;
-        if !xcode.starts_with(&format!(
-            "Xcode {}\n",
-            self.config.pins.expected_xcode_version
-        )) {
-            bail!(
-                "guest Xcode does not match {}",
-                self.config.pins.expected_xcode_version
-            );
-        }
+        info!(xcode = xcode.trim(), "guest Apple toolchain selected");
+        self.process.run(
+            "/usr/bin/xcodebuild",
+            &["-checkFirstLaunchStatus"],
+            "guest Xcode readiness",
+        )?;
         // GNU make cannot express a path containing a space, and cmake feeds
         // it whatever `xcrun` resolves the toolchain to. Assert the property
         // the build depends on, so a regression fails here and says why,

@@ -33,6 +33,7 @@ use signal_hook::{
     consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM},
     flag, low_level,
 };
+use xtask::ci::bootstrap;
 
 use super::{
     layout, lease,
@@ -311,6 +312,8 @@ fn cargo_build_command(root: &Path, release: bool) -> Command {
     command
         .args(["--", "self-cache", "artifact"])
         .current_dir(root)
+        .env("GITHUB_ACTIONS", "")
+        .env("GITLAB_CI", "")
         .env("CARGO_TARGET_DIR", layout::target_dir(root))
         .stdin(Stdio::null())
         .stdout(Stdio::piped());
@@ -321,27 +324,46 @@ fn run_cargo_build<F>(root: &Path, command: &mut Command, wait: F) -> Result<()>
 where
     F: FnOnce(&mut Child) -> Result<ExitStatus>,
 {
-    let mut child = command
-        .spawn()
-        .context("launch Cargo for xtask self-cache refresh")?;
-    let stdout = child
-        .stdout
-        .take()
-        .context("capture xtask self-cache build output")?;
-    let reader = thread::spawn(move || read_bounded_output(stdout, consts::BUILD_OUTPUT_LIMIT));
-    let status = wait(&mut child);
-    let output = reader
-        .join()
-        .map_err(|_| anyhow::anyhow!("xtask self-cache output reader panicked"))?;
-    let status = status?;
-    let output = output?;
-    ensure!(
-        status.success(),
-        "xtask self-cache refresh build failed: {status}"
-    );
-    let artifact = parse_artifact(root, &output)?;
-    println!("{}", artifact.display());
-    Ok(())
+    let cache = if env::var_os("KACHE_RUNTIME_DIR").is_none() {
+        bootstrap::CompilerCache::enter()?
+    } else {
+        None
+    };
+    if let Some(cache) = &cache {
+        cache.apply(command);
+    }
+    let result = (|| {
+        let mut child = command
+            .spawn()
+            .context("launch Cargo for xtask self-cache refresh")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("capture xtask self-cache build output")?;
+        let reader = thread::spawn(move || read_bounded_output(stdout, consts::BUILD_OUTPUT_LIMIT));
+        let status = wait(&mut child);
+        let output = reader
+            .join()
+            .map_err(|_| anyhow::anyhow!("xtask self-cache output reader panicked"))?;
+        let status = status?;
+        let output = output?;
+        ensure!(
+            status.success(),
+            "xtask self-cache refresh build failed: {status}\n{}",
+            String::from_utf8_lossy(&output)
+        );
+        let artifact = parse_artifact(root, &output)?;
+        println!("{}", artifact.display());
+        Ok(())
+    })();
+    if let Some(cache) = cache {
+        cache.record(std::ffi::OsStr::new("bootstrap-refresh"));
+        let stopped = cache.finish();
+        if result.is_ok() {
+            stopped?;
+        }
+    }
+    result
 }
 
 fn artifact(root: &Path) -> Result<()> {
@@ -575,6 +597,21 @@ mod tests {
             !command.get_args().any(|arg| arg == "--quiet"),
             "the build's progress must reach the log: {command:?}"
         );
+    }
+
+    #[test]
+    fn bootstrap_compilation_uses_the_scope_credentials_for_remote_writes() {
+        let command = cargo_build_command(std::path::Path::new("/repo"), false);
+        let environment = command
+            .get_envs()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for key in ["GITHUB_ACTIONS", "GITLAB_CI"] {
+            assert_eq!(
+                environment.get(std::ffi::OsStr::new(key)),
+                Some(&Some(std::ffi::OsStr::new(""))),
+                "bootstrap must use the same scoped remote-write policy as the lane"
+            );
+        }
     }
 
     fn fixture() -> Result<(tempfile::TempDir, PathBuf, PathBuf, XtaskCacheConfig)> {

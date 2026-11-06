@@ -33,6 +33,7 @@ use crate::{
         hosted::HostedControlPlan,
         scroll::{Bar, Window},
         solve::{self, Alignment, Length, Padding, Size},
+        surface::entry_value,
         window::DragGhost,
     },
     ids::InternId,
@@ -658,7 +659,14 @@ where
             output.set_detent(Detent::new(
                 self.ctx.ui.resolve(surface.path).to_owned(),
                 Rc::clone(&self.map_event),
+                surface
+                    .entry
+                    .as_ref()
+                    .map(|entry| (entry_value(self.ctx, entry), self.skin.clone())),
             ));
+            if let Some(entry) = &surface.entry {
+                output.watch(entry);
+            }
         }
         if let Some((flag, lit)) = lit {
             output.lights(flag.clone(), Some(Faces { idle, lit }));

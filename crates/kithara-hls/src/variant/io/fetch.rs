@@ -49,7 +49,6 @@ where
         };
         let slot = FetchSlot {
             handle,
-            reader: writer.reader(),
             raw: writer.raw_write_handle(),
             writer,
             cancel: cancel.clone(),

@@ -276,6 +276,7 @@ where
                 bus,
             }
             .into_source(attachment)),
+            AcquisitionResult::Joined(_) => Err(SourceError::WriterSettling),
             _ => Err(SourceError::UnexpectedAcquisitionState),
         }
     }
@@ -295,7 +296,10 @@ where
             }
             match Self::create_remote(&url, Arc::clone(&config), cancel.clone()) {
                 Ok(src) => return Ok(src),
-                Err(SourceError::Assets(AssetsError::Storage(StorageError::TmpClaimed(_)))) => {
+                Err(
+                    SourceError::WriterSettling
+                    | SourceError::Assets(AssetsError::Storage(StorageError::TmpClaimed(_))),
+                ) => {
                     tokio::select! {
                         biased;
                         () = cancel.cancelled() => return Err(StreamSourceError::Cancelled),
@@ -314,7 +318,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::test_pools::pools;
+    use crate::test_pools::{TestPools, pools};
 
     fn url(value: &str) -> Url {
         Url::parse(value).expect("valid test URL")
@@ -393,6 +397,57 @@ mod tests {
         assert!(matches!(result, Err(SourceError::InvalidPath(_))));
     }
 
+    fn remote_config(
+        store: AssetStore<TestPools>,
+        url: Url,
+        cancel: CancelToken,
+        bus: EventBus,
+    ) -> FileConfig<TestPools> {
+        let pools = pools();
+        FileConfig::for_src(FileSrc::Remote(url))
+            .downloader(Downloader::new({
+                let config =
+                    kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
+                        kithara_net::NetOptions::default(),
+                        pools,
+                        CancelToken::never(),
+                    ));
+                #[cfg(not(target_arch = "wasm32"))]
+                let config = config.runtime(tokio::runtime::Handle::current());
+                config.build()
+            }))
+            .store(store)
+            .cancel(cancel)
+            .events(bus)
+            .build()
+    }
+
+    /// A writer outside the pending index is settling, so the source opens after it.
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn a_source_waits_out_a_writer_of_its_own_store() {
+        let dir = tempdir().expect("test cache directory");
+        let store = AssetStore::builder(pools())
+            .backend(StorageBackend::Disk {
+                root: dir.path().to_path_buf(),
+            })
+            .build();
+        let remote_url = url("http://example.test/audio.mp3");
+        let key = remote_key(&store, &remote_url, None, None).expect("remote key");
+        let holder = store.acquire_resource(&key, None).expect("holder acquires");
+        let scope = CancelScope::new(None);
+        let config = remote_config(store, remote_url, scope.token(), EventBus::new(8));
+        let create = File::create(config);
+        kithara_platform::tokio::pin!(create);
+        kithara_platform::tokio::select! {
+            _result = &mut create => panic!("the source opened over a live writer"),
+            () = sleep(Duration::from_millis(50)) => {}
+        }
+
+        drop(holder);
+
+        assert!(create.await.is_ok());
+    }
+
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn remote_claim_wait_returns_cancelled() {
         let dir = tempdir().expect("test cache directory");
@@ -418,22 +473,7 @@ mod tests {
         let cancel = scope.token();
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
-        let config = FileConfig::for_src(FileSrc::Remote(remote_url))
-            .downloader(Downloader::new({
-                let config =
-                    kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
-                        kithara_net::NetOptions::default(),
-                        pools.clone(),
-                        CancelToken::never(),
-                    ));
-                #[cfg(not(target_arch = "wasm32"))]
-                let config = config.runtime(tokio::runtime::Handle::current());
-                config.build()
-            }))
-            .store(waiting_store)
-            .cancel(cancel.clone())
-            .events(bus)
-            .build();
+        let config = remote_config(waiting_store, remote_url, cancel.clone(), bus);
         let create = File::create(config);
         kithara_platform::tokio::pin!(create);
 

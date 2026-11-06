@@ -40,7 +40,6 @@ pub(crate) struct CiPins {
     pub(crate) cmake_linux_arm64_sha256: String,
     pub(crate) cmake_version: String,
     pub(crate) cmake_windows_amd64_sha256: String,
-    pub(crate) expected_xcode_version: String,
     pub(crate) ffmpeg_windows_sha256: String,
     /// A monthly build from `BtbN/FFmpeg-Builds`, named in full: the tag
     /// carries the build time and the file name the commit it was cut from.
@@ -58,8 +57,12 @@ pub(crate) struct CiPins {
     pub(crate) gitleaks_linux_arm64_sha256: String,
     pub(crate) gitleaks_version: String,
     /// The `CoreSimulator` device type the simulator lane creates its device
-    /// from. It has to ship with `expected_xcode_version`.
+    /// from. It must be available in the installed Xcode simulator runtime.
     pub(crate) ios_simulator_device_type: String,
+    pub(crate) kache_linux_amd64_sha256: String,
+    pub(crate) kache_linux_arm64_sha256: String,
+    pub(crate) kache_macos_arm64_sha256: String,
+    pub(crate) kache_windows_amd64_sha256: String,
     pub(crate) linux_base_digest: String,
     pub(crate) linux_android_image: String,
     pub(crate) linux_android_runner_image: String,
@@ -87,6 +90,8 @@ pub(crate) struct CiPins {
     /// links. It tracks the LLVM the libraries were cut from, not a toolchain
     /// pinned here.
     pub(crate) rtsan_version: String,
+    pub(crate) rustfs_version: String,
+    pub(crate) rustfs_macos_arm64_sha256: String,
     pub(crate) rustup_version: String,
     pub(crate) rustup_windows_sha256: String,
     pub(crate) stable_toolchain: String,
@@ -130,10 +135,6 @@ impl CiPins {
             ("cache_client_image", self.cache_client_image.as_str()),
             ("cache_server_image", self.cache_server_image.as_str()),
             ("cmake_version", self.cmake_version.as_str()),
-            (
-                "expected_xcode_version",
-                self.expected_xcode_version.as_str(),
-            ),
             ("ffmpeg_windows_url", self.ffmpeg_windows_url.as_str()),
             ("geckodriver_version", self.geckodriver_version.as_str()),
             ("gitlab_runner_version", self.gitlab_runner_version.as_str()),
@@ -161,6 +162,7 @@ impl CiPins {
             ("msrv_toolchain", self.msrv_toolchain.as_str()),
             ("nightly_toolchain", self.nightly_toolchain.as_str()),
             ("rtsan_version", self.rtsan_version.as_str()),
+            ("rustfs_version", self.rustfs_version.as_str()),
             ("rustup_version", self.rustup_version.as_str()),
             ("stable_toolchain", self.stable_toolchain.as_str()),
             ("windows_eval_iso_url", self.windows_eval_iso_url.as_str()),
@@ -192,6 +194,22 @@ impl CiPins {
 
     fn validate_hashes(&self) -> Result<()> {
         for (name, digest) in [
+            (
+                "kache_linux_amd64_sha256",
+                self.kache_linux_amd64_sha256.as_str(),
+            ),
+            (
+                "kache_linux_arm64_sha256",
+                self.kache_linux_arm64_sha256.as_str(),
+            ),
+            (
+                "kache_macos_arm64_sha256",
+                self.kache_macos_arm64_sha256.as_str(),
+            ),
+            (
+                "kache_windows_amd64_sha256",
+                self.kache_windows_amd64_sha256.as_str(),
+            ),
             (
                 "actions_runner_linux_amd64_sha256",
                 self.actions_runner_linux_amd64_sha256.as_str(),
@@ -259,6 +277,10 @@ impl CiPins {
                 "rtsan_linux_arm64_sha256",
                 self.rtsan_linux_arm64_sha256.as_str(),
             ),
+            (
+                "rustfs_macos_arm64_sha256",
+                self.rustfs_macos_arm64_sha256.as_str(),
+            ),
             ("rustup_windows_sha256", self.rustup_windows_sha256.as_str()),
             (
                 "windows_eval_iso_sha256",
@@ -306,6 +328,15 @@ mod tests {
 
     use super::*;
     use crate::{ci::config::profile::workspace_root, consts};
+
+    #[test]
+    fn native_and_container_stores_use_the_same_release() {
+        let pins = CiPins::load(&workspace_root().join(consts::PINS_PATH)).unwrap();
+        assert!(
+            pins.cache_server_image
+                .starts_with(&format!("rustfs/rustfs:{}@sha256:", pins.rustfs_version))
+        );
+    }
 
     #[test]
     fn digests_are_bounded() {

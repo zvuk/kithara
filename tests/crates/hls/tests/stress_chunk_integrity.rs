@@ -3,6 +3,8 @@ use std::num::{NonZeroU128, NonZeroUsize};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
+    download::DownloaderEvent,
+    events::{EventBus, EventReceiver},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{
@@ -10,6 +12,7 @@ use kithara::{
         sync::Arc,
         thread,
         time::{Duration, WallInstant},
+        tokio::sync::broadcast::error::TryRecvError,
     },
     play::{PlayWorker, PlayWorkerConfig},
     signal::{AudioChunk, AudioChunkInfo},
@@ -51,6 +54,29 @@ mod consts {
     pub(super) const CHUNKS_PER_SEEK: usize = 5;
     pub(super) const WARMUP_NEXT_CHUNK_TIMEOUT_MS: u64 = 5_000;
     pub(super) const NEXT_CHUNK_TIMEOUT_MS: u64 = 3_000;
+}
+
+struct DownloadTrace(EventReceiver<DownloaderEvent>);
+
+impl Drop for DownloadTrace {
+    fn drop(&mut self) {
+        loop {
+            match self.0.try_recv() {
+                Ok(envelope) => {
+                    info!(
+                        sequence = envelope.meta.seq,
+                        timestamp_micros = envelope.meta.ts_micros,
+                        event = ?envelope.event,
+                        "HLS download lifecycle"
+                    );
+                }
+                Err(TryRecvError::Lagged(lost)) => {
+                    tracing::warn!(lost, "HLS download lifecycle trace is incomplete");
+                }
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            }
+        }
+    }
 }
 
 fn detect_chunk_direction(chunk: &AudioChunk) -> Direction {
@@ -168,7 +194,9 @@ async fn audio_server(
     native,
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(1),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
+    tracing(
+        "hls_heavy::stress_chunk_integrity=info,kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug"
+    )
 )]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
@@ -201,7 +229,10 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
             .build()
     };
 
+    let bus = EventBus::new(8192);
+    let _download_trace = DownloadTrace(bus.subscribe());
     let hls_config = HlsConfig::for_url(url)
+        .events(bus)
         .downloader(create_test_downloader())
         .store(store)
         .pools(pools)
