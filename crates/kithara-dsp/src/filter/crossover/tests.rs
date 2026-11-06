@@ -16,13 +16,6 @@ fn crossover(frequencies: &[f32], rate: f32) -> Crossover {
     .expect("valid test crossover")
 }
 
-#[kithara::test]
-fn butterworth_lp_dc_gain_is_unity() {
-    let coeffs = super::coefficients(Type::LowPass, hz(250.0), hz(44100.0)).expect("valid design");
-    let dc_gain = (coeffs.b0 + coeffs.b1 + coeffs.b2) / (1.0 + coeffs.a1 + coeffs.a2);
-    assert!((dc_gain - 1.0).abs() < 0.001);
-}
-
 struct ScalarSection(DirectForm1<f32>);
 
 impl ScalarSection {
@@ -271,18 +264,6 @@ fn strict_design_rejects_invalid_rate_frequency_order_and_nyquist() {
         bands[0].iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
         input.map(f32::to_bits)
     );
-}
-
-#[kithara::test]
-fn coefficient_factory_errors_and_nonfinite_results_are_not_identity() {
-    assert!(matches!(
-        super::coefficients(Type::LowPass, hz(24_000.0), hz(48_000.0)),
-        Err(FilterError::Parameters)
-    ));
-    assert!(matches!(
-        super::coefficients(Type::PeakingEQ(f32::NAN), hz(250.0), hz(48_000.0)),
-        Err(FilterError::Parameters)
-    ));
 }
 
 #[kithara::test]

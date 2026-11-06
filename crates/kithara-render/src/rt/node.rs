@@ -139,6 +139,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use firewheel::FirewheelConfig;
     use kithara_command::{
         Batch, ChannelConfig, LevelInbox, Port, ScopeId, ScopedConfig, ScopedInbox, ScopedSender,
         When, scoped_channel,
@@ -291,7 +292,7 @@ mod tests {
                 .get_with_len::<f32>(BUDGET / 4)
                 .expect("controlled pool pressure")
         });
-        let mut context = FirewheelContext::new(Default::default());
+        let mut context = FirewheelContext::new(FirewheelConfig::default());
         let id = context
             .add_node(node.clone(), None)
             .expect("cold deck node");
@@ -394,7 +395,7 @@ mod tests {
         let (node, mut ends, _sender, mut inbox) = make_node();
         let initial = ends.snapshot.read().clone();
         let refused = Arc::new(AtomicBool::new(true));
-        let mut context = FirewheelContext::new(Default::default());
+        let mut context = FirewheelContext::new(FirewheelConfig::default());
         let id = context.add_node(node.clone(), None).expect("deck node");
         context
             .connect(id, context.graph_out_node_id(), &[(0, 0), (1, 1)], true)
@@ -489,7 +490,7 @@ mod tests {
         use kithara_warp::RenderContext;
 
         let (node, mut ends, _sender, inbox) = make_node();
-        let mut context = FirewheelContext::new(Default::default());
+        let mut context = FirewheelContext::new(FirewheelConfig::default());
         let id = context.add_node(node, None).expect("deck node");
         context
             .connect(id, context.graph_out_node_id(), &[(0, 0), (1, 1)], true)

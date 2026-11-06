@@ -10,6 +10,25 @@ use super::FilterError;
 #[cfg(test)]
 mod tests;
 
+struct SectionCoefficients {
+    b0: f32,
+    products: [f32; 4],
+}
+
+impl SectionCoefficients {
+    const fn new(coefficients: Coefficients<f32>) -> Self {
+        Self {
+            b0: coefficients.b0,
+            products: [
+                coefficients.b1,
+                coefficients.b2,
+                coefficients.a1,
+                coefficients.a2,
+            ],
+        }
+    }
+}
+
 struct Df1State {
     y1: f32,
     y2: f32,
@@ -28,11 +47,13 @@ impl Df1State {
     }
 
     #[inline]
-    fn run(&mut self, input: f32, coefficients: &Coefficients<f32>) -> f32 {
-        let output =
-            coefficients.b0 * input + coefficients.b1 * self.x1 + coefficients.b2 * self.x2
-                - coefficients.a1 * self.y1
-                - coefficients.a2 * self.y2;
+    fn run(&mut self, input: f32, coefficients: &SectionCoefficients) -> f32 {
+        let direct = coefficients.b0 * input;
+        let [b1, b2, a1, a2] = coefficients.products;
+        let [feed1, feed2, feedback1, feedback2] =
+            [(b1, self.x1), (b2, self.x2), (a1, self.y1), (a2, self.y2)]
+                .map(|(coefficient, state)| coefficient * state);
+        let output = direct + feed1 + feed2 - feedback1 - feedback2;
         self.x2 = self.x1;
         self.x1 = input;
         self.y2 = self.y1;
@@ -54,14 +75,14 @@ impl Df1State {
 
 struct Section {
     state: Df1State,
-    coefficients: Coefficients<f32>,
+    coefficients: SectionCoefficients,
 }
 
 impl Section {
     const fn new(coefficients: Coefficients<f32>) -> Self {
         Self {
             state: Df1State::new(),
-            coefficients,
+            coefficients: SectionCoefficients::new(coefficients),
         }
     }
 
@@ -72,7 +93,7 @@ impl Section {
 }
 
 struct Lr4 {
-    coefficients: Coefficients<f32>,
+    coefficients: SectionCoefficients,
     first: Df1State,
     second: Df1State,
 }
@@ -80,7 +101,7 @@ struct Lr4 {
 impl Lr4 {
     const fn new(coefficients: Coefficients<f32>) -> Self {
         Self {
-            coefficients,
+            coefficients: SectionCoefficients::new(coefficients),
             first: Df1State::new(),
             second: Df1State::new(),
         }
