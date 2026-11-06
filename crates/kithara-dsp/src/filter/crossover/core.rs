@@ -23,32 +23,10 @@ impl Section {
     }
 }
 
-#[derive(Default)]
-struct BranchState {
-    x1: f32,
-    x2: f32,
-    y1: f32,
-    y2: f32,
-}
-
-impl BranchState {
-    #[inline(always)]
-    fn commit(&mut self, input: f32, output: f32, retired: bool) {
-        if retired {
-            *self = Self::default();
-        } else {
-            self.x2 = self.x1;
-            self.x1 = input;
-            self.y2 = self.y1;
-            self.y1 = output;
-        }
-    }
-}
-
 struct Lr4Pair {
     coefficients: [[f32; 2]; 5],
-    low: [BranchState; 2],
-    high: [BranchState; 2],
+    first: [[f32; 2]; 4],
+    second: [[f32; 2]; 4],
 }
 
 impl Lr4Pair {
@@ -61,42 +39,53 @@ impl Lr4Pair {
                 [low.a1, high.a1],
                 [low.a2, high.a2],
             ],
-            low: std::array::from_fn(|_| BranchState::default()),
-            high: std::array::from_fn(|_| BranchState::default()),
+            first: [[0.0; 2]; 4],
+            second: [[0.0; 2]; 4],
         }
     }
 
     #[inline(always)]
-    fn evaluate(&self, stage: usize, input: [f32; 2]) -> ([f32; 2], [bool; 2]) {
-        let low = self.low.get(stage).expect("two LR4 stages");
-        let high = self.high.get(stage).expect("two LR4 stages");
-        let [[b00, b01], [b10, b11], [b20, b21], [a10, a11], [a20, a21]] = self.coefficients;
+    fn evaluate(&self, state: &[[f32; 2]; 4], input: [f32; 2]) -> ([f32; 2], [bool; 2]) {
+        let [low, high] = crate::backend::paired_df1(&self.coefficients, state, input);
         let [left, right] = input;
-        let l = b00 * left + b10 * low.x1 + b20 * low.x2 - a10 * low.y1 - a20 * low.y2;
-        let r = b01 * right + b11 * high.x1 + b21 * high.x2 - a11 * high.y1 - a21 * high.y2;
-        let rl = l.is_subnormal() && left.abs() < f32::MIN_POSITIVE;
-        let rh = r.is_subnormal() && right.abs() < f32::MIN_POSITIVE;
+        let rl = low.is_subnormal() && left.abs() < f32::MIN_POSITIVE;
+        let rh = high.is_subnormal() && right.abs() < f32::MIN_POSITIVE;
         (
-            [if rl { 0.0 } else { l }, if rh { 0.0 } else { r }],
+            [if rl { 0.0 } else { low }, if rh { 0.0 } else { high }],
             [rl, rh],
         )
     }
 
     #[inline(always)]
+    fn commit<const LANE: usize>(
+        state: &mut [[f32; 2]; 4],
+        input: f32,
+        output: f32,
+        retired: bool,
+    ) {
+        let [x1, x2, y1, y2] = state;
+        let old_x = *x1.get(LANE).expect("low/high branch lane");
+        let old_y = *y1.get(LANE).expect("low/high branch lane");
+        *x2.get_mut(LANE).expect("low/high branch lane") = if retired { 0.0 } else { old_x };
+        *x1.get_mut(LANE).expect("low/high branch lane") = if retired { 0.0 } else { input };
+        *y2.get_mut(LANE).expect("low/high branch lane") = if retired { 0.0 } else { old_y };
+        *y1.get_mut(LANE).expect("low/high branch lane") = if retired { 0.0 } else { output };
+    }
+
+    #[inline(always)]
     fn process(&mut self, input: f32) -> [f32; 2] {
-        let ([l1, h1], [rl1, rh1]) = self.evaluate(0, [input, input]);
-        let ([low, high], [rl2, rh2]) = self.evaluate(1, [l1, h1]);
-        self.low[0].commit(input, l1, rl1);
-        self.low[1].commit(l1, low, rl2);
-        self.high[0].commit(input, h1, rh1);
-        self.high[1].commit(h1, high, rh2);
+        let ([l1, h1], [rl1, rh1]) = self.evaluate(&self.first, [input, input]);
+        let ([low, high], [rl2, rh2]) = self.evaluate(&self.second, [l1, h1]);
+        Self::commit::<0>(&mut self.first, input, l1, rl1);
+        Self::commit::<0>(&mut self.second, l1, low, rl2);
+        Self::commit::<1>(&mut self.first, input, h1, rh1);
+        Self::commit::<1>(&mut self.second, h1, high, rh2);
         [low, high]
     }
 
     fn reset(&mut self) {
-        for state in self.low.iter_mut().chain(&mut self.high) {
-            *state = BranchState::default();
-        }
+        self.first = [[0.0; 2]; 4];
+        self.second = [[0.0; 2]; 4];
     }
 }
 
