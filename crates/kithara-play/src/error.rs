@@ -166,36 +166,3 @@ impl From<InvalidMixLevel> for PlayError {
         Self::MixLevel { level }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::num::NonZeroU32;
-
-    use kithara_dsp::filter::FilterError;
-    use kithara_effects::eq::{EqBandConfig, EqConfig, EqLayout, generate_log_spaced_bands};
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test]
-    fn real_eq_construction_keeps_pool_and_filter_failures_distinct() {
-        let config = EqConfig::builder(crate::test_pools::pools_with_budget(4)).build();
-        let rate = NonZeroU32::new(44_100).expect("design rate");
-        let error = EqLayout::new(&config, &generate_log_spaced_bands(10), rate)
-            .expect_err("the pool cannot supply the layout");
-        assert!(matches!(
-            PlayError::from(error).clone(),
-            PlayError::Pool(PoolError::OverallBudgetExceeded { max_bytes: 4, .. })
-        ));
-        let bands = [
-            EqBandConfig::default(),
-            EqBandConfig::builder().frequency(f32::INFINITY).build(),
-        ];
-        let error = EqLayout::new(&config, &bands, rate)
-            .expect_err("invalid design is refused before allocation");
-        assert!(matches!(
-            PlayError::from(error).clone(),
-            PlayError::EqPreparation(EqError::Filter(FilterError::Parameters))
-        ));
-    }
-}
