@@ -2944,6 +2944,29 @@ fn the_windows_lane_keeps_the_xtask_build_the_guest_keeps() {
 }
 
 #[test]
+fn filtered_android_runs_do_not_claim_baseline_acceptance() {
+    let workflow = github_workflow("android.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "android");
+    for label in [&workflow["run-name"], &job["name"]] {
+        let label = label.as_str().expect("platform run declares its scope");
+        assert!(label.contains("(inputs.filter || '') != ''"));
+        assert!(label.contains("diagnostic"));
+    }
+    assert!(
+        workflow["run-name"]
+            .as_str()
+            .unwrap()
+            .contains("not acceptance")
+    );
+    assert!(
+        job["name"]
+            .as_str()
+            .unwrap()
+            .contains("Android baseline on an emulator")
+    );
+}
+
+#[test]
 fn windows_diagnostics_cannot_schedule_the_acceptance_suite() {
     let workflow = github_workflow("windows.yml");
     let inputs = &workflow["on"]["workflow_dispatch"]["inputs"];
