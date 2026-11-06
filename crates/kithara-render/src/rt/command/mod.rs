@@ -2,6 +2,7 @@ mod apply;
 mod arrivals;
 mod eq;
 mod gain;
+mod parameter;
 mod state;
 
 pub(in crate::rt) use eq::{EqCurves, EqPrograms, gain_at};

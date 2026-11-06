@@ -5,7 +5,10 @@ use kithara_effects::GainDb;
 use kithara_signal::{SessionEpoch, SessionFrame};
 use num_traits::ToPrimitive;
 
-use super::super::processor::Deck;
+use super::{
+    super::processor::Deck,
+    parameter::{ParameterState, ProgramState},
+};
 use crate::bridge::{
     DeckEqChange, DeckPart, DeckProtocol, DeckRefusal, EqBinding, EqGainProgram, EqSnapshot,
     ParameterCurve,
@@ -14,42 +17,11 @@ use crate::bridge::{
 pub(in crate::rt) type EqCurves<'a> =
     [Option<(usize, &'a ParameterCurve)>; EqGainProgram::MAX_ACTIVE];
 
-#[derive(Clone, Copy, Default)]
-enum Program {
-    #[default]
-    Manual,
-    Pending(Seq),
-    Running(Seq),
-    Held(Seq),
-}
-
-impl Program {
-    fn active(self) -> Option<Seq> {
-        match self {
-            Self::Pending(seq) | Self::Running(seq) => Some(seq),
-            Self::Manual | Self::Held(_) => None,
-        }
-    }
-
-    fn applied(self) -> Option<Seq> {
-        match self {
-            Self::Running(seq) | Self::Held(seq) => Some(seq),
-            Self::Manual | Self::Pending(_) => None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-struct Field {
-    program: Program,
-    authority: Option<Seq>,
-}
-
 /// Parameter metadata only; the inbox retains every owning program.
 pub(in crate::rt) struct EqPrograms {
     scope: ScopeId,
     layout: Option<Seq>,
-    fields: Vec<Field>,
+    fields: Vec<ParameterState>,
 }
 
 impl EqPrograms {
@@ -57,7 +29,7 @@ impl EqPrograms {
         Self {
             scope,
             layout: None,
-            fields: vec![Field::default(); bands],
+            fields: vec![ParameterState::default(); bands],
         }
     }
 
@@ -68,12 +40,12 @@ impl EqPrograms {
     }
 
     pub(in crate::rt) fn begin(&mut self, band: usize, seq: Seq) {
-        self.fields.get_mut(band).expect("admitted EQ band").program = Program::Pending(seq);
+        self.fields.get_mut(band).expect("admitted EQ band").program = ProgramState::Pending(seq);
     }
 
     pub(in crate::rt) fn replace_layout(&mut self, seq: Seq) {
         self.layout = Some(seq);
-        self.fields.fill(Field::default());
+        self.fields.fill(ParameterState::default());
     }
 
     pub(in crate::rt) fn publish(&self, snapshot: &mut EqSnapshot, epoch: Option<SessionEpoch>) {
@@ -232,7 +204,7 @@ impl Deck {
                 continue;
             }
             let field = *self.eq_programs.fields.get(band).expect("configured band");
-            if let Program::Running(seq) = field.program {
+            if let ProgramState::Running(seq) = field.program {
                 let gain = gain_at(
                     program_in(
                         due.committed_mut(seq).expect("active EQ owns its batch"),
@@ -249,7 +221,7 @@ impl Deck {
                 .fields
                 .get_mut(band)
                 .expect("configured band");
-            state.program = Program::Manual;
+            state.program = ProgramState::Manual;
             if matches!(part, DeckPart::Eq(DeckEqChange::Gain { .. })) {
                 state.authority = Some(current);
             }
@@ -315,9 +287,9 @@ impl Deck {
             field.program = if at >= program.end() {
                 *completed.get_mut(next).expect("admitted active capacity") = Some(seq);
                 next = next.saturating_add(1);
-                Program::Held(seq)
+                ProgramState::Held(seq)
             } else {
-                Program::Running(seq)
+                ProgramState::Running(seq)
             };
         }
         for seq in completed.into_iter().flatten() {
@@ -333,7 +305,7 @@ impl Deck {
                 *completed.get_mut(next).expect("admitted active capacity") = Some(seq);
                 next = next.saturating_add(1);
             }
-            field.program = Program::Manual;
+            field.program = ProgramState::Manual;
         }
         for seq in completed.into_iter().flatten() {
             self.complete_output(level, seq);
