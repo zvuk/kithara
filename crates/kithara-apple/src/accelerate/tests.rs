@@ -1,6 +1,9 @@
 use std::num::NonZeroUsize;
 
-use kithara_test_fixtures::unit_fixtures::{accelerate_ramp, accelerate_wave};
+use kithara_test_fixtures::{
+    portable::sine_440,
+    unit_fixtures::{accelerate_ramp, accelerate_wave},
+};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -173,6 +176,36 @@ fn max_magnitude_reads_the_largest_absolute_value() {
         2.0_f32.to_bits()
     );
     assert_eq!(max_magnitude_f32(&[]).to_bits(), 0.0_f32.to_bits());
+    // NaNs and subnormals have backend-specific maximum ordering.
+    let specials = [
+        0.0,
+        -0.0,
+        f32::MIN_POSITIVE,
+        f32::MAX,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    for len in [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 63, 64, 66, 258, 1023, 4096,
+    ] {
+        let sine = &sine_440()[..len];
+        let with_specials: Vec<f32> = specials
+            .iter()
+            .copied()
+            .chain(sine.iter().copied())
+            .take(len)
+            .collect();
+        for samples in [sine, with_specials.as_slice()] {
+            let expected = samples
+                .iter()
+                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+            assert_eq!(
+                max_magnitude_f32(samples).to_bits(),
+                expected.to_bits(),
+                "native peak at {len}"
+            );
+        }
+    }
 }
 
 #[kithara::test(native)]

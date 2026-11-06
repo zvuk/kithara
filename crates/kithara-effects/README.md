@@ -19,6 +19,12 @@ and the DJ isolator, the stereo equaliser a deck runs, the peak limiter, and the
 Firewheel node that puts the limiter on a session bus. It does not decode
 audio, own player or session state, or reach the network.
 
+`filter::FilterEffect` prepares causal high-pass, low-pass and shelf responses
+with pooled planar scratch and retained DSP-owned biquad history. Manual cutoff
+and Q changes use the shared smoothing law in f64; explicit parameter points
+apply without another smoothing pass. Construction and buffer acquisition belong
+outside audio processing. Reset clears history and completes manual targets.
+
 ## Usage
 
 ```rust
