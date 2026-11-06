@@ -9,11 +9,10 @@ use super::{ParameterCurve, ParameterCurveError, ParameterKnot};
 #[fieldwork(get, vis = "pub(crate)")]
 #[non_exhaustive]
 pub struct EqGainProgram {
-    #[field(get, copy, vis = "pub")]
+    #[field(skip)]
     band: usize,
     curve: ParameterCurve,
-    /// The last frame and gain rendered by the executor, absent before the first frame.
-    #[field(get, copy, vis = "pub")]
+    #[field(skip)]
     last_rendered: Option<(SessionFrame, GainDb)>,
 }
 
@@ -45,6 +44,18 @@ impl EqGainProgram {
 
     pub(crate) fn record_rendered(&mut self, at: SessionFrame, gain: GainDb) {
         self.last_rendered = Some((at, gain));
+    }
+
+    /// The band addressed by this program.
+    #[must_use]
+    pub fn band(&self) -> usize {
+        self.band
+    }
+
+    /// The last frame and gain rendered by the executor, absent before the first frame.
+    #[must_use]
+    pub fn last_rendered(&self) -> Option<(SessionFrame, GainDb)> {
+        self.last_rendered
     }
 
     delegate::delegate! {

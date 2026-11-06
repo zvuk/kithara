@@ -288,20 +288,17 @@ impl Deck {
         let animated = {
             let curves = self.eq_programs.curves(level);
             let animated = curves.iter().any(Option::is_some);
-            match input {
-                Some([left, right]) => {
-                    if animated {
-                        self.render.finish_eq_curves(left, right, at, &curves);
-                    } else {
-                        self.render.finish(left, right);
-                    }
+            if let Some([left, right]) = input {
+                if animated {
+                    self.render.finish_eq_curves(left, right, at, &curves);
+                } else {
+                    self.render.finish(left, right);
                 }
-                None => {
-                    if animated {
-                        self.render.advance_eq_curves(at, range.len(), &curves);
-                    }
-                    self.render.idle();
+            } else {
+                if animated {
+                    self.render.advance_eq_curves(at, range.len(), &curves);
                 }
+                self.render.idle();
             }
             animated
         };
