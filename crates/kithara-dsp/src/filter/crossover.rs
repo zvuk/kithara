@@ -1,6 +1,6 @@
 use std::{
     f32::consts::FRAC_1_SQRT_2,
-    ops::{Deref, DerefMut, Mul},
+    ops::{Add, Deref, DerefMut, Mul, Sub},
 };
 
 use biquad::{Coefficients, Hertz, Type};
@@ -10,25 +10,6 @@ use super::FilterError;
 
 #[cfg(test)]
 mod tests;
-
-struct SectionCoefficients {
-    b0: f32,
-    products: [f32; 4],
-}
-
-impl SectionCoefficients {
-    const fn new(coefficients: Coefficients<f32>) -> Self {
-        Self {
-            b0: coefficients.b0,
-            products: [
-                coefficients.b1,
-                coefficients.b2,
-                coefficients.a1,
-                coefficients.a2,
-            ],
-        }
-    }
-}
 
 struct Df1State {
     y1: f32,
@@ -48,23 +29,30 @@ impl Df1State {
     }
 
     #[inline]
-    fn run(&mut self, input: f32, coefficients: &SectionCoefficients) -> f32 {
-        let direct = coefficients.b0 * input;
-        let [feed1, feed2, feedback1, feedback2] = dispatch!(Level::baseline(), simd => {
-            let factors = f32x4::simd_from(simd, coefficients.products);
-            let history = f32x4::simd_from(simd, [self.x1, self.x2, self.y1, self.y2]);
-            <[f32; 4]>::from(factors.mul(history))
-        });
-        let output = direct + feed1 + feed2 - feedback1 - feedback2;
+    fn run(&mut self, input: f32, coefficients: &Coefficients<f32>) -> f32 {
+        let output =
+            coefficients.b0 * input + coefficients.b1 * self.x1 + coefficients.b2 * self.x2
+                - coefficients.a1 * self.y1
+                - coefficients.a2 * self.y2;
+        self.commit(input, output)
+    }
+
+    #[inline]
+    fn commit(&mut self, input: f32, output: f32) -> f32 {
         self.x2 = self.x1;
         self.x1 = input;
         self.y2 = self.y1;
         self.y1 = output;
-        if output.is_subnormal() && input.abs() < f32::MIN_POSITIVE {
+        if Self::reset_needed(input, output) {
             self.reset();
             return 0.0;
         }
         output
+    }
+
+    #[inline]
+    fn reset_needed(input: f32, output: f32) -> bool {
+        output.is_subnormal() && input.abs() < f32::MIN_POSITIVE
     }
 
     fn reset(&mut self) {
@@ -77,14 +65,14 @@ impl Df1State {
 
 struct Section {
     state: Df1State,
-    coefficients: SectionCoefficients,
+    coefficients: Coefficients<f32>,
 }
 
 impl Section {
     const fn new(coefficients: Coefficients<f32>) -> Self {
         Self {
             state: Df1State::new(),
-            coefficients: SectionCoefficients::new(coefficients),
+            coefficients,
         }
     }
 
@@ -95,7 +83,7 @@ impl Section {
 }
 
 struct Lr4 {
-    coefficients: SectionCoefficients,
+    coefficients: Coefficients<f32>,
     first: Df1State,
     second: Df1State,
 }
@@ -103,18 +91,45 @@ struct Lr4 {
 impl Lr4 {
     const fn new(coefficients: Coefficients<f32>) -> Self {
         Self {
-            coefficients: SectionCoefficients::new(coefficients),
+            coefficients,
             first: Df1State::new(),
             second: Df1State::new(),
         }
     }
 
-    #[inline]
-    fn process(&mut self, input: f32) -> f32 {
-        self.second.run(
-            self.first.run(input, &self.coefficients),
-            &self.coefficients,
-        )
+    #[inline(always)]
+    fn process_pair(&mut self, highpass: &mut Self, input: f32) -> (f32, f32) {
+        dispatch!(Level::baseline(), simd => {
+            let pair = |low, high| f32x4::simd_from(simd, [low, high, 0.0, 0.0]);
+            let (low, high) = (&self.coefficients, &highpass.coefficients);
+            let b0 = pair(low.b0, high.b0);
+            let b1 = pair(low.b1, high.b1);
+            let b2 = pair(low.b2, high.b2);
+            let a1 = pair(low.a1, high.a1);
+            let a2 = pair(low.a2, high.a2);
+            let run = |low: &Df1State, high: &Df1State, input: f32x4<_>| {
+                let output = b0.mul(input)
+                    .add(b1.mul(pair(low.x1, high.x1)))
+                    .add(b2.mul(pair(low.x2, high.x2)))
+                    .sub(a1.mul(pair(low.y1, high.y1)))
+                    .sub(a2.mul(pair(low.y2, high.y2)));
+                let [low, high, ..] = <[f32; 4]>::from(output);
+                [low, high]
+            };
+            let [low, high] = run(&self.first, &highpass.first, pair(input, input));
+            let low = self.first.commit(input, low);
+            // Preview the high stage without committing it before the low cascade.
+            let next_high = if Df1State::reset_needed(input, high) {
+                0.0
+            } else {
+                high
+            };
+            let [next_low, next_high] = run(&self.second, &highpass.second, pair(low, next_high));
+            let low = self.second.commit(low, next_low);
+            let high = highpass.first.commit(input, high);
+            let high = highpass.second.commit(high, next_high);
+            (low, high)
+        })
     }
 }
 
@@ -267,8 +282,7 @@ impl Crossover {
             .zip(self.highpass.iter_mut())
             .zip(lower.iter_mut())
         {
-            *low = lowpass.process(high);
-            high = highpass.process(high);
+            (*low, high) = lowpass.process_pair(highpass, high);
         }
         let count = lower.len();
         let mut allpass = self.allpass.as_mut();

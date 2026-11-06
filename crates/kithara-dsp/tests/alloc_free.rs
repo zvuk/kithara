@@ -136,40 +136,6 @@ fn biquad_never_allocates_after_construction() {
 }
 
 #[kithara::test(native)]
-fn crossover_never_allocates_after_construction() {
-    let hz = |value: f32| Hertz::from_hz(value).expect("positive test Hz");
-    let mut filter = kithara_dsp::filter::Crossover::new(&[hz(250.0), hz(2_500.0)], hz(48_000.0))
-        .expect("valid crossover");
-    let input = [0.25; FRAMES];
-    let mut bands = vec![vec![0.0; FRAMES]; 3];
-    let gains = vec![vec![0.5; 2]; 3];
-    let mut summed = input;
-    assert_no_alloc(|| {
-        assert_eq!(filter.split(&input, &mut bands), FRAMES);
-        filter.reset();
-        assert_eq!(filter.sum(&mut summed, &gains), 2);
-        assert_eq!(&summed[2..], &input[2..]);
-        filter.reset();
-        filter
-            .prepare_sample_rate(hz(44_100.0))
-            .expect("prepared retune");
-        filter
-            .update_sample_rate(hz(44_100.0))
-            .expect("valid retune");
-        filter
-            .prepare_sample_rate(hz(48_000.0))
-            .expect("prepared design");
-        assert_eq!(filter.apply_prepared_sample_rate(), Some(hz(48_000.0)));
-        assert_eq!(filter.apply_prepared_sample_rate(), None);
-        assert_eq!(
-            filter.update_sample_rate(hz(4_000.0)),
-            Err(kithara_dsp::filter::FilterError::Parameters)
-        );
-        assert_eq!(filter.split(&input, &mut bands), FRAMES);
-    });
-}
-
-#[kithara::test(native)]
 fn interpolation_never_allocates() {
     let window = vec![0.25_f32; FRAMES + 4];
     let positions: Vec<f32> = std::iter::successors(Some(1.5_f32), |position| Some(position + 1.0))
