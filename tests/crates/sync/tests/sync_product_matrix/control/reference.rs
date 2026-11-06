@@ -1331,6 +1331,55 @@ impl DecodedCapture {
         })
     }
 
+    fn samples_with_wrong_cue(
+        &self,
+        position: SourcePosition,
+        kernel: &sampling::SampleKernel,
+        read: &mut impl FnMut(i64, usize) -> Result<f32, String>,
+    ) -> Result<[[f32; 2]; 2], String> {
+        if self.rejected {
+            return Err("decoder observer rejected or conflicted while capturing PCM".to_owned());
+        }
+        let source =
+            i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
+        let mut window = [[0.0; 2]; (2 * SINC_RADIUS + 1) as usize];
+        let mut through = 0;
+        let expected = kernel.samples(|offset| {
+            let frame = source
+                .checked_add(offset)
+                .ok_or_else(|| "physical sample coordinate overflows".to_owned())?;
+            let samples = [read(frame, 0)?, read(frame, 1)?];
+            let index = usize::try_from(offset + i64::from(SINC_RADIUS))
+                .expect("kernel offset fits its declared window");
+            window[index] = samples;
+            through = index + 1;
+            Ok(samples)
+        })?;
+        let shifted = position
+            .0
+            .checked_add(position.1.get())
+            .ok_or_else(|| "wrong-cue negative coordinate overflows".to_owned())?;
+        // Shifted taps start one frame later, so reused taps were already admitted above.
+        let prepared = &window[..through];
+        let wrong_cue = i64::try_from(shifted / position.1.get())
+            .map_err(|error| error.to_string())
+            .and_then(|source| {
+                kernel.samples(|offset| {
+                    let frame = source
+                        .checked_add(offset)
+                        .ok_or_else(|| "physical sample coordinate overflows".to_owned())?;
+                    let index = usize::try_from(offset + 1 + i64::from(SINC_RADIUS))
+                        .expect("shifted kernel offset is nonnegative");
+                    if let Some(samples) = prepared.get(index) {
+                        return Ok(*samples);
+                    }
+                    Ok([read(frame, 0)?, read(frame, 1)?])
+                })
+            })
+            .map_err(|error| format!("wrong-cue negative: {error}"))?;
+        Ok([expected, wrong_cue])
+    }
+
     pub(in super::super) fn fixture_domain(
         &self,
         info: AudioChunkInfo,
@@ -1514,7 +1563,7 @@ impl DecodedCapture {
                     .source_ratio_at(0)
                     .ok_or_else(|| "physical source interval has no raw origin".to_owned())?;
                 let (inverse, first) = self.physical_inverse(&candidates, info, position)?;
-                let samplers = [self.sampler(info), self.sampler(info), self.sampler(info)];
+                let samplers = [self.sampler(info), self.sampler(info)];
                 Ok((start, (inverse, first, samplers)))
             })
             .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
@@ -1555,7 +1604,7 @@ impl DecodedCapture {
                 .get_mut(&start)
                 .ok_or_else(|| "physical source interval lost its decoded basis".to_owned())?;
             let (inverse, first) = (*inverse, *first);
-            let [expected_source, cue_source, tempo_source] = samplers;
+            let [expected_source, tempo_source] = samplers;
             let (raw_position, (numerator, denominator)) = if let Some((_, raw, physical)) =
                 next_position.filter(|(previous_start, _, _)| *previous_start == start)
             {
@@ -1580,18 +1629,8 @@ impl DecodedCapture {
             next_position = Some((start, raw_next, physical_next));
             let speed = physical_source_speed((numerator, denominator), physical_next)?;
             let kernel = sampling::SampleKernel::new((numerator, denominator.get()), speed)?;
-            let expected = self.samples_with_kernel(
-                (numerator, denominator),
-                &kernel,
-                [0, 1],
-                expected_source,
-            )?;
-            let wrong_position = numerator
-                .checked_add(denominator.get())
-                .ok_or_else(|| "wrong-cue negative coordinate overflows".to_owned())?;
-            let wrong_cue = self
-                .samples_with_kernel((wrong_position, denominator), &kernel, [0, 1], cue_source)
-                .map_err(|error| format!("wrong-cue negative: {error}"))?;
+            let [expected, wrong_cue] =
+                self.samples_with_wrong_cue((numerator, denominator), &kernel, expected_source)?;
             let wrong_denominator = denominator
                 .get()
                 .checked_mul(first.1.get())
@@ -1991,6 +2030,80 @@ fn native_stereo_sampling_preserves_scalar_bits_and_coverage_errors() {
     }
 }
 
+fn check_physical_pair(
+    capture: &DecodedCapture,
+    position: SourcePosition,
+    speed: f64,
+    mut read: impl FnMut(i64, usize) -> Result<f32, String>,
+) {
+    let kernel = sampling::SampleKernel::new((position.0, position.1.get()), speed)
+        .expect("representable physical phase");
+    let expected = capture
+        .samples_with_kernel(position, &kernel, [0, 1], &mut read)
+        .and_then(|expected| {
+            let shifted = position
+                .0
+                .checked_add(position.1.get())
+                .ok_or_else(|| "wrong-cue negative coordinate overflows".to_owned())?;
+            capture
+                .samples_with_kernel((shifted, position.1), &kernel, [0, 1], &mut read)
+                .map(|wrong_cue| [expected, wrong_cue])
+                .map_err(|error| format!("wrong-cue negative: {error}"))
+        });
+    let mut reads = Vec::new();
+    let actual = capture.samples_with_wrong_cue(position, &kernel, &mut |frame, channel| {
+        reads.push((frame, channel));
+        read(frame, channel)
+    });
+    assert_eq!(
+        actual.map(|pair| pair.map(|pcm| pcm.map(f32::to_bits))),
+        expected.map(|pair| pair.map(|pcm| pcm.map(f32::to_bits))),
+        "{position:?}, {speed}"
+    );
+    let before = reads.len();
+    reads.sort_unstable();
+    reads.dedup();
+    assert_eq!(
+        before,
+        reads.len(),
+        "immutable PCM read twice: {position:?}, {speed}"
+    );
+}
+
+#[kithara::test(native)]
+fn physical_pair_reuses_pcm_and_preserves_errors() {
+    let capture = DecodedCapture::default();
+    for (numerator, denominator) in [
+        (128, 4),
+        (129, 4),
+        (131, 4),
+        (100, 3),
+        (u128::MAX, u128::MAX),
+        (i64::MAX as u128, 1),
+        (i64::MAX as u128 + 1, 1),
+    ] {
+        let position = (numerator, std::num::NonZeroU128::new(denominator).unwrap());
+        for speed in [0.5, 1.0, 1.00001, 1.5, 8.0, f64::INFINITY, f64::NAN] {
+            for fail in [
+                None,
+                Some((16, 0)),
+                Some((32, 1)),
+                Some((48, 0)),
+                Some((49, 1)),
+            ] {
+                check_physical_pair(&capture, position, speed, |frame, channel| {
+                    if fail == Some((frame, channel)) {
+                        return Err(format!("missing PCM at {frame}/{channel}"));
+                    }
+                    let phase = u8::try_from(frame.rem_euclid(5)).expect("bounded source phase");
+                    let channel = u8::try_from(channel).expect("stereo sample channel");
+                    Ok((f32::from(phase) - f32::from(channel)) * 0.125)
+                });
+            }
+        }
+    }
+}
+
 fn check_persistent_physical_sampling(
     capture: &DecodedCapture,
     identity: consumed::SourceIdentity,
@@ -2000,6 +2113,7 @@ fn check_persistent_physical_sampling(
         capture.sampler(identity),
         capture.sampler(identity),
     ];
+    let mut paired = capture.sampler(identity);
     for speed in [0.5, 1.0, 1.25, 1.5, 8.0, f64::INFINITY, f64::NAN] {
         for (frame, phase) in [
             (0_u128, 0),
@@ -2014,6 +2128,14 @@ fn check_persistent_physical_sampling(
             (u128::MAX / 4 - 2, 3),
         ] {
             let numerator = frame * 4 + phase;
+            let denominator = std::num::NonZeroU128::new(4).expect("quarter-frame phase");
+            check_physical_pair(
+                capture,
+                (numerator, denominator),
+                speed,
+                |frame, channel| capture.sample(identity, frame, channel),
+            );
+            check_physical_pair(capture, (numerator, denominator), speed, &mut paired);
             let positions = [(numerator, 4), (numerator + 4, 4), (numerator, 8)];
             for ((read, (numerator, denominator)), speed) in readers
                 .iter_mut()
