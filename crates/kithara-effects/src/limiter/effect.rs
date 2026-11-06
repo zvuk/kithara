@@ -1,6 +1,7 @@
 use core::{
     f32::consts::PI,
     num::{NonZeroU32, NonZeroUsize},
+    ops::Range,
 };
 
 use arrayvec::ArrayVec;
@@ -9,7 +10,7 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_config::Config;
 use kithara_dsp::{
     delay::DelayLine,
-    envelope::{AttackRelease, MinimumWindow, PeakHold},
+    envelope::{AttackRelease, MinimumWindow, PeakHold, WindowTooLong},
     filter::Fir,
     multiply_in_place, sanitize,
 };
@@ -92,9 +93,9 @@ impl LimiterConfig {
 /// bypass below the ceiling that is exact for normal finite samples.
 ///
 /// With a lookahead of `L` frames the output trails the input by `L`: each output frame is the
-/// input `L` frames earlier. Up to eight of those frames resolve the detector's future;
-/// the remaining lookahead holds its smallest target, so a block edge is known before
-/// its samples leave the delay. Zero lookahead retains the immediate held-tail law.
+/// input `L` frames earlier under a gain no larger than the smallest target of those `L + 1`
+/// frames, so the gain is down before a peak leaves the delay. A lookahead of zero frames is the
+/// same law with no delay.
 #[derive(Debug, kithara_config::ConfigOwner)]
 #[config_owner(config)]
 #[non_exhaustive]
@@ -107,9 +108,9 @@ pub struct PeakLimiter {
     >,
     config: LimiterConfig,
     envelope: AttackRelease,
-    /// Smallest target over the lookahead remaining after detector support.
+    /// Smallest gain target over the latency and the current frame.
     window: MinimumWindow,
-    /// Raw input shared by detector support and delayed output; absent at zero latency.
+    /// Sanitized input on its way to the output; absent when the highest rate has no latency.
     delay: Option<DelayLine>,
     /// Frames the output trails the input at the current rate.
     latency: usize,
@@ -211,13 +212,12 @@ impl PeakLimiter {
                 prepared,
             });
         }
-        let support = frames.min(Self::DETECTOR_HALF_WIDTH);
         self.window
-            .set_len(NonZeroUsize::MIN.saturating_add(frames - support))
-            .map_err(|_| LimiterError::Latency {
+            .set_len(NonZeroUsize::MIN.saturating_add(frames))
+            .map_err(|WindowTooLong { capacity, .. }| LimiterError::Latency {
                 sample_rate,
                 frames,
-                prepared,
+                prepared: capacity.saturating_sub(1),
             })?;
         self.latency = frames;
         self.envelope = Self::release_envelope(self.config, sample_rate);
@@ -256,10 +256,6 @@ impl PeakLimiter {
             .map(|channel| channel.len())
             .min()
             .unwrap_or(0);
-        if self.latency > 0 {
-            self.process_buffered(channels, frames);
-            return;
-        }
         let ceiling = f32::from(self.ceiling());
         let reconstruct = self.detector.begin_block(channels, ceiling);
         for start in (0..frames).step_by(Self::CHUNK_FRAMES) {
@@ -299,6 +295,7 @@ impl PeakLimiter {
                 linked.fill(1.0);
             }
             self.window.process(linked);
+            self.delay(channels, start..end);
             // Unity targets only raise the window's minimums, so a unity first gain over a
             // settled envelope keeps every frame of the chunk at unity.
             if !reconstruct && self.envelope.gain() == 1.0 && linked.first() == Some(&1.0) {
@@ -311,81 +308,31 @@ impl PeakLimiter {
         }
     }
 
-    /// Resolve each detector block from the same prepared raw history that delays output.
-    fn process_buffered(&mut self, channels: &mut [&mut [f32]], frames: usize) {
-        let ceiling = f32::from(self.ceiling());
-        let latency = self.latency;
-        let support = latency.min(Self::DETECTOR_HALF_WIDTH);
-        let line = self
-            .delay
-            .as_mut()
-            .expect("invariant: nonzero latency fits prepared delay storage");
-        for start in (0..frames).step_by(Self::CHUNK_FRAMES) {
-            let end = frames.min(start + Self::CHUNK_FRAMES);
-            let count = end - start;
-            let mut raw: [ArrayVec<f32, { Self::CHUNK_FRAMES + Self::DETECTOR_HALF_WIDTH }>;
-                Self::DETECTOR_CHANNELS] = std::array::from_fn(|_| ArrayVec::new());
-            for plane in raw.iter_mut().take(self.channels) {
-                plane.extend(std::iter::repeat_n(0.0, count + support));
-            }
-            let prepared = line.write(channels, start..end).and_then(|()| {
-                let tap = line.tap((count + support).to_f64().unwrap_or(0.0))?;
-                for (channel, plane) in raw.iter_mut().take(self.channels).enumerate() {
-                    line.read(channel, tap, plane)?;
-                }
-                Ok(())
-            });
-            debug_assert!(
-                prepared.is_ok(),
-                "bounded raw detector support fits prepared storage"
-            );
-            let reconstruct = {
-                let mut views = ArrayVec::<_, { Self::DETECTOR_CHANNELS }>::new();
-                for plane in raw.iter_mut().take(self.channels) {
-                    views.push(plane.as_mut_slice());
-                }
-                self.detector.begin_block(&views, ceiling)
-            };
-            let mut linked = ArrayVec::<f32, { Self::CHUNK_FRAMES }>::new();
-            linked.extend(std::iter::repeat_n(0.0, count));
-            let mut current = ArrayVec::<f32, { Self::CHUNK_FRAMES }>::new();
-            let mut peaks = ArrayVec::<f32, { Self::CHUNK_FRAMES }>::new();
-            peaks.extend(std::iter::repeat_n(0.0, count));
-            for (channel, plane) in raw.iter().take(self.channels).enumerate() {
-                current.clear();
-                current.extend(plane[..count].iter().copied().map(sanitize_sample));
-                self.detector.process(channel, plane, &current, &mut peaks);
-                PeakHold::link(&peaks, &mut linked);
-            }
-            for peak in &mut linked {
-                *peak = if *peak > ceiling {
-                    ceiling / *peak
-                } else {
-                    1.0
-                };
-            }
-            self.window.process(&mut linked);
-            let delayed = line
-                .tap((latency + count).to_f64().unwrap_or(0.0))
-                .and_then(|tap| {
-                    for (channel, plane) in channels.iter_mut().enumerate() {
-                        line.read(channel, tap, &mut plane[start..end])?;
-                        sanitize(&mut plane[start..end]);
-                    }
-                    Ok(())
-                });
-            debug_assert!(
-                delayed.is_ok(),
-                "declared output delay fits prepared storage"
-            );
-            if !reconstruct && self.envelope.gain() == 1.0 && linked.first() == Some(&1.0) {
-                continue;
-            }
-            self.envelope.process(&mut linked);
-            for channel in channels.iter_mut() {
-                multiply_in_place(&mut channel[start..end], &linked);
-            }
-        }
+    /// Replace `range` of every channel with the sanitized input the latency earlier.
+    fn delay(&mut self, channels: &mut [&mut [f32]], range: Range<usize>) {
+        let Some(delay) = self.delay.as_mut().filter(|_| self.latency > 0) else {
+            return;
+        };
+        // The range is written first, so one read covers it by reaching back the range and the
+        // latency: the storage holds a chunk beyond the longest latency.
+        let reach = self
+            .latency
+            .saturating_add(range.len())
+            .to_f64()
+            .unwrap_or(0.0);
+        let delayed = delay.write(channels, range.clone()).and_then(|()| {
+            let tap = delay.tap(reach)?;
+            channels
+                .iter_mut()
+                .enumerate()
+                .try_for_each(|(index, channel)| {
+                    delay.read(index, tap, &mut channel[range.clone()])
+                })
+        });
+        debug_assert!(
+            delayed.is_ok(),
+            "one plane per channel and a chunk beyond the longest latency fit every read"
+        );
     }
 
     /// Reset the gain envelope to unity and forget detector, gain-target and delayed-input
