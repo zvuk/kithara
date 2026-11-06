@@ -84,6 +84,8 @@ impl RenderPass {
             pub(crate) fn idle(&mut self);
         }
         to self.eq {
+            pub(crate) fn prepare_sample_rate(&mut self, sample_rate: NonZeroU32) -> Result<(), FilterError>;
+            pub(crate) fn discard_prepared_sample_rate(&mut self);
             #[call(read_gains)]
             pub(crate) fn read_eq(&self, gains: &mut [GainDb]) -> usize;
             /// Ramp `band` of the deck's equaliser to `gain` from the next frame rendered.
@@ -93,17 +95,6 @@ impl RenderPass {
             #[call(take_prepared_layout)]
             pub(crate) fn take_prepared_eq_layout(&mut self, layout: Box<EqLayout>) -> Option<Box<EqLayout>>;
         }
-    }
-
-    pub(crate) fn prepare_sample_rate(
-        &mut self,
-        sample_rate: NonZeroU32,
-    ) -> Result<(), FilterError> {
-        self.eq.prepare_sample_rate(sample_rate)
-    }
-
-    pub(crate) fn discard_prepared_sample_rate(&mut self) {
-        self.eq.discard_prepared_sample_rate();
     }
 
     pub(crate) fn apply_prepared_sample_rate(&mut self) -> Option<NonZeroU32> {
