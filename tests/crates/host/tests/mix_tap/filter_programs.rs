@@ -37,10 +37,7 @@ fn cutoff_at(at: u64, start: u64) -> f64 {
     200.0 * 4.0_f64.powf(3.0 * t * t - 2.0 * t * t * t)
 }
 
-#[kithara::test(tokio)]
-#[case::inside_callback(0)]
-#[case::callback_edge(47)]
-async fn public_filter_curves_takeover_reset_and_clear_reach_the_host(#[case] phase: u64) {
+async fn loaded_filter_source(source: String) -> (OfflinePlayer, Underruns) {
     let options = OfflinePlayerOptions::builder()
         .block_on_underrun(false)
         .output_block_frames(NonZeroU32::new(64).expect("callback"))
@@ -51,16 +48,22 @@ async fn public_filter_curves_takeover_reset_and_clear_reach_the_host(#[case] ph
         )
         .build();
     let harness = OfflinePlayer::with_sample_rate(options, SAMPLE_RATE).await;
-    let mut underruns = Underruns::new(&harness);
-    let config = ResourceConfig::for_src(
-        ResourceSrc::parse(asset_source(&assets::fixed_constant_wav_cd_half_44100()))
-            .expect("fixture URI"),
-    )
-    .store(AssetStore::builder(harness.worker().pools().clone()).build())
-    .preload_chunks(NonZeroUsize::MIN)
-    .audio_buffer_chunks(NonZeroUsize::new(2).expect("packets"))
-    .build();
+    let underruns = Underruns::new(&harness);
+    let config = ResourceConfig::for_src(ResourceSrc::parse(source).expect("fixture URI"))
+        .store(AssetStore::builder(harness.worker().pools().clone()).build())
+        .preload_chunks(NonZeroUsize::MIN)
+        .audio_buffer_chunks(NonZeroUsize::new(2).expect("packets"))
+        .build();
     let harness = load_source(harness, TrackSource::Config(Box::new(config))).await;
+    (harness, underruns)
+}
+
+#[kithara::test(tokio)]
+#[case::inside_callback(0)]
+#[case::callback_edge(47)]
+async fn public_filter_curves_takeover_reset_and_clear_reach_the_host(#[case] phase: u64) {
+    let (harness, mut underruns) =
+        loaded_filter_source(asset_source(&assets::fixed_constant_wav_cd_half_44100())).await;
     let first = render_effect_window(&harness, 64).await;
     assert_eq!(first.len(), 128);
     underruns.checkpoint(harness.metrics(), true, "Filter first callback");
@@ -269,6 +272,175 @@ async fn public_filter_curves_takeover_reset_and_clear_reach_the_host(#[case] ph
     );
     assert_eq!(tap.drops(), 0);
     underruns.checkpoint(harness.metrics(), true, "Filter final complete edges");
+    assert_eq!(harness.metrics().underruns(), 0);
+    harness.close().await;
+}
+
+#[kithara::test(tokio)]
+async fn filter_tail_and_programme_outlive_source_eof_and_close_while_owned() {
+    let (harness, mut underruns) =
+        loaded_filter_source(asset_source(&assets::fixed_constant_wav_cd_half_4410())).await;
+    let first = render_effect_window(&harness, 64).await;
+    assert_eq!(first.len(), 128);
+    underruns.checkpoint(harness.metrics(), true, "Filter EOF initial callback");
+    assert_eq!(harness.metrics().underruns(), 0);
+    let warm = render_effect_window(&harness, 2048).await;
+    assert_eq!(&warm[warm.len() - 128..], &[0.5; 128]);
+    let settings = FilterSettings::builder()
+        .kind(Kind::LowPass)
+        .cutoff_hz(Cutoff::checked(1_000.0).expect("cutoff"))
+        .build()
+        .expect("settings");
+    let start = harness.host().position();
+    let install = start + 529;
+    harness
+        .with_queue(move |queue| queue.install_filter(When::At(frame(install)), settings))
+        .await
+        .expect("install resident filter");
+    let mut tap = harness
+        .host()
+        .attach_tap(Tap::Master, ROOMY_CAPACITY)
+        .await
+        .expect("master tap");
+    let mut take = render_effect_window(&harness, 1024).await;
+    assert_eq!(tap.drain(), take);
+    let snapshot = harness.deck_snapshot();
+    let slot = snapshot
+        .slots
+        .iter()
+        .find(|slot| slot.binding.is_some())
+        .expect("sounding source");
+    let mark = slot.mark.expect("source/session anchor");
+    let spec = slot.source.expect("source metadata").spec;
+    assert_eq!(spec.sample_rate.get(), SAMPLE_RATE);
+    assert_eq!(
+        mark.position,
+        spec.duration_for(mark.lane.frame)
+            .expect("one-to-one source clock")
+    );
+    let source_start = u64::try_from(i64::from(mark.session))
+        .expect("session anchor")
+        .checked_sub(mark.lane.frame)
+        .expect("initial source origin");
+    let source_end = source_start + 4410;
+    let curve = harness.host().position() + 529;
+    let end = curve + 8192;
+    let program = FilterProgram::new(
+        FilterParameter::CutoffHz,
+        vec![
+            point(curve, 200.0, CurveShape::cubic(0.0, 1.0).expect("S shape")),
+            point(end, 800.0, CurveShape::HOLD),
+        ],
+    )
+    .expect("programme beyond EOF");
+    harness
+        .with_queue(move |queue| queue.filter_program(program))
+        .await
+        .expect("public programme");
+    let drained = render_effect_window(&harness, 10_240).await;
+    assert_eq!(tap.drain(), drained);
+    take.extend(drained);
+    let rate = harness.host().spec().await.sample_rate;
+    let mut reference = FilterEffect::new(
+        AudioSpec::new(2, rate),
+        FilterConfig::from((harness.worker().pools().clone(), settings)),
+    )
+    .expect("reference");
+    let mut expected = Vec::with_capacity(take.len());
+    for offset in 0..take.len() / 2 {
+        let at = start + u64::try_from(offset).expect("capture frame");
+        let input = if (source_start..source_end).contains(&at) {
+            0.5
+        } else {
+            0.0
+        };
+        let (mut left, mut right) = ([input], [input]);
+        if at >= install {
+            if at >= curve {
+                let value = if at >= end {
+                    800.0
+                } else {
+                    let t = f64::from(u32::try_from(at - curve).expect("programme local frame"))
+                        / 8192.0;
+                    200.0 * 4.0_f64.powf(3.0 * t * t - 2.0 * t * t * t)
+                };
+                reference
+                    .set_explicit(FilterSettingsChange::CutoffHz(
+                        Cutoff::checked(value).expect("positive cutoff"),
+                    ))
+                    .expect("reference point");
+            }
+            reference
+                .process(&mut [&mut left[..], &mut right[..]], 0..1)
+                .expect("reference tail");
+        }
+        expected.extend([left[0], right[0]]);
+    }
+    assert_eq!(
+        take.iter()
+            .map(|sample| sample.to_bits())
+            .collect::<Vec<_>>(),
+        expected
+            .iter()
+            .map(|sample| sample.to_bits())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        take[take.len() - 512..]
+            .iter()
+            .all(|sample| sample.to_bits() == 0)
+    );
+    let tail_offset = usize::try_from(source_end - start).expect("source endpoint") * 2;
+    assert!(
+        take[tail_offset..tail_offset + 64]
+            .iter()
+            .any(|sample| *sample != 0.0),
+        "the causal tail survives EOF"
+    );
+    let snapshot = harness.deck_snapshot();
+    assert!(
+        snapshot
+            .slots
+            .iter()
+            .all(|slot| slot.state != kithara_render::bridge::SlotState::Playing)
+    );
+    assert_eq!(
+        f64::from(
+            snapshot
+                .filter
+                .settings()
+                .expect("resident filter")
+                .cutoff_hz()
+        ),
+        800.0
+    );
+    assert!(snapshot.filter.program(FilterParameter::CutoffHz).is_some());
+    let future = harness.host().position() + 529;
+    let held = FilterProgram::new(
+        FilterParameter::CutoffHz,
+        vec![
+            point(future, 800.0, CurveShape::HOLD),
+            point(future + 8192, 800.0, CurveShape::HOLD),
+        ],
+    )
+    .expect("owned future programme");
+    harness
+        .with_queue(move |queue| queue.filter_program(held))
+        .await
+        .expect("programme on empty deck");
+    let empty = render_effect_window(&harness, 640).await;
+    assert_eq!(tap.drain(), empty);
+    assert!(empty.iter().all(|sample| sample.to_bits() == 0));
+    assert!(
+        harness
+            .deck_snapshot()
+            .filter
+            .program(FilterParameter::CutoffHz)
+            .is_some()
+    );
+    assert!(harness.deck_snapshot().filter.settings().is_some());
+    assert_eq!(tap.drops(), 0);
+    underruns.checkpoint(harness.metrics(), true, "Filter EOF tail and owned close");
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;
 }

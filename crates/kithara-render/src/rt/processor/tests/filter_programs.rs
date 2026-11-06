@@ -384,3 +384,113 @@ fn cubic_cutoff_q_and_shelf_gain_reach_each_frame_of_the_resident_kernel() {
     assert_eq!(settings.gain_db(), GainDb::MAX);
     assert_eq!(snapshot.metrics.underruns(), 0);
 }
+
+#[kithara::test]
+fn switched_high_q_trajectory_is_refused_or_keeps_normalized_pcm_finite() {
+    const PERIOD: usize = 552;
+    const CYCLES: usize = FilterProgram::MAX_KNOTS / 2;
+    const TAKE: usize = PERIOD * CYCLES;
+    let (mut mixer, mut ends) = mixer_with_config(DeckMixerConfig::default(), 32);
+    render_frames(&mut mixer, 0, 1);
+    let config = FilterConfig::builder(pools())
+        .kind(Kind::LowPass)
+        .cutoff_hz(Cutoff::MIN)
+        .q(Q::MAX)
+        .build()
+        .expect("stable endpoint settings");
+    let effect = FilterEffect::new(AudioSpec::new(2, shape().sample_rate), config.clone())
+        .expect("prepared high-Q filter");
+    let mut reference = FilterEffect::new(AudioSpec::new(2, shape().sample_rate), config)
+        .expect("unchanged stable reference");
+    send(
+        &mut ends,
+        at(1),
+        vec![
+            DeckPart::Attach {
+                slot: A,
+                item_id: kithara_events::TrackId::allocate(),
+                pcm: pcm_samples(
+                    "normalized switched filter",
+                    1.0,
+                    &vec![1.0; (TAKE + 2) * 2],
+                    false,
+                ),
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Crossfade(
+                    CrossfadeSettings::new(0.0, CrossfadeCurve::Linear, 1.0, 0.5)
+                        .expect("instant start"),
+                ),
+            },
+        ],
+    );
+    let observed = binding(&mut ends);
+    send(
+        &mut ends,
+        at(1),
+        vec![part(observed, DeckFilterChange::Install(Box::new(effect)))],
+    );
+    render_frames(&mut mixer, 1, 1);
+    assert_eq!(receipts(&mut ends).len(), 2);
+    tick(&mut reference);
+    let before = ends.deck.snapshot.read().filter;
+    let origin = 2;
+    let mut knots = Vec::new();
+    for cycle in 0..CYCLES {
+        let start = origin + cycle * PERIOD;
+        knots
+            .push(ParameterKnot::new(frame_at(start), 20.0, CurveShape::HOLD).expect("low cutoff"));
+        knots.push(
+            ParameterKnot::new(frame_at(start + PERIOD - 1), 11_025.0, CurveShape::HOLD)
+                .expect("high cutoff"),
+        );
+    }
+    assert_eq!(knots.len(), FilterProgram::MAX_KNOTS);
+    let program =
+        FilterProgram::new(FilterParameter::CutoffHz, knots).expect("legal parameter points");
+    let command = program_part(&mut ends, program);
+    let seq = send(&mut ends, at(origin), vec![command]);
+    let first = render_frames(&mut mixer, origin, 1);
+    let replies = receipts(&mut ends);
+    if !replies.is_empty() {
+        assert_eq!(replies.len(), 1);
+        assert!(matches!(
+            outcome_of(&replies, seq),
+            Outcome::Rejected(Rejection::Refused(DeckRefusal::Filter(
+                kithara_effects::filter::FilterError::Parameters
+            )))
+        ));
+        let after = ends.deck.snapshot.read().filter;
+        assert_eq!(after.settings(), before.settings());
+        assert_eq!(after.binding(), before.binding());
+        assert_eq!(after.program(FilterParameter::CutoffHz), None);
+        assert_eq!(
+            after.authority(FilterParameter::CutoffHz),
+            before.authority(FilterParameter::CutoffHz)
+        );
+        assert_eq!(bits(&first), bits(&[tick(&mut reference)]));
+        return;
+    }
+    assert_eq!(
+        ends.deck
+            .snapshot
+            .read()
+            .filter
+            .program(FilterParameter::CutoffHz),
+        Some(seq)
+    );
+    assert!(first.iter().all(|sample| sample.is_finite()));
+    // Stable poles at each endpoint do not establish stability of their switched product.
+    for offset in (1..TAKE).step_by(BLOCK) {
+        let pcm = render_frames(&mut mixer, origin + offset, BLOCK.min(TAKE - offset));
+        assert!(
+            pcm.iter().all(|sample| sample.is_finite()),
+            "admitted normalized trajectory emitted nonfinite PCM at offset{offset}"
+        );
+    }
+    let replies = receipts(&mut ends);
+    assert_applied_at(outcome_of(&replies, seq), origin);
+    assert_eq!(ends.deck.snapshot.read().metrics.underruns(), 0);
+}
