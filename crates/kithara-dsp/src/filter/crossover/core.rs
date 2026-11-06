@@ -32,7 +32,7 @@ impl Df1State {
         self.x1 = input;
         self.y2 = self.y1;
         self.y1 = output;
-        if output.is_subnormal() && input.abs().to_bits() < f32::MIN_POSITIVE.to_bits() {
+        if output.is_subnormal() && input.abs() < f32::MIN_POSITIVE {
             self.reset();
             return 0.0;
         }
@@ -119,6 +119,7 @@ impl Design {
 pub struct Crossover {
     splits: Box<[Split]>,
     gain_frame: Box<[f32]>,
+    band_frame: Box<[f32]>,
     prepared: Box<[Design]>,
     prepared_rate: Option<Hertz<f32>>,
 }
@@ -152,6 +153,7 @@ impl Crossover {
                 })
                 .collect(),
             gain_frame: vec![0.0; frequencies.len().saturating_add(1)].into_boxed_slice(),
+            band_frame: vec![0.0; frequencies.len().saturating_add(1)].into_boxed_slice(),
             prepared: designs.into_boxed_slice(),
             prepared_rate: None,
         })
@@ -171,11 +173,12 @@ impl Crossover {
             .iter()
             .fold(input.len(), |count, band| count.min(band.len()));
         for (frame, &sample) in input.iter().take(count).enumerate() {
-            filtered_bands(&mut self.splits, sample, bands, |band, value| {
+            filter_frame(&mut self.splits, &mut self.band_frame, sample);
+            for (band, &value) in bands.iter_mut().zip(self.band_frame.iter()) {
                 *band
                     .get_mut(frame)
                     .expect("frame belongs to the validated common prefix") = value;
-            });
+            }
         }
         count
     }
@@ -206,16 +209,11 @@ impl Crossover {
 
     #[inline(never)]
     fn weighted_sample(&mut self, sample: f32) -> f32 {
-        let mut output = 0.0;
-        filtered_bands(
-            &mut self.splits,
-            sample,
-            &mut self.gain_frame,
-            |gain, value| {
-                output = value.mul_add(*gain, output);
-            },
-        );
-        output
+        filter_frame(&mut self.splits, &mut self.band_frame, sample);
+        self.band_frame
+            .iter()
+            .zip(&self.gain_frame)
+            .fold(0.0, |output, (value, gain)| value.mul_add(*gain, output))
     }
 
     /// Clears every section's history without allocation or coefficient changes.
@@ -279,22 +277,18 @@ impl Crossover {
 }
 
 #[inline(always)]
-fn filtered_bands<T>(
-    splits: &mut [Split],
-    mut high: f32,
-    outputs: &mut [T],
-    mut consume: impl FnMut(&mut T, f32),
-) {
-    let (high_output, lower) = outputs
+fn filter_frame(splits: &mut [Split], bands: &mut [f32], mut high: f32) {
+    let (high_output, lower) = bands
         .split_last_mut()
-        .expect("validated bands include the final high output");
-    for (split, output) in splits.iter_mut().zip(lower) {
-        let mut low = split.lowpass.process(high);
+        .expect("construction reserves the final high band");
+    for (split, output) in splits.iter_mut().zip(lower.iter_mut()) {
+        *output = split.lowpass.process(high);
         high = split.highpass.process(high);
-        for section in &mut split.allpass {
-            low = section.run(low);
-        }
-        consume(output, low);
     }
-    consume(high_output, high);
+    *high_output = high;
+    for (split, output) in splits.iter_mut().zip(lower) {
+        for section in &mut split.allpass {
+            *output = section.run(*output);
+        }
+    }
 }
