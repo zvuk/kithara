@@ -1,6 +1,6 @@
 use std::{num::NonZeroUsize, ops::Range};
 
-use fearless_simd::{Level, dispatch, prelude::*};
+use fearless_simd::{Level, dispatch};
 use kithara_test_fixtures::{
     portable::{harmonics, sawtooth, sine_440},
     signal::Wave,
@@ -661,31 +661,17 @@ fn a_silent_channel_beside_a_playing_one_never_reaches_subnormals() {
 }
 
 fn fallback_peak(samples: &[f32]) -> f32 {
-    dispatch!(Level::fallback(), simd => peak_reference(simd, samples))
-}
-
-fn native_peak(samples: &[f32]) -> f32 {
-    dispatch!(Level::new(), simd => peak_reference(simd, samples))
-}
-
-fn peak_reference<S: Simd>(simd: S, samples: &[f32]) -> f32 {
-    let mut blocks = samples.chunks_exact(S::f32s::LEN);
-    let mut peak = S::f32s::splat(simd, 0.0);
-    for block in &mut blocks {
-        peak = peak.max(S::f32s::from_slice(simd, block).abs());
-    }
-    peak.max(simd::padded(simd, blocks.remainder()).abs())
-        .reduce_max()
+    dispatch!(Level::fallback(), simd => portable::peak_kernel(simd, samples))
 }
 
 #[kithara::test]
 fn peak_matches_the_scalar_maximum_on_every_backend() {
     type Peak = fn(&[f32]) -> f32;
     let backends: Vec<(&str, Peak)> = Vec::from([
-        ("portable-native", native_peak as Peak),
+        ("portable-native", portable::peak as Peak),
         ("portable-fallback", fallback_peak),
         #[cfg(any(target_os = "macos", target_os = "ios"))]
-        ("accelerate", kithara_apple::accelerate::max_magnitude_f32),
+        ("accelerate", accelerate::peak),
     ]);
     for len in SIZES {
         let sine: Vec<f32> = signal(len.saturating_add(SPECIALS.len()), sine_440())

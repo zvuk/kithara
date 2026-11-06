@@ -24,9 +24,7 @@ same backends; `downmix` folds interleaved frames to mono and `sum_squares`
 reduces a slice. The FFT, the bin kernels and the autocorrelation build only
 with the `spectrum` feature, off by default, so a build that runs no analysis
 compiles no FFT; `spectrum::FftLen` and `SpectrumError` are always
-available. Biquad cascades use ordered SIMD on every target to keep state and
-samples identical across arbitrary caller chunks.
-No kernel panics; only `filter::Biquad::new`,
+available. No kernel panics; only `filter::Biquad::new`,
 `spectrum::Fft::new` and, off Apple, `Fft::spectrum` allocate.
 `Fft::spectrum` takes its sample planes, `spectrum::Autocorrelation::new`
 its padding and `delay::DelayLine::new` its frame history from the caller's
