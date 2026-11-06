@@ -1,96 +1,44 @@
-use std::ops::{Deref, DerefMut, Mul};
+use std::ops::{Deref, DerefMut};
 
-use biquad::{Coefficients, Hertz, Type};
-use fearless_simd::{Level, SimdFrom, dispatch, f32x4};
+use biquad::{Biquad, Coefficients, DirectForm1, Hertz, Type};
 
 use super::{coefficients, validate};
 use crate::filter::FilterError;
 
-struct Df1State {
-    y1: f32,
-    y2: f32,
-    x1: f32,
-    x2: f32,
-}
-
-impl Df1State {
-    const fn new() -> Self {
-        Self {
-            y1: 0.0,
-            y2: 0.0,
-            x1: 0.0,
-            x2: 0.0,
-        }
-    }
-
-    #[inline]
-    fn run(&mut self, input: f32, coefficients: &Coefficients<f32>) -> f32 {
-        let direct = coefficients.b0 * input;
-        let [feed1, feed2, feedback1, feedback2] = dispatch!(Level::baseline(), simd => {
-            let factors = f32x4::simd_from(simd, [coefficients.b1, coefficients.b2, coefficients.a1, coefficients.a2]);
-            let history = f32x4::simd_from(simd, [self.x1, self.x2, self.y1, self.y2]);
-            <[f32; 4]>::from(factors.mul(history))
-        });
-        let output = direct + feed1 + feed2 - feedback1 - feedback2;
-        self.x2 = self.x1;
-        self.x1 = input;
-        self.y2 = self.y1;
-        self.y1 = output;
-        if output.is_subnormal() && input.abs() < f32::MIN_POSITIVE {
-            self.reset();
-            return 0.0;
-        }
-        output
-    }
-
-    fn reset(&mut self) {
-        self.x1 = 0.0;
-        self.x2 = 0.0;
-        self.y1 = 0.0;
-        self.y2 = 0.0;
-    }
-}
-
-struct Section {
-    state: Df1State,
-    coefficients: Coefficients<f32>,
-}
+struct Section(DirectForm1<f32>);
 
 impl Section {
     const fn new(coefficients: Coefficients<f32>) -> Self {
-        Self {
-            state: Df1State::new(),
-            coefficients,
-        }
+        Self(DirectForm1::new(coefficients))
     }
 
     #[inline]
     fn run(&mut self, input: f32) -> f32 {
-        self.state.run(input, &self.coefficients)
+        let output = self.0.run(input);
+        if output.is_subnormal() && input.abs() < f32::MIN_POSITIVE {
+            self.0.reset_state();
+            return 0.0;
+        }
+        output
     }
 }
 
 struct Lr4 {
-    coefficients: Coefficients<f32>,
-    first: Df1State,
-    second: Df1State,
+    first: Section,
+    second: Section,
 }
 
 impl Lr4 {
     const fn new(coefficients: Coefficients<f32>) -> Self {
         Self {
-            coefficients,
-            first: Df1State::new(),
-            second: Df1State::new(),
+            first: Section::new(coefficients),
+            second: Section::new(coefficients),
         }
     }
 
     #[inline]
     fn process(&mut self, input: f32) -> f32 {
-        self.second.run(
-            self.first.run(input, &self.coefficients),
-            &self.coefficients,
-        )
+        self.second.run(self.first.run(input))
     }
 }
 
@@ -225,12 +173,12 @@ impl Crossover {
     /// Clears every section's history without allocation or coefficient changes.
     pub fn reset(&mut self) {
         for split in &mut self.splits {
-            split.lowpass.first.reset();
-            split.lowpass.second.reset();
-            split.highpass.first.reset();
-            split.highpass.second.reset();
+            split.lowpass.first.0.reset_state();
+            split.lowpass.second.0.reset_state();
+            split.highpass.first.0.reset_state();
+            split.highpass.second.0.reset_state();
             for section in &mut split.allpass {
-                section.state.reset();
+                section.0.reset_state();
             }
         }
     }
