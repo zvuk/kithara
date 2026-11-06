@@ -78,9 +78,10 @@ impl IsolatorEq {
 
     #[inline]
     pub fn process_sample(&mut self, input: f32) -> f32 {
-        let mut output = [0.0];
-        self.process(&[input], &mut output);
-        output[0]
+        self.process_block(std::slice::from_ref(&input))
+            .first()
+            .copied()
+            .expect("construction reserves a nonempty output block")
     }
 
     /// Processes the common input/output prefix; the remaining output stays untouched.
