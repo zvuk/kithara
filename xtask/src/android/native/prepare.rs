@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::{common::project::ProjectConfig, lock::FileLock, test::NextestAction};
 use sha2::{Digest, Sha256};
 
-use super::{super::device::Selected, build, runner};
+use super::{super::device::Selected, build, runner, selection};
 use crate::child;
 
 pub(super) fn art_nextest_list_extra(target: &str, packages: &BTreeSet<String>) -> Vec<String> {
@@ -195,10 +195,7 @@ impl Prepared {
             "==> Native fixtures from {device_url} after {:.1}s (no store push)",
             started.elapsed().as_secs_f64()
         );
-        fs::write(
-            self.evidence.join("session.json"),
-            serde_json::to_vec_pretty(&session)?,
-        )?;
+        session.write(&self.evidence.join("session.json"))?;
         let mut list = self.nextest(NextestAction::List, filter)?;
         list.args(["--message-format", "json"]);
         logged(
@@ -207,6 +204,8 @@ impl Prepared {
             &self.evidence.join("list.log"),
             cancel,
         )?;
+        session.filters = selection::filters(&fs::read(self.evidence.join("list.json"))?)?;
+        session.write(&self.evidence.join("session.json"))?;
         let junit = inventory_junit(&self.root);
         if junit.exists() {
             fs::remove_file(&junit)?;

@@ -123,6 +123,7 @@ pub(super) fn prepare(
         evidence: evidence.join("invocations"),
         environment: BTreeMap::new(),
         binaries,
+        filters: BTreeMap::new(),
     };
     fs::create_dir_all(&session.evidence)?;
     if let Err(error) = session.control(
