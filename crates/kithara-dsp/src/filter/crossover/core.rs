@@ -32,7 +32,7 @@ impl Df1State {
         self.x1 = input;
         self.y2 = self.y1;
         self.y1 = output;
-        if output.is_subnormal() && input.abs() < f32::MIN_POSITIVE {
+        if output.is_subnormal() && input.abs().to_bits() < f32::MIN_POSITIVE.to_bits() {
             self.reset();
             return 0.0;
         }
