@@ -1,8 +1,10 @@
 use std::{
     collections::BTreeMap,
     env, fs,
+    io::Write,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
@@ -18,6 +20,7 @@ pub(super) fn run(output: &Path, ctx: &Ctx) -> Result<()> {
     process.require_os(&["windows"], "native Windows diagnostics")?;
     let target = ctx.metadata()?.target_directory.as_std_path();
     let files = collect(&env::temp_dir(), target, output)?;
+    let io_probe = durable_write_samples(output)?;
     let mut query = process.command("powershell.exe");
     query.args([
         "-NoProfile",
@@ -55,6 +58,7 @@ pub(super) fn run(output: &Path, ctx: &Ctx) -> Result<()> {
         "captured_unix_seconds": SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
         "target": target,
         "system": system,
+        "io_probe": io_probe,
         "files": files,
     });
     fs::write(
@@ -62,6 +66,47 @@ pub(super) fn run(output: &Path, ctx: &Ctx) -> Result<()> {
         serde_json::to_vec_pretty(&manifest)?,
     )?;
     Ok(())
+}
+
+fn durable_write_samples(root: &Path) -> Result<Value> {
+    const WRITERS: usize = 8;
+    const SAMPLES: usize = 4;
+    const BYTES: usize = 128;
+    let started = Instant::now();
+    let samples = thread::scope(|scope| -> Result<Vec<Vec<f64>>> {
+        let workers: Vec<_> = (0..WRITERS)
+            .map(|_| {
+                scope.spawn(|| -> Result<Vec<f64>> {
+                    let mut file = tempfile::NamedTempFile::new_in(root)
+                        .context("create diagnostic I/O file")?;
+                    (0..SAMPLES)
+                        .map(|_| {
+                            let started = Instant::now();
+                            file.write_all(&[0x5a; BYTES])?;
+                            file.as_file().sync_data()?;
+                            Ok(started.elapsed().as_secs_f64() * 1000.0)
+                        })
+                        .collect()
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("diagnostic I/O worker panicked"))?
+            })
+            .collect()
+    })?;
+    Ok(json!({
+        "root": root,
+        "concurrent_writers": WRITERS,
+        "samples_per_writer": SAMPLES,
+        "bytes_per_sample": BYTES,
+        "write_and_sync_ms": samples,
+        "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
+    }))
 }
 
 fn ordinary(metadata: &fs::Metadata) -> bool {
@@ -153,6 +198,36 @@ fn collect(temp: &Path, target: &Path, output: &Path) -> Result<Vec<Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn durable_samples_preserve_evidence_and_remove_their_temporary_files() {
+        let root = tempfile::tempdir().unwrap();
+        let report = root.path().join("previous-junit.xml");
+        fs::write(&report, b"retained report").unwrap();
+        let samples = durable_write_samples(root.path()).unwrap();
+        assert_eq!(samples["concurrent_writers"], 8);
+        let rows = samples["write_and_sync_ms"].as_array().unwrap();
+        assert_eq!(rows.len(), 8);
+        for row in rows {
+            let values = row.as_array().unwrap();
+            assert_eq!(values.len(), 4);
+            assert!(
+                values
+                    .iter()
+                    .all(|value| value.as_f64().is_some_and(|ms| ms.is_finite() && ms >= 0.0))
+            );
+        }
+        assert_eq!(fs::read(&report).unwrap(), b"retained report");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn durable_samples_never_fall_back_to_another_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("missing");
+        assert!(durable_write_samples(&missing).is_err());
+        assert!(!missing.exists());
+    }
 
     #[test]
     fn capture_is_bounded_hashed_and_preserves_its_sources() {
