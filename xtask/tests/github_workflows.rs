@@ -1188,7 +1188,7 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
 
     assert_checkout(
         named_step(report, "Checkout controller"),
-        "controller",
+        ".",
         "${{ job.workflow_repository }}",
         "${{ job.workflow_sha }}",
     );
@@ -1218,7 +1218,7 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
     assert_eq!(
         mapping_field(cache_upload, "if").as_str(),
         Some(
-            "${{ always() && hashFiles(format('controller/.ci-artifacts/cache/github-{0}-{1}-*.json', github.run_id, github.run_attempt)) != '' }}"
+            "${{ always() && hashFiles(format('.ci-artifacts/cache/github-{0}-{1}-*.json', github.run_id, github.run_attempt)) != '' }}"
         ),
     );
     let cache_inputs = mapping_field(cache_upload, "with")
@@ -1226,16 +1226,14 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
         .expect("compiler-cache evidence inputs");
     assert_eq!(
         mapping_field(cache_inputs, "path").as_str(),
-        Some(
-            "controller/.ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json"
-        ),
+        Some(".ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json"),
     );
 
     let verifier = named_step(report, "Verify and render the stress evidence");
     assert_always(verifier);
     assert_eq!(
         mapping_field(verifier, "working-directory").as_str(),
-        Some("controller")
+        Some(".")
     );
     let verifier_env = mapping_field(verifier, "env")
         .as_mapping()
