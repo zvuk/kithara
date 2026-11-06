@@ -548,7 +548,7 @@ mod tests {
     /// lane can pass a version check the host never made.
     #[test]
     fn the_bootstrap_spells_xcodebuild_the_way_the_config_resolves_it() {
-        let root = crate::ci::config::workspace_root();
+        let root = crate::testing::workspace::root();
         let project = kithara_devtools::common::project::ProjectConfig::load(&root)
             .expect("the project config loads");
         let source = fs::read_to_string(root.join("xtask/src/ci/host/mac/system.rs"))

@@ -296,7 +296,7 @@ mod tests {
     use clap::Parser;
 
     use super::*;
-    use crate::ci::config::workspace_root;
+    use crate::testing::workspace::root as workspace_root;
 
     #[test]
     fn the_native_cache_service_accepts_its_host_directory() {

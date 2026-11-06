@@ -4,9 +4,12 @@
 //! every claim. So every workspace build script names what it reads before it
 //! can return, and none of them reads a value that changes on every commit.
 
-use std::{fs, path::Path};
+use std::fs;
 
 use syn::{Item, Stmt, visit::Visit};
+
+#[path = "../src/testing/workspace.rs"]
+mod workspace;
 
 /// Values that differ on every commit or pipeline: a script that reads one
 /// reruns, and rebuilds everything that depends on it, on every job.
@@ -20,9 +23,7 @@ const PER_COMMIT: &[&str] = &[
 
 #[test]
 fn every_build_script_tells_cargo_what_it_reads_before_it_can_return() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace::root();
     let metadata = cargo_metadata::MetadataCommand::new()
         .manifest_path(root.join("Cargo.toml"))
         .no_deps()
@@ -72,9 +73,7 @@ fn every_build_script_tells_cargo_what_it_reads_before_it_can_return() {
 fn a_nested_just_hands_build_scripts_the_same_pkg_config_path() {
     use std::{env, os::unix::fs::PermissionsExt, process::Command};
 
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace::root();
     let pins =
         fs::read_to_string(root.join(".config/ci-pins.toml")).expect("the pins are readable");
     let start = pins
@@ -107,7 +106,7 @@ fn a_nested_just_hands_build_scripts_the_same_pkg_config_path() {
             .arg("--justfile")
             .arg(root.join("justfile"))
             .arg("--working-directory")
-            .arg(root)
+            .arg(&root)
             .args(["--evaluate", "PKG_CONFIG_PATH"])
             .env("PATH", &path)
             .env("PKG_CONFIG_PATH", inherited)
@@ -131,7 +130,7 @@ fn a_nested_just_hands_build_scripts_the_same_pkg_config_path() {
 /// Browser orchestration belongs to xtask; Just only routes its arguments.
 #[test]
 fn wasm_recipe_only_dispatches_to_its_rust_owner() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = workspace::root();
     let source = fs::read_to_string(root.join(".config/just/test.just")).unwrap();
     let body = source.split("wasm *ARGS:\n").nth(1).expect("wasm recipe");
     let commands: Vec<_> = body
@@ -145,7 +144,7 @@ fn wasm_recipe_only_dispatches_to_its_rust_owner() {
 
 #[test]
 fn apple_recipe_only_dispatches_to_its_rust_owner() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = workspace::root();
     let source = fs::read_to_string(root.join(".config/just/platform.just")).unwrap();
     let body = source
         .split("apple MODE=\"xcframework\" *ARGS:\n")
@@ -162,7 +161,7 @@ fn apple_recipe_only_dispatches_to_its_rust_owner() {
 
 #[test]
 fn trunk_postbuild_hooks_use_the_cached_xtask_entry() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = workspace::root();
     for package in ["kithara-ffi", "kithara-app"] {
         let source = fs::read_to_string(root.join(format!("crates/{package}/Trunk.toml")))
             .expect("Trunk configuration is readable");

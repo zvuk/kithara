@@ -1717,7 +1717,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_gitlab_jobs_build_root_is_hidden_beside_its_checkout_and_budgeted() {
-        let workspace = crate::ci::config::workspace_root();
+        let workspace = crate::testing::workspace::root();
         let common: serde_yaml_ng::Value = serde_yaml_ng::from_str(
             &fs::read_to_string(workspace.join(".gitlab/ci/common.yml")).unwrap(),
         )

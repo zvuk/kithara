@@ -1914,14 +1914,12 @@ mod tests {
     /// what was linked into it.
     #[test]
     fn every_apple_proof_needle_is_an_audio_toolbox_import() {
-        let root = FsPath::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask sits beside the workspace root");
-        let apple = KitharaExt::load(root)
+        let root = crate::testing::workspace::root();
+        let apple = KitharaExt::load(&root)
             .expect("the project config loads")
             .apple;
         let sources = kithara_devtools::common::walker::workspace_rs_files_scoped(
-            root,
+            &root,
             &kithara_devtools::common::scope::Scope::default(),
         )
         .expect("the workspace sources are listed");
@@ -2230,7 +2228,7 @@ public struct FfiConverterTypeTrackId {
     #[test]
     fn every_process_this_module_starts_has_a_declared_owner() {
         let source = fs::read_to_string(
-            FsPath::new(env!("CARGO_MANIFEST_DIR")).join("src/apple/command.rs"),
+            crate::testing::workspace::root().join("xtask/src/apple/command.rs"),
         )
         .expect("this source is readable");
         let (production, _) = source

@@ -2,6 +2,9 @@
 
 use std::{fs, path::Path, process::Command};
 
+#[path = "../src/testing/workspace.rs"]
+mod workspace;
+
 fn command(bin: &Path) -> Command {
     let path = std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
@@ -9,11 +12,7 @@ fn command(bin: &Path) -> Command {
     .expect("prepend the test command directory to PATH");
     let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
     command
-        .current_dir(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .expect("xtask has a workspace root"),
-        )
+        .current_dir(workspace::root())
         .env("PATH", path)
         .env_remove("KITHARA_XTASK_TARGET")
         .env_remove("CARGO_TARGET_DIR")

@@ -13,11 +13,9 @@ struct Cli {
     command: CoreCommand,
 }
 
-fn root() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("workspace root")
-}
+#[path = "../src/testing/workspace.rs"]
+mod workspace;
+use workspace::root;
 
 fn config(namespace: &str) -> toml::Value {
     let path = root()

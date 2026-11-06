@@ -774,10 +774,10 @@ mod tests {
         let checkout = checkout();
         let root = checkout.path();
         let ci_config = fixture();
-        let ext = KitharaExt::load(&crate::ci::config::workspace_root())
+        let ext = KitharaExt::load(&crate::testing::workspace::root())
             .expect("the project config parses");
         let project = kithara_devtools::common::project::ProjectConfig::load(
-            &crate::ci::config::workspace_root(),
+            &crate::testing::workspace::root(),
         )
         .expect("the project config loads");
         let lane = Lane::parse(name, &ext.ci.lanes).expect("the lane is declared");
@@ -864,17 +864,16 @@ mod tests {
     #[test]
     fn both_ci_executors_select_the_android_test_lane() {
         let github = fs::read_to_string(
-            crate::ci::config::workspace_root().join(".github/workflows/android.yml"),
+            crate::testing::workspace::root().join(".github/workflows/android.yml"),
         )
         .unwrap();
         let gitlab =
-            fs::read_to_string(crate::ci::config::workspace_root().join(".gitlab/ci/android.yml"))
+            fs::read_to_string(crate::testing::workspace::root().join(".gitlab/ci/android.yml"))
                 .unwrap();
         assert!(github.contains("run: just ci lane android-test --kind platforms"));
-        let ci = fs::read_to_string(
-            crate::ci::config::workspace_root().join(".github/workflows/ci.yml"),
-        )
-        .unwrap();
+        let ci =
+            fs::read_to_string(crate::testing::workspace::root().join(".github/workflows/ci.yml"))
+                .unwrap();
         assert!(ci.contains("' android-test '"));
         assert!(ci.contains("uses: ./.github/workflows/android.yml"));
         assert!(gitlab.contains("- just ci run android-test"));
@@ -888,7 +887,7 @@ mod tests {
     #[test]
     fn the_windows_workflow_names_the_build_directory_it_keeps() {
         let text = fs::read_to_string(
-            crate::ci::config::workspace_root().join(".github/workflows/windows.yml"),
+            crate::testing::workspace::root().join(".github/workflows/windows.yml"),
         )
         .unwrap();
         assert!(
@@ -1012,10 +1011,10 @@ mod tests {
     #[test]
     fn every_command_lane_resolves_to_its_recorded_commands() {
         let ci_config = fixture();
-        let ext = KitharaExt::load(&crate::ci::config::workspace_root())
+        let ext = KitharaExt::load(&crate::testing::workspace::root())
             .expect("the project config parses");
         let project = kithara_devtools::common::project::ProjectConfig::load(
-            &crate::ci::config::workspace_root(),
+            &crate::testing::workspace::root(),
         )
         .expect("the project config loads");
         let checkout = checkout_after_a_simulator_run();
@@ -1074,7 +1073,7 @@ mod tests {
 
         let report = portable(&report, root);
         let snapshot =
-            crate::ci::config::workspace_root().join("xtask/tests/fixtures/ci-lane-commands.txt");
+            crate::testing::workspace::root().join("xtask/tests/fixtures/ci-lane-commands.txt");
         if env::var_os("KITHARA_UPDATE_SNAPSHOT").is_some() {
             fs::write(&snapshot, &report).expect("snapshot is writable");
         }
@@ -1102,7 +1101,7 @@ mod tests {
     /// pipeline YAML, and nothing but this test connects them. Renaming a lane
     /// without renaming its job used to fail in CI, on the runner, minutes in.
     fn scheduled_lanes() -> BTreeSet<String> {
-        let directory = crate::ci::config::workspace_root().join(".gitlab/ci");
+        let directory = crate::testing::workspace::root().join(".gitlab/ci");
         let mut lanes = BTreeSet::new();
         for entry in fs::read_dir(&directory).expect("pipeline directory is readable") {
             let path = entry.expect("pipeline entry is readable").path();
@@ -1307,7 +1306,7 @@ mod tests {
 
     #[test]
     fn gitlab_setup_leaves_the_lane_target_path_unclaimed() {
-        let root = crate::ci::config::workspace_root();
+        let root = crate::testing::workspace::root();
         let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
             .expect("the shared pipeline definition is readable");
 
@@ -1322,7 +1321,7 @@ mod tests {
 
     #[test]
     fn manual_platform_dispatch_has_its_own_pipeline_kind() {
-        let root = crate::ci::config::workspace_root();
+        let root = crate::testing::workspace::root();
         let pipeline = fs::read_to_string(root.join(".gitlab-ci.yml"))
             .expect("the parent pipeline definition is readable");
         let (_, after_platforms) = pipeline
@@ -1338,7 +1337,7 @@ mod tests {
 
     #[test]
     fn platform_runs_schedule_verification_and_integration_lanes() {
-        let root = crate::ci::config::workspace_root();
+        let root = crate::testing::workspace::root();
         let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
             .expect("the shared pipeline definition is readable");
 
@@ -1364,7 +1363,7 @@ mod tests {
     /// branch push or a draft pull request is not judged in full and skips it.
     #[test]
     fn the_ios_suite_blocks_every_pipeline_that_judges_a_change() {
-        let root = crate::ci::config::workspace_root();
+        let root = crate::testing::workspace::root();
         let apple = fs::read_to_string(root.join(".gitlab/ci/apple.yml"))
             .expect("the Apple pipeline definition is readable");
         let (_, after_ios_test) = apple
@@ -1399,7 +1398,7 @@ mod tests {
 
     #[test]
     fn ci_junit_paths_match_their_producers() {
-        let root = crate::ci::config::workspace_root();
+        let root = crate::testing::workspace::root();
         let nextest: toml::Value = toml::from_str(
             &fs::read_to_string(root.join(".config/nextest.toml"))
                 .expect("nextest configuration is readable"),
@@ -1567,7 +1566,7 @@ mod tests {
     }
 
     fn declared_lanes() -> BTreeMap<String, CiLaneConfig> {
-        let root = crate::ci::config::workspace_root();
+        let root = crate::testing::workspace::root();
         KitharaExt::load(&root)
             .expect("the project config parses")
             .ci

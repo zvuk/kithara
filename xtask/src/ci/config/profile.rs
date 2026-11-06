@@ -3,6 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::{host::CiHost, pins::CiPins};
+#[cfg(test)]
+use crate::testing::workspace::root as workspace_root;
 
 /// One CI machine described by its own profile plus the reviewed build pins.
 #[derive(Clone, Debug)]
@@ -28,14 +30,6 @@ impl CiConfig {
         self.host.validate_macos_layout()?;
         self.pins.validate()
     }
-}
-
-#[cfg(test)]
-pub(crate) fn workspace_root() -> std::path::PathBuf {
-    std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package"))
-        .parent()
-        .expect("xtask lives inside the workspace")
-        .to_path_buf()
 }
 
 #[cfg(test)]

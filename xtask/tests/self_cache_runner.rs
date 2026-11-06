@@ -20,6 +20,9 @@ use nix::{
 };
 use tempfile::TempDir;
 
+#[path = "../src/testing/workspace.rs"]
+mod workspace;
+
 struct Fixture {
     _temp: TempDir,
     bootstrap_artifact: PathBuf,
@@ -74,9 +77,7 @@ case "$1 $2" in
 esac
 "#,
         )?;
-        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .context("resolve repository root")?;
+        let repository = workspace::root();
         fs::copy(repository.join("justfile"), &justfile)?;
         fs::copy(
             env!("CARGO_BIN_EXE_ci-bootstrap"),

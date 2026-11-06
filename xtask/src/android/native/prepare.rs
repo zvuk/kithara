@@ -539,11 +539,9 @@ kithara-stream v0.0.1 (/workspace/crates/kithara-stream)\n";
 
     #[test]
     fn configured_android_lane_combines_product_and_detached_suites() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask lives below the workspace root");
-        let config = ProjectConfig::load(root).expect("project config");
-        let product = android_product_packages(root, "aarch64-linux-android", "kithara-ffi")
+        let root = crate::testing::workspace::root();
+        let config = ProjectConfig::load(&root).expect("project config");
+        let product = android_product_packages(&root, "aarch64-linux-android", "kithara-ffi")
             .expect("Android product packages");
         let extra = art_nextest_list_extra("aarch64-linux-android", &product);
         let command = kithara_devtools::test::nextest_command_for_lane(

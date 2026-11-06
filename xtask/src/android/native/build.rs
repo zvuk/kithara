@@ -589,7 +589,8 @@ mod tests {
     fn packaged_images_retain_their_elf_runtime() {
         let tool = crate::sysroot::tool("llvm-readobj").expect("llvm-tools are installed");
         let tools = tool.parent().expect("LLVM tool directory");
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/android-runtime");
+        let fixtures =
+            crate::testing::workspace::root().join("xtask/tests/fixtures/android-runtime");
         assert!(is_executable(tools, &fixtures.join("executable.so"), None).unwrap());
         assert!(!is_executable(tools, &fixtures.join("context.so"), None).unwrap());
     }

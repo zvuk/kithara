@@ -1,12 +1,13 @@
-use std::{collections::HashSet, path::Path};
+use std::collections::HashSet;
 
 use cargo_metadata::{DependencyKind, MetadataCommand};
 
+#[path = "../src/testing/workspace.rs"]
+mod workspace;
+
 #[test]
 fn download_dependency_closure_excludes_stream_protocols_and_facade() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask belongs to the workspace");
+    let root = workspace::root();
     let metadata = MetadataCommand::new()
         .manifest_path(root.join("Cargo.toml"))
         .exec()

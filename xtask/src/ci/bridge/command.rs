@@ -204,7 +204,7 @@ mod tests {
     use crate::Cli;
 
     fn example() -> String {
-        let path = crate::ci::config::workspace_root().join(".config/bridge/config.example.toml");
+        let path = crate::testing::workspace::root().join(".config/bridge/config.example.toml");
         std::fs::read_to_string(path).unwrap()
     }
 

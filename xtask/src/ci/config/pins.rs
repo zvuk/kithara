@@ -327,7 +327,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::{ci::config::profile::workspace_root, consts};
+    use crate::{consts, testing::workspace::root as workspace_root};
 
     #[test]
     fn native_and_container_stores_use_the_same_release() {

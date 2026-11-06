@@ -1,7 +1,10 @@
-use std::{fs, path::Path};
+use std::fs;
 
 use cargo_metadata::MetadataCommand;
 use syn::{Expr, ExprMethodCall, Lit, visit::Visit};
+
+#[path = "../src/testing/workspace.rs"]
+mod workspace;
 
 #[derive(Default)]
 struct Requests(Vec<Vec<Option<String>>>);
@@ -31,7 +34,7 @@ impl<'ast> Visit<'ast> for Requests {
 
 #[test]
 fn explicit_binary_features_are_owned_by_the_manifest() {
-    let tooling = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let tooling = workspace::root().join("xtask");
     let metadata = MetadataCommand::new()
         .manifest_path(tooling.join("Cargo.toml"))
         .no_deps()

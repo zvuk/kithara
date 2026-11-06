@@ -263,9 +263,12 @@ pub(crate) mod tests {
     use serde_yaml_ng::Value;
 
     use super::*;
-    use crate::ci::{
-        config::workspace_root, environment::CacheTrust, host::linux::profile::tests::host_fixture,
-        previous_layout::previous_layout,
+    use crate::{
+        ci::{
+            environment::CacheTrust, host::linux::profile::tests::host_fixture,
+            previous_layout::previous_layout,
+        },
+        testing::workspace::root as workspace_root,
     };
 
     /// The value a runner's job is told for `name`.

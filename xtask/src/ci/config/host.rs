@@ -749,7 +749,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("mac-host.toml");
         let source =
-            crate::ci::config::workspace_root().join("xtask/tests/fixtures/ci-mac-host.toml");
+            crate::testing::workspace::root().join("xtask/tests/fixtures/ci-mac-host.toml");
         let text = fs::read_to_string(&source).expect("fixture profile");
         let without: String = text
             .lines()

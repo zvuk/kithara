@@ -168,7 +168,7 @@ mod tests {
 
     fn fixture() -> Value {
         let path =
-            crate::ci::config::workspace_root().join("xtask/tests/fixtures/xcresult-tests.json");
+            crate::testing::workspace::root().join("xtask/tests/fixtures/xcresult-tests.json");
         serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
     }
 

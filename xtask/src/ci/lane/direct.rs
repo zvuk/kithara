@@ -228,9 +228,9 @@ mod tests {
     use kithara_devtools::{common::project::TestCommandConfig, lease};
 
     use super::*;
-    use crate::ci::{
-        build_dir::fixture::git,
-        config::{fixture, workspace_root},
+    use crate::{
+        ci::{build_dir::fixture::git, config::fixture},
+        testing::workspace::root as workspace_root,
     };
 
     /// A lane builds where the executor said. These runners are ephemeral and
