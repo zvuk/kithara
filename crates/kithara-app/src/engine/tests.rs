@@ -471,6 +471,20 @@ async fn sync_puts_the_deck_on_the_host_beat(rhythm_a_wav: String) {
     drop(served);
 }
 
+#[cfg(not(feature = "broadcast"))]
+#[kithara::test(native, tokio)]
+async fn offline_sync_capture_keeps_the_host_beat_clicks(rhythm_a_wav: String) {
+    let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
+    rig.call(|rig| {
+        rig.device = None;
+        let _ = capture(rig, consts::SETTLE);
+        assert_on_host_beats(rig, 124.0, consts::MEASURED_BEATS);
+    })
+    .await;
+    rig.close().await;
+    drop(served);
+}
+
 /// The deck shows a seek landing on the in-phase position nearest the
 /// request, then plays on from it.
 #[cfg(not(feature = "broadcast"))]
