@@ -102,9 +102,9 @@ impl LimiterConfig {
 pub struct PeakLimiter {
     detector: Fir<
         { Self::DETECTOR_TAPS },
-        { Self::DETECTOR_PHASES - 1 },
+        { 2 * (Self::DETECTOR_PHASES - 1) },
         { Self::DETECTOR_CHANNELS },
-        { Self::DETECTOR_HALF_WIDTH + 1 },
+        { 2 * Self::DETECTOR_HALF_WIDTH + 1 },
     >,
     config: LimiterConfig,
     envelope: AttackRelease,
@@ -135,8 +135,8 @@ impl PeakLimiter {
     /// the crest of a partial sitting between two samples.
     const DETECTOR_PHASES: usize = 8;
 
-    /// Taps in one polyphase branch of the detector kernel.
-    const DETECTOR_TAPS: usize = 2 * Self::DETECTOR_HALF_WIDTH + 1;
+    /// Storage for the immediate and older seventeen-tap branches.
+    const DETECTOR_TAPS: usize = 3 * Self::DETECTOR_HALF_WIDTH + 1;
 
     /// Build a limiter applying `config` to `channels` linked channels at `sample_rate`, its
     /// latency storage for every rate up to `max_rate` taken from `pools` once.
@@ -171,15 +171,8 @@ impl PeakLimiter {
             })
             .transpose()?;
 
-        let taps = std::array::from_fn(|phase: usize| {
-            std::array::from_fn(|tap: usize| {
-                let offset = (phase + 1).to_f32().unwrap_or(0.0)
-                    / Self::DETECTOR_PHASES.to_f32().unwrap_or(1.0);
-                let position =
-                    tap.to_f32().unwrap_or(0.0) - Self::DETECTOR_HALF_WIDTH.to_f32().unwrap_or(0.0);
-                Self::detector_tap(offset - position)
-            })
-        });
+        let latency = config.latency_frames(sample_rate);
+        let taps = Self::detector_taps(latency >= Self::DETECTOR_HALF_WIDTH);
 
         let mut limiter = Self {
             config,
@@ -187,7 +180,7 @@ impl PeakLimiter {
             envelope: Self::release_envelope(config, sample_rate),
             window,
             delay,
-            latency: 0,
+            latency,
             channels: channels.get(),
         };
         limiter.retune(sample_rate)?;
@@ -219,6 +212,9 @@ impl PeakLimiter {
                 frames,
                 prepared: capacity.saturating_sub(1),
             })?;
+        if (frames >= Self::DETECTOR_HALF_WIDTH) != (self.latency >= Self::DETECTOR_HALF_WIDTH) {
+            self.detector = Fir::new(Self::detector_taps(frames >= Self::DETECTOR_HALF_WIDTH));
+        }
         self.latency = frames;
         self.envelope = Self::release_envelope(self.config, sample_rate);
         self.detector.reset();
@@ -233,6 +229,30 @@ impl PeakLimiter {
         let samples = f32::from(config.release_ms()) / consts::MS_PER_SEC
             * sample_rate.get().to_f32().unwrap_or(1.0);
         AttackRelease::new((-1.0 / samples).exp())
+    }
+
+    /// Add past-interval rows without changing the immediate rows or their phase grid.
+    fn detector_taps(
+        resolved: bool,
+    ) -> [[f32; Self::DETECTOR_TAPS]; 2 * (Self::DETECTOR_PHASES - 1)] {
+        let phases = Self::DETECTOR_PHASES - 1;
+        std::array::from_fn(|phase| {
+            std::array::from_fn(|tap| {
+                let older = phase >= phases;
+                let start = if older { 0 } else { Self::DETECTOR_HALF_WIDTH };
+                // Zero-tail FMAs still see raw future, so older bounds need finite raw support.
+                if (older && !resolved)
+                    || !(start..start + 2 * Self::DETECTOR_HALF_WIDTH + 1).contains(&tap)
+                {
+                    return 0.0;
+                }
+                let offset = (phase % phases + 1).to_f32().unwrap_or(0.0)
+                    / Self::DETECTOR_PHASES.to_f32().unwrap_or(1.0);
+                let position = tap.to_f32().unwrap_or(0.0)
+                    - (start + Self::DETECTOR_HALF_WIDTH).to_f32().unwrap_or(0.0);
+                Self::detector_tap(offset - position)
+            })
+        })
     }
 
     /// Hann-windowed sinc evaluated `distance` input samples away from a tap.
@@ -693,18 +713,20 @@ mod tests {
             "the overload left the gain down"
         );
 
-        let rate = NonZeroU32::new(44_100).unwrap();
-        retuned.retune(rate).unwrap();
-        let mut fresh = PeakLimiter::new(rate, max_rate, stereo, config, &pools()).unwrap();
-        let above = NonZeroU32::new(192_000).unwrap();
-        assert!(retuned.retune(above).is_err());
-        for block in [&loud[..], &tail[..]] {
-            let (mut left, mut right) = (block.to_vec(), block.to_vec());
-            let (mut expected_left, mut expected_right) = (block.to_vec(), block.to_vec());
-            run(&mut retuned, &mut left, &mut right);
-            run(&mut fresh, &mut expected_left, &mut expected_right);
-            assert_eq!(bits(&left), bits(&expected_left));
-            assert_eq!(bits(&right), bits(&expected_right));
+        for rate in [44_100, 1_000, 2_000, 44_100] {
+            let rate = NonZeroU32::new(rate).unwrap();
+            retuned.retune(rate).unwrap();
+            let mut fresh = PeakLimiter::new(rate, max_rate, stereo, config, &pools()).unwrap();
+            let above = NonZeroU32::new(192_000).unwrap();
+            assert!(retuned.retune(above).is_err());
+            for block in [&loud[..], &tail[..]] {
+                let (mut left, mut right) = (block.to_vec(), block.to_vec());
+                let (mut expected_left, mut expected_right) = (block.to_vec(), block.to_vec());
+                run(&mut retuned, &mut left, &mut right);
+                run(&mut fresh, &mut expected_left, &mut expected_right);
+                assert_eq!(bits(&left), bits(&expected_left));
+                assert_eq!(bits(&right), bits(&expected_right));
+            }
         }
     }
 
