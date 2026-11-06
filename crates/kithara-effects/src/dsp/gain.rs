@@ -86,10 +86,15 @@ impl GainBank {
         }
     }
 
-    pub(crate) fn set_explicit(&mut self, band: usize, gain_db: GainDb) {
-        if let Some(gain) = self.gains.get_mut(band) {
-            *gain = SmoothedGain::new(gain_db);
+    pub(crate) fn set_explicit(&mut self, band: usize, gain_db: GainDb) -> bool {
+        let Some(gain) = self.gains.get_mut(band) else {
+            return false;
+        };
+        if gain.target == gain_db && gain.current() == gain.target_linear {
+            return false;
         }
+        *gain = SmoothedGain::new(gain_db);
+        true
     }
 
     pub(crate) fn update_sample_rate(&mut self, sample_rate: f32) {

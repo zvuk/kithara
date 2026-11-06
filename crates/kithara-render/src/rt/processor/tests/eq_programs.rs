@@ -404,3 +404,223 @@ fn future_eq_programs_do_not_shift_a_slots_resume_boundary() {
     assert_eq!(snapshot.eq.gain(0), Some(GainDb::DEFAULT));
     assert_eq!(snapshot.metrics.underruns(), 0);
 }
+
+#[kithara::test]
+fn mixed_shape_eq_knots_preserve_each_pcm_frame_across_render_subdivisions() {
+    for block in [1, 7, 13, 128] {
+        let (mut mixer, mut ends) = prepared(1);
+        let curve = EqGainProgram::new(
+            0,
+            [
+                (17, 0.0, CurveShape::cubic(0.0, 1.0).expect("S shape")),
+                (33, -12.0, CurveShape::HOLD),
+                (40, -12.0, CurveShape::LINEAR),
+                (48, 6.0, CurveShape::HOLD),
+            ]
+            .into_iter()
+            .map(|(at, value, shape)| {
+                ParameterKnot::new(frame_at(BLOCK + at), value, shape).expect("finite knot")
+            })
+            .collect(),
+        )
+        .expect("mixed shape program");
+        let curve = part(&mut ends, curve);
+        let seq = send(&mut ends, at(BLOCK + 17), vec![curve]);
+        let mut pcm = Vec::new();
+        for offset in (0..96).step_by(block) {
+            pcm.extend(render_frames(
+                &mut mixer,
+                BLOCK + offset,
+                block.min(96 - offset),
+            ));
+        }
+        let expected: Vec<_> = (0..96_u32)
+            .map(|frame| {
+                let db = match frame {
+                    0..17 => 0.0,
+                    17..33 => {
+                        let t = f64::from(frame - 17) / 16.0;
+                        -12.0 * (3.0 * t * t - 2.0 * t * t * t)
+                    }
+                    33..40 => -12.0,
+                    40..48 => -12.0 + 18.0 * f64::from(frame - 40) / 8.0,
+                    _ => 6.0,
+                };
+                amplitude(GainDb::checked(db.to_f32().expect("canonical dB")).expect("in range"))
+            })
+            .collect();
+        assert_eq!(pcm, expected, "subdivision {block}");
+        assert_applied_at(outcome_of(&receipts(&mut ends), seq), BLOCK + 17);
+        let snapshot = ends.deck.snapshot.read();
+        assert_eq!(snapshot.eq.gain(0), Some(GainDb::MAX));
+        assert_eq!(snapshot.eq.program(0), Some(seq));
+        assert_eq!(snapshot.metrics.underruns(), 0);
+    }
+}
+
+#[kithara::test]
+#[case::clock(0)]
+#[case::epoch(1)]
+#[case::mixed_batch(2)]
+fn eq_refusals_preserve_running_pcm_and_return_the_original_program(#[case] kind: u8) {
+    let (mut mixer, mut ends) = prepared(1);
+    let running = part(&mut ends, program(0, BLOCK, BLOCK + 32, CurveShape::LINEAR));
+    let running = send(&mut ends, at(BLOCK), vec![running]);
+    render_frames(&mut mixer, BLOCK, 8);
+    let band = if kind == 2 { 99 } else { 0 };
+    let start = BLOCK + if kind == 0 { 9 } else { 8 };
+    let mut replacement = part(
+        &mut ends,
+        program(band, start, BLOCK + 24, CurveShape::HOLD),
+    );
+    if let DeckPart::EqProgram { binding, .. } = &mut replacement
+        && kind == 1
+    {
+        *binding =
+            crate::bridge::EqBinding::new(binding.scope(), binding.layout(), SessionEpoch::new(1));
+    }
+    let mut commands = vec![replacement];
+    if kind == 2 {
+        commands.insert(
+            0,
+            DeckPart::Eq(DeckEqChange::Gain {
+                band: 0,
+                gain: GainDb::MIN,
+            }),
+        );
+    }
+    let rejected = send(&mut ends, at(BLOCK + 8), commands);
+    let pcm = render_frames(&mut mixer, BLOCK + 8, 8);
+    let expected: Vec<_> = (8..16_u32)
+        .map(|frame| {
+            amplitude(
+                GainDb::checked(-12.0 + 12.0 * frame.to_f32().expect("local frame") / 32.0)
+                    .expect("curve gain"),
+            )
+        })
+        .collect();
+    assert_eq!(pcm, expected);
+    let replies = receipts(&mut ends);
+    assert_eq!(replies.len(), 1);
+    let reason = match kind {
+        0 => DeckRefusal::EqProgramClock { band: 0 },
+        1 => DeckRefusal::AxisRestarted,
+        _ => DeckRefusal::EqUnavailable { band: 99 },
+    };
+    assert!(
+        matches!(outcome_of(&replies, rejected), Outcome::Rejected(Rejection::Refused(found)) if *found == reason)
+    );
+    let returned = replies
+        .iter()
+        .find(|(seq, ..)| *seq == rejected)
+        .and_then(|(_, _, parts)| {
+            parts.iter().find_map(|part| match part {
+                DeckPart::EqProgram { program, .. } => Some(program),
+                _ => None,
+            })
+        })
+        .expect("refused programme storage returned");
+    assert_eq!(returned.band(), band);
+    assert_eq!(returned.start(), frame_at(start));
+    assert_eq!(returned.last_rendered(), None);
+    let snapshot = ends.deck.snapshot.read();
+    assert_eq!(snapshot.eq.program(0), Some(running));
+    assert_eq!(
+        snapshot.eq.gain(0),
+        GainDb::checked(-12.0 + 12.0 * 15.0 / 32.0)
+    );
+    assert_eq!(snapshot.metrics.underruns(), 0);
+}
+
+#[kithara::test]
+fn neutral_capacity_admission_and_refusal_leave_the_pcm_unchanged() {
+    let (mut mixer, mut ends) = prepared(17);
+    for band in 0..EqGainProgram::MAX_ACTIVE {
+        let curve = EqGainProgram::new(
+            band,
+            [BLOCK, BLOCK + 64]
+                .into_iter()
+                .map(|at| {
+                    ParameterKnot::new(frame_at(at), 0.0, CurveShape::HOLD).expect("neutral knot")
+                })
+                .collect(),
+        )
+        .expect("neutral curve");
+        let curve = part(&mut ends, curve);
+        send(&mut ends, at(BLOCK), vec![curve]);
+    }
+    assert_eq!(render_frames(&mut mixer, BLOCK, 1), [1.0]);
+    assert!(receipts(&mut ends).is_empty());
+    let curve = EqGainProgram::new(
+        16,
+        [BLOCK + 1, BLOCK + 65]
+            .into_iter()
+            .map(|at| {
+                ParameterKnot::new(frame_at(at), 0.0, CurveShape::HOLD).expect("neutral knot")
+            })
+            .collect(),
+    )
+    .expect("neutral excess");
+    let curve = part(&mut ends, curve);
+    let excess = send(&mut ends, at(BLOCK + 1), vec![curve]);
+    assert_eq!(render_frames(&mut mixer, BLOCK + 1, 1), [1.0]);
+    assert!(matches!(
+        outcome_of(&receipts(&mut ends), excess),
+        Outcome::Rejected(Rejection::Refused(DeckRefusal::EqProgramCapacity))
+    ));
+    let snapshot = ends.deck.snapshot.read();
+    assert_eq!(snapshot.eq.gain(16), Some(GainDb::DEFAULT));
+    assert_eq!(snapshot.eq.program(16), None);
+    assert_eq!(snapshot.metrics.underruns(), 0);
+}
+
+#[kithara::test]
+fn manual_eq_steps_keep_their_pcm_law_at_the_exact_deck_frame() {
+    for block in [1, 13, 128] {
+        let (mut mixer, mut ends) = prepared(1);
+        let seq = send(
+            &mut ends,
+            at(BLOCK + 17),
+            vec![DeckPart::Eq(DeckEqChange::Gain {
+                band: 0,
+                gain: GainDb::MIN,
+            })],
+        );
+        assert_eq!(ends.deck.snapshot.read().eq.gain(0), Some(GainDb::DEFAULT));
+        let config = EqConfig::builder(pools()).build();
+        let mut reference = kithara_effects::eq::StereoEq::with_layout(
+            &config,
+            shape().sample_rate,
+            eq_layout(&[GainDb::DEFAULT]),
+        );
+        let expected: Vec<_> = (0..96)
+            .map(|frame| {
+                if frame == 17 {
+                    reference.set_gain(0, GainDb::MIN);
+                }
+                let (mut left, mut right) = ([1.0], [1.0]);
+                reference.process(&mut left, &mut right);
+                left[0].to_bits()
+            })
+            .collect();
+        let mut pcm = Vec::new();
+        for offset in (0..96).step_by(block) {
+            pcm.extend(render_frames(
+                &mut mixer,
+                BLOCK + offset,
+                block.min(96 - offset),
+            ));
+        }
+        assert!(pcm[..17].iter().all(|sample| *sample == 1.0));
+        assert_eq!(
+            pcm.iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            expected,
+            "subdivision {block}"
+        );
+        assert_applied_at(outcome_of(&receipts(&mut ends), seq), BLOCK + 17);
+        assert_eq!(ends.deck.snapshot.read().eq.gain(0), Some(GainDb::MIN));
+        assert_eq!(ends.deck.snapshot.read().metrics.underruns(), 0);
+    }
+}
