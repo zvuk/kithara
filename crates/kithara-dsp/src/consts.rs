@@ -23,3 +23,6 @@ pub(crate) const SILENT_PEAK: f32 = 1.0e-9;
 /// Frames a biquad section remembers: a quiet call proves the state silent
 /// only when it covers them.
 pub(crate) const SECTION_MEMORY: usize = 2;
+
+/// Frames in each crossover working window, keeping each band to 256 bytes.
+pub(crate) const CROSSOVER_BLOCK_FRAMES: usize = 64;

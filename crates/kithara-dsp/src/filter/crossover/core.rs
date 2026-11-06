@@ -3,10 +3,7 @@ use std::ops::{Deref, DerefMut};
 use biquad::{Biquad, Coefficients, DirectForm1, Hertz, Type};
 
 use super::{coefficients, validate};
-use crate::filter::FilterError;
-
-// Keep each band's working window to 256 bytes; input length remains unrestricted.
-const BLOCK_FRAMES: usize = 64;
+use crate::{consts, filter::FilterError};
 
 #[derive(Clone, Copy)]
 struct Section(DirectForm1<f32>);
@@ -20,10 +17,16 @@ impl Section {
     fn run(&mut self, input: f32) -> f32 {
         let output = self.0.run(input);
         if output.is_subnormal() && input.abs() < f32::MIN_POSITIVE {
-            self.0.reset_state();
-            return 0.0;
+            return self.retire();
         }
         output
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn retire(&mut self) -> f32 {
+        self.0.reset_state();
+        0.0
     }
 
     #[inline(always)]
@@ -87,8 +90,8 @@ impl Design {
 pub struct Crossover {
     lowpass: Vec<Lr4>,
     highpass: Vec<Lr4>,
-    band_blocks: Box<[[f32; BLOCK_FRAMES]]>,
-    gain_blocks: Box<[[f32; BLOCK_FRAMES]]>,
+    band_blocks: Box<[[f32; consts::CROSSOVER_BLOCK_FRAMES]]>,
+    gain_blocks: Box<[[f32; consts::CROSSOVER_BLOCK_FRAMES]]>,
     allpass: Vec<Section>,
     frequencies: Box<[Hertz<f32>]>,
     prepared: Box<[Design]>,
@@ -125,10 +128,16 @@ impl Crossover {
                         .map(|design| Section::new(design.allpass))
                 })
                 .collect(),
-            band_blocks: vec![[0.0; BLOCK_FRAMES]; frequencies.len().saturating_add(1)]
-                .into_boxed_slice(),
-            gain_blocks: vec![[0.0; BLOCK_FRAMES]; frequencies.len().saturating_add(1)]
-                .into_boxed_slice(),
+            band_blocks: vec![
+                [0.0; consts::CROSSOVER_BLOCK_FRAMES];
+                frequencies.len().saturating_add(1)
+            ]
+            .into_boxed_slice(),
+            gain_blocks: vec![
+                [0.0; consts::CROSSOVER_BLOCK_FRAMES];
+                frequencies.len().saturating_add(1)
+            ]
+            .into_boxed_slice(),
             prepared: designs.into_boxed_slice(),
             prepared_rate: None,
         })
@@ -150,11 +159,11 @@ impl Crossover {
         for (index, input) in input
             .get(..count)
             .expect("validated input prefix")
-            .chunks(BLOCK_FRAMES)
+            .chunks(consts::CROSSOVER_BLOCK_FRAMES)
             .enumerate()
         {
             let start = index
-                .checked_mul(BLOCK_FRAMES)
+                .checked_mul(consts::CROSSOVER_BLOCK_FRAMES)
                 .expect("chunk starts within the input prefix");
             let end = start
                 .checked_add(input.len())
@@ -189,11 +198,11 @@ impl Crossover {
         for (index, samples) in samples
             .get_mut(..count)
             .expect("validated output prefix")
-            .chunks_mut(BLOCK_FRAMES)
+            .chunks_mut(consts::CROSSOVER_BLOCK_FRAMES)
             .enumerate()
         {
             let start = index
-                .checked_mul(BLOCK_FRAMES)
+                .checked_mul(consts::CROSSOVER_BLOCK_FRAMES)
                 .expect("chunk starts within the output prefix");
             let end = start
                 .checked_add(samples.len())
