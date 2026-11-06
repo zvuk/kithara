@@ -25,12 +25,6 @@ const RESTART_SAMPLE: usize = 3;
 
 type Events = Rc<RefCell<Vec<JsValue>>>;
 
-#[wasm_bindgen::prelude::wasm_bindgen(module = "/../../fixtures/worker_diagnostics.js")]
-extern "C" {
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name = installWorkerDiagnostics)]
-    fn install_worker_diagnostics();
-}
-
 struct BroadcastObservation {
     channel: BroadcastChannel,
     _listener: Closure<dyn FnMut(MessageEvent)>,
@@ -101,7 +95,7 @@ fn boolean(value: &JsValue, key: &str) -> bool {
 
 /// What a pass that never reached its end managed to publish, so a deadline
 /// says whether the analysis stalled at the start or merely ran out of budget.
-fn progress_report(events: &Events, diagnostics: &[BroadcastObservation; 3]) -> String {
+fn progress_report(events: &Events, diagnostics: &[BroadcastObservation; 2]) -> String {
     let received = events.borrow();
     let publications = match received.last() {
         Some(last) => format!(
@@ -115,10 +109,9 @@ fn progress_report(events: &Events, diagnostics: &[BroadcastObservation; 3]) -> 
         None => "no publication at all".to_string(),
     };
     format!(
-        "{publications}; kithara-reply={}; kithara-events (analysis arrays are lengths)={}; workers created on main thread={}",
+        "{publications}; kithara-reply={}; kithara-events (analysis arrays are lengths)={}",
         diagnostics[0].report(),
         diagnostics[1].report(),
-        diagnostics[2].report(),
     )
 }
 
@@ -130,17 +123,15 @@ fn revisions(events: &Events) -> Vec<f64> {
         .collect()
 }
 
-fn observed_player() -> (AudioPlayer, Events, [BroadcastObservation; 3]) {
+fn observed_player() -> (AudioPlayer, Events, [BroadcastObservation; 2]) {
     static BINDINGS: Once = Once::new();
+    BINDINGS.call_once(|| {
+        kithara_ffi::web::bindings::setup().expect("browser bindings initialized");
+    });
     let diagnostics = [
         BroadcastObservation::new("kithara-reply"),
         BroadcastObservation::new("kithara-events"),
-        BroadcastObservation::new("kithara-worker-diagnostics"),
     ];
-    BINDINGS.call_once(|| {
-        install_worker_diagnostics();
-        kithara_ffi::web::bindings::setup().expect("browser bindings initialized");
-    });
     let events: Events = Rc::new(RefCell::new(Vec::new()));
     let player = AudioPlayer::new_js();
 
