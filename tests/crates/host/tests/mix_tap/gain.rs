@@ -13,8 +13,9 @@ use kithara_test_fixtures::assets;
 use num_traits::ToPrimitive;
 
 use super::cases::{BLOCK_FRAMES, ROOMY_CAPACITY, SAMPLE_RATE, load_source, render_effect_window};
+use crate::underrun;
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, tracing("warn,kithara_test::host_rate_telemetry=info"))]
 async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
     let options = OfflinePlayerOptions::builder()
         .block_on_underrun(false)
@@ -26,6 +27,7 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
         )
         .build();
     let harness = OfflinePlayer::with_sample_rate(options, SAMPLE_RATE).await;
+    let mut underruns = underrun::Underruns::new(&harness);
     let config = ResourceConfig::for_src(
         ResourceSrc::parse(asset_source(&assets::fixed_constant_wav_cd_half_44100()))
             .expect("fixture URI parses"),
@@ -35,9 +37,12 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
     .audio_buffer_chunks(NonZeroUsize::new(2).expect("nonzero packet count"))
     .build();
     let harness = load_source(harness, TrackSource::Config(Box::new(config))).await;
+    let loaded_underruns = harness.metrics().underruns();
     let _ = render_effect_window(&harness, BLOCK_FRAMES).await;
+    let initial_underruns = harness.metrics().underruns();
     let warm = render_effect_window(&harness, 4096).await;
     assert!(warm[warm.len() - 128..].iter().all(|sample| *sample == 0.5));
+    let warm_underruns = harness.metrics().underruns();
     let item = harness
         .with_queue(|queue| queue.current().expect("loaded current item").id)
         .await;
@@ -92,6 +97,8 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
         .expect("same sounding attachment");
     assert_eq!(sounding.output.gain(), 0.25);
     assert!(sounding.output.program().is_some());
+    tracing::info!(target: "kithara_test::host_rate_telemetry", loaded_underruns, initial_underruns, warm_underruns, capture_start = start, "cumulative underruns by render phase");
+    underruns.checkpoint(harness.metrics(), true, "checked 1024-frame gain window");
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;
 }
