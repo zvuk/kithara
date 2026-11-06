@@ -37,22 +37,6 @@ use types::{
     FfiStretchBackendKind, FfiTrackFailureKind, FfiTrackStatus,
 };
 
-#[wasm_bindgen::prelude::wasm_bindgen(module = "/../../tests/fixtures/worker_diagnostics.js")]
-extern "C" {
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name = installWorkerDiagnostics)]
-    fn install_worker_diagnostics();
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name = reportWorkerDiagnostics)]
-    fn report_worker_diagnostics() -> String;
-    #[wasm_bindgen::prelude::wasm_bindgen(catch, js_name = checkWorkerConstructorForwarding)]
-    fn check_worker_constructor_forwarding() -> Result<(), JsValue>;
-}
-
-#[wasm_bindgen_test]
-fn a_worker_observer_preserves_constructor_behavior() {
-    check_worker_constructor_forwarding()
-        .expect("worker observation preserves constructor behavior");
-}
-
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 
@@ -60,7 +44,6 @@ fn surface_player() -> AudioPlayer {
     static STARTUP: Once = Once::new();
     STARTUP.call_once(|| {
         thread::set_wasm_shim_name("wasm-bindgen-test");
-        install_worker_diagnostics();
         kithara_ffi::web::bindings::setup().expect("browser bindings initialized");
     });
     AudioPlayer::new_js()
@@ -93,12 +76,7 @@ async fn surface_ids_fixture() -> (AudioPlayer, String, f64) {
         player.item_count_js() == 1
     })
     .await
-    .unwrap_or_else(|error| {
-        panic!(
-            "owner admits fixture insertion: {error}; workers created on main thread={}",
-            report_worker_diagnostics()
-        )
-    });
+    .expect("owner admits fixture insertion");
     (player, url, id)
 }
 
@@ -247,9 +225,7 @@ async fn surface_dependent_commands_share_owner_order_before_publication() {
             })
     })
     .await
-    .unwrap_or_else(|error| {
-        panic!("the owner applies dependent commands in posted order: {error}; workers created on main thread={}", report_worker_diagnostics())
-    });
+    .expect("the owner applies dependent commands in posted order");
     let ids: Vec<f64> = player
         .items()
         .iter()
@@ -334,13 +310,12 @@ async fn surface_settings_follow_owner_publication_and_report_refusal() {
     .await
     .unwrap_or_else(|error| {
         panic!(
-            "{error}; rate={}, volume={}, muted={}, process_calls={}, events={:?}; workers created on main thread={}",
+            "{error}; rate={}, volume={}, muted={}, process_calls={}, events={:?}",
             player.playing_rate(),
             player.volume(),
             player.is_muted(),
             player.rt_process_calls_js(),
             *events.lock(),
-            report_worker_diagnostics(),
         )
     });
     player
