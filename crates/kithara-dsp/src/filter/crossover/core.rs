@@ -20,6 +20,7 @@ impl Section {
     fn run(&mut self, input: f32) -> f32 {
         let output = self.0.run(input);
         if output.is_subnormal() && input.abs() < f32::MIN_POSITIVE {
+            std::hint::cold_path();
             self.0.reset_state();
             return 0.0;
         }
