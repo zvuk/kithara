@@ -494,38 +494,12 @@ impl Deck {
                 sounded = true;
             }
         }
-        let at = SessionFrame::new(
-            i64::from(start).saturating_add(i64::try_from(range.start).expect("prepared frame")),
+        self.finish_range(
+            level,
+            start,
+            range.clone(),
+            sounded.then_some([&mut left[range.clone()], &mut right[range]]),
         );
-        let animated = {
-            let curves = self.eq_programs.curves(level);
-            let animated = curves.iter().any(Option::is_some);
-            if sounded {
-                if animated {
-                    self.render.finish_eq_curves(
-                        &mut left[range.clone()],
-                        &mut right[range.clone()],
-                        at,
-                        &curves,
-                    );
-                } else {
-                    self.render
-                        .finish(&mut left[range.clone()], &mut right[range.clone()]);
-                }
-            } else {
-                if animated {
-                    self.render.advance_eq_curves(at, range.len(), &curves);
-                }
-                self.render.idle();
-            }
-            animated
-        };
-        if animated && let Some(last) = range.end.checked_sub(1) {
-            let at = SessionFrame::new(
-                i64::from(start).saturating_add(i64::try_from(last).expect("prepared frame")),
-            );
-            self.advance_eq(level, at);
-        }
         sounded
     }
 
