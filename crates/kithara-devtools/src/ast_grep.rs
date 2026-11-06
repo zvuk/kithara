@@ -418,7 +418,7 @@ fn print_grouped(groups: &BTreeMap<String, RuleGroup>) {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, path::PathBuf, process::Command};
+    use std::{collections::BTreeMap, fs, process::Command};
 
     use tempfile::tempdir;
 
@@ -599,7 +599,7 @@ mod tests {
             .expect("create fixture directory");
         fs::write(&source_path, source).expect("write fixture");
 
-        let rules = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.config/ast-grep");
+        let rules = crate::testing::package().join("../../.config/ast-grep");
         fs::write(
             temp.path().join("sgconfig.yml"),
             format!(

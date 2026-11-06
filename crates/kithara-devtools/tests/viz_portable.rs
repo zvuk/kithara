@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     process::Command,
     sync::{Mutex, MutexGuard, OnceLock, PoisonError},
 };
@@ -8,6 +8,9 @@ use std::{
 use clap::{FromArgMatches, Subcommand};
 use kithara_devtools::{CoreCommand, Ctx};
 use tempfile::tempdir;
+
+#[path = "../src/testing.rs"]
+mod testing;
 
 fn runtime_scenario_guard() -> MutexGuard<'static, ()> {
     static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
@@ -156,8 +159,7 @@ fn auto_lod_command(scope: &[&str]) -> CoreCommand {
 #[test]
 fn workspace_lod_zero_shows_every_crate_without_internal_nodes() {
     let temp = tempdir().expect("tempdir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    let fixture = testing::package().join("tests/fixtures/architecture-workspace");
     copy_tree(&fixture, temp.path());
     let manifest = temp.path().join("Cargo.toml");
     let ctx = Ctx::load_from_manifest(&manifest).expect("load fixture context");
@@ -213,8 +215,7 @@ fn workspace_lod_zero_shows_every_crate_without_internal_nodes() {
 #[test]
 fn focused_crate_hides_workspace_dependencies_and_incoming_neighbors() {
     let temp = tempdir().expect("tempdir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    let fixture = testing::package().join("tests/fixtures/architecture-workspace");
     copy_tree(&fixture, temp.path());
     let manifest = temp.path().join("Cargo.toml");
     let ctx = Ctx::load_from_manifest(&manifest).expect("load fixture context");
@@ -255,8 +256,7 @@ fn focused_crate_hides_workspace_dependencies_and_incoming_neighbors() {
 #[test]
 fn workspace_filters_remove_crates_modules_edges_and_report_findings() {
     let temp = tempdir().expect("tempdir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    let fixture = testing::package().join("tests/fixtures/architecture-workspace");
     copy_tree(&fixture, temp.path());
     let manifest_path = temp.path().join("Cargo.toml");
     let ctx = Ctx::load_from_manifest(&manifest_path).expect("load fixture context");
@@ -340,8 +340,7 @@ fn workspace_filters_remove_crates_modules_edges_and_report_findings() {
 #[test]
 fn exclusion_filters_reject_invalid_or_empty_scope() {
     let temp = tempdir().expect("tempdir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    let fixture = testing::package().join("tests/fixtures/architecture-workspace");
     copy_tree(&fixture, temp.path());
     let manifest_path = temp.path().join("Cargo.toml");
     let ctx = Ctx::load_from_manifest(&manifest_path).expect("load fixture context");
@@ -387,8 +386,7 @@ fn exclusion_filters_reject_invalid_or_empty_scope() {
 #[test]
 fn automatic_lod_follows_workspace_crate_and_module_scope() {
     let temp = tempdir().expect("tempdir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    let fixture = testing::package().join("tests/fixtures/architecture-workspace");
     copy_tree(&fixture, temp.path());
     let manifest_path = temp.path().join("Cargo.toml");
     let ctx = Ctx::load_from_manifest(&manifest_path).expect("load fixture context");
@@ -411,8 +409,7 @@ fn automatic_lod_follows_workspace_crate_and_module_scope() {
 #[test]
 fn crate_lod_one_contracts_modules_into_subsystems() {
     let temp = tempdir().expect("tempdir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    let fixture = testing::package().join("tests/fixtures/architecture-workspace");
     copy_tree(&fixture, temp.path());
     let manifest = temp.path().join("Cargo.toml");
     let ctx = Ctx::load_from_manifest(&manifest).expect("load fixture context");
@@ -464,8 +461,7 @@ fn crate_lod_one_contracts_modules_into_subsystems() {
 #[test]
 fn workspace_metrics_are_explainable_and_machine_readable() {
     let temp = tempdir().expect("tempdir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    let fixture = testing::package().join("tests/fixtures/architecture-workspace");
     copy_tree(&fixture, temp.path());
     let manifest = temp.path().join("Cargo.toml");
     let ctx = Ctx::load_from_manifest(&manifest).expect("load fixture context");
@@ -550,8 +546,7 @@ fn workspace_metrics_are_explainable_and_machine_readable() {
 #[test]
 fn crate_lod_two_groups_methods_into_architectural_abstractions() {
     let temp = tempdir().expect("tempdir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    let fixture = testing::package().join("tests/fixtures/architecture-workspace");
     copy_tree(&fixture, temp.path());
     let manifest = temp.path().join("Cargo.toml");
     let ctx = Ctx::load_from_manifest(&manifest).expect("load fixture context");
@@ -618,8 +613,7 @@ fn crate_lod_two_groups_methods_into_architectural_abstractions() {
 #[test]
 fn crate_lod_three_reveals_constructor_and_boundary_methods() {
     let temp = tempdir().expect("tempdir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    let fixture = testing::package().join("tests/fixtures/architecture-workspace");
     copy_tree(&fixture, temp.path());
     let manifest = temp.path().join("Cargo.toml");
     let ctx = Ctx::load_from_manifest(&manifest).expect("load fixture context");
@@ -644,8 +638,7 @@ fn crate_lod_three_reveals_constructor_and_boundary_methods() {
 #[test]
 fn crate_lod_one_and_four_bound_the_detail_range() {
     let temp = tempdir().expect("tempdir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    let fixture = testing::package().join("tests/fixtures/architecture-workspace");
     copy_tree(&fixture, temp.path());
     let manifest = temp.path().join("Cargo.toml");
     let ctx = Ctx::load_from_manifest(&manifest).expect("load fixture context");
@@ -698,8 +691,7 @@ fn crate_lod_one_and_four_bound_the_detail_range() {
 #[test]
 fn portable_workspace_produces_stable_mermaid_artifacts() {
     let temp = tempdir().expect("tempdir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    let fixture = testing::package().join("tests/fixtures/architecture-workspace");
     copy_tree(&fixture, temp.path());
     let manifest = temp.path().join("Cargo.toml");
     let ctx = Ctx::load_from_manifest(&manifest).expect("load fixture context");
@@ -749,8 +741,7 @@ fn portable_workspace_produces_stable_mermaid_artifacts() {
 fn configured_runtime_scenario_enriches_the_same_graph() {
     let _guard = runtime_scenario_guard();
     let temp = tempdir().expect("tempdir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    let fixture = testing::package().join("tests/fixtures/architecture-workspace");
     copy_tree(&fixture, temp.path());
     let manifest = temp.path().join("Cargo.toml");
     let ctx = Ctx::load_from_manifest(&manifest).expect("load fixture context");
@@ -814,8 +805,7 @@ fn configured_runtime_scenario_enriches_the_same_graph() {
 #[test]
 fn degraded_selected_scenario_preserves_the_static_projection_before_failing() {
     let temp = tempdir().expect("tempdir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    let fixture = testing::package().join("tests/fixtures/architecture-workspace");
     copy_tree(&fixture, temp.path());
     fs::write(
         temp.path().join(".config/xtask.toml"),
@@ -860,8 +850,7 @@ path = "missing.jsonl"
 fn excluded_test_harness_can_still_produce_runtime_evidence() {
     let _guard = runtime_scenario_guard();
     let temp = tempdir().expect("tempdir");
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/architecture-workspace");
+    let fixture = testing::package().join("tests/fixtures/architecture-workspace");
     copy_tree(&fixture, temp.path());
     fs::write(
         temp.path().join(".config/xtask.toml"),

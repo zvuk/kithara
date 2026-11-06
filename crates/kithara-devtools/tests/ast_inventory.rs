@@ -2,6 +2,9 @@
 
 use std::{collections::BTreeMap, fs, path::Path};
 
+#[path = "../src/testing.rs"]
+mod testing;
+
 const CONSUMER_RULES: [&str; 3] = [
     "perf.no-collect-iter-roundtrip",
     "rust.no-debug-prints",
@@ -39,7 +42,7 @@ fn rule_sources(directory: &Path) -> BTreeMap<String, String> {
 
 #[test]
 fn every_rule_has_one_canonical_repository_owner() {
-    let package = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let package = testing::package();
     assert!(
         !package.join("rules").exists(),
         "devtools must not own a second rule library"
