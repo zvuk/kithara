@@ -51,7 +51,7 @@ impl IsolatorEq {
         };
         let sample_rate: f32 = sample_rate.as_();
         let crossover_count = bands.len().saturating_sub(1);
-        let mut crossover_freqs = Vec::with_capacity(crossover_count);
+        let mut crossover_freqs = Vec::<Hertz<f32>>::with_capacity(crossover_count);
         for pair in bands.windows(2) {
             let frequency = (pair[0].frequency() * pair[1].frequency()).sqrt();
             crossover_freqs.push(Hertz::from_hz(frequency).map_err(|_| FilterError::Parameters)?);
