@@ -230,6 +230,11 @@ unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [[test]]
+name = "web-bootstrap"
+path = "tests/web_bootstrap.rs"
+required-features = ["wasm"]
+
+[[test]]
 name = "web-observer"
 path = "src/web/observer/tests.rs"
 required-features = ["wasm"]

@@ -49,6 +49,8 @@ pub(crate) const WASM_OBSERVER_TEST: &[&str] = &[
     "kithara-ffi",
     "--test",
     "web-observer",
+    "--test",
+    "web-bootstrap",
     "--no-default-features",
     "--features",
     "wasm",

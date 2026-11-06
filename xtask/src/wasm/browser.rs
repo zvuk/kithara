@@ -323,6 +323,7 @@ mod tests {
             };
             assert!(has("session") && has("layout"));
             assert_eq!(has("web-observer"), audio_route == AudioRoute::Include);
+            assert_eq!(has("web-bootstrap"), audio_route == AudioRoute::Include);
             assert_eq!(has("web-analysis"), audio_route == AudioRoute::Include);
             assert_eq!(has("ffi_web"), suite == Suite::All);
             assert_eq!(has("suite_heavy"), suite == Suite::All);

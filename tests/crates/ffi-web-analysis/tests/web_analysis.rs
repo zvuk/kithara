@@ -6,6 +6,7 @@ use js_sys::{Array, Float32Array, Float64Array, Object, Reflect};
 use kithara::{
     platform::{
         sync::Arc,
+        thread,
         time::{Duration, sleep},
     },
     queue::QueueError,
@@ -138,6 +139,7 @@ fn observed_player() -> (AudioPlayer, Events, [BroadcastObservation; 3]) {
         BroadcastObservation::new("kithara-worker-diagnostics"),
     ];
     BINDINGS.call_once(|| {
+        thread::set_wasm_shim_name("wasm-bindgen-test");
         install_worker_diagnostics();
         kithara_ffi::web::bindings::setup().expect("browser bindings initialized");
     });

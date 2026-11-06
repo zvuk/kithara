@@ -160,14 +160,14 @@ mod tests {
     use crate::{consts, time::sleep};
 
     #[kithara::test(wasm, flash(false))]
-    async fn blocking_tasks_start_on_workers_and_can_spawn_nested_work() {
-        assert!(crate::thread::is_main_thread());
+    async fn blocking_tasks_from_workers_complete_nested_work_and_keep_abort_inert() {
+        assert!(crate::thread::is_worker_thread());
         let direct = spawn_blocking(crate::thread::is_worker_thread);
         let handled = spawn_blocking_on(&Handle, crate::thread::is_worker_thread);
         let nested = spawn_blocking(|| spawn_blocking(|| 7u32));
         nested.abort();
 
-        assert!(direct.await.expect("main-thread task runs on a worker"));
+        assert!(direct.await.expect("blocking task runs on a worker"));
         assert!(handled.await.expect("runtime task runs on a worker"));
         assert_eq!(
             nested
