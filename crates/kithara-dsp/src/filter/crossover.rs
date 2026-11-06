@@ -1,6 +1,6 @@
 use std::{
     f32::consts::FRAC_1_SQRT_2,
-    ops::{Deref, DerefMut},
+    ops::{Deref, DerefMut, Mul},
 };
 
 use biquad::{Coefficients, Hertz, Type};
@@ -53,7 +53,7 @@ impl Df1State {
         let [feed1, feed2, feedback1, feedback2] = dispatch!(Level::baseline(), simd => {
             let factors = f32x4::simd_from(simd, coefficients.products);
             let history = f32x4::simd_from(simd, [self.x1, self.x2, self.y1, self.y2]);
-            <[f32; 4]>::from(factors * history)
+            <[f32; 4]>::from(factors.mul(history))
         });
         let output = direct + feed1 + feed2 - feedback1 - feedback2;
         self.x2 = self.x1;
