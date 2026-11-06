@@ -1,9 +1,14 @@
 //! Every maintained AST rule belongs to the repository rule library.
 
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
-#[path = "../src/testing.rs"]
-mod testing;
+fn package_root() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+}
 
 const CONSUMER_RULES: [&str; 3] = [
     "perf.no-collect-iter-roundtrip",
@@ -42,7 +47,7 @@ fn rule_sources(directory: &Path) -> BTreeMap<String, String> {
 
 #[test]
 fn every_rule_has_one_canonical_repository_owner() {
-    let package = testing::package();
+    let package = package_root();
     assert!(
         !package.join("rules").exists(),
         "devtools must not own a second rule library"

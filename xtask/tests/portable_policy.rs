@@ -1,6 +1,10 @@
 //! Kithara policy contracts belong to the workspace that declares them.
 
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use clap::Parser;
 use kithara_devtools::{CoreCommand, Ctx, common::project::ProjectConfig, verdict::NotClean};
@@ -13,9 +17,12 @@ struct Cli {
     command: CoreCommand,
 }
 
-#[path = "../src/testing/workspace.rs"]
-mod workspace;
-use workspace::root;
+fn root() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+        .parent()
+        .expect("xtask has a workspace root")
+        .to_path_buf()
+}
 
 fn config(namespace: &str) -> toml::Value {
     let path = root()

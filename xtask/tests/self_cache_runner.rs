@@ -20,8 +20,12 @@ use nix::{
 };
 use tempfile::TempDir;
 
-#[path = "../src/testing/workspace.rs"]
-mod workspace;
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+        .parent()
+        .expect("xtask has a workspace root")
+        .to_path_buf()
+}
 
 struct Fixture {
     _temp: TempDir,
@@ -77,7 +81,7 @@ case "$1 $2" in
 esac
 "#,
         )?;
-        let repository = workspace::root();
+        let repository = workspace_root();
         fs::copy(repository.join("justfile"), &justfile)?;
         fs::copy(
             env!("CARGO_BIN_EXE_ci-bootstrap"),

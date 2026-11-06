@@ -1,9 +1,17 @@
 #![cfg(feature = "cli")]
 
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
-#[path = "../src/testing/workspace.rs"]
-mod workspace;
+fn workspace_root() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+        .parent()
+        .expect("xtask has a workspace root")
+        .to_path_buf()
+}
 
 fn command(bin: &Path) -> Command {
     let path = std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(
@@ -12,7 +20,7 @@ fn command(bin: &Path) -> Command {
     .expect("prepend the test command directory to PATH");
     let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
     command
-        .current_dir(workspace::root())
+        .current_dir(workspace_root())
         .env("PATH", path)
         .env_remove("KITHARA_XTASK_TARGET")
         .env_remove("CARGO_TARGET_DIR")

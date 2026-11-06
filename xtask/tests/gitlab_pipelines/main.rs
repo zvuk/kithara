@@ -1,12 +1,19 @@
-use std::{collections::BTreeSet, fs, path::Path};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde_yaml_ng::{Mapping, Value};
 
 mod deps_deny;
 
-#[path = "../../src/testing/workspace.rs"]
-mod workspace;
-use workspace::root as workspace_root;
+fn workspace_root() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+        .parent()
+        .expect("xtask has a workspace root")
+        .to_path_buf()
+}
 
 const MERGE_REQUEST_KIND: &str = "merge-request";
 /// How a job on a host that carries `just` runs a lane.

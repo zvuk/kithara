@@ -59,9 +59,12 @@ fn github_workflow_text(name: &str) -> String {
     fs::read_to_string(workflows_dir().join(name)).expect("workflow is readable")
 }
 
-#[path = "../src/testing/workspace.rs"]
-mod workspace;
-use workspace::root as workspace_root;
+fn workspace_root() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+        .parent()
+        .expect("xtask has a workspace root")
+        .to_path_buf()
+}
 
 fn workflows_dir() -> PathBuf {
     workspace_root().join(".github/workflows")

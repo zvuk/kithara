@@ -9,8 +9,12 @@ use std::{
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
-#[path = "../src/testing/workspace.rs"]
-mod workspace;
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+        .parent()
+        .expect("xtask has a workspace root")
+        .to_path_buf()
+}
 
 mod consts {
     pub(super) const FILE: &str = "test_model.onnx";
@@ -136,7 +140,7 @@ impl Fixture {
     }
 
     fn cargo_fixture(&self) -> PathBuf {
-        let repository = workspace::root();
+        let repository = workspace_root();
         let workspace: toml::Table = fs::read_to_string(repository.join("Cargo.toml"))
             .expect("workspace manifest")
             .parse()
@@ -216,7 +220,7 @@ fn main() {{
     }
 
     fn cargo_build(&self, root: &Path) -> Vec<serde_json::Value> {
-        let pins: toml::Table = fs::read_to_string(workspace::root().join(".config/ci-pins.toml"))
+        let pins: toml::Table = fs::read_to_string(workspace_root().join(".config/ci-pins.toml"))
             .expect("repository CI pins")
             .parse()
             .expect("CI toolchain declarations");

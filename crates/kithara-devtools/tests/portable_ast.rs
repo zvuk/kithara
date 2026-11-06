@@ -8,8 +8,9 @@ use std::{
 use kithara_devtools::{CoreCommand, Ctx, ast_grep::AstGrepArgs, run};
 use tempfile::{TempDir, tempdir, tempdir_in};
 
-#[path = "../src/testing.rs"]
-mod testing;
+fn package_root() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+}
 
 fn fixture(rule: &str, path: &str, source: &str) -> (TempDir, Ctx) {
     let root = tempdir().expect("workspace");
@@ -35,7 +36,7 @@ fn fixture(rule: &str, path: &str, source: &str) -> (TempDir, Ctx) {
     )
     .expect("policy");
     fs::create_dir(root.path().join("fixture-rules")).expect("caller rule directory");
-    let canonical = testing::package()
+    let canonical = package_root()
         .join("../../.config/ast-grep")
         .join(format!("{rule}.yml"));
     let text = fs::read_to_string(canonical).expect("canonical source");

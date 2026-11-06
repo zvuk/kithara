@@ -1,8 +1,11 @@
-use std::fs;
+use std::{fs, path::PathBuf};
 
-#[path = "../src/testing/workspace.rs"]
-mod workspace;
-use workspace::root as workspace_root;
+fn workspace_root() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+        .parent()
+        .expect("xtask has a workspace root")
+        .to_path_buf()
+}
 
 #[test]
 fn config_reads_follow_the_running_checkout() {
@@ -85,7 +88,7 @@ fn every_test_package_keeps_its_code_at_opt_level_one_under_test_release() {
 // otherwise `--lane=selenium-firefox` reports Firefox and runs Chrome.
 #[test]
 fn a_selenium_lane_names_its_browser_in_its_own_environment() {
-    let root = workspace::root();
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
@@ -122,7 +125,7 @@ fn a_selenium_lane_names_its_browser_in_its_own_environment() {
 // - so this also fixes the number a green lane may not be bought with.
 #[test]
 fn the_coverage_bar_is_declared_once_and_enforced_where_it_is_declared() {
-    let root = workspace::root();
+    let root = workspace_root();
     let recipe = fs::read_to_string(root.join(".config/just/test.just"))
         .expect("the test recipes are readable");
 
@@ -199,7 +202,7 @@ fn the_catalog_accepts_exactly_the_pipeline_kinds_the_executor_knows() {
 }
 
 fn xtask_pipeline_kind_names() -> Vec<String> {
-    let root = workspace::root();
+    let root = workspace_root();
     let source = fs::read_to_string(root.join("xtask/src/consts.rs"))
         .expect("the xtask constants source is readable");
     let start = source
@@ -220,7 +223,7 @@ fn xtask_pipeline_kind_names() -> Vec<String> {
 }
 
 fn xtask_lane_role_names() -> Vec<String> {
-    let root = workspace::root();
+    let root = workspace_root();
     let source = fs::read_to_string(root.join("xtask/src/consts.rs"))
         .expect("the xtask constants source is readable");
     let start = source
@@ -244,7 +247,7 @@ fn xtask_lane_role_names() -> Vec<String> {
 // workflows can stop restating them. This names the lanes that must be there.
 #[test]
 fn the_catalog_declares_every_lane_the_github_workflows_will_ask_for() {
-    let root = workspace::root();
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
@@ -285,7 +288,7 @@ fn the_catalog_declares_every_lane_the_github_workflows_will_ask_for() {
 // missing directory as "nothing to report" rather than an error.
 #[test]
 fn every_deep_rtsan_lane_names_its_backend_and_quality_report_names_its_artifacts_path() {
-    let root = workspace::root();
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
@@ -350,7 +353,7 @@ fn every_deep_rtsan_lane_names_its_backend_and_quality_report_names_its_artifact
 // nothing else would say so.
 #[test]
 fn every_declared_lane_names_a_known_role_and_known_kinds() {
-    let root = workspace::root();
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
