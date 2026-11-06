@@ -125,8 +125,6 @@ impl RenderPass {
             pub(crate) fn accepts_eq_program(&self, band: usize) -> bool;
             #[call(set_gain_explicit)]
             pub(crate) fn set_eq_gain_explicit(&mut self, band: usize, gain: GainDb);
-            #[call(target_gain)]
-            pub(crate) fn eq_gain(&self, band: usize) -> Option<GainDb>;
             /// Cross the deck's equaliser over to `layout`, answering the layout it displaced.
             #[call(take_layout)]
             pub(crate) fn take_eq_layout(&mut self, layout: Box<EqLayout>) -> Option<Box<EqLayout>>;

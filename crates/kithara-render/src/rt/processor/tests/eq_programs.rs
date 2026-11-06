@@ -117,7 +117,7 @@ fn same_frame_manual_control_does_not_start_from_an_unrendered_replacement() {
             (send(&mut ends, at(BLOCK + 10), vec![manual]), replacement)
         };
         let pcm = render_frames(&mut mixer, BLOCK + 8, 24);
-        let smoothing = SmootherConfig::default();
+        let smoothing = EqConfig::builder(pools()).build().smoothing();
         let coeff = kithara_dsp::param::SmoothingFilterCoeff::new(
             shape().sample_rate,
             smoothing.smooth_seconds,
@@ -153,11 +153,8 @@ fn same_frame_manual_control_does_not_start_from_an_unrendered_replacement() {
                 })
             })
             .expect("replacement storage returned");
-        assert_eq!(
-            returned.last_rendered(),
-            None,
-            "unrendered replacement is never confirmed"
-        );
+        assert_eq!(returned.start(), frame_at(BLOCK + 10));
+        assert_eq!(returned.curve().segment_at(0), (-24.0, -24.0, 0.0));
         let snapshot = ends.deck.snapshot.read();
         assert_eq!(snapshot.eq.authority(0), Some(manual_seq));
         assert_eq!(snapshot.eq.program(0), None);
@@ -232,7 +229,32 @@ fn a_future_curve_cannot_control_an_eq_layout_that_replaced_its_binding() {
         ])))],
     );
     let pcm = render_frames(&mut mixer, BLOCK, 32);
-    assert_eq!(pcm, vec![1.0; 32]);
+    let config = EqConfig::builder(pools()).build();
+    let mut reference = kithara_effects::eq::StereoEq::with_layout(
+        &config,
+        shape().sample_rate,
+        eq_layout(&[GainDb::DEFAULT]),
+    );
+    let expected: Vec<_> = (0..32)
+        .map(|frame| {
+            if frame == 2 {
+                reference.take_layout(eq_layout(&[]));
+            }
+            if frame == 3 {
+                reference.take_layout(eq_layout(&[GainDb::DEFAULT]));
+            }
+            let (mut left, mut right) = ([1.0], [1.0]);
+            reference.process(&mut left, &mut right);
+            left[0].to_bits()
+        })
+        .collect();
+    assert!(expected.iter().any(|sample| *sample != 1.0_f32.to_bits()));
+    assert_eq!(
+        pcm.iter()
+            .map(|sample| sample.to_bits())
+            .collect::<Vec<_>>(),
+        expected
+    );
     let replies = receipts(&mut ends);
     assert!(matches!(
         outcome_of(&replies, stale),
@@ -333,7 +355,9 @@ fn closing_the_parameter_owner_confirms_only_rendered_values_and_returns_knots()
             })
         })
         .expect("terminal program storage");
-    assert_eq!(returned.last_rendered(), Some((frame_at(BLOCK + 15), last)));
+    assert_eq!(returned.start(), frame_at(BLOCK));
+    assert_eq!(returned.end(), frame_at(BLOCK + 128));
+    assert_eq!(returned.curve().segment_at(128), (0.0, 0.0, 0.0));
     assert_eq!(snapshot.eq.gain(0), Some(last));
     assert_ne!(
         snapshot.eq.gain(0),
@@ -522,7 +546,7 @@ fn eq_refusals_preserve_running_pcm_and_return_the_original_program(#[case] kind
         .expect("refused programme storage returned");
     assert_eq!(returned.band(), band);
     assert_eq!(returned.start(), frame_at(start));
-    assert_eq!(returned.last_rendered(), None);
+    assert_eq!(returned.end(), frame_at(BLOCK + 24));
     let snapshot = ends.deck.snapshot.read();
     assert_eq!(snapshot.eq.program(0), Some(running));
     assert_eq!(

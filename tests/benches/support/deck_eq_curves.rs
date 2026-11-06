@@ -72,72 +72,74 @@ fn expected(frame: usize, frames: usize, shape: CurveShape) -> (GainDb, [f32; 2]
 pub(super) fn bench(c: &mut Criterion) {
     let rt = super::make_runtime();
     let harness = rt.block_on(player());
-    let mut group = c.benchmark_group("deck_eq_curves");
-    group.sample_size(20);
-    for (name, shape) in [
-        ("hold", CurveShape::HOLD),
-        ("linear", CurveShape::LINEAR),
-        ("cubic", CurveShape::cubic(0.0, 1.0).expect("S shape")),
-    ] {
-        for frames in [13, 256] {
-            let oracle: Vec<_> = (0..frames)
-                .flat_map(|frame| expected(frame, frames, shape).1)
-                .collect();
-            group.bench_function(format!("render_{name}/{frames}"), |b| {
-                let mut last = Vec::new();
-                b.iter_batched(
-                    || {
-                        rt.block_on(async {
-                            reset(&harness).await;
-                            submit(&harness, shape, frames).await;
-                            let prelude = harness.render(PRELUDE).await;
-                            assert!(prelude.iter().all(|sample| *sample == 0.5));
-                        })
-                    },
-                    |()| {
-                        last = rt.block_on(harness.render(frames));
-                        black_box(&last);
-                    },
-                    BatchSize::PerIteration,
-                );
-                assert_eq!(last, oracle);
-                assert_eq!(
-                    harness.deck_snapshot().eq.gain(0),
-                    Some(expected(frames - 1, frames, shape).0)
-                );
-                assert!(harness.deck_snapshot().eq.program(0).is_some());
-                assert_eq!(harness.metrics().underruns(), 0);
-            });
-        }
-    }
-    let shape = CurveShape::cubic(0.0, 1.0).expect("S shape");
-    let oracle: Vec<_> = (0..1024_usize)
-        .flat_map(|frame| {
-            if frame < PRELUDE {
-                [0.5; 2]
-            } else {
-                expected(frame - PRELUDE, 128, shape).1
-            }
-        })
-        .collect();
-    group.bench_function("public_host_cubic/1024", |b| {
-        let mut last = Vec::new();
-        b.iter_batched(
-            || rt.block_on(reset(&harness)),
-            |()| {
-                last = rt.block_on(async {
-                    submit(&harness, shape, 128).await;
-                    harness.render(1024).await
+    {
+        let mut group = c.benchmark_group("deck_eq_curves");
+        group.sample_size(20);
+        for (name, shape) in [
+            ("hold", CurveShape::HOLD),
+            ("linear", CurveShape::LINEAR),
+            ("cubic", CurveShape::cubic(0.0, 1.0).expect("S shape")),
+        ] {
+            for frames in [13, 256] {
+                let oracle: Vec<_> = (0..frames)
+                    .flat_map(|frame| expected(frame, frames, shape).1)
+                    .collect();
+                group.bench_function(format!("render_{name}/{frames}"), |b| {
+                    let mut last = Vec::new();
+                    b.iter_batched(
+                        || {
+                            rt.block_on(async {
+                                reset(&harness).await;
+                                submit(&harness, shape, frames).await;
+                                let prelude = harness.render(PRELUDE).await;
+                                assert!(prelude.iter().all(|sample| *sample == 0.5));
+                            });
+                        },
+                        |()| {
+                            last = rt.block_on(harness.render(frames));
+                            black_box(&last);
+                        },
+                        BatchSize::PerIteration,
+                    );
+                    assert_eq!(last, oracle);
+                    assert_eq!(
+                        harness.deck_snapshot().eq.gain(0),
+                        Some(expected(frames - 1, frames, shape).0)
+                    );
+                    assert!(harness.deck_snapshot().eq.program(0).is_some());
+                    assert_eq!(harness.metrics().underruns(), 0);
                 });
-                black_box(&last);
-            },
-            BatchSize::PerIteration,
-        );
-        assert_eq!(last, oracle);
-        assert_eq!(harness.deck_snapshot().eq.gain(0), GainDb::checked(-12.0));
-        assert!(harness.deck_snapshot().eq.program(0).is_some());
-        assert_eq!(harness.metrics().underruns(), 0);
-    });
-    group.finish();
+            }
+        }
+        let shape = CurveShape::cubic(0.0, 1.0).expect("S shape");
+        let oracle: Vec<_> = (0..1024_usize)
+            .flat_map(|frame| {
+                if frame < PRELUDE {
+                    [0.5; 2]
+                } else {
+                    expected(frame - PRELUDE, 128, shape).1
+                }
+            })
+            .collect();
+        group.bench_function("public_host_cubic/1024", |b| {
+            let mut last = Vec::new();
+            b.iter_batched(
+                || rt.block_on(reset(&harness)),
+                |()| {
+                    last = rt.block_on(async {
+                        submit(&harness, shape, 128).await;
+                        harness.render(1024).await
+                    });
+                    black_box(&last);
+                },
+                BatchSize::PerIteration,
+            );
+            assert_eq!(last, oracle);
+            assert_eq!(harness.deck_snapshot().eq.gain(0), GainDb::checked(-12.0));
+            assert!(harness.deck_snapshot().eq.program(0).is_some());
+            assert_eq!(harness.metrics().underruns(), 0);
+        });
+        group.finish();
+    }
     rt.block_on(harness.close());
 }

@@ -195,8 +195,9 @@ fn held_gain_program_preserves_another_bands_manual_pcm_transition(
             expected_right[0].to_bits(),
             "right {frame}"
         );
-        assert_eq!(actual.target_gain(0), Some(held));
-        assert_eq!(actual.target_gain(1), Some(target));
+        let mut targets = [GainDb::DEFAULT; 2];
+        assert_eq!(actual.read_gains(&mut targets), 2);
+        assert_eq!(targets, [held, target]);
     }
 }
 

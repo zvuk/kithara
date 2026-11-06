@@ -84,9 +84,8 @@ impl Deck {
             DeckPart::EqProgram {
                 binding,
                 authority,
-                mut program,
+                program,
             } => {
-                program.reset_rendered();
                 self.eq_programs.begin(program.band(), seq);
                 Some(DeckPart::EqProgram {
                     binding,

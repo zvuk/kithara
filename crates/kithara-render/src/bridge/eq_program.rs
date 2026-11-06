@@ -12,8 +12,6 @@ pub struct EqGainProgram {
     #[field(skip)]
     band: usize,
     curve: ParameterCurve,
-    #[field(skip)]
-    last_rendered: Option<(SessionFrame, GainDb)>,
 }
 
 impl EqGainProgram {
@@ -31,31 +29,13 @@ impl EqGainProgram {
         {
             return Err(ParameterCurveError::Range);
         }
-        Ok(Self {
-            band,
-            curve,
-            last_rendered: None,
-        })
-    }
-
-    pub(crate) fn reset_rendered(&mut self) {
-        self.last_rendered = None;
-    }
-
-    pub(crate) fn record_rendered(&mut self, at: SessionFrame, gain: GainDb) {
-        self.last_rendered = Some((at, gain));
+        Ok(Self { band, curve })
     }
 
     /// The band addressed by this program.
     #[must_use]
     pub fn band(&self) -> usize {
         self.band
-    }
-
-    /// The last frame and gain rendered by the executor, absent before the first frame.
-    #[must_use]
-    pub fn last_rendered(&self) -> Option<(SessionFrame, GainDb)> {
-        self.last_rendered
     }
 
     delegate::delegate! {

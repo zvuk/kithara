@@ -112,13 +112,6 @@ fn program_in(commands: &[DeckPart], band: usize) -> Option<&EqGainProgram> {
     })
 }
 
-fn program_in_mut(commands: &mut [DeckPart], band: usize) -> Option<&mut EqGainProgram> {
-    commands.iter_mut().find_map(|part| match part {
-        DeckPart::EqProgram { program, .. } if program.band() == band => Some(program),
-        _ => None,
-    })
-}
-
 pub(in crate::rt) fn gain_at(curve: &ParameterCurve, at: SessionFrame) -> GainDb {
     let elapsed = at
         .frames_since(curve.start())
@@ -317,13 +310,8 @@ impl Deck {
             let Some(seq) = field.program.active() else {
                 continue;
             };
-            let program = program_in_mut(level.committed_mut(seq).expect("active EQ batch"), band)
+            let program = program_in(level.committed(seq).expect("active EQ batch"), band)
                 .expect("active EQ band program");
-            let gain = self
-                .render
-                .eq_gain(band)
-                .expect("rendered EQ band remains installed");
-            program.record_rendered(at, gain);
             field.program = if at >= program.end() {
                 *completed.get_mut(next).expect("admitted active capacity") = Some(seq);
                 next = next.saturating_add(1);

@@ -160,13 +160,6 @@ impl StereoEq {
         layout.band_count()
     }
 
-    /// The gain addressed by a scalar control on the current target layout.
-    #[must_use]
-    pub fn target_gain(&self, band: usize) -> Option<GainDb> {
-        self.target_layout()
-            .and_then(|layout| layout.target_gain(band))
-    }
-
     fn target_layout(&self) -> Option<&EqLayout> {
         match &self.update {
             Some(LayoutUpdate::Pending(layout)) => Some(layout),
