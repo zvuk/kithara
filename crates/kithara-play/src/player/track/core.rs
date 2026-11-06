@@ -30,6 +30,7 @@ pub struct PlayerImpl<S> {
     pub(super) lane: Option<Sender<LaneProtocol>>,
     pub(super) lane_id: Option<LaneId>,
     pub(super) settings: Live<TrackSettings, LaneProtocol>,
+    pub(super) output: kithara_render::bridge::SlotOutputSnapshot,
     pub(super) status: TrackStatus,
     pub(super) loading: Option<Loading>,
     pub(super) attaching: Option<Attaching>,
@@ -78,6 +79,7 @@ impl<S> PlayerImpl<S> {
             lane: None,
             lane_id: None,
             settings: Live::new(config.settings)?,
+            output: kithara_render::bridge::SlotOutputSnapshot::default(),
             status: TrackStatus::Idle,
             loading: None,
             attaching: None,
@@ -173,6 +175,11 @@ impl<S> PlayerImpl<S> {
             && let Some(slot) = pass.deck.slots.get(seat.index())
         {
             self.mark = slot.mark;
+            if slot.binding.is_some_and(|binding| {
+                binding.item() == self.item && binding.segment() == self.segment
+            }) {
+                self.output = slot.output;
+            }
             if let Some(source) = slot.source.filter(|info| info.segment == self.segment)
                 && self.attach_at.is_some()
                 && !matches!(self.status, TrackStatus::Released)
