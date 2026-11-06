@@ -3,7 +3,7 @@ use std::ops::{Deref, DerefMut};
 use biquad::{Biquad, Coefficients, DirectForm1, Hertz, Type};
 
 use super::{coefficients, validate};
-use crate::filter::FilterError;
+use crate::{consts::CROSSOVER_GAIN_FRAMES, filter::FilterError};
 
 struct Section(DirectForm1<f32>);
 
@@ -71,6 +71,7 @@ impl Design {
 pub struct Crossover {
     splits: Box<[Split]>,
     frame: Box<[f32]>,
+    gain_tiles: Box<[[f32; CROSSOVER_GAIN_FRAMES]]>,
     prepared: Box<[Design]>,
     prepared_rate: Option<Hertz<f32>>,
 }
@@ -104,6 +105,8 @@ impl Crossover {
                 })
                 .collect(),
             frame: vec![0.0; frequencies.len().saturating_add(1)].into_boxed_slice(),
+            gain_tiles: vec![[0.0; CROSSOVER_GAIN_FRAMES]; frequencies.len().saturating_add(1)]
+                .into_boxed_slice(),
             prepared: designs.into_boxed_slice(),
             prepared_rate: None,
         })
@@ -144,23 +147,46 @@ impl Crossover {
         let count = gains
             .iter()
             .fold(samples.len(), |n, gain| n.min(gain.len()));
-        for (frame, sample) in samples.iter_mut().take(count).enumerate() {
-            *sample =
-                self.filter_sample(*sample)
-                    .iter()
-                    .zip(gains)
-                    .fold(0.0, |output, (value, gain)| {
-                        value.mul_add(
-                            *gain
-                                .get(frame)
-                                .expect("frame belongs to the validated common prefix"),
-                            output,
-                        )
-                    });
+        for (chunk, start) in samples
+            .split_at_mut(count)
+            .0
+            .chunks_mut(CROSSOVER_GAIN_FRAMES)
+            .zip((0..count).step_by(CROSSOVER_GAIN_FRAMES))
+        {
+            for (tile, gain) in self.gain_tiles.iter_mut().zip(gains) {
+                let source = gain
+                    .get(start..)
+                    .and_then(|tail| tail.get(..chunk.len()))
+                    .expect("chunk belongs to the validated common prefix");
+                tile.get_mut(..chunk.len())
+                    .expect("chunk fits the prepared gain tile")
+                    .copy_from_slice(source);
+            }
+            self.weighted_block(chunk);
         }
         count
     }
 
+    #[inline(never)]
+    fn weighted_block(&mut self, samples: &mut [f32]) {
+        for (sample, frame) in samples.iter_mut().zip(0..CROSSOVER_GAIN_FRAMES) {
+            self.filter_sample(*sample);
+            *sample =
+                self.frame
+                    .iter()
+                    .zip(self.gain_tiles.iter())
+                    .fold(0.0, |output, (value, gain)| {
+                        value.mul_add(
+                            *gain
+                                .get(frame)
+                                .expect("frame belongs to the prepared gain tile"),
+                            output,
+                        )
+                    });
+        }
+    }
+
+    #[inline(always)]
     fn filter_sample(&mut self, mut high: f32) -> &[f32] {
         let (high_band, lower) = self
             .frame

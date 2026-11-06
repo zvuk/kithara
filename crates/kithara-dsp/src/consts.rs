@@ -13,6 +13,9 @@ pub(crate) const LANES: usize = 4;
 /// Interpolation positions are `f32`: every frame index below `2²⁴` is exact.
 pub(crate) const MAX_WINDOW: u32 = 1 << 24;
 
+/// Gain planes cross the concrete crossover core in bounded copy tiles.
+pub(crate) const CROSSOVER_GAIN_FRAMES: usize = 128;
+
 /// Frames per biquad settle pass; the scratch planes hold this many.
 pub(crate) const SETTLE_CHUNK: usize = 64;
 /// `log2` of the residue a biquad transient decays to before it counts as
