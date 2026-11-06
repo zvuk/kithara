@@ -76,6 +76,10 @@ impl IsolatorEq {
         })
     }
 
+    /// Processes one sample through the prepared EQ block.
+    ///
+    /// # Panics
+    /// Panics if the prepared output block is empty.
     #[inline]
     pub fn process_sample(&mut self, input: f32) -> f32 {
         self.process_block(std::slice::from_ref(&input))
