@@ -13,6 +13,7 @@ use kithara_test_fixtures::assets;
 use num_traits::ToPrimitive;
 
 use super::cases::{BLOCK_FRAMES, ROOMY_CAPACITY, SAMPLE_RATE, load_source, render_effect_window};
+use crate::underrun;
 
 #[kithara::test(tokio)]
 async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
@@ -26,6 +27,7 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
         )
         .build();
     let harness = OfflinePlayer::with_sample_rate(options, SAMPLE_RATE).await;
+    let mut underruns = underrun::Underruns::new(&harness);
     let config = ResourceConfig::for_src(
         ResourceSrc::parse(asset_source(&assets::fixed_constant_wav_cd_half_44100()))
             .expect("fixture URI parses"),
@@ -36,7 +38,9 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
     .build();
     let harness = load_source(harness, TrackSource::Config(Box::new(config))).await;
     let _ = render_effect_window(&harness, BLOCK_FRAMES).await;
+    underruns.checkpoint(harness.metrics(), false, "gain initial playback");
     let warm = render_effect_window(&harness, 4096).await;
+    underruns.checkpoint(harness.metrics(), false, "gain ready playback");
     assert!(warm[warm.len() - 128..].iter().all(|sample| *sample == 0.5));
     let item = harness
         .with_queue(|queue| queue.current().expect("loaded current item").id)
@@ -69,6 +73,7 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
         .await
         .expect("master tap");
     let take = render_effect_window(&harness, 1024).await;
+    underruns.checkpoint(harness.metrics(), false, "gain program playback");
     assert_eq!(tap.drain(), take);
     assert_eq!(tap.drops(), 0);
     for (index, &channels) in take.as_chunks::<2>().0.iter().enumerate() {
