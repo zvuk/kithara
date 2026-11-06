@@ -263,6 +263,50 @@ fn filter_matches_declared_corner_response(
     );
 }
 
+/// The DC group delay of a second-order Butterworth LP is 1/(2 Q tan(pi fc/fs)).
+#[kithara::test]
+fn low_pass_impulse_has_the_declared_causal_delay() {
+    let pools = pools();
+    let cutoff = 200.0;
+    let settings = FilterConfig::builder(pools.clone())
+        .kind(Kind::LowPass)
+        .cutoff_hz(Cutoff::checked(cutoff).expect("admitted cutoff"))
+        .build()
+        .expect("valid low pass");
+    let mut filter = FilterEffect::new(spec(1), settings).expect("prepared filter");
+    let mut input = vec![0.0; 8192];
+    let origin = 2048;
+    *input.get_mut(origin).expect("impulse origin") = 0.25;
+    let output = filter.process(chunk(&pools, 1, &input)).expect("impulse");
+    assert!(
+        output
+            .samples
+            .get(..origin)
+            .expect("impulse prefix")
+            .iter()
+            .all(|sample| *sample == 0.0)
+    );
+    let (sum, moment) = output
+        .samples
+        .get(origin..)
+        .expect("impulse response")
+        .iter()
+        .enumerate()
+        .fold((0.0_f64, 0.0_f64), |(sum, moment), (frame, sample)| {
+            let frame = f64::from(u32::try_from(frame).expect("bounded impulse"));
+            let sample = f64::from(*sample);
+            (sum + sample, moment + frame * sample)
+        });
+    assert!((20.0 * (sum / 0.25).abs().log10()).abs() <= 0.5);
+    let delay = moment / sum;
+    let reference =
+        std::f64::consts::FRAC_1_SQRT_2 / (std::f64::consts::PI * cutoff / 44_100.0).tan();
+    assert!(
+        (delay - reference).abs() <= 0.1,
+        "DC group delay: {delay} frames, causal reference {reference} frames"
+    );
+}
+
 #[kithara::test]
 fn refused_reprepare_leaves_filter_format_and_history_untouched() {
     let pools = pools();
