@@ -9,7 +9,6 @@ use kithara_audio::{
     TrackFailureKind, TrackStep, WaitingReason,
 };
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_effects::{AudioEffect, EffectDrain, EffectDrainStep, apply_effects, reset_effects};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_warp::WarpRenderError;
@@ -24,7 +23,6 @@ pub(super) enum DrainState {
     Open,
     LiveWarp,
     Warp,
-    Effects,
     Exhausted,
 }
 
@@ -33,11 +31,10 @@ pub(super) struct PendingInput {
     pub(super) consumed_frames: usize,
 }
 
-/// The sole producer-side Warp/effect stage before the play output ring.
+/// The sole producer-side Warp stage before the play output ring.
 pub struct WarpSource<T, S> {
     pub(super) spec: AudioSpec,
     pub(super) drain_state: DrainState,
-    drain: EffectDrain,
     discontinuity: Option<SourceDiscontinuity>,
     lane: Lane,
     pub(super) pending_input: Option<PendingInput>,
@@ -47,7 +44,6 @@ pub struct WarpSource<T, S> {
     staged_meta: Option<AudioChunkInfo>,
     pools: PoolRegion<S>,
     pub(super) source: T,
-    pub(super) effects: Vec<Box<dyn AudioEffect>>,
     pub(super) warp: kithara_warp::WarpRenderer<S>,
     pub(super) quantum_failed: bool,
     terminal_failure: Option<TrackFailureKind>,
@@ -58,14 +54,11 @@ where
     T: AudioSource<Chunk = AudioChunk>,
     S: HasPool<f32>,
 {
-    /// Builds the stage over a decoded source, its Warp renderer, and the
-    /// effect chain with the drain that flushes it; `lane` brings the lane
-    /// commands it executes at frames of its output.
+    /// Builds the stage over a decoded source and its Warp renderer; `lane`
+    /// brings the lane commands it executes at frames of its output.
     pub fn new(
         source: T,
         warp: kithara_warp::WarpRenderer<S>,
-        effects: Vec<Box<dyn AudioEffect>>,
-        drain: EffectDrain,
         spec: AudioSpec,
         pools: PoolRegion<S>,
         lane: LaneSetup,
@@ -74,8 +67,6 @@ where
         Self {
             source,
             warp,
-            effects,
-            drain,
             discontinuity,
             spec,
             pools,
@@ -132,16 +123,11 @@ where
     /// # Errors
     /// Returns the source's seek classification or a render failure.
     pub fn service_commands(&mut self) -> Result<bool, TrackFailureKind> {
-        let changed = self.lane.execute_due(
-            &mut self.source,
-            &mut self.warp,
-            self.spec,
-            &mut self.effects,
-        )?;
+        let changed = self
+            .lane
+            .execute_due(&mut self.source, &mut self.warp, self.spec)?;
         if changed == LaneChange::Source {
             self.discard_staged_input();
-            reset_effects(&mut self.effects);
-            self.drain.reset();
             self.drain_state = DrainState::Open;
             self.discontinuity = self.source.discontinuity();
             self.spec = self.discontinuity.map_or(self.spec, |stamp| *stamp.spec());
@@ -505,8 +491,7 @@ where
             }
             return Some(
                 chunk
-                    .and_then(|chunk| self.apply_chain(chunk))
-                    .and_then(|output| self.fetch(output))
+                    .and_then(|chunk| self.fetch(chunk))
                     .map_or(TrackStep::StateChanged, TrackStep::Produced),
             );
         }
@@ -518,33 +503,14 @@ where
             };
             if let Some(chunk) = chunk {
                 return Some(
-                    self.apply_chain(chunk)
-                        .and_then(|output| self.fetch(output))
+                    self.fetch(chunk)
                         .map_or(TrackStep::StateChanged, TrackStep::Produced),
                 );
             }
-            self.drain_state = DrainState::Effects;
+            self.drain_state = DrainState::Exhausted;
+            return Some(TrackStep::Eof);
         }
-
-        let DrainState::Effects = self.drain_state else {
-            return None;
-        };
-        Some(match self.drain.step(&mut self.effects) {
-            Err(_) => self.fail(TrackFailureKind::Render),
-            Ok(EffectDrainStep::Produced(chunk)) => {
-                let source_end = chunk.meta.source_span.map(|span| {
-                    SourceEnd::new(span.end(), span.sample_rate())
-                        .with_mapping_revision(span.mapping_revision())
-                });
-                self.emit_output(*chunk, source_end)
-                    .map_or(TrackStep::StateChanged, TrackStep::Produced)
-            }
-            Ok(EffectDrainStep::Progress) => TrackStep::StateChanged,
-            Ok(EffectDrainStep::Exhausted) => {
-                self.drain_state = DrainState::Exhausted;
-                TrackStep::Eof
-            }
-        })
+        None
     }
 
     fn fetch(&mut self, data: AudioChunk) -> Option<Fetch<AudioChunk>> {
@@ -612,17 +578,6 @@ where
         }
     }
 
-    fn apply_chain(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        match apply_effects(&mut self.effects, chunk) {
-            Ok(output) => output,
-            Err(error) => {
-                tracing::error!(%error, "effect input was not admitted");
-                self.quantum_failed = true;
-                None
-            }
-        }
-    }
-
     fn render_full_quantum(&mut self) -> Option<TrackStep<AudioChunk>> {
         let frames = self.prepared_frames?;
         (self.staged_frames() >= frames).then(|| self.render_staged(frames))
@@ -636,7 +591,6 @@ where
         if self.warp.transition_pending() {
             self.drain_state = DrainState::LiveWarp;
         }
-        let output = output.and_then(|chunk| self.apply_chain(chunk));
         ControlFlow::Continue(output.and_then(|output| self.fetch(output)))
     }
 
@@ -723,7 +677,6 @@ where
 
     fn reset_renderers(&mut self) {
         self.warp.reset();
-        reset_effects(&mut self.effects);
     }
 
     fn sync_discontinuity(&mut self) -> bool {
@@ -745,7 +698,6 @@ where
         }
         self.discard_staged_input();
         self.reset_renderers();
-        self.drain.reset();
         self.drain_state = DrainState::Open;
         true
     }
@@ -796,14 +748,6 @@ where
             spec.unwrap_or(self.spec)
         };
         self.prepare_renderers(prepared_spec);
-        for effect in &mut self.effects {
-            if effect.service_deferred(prepared_spec).is_err()
-                || !effect.accepts_spec(prepared_spec)
-            {
-                self.quantum_failed = true;
-                break;
-            }
-        }
         spec.map(|_| prepared_spec)
     }
 
@@ -832,14 +776,6 @@ where
         }
         if self.quantum_failed {
             return self.fail(TrackFailureKind::Render);
-        }
-
-        if self
-            .effects
-            .iter()
-            .any(|effect| !effect.accepts_spec(self.spec))
-        {
-            return TrackStep::StateChanged;
         }
 
         if let Some(step) = self.step_buffered() {
@@ -883,8 +819,6 @@ mod tests {
         let mut source = WarpSource::new(
             decoded,
             kithara_warp::Warp::new((), &config).renderer(spec, pools.clone()),
-            Vec::new(),
-            EffectDrain::new(0, &pools).expect("effect drain"),
             spec,
             pools.clone(),
             LaneSetup {

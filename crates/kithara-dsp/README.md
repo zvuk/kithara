@@ -18,7 +18,8 @@ Vector DSP kernels over planar `f32` slices. The layout functions match
 `fast_interleave` for `f32`: Apple builds run the stereo pair on Accelerate,
 every other target runs it on `fearless_simd` at the best SIMD level the CPU
 reports, and other channel counts take a bit-exact strided copy. `filter`
-runs multichannel biquad cascades, `interp` reads a window at fractional
+runs multichannel biquad cascades and ordered FIR reconstruction; `envelope` links
+interval peaks and releases gains before clamping. `interp` reads a window at fractional
 positions and `spectrum` takes the real FFT of a Hann-windowed frame on the
 same backends; `downmix` folds interleaved frames to mono and `sum_squares`
 reduces a slice. The FFT, the bin kernels and the autocorrelation build only
@@ -76,13 +77,17 @@ assert_eq!(samples, [0.0, 0.5]);
 
 <tr><td><code>interp::interpolate</code></td><td>Reads a window at fractional positions with an <code>interp::Interpolation</code> method (linear, quadratic, Hermite, Watte); a position outside the window is an error and leaves the output untouched</td></tr>
 
+<tr><td><code>interp::interpolate_frame</code></td><td>Interpolates the common channel prefix of two resolved frames with a separate f64 fraction; integer phase copies exact bits, including signed zero</td></tr>
+
+<tr><td><code>interp::weighted_frames</code></td><td>Accumulates checked frame offsets and f64 weights in tap order into caller-owned f64 scratch, without fusion, normalization or allocation; invalid shapes leave output untouched</td></tr>
+
 <tr><td><code>interp::RateRamp</code></td><td>Read rate moving linearly to a target; places a block of positions in closed form and lands on the target exactly</td></tr>
 
 <tr><td><code>spectrum::FftLen</code></td><td>An FFT length <code>f·2ⁿ</code>, <code>f</code> in {1, 3, 5, 15}, <code>n ≥ 4</code>: the lengths vDSP's real DFT runs, held on every backend</td></tr>
 
 <tr><td><code>spectrum::Fft</code></td><td>Real FFT of a Hann-windowed frame into a <code>Spectrum</code> of <code>N/2 + 1</code> unscaled bins; a short frame is zero-padded; <code>new</code> allocates, <code>spectrum</code> takes its sample planes from the caller's pool region and, off Apple, allocates the complex ones, <code>forward</code> does neither</td></tr>
 
-<tr><td><code>spectrum::magnitude</code> / <code>spectrum::phase</code></td><td>Magnitude and phase (<code>atan2</code>) of each bin from its real and imaginary parts, through one <code>fearless_simd</code> kernel on every target</td></tr>
+<tr><td><code>spectrum::prediction_difference</code></td><td>Complex spectral difference from caller-owned history of the two previous spectra; vector arithmetic without transcendentals and no allocation</td></tr>
 
 <tr><td><code>spectrum::Autocorrelation</code></td><td>Unbiased autocorrelation of a frame over lags <code>0..N</code>; <code>new</code> takes its zero padding from the caller's pool region, <code>process</code> does not allocate</td></tr>
 
@@ -101,11 +106,14 @@ functions; its pooled planar buffer goes through the channel-major ones, so
 no channel count allocates. `kithara-resampler`'s Glide backend filters
 through `filter::Biquad`, interpolates through `interp::interpolate` and places
 its positions with `interp::RateRamp`. `kithara-decode` sanitizes resampled
-planes. `kithara-beat`'s spectral detector reads novelty from `spectrum::Fft`,
-`magnitude` and `phase` and its tempo period from `spectrum::Autocorrelation`;
+planes. `kithara-beat`'s spectral detector reads novelty from `spectrum::Fft`
+and `prediction_difference` and its tempo period from `spectrum::Autocorrelation`;
 `kithara-waveform` sums band energy with `sum_squares` over an `Fft`, and it,
 `kithara-analysis`'s producer and its beat analyzer downmix through `downmix`.
 The build target picks the backend at compile time; on x86 the SIMD level is
 detected once per process, so a call costs one load before the kernel runs.
+
+Warp uses the scalar frame operations for its mapped source-window arithmetic;
+source coordinates, residency, tap selection and normalization remain in Warp.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-dsp) for detailed contracts, invariants, and internals.

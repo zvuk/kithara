@@ -61,21 +61,59 @@ impl Deck {
                 item_id,
                 pcm,
                 segment,
-            } => Some(self.replace_track(slot, item_id, pcm, segment, context_valid, wait_for_pcm)),
+            } => {
+                let track = self.track(pcm, segment, item_id, seq);
+                Some(self.replace_track(slot, track, context_valid, wait_for_pcm))
+            }
             DeckPart::Chain { from, to } => Some(self.chain_tracks(from, to)),
             DeckPart::Mix(change) => {
                 self.mix.apply_change(change);
-                self.render.set_gain(self.mix.gain());
+                self.render.set_mix(self.mix);
                 Some(DeckPart::Mix(change))
             }
             DeckPart::Eq(DeckEqChange::Gain { band, gain }) => {
                 self.render.set_eq_gain(band, gain);
                 Some(DeckPart::Eq(DeckEqChange::Gain { band, gain }))
             }
-            DeckPart::Eq(DeckEqChange::Layout(layout)) => self
-                .render
-                .take_eq_layout(layout)
-                .map(|layout| DeckPart::Returned(Returned::Eq(layout))),
+            DeckPart::Eq(DeckEqChange::Layout(layout)) => {
+                self.eq_programs.replace_layout(seq);
+                self.render
+                    .take_eq_layout(layout)
+                    .map(|layout| DeckPart::Returned(Returned::Eq(layout)))
+            }
+            DeckPart::EqProgram {
+                binding,
+                authority,
+                program,
+            } => {
+                self.eq_programs.begin(program.band(), seq);
+                Some(DeckPart::EqProgram {
+                    binding,
+                    authority,
+                    program,
+                })
+            }
+            DeckPart::Fx(change) => self.render.change_fx(change, self.sample_rate),
+            DeckPart::Filter { .. } | DeckPart::FilterProgram { .. } => {
+                unreachable!("filter operations use single-command admission")
+            }
+            DeckPart::GainProgram {
+                slot,
+                binding,
+                authority,
+                program,
+            } => {
+                self.tracks
+                    .at_mut(slot)
+                    .expect("validated output target")
+                    .begin_output(seq, program.curve(), at);
+                Some(DeckPart::GainProgram {
+                    slot,
+                    binding,
+                    authority,
+                    program,
+                })
+            }
             DeckPart::Returned(returned) => Some(DeckPart::Returned(returned)),
         }
     }
@@ -114,7 +152,7 @@ impl Deck {
     ) -> Option<DeckPart> {
         #[cfg(not(feature = "usdt"))]
         let _ = (at, seq);
-        let track = self.track(pcm, segment, item_id);
+        let track = self.track(pcm, segment, item_id, seq);
         match self.tracks.put(slot, track) {
             Ok(()) => {
                 #[cfg(feature = "usdt")]
@@ -200,13 +238,10 @@ impl Deck {
     fn replace_track(
         &mut self,
         slot: Slot,
-        item_id: TrackId,
-        pcm: Box<PlayerResource>,
-        segment: SegmentId,
+        mut track: PlayerTrack,
         context_valid: bool,
         wait_for_pcm: bool,
     ) -> DeckPart {
-        let mut track = self.track(pcm, segment, item_id);
         track.start(Fade::Declick);
         track.snap_gate();
         match self.tracks.replace(slot, track) {
@@ -234,12 +269,14 @@ impl Deck {
         pcm: Box<PlayerResource>,
         segment: SegmentId,
         item_id: TrackId,
+        seq: Seq,
     ) -> PlayerTrack {
         PlayerTrack::builder()
             .item_id(item_id)
             .sample_rate(self.sample_rate)
             .declick(self.declick)
             .segment(segment)
+            .attachment(seq)
             .build(pcm)
     }
 
@@ -258,10 +295,9 @@ impl Deck {
         };
         if seq == due.seq() {
             answer_stop(&mut due.commands_mut()[remaining..], slot, resume);
-        } else if due
-            .committed_mut(seq)
-            .is_some_and(|commands| answer_stop(commands, slot, resume))
-        {
+        } else if due.committed_mut(seq).is_some_and(|commands| {
+            answer_stop(commands, slot, resume) && self.output_finished(commands, seq)
+        }) {
             due.complete(seq, ());
         }
     }

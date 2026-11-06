@@ -262,7 +262,7 @@ impl Player<TestPools> for ScriptedTrack {
             TrackCommand::SetHostRate { rate } => Command::Rate(rate),
             TrackCommand::Release => Command::Release,
             TrackCommand::Supersede
-            | TrackCommand::ConfigureEffect { .. }
+            | TrackCommand::GainProgram(_)
             | TrackCommand::PlayAfter { .. }
             | TrackCommand::Seat { .. } => {
                 panic!("unexpected command in synchronization fixture")
@@ -619,7 +619,7 @@ impl Rig {
 pub(super) fn ordinary() -> (ScriptedTrack, Control) {
     let control = Control(Arc::new(Mutex::new(Script {
         snapshot: TrackSnapshot {
-            effects: Vec::new(),
+            output: kithara_play::SlotOutputSnapshot::default(),
             item: TrackId::allocate(),
             slot: Some(Slot::new(0)),
             status: TrackStatus::Loaded,

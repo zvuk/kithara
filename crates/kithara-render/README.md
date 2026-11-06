@@ -26,7 +26,7 @@ test in place of a `DeckMixer`.
 ```rust,ignore
 use kithara_render::WarpSource;
 
-let stage = WarpSource::new(source, renderer, effects, drain, spec, pools);
+let stage = WarpSource::new(source, renderer, spec, pools, lane);
 // `stage` is itself an `AudioSource`: the play worker steps it like any
 // decoded source and writes what it produces into the output ring.
 ```
@@ -37,7 +37,7 @@ let stage = WarpSource::new(source, renderer, effects, drain, spec, pools);
 
 <tr><th>Type</th><th>Role</th></tr>
 
-<tr><td><code>WarpSource</code></td><td>Steps a decoded source through Warp and effects, keeps staged input across seeks and drains, and reports where a lane entering its plan starts decoding</td></tr>
+<tr><td><code>WarpSource</code></td><td>Steps a decoded source through Warp, keeps staged input across seeks and drains, and reports where a lane entering its plan starts decoding</td></tr>
 
 <tr><td><code>rt::DeckMixer</code></td><td>The deck on the audio thread: takes its command batches at their frames and mixes its tracks, crossfades and declicks between them</td></tr>
 

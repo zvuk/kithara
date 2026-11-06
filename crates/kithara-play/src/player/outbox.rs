@@ -1,17 +1,18 @@
 use kithara_command::{
     Batch, Live, LiveError, Outcome, Port, Receipt, Rejection, SendError, Sender, Seq, When,
 };
+use kithara_effects::filter::{FilterConfig, FilterEffect};
 use kithara_render::{
     DispatcherCommand, DispatcherProtocol, LaneCommand, LaneFrame, LaneId, LaneProtocol,
     LoadRequest, ServiceClass,
     bridge::{DeckEvent, DeckPart, DeckProtocol, Slot},
 };
 pub use kithara_signal::Bound;
-use kithara_signal::SessionFrame;
+use kithara_signal::{AudioSpec, SessionFrame};
 
 use crate::{
-    DeckEqChange, DeckMixSettings, DeckMixSettingsChange, DeckPass, InterruptionKind, PlayError,
-    ResourceLoad, SessionEvent,
+    DeckEqChange, DeckFilterChange, DeckFxChange, DeckMixSettings, DeckMixSettingsChange, DeckPass,
+    FilterSettings, InterruptionKind, PlayError, ResourceLoad, SessionEvent,
 };
 
 /// One loaded track or a deck built of them: it changes its own state on the
@@ -149,7 +150,7 @@ impl<'a, S> Outbox<'a, S> {
         })?;
         mix.send(&mut *self.deck, at, change, DeckPart::Mix)
             .map_err(|error| match error {
-                LiveError::Invalid(error) => PlayError::from(error),
+                LiveError::Invalid(never) => match never {},
                 LiveError::Send(SendError::Full(_)) => PlayError::Full("deck"),
                 LiveError::Send(SendError::Closed(_)) => PlayError::Closed,
                 LiveError::Send(SendError::Target(_)) => {
@@ -158,8 +159,111 @@ impl<'a, S> Outbox<'a, S> {
             })
     }
 
+    /// Sends `changes` of the deck's FX units to apply at `at`, whole or not at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayError::Late`] for a frame already rendered and
+    /// [`PlayError::Full`] when the deck has no room.
+    pub fn fx(
+        &mut self,
+        at: When<SessionFrame>,
+        changes: Vec<DeckFxChange>,
+    ) -> Result<Option<Seq>, PlayError> {
+        self.deck(at, changes.into_iter().map(DeckPart::Fx).collect())
+    }
+
     pub fn eq(&mut self, parts: Vec<DeckEqChange>) -> Result<Option<Seq>, PlayError> {
         self.deck(When::Next, parts.into_iter().map(DeckPart::Eq).collect())
+    }
+
+    /// Send one filter operation on the observed instance and output stream.
+    /// # Errors
+    /// Refuses a missing output binding, late frame or exhausted command capacity.
+    pub fn filter(
+        &mut self,
+        at: When<SessionFrame>,
+        change: DeckFilterChange,
+    ) -> Result<Option<Seq>, PlayError> {
+        let binding = self
+            .pass
+            .ok_or(PlayError::NotReady)?
+            .deck
+            .filter
+            .binding()
+            .ok_or(PlayError::NotReady)?;
+        self.deck(at, vec![DeckPart::Filter { binding, change }])
+    }
+
+    /// Submit one trajectory against the observed Filter instance and field authority.
+    /// # Errors
+    /// Refuses unavailable output state, insufficient delivery lead or command capacity.
+    pub fn filter_program(
+        &mut self,
+        program: crate::FilterProgram,
+    ) -> Result<Option<Seq>, PlayError> {
+        let pass = self.pass.ok_or(PlayError::NotReady)?;
+        let binding = pass.deck.filter.binding().ok_or(PlayError::NotReady)?;
+        if pass.deck.filter.settings().is_none() {
+            return Err(PlayError::NotReady);
+        }
+        let authority = pass.deck.filter.authority(program.parameter());
+        self.deck(
+            When::At(program.start()),
+            vec![DeckPart::FilterProgram {
+                binding,
+                authority,
+                program,
+            }],
+        )
+    }
+
+    /// Prepare a stereo filter at the deck's actual output rate, off the audio thread.
+    /// # Errors
+    /// Preserves geometry, design and pool errors; refuses an unpublished output rate.
+    pub fn install_filter(
+        &mut self,
+        at: When<SessionFrame>,
+        settings: FilterSettings,
+        pools: &kithara_bufpool::PoolRegion<S>,
+    ) -> Result<Option<Seq>, PlayError>
+    where
+        S: kithara_bufpool::HasPool<f32>,
+    {
+        let snapshot = self.pass.ok_or(PlayError::NotReady)?.deck;
+        let rate = std::num::NonZeroU32::new(snapshot.sample_rate).ok_or(PlayError::NotReady)?;
+        let filter = FilterEffect::new(
+            AudioSpec::new(2, rate),
+            FilterConfig::from((pools.clone(), settings)),
+        )?;
+        self.filter(at, DeckFilterChange::Install(Box::new(filter)))
+    }
+
+    /// Send an EQ trajectory on the layout and authority last observed by this pass.
+    /// # Errors
+    /// Refuses an unavailable band/layout/clock or insufficient command delivery lead.
+    pub fn eq_gain_program(
+        &mut self,
+        program: crate::EqGainProgram,
+    ) -> Result<Option<Seq>, PlayError> {
+        let pass = self.pass.ok_or(PlayError::NotReady)?;
+        let band = program.band();
+        if band >= pass.deck.eq.bands() {
+            return Err(PlayError::EqBandOutOfRange {
+                band,
+                bands: pass.deck.eq.bands(),
+            });
+        }
+        let binding = pass.deck.eq.binding().ok_or(PlayError::NotReady)?;
+        let authority = pass.deck.eq.authority(band);
+        self.deck(
+            When::At(program.start()),
+            vec![DeckPart::EqProgram {
+                binding,
+                authority,
+                program,
+            }],
+        )
     }
 
     pub fn eq_layout(
@@ -445,7 +549,14 @@ pub(crate) fn slots(part: &DeckPart) -> impl Iterator<Item = Slot> {
         | DeckPart::Adopt { slot, .. }
         | DeckPart::Replace { slot, .. } => (Some(slot), None),
         DeckPart::Chain { from, to } => (Some(from), Some(to)),
-        DeckPart::Mix(_) | DeckPart::Eq(_) | DeckPart::Returned(_) => (None, None),
+        DeckPart::Mix(_)
+        | DeckPart::Eq(_)
+        | DeckPart::Fx(_)
+        | DeckPart::Filter { .. }
+        | DeckPart::FilterProgram { .. }
+        | DeckPart::EqProgram { .. }
+        | DeckPart::GainProgram { .. }
+        | DeckPart::Returned(_) => (None, None),
     };
     first.into_iter().chain(second)
 }
@@ -524,7 +635,8 @@ impl<S> TrackReceipt<'_, S> {
     #[must_use]
     pub fn names(&self, slot: Slot) -> bool {
         match self {
-            Self::Deck { batch, .. } => batch.basis.iter().any(|&(named, _)| named == slot),
+            Self::Deck { batch, .. } => batch.basis.iter().any(|&(named, _)| named == slot)
+                || batch.commands.iter().any(|part| matches!(part, DeckPart::GainProgram { slot: named, .. } if *named == slot)),
             Self::Event(
                 DeckEvent::Ended { slot: named, .. }
                 | DeckEvent::Failed { slot: named, .. }

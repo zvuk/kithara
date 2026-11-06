@@ -21,6 +21,8 @@ pub struct IsolatorEq {
     gains: GainBank,
     bypass: MixDSP,
     silence: MixDSP,
+    bypass_owner: Option<usize>,
+    silence_owner: Option<usize>,
 }
 
 impl IsolatorEq {
@@ -59,6 +61,8 @@ impl IsolatorEq {
         Ok(Self {
             bypass: MixDSP::new(bypass, FadeCurve::Linear, config.smoothing(), rate),
             silence: MixDSP::new(silence, FadeCurve::Linear, config.smoothing(), rate),
+            bypass_owner: None,
+            silence_owner: None,
             filters: CrossoverFilters::new(config.pools(), crossover_freqs, sample_rate)?,
             gains: GainBank::new(
                 bands.iter().map(EqBandConfig::gain_db),
@@ -87,42 +91,56 @@ impl IsolatorEq {
         self.reset_history();
     }
 
-    pub(crate) fn reset_to_targets(&mut self) {
-        self.gains.reset_to_targets();
-        self.reset_history();
-    }
-
     fn reset_history(&mut self) {
         self.filters.reset();
-        self.update_mix();
+        self.bypass_owner = None;
+        self.silence_owner = None;
+        self.update_mix(None);
         self.bypass.reset_to_target();
         self.silence.reset_to_target();
     }
 
     pub fn set_gain(&mut self, band: usize, gain_db: GainDb) {
         self.gains.set(band, gain_db);
-        self.update_mix();
+        self.update_mix(Some(band));
     }
 
-    fn update_mix(&mut self) {
+    pub(crate) fn set_explicit(&mut self, band: usize, gain_db: GainDb) {
+        let changed = self.gains.set_explicit(band, gain_db);
+        if changed {
+            self.update_mix(Some(band));
+        }
+        if changed || self.bypass_owner == Some(band) {
+            self.bypass.reset_to_target();
+            self.bypass_owner = None;
+        }
+        if changed || self.silence_owner == Some(band) {
+            self.silence.reset_to_target();
+            self.silence_owner = None;
+        }
+    }
+
+    fn update_mix(&mut self, owner: Option<usize>) {
         let all =
             |target| (0..self.gains.len()).all(|band| self.gains.target(band) == Some(target));
-        self.bypass.set_mix(
-            if all(GainDb::default()) {
-                Mix::FULLY_DRY
-            } else {
-                Mix::FULLY_WET
-            },
-            FadeCurve::Linear,
-        );
-        self.silence.set_mix(
-            if self.gains.len() > 0 && all(GainDb::MIN) {
-                Mix::FULLY_DRY
-            } else {
-                Mix::FULLY_WET
-            },
-            FadeCurve::Linear,
-        );
+        let bypass = if all(GainDb::default()) {
+            Mix::FULLY_DRY
+        } else {
+            Mix::FULLY_WET
+        };
+        let silence = if self.gains.len() > 0 && all(GainDb::MIN) {
+            Mix::FULLY_DRY
+        } else {
+            Mix::FULLY_WET
+        };
+        if self.bypass.second_gain_target() != bypass.get() {
+            self.bypass_owner = owner;
+        }
+        if self.silence.second_gain_target() != silence.get() {
+            self.silence_owner = owner;
+        }
+        self.bypass.set_mix(bypass, FadeCurve::Linear);
+        self.silence.set_mix(silence, FadeCurve::Linear);
     }
 
     pub fn update_sample_rate(&mut self, sample_rate: u32) {
@@ -142,8 +160,6 @@ impl IsolatorEq {
             #[must_use]
             #[call(target)]
             pub fn target_gain(&self, band: usize) -> Option<GainDb>;
-            #[cfg(test)]
-            pub(crate) fn is_smoothing(&self) -> bool;
         }
     }
 }

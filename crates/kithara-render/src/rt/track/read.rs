@@ -6,7 +6,12 @@ use kithara_warp::RenderContext;
 use num_traits::ToPrimitive;
 
 use super::{PlayerTrack, ReadOutcome, RtSink};
-use crate::bridge::{DeckEvent, PlaybackFault, RtMetrics, SlotState};
+use crate::bridge::{DeckEvent, ParameterCurve, PlaybackFault, RtMetrics, SlotState};
+
+pub(crate) struct TrackBuffers<'block, 'scratch, 'bus> {
+    pub(crate) scratch: &'block mut [&'scratch mut [f32]],
+    pub(crate) bus: &'block mut [&'bus mut [f32]],
+}
 
 /// Result of an exact packet-backed render range.
 #[derive(Debug)]
@@ -64,6 +69,32 @@ impl PlayerTrack {
             }
             ReadOutcome::Full { .. } | ReadOutcome::Partial { .. } => return false,
         };
+        self.finish_terminal(event, offset, sink);
+        true
+    }
+
+    pub(in crate::rt) fn fail(
+        &mut self,
+        fault: PlaybackFault,
+        offset: usize,
+        sink: &mut RtSink<'_>,
+    ) {
+        if self.state != SlotState::Playing {
+            return;
+        }
+        sink.metrics.record_decode_error();
+        self.finish_terminal(
+            DeckEvent::Failed {
+                slot: sink.slot,
+                at: sink.at(offset),
+                fault,
+            },
+            offset,
+            sink,
+        );
+    }
+
+    fn finish_terminal(&mut self, event: DeckEvent, offset: usize, sink: &mut RtSink<'_>) {
         self.finish_underrun(offset, sink);
         if self.stopping() {
             self.finish_stop(sink.at(offset));
@@ -72,7 +103,6 @@ impl PlayerTrack {
         self.state = SlotState::Ended;
         self.shut();
         sink.report(event);
-        true
     }
 
     #[kithara::probe(
@@ -85,12 +115,13 @@ impl PlayerTrack {
     pub(crate) fn render(
         &mut self,
         context: Option<&RenderContext>,
-        scratch: &mut [&mut [f32]],
-        bus: &mut [&mut [f32]],
+        buffers: TrackBuffers<'_, '_, '_>,
         range: Range<usize>,
         budget: &mut usize,
         sink: &mut RtSink<'_>,
+        curve: Option<&ParameterCurve>,
     ) -> TrackReadOutcome {
+        let TrackBuffers { scratch, bus } = buffers;
         if self.state == SlotState::Ended {
             return TrackReadOutcome::Eof;
         }
@@ -142,6 +173,8 @@ impl PlayerTrack {
         if frames > 0 {
             self.end_underrun(range.start, recovery_position, true, sink);
             let written = range.start..range.start.saturating_add(frames);
+            self.output
+                .apply(curve, sink.start, scratch, written.clone());
             self.gate.apply(scratch, written.clone());
             self.fade.mix_range(scratch, bus, written);
         }
@@ -235,7 +268,12 @@ impl PlayerTrack {
         if self.state != SlotState::Playing || length == 0 {
             return 0;
         }
-        let gain = self.gain();
+        let gain = self.gain()
+            * self
+                .output
+                .gain()
+                .to_f32()
+                .expect("prepared output gain fits f32");
         let mut buffers = [&mut left[..length], &mut right[..length]];
         let written =
             match self

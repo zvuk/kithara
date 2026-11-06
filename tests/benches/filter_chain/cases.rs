@@ -2,35 +2,36 @@ use std::{hint::black_box, num::NonZeroU32};
 
 use criterion::{BatchSize, Criterion};
 use kithara::{
-    effects::{
-        AudioEffect, apply_effects,
-        filter::{Cutoff, FilterConfig, FilterEffect, Kind},
-    },
-    signal::{AudioChunk, AudioChunkInfo, AudioSpec},
+    bufpool::SampleBuffer,
+    effects::filter::{Cutoff, FilterConfig, FilterEffect, Kind},
+    signal::AudioSpec,
 };
 use kithara_test_utils::bufpool::{Pools, pools, sample_buffer};
 
-fn prepared_chain(pools: &Pools, spec: AudioSpec) -> Vec<Box<dyn AudioEffect>> {
+fn prepared_filter(pools: &Pools, spec: AudioSpec) -> FilterEffect {
     let config = FilterConfig::builder(pools.clone())
         .kind(Kind::LowPass)
         .cutoff_hz(Cutoff::checked(1_000.0).expect("admitted cutoff"))
         .build()
         .expect("admitted settings");
-    vec![Box::new(
-        FilterEffect::new(spec, config).expect("prepared filter"),
-    )]
+    FilterEffect::new(spec, config).expect("prepared filter")
 }
 
-fn input_chunk(pools: &Pools, spec: AudioSpec, input: &[f32]) -> AudioChunk {
-    AudioChunk::new(
-        AudioChunkInfo {
-            spec,
-            frames: u32::try_from(input.len() / usize::from(spec.channels))
-                .expect("bounded frames"),
-            ..Default::default()
-        },
-        sample_buffer(pools, input),
-    )
+fn input_planes(pools: &Pools, spec: AudioSpec, input: &[f32]) -> Vec<SampleBuffer> {
+    let channels = usize::from(spec.channels);
+    (0..channels)
+        .map(|channel| {
+            sample_buffer(
+                pools,
+                &input
+                    .iter()
+                    .skip(channel)
+                    .step_by(channels)
+                    .copied()
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect()
 }
 
 pub(crate) fn bench(c: &mut Criterion) {
@@ -47,21 +48,21 @@ pub(crate) fn bench(c: &mut Criterion) {
     ] {
         let spec = AudioSpec::new(channels, rate);
         let fixture = crate::make_pcm(frames, usize::from(channels));
-        let mut chain = prepared_chain(&pools, spec);
+        let mut filter = prepared_filter(&pools, spec);
         group.bench_function(name, |b| {
             b.iter_batched_ref(
-                || Some(input_chunk(&pools, spec, &fixture)),
-                |input| {
-                    apply_effects(&mut chain, black_box(input.take().expect("prepared PCM")))
-                        .expect("admitted format")
-                        .expect("causal filter output")
+                || input_planes(&pools, spec, &fixture),
+                |planes| {
+                    filter
+                        .process(black_box(planes), 0..frames)
+                        .expect("admitted planes");
                 },
                 BatchSize::LargeInput,
             );
         });
     }
     let spec = AudioSpec::new(2, rate);
-    let mut chain = prepared_chain(&pools, spec);
+    let mut filter = prepared_filter(&pools, spec);
     let mut burst = vec![0.0; 514];
     burst[..64].fill(0.25);
     let silence = vec![0.0; 514];
@@ -69,17 +70,17 @@ pub(crate) fn bench(c: &mut Criterion) {
         b.iter_batched_ref(
             || {
                 [
-                    Some(input_chunk(&pools, spec, &burst)),
-                    Some(input_chunk(&pools, spec, &silence)),
-                    Some(input_chunk(&pools, spec, &silence)),
+                    input_planes(&pools, spec, &burst),
+                    input_planes(&pools, spec, &silence),
+                    input_planes(&pools, spec, &silence),
                 ]
             },
             |inputs| {
-                inputs.each_mut().map(|input| {
-                    apply_effects(&mut chain, black_box(input.take().expect("prepared PCM")))
-                        .expect("admitted format")
-                        .expect("causal filter output")
-                })
+                for planes in inputs {
+                    filter
+                        .process(black_box(planes), 0..257)
+                        .expect("admitted planes");
+                }
             },
             BatchSize::LargeInput,
         );

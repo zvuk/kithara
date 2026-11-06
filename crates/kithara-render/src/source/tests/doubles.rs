@@ -48,19 +48,17 @@ pub(in crate::source) fn idle_inbox() -> Inbox<LaneProtocol> {
 pub(in crate::source) fn source_stage<T>(
     pools: &PoolRegion<TestPools>,
     source: T,
-    effects: Vec<Box<dyn AudioEffect>>,
     spec: AudioSpec,
 ) -> WarpSource<T, TestPools>
 where
     T: AudioSource<Chunk = AudioChunk>,
 {
-    source_stage_with_quantum(pools, source, effects, spec, 128)
+    source_stage_with_quantum(pools, source, spec, 128)
 }
 
 pub(in crate::source) fn source_stage_with_quantum<T>(
     pools: &PoolRegion<TestPools>,
     source: T,
-    effects: Vec<Box<dyn AudioEffect>>,
     spec: AudioSpec,
     quantum_frames: usize,
 ) -> WarpSource<T, TestPools>
@@ -72,13 +70,9 @@ where
         .build();
     let warp = kithara_warp::Warp::new((), &config);
     let renderer = warp.renderer(spec, pools.clone());
-    let drain = EffectDrain::new(effects.len(), pools)
-        .unwrap_or_else(|error| panic!("test effect drain: {error}"));
     WarpSource::new(
         source,
         renderer,
-        effects,
-        drain,
         spec,
         pools.clone(),
         LaneSetup {
@@ -171,145 +165,6 @@ impl AudioSource for FailedSource {
     }
 }
 
-#[derive(Default)]
-pub(in crate::source) struct BufferThenHalveFrames {
-    pub(in crate::source) buffered: Option<AudioChunk>,
-}
-
-impl AudioEffect for BufferThenHalveFrames {
-    fn held_source_frames(&self) -> u64 {
-        self.buffered
-            .as_ref()
-            .map_or(0, |chunk| u64::from(chunk.meta.frames))
-    }
-
-    fn reset(&mut self) {
-        self.buffered = None;
-    }
-
-    delegate::delegate! {
-        to self.buffered {
-            #[expr($.and_then(halve_frames))]
-            #[call(take)]
-            fn flush(&mut self) -> Option<AudioChunk>;
-            #[expr($.and_then(halve_frames))]
-            #[call(replace)]
-            fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk>;
-        }
-    }
-}
-
-pub(in crate::source) fn halve_frames(mut chunk: AudioChunk) -> Option<AudioChunk> {
-    let frames = chunk.meta.frames / 2;
-    let samples = usize::try_from(frames)
-        .ok()?
-        .checked_mul(usize::from(chunk.meta.spec.channels))?;
-    chunk.samples.truncate(samples);
-    chunk.meta.frames = frames;
-    chunk.meta.end_timestamp = chunk
-        .meta
-        .spec
-        .duration_for(chunk.meta.frame_offset.saturating_add(u64::from(frames)))
-        .expect("fixture timestamp fits");
-    Some(chunk)
-}
-
-pub(in crate::source) struct DeferredSource {
-    pub(in crate::source) log: Arc<Mutex<Vec<&'static str>>>,
-    pub(in crate::source) spec: AudioSpec,
-}
-
-impl AudioSource for DeferredSource {
-    type Chunk = AudioChunk;
-
-    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
-        Ok(SeekOutcome::Landed {
-            target,
-            landed_at: target,
-        })
-    }
-
-    fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
-
-    fn host_sample_rate(&self) -> Option<NonZeroU32> {
-        None
-    }
-
-    fn finish_deferred(&mut self) {
-        self.log.lock().push("source.finish");
-    }
-
-    fn prepare_deferred(&mut self) -> Option<AudioSpec> {
-        self.log.lock().push("source.prepare");
-        Some(self.spec)
-    }
-
-    fn step_track(&mut self) -> TrackStep<AudioChunk> {
-        TrackStep::Blocked(WaitingReason::Waiting)
-    }
-}
-
-pub(in crate::source) struct DeferredEffect {
-    pub(in crate::source) log: Arc<Mutex<Vec<&'static str>>>,
-    pub(in crate::source) serviced: Arc<Mutex<Option<AudioSpec>>>,
-}
-
-pub(in crate::source) struct FixedSpecEffect(pub(in crate::source) AudioSpec);
-
-impl AudioEffect for FixedSpecEffect {
-    fn accepts_spec(&self, spec: AudioSpec) -> bool {
-        spec == self.0
-    }
-    fn service_deferred(
-        &mut self,
-        spec: AudioSpec,
-    ) -> Result<(), kithara_effects::EffectPrepareError> {
-        if spec.sample_rate != self.0.sample_rate {
-            return Err(kithara_dsp::filter::FilterError::Parameters.into());
-        }
-        if self.accepts_spec(spec) {
-            Ok(())
-        } else {
-            Err(kithara_effects::EffectPrepareError::Shape)
-        }
-    }
-    fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        Some(chunk)
-    }
-    fn flush(&mut self) -> Option<AudioChunk> {
-        None
-    }
-    fn held_source_frames(&self) -> u64 {
-        0
-    }
-    fn reset(&mut self) {}
-}
-
-impl AudioEffect for DeferredEffect {
-    fn flush(&mut self) -> Option<AudioChunk> {
-        None
-    }
-
-    fn held_source_frames(&self) -> u64 {
-        0
-    }
-
-    fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        Some(chunk)
-    }
-
-    fn reset(&mut self) {}
-
-    fn service_deferred(
-        &mut self,
-        spec: AudioSpec,
-    ) -> Result<(), kithara_effects::EffectPrepareError> {
-        self.log.lock().push("effect.service");
-        *self.serviced.lock() = Some(spec);
-        Ok(())
-    }
-}
-
 pub(in crate::source) struct RevisionSource {
     pub(in crate::source) discontinuity: Arc<Mutex<SourceDiscontinuity>>,
     pub(in crate::source) chunks: VecDeque<AudioChunk>,
@@ -341,28 +196,6 @@ impl AudioSource for RevisionSource {
             .map_or(TrackStep::Blocked(WaitingReason::Waiting), |chunk| {
                 TrackStep::Produced(Fetch::data(chunk))
             })
-    }
-}
-
-pub(in crate::source) struct ResetCounter {
-    pub(in crate::source) resets: Arc<AtomicU64>,
-}
-
-impl AudioEffect for ResetCounter {
-    fn flush(&mut self) -> Option<AudioChunk> {
-        None
-    }
-
-    fn held_source_frames(&self) -> u64 {
-        0
-    }
-
-    fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        Some(chunk)
-    }
-
-    fn reset(&mut self) {
-        self.resets.fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -403,93 +236,6 @@ impl AudioSource for CountingEofSource {
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
         self.steps.fetch_add(1, Ordering::AcqRel);
         TrackStep::Eof
-    }
-}
-
-pub(in crate::source) struct CountingEmptyTail {
-    pub(in crate::source) flushes: Arc<AtomicU64>,
-    pub(in crate::source) resets: Arc<AtomicU64>,
-}
-
-impl AudioEffect for CountingEmptyTail {
-    fn flush(&mut self) -> Option<AudioChunk> {
-        self.flushes.fetch_add(1, Ordering::AcqRel);
-        None
-    }
-
-    fn held_source_frames(&self) -> u64 {
-        0
-    }
-
-    fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        Some(chunk)
-    }
-
-    fn reset(&mut self) {
-        self.resets.fetch_add(1, Ordering::AcqRel);
-    }
-}
-
-pub(in crate::source) struct SeekApplyingSource {
-    pub(in crate::source) spec: AudioSpec,
-    pub(in crate::source) revision: u64,
-    pub(in crate::source) pending: bool,
-}
-
-impl AudioSource for SeekApplyingSource {
-    type Chunk = AudioChunk;
-
-    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
-        self.revision = self.revision.wrapping_add(1);
-        self.pending = true;
-        Ok(SeekOutcome::Landed {
-            target,
-            landed_at: target,
-        })
-    }
-
-    fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
-
-    fn host_sample_rate(&self) -> Option<NonZeroU32> {
-        None
-    }
-
-    fn discontinuity(&self) -> Option<SourceDiscontinuity> {
-        Some(SourceDiscontinuity::new(self.revision, self.spec))
-    }
-
-    fn step_track(&mut self) -> TrackStep<AudioChunk> {
-        if std::mem::take(&mut self.pending) {
-            TrackStep::StateChanged
-        } else {
-            TrackStep::Eof
-        }
-    }
-}
-
-pub(in crate::source) struct ResettingTail {
-    pub(in crate::source) resets: Arc<AtomicU64>,
-    pub(in crate::source) tail: Option<AudioChunk>,
-}
-
-impl AudioEffect for ResettingTail {
-    fn flush(&mut self) -> Option<AudioChunk> {
-        self.tail.take()
-    }
-
-    fn held_source_frames(&self) -> u64 {
-        self.tail
-            .as_ref()
-            .map_or(0, |chunk| u64::from(chunk.meta.frames))
-    }
-
-    fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        Some(chunk)
-    }
-
-    fn reset(&mut self) {
-        self.tail = None;
-        self.resets.fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -621,13 +367,9 @@ pub(in crate::source) fn lane_over<'a>(
         .render_quantum_frames(NonZeroUsize::new(256).expect("test quantum is non-zero"))
         .build();
     let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
-    let drain =
-        EffectDrain::new(0, pools).unwrap_or_else(|error| panic!("test effect drain: {error}"));
     let source = WarpSource::new(
         raw,
         renderer,
-        Vec::new(),
-        drain,
         spec,
         pools.clone(),
         LaneSetup {

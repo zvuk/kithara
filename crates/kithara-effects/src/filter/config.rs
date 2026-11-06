@@ -99,12 +99,38 @@ impl FilterSettings {
         q: f64,
         gain: f64,
     ) -> Result<(), FilterError> {
+        if ![cutoff, q, gain].iter().all(|value| value.is_finite()) {
+            return Err(FilterError::Parameters);
+        }
         let target_cutoff = f64::from(self.cutoff_hz);
         let target_q = f64::from(self.q);
         let target_gain = f64::from(f32::from(self.gain_db));
-        if ![cutoff, q, gain].iter().all(|value| value.is_finite())
+        self.admit_ranges(
+            rate,
+            [cutoff.min(target_cutoff), cutoff.max(target_cutoff)],
+            [q.min(target_q), q.max(target_q)],
+            [gain.min(target_gain), gain.max(target_gain)],
+        )
+    }
+
+    pub(super) fn admit_ranges(
+        &self,
+        rate: f64,
+        cutoff: [f64; 2],
+        q: [f64; 2],
+        gain: [f64; 2],
+    ) -> Result<(), FilterError> {
+        let [cutoff, target_cutoff] = cutoff;
+        let [q, target_q] = q;
+        let [gain, target_gain] = gain;
+        if ![cutoff, target_cutoff, q, target_q, gain, target_gain]
+            .iter()
+            .all(|value| value.is_finite())
             || cutoff <= 0.0
             || q <= 0.0
+            || cutoff > target_cutoff
+            || q > target_q
+            || gain > target_gain
             || cutoff.max(target_cutoff) >= rate / 2.0
         {
             return Err(FilterError::Parameters);

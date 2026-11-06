@@ -59,13 +59,15 @@ pub(crate) const TASK_BURST: NonZeroU32 = match NonZeroU32::new(32) {
     None => unreachable!(),
 };
 
-/// EWMA weight for per-chunk samples (≈ last ~10 chunks dominate).
-pub(crate) const LOAD_ALPHA: f32 = 0.2;
+/// Audio time over which the engine load forgets older audio.
+pub(crate) const LOAD_TIME_CONSTANT: Duration = Duration::from_millis(100);
 
-pub(crate) const MS_PER_SEC: f64 = 1000.0;
 pub(crate) const MIN_STEREO: usize = 2;
 pub(crate) const EVENTS_PER_SLOT: usize = 16;
 
 /// Frames per stack chunk of a track fade: the four gain arrays of one chunk
 /// stay within the real-time stack budget.
 pub(crate) const FADE_CHUNK: usize = 256;
+
+/// Every gain and dry/wet of a deck runs from silence to unity.
+pub(crate) const GAIN_SPAN: f32 = 1.0;

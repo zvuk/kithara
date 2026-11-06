@@ -30,13 +30,6 @@ impl SmoothedGain {
         self.filter.z1
     }
 
-    #[cfg(test)]
-    fn is_smoothing(&self, smoothing: SmootherConfig) -> bool {
-        !self.filter.has_settled(self.target_linear)
-            && (self.filter.z1 - self.target_linear).abs()
-                >= DEFAULT_GAIN_SPAN * smoothing.settle_ratio
-    }
-
     fn set_target(&mut self, target: GainDb) {
         if target == self.target {
             return;
@@ -75,22 +68,9 @@ impl GainBank {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn is_smoothing(&self) -> bool {
-        self.gains
-            .iter()
-            .any(|gain| gain.is_smoothing(self.smoothing))
-    }
-
     pub(crate) fn reset(&mut self) {
         for gain in &mut self.gains {
             *gain = SmoothedGain::new(GainDb::default());
-        }
-    }
-
-    pub(crate) fn reset_to_targets(&mut self) {
-        for gain in &mut self.gains {
-            gain.filter = SmoothingFilter::new(gain.target_linear);
         }
     }
 
@@ -104,6 +84,17 @@ impl GainBank {
         for gain in &mut self.gains {
             gain.smooth(self.coeff, self.smoothing.settle_ratio);
         }
+    }
+
+    pub(crate) fn set_explicit(&mut self, band: usize, gain_db: GainDb) -> bool {
+        let Some(gain) = self.gains.get_mut(band) else {
+            return false;
+        };
+        if gain.target == gain_db && gain.current() == gain.target_linear {
+            return false;
+        }
+        *gain = SmoothedGain::new(gain_db);
+        true
     }
 
     pub(crate) fn update_sample_rate(&mut self, sample_rate: f32) {
@@ -151,5 +142,33 @@ mod tests {
         }
 
         assert_eq!(bank.linear(0), GainDb::MAX.linear());
+    }
+
+    #[kithara::test]
+    fn explicit_values_do_not_restart_an_unrelated_manual_smoother() {
+        let mut bank = GainBank::new(
+            [GainDb::DEFAULT; 2].into_iter(),
+            44_100.0,
+            SmootherConfig::default(),
+        );
+        let mut reference = GainBank::new(
+            [GainDb::DEFAULT; 2].into_iter(),
+            44_100.0,
+            SmootherConfig::default(),
+        );
+        bank.set(1, GainDb::MAX);
+        reference.set(1, GainDb::MAX);
+        for value in [GainDb::MIN, GainDb::DEFAULT, GainDb::MAX]
+            .into_iter()
+            .cycle()
+            .take(64)
+        {
+            bank.set_explicit(0, value);
+            bank.tick();
+            reference.tick();
+            assert_eq!(bank.linear(0).to_bits(), value.linear().to_bits());
+            assert_eq!(bank.linear(1).to_bits(), reference.linear(1).to_bits());
+            assert_eq!(bank.target(1), reference.target(1));
+        }
     }
 }

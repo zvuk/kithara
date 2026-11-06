@@ -1,29 +1,18 @@
-use std::f32::consts::TAU;
-
 use fearless_simd::{Level, dispatch};
-use kithara_test_fixtures::portable::polar_points;
 use kithara_test_utils::{bufpool::pools, kithara};
 use num_traits::ToPrimitive;
 
 use super::{Dft, Work, correlate, kernels};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::backend::accelerate;
-use crate::{
-    backend::bins::{magnitude, magnitude_kernel, phase, phase_kernel},
-    spectrum::{FftLen, SpectrumError, oracle},
-};
+use crate::spectrum::{FftLen, SpectrumError, oracle};
 
-/// Largest `|X|` error against `hypot`, relative: two `f32` epsilons.
-const MAGNITUDE_PARITY: f32 = 2.0 * f32::EPSILON;
-/// Largest `arg` error against `atan2`, in radians on the circle.
-const PHASE_PARITY: f32 = 1e-6;
 const LENGTHS: [usize; 7] = [16, 48, 80, 240, 1024, 3072, 4096];
 const UNWRITTEN: f32 = -1.0;
 const TAPS: [usize; 5] = [1, 3, 7, 64, 257];
 /// Lags beyond the longest kernel.
 const EXTRA: usize = 300;
 
-type BinKernel = fn(&[f32], &[f32], &mut [f32]) -> usize;
 type Forward = fn(FftLen, &[f32]) -> Result<[Vec<f32>; 2], SpectrumError>;
 type Correlate = fn(&[f32], &[f32], &mut [f32]) -> usize;
 
@@ -49,94 +38,6 @@ fn correlations() -> Vec<Correlation> {
             correlate: accelerate::correlate,
         },
     ])
-}
-
-/// One kernel reading every bin, so every check runs the same points on each.
-struct Kernel {
-    name: &'static str,
-    run: BinKernel,
-}
-
-/// Every platform reads the magnitude through one kernel, so its rows are
-/// the SIMD levels.
-fn magnitudes() -> [Kernel; 2] {
-    [
-        Kernel {
-            name: "native",
-            run: magnitude,
-        },
-        Kernel {
-            name: "fallback",
-            run: |re, im, output| dispatch!(Level::fallback(), simd => magnitude_kernel(simd, re, im, output)),
-        },
-    ]
-}
-
-/// Every platform reads the phase through one kernel, so its rows are the
-/// SIMD levels.
-fn phases() -> [Kernel; 2] {
-    [
-        Kernel {
-            name: "native",
-            run: phase,
-        },
-        Kernel {
-            name: "fallback",
-            run: |re, im, output| dispatch!(Level::fallback(), simd => phase_kernel(simd, re, im, output)),
-        },
-    ]
-}
-
-/// Points around the circle at three radii, then the four signed zeros and
-/// the axes; the count is no multiple of a vector, so the tail runs too.
-fn points() -> (Vec<f32>, Vec<f32>) {
-    let (re, im) = polar_points();
-    (re.to_vec(), im.to_vec())
-}
-
-/// Distance between two angles on the circle, in radians.
-fn angular_distance(a: f32, b: f32) -> f32 {
-    let difference = a - b;
-    (difference - TAU * (difference / TAU).round()).abs()
-}
-
-#[kithara::test]
-fn magnitude_tracks_hypot_at_every_simd_level() {
-    let (re, im) = points();
-    for Kernel { name, run } in magnitudes() {
-        let mut output = vec![UNWRITTEN; re.len()];
-        assert_eq!(run(&re, &im, &mut output), re.len(), "{name}");
-        for ((x, y), got) in re.iter().zip(&im).zip(&output) {
-            let want = x.hypot(*y);
-            assert!(
-                (got - want).abs() <= MAGNITUDE_PARITY * want,
-                "{name}: |{x} + i{y}| = {got}, hypot {want}"
-            );
-        }
-    }
-}
-
-#[kithara::test]
-fn phase_tracks_atan2_at_every_simd_level() {
-    let (re, im) = points();
-    for Kernel { name, run } in phases() {
-        let mut output = vec![UNWRITTEN; re.len()];
-        assert_eq!(run(&re, &im, &mut output), re.len(), "{name}");
-        for ((x, y), got) in re.iter().zip(&im).zip(&output) {
-            let want = y.atan2(*x);
-            assert!(
-                angular_distance(*got, want) <= PHASE_PARITY,
-                "{name}: arg({x} + i{y}) = {got}, atan2 {want}"
-            );
-        }
-        let mut origin = [UNWRITTEN];
-        assert_eq!(run(&[0.0], &[0.0], &mut origin), 1);
-        assert_eq!(
-            origin.map(f32::to_bits),
-            [0.0_f32.to_bits()],
-            "{name}: arg(0) is +0"
-        );
-    }
 }
 
 fn portable_forward(len: FftLen, signal: &[f32]) -> Result<[Vec<f32>; 2], SpectrumError> {

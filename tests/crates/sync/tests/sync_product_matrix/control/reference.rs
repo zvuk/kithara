@@ -582,7 +582,7 @@ pub(super) fn mapped_samples<const N: usize>(
 }
 
 fn output_sample(sample: f32) -> Result<f32, String> {
-    if !sample.is_finite() || sample.abs() >= LimiterConfig::default().ceiling() {
+    if !sample.is_finite() || sample.abs() >= f32::from(LimiterConfig::default().ceiling()) {
         return Err("control reference exceeds its configured output headroom".to_owned());
     }
     Ok(kithara::signal::sanitize_sample(sample))
@@ -748,7 +748,14 @@ pub(in super::super) async fn capture(
     let harness = OfflinePlayer::with_factory(
         OfflinePlayerOptions::builder()
             .eq_layout(Vec::new())
-            .mix(DeckMixSettings::builder().level(CONTROL_GAIN).build())
+            .mix(
+                DeckMixSettings::builder()
+                    .crossfader(
+                        kithara::play::CrossfaderGain::checked(CONTROL_GAIN)
+                            .expect("the control gain is a crossfader gain"),
+                    )
+                    .build(),
+            )
             .crossfade_duration(0.0)
             .block_on_underrun(true)
             .warp(
@@ -1932,7 +1939,7 @@ fn output_reference_keeps_the_limiter_sample_domain_and_strict_pcm_checks() {
         f32::NAN,
         f32::INFINITY,
         f32::NEG_INFINITY,
-        LimiterConfig::default().ceiling(),
+        f32::from(LimiterConfig::default().ceiling()),
     ] {
         assert!(output_sample(invalid).is_err());
     }

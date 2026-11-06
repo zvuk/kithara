@@ -5,18 +5,12 @@ fn exhausted_drain_stays_terminal_for_the_decode_epoch() {
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
     let pools = pools();
     let steps = Arc::new(AtomicU64::new(0));
-    let flushes = Arc::new(AtomicU64::new(0));
-    let resets = Arc::new(AtomicU64::new(0));
     let discontinuity = Arc::new(Mutex::new(None));
     let source = CountingEofSource {
         discontinuity: Arc::clone(&discontinuity),
         steps: Arc::clone(&steps),
     };
-    let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(CountingEmptyTail {
-        flushes: Arc::clone(&flushes),
-        resets: Arc::clone(&resets),
-    })];
-    let mut source = source_stage(&pools, source, effects, spec);
+    let mut source = source_stage(&pools, source, spec);
 
     assert!(matches!(source.step_track(), TrackStep::StateChanged));
     assert!(matches!(source.step_track(), TrackStep::Eof));
@@ -25,7 +19,6 @@ fn exhausted_drain_stays_terminal_for_the_decode_epoch() {
     }
 
     assert_eq!(steps.load(Ordering::Acquire), 1);
-    assert_eq!(flushes.load(Ordering::Acquire), 1);
 
     assert!(matches!(
         source.source.seek(Duration::from_secs(1)),
@@ -36,15 +29,11 @@ fn exhausted_drain_stays_terminal_for_the_decode_epoch() {
     assert!(matches!(source.step_track(), TrackStep::Eof));
     assert!(matches!(source.step_track(), TrackStep::Eof));
     assert_eq!(steps.load(Ordering::Acquire), 2);
-    assert_eq!(flushes.load(Ordering::Acquire), 2);
-    assert_eq!(resets.load(Ordering::Acquire), 1);
 
     *discontinuity.lock() = Some(SourceDiscontinuity::new(1, spec));
     assert!(matches!(source.step_track(), TrackStep::Eof));
     assert!(matches!(source.step_track(), TrackStep::Eof));
     assert_eq!(steps.load(Ordering::Acquire), 2);
-    assert_eq!(flushes.load(Ordering::Acquire), 2);
-    assert_eq!(resets.load(Ordering::Acquire), 1);
 
     *discontinuity.lock() = Some(SourceDiscontinuity::new(2, spec));
     flush_deferred(&mut source);
@@ -52,8 +41,6 @@ fn exhausted_drain_stays_terminal_for_the_decode_epoch() {
     assert!(matches!(source.step_track(), TrackStep::Eof));
     assert!(matches!(source.step_track(), TrackStep::Eof));
     assert_eq!(steps.load(Ordering::Acquire), 3);
-    assert_eq!(flushes.load(Ordering::Acquire), 3);
-    assert_eq!(resets.load(Ordering::Acquire), 2);
 }
 
 #[kithara::test]
@@ -551,13 +538,10 @@ fn identity_source_preserves_buffers_despite_initial_and_live_controls(quarter: 
         .render_quantum_frames(NonZeroUsize::new(64).expect("quantum"))
         .build();
     let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
-    let drain = EffectDrain::new(0, &pools).expect("empty effect drain");
     let (mut lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
     let mut source = WarpSource::new(
         raw,
         renderer,
-        Vec::new(),
-        drain,
         spec,
         pools.clone(),
         LaneSetup {

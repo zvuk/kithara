@@ -3,7 +3,6 @@ use std::num::NonZeroUsize;
 use kithara_audio::{AudioConfig, ResamplerBackend};
 use kithara_config::{Config, Patch};
 use kithara_dsp::param::SmootherConfig;
-use kithara_effects::EffectSetup;
 use kithara_platform::sync::Arc;
 use kithara_stream::StreamType;
 use kithara_warp::WarpConfig;
@@ -52,14 +51,6 @@ where
     #[field(get)]
     #[config(skip = "transferred to the producer cost meter", patch(skip))]
     pub(crate) engine_load: Option<Arc<EngineLoad>>,
-    /// Playback effects after the resident Warp stage.
-    #[config(
-        skip = "transferred to the effect chain",
-        builder(default),
-        patch(skip)
-    )]
-    #[field(get)]
-    pub(crate) effects: Vec<EffectSetup>,
     /// Resident Warp resources and live temporal controls.
     #[config(skip = "transferred to the warp lane", builder(default = WarpConfig::builder().build()), patch(skip))]
     #[field(get)]

@@ -31,7 +31,7 @@ impl TrackFactory<TestPools> for SnapshotFactory {
     fn track(&self, config: PlayerConfig) -> Result<Self::Track, PlayError> {
         Ok(SnapshotTrack(
             TrackSnapshot {
-                effects: Vec::new(),
+                output: kithara_play::SlotOutputSnapshot::default(),
                 item: config.item,
                 slot: config.slot,
                 status: PlayerTrackStatus::Loaded,

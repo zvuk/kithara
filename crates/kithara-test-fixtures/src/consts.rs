@@ -56,10 +56,6 @@ pub(crate) static TWO_TONES: [f32; 4_096] = pcm(include_bytes!(concat!(
     env!("OUT_DIR"),
     "/glide_two_tones.f32le"
 )));
-pub(crate) static POLAR_RE: [f32; 201] =
-    pcm(include_bytes!(concat!(env!("OUT_DIR"), "/polar_re.f32le")));
-pub(crate) static POLAR_IM: [f32; 201] =
-    pcm(include_bytes!(concat!(env!("OUT_DIR"), "/polar_im.f32le")));
 
 const fn pcm<const N: usize>(bytes: &[u8]) -> [f32; N] {
     assert!(bytes.len() == N * size_of::<f32>());
