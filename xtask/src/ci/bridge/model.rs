@@ -342,9 +342,7 @@ mod tests {
 
     #[test]
     fn every_pipeline_kind_has_its_dispatcher_in_the_parent_pipeline() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask has a workspace root");
+        let root = crate::ci::config::workspace_root();
         let pipeline = fs::read_to_string(root.join(".gitlab-ci.yml"))
             .expect("the parent pipeline definition is readable");
 

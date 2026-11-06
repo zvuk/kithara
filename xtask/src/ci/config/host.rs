@@ -748,7 +748,8 @@ mod tests {
     fn a_profile_without_a_topology_still_loads() {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("mac-host.toml");
-        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-mac-host.toml");
+        let source =
+            crate::ci::config::workspace_root().join("xtask/tests/fixtures/ci-mac-host.toml");
         let text = fs::read_to_string(&source).expect("fixture profile");
         let without: String = text
             .lines()

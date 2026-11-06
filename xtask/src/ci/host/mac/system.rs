@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn the_bootstrap_spells_xcodebuild_the_way_the_config_resolves_it() {
         let root = crate::ci::config::workspace_root();
-        let project = kithara_devtools::common::project::ProjectConfig::load(root)
+        let project = kithara_devtools::common::project::ProjectConfig::load(&root)
             .expect("the project config loads");
         let source = fs::read_to_string(root.join("xtask/src/ci/host/mac/system.rs"))
             .expect("this source is readable");

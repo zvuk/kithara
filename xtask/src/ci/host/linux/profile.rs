@@ -421,7 +421,7 @@ pub(crate) mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("linux-host.toml");
         let source =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-linux-host.toml");
+            crate::ci::config::workspace_root().join("xtask/tests/fixtures/ci-linux-host.toml");
         let text = fs::read_to_string(&source).expect("fixture profile");
         let without: String = text
             .lines()
@@ -445,7 +445,7 @@ pub(crate) mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("linux-host.toml");
         let source =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-linux-host.toml");
+            crate::ci::config::workspace_root().join("xtask/tests/fixtures/ci-linux-host.toml");
         let text = fs::read_to_string(&source).expect("fixture profile");
         let without: String = text
             .lines()
@@ -469,7 +469,7 @@ pub(crate) mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("linux-host.toml");
         let source =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-linux-host.toml");
+            crate::ci::config::workspace_root().join("xtask/tests/fixtures/ci-linux-host.toml");
         let text = fs::read_to_string(&source).expect("fixture profile");
         let without: String = text
             .lines()
@@ -511,7 +511,7 @@ pub(crate) mod tests {
     /// runner and one that reaches the hardware a plain one must not.
     pub(crate) fn host_fixture() -> LinuxHost {
         LinuxHost::load(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-linux-host.toml"),
+            &crate::ci::config::workspace_root().join("xtask/tests/fixtures/ci-linux-host.toml"),
         )
         .expect("the fixture profile must load")
     }

@@ -391,7 +391,7 @@ mod tests {
         let root = workspace_root();
         let pins = CiPins::load(&root.join(".config/ci-pins.toml")).expect("pins load");
         let project =
-            kithara_devtools::common::project::ProjectConfig::load(root).expect("project loads");
+            kithara_devtools::common::project::ProjectConfig::load(&root).expect("project loads");
 
         pins.validate_tool_pins(&project.tools)
             .expect("every configured role names a pin this repository reviews");
