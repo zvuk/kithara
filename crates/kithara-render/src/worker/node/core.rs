@@ -284,14 +284,18 @@ where
         }
     }
 
-    /// Recheck a deferred consumer wake within half a packet, including a single-slot ring.
+    /// Half a packet while a full ring holds a packet behind the consumer's next
+    /// one. The consumer frees a slot without waking the worker and can read
+    /// faster than real time, so the recheck never outgrows the packet it
+    /// refills; a one-packet ring has no lead to spare and keeps the
+    /// configured poll.
     fn backpressure_recheck(&self) -> Option<Duration> {
         let packet = self
             .last_output
             .spec
             .duration_for(u64::from(self.last_output.frames))
             .ok()?;
-        (!packet.is_zero()).then(|| packet / 2)
+        (self.port.forward.capacity().get() > 1 && !packet.is_zero()).then(|| packet / 2)
     }
 
     #[kithara::hang_watchdog]
@@ -425,14 +429,14 @@ mod tests {
         ))));
     }
 
-    /// A deferred consumer wake is rechecked within half a packet, even with one slot.
+    /// A full ring is rechecked within half of the lead it holds beyond the
+    /// consumer's next packet, and a one-packet ring keeps the configured poll.
     #[kithara::test(tokio)]
     async fn a_full_ring_is_rechecked_within_half_a_packet() {
-        for (capacity, frames, expected) in [
-            (1, 48, Duration::from_micros(500)),
-            (1, 480, Duration::from_millis(5)),
-            (3, 480, Duration::from_millis(5)),
-            (8, 480, Duration::from_millis(5)),
+        for (capacity, expected) in [
+            (1, None),
+            (3, Some(Duration::from_millis(5))),
+            (8, Some(Duration::from_millis(5))),
         ] {
             let mut fixture = NodeFixture::new(capacity).await;
             assert_eq!(
@@ -440,11 +444,10 @@ mod tests {
                 None,
                 "a lane that has not output a packet keeps the configured poll"
             );
-            let samples = vec![0.25; frames];
             for _ in 0..capacity {
                 fixture.stage(PcmPacket::Chunk(Box::new(chunk(
                     SegmentId::FIRST,
-                    &samples,
+                    &[0.25; 480],
                 ))));
                 assert_eq!(fixture.node.admit(), TickResult::Progress);
             }
@@ -453,8 +456,8 @@ mod tests {
 
             assert_eq!(
                 fixture.node.backpressure_recheck(),
-                Some(expected),
-                "{capacity} slots of {frames} frames at 48 kHz must refill before the next packet drains"
+                expected,
+                "{capacity} slots of 480 frames at 48 kHz hold 10 ms each"
             );
         }
     }
