@@ -175,11 +175,28 @@ exit 98
         })
     }
 
+    fn use_git_checkout(&self) -> Result<()> {
+        fs::remove_file(self.fake_bin.join("git"))?;
+        fs::write(self.root.join(".gitignore"), "/target/\n/.ci-bootstrap/\n")?;
+        for args in [["init", "--quiet"], ["add", "--all"]] {
+            let output = Command::new("git")
+                .current_dir(&self.root)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_INDEX_FILE")
+                .env_remove("GIT_WORK_TREE")
+                .args(args)
+                .output()?;
+            assert_success(&output);
+        }
+        Ok(())
+    }
+
     fn bootstrap_command(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
         command
             .args(["self-cache", "bootstrap"])
             .current_dir(&self.root)
+            .env("CI", "")
             .env("CI_JOB_ID", "")
             .env("GITHUB_RUN_ID", "")
             .env("PATH", self.fake_path().expect("fixture PATH"))
@@ -226,6 +243,7 @@ exit 98
         command
             .args(args)
             .current_dir(&self.root)
+            .env("CI", "")
             .env("CI_JOB_ID", "")
             .env("GITHUB_RUN_ID", "")
             .env("CARGO_TARGET_DIR", &self.target)
@@ -263,6 +281,7 @@ exit 98
         command
             .args(args)
             .current_dir(root)
+            .env("CI", "")
             .env("CI_JOB_ID", "")
             .env("GITHUB_RUN_ID", "")
             .env("CARGO", env!("CARGO"))
@@ -319,6 +338,7 @@ exit 98
             .arg("--working-directory")
             .arg(root)
             .args(args)
+            .env("CI", "")
             .env("CI_JOB_ID", "")
             .env("GITHUB_RUN_ID", "")
             .env_remove("KITHARA_XTASK_TARGET")
@@ -775,6 +795,7 @@ fn ci_bootstrap_builds_where_the_executor_names() -> Result<()> {
     let xtask = fixture._temp.path().join("builds/xtask");
     let output = fixture
         .just_command(&fixture.root, &["_xtask-bootstrap", "--force"])?
+        .env("CI", "true")
         .env("KITHARA_XTASK_TARGET", &xtask)
         .output()?;
 
@@ -1243,6 +1264,7 @@ fn an_unnamed_cargo_target_directory_builds_inside_the_checkout() -> Result<()> 
 fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
     writeln!(io::stderr(), "self-cache-ci-refresh fixture:start")?;
     let fixture = Fixture::new()?;
+    fixture.use_git_checkout()?;
     writeln!(
         io::stderr(),
         "self-cache-ci-refresh bootstrap:start root={} target={}",
@@ -1286,6 +1308,7 @@ fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
     )?;
     let mut ready = fixture
         .just_command(&fixture.root, &["_xtask-ready"])?
+        .env("CI", "true")
         .env_remove("CARGO_TARGET_DIR")
         .env("KITHARA_XTASK_TARGET", &xtask)
         .env("XTASK_SELF_CACHE_CARGO", fixture.fake_bin.join("cargo"))
@@ -1319,6 +1342,7 @@ fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
         fs::read_to_string(&fixture.cargo_log)?,
         cargo_build_log(&fs::canonicalize(&fixture.root)?, &xtask)
     );
+    assert!(xtask.join("sources.tsv").is_file());
     Ok(())
 }
 
@@ -1328,6 +1352,7 @@ fn ci_bootstrap_driver_owns_the_target_lease() -> Result<()> {
     fixture.install_fake_transport()?;
     let output = fixture
         .just_command(&fixture.root, &["_xtask", "exit-status", "0"])?
+        .env("CI", "true")
         .env("CI_JOB_ID", "42")
         .env("KITHARA_XTASK_TARGET", &fixture.target)
         .env_remove("KACHE_RUNTIME_DIR")
@@ -1342,6 +1367,7 @@ fn ci_bootstrap_driver_owns_the_target_lease() -> Result<()> {
 #[test]
 fn a_cached_ci_worker_refreshes_a_checkout_without_its_bootstrap_driver() -> Result<()> {
     let fixture = Fixture::new()?;
+    fixture.use_git_checkout()?;
     assert_success(&fixture.bootstrap()?);
     assert!(!fixture.root.join("xtask/bin/ci-bootstrap.rs").exists());
     fs::write(
@@ -1350,6 +1376,7 @@ fn a_cached_ci_worker_refreshes_a_checkout_without_its_bootstrap_driver() -> Res
     )?;
     let output = fixture
         .just_command(&fixture.root, &["_xtask-ready"])?
+        .env("CI", "true")
         .env("GITHUB_RUN_ID", "checkout-transition")
         .env("GITHUB_ACTIONS", "true")
         .env_remove("KACHE_RUNTIME_DIR")
@@ -1361,6 +1388,7 @@ fn a_cached_ci_worker_refreshes_a_checkout_without_its_bootstrap_driver() -> Res
         fs::read_to_string(&fixture.cargo_log)?,
         cargo_build_log(&fs::canonicalize(&fixture.root)?, &fixture.target)
     );
+    assert!(fixture.target.join("sources.tsv").is_file());
     Ok(())
 }
 
