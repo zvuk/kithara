@@ -62,6 +62,16 @@ impl CaptureBlock {
     }
 
     fn diagnostic(&self) -> String {
+        let scheduler_passes = self.refill_probes.first().map(|refill| {
+            kithara_test_utils::test::usdt::events_of("scheduler_pass")
+                .into_iter()
+                .filter(|pass| {
+                    let first = pass.wall_time.min(refill.wall_time);
+                    let last = pass.wall_time.max(refill.wall_time);
+                    last.duration_since(first) <= Duration::from_millis(100)
+                })
+                .collect::<Vec<_>>()
+        });
         let lane_frames = self
             .before
             .slots
@@ -77,7 +87,7 @@ impl CaptureBlock {
             })
             .collect::<Vec<_>>();
         format!(
-            "capture={:?} output={:?} started_unix_micros={:?} lane_frames={lane_frames:?} metrics_before={:?} metrics_after={:?} slots_before={:#?} slots_after={:#?} item_events={:?} event_error={:?} refill_probes={:?}",
+            "capture={:?} output={:?} started_unix_micros={:?} lane_frames={lane_frames:?} metrics_before={:?} metrics_after={:?} slots_before={:#?} slots_after={:#?} item_events={:?} event_error={:?} refill_probes={:?} scheduler_passes={scheduler_passes:?}",
             self.capture,
             self.output,
             self.started_unix_micros,
