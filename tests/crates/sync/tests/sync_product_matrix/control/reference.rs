@@ -1097,7 +1097,6 @@ impl AudioObserver for DecodedObserver {
         };
         if rejection.vacant <= 1
             || samples.is_empty()
-            || samples.len() > 32_768
             || samples.len() != chunk.frames() * usize::from(chunk.meta.spec.channels)
         {
             return self.reject(rejection);
@@ -2559,6 +2558,35 @@ fn decoded_test_chunk(frame_offset: u64, samples: &[f32]) -> AudioChunk {
 }
 
 #[kithara::test(native)]
+fn decoded_capture_accepts_a_large_fact_within_its_existing_budget() {
+    let (recording, mut observer) = DecodedRecorder::open();
+    let mut held = recording.lock();
+    let samples: Vec<_> = [0.125, -0.25, 0.5, -0.75]
+        .into_iter()
+        .cycle()
+        .take(46_080)
+        .collect();
+    let chunk = decoded_test_chunk(32, &samples);
+    assert_eq!(chunk.frames(), 23_040);
+
+    observer
+        .try_observe(&chunk)
+        .expect("a valid decoder block fits the existing pool budget");
+
+    let captured = held.view();
+    assert!(!captured.rejected);
+    assert_eq!(captured.chunks.len(), 1);
+    assert_eq!(captured.samples, samples.len());
+    let (info, pcm) = captured
+        .chunks
+        .get(&(7, 32))
+        .expect("retained decoder fact");
+    assert_eq!(*info, chunk.meta);
+    assert_eq!(&pcm[..], samples);
+    drop(held);
+}
+
+#[kithara::test(native)]
 #[case::queue(1, 16)]
 #[case::budget(8, 4)]
 fn decoded_capture_saturation_is_sticky(#[case] chunks: usize, #[case] samples: usize) {
@@ -2583,7 +2611,7 @@ fn decoded_capture_saturation_is_sticky(#[case] chunks: usize, #[case] samples: 
 #[case::oversized(32_770)]
 #[case::partial_frame(3)]
 fn decoded_capture_malformed_facts_are_visible(#[case] len: usize) {
-    let (recording, mut observer) = DecodedRecorder::open();
+    let (recording, mut observer) = DecodedRecorder::with_limits(2, 32_768);
     let chunk = decoded_test_chunk(0, &vec![0.125; len]);
     assert_eq!(observer.try_observe(&chunk), Err(AudioObserveError::Full));
     let captured = recording.lock().view().clone();
