@@ -4,6 +4,7 @@ use std::{
 };
 
 use biquad::{Coefficients, Hertz, Type};
+use fearless_simd::{Level, SimdFrom, dispatch, f32x4};
 
 use super::FilterError;
 
@@ -49,10 +50,11 @@ impl Df1State {
     #[inline]
     fn run(&mut self, input: f32, coefficients: &SectionCoefficients) -> f32 {
         let direct = coefficients.b0 * input;
-        let [b1, b2, a1, a2] = coefficients.products;
-        let [feed1, feed2, feedback1, feedback2] =
-            [(b1, self.x1), (b2, self.x2), (a1, self.y1), (a2, self.y2)]
-                .map(|(coefficient, state)| coefficient * state);
+        let [feed1, feed2, feedback1, feedback2] = dispatch!(Level::baseline(), simd => {
+            let factors = f32x4::simd_from(simd, coefficients.products);
+            let history = f32x4::simd_from(simd, [self.x1, self.x2, self.y1, self.y2]);
+            <[f32; 4]>::from(factors * history)
+        });
         let output = direct + feed1 + feed2 - feedback1 - feedback2;
         self.x2 = self.x1;
         self.x1 = input;
