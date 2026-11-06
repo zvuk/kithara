@@ -82,15 +82,8 @@ impl<S: HasPool<f32>> FilterEffect<S> {
         self.cutoff.has_settled() && self.q.has_settled() && self.gain.has_settled()
     }
 
-    fn process_planes(&mut self, frames: usize) {
-        let mut frame = 0;
-        while frame < frames {
-            if self.settled() {
-                self.filter
-                    .process(&mut self.planes, frame..frames)
-                    .expect("prepared planes cover the block");
-                break;
-            }
+    fn process_frame(&mut self) {
+        if !self.settled() {
             for parameter in [&mut self.cutoff, &mut self.q, &mut self.gain] {
                 if !parameter.has_settled() {
                     parameter.next_smoothed();
@@ -112,11 +105,10 @@ impl<S: HasPool<f32>> FilterEffect<S> {
             self.filter
                 .retune(0, coefficients)
                 .expect("admitted smoothing box has stable f32 coefficients");
-            self.filter
-                .process(&mut self.planes, frame..frame + 1)
-                .expect("prepared planes cover the frame");
-            frame += 1;
         }
+        self.filter
+            .process(&mut self.planes, 0..1)
+            .expect("prepared scratch frame");
     }
 }
 
@@ -231,22 +223,14 @@ impl<S: HasPool<f32> + Send + Sync + 'static> AudioEffect for FilterEffect<S> {
         let channels = self.planes.len();
         debug_assert!(self.accepts_spec(chunk.spec()));
         debug_assert!(chunk.samples.len().is_multiple_of(channels));
-        for block in chunk
-            .samples
-            .chunks_mut(consts::FILTER_BLOCK_FRAMES * channels)
-        {
-            let frames = block.len() / channels;
-            kithara_dsp::deinterleave_variable(
-                block,
-                NonZeroUsize::new(channels).expect("prepared nonzero channels"),
-                &mut self.planes,
-                0..frames,
-            );
-            self.process_planes(frames);
-            for (frame, output) in block.chunks_exact_mut(channels).enumerate() {
-                for (sample, plane) in output.iter_mut().zip(&self.planes) {
-                    *sample = plane[frame];
-                }
+        // A fixed scratch address and one-frame call keep native arithmetic independent of caller chunks.
+        for frame in chunk.samples.chunks_exact_mut(channels) {
+            for (sample, plane) in frame.iter().zip(&mut self.planes) {
+                *plane.first_mut().expect("prepared channel scratch") = *sample;
+            }
+            self.process_frame();
+            for (sample, plane) in frame.iter_mut().zip(&self.planes) {
+                *sample = *plane.first().expect("prepared channel scratch");
             }
         }
         Some(chunk)

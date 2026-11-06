@@ -353,3 +353,84 @@ fn quiet_fir_history_is_independent_of_chunk_boundaries(#[case] amplitude_bits: 
         .expect("copied continuation");
     assert_eq!(bits(&actual), bits(&expected));
 }
+
+#[kithara::test]
+fn identity_sections_preserve_small_nonzero_output_bits() {
+    let input = [1.0e-35_f32, -1.0e-35, 1.0e-30, -1.0e-30, 3.0e-31, -3.0e-31];
+    for channels in [1, 2, 3, 4, 5, 8] {
+        for block in [1, 2, 6] {
+            let mut filter = Biquad::new(NonZeroUsize::new(channels).expect("channels"), TWO)
+                .expect("identity sections");
+            let mut planes = vec![input.to_vec(); channels];
+            for start in (0..input.len()).step_by(block) {
+                filter
+                    .process(
+                        &mut planes,
+                        start..start.saturating_add(block).min(input.len()),
+                    )
+                    .expect("complete planes");
+            }
+            assert_eq!(
+                bits(&planes),
+                vec![input.map(f32::to_bits).to_vec(); channels]
+            );
+        }
+    }
+}
+
+fn half_decay(channels: NonZeroUsize) -> Biquad {
+    let mut filter =
+        Biquad::new(channels, NonZeroUsize::MIN).expect("channel count and one section");
+    filter
+        .retune(
+            0,
+            Coefficients {
+                a1: -0.5,
+                a2: 0.0,
+                b0: 1.0,
+                b1: 0.0,
+                b2: 0.0,
+            },
+        )
+        .expect("stable exact half decay");
+    filter
+}
+
+#[kithara::test]
+fn copy_state_preserves_a_partial_quiet_run() {
+    let amplitude = 2.0e-9_f32;
+    let mut source = half_decay(NonZeroUsize::MIN);
+    let mut prefix = vec![vec![amplitude, 0.0]];
+    source.process(&mut prefix, 0..2).expect("prefix shape");
+    assert_eq!(bits(&prefix), bits(&[vec![amplitude, amplitude * 0.5]]));
+    let mut copied = half_decay(NonZeroUsize::MIN);
+    copied.copy_state(&source).expect("matching shape");
+    let mut original_tail = vec![vec![0.0; 3]];
+    let mut copied_tail = original_tail.clone();
+    source
+        .process(&mut original_tail, 0..3)
+        .expect("source tail");
+    copied.process(&mut copied_tail, 0..3).expect("copied tail");
+    let expected = vec![vec![amplitude * 0.25, 0.0, 0.0]];
+    assert_eq!(bits(&original_tail), bits(&expected));
+    assert_eq!(bits(&copied_tail), bits(&expected));
+}
+
+#[kithara::test]
+fn nan_input_is_nonquiet_under_every_partition() {
+    let mut whole = vec![vec![1.0, 0.0, f32::NAN, 1.0e-10, 1.0]];
+    let mut split = whole.clone();
+    half_decay(NonZeroUsize::MIN)
+        .process(&mut whole, 0..5)
+        .expect("whole stream");
+    let mut filter = half_decay(NonZeroUsize::MIN);
+    filter.process(&mut split, 0..2).expect("prefix");
+    filter.process(&mut split, 2..5).expect("suffix");
+    assert_eq!(bits(&whole), bits(&split));
+    assert!(
+        whole
+            .first()
+            .and_then(|plane| plane.get(4))
+            .is_some_and(|sample| sample.is_nan())
+    );
+}
