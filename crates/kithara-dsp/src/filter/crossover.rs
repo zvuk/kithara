@@ -117,6 +117,7 @@ impl Crossover {
     ///
     /// # Panics
     /// Panics if a plane changes length between dereferences during processing.
+    #[inline]
     pub fn split<P: DerefMut<Target = [f32]>>(&mut self, input: &[f32], bands: &mut [P]) -> usize {
         let Some(bands) = bands.get_mut(..self.frequencies.len().saturating_add(1)) else {
             return 0;
@@ -140,6 +141,7 @@ impl Crossover {
     ///
     /// # Panics
     /// Panics if a gain plane changes length between dereferences during processing.
+    #[inline]
     pub fn sum<P: Deref<Target = [f32]>>(&mut self, samples: &mut [f32], gains: &[P]) -> usize {
         let Some(gains) = gains.get(..self.frequencies.len().saturating_add(1)) else {
             return 0;
