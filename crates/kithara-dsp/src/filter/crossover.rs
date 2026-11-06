@@ -106,7 +106,7 @@ impl Crossover {
                         .map(|design| Section::new(design.allpass))
                 })
                 .collect(),
-            frame: vec![0.0; frequencies.len().saturating_add(1)].into_boxed_slice(),
+            frame: vec![0.0; frequencies.len()].into_boxed_slice(),
             prepared: designs.into_boxed_slice(),
             prepared_rate: None,
         })
@@ -125,12 +125,19 @@ impl Crossover {
         let count = bands
             .iter()
             .fold(input.len(), |count, band| count.min(band.len()));
+        let (high_band, low_bands) = bands
+            .split_last_mut()
+            .expect("one high band after the crossovers");
         for (frame, &sample) in input.iter().take(count).enumerate() {
-            for (band, value) in bands.iter_mut().zip(self.filter_sample(sample)) {
+            let high = self.filter_sample(sample);
+            for (band, value) in low_bands.iter_mut().zip(self.frame.iter()) {
                 *band
                     .get_mut(frame)
                     .expect("frame belongs to the validated common prefix") = *value;
             }
+            *high_band
+                .get_mut(frame)
+                .expect("frame belongs to the validated common prefix") = high;
         }
         count
     }
@@ -141,7 +148,6 @@ impl Crossover {
     ///
     /// # Panics
     /// Panics if a gain plane changes length between dereferences during processing.
-    #[inline]
     pub fn sum<P: Deref<Target = [f32]>>(&mut self, samples: &mut [f32], gains: &[P]) -> usize {
         let Some(gains) = gains.get(..self.frequencies.len().saturating_add(1)) else {
             return 0;
@@ -149,32 +155,41 @@ impl Crossover {
         let count = gains
             .iter()
             .fold(samples.len(), |n, gain| n.min(gain.len()));
+        let (high_gain, low_gains) = gains
+            .split_last()
+            .expect("one high gain after the crossovers");
         for (frame, sample) in samples.iter_mut().take(count).enumerate() {
-            *sample = self.filtered_frame(*sample).iter().zip(gains).fold(
-                0.0,
-                |output, (value, gain)| {
+            let high = self.filtered_high(*sample);
+            let low = self
+                .frame
+                .iter()
+                .zip(low_gains)
+                .fold(0.0, |output, (value, gain)| {
                     value.mul_add(
                         *gain
                             .get(frame)
                             .expect("frame belongs to the validated common prefix"),
                         output,
                     )
-                },
+                });
+            *sample = high.mul_add(
+                *high_gain
+                    .get(frame)
+                    .expect("frame belongs to the validated common prefix"),
+                low,
             );
         }
         count
     }
 
-    fn filtered_frame(&mut self, input: f32) -> &[f32] {
+    #[inline(never)]
+    fn filtered_high(&mut self, input: f32) -> f32 {
         self.filter_sample(input)
     }
 
     #[inline(always)]
-    fn filter_sample(&mut self, mut high: f32) -> &[f32] {
-        let (high_band, lower) = self
-            .frame
-            .split_last_mut()
-            .expect("one high band after the crossovers");
+    fn filter_sample(&mut self, mut high: f32) -> f32 {
+        let lower = self.frame.as_mut();
         for ((lowpass, highpass), low) in self
             .lowpass
             .iter_mut()
@@ -195,8 +210,7 @@ impl Crossover {
             *low = value;
             allpass = remaining;
         }
-        *high_band = high;
-        &self.frame
+        high
     }
 
     /// Clears every section's history without allocation or coefficient changes.
