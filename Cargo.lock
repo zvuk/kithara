@@ -4843,6 +4843,7 @@ dependencies = [
  "kithara-config",
  "kithara-decode",
  "kithara-derive",
+ "kithara-dsp",
  "kithara-events",
  "kithara-file",
  "kithara-hls",

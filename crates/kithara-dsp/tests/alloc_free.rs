@@ -213,6 +213,12 @@ fn elementwise_kernels_and_fade_gains_never_allocate() {
         assert_eq!(kithara_dsp::scale_add(&input, 0.5, &mut acc), FRAMES);
         assert_eq!(kithara_dsp::mul_add(&input, &input, &mut acc), FRAMES);
         assert_eq!(kithara_dsp::add(&input, &mut acc), FRAMES);
+        for channels in [NonZeroUsize::MIN, TWO, SIX] {
+            assert_eq!(
+                kithara_dsp::crossfade_linear(&input, &mut acc, channels, 1, FRAMES),
+                FRAMES / channels.get()
+            );
+        }
         assert_eq!(kithara_dsp::multiply_in_place(&mut acc, &input), FRAMES);
         assert_eq!(kithara_dsp::scale_in_place(&mut acc[..1], -0.75), 1);
         assert_eq!(kithara_dsp::scale_in_place(&mut acc[..3], -0.75), 3);
