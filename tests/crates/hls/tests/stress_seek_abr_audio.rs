@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
@@ -98,9 +100,8 @@ fn assert_abr_size_probes(fixture: AbrAudioFixture, helper: &TestServerHelper, h
 
 type HlsAudio = LaneAudio<Stream<Hls<TestPools>>, TestPools>;
 
-/// Phase 1: read until the saw turns from ascending to descending, the ABR
-/// switch onto the low-bandwidth variant.
-fn wait_for_abr_switch(audio: &mut HlsAudio, buf: &mut [f32], channels: usize) {
+/// Phase 1 ends only after the owner completes the join and the reader consumes it.
+fn wait_for_abr_switch(audio: &mut HlsAudio, buf: &mut [f32], channels: usize) -> Range<usize> {
     info!("Phase 1: waiting for ABR switch (ascending -> descending)...");
 
     let warmup_start = kithara::platform::time::Instant::now();
@@ -116,9 +117,14 @@ fn wait_for_abr_switch(audio: &mut HlsAudio, buf: &mut [f32], channels: usize) {
             consts::WARMUP_TIMEOUT_SECS,
         );
 
-        let n = match audio.read(buf) {
+        let (n, span) = match audio.read(buf) {
             Ok(ReadOutcome::Pending { .. }) => continue,
-            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+            Ok(ReadOutcome::Frames {
+                count, source_span, ..
+            }) => (
+                count.get(),
+                source_span.expect("decoded saw has exact source geometry"),
+            ),
             Ok(ReadOutcome::Eof { .. }) => panic!(
                 "Hit EOF before ABR switch (ascending={warmup_ascending_chunks}, \
                  unknown={warmup_unknown_chunks})"
@@ -128,16 +134,37 @@ fn wait_for_abr_switch(audio: &mut HlsAudio, buf: &mut [f32], channels: usize) {
 
         match detect_direction(&buf[..n], channels) {
             Direction::Ascending => warmup_ascending_chunks += 1,
-            Direction::Descending => {
+            Direction::Descending => {}
+            Direction::Unknown => warmup_unknown_chunks += 1,
+        }
+
+        if let Some(join) = kithara_test_utils::test::usdt::last("audio_join_processed")
+            && join.field("remaining") == Some(0)
+        {
+            let end = join
+                .field("source_start")
+                .expect("join source start")
+                .checked_add(join.field("frames").expect("processed join frames"))
+                .expect("join source end fits its native clock");
+            if span.end() >= end {
+                let first = usize::try_from(end.saturating_sub(span.start()))
+                    .expect("join suffix offset fits the read");
+                let first = first
+                    .checked_mul(channels)
+                    .expect("join suffix sample offset");
+                assert!(
+                    first <= n,
+                    "completed join belongs to the observed native read"
+                );
                 info!(
+                    end,
                     warmup_ascending_chunks,
                     warmup_unknown_chunks,
                     elapsed_ms = warmup_start.elapsed().as_millis(),
-                    "ABR switch detected: ascending -> descending"
+                    "ABR join consumed"
                 );
-                return;
+                return first..n;
             }
-            Direction::Unknown => warmup_unknown_chunks += 1,
         }
 
         if warmup_ascending_chunks.is_multiple_of(100) && warmup_ascending_chunks > 0 {
@@ -153,24 +180,37 @@ fn wait_for_abr_switch(audio: &mut HlsAudio, buf: &mut [f32], channels: usize) {
 
 /// Phase 2: every chunk right after the switch is valid, descending saw, with
 /// at most the one break the decoder handoff leaves.
-fn verify_post_switch_chunks(audio: &mut HlsAudio, buf: &mut [f32], channels: usize) {
+fn verify_post_switch_chunks(
+    audio: &mut HlsAudio,
+    buf: &mut [f32],
+    channels: usize,
+    pure: Range<usize>,
+) {
     info!(
         "Phase 2: verifying {} post-switch chunks are descending...",
         consts::POST_SWITCH_CHUNKS
     );
 
-    for chunk_idx in 0..consts::POST_SWITCH_CHUNKS {
-        let n = match audio.read(buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
-            Ok(ReadOutcome::Pending { .. }) => {
-                panic!("read returned 0 in post-switch chunk {chunk_idx}");
-            }
-            Ok(ReadOutcome::Eof { .. }) => {
-                panic!("unexpected EOF in post-switch chunk {chunk_idx}");
-            }
-            Err(e) => panic!("post-switch decode error at chunk {chunk_idx}: {e}"),
+    let mut pure = Some(pure).filter(|range| !range.is_empty());
+    let total = consts::POST_SWITCH_CHUNKS
+        .checked_add(usize::from(pure.is_some()))
+        .expect("one optional suffix plus the original chunks");
+    for chunk_idx in 0..total {
+        let chunk = if let Some(range) = pure.take() {
+            buf.get(range).expect("observed pure suffix")
+        } else {
+            let n = match audio.read(buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+                Ok(ReadOutcome::Pending { .. }) => {
+                    panic!("read returned 0 in post-switch chunk {chunk_idx}");
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    panic!("unexpected EOF in post-switch chunk {chunk_idx}");
+                }
+                Err(e) => panic!("post-switch decode error at chunk {chunk_idx}: {e}"),
+            };
+            &buf[..n]
         };
-        let chunk = &buf[..n];
 
         if let Some((j, sample)) = first_invalid_sample(chunk) {
             panic!("invalid sample in post-switch chunk {chunk_idx} offset {j}: {sample}");
@@ -458,6 +498,7 @@ async fn stress_seek_abr_audio(
     #[case] fixture: AbrAudioFixture,
     #[case] prepared: (TestServerHelper, CreatedHls),
 ) {
+    let _join_trace = kithara_test_utils::test::usdt::scope();
     let (helper, hls) = prepared;
     let url = hls.master_url();
 
@@ -513,8 +554,8 @@ async fn stress_seek_abr_audio(
         .unwrap_or(usize::MAX);
         let mut buf = vec![0.0f32; chunk_samples];
 
-        wait_for_abr_switch(&mut audio, &mut buf, channels);
-        verify_post_switch_chunks(&mut audio, &mut buf, channels);
+        let pure = wait_for_abr_switch(&mut audio, &mut buf, channels);
+        verify_post_switch_chunks(&mut audio, &mut buf, channels, pure);
 
         let segments: f64 = consts::SEGMENT_COUNT.as_();
         let total_secs = audio

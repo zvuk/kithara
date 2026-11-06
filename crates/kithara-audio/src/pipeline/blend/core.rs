@@ -3,6 +3,7 @@ use std::num::NonZeroUsize;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_dsp::crossfade_linear;
 use kithara_signal::{AudioChunk, AudioSpec};
+use kithara_test_utils::kithara;
 
 use crate::consts;
 
@@ -57,10 +58,20 @@ impl GaplessBlender {
             usize::from(*frame),
             usize::from(*frames),
         );
-        *frame = frame.saturating_add(u16::try_from(processed).unwrap_or(u16::MAX));
+        let processed = u16::try_from(processed).unwrap_or(u16::MAX);
+        *frame = frame.saturating_add(processed);
         if *frame >= *frames {
             self.join = JoinState::Steady;
         }
+        kithara::probe_event!(
+            audio_join_processed,
+            source_start = chunk.meta.frame_offset,
+            frames = u64::from(processed),
+            remaining = match &self.join {
+                JoinState::Steady => 0,
+                JoinState::Active { frame, frames } => u64::from(frames.saturating_sub(*frame)),
+            }
+        );
     }
 
     #[cfg(test)]
