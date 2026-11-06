@@ -641,6 +641,7 @@ where
                         matches!(
                             part,
                             DeckPart::Eq(_)
+                                | DeckPart::EqProgram { .. }
                                 | DeckPart::Returned(kithara_render::bridge::Returned::Eq(_))
                         )
                     });

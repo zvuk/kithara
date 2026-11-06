@@ -75,10 +75,25 @@ impl Deck {
                 self.render.set_eq_gain(band, gain);
                 Some(DeckPart::Eq(DeckEqChange::Gain { band, gain }))
             }
-            DeckPart::Eq(DeckEqChange::Layout(layout)) => self
-                .render
-                .take_eq_layout(layout)
-                .map(|layout| DeckPart::Returned(Returned::Eq(layout))),
+            DeckPart::Eq(DeckEqChange::Layout(layout)) => {
+                self.eq_programs.replace_layout(seq);
+                self.render
+                    .take_eq_layout(layout)
+                    .map(|layout| DeckPart::Returned(Returned::Eq(layout)))
+            }
+            DeckPart::EqProgram {
+                binding,
+                authority,
+                mut program,
+            } => {
+                program.reset_rendered();
+                self.eq_programs.begin(program.band(), seq);
+                Some(DeckPart::EqProgram {
+                    binding,
+                    authority,
+                    program,
+                })
+            }
             DeckPart::GainProgram {
                 slot,
                 binding,

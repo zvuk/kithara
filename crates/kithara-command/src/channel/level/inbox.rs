@@ -44,6 +44,8 @@ impl<'inbox, P: Protocol> LevelInbox<'inbox, P> {
             /// Whether this level still holds the parked batch.
             #[must_use]
             pub fn is_parked(&self, seq: Seq) -> bool;
+            /// Borrows one committed batch without changing its custody.
+            pub fn committed(&self, seq: Seq) -> Option<&[P::Command]>;
             /// Edits a committed batch in place without taking it out of this level.
             pub fn committed_mut(&mut self, seq: Seq) -> Option<&mut [P::Command]>;
         }

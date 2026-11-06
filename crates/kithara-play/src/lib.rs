@@ -38,9 +38,10 @@ pub use kithara_render::{
     PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
     bridge::{
         CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckMixSettings,
-        DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, EqSnapshot,
-        FadeDir, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault, Returned,
-        RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot,
+        DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, EqBinding,
+        EqGainProgram, EqSnapshot, FadeDir, MixTapWriter, ParameterCurveError, ParameterKnot,
+        PlaybackFault, Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot,
+        SlotSnapshot,
     },
     dispatch,
     rt::{

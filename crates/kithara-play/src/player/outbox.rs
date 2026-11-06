@@ -162,6 +162,33 @@ impl<'a, S> Outbox<'a, S> {
         self.deck(When::Next, parts.into_iter().map(DeckPart::Eq).collect())
     }
 
+    /// Send an EQ trajectory on the layout and authority last observed by this pass.
+    /// # Errors
+    /// Refuses an unavailable band/layout/clock or insufficient command delivery lead.
+    pub fn eq_gain_program(
+        &mut self,
+        program: crate::EqGainProgram,
+    ) -> Result<Option<Seq>, PlayError> {
+        let pass = self.pass.ok_or(PlayError::NotReady)?;
+        let band = program.band();
+        if band >= pass.deck.eq.bands() {
+            return Err(PlayError::EqBandOutOfRange {
+                band,
+                bands: pass.deck.eq.bands(),
+            });
+        }
+        let binding = pass.deck.eq.binding().ok_or(PlayError::NotReady)?;
+        let authority = pass.deck.eq.authority(band);
+        self.deck(
+            When::At(program.start()),
+            vec![DeckPart::EqProgram {
+                binding,
+                authority,
+                program,
+            }],
+        )
+    }
+
     pub fn eq_layout(
         &mut self,
         pools: &kithara_bufpool::PoolRegion<S>,
@@ -447,6 +474,7 @@ pub(crate) fn slots(part: &DeckPart) -> impl Iterator<Item = Slot> {
         DeckPart::Chain { from, to } => (Some(from), Some(to)),
         DeckPart::Mix(_)
         | DeckPart::Eq(_)
+        | DeckPart::EqProgram { .. }
         | DeckPart::GainProgram { .. }
         | DeckPart::Returned(_) => (None, None),
     };

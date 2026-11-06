@@ -99,6 +99,13 @@ impl IsolatorEq {
         self.update_mix();
     }
 
+    pub(crate) fn set_explicit(&mut self, band: usize, gain_db: GainDb) {
+        self.gains.set_explicit(band, gain_db);
+        self.update_mix();
+        self.bypass.reset_to_target();
+        self.silence.reset_to_target();
+    }
+
     fn update_mix(&mut self) {
         let all =
             |target| (0..self.gains.len()).all(|band| self.gains.target(band) == Some(target));

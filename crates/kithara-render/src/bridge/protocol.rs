@@ -7,7 +7,9 @@ use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_signal::{SegmentId, SessionFrame};
 
-use super::{DeckMixSettingsChange, SlotBinding, SlotGainProgram, SlotMark};
+use super::{
+    DeckMixSettingsChange, EqBinding, EqGainProgram, SlotBinding, SlotGainProgram, SlotMark,
+};
 use crate::{CrossfadeSettings, rt::track::PlayerResource};
 
 /// One scoped deck's commands, clock and verdicts.
@@ -56,6 +58,10 @@ pub enum DeckRefusal {
     Outdated { slot: Slot },
     Deferral,
     AxisRestarted,
+    EqOutdated { band: usize },
+    EqUnavailable { band: usize },
+    EqProgramClock { band: usize },
+    EqProgramCapacity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -110,6 +116,11 @@ pub enum DeckPart {
     },
     Mix(DeckMixSettingsChange),
     Eq(DeckEqChange),
+    EqProgram {
+        binding: EqBinding,
+        authority: Option<Seq>,
+        program: EqGainProgram,
+    },
     GainProgram {
         slot: Slot,
         binding: SlotBinding,
@@ -229,6 +240,16 @@ impl fmt::Debug for DeckPart {
                 .finish(),
             Self::Mix(change) => formatter.debug_tuple("Mix").field(change).finish(),
             Self::Eq(change) => formatter.debug_tuple("Eq").field(change).finish(),
+            Self::EqProgram {
+                binding,
+                authority,
+                program,
+            } => formatter
+                .debug_struct("EqProgram")
+                .field("binding", binding)
+                .field("authority", authority)
+                .field("program", program)
+                .finish(),
             Self::GainProgram {
                 slot,
                 binding,

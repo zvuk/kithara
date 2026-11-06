@@ -6,8 +6,12 @@ use kithara_effects::{
     GainDb,
     eq::{EqConfig, EqLayout, StereoEq, generate_log_spaced_bands},
 };
+use kithara_signal::SessionFrame;
 
-use super::processor::StreamShape;
+use super::{
+    command::{EqCurves, gain_at},
+    processor::StreamShape,
+};
 
 /// A deck's output stage: the gain and equaliser every slot's mix passes through.
 pub(crate) struct RenderPass {
@@ -70,6 +74,38 @@ impl RenderPass {
         self.eq.process(left, right);
     }
 
+    pub(crate) fn finish_eq_curves(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        start: SessionFrame,
+        curves: &EqCurves<'_>,
+    ) {
+        self.apply_gain(left, right);
+        for (frame, (left, right)) in left.iter_mut().zip(right).enumerate() {
+            self.apply_eq_curves(curves, frame_at(start, frame));
+            self.eq
+                .process(core::slice::from_mut(left), core::slice::from_mut(right));
+        }
+    }
+
+    pub(crate) fn advance_eq_curves(
+        &mut self,
+        start: SessionFrame,
+        frames: usize,
+        curves: &EqCurves<'_>,
+    ) {
+        for frame in 0..frames {
+            self.apply_eq_curves(curves, frame_at(start, frame));
+        }
+    }
+
+    fn apply_eq_curves(&mut self, curves: &EqCurves<'_>, at: SessionFrame) {
+        for (band, curve) in curves.iter().flatten() {
+            self.eq.set_gain_explicit(*band, gain_at(curve, at));
+        }
+    }
+
     delegate::delegate! {
         to self.gain {
             /// Ramp the deck's output gain to `gain` from the next frame rendered.
@@ -85,6 +121,12 @@ impl RenderPass {
             /// Ramp `band` of the deck's equaliser to `gain` from the next frame rendered.
             #[call(set_gain)]
             pub(crate) fn set_eq_gain(&mut self, band: usize, gain: GainDb);
+            #[call(accepts_gain_program)]
+            pub(crate) fn accepts_eq_program(&self, band: usize) -> bool;
+            #[call(set_gain_explicit)]
+            pub(crate) fn set_eq_gain_explicit(&mut self, band: usize, gain: GainDb);
+            #[call(target_gain)]
+            pub(crate) fn eq_gain(&self, band: usize) -> Option<GainDb>;
             /// Cross the deck's equaliser over to `layout`, answering the layout it displaced.
             #[call(take_layout)]
             pub(crate) fn take_eq_layout(&mut self, layout: Box<EqLayout>) -> Option<Box<EqLayout>>;
@@ -119,6 +161,12 @@ impl RenderPass {
         }
         self.gain.settle();
     }
+}
+
+fn frame_at(start: SessionFrame, frame: usize) -> SessionFrame {
+    SessionFrame::new(
+        i64::from(start).saturating_add(i64::try_from(frame).expect("prepared frame count")),
+    )
 }
 
 #[cfg(test)]
