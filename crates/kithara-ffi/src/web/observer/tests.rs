@@ -43,6 +43,14 @@ extern "C" {
     fn install_worker_diagnostics();
     #[wasm_bindgen::prelude::wasm_bindgen(js_name = reportWorkerDiagnostics)]
     fn report_worker_diagnostics() -> String;
+    #[wasm_bindgen::prelude::wasm_bindgen(catch, js_name = checkWorkerConstructorForwarding)]
+    fn check_worker_constructor_forwarding() -> Result<(), JsValue>;
+}
+
+#[wasm_bindgen_test]
+fn a_worker_observer_preserves_constructor_behavior() {
+    check_worker_constructor_forwarding()
+        .expect("worker observation preserves constructor behavior");
 }
 
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
