@@ -161,7 +161,6 @@ impl Crossover {
         count
     }
 
-    #[inline(never)]
     fn filter_sample(&mut self, mut high: f32) -> &[f32] {
         let (high_band, lower) = self
             .frame
