@@ -2995,6 +2995,15 @@ fn windows_diagnostics_preserve_old_evidence_before_a_scoped_probe() {
             "just ci cache-exec windows-diagnostic just test run --net-backend=none \"--narrow=$env:TEST_FILTER\" --retries=0"
         )
     );
+    assert_eq!(
+        steps[probe]["env"]["KITHARA_FLASH_SYNC_TRACE"].as_str(),
+        Some("1")
+    );
+    let acceptance = named_step(
+        workflow_job(workflow_jobs(&workflow), "windows"),
+        "Run tests",
+    );
+    assert!(acceptance["env"].get("KITHARA_FLASH_SYNC_TRACE").is_none());
     for index in [index("Verify probe compiler cache"), probe] {
         assert_eq!(
             steps[index]["working-directory"].as_str(),

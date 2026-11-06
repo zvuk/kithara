@@ -149,6 +149,7 @@ jobs:
         if: ${{ (inputs.test-filter || '') != '' }}
         working-directory: diagnostics-controller
         env:
+          KITHARA_FLASH_SYNC_TRACE: "1"
           KITHARA_HANG_DUMP_DIR: ${{ runner.temp }}/windows-diagnostics/probe-hang
         run: just ci cache-exec windows-diagnostic just test run --net-backend=none "--narrow=$env:TEST_FILTER" --retries=0
 
