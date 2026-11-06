@@ -4,6 +4,7 @@ mod build_dir;
 mod cache;
 mod command;
 mod config;
+mod cycle;
 mod environment;
 mod host;
 mod image;

@@ -45,52 +45,10 @@ for mode in $MODE; do args+=(--mode "$mode"); done
 for lane in $LANE; do args+=(--lane "$lane"); done
 just ci cache-exec stress-report just ci stress-report "${args[@]}""#;
 
-const AUTHORIZATION_SCRIPT: &str = r#"python3 - <<'PY'
-import json
-import os
-import sys
-
-actor = os.environ["ACTOR"]
-owner = os.environ["OWNER"]
-if actor != owner:
-    print(f"CI may only be started by repository owner {owner!r}, got {actor!r}")
-    sys.exit(1)
-
-raw_labels = os.environ.get("RUNNER_LABELS", "")
-try:
-    labels = json.loads(raw_labels)
-except json.JSONDecodeError as error:
-    print(f"KITHARA_RUNNER_LABELS is not valid JSON: {error}")
-    sys.exit(1)
-if not isinstance(labels, list) or not labels or not all(
-    isinstance(label, str) and label for label in labels
-):
-    print("KITHARA_RUNNER_LABELS must be a non-empty JSON array of non-empty strings")
-    sys.exit(1)
-PY"#;
-
-const REQUIRED_SCRIPT: &str = r#"python3 - <<'PY'
-import json
-import os
-import sys
-
-results = json.loads(os.environ["RESULTS"])
-required_lanes = set(os.environ["REQUIRED_LANES"].split())
-optional_required = bool(required_lanes)
-ui_required = "all" in required_lanes or "deep-ui" in required_lanes or os.environ["TOUCHED_UI_REQUIRED"] == "true"
-android_required = "all" in required_lanes or "android-test" in required_lanes
-incomplete = {
-    name: job["result"]
-    for name, job in results.items()
-    if job["result"] != "success"
-    and not (name in {"deep", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
-    and not (name == "ui" and job["result"] == "skipped" and not ui_required)
-    and not (name == "android" and job["result"] == "skipped" and not android_required)
-}
-if incomplete:
-    print(f"required CI jobs did not execute successfully: {incomplete}")
-    sys.exit(1)
-PY"#;
+const AUTHORIZATION_COMMAND: &str =
+    "cargo run --locked -p xtask --no-default-features --bin ci-bootstrap -- github authorize";
+const REQUIRED_COMMAND: &str =
+    "cargo run --locked -p xtask --no-default-features --bin ci-bootstrap -- github required";
 
 fn github_workflow(name: &str) -> Value {
     let text = github_workflow_text(name);
@@ -325,7 +283,23 @@ fn assert_hosted_authorization(job: &Mapping) {
         Some("ubuntu-latest")
     );
 
-    let step = first_step(job);
+    let checkout = first_step(job);
+    assert!(
+        mapping_field(checkout, "uses")
+            .as_str()
+            .expect("hosted gate starts with a checkout action")
+            .starts_with("actions/checkout@")
+    );
+    assert_eq!(
+        mapping_field(
+            mapping_field(checkout, "with")
+                .as_mapping()
+                .expect("checkout options are a mapping"),
+            "persist-credentials"
+        ),
+        &Value::Bool(false)
+    );
+    let step = named_step(job, "Validate actor and runner labels");
     let env = mapping_field(step, "env")
         .as_mapping()
         .expect("authorization environment is a mapping");
@@ -346,7 +320,7 @@ fn assert_hosted_authorization(job: &Mapping) {
             .as_str()
             .expect("authorization step is a script")
             .trim(),
-        AUTHORIZATION_SCRIPT
+        AUTHORIZATION_COMMAND
     );
 }
 
@@ -515,7 +489,10 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     expected.remove("required");
     assert_eq!(job_needs(required), expected);
 
-    let step = first_step(required);
+    let step = named_step(
+        required,
+        "Require every CI job to have executed successfully",
+    );
     let env = mapping_field(step, "env")
         .as_mapping()
         .expect("required environment is a mapping");
@@ -534,7 +511,7 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
             .as_str()
             .expect("required step is a script")
             .trim(),
-        REQUIRED_SCRIPT
+        REQUIRED_COMMAND
     );
 }
 
@@ -2316,7 +2293,10 @@ fn required_aggregation_requires_an_automatically_selected_ui_verdict() {
     let (selection_name, _) = ui_selection(jobs);
     let required = workflow_job(jobs, "required");
     assert!(job_needs(required).contains(selection_name));
-    let step = first_step(required);
+    let step = named_step(
+        required,
+        "Require every CI job to have executed successfully",
+    );
     let env = mapping_field(step, "env")
         .as_mapping()
         .expect("aggregate has an environment");
@@ -2324,9 +2304,6 @@ fn required_aggregation_requires_an_automatically_selected_ui_verdict() {
         mapping_field(env, "TOUCHED_UI_REQUIRED").as_str(),
         Some(format!("${{{{ vars.KITHARA_GPU_RUNNER_LABELS != '' && needs.{selection_name}.outputs.ui_required == 'true' }}}}").as_str())
     );
-    let verdict = mapping_field(step, "run")
-        .as_str()
-        .expect("aggregate has a verdict script");
     for (selected, lanes, result, accepted) in [
         ("true", "", "skipped", false),
         ("true", "", "failure", false),
@@ -2339,8 +2316,8 @@ fn required_aggregation_requires_an_automatically_selected_ui_verdict() {
         ("false", "deep-ui", "success", true),
     ] {
         let results = serde_json::json!({"ui": {"result": result}});
-        let output = Command::new("bash")
-            .args(["-c", verdict])
+        let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
+            .args(["github", "required"])
             .env("RESULTS", results.to_string())
             .env("REQUIRED_LANES", lanes)
             .env("TOUCHED_UI_REQUIRED", selected)

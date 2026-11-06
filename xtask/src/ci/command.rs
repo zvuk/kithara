@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{ffi::OsString, path::PathBuf};
 
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
@@ -22,6 +22,13 @@ pub(crate) struct CiArgs {
 
 #[derive(Debug, Subcommand)]
 enum CiCommand {
+    /// Run both Flash modes, stopping on the first failure.
+    Gate {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        arguments: Vec<OsString>,
+    },
+    /// Run lint, tests and mutations with independent stage logs.
+    Full { output: PathBuf },
     /// Provision and verify the shared compiler cache.
     Cache(CacheArgs),
     /// Reconcile the public GitHub and private `GitLab` repositories.
@@ -73,6 +80,8 @@ pub(crate) fn run_standalone(args: &CiArgs) -> Result<()> {
         CiCommand::Image(args) => super::image::run(args),
         CiCommand::Verdict(args) => super::verdict::run(args),
         CiCommand::Run(_)
+        | CiCommand::Gate { .. }
+        | CiCommand::Full { .. }
         | CiCommand::Lane(_)
         | CiCommand::Lanes(_)
         | CiCommand::Touched(_)
@@ -90,6 +99,8 @@ pub(crate) fn run(args: &CiArgs, ctx: &Ctx) -> Result<()> {
         | CiCommand::Image(_)
         | CiCommand::Verdict(_) => run_standalone(args),
         CiCommand::Run(args) => super::run::run(args, ctx),
+        CiCommand::Gate { arguments } => super::cycle::gate(ctx, arguments),
+        CiCommand::Full { output } => super::cycle::full(ctx, output),
         CiCommand::Lane(args) => super::lane::direct::run(args, ctx),
         CiCommand::Lanes(args) => super::lane::select::run(args, ctx),
         CiCommand::WindowsDiagnostics { output } => super::windows_diagnostics::run(output, ctx),
