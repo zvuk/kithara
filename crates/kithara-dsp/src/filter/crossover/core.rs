@@ -42,45 +42,11 @@ impl Lr4 {
     }
 }
 
-struct CrossoverState {
-    lowpass: Box<[Lr4]>,
-    highpass: Box<[Lr4]>,
+struct Split {
+    frequency: Hertz<f32>,
+    lowpass: Lr4,
+    highpass: Lr4,
     allpass: Box<[Section]>,
-    frame: Box<[f32]>,
-}
-
-impl CrossoverState {
-    #[inline(always)]
-    fn run<T>(&mut self, mut high: f32, outputs: &mut [T], mut consume: impl FnMut(&mut T, f32)) {
-        let (high_output, lower) = outputs
-            .split_last_mut()
-            .expect("validated bands include the final high output");
-        for ((lowpass, highpass), low) in self
-            .lowpass
-            .iter_mut()
-            .zip(self.highpass.iter_mut())
-            .zip(self.frame.iter_mut())
-        {
-            *low = lowpass.process(high);
-            high = highpass.process(high);
-        }
-        let mut remaining = self.allpass.as_mut();
-        for ((&initial, count), output) in self
-            .frame
-            .iter()
-            .zip((0..self.lowpass.len()).rev())
-            .zip(lower)
-        {
-            let (sections, tail) = remaining.split_at_mut(count);
-            remaining = tail;
-            let mut low = initial;
-            for section in sections {
-                low = section.run(low);
-            }
-            consume(output, low);
-        }
-        consume(high_output, high);
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -103,9 +69,8 @@ impl Design {
 /// Mono LR4 crossovers with later-frequency allpass compensation, computed in f32.
 #[non_exhaustive]
 pub struct Crossover {
-    frequencies: Box<[Hertz<f32>]>,
-    state: CrossoverState,
-    gain_frame: Box<[f32]>,
+    splits: Box<[Split]>,
+    frame: Box<[f32]>,
     prepared: Box<[Design]>,
     prepared_rate: Option<Hertz<f32>>,
 }
@@ -123,23 +88,22 @@ impl Crossover {
             .map(|&frequency| Design::new(frequency, sample_rate))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
-            frequencies: frequencies.into(),
-            state: CrossoverState {
-                lowpass: designs
-                    .iter()
-                    .map(|design| Lr4::new(design.lowpass))
-                    .collect(),
-                highpass: designs
-                    .iter()
-                    .map(|design| Lr4::new(design.highpass))
-                    .collect(),
-                allpass: (1..designs.len())
-                    .flat_map(|start| designs.iter().skip(start))
-                    .map(|later| Section::new(later.allpass))
-                    .collect(),
-                frame: vec![0.0; frequencies.len()].into_boxed_slice(),
-            },
-            gain_frame: vec![0.0; frequencies.len().saturating_add(1)].into_boxed_slice(),
+            splits: frequencies
+                .iter()
+                .zip(&designs)
+                .enumerate()
+                .map(|(index, (&frequency, design))| Split {
+                    frequency,
+                    lowpass: Lr4::new(design.lowpass),
+                    highpass: Lr4::new(design.highpass),
+                    allpass: designs
+                        .iter()
+                        .skip(index.saturating_add(1))
+                        .map(|later| Section::new(later.allpass))
+                        .collect(),
+                })
+                .collect(),
+            frame: vec![0.0; frequencies.len().saturating_add(1)].into_boxed_slice(),
             prepared: designs.into_boxed_slice(),
             prepared_rate: None,
         })
@@ -150,20 +114,19 @@ impl Crossover {
     ///
     /// # Panics
     /// Panics if a plane changes length between dereferences during processing.
-    #[inline(always)]
     pub fn split<P: DerefMut<Target = [f32]>>(&mut self, input: &[f32], bands: &mut [P]) -> usize {
-        let Some(bands) = bands.get_mut(..self.state.lowpass.len().saturating_add(1)) else {
+        let Some(bands) = bands.get_mut(..self.splits.len().saturating_add(1)) else {
             return 0;
         };
         let count = bands
             .iter()
             .fold(input.len(), |count, band| count.min(band.len()));
         for (frame, &sample) in input.iter().take(count).enumerate() {
-            self.state.run(sample, bands, |band, value| {
+            for (band, value) in bands.iter_mut().zip(self.filter_sample(sample)) {
                 *band
                     .get_mut(frame)
-                    .expect("frame belongs to the validated common prefix") = value;
-            });
+                    .expect("frame belongs to the validated common prefix") = *value;
+            }
         }
         count
     }
@@ -175,45 +138,56 @@ impl Crossover {
     /// # Panics
     /// Panics if a gain plane changes length between dereferences during processing.
     pub fn sum<P: Deref<Target = [f32]>>(&mut self, samples: &mut [f32], gains: &[P]) -> usize {
-        let Some(gains) = gains.get(..self.state.lowpass.len().saturating_add(1)) else {
+        let Some(gains) = gains.get(..self.splits.len().saturating_add(1)) else {
             return 0;
         };
         let count = gains
             .iter()
             .fold(samples.len(), |n, gain| n.min(gain.len()));
         for (frame, sample) in samples.iter_mut().take(count).enumerate() {
-            for (value, gain) in self.gain_frame.iter_mut().zip(gains) {
-                *value = *gain
-                    .get(frame)
-                    .expect("frame belongs to the validated common prefix");
-            }
-            *sample = self.weighted_sample(*sample);
+            *sample =
+                self.filter_sample(*sample)
+                    .iter()
+                    .zip(gains)
+                    .fold(0.0, |output, (value, gain)| {
+                        value.mul_add(
+                            *gain
+                                .get(frame)
+                                .expect("frame belongs to the validated common prefix"),
+                            output,
+                        )
+                    });
         }
         count
     }
 
     #[inline(never)]
-    fn weighted_sample(&mut self, sample: f32) -> f32 {
-        let mut output = 0.0;
-        self.state.run(sample, &mut self.gain_frame, |gain, value| {
-            output = value.mul_add(*gain, output);
-        });
-        output
+    fn filter_sample(&mut self, mut high: f32) -> &[f32] {
+        let (high_band, lower) = self
+            .frame
+            .split_last_mut()
+            .expect("one high band after the crossovers");
+        for (split, low) in self.splits.iter_mut().zip(lower) {
+            *low = split.lowpass.process(high);
+            high = split.highpass.process(high);
+            for section in &mut split.allpass {
+                *low = section.run(*low);
+            }
+        }
+        *high_band = high;
+        &self.frame
     }
 
     /// Clears every section's history without allocation or coefficient changes.
     pub fn reset(&mut self) {
-        for filter in self
-            .state
-            .lowpass
-            .iter_mut()
-            .chain(self.state.highpass.iter_mut())
-        {
-            filter.first.0.reset_state();
-            filter.second.0.reset_state();
-        }
-        for section in &mut self.state.allpass {
-            section.0.reset_state();
+        for split in &mut self.splits {
+            split.lowpass.first.0.reset_state();
+            split.lowpass.second.0.reset_state();
+            split.highpass.first.0.reset_state();
+            split.highpass.second.0.reset_state();
+            for section in &mut split.allpass {
+                section.0.reset_state();
+            }
         }
     }
 
@@ -225,9 +199,9 @@ impl Crossover {
     /// A rejected preparation invalidates prior preparation and leaves active state unchanged.
     pub fn prepare_sample_rate(&mut self, sample_rate: Hertz<f32>) -> Result<(), FilterError> {
         self.prepared_rate = None;
-        validate(self.frequencies.iter().copied(), sample_rate)?;
-        for (&frequency, prepared) in self.frequencies.iter().zip(self.prepared.iter_mut()) {
-            *prepared = Design::new(frequency, sample_rate)?;
+        validate(self.splits.iter().map(|split| split.frequency), sample_rate)?;
+        for (split, prepared) in self.splits.iter().zip(self.prepared.iter_mut()) {
+            *prepared = Design::new(split.frequency, sample_rate)?;
         }
         self.prepared_rate = Some(sample_rate);
         Ok(())
@@ -249,16 +223,16 @@ impl Crossover {
     /// Returns its rate, or `None` without mutation when no preparation remains.
     pub fn apply_prepared_sample_rate(&mut self) -> Option<Hertz<f32>> {
         let rate = self.prepared_rate.take()?;
-        for (filter, prepared) in self.state.lowpass.iter_mut().zip(self.prepared.iter()) {
-            *filter = Lr4::new(prepared.lowpass);
-        }
-        for (filter, prepared) in self.state.highpass.iter_mut().zip(self.prepared.iter()) {
-            *filter = Lr4::new(prepared.highpass);
-        }
-        let prepared = &self.prepared;
-        let later = (1..prepared.len()).flat_map(|start| prepared.iter().skip(start));
-        for (section, design) in self.state.allpass.iter_mut().zip(later) {
-            *section = Section::new(design.allpass);
+        for (index, (split, prepared)) in self.splits.iter_mut().zip(&self.prepared).enumerate() {
+            split.lowpass = Lr4::new(prepared.lowpass);
+            split.highpass = Lr4::new(prepared.highpass);
+            for (section, later) in split
+                .allpass
+                .iter_mut()
+                .zip(self.prepared.iter().skip(index.saturating_add(1)))
+            {
+                *section = Section::new(later.allpass);
+            }
         }
         Some(rate)
     }
