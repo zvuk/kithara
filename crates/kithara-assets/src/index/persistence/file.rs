@@ -34,14 +34,24 @@ impl IndexFile {
         let mut file = match File::open(&self.path) {
             Ok(file) => file,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                self.report_io_error("open", &error);
+                return Err(error.into());
+            }
         };
-        let len = usize::try_from(file.metadata()?.len())
-            .map_err(|error| AssetsError::Io(Error::other(error)))?;
+        let len = usize::try_from(
+            file.metadata()
+                .inspect_err(|error| self.report_io_error("metadata", error))?
+                .len(),
+        )
+        .map_err(|error| AssetsError::Io(Error::other(error)))?;
         buf.ensure_len(len)?;
         let mut read = 0;
         while read < len {
-            match file.read(&mut buf[read..len])? {
+            match file
+                .read(&mut buf[read..len])
+                .inspect_err(|error| self.report_io_error("read", error))?
+            {
                 0 => break,
                 n => read += n,
             }
@@ -57,13 +67,24 @@ impl IndexFile {
             .path
             .parent()
             .ok_or_else(|| Error::other("index file has no parent directory"))?;
-        fs::create_dir_all(parent)?;
-        let mut tmp = NamedTempFile::new_in(parent)?;
-        tmp.write_all(bytes)?;
+        fs::create_dir_all(parent)
+            .inspect_err(|error| self.report_io_error("create-directory", error))?;
+        let mut tmp = NamedTempFile::new_in(parent)
+            .inspect_err(|error| self.report_io_error("create-tempfile", error))?;
+        tmp.write_all(bytes)
+            .inspect_err(|error| self.report_io_error("write", error))?;
         if durable {
-            tmp.as_file().sync_data()?;
+            tmp.as_file()
+                .sync_data()
+                .inspect_err(|error| self.report_io_error("sync-data", error))?;
         }
-        tmp.persist(&self.path).map_err(|error| error.error)?;
+        tmp.persist(&self.path)
+            .map_err(|error| error.error)
+            .inspect_err(|error| self.report_io_error("persist", error))?;
         Ok(())
+    }
+
+    fn report_io_error(&self, operation: &'static str, error: &Error) {
+        tracing::error!(operation, path = %self.path.display(), error = ?error, "asset index I/O failed");
     }
 }

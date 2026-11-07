@@ -7,6 +7,7 @@ use kithara::{
     events::TrackId,
     platform::{
         sync::{Arc, Mutex},
+        thread,
         time::Duration,
     },
     play::PlayError,
@@ -40,8 +41,9 @@ const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 
 fn surface_player() -> AudioPlayer {
-    static BINDINGS: Once = Once::new();
-    BINDINGS.call_once(|| {
+    static STARTUP: Once = Once::new();
+    STARTUP.call_once(|| {
+        thread::set_wasm_shim_name("wasm-bindgen-test");
         kithara_ffi::web::bindings::setup().expect("browser bindings initialized");
     });
     AudioPlayer::new_js()
@@ -270,6 +272,7 @@ impl SeekCallback for Seeks {
 
 #[wasm_bindgen_test]
 async fn surface_settings_follow_owner_publication_and_report_refusal() {
+    assert!(thread::is_main_thread());
     let player = Arc::new(surface_player());
     let events = Arc::new(Mutex::new(Vec::new()));
     player.set_observer(Arc::new(Events(Arc::clone(&events))));

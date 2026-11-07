@@ -10,6 +10,7 @@ use kithara_devtools::{Ctx, common::tools::ToolsConfig};
 use plist::{Dictionary as PlistDictionary, Value as PlistValue};
 use regex::Regex;
 
+use super::demo;
 use crate::{
     apple_docgen,
     config::{AppleConfig, KitharaExt, ReleaseConfig},
@@ -153,6 +154,7 @@ impl Drop for HakariDisableGuard {
 #[derive(Clone, Debug, clap::Subcommand)]
 pub(crate) enum AppleCommand {
     /// Build `XCFramework` for Apple platforms.
+    #[command(alias = "xcframework")]
     Build {
         /// Build profile.
         #[arg(long, default_value_t = crate::BuildProfile::Release)]
@@ -174,6 +176,7 @@ pub(crate) enum AppleCommand {
     /// Pass `--debug` to launch with `simctl launch --wait-for-debugger`,
     /// which suspends the app on entry; the printed PID can then be
     /// fed to `lldb` (or Zed's `CodeLLDB` "attach" debug config).
+    #[command(alias = "demo")]
     Run {
         /// Simulator name or UUID (defaults to a recent iPhone).
         #[arg(long)]
@@ -206,6 +209,24 @@ pub(crate) enum AppleCommand {
         #[arg(long)]
         check: bool,
     },
+    /// Generate and open the local demo Xcode project.
+    Xcode,
+    /// Build the iOS demo for the requested destination.
+    Ios {
+        #[arg(default_value = "KitharaDemo_iOS")]
+        scheme: String,
+        #[arg(default_value = "generic/platform=iOS Simulator")]
+        destination: String,
+    },
+    /// Run the iOS unit suite against the hermetic test server.
+    Test {
+        #[arg(long)]
+        skip_build: bool,
+    },
+    /// Run all iOS integration regressions or one named test.
+    IntegrationRegressions { name: Option<String> },
+    /// Build the combined Swift documentation archive.
+    Doc { hosting_base: Option<String> },
     /// Build release Apple artifacts, strip/audit them, zip them, and print
     /// the SPM checksum for the Rust `XCFramework` binary target.
     Release,
@@ -234,6 +255,11 @@ pub(crate) fn run(cmd: AppleCommand, ctx: &Ctx) -> Result<()> {
         ),
         AppleCommand::Audit { path } => audit_symbols(&path, &ext.apple, tools),
         AppleCommand::Docgen { check } => apple_docgen::run(check, &ext.apple.docgen),
+        AppleCommand::Xcode
+        | AppleCommand::Ios { .. }
+        | AppleCommand::Test { .. }
+        | AppleCommand::IntegrationRegressions { .. }
+        | AppleCommand::Doc { .. } => demo::run(cmd, ctx),
         AppleCommand::Release => run_release(&ext.release, &ext.apple, tools),
     }
 }
@@ -1545,7 +1571,7 @@ fn require_file(path: &FsPath) -> Result<()> {
 }
 
 /// Top-level `.swift` files in `dir`, sorted.
-fn swift_files(dir: &FsPath) -> Result<Vec<PathBuf>> {
+pub(super) fn swift_files(dir: &FsPath) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for entry in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
         let path = entry?.path();
@@ -1888,14 +1914,12 @@ mod tests {
     /// what was linked into it.
     #[test]
     fn every_apple_proof_needle_is_an_audio_toolbox_import() {
-        let root = FsPath::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask sits beside the workspace root");
-        let apple = KitharaExt::load(root)
+        let root = crate::testing::workspace::root();
+        let apple = KitharaExt::load(&root)
             .expect("the project config loads")
             .apple;
         let sources = kithara_devtools::common::walker::workspace_rs_files_scoped(
-            root,
+            &root,
             &kithara_devtools::common::scope::Scope::default(),
         )
         .expect("the workspace sources are listed");
@@ -2003,86 +2027,6 @@ printf '%s\n' "$library" > "$output/staging"
             staging.push(fs::read_to_string(framework.join("staging")).unwrap());
         }
         assert_ne!(staging[0], staging[1]);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn xcode_recipes_keep_derived_data_in_each_job_checkout() {
-        let (_, recipe) = include_str!("../../.config/just/platform.just")
-            .split_once("apple MODE=\"xcframework\" *ARGS:\n")
-            .unwrap();
-        let (recipe, _) = recipe.split_once("\n[private]").unwrap();
-        let recipe = recipe
-            .lines()
-            .map(|line| line.strip_prefix("    ").unwrap_or(line))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let directory = tempfile::tempdir().unwrap();
-        let base = directory.path().canonicalize().unwrap();
-        let bin = base.join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        crate::testing::install_script(&bin.join("just"), "#!/bin/sh\nexit 0\n");
-        crate::testing::install_script(
-            &bin.join("xcodebuild"),
-            r#"#!/bin/sh
-set -eu
-while [ "$#" -gt 0 ]; do
-    if [ "$1" = -derivedDataPath ]; then
-        derived=$2
-        shift
-    fi
-    shift
-done
-test "$derived" = "$PWD/apple/Examples/KitharaDemo/build/DerivedData"
-mkdir -p "$derived"
-cp revision "$derived/producer"
-printf '%s\n' "$derived" >> xcode-paths
-"#,
-        );
-        let path = env::join_paths(
-            std::iter::once(bin).chain(env::split_paths(&env::var_os("PATH").unwrap())),
-        )
-        .unwrap();
-        let roots = [base.join("job a"), base.join("job b")];
-        for (root, revision) in roots.iter().zip(["branch-a", "branch-b"]) {
-            let tests = root.join("apple/Examples/KitharaDemo/UnitTests");
-            fs::create_dir_all(&tests).unwrap();
-            fs::create_dir_all(root.join("apple/KitharaFFIInternal.xcframework")).unwrap();
-            fs::write(root.join("revision"), revision).unwrap();
-            fs::write(
-                tests.join("Regression.swift"),
-                "struct IntegrationRegressionsIOS {}\n@Test(\"regression\")\nfunc regression() {}\n",
-            )
-            .unwrap();
-            for args in [
-                &["ios"][..],
-                &["test", "--skip-build"][..],
-                &["integration-regressions"][..],
-            ] {
-                let output = Command::new("bash")
-                    .args(["-c", &recipe, "apple"])
-                    .args(args)
-                    .current_dir(root)
-                    .env("PATH", &path)
-                    .env("TMPDIR", root)
-                    .env("KITHARA_IOS_DESTINATION", "platform=iOS Simulator,id=owned")
-                    .env("KITHARA_TEST_SERVER_URL", "http://127.0.0.1:1")
-                    .output()
-                    .unwrap();
-                assert!(output.status.success(), "{args:?}: {output:?}");
-            }
-        }
-        for (root, revision) in roots.iter().zip(["branch-a", "branch-b"]) {
-            let derived = root.join("apple/Examples/KitharaDemo/build/DerivedData");
-            assert_eq!(
-                fs::read_to_string(derived.join("producer")).unwrap(),
-                revision
-            );
-            assert_eq!(
-                fs::read_to_string(root.join("xcode-paths")).unwrap(),
-                format!("{}\n", derived.display()).repeat(4)
-            );
-        }
     }
 
     #[test]
@@ -2283,9 +2227,10 @@ public struct FfiConverterTypeTrackId {
     /// the hoist cannot smuggle a literal past the first census.
     #[test]
     fn every_process_this_module_starts_has_a_declared_owner() {
-        let source =
-            fs::read_to_string(FsPath::new(env!("CARGO_MANIFEST_DIR")).join("src/apple.rs"))
-                .expect("this source is readable");
+        let source = fs::read_to_string(
+            crate::testing::workspace::root().join("xtask/src/apple/command.rs"),
+        )
+        .expect("this source is readable");
         let (production, _) = source
             .split_once("\n#[cfg(test)]")
             .expect("this source carries a test module to cut the production half at");

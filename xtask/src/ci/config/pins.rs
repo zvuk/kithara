@@ -327,7 +327,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::{ci::config::profile::workspace_root, consts};
+    use crate::{consts, testing::workspace::root as workspace_root};
 
     #[test]
     fn native_and_container_stores_use_the_same_release() {
@@ -391,7 +391,7 @@ mod tests {
         let root = workspace_root();
         let pins = CiPins::load(&root.join(".config/ci-pins.toml")).expect("pins load");
         let project =
-            kithara_devtools::common::project::ProjectConfig::load(root).expect("project loads");
+            kithara_devtools::common::project::ProjectConfig::load(&root).expect("project loads");
 
         pins.validate_tool_pins(&project.tools)
             .expect("every configured role names a pin this repository reviews");

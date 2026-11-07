@@ -14,6 +14,7 @@ use kithara_integration_tests::{
     fixture_protocol::{DelayRule, PcmPattern},
     hls_fixture::create_test_downloader,
     mock::LaneAudio,
+    usdt_trace,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{
@@ -100,10 +101,30 @@ fn assert_abr_size_probes(fixture: AbrAudioFixture, helper: &TestServerHelper, h
 
 type HlsAudio = LaneAudio<Stream<Hls<TestPools>>, TestPools>;
 
-/// Phase 1 ends only after the owner completes the join and the reader consumes it.
-fn wait_for_abr_switch(audio: &mut HlsAudio, buf: &mut [f32], channels: usize) -> Range<usize> {
-    info!("Phase 1: waiting for ABR switch (ascending -> descending)...");
+fn join_was_consumed(position: Duration) -> bool {
+    usdt_trace::last("gapless_join_completed")
+        .filter(|event| event.field("variant") == Some(1))
+        .is_some_and(|event| {
+            let end_ns = event
+                .field("end_ns")
+                .expect("join completion source boundary");
+            assert_ne!(
+                end_ns,
+                u64::MAX,
+                "join completion must have a source boundary"
+            );
+            position >= Duration::from_nanos(end_ns)
+        })
+}
 
+/// Consume the committed join onto the low-bandwidth variant, including its mixed tail.
+fn wait_for_abr_switch(
+    audio: &mut impl AudioRead,
+    buf: &mut [f32],
+    channels: usize,
+    require_source_geometry: bool,
+) -> Option<Range<usize>> {
+    info!("Phase 1: waiting to consume the completed ABR join...");
     let warmup_start = kithara::platform::time::Instant::now();
     let warmup_timeout = Duration::from_secs(consts::WARMUP_TIMEOUT_SECS);
     let mut warmup_ascending_chunks = 0u64;
@@ -116,31 +137,36 @@ fn wait_for_abr_switch(audio: &mut HlsAudio, buf: &mut [f32], channels: usize) -
              unknown={warmup_unknown_chunks})",
             consts::WARMUP_TIMEOUT_SECS,
         );
-
-        let (n, span) = match audio.read(buf) {
+        let (n, position, span) = match audio.read(buf) {
             Ok(ReadOutcome::Pending { .. }) => continue,
             Ok(ReadOutcome::Frames {
-                count, source_span, ..
-            }) => (
-                count.get(),
-                source_span.expect("decoded saw has exact source geometry"),
-            ),
+                count,
+                position,
+                source_span,
+                ..
+            }) => {
+                if require_source_geometry {
+                    assert!(
+                        source_span.is_some(),
+                        "decoded saw has exact source geometry"
+                    );
+                }
+                (count.get(), position, source_span)
+            }
             Ok(ReadOutcome::Eof { .. }) => panic!(
                 "Hit EOF before ABR switch (ascending={warmup_ascending_chunks}, \
                  unknown={warmup_unknown_chunks})"
             ),
             Err(e) => panic!("warmup decode error: {e}"),
         };
-
-        match detect_direction(&buf[..n], channels) {
-            Direction::Ascending => warmup_ascending_chunks += 1,
-            Direction::Descending => {}
-            Direction::Unknown => warmup_unknown_chunks += 1,
-        }
-
-        if let Some(join) = kithara_test_utils::test::usdt::last("audio_join_processed")
-            && join.field("remaining") == Some(0)
-        {
+        if join_was_consumed(position) {
+            if !require_source_geometry {
+                return None;
+            }
+            let span = span.expect("decoded saw has exact source geometry");
+            let join = usdt_trace::last("audio_join_processed")
+                .expect("completed join has processed-frame geometry");
+            assert_eq!(join.field("remaining"), Some(0), "join must be complete");
             let end = join
                 .field("source_start")
                 .expect("join source start")
@@ -163,10 +189,13 @@ fn wait_for_abr_switch(audio: &mut HlsAudio, buf: &mut [f32], channels: usize) -
                     elapsed_ms = warmup_start.elapsed().as_millis(),
                     "ABR join consumed"
                 );
-                return first..n;
+                return Some(first..n);
             }
         }
-
+        match detect_direction(&buf[..n], channels) {
+            Direction::Ascending => warmup_ascending_chunks += 1,
+            Direction::Descending | Direction::Unknown => warmup_unknown_chunks += 1,
+        }
         if warmup_ascending_chunks.is_multiple_of(100) && warmup_ascending_chunks > 0 {
             info!(
                 warmup_ascending_chunks,
@@ -178,20 +207,87 @@ fn wait_for_abr_switch(audio: &mut HlsAudio, buf: &mut [f32], channels: usize) -
     }
 }
 
+#[kithara::test(native)]
+fn a_frame_100224_blend_is_not_a_completed_abr_switch() {
+    use kithara::{audio::mock::TestPcmReader, signal::AudioSpec};
+    use kithara_test_fixtures::signal::Wave;
+
+    const START: usize = 100_224;
+    const CHUNK: usize = 1_152;
+    const JOIN: usize = 1_764;
+    let spec = AudioSpec::new(2, 44_100u32.try_into().expect("sample rate"));
+    let sample = |wave: Wave, frame| f32::from(wave.sample(frame, 44_100)) / 32_768.0;
+    let samples: Vec<_> = (0..CHUNK * (2 + consts::POST_SWITCH_CHUNKS))
+        .map(|offset| {
+            let incoming = sample(Wave::SawtoothDescending, START + offset);
+            if offset < JOIN {
+                let gain = f32::from(u16::try_from(offset).expect("join offset"))
+                    / f32::from(u16::try_from(JOIN).expect("join length"));
+                sample(Wave::Sawtooth, START + offset).mul_add(1.0 - gain, incoming * gain)
+            } else {
+                incoming
+            }
+        })
+        .collect();
+    assert_eq!(
+        detect_direction(&samples[..CHUNK], 1),
+        Direction::Descending
+    );
+    assert_eq!(
+        phase_steps(&samples[CHUNK..2 * CHUNK], 1)
+            .into_iter()
+            .filter(|&(_, prev, curr)| signal::phase::delta(prev, curr) != -1)
+            .count(),
+        612
+    );
+
+    let _trace = usdt_trace::scope();
+    let frontier = spec.duration_for((2 * CHUNK) as u64).expect("frontier");
+    tracing::event!(target: "kithara_audio_probe", tracing::Level::TRACE,
+        probe = "gapless_join_completed", variant = 1u64,
+        end_ns = u64::try_from(frontier.as_nanos()).expect("fixture nanoseconds"));
+    let mut audio = TestPcmReader::with_samples(spec, samples);
+    let mut buf = vec![0.0; CHUNK * 2];
+    let pure = wait_for_abr_switch(&mut audio, &mut buf, 2, false);
+    assert_eq!(
+        audio.position(),
+        frontier,
+        "producer completion must wait for consumed PCM"
+    );
+    verify_post_switch_chunks(&mut audio, &mut buf, 2, pure);
+}
+
+#[kithara::test(native)]
+#[should_panic(expected = "too many continuity breaks in post-switch chunk 0")]
+fn a_completed_join_does_not_hide_corrupt_post_switch_pcm() {
+    use kithara::{audio::mock::TestPcmReader, signal::AudioSpec};
+
+    let _trace = usdt_trace::scope();
+    let spec = AudioSpec::new(2, 44_100u32.try_into().expect("sample rate"));
+    let mut audio = TestPcmReader::with_samples(spec, vec![0.25; 128]);
+    let frontier = spec.duration_for(32).expect("frontier");
+    tracing::event!(target: "kithara_audio_probe", tracing::Level::TRACE,
+        probe = "gapless_join_completed", variant = 1u64,
+        end_ns = u64::try_from(frontier.as_nanos()).expect("fixture nanoseconds"));
+    let mut buf = vec![0.0; 32];
+    let pure = wait_for_abr_switch(&mut audio, &mut buf, 2, false);
+    verify_post_switch_chunks(&mut audio, &mut buf, 2, pure);
+}
+
 /// Phase 2: every chunk right after the switch is valid, descending saw, with
 /// at most the one break the decoder handoff leaves.
 fn verify_post_switch_chunks(
-    audio: &mut HlsAudio,
+    audio: &mut impl AudioRead,
     buf: &mut [f32],
     channels: usize,
-    pure: Range<usize>,
+    pure: Option<Range<usize>>,
 ) {
     info!(
         "Phase 2: verifying {} post-switch chunks are descending...",
         consts::POST_SWITCH_CHUNKS
     );
 
-    let mut pure = Some(pure).filter(|range| !range.is_empty());
+    let mut pure = pure.filter(|range| !range.is_empty());
     let total = consts::POST_SWITCH_CHUNKS
         .checked_add(usize::from(pure.is_some()))
         .expect("one optional suffix plus the original chunks");
@@ -482,7 +578,7 @@ async fn flac_abr() -> (TestServerHelper, CreatedHls) {
 /// Scenario:
 /// 1. Two variants: V0 (ascending, high bandwidth, delayed) and V1 (descending, low bandwidth)
 /// 2. ABR starts on V0, switches to V1 when V0 segments become slow
-/// 3. Verify the switch happened via PCM direction change
+/// 3. Consume the completed join, then verify descending PCM
 /// 4. 200 random seeks with direction + integrity checks
 #[kithara::test(
     native,
@@ -498,7 +594,7 @@ async fn stress_seek_abr_audio(
     #[case] fixture: AbrAudioFixture,
     #[case] prepared: (TestServerHelper, CreatedHls),
 ) {
-    let _join_trace = kithara_test_utils::test::usdt::scope();
+    let _trace = usdt_trace::scope();
     let (helper, hls) = prepared;
     let url = hls.master_url();
 
@@ -554,8 +650,9 @@ async fn stress_seek_abr_audio(
         .unwrap_or(usize::MAX);
         let mut buf = vec![0.0f32; chunk_samples];
 
-        let pure = wait_for_abr_switch(&mut audio, &mut buf, channels);
-        verify_post_switch_chunks(&mut audio, &mut buf, channels, pure);
+        let pure = wait_for_abr_switch(&mut audio, &mut buf, channels, true)
+            .expect("decoded saw has exact source geometry");
+        verify_post_switch_chunks(&mut audio, &mut buf, channels, Some(pure));
 
         let segments: f64 = consts::SEGMENT_COUNT.as_();
         let total_secs = audio

@@ -10,6 +10,10 @@ description = "Cross-platform primitives (sync, time, thread) for native and was
 keywords = ["platform", "wasm", "sync", "audio", "primitives"]
 categories = ["wasm", "concurrency"]
 
+[package.metadata.kithara.wasm-lib-tests]
+default-features = true
+features = []
+
 [features]
 # Virtual monotonic clock for fast, deterministic offline playback tests.
 # OFF by default and referenced by no shipping crate, so production builds are
