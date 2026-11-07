@@ -170,6 +170,38 @@ fn multichannel_biquad_rejects_a_shape_it_was_not_built_for() {
 }
 
 #[kithara::test(native)]
+fn multichannel_biquad_keeps_a_finite_prefix_before_a_future_nan() {
+    let mut filter =
+        MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
+    filter
+        .set_section(0, [1.0, 0.0, 0.0, -0.5, 0.0])
+        .expect("one section");
+    let mut plane = vec![1.0, 0.0, f32::NAN, 1.0e-10, 1.0];
+    filter
+        .process(&mut [plane.as_mut_slice()], 0..5)
+        .expect("whole stream");
+    assert_eq!(bits([plane[0], plane[1]]), bits([1.0, 0.5]));
+    assert!(plane[2..].iter().all(|sample| sample.is_nan()));
+}
+
+#[kithara::test(native)]
+fn multichannel_biquad_refuses_the_entire_shape_without_advancing_history() {
+    let mut filter =
+        MultichannelBiquad::new(NonZeroUsize::MIN.saturating_add(1), NonZeroUsize::MIN)
+            .expect("native setup");
+    filter
+        .set_section(0, [1.0, 0.0, 0.0, -0.5, 0.0])
+        .expect("one section");
+    let mut short = [vec![1.0, 0.0, 0.0], vec![0.0]];
+    let before = short.clone();
+    assert_eq!(filter.process(&mut short, 0..3), Err(BiquadError::Shape));
+    assert_eq!(short, before);
+    let mut probe = [vec![0.0; 3], vec![0.0; 3]];
+    filter.process(&mut probe, 0..3).expect("complete planes");
+    assert_eq!(probe, [vec![0.0; 3], vec![0.0; 3]]);
+}
+
+#[kithara::test(native)]
 fn max_magnitude_reads_the_largest_absolute_value() {
     assert_eq!(
         max_magnitude_f32(&[0.5, -2.0, 1.0]).to_bits(),
