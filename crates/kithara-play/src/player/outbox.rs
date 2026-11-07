@@ -138,7 +138,9 @@ impl<'a, S> Outbox<'a, S> {
         self.session = Some((suspended_at, bus, blocks));
         self
     }
+}
 
+impl<'a, S> Outbox<'a, S> {
     pub fn mix(
         &mut self,
         at: When<SessionFrame>,
@@ -256,7 +258,9 @@ impl<'a, S> Outbox<'a, S> {
         let layout = kithara_effects::eq::EqLayout::new(&config, bands, rate)?;
         self.eq(vec![DeckEqChange::Layout(Box::new(layout))])
     }
+}
 
+impl<'a, S> Outbox<'a, S> {
     pub fn notify_interruption(&mut self, kind: InterruptionKind) -> Result<bool, PlayError> {
         let (suspended_at, bus, blocks) = self.session.as_mut().ok_or(PlayError::NotReady)?;
         if matches!(kind, InterruptionKind::Began) {
