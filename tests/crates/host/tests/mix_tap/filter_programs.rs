@@ -58,7 +58,12 @@ async fn loaded_filter_source(source: String) -> (OfflinePlayer, Underruns) {
     (harness, underruns)
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(
+    tokio,
+    tracing(
+        "warn,kithara_render_probe=trace,kithara_worker_probe=trace,kithara_test::host_rate_telemetry=info"
+    )
+)]
 #[case::inside_callback(0)]
 #[case::callback_edge(47)]
 async fn public_filter_curves_takeover_reset_and_clear_reach_the_host(#[case] phase: u64) {
@@ -70,6 +75,8 @@ async fn public_filter_curves_takeover_reset_and_clear_reach_the_host(#[case] ph
     assert_eq!(harness.metrics().underruns(), 0);
     let warm = render_effect_window(&harness, 4096).await;
     assert_eq!(&warm[warm.len() - 128..], &[0.5; 128]);
+    underruns.checkpoint(harness.metrics(), true, "Filter warmup before construction");
+    assert_eq!(harness.metrics().underruns(), 0);
     let actual_rate = harness.host().spec().await.sample_rate;
     assert_eq!(actual_rate.get(), SAMPLE_RATE);
     let settings = FilterSettings::builder()
