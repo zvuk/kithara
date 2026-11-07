@@ -1,6 +1,6 @@
 use std::{
     num::{NonZeroU32, NonZeroUsize},
-    ops::{DerefMut, Range, RangeInclusive},
+    ops::{DerefMut, Range},
 };
 
 use kithara_bufpool::{HasPool, PoolError, SampleBuffer};
@@ -11,7 +11,7 @@ use kithara_dsp::{
 };
 use kithara_signal::AudioSpec;
 
-use super::{FilterConfig, FilterParameter, FilterSettings, FilterSettingsChange};
+use super::{FilterConfig, FilterSettings, FilterSettingsChange};
 use crate::consts;
 
 /// Why a filter's numerical state or pooled scratch could not be prepared.
@@ -121,64 +121,6 @@ impl FilterEffect {
 }
 
 impl FilterEffect {
-    /// Advance the parameter clock while an exhausted filter has no audio input.
-    pub fn advance(&mut self, frames: usize) {
-        for _ in 0..frames {
-            if self.settled() {
-                break;
-            }
-            self.advance_parameters();
-        }
-    }
-
-    /// The current manual value and its admitted target, in the field's units.
-    #[must_use]
-    pub fn value_range(&self, field: FilterParameter) -> RangeInclusive<f64> {
-        let (current, target) = match field {
-            FilterParameter::CutoffHz => (
-                self.cutoff.current_value(),
-                f64::from(self.settings.cutoff_hz()),
-            ),
-            FilterParameter::Q => (self.q.current_value(), f64::from(self.settings.q())),
-            FilterParameter::GainDb => (
-                self.gain.current_value(),
-                f64::from(f32::from(self.settings.gain_db())),
-            ),
-        };
-        current.min(target)..=current.max(target)
-    }
-
-    /// Admit the combined trajectories at an output rate without changing history.
-    /// # Errors
-    /// Refuses a nonfinite, unordered, out-of-range or unstable continuous parameter box.
-    pub fn admit_trajectory(
-        &self,
-        rate: NonZeroU32,
-        ranges: &[RangeInclusive<f64>; 3],
-    ) -> Result<(), FilterError> {
-        let current = [
-            self.cutoff.current_value(),
-            self.q.current_value(),
-            self.gain.current_value(),
-        ];
-        let mut bounds = [[0.0; 2]; 3];
-        for field in FilterParameter::ALL {
-            let index = field.index();
-            let range = &ranges[index];
-            if range.is_empty() {
-                return Err(FilterError::Parameters);
-            }
-            bounds[index] = [*range.start(), *range.end()];
-            for value in [*range.start(), *range.end()] {
-                let admitted = field.change(value).ok_or(FilterError::Parameters)?.value();
-                bounds[index][0] = bounds[index][0].min(admitted).min(current[index]);
-                bounds[index][1] = bounds[index][1].max(admitted).max(current[index]);
-            }
-        }
-        self.settings
-            .admit_ranges(f64::from(rate.get()), bounds[0], bounds[1], bounds[2])
-    }
-
     /// Apply one manual target while preserving every other parameter's trajectory.
     /// # Errors
     /// Refuses a contextual design or smoothing box before changing state.
@@ -224,37 +166,6 @@ impl FilterEffect {
         self.gain = gain;
         Ok(())
     }
-
-    /// Apply an already prepared trajectory point without another smoothing pass.
-    /// # Errors
-    /// Refuses an invalid contextual point without changing state.
-    pub fn set_explicit(&mut self, change: FilterSettingsChange) -> Result<(), FilterError> {
-        let mut settings = self.settings;
-        settings.apply_change(change);
-        let rate = self.spec.sample_rate;
-        let coefficients = settings.coefficients(f64::from(rate.get()))?;
-        settings.admit_smoothing(
-            f64::from(rate.get()),
-            self.cutoff.current_value(),
-            self.q.current_value(),
-            self.gain.current_value(),
-        )?;
-        let (mut cutoff, mut q, mut gain) = (self.cutoff, self.q, self.gain);
-        let point = |value| SmoothedParam64::new(value, 0.0, SmootherConfig::default(), rate);
-        match change {
-            FilterSettingsChange::CutoffHz(value) => cutoff = point(f64::from(value)),
-            FilterSettingsChange::Q(value) => q = point(f64::from(value)),
-            FilterSettingsChange::GainDb(value) => gain = point(f64::from(f32::from(value))),
-        }
-        self.filter.retune(0, coefficients)?;
-        self.settings = settings;
-        self.target_coefficients = coefficients;
-        self.cutoff = cutoff;
-        self.q = q;
-        self.gain = gain;
-        Ok(())
-    }
-
     /// Retune the resident filter at a new rate without allocating or resetting history.
     /// # Errors
     /// Refuses an unrepresentable design before changing the prepared rate or state.
@@ -291,13 +202,6 @@ impl FilterEffect {
         self.spec = AudioSpec::new(self.spec.channels, rate);
         Ok(())
     }
-
-    /// Whether this filter is already prepared for the exact format.
-    #[must_use]
-    pub fn accepts_spec(&self, spec: AudioSpec) -> bool {
-        self.spec == spec
-    }
-
     /// Filter a validated range of every plane in place.
     /// # Errors
     /// Refuses a mismatched or incomplete plane range before advancing parameters or history.
@@ -324,13 +228,6 @@ impl FilterEffect {
         }
         Ok(())
     }
-
-    /// Whether the existing retirement rule has exhausted the filter's tail.
-    #[must_use]
-    pub fn tail_exhausted(&self) -> bool {
-        self.filter.is_reset()
-    }
-
     /// Clear filter history and finish the current manual targets.
     pub fn reset(&mut self) {
         self.filter

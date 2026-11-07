@@ -21,8 +21,7 @@ audio, own player or session state, or reach the network.
 
 `filter::FilterEffect` prepares causal high-pass, low-pass and shelf responses
 with pooled planar scratch and retained DSP-owned biquad history. Manual cutoff
-and Q changes use the shared smoothing law in f64; explicit parameter points
-apply without another smoothing pass. Construction and buffer acquisition belong
+and Q changes use the shared smoothing law in f64. Construction and buffer acquisition belong
 outside audio processing. Reset clears history and completes manual targets.
 
 ## Usage
