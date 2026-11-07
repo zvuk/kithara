@@ -126,7 +126,7 @@ pub(super) fn main(shutdown: CancelToken) -> AppResult {
     }
 
     let host = pools::host(
-        HostConfig::builder()
+        HostConfig::builder(config.worker.pools().clone())
             .settings(
                 HostSettings::builder()
                     .maybe_sample_rate(config.sample_rate)

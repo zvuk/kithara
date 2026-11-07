@@ -9,11 +9,11 @@ use kithara_play::{
 use tracing::{debug, trace, warn};
 
 use super::{
-    protocol::{HostMailbox, SessionError, SessionSampleRate},
-    state::SessionState,
+    protocol::{HostMailbox, SessionError, SessionSampleRate, StartStreamFn},
+    state::{SessionState, SessionStream},
     transport::{self, RouteRestartStatus},
 };
-use crate::{DeckId, HostOwner, HostSettled};
+use crate::{DeckId, HostOwner, HostSettled, consts};
 
 pub(crate) fn run_host_cmd<S, O: HostOwner<S>>(
     owner: &mut O,
@@ -218,7 +218,7 @@ pub(super) fn restart_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(),
         return Ok(());
     }
     let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-    let stream = (state.start_stream_fn)(fw_ctx, sample_rate).map_err(SessionError::StreamStart)?;
+    let stream = start_stream(&mut state.start_stream_fn, fw_ctx, sample_rate)?;
     state.stream = Some(stream);
     state.reserved_session_grid = None;
     state.stream_needs_restart = false;
@@ -229,6 +229,28 @@ pub(super) fn restart_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(),
         "[KITHARA-ROUTE] firewheel stream restart complete"
     );
     Ok(())
+}
+
+/// Starts the output on `ctx` at `sample_rate` and refuses a stream the device
+/// runs faster than [`consts::MAX_SAMPLE_RATE`]: the output chain holds its
+/// lookahead for no faster rate, so that stream stops before the session counts
+/// on it.
+pub(super) fn start_stream<T>(
+    start: &mut StartStreamFn<T>,
+    ctx: &mut FirewheelContext,
+    sample_rate: u32,
+) -> Result<SessionStream<T>, SessionError> {
+    let stream = start(ctx, sample_rate).map_err(SessionError::StreamStart)?;
+    if let Some(info) = ctx.stream_info()
+        && info.sample_rate > consts::MAX_SAMPLE_RATE
+    {
+        return Err(SessionError::StreamStart(format!(
+            "the output runs at {} Hz, above the {} Hz a session serves",
+            info.sample_rate,
+            consts::MAX_SAMPLE_RATE
+        )));
+    }
+    Ok(stream)
 }
 
 pub(super) fn trace_stream_info<T, S>(state: &SessionState<T, S>, context: &'static str) {

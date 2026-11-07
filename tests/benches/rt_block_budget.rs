@@ -273,7 +273,7 @@ async fn processor(count: usize, lane: Lane) -> BenchMixer {
         ..StreamInfo::default()
     };
     let mut state = None;
-    let limiter = LimiterNode::new(LimiterConfig::default())
+    let limiter = LimiterNode::new(LimiterConfig::default(), shape.sample_rate, pools)
         .construct_processor(
             &EmptyConfig,
             ConstructProcessorContext::new(NodeID::DANGLING, &stream, &mut state),

@@ -1,3 +1,5 @@
+use core::num::NonZeroUsize;
+
 use biquad::Coefficients;
 use kithara_dsp::param::{MIN_SETTLE_RATIO, SmootherConfig};
 
@@ -34,6 +36,9 @@ pub(crate) const DB_LOG_BASE: f32 = 10.0;
 /// Milliseconds per second: the release time arrives in ms, the coefficient
 /// is computed in samples.
 pub(crate) const MS_PER_SEC: f32 = 1000.0;
+
+/// Channels the limiter node carries.
+pub(crate) const STEREO: NonZeroUsize = NonZeroUsize::new(2).expect("invariant: 2 is non-zero");
 
 #[cfg(test)]
 pub(crate) const CEILING: f32 = 0.98;

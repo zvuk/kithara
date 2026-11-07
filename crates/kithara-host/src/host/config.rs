@@ -1,14 +1,11 @@
-use std::{
-    marker::PhantomData,
-    num::{NonZeroU16, NonZeroU32, NonZeroUsize},
-};
+use std::num::{NonZeroU16, NonZeroU32, NonZeroUsize};
 
+use kithara_bufpool::PoolRegion;
 use kithara_command::{ChannelConfig, ScopedConfig};
 use kithara_effects::LimiterConfig;
 use kithara_render::rt::DeckMixerConfig;
 #[cfg(feature = "offline")]
 use {
-    kithara_bufpool::PoolRegion,
     kithara_platform::time::Duration,
     kithara_worker::{DispatcherConfig, TaskConfig, WorkerConfig},
 };
@@ -16,12 +13,14 @@ use {
 use crate::{HostSettings, consts};
 
 /// Configuration for the shared output session owned by `Host`.
-#[cfg_attr(not(feature = "offline"), derive_where::derive_where(Clone, Copy))]
+#[cfg_attr(not(feature = "offline"), derive_where::derive_where(Clone))]
 #[non_exhaustive]
 pub enum HostConfig<S> {
     /// Device-backed platform session.
     #[non_exhaustive]
     Realtime {
+        /// Typed pool the session output chain takes its storage from.
+        pools: PoolRegion<S>,
         /// Optional native output callback-size override. `None` preserves the backend default.
         output_block_frames: Option<NonZeroU32>,
         /// Maximum simultaneously open or closing deck scopes. Default: 8.
@@ -34,7 +33,6 @@ pub enum HostConfig<S> {
         limiter: LimiterConfig,
         /// Settings the Host starts with; they change while it runs.
         settings: HostSettings,
-        marker: PhantomData<fn() -> S>,
     },
     /// Device-free finite renderer.
     #[cfg(feature = "offline")]
@@ -76,6 +74,7 @@ impl<S> HostConfig<S> {
         start_fn(name = builder, vis = "pub")
     )]
     fn new(
+        #[builder(start_fn)] pools: PoolRegion<S>,
         output_block_frames: Option<NonZeroU32>,
         #[builder(default = consts::MAX_DECKS)] max_decks: NonZeroU16,
         #[builder(default = consts::DECK_CAPACITY)] deck_capacity: NonZeroUsize,
@@ -84,13 +83,13 @@ impl<S> HostConfig<S> {
         #[builder(default)] settings: HostSettings,
     ) -> Self {
         Self::Realtime {
+            pools,
             output_block_frames,
             max_decks,
             deck_capacity,
             max_deck_slots,
             limiter,
             settings,
-            marker: PhantomData,
         }
     }
 

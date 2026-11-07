@@ -5,7 +5,7 @@ pub(crate) fn spawn<S, O>(
     view: RootView,
     output_block_frames: Option<NonZeroU32>,
     channel_config: kithara_command::ScopedConfig,
-    output: SessionOutput,
+    output: SessionOutput<S>,
     settings: Live<HostSettings, HostProtocol>,
     layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
 ) -> Arc<SessionClient<O::Command>>

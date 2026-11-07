@@ -111,7 +111,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let owner = OffThread::spawn("cpal-seek-host", move || {
-        let mut host = Host::new(HostConfig::builder().build())?;
+        let mut host = Host::new(HostConfig::builder(worker.pools().clone()).build())?;
         let player = kithara::play::ResourcePrep::builder()
             .worker(worker)
             .build();

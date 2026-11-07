@@ -213,7 +213,7 @@ async fn live_web_audio_plays_at_session_rate() {
     init_diagnostics();
 
     let host: Host<TestPools> = Host::new(
-        HostConfig::builder()
+        HostConfig::builder(pools())
             .settings(HostSettings::builder().sample_rate(RATE).build())
             .build(),
     )
@@ -502,7 +502,7 @@ async fn two_decks_in_one_host_follow_the_crossfader() {
     init_diagnostics();
 
     let host: Host<TestPools> = Host::new(
-        HostConfig::builder()
+        HostConfig::builder(pools())
             .settings(HostSettings::builder().sample_rate(RATE).build())
             .build(),
     )
