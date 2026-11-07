@@ -109,7 +109,7 @@ impl<E: SessionInbox> DeckMixer<E> {
                 recycle: vec![0; slots.get()],
                 declick_frames,
                 evict_frames,
-                render: RenderPass::new(pools, shape, mix.gain(), config)?,
+                render: RenderPass::new(pools, shape, config)?,
                 mix,
                 events,
                 metrics: RtMetrics::default(),
@@ -487,6 +487,7 @@ impl Deck {
                 sounded = true;
             }
         }
+        sounded |= self.render.ringing();
         if sounded {
             self.render
                 .finish(&mut left[range.clone()], &mut right[range]);
