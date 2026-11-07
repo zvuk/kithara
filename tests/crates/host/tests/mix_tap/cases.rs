@@ -156,7 +156,7 @@ async fn deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
 #[kithara::test(
     tokio,
     tracing(
-        "kithara_render_probe=trace,kithara_decode_probe=trace,kithara_audio_probe=trace,kithara_test::host_rate_telemetry=info"
+        "kithara_render_probe=trace,kithara_decode_probe=trace,kithara_audio_probe=trace,kithara_test::host_rate_telemetry=info,host_rate_feed_intervals=info"
     )
 )]
 async fn nonblocking_deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
@@ -201,7 +201,7 @@ async fn trace_native_feeds() {
             let syscall = read("syscall");
             let wchan = read("wchan");
             tracing::info!(
-                target: "kithara_test::host_rate_telemetry",
+                target: "host_rate_feed_intervals",
                 sample,
                 read_start_ns,
                 elapsed_ns = started.elapsed().as_nanos(),
@@ -214,7 +214,7 @@ async fn trace_native_feeds() {
         time::sleep(Duration::from_millis(2)).await;
     }
     tracing::info!(
-        target: "kithara_test::host_rate_telemetry",
+        target: "host_rate_feed_intervals",
         "native feed interval snapshot limit reached"
     );
 }
