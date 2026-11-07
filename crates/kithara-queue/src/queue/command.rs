@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_bufpool::HasPool;
 use kithara_command::{Mailbox, Postbox, Seq, When};
 use kithara_config::LiveConfig;
@@ -601,7 +603,15 @@ where
             });
         }
         let prep = self.config.prep.as_ref().ok_or(PlayError::NotReady)?;
-        out.eq_layout(prep.worker.pools(), bands, self.config.mixer.sample_rate())
+        let rate = NonZeroU32::new(
+            out.pass()
+                .ok_or(PlayError::NotReady)?
+                .output
+                .sample_rate
+                .output(),
+        )
+        .ok_or(PlayError::NotReady)?;
+        out.eq_layout(prep.worker.pools(), bands, rate)
     }
 }
 

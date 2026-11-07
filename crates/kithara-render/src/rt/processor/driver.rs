@@ -1,6 +1,9 @@
 use firewheel::{
     StreamInfo,
-    node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
+    node::{
+        AudioNodeProcessor, NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx,
+        ProcessStatus,
+    },
 };
 
 use super::{DeckMixer, offline::OfflineProcessor};
@@ -12,6 +15,13 @@ pub(in crate::rt) enum PlayerProcessor<E: SessionInbox> {
 }
 
 impl<E: SessionInbox> AudioNodeProcessor for PlayerProcessor<E> {
+    fn prepare_new_stream(&mut self, info: &StreamInfo) -> Result<(), NodeError> {
+        match self {
+            Self::Native(mixer) => mixer.prepare_new_stream(info),
+            Self::Offline(processor) => processor.prepare_new_stream(info),
+        }
+    }
+
     fn new_stream(&mut self, info: &StreamInfo, context: &mut ProcStreamCtx) {
         match self {
             Self::Native(mixer) => mixer.new_stream(info, context),

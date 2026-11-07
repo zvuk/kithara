@@ -62,6 +62,9 @@ rustflags = [
 # Cargo also applies these pins when a tool builds an external manifest from
 # this workspace, including the temporary consumer used by semver-checks.
 [patch.crates-io]
+firewheel = { git = "https://github.com/gerasim13/Firewheel", rev = "a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9" }
+firewheel-core = { git = "https://github.com/gerasim13/Firewheel", rev = "a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9" }
+firewheel-graph = { git = "https://github.com/gerasim13/Firewheel", rev = "a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9" }
 # wasmtimer replaces the unmaintained pin-utils projection dependency.
 wasmtimer = { git = "https://github.com/gerasim13/wasmtimer-rs", rev = "c5d137cead6335f9398226a1af55ae75bad30d60" }
 # Worklet and worker imports share the same origin-wide bootstrap admission.

@@ -76,5 +76,7 @@ interval peaks and release recursion belong to `kithara-dsp`; effects owns its
 tap design, ceiling, channel linking and per-frame sanitization policy.
 `LimiterConfig` takes checked `Ceiling` (0.001..=1.0) and `ReleaseMs`
 (1..=5000 ms) values; their defaults are 0.98 and 50 ms.
+The reusable crossover state lives in `kithara-dsp::filter::Crossover`; EQ owns gain smoothing and layout transitions.
+Layout construction and rate preparation return `eq::EqError`, preserving pool and filter design failures.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-effects) for detailed contracts, invariants, and internals.

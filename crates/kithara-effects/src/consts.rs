@@ -1,16 +1,6 @@
-use biquad::Coefficients;
 use kithara_dsp::param::{MIN_SETTLE_RATIO, SmootherConfig};
 
-pub(crate) const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
-pub(crate) const NYQUIST_FACTOR: f32 = 2.0;
-
-pub(crate) const PASSTHROUGH: Coefficients<f32> = Coefficients {
-    a1: 0.0,
-    a2: 0.0,
-    b0: 1.0,
-    b1: 0.0,
-    b2: 0.0,
-};
+pub(crate) const EQ_BLOCK_FRAMES: usize = 256;
 
 pub(crate) const BAND_MAX_FREQ: f32 = 18000.0;
 pub(crate) const BAND_MIN_FREQ: f32 = 60.0;

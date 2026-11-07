@@ -724,7 +724,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-time",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2564,7 +2564,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2730,8 +2730,7 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 [[package]]
 name = "firewheel"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1270d1a20d0143ffcf76432d15085c79043dcb8d0bb5b6af9e9480c941eee6bf"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "firewheel-core",
  "firewheel-cpal",
@@ -2745,8 +2744,7 @@ dependencies = [
 [[package]]
 name = "firewheel-core"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a51e33f3ade070d0da6ea87ff385d32e7d5f073a74449fbbda1e8549201eaf2"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "arrayvec",
  "audioadapter",
@@ -2774,8 +2772,7 @@ dependencies = [
 [[package]]
 name = "firewheel-cpal"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f085db5567eb2059643de90f37eff03c572a405571e6ae088935089337e0e248"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "audioadapter-buffers",
  "bevy_platform",
@@ -2790,8 +2787,7 @@ dependencies = [
 [[package]]
 name = "firewheel-graph"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b01684a0dcdbb5d2c7c543a96f5194174fb0e0b49ffab3f01552aa97e337805"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "arrayvec",
  "audioadapter",
@@ -2812,8 +2808,7 @@ dependencies = [
 [[package]]
 name = "firewheel-macros"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6e6da6e4ad09849a0a46790a37a555e621be74de43c1e3ef3ecc588bac4c61f"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "bevy_macro_utils",
  "proc-macro2",
@@ -2825,8 +2820,7 @@ dependencies = [
 [[package]]
 name = "firewheel-nodes"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3cff45842650fee713bea9a2e6cada1a96e393895073aad3ee453acb0e26073"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "bevy_ecs",
  "bevy_platform",
@@ -2839,8 +2833,7 @@ dependencies = [
 [[package]]
 name = "firewheel-rtaudio"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6c6e3ee75d88ad0dda1be16f849cee579dda70b69f2c3003f0a81eb5e455060"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "audioadapter-buffers",
  "bevy_platform",
@@ -2854,8 +2847,7 @@ dependencies = [
 [[package]]
 name = "firewheel-symphonium"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2188ec2f3039775663fda4cdef93a83b3feebca49a0d6c0c18097e81cdf06a75"
+source = "git+https://github.com/gerasim13/Firewheel?rev=a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9#a7f247b423ad14a1a2b8dc6ce63f6e3e3f73dca9"
 dependencies = [
  "bevy_platform",
  "firewheel-core",
@@ -3916,7 +3908,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.58.0",
 ]
 
 [[package]]
@@ -4342,7 +4334,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5239,7 +5231,6 @@ version = "0.0.1-alpha5"
 dependencies = [
  "arrayvec",
  "assert_no_alloc",
- "biquad",
  "bon",
  "delegate",
  "derive-where",
@@ -5976,6 +5967,7 @@ dependencies = [
  "kithara-decode",
  "kithara-derive",
  "kithara-download",
+ "kithara-effects",
  "kithara-events",
  "kithara-host",
  "kithara-net",
@@ -6046,6 +6038,7 @@ dependencies = [
 name = "kithara-render"
 version = "0.0.1-alpha5"
 dependencies = [
+ "audioadapter-buffers",
  "bon",
  "delegate",
  "derive-where",
@@ -7457,7 +7450,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8702,7 +8695,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9499,7 +9492,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9556,7 +9549,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -10542,10 +10535,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -12505,7 +12498,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

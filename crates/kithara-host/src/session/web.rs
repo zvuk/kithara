@@ -86,7 +86,7 @@ where
         output,
         settings,
         channel_config,
-        |ctx, rate| {
+        |ctx, rate, _decks| {
             start_stream_web_audio(ctx, rate)
                 .map(|backend| SessionStream::Realtime { _backend: backend })
         },

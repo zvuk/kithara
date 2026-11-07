@@ -1,19 +1,21 @@
 use core::{fmt, num::NonZeroU32};
 
-use kithara_bufpool::{HasPool, PoolError};
+use kithara_bufpool::HasPool;
 use kithara_dsp::{
     fade::FadeCurve,
+    filter::FilterError,
     param::{Mix, MixDSP},
 };
 
-use super::{EqBandConfig, EqConfig, IsolatorEq};
-use crate::GainDb;
+use super::{EqBandConfig, EqConfig, EqError, IsolatorEq};
+use crate::{GainDb, consts::EQ_BLOCK_FRAMES};
 
 /// One band layout built for both channels of a stereo signal. It is built off the audio
 /// thread, so taking it in allocates nothing there.
 pub struct EqLayout {
     pub(super) left: IsolatorEq,
     right: IsolatorEq,
+    prepared_rate: Option<NonZeroU32>,
 }
 
 impl EqLayout {
@@ -21,19 +23,19 @@ impl EqLayout {
     ///
     /// # Errors
     ///
-    /// Returns [`PoolError`] when the region cannot hand out the crossover filter states and
-    /// the gain banks the two isolators run on.
+    /// Returns [`EqError`] for an invalid crossover design or exhausted pool.
     pub fn new<S>(
         config: &EqConfig<S>,
         bands: &[EqBandConfig],
         sample_rate: NonZeroU32,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, EqError>
     where
         S: HasPool<f32>,
     {
         Ok(Self {
             left: IsolatorEq::new(config, bands, sample_rate.get())?,
             right: IsolatorEq::new(config, bands, sample_rate.get())?,
+            prepared_rate: None,
         })
     }
 
@@ -49,9 +51,30 @@ impl EqLayout {
         }
     }
 
-    fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        self.left.update_sample_rate(sample_rate.get());
-        self.right.update_sample_rate(sample_rate.get());
+    /// Stages both channels without changing filter history or gain targets.
+    ///
+    /// # Errors
+    /// Refuses an unsupported design and invalidates previous preparation.
+    pub fn prepare_sample_rate(&mut self, sample_rate: NonZeroU32) -> Result<(), FilterError> {
+        self.prepared_rate = None;
+        self.left.prepare_sample_rate(sample_rate.get())?;
+        self.right.prepare_sample_rate(sample_rate.get())?;
+        self.prepared_rate = Some(sample_rate);
+        Ok(())
+    }
+
+    fn update_sample_rate(&mut self, sample_rate: NonZeroU32) -> Result<(), FilterError> {
+        if self.prepared_rate != Some(sample_rate) {
+            self.prepare_sample_rate(sample_rate)?;
+        }
+        self.apply_sample_rate(sample_rate);
+        Ok(())
+    }
+
+    fn apply_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        self.prepared_rate = None;
+        self.left.apply_sample_rate(sample_rate);
+        self.right.apply_sample_rate(sample_rate);
     }
 }
 
@@ -86,6 +109,7 @@ pub struct StereoEq {
     update: Option<LayoutUpdate>,
     pub(super) crossover: MixDSP,
     sample_rate: NonZeroU32,
+    prepared_rate: Option<NonZeroU32>,
 }
 
 impl StereoEq {
@@ -103,28 +127,40 @@ impl StereoEq {
                 sample_rate,
             ),
             sample_rate,
+            prepared_rate: None,
         }
     }
 
     /// A stereo EQ sounding `layout` immediately, without an initial crossover.
-    #[must_use]
+    ///
+    /// # Errors
+    /// Returns the design error and unchanged owning layout if its retune is refused.
     pub fn with_layout<S>(
         config: &EqConfig<S>,
         sample_rate: NonZeroU32,
         mut layout: Box<EqLayout>,
-    ) -> Self {
-        layout.update_sample_rate(sample_rate);
-        Self {
+    ) -> Result<Self, (FilterError, Box<EqLayout>)> {
+        if let Err(error) = layout.update_sample_rate(sample_rate) {
+            return Err((error, layout));
+        }
+        Ok(Self {
             active: Some(layout),
             ..Self::new(config, sample_rate)
-        }
+        })
     }
 
-    /// Takes `layout`, retuned to this EQ's rate, to cross over to once the crossover in
-    /// progress settles, and hands back the layout it displaces: one still waiting, or the one
-    /// the last crossover retired. Nothing it held is freed here.
-    pub fn take_layout(&mut self, mut layout: Box<EqLayout>) -> Option<Box<EqLayout>> {
-        layout.update_sample_rate(self.sample_rate);
+    /// Takes a layout already prepared for this equaliser's sample rate.
+    ///
+    /// # Panics
+    /// The layout must have passed preparation for the current rate.
+    pub fn take_prepared_layout(&mut self, mut layout: Box<EqLayout>) -> Option<Box<EqLayout>> {
+        assert_eq!(
+            layout.prepared_rate,
+            Some(self.sample_rate),
+            "layout preparation precedes batch mutation"
+        );
+        layout.apply_sample_rate(self.sample_rate);
+        self.prepared_rate = None;
         self.update
             .replace(LayoutUpdate::Pending(layout))
             .map(LayoutUpdate::into_inner)
@@ -159,20 +195,47 @@ impl StereoEq {
         layout.band_count()
     }
 
-    /// Retunes every layout this EQ holds, and its crossover, to `sample_rate`.
-    pub fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
+    /// Stages both channels of every retained layout without changing sounding state.
+    ///
+    /// # Errors
+    /// Refuses an unsupported design and invalidates any earlier preparation.
+    pub fn prepare_sample_rate(&mut self, sample_rate: NonZeroU32) -> Result<(), FilterError> {
+        self.prepared_rate = None;
+        for layout in self.retained_layouts() {
+            layout.prepare_sample_rate(sample_rate)?;
+        }
+        self.prepared_rate = Some(sample_rate);
+        Ok(())
+    }
+
+    /// Discards pending coefficients without changing sounding state or layout ownership.
+    pub fn discard_prepared_sample_rate(&mut self) {
+        self.prepared_rate = None;
+    }
+
+    /// Consumes the prepared rate once, with no factory calls or allocation.
+    /// Returns `None` without mutation after refusal or when no preparation remains.
+    pub fn apply_prepared_sample_rate(&mut self) -> Option<NonZeroU32> {
+        let sample_rate = self.prepared_rate.take()?;
+        for layout in self.retained_layouts() {
+            layout.apply_sample_rate(sample_rate);
+        }
         self.sample_rate = sample_rate;
         self.crossover.update_sample_rate(sample_rate);
-        let pending = match &mut self.update {
-            Some(LayoutUpdate::Pending(layout)) => Some(layout),
-            _ => None,
-        };
-        for layout in [self.active.as_mut(), self.retiring.as_mut(), pending]
-            .into_iter()
-            .flatten()
-        {
-            layout.update_sample_rate(sample_rate);
-        }
+        Some(sample_rate)
+    }
+
+    fn retained_layouts(&mut self) -> impl Iterator<Item = &mut EqLayout> {
+        let update = self.update.as_mut().map(|update| match update {
+            LayoutUpdate::Pending(layout) | LayoutUpdate::Retired(layout) => layout.as_mut(),
+        });
+        [
+            self.active.as_deref_mut(),
+            self.retiring.as_deref_mut(),
+            update,
+        ]
+        .into_iter()
+        .flatten()
     }
 
     /// Runs both channels through the sounding layout in place, crossing over from the layout
@@ -215,27 +278,38 @@ fn render_stereo(
     left: &mut [f32],
     right: &mut [f32],
 ) {
-    for (left, right) in left.iter_mut().zip(right.iter_mut()) {
-        let (dry_left, dry_right) = (*left, *right);
-        let mut wet_left = [active.left.process_sample(dry_left)];
-        let mut wet_right = [active.right.process_sample(dry_right)];
-        if !crossover.has_settled() {
-            let (from_left, from_right) = match retiring.as_deref_mut() {
-                Some(retiring) => (
-                    retiring.left.process_sample(dry_left),
-                    retiring.right.process_sample(dry_right),
-                ),
-                None => (dry_left, dry_right),
-            };
-            crossover.mix_dry_into_wet_stereo(
-                &[from_left],
-                &[from_right],
-                &mut wet_left,
-                &mut wet_right,
-                1,
-            );
+    let frames = left.len().min(right.len());
+    let left = left.split_at_mut(frames).0;
+    let right = right.split_at_mut(frames).0;
+    for (left, right) in left
+        .chunks_mut(EQ_BLOCK_FRAMES)
+        .zip(right.chunks_mut(EQ_BLOCK_FRAMES))
+    {
+        let wet_left = active.left.process_block(left);
+        let wet_right = active.right.process_block(right);
+        for ((left, right), (wet_left, wet_right)) in left
+            .iter_mut()
+            .zip(right.iter_mut())
+            .zip(wet_left.iter_mut().zip(wet_right.iter_mut()))
+        {
+            if !crossover.has_settled() {
+                let (from_left, from_right) = match retiring.as_deref_mut() {
+                    Some(retiring) => (
+                        retiring.left.process_sample(*left),
+                        retiring.right.process_sample(*right),
+                    ),
+                    None => (*left, *right),
+                };
+                crossover.mix_dry_into_wet_stereo(
+                    &[from_left],
+                    &[from_right],
+                    std::slice::from_mut(wet_left),
+                    std::slice::from_mut(wet_right),
+                    1,
+                );
+            }
+            *left = *wet_left;
+            *right = *wet_right;
         }
-        *left = wet_left[0];
-        *right = wet_right[0];
     }
 }

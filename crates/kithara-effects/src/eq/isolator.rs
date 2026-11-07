@@ -1,23 +1,23 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{HasPool, PoolError};
+use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_dsp::{
     fade::FadeCurve,
+    filter::{Crossover, FilterError, Hertz},
     param::{Mix, MixDSP},
 };
 use kithara_signal::sanitize_sample;
 use num_traits::cast::AsPrimitive;
 
-use super::{EqBandConfig, EqConfig};
-use crate::{
-    GainDb,
-    dsp::{filter::CrossoverFilters, gain::GainBank},
-};
+use super::{EqBandConfig, EqConfig, EqError, gain::GainBank};
+use crate::{GainDb, consts::EQ_BLOCK_FRAMES};
 
 /// Single-channel isolator crossover EQ.
 #[non_exhaustive]
 pub struct IsolatorEq {
-    filters: CrossoverFilters,
+    filters: Crossover,
+    output: SampleBuffer,
+    gain_blocks: Vec<SampleBuffer>,
     gains: GainBank,
     bypass: MixDSP,
     silence: MixDSP,
@@ -28,17 +28,16 @@ impl IsolatorEq {
     ///
     /// # Errors
     ///
-    /// Returns [`PoolError`] when the region cannot hand out the crossover
-    /// filter states and the gain bank this isolator runs on.
+    /// Returns [`EqError`] for an invalid crossover design or exhausted pool.
     pub fn new<S>(
         config: &EqConfig<S>,
         bands: &[EqBandConfig],
         sample_rate: u32,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, EqError>
     where
         S: HasPool<f32>,
     {
-        let rate = NonZeroU32::new(sample_rate).unwrap_or(NonZeroU32::MIN);
+        let rate = NonZeroU32::new(sample_rate).ok_or(FilterError::Parameters)?;
         let bypass = if bands.iter().all(|band| band.gain_db() == GainDb::default()) {
             Mix::FULLY_DRY
         } else {
@@ -52,14 +51,23 @@ impl IsolatorEq {
         };
         let sample_rate: f32 = sample_rate.as_();
         let crossover_count = bands.len().saturating_sub(1);
-        let mut crossover_freqs = config.pools().get_with_len::<f32>(crossover_count)?;
-        for (frequency, pair) in crossover_freqs.iter_mut().zip(bands.windows(2)) {
-            *frequency = (pair[0].frequency() * pair[1].frequency()).sqrt();
+        let mut crossover_freqs = Vec::<Hertz<f32>>::with_capacity(crossover_count);
+        for pair in bands.windows(2) {
+            let frequency = (pair[0].frequency() * pair[1].frequency()).sqrt();
+            crossover_freqs.push(Hertz::from_hz(frequency).map_err(|_| FilterError::Parameters)?);
         }
+        let filters = Crossover::new(
+            &crossover_freqs,
+            Hertz::from_hz(sample_rate).map_err(|_| FilterError::Parameters)?,
+        )?;
         Ok(Self {
             bypass: MixDSP::new(bypass, FadeCurve::Linear, config.smoothing(), rate),
             silence: MixDSP::new(silence, FadeCurve::Linear, config.smoothing(), rate),
-            filters: CrossoverFilters::new(config.pools(), crossover_freqs, sample_rate)?,
+            filters,
+            output: config.pools().get_with_len::<f32>(EQ_BLOCK_FRAMES)?,
+            gain_blocks: (0..bands.len())
+                .map(|_| config.pools().get_with_len::<f32>(EQ_BLOCK_FRAMES))
+                .collect::<Result<_, _>>()?,
             gains: GainBank::new(
                 bands.iter().map(EqBandConfig::gain_db),
                 sample_rate,
@@ -68,18 +76,58 @@ impl IsolatorEq {
         })
     }
 
+    /// Processes one sample through the prepared EQ block.
+    ///
+    /// # Panics
+    /// Panics if the prepared output block is empty.
     #[inline]
     pub fn process_sample(&mut self, input: f32) -> f32 {
-        let input = sanitize_sample(input);
-        self.gains.tick();
-        let mut output = [match self.gains.len() {
-            0 => input,
-            1 => sanitize_sample(input * self.gains.linear(0)),
-            _ => sanitize_sample(self.filters.process(input, |band| self.gains.linear(band))),
-        }];
-        self.bypass.mix_dry_into_wet_mono(&[input], &mut output, 1);
-        self.silence.mix_dry_into_wet_mono(&[0.0], &mut output, 1);
-        sanitize_sample(output[0])
+        self.process_block(std::slice::from_ref(&input))
+            .first()
+            .copied()
+            .expect("construction reserves a nonempty output block")
+    }
+
+    /// Processes the common input/output prefix; the remaining output stays untouched.
+    pub fn process(&mut self, input: &[f32], output: &mut [f32]) -> usize {
+        let count = input.len().min(output.len());
+        let input = input.split_at(count).0;
+        let output = output.split_at_mut(count).0;
+        for (input, output) in input
+            .chunks(EQ_BLOCK_FRAMES)
+            .zip(output.chunks_mut(EQ_BLOCK_FRAMES))
+        {
+            output.copy_from_slice(self.process_block(input));
+        }
+        count
+    }
+
+    pub(super) fn process_block(&mut self, input: &[f32]) -> &mut [f32] {
+        let frames = input.len().min(self.output.len());
+        let output = self.output.split_at_mut(frames).0;
+        for (output, &input) in output.iter_mut().zip(input) {
+            *output = sanitize_sample(input);
+        }
+        self.gains.fill(&mut self.gain_blocks, frames);
+        match self.gain_blocks.as_slice() {
+            [] => {}
+            [gain] => {
+                for (output, gain) in output.iter_mut().zip(gain.iter()) {
+                    *output *= gain;
+                }
+            }
+            gains => {
+                self.filters.sum(output, gains);
+            }
+        }
+        for (output, &input) in output.iter_mut().zip(input) {
+            let dry = sanitize_sample(input);
+            let mut wet = [sanitize_sample(*output)];
+            self.bypass.mix_dry_into_wet_mono(&[dry], &mut wet, 1);
+            self.silence.mix_dry_into_wet_mono(&[0.0], &mut wet, 1);
+            *output = sanitize_sample(wet[0]);
+        }
+        output
     }
 
     pub fn reset(&mut self) {
@@ -120,13 +168,30 @@ impl IsolatorEq {
         );
     }
 
-    pub fn update_sample_rate(&mut self, sample_rate: u32) {
-        let rate = NonZeroU32::new(sample_rate).unwrap_or(NonZeroU32::MIN);
+    pub(super) fn prepare_sample_rate(&mut self, sample_rate: u32) -> Result<(), FilterError> {
+        let rate: f32 = sample_rate.as_();
+        self.filters
+            .prepare_sample_rate(Hertz::from_hz(rate).map_err(|_| FilterError::Parameters)?)
+    }
+
+    /// Retunes without allocation; a refused design preserves filters, gains and mix state.
+    ///
+    /// # Errors
+    /// Returns [`FilterError::Parameters`] when the rate cannot represent the crossovers.
+    pub fn update_sample_rate(&mut self, sample_rate: u32) -> Result<(), FilterError> {
+        let rate = NonZeroU32::new(sample_rate).ok_or(FilterError::Parameters)?;
+        self.prepare_sample_rate(sample_rate)?;
+        self.apply_sample_rate(rate);
+        Ok(())
+    }
+
+    pub(super) fn apply_sample_rate(&mut self, rate: NonZeroU32) {
+        let Some(sample_rate) = self.filters.apply_prepared_sample_rate() else {
+            return;
+        };
         self.bypass.update_sample_rate(rate);
         self.silence.update_sample_rate(rate);
-        let sample_rate = sample_rate.as_();
-        self.gains.update_sample_rate(sample_rate);
-        self.filters.update_sample_rate(sample_rate);
+        self.gains.update_sample_rate(sample_rate.hz());
     }
 
     delegate::delegate! {

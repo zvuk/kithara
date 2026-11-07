@@ -87,17 +87,18 @@ pub(super) fn mixer_without_declick() -> (TestMixer, TestEnds) {
 }
 
 #[kithara::test]
-fn a_constructed_deck_publishes_its_shape_before_any_rendered_block() {
-    let (_mixer, mut ends) = mixer();
+fn a_constructed_deck_retains_scope_state_until_its_first_render() {
+    let config = DeckMixerConfig::default();
+    let (mut mixer, mut ends) = mixer_with_config(config, 64);
+    let initial = crate::bridge::DeckSnapshot::new(config);
+    assert_eq!(*ends.deck.snapshot.read(), initial);
+    render(&mut mixer, 0);
     let snapshot = ends.deck.snapshot.read();
     assert_eq!(snapshot.sample_rate, RATE);
-    assert_eq!(snapshot.blocks, 0);
-    assert!(
-        snapshot
-            .slots
-            .iter()
-            .all(|slot| slot.state == SlotState::Empty)
-    );
+    assert_eq!(snapshot.blocks, 1);
+    assert_eq!(snapshot.slots, initial.slots);
+    assert_eq!(snapshot.eq, initial.eq);
+    assert_eq!(snapshot.metrics, initial.metrics);
 }
 
 #[kithara::test]

@@ -175,7 +175,9 @@ where
     let client = Arc::new(OfflineSessionClient::new(postbox, cmd_tx, route.clone()));
     let inbox: Arc<dyn DeckInbox> = client.clone();
     let factory = move |_| {
-        let start = move |ctx: &mut firewheel::FirewheelContext, rate: u32| {
+        let start = move |ctx: &mut firewheel::FirewheelContext,
+                          rate: u32,
+                          decks: &mut [crate::session::state::DeckNode]| {
             let rate = NonZeroU32::new(rate)
                 .ok_or_else(|| "offline sample rate must be non-zero".to_owned())?;
             let backend = BackendConfig::builder()
@@ -183,7 +185,7 @@ where
                 .declared_latency(declared_latency)
                 .sample_rate(rate)
                 .build();
-            OfflineStream::start(ctx, backend)
+            OfflineStream::start(ctx, backend, decks)
                 .map(|stream| SessionStream::Offline(Box::new(stream)))
                 .map_err(|error| error.to_string())
         };

@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::state::DeckNode;
 
 pub(crate) fn spawn<S, O>(
     root: HostRoot,
@@ -24,7 +25,7 @@ where
     });
     let inbox: Arc<dyn DeckInbox> = client.clone();
     spawn_named("host-deck-session", move || {
-        let start = move |ctx: &mut FirewheelContext, rate| {
+        let start = move |ctx: &mut FirewheelContext, rate: u32, _decks: &mut [DeckNode]| {
             start_stream_cpal(ctx, rate, output_block_frames).map(|backend| {
                 SessionStream::Realtime {
                     _backend: Box::new(backend),

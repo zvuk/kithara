@@ -13,7 +13,7 @@ use crate::{
 #[case(10)]
 fn an_initial_flat_layout_is_an_exact_identity_from_frame_zero(#[case] count: usize) {
     let config = EqConfig::builder(pools()).build();
-    let mut eq = StereoEq::with_layout(&config, TEST_RATE, layout(count));
+    let mut eq = StereoEq::with_layout(&config, TEST_RATE, layout(count)).expect("valid layout");
     let input = [0.5, -0.5, 2.0, -2.0, 0.0, 0.125];
     let mut left = input;
     let mut right = input;
@@ -40,6 +40,11 @@ fn a_layout_the_pool_cannot_afford_is_refused_where_it_is_built() {
     assert!(EqLayout::new(&config, &generate_log_spaced_bands(10), TEST_RATE).is_err());
 }
 
+fn take_layout(eq: &mut StereoEq, mut layout: Box<EqLayout>) -> Option<Box<EqLayout>> {
+    layout.prepare_sample_rate(TEST_RATE).expect("valid layout");
+    eq.take_prepared_layout(layout)
+}
+
 /// Crosses over to the waiting layout and lets the crossover settle.
 fn cross_over(eq: &mut StereoEq) {
     let (mut left, mut right) = ([0.5; 64], [0.5; 64]);
@@ -59,15 +64,19 @@ fn bands(layout: Option<Box<EqLayout>>) -> Option<usize> {
 fn a_layout_taken_hands_back_the_one_it_displaces() {
     let mut eq = StereoEq::new(&EqConfig::builder(pools()).build(), TEST_RATE);
 
-    assert_eq!(bands(eq.take_layout(layout(3))), None);
-    assert_eq!(bands(eq.take_layout(layout(4))), Some(3), "the waiting one");
+    assert_eq!(bands(take_layout(&mut eq, layout(3))), None);
+    assert_eq!(
+        bands(take_layout(&mut eq, layout(4))),
+        Some(3),
+        "the waiting one"
+    );
     cross_over(&mut eq);
-    assert_eq!(bands(eq.take_layout(layout(5))), None);
+    assert_eq!(bands(take_layout(&mut eq, layout(5))), None);
     cross_over(&mut eq);
-    assert_eq!(bands(eq.take_layout(layout(6))), None);
+    assert_eq!(bands(take_layout(&mut eq, layout(6))), None);
     cross_over(&mut eq);
     assert_eq!(
-        bands(eq.take_layout(layout(7))),
+        bands(take_layout(&mut eq, layout(7))),
         Some(4),
         "the one the last crossover retired"
     );
@@ -87,7 +96,8 @@ fn stereo_blocks_match_scalar_filters_through_gain_moves(#[case] count: usize) {
             &config,
             rate,
             Box::new(EqLayout::new(&config, &bands, rate).expect("stereo test layout")),
-        );
+        )
+        .expect("valid layout");
         let mut scalar_left = IsolatorEq::new(&config, &bands, rate.get()).expect("left filter");
         let mut scalar_right = IsolatorEq::new(&config, &bands, rate.get()).expect("right filter");
         for (block, frames) in [0, 1, 7, 127, 1024, 4096].into_iter().enumerate() {

@@ -81,6 +81,7 @@ pub(super) struct RouteLossError;
 pub(super) fn start_route_loss_stream(
     ctx: &mut FirewheelContext,
     sample_rate: u32,
+    decks: &mut [DeckNode],
 ) -> Result<SessionStream, String> {
     route_loss(|probe| probe.start_count.fetch_add(1, Ordering::SeqCst));
     if route_loss(|probe| probe.fail_next_start.swap(false, Ordering::SeqCst)) {
@@ -93,6 +94,7 @@ pub(super) fn start_route_loss_stream(
             .block_frames(NonZeroU32::new(512).expect("block"))
             .declared_latency(Duration::ZERO)
             .build(),
+        decks,
     )
     .map(|stream| SessionStream::Offline(Box::new(stream)))
     .map_err(|error| error.to_string())

@@ -169,7 +169,22 @@ impl OfflineStream {
     pub(in crate::session::offline) fn start(
         cx: &mut FirewheelContext,
         config: BackendConfig,
+        decks: &mut [DeckNode],
     ) -> Result<Self, OfflineSessionError> {
+        if cx.is_active() {
+            return Err(OfflineSessionError::Graph(
+                firewheel::error::ActivateError::AlreadyActive.to_string(),
+            ));
+        }
+        let shape = kithara_render::rt::StreamShape::new(config.block_frames, config.sample_rate);
+        for deck in decks
+            .iter_mut()
+            .filter(|deck| cx.node_info(deck.node).is_some())
+            .filter_map(|deck| deck.offline.as_mut())
+        {
+            deck.prepare_stream(shape)
+                .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
+        }
         let num_stream_out_channels =
             u32::try_from(CHANNELS).map_err(|_| OfflineSessionError::ChannelCountOverflow)?;
         let inbox = cx
@@ -187,6 +202,13 @@ impl OfflineStream {
                 input_to_output_latency_seconds: config.declared_latency.as_secs_f64(),
             })
             .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
+        for deck in decks
+            .iter_mut()
+            .filter(|deck| cx.node_info(deck.node).is_some())
+            .filter_map(|deck| deck.offline.as_mut())
+        {
+            deck.commit_stream();
+        }
         Ok(Self {
             inbox,
             processor: Box::new(processor),

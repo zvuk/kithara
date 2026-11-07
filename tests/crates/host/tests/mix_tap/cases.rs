@@ -44,7 +44,8 @@ async fn deck_eq_processes_the_crossfade_sum() {
         rate,
     )
     .expect("pool fits the reference layout");
-    let mut reference = StereoEq::with_layout(&config, rate, Box::new(layout));
+    let mut reference =
+        StereoEq::with_layout(&config, rate, Box::new(layout)).expect("valid reference layout");
     reference.set_gain(0, GainDb::MIN);
     let mut expected = Vec::with_capacity(flat.len());
     for block in flat.chunks(64 * 2) {

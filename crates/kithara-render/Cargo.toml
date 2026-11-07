@@ -79,6 +79,8 @@ kithara-stream = { workspace = true, default-features = false, features = ["mock
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["mock", "hang"] }
 kithara-worker = { workspace = true, features = ["mock"] }
+
+audioadapter-buffers = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

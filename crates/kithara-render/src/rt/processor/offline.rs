@@ -2,17 +2,20 @@ use std::num::NonZeroU32;
 
 use firewheel::{
     StreamInfo,
-    node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
+    node::{
+        AudioNodeProcessor, NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx,
+        ProcessStatus,
+    },
 };
 use kithara_command::ScopeId;
 use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
-    traits::{Consumer, Producer, Split},
+    traits::{Consumer, Observer, Producer, Split},
 };
 
-use super::DeckMixer;
+use super::{DeckMixer, StreamShape};
 use crate::bridge::SessionInbox;
 
 /// Sole owner of an offline mixer between complete graph turns.
@@ -32,6 +35,11 @@ pub enum OfflineDeckError {
     TurnInFlight,
     #[error("offline turn must fit its nonempty prepared PCM range")]
     InvalidFrames,
+    #[error("offline turn rate {provided} differs from admitted rate {admitted}")]
+    SampleRateMismatch {
+        provided: NonZeroU32,
+        admitted: NonZeroU32,
+    },
 }
 
 pub(in crate::rt) struct OfflineProcessor<E: SessionInbox> {
@@ -39,7 +47,6 @@ pub(in crate::rt) struct OfflineProcessor<E: SessionInbox> {
     to_owner: HeapProd<Box<DeckMixer<E>>>,
     from_owner: HeapCons<(Box<DeckMixer<E>>, usize)>,
     remaining: usize,
-    sample_rate: Option<NonZeroU32>,
 }
 
 impl<E: SessionInbox> OfflineDeck<E> {
@@ -59,9 +66,26 @@ impl<E: SessionInbox> OfflineDeck<E> {
                 to_owner,
                 from_owner,
                 remaining: 0,
-                sample_rate: None,
             },
         )
+    }
+
+    /// Prepares every session-owned mixer before activating an offline stream.
+    ///
+    /// # Errors
+    /// Returns the typed design or capacity refusal without changing sounding state.
+    pub fn prepare_stream(&mut self, shape: StreamShape) -> Result<(), NodeError> {
+        for mixer in self.mixer.iter_mut().chain(self.from_processor.iter_mut()) {
+            mixer.prepare_stream(shape)?;
+        }
+        Ok(())
+    }
+
+    /// Commits the preparation after the offline graph admits its stream.
+    pub fn commit_stream(&mut self) {
+        for mixer in self.mixer.iter_mut().chain(self.from_processor.iter_mut()) {
+            mixer.commit_stream();
+        }
     }
 
     /// Apply due deck commands and wait for opted-in PCM before graph processing.
@@ -80,7 +104,13 @@ impl<E: SessionInbox> OfflineDeck<E> {
         }
         self.acquire()?;
         let mixer = self.mixer.as_mut().ok_or(OfflineDeckError::MissingMixer)?;
-        let frames = mixer.prepare_offline(inbox.scope(self.scope), start, frames, sample_rate);
+        if mixer.deck.sample_rate != sample_rate {
+            return Err(OfflineDeckError::SampleRateMismatch {
+                provided: sample_rate,
+                admitted: mixer.deck.sample_rate,
+            });
+        }
+        let frames = mixer.prepare_offline(inbox.scope(self.scope), start, frames);
         self.prepared = Some(frames);
         Ok(frames)
     }
@@ -126,19 +156,41 @@ impl<E: SessionInbox> OfflineDeck<E> {
 }
 
 impl<E: SessionInbox> OfflineProcessor<E> {
-    pub(in crate::rt) fn install(
-        &mut self,
-        mixer: Box<DeckMixer<E>>,
-    ) -> Result<(), OfflineDeckError> {
-        self.to_owner
-            .try_push(mixer)
-            .map_err(|_| OfflineDeckError::TurnInFlight)
+    pub(in crate::rt) fn check_install(&self) -> Result<(), OfflineDeckError> {
+        if self.to_owner.is_full() {
+            return Err(OfflineDeckError::TurnInFlight);
+        }
+        Ok(())
+    }
+
+    /// The sole producer checked capacity before taking the constructor's inputs.
+    pub(in crate::rt) fn install(&mut self, mixer: Box<DeckMixer<E>>) {
+        assert!(
+            self.to_owner.try_push(mixer).is_ok(),
+            "reserved cold mixer handoff"
+        );
     }
 }
 
 impl<E: SessionInbox> AudioNodeProcessor for OfflineProcessor<E> {
-    fn new_stream(&mut self, info: &StreamInfo, _context: &mut ProcStreamCtx) {
-        self.sample_rate = Some(info.sample_rate);
+    fn prepare_new_stream(&mut self, info: &StreamInfo) -> Result<(), NodeError> {
+        let shape = StreamShape::new(info.max_block_frames, info.sample_rate);
+        if let Some(mixer) = self.mixer.as_mut() {
+            mixer.prepare_stream(shape)?;
+        }
+        for (mixer, _) in self.from_owner.iter_mut() {
+            mixer.prepare_stream(shape)?;
+        }
+        Ok(())
+    }
+
+    fn new_stream(&mut self, _info: &StreamInfo, _context: &mut ProcStreamCtx) {
+        if let Some(mixer) = self.mixer.as_mut() {
+            mixer.commit_stream();
+        }
+        for (mixer, _) in self.from_owner.iter_mut() {
+            mixer.commit_stream();
+        }
     }
 
     #[kithara::rtsan_forbid_blocking]
@@ -166,9 +218,6 @@ impl<E: SessionInbox> AudioNodeProcessor for OfflineProcessor<E> {
                 .try_error("offline graph exceeded its prepared turn");
             return ProcessStatus::ClearAllOutputs;
         };
-        if let Some(rate) = self.sample_rate {
-            mixer.update_sample_rate(rate);
-        }
         let status = mixer.process(info, buffers, extra);
         self.remaining = remaining;
         if remaining == 0
@@ -231,7 +280,6 @@ mod tests {
             mixer.inbox.0.scope(mixer.mixer.scope),
             SessionFrame::new(0),
             32,
-            rate,
         );
         assert_eq!(prepared, 32);
         assert!(
@@ -244,5 +292,110 @@ mod tests {
             ends.ring.receipt().is_none(),
             "only the graph may answer the batch"
         );
+    }
+    #[kithara::test]
+    #[case::queued_to_session(0)]
+    #[case::session_owned(1)]
+    #[case::queued_to_graph(2)]
+    #[case::graph_owned(3)]
+    fn every_offline_owner_prepares_before_rate_commit(#[case] location: usize) {
+        use firewheel::{
+            StreamInfo,
+            log::{RealtimeLoggerConfig, realtime_logger},
+            node::{AudioNodeProcessor, ProcStore, ProcStreamCtx},
+        };
+        use kithara_dsp::filter::FilterError;
+        use kithara_effects::eq::EqError;
+
+        use super::*;
+
+        fn rate<E: SessionInbox>(
+            owner: &OfflineDeck<E>,
+            processor: &OfflineProcessor<E>,
+        ) -> NonZeroU32 {
+            owner
+                .mixer
+                .as_ref()
+                .or_else(|| owner.from_processor.iter().next())
+                .or(processor.mixer.as_ref())
+                .map(|mixer| mixer.deck.sample_rate)
+                .or_else(|| {
+                    processor
+                        .from_owner
+                        .iter()
+                        .next()
+                        .map(|(mixer, _)| mixer.deck.sample_rate)
+                })
+                .expect("one actual owner retains the mixer")
+        }
+
+        let (fixture, _ends) = mixer();
+        let initial = fixture.mixer.deck.sample_rate;
+        let (mut owner, mut processor) = OfflineDeck::channel(fixture.mixer.scope);
+        processor.check_install().expect("vacant initial handoff");
+        processor.install(Box::new(fixture.mixer));
+        if location >= 1 {
+            owner.end_render().expect("session acquires its mixer");
+        }
+        if location >= 2 {
+            owner.prepared = Some(1);
+            owner.begin_render(1).expect("graph turn handoff");
+        }
+        if location >= 3 {
+            let (mixer, frames) = processor
+                .from_owner
+                .try_pop()
+                .expect("graph acquires its mixer");
+            processor.mixer = Some(mixer);
+            processor.remaining = frames;
+        }
+        let descriptor = |sample_rate| StreamInfo {
+            sample_rate,
+            sample_rate_recip: f64::from(sample_rate.get()).recip(),
+            prev_sample_rate: initial,
+            max_block_frames: NonZeroU32::new(512).expect("prepared capacity"),
+            ..StreamInfo::default()
+        };
+        let refused = descriptor(NonZeroU32::new(12_000).expect("refused rate"));
+        let error = if location < 2 {
+            owner.prepare_stream(StreamShape::new(
+                refused.max_block_frames,
+                refused.sample_rate,
+            ))
+        } else {
+            processor.prepare_new_stream(&refused)
+        }
+        .expect_err("the same EQ refusal reaches every owning location");
+        assert!(matches!(
+            error.0.downcast_ref::<EqError>(),
+            Some(EqError::Filter(FilterError::Parameters))
+        ));
+        assert_eq!(rate(&owner, &processor), initial);
+        let admitted = descriptor(NonZeroU32::new(48_000).expect("admitted rate"));
+        if location < 2 {
+            owner
+                .prepare_stream(StreamShape::new(
+                    admitted.max_block_frames,
+                    admitted.sample_rate,
+                ))
+                .expect("prepare");
+        } else {
+            processor.prepare_new_stream(&admitted).expect("prepare");
+        }
+        assert_eq!(rate(&owner, &processor), initial);
+        let mut store = ProcStore::with_capacity(1);
+        let (mut logger, _events) = realtime_logger(RealtimeLoggerConfig::default());
+        if location < 2 {
+            owner.commit_stream();
+        } else {
+            processor.new_stream(
+                &admitted,
+                &mut ProcStreamCtx {
+                    store: &mut store,
+                    logger: &mut logger,
+                },
+            );
+        }
+        assert_eq!(rate(&owner, &processor), admitted.sample_rate);
     }
 }

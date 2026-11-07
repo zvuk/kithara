@@ -288,7 +288,9 @@ impl<T, S> SessionState<T, S> {
         start_stream_fn: F,
     ) -> Self
     where
-        F: FnMut(&mut FirewheelContext, u32) -> Result<SessionStream<T>, String> + Send + 'static,
+        F: FnMut(&mut FirewheelContext, u32, &mut [DeckNode]) -> Result<SessionStream<T>, String>
+            + Send
+            + 'static,
     {
         let grid_id = root.id();
         let mut generation = SessionGridGeneration::new(grid_id);
@@ -452,7 +454,7 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
             return Err(SessionError::Graph(error.into()));
         }
     };
-    let stream = match (state.start_stream_fn)(&mut ctx, sample_rate) {
+    let stream = match (state.start_stream_fn)(&mut ctx, sample_rate, &mut state.deck_nodes) {
         Ok(stream) => stream,
         Err(error) => {
             state.reserved_session_grid = Some(session_grid);

@@ -5,7 +5,11 @@ use kithara_play::PlayError;
 pub(crate) use kithara_play::{SessionError, SessionSampleRate};
 
 pub(crate) type StartStreamFn<T> = Box<
-    dyn FnMut(&mut FirewheelContext, u32) -> Result<super::state::SessionStream<T>, String>
+    dyn FnMut(
+            &mut FirewheelContext,
+            u32,
+            &mut [super::state::DeckNode],
+        ) -> Result<super::state::SessionStream<T>, String>
         + Send
         + 'static,
 >;
