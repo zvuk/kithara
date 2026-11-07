@@ -133,10 +133,10 @@ fn biquad_coeffs(filter: Type<f32>, freq: f32, sample_rate: f32) -> Coefficients
 
 #[cfg(test)]
 mod tests {
-    use biquad::Type;
+    use biquad::{Biquad, Type};
     use kithara_test_utils::kithara;
 
-    use super::{CrossoverFilters, biquad_coeffs};
+    use super::{CrossoverFilters, Section, biquad_coeffs};
     use crate::test_pools::pools;
 
     #[kithara::test]
@@ -162,7 +162,7 @@ mod tests {
             let mut scratch = vec![0.0; crossovers];
             let levels = [0.25, -0.5, 0.75, -1.0, 0.0, f32::MIN_POSITIVE, -0.0];
             let gains = [0.0, 1.0, -0.75, 2.0, 0.125];
-            for frame in 0..20_000 {
+            for frame in 0..24_096 {
                 if frame == 512 {
                     actual.reset();
                     reference.reset();
@@ -171,7 +171,7 @@ mod tests {
                     actual.update_sample_rate(96_000.0);
                     reference.update_sample_rate(96_000.0);
                 }
-                let input = if frame < 4096 {
+                let input = if !(4096..20_000).contains(&frame) {
                     levels[frame % levels.len()]
                 } else {
                     0.0
@@ -195,8 +195,8 @@ mod tests {
     ) -> f32 {
         let mut high = input;
         for (index, low) in scratch.iter_mut().enumerate() {
-            *low = filters.lowpass[index].process(high);
-            high = filters.highpass[index].process(high);
+            *low = original_lr4(&mut filters.lowpass[index], high);
+            high = original_lr4(&mut filters.highpass[index], high);
         }
         let mut output = 0.0;
         let mut start = 0;
@@ -204,12 +204,26 @@ mod tests {
             let mut band = low;
             let end = start + scratch.len().saturating_sub(index + 1);
             for filter in &mut filters.allpass[start..end] {
-                band = filter.run(band);
+                band = original_section(filter, band);
             }
             start = end;
             output = band.mul_add(gains(index), output);
         }
         high.mul_add(gains(scratch.len()), output)
+    }
+
+    fn original_section(section: &mut Section, input: f32) -> f32 {
+        let out = section.0.run(input);
+        if out.is_subnormal() && input.abs() < f32::MIN_POSITIVE {
+            section.0.reset_state();
+            return 0.0;
+        }
+        out
+    }
+
+    fn original_lr4(filter: &mut super::Lr4, input: f32) -> f32 {
+        let first = original_section(&mut filter.first, input);
+        original_section(&mut filter.second, first)
     }
 
     #[kithara::test]
