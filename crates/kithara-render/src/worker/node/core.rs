@@ -375,6 +375,14 @@ where
                 return TickResult::Progress;
             }
             TrackStep::Blocked(reason) => {
+                tracing::trace!(
+                    target: "render_refill",
+                    probe = "source_blocked",
+                    reason = ?reason,
+                    segment = self.source.cursor().segment.get(),
+                    lane_frame = self.source.cursor().frame,
+                    forward_full = self.port.forward.is_full(),
+                );
                 if self.port.forward.is_full() {
                     return TickResult::Backpressured;
                 }
