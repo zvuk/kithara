@@ -160,7 +160,63 @@ async fn deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
     )
 )]
 async fn nonblocking_deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
+    #[cfg(not(any(feature = "flash", feature = "no-block", rtsan)))]
+    let sampling = kithara::platform::tokio::task::spawn(trace_native_feeds());
     deck_eq_format_change(false).await;
+    #[cfg(not(any(feature = "flash", feature = "no-block", rtsan)))]
+    {
+        sampling.abort();
+        let _ = sampling.await;
+    }
+}
+
+#[cfg(not(any(feature = "flash", feature = "no-block", rtsan)))]
+async fn trace_native_feeds() {
+    use std::fs;
+
+    use kithara::platform::time::{self, Duration, WallInstant};
+
+    let started = WallInstant::now();
+    for sample in 0..1024 {
+        let Ok(tasks) = fs::read_dir("/proc/self/task") else {
+            return;
+        };
+        for task in tasks.take(128).flatten() {
+            let path = task.path();
+            let Ok(name) = fs::read_to_string(path.join("comm")) else {
+                continue;
+            };
+            if !name.starts_with("kithara-play-") && !name.starts_with("kithara-native-") {
+                continue;
+            }
+            let read = |field| {
+                fs::read_to_string(path.join(field)).map_or_else(
+                    |error| format!("unavailable: {error}"),
+                    |value| value.trim().to_owned(),
+                )
+            };
+            let read_start_ns = started.elapsed().as_nanos();
+            let stat = read("stat");
+            let schedstat = read("schedstat");
+            let syscall = read("syscall");
+            let wchan = read("wchan");
+            tracing::info!(
+                target: "kithara_test::host_rate_telemetry",
+                sample,
+                read_start_ns,
+                elapsed_ns = started.elapsed().as_nanos(),
+                tid = %task.file_name().to_string_lossy(),
+                thread = name.trim(),
+                stat, schedstat, syscall, wchan,
+                "native feed interval snapshot"
+            );
+        }
+        time::sleep(Duration::from_millis(2)).await;
+    }
+    tracing::info!(
+        target: "kithara_test::host_rate_telemetry",
+        "native feed interval snapshot limit reached"
+    );
 }
 
 async fn deck_eq_format_change(block_on_underrun: bool) {
