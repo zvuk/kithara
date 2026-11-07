@@ -13,8 +13,7 @@ use crate::{
 
 /// Cascaded biquad sections applied in place to channel planes.
 ///
-/// Sections start as identity. The state carries over between calls, so a
-/// stream split into any chunks yields the same samples. Two consecutive
+/// Sections start as identity and retain history between calls. Two consecutive
 /// stream frames whose input and output both stay at or below `1e-9` reset
 /// the state, so silence never decays into denormals.
 pub struct Biquad {
@@ -189,7 +188,6 @@ impl Biquad {
         self.reset_state = source.reset_state;
         Ok(())
     }
-
     /// Whether construction, reset or quiet retirement left no residual history.
     #[must_use]
     pub fn is_reset(&self) -> bool {
