@@ -1036,6 +1036,7 @@ impl DecodedRecorder {
                         incoming = ?info,
                         previous_samples = samples.len(),
                         incoming_samples = pcm.len(),
+                        first_pcm_mismatch = ?samples.iter().zip(pcm.iter()).position(|(previous, incoming)| previous != incoming),
                         "decoder observation has conflicting source chunks"
                     );
                 }
