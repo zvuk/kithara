@@ -1,7 +1,5 @@
-use std::ops::RangeInclusive;
-
 use kithara_command::{Due, LevelInbox, Seq};
-use kithara_effects::filter::{FilterParameter, FilterSettingsChange};
+use kithara_effects::filter::{FilterMotion, FilterParameter, FilterSettingsChange};
 use kithara_signal::SessionFrame;
 
 use super::{
@@ -141,7 +139,7 @@ impl Deck {
         &self,
         due: &mut Due<'_, DeckProtocol>,
     ) -> Result<Option<FilterSettingsChange>, DeckRefusal> {
-        let (field, range) = match due.commands() {
+        let field = match due.commands() {
             [
                 DeckPart::FilterProgram {
                     authority, program, ..
@@ -161,14 +159,14 @@ impl Deck {
                 if active > EqGainProgram::MAX_ACTIVE {
                     return Err(DeckRefusal::FilterProgramCapacity);
                 }
-                (field, program.curve().value_range())
+                field
             }
             [
                 DeckPart::Filter {
                     change: DeckFilterChange::Configure(value),
                     ..
                 },
-            ] => (FilterParameter::of(*value), value.value()..=value.value()),
+            ] => FilterParameter::of(*value),
             [
                 DeckPart::Filter {
                     change: DeckFilterChange::Install(filter),
@@ -201,22 +199,18 @@ impl Deck {
             }
             _ => unreachable!("single Filter admission"),
         };
-        let (ranges, takeover) = self.filter_ranges_at(due, field, range)?;
-        self.render.admit_filter_ranges(self.sample_rate, &ranges)?;
+        let (motions, takeover) = self.filter_motions_at(due, field)?;
+        self.render
+            .admit_filter_motions(self.sample_rate, &motions)?;
         Ok(takeover)
     }
 
-    fn filter_ranges_at(
+    fn filter_motions_at(
         &self,
         due: &mut Due<'_, DeckProtocol>,
         addressed: FilterParameter,
-        range: RangeInclusive<f64>,
-    ) -> Result<([RangeInclusive<f64>; 3], Option<FilterSettingsChange>), DeckRefusal> {
-        let mut ranges = self
-            .render
-            .filter_ranges()
-            .ok_or(DeckRefusal::FilterShape)?;
-        ranges[addressed.index()] = range;
+    ) -> Result<([FilterMotion; 3], Option<FilterSettingsChange>), DeckRefusal> {
+        let mut motions = self.render.filter_motions(self.sample_rate)?;
         let at = due.at();
         let mut takeover = None;
         for field in FilterParameter::ALL {
@@ -227,16 +221,28 @@ impl Deck {
             let program = program_in(due.committed_mut(seq).expect("active Filter batch"), field)
                 .expect("active Filter program");
             if field != addressed {
-                ranges[field.index()] = program.curve().value_range();
+                motions[field.index()] = program
+                    .motion_after(at, self.sample_rate)
+                    .map_err(DeckRefusal::Filter)?;
             } else if matches!(state.program, ProgramState::Running(_)) {
-                let point = program.change_at(at);
-                let range = &ranges[field.index()];
-                ranges[field.index()] =
-                    (*range.start()).min(point.value())..=(*range.end()).max(point.value());
-                takeover = Some(point);
+                takeover = Some(program.change_at(at));
             }
         }
-        Ok((ranges, takeover))
+        motions[addressed.index()] = match due.commands() {
+            [DeckPart::FilterProgram { program, .. }] => program
+                .motion_after(at, self.sample_rate)
+                .map_err(DeckRefusal::Filter)?,
+            [
+                DeckPart::Filter {
+                    change: DeckFilterChange::Configure(change),
+                    ..
+                },
+            ] => self
+                .render
+                .filter_change_motion(self.sample_rate, *change, takeover)?,
+            _ => unreachable!("parameter motion admission"),
+        };
+        Ok((motions, takeover))
     }
 
     fn cancel_filter(

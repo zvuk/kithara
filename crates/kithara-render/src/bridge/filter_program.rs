@@ -1,4 +1,6 @@
-use kithara_effects::filter::{FilterParameter, FilterSettingsChange};
+use std::num::NonZeroU32;
+
+use kithara_effects::filter::{FilterError, FilterMotion, FilterParameter, FilterSettingsChange};
 use kithara_signal::SessionFrame;
 
 use super::{ParameterCurve, ParameterCurveError, ParameterKnot};
@@ -33,10 +35,6 @@ impl FilterProgram {
         self.parameter
     }
 
-    pub(crate) fn curve(&self) -> &ParameterCurve {
-        &self.curve
-    }
-
     delegate::delegate! {
         to self.curve {
             #[must_use]
@@ -44,6 +42,53 @@ impl FilterProgram {
             #[must_use]
             pub fn end(&self) -> SessionFrame;
         }
+    }
+
+    pub(crate) fn motion_after(
+        &self,
+        at: SessionFrame,
+        rate: NonZeroU32,
+    ) -> Result<FilterMotion, FilterError> {
+        let elapsed = at
+            .frames_since(self.start())
+            .ok_or(FilterError::Parameters)?;
+        let initial = self.change_at(at).value();
+        let mut previous = initial;
+        let (mut low, mut high) = (initial, initial);
+        let mut shape = self.curve.shape_at(elapsed);
+        let (mut frame, mut changing) = (0_u64, 0_u64);
+        let mut variation = 0.0;
+        for (next, raw, next_shape) in self.curve.remaining_points(elapsed) {
+            let value = self
+                .parameter
+                .change(raw)
+                .ok_or(FilterError::Parameters)?
+                .value();
+            if value != previous {
+                variation += FilterMotion::distance(self.parameter, rate, previous, value)?;
+                let changes = if shape == super::CurveShape::HOLD {
+                    1
+                } else {
+                    next - frame
+                };
+                changing = changing
+                    .checked_add(changes)
+                    .ok_or(FilterError::Parameters)?;
+            }
+            low = low.min(value);
+            high = high.max(value);
+            (frame, previous, shape) = (next, value, next_shape);
+        }
+        let frames = frame.checked_add(1).ok_or(FilterError::Parameters)?;
+        FilterMotion::new(
+            self.parameter,
+            rate,
+            low..=high,
+            initial,
+            variation,
+            frames,
+            changing,
+        )
     }
 
     pub(crate) fn change_at(&self, at: SessionFrame) -> FilterSettingsChange {

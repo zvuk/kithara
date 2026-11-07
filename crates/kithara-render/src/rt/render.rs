@@ -1,4 +1,4 @@
-use std::{num::NonZeroU32, ops::RangeInclusive};
+use std::num::NonZeroU32;
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_command::{ScopeId, Seq};
@@ -7,7 +7,7 @@ use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 use kithara_effects::{
     DeckEffect, FxParamChange, GainDb,
     eq::{EqConfig, EqLayout, StereoEq, generate_log_spaced_bands},
-    filter::{FilterEffect, FilterParameter, FilterSettings, FilterSettingsChange, PrepareError},
+    filter::{FilterEffect, FilterMotion, FilterSettings, FilterSettingsChange, PrepareError},
 };
 use kithara_signal::{AudioSpec, SessionEpoch, SessionFrame};
 
@@ -231,11 +231,12 @@ impl RenderPass {
             if filter.accepts_spec(AudioSpec::new(2, rate)) {
                 return Ok(());
             }
-            let mut ranges = FilterParameter::ALL.map(|field| filter.value_range(field));
+            let mut motions = filter.motions(rate)?;
             for program in curves.iter().flatten() {
-                ranges[program.parameter().index()] = program.curve().value_range();
+                motions[program.parameter().index()] =
+                    program.motion_after(program.start(), rate)?;
             }
-            filter.admit_trajectory(rate, &ranges)?;
+            filter.admit_trajectory(rate, &motions)?;
             filter.update_sample_rate(rate)?;
         }
         Ok(())
@@ -247,15 +248,34 @@ impl RenderPass {
             .is_some_and(|filter| filter.accepts_spec(AudioSpec::new(2, rate)))
     }
 
-    pub(crate) fn filter_ranges(&self) -> Option<[RangeInclusive<f64>; 3]> {
-        let filter = self.filter.as_ref()?;
-        Some(FilterParameter::ALL.map(|field| filter.value_range(field)))
-    }
-
-    pub(crate) fn admit_filter_ranges(
+    pub(crate) fn filter_motions(
         &self,
         rate: NonZeroU32,
-        ranges: &[RangeInclusive<f64>; 3],
+    ) -> Result<[FilterMotion; 3], DeckRefusal> {
+        self.filter
+            .as_ref()
+            .ok_or(DeckRefusal::FilterShape)?
+            .motions(rate)
+            .map_err(DeckRefusal::Filter)
+    }
+
+    pub(crate) fn filter_change_motion(
+        &self,
+        rate: NonZeroU32,
+        change: FilterSettingsChange,
+        prior: Option<FilterSettingsChange>,
+    ) -> Result<FilterMotion, DeckRefusal> {
+        self.filter
+            .as_ref()
+            .ok_or(DeckRefusal::FilterShape)?
+            .change_motion(rate, change, prior)
+            .map_err(DeckRefusal::Filter)
+    }
+
+    pub(crate) fn admit_filter_motions(
+        &self,
+        rate: NonZeroU32,
+        motions: &[FilterMotion; 3],
     ) -> Result<(), DeckRefusal> {
         let filter = self
             .filter
@@ -263,7 +283,7 @@ impl RenderPass {
             .filter(|filter| filter.accepts_spec(AudioSpec::new(2, rate)))
             .ok_or(DeckRefusal::FilterShape)?;
         filter
-            .admit_trajectory(rate, ranges)
+            .admit_trajectory(rate, motions)
             .map_err(DeckRefusal::Filter)
     }
 

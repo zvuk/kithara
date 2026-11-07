@@ -7,8 +7,8 @@ use kithara_dsp::filter::{Biquad, Coefficients, FilterError, Hertz, Type};
 use kithara_effects::{
     GainDb,
     filter::{
-        Cutoff, FilterConfig, FilterEffect, FilterSettings, FilterSettingsChange, Kind,
-        PrepareError, Q,
+        Cutoff, FilterConfig, FilterEffect, FilterMotion, FilterParameter, FilterSettings,
+        FilterSettingsChange, Kind, PrepareError, Q,
     },
 };
 use kithara_signal::AudioSpec;
@@ -712,8 +712,45 @@ fn admitted_switching_keeps_normalized_pcm_finite_or_refuses_before_mutation() {
         processed(effect, 1, &[1.0]).expect("retained history");
     }
     let before = *filter.config();
-    let ranges = [20.0..=11_025.0, 10.0..=10.0, 0.0..=0.0];
-    if let Err(error) = filter.admit_trajectory(spec(1).sample_rate, &ranges) {
+    let motions = [
+        FilterMotion::new(
+            FilterParameter::CutoffHz,
+            spec(1).sample_rate,
+            20.0..=11_025.0,
+            20.0,
+            63.0 * FilterMotion::distance(
+                FilterParameter::CutoffHz,
+                spec(1).sample_rate,
+                20.0,
+                11_025.0,
+            )
+            .expect("cutoff travel"),
+            552 * 32,
+            63,
+        )
+        .expect("exact HOLD path"),
+        FilterMotion::new(
+            FilterParameter::Q,
+            spec(1).sample_rate,
+            10.0..=10.0,
+            10.0,
+            0.0,
+            0,
+            0,
+        )
+        .expect("held Q"),
+        FilterMotion::new(
+            FilterParameter::GainDb,
+            spec(1).sample_rate,
+            0.0..=0.0,
+            0.0,
+            0.0,
+            0,
+            0,
+        )
+        .expect("held gain"),
+    ];
+    if let Err(error) = filter.admit_trajectory(spec(1).sample_rate, &motions) {
         assert_eq!(error, FilterError::Parameters);
         assert_eq!(*filter.config(), before);
         assert_eq!(
@@ -741,4 +778,112 @@ fn admitted_switching_keeps_normalized_pcm_finite_or_refuses_before_mutation() {
             "nonfinite accepted PCM at frame{frame}"
         );
     }
+}
+
+#[kithara::test]
+fn ordinary_sweep_admission_preserves_the_sounding_filter() {
+    let pools = pools();
+    let config = FilterConfig::builder(pools)
+        .kind(Kind::LowPass)
+        .cutoff_hz(Cutoff::checked(200.0).expect("cutoff"))
+        .q(Q::MAX)
+        .build()
+        .expect("settings");
+    let mut filter = FilterEffect::new(spec(1), config.clone()).expect("filter");
+    let mut reference = FilterEffect::new(spec(1), config).expect("reference");
+    for effect in [&mut filter, &mut reference] {
+        processed(effect, 1, &[1.0; 7]).expect("retained history");
+    }
+    let rate = spec(1).sample_rate;
+    let mut motions = filter.motions(rate).expect("held fields");
+    motions[FilterParameter::CutoffHz.index()] = FilterMotion::new(
+        FilterParameter::CutoffHz,
+        rate,
+        200.0..=800.0,
+        200.0,
+        FilterMotion::distance(FilterParameter::CutoffHz, rate, 200.0, 800.0)
+            .expect("cutoff travel"),
+        44_101,
+        44_100,
+    )
+    .expect("one-second logarithmic sweep");
+    let before = *filter.config();
+    filter
+        .admit_trajectory(rate, &motions)
+        .expect("ordinary sweep");
+    assert_eq!(*filter.config(), before);
+    assert_eq!(
+        processed(&mut filter, 1, &[1.0; 7]).expect("admission continuation"),
+        processed(&mut reference, 1, &[1.0; 7]).expect("unchanged continuation")
+    );
+}
+
+#[kithara::test]
+fn equal_parameter_extrema_do_not_erase_trajectory_travel() {
+    let pools = pools();
+    let config = FilterConfig::builder(pools)
+        .kind(Kind::LowPass)
+        .cutoff_hz(Cutoff::MIN)
+        .q(Q::MAX)
+        .build()
+        .expect("settings");
+    let filter = FilterEffect::new(spec(1), config).expect("filter");
+    let travel = FilterMotion::distance(
+        FilterParameter::CutoffHz,
+        spec(1).sample_rate,
+        20.0,
+        11_025.0,
+    )
+    .expect("cutoff travel");
+    let mut motions = [
+        FilterMotion::new(
+            FilterParameter::CutoffHz,
+            spec(1).sample_rate,
+            20.0..=11_025.0,
+            20.0,
+            travel,
+            552 * 32,
+            1,
+        )
+        .expect("one jump"),
+        FilterMotion::new(
+            FilterParameter::Q,
+            spec(1).sample_rate,
+            10.0..=10.0,
+            10.0,
+            0.0,
+            0,
+            0,
+        )
+        .expect("Q"),
+        FilterMotion::new(
+            FilterParameter::GainDb,
+            spec(1).sample_rate,
+            0.0..=0.0,
+            0.0,
+            0.0,
+            0,
+            0,
+        )
+        .expect("gain"),
+    ];
+    assert!(
+        filter
+            .admit_trajectory(spec(1).sample_rate, &motions)
+            .is_ok()
+    );
+    motions[0] = FilterMotion::new(
+        FilterParameter::CutoffHz,
+        spec(1).sample_rate,
+        20.0..=11_025.0,
+        20.0,
+        63.0 * travel,
+        552 * 32,
+        63,
+    )
+    .expect("repeated jumps");
+    assert_eq!(
+        filter.admit_trajectory(spec(1).sample_rate, &motions),
+        Err(FilterError::Parameters)
+    );
 }

@@ -1,3 +1,4 @@
+use kithara_command::Target;
 use kithara_dsp::filter::{Biquad, Coefficients, Hertz, Type};
 use kithara_effects::filter::{
     Cutoff, FilterConfig, FilterEffect, FilterParameter, FilterSettingsChange, Kind, Q,
@@ -492,5 +493,11 @@ fn switched_high_q_trajectory_is_refused_or_keeps_normalized_pcm_finite() {
     }
     let replies = receipts(&mut ends);
     assert_applied_at(outcome_of(&replies, seq), origin);
-    assert_eq!(ends.deck.snapshot.read().metrics.underruns(), 0);
+    let snapshot = ends.deck.snapshot.read();
+    assert_eq!(snapshot.metrics.underruns(), 0);
+    assert_eq!(
+        snapshot.slots[A.index()].state,
+        SlotState::Playing,
+        "an accepted trajectory cannot hide nonfinite processing behind terminal silence"
+    );
 }
