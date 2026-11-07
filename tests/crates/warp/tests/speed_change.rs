@@ -6,12 +6,11 @@ use std::num::NonZeroU32;
 
 use kithara::{
     host::{
-        HostConfig, HostOwned, HostSettings, HostSettingsControl, MetronomeConfig,
-        MetronomeConfigControl, Tap,
+        HostConfig, HostSettings, HostSettingsControl, MetronomeConfig, MetronomeConfigControl, Tap,
     },
     platform::time::{self, Duration, Instant},
     play::{ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, Transition},
+    queue::Transition,
     warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
@@ -100,7 +99,7 @@ async fn playing_deck(
     temp_dir: &TestTempDir,
     backend: StretchKind,
     keylock: bool,
-) -> (OfflinePlayer, HostOwned<Queue<TestPools>>) {
+) -> OfflinePlayer {
     let harness = OfflinePlayer::with_options(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -115,14 +114,9 @@ async fn playing_deck(
         session(),
     )
     .await;
-    let queue = Queue::new(
-        QueueConfig::builder()
-            .prep(harness.resource_prep().clone())
-            .build(),
-    );
-    let queue = harness.insert(queue).await;
+    let queue = harness.player();
     harness
-        .run(queue.control(), |q| q.set_default_rate(START_SPEED))
+        .run(queue, |q| q.set_default_rate(START_SPEED))
         .await
         .expect("a finite rate is accepted");
     let path = rhythm_wav_deck_b_120bpm_48k()
@@ -136,20 +130,20 @@ async fn playing_deck(
     .build();
     let mut events = queue.subscribe();
     let id = harness
-        .run(queue.control(), move |q| q.append(config))
+        .run(queue, move |q| q.append(config))
         .await
         .expect("append the pulse track");
     let mut budget = Duration::ZERO;
     hang_park!(|remaining: Duration| budget = remaining.min(Duration::from_secs(5)));
-    let loaded = wait_for_loader_done_event(&mut events, &queue, id, budget).await;
+    let loaded = wait_for_loader_done_event(&mut events, queue, id, budget).await;
     hang_tick!();
     loaded.expect("load the pulse track");
     hang_reset!();
     harness
-        .run(queue.control(), move |q| q.select(id, Transition::None))
+        .run(queue, move |q| q.select(id, Transition::None))
         .await
         .expect("select the pulse track");
-    (harness, queue)
+    harness
 }
 
 /// Plays the deck at the device cadence and sends each change before its
@@ -160,7 +154,8 @@ async fn playing_deck(
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Take {
     let trace = usdt_trace::scope();
-    let (harness, queue) = playing_deck(temp_dir, backend, keylock).await;
+    let harness = playing_deck(temp_dir, backend, keylock).await;
+    let queue = harness.player();
     let mut master = harness
         .host()
         .attach_tap(Tap::Master, TOTAL_BLOCKS * BLOCK_FRAMES * CHANNELS)
@@ -186,7 +181,7 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
         if let Some((_, speed)) = CHANGES.iter().find(|(at, _)| *at == block) {
             let speed = *speed;
             harness
-                .run(queue.control(), move |q| q.set_rate(speed))
+                .run(queue, move |q| q.set_rate(speed))
                 .await
                 .expect("a finite rate is accepted");
             if let Some(recording) = recording.as_mut() {
@@ -194,6 +189,14 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
             }
         }
         if block == WARMUP_BLOCKS {
+            let current = queue.current().expect("sounding queue item").id;
+            assert!(
+                harness.deck_snapshot().slots.iter().any(|slot| {
+                    slot.binding
+                        .is_some_and(|binding| binding.item() == current)
+                }),
+                "underrun metrics observe the sounding queue"
+            );
             warmed = Some(harness.metrics().underruns());
         }
         let started = Instant::now();
@@ -212,7 +215,6 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
         .saturating_sub(warmed.expect("the capture outlasts the warmup"));
     assert_eq!(master.drops(), 0, "the master tap keeps every frame");
     let master = master.drain();
-    drop(queue);
     let mut budget = Duration::ZERO;
     hang_park!(|remaining| budget = remaining);
     time::timeout(budget, harness.close())

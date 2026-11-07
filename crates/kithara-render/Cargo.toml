@@ -71,13 +71,13 @@ hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-assets = { workspace = true }
-kithara-audio = { workspace = true, default-features = false, features = ["mock"] }
+kithara-audio = { workspace = true, default-features = false, features = ["mock", "usdt"] }
 kithara-beat = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
 kithara-render = { path = ".", default-features = false, features = ["mock", "usdt"] }
 kithara-stream = { workspace = true, default-features = false, features = ["mock"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["mock", "hang"] }
+kithara-test-utils = { workspace = true, features = ["mock", "hang", "temp-dir"] }
 kithara-worker = { workspace = true, features = ["mock"] }
 unimock = { workspace = true }
 
