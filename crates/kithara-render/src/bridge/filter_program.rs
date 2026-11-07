@@ -52,18 +52,14 @@ impl FilterProgram {
         let elapsed = at
             .frames_since(self.start())
             .ok_or(FilterError::Parameters)?;
-        let initial = self.change_at(at).value();
+        let initial = f64::from(self.change_at(at));
         let mut previous = initial;
         let (mut low, mut high) = (initial, initial);
         let mut shape = self.curve.shape_at(elapsed);
         let (mut frame, mut changing) = (0_u64, 0_u64);
         let mut variation = 0.0;
         for (next, raw, next_shape) in self.curve.remaining_points(elapsed) {
-            let value = self
-                .parameter
-                .change(raw)
-                .ok_or(FilterError::Parameters)?
-                .value();
+            let value = f64::from(self.parameter.change(raw).ok_or(FilterError::Parameters)?);
             if value != previous {
                 variation += FilterMotion::distance(self.parameter, rate, previous, value)?;
                 let changes = if shape == super::CurveShape::HOLD {
@@ -142,7 +138,7 @@ mod tests {
                 ParameterKnot::new(SessionFrame::new(10), value, CurveShape::HOLD).expect("point");
             let program = FilterProgram::new(field, vec![knot]).expect("program");
             assert_eq!(
-                program.change_at(SessionFrame::new(10)).value().to_bits(),
+                f64::from(program.change_at(SessionFrame::new(10))).to_bits(),
                 value.to_bits()
             );
         }
@@ -166,7 +162,10 @@ mod tests {
             )
             .expect("program");
             for (frame, value) in [(10, left), (18, midpoint), (26, right), (40, right)] {
-                assert_eq!(program.change_at(SessionFrame::new(frame)).value(), value);
+                assert_eq!(
+                    f64::from(program.change_at(SessionFrame::new(frame))),
+                    value
+                );
             }
         }
     }
