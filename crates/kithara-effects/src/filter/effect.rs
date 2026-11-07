@@ -134,9 +134,7 @@ impl FilterEffect {
                 .expect("admitted smoothing box has stable f32 coefficients");
         }
     }
-}
 
-impl FilterEffect {
     /// Advance the parameter clock while an exhausted filter has no audio input.
     pub fn advance(&mut self, frames: usize) {
         for _ in 0..frames {
@@ -173,11 +171,11 @@ impl FilterEffect {
     ) -> Result<FilterMotion, FilterError> {
         let field = FilterParameter::of(change);
         let current = match prior {
-            Some(point) if FilterParameter::of(point) == field => point.value(),
+            Some(point) if FilterParameter::of(point) == field => f64::from(point),
             Some(_) => return Err(FilterError::Parameters),
             None => self.parameter(field).current_value(),
         };
-        parameter_motion(field, transition(current, change.value(), rate), rate)
+        parameter_motion(field, transition(current, f64::from(change), rate), rate)
     }
 
     fn parameter(&self, field: FilterParameter) -> SmoothedParam64 {
