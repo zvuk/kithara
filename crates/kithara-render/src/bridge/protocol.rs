@@ -10,8 +10,8 @@ use kithara_platform::time::Duration;
 use kithara_signal::{SegmentId, SessionFrame};
 
 use super::{
-    DeckFilterChange, DeckMixSettingsChange, EqBinding, EqGainProgram, FilterBinding, SlotBinding,
-    SlotGainProgram, SlotMark,
+    DeckFilterChange, DeckMixSettingsChange, EqBinding, EqGainProgram, FilterBinding,
+    FilterProgram, SlotBinding, SlotGainProgram, SlotMark,
 };
 use crate::{CrossfadeSettings, rt::track::PlayerResource};
 
@@ -89,6 +89,8 @@ pub enum DeckRefusal {
     FilterOutdated,
     FilterShape,
     FilterBatch,
+    FilterProgramClock,
+    FilterProgramCapacity,
     Filter(FilterError),
 }
 
@@ -164,6 +166,11 @@ pub enum DeckPart {
     Filter {
         binding: FilterBinding,
         change: DeckFilterChange,
+    },
+    FilterProgram {
+        binding: FilterBinding,
+        authority: Option<Seq>,
+        program: FilterProgram,
     },
     EqProgram {
         binding: EqBinding,
@@ -344,6 +351,16 @@ impl fmt::Debug for DeckPart {
                 .debug_struct("Filter")
                 .field("binding", binding)
                 .field("change", change)
+                .finish(),
+            Self::FilterProgram {
+                binding,
+                authority,
+                program,
+            } => formatter
+                .debug_struct("FilterProgram")
+                .field("binding", binding)
+                .field("authority", authority)
+                .field("program", program)
                 .finish(),
             Self::EqProgram {
                 binding,

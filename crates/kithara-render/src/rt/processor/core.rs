@@ -16,7 +16,7 @@ use triple_buffer::Input;
 
 use super::{
     super::{
-        command::{Armed, EqPrograms, answer_stop, output_curve},
+        command::{Armed, EqPrograms, FilterPrograms, answer_stop, output_curve},
         context::read_render_context,
         tail::SlotTail,
         track::{PlayerTrack, RtSink, TrackBuffers},
@@ -56,6 +56,7 @@ pub(in crate::rt) struct Deck {
     pub(in crate::rt) mix: DeckMixSettings,
     pub(in crate::rt) render: RenderPass,
     pub(in crate::rt) eq_programs: EqPrograms,
+    pub(in crate::rt) filter_programs: FilterPrograms,
     events: HeapProd<DeckEvent>,
     pub(in crate::rt) metrics: RtMetrics,
     pub(in crate::rt) sample_rate: NonZeroU32,
@@ -115,6 +116,7 @@ impl<E: SessionInbox> DeckMixer<E> {
                 evict_frames,
                 render: RenderPass::new(pools, shape, config)?,
                 eq_programs: EqPrograms::new(scope, config.eq_bands()),
+                filter_programs: FilterPrograms::default(),
                 mix,
                 events,
                 metrics: RtMetrics::default(),
@@ -218,6 +220,7 @@ impl<E: SessionInbox> DeckMixer<E> {
                 sounded = self.render_block_in(&mut level, context, start, buffers, frames);
                 if level.is_closing() && self.deck.tails_quiet() {
                     self.deck.cancel_eq_epoch(&mut level);
+                    self.deck.cancel_filter_epoch(&mut level);
                     level.retire();
                     self.retired = true;
                 }
@@ -336,6 +339,7 @@ impl<E: SessionInbox> DeckMixer<E> {
                     .map(|epoch| self.deck.render.filter_binding(self.scope, epoch))
             },
         );
+        self.deck.filter_programs.publish(&mut snapshot.filter);
         self.snapshot.publish();
     }
 }
@@ -459,7 +463,11 @@ impl Deck {
             }
             return false;
         }
-        if self.render.prepare_filter(self.sample_rate).is_err() {
+        if self
+            .render
+            .prepare_filter(self.sample_rate, &self.filter_programs.curves(level))
+            .is_err()
+        {
             self.fail_filter(range.start, start, level);
             return false;
         }
@@ -528,6 +536,7 @@ impl Deck {
         start: SessionFrame,
         level: &mut LevelInbox<'_, DeckProtocol>,
     ) {
+        self.cancel_filter_epoch(level);
         for slot in self.tracks.slots() {
             let Some(track) = self
                 .tracks

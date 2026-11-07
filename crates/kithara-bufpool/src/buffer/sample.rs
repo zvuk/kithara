@@ -22,6 +22,12 @@ impl std::ops::DerefMut for SampleBuffer {
     }
 }
 
+impl AsMut<[f32]> for SampleBuffer {
+    fn as_mut(&mut self) -> &mut [f32] {
+        self
+    }
+}
+
 impl SampleBuffer {
     pub(crate) fn new(inner: OwnedBuffer<8, Vec<f32>, false>) -> Self {
         Self(inner)

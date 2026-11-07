@@ -5701,6 +5701,7 @@ dependencies = [
  "kithara-app",
  "kithara-app-library",
  "kithara-command",
+ "kithara-config",
  "kithara-devtools-trace-format",
  "kithara-dsp",
  "kithara-encode",

@@ -253,6 +253,36 @@ impl FilterEffect {
         Ok(())
     }
 
+    /// Apply an already prepared trajectory point without another smoothing pass.
+    /// # Errors
+    /// Refuses an invalid contextual point without changing state.
+    pub fn set_explicit(&mut self, change: FilterSettingsChange) -> Result<(), FilterError> {
+        let mut settings = self.settings;
+        settings.apply_change(change);
+        let rate = self.spec.sample_rate;
+        let coefficients = settings.coefficients(f64::from(rate.get()))?;
+        settings.admit_smoothing(
+            f64::from(rate.get()),
+            self.cutoff.current_value(),
+            self.q.current_value(),
+            self.gain.current_value(),
+        )?;
+        let (mut cutoff, mut q, mut gain) = (self.cutoff, self.q, self.gain);
+        let point = |value| SmoothedParam64::new(value, 0.0, SmootherConfig::default(), rate);
+        match change {
+            FilterSettingsChange::CutoffHz(value) => cutoff = point(f64::from(value)),
+            FilterSettingsChange::Q(value) => q = point(f64::from(value)),
+            FilterSettingsChange::GainDb(value) => gain = point(f64::from(f32::from(value))),
+        }
+        self.filter.retune(0, coefficients)?;
+        self.settings = settings;
+        self.target_coefficients = coefficients;
+        self.cutoff = cutoff;
+        self.q = q;
+        self.gain = gain;
+        Ok(())
+    }
+
     /// Retune the resident filter at a new rate without allocating or resetting history.
     /// # Errors
     /// Refuses an unrepresentable design before changing the prepared rate or state.

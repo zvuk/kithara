@@ -23,6 +23,12 @@ pub(in crate::rt) struct EqPrograms {
 }
 
 impl EqPrograms {
+    pub(in crate::rt) fn active_count(&self) -> usize {
+        self.fields
+            .iter()
+            .filter(|field| field.program.active().is_some())
+            .count()
+    }
     pub(in crate::rt) fn new(scope: ScopeId, bands: usize) -> Self {
         Self {
             scope,
@@ -167,7 +173,7 @@ impl Deck {
                     && !commands.iter().any(|part| cancels(part, *band)))
             })
             .count();
-        if active > EqGainProgram::MAX_ACTIVE {
+        if active + self.filter_programs.active_count() > EqGainProgram::MAX_ACTIVE {
             return Err(DeckRefusal::EqProgramCapacity);
         }
         Ok(())

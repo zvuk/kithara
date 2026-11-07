@@ -195,6 +195,29 @@ impl<'a, S> Outbox<'a, S> {
         self.deck(at, vec![DeckPart::Filter { binding, change }])
     }
 
+    /// Submit one trajectory against the observed Filter instance and field authority.
+    /// # Errors
+    /// Refuses unavailable output state, insufficient delivery lead or command capacity.
+    pub fn filter_program(
+        &mut self,
+        program: crate::FilterProgram,
+    ) -> Result<Option<Seq>, PlayError> {
+        let pass = self.pass.ok_or(PlayError::NotReady)?;
+        let binding = pass.deck.filter.binding().ok_or(PlayError::NotReady)?;
+        if pass.deck.filter.settings().is_none() {
+            return Err(PlayError::NotReady);
+        }
+        let authority = pass.deck.filter.authority(program.parameter());
+        self.deck(
+            When::At(program.start()),
+            vec![DeckPart::FilterProgram {
+                binding,
+                authority,
+                program,
+            }],
+        )
+    }
+
     /// Prepare a stereo filter at the deck's actual output rate, off the audio thread.
     /// # Errors
     /// Preserves geometry, design and pool errors; refuses an unpublished output rate.
@@ -531,6 +554,7 @@ pub(crate) fn slots(part: &DeckPart) -> impl Iterator<Item = Slot> {
         | DeckPart::Eq(_)
         | DeckPart::Fx(_)
         | DeckPart::Filter { .. }
+        | DeckPart::FilterProgram { .. }
         | DeckPart::EqProgram { .. }
         | DeckPart::GainProgram { .. }
         | DeckPart::Returned(_) => (None, None),

@@ -2,6 +2,7 @@ mod arena_contracts;
 mod core;
 mod eq_programs;
 mod filter;
+mod filter_programs;
 mod legacy_fixture;
 mod no_sync_deadline;
 mod player_processor_internal;
