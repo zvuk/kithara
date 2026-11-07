@@ -8,7 +8,7 @@ use kithara::{
         time::{Duration, sleep, timeout},
         tokio::sync::OnceCell,
     },
-    queue::{AdvanceReason, QueueControl, QueueEvent, TrackSource, Transition},
+    queue::{AdvanceReason, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use kithara_app::{document::Config, pools::AppPools};
 use kithara_integration_tests::{
@@ -47,6 +47,18 @@ mod test_statics {
 
 async fn shared_test_ctx() -> &'static AppQueueFixture {
     test_statics::TEST_CTX.get_or_init(insecure_app_queue).await
+}
+
+fn loader_phase(queue: &QueueControl<AppPools>, item: TrackId) -> Option<&'static str> {
+    queue.track(item).map(|entry| match entry.status {
+        TrackStatus::Pending => "Pending",
+        TrackStatus::Loading => "Loading",
+        TrackStatus::Slow => "Slow",
+        TrackStatus::Loaded => "Loaded",
+        TrackStatus::Consumed => "Consumed",
+        TrackStatus::Cancelled => "Cancelled",
+        TrackStatus::Failed(_) => "Failed",
+    })
 }
 
 async fn sample_positions(
@@ -543,7 +555,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
                 Ok(())
             }
             .await;
-        tracing::info!(target: "kithara_test::playlist_progress", phase = "track_complete", index = i, passed = result.is_ok(), current = ?ctx.queue.current_index(), position = ?ctx.queue.position_seconds());
+        tracing::info!(target: "kithara_test::playlist_progress", phase = "track_complete", index = i, passed = result.is_ok(), current = ?ctx.queue.current_index(), position = ?ctx.queue.position_seconds(), loader = ?loader_phase(&ctx.queue, ids[i]), next_loader = ?ids.get(i + 1).and_then(|id| loader_phase(&ctx.queue, *id)), slots = ?ctx.queue.deck_snapshot().slots.iter().map(|slot| (slot.binding.map(|binding| binding.item()), slot.state)).collect::<Vec<_>>());
         per_track.push((url.to_string(), result));
     }
 
