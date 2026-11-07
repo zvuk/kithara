@@ -3852,6 +3852,14 @@ fn direct_grid_binding_checks_the_declared_crossing_cell() {
         &analysed_grid("library_flac_newtechno"),
         &[27.64, 28.04, 28.5],
     );
+    let cell: Vec<_> = model
+        .as_raw()
+        .beats
+        .iter()
+        .filter(|beat| (63..=65).contains(&beat.ordinal))
+        .map(|beat| (beat.ordinal, beat.at))
+        .collect();
+    assert_eq!(cell, [(63, 27.64), (64, 28.04), (65, 28.5)]);
     let at = SessionFrame::new(2_127_986);
     let host = SessionAnchor::new(
         at,
@@ -3900,7 +3908,7 @@ fn direct_grid_binding_checks_the_declared_crossing_cell() {
     };
     let reference = Some(SelectedBinding {
         media: Duration::from_secs_f64(28.04 - 0.4 / 72_000.0),
-        source_beat: 65.0 - 1.0 / 72_000.0,
+        source_beat: 64.0 - 1.0 / 72_000.0,
         host_beat: 74.0 - 1.0 / 72_000.0,
         frame: at,
     });
@@ -3908,6 +3916,25 @@ fn direct_grid_binding_checks_the_declared_crossing_cell() {
         .expect("the recorded source and Host grids cover the consumed frame");
     assert_eq!(binding.expected_frame, at);
     assert!(binding.failures().is_empty(), "{binding:?}");
+    let shifted_reference = reference.map(|binding| SelectedBinding {
+        source_beat: binding.source_beat + 1.0,
+        ..binding
+    });
+    assert!(
+        !check(
+            &model,
+            rate,
+            &host_grid,
+            consumed,
+            0.88,
+            4,
+            shifted_reference
+        )
+        .expect("the shifted reference still names a covered cell")
+        .failures()
+        .is_empty(),
+        "a reference to the neighbouring beat must be rejected"
+    );
     for wrong_speed in [0.8, 0.92] {
         assert!(
             !check(
