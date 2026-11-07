@@ -15,7 +15,12 @@ use num_traits::ToPrimitive;
 use super::cases::{BLOCK_FRAMES, ROOMY_CAPACITY, SAMPLE_RATE, load_source, render_effect_window};
 use crate::underrun;
 
-#[kithara::test(tokio, tracing("warn,kithara_test::host_rate_telemetry=info"))]
+const CALLBACK_FRAMES: usize = 64;
+
+#[kithara::test(
+    tokio,
+    tracing("warn,render_refill=trace,kithara_test::host_rate_telemetry=info")
+)]
 async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
     let options = OfflinePlayerOptions::builder()
         .block_on_underrun(false)
@@ -38,9 +43,11 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
     .build();
     let harness = load_source(harness, TrackSource::Config(Box::new(config))).await;
     let loaded_underruns = harness.metrics().underruns();
-    let _ = render_effect_window(&harness, BLOCK_FRAMES).await;
+    let _ = render_gain_window(&harness, BLOCK_FRAMES, &mut underruns).await;
     let initial_underruns = harness.metrics().underruns();
-    let warm = render_effect_window(&harness, 4096).await;
+    underruns.checkpoint(harness.metrics(), false, "gain initial playback");
+    let warm = render_gain_window(&harness, 4096, &mut underruns).await;
+    underruns.checkpoint(harness.metrics(), false, "gain ready playback");
     assert!(warm[warm.len() - 128..].iter().all(|sample| *sample == 0.5));
     let warm_underruns = harness.metrics().underruns();
     let item = harness
@@ -73,7 +80,8 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
         .attach_tap(Tap::Master, ROOMY_CAPACITY)
         .await
         .expect("master tap");
-    let take = render_effect_window(&harness, 1024).await;
+    let take = render_gain_window(&harness, 1024, &mut underruns).await;
+    underruns.checkpoint(harness.metrics(), false, "gain program playback");
     assert_eq!(tap.drain(), take);
     assert_eq!(tap.drops(), 0);
     for (index, &channels) in take.as_chunks::<2>().0.iter().enumerate() {
@@ -101,4 +109,21 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
     underruns.checkpoint(harness.metrics(), true, "checked 1024-frame gain window");
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;
+}
+
+async fn render_gain_window(
+    harness: &OfflinePlayer,
+    frames: usize,
+    underruns: &mut underrun::Underruns,
+) -> Vec<f32> {
+    let mut output = Vec::new();
+    for start in (0..frames).step_by(CALLBACK_FRAMES) {
+        let at = harness.host().position();
+        output.extend_from_slice(
+            &render_effect_window(harness, CALLBACK_FRAMES.min(frames - start)).await,
+        );
+        underruns.checkpoint(harness.metrics(), false, "gain callback");
+        assert_eq!(harness.metrics().underruns(), 0, "callback at {at}");
+    }
+    output
 }
