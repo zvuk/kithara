@@ -3,10 +3,10 @@ use kithara_command::{Mailbox, Postbox, Seq, When};
 use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_play::{
-    CrossfaderGain, DeckEqChange, DeckFxChange, DeckMixSettingsChange, EqBandConfig, GainDb,
-    InterruptionKind, Outbox, OutputSnapshot, PlayError, Player, Position, SeekBatch, Track,
-    TrackCommand, TrackFactory, TrackSettings, TrackSettingsChange, TrackStatus as PlayingStatus,
-    Trim,
+    CrossfaderGain, DeckEqChange, DeckFilterChange, DeckFxChange, DeckMixSettingsChange,
+    EqBandConfig, FilterSettings, GainDb, InterruptionKind, Outbox, OutputSnapshot, PlayError,
+    Player, Position, SeekBatch, Track, TrackCommand, TrackFactory, TrackSettings,
+    TrackSettingsChange, TrackStatus as PlayingStatus, Trim,
 };
 use kithara_signal::{FaderValue, SessionFrame};
 
@@ -80,6 +80,14 @@ where
     Fx {
         at: When<SessionFrame>,
         changes: Vec<DeckFxChange>,
+    },
+    Filter {
+        at: When<SessionFrame>,
+        change: DeckFilterChange,
+    },
+    InstallFilter {
+        at: When<SessionFrame>,
+        settings: FilterSettings,
     },
     NotifyInterruption(InterruptionKind),
     Tick,
@@ -183,6 +191,12 @@ where
             QueueCommand::Seek { to } => self.seek_to(to, out),
             QueueCommand::ConfigureTrack(change, at) => self.configure_tracks(change, at, out),
             QueueCommand::Fx { at, changes } => out.fx(at, changes).map_err(Into::into),
+            QueueCommand::Filter { at, change } => out.filter(at, change).map_err(Into::into),
+            QueueCommand::InstallFilter { at, settings } => {
+                let prep = self.config.prep.as_ref().ok_or(PlayError::NotReady)?;
+                out.install_filter(at, settings, prep.worker.pools())
+                    .map_err(Into::into)
+            }
             QueueCommand::GainProgram { item, program } => {
                 let index = self
                     .active

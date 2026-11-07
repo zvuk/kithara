@@ -30,18 +30,23 @@ pub use api::{
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
-pub use kithara_effects::{GainDb, eq::EqBandConfig};
+pub use kithara_effects::{
+    GainDb,
+    eq::EqBandConfig,
+    filter::{Cutoff, FilterSettings, FilterSettingsChange, Kind as FilterKind, Q},
+};
 pub use kithara_net::Headers;
 pub use kithara_render::{
     CrossfadeCurve, CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError,
     DispatcherProtocol, EngineLoad, EngineLoadSnapshot, InvalidCrossfade, LaneId, LoadRefusal,
     PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
     bridge::{
-        CrossfaderGain, CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckFxChange,
-        DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot,
-        EqBinding, EqGainProgram, EqSnapshot, FadeDir, FxMix, MixTapWriter, ParameterCurveError,
-        ParameterKnot, PlaybackFault, Returned, RtMetricsSnapshot, Slot, SlotGainProgram,
-        SlotOutputSnapshot, SlotSnapshot, TrackClock, Trim,
+        CrossfaderGain, CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckFilterChange,
+        DeckFxChange, DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal,
+        DeckSnapshot, EqBinding, EqGainProgram, EqSnapshot, FadeDir, FilterBinding, FilterSnapshot,
+        FxMix, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault, Returned,
+        RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot, TrackClock,
+        Trim,
     },
     dispatch,
     rt::{
