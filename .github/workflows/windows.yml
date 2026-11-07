@@ -15,6 +15,19 @@ on:
         description: Optional diagnostic Nextest filter. Its result does not qualify the full suite.
         type: string
         default: ""
+      test-lane:
+        description: Configured test lane for a nonempty diagnostic test-filter.
+        type: string
+        default: workspace
+      test-load:
+        description: Built-in kithara test CPU load for a nonempty diagnostic test-filter.
+        type: choice
+        options: ["off", "on"]
+        default: "off"
+      test-count:
+        description: Positive finite repetition count for a nonempty diagnostic test-filter.
+        type: number
+        default: 1
       fixture-refresh:
         description: >-
           Comma-separated fixture names, or producing-function names, to
@@ -124,6 +137,9 @@ jobs:
     timeout-minutes: 180
     env:
       TEST_FILTER: ${{ inputs.test-filter || '' }}
+      TEST_LANE: ${{ inputs.test-lane }}
+      TEST_LOAD: ${{ inputs.test-load }}
+      TEST_COUNT: ${{ inputs.test-count }}
     steps:
       - name: Checkout diagnostics controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -151,12 +167,17 @@ jobs:
         env:
           KITHARA_FLASH_SYNC_TRACE: "1"
           KITHARA_HANG_DUMP_DIR: ${{ runner.temp }}/windows-diagnostics/probe-hang
-        run: just ci cache-exec windows-diagnostic just test run --net-backend=none "--narrow=$env:TEST_FILTER" --retries=0
+        run: >-
+          just ci cache-exec windows-diagnostic just test run --net-backend=none "--narrow=$env:TEST_FILTER"
+          "--lane=$env:TEST_LANE" "--load=$env:TEST_LOAD" "--stress-count=$env:TEST_COUNT" --profile=ci --retries=0
 
       - name: Upload probe evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/windows-diagnostics
+          path: |
+            ${{ runner.temp }}/windows-diagnostics
+            diagnostics-controller/target/nextest/ci/junit.xml
+            diagnostics-controller/.ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json
           if-no-files-found: error

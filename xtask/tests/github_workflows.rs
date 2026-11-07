@@ -3020,6 +3020,53 @@ fn windows_runner_context_is_bound_only_after_runner_assignment() {
 }
 
 #[test]
+fn windows_filtered_probes_route_lane_load_and_repetitions_to_the_harness() {
+    let workflow = github_workflow("windows.yml");
+    let inputs = &workflow["on"]["workflow_dispatch"]["inputs"];
+    for (name, kind, default) in [
+        ("test-lane", "string", "workspace"),
+        ("test-load", "choice", "off"),
+    ] {
+        assert_eq!(inputs[name]["type"].as_str(), Some(kind));
+        assert_eq!(inputs[name]["default"].as_str(), Some(default));
+    }
+    assert_eq!(inputs["test-count"]["type"].as_str(), Some("number"));
+    assert_eq!(inputs["test-count"]["default"].as_u64(), Some(1));
+    assert_eq!(
+        inputs["test-load"]["options"],
+        serde_yaml_ng::to_value(["off", "on"]).unwrap()
+    );
+    let job = workflow_job(workflow_jobs(&workflow), "diagnostics");
+    for (variable, input) in [
+        ("TEST_LANE", "test-lane"),
+        ("TEST_LOAD", "test-load"),
+        ("TEST_COUNT", "test-count"),
+    ] {
+        assert_eq!(
+            job["env"][variable].as_str(),
+            Some(format!("${{{{ inputs.{input} }}}}").as_str())
+        );
+    }
+    let run = named_step(job, "Run diagnostic test selection")["run"]
+        .as_str()
+        .unwrap();
+    for argument in [
+        "\"--lane=$env:TEST_LANE\"",
+        "\"--load=$env:TEST_LOAD\"",
+        "\"--stress-count=$env:TEST_COUNT\"",
+        "--profile=ci",
+        "--retries=0",
+    ] {
+        assert!(run.split_whitespace().any(|arg| arg == argument));
+    }
+    let upload = named_step(job, "Upload probe evidence")["with"]["path"]
+        .as_str()
+        .unwrap();
+    assert!(upload.contains("diagnostics-controller/target/nextest/ci/junit.xml"));
+    assert!(upload.contains("diagnostics-controller/.ci-artifacts/cache/github-"));
+}
+
+#[test]
 fn windows_diagnostics_preserve_old_evidence_before_a_scoped_probe() {
     let workflow = github_workflow("windows.yml");
     let diagnostic = workflow_job(workflow_jobs(&workflow), "diagnostics");
@@ -3048,7 +3095,7 @@ fn windows_diagnostics_preserve_old_evidence_before_a_scoped_probe() {
     assert_eq!(
         steps[probe]["run"].as_str(),
         Some(
-            "just ci cache-exec windows-diagnostic just test run --net-backend=none \"--narrow=$env:TEST_FILTER\" --retries=0"
+            "just ci cache-exec windows-diagnostic just test run --net-backend=none \"--narrow=$env:TEST_FILTER\" \"--lane=$env:TEST_LANE\" \"--load=$env:TEST_LOAD\" \"--stress-count=$env:TEST_COUNT\" --profile=ci --retries=0"
         )
     );
     assert_eq!(
