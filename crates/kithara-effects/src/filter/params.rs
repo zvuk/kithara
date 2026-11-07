@@ -48,13 +48,12 @@ impl FilterParameter {
     }
 }
 
-impl FilterSettingsChange {
-    #[must_use]
-    pub fn value(self) -> f64 {
-        match self {
-            Self::CutoffHz(value) => f64::from(value),
-            Self::Q(value) => f64::from(value),
-            Self::GainDb(value) => f64::from(f32::from(value)),
+impl From<FilterSettingsChange> for f64 {
+    fn from(change: FilterSettingsChange) -> Self {
+        match change {
+            FilterSettingsChange::CutoffHz(value) => Self::from(value),
+            FilterSettingsChange::Q(value) => Self::from(value),
+            FilterSettingsChange::GainDb(value) => Self::from(f32::from(value)),
         }
     }
 }
