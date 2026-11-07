@@ -148,7 +148,7 @@ type NativeSegment = (TrackId, Slot, SessionFrame, u64, u64);
 struct Voice {
     item: TrackId,
     entry: Position,
-    model: Arc<BeatGridModel>,
+    declared: super::binding::DeclaredSource,
     decoded: Arc<Mutex<DecodedRecorder>>,
     fixture: kithara_integration_tests::pcm_oracle::Audio,
     first: BTreeMap<SegmentId, SlotSnapshot>,
@@ -256,7 +256,7 @@ fn intervals(
 }
 
 fn entry_boundary(voice: &Voice) -> Duration {
-    let raw = voice.model.as_raw();
+    let raw = voice.declared.model().as_raw();
     let at_or_after = |seconds| {
         Duration::try_from_secs_f64(seconds).expect("finite declared beat time") >= voice.entry
     };
@@ -394,11 +394,10 @@ fn voice_intervals(
     let initial_raw = first_span
         .source_ratio_at(0)
         .expect("first actual source span origin");
-    let (initial_origin, initial_basis) = voice
-        .decoded
-        .lock()
-        .view()
-        .physical_basis(identity, initial_raw)
+    let mut recording = voice.decoded.lock();
+    let decoded = recording.view();
+    let physical_basis = decoded.physical_basis_lookup(identity);
+    let (initial_origin, initial_basis) = physical_basis(initial_raw)
         .unwrap_or_else(|error| panic!("item {:?}: {error}", voice.item));
     let origin = residency_origin(voice, first_info);
     let initial_physical = initial_basis
@@ -421,10 +420,7 @@ fn voice_intervals(
         demand <= (2 * SOURCE_BLOCK) as u128,
         "UNSUPPORTED_ORACLE_WITNESS: first no-keylock quantum exceeds the guaranteed residency capacity"
     );
-    let physical_domain = voice
-        .decoded
-        .lock()
-        .view()
+    let physical_domain = decoded
         .fixture_domain(first_info, &voice.fixture, origin)
         .unwrap_or_else(|error| panic!("named source {:?}: {error}", voice.item));
     let slices = consumed
@@ -457,12 +453,8 @@ fn voice_intervals(
         let raw = span
             .source_ratio_at(u64::try_from(active.start - slice_start).expect("slice offset"))
             .expect("exact consumed interval has a raw source coordinate");
-        let (physical_origin, physical_basis) = voice
-            .decoded
-            .lock()
-            .view()
-            .physical_basis(interval.identity, raw)
-            .unwrap_or_else(|error| panic!("item {:?}: {error}", voice.item));
+        let (physical_origin, physical_basis) =
+            physical_basis(raw).unwrap_or_else(|error| panic!("item {:?}: {error}", voice.item));
         result.push(Interval {
             voice: index,
             slot,
@@ -475,6 +467,8 @@ fn voice_intervals(
             physical_domain: physical_domain.clone(),
         });
     }
+    drop(physical_basis);
+    drop(recording);
     assert_eq!(
         frontier, end,
         "every audible sample through the native end has actual source geometry"
@@ -602,6 +596,10 @@ fn reference(
                 .unwrap_or_else(|error| {
                     panic!("source {:?} session {}: {error}", voice.item, active.start)
                 });
+            let physical_inverse = interval
+                .physical_basis
+                .source_inverse(interval.physical_origin)
+                .expect("the admitted decoded basis is invertible");
             // A frame's endpoint is the next frame's start, so each coordinate is
             // projected once and carried into the following frame.
             let mut carried = None;
@@ -611,17 +609,15 @@ fn reference(
                     let raw = span
                         .source_ratio_at(offset)
                         .expect("physical source coordinate");
-                    interval
-                        .physical_basis
-                        .output_ratio_at_source(interval.physical_origin, raw)
+                    physical_inverse
+                        .output_at(raw)
                         .expect("actual decoded physical coordinate")
                 });
                 let next = span
                     .source_ratio_at(offset + 1)
                     .expect("physical source endpoint");
-                let endpoint = interval
-                    .physical_basis
-                    .output_ratio_at_source(interval.physical_origin, next)
+                let endpoint = physical_inverse
+                    .output_at(next)
                     .expect("actual decoded physical endpoint");
                 carried = Some(endpoint);
                 let speed = super::control::physical_source_speed(physical, endpoint)
@@ -920,7 +916,7 @@ impl QueueMusic {
             let voice = Voice {
                 item,
                 entry,
-                model,
+                declared: super::binding::DeclaredSource::new(model),
                 decoded,
                 fixture,
                 first: BTreeMap::new(),
@@ -962,13 +958,37 @@ impl QueueMusic {
             );
         });
         hang_reset!();
+        let first = self.voices[0].item;
+        let prepared_at = self.host.position();
+        let control = self.deck.control().clone();
+        let mut events = control.subscribe();
+        kithara_integration_tests::waits::wait_for_loader_done_event(
+            &mut events,
+            &control,
+            first,
+            __hang_detector.remaining(),
+        )
+        .await
+        .expect("the first Queue source loads before its finite music timeline");
+        drop(events);
+        assert_eq!(
+            self.host.position(),
+            prepared_at,
+            "source preparation renders no audio frames"
+        );
+        hang_reset!();
+        let status = control.track(first).map(|entry| entry.status);
+        assert!(
+            matches!(status, Some(TrackStatus::Loaded | TrackStatus::Consumed)),
+            "the finite music clock starts after its first source loads: {first:?}: {status:?}",
+        );
         let source_count: f64 = self.kind.sources().len().as_();
         let max_frames: u64 = match self.kind {
             MusicCase::Natural => (((source_count * 4.0)
                 + self
                     .voices
                     .iter()
-                    .map(|voice| 12.0 * voice.model.as_raw().bpm / 100.0)
+                    .map(|voice| 12.0 * voice.declared.model().as_raw().bpm / 100.0)
                     .sum::<f64>())
                 * f64::from(RATE))
             .ceil()
@@ -1326,14 +1346,15 @@ impl QueueMusic {
                 .iter()
                 .find(|voice| voice.item == item)
                 .expect("one of five sources")
-                .model
+                .declared
+                .model()
                 .clone();
             self.host
                 .send(LinkedHostCommand::Grid {
                     deck: target,
                     answer: GridAnswer {
                         item,
-                        model: Ok((*model).clone()),
+                        model: Ok(model),
                     },
                 })
                 .await
@@ -1490,9 +1511,16 @@ impl QueueMusic {
             }
             let result = self.deck.observe(|o| {
                 if self.forward_oracle {
-                    super::binding::queue_observation(&voice.model, grid, o, linked, first, *slot)
+                    super::binding::queue_observation(
+                        &mut voice.declared,
+                        grid,
+                        o,
+                        linked,
+                        first,
+                        *slot,
+                    )
                 } else {
-                    super::binding::executed_law(&voice.model, grid, o, linked, first, *slot)
+                    super::binding::executed_law(&mut voice.declared, grid, o, linked, first, *slot)
                 }
             });
             let (speed, failures, mut evidence, reference) = result.unwrap_or_else(|error| {
@@ -1540,7 +1568,7 @@ impl QueueMusic {
                 && !matches!(linked.sync, kithara::link::SyncStatus::Correcting { .. })
             {
                 let binding = super::binding::check(
-                    &voice.model,
+                    voice.declared.model(),
                     sample_rate,
                     grid,
                     *slot,
@@ -1628,7 +1656,7 @@ impl QueueMusic {
         let evidence = serde_json::json!({
             "scenario": self.kind.label(),
             "sources": self.kind.sources(), "items": self.voices.iter().map(|voice| u64::from(voice.item)).collect::<Vec<_>>(),
-            "source_grids": self.voices.iter().map(|voice| serde_json::json!({"item": u64::from(voice.item), "model": voice.model.as_raw()})).collect::<Vec<_>>(),
+            "source_grids": self.voices.iter().map(|voice| serde_json::json!({"item": u64::from(voice.item), "model": voice.declared.model().as_raw()})).collect::<Vec<_>>(),
             "public_next_requests": data.next_requests.iter().map(|(item, at)| serde_json::json!({"outgoing_item": u64::from(*item), "request_frame": frame(*at)})).collect::<Vec<_>>(),
             "bounded_final_playing": data.bounded_end.map(|(item, at)| serde_json::json!({"item": u64::from(item), "capture_end": frame(at)})),
             "crossfade_settings": format!("{:?}", self.kind.crossfade()),
@@ -2157,8 +2185,8 @@ fn assert_reuse(
         "slot reuse owns a distinct actual Load"
     );
     assert_ne!(
-        voices[0].model.as_raw(),
-        voices[4].model.as_raw(),
+        voices[0].declared.model().as_raw(),
+        voices[4].declared.model().as_raw(),
         "slot reuse owns the fifth source grid"
     );
 }
@@ -2849,7 +2877,7 @@ async fn capture_music(
                     .next()
                     .expect("retained first consumed witness");
                 super::binding::queue_law(
-                    &voice.model,
+                    voice.declared.model(),
                     o,
                     voice.item,
                     start..SessionFrame::new(native_end(&capture, voice.item, data.bounded_end)),
@@ -2868,7 +2896,7 @@ async fn capture_music(
     });
     data.supplied_grid_shift_rejected = case.deck.observe(|o| {
         let voice = &voices[2];
-        let mut displaced = voice.model.as_raw().clone();
+        let mut displaced = voice.declared.model().as_raw().clone();
         for beat in &mut displaced.beats {
             beat.at += 1.0 / f64::from(RATE);
         }
@@ -3169,7 +3197,7 @@ async fn check_keylock_music(case: &mut QueueMusic, data: CapturedMusic) {
             "actual_backend": "not exposed by TrackSnapshot or existing probes",
             "sources": REAL_SOURCES,
             "source_grids": voices.iter().map(|voice| serde_json::json!({
-                "item": u64::from(voice.item), "model": voice.model.as_raw(),
+                "item": u64::from(voice.item), "model": voice.declared.model().as_raw(),
                 "requested_start_seconds": voice.entry.as_secs_f64(),
             })).collect::<Vec<_>>(),
             "frames": data.pcm.len() / 2, "sample_rate": RATE, "channels": 2,

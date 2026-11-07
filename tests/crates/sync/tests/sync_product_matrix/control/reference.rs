@@ -1283,6 +1283,14 @@ impl DecodedCapture {
             .collect()
     }
 
+    pub(in super::super) fn physical_basis_lookup(
+        &self,
+        info: consumed::SourceIdentity,
+    ) -> impl Fn(SourcePosition) -> Result<(u64, SourceSpan), String> + '_ {
+        let candidates = self.physical_candidates();
+        move |position| self.physical_basis_among(&candidates, info, position)
+    }
+
     fn physical_basis_among<'a>(
         &self,
         candidates: impl IntoIterator<Item = impl std::borrow::Borrow<PhysicalCandidate<'a>>>,
@@ -2271,6 +2279,7 @@ fn physical_basis_preserves_subframe_positions_above_f64_precision() {
         let candidates = capture.physical_candidates();
         let retained = capture.physical_basis_among(&candidates, identity, position);
         assert_eq!(fresh, retained);
+        assert_eq!(fresh, capture.physical_basis_lookup(identity)(position));
         let (offset, basis) =
             fresh.expect("an exact half-frame position belongs to the captured chunk");
         assert_eq!(offset, origin);
@@ -2328,6 +2337,44 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     let mut missing_chunk = capture.clone();
     missing_chunk.chunks.remove(&(7, 32));
     check_persistent_physical_sampling(&missing_chunk, identity);
+    let mut overflowing = capture.clone();
+    overflowing
+        .chunks
+        .first_entry()
+        .expect("first chunk")
+        .get_mut()
+        .0
+        .source_span = Some(
+        SourceSpan::try_from((
+            u128::from(u64::MAX) - 32,
+            1,
+            std::num::NonZeroU128::MIN,
+            NonZeroU32::new(24_000).expect("different source clock"),
+            32,
+        ))
+        .expect("valid source span whose clock normalization overflows"),
+    );
+    for captured in [&capture, &missing_chunk, &overflowing] {
+        for identity in [
+            identity,
+            consumed::SourceIdentity {
+                source_revision: 8,
+                ..identity
+            },
+        ] {
+            let lookup = captured.physical_basis_lookup(identity);
+            for numerator in [0, 1, 127, 128, 129, 255, 256, 383, 384] {
+                let position = (
+                    numerator,
+                    std::num::NonZeroU128::new(4).expect("quarter frame"),
+                );
+                assert_eq!(
+                    lookup(position),
+                    captured.physical_basis(identity, position)
+                );
+            }
+        }
+    }
     let denominator = std::num::NonZeroU128::new(4).expect("quarter-frame phase");
     let domain = 0..96;
     let mut across_frames = capture
