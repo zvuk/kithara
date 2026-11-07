@@ -125,7 +125,7 @@ impl Crossover {
             .iter()
             .fold(input.len(), |count, band| count.min(band.len()));
         for (frame, &sample) in input.iter().take(count).enumerate() {
-            for (band, value) in bands.iter_mut().zip(self.filter_sample(sample)) {
+            for (band, value) in bands.iter_mut().zip(self.split_sample(sample)) {
                 *band
                     .get_mut(frame)
                     .expect("frame belongs to the validated common prefix") = *value;
@@ -184,6 +184,12 @@ impl Crossover {
                         )
                     });
         }
+    }
+
+    // Keep filtering in the DSP compilation unit for generic split callers.
+    #[inline(never)]
+    fn split_sample(&mut self, input: f32) -> &[f32] {
+        self.filter_sample(input)
     }
 
     #[inline(always)]
