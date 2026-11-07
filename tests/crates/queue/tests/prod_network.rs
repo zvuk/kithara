@@ -30,10 +30,7 @@ use kithara_app::{
 };
 use kithara_integration_tests::{
     kithara,
-    offline::{
-        OfflineQueue, QueueTicker, RENDER_PACE, app_disk_asset_store, app_drm, app_track_source,
-        prod_document,
-    },
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE, app_drm, app_track_source, prod_document},
     user_sim::{actions::Action, scenarios},
 };
 use kithara_test_utils::TestTempDir;
@@ -55,7 +52,7 @@ fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource<AppPools> {
     app_track_source(
         url,
         &ctx.config,
-        app_disk_asset_store(&ctx.config, ctx.cache.path()),
+        ctx.config.store.clone(),
         DecoderBackend::Symphonia,
         AbrMode::Auto(None),
         None,
@@ -64,7 +61,7 @@ fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource<AppPools> {
 
 struct ProdCtx {
     config: AppConfig,
-    cache: TestTempDir,
+    _cache: TestTempDir,
 }
 
 fn build_prod_ctx() -> ProdCtx {
@@ -79,9 +76,12 @@ fn build_prod_ctx() -> ProdCtx {
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
     let document = prod_document();
+    let cache = TestTempDir::new();
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
-        .backend(StorageBackend::default())
+        .backend(StorageBackend::Disk {
+            root: cache.path().to_path_buf(),
+        })
         .flush_hub(flush_hub)
         .layouts(document.asset_layouts())
         .build();
@@ -100,7 +100,7 @@ fn build_prod_ctx() -> ProdCtx {
         .build();
     ProdCtx {
         config,
-        cache: TestTempDir::new(),
+        _cache: cache,
     }
 }
 
@@ -109,7 +109,13 @@ async fn prod_queue(prod: &ProdCtx, pacing: Option<Duration>) -> OfflineQueue<Ap
     let player = kithara::play::ResourcePrep::builder()
         .worker(prod.config.worker.clone())
         .build();
-    let queue = Queue::new(QueueConfig::builder().prep(player).build());
+    let queue = Queue::new(
+        QueueConfig::builder()
+            .prep(player)
+            .store(prod.config.store.clone())
+            .downloader(prod.config.downloader.clone())
+            .build(),
+    );
     match pacing {
         Some(interval) => OfflineQueue::paced(session, queue, interval).await,
         None => OfflineQueue::new(session, queue).await,

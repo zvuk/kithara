@@ -177,7 +177,9 @@ fn correction_bounds_every_step_and_cancels_the_phase_integral() {
         let cue = Position::from_secs_f64(1.0 + seconds.rem_euclid(0.5));
         let error = phase_error(&host, &source_grid(&model), cue, SessionFrame::new(0))
             .expect("source phase");
-        let Some(Slew::Closes { curve, frames: end }) = slew(
+        let Some(Slew::Closes {
+            curve, frames: end, ..
+        }) = slew(
             &host,
             &source_grid(&model),
             cue,
@@ -187,7 +189,9 @@ fn correction_bounds_every_step_and_cancels_the_phase_integral() {
                 from,
                 limit: f32::INFINITY,
             },
-        ) else {
+            u64::MAX,
+        )
+        else {
             panic!("source-aware correction");
         };
         let actual = cue.as_secs_f64() + future_law::advance(&curve, 0, end) / 48_000.0;
@@ -215,6 +219,7 @@ fn correction_bounds_every_step_and_cancels_the_phase_integral() {
                 from: 1.0,
                 limit: 0.5,
             },
+            u64::MAX,
         ),
         None,
         "a drift toward a speed past the playable range has no plan"

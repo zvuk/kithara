@@ -115,7 +115,7 @@ mod tests {
     use super::*;
 
     fn fixtures() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/android-exports")
+        crate::testing::workspace::root().join("xtask/tests/fixtures/android-exports")
     }
 
     fn tools() -> PathBuf {

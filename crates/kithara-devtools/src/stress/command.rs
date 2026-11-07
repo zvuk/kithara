@@ -329,10 +329,41 @@ mod sharding_tests {
     }
 
     #[test]
+    fn the_executor_admits_the_subject_build_under_its_lease_before_unit_work() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (ctx, mut args) = empty_run(temp.path());
+        args.shard_index = None;
+        args.shard_count = None;
+        let observed = std::cell::RefCell::new(Vec::new());
+
+        let result = args.run_with_build_admission(&ctx, &|build| {
+            observed.borrow_mut().push(build.to_path_buf());
+            assert!(lease::evict(build).expect("probe live build").is_none());
+            anyhow::bail!("executor refused the subject build")
+        });
+
+        assert_eq!(
+            *observed.borrow(),
+            [args.subject_root.join("target-stress")],
+            "the executor must admit the selected subject build"
+        );
+        let error = result.expect_err("admission refusal stops the unit");
+        assert!(error.to_string().contains("executor refused"), "{error:#}");
+        assert_eq!(
+            fs::read_dir(args.output.as_ref().expect("raw root"))
+                .expect("raw transport root")
+                .count(),
+            0,
+            "no unit evidence is claimed before admission"
+        );
+    }
+
+    #[test]
     fn an_empty_shard_records_selection_without_claiming_execution_or_creating_a_build() {
         let temp = tempfile::tempdir().expect("tempdir");
         let (ctx, args) = empty_run(temp.path());
-        execute_run(&args, &ctx).expect("empty partition validates and creates transport receipt");
+        args.run_with_build_admission(&ctx, &|_| panic!("empty shards admit no build"))
+            .expect("empty partition validates and creates transport receipt");
         let raw = args.output.as_ref().expect("raw");
         let receipt = fs::read(raw.join("selection.json")).expect("receipt");
         let selected: serde_json::Value = serde_json::from_slice(&receipt).expect("selection JSON");
@@ -341,7 +372,7 @@ mod sharding_tests {
         assert_eq!(fs::read_dir(raw).expect("raw entries").count(), 1);
         assert!(!args.subject_root.join("target-stress").exists());
         assert!(
-            execute_run(&args, &ctx).is_err(),
+            execute_run(&args, &ctx, &|_| Ok(())).is_err(),
             "raw evidence must remain immutable"
         );
         assert_eq!(
@@ -382,7 +413,10 @@ mod sharding_tests {
                 }
                 _ => panic!("invalid fixture"),
             }
-            assert!(execute_run(&args, &ctx).is_err(), "accepted {invalid}");
+            assert!(
+                execute_run(&args, &ctx, &|_| Ok(())).is_err(),
+                "accepted {invalid}"
+            );
             assert!(
                 !args.output.as_ref().expect("raw").exists(),
                 "{invalid} created raw evidence"
@@ -430,6 +464,7 @@ mod sharding_tests {
                 config,
                 &selected[0],
                 &raw.join(selected[0].directory()),
+                &|_| panic!("revision validation precedes admission"),
             )
             .expect_err("a unit cannot claim the preflight revision after checkout changes");
 
@@ -759,7 +794,8 @@ mod subject {
         let (ctx, mut args) = subject_fixture(temp.path());
         args.filter = Some("test(selected)".to_owned());
 
-        let error = execute_run(&args, &ctx).expect_err("command modes cannot narrow by filterset");
+        let error = execute_run(&args, &ctx, &|_| Ok(()))
+            .expect_err("command modes cannot narrow by filterset");
 
         assert!(error.to_string().contains("--filter"), "{error:#}");
         assert!(error.to_string().contains("command"), "{error:#}");
@@ -800,7 +836,8 @@ mod subject {
         let (mut ctx, args) = subject_fixture(temp.path());
         ctx.config.stress.default_filter = "test(selected)".to_owned();
 
-        let error = execute_run(&args, &ctx).expect_err("configured command filterset");
+        let error =
+            execute_run(&args, &ctx, &|_| Ok(())).expect_err("configured command filterset");
 
         assert!(
             error.to_string().contains("stress.default_filter"),
@@ -905,7 +942,7 @@ mod subject {
             &config.artifacts,
         );
 
-        execute_run(&args, &ctx).expect("run command mode lifecycle");
+        execute_run(&args, &ctx, &|_| Ok(())).expect("run command mode lifecycle");
 
         assert_subject_report(&paths, &ctx, &args);
         let manifest = Manifest::read(&paths.manifest).expect("read command manifest");
@@ -984,6 +1021,24 @@ pub struct RunArgs {
     tier: Option<String>,
 }
 
+impl RunArgs {
+    /// Runs each unit after its executor admits the leased subject build.
+    ///
+    /// Admission receives the validated subject build while its lease is held.
+    /// Refusal prevents unit work; empty shards request no admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, admission, execution, or evidence errors.
+    pub fn run_with_build_admission(
+        &self,
+        ctx: &Ctx,
+        admit: &dyn Fn(&Path) -> Result<()>,
+    ) -> Result<()> {
+        execute_run(self, ctx, admit)
+    }
+}
+
 #[derive(Debug, Args)]
 #[non_exhaustive]
 pub struct ReportArgs {
@@ -1023,7 +1078,7 @@ pub struct ReportArgs {
 /// Returns an error when execution, finalization, or verification fails.
 pub(crate) fn run(command: &StressCommand, ctx: &Ctx) -> Result<()> {
     match command {
-        StressCommand::Run(args) => execute_run(args, ctx),
+        StressCommand::Run(args) => args.run_with_build_admission(ctx, &|_| Ok(())),
         StressCommand::Report(args) => run_report(args, ctx),
     }
 }
@@ -1091,7 +1146,7 @@ impl Paths {
 /// the first red unit would answer that question only when the answer was
 /// already known. The first failure is what the caller sees, once every unit
 /// has finished.
-fn execute_run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
+fn execute_run(args: &RunArgs, ctx: &Ctx, admit: &dyn Fn(&Path) -> Result<()>) -> Result<()> {
     let config = &ctx.config.stress;
     ensure!(config.is_configured(), "stress run is not configured");
     let modes = resolve_modes(&args.modes, config)?;
@@ -1130,7 +1185,7 @@ fn execute_run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     }
     let mut failure = None;
     for unit in &units {
-        let outcome = run_lane(&inputs, config, unit, &root.join(unit.directory()));
+        let outcome = run_lane(&inputs, config, unit, &root.join(unit.directory()), admit);
         if let Err(error) = outcome
             && failure.is_none()
         {
@@ -1367,7 +1422,13 @@ impl RunInputs {
 
 /// The build lease is held for the lane so the host's build-cache budget leaves these artifacts
 /// alone while the lane is still executing them.
-fn run_lane(inputs: &RunInputs, config: &StressConfig, unit: &Unit<'_>, raw: &Path) -> Result<()> {
+fn run_lane(
+    inputs: &RunInputs,
+    config: &StressConfig,
+    unit: &Unit<'_>,
+    raw: &Path,
+    admit: &dyn Fn(&Path) -> Result<()>,
+) -> Result<()> {
     revision(
         &inputs.controller_root,
         Some(&inputs.controller_sha),
@@ -1384,6 +1445,7 @@ fn run_lane(inputs: &RunInputs, config: &StressConfig, unit: &Unit<'_>, raw: &Pa
     let subject_junit = &inputs.subject_junit;
     let _build_lease = lease::hold(build)
         .with_context(|| format!("lease the stress build {}", build.display()))?;
+    admit(build)?;
     let spec = inputs.spec(unit, &paths, config);
     if spec.is_some() {
         clear_previous_lane_junit(subject_junit)?;

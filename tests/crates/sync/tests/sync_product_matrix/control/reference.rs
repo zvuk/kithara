@@ -1,6 +1,6 @@
 use kithara::{
     audio::{AudioObserveError, AudioObserver},
-    bufpool::SampleBuffer,
+    bufpool::{PoolError, SampleBuffer},
     download::Downloader,
     effects::LimiterConfig,
     play::{DeckMixSettings, Position, Settled},
@@ -11,7 +11,10 @@ use kithara_integration_tests::{
     pcm_oracle::Audio,
 };
 use kithara_render::bridge::DeckSnapshot;
-use kithara_test_utils::bufpool::{Pools, pools_with_budget, sample_buffer};
+use kithara_test_utils::{
+    bufpool::{Pools, pools_with_budget, sample_buffer},
+    tracing,
+};
 use num_traits::ToPrimitive;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
@@ -969,8 +972,17 @@ impl<'a> PhysicalCandidate<'a> {
     }
 }
 
+#[derive(Debug)]
+struct DecodedRejection {
+    vacant: usize,
+    samples: usize,
+    frames: usize,
+    channels: u16,
+    pool_error: Option<PoolError>,
+}
+
 pub(in super::super) struct DecodedRecorder {
-    incoming: HeapCons<Result<DecodedChunk, AudioObserveError>>,
+    incoming: HeapCons<Result<DecodedChunk, DecodedRejection>>,
     capture: DecodedCapture,
     chunk_limit: usize,
     sample_limit: usize,
@@ -1000,16 +1012,47 @@ impl DecodedRecorder {
 
     pub(in super::super) fn view(&mut self) -> &DecodedCapture {
         while let Some(chunk) = self.incoming.try_pop() {
-            let Ok((info, pcm)) = chunk else {
-                self.capture.rejected = true;
-                continue;
+            let (info, pcm) = match chunk {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    tracing::warn!(
+                        vacant = error.vacant,
+                        samples = error.samples,
+                        frames = error.frames,
+                        channels = error.channels,
+                        pool_error = ?error.pool_error,
+                        "decoder observation intake rejected PCM"
+                    );
+                    self.capture.rejected = true;
+                    continue;
+                }
             };
             let key = (info.source_revision, info.frame_offset);
             if let Some((previous, samples)) = self.capture.chunks.get(&key) {
-                self.capture.rejected |= *previous != info || samples[..] != pcm[..];
+                let conflict = *previous != info || samples[..] != pcm[..];
+                if conflict && !self.capture.rejected {
+                    tracing::warn!(
+                        ?previous,
+                        incoming = ?info,
+                        previous_samples = samples.len(),
+                        incoming_samples = pcm.len(),
+                        "decoder observation has conflicting source chunks"
+                    );
+                }
+                self.capture.rejected |= conflict;
             } else if self.capture.chunks.len() >= self.chunk_limit
                 || self.capture.samples + pcm.len() > self.sample_limit
             {
+                if !self.capture.rejected {
+                    tracing::warn!(
+                        chunks = self.capture.chunks.len(),
+                        chunk_limit = self.chunk_limit,
+                        samples = self.capture.samples,
+                        incoming_samples = pcm.len(),
+                        sample_limit = self.sample_limit,
+                        "decoder observation capture limit exceeded"
+                    );
+                }
                 self.capture.rejected = true;
             } else {
                 self.capture.samples += pcm.len();
@@ -1021,16 +1064,16 @@ impl DecodedRecorder {
 }
 
 pub(in super::super) struct DecodedObserver {
-    outgoing: Option<HeapProd<Result<DecodedChunk, AudioObserveError>>>,
+    outgoing: Option<HeapProd<Result<DecodedChunk, DecodedRejection>>>,
     pools: Pools,
 }
 
 impl DecodedObserver {
-    fn reject(&mut self) -> Result<(), AudioObserveError> {
+    fn reject(&mut self, error: DecodedRejection) -> Result<(), AudioObserveError> {
         if let Some(mut outgoing) = self.outgoing.take() {
             // Data offers always leave one slot for a sticky terminal failure.
             outgoing
-                .try_push(Err(AudioObserveError::Full))
+                .try_push(Err(error))
                 .expect("reserved decoder failure slot");
         }
         Err(AudioObserveError::Full)
@@ -1045,16 +1088,25 @@ impl AudioObserver for DecodedObserver {
             return Err(AudioObserveError::Closed);
         }
         let samples = chunk.as_ref();
-        if outgoing.vacant_len() <= 1
+        let rejection = DecodedRejection {
+            vacant: outgoing.vacant_len(),
+            samples: samples.len(),
+            frames: chunk.frames(),
+            channels: chunk.meta.spec.channels,
+            pool_error: None,
+        };
+        if rejection.vacant <= 1
             || samples.is_empty()
-            || samples.len() > 32_768
             || samples.len() != chunk.frames() * usize::from(chunk.meta.spec.channels)
         {
-            return self.reject();
+            return self.reject(rejection);
         }
         let mut pcm = self.pools.get::<f32>();
-        if pcm.try_extend_from_slice(samples).is_err() {
-            return self.reject();
+        if let Err(error) = pcm.try_extend_from_slice(samples) {
+            return self.reject(DecodedRejection {
+                pool_error: Some(error),
+                ..rejection
+            });
         }
         self.outgoing
             .as_mut()
@@ -1331,6 +1383,55 @@ impl DecodedCapture {
         })
     }
 
+    fn samples_with_wrong_cue(
+        &self,
+        position: SourcePosition,
+        kernel: &sampling::SampleKernel,
+        read: &mut impl FnMut(i64, usize) -> Result<f32, String>,
+    ) -> Result<[[f32; 2]; 2], String> {
+        if self.rejected {
+            return Err("decoder observer rejected or conflicted while capturing PCM".to_owned());
+        }
+        let source =
+            i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
+        let mut window = [[0.0; 2]; (2 * SINC_RADIUS + 1) as usize];
+        let mut through = 0;
+        let expected = kernel.samples(|offset| {
+            let frame = source
+                .checked_add(offset)
+                .ok_or_else(|| "physical sample coordinate overflows".to_owned())?;
+            let samples = [read(frame, 0)?, read(frame, 1)?];
+            let index = usize::try_from(offset + i64::from(SINC_RADIUS))
+                .expect("kernel offset fits its declared window");
+            window[index] = samples;
+            through = index + 1;
+            Ok(samples)
+        })?;
+        let shifted = position
+            .0
+            .checked_add(position.1.get())
+            .ok_or_else(|| "wrong-cue negative coordinate overflows".to_owned())?;
+        // Shifted taps start one frame later, so reused taps were already admitted above.
+        let prepared = &window[..through];
+        let wrong_cue = i64::try_from(shifted / position.1.get())
+            .map_err(|error| error.to_string())
+            .and_then(|source| {
+                kernel.samples(|offset| {
+                    let frame = source
+                        .checked_add(offset)
+                        .ok_or_else(|| "physical sample coordinate overflows".to_owned())?;
+                    let index = usize::try_from(offset + 1 + i64::from(SINC_RADIUS))
+                        .expect("shifted kernel offset is nonnegative");
+                    if let Some(samples) = prepared.get(index) {
+                        return Ok(*samples);
+                    }
+                    Ok([read(frame, 0)?, read(frame, 1)?])
+                })
+            })
+            .map_err(|error| format!("wrong-cue negative: {error}"))?;
+        Ok([expected, wrong_cue])
+    }
+
     pub(in super::super) fn fixture_domain(
         &self,
         info: AudioChunkInfo,
@@ -1514,7 +1615,7 @@ impl DecodedCapture {
                     .source_ratio_at(0)
                     .ok_or_else(|| "physical source interval has no raw origin".to_owned())?;
                 let (inverse, first) = self.physical_inverse(&candidates, info, position)?;
-                let samplers = [self.sampler(info), self.sampler(info), self.sampler(info)];
+                let samplers = [self.sampler(info), self.sampler(info)];
                 Ok((start, (inverse, first, samplers)))
             })
             .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
@@ -1555,7 +1656,7 @@ impl DecodedCapture {
                 .get_mut(&start)
                 .ok_or_else(|| "physical source interval lost its decoded basis".to_owned())?;
             let (inverse, first) = (*inverse, *first);
-            let [expected_source, cue_source, tempo_source] = samplers;
+            let [expected_source, tempo_source] = samplers;
             let (raw_position, (numerator, denominator)) = if let Some((_, raw, physical)) =
                 next_position.filter(|(previous_start, _, _)| *previous_start == start)
             {
@@ -1580,18 +1681,8 @@ impl DecodedCapture {
             next_position = Some((start, raw_next, physical_next));
             let speed = physical_source_speed((numerator, denominator), physical_next)?;
             let kernel = sampling::SampleKernel::new((numerator, denominator.get()), speed)?;
-            let expected = self.samples_with_kernel(
-                (numerator, denominator),
-                &kernel,
-                [0, 1],
-                expected_source,
-            )?;
-            let wrong_position = numerator
-                .checked_add(denominator.get())
-                .ok_or_else(|| "wrong-cue negative coordinate overflows".to_owned())?;
-            let wrong_cue = self
-                .samples_with_kernel((wrong_position, denominator), &kernel, [0, 1], cue_source)
-                .map_err(|error| format!("wrong-cue negative: {error}"))?;
+            let [expected, wrong_cue] =
+                self.samples_with_wrong_cue((numerator, denominator), &kernel, expected_source)?;
             let wrong_denominator = denominator
                 .get()
                 .checked_mul(first.1.get())
@@ -1997,6 +2088,80 @@ fn native_stereo_sampling_preserves_scalar_bits_and_coverage_errors() {
     }
 }
 
+fn check_physical_pair(
+    capture: &DecodedCapture,
+    position: SourcePosition,
+    speed: f64,
+    mut read: impl FnMut(i64, usize) -> Result<f32, String>,
+) {
+    let kernel = sampling::SampleKernel::new((position.0, position.1.get()), speed)
+        .expect("representable physical phase");
+    let expected = capture
+        .samples_with_kernel(position, &kernel, [0, 1], &mut read)
+        .and_then(|expected| {
+            let shifted = position
+                .0
+                .checked_add(position.1.get())
+                .ok_or_else(|| "wrong-cue negative coordinate overflows".to_owned())?;
+            capture
+                .samples_with_kernel((shifted, position.1), &kernel, [0, 1], &mut read)
+                .map(|wrong_cue| [expected, wrong_cue])
+                .map_err(|error| format!("wrong-cue negative: {error}"))
+        });
+    let mut reads = Vec::new();
+    let actual = capture.samples_with_wrong_cue(position, &kernel, &mut |frame, channel| {
+        reads.push((frame, channel));
+        read(frame, channel)
+    });
+    assert_eq!(
+        actual.map(|pair| pair.map(|pcm| pcm.map(f32::to_bits))),
+        expected.map(|pair| pair.map(|pcm| pcm.map(f32::to_bits))),
+        "{position:?}, {speed}"
+    );
+    let before = reads.len();
+    reads.sort_unstable();
+    reads.dedup();
+    assert_eq!(
+        before,
+        reads.len(),
+        "immutable PCM read twice: {position:?}, {speed}"
+    );
+}
+
+#[kithara::test(native)]
+fn physical_pair_reuses_pcm_and_preserves_errors() {
+    let capture = DecodedCapture::default();
+    for (numerator, denominator) in [
+        (128, 4),
+        (129, 4),
+        (131, 4),
+        (100, 3),
+        (u128::MAX, u128::MAX),
+        (i64::MAX as u128, 1),
+        (i64::MAX as u128 + 1, 1),
+    ] {
+        let position = (numerator, std::num::NonZeroU128::new(denominator).unwrap());
+        for speed in [0.5, 1.0, 1.00001, 1.5, 8.0, f64::INFINITY, f64::NAN] {
+            for fail in [
+                None,
+                Some((16, 0)),
+                Some((32, 1)),
+                Some((48, 0)),
+                Some((49, 1)),
+            ] {
+                check_physical_pair(&capture, position, speed, |frame, channel| {
+                    if fail == Some((frame, channel)) {
+                        return Err(format!("missing PCM at {frame}/{channel}"));
+                    }
+                    let phase = u8::try_from(frame.rem_euclid(5)).expect("bounded source phase");
+                    let channel = u8::try_from(channel).expect("stereo sample channel");
+                    Ok((f32::from(phase) - f32::from(channel)) * 0.125)
+                });
+            }
+        }
+    }
+}
+
 fn check_persistent_physical_sampling(
     capture: &DecodedCapture,
     identity: consumed::SourceIdentity,
@@ -2006,6 +2171,7 @@ fn check_persistent_physical_sampling(
         capture.sampler(identity),
         capture.sampler(identity),
     ];
+    let mut paired = capture.sampler(identity);
     for speed in [0.5, 1.0, 1.25, 1.5, 8.0, f64::INFINITY, f64::NAN] {
         for (frame, phase) in [
             (0_u128, 0),
@@ -2020,6 +2186,14 @@ fn check_persistent_physical_sampling(
             (u128::MAX / 4 - 2, 3),
         ] {
             let numerator = frame * 4 + phase;
+            let denominator = std::num::NonZeroU128::new(4).expect("quarter-frame phase");
+            check_physical_pair(
+                capture,
+                (numerator, denominator),
+                speed,
+                |frame, channel| capture.sample(identity, frame, channel),
+            );
+            check_physical_pair(capture, (numerator, denominator), speed, &mut paired);
             let positions = [(numerator, 4), (numerator + 4, 4), (numerator, 8)];
             for ((read, (numerator, denominator)), speed) in readers
                 .iter_mut()
@@ -2512,6 +2686,35 @@ fn decoded_test_chunk(frame_offset: u64, samples: &[f32]) -> AudioChunk {
 }
 
 #[kithara::test(native)]
+fn decoded_capture_accepts_a_large_fact_within_its_existing_budget() {
+    let (recording, mut observer) = DecodedRecorder::open();
+    let mut held = recording.lock();
+    let samples: Vec<_> = [0.125, -0.25, 0.5, -0.75]
+        .into_iter()
+        .cycle()
+        .take(46_080)
+        .collect();
+    let chunk = decoded_test_chunk(32, &samples);
+    assert_eq!(chunk.frames(), 23_040);
+
+    observer
+        .try_observe(&chunk)
+        .expect("a valid decoder block fits the existing pool budget");
+
+    let captured = held.view();
+    assert!(!captured.rejected);
+    assert_eq!(captured.chunks.len(), 1);
+    assert_eq!(captured.samples, samples.len());
+    let (info, pcm) = captured
+        .chunks
+        .get(&(7, 32))
+        .expect("retained decoder fact");
+    assert_eq!(*info, chunk.meta);
+    assert_eq!(&pcm[..], samples);
+    drop(held);
+}
+
+#[kithara::test(native)]
 #[case::queue(1, 16)]
 #[case::budget(8, 4)]
 fn decoded_capture_saturation_is_sticky(#[case] chunks: usize, #[case] samples: usize) {
@@ -2536,7 +2739,7 @@ fn decoded_capture_saturation_is_sticky(#[case] chunks: usize, #[case] samples: 
 #[case::oversized(32_770)]
 #[case::partial_frame(3)]
 fn decoded_capture_malformed_facts_are_visible(#[case] len: usize) {
-    let (recording, mut observer) = DecodedRecorder::open();
+    let (recording, mut observer) = DecodedRecorder::with_limits(2, 32_768);
     let chunk = decoded_test_chunk(0, &vec![0.125; len]);
     assert_eq!(observer.try_observe(&chunk), Err(AudioObserveError::Full));
     let captured = recording.lock().view().clone();

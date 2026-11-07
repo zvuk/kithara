@@ -26,7 +26,7 @@ use kithara_integration_tests::{
     event::TestEvent,
     fixture_protocol::DelayRule,
     kithara, mixed_codec_ladder_encrypted,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE, app_disk_asset_store, app_track_source},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE, app_track_source},
     waits::{wait_for_position_at_least, wait_for_position_event, wait_for_position_near_event},
 };
 use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
@@ -132,7 +132,9 @@ async fn run_seek_scenario(
     let shutdown = CancelToken::never();
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
-        .backend(StorageBackend::default())
+        .backend(StorageBackend::Disk {
+            root: temp.path().to_path_buf(),
+        })
         .flush_hub(flush_hub)
         .build();
     let worker = PlayWorker::new(
@@ -157,7 +159,13 @@ async fn run_seek_scenario(
         .build();
     let queue = OfflineQueue::paced(
         session_config,
-        Queue::new(QueueConfig::builder().prep(player).build()),
+        Queue::new(
+            QueueConfig::builder()
+                .prep(player)
+                .store(config.store.clone())
+                .downloader(config.downloader.clone())
+                .build(),
+        ),
         RENDER_PACE,
     )
     .await
@@ -167,7 +175,7 @@ async fn run_seek_scenario(
     let source = app_track_source(
         url.as_str(),
         &config,
-        app_disk_asset_store(&config, temp.path()),
+        config.store.clone(),
         backend,
         abr,
         None,

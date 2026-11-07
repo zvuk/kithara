@@ -40,7 +40,7 @@ pub use kithara_render::{
         CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckMixSettings,
         DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, EqSnapshot,
         FadeDir, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault, Returned,
-        RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot,
+        RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot, TrackClock,
     },
     dispatch,
     rt::{

@@ -525,9 +525,9 @@ mod tests {
 
     #[test]
     fn independent_manifest_pins_all_kithara_dependencies() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let root = crate::testing::workspace::root();
         let rendered = manifest(
-            root,
+            &root,
             Some((
                 "https://github.example/owner/repo.git",
                 "0123456789abcdef0123456789abcdef01234567",
@@ -570,7 +570,7 @@ mod tests {
                 workspace["workspace"]["dependencies"][name]
             );
         }
-        let local: toml::Value = toml::from_str(&manifest(root, None)?)?;
+        let local: toml::Value = toml::from_str(&manifest(&root, None)?)?;
         let path = local["dependencies"]["kithara-test-utils"]["path"]
             .as_str()
             .unwrap();

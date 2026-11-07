@@ -48,6 +48,24 @@ fn host_root_owns_the_configured_sample_rate() {
 
 #[cfg(feature = "offline")]
 #[kithara::test(native, tokio)]
+async fn hosts_report_their_configured_session_mode() {
+    use kithara_play::PlayError;
+    use kithara_test_utils::{bufpool::pools, off_thread::OffThread};
+
+    let hosts = OffThread::spawn("host-session-modes", || {
+        let realtime = Host::<TestPools>::new(HostConfig::builder(pools()).build())?;
+        let offline = Host::new(HostConfig::offline(pools()).build())?;
+        assert!(!realtime.is_offline());
+        assert!(offline.is_offline());
+        Ok::<_, PlayError>((realtime, offline))
+    })
+    .await
+    .expect("both session modes start without an audio device");
+    hosts.close().await;
+}
+
+#[cfg(feature = "offline")]
+#[kithara::test(native, tokio)]
 #[kithara::hang_watchdog]
 async fn an_offline_deck_publishes_owner_commands_without_a_render_pull() {
     use kithara_platform::time::{self, Duration, WallInstant};
