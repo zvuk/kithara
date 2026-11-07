@@ -14,13 +14,13 @@ use kithara_platform::{
 };
 use kithara_signal::{AudioChunkInfo, FrameCount};
 use kithara_stream::{Stream, StreamType};
-use kithara_warp::Warp;
+use kithara_warp::{Warp, WarpRenderer};
 use kithara_worker::{
     Dispatcher, DispatcherConfig, TaskConfig, TaskError, TaskHandle, Worker, WorkerConfig,
 };
 
 use super::{
-    DecoderNode, PcmReceiver, PlayWorkerConfig, TrackConfig,
+    DecoderNode, PcmReceiver, PlayWorkerConfig, TrackConfig, preparation,
     scheduler::{PlaybackObserver, StreamWake},
 };
 use crate::{
@@ -64,6 +64,7 @@ struct WorkerOwner<S> {
     lane: ChannelConfig,
     capacity: NonZeroUsize,
     dispatcher: Dispatcher,
+    preparation: preparation::Preparation,
     pools: PoolRegion<S>,
     base: Worker,
 }
@@ -71,6 +72,15 @@ struct WorkerOwner<S> {
 /// Shared scheduler and pools for the sole render dispatcher task.
 #[derive_where::derive_where(Clone)]
 pub struct PlayWorker<S>(Arc<WorkerOwner<S>>);
+
+struct PreparedLane<T: StreamType, S: HasPool<f32>> {
+    audio: Audio<Stream<T>>,
+    renderer: WarpRenderer<S>,
+    receiver: PcmReceiver,
+    port: super::reader::PcmProducer,
+    activity: Option<kithara_stream::ActivityWriter>,
+    initial: AudioChunkInfo,
+}
 
 impl<S> PlayWorker<S> {
     #[must_use]
@@ -114,13 +124,15 @@ impl<S> PlayWorker<S> {
             .task_burst(task_burst)
             .thread_class(ThreadClass::AudioFeed)
             .wait_timeout(wait_timeout)
-            .maybe_cancel(dispatcher_cancel)
+            .maybe_cancel(dispatcher_cancel.clone())
             .build();
         let dispatcher = base.dispatcher(dispatcher_config);
+        let preparation = preparation::new(&base, id, dispatcher_cancel);
         Self(Arc::new(WorkerOwner {
             lane: ChannelConfig::builder().capacity(lane_capacity).build(),
             capacity,
             dispatcher,
+            preparation,
             pools,
             base,
         }))
@@ -193,23 +205,76 @@ where
         B: Default + ResamplerBackend,
         C: Into<TrackConfig<T, B>>,
     {
-        let TrackConfig {
-            audio,
-            engine_load,
-            warp,
-            preload_chunks,
-            declick,
-            audio_buffer_chunks,
-            block_on_underrun,
-        } = config.into();
-        let cancel = audio.cancel().cloned();
+        let config = config.into();
+        let cancel = config.audio.cancel().cloned();
         self.check_load_cancelled(cancel.as_ref())?;
-        if preload_chunks > audio_buffer_chunks {
+        if config.preload_chunks > config.audio_buffer_chunks {
             return Err(LoadRefusal::Open(DecodeError::InvalidData {
                 detail: "lane preload quota exceeds PCM ring capacity",
             }));
         }
-        let (receiver, lane) = {
+        let preload_chunks = config.preload_chunks;
+        let declick = config.declick;
+        let engine_load = config.engine_load.clone();
+        let worker = self.clone();
+        let prepared =
+            preparation::execute(&self.0.preparation, cancel.clone(), move || async move {
+                worker.prepare_lane(config, position, start).await
+            })
+            .await?;
+        self.check_load_cancelled(cancel.as_ref())?;
+        let PreparedLane {
+            audio,
+            renderer,
+            receiver,
+            port,
+            activity,
+            initial,
+        } = prepared;
+        let source = WarpSource::new(
+            audio,
+            renderer,
+            initial.spec,
+            self.pools().clone(),
+            crate::LaneSetup {
+                inbox,
+                preload_chunks,
+                declick,
+            },
+        );
+        let lane = DecoderNode::new(
+            source,
+            port,
+            activity,
+            initial,
+            engine_load,
+            self.pools().clone(),
+            cancel,
+        );
+        let latency = lane.engine_latency();
+        Ok((receiver, lane, latency))
+    }
+
+    async fn prepare_lane<T, B>(
+        &self,
+        config: TrackConfig<T, B>,
+        position: Duration,
+        start: LaneStart,
+    ) -> Result<PreparedLane<T, S>, LoadRefusal>
+    where
+        T: StreamType<Events = EventBus>,
+        B: Default + ResamplerBackend,
+    {
+        let TrackConfig {
+            audio,
+            warp,
+            audio_buffer_chunks,
+            block_on_underrun,
+            ..
+        } = config;
+        let cancel = audio.cancel().cloned();
+        self.check_load_cancelled(cancel.as_ref())?;
+        {
             let wake = StreamWake::new(self.0.dispatcher.wake_handle());
             // Keep cold source preparation out of the callers' inline future state.
             let prepared = Box::pin(Audio::<Stream<T>>::prepare(
@@ -267,31 +332,15 @@ where
                 .map_err(|error| DecodeError::audio_stream("lane renderer preparation task", error))
                 .map_err(decode_refusal)?
                 .map_err(decode_refusal)?;
-            let source = WarpSource::new(
+            Ok(PreparedLane {
                 audio,
                 renderer,
-                spec,
-                self.pools().clone(),
-                crate::LaneSetup {
-                    inbox,
-                    preload_chunks,
-                    declick,
-                },
-            );
-            let lane = Box::new(DecoderNode::new(
-                source,
+                receiver,
                 port,
                 activity,
                 initial,
-                engine_load,
-                self.pools().clone(),
-                cancel.clone(),
-            ));
-            (receiver, lane)
-        };
-        self.check_load_cancelled(cancel.as_ref())?;
-        let latency = lane.engine_latency();
-        Ok((receiver, *lane, latency))
+            })
+        }
     }
 
     fn check_load_cancelled(
@@ -335,7 +384,7 @@ fn decode_refusal(error: DecodeError) -> LoadRefusal {
     }
 }
 
-fn task_refusal(error: TaskError) -> LoadRefusal {
+pub(super) fn task_refusal(error: TaskError) -> LoadRefusal {
     match error {
         TaskError::Capacity { capacity } => LoadRefusal::Capacity { capacity },
         TaskError::Cancelled => LoadRefusal::Cancelled,
@@ -425,12 +474,20 @@ mod tests {
     struct GatedFailure;
 
     impl StreamType for GatedFailure {
-        type Config = futures::channel::oneshot::Receiver<()>;
+        type Config = (
+            futures::channel::oneshot::Receiver<()>,
+            Option<kithara_platform::CancelToken>,
+        );
         type Events = EventBus;
         type Source = unimock::Unimock;
 
-        async fn create(config: Self::Config) -> Result<Self::Source, kithara_stream::SourceError> {
-            config.await.expect("the test releases source preparation");
+        async fn create(
+            (gate, cancel): Self::Config,
+        ) -> Result<Self::Source, kithara_stream::SourceError> {
+            gate.await.expect("the test releases source preparation");
+            if let Some(cancel) = cancel {
+                cancel.cancel();
+            }
             Err(kithara_stream::SourceError::InvalidPath(
                 "gated source failure".to_owned(),
             ))
@@ -453,7 +510,14 @@ mod tests {
                 .build(),
         );
         let (release, gate) = futures::channel::oneshot::channel();
-        let audio = AudioConfig::<GatedFailure, NoResamplerBackend>::for_stream(gate)
+        let cancelled = if cancel_audio {
+            Some(audio_cancel.token())
+        } else if cancel_dispatcher {
+            Some(dispatcher_cancel.token())
+        } else {
+            None
+        };
+        let audio = AudioConfig::<GatedFailure, NoResamplerBackend>::for_stream((gate, cancelled))
             .cancel(audio_cancel.token())
             .build();
         let (_sender, inbox) = play.lane_channel();
@@ -469,12 +533,6 @@ mod tests {
             inbox,
         ));
         assert!(futures::poll!(opening.as_mut()).is_pending());
-        if cancel_audio {
-            audio_cancel.cancel();
-        }
-        if cancel_dispatcher {
-            dispatcher_cancel.cancel();
-        }
         release.send(()).expect("release the pending source");
         let Err(refusal) = opening.await else {
             panic!("the gated source cannot open");

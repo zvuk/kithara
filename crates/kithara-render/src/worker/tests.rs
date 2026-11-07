@@ -1,7 +1,7 @@
 use kithara_assets::{AssetStore, StorageBackend};
 use kithara_audio::{AudioConfig, NoResamplerBackend};
 use kithara_file::{File, FileConfig, FileSrc};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{cancel_token, kithara};
 
 use super::{TrackConfig, TrackConfigPatch};
 use crate::test_pools::{TestPools, pools};
@@ -17,6 +17,47 @@ fn file_config() -> FileConfig<TestPools> {
             .build(),
     )
     .build()
+}
+
+#[kithara::test(tokio)]
+async fn cold_source_preparation_runs_outside_the_requesting_thread() {
+    use kithara_platform::{thread, time::Duration};
+    use kithara_test_fixtures::signal::{Wave, wav};
+    use kithara_test_utils::{TestTempDir, test::usdt};
+
+    let directory = TestTempDir::new();
+    let path = directory.path().join("preparation.wav");
+    std::fs::write(&path, wav(44_100, 2, 44_100, Wave::Silence)).expect("write source");
+    let pools = pools();
+    let file = FileConfig::for_src(FileSrc::Local(path))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Memory)
+                .build(),
+        )
+        .build();
+    let audio = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file).build();
+    let config = TrackConfig::for_audio(audio).build();
+    let start = crate::LaneStart {
+        speed: kithara_sync::SpeedCurve::Constant(1.0),
+        keylock: false,
+        backend: config.warp().backend(),
+    };
+    let worker = super::PlayWorker::new(super::PlayWorkerConfig::builder(pools).build());
+    let (_sender, inbox) = worker.lane_channel();
+    let caller = thread::current().id();
+    let trace = usdt::scope();
+    let (_receiver, _lane, _latency) = worker
+        .load(config, Duration::ZERO, start, inbox)
+        .await
+        .expect("prepare source");
+    let opened = trace.events_of("source_opened");
+    drop(trace);
+    assert_eq!(opened.len(), 1, "one real source-open operation");
+    assert_ne!(
+        opened[0].thread, caller,
+        "cold source work must not occupy its requesting owner"
+    );
 }
 
 #[kithara::test]
@@ -65,3 +106,60 @@ fn an_absent_key_stays_unset_rather_than_defaulting() {
         "an unnamed value leaves the owner's capacity unchanged"
     );
 }
+
+#[kithara::test(tokio)]
+async fn domain_cancel_interrupts_cold_open_on_a_shared_worker(
+    cancel_token: kithara_platform::CancelToken,
+) {
+    use kithara_platform::{
+        time::{Duration, timeout},
+        tokio::sync::oneshot,
+    };
+    use kithara_stream::{SourceError, StreamType};
+    use kithara_worker::{Worker, WorkerConfig};
+
+    struct PendingFile;
+    impl StreamType for PendingFile {
+        type Config = oneshot::Sender<()>;
+        type Events = kithara_events::EventBus;
+        type Source = <File<TestPools> as StreamType>::Source;
+        async fn create(started: Self::Config) -> Result<Self::Source, SourceError> {
+            let _ = started.send(());
+            std::future::pending().await
+        }
+    }
+
+    let shared = Worker::new(WorkerConfig::new());
+    let worker = super::PlayWorker::new(
+        super::PlayWorkerConfig::builder(pools())
+            .worker(shared.clone())
+            .cancel(cancel_token.clone())
+            .build(),
+    );
+    let (started, received) = oneshot::channel();
+    let audio = AudioConfig::<PendingFile, NoResamplerBackend>::for_stream(started).build();
+    let config = TrackConfig::for_audio(audio).build();
+    let start = crate::LaneStart {
+        speed: kithara_sync::SpeedCurve::Constant(1.0),
+        keylock: false,
+        backend: config.warp().backend(),
+    };
+    let (_sender, inbox) = worker.lane_channel();
+    let load = worker.load(config, Duration::ZERO, start, inbox);
+    let (result, ()) =
+        kithara_platform::tokio::join!(timeout(Duration::from_secs(1), load), async {
+            received.await.expect("cold source starts");
+            cancel_token.cancel();
+        },);
+    assert!(matches!(
+        result.expect("domain cancellation releases the load"),
+        Err(super::LoadRefusal::Cancelled)
+    ));
+    assert!(
+        !shared.is_cancelled(),
+        "another owner of the base worker remains live"
+    );
+}
+
+#[path = "cold_open_tests.rs"]
+mod cold_open;
