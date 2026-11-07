@@ -33,6 +33,45 @@ fn assert_track_unchanged(actual: &TrackSnapshot, expected: &TrackSnapshot) {
 }
 
 #[kithara::test]
+fn a_rejected_alignment_cannot_replace_a_waiting_play() {
+    let (mut deck, control, mut rig, _) = sounding();
+    rig.run(|out| LinkedPlayer::sync(&mut deck, false, out))
+        .expect("disable SYNC");
+    let alignment = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("enable SYNC")
+        .expect("alignment is pending");
+    let pause = rig
+        .run(|out| deck.apply(TrackCommand::Pause { at: When::Next }, out))
+        .expect("pause")
+        .expect("pause sequence");
+    rig.apply(&mut deck, pause, 0);
+    assert!(matches!(
+        deck.snapshot().track.status,
+        TrackStatus::Paused { .. }
+    ));
+    control.clear();
+    assert_eq!(
+        rig.run(|out| deck.apply(TrackCommand::Play { at: When::Next }, out))
+            .expect("Play waits for its cue"),
+        None
+    );
+    let cue = control.commands()[0].0;
+    rig.settle(&mut deck, alignment, &Outcome::Rejected(Rejection::Late));
+    rig.apply(&mut deck, cue, 0);
+    control.clear();
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert!(
+        control
+            .commands()
+            .iter()
+            .any(|(_, command)| matches!(command, Command::Play(_))),
+        "the latest Play must survive the older alignment refusal: {:?}",
+        control.commands()
+    );
+}
+
+#[kithara::test]
 fn a_parent_fact_commits_the_member_observation_it_was_staged_on() {
     let (mut deck, control, mut rig, _) = sounding();
     let at = SessionFrame::new(36_000);
