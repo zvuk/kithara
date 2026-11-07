@@ -156,7 +156,7 @@ async fn deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
 #[kithara::test(
     tokio,
     tracing(
-        "kithara_render_probe=trace,kithara_decode_probe=trace,kithara_audio_probe=trace,kithara_test::host_rate_telemetry=info,host_rate_feed_intervals=info"
+        "kithara_render_probe=trace,kithara_decode_probe=trace,kithara_audio_probe=trace,kithara_worker_probe=trace,kithara_test::host_rate_telemetry=info,host_rate_feed_intervals=info"
     )
 )]
 async fn nonblocking_deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
