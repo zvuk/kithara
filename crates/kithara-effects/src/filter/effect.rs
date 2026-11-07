@@ -238,7 +238,7 @@ impl FilterEffect {
                 cutoff = transition(cutoff.current_value(), f64::from(value), rate);
             }
             FilterSettingsChange::Q(value) => {
-                q = transition(q.current_value(), f64::from(value), rate)
+                q = transition(q.current_value(), f64::from(value), rate);
             }
             FilterSettingsChange::GainDb(value) => {
                 gain = transition(gain.current_value(), f64::from(f32::from(value)), rate);
