@@ -188,6 +188,18 @@ impl Biquad {
         self.reset_state = source.reset_state;
         Ok(())
     }
+    /// Whether construction, reset or quiet retirement left no residual history.
+    #[must_use]
+    pub fn is_reset(&self) -> bool {
+        self.reset_state
+    }
+
+    /// Clears section history without changing coefficients or allocating.
+    pub fn reset(&mut self) {
+        self.cascade.reset();
+        self.quiet = 0;
+        self.reset_state = true;
+    }
 }
 
 fn quiet<P: Deref<Target = [f32]>>(planes: &[P], frame: usize) -> bool {
