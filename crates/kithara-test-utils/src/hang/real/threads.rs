@@ -14,10 +14,9 @@ use std::fs;
 /// runaway one must not turn a bounded dump into an unbounded file.
 const MAX_THREADS: usize = 128;
 
-/// One line per live thread of this process: name, id, scheduler state,
-/// accumulated CPU ticks and the kernel wait channel. Name first, because the
-/// reading is joined to an engine holder by name and the sort must keep a
-/// name's instances together when the cap truncates.
+/// One line per live thread: name, id, scheduler state, CPU ticks, nice,
+/// wait channel and schedstat (runtime ns, runnable wait ns, timeslices).
+/// Name first because readings join engine holders by name before truncation.
 ///
 /// Empty on targets without `/proc`, and on any thread whose files vanish
 /// mid-read — a thread exiting during the walk is expected, not an error.
@@ -37,13 +36,15 @@ pub(crate) fn snapshot() -> Vec<String> {
 /// Render one thread, or `None` when it exited before its files were read.
 fn describe(tid: &str) -> Option<String> {
     let stat = fs::read_to_string(format!("/proc/self/task/{tid}/stat")).ok()?;
-    let (state, cpu_ticks) = parse_stat(&stat)?;
+    let (state, cpu_ticks, nice) = parse_stat(&stat)?;
     let name = read_trimmed(&format!("/proc/self/task/{tid}/comm"))
         .unwrap_or_else(|| "<unnamed>".to_owned());
     let wchan =
         read_trimmed(&format!("/proc/self/task/{tid}/wchan")).unwrap_or_else(|| "-".to_owned());
+    let schedstat =
+        read_trimmed(&format!("/proc/self/task/{tid}/schedstat")).unwrap_or_else(|| "-".to_owned());
     Some(format!(
-        "name={name} tid={tid} state={state} cpu_ticks={cpu_ticks} wchan={wchan}"
+        "name={name} tid={tid} state={state} cpu_ticks={cpu_ticks} nice={nice} wchan={wchan} schedstat={schedstat:?}"
     ))
 }
 
@@ -53,18 +54,19 @@ fn read_trimmed(path: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
-/// Pull the scheduler state and the thread's own CPU time out of a `stat` line.
+/// Pull the scheduler state, CPU time and nice value out of a `stat` line.
 ///
 /// The comm field is parenthesised and may itself contain spaces and
 /// parentheses, so the fixed-position fields are counted from the LAST `)`:
 /// state first, then `utime` and `stime` eleven and twelve fields later.
-fn parse_stat(stat: &str) -> Option<(String, u64)> {
+fn parse_stat(stat: &str) -> Option<(String, u64, i32)> {
     let after_comm = &stat[stat.rfind(')')? + 1..];
     let fields: Vec<&str> = after_comm.split_whitespace().collect();
     let state = (*fields.first()?).to_owned();
     let utime: u64 = fields.get(11)?.parse().ok()?;
     let stime: u64 = fields.get(12)?.parse().ok()?;
-    Some((state, utime + stime))
+    let nice: i32 = fields.get(16)?.parse().ok()?;
+    Some((state, utime + stime, nice))
 }
 
 #[cfg(test)]
@@ -73,8 +75,8 @@ mod tests {
 
     #[test]
     fn stat_fields_are_counted_from_the_last_paren() {
-        let stat = "7 (audio (worker) rt) S 1 7 7 0 -1 4194304 11 0 0 0 42 17 0 0 20 0";
-        assert_eq!(parse_stat(stat), Some(("S".to_owned(), 59)));
+        let stat = "7 (audio (worker) rt) S 1 7 7 0 -1 4194304 11 0 0 0 42 17 0 0 20 -16";
+        assert_eq!(parse_stat(stat), Some(("S".to_owned(), 59, -16)));
     }
 
     #[test]
@@ -92,7 +94,9 @@ mod tests {
             lines.iter().all(|line| line.starts_with("name=")
                 && line.contains(" tid=")
                 && line.contains(" state=")
-                && line.contains(" cpu_ticks=")),
+                && line.contains(" cpu_ticks=")
+                && line.contains(" nice=")
+                && line.contains(" schedstat=")),
             "every line carries the full reading: {lines:?}"
         );
     }
