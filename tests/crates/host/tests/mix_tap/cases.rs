@@ -153,7 +153,12 @@ async fn deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
     deck_eq_format_change(true).await;
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(
+    tokio,
+    tracing(
+        "kithara_render_probe=trace,kithara_decode_probe=trace,kithara_audio_probe=trace,kithara_test::host_rate_telemetry=info"
+    )
+)]
 async fn nonblocking_deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
     deck_eq_format_change(false).await;
 }
@@ -191,8 +196,9 @@ async fn deck_eq_format_change(block_on_underrun: bool) {
     )
     .await;
     let _ = render_effect_window(&harness, 4096).await;
-    assert_eq!(harness.metrics().underruns(), 0, "initial deck playback");
-    underruns.checkpoint(harness.metrics(), true, "initial ready playback");
+    let metrics = harness.metrics();
+    underruns.checkpoint(metrics, true, "initial ready playback");
+    assert_eq!(metrics.underruns(), 0, "initial deck playback");
     assert_eq!(harness.player().eq_gain(1), Some(6.0));
     let mut tap = harness
         .host()
