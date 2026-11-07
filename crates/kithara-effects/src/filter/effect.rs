@@ -229,6 +229,8 @@ impl FilterEffect {
         Ok(())
     }
     /// Clear filter history and finish the current manual targets.
+    /// # Panics
+    /// Panics if the internal prepared-coefficient invariant is violated.
     pub fn reset(&mut self) {
         self.filter
             .retune(0, self.target_coefficients)
