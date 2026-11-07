@@ -135,6 +135,15 @@ impl SmoothedParam64 {
         if !(0.0..1.0).contains(&self.b1) {
             return None;
         }
+        self.rounded_motion_bound(low..=high)
+    }
+
+    fn rounded_motion_bound(
+        &self,
+        bounds: RangeInclusive<f64>,
+    ) -> Option<(RangeInclusive<f64>, u64)> {
+        let distance = (self.value - self.target).abs();
+        let threshold = self.span * self.settle_ratio;
         let magnitude = self
             .value
             .abs()
@@ -163,7 +172,7 @@ impl SmoothedParam64 {
                 .checked_add(1)?
         };
         Some((
-            low.min(lower)..=high.max(upper),
+            (*bounds.start()).min(lower)..=(*bounds.end()).max(upper),
             approach.checked_add(settling)?,
         ))
     }

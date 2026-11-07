@@ -1,6 +1,7 @@
 use std::{num::NonZeroU32, ops::RangeInclusive};
 
 use kithara_dsp::filter::FilterError;
+use num_traits::ToPrimitive;
 
 use super::{FilterParameter, FilterSettings, Kind};
 
@@ -224,6 +225,5 @@ fn log_add(left: f64, right: f64) -> f64 {
 }
 
 fn count(value: u64) -> f64 {
-    use num_traits::ToPrimitive;
     value.to_f64().unwrap_or(f64::INFINITY)
 }
