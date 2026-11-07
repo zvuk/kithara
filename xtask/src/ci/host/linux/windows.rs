@@ -820,9 +820,7 @@ mod tests {
     /// missed one of them would surface there and nowhere earlier.
     #[test]
     fn the_guest_sources_name_files_this_repository_tracks() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("the crate sits inside the workspace");
+        let root = crate::testing::workspace::root();
         for source in [consts::GUEST_ANSWER_FILE, consts::GUEST_PROVISION_SCRIPT] {
             assert!(root.join(source).is_file(), "{source}");
         }
@@ -915,9 +913,7 @@ mod tests {
     /// finished long before.
     #[test]
     fn the_guest_writes_what_the_host_reads() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("the crate sits inside the workspace");
+        let root = crate::testing::workspace::root();
         let script = fs::read_to_string(root.join(consts::GUEST_PROVISION_SCRIPT)).unwrap();
         for marker in ["step ", "done", "failed: ", "licence-expires "] {
             let line = format!("{} {marker}", consts::GUEST_CONSOLE_PREFIX);
@@ -1153,9 +1149,7 @@ mod tests {
     /// settled before it runs.
     #[test]
     fn the_account_the_guest_signs_in_as_never_has_its_password_expire() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("the crate sits inside the workspace");
+        let root = crate::testing::workspace::root();
         let text = fs::read_to_string(root.join(consts::GUEST_ANSWER_FILE)).unwrap();
         let answer = roxmltree::Document::parse(&text).unwrap();
         let text_of = |node: roxmltree::Node<'_, '_>, name: &str| {

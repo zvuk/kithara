@@ -2,7 +2,9 @@ use kithara_beat::BeatGridModel;
 use kithara_command::{Seq, When};
 use kithara_config::Config;
 use kithara_platform::time::Duration;
-use kithara_play::{Outbox, PlayError, Player, Position, Settled, Track, TrackSnapshot};
+use kithara_play::{
+    Outbox, PlayError, Player, Position, Settled, Track, TrackClock, TrackCommand, TrackSnapshot,
+};
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 
 use crate::{GridAnswer, LinkError, LinkedConfig, TempoTrajectory};
@@ -66,6 +68,16 @@ pub struct LinkConfig {
     /// Time a new segment takes from its cue to ready on a silent deck.
     #[config(builder(default = Duration::from_millis(60)))]
     preparation: Duration,
+    /// Output time a sounding deck's speed plan follows the source grid past
+    /// its correction; the deck renews the plan half this time before it ends.
+    #[config(check = check_horizon, builder(default = Duration::from_secs(4)))]
+    horizon: Duration,
+}
+
+fn check_horizon(horizon: Duration) -> Result<Duration, LinkError> {
+    (!horizon.is_zero())
+        .then_some(horizon)
+        .ok_or(LinkError::Horizon { horizon })
 }
 
 fn check_epsilon(epsilon: f32) -> Result<f32, LinkError> {
@@ -165,9 +177,14 @@ pub struct Linked<P> {
     pub(super) grid: Option<BeatGridModel>,
     pub(super) host: TempoTrajectory,
     pub(crate) mode: SyncMode,
+    /// The dropout clock the inner track last accepted.
+    pub(super) clock: TrackClock,
     pub(super) waiting: Option<Waiting>,
     pub(super) correction: Option<(Seq, RunningCorrection)>,
     pub(super) alignment: Option<Cause>,
+    /// The last law's start in a bounded plan; `None` for a plan through
+    /// the grid's end or when no plan is sent.
+    pub(super) plan_end: Option<SessionFrame>,
     pub(super) speeds: Vec<(Seq, SpeedOperation)>,
     pub(super) start: Option<Seq>,
     pub(super) start_caller: Option<Seq>,
@@ -268,9 +285,11 @@ impl<P> Linked<P> {
             grid: None,
             host,
             mode: SyncMode::Off,
+            clock: TrackClock::Media,
             waiting: None,
             correction: None,
             alignment: None,
+            plan_end: None,
             speeds: Vec::new(),
             start: None,
             start_caller: None,
@@ -279,6 +298,26 @@ impl<P> Linked<P> {
             retimes: Vec::new(),
             cue: None,
             paused_in_place: false,
+        }
+    }
+
+    /// A synced track keeps session time through a PCM dropout, so it comes
+    /// back on the host phase in the block its PCM returns.
+    pub(super) fn keep_clock<S>(&mut self, out: &mut Outbox<'_, S>)
+    where
+        P: Track<S>,
+    {
+        let clock = if self.synced() {
+            TrackClock::Session
+        } else {
+            TrackClock::Media
+        };
+        if clock == self.clock {
+            return;
+        }
+        match self.inner.apply(TrackCommand::Clock(clock), out) {
+            Ok(_) => self.clock = clock,
+            Err(error) => tracing::debug!(%error, "the track clock waits for the next pass"),
         }
     }
 

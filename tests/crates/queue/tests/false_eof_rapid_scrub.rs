@@ -19,7 +19,7 @@ use kithara_app::pools::AppPools;
 use kithara_integration_tests::{
     event::TestEvent,
     kithara,
-    offline::{AppQueueFixture, app_disk_asset_store, app_track_source, insecure_app_queue},
+    offline::{AppQueueFixture, app_track_source, insecure_app_queue},
     usdt_trace::scope,
     waits::{wait_for_event, wait_for_loader_done_event},
 };
@@ -338,7 +338,7 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
             let source = app_track_source(
                 SENTINEL_BEFORE,
                 &ctx.config,
-                app_disk_asset_store(&ctx.config, ctx.cache.path()),
+                ctx.config.store.clone(),
                 backend,
                 AbrMode::Auto(None),
                 None,
@@ -353,7 +353,7 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
             let source = app_track_source(
                 TARGET_TRACK,
                 &ctx.config,
-                app_disk_asset_store(&ctx.config, ctx.cache.path()),
+                ctx.config.store.clone(),
                 backend,
                 AbrMode::Auto(None),
                 None,
@@ -368,7 +368,7 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
             let source = app_track_source(
                 SENTINEL_AFTER,
                 &ctx.config,
-                app_disk_asset_store(&ctx.config, ctx.cache.path()),
+                ctx.config.store.clone(),
                 backend,
                 AbrMode::Auto(None),
                 None,

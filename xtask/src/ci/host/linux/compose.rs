@@ -106,7 +106,7 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
             env_file = unit.env_file,
         )?;
         writeln!(yaml, "    environment:")?;
-        for entry in Container::environment(runner) {
+        for entry in Container::environment(host, runner) {
             writeln!(yaml, "      - {entry}")?;
         }
         writeln!(yaml, "    volumes:")?;
@@ -167,7 +167,7 @@ mod tests {
         let host = host_fixture();
         let yaml = project(&host, &fixture().pins, 32).expect("the project must render");
         for runner in &host.runners {
-            for entry in Container::environment(runner) {
+            for entry in Container::environment(&host, runner) {
                 assert!(
                     yaml.contains(&format!("      - {entry}")),
                     "{entry}:\n{yaml}"

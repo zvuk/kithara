@@ -15,8 +15,7 @@ use kithara_integration_tests::{
     event::TestEvent,
     kithara,
     offline::{
-        AppQueueFixture, app_disk_asset_store, app_track_source, assert_playhead_tracks_renderer,
-        insecure_app_queue,
+        AppQueueFixture, app_track_source, assert_playhead_tracks_renderer, insecure_app_queue,
     },
     waits::{wait_for_loader_done_event, wait_for_position_at_least, wait_for_position_near},
 };
@@ -34,7 +33,7 @@ fn build_track_source(
     app_track_source(
         url,
         &ctx.config,
-        app_disk_asset_store(&ctx.config, ctx.cache.path()),
+        ctx.config.store.clone(),
         backend,
         abr,
         None,

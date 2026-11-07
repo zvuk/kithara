@@ -385,6 +385,27 @@ pub(super) struct Correction {
     pub(super) epsilon: f32,
 }
 
+/// How far a speed plan follows the source grid.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Coverage {
+    /// The plan's last law starts on this output frame, counted from its
+    /// start, and holds from there until a renewal.
+    Until(u64),
+    /// The plan follows the source grid to its end.
+    GridEnd,
+}
+
+/// Where a curve starts, where it lands, and how far past its correction
+/// and landing it is planned.
+#[derive(Clone, Copy)]
+pub(super) struct Span {
+    pub(super) start: SessionFrame,
+    pub(super) landing: Option<(Duration, SessionFrame)>,
+    /// Output frames planned past the later of the correction end and the
+    /// landing.
+    pub(super) horizon: u64,
+}
+
 /// Why a source curve could not be planned.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CurveError {
@@ -622,7 +643,8 @@ fn bridge_source_law(
         offset,
         rate,
     )?;
-    let speed = (source.media_at(reached)? - source.media_at(preceding)?) * rate;
+    let advance = source.frame_at_beat(reached)? - source.frame_at_beat(preceding)?;
+    let speed = advance * (rate / f64::from(source.rate.get()));
     Some((reached, speed))
 }
 
@@ -666,15 +688,37 @@ fn speed_curve(laws: Vec<(u64, ExponentialApproach)>) -> Option<SpeedCurve> {
     }
 }
 
+/// Whether the plan, holding its law from `frame`, has reached its horizon:
+/// the horizon past the correction end and the landing.
+fn reached_horizon(
+    frame: u64,
+    terminal: Option<(u64, f64)>,
+    landing: Option<(Duration, u64)>,
+    correction: Option<&Correction>,
+    horizon: u64,
+) -> bool {
+    if correction.is_some() && terminal.is_none() {
+        return false;
+    }
+    let settled = terminal
+        .map_or(0, |(end, _)| end)
+        .max(landing.map_or(0, |(_, at)| at));
+    frame > settled && frame >= settled.saturating_add(horizon)
+}
+
 pub(super) fn curve(
     host: &TempoTrajectory,
     source: &SourceGrid,
     media: Duration,
-    start: SessionFrame,
-    landing: Option<(Duration, SessionFrame)>,
+    span: Span,
     offsets: &[(u64, f64)],
     correction: Option<&Correction>,
-) -> Result<(SpeedCurve, u64), CurveError> {
+) -> Result<(SpeedCurve, u64, Coverage), CurveError> {
+    let Span {
+        start,
+        landing,
+        horizon,
+    } = span;
     let rate = f64::from(host.sample_rate().get());
     let first_beat = source
         .beat_at(media.as_secs_f64())
@@ -687,6 +731,7 @@ pub(super) fn curve(
     let mut frame = 0;
     let mut terminal = None;
     let mut laws = Vec::new();
+    let mut coverage = Coverage::GridEnd;
     loop {
         let (landed, slope, source_end) = landed_interval(source, beat, frame, landing)?;
         beat = landed;
@@ -703,6 +748,10 @@ pub(super) fn curve(
         }
         let (law, offset) = source_law(host, start, frame, slope, terminal, offsets, &mut laws)
             .ok_or(CurveError::NoLaw)?;
+        if reached_horizon(frame, terminal, landing, correction, horizon) {
+            coverage = Coverage::Until(frame);
+            break;
+        }
         let next = boundaries.iter().copied().find(|next| *next > frame);
         let Some(CurveCrossing {
             through,
@@ -724,7 +773,11 @@ pub(super) fn curve(
         frame = through;
     }
     let frames = terminal.map_or(0, |(end, _)| end);
-    Ok((speed_curve(laws).ok_or(CurveError::NoLaw)?, frames))
+    Ok((
+        speed_curve(laws).ok_or(CurveError::NoLaw)?,
+        frames,
+        coverage,
+    ))
 }
 
 #[cfg(test)]

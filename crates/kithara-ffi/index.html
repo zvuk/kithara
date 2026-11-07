@@ -355,14 +355,18 @@
         window.renderPlaylist = renderPlaylist;
         function renderPlaylist() {
             const ul = $('playlist');
-            ul.textContent = '';
+            const rows = new Map(Array.from(ul.children, li => [li.dataset.itemId, li]));
             playlist.forEach((track, i) => {
-                const li = document.createElement('li');
+                const key = String(track.id);
+                const li = rows.get(key) ?? document.createElement('li');
+                rows.delete(key);
+                li.dataset.itemId = key;
                 li.textContent = `${i + 1}. ${track.label}`;
-                if (track.id === currentId) li.classList.add('active');
+                li.classList.toggle('active', track.id === currentId);
                 li.onclick = () => selectTrack(i);
-                ul.appendChild(li);
+                if (ul.children[i] !== li) ul.insertBefore(li, ul.children[i] ?? null);
             });
+            rows.forEach(li => li.remove());
         }
 
         // window-exposed for selenium: append a track to the engine queue and

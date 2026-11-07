@@ -8,13 +8,17 @@
 //! It is a program rather than an ignored test because these call sites choose
 //! their own arguments: libtest would reject `--stop-server` before the double
 //! could answer it.
+//!
+//! A double invoked by an absolute path with a `<path>.sh` file beside it runs
+//! that file with `/bin/sh` instead of a role.
 
 use std::{env, fs::OpenOptions, io::Write as _, path::Path, process::ExitCode};
 
 #[cfg(unix)]
 mod kache;
 
-/// The environment this double reads its whole behaviour from.
+/// The environment this double reads its whole behaviour from, unless a
+/// script was installed beside it.
 mod consts {
     /// File the arguments of each run are appended to, one line per run,
     /// joined by spaces. The whole line, not the first argument: `colima`
@@ -43,6 +47,10 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => fail("starting compiler-cache socket"),
         };
+    }
+    #[cfg(unix)]
+    if let Some(script) = installed_script() {
+        return run_script(&script);
     }
     let role = env::args_os()
         .next()
@@ -89,6 +97,37 @@ fn main() -> ExitCode {
         return fail("starting compiler-cache socket");
     }
     ExitCode::from(code)
+}
+
+/// The script installed beside the path this double was invoked by.
+///
+/// Only an absolute invocation names a place: a double reached through `PATH`
+/// is invoked by its bare name, and that name beside the working directory is
+/// not where a test installed anything.
+#[cfg(unix)]
+fn installed_script() -> Option<std::path::PathBuf> {
+    let invoked = std::path::PathBuf::from(env::args_os().next()?);
+    if !invoked.is_absolute() {
+        return None;
+    }
+    let mut script = invoked.into_os_string();
+    script.push(".sh");
+    let script = std::path::PathBuf::from(script);
+    script.is_file().then_some(script)
+}
+
+/// Becomes `/bin/sh` running `script` on this run's arguments, so the caller's
+/// process, pipes and signals are the script's.
+#[cfg(unix)]
+fn run_script(script: &Path) -> ExitCode {
+    use std::os::unix::process::CommandExt as _;
+
+    let error = std::process::Command::new("/bin/sh")
+        .arg(script)
+        .args(env::args_os().skip(1))
+        .exec();
+    eprintln!("{error}");
+    fail("running the installed script")
 }
 
 fn fail(what: &str) -> ExitCode {

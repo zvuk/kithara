@@ -9,6 +9,7 @@ use kithara_devtools::{
 };
 use regex::Regex;
 
+use super::browser;
 use crate::{config::KitharaExt, consts};
 
 #[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
@@ -47,6 +48,8 @@ impl WebPackage {
 
 #[derive(Debug, clap::Subcommand)]
 pub(crate) enum WasmCommand {
+    /// Run the browser test suites with their prebuilt native runner.
+    Test(browser::TestArgs),
     /// Build a web package via Trunk.
     Build {
         /// Build profile.
@@ -77,12 +80,15 @@ pub(crate) enum WasmCommand {
 }
 
 pub(crate) fn run(cmd: WasmCommand, ctx: &Ctx) -> Result<()> {
-    let ext = KitharaExt::from_ctx(ctx)?;
     let tools = &ctx.config.tools;
     match cmd {
+        WasmCommand::Test(args) => browser::run(&args, ctx),
         WasmCommand::Build { profile, package } => run_build(profile, package, tools),
         WasmCommand::SizeCheck { profile } => run_size_check(profile, tools),
-        WasmCommand::Doc => render_docs(&ctx.root.join(&ext.release.docs_channel("web")?.archive)),
+        WasmCommand::Doc => {
+            let ext = KitharaExt::from_ctx(ctx)?;
+            render_docs(&ctx.root.join(&ext.release.docs_channel("web")?.archive))
+        }
         WasmCommand::Postbuild {
             staging_dir,
             package,

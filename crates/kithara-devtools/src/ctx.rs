@@ -73,7 +73,11 @@ impl Ctx {
         })
     }
 
-    pub(crate) fn metadata(&self) -> Result<&Metadata> {
+    /// Returns the Cargo metadata loaded with this workspace context.
+    ///
+    /// # Errors
+    /// Returns an error for a context created without Cargo metadata.
+    pub fn metadata(&self) -> Result<&Metadata> {
         self.metadata
             .as_ref()
             .context("workspace metadata is unavailable in this xtask context")

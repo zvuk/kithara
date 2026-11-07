@@ -87,6 +87,12 @@ directory for a cold build. Runtime helpers serve the prepared bytes.
 `just test wasm [chrome|firefox|safari] [all|webcodecs]`. `just platform wasm` is
 check/build/size-check only and runs no tests.
 
+- A package opts its library unit tests into every `just test wasm` run,
+  whatever the browser, suite or route, with
+  `[package.metadata.kithara.wasm-lib-tests]`. Both keys are required:
+  `default-features` (`true` or `false`) and `features` (a list, possibly
+  empty). An entry that lacks either stops the recipe before it builds
+  anything.
 - A `wasm32` build makes no host binary and the runner looks for `test_server`
   beside itself, so the recipe builds it first.
 - Only `suite_heavy` is built for `wasm32`, with every native module compiled

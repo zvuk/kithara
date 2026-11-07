@@ -1,8 +1,19 @@
-use std::{collections::BTreeSet, fs, path::Path};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde_yaml_ng::{Mapping, Value};
 
 mod deps_deny;
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+        .parent()
+        .expect("xtask has a workspace root")
+        .to_path_buf()
+}
 
 const MERGE_REQUEST_KIND: &str = "merge-request";
 /// How a job on a host that carries `just` runs a lane.
@@ -445,12 +456,6 @@ fn assert_exact_rule(rule: &Mapping, condition: &str, when: Option<&str>) {
     assert_eq!(rule.get("when").and_then(Value::as_str), when);
 }
 
-fn workspace_root() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root")
-}
-
 #[test]
 fn merge_request_dispatch_is_admitted_without_duplicate_push_pipelines() {
     let dispatch = yaml(workspace_root().join(".gitlab-ci.yml"));
@@ -606,7 +611,7 @@ fn child_pipeline_includes_apple_lanes_and_the_blocking_verdict() {
 
 #[test]
 fn the_branch_verdict_expects_only_the_apple_test_producer() {
-    let config = GitlabConfig::load(workspace_root());
+    let config = GitlabConfig::load(&workspace_root());
     let jobs = config.lane_jobs();
     let producers: BTreeSet<&str> = config.definition("verdict")["needs"]
         .as_sequence()
@@ -678,7 +683,7 @@ fn judged_jobs_stage_only_checkout_cleaned_verdict_evidence() {
 #[test]
 fn every_lane_run_through_just_builds_in_a_root_beside_its_own_checkout() {
     const CHECKOUT: &str = "${CI_PROJECT_DIR}";
-    let config = GitlabConfig::load(workspace_root());
+    let config = GitlabConfig::load(&workspace_root());
     let jobs: BTreeSet<String> = config
         .lane_jobs()
         .into_iter()
@@ -729,7 +734,7 @@ fn every_lane_run_through_just_builds_in_a_root_beside_its_own_checkout() {
 
 #[test]
 fn macos_review_jobs_can_use_either_native_registration() {
-    let config = GitlabConfig::load(workspace_root());
+    let config = GitlabConfig::load(&workspace_root());
     let registrations = [
         ["kithara-macos", "kithara-macos-1"],
         ["kithara-macos", "kithara-macos-2"],
@@ -750,8 +755,8 @@ fn macos_review_jobs_can_use_either_native_registration() {
 
 #[test]
 fn each_independent_store_has_a_default_branch_source_publisher() {
-    let lanes = lane_catalog(workspace_root());
-    let gitlab = GitlabConfig::load(workspace_root());
+    let lanes = lane_catalog(&workspace_root());
+    let gitlab = GitlabConfig::load(&workspace_root());
     for (name, os) in [("apple-lint", "macos"), ("linux-lint", "linux")] {
         assert_eq!(lanes[name]["publishes_sources"].as_bool(), Some(true));
         assert_eq!(lanes[name]["os"].as_str(), Some(os));
@@ -768,7 +773,7 @@ fn each_independent_store_has_a_default_branch_source_publisher() {
 
 #[test]
 fn cache_evidence_uploads_only_the_current_job_even_when_it_fails() {
-    let config = GitlabConfig::load(workspace_root());
+    let config = GitlabConfig::load(&workspace_root());
     let default = &config.definition("default")["artifacts"];
     let target = ".ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json";
     for (name, _) in config.lane_jobs() {
@@ -833,7 +838,7 @@ fn verdict_downloads_every_judged_apple_report() {
 
 #[test]
 fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
-    let config = GitlabConfig::load(workspace_root());
+    let config = GitlabConfig::load(&workspace_root());
     let expected_jobs = BTreeSet::from([
         "apple:ios",
         "apple:ios-test",
@@ -867,7 +872,7 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
 
 #[test]
 fn safari_stays_out_of_merge_requests_and_runs_nightly() {
-    let config = GitlabConfig::load(workspace_root());
+    let config = GitlabConfig::load(&workspace_root());
     assert_eq!(
         config.rules_owner("apple:safari").as_deref(),
         Some(".rules-nightly")
@@ -890,7 +895,7 @@ fn safari_stays_out_of_merge_requests_and_runs_nightly() {
 // still fails the night.
 #[test]
 fn the_apple_sanitizer_is_offered_to_review_pipelines_without_blocking_them() {
-    let config = GitlabConfig::load(workspace_root());
+    let config = GitlabConfig::load(&workspace_root());
     assert_eq!(
         config.rules_owner("deep:rtsan").as_deref(),
         Some("deep:rtsan")
@@ -930,8 +935,8 @@ fn the_apple_sanitizer_is_offered_to_review_pipelines_without_blocking_them() {
 #[test]
 fn every_gitlab_lane_job_runs_the_kinds_its_lane_declares() {
     let root = workspace_root();
-    let config = GitlabConfig::load(root);
-    let lanes = lane_catalog(root);
+    let config = GitlabConfig::load(&root);
+    let lanes = lane_catalog(&root);
 
     let mut checked = 0;
     for (job, lane_name) in config.lane_jobs() {
@@ -952,7 +957,7 @@ fn every_gitlab_lane_job_runs_the_kinds_its_lane_declares() {
 
 #[test]
 fn semver_audit_blocks_release_builds_but_not_other_pipeline_kinds() {
-    let config = GitlabConfig::load(workspace_root());
+    let config = GitlabConfig::load(&workspace_root());
     assert_eq!(
         config.admitted_kinds("deps:semver"),
         BTreeSet::from(["release".to_owned(), "weekly".to_owned()])
@@ -981,13 +986,13 @@ fn semver_audit_blocks_release_builds_but_not_other_pipeline_kinds() {
 #[test]
 fn every_lane_that_names_a_gitlab_pipeline_has_a_job_that_runs_it() {
     let root = workspace_root();
-    let scheduled: BTreeSet<String> = GitlabConfig::load(root)
+    let scheduled: BTreeSet<String> = GitlabConfig::load(&root)
         .lane_jobs()
         .into_iter()
         .map(|(_, lane)| lane)
         .collect();
 
-    for (name, lane) in lane_catalog(root) {
+    for (name, lane) in lane_catalog(&root) {
         if declared_kinds(&lane).is_empty() {
             continue;
         }
@@ -1039,7 +1044,7 @@ fn dispatch_does_not_reserve_the_host_while_children_run() {
             "{name:?} must leave resource ownership to child jobs"
         );
     }
-    let config = GitlabConfig::load(workspace_root());
+    let config = GitlabConfig::load(&workspace_root());
     for job in ["apple:test", "apple:test-flash-off", "apple:ios-test"] {
         assert_eq!(
             config
@@ -1171,7 +1176,7 @@ fn superseded_review_checks_are_cancelable_in_the_child_pipeline() {
         Some("interruptible")
     );
     assert_eq!(rules[1]["when"].as_str(), Some("always"));
-    let config = GitlabConfig::load(root);
+    let config = GitlabConfig::load(&root);
     // A rule inherits the block's `interruptible` unless it overrides it, and
     // the kinds a review ref runs under are spread over the two blocks that
     // declare them: a branch on `.rules-verify-and-branch`, a merge request on
@@ -1273,7 +1278,7 @@ fn a_provisioning_run_on_the_default_branch_reaches_the_mac_roll_out_alone() {
         .as_str()
         .expect("the provisioning dispatcher names its kind");
 
-    let config = GitlabConfig::load(workspace_root());
+    let config = GitlabConfig::load(&workspace_root());
     assert_eq!(
         config.admitted_kinds("host:provision"),
         BTreeSet::from([kind.to_owned()]),
@@ -1323,7 +1328,7 @@ fn a_provisioning_run_on_the_default_branch_reaches_the_mac_roll_out_alone() {
 
 #[test]
 fn mac_pipeline_requires_no_linux_guest() {
-    let config = GitlabConfig::load(workspace_root());
+    let config = GitlabConfig::load(&workspace_root());
     for job in config.job_names() {
         assert!(
             !job.starts_with("linux:") && !job.starts_with("web:"),
@@ -1342,7 +1347,7 @@ fn mac_pipeline_requires_no_linux_guest() {
 
 #[test]
 fn native_dependency_audits_retain_the_linux_fleet_and_host_cache() {
-    let lanes = lane_catalog(workspace_root());
+    let lanes = lane_catalog(&workspace_root());
     for name in [
         "deps-deny",
         "deps-unused",
