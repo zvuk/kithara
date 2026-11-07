@@ -1,6 +1,6 @@
 use kithara::{
     audio::{AudioObserveError, AudioObserver},
-    bufpool::SampleBuffer,
+    bufpool::{PoolError, SampleBuffer},
     download::Downloader,
     effects::LimiterConfig,
     play::{DeckMixSettings, Position, Settled},
@@ -11,7 +11,10 @@ use kithara_integration_tests::{
     pcm_oracle::Audio,
 };
 use kithara_render::bridge::DeckSnapshot;
-use kithara_test_utils::bufpool::{Pools, pools_with_budget, sample_buffer};
+use kithara_test_utils::{
+    bufpool::{Pools, pools_with_budget, sample_buffer},
+    tracing,
+};
 use num_traits::ToPrimitive;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
@@ -976,8 +979,17 @@ impl<'a> PhysicalCandidate<'a> {
     }
 }
 
+#[derive(Debug)]
+struct DecodedRejection {
+    vacant: usize,
+    samples: usize,
+    frames: usize,
+    channels: u16,
+    pool_error: Option<PoolError>,
+}
+
 pub(in super::super) struct DecodedRecorder {
-    incoming: HeapCons<Result<DecodedChunk, AudioObserveError>>,
+    incoming: HeapCons<Result<DecodedChunk, DecodedRejection>>,
     capture: DecodedCapture,
     chunk_limit: usize,
     sample_limit: usize,
@@ -1007,16 +1019,47 @@ impl DecodedRecorder {
 
     pub(in super::super) fn view(&mut self) -> &DecodedCapture {
         while let Some(chunk) = self.incoming.try_pop() {
-            let Ok((info, pcm)) = chunk else {
-                self.capture.rejected = true;
-                continue;
+            let (info, pcm) = match chunk {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    tracing::warn!(
+                        vacant = error.vacant,
+                        samples = error.samples,
+                        frames = error.frames,
+                        channels = error.channels,
+                        pool_error = ?error.pool_error,
+                        "decoder observation intake rejected PCM"
+                    );
+                    self.capture.rejected = true;
+                    continue;
+                }
             };
             let key = (info.source_revision, info.frame_offset);
             if let Some((previous, samples)) = self.capture.chunks.get(&key) {
-                self.capture.rejected |= *previous != info || samples[..] != pcm[..];
+                let conflict = *previous != info || samples[..] != pcm[..];
+                if conflict && !self.capture.rejected {
+                    tracing::warn!(
+                        ?previous,
+                        incoming = ?info,
+                        previous_samples = samples.len(),
+                        incoming_samples = pcm.len(),
+                        "decoder observation has conflicting source chunks"
+                    );
+                }
+                self.capture.rejected |= conflict;
             } else if self.capture.chunks.len() >= self.chunk_limit
                 || self.capture.samples + pcm.len() > self.sample_limit
             {
+                if !self.capture.rejected {
+                    tracing::warn!(
+                        chunks = self.capture.chunks.len(),
+                        chunk_limit = self.chunk_limit,
+                        samples = self.capture.samples,
+                        incoming_samples = pcm.len(),
+                        sample_limit = self.sample_limit,
+                        "decoder observation capture limit exceeded"
+                    );
+                }
                 self.capture.rejected = true;
             } else {
                 self.capture.samples += pcm.len();
@@ -1028,16 +1071,16 @@ impl DecodedRecorder {
 }
 
 pub(in super::super) struct DecodedObserver {
-    outgoing: Option<HeapProd<Result<DecodedChunk, AudioObserveError>>>,
+    outgoing: Option<HeapProd<Result<DecodedChunk, DecodedRejection>>>,
     pools: Pools,
 }
 
 impl DecodedObserver {
-    fn reject(&mut self) -> Result<(), AudioObserveError> {
+    fn reject(&mut self, error: DecodedRejection) -> Result<(), AudioObserveError> {
         if let Some(mut outgoing) = self.outgoing.take() {
             // Data offers always leave one slot for a sticky terminal failure.
             outgoing
-                .try_push(Err(AudioObserveError::Full))
+                .try_push(Err(error))
                 .expect("reserved decoder failure slot");
         }
         Err(AudioObserveError::Full)
@@ -1052,16 +1095,25 @@ impl AudioObserver for DecodedObserver {
             return Err(AudioObserveError::Closed);
         }
         let samples = chunk.as_ref();
-        if outgoing.vacant_len() <= 1
+        let rejection = DecodedRejection {
+            vacant: outgoing.vacant_len(),
+            samples: samples.len(),
+            frames: chunk.frames(),
+            channels: chunk.meta.spec.channels,
+            pool_error: None,
+        };
+        if rejection.vacant <= 1
             || samples.is_empty()
-            || samples.len() > 32_768
             || samples.len() != chunk.frames() * usize::from(chunk.meta.spec.channels)
         {
-            return self.reject();
+            return self.reject(rejection);
         }
         let mut pcm = self.pools.get::<f32>();
-        if pcm.try_extend_from_slice(samples).is_err() {
-            return self.reject();
+        if let Err(error) = pcm.try_extend_from_slice(samples) {
+            return self.reject(DecodedRejection {
+                pool_error: Some(error),
+                ..rejection
+            });
         }
         self.outgoing
             .as_mut()
@@ -2513,6 +2565,35 @@ fn decoded_test_chunk(frame_offset: u64, samples: &[f32]) -> AudioChunk {
 }
 
 #[kithara::test(native)]
+fn decoded_capture_accepts_a_large_fact_within_its_existing_budget() {
+    let (recording, mut observer) = DecodedRecorder::open();
+    let mut held = recording.lock();
+    let samples: Vec<_> = [0.125, -0.25, 0.5, -0.75]
+        .into_iter()
+        .cycle()
+        .take(46_080)
+        .collect();
+    let chunk = decoded_test_chunk(32, &samples);
+    assert_eq!(chunk.frames(), 23_040);
+
+    observer
+        .try_observe(&chunk)
+        .expect("a valid decoder block fits the existing pool budget");
+
+    let captured = held.view();
+    assert!(!captured.rejected);
+    assert_eq!(captured.chunks.len(), 1);
+    assert_eq!(captured.samples, samples.len());
+    let (info, pcm) = captured
+        .chunks
+        .get(&(7, 32))
+        .expect("retained decoder fact");
+    assert_eq!(*info, chunk.meta);
+    assert_eq!(&pcm[..], samples);
+    drop(held);
+}
+
+#[kithara::test(native)]
 #[case::queue(1, 16)]
 #[case::budget(8, 4)]
 fn decoded_capture_saturation_is_sticky(#[case] chunks: usize, #[case] samples: usize) {
@@ -2537,7 +2618,7 @@ fn decoded_capture_saturation_is_sticky(#[case] chunks: usize, #[case] samples: 
 #[case::oversized(32_770)]
 #[case::partial_frame(3)]
 fn decoded_capture_malformed_facts_are_visible(#[case] len: usize) {
-    let (recording, mut observer) = DecodedRecorder::open();
+    let (recording, mut observer) = DecodedRecorder::with_limits(2, 32_768);
     let chunk = decoded_test_chunk(0, &vec![0.125; len]);
     assert_eq!(observer.try_observe(&chunk), Err(AudioObserveError::Full));
     let captured = recording.lock().view().clone();

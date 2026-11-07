@@ -121,6 +121,7 @@ impl DeckRecord {
         let prep = ResourcePrep::builder()
             .worker(config.worker.clone())
             .warp(config.warp.clone())
+            .block_on_underrun(host.is_offline())
             .cancel(cancel.child())
             .build();
 

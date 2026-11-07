@@ -663,10 +663,7 @@ mod tests {
     /// `rendered_runner_configs_are_valid_toml_and_yaml`'s claim.
     #[test]
     fn the_cargo_budget_leaves_the_host_a_spare_core() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
+        let root = crate::testing::workspace::root();
         let config = fixture();
         let process = Process::new(&root, BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
@@ -889,10 +886,7 @@ mod tests {
     /// notices, which is how an evening went.
     #[test]
     fn every_token_has_a_runner_and_macos_runs_on_the_host() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
+        let root = crate::testing::workspace::root();
         let config = fixture();
         let process = Process::new(&root, BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
@@ -999,10 +993,7 @@ mod tests {
 
     #[test]
     fn rendered_runner_configs_are_valid_toml_and_yaml() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
+        let root = crate::testing::workspace::root();
         let config = fixture();
         let process = Process::new(&root, BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
@@ -1297,10 +1288,7 @@ mod tests {
 
     #[test]
     fn generated_configs_trust_the_platform_store_only() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
+        let root = crate::testing::workspace::root();
         let config = fixture();
         let process = Process::new(&root, BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);

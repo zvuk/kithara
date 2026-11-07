@@ -461,6 +461,7 @@ NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
 
 [stress.modes.reproduction-load-flash-on.raw_path_env]
+KITHARA_AUDIO_ARTIFACT_DIR = "audio"
 KITHARA_HANG_DUMP_DIR = "hang"
 
 [stress.modes.reproduction-load-flash-off]
@@ -476,6 +477,7 @@ NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
 
 [stress.modes.reproduction-load-flash-off.raw_path_env]
+KITHARA_AUDIO_ARTIFACT_DIR = "audio"
 KITHARA_HANG_DUMP_DIR = "hang"
 
 # The real-time contract, measured the same way. They belong in the run
@@ -1890,7 +1892,7 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just"]
+tools = ["cargo", "cargo-nextest", "just"]
 program = "just"
 steps = [{ args = ["test", "miri"], label = "Miri interpreter run" }]
 role = "deep"
@@ -1898,6 +1900,7 @@ kinds = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
 timeout_minutes = 240
+artifact = { name = "miri-junit", path = "target/nextest/miri/junit.xml", when = "always" }
 
 # libFuzzer needs the nightly sanitizer flags, so the targets build on the
 # pinned nightly the image links as `nightly`. Each target runs for a fixed

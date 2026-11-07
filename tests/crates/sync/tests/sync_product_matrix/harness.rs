@@ -1803,12 +1803,21 @@ impl ProductHarness {
                         "item": u64::from(item), "start_seq": seq.get(), "start_applied": at,
                         "declick_frames": declick, "stable_at": stable_at,
                         "consumed_at": i64::from(mark.session), "segment": info.segment.get(), "slot_gain": slot.gain,
+                        "timeline": observation.timeline,
                     }))
                 })
             }).collect();
-            if let Some(_ready) = ready {
+            if let Some(ready) = ready {
                 #[cfg(not(target_os = "android"))]
-                self.master_tap.evidence(event, serde_json::json!(_ready));
+                self.master_tap.evidence(event, serde_json::json!(ready));
+                #[cfg(target_os = "android")]
+                eprintln!(
+                    "SYNC_CAPTURE_READY case={} provider={:?} event={event} output_frame={} decks={}",
+                    case.id,
+                    self.provider,
+                    self.output_frames,
+                    serde_json::json!(ready),
+                );
                 hang_reset!();
                 return;
             }
@@ -2035,7 +2044,17 @@ impl ProductHarness {
                     .map(|deck| {
                         let item = deck
                             .current()
-                            .expect("capture has a selected Playing item")
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "{}: capture lost its selected Playing item; deck={}, output_frame={}, captured_frames={}, expected_frames={}, consumed={:?}",
+                                    case.id,
+                                    u64::from(deck.id()),
+                                    self.output_frames,
+                                    pcm.len() / usize::from(CHANNELS),
+                                    capture_frames,
+                                    deck.observe(|observation| observation.consumed.clone()),
+                                )
+                            })
                             .id;
                         deck.observe(|observation| {
                             let (_, slot) = observation

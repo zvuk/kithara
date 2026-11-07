@@ -675,35 +675,35 @@
   just test fuzz
 # deep-miri / branch
   <require os> linux
-  <require tools> cargo just
+  <require tools> cargo cargo-nextest just
   just test miri
 # deep-miri / platforms
   <require os> linux
-  <require tools> cargo just
+  <require tools> cargo cargo-nextest just
   just test miri
 # deep-miri / merge-request
   <require os> linux
-  <require tools> cargo just
+  <require tools> cargo cargo-nextest just
   just test miri
 # deep-miri / quarantine
   <require os> linux
-  <require tools> cargo just
+  <require tools> cargo cargo-nextest just
   just test miri
 # deep-miri / main
   <require os> linux
-  <require tools> cargo just
+  <require tools> cargo cargo-nextest just
   just test miri
 # deep-miri / nightly
   <require os> linux
-  <require tools> cargo just
+  <require tools> cargo cargo-nextest just
   just test miri
 # deep-miri / weekly
   <require os> linux
-  <require tools> cargo just
+  <require tools> cargo cargo-nextest just
   just test miri
 # deep-miri / release
   <require os> linux
-  <require tools> cargo just
+  <require tools> cargo cargo-nextest just
   just test miri
 # deep-mutants-analysis / branch
   <require os> linux

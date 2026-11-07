@@ -7,10 +7,7 @@ use kithara_play::{
     SeekBatch, Settled, Track, TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange,
     TrackStatus,
 };
-use kithara_render::{
-    bridge::{DeckEvent, DeckPart},
-    rt::DeckMixerConfig,
-};
+use kithara_render::{bridge::DeckPart, rt::DeckMixerConfig};
 use kithara_signal::{FrameCount, SessionFrame};
 use tracing::warn;
 
@@ -216,6 +213,7 @@ impl<P> Linked<P> {
         self.mode = SyncMode::Unsyncable;
         self.cue = None;
         self.alignment = None;
+        self.plan_end = None;
         self.resume_wait(out);
     }
 
@@ -256,6 +254,7 @@ impl<P> Linked<P> {
     /// Drops the grid; a refusal it carried becomes a wait for the next one.
     pub(super) fn clear_grid(&mut self) {
         self.grid = None;
+        self.plan_end = None;
         if self.mode == SyncMode::Unsyncable {
             self.mode = SyncMode::NoGrid;
         }
@@ -276,9 +275,11 @@ impl<P> Linked<P> {
         let Some(entry_frame) = entry(&self.host, &source, required, Bound::AtOrAfter(at)) else {
             return;
         };
-        let sent = self
-            .curve(&source, required, entry_frame, None)
-            .and_then(|curve| self.send_cue(required, curve, out));
+        let sent =
+            self.curve(&source, required, entry_frame, None)
+                .and_then(|(curve, coverage)| {
+                    self.send_cue(required, curve, Some((entry_frame, coverage)), out)
+                });
         match sent {
             Ok(sent @ Some(_)) => {
                 self.record_retime(at, sent);
@@ -328,7 +329,7 @@ impl<P> Linked<P> {
         ) else {
             return Ok(None);
         };
-        let value = self.curve(&source, position, at, None)?;
+        let (value, coverage) = self.curve(&source, position, at, None)?;
         tracing::debug!(
             item = u64::from(self.inner.snapshot().as_ref().item),
             ?position,
@@ -336,7 +337,7 @@ impl<P> Linked<P> {
             speed = ?value,
             "preparing synchronized load cue"
         );
-        let sent = self.send_cue(position, value, out)?;
+        let sent = self.send_cue(position, value, Some((at, coverage)), out)?;
         self.cue = None;
         self.withdraw_start(position);
         self.waiting = self.waiting.and_then(|waiting| waiting.cued(position));
@@ -393,20 +394,14 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
             TrackCommand::Fade { at, settings, dir } if self.synced() => {
                 self.fade_synced(at, settings, dir, out)
             }
+            TrackCommand::Clock(_) => Err(PlayError::InvalidConfiguration {
+                reason: "SYNC owns the clock of a linked track".to_owned(),
+            }),
             other => self.inner.apply(other, out),
         }
     }
 
     fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
-        let snapshot = self.inner.snapshot();
-        let track = snapshot.as_ref();
-        let slot = track.slot;
-        let underrun = track.attached
-            && matches!(track.status, TrackStatus::Playing { .. })
-            && matches!(&receipt,
-                TrackReceipt::Event(DeckEvent::UnderrunEnded { slot: named, item, recovered: true, .. })
-                    if Some(*named) == slot && *item == track.item
-            );
         let mut settled = self.inner.settle(receipt, out);
         self.answer_reissued(&settled);
         if let Settled::Rejected {
@@ -432,16 +427,6 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                 }
             }
         }
-        // The dropout already broke the sound, so its end is a silent entry:
-        // the deck re-enters on the host phase rather than closing the gap
-        // with speed steps, which a short track may never have room for. A
-        // waiting seek already lands on the host phase, so it is kept.
-        if self.synced() && underrun {
-            self.waiting.get_or_insert_with(|| Waiting::Sync {
-                required: self.inner.snapshot().as_ref().position,
-            });
-            self.resume_wait(out);
-        }
         if self.cue.is_none() && matches!(self.waiting, Some(Waiting::Load { .. })) {
             self.resume_wait(out);
         }
@@ -449,10 +434,12 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
     }
 
     fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
+        self.keep_clock(out);
         self.inner.tick(now, out);
         self.drain_speed_receipts::<S>();
         self.update_correction::<S>();
         if self.synced() {
+            self.renew_plan(out);
             self.realign(out);
         }
         if self.synced() {
@@ -536,7 +523,7 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
             return Ok(false);
         };
         let source = self.source(grid)?;
-        let curve = self.curve(&source, position, at, None)?;
+        let (curve, coverage) = self.curve(&source, position, at, None)?;
         if !ended && self.inner.prepared_speed() == Some(&curve) {
             return Ok(true);
         }
@@ -548,7 +535,7 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
             speed = ?curve,
             "repreparing silent linked entry"
         );
-        self.send_cue(position, curve, out)?;
+        self.send_cue(position, curve, Some((at, coverage)), out)?;
         Ok(false)
     }
 
@@ -559,7 +546,7 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         self.paused_in_place = false;
-        self.send_cue(position, speed, out)
+        self.send_cue(position, speed, None, out)
     }
 
     fn seek(
@@ -657,10 +644,13 @@ where
 }
 
 impl<P> Linked<P> {
+    /// Cues `position` with `speed`; `plan` is where a speed plan of this
+    /// deck's own starts and how far it reaches, `None` for a caller's speed.
     fn send_cue<S>(
         &mut self,
         position: Position,
         speed: kithara_sync::SpeedCurve,
+        plan: Option<(SessionFrame, kithara_sync::Coverage)>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError>
     where
@@ -668,6 +658,10 @@ impl<P> Linked<P> {
     {
         let sent = self.inner.cue(position, speed, out)?;
         if let Some(seq) = sent {
+            match plan {
+                Some((at, coverage)) => self.plan_sent(at, coverage),
+                None => self.plan_end = None,
+            }
             for (_, current) in &mut self.retimes {
                 *current = seq;
             }
@@ -683,6 +677,7 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
             self.waiting = None;
             self.cue = None;
             self.alignment = None;
+            self.plan_end = None;
             return Ok(None);
         }
         if self.mode == SyncMode::On {

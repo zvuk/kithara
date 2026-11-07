@@ -47,7 +47,8 @@ pub use kithara_render::{
         DeckFxChange, DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal,
         DeckSnapshot, EqBinding, EqGainProgram, EqSnapshot, FadeDir, FilterBinding, FilterProgram,
         FilterSnapshot, FxMix, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault,
-        Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot, Trim,
+        Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot,
+        TrackClock, Trim,
     },
     dispatch,
     rt::{

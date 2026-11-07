@@ -1,6 +1,5 @@
 use std::{
     fs::{self, File},
-    path::Path,
     process::Command,
     thread,
     time::{Duration, Instant},
@@ -38,7 +37,7 @@ fn every_declared_leak_timeout_fails_the_test() {
 #[test]
 fn leaked_output_fails_the_lane_and_stress_report() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nextest-leak");
+    let fixture = crate::testing::package().join("tests/fixtures/nextest-leak");
     for name in ["Cargo.toml", "leak.rs"] {
         fs::copy(fixture.join(name), temp.path().join(name)).expect("copy leak fixture");
     }

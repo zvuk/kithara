@@ -149,14 +149,16 @@ fn a_revision_moves_a_sounding_deck_once_only_past_what_a_slew_closes(
     assert_eq!(jumped, expected);
 }
 
+/// The RT keeps a synced track on session time through a dropout, so a
+/// recovery near the covered end, where no slew could finish, moves nothing.
 #[kithara::test]
-fn an_underrun_recovery_a_slew_cannot_finish_moves_the_deck_once() {
+fn an_underrun_recovery_near_the_covered_end_leaves_the_deck_in_place() {
     let model = grid(consts::BEAT, 0, Some((4, 0)), 480_000);
-    let (mut deck, control, mut rig, _) = synced(model.clone());
+    let (mut deck, control, mut rig, _) = synced(model);
     sound(&control, &mut rig, NEAR_THE_COVERED_END, 474_240);
     recover_from_an_underrun(&mut deck, &mut rig);
     tick(&mut deck, &mut rig);
-    assert_jumps_in_phase(&control, &model);
+    assert_eq!(jumps(&control), [], "{:?}", control.commands());
 }
 
 #[kithara::test]

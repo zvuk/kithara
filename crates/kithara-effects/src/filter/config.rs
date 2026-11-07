@@ -113,7 +113,7 @@ impl FilterSettings {
         )
     }
 
-    pub(super) fn admit_ranges(
+    fn validate_ranges(
         &self,
         rate: f64,
         cutoff: [f64; 2],
@@ -137,6 +137,20 @@ impl FilterSettings {
         }
         self.kind.filter_type(gain)?;
         self.kind.filter_type(target_gain)?;
+        Ok(())
+    }
+
+    pub(super) fn admit_ranges(
+        &self,
+        rate: f64,
+        cutoff: [f64; 2],
+        q: [f64; 2],
+        gain: [f64; 2],
+    ) -> Result<(), FilterError> {
+        self.validate_ranges(rate, cutoff, q, gain)?;
+        let [cutoff, target_cutoff] = cutoff;
+        let [q, target_q] = q;
+        let [gain, target_gain] = gain;
         let angles = [cutoff.min(target_cutoff), cutoff.max(target_cutoff)]
             .map(|hz| std::f64::consts::TAU * hz / rate);
         let [low, high] = angles;

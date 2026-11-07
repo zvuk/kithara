@@ -73,35 +73,17 @@ jobs:
     outputs:
       kind: ${{ steps.kind.outputs.kind }}
     steps:
+      - name: Checkout hosted gate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Validate actor and runner labels
         env:
           ACTOR: ${{ github.actor }}
           OWNER: ${{ github.repository_owner }}
           RUNNER_LABELS: ${{ vars.KITHARA_RUNNER_LABELS }}
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import sys
-
-          actor = os.environ["ACTOR"]
-          owner = os.environ["OWNER"]
-          if actor != owner:
-              print(f"CI may only be started by repository owner {owner!r}, got {actor!r}")
-              sys.exit(1)
-
-          raw_labels = os.environ.get("RUNNER_LABELS", "")
-          try:
-              labels = json.loads(raw_labels)
-          except json.JSONDecodeError as error:
-              print(f"KITHARA_RUNNER_LABELS is not valid JSON: {error}")
-              sys.exit(1)
-          if not isinstance(labels, list) or not labels or not all(
-              isinstance(label, str) and label for label in labels
-          ):
-              print("KITHARA_RUNNER_LABELS must be a non-empty JSON array of non-empty strings")
-              sys.exit(1)
-          PY
+        run: cargo run --locked -p xtask --no-default-features --bin ci-bootstrap -- github authorize
 
       # The pipeline kind every role below runs under. A push to the default
       # branch is `main`. A push to a branch with a pull request open for
@@ -256,31 +238,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout hosted gate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Require every CI job to have executed successfully
         env:
           RESULTS: ${{ toJSON(needs) }}
           REQUIRED_LANES: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes || '' }}
           TOUCHED_UI_REQUIRED: ${{ vars.KITHARA_GPU_RUNNER_LABELS != '' && needs.ui-select.outputs.ui_required == 'true' }}
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import sys
-
-          results = json.loads(os.environ["RESULTS"])
-          required_lanes = set(os.environ["REQUIRED_LANES"].split())
-          optional_required = bool(required_lanes)
-          ui_required = "all" in required_lanes or "deep-ui" in required_lanes or os.environ["TOUCHED_UI_REQUIRED"] == "true"
-          android_required = "all" in required_lanes or "android-test" in required_lanes
-          incomplete = {
-              name: job["result"]
-              for name, job in results.items()
-              if job["result"] != "success"
-              and not (name in {"deep", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
-              and not (name == "ui" and job["result"] == "skipped" and not ui_required)
-              and not (name == "android" and job["result"] == "skipped" and not android_required)
-          }
-          if incomplete:
-              print(f"required CI jobs did not execute successfully: {incomplete}")
-              sys.exit(1)
-          PY
+        run: cargo run --locked -p xtask --no-default-features --bin ci-bootstrap -- github required

@@ -696,3 +696,49 @@ fn manual_refusal_keeps_settings_smoothing_and_filter_history() {
         .collect();
     assert_eq!(output[0], output[1]);
 }
+
+#[kithara::test]
+fn admitted_switching_keeps_normalized_pcm_finite_or_refuses_before_mutation() {
+    let pools = pools();
+    let config = FilterConfig::builder(pools)
+        .kind(Kind::LowPass)
+        .cutoff_hz(Cutoff::MIN)
+        .q(Q::MAX)
+        .build()
+        .expect("stable endpoint settings");
+    let mut filter = FilterEffect::new(spec(1), config.clone()).expect("filter");
+    let mut reference = FilterEffect::new(spec(1), config).expect("unchanged reference");
+    for effect in [&mut filter, &mut reference] {
+        processed(effect, 1, &[1.0]).expect("retained history");
+    }
+    let before = *filter.config();
+    let ranges = [20.0..=11_025.0, 10.0..=10.0, 0.0..=0.0];
+    if let Err(error) = filter.admit_trajectory(spec(1).sample_rate, &ranges) {
+        assert_eq!(error, FilterError::Parameters);
+        assert_eq!(*filter.config(), before);
+        assert_eq!(
+            processed(&mut filter, 1, &[1.0; 7]).expect("old continuation"),
+            processed(&mut reference, 1, &[1.0; 7]).expect("unchanged continuation")
+        );
+        return;
+    }
+    let high = Cutoff::checked(11_025.0).expect("quarter-rate cutoff");
+    for frame in 0..552 * 32 {
+        let cutoff = if frame % 552 == 551 {
+            high
+        } else {
+            Cutoff::MIN
+        };
+        filter
+            .set_explicit(FilterSettingsChange::CutoffHz(cutoff))
+            .expect("admitted trajectory point");
+        let mut plane = [1.0];
+        filter
+            .process(&mut [plane.as_mut_slice()], 0..1)
+            .expect("normalized frame");
+        assert!(
+            plane[0].is_finite(),
+            "nonfinite accepted PCM at frame{frame}"
+        );
+    }
+}

@@ -66,6 +66,12 @@ impl Deck {
                 Some(self.replace_track(slot, track, context_valid, wait_for_pcm))
             }
             DeckPart::Chain { from, to } => Some(self.chain_tracks(from, to)),
+            DeckPart::Clock { slot, clock } => {
+                if let Some(track) = self.tracks.at_mut(slot) {
+                    track.set_clock(clock);
+                }
+                Some(DeckPart::Clock { slot, clock })
+            }
             DeckPart::Mix(change) => {
                 self.mix.apply_change(change);
                 self.render.set_mix(self.mix);

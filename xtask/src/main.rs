@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use kithara_devtools::{CoreCommand, Ctx};
+use kithara_devtools::{CoreCommand, Ctx, stress::StressCommand};
 
 mod agent_hook;
 mod android;
@@ -137,6 +137,11 @@ fn work() -> anyhow::Result<()> {
         Command::Release(ref args) => release::run(args, &ctx),
         Command::AgentHook => agent_hook::run(),
         Command::SelfCache(ref args) => self_cache::run(args),
+        Command::Core(CoreCommand::Stress {
+            command: StressCommand::Run(args),
+        }) => args.run_with_build_admission(&ctx, &|build| {
+            ci::admit_linux_build(build, &|name| std::env::var_os(name))
+        }),
         Command::Core(cmd) => kithara_devtools::run(&cmd, &ctx),
     }
 }

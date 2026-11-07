@@ -135,6 +135,7 @@ impl<P> Linked<P> {
             at,
             self.config.epsilon(),
             law,
+            self.horizon(),
         );
         self.close_phase(planned, cause, at, segment, out)
     }
@@ -151,8 +152,12 @@ impl<P> Linked<P> {
     where
         P: Track<S>,
     {
-        let (curve, frames) = match planned {
-            Some(Slew::Closes { curve, frames }) => (curve, frames),
+        let (curve, frames, coverage) = match planned {
+            Some(Slew::Closes {
+                curve,
+                frames,
+                coverage,
+            }) => (curve, frames, coverage),
             Some(Slew::Relocate) | None if self.waiting.is_some() => {
                 return Err(PlayError::NotReady);
             }
@@ -180,8 +185,38 @@ impl<P> Linked<P> {
             });
             self.speeds
                 .push((seq, SpeedOperation::Correction { cause, state }));
+            self.plan_sent(at, coverage);
         }
         Ok(Corrected::Slew(sent))
+    }
+
+    /// A sounding deck owes a drift correction once the earliest frame it can
+    /// command comes within half a horizon of its plan's end; in phase, that
+    /// correction continues the same law.
+    pub(super) fn renew_plan<S>(&mut self, out: &Outbox<'_, S>)
+    where
+        P: Track<S>,
+    {
+        let Some(end) = self.plan_end else {
+            return;
+        };
+        if self.alignment.is_some()
+            || !matches!(
+                self.inner.snapshot().as_ref().status,
+                TrackStatus::Playing { .. }
+            )
+        {
+            return;
+        }
+        let Ok(half) = usize::try_from(self.horizon() / 2) else {
+            return;
+        };
+        if self
+            .earliest(out)
+            .is_ok_and(|earliest| earliest + FrameCount::new(half) >= end)
+        {
+            self.alignment = Some(Cause::Drift);
+        }
     }
 
     /// Whether the owed correction moved the deck.
@@ -275,16 +310,13 @@ impl<P> Linked<P> {
         let to = jump_target(&self.host, source, position, at).ok_or(PlayError::NotReady)?;
         let start = at - self.inner.snapshot().as_ref().declick;
         let (before, _) = self.planned::<S>(start)?;
-        let sent = self.inner.apply(
-            TrackCommand::Align {
-                to,
-                speed: self.curve(source, before, start, Some((to, at)))?,
-                at,
-            },
-            out,
-        )?;
+        let (speed, coverage) = self.curve(source, before, start, Some((to, at)))?;
+        let sent = self
+            .inner
+            .apply(TrackCommand::Align { to, speed, at }, out)?;
         if let Some(seq) = sent {
             self.speeds.push((seq, SpeedOperation::Alignment));
+            self.plan_sent(start, coverage);
         }
         self.correction = None;
         self.waiting = None;
