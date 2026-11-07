@@ -7,8 +7,8 @@ use kithara_dsp::filter::{Biquad, Coefficients, FilterError, Hertz, Type};
 use kithara_effects::{
     GainDb,
     filter::{
-        Cutoff, FilterConfig, FilterEffect, FilterSettings, FilterSettingsChange, Kind,
-        PrepareError, Q,
+        Cutoff, FilterConfig, FilterEffect, FilterMotion, FilterParameter, FilterSettings,
+        FilterSettingsChange, Kind, PrepareError, Q,
     },
 };
 use kithara_signal::AudioSpec;
@@ -165,6 +165,33 @@ fn filter_rejects_invalid_parameters_and_unstable_designs() {
         Err(PrepareError::Filter(FilterError::Parameters))
     ));
 }
+
+#[kithara::test]
+fn filter_is_a_causal_planar_consumer_with_independent_channel_history() {
+    let pools = pools();
+    let mut filter =
+        FilterEffect::new(spec(2), config(&pools, Kind::HighPass)).expect("prepared filter");
+    let input = [0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let output = processed(&mut filter, 2, &input).expect("causal output");
+    assert_eq!(output.len(), input.len());
+    assert_ne!(&output[..], &input);
+    assert!(
+        output
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .all(|sample| sample.to_bits() == 0)
+    );
+    filter.reset();
+    assert!(filter.tail_exhausted());
+    assert!(
+        processed(&mut filter, 2, &[0.0; 8])
+            .expect("reset silence")
+            .iter()
+            .all(|sample| sample.to_bits() == 0)
+    );
+}
+
 #[kithara::test]
 fn filter_keeps_history_across_odd_blocks_and_reset_clears_it() {
     let pools = pools();
@@ -258,6 +285,65 @@ fn low_pass_impulse_has_the_declared_causal_delay() {
         "DC group delay: {delay} frames, causal reference {reference} frames"
     );
 }
+
+#[kithara::test]
+fn refused_rate_and_plane_geometry_leave_format_and_history_untouched() {
+    let pools = pools();
+    let config = FilterConfig::builder(pools.clone())
+        .kind(Kind::HighPass)
+        .cutoff_hz(Cutoff::MAX)
+        .build()
+        .expect("admitted high cutoff");
+    let mut filter = FilterEffect::new(spec(1), config.clone()).expect("prepared filter");
+    let mut reference = FilterEffect::new(spec(1), config).expect("reference filter");
+    for effect in [&mut filter, &mut reference] {
+        assert!(
+            processed(effect, 1, &[0.25, 0.0, 0.0])
+                .expect("warm history")
+                .iter()
+                .any(|sample| *sample != 0.0)
+        );
+    }
+    let refused = AudioSpec::new(1, NonZeroU32::new(32_000).expect("changed rate"));
+    let mut invalid_planes: [&mut [f32]; 0] = [];
+    assert_eq!(
+        filter.process(&mut invalid_planes, 0..0),
+        Err(FilterError::Shape)
+    );
+    assert!(matches!(
+        filter.update_sample_rate(refused.sample_rate),
+        Err(PrepareError::Filter(FilterError::Parameters))
+    ));
+    assert!(!filter.accepts_spec(refused));
+    assert!(filter.accepts_spec(spec(1)));
+    let expected = processed(&mut reference, 1, &[0.0; 3]).expect("reference");
+    let actual = processed(&mut filter, 1, &[0.0; 3]).expect("accepted input");
+    assert!(expected.iter().any(|sample| *sample != 0.0));
+    assert_eq!(actual, expected);
+}
+
+#[kithara::test]
+fn refused_cold_replacement_preserves_resident_filter_and_history() {
+    let scratch = pools_with_budget(1024);
+    let pcm = pools();
+    let mut filter =
+        FilterEffect::new(spec(1), config(&scratch, Kind::LowPass)).expect("one scratch plane");
+    let mut reference = FilterEffect::new(spec(1), config(&pcm, Kind::LowPass)).expect("reference");
+    for effect in [&mut filter, &mut reference] {
+        processed(effect, 1, &[0.25; 7]).expect("warm history");
+    }
+    assert!(matches!(
+        FilterEffect::new(spec(2), config(&scratch, Kind::LowPass)),
+        Err(PrepareError::Pool(_))
+    ));
+    assert!(filter.accepts_spec(spec(1)));
+    assert!(!filter.accepts_spec(spec(2)));
+    let actual = processed(&mut filter, 1, &[0.0; 7]).expect("old format");
+    let expected = processed(&mut reference, 1, &[0.0; 7]).expect("reference");
+    assert!(expected.iter().any(|sample| *sample != 0.0));
+    assert_eq!(actual, expected);
+}
+
 /// Compare settled fixture RMS against the bilinear Butterworth magnitude.
 #[kithara::test]
 #[case(Kind::LowPass, 40.0, eq_sine_40())]
@@ -440,6 +526,52 @@ fn filter_preparation_reports_insufficient_scratch_budget() {
     ));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[global_allocator]
+static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
+
+#[kithara::test(native)]
+fn prepared_filter_controls_process_reset_and_rate_retune_never_allocate() {
+    let pools = pools();
+    for channels in [1, 2, 6] {
+        let mut filter = FilterEffect::new(spec(channels), config(&pools, Kind::LowPass))
+            .expect("prepared filter");
+        for (index, frames) in [0, 1, 7, 256, 1027].into_iter().enumerate() {
+            let cutoff = Cutoff::checked(if index.is_multiple_of(2) {
+                800.0
+            } else {
+                1200.0
+            })
+            .expect("alternating target");
+            let q = if index.is_multiple_of(2) {
+                Q::MAX
+            } else {
+                Q::MIN
+            };
+            let mut planes = vec![vec![0.25; frames]; usize::from(channels)];
+            let allocated = pools.stats().allocated_bytes;
+            assert_no_alloc::assert_no_alloc(|| {
+                filter
+                    .update_sample_rate(spec(channels).sample_rate)
+                    .expect("same format");
+                filter
+                    .configure(FilterSettingsChange::CutoffHz(cutoff))
+                    .expect("bounded manual update");
+                filter
+                    .configure(FilterSettingsChange::Q(q))
+                    .expect("bounded Q update");
+                filter
+                    .process(&mut planes, 0..frames)
+                    .expect("immediate output");
+                filter.reset();
+                assert!(filter.tail_exhausted());
+            });
+            assert!(planes.iter().all(|plane| plane.len() == frames));
+            assert_eq!(pools.stats().allocated_bytes, allocated);
+        }
+    }
+}
+
 #[kithara::test]
 fn configured_filter_preparation_preserves_design_geometry_and_pool_errors() {
     let pools = pools();
@@ -500,6 +632,7 @@ fn incomplete_plane_range_refusal_advances_neither_pcm_nor_manual_history() {
             .collect::<Vec<_>>()
     );
 }
+
 #[kithara::test]
 fn manual_refusal_keeps_settings_smoothing_and_filter_history() {
     let pools = pools();
@@ -530,4 +663,112 @@ fn manual_refusal_keeps_settings_smoothing_and_filter_history() {
         .map(|filter| processed(filter, 1, &[0.125; 257]).expect("old admitted state"))
         .collect();
     assert_eq!(output[0], output[1]);
+}
+
+#[kithara::test]
+fn ordinary_sweep_admission_preserves_the_sounding_filter() {
+    let pools = pools();
+    let config = FilterConfig::builder(pools)
+        .kind(Kind::LowPass)
+        .cutoff_hz(Cutoff::checked(200.0).expect("cutoff"))
+        .q(Q::MAX)
+        .build()
+        .expect("settings");
+    let mut filter = FilterEffect::new(spec(1), config.clone()).expect("filter");
+    let mut reference = FilterEffect::new(spec(1), config).expect("reference");
+    for effect in [&mut filter, &mut reference] {
+        processed(effect, 1, &[1.0; 7]).expect("retained history");
+    }
+    let rate = spec(1).sample_rate;
+    let mut motions = filter.motions(rate).expect("held fields");
+    motions[FilterParameter::CutoffHz.index()] = FilterMotion::new(
+        FilterParameter::CutoffHz,
+        rate,
+        200.0..=800.0,
+        200.0,
+        FilterMotion::distance(FilterParameter::CutoffHz, rate, 200.0, 800.0)
+            .expect("cutoff travel"),
+        44_101,
+        44_100,
+    )
+    .expect("one-second logarithmic sweep");
+    let before = *filter.config();
+    filter
+        .admit_trajectory(rate, &motions)
+        .expect("ordinary sweep");
+    assert_eq!(*filter.config(), before);
+    assert_eq!(
+        processed(&mut filter, 1, &[1.0; 7]).expect("admission continuation"),
+        processed(&mut reference, 1, &[1.0; 7]).expect("unchanged continuation")
+    );
+}
+
+#[kithara::test]
+fn equal_parameter_extrema_do_not_erase_trajectory_travel() {
+    let pools = pools();
+    let config = FilterConfig::builder(pools)
+        .kind(Kind::LowPass)
+        .cutoff_hz(Cutoff::MIN)
+        .q(Q::MAX)
+        .build()
+        .expect("settings");
+    let filter = FilterEffect::new(spec(1), config).expect("filter");
+    let travel = FilterMotion::distance(
+        FilterParameter::CutoffHz,
+        spec(1).sample_rate,
+        20.0,
+        11_025.0,
+    )
+    .expect("cutoff travel");
+    let mut motions = [
+        FilterMotion::new(
+            FilterParameter::CutoffHz,
+            spec(1).sample_rate,
+            20.0..=11_025.0,
+            20.0,
+            travel,
+            552 * 32,
+            1,
+        )
+        .expect("one jump"),
+        FilterMotion::new(
+            FilterParameter::Q,
+            spec(1).sample_rate,
+            10.0..=10.0,
+            10.0,
+            0.0,
+            0,
+            0,
+        )
+        .expect("Q"),
+        FilterMotion::new(
+            FilterParameter::GainDb,
+            spec(1).sample_rate,
+            0.0..=0.0,
+            0.0,
+            0.0,
+            0,
+            0,
+        )
+        .expect("gain"),
+    ];
+    assert!(
+        filter
+            .admit_trajectory(spec(1).sample_rate, &motions)
+            .is_ok()
+    );
+    motions[0] = FilterMotion::new(
+        FilterParameter::CutoffHz,
+        spec(1).sample_rate,
+        20.0..=11_025.0,
+        20.0,
+        63.0 * travel,
+        552 * 32,
+        63,
+    )
+    .expect("repeated jumps");
+    assert_eq!(
+        filter.admit_trajectory(spec(1).sample_rate, &motions),
+        Err(FilterError::Parameters)
+    );
 }

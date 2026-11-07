@@ -11,7 +11,9 @@ use kithara_dsp::{
 };
 use kithara_signal::AudioSpec;
 
-use super::{FilterConfig, FilterSettings, FilterSettingsChange};
+use super::{
+    FilterConfig, FilterMotion, FilterParameter, FilterSettings, FilterSettingsChange, admission,
+};
 use crate::consts;
 
 /// Why a filter's numerical state or pooled scratch could not be prepared.
@@ -41,6 +43,7 @@ pub struct FilterEffect {
     q: SmoothedParam64,
     gain: SmoothedParam64,
     planes: Vec<SampleBuffer>,
+    history_peak: f64,
 }
 
 impl FilterEffect {
@@ -79,6 +82,7 @@ impl FilterEffect {
                 spec.sample_rate,
             ),
             planes,
+            history_peak: 0.0,
         })
     }
 
@@ -87,10 +91,22 @@ impl FilterEffect {
     }
 
     fn process_frame(&mut self) {
+        let mut peak = if self.tail_exhausted() {
+            0.0
+        } else {
+            self.history_peak
+        };
+        for plane in &self.planes {
+            peak = observe_peak(peak, plane[0]);
+        }
         self.advance_parameters();
         self.filter
             .process(&mut self.planes, 0..1)
             .expect("prepared scratch frame");
+        for plane in &self.planes {
+            peak = observe_peak(peak, plane[0]);
+        }
+        self.history_peak = peak;
     }
 
     fn advance_parameters(&mut self) {
@@ -121,6 +137,71 @@ impl FilterEffect {
 }
 
 impl FilterEffect {
+    /// Summarize the pending manual transitions without advancing their clocks.
+    /// # Errors
+    /// Refuses an unrepresentable changing-frame bound.
+    pub fn motions(&self, rate: NonZeroU32) -> Result<[FilterMotion; 3], FilterError> {
+        let motions = FilterParameter::ALL.map(|field| {
+            let mut parameter = self.parameter(field);
+            if rate != self.spec.sample_rate {
+                parameter.update_sample_rate(rate);
+            }
+            parameter_motion(field, parameter, rate)
+        });
+        let [cutoff, q, gain] = motions;
+        Ok([cutoff?, q?, gain?])
+    }
+
+    /// Prepare one manual transition, optionally after its old programme's due-frame point.
+    /// # Errors
+    /// Refuses inconsistent fields or an unrepresentable motion bound.
+    pub fn change_motion(
+        &self,
+        rate: NonZeroU32,
+        change: FilterSettingsChange,
+        prior: Option<FilterSettingsChange>,
+    ) -> Result<FilterMotion, FilterError> {
+        let field = FilterParameter::of(change);
+        let current = match prior {
+            Some(point) if FilterParameter::of(point) == field => point.value(),
+            Some(_) => return Err(FilterError::Parameters),
+            None => self.parameter(field).current_value(),
+        };
+        parameter_motion(field, transition(current, change.value(), rate), rate)
+    }
+
+    fn parameter(&self, field: FilterParameter) -> SmoothedParam64 {
+        match field {
+            FilterParameter::CutoffHz => self.cutoff,
+            FilterParameter::Q => self.q,
+            FilterParameter::GainDb => self.gain,
+        }
+    }
+
+    /// Admit ordered, bounded movement before changing settings, clocks or history.
+    /// # Errors
+    /// Refuses unsafe coefficient or modulation amplification bounds.
+    pub fn admit_trajectory(
+        &self,
+        rate: NonZeroU32,
+        motions: &[FilterMotion; 3],
+    ) -> Result<(), FilterError> {
+        let mut motions = *motions;
+        for field in FilterParameter::ALL {
+            let motion = &mut motions[field.index()];
+            if motion.field != field {
+                return Err(FilterError::Parameters);
+            }
+            motion.include_current(self.parameter(field).current_value())?;
+        }
+        let peak = if self.tail_exhausted() {
+            0.0
+        } else {
+            self.history_peak
+        };
+        admission::admit(self.settings, rate, &motions, peak)
+    }
+
     /// Apply one manual target while preserving every other parameter's trajectory.
     /// # Errors
     /// Refuses a contextual design or smoothing box before changing state.
@@ -138,24 +219,19 @@ impl FilterEffect {
             self.q.current_value(),
             self.gain.current_value(),
         )?;
-        let transition = |current: f64, target: f64| {
-            let mut parameter = SmoothedParam64::new(
-                current,
-                (target - current).abs(),
-                SmootherConfig::default(),
-                rate,
-            );
-            parameter.set_value(target);
-            parameter
-        };
+        let mut motions = self.motions(rate)?;
+        motions[FilterParameter::of(change).index()] = self.change_motion(rate, change, None)?;
+        self.admit_trajectory(rate, &motions)?;
         let (mut cutoff, mut q, mut gain) = (self.cutoff, self.q, self.gain);
         match change {
             FilterSettingsChange::CutoffHz(value) => {
-                cutoff = transition(cutoff.current_value(), f64::from(value));
+                cutoff = transition(cutoff.current_value(), f64::from(value), rate);
             }
-            FilterSettingsChange::Q(value) => q = transition(q.current_value(), f64::from(value)),
+            FilterSettingsChange::Q(value) => {
+                q = transition(q.current_value(), f64::from(value), rate)
+            }
             FilterSettingsChange::GainDb(value) => {
-                gain = transition(gain.current_value(), f64::from(f32::from(value)));
+                gain = transition(gain.current_value(), f64::from(f32::from(value)), rate);
             }
         }
         self.filter.retune(0, coefficients)?;
@@ -166,11 +242,13 @@ impl FilterEffect {
         self.gain = gain;
         Ok(())
     }
+
     /// Retune the resident filter at a new rate without allocating or resetting history.
     /// # Errors
     /// Refuses an unrepresentable design before changing the prepared rate or state.
     pub fn update_sample_rate(&mut self, rate: NonZeroU32) -> Result<(), PrepareError> {
-        if rate == self.spec.sample_rate {
+        let spec = AudioSpec::new(self.spec.channels, rate);
+        if self.accepts_spec(spec) {
             return Ok(());
         }
         let target = self.settings.coefficients(f64::from(rate.get()))?;
@@ -180,6 +258,7 @@ impl FilterEffect {
             self.q.current_value(),
             self.gain.current_value(),
         )?;
+        self.admit_trajectory(rate, &self.motions(rate)?)?;
         let current = if self.settled() {
             target
         } else {
@@ -199,9 +278,16 @@ impl FilterEffect {
         self.cutoff = cutoff;
         self.q = q;
         self.gain = gain;
-        self.spec = AudioSpec::new(self.spec.channels, rate);
+        self.spec = spec;
         Ok(())
     }
+
+    /// Whether this filter is already prepared for the exact format.
+    #[must_use]
+    pub fn accepts_spec(&self, spec: AudioSpec) -> bool {
+        self.spec == spec
+    }
+
     /// Filter a validated range of every plane in place.
     /// # Errors
     /// Refuses a mismatched or incomplete plane range before advancing parameters or history.
@@ -228,6 +314,13 @@ impl FilterEffect {
         }
         Ok(())
     }
+
+    /// Whether the existing retirement rule has exhausted the filter's tail.
+    #[must_use]
+    pub fn tail_exhausted(&self) -> bool {
+        self.filter.is_reset()
+    }
+
     /// Clear filter history and finish the current manual targets.
     /// # Panics
     /// Panics if the internal prepared-coefficient invariant is violated.
@@ -236,8 +329,46 @@ impl FilterEffect {
             .retune(0, self.target_coefficients)
             .expect("prepared target coefficients");
         self.filter.reset();
+        self.history_peak = 0.0;
         for parameter in [&mut self.cutoff, &mut self.q, &mut self.gain] {
             parameter.reset_to_target();
         }
+    }
+}
+
+fn transition(current: f64, target: f64, rate: NonZeroU32) -> SmoothedParam64 {
+    let mut parameter = SmoothedParam64::new(
+        current,
+        (target - current).abs(),
+        SmootherConfig::default(),
+        rate,
+    );
+    parameter.set_value(target);
+    parameter
+}
+
+fn parameter_motion(
+    field: FilterParameter,
+    parameter: SmoothedParam64,
+    rate: NonZeroU32,
+) -> Result<FilterMotion, FilterError> {
+    let (range, frames) = parameter.motion_bound().ok_or(FilterError::Parameters)?;
+    let variation = 2.0 * FilterMotion::distance(field, rate, *range.start(), *range.end())?;
+    FilterMotion::new(
+        field,
+        rate,
+        range,
+        parameter.current_value(),
+        variation,
+        frames,
+        frames,
+    )
+}
+
+fn observe_peak(peak: f64, value: f32) -> f64 {
+    if value.is_finite() {
+        peak.max(f64::from(value).abs())
+    } else {
+        f64::INFINITY
     }
 }

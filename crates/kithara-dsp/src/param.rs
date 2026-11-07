@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, ops::RangeInclusive};
 
 use firewheel_core::dsp::filter::smoothing_filter::MAX_SETTLE_RATIO;
 pub use firewheel_core::{
@@ -11,6 +11,7 @@ pub use firewheel_core::{
     },
     param::smoother::{DEFAULT_GAIN_SPAN, SmoothedParam, SmootherConfig},
 };
+use num_traits::ToPrimitive;
 
 /// Double-precision parameter state with the shared one-pole and settle law.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -102,68 +103,100 @@ impl SmoothedParam64 {
         self.target_times_a = self.target * (1.0 - self.b1);
     }
 
+    /// Bound values and changing frames when each step is followed by `settle`.
+    /// Returns `None` when a finite bound cannot be represented.
+    #[must_use]
+    pub fn motion_bound(&self) -> Option<(RangeInclusive<f64>, u64)> {
+        if ![
+            self.value,
+            self.target,
+            self.span,
+            self.b1,
+            self.target_times_a,
+        ]
+        .iter()
+        .all(|value| value.is_finite())
+        {
+            return None;
+        }
+        if self.has_settled() {
+            return Some((self.value..=self.value, 0));
+        }
+        let low = self.value.min(self.target);
+        let high = self.value.max(self.target);
+        let distance = (self.value - self.target).abs();
+        let threshold = self.span * self.settle_ratio;
+        if self.span == 0.0 || self.b1 == 0.0 || (self.b1 == 1.0 && distance < threshold) {
+            return Some((low..=high, 1));
+        }
+        if self.b1 == 1.0 {
+            return Some((self.value..=self.value, 0));
+        }
+        if !(0.0..1.0).contains(&self.b1) {
+            return None;
+        }
+        self.rounded_motion_bound(low..=high)
+    }
+
+    fn rounded_motion_bound(
+        &self,
+        bounds: RangeInclusive<f64>,
+    ) -> Option<(RangeInclusive<f64>, u64)> {
+        let distance = (self.value - self.target).abs();
+        let threshold = self.span * self.settle_ratio;
+        let magnitude = self
+            .value
+            .abs()
+            .max(self.target.abs())
+            .max(f64::MIN_POSITIVE);
+        let floor = 8.0 * f64::EPSILON * magnitude / (1.0 - self.b1);
+        if !floor.is_finite() || floor >= magnitude {
+            return None;
+        }
+        let goal = if threshold > 2.0 * floor {
+            threshold - floor
+        } else {
+            floor
+        };
+        let approach = decay_frames(self.b1, distance, goal)?;
+        let lower = (self.target - 2.0 * floor).next_down();
+        let upper = (self.target + 2.0 * floor).next_up();
+        if !lower.is_finite() || !upper.is_finite() {
+            return None;
+        }
+        let settling = if threshold > 2.0 * floor {
+            0
+        } else {
+            ordered_bits(upper)
+                .checked_sub(ordered_bits(lower))?
+                .checked_add(1)?
+        };
+        Some((
+            (*bounds.start()).min(lower)..=(*bounds.end()).max(upper),
+            approach.checked_add(settling)?,
+        ))
+    }
+
     fn decay(seconds: f64, ratio: f64, sample_rate: NonZeroU32) -> f64 {
         let frames = (seconds * f64::from(sample_rate.get())).max(1.0);
         ratio.powf(frames.recip())
     }
 }
 
-/// Clock-free progression for a prepared parameter segment.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct CurveShape(Progression);
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Progression {
-    Hold,
-    Linear,
-    Cubic { first: f64, second: f64 },
+fn decay_frames(decay: f64, distance: f64, goal: f64) -> Option<u64> {
+    if distance <= goal {
+        return Some(1);
+    }
+    let frames = ((goal / distance).ln() / decay.ln()).ceil();
+    frames.to_u64()?.checked_add(2)
 }
 
-/// Cubic progression handles must be finite, ordered and inside zero to one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("cubic progression handles must satisfy 0 <= first <= second <= 1")]
-pub struct CurveShapeError;
-
-impl CurveShape {
-    pub const HOLD: Self = Self(Progression::Hold);
-    pub const LINEAR: Self = Self(Progression::Linear);
-
-    /// Prepare a monotone cubic Bezier with time handles at 1/3 and 2/3.
-    /// # Errors
-    /// Refuses nonfinite, unordered or out-of-range progression handles.
-    pub fn cubic(first: f64, second: f64) -> Result<Self, CurveShapeError> {
-        if first.is_finite()
-            && second.is_finite()
-            && 0.0 <= first
-            && first <= second
-            && second <= 1.0
-        {
-            Ok(Self(Progression::Cubic { first, second }))
-        } else {
-            Err(CurveShapeError)
-        }
-    }
-
-    /// Evaluate normalized time in f64; exact endpoints are copied directly.
-    #[must_use]
-    pub fn progress(self, time: f64) -> f64 {
-        if time <= 0.0 {
-            return 0.0;
-        }
-        if time >= 1.0 {
-            return 1.0;
-        }
-        match self.0 {
-            Progression::Hold => 0.0,
-            Progression::Linear => time,
-            Progression::Cubic { first, second } => {
-                let remaining = 1.0 - time;
-                let left = 3.0 * remaining * remaining * time * first;
-                let right = 3.0 * remaining * time * time * second;
-                ((left + right) + time * time * time).clamp(0.0, 1.0)
-            }
-        }
+fn ordered_bits(value: f64) -> u64 {
+    let bits = value.to_bits();
+    if value.is_sign_negative() {
+        !bits
+    } else {
+        bits | (1_u64 << 63)
     }
 }
 
@@ -173,57 +206,7 @@ mod tests {
 
     use kithara_test_utils::kithara;
 
-    use super::{CurveShape, SmoothedParam64, SmootherConfig};
-
-    #[kithara::test]
-    fn cubic_handles_are_validated_before_a_shape_exists() {
-        for (first, second) in [
-            (-0.1, 0.5),
-            (0.5, 1.1),
-            (0.8, 0.2),
-            (f64::NAN, 0.5),
-            (0.5, f64::NAN),
-            (f64::INFINITY, 1.0),
-        ] {
-            assert!(CurveShape::cubic(first, second).is_err());
-        }
-    }
-
-    #[kithara::test]
-    fn cubic_quarter_points_match_independent_polynomial_values() {
-        for (handles, expected) in [
-            ((0.0, 0.0), [0.0, 0.015625, 0.125, 0.421875, 1.0]),
-            ((1.0, 1.0), [0.0, 0.578125, 0.875, 0.984375, 1.0]),
-            ((0.0, 1.0), [0.0, 0.15625, 0.5, 0.84375, 1.0]),
-        ] {
-            let shape = CurveShape::cubic(handles.0, handles.1).expect("bounded handles");
-            for (time, expected) in [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().zip(expected) {
-                assert_eq!(shape.progress(time), expected);
-            }
-        }
-        assert_eq!(CurveShape::HOLD.progress(0.5), 0.0);
-        assert_eq!(CurveShape::LINEAR.progress(0.5), 0.5);
-    }
-
-    #[kithara::test]
-    fn progression_is_monotone_and_bounded_including_exact_endpoints() {
-        for shape in [
-            CurveShape::HOLD,
-            CurveShape::LINEAR,
-            CurveShape::cubic(0.0, 0.0).expect("ease in"),
-            CurveShape::cubic(1.0, 1.0).expect("ease out"),
-            CurveShape::cubic(0.0, 1.0).expect("S shape"),
-        ] {
-            let mut previous = 0.0;
-            for frame in 0..=1024_u16 {
-                let value = shape.progress(f64::from(frame) / 1024.0);
-                assert!((previous..=1.0).contains(&value));
-                previous = value;
-            }
-            assert_eq!(shape.progress(0.0).to_bits(), 0.0_f64.to_bits());
-            assert_eq!(shape.progress(1.0).to_bits(), 1.0_f64.to_bits());
-        }
-    }
+    use super::{SmoothedParam64, SmootherConfig};
 
     fn half_life() -> SmootherConfig {
         SmootherConfig {
@@ -294,5 +277,28 @@ mod tests {
         }
         assert_eq!(output, reference);
         assert_eq!(actual, expected);
+    }
+
+    #[kithara::test]
+    fn motion_bound_covers_settlement_and_a_rounded_fixed_point() {
+        let rate = NonZeroU32::new(44_100).expect("rate");
+        for (from, to) in [(1_000.0, 200.0), (20.0, 20.0_f64.next_up()), (-24.0, 0.0)] {
+            let mut value =
+                SmoothedParam64::new(from, (to - from).abs(), SmootherConfig::default(), rate);
+            value.set_value(to);
+            let (range, frames) = value.motion_bound().expect("finite changing-frame bound");
+            let mut stopped = false;
+            for _ in 0..frames {
+                let before = value.current_value();
+                value.next_smoothed();
+                value.settle();
+                assert!(range.contains(&value.current_value()));
+                if value.has_settled() || before.to_bits() == value.current_value().to_bits() {
+                    stopped = true;
+                    break;
+                }
+            }
+            assert!(stopped, "motion exceeded its bound: {from} -> {to}");
+        }
     }
 }
