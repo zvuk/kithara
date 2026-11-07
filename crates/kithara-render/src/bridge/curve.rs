@@ -1,4 +1,4 @@
-use kithara_dsp::param::CurveShape;
+use kithara_dsp::curve::CurveShape;
 use kithara_signal::SessionFrame;
 use num_traits::ToPrimitive;
 

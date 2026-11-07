@@ -6,8 +6,12 @@ use kithara_effects::{
     DeckEffect, FxParamChange, GainDb,
     eq::{EqConfig, EqLayout, StereoEq, generate_log_spaced_bands},
 };
+use kithara_signal::SessionFrame;
 
-use super::processor::StreamShape;
+use super::{
+    command::{EqCurves, gain_at},
+    processor::StreamShape,
+};
 use crate::{
     bridge::{DeckFxChange, DeckMixSettings, DeckPart, Returned},
     consts::{FADE_CHUNK, GAIN_SPAN},
@@ -91,6 +95,10 @@ impl RenderPass {
     pub(crate) fn finish(&mut self, left: &mut [f32], right: &mut [f32]) {
         apply_gain(&mut self.trim, left, right);
         self.eq.process(left, right);
+        self.finish_output(left, right);
+    }
+
+    fn finish_output(&mut self, left: &mut [f32], right: &mut [f32]) {
         for unit in &mut self.units {
             unit.process(left, right, &mut self.wet);
         }
@@ -182,6 +190,39 @@ impl RenderPass {
         effect.map(|effect| DeckPart::Returned(Returned::Fx { unit, effect }))
     }
 
+    pub(crate) fn finish_eq_curves(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        start: SessionFrame,
+        curves: &EqCurves<'_>,
+    ) {
+        apply_gain(&mut self.trim, left, right);
+        for (frame, (left, right)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
+            self.apply_eq_curves(curves, frame_at(start, frame));
+            self.eq
+                .process(core::slice::from_mut(left), core::slice::from_mut(right));
+        }
+        self.finish_output(left, right);
+    }
+
+    pub(crate) fn advance_eq_curves(
+        &mut self,
+        start: SessionFrame,
+        frames: usize,
+        curves: &EqCurves<'_>,
+    ) {
+        for frame in 0..frames {
+            self.apply_eq_curves(curves, frame_at(start, frame));
+        }
+    }
+
+    fn apply_eq_curves(&mut self, curves: &EqCurves<'_>, at: SessionFrame) {
+        for (band, curve) in curves.iter().flatten() {
+            self.eq.set_gain_explicit(*band, gain_at(curve, at));
+        }
+    }
+
     delegate::delegate! {
         to self.eq {
             #[call(read_gains)]
@@ -189,6 +230,10 @@ impl RenderPass {
             /// Ramp `band` of the deck's equaliser to `gain` from the next frame rendered.
             #[call(set_gain)]
             pub(crate) fn set_eq_gain(&mut self, band: usize, gain: GainDb);
+            #[call(accepts_gain_program)]
+            pub(crate) fn accepts_eq_program(&self, band: usize) -> bool;
+            #[call(set_gain_explicit)]
+            pub(crate) fn set_eq_gain_explicit(&mut self, band: usize, gain: GainDb);
             /// Cross the deck's equaliser over to `layout`, answering the layout it displaced.
             #[call(take_layout)]
             pub(crate) fn take_eq_layout(&mut self, layout: Box<EqLayout>) -> Option<Box<EqLayout>>;
@@ -262,6 +307,12 @@ impl FxUnit {
     }
 }
 
+fn frame_at(start: SessionFrame, frame: usize) -> SessionFrame {
+    SessionFrame::new(
+        i64::from(start).saturating_add(i64::try_from(frame).expect("prepared frame count")),
+    )
+}
+
 /// Fill `mixes` with the next values of a ramping `mix` and `keeps` with their
 /// complements, up to the frame the ramp settles on, and answer how many
 /// frames that is. The ramp settles on the first frame close enough to its
@@ -331,7 +382,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        bridge::{CrossfaderGain, FxMix, Trim},
+        bridge::{CrossfaderGain, EqGainProgram, FxMix, ParameterKnot, Trim},
         rt::DeckMixerConfig,
         test_pools::pools,
     };
@@ -405,13 +456,13 @@ mod tests {
         }
     }
 
-    /// Records every sample rate it is tuned to.
-    struct Tuned(Arc<Mutex<Vec<u32>>>);
+    /// A constant wet signal recording each prepared sample rate.
+    struct Tuned(Arc<Mutex<Vec<u32>>>, f32);
 
     impl DeckEffect for Tuned {
         fn process(&mut self, _: [&[f32]; 2], wet: [&mut [f32]; 2]) {
             for wet in wet {
-                wet.fill(0.0);
+                wet.fill(self.1);
             }
         }
 
@@ -444,7 +495,7 @@ mod tests {
         let tuned = Arc::new(Mutex::new(Vec::new()));
         let install = DeckFxChange::Install {
             unit: 0,
-            effect: Box::new(Tuned(Arc::clone(&tuned))),
+            effect: Box::new(Tuned(Arc::clone(&tuned), 0.0)),
         };
         assert!(
             render.change_fx(install, rate(48_000)).is_none(),
@@ -452,6 +503,50 @@ mod tests {
         );
         render.update_sample_rate(rate(96_000));
         assert_eq!(*tuned.lock(), [48_000, 96_000]);
+    }
+
+    #[kithara::test]
+    fn eq_program_pcm_keeps_fx_after_eq_and_fader_after_fx() {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let mix = DeckMixSettings::builder()
+            .crossfader(CrossfaderGain::checked(0.5).expect("half output"))
+            .build();
+        let mut render = RenderPass::new(
+            &pools(),
+            StreamShape::new(NonZeroU32::new(4).expect("four frames"), rate),
+            DeckMixerConfig::builder().eq_bands(1).mix(mix).build(),
+        )
+        .expect("one-band deck");
+        let effect = Box::new(Tuned(Arc::new(Mutex::new(Vec::new())), 0.25));
+        for change in [
+            DeckFxChange::Install { unit: 0, effect },
+            DeckFxChange::Power { unit: 0, on: true },
+            DeckFxChange::Mix {
+                unit: 0,
+                value: FxMix::checked(1.0).expect("fully wet"),
+            },
+        ] {
+            render.change_fx(change, rate);
+        }
+        render.idle();
+        let start = SessionFrame::new(32);
+        let program = EqGainProgram::new(
+            0,
+            vec![
+                ParameterKnot::new(start, 6.0, kithara_dsp::curve::CurveShape::HOLD)
+                    .expect("held gain"),
+            ],
+        )
+        .expect("gain programme");
+        let mut curves = [None; EqGainProgram::MAX_ACTIVE];
+        curves[0] = Some((0, program.curve()));
+        let (mut left, mut right) = ([0.125; 4], [-0.5; 4]);
+        render.finish_eq_curves(&mut left, &mut right, start, &curves);
+        assert_eq!(left.map(f32::to_bits), [0.125_f32.to_bits(); 4]);
+        assert_eq!(right.map(f32::to_bits), [0.125_f32.to_bits(); 4]);
+        let mut gains = [GainDb::DEFAULT];
+        assert_eq!(render.read_eq(&mut gains), 1);
+        assert_eq!(gains[0], GainDb::MAX);
     }
 
     /// A ramp a sample-rate change catches goes on toward its target at the
@@ -492,7 +587,7 @@ mod tests {
                 DeckMixerConfig::builder().eq_bands(0).build(),
             )
             .expect("deck chain");
-            let effect = Box::new(Tuned(Arc::new(Mutex::new(Vec::new()))));
+            let effect = Box::new(Tuned(Arc::new(Mutex::new(Vec::new())), 0.0));
             for change in [
                 DeckFxChange::Install { unit: 0, effect },
                 DeckFxChange::Power { unit: 0, on: true },

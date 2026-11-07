@@ -42,6 +42,11 @@ impl EqLayout {
         self.right.set_gain(band, gain_db);
     }
 
+    fn set_explicit(&mut self, band: usize, gain_db: GainDb) {
+        self.left.set_explicit(band, gain_db);
+        self.right.set_explicit(band, gain_db);
+    }
+
     delegate::delegate! {
         to self.left {
             fn band_count(&self) -> usize;
@@ -144,11 +149,7 @@ impl StereoEq {
 
     /// Reads target gains into storage supplied by the mixer, without allocation.
     pub fn read_gains(&self, gains: &mut [GainDb]) -> usize {
-        let layout = match &self.update {
-            Some(LayoutUpdate::Pending(layout)) => Some(layout),
-            _ => self.active.as_ref(),
-        };
-        let Some(layout) = layout else {
+        let Some(layout) = self.target_layout() else {
             return 0;
         };
         for (band, gain) in gains.iter_mut().enumerate().take(layout.band_count()) {
@@ -157,6 +158,32 @@ impl StereoEq {
             }
         }
         layout.band_count()
+    }
+
+    fn target_layout(&self) -> Option<&EqLayout> {
+        match &self.update {
+            Some(LayoutUpdate::Pending(layout)) => Some(layout),
+            _ => self.active.as_ref(),
+        }
+        .map(Box::as_ref)
+    }
+
+    /// Whether a settled sounding layout contains the requested band.
+    #[must_use]
+    pub fn accepts_gain_program(&self, band: usize) -> bool {
+        !matches!(self.update, Some(LayoutUpdate::Pending(_)))
+            && self.crossover.has_settled()
+            && self
+                .active
+                .as_ref()
+                .is_some_and(|layout| band < layout.band_count())
+    }
+
+    /// Apply one admitted trajectory value without manual-target smoothing.
+    pub fn set_gain_explicit(&mut self, band: usize, gain_db: GainDb) {
+        if let Some(layout) = self.active.as_mut() {
+            layout.set_explicit(band, gain_db);
+        }
     }
 
     /// Retunes every layout this EQ holds, and its crossover, to `sample_rate`.
