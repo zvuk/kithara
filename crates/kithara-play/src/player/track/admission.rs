@@ -6,9 +6,10 @@ use kithara_render::{
     LaneCommand, LaneFrame,
     bridge::{DeckPart, SlotMark},
 };
-use kithara_signal::{AudioChunkInfo, SessionFrame, SourceSpan};
+use kithara_signal::{AudioChunkInfo, SegmentId, SessionFrame, SourceSpan};
 use kithara_sync::SpeedCurve;
 use kithara_warp::SourceTrajectory;
+use num_traits::ToPrimitive;
 use tracing::warn;
 
 use super::{
@@ -303,6 +304,107 @@ impl<S> Track<S> for PlayerImpl<S> {
 }
 
 impl<S> PlayerImpl<S> {
+    pub(super) fn consumed_speed(&self) -> Result<f32, PlayError> {
+        let frame = match self
+            .resume
+            .or(self.mark)
+            .filter(|mark| mark.lane.segment == self.segment)
+        {
+            Some(mark) => mark.lane.frame,
+            None if matches!(
+                self.status,
+                TrackStatus::Loading | TrackStatus::Loaded | TrackStatus::Paused { .. }
+            ) =>
+            {
+                0
+            }
+            None => return Err(PlayError::Untimed),
+        };
+        let commands = self.planned_changes(self.segment, false)?;
+        let commands = &commands[..commands.partition_point(|(at, _, _)| *at <= frame)];
+
+        let first = commands
+            .iter()
+            .rposition(|(_, _, change)| match change {
+                PlannedChange::Speed(
+                    SpeedCurve::Constant(_)
+                    | SpeedCurve::Approach(_)
+                    | SpeedCurve::ApproachSteps(_),
+                ) => true,
+                PlannedChange::Speed(SpeedCurve::Steps(steps)) => {
+                    steps.first().is_some_and(|(at, _)| *at == 0)
+                }
+                PlannedChange::Speed(SpeedCurve::Ramp { .. }) | PlannedChange::Jump(_) => false,
+            })
+            .unwrap_or(0);
+        let base = SpeedCurve::Constant(self.segment_speed);
+        let mut curve = &base;
+        let mut origin = f64::from(self.segment_speed);
+        let mut start = 0;
+        for (at, _, change) in &commands[first..] {
+            if let PlannedChange::Speed(next) = change {
+                origin = curve_speed(curve, origin, at.saturating_sub(start))?;
+                curve = next;
+                start = *at;
+            }
+        }
+        curve_speed(curve, origin, frame.saturating_sub(start))?
+            .to_f32()
+            .ok_or(PlayError::Untimed)
+    }
+
+    pub(super) fn planned_changes(
+        &self,
+        segment: SegmentId,
+        future: bool,
+    ) -> Result<Vec<(u64, Seq, PlannedChange<'_>)>, PlayError> {
+        let mut commands: Vec<(u64, Seq, PlannedChange<'_>)> =
+            Vec::with_capacity(self.lane_commands.len());
+        for operation in &self.lane_commands {
+            if operation.applied() == Some(false) {
+                continue;
+            }
+            let frame = match &operation.command {
+                LaneCommand::Segment { id, .. } if *id == segment => 0,
+                _ => match operation.when {
+                    When::At(frame) if frame.segment == segment => frame.frame,
+                    When::Next | When::Deferred
+                        if operation.segment == segment
+                            && matches!(
+                                operation.command,
+                                LaneCommand::SetSpeed(_) | LaneCommand::Jump { .. }
+                            ) =>
+                    {
+                        if future {
+                            return Err(PlayError::NotReady);
+                        }
+                        continue;
+                    }
+                    When::At(_) | When::Next | When::Deferred => continue,
+                },
+            };
+            match &operation.command {
+                LaneCommand::SetSpeed(curve) | LaneCommand::Segment { speed: curve, .. } => {
+                    commands.push((frame, operation.seq, PlannedChange::Speed(curve)));
+                }
+                LaneCommand::Jump { to } => {
+                    let landing = frame
+                        .checked_add(self.declick.get() as u64)
+                        .ok_or(PlayError::Untimed)?;
+                    let superseded = self.lane_commands.iter().any(|next| next.seq != operation.seq && next.applied() != Some(false)
+                        && matches!(next.command, LaneCommand::Jump { .. })
+                        && matches!(next.when, When::At(at) if at.segment == segment && (at.frame > frame || at.frame == frame && next.seq > operation.seq) && at.frame < landing));
+                    if !superseded {
+                        commands.push((landing, operation.seq, PlannedChange::Jump(*to)));
+                    }
+                }
+                _ => {}
+            }
+        }
+        commands.sort_by_key(|&(frame, seq, _)| (frame, seq));
+        Ok(commands)
+    }
+
     fn planned_target(&self, at: SessionFrame) -> Result<(SlotMark, u64), PlayError> {
         let mark = self.mark.ok_or(PlayError::Untimed)?;
         if mark.lane.segment != self.segment || !matches!(self.status, TrackStatus::Playing { .. })
