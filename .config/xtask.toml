@@ -329,6 +329,7 @@ line_log = "no-block.log"
 
 [stress.environment]
 remove = [
+  "KITHARA_AUDIO_ARTIFACT_DIR",
   "KITHARA_FLASH_SYNC_BT",
   "KITHARA_FLASH_SYNC_TRACE",
   "KITHARA_HANG_DUMP_DIR",
@@ -451,6 +452,8 @@ KITHARA_NO_BLOCK_LOG = "no-block.log"
 [stress.modes.reproduction-load-flash-on]
 flash = true
 load = true
+# Each test fills the CPU set; its spinners already supply concurrent pressure.
+test_threads = "1"
 
 [stress.modes.reproduction-load-flash-on.set_env]
 KITHARA_FLASH_SYNC_TRACE = "1"
@@ -461,12 +464,12 @@ NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
 
 [stress.modes.reproduction-load-flash-on.raw_path_env]
-KITHARA_AUDIO_ARTIFACT_DIR = "audio"
 KITHARA_HANG_DUMP_DIR = "hang"
 
 [stress.modes.reproduction-load-flash-off]
 flash = false
 load = true
+test_threads = "1"
 
 [stress.modes.reproduction-load-flash-off.set_env]
 KITHARA_FLASH_SYNC_TRACE = "1"
@@ -477,7 +480,6 @@ NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
 
 [stress.modes.reproduction-load-flash-off.raw_path_env]
-KITHARA_AUDIO_ARTIFACT_DIR = "audio"
 KITHARA_HANG_DUMP_DIR = "hang"
 
 # The real-time contract, measured the same way. They belong in the run

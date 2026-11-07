@@ -879,6 +879,7 @@ mod subject {
             mode_name: "lane",
             mode: &mode,
             lane: Some("tests"),
+            test_threads: "1",
             runner: StressRunner::Lane(Box::new(ResolvedLane {
                 env: BTreeMap::new(),
                 backend: "local".to_owned(),
@@ -901,6 +902,7 @@ mod subject {
             mode_name: "command",
             mode: &command,
             lane: None,
+            test_threads: "1",
             runner: StressRunner::Command(command.command.clone()),
         };
 
@@ -1408,7 +1410,7 @@ impl RunInputs {
                 junit: self.subject_junit.clone(),
                 config_file: self.config_file.clone(),
                 filter: self.filter.clone(),
-                test_threads: config.test_threads.clone(),
+                test_threads: unit.test_threads.to_owned(),
                 profile: config.nextest_profile.clone(),
                 max_count: config.max_count,
                 max_test_threads: config.max_test_threads,
@@ -1467,7 +1469,7 @@ fn run_lane(
             selection: Selection {
                 count,
                 filter: inputs.filter.clone(),
-                test_threads: config.test_threads.clone(),
+                test_threads: unit.test_threads.to_owned(),
             },
             policy: policy_snapshot(config, mode),
         },
@@ -2114,7 +2116,7 @@ fn verify_manifest(
         subject_sha: args.expected_subject_sha.clone(),
         filter: expected.filter.to_owned(),
         count: expected.count,
-        test_threads: expected.config.test_threads.clone(),
+        test_threads: expected.unit.test_threads.to_owned(),
         mode: expected.unit.mode_name.to_owned(),
         config: ManifestConfig::new(
             expected.config.nextest_profile.clone(),
@@ -2648,6 +2650,52 @@ mod tests {
             assert!(lane.features.contains(&"nb-detect".to_owned()));
             assert!(lane.features.contains(&"virtual-time".to_owned()));
         }
+    }
+
+    #[test]
+    fn modes_with_distinct_thread_budgets_keep_distinct_execution_units() {
+        let mut project = lanes_project();
+        project.stress.test_threads = "8".to_owned();
+        project.stress.modes = toml::from_str("[parallel]\n[whole_cpu]\ntest_threads = '1'\n")
+            .expect("mode thread budgets are configuration");
+        let names = ["parallel".to_owned(), "whole_cpu".to_owned()];
+        let lanes = ["product".to_owned()];
+        let selected =
+            units(&project, &project.stress, &names, &lanes).expect("resolve execution units");
+        assert_eq!(
+            selected.len(),
+            2,
+            "distinct CPU budgets are distinct evidence"
+        );
+        let inputs = RunInputs {
+            build: PathBuf::from("build"),
+            config_file: PathBuf::from("nextest.toml"),
+            controller_root: PathBuf::from("controller"),
+            controller_sha: "a".repeat(40),
+            count: 100,
+            filter: "all()".to_owned(),
+            subject_junit: PathBuf::from("junit.xml"),
+            subject_root: PathBuf::from("subject"),
+            subject_sha: "b".repeat(40),
+        };
+        let paths = Paths::new(PathBuf::from("raw"), &project.stress.artifacts);
+        let budgets: Vec<_> = selected
+            .iter()
+            .map(|unit| {
+                let spec = inputs
+                    .spec(unit, &paths, &project.stress)
+                    .expect("lane runner");
+                assert_eq!(spec.count, 100, "admission preserves every repeat");
+                (unit.name(), spec.test_threads)
+            })
+            .collect();
+        assert_eq!(
+            budgets,
+            [
+                ("parallel/product".to_owned(), "8".to_owned()),
+                ("whole_cpu/product".to_owned(), "1".to_owned())
+            ]
+        );
     }
 
     /// A run repeats every lane mode on every lane it names and a command mode

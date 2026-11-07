@@ -22,6 +22,7 @@ pub(super) struct Unit<'a> {
     /// The test lane a lane mode runs on; a command mode has none.
     pub(super) lane: Option<&'a str>,
     pub(super) runner: StressRunner,
+    pub(super) test_threads: &'a str,
 }
 
 impl Unit<'_> {
@@ -109,10 +110,11 @@ pub(super) fn units<'a>(
     modes: &'a [String],
     lanes: &'a [String],
 ) -> Result<Vec<Unit<'a>>> {
-    let mut seen = Vec::<(StressRunner, PolicySnapshot)>::new();
+    let mut seen = Vec::<(StressRunner, PolicySnapshot, &str)>::new();
     let mut units = Vec::new();
     for mode_name in modes {
         let mode = config.mode(mode_name)?;
+        let test_threads = mode.test_threads.as_deref().unwrap_or(&config.test_threads);
         let targets = if mode.command.is_empty() {
             lanes.iter().map(|lane| Some(lane.as_str())).collect()
         } else {
@@ -120,7 +122,7 @@ pub(super) fn units<'a>(
         };
         for lane in targets {
             let runner = unit_runner(project, mode, lane)?;
-            let identity = (runner.clone(), policy_snapshot(config, mode));
+            let identity = (runner.clone(), policy_snapshot(config, mode), test_threads);
             if seen.contains(&identity) {
                 continue;
             }
@@ -130,6 +132,7 @@ pub(super) fn units<'a>(
                 mode,
                 lane,
                 runner,
+                test_threads,
             });
         }
     }
