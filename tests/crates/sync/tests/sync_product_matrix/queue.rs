@@ -762,7 +762,14 @@ impl QueueMusic {
             .eq_bands(0)
             .sample_rate(sample_rate)
             .slots(NonZeroUsize::new(2).expect("two actual reusable mixer slots"))
-            .mix(DeckMixSettings::builder().level(CONTROL_GAIN).build())
+            .mix(
+                DeckMixSettings::builder()
+                    .crossfader(
+                        kithara::play::CrossfaderGain::checked(CONTROL_GAIN)
+                            .expect("the control gain is a crossfader gain"),
+                    )
+                    .build(),
+            )
             .build();
         let crossfade = kind.crossfade();
         if kind == MusicCase::Natural {

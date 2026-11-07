@@ -4,5 +4,5 @@ mod cases;
 mod gain;
 
 pub(super) use cases::{
-    ROOMY_CAPACITY, play_resource, play_source, playing_harness, render_blocks,
+    ROOMY_CAPACITY, load_source, play_resource, play_source, playing_harness, render_blocks,
 };
