@@ -147,8 +147,22 @@ fn source_format_changes_preserve_pcm_metadata_and_the_deck_filter_rate(
         )],
     );
     let mut reference = filter(1_000.0);
-    for (index, (meta, value)) in metadata.into_iter().zip([0.25, -0.125, 0.0625]).enumerate() {
-        let actual = stereo_frames(&mut mixer, 1 + index * 128, 128);
+    for (index, (meta, value)) in metadata
+        .iter()
+        .copied()
+        .zip([0.25, -0.125, 0.0625])
+        .enumerate()
+    {
+        let start = 1 + index * 128;
+        let mut actual = stereo_frames(&mut mixer, start, 127);
+        {
+            let snapshot = ends.deck.snapshot.read();
+            assert_eq!(snapshot.slots[A.index()].source, Some(meta));
+        }
+        let last = stereo_frames(&mut mixer, start + 127, 1);
+        for (output, suffix) in actual.iter_mut().zip(last) {
+            output.extend(suffix);
+        }
         let mut expected = [vec![value; 128], vec![value; 128]];
         reference
             .process(&mut expected, 0..128)
@@ -158,7 +172,10 @@ fn source_format_changes_preserve_pcm_metadata_and_the_deck_filter_rate(
             expected.each_ref().map(|plane| bits(plane))
         );
         let snapshot = ends.deck.snapshot.read();
-        assert_eq!(snapshot.slots[A.index()].source, Some(meta));
+        assert_eq!(
+            snapshot.slots[A.index()].source,
+            Some(metadata.get(index + 1).copied().unwrap_or(meta))
+        );
         assert_eq!(snapshot.sample_rate, initial.sample_rate.get());
         assert_eq!(snapshot.filter.settings(), Some(*reference.config()));
         assert_eq!(
