@@ -8,7 +8,7 @@ use kithara::{
         time::{Duration, sleep, timeout},
         tokio::sync::OnceCell,
     },
-    queue::{AdvanceReason, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
+    queue::{AdvanceReason, QueueControl, QueueEvent, TrackSource, Transition},
 };
 use kithara_app::{document::Config, pools::AppPools};
 use kithara_integration_tests::{
@@ -18,7 +18,7 @@ use kithara_integration_tests::{
         AppQueueFixture, app_disk_asset_store, app_track_source, assert_playhead_tracks_renderer,
         insecure_app_queue,
     },
-    waits::{wait_for_position_at_least, wait_for_position_near},
+    waits::{wait_for_loader_done_event, wait_for_position_at_least, wait_for_position_near},
 };
 use kithara_test_utils::Xorshift64;
 
@@ -48,57 +48,6 @@ mod test_statics {
 
 async fn shared_test_ctx() -> &'static AppQueueFixture {
     test_statics::TEST_CTX.get_or_init(insecure_app_queue).await
-}
-
-async fn wait_for_status(
-    rx: &mut EventReceiver<TestEvent>,
-    queue: &QueueControl<AppPools>,
-    track_id: TrackId,
-    target: TrackStatus,
-    deadline: Duration,
-) -> Result<(), String> {
-    use kithara::platform::tokio::sync::broadcast::error::RecvError;
-    if let Some(entry) = queue.track(track_id) {
-        if entry.status == target {
-            return Ok(());
-        }
-        if let TrackStatus::Failed(err) = &entry.status {
-            return Err(format!("track entered Failed: {err}"));
-        }
-    }
-    let res = timeout(deadline, async {
-        loop {
-            let ev = match rx.recv().await {
-                Ok(env) => env.event,
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => return Err("event stream closed".to_string()),
-            };
-            if let TestEvent::Queue(QueueEvent::TrackStatusChanged { id, status }) = ev
-                && id == track_id
-            {
-                match &status {
-                    s if *s == target => return Ok(()),
-                    TrackStatus::Failed(err) => {
-                        return Err(format!("track entered Failed: {err}"));
-                    }
-                    TrackStatus::Pending
-                    | TrackStatus::Loading
-                    | TrackStatus::Slow
-                    | TrackStatus::Loaded
-                    | TrackStatus::Consumed
-                    | TrackStatus::Cancelled => continue,
-                }
-            }
-        }
-    })
-    .await;
-    match res {
-        Ok(r) => r,
-        Err(_) => Err(format!(
-            "timeout waiting for {target:?} after {:?}",
-            deadline
-        )),
-    }
 }
 
 async fn sample_positions(
@@ -335,15 +284,9 @@ async fn track_plays_end_to_end(
         .await
         .expect("append real playlist track");
 
-    wait_for_status(
-        &mut rx,
-        &ctx.queue,
-        track_id,
-        TrackStatus::Loaded,
-        Duration::from_secs(30),
-    )
-    .await
-    .unwrap_or_else(|e| panic!("load fail [{url}]: {e}"));
+    wait_for_loader_done_event(&mut rx, &ctx.queue, track_id, Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|e| panic!("load fail [{url}]: {e}"));
 
     ctx.queue
         .run(move |q| q.select(track_id, Transition::None))
@@ -474,15 +417,9 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         })
         .await
         .expect("select first");
-    wait_for_status(
-        &mut rx,
-        &ctx.queue,
-        ids[0],
-        TrackStatus::Loaded,
-        Duration::from_secs(30),
-    )
-    .await
-    .unwrap_or_else(|e| panic!("first track load [{}]: {e}", urls[0]));
+    wait_for_loader_done_event(&mut rx, &ctx.queue, ids[0], Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|e| panic!("first track load [{}]: {e}", urls[0]));
     wait_for_position_at_least(&ctx.queue, 2.0, Duration::from_secs(15))
         .await
         .expect("first track position");
@@ -522,15 +459,9 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .await
         .expect("seek landed near target");
 
-    wait_for_status(
-        &mut rx,
-        &ctx.queue,
-        ids[1],
-        TrackStatus::Loaded,
-        Duration::from_secs(30),
-    )
-    .await
-    .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
+    wait_for_loader_done_event(&mut rx, &ctx.queue, ids[1], Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
     let xf_duration = ctx.queue.crossfade_settings().duration;
     ctx.queue
         .run(|q| q.next(Transition::Crossfade))
@@ -563,11 +494,10 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         let url = &urls[i];
         let result: Result<(), String> =
             async {
-                wait_for_status(
+                wait_for_loader_done_event(
                     &mut rx,
                     &ctx.queue,
                     ids[i],
-                    TrackStatus::Loaded,
                     Duration::from_secs(30),
                 )
                 .await
@@ -725,15 +655,9 @@ async fn prod_tracks_sequential_startup_latency() {
         hang_reset!();
 
         let outcome: Result<(Duration, Duration), String> = async {
-            wait_for_status(
-                &mut rx,
-                &ctx.queue,
-                track_id,
-                TrackStatus::Loaded,
-                Duration::from_secs(30),
-            )
-            .await
-            .map_err(|e| format!("load: {e}"))?;
+            wait_for_loader_done_event(&mut rx, &ctx.queue, track_id, Duration::from_secs(30))
+                .await
+                .map_err(|e| format!("load: {e}"))?;
             hang_reset!();
             let load_latency = t0.elapsed();
 
@@ -919,15 +843,9 @@ async fn hls_hands_over_to_mpeg_at_its_own_end(#[case] backend: DecoderBackend) 
         .await
         .expect("append the MPEG leg");
 
-    wait_for_status(
-        &mut rx,
-        &ctx.queue,
-        hls,
-        TrackStatus::Loaded,
-        Duration::from_secs(30),
-    )
-    .await
-    .unwrap_or_else(|e| panic!("HLS leg load [{HLS_URL}]: {e}"));
+    wait_for_loader_done_event(&mut rx, &ctx.queue, hls, Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|e| panic!("HLS leg load [{HLS_URL}]: {e}"));
     ctx.queue
         .run(move |q| q.select(hls, Transition::None))
         .await
