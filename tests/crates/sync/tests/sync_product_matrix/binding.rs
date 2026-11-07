@@ -1,4 +1,7 @@
-use std::num::{NonZeroU16, NonZeroU128};
+use std::{
+    collections::{BTreeMap, btree_map::Entry},
+    num::{NonZeroU16, NonZeroU128},
+};
 
 use kithara::{
     beat::BeatGridModel,
@@ -238,26 +241,135 @@ struct AppliedCurve<'a> {
     at: SessionFrame,
 }
 
-struct SourceGeometry<'a> {
-    model: &'a BeatGridModel,
+struct SourceGeometry {
+    model: Arc<BeatGridModel>,
     source: BeatGridSnapshot,
     maximum_slope: f64,
 }
 
-impl<'a> SourceGeometry<'a> {
+impl SourceGeometry {
     fn new(
-        model: &'a BeatGridModel,
+        model: Arc<BeatGridModel>,
         rate: NonZeroU32,
         duration: Option<Duration>,
     ) -> Result<Self, String> {
-        let source = source_with_duration(model, rate, duration)?;
-        let maximum_slope = maximum_source_slope(model, &source, rate)?;
+        let source = source_with_duration(&model, rate, duration)?;
+        let maximum_slope = maximum_source_slope(&model, &source, rate)?;
         Ok(Self {
             model,
             source,
             maximum_slope,
         })
     }
+}
+
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
+pub(super) struct DeclaredSource {
+    #[field(get, vis = "pub(super)")]
+    model: Arc<BeatGridModel>,
+    grids: BTreeMap<NonZeroU32, BeatGridSnapshot>,
+    geometries: BTreeMap<(NonZeroU32, Option<Duration>), SourceGeometry>,
+}
+
+impl DeclaredSource {
+    pub(super) fn new(model: Arc<BeatGridModel>) -> Self {
+        Self {
+            model,
+            grids: BTreeMap::new(),
+            geometries: BTreeMap::new(),
+        }
+    }
+
+    fn grid(&mut self, rate: NonZeroU32) -> Result<&BeatGridSnapshot, String> {
+        match self.grids.entry(rate) {
+            Entry::Occupied(entry) => Ok(entry.into_mut()),
+            Entry::Vacant(entry) => Ok(entry.insert(declared_source_grid(&self.model, rate)?)),
+        }
+    }
+
+    fn geometry(
+        &mut self,
+        rate: NonZeroU32,
+        duration: Option<Duration>,
+    ) -> Result<&SourceGeometry, String> {
+        match self.geometries.entry((rate, duration)) {
+            Entry::Occupied(entry) => Ok(entry.into_mut()),
+            Entry::Vacant(entry) => Ok(entry.insert(SourceGeometry::new(
+                Arc::clone(&self.model),
+                rate,
+                duration,
+            )?)),
+        }
+    }
+}
+
+#[kithara::test]
+fn declared_source_prepares_only_immutable_matching_geometry() {
+    let ArtifactSource::Value(model) = synthetic_grid() else {
+        panic!("declared synthetic source");
+    };
+    let rate = NonZeroU32::new(48_000).expect("source rate");
+    let mut declared = DeclaredSource::new(Arc::clone(&model));
+    let fresh = SourceGeometry::new(Arc::clone(&model), rate, None).expect("fresh source geometry");
+    let stamp = {
+        let cached = declared
+            .geometry(rate, None)
+            .expect("prepared source geometry");
+        assert_eq!(
+            cached.maximum_slope.to_bits(),
+            fresh.maximum_slope.to_bits()
+        );
+        for beat in model.as_raw().beats.iter().take(8) {
+            let position = media_position(
+                Duration::try_from_secs_f64(beat.at).expect("observed source beat"),
+                rate,
+            )
+            .expect("source beat position");
+            assert_eq!(
+                grid_beat_at(&cached.source, position).map(f64::to_bits),
+                grid_beat_at(&fresh.source, position).map(f64::to_bits),
+            );
+        }
+        cached.source.stamp()
+    };
+    assert_eq!(
+        declared
+            .geometry(rate, None)
+            .expect("same geometry")
+            .source
+            .stamp(),
+        stamp
+    );
+    let other = NonZeroU32::new(96_000).expect("different evaluation rate");
+    assert_eq!(
+        declared
+            .geometry(other, None)
+            .expect("other geometry")
+            .source
+            .axis()
+            .sample_rate(),
+        other
+    );
+    let invalid = SourceGeometry::new(Arc::clone(&model), rate, Some(Duration::ZERO)).err();
+    assert!(
+        invalid.is_some(),
+        "zero extent cannot contain the declared beats"
+    );
+    assert_eq!(declared.geometry(rate, Some(Duration::ZERO)).err(), invalid);
+    assert_eq!(
+        declared
+            .geometry(rate, None)
+            .expect("unaffected geometry")
+            .source
+            .stamp(),
+        stamp
+    );
+    let grid = declared.grid(rate).expect("declared grid").stamp();
+    assert_eq!(
+        declared.grid(rate).expect("same declared grid").stamp(),
+        grid
+    );
 }
 
 struct PrefixPlan {
@@ -1571,13 +1683,13 @@ impl AppliedCurve<'_> {
 
     fn verify_prefix(
         &self,
-        geometry: &SourceGeometry<'_>,
+        geometry: &SourceGeometry,
         host: &TempoTrajectory,
         horizon: std::ops::Bound<SessionFrame>,
         predecessor: f64,
         commanded: bool,
     ) -> Result<PrefixProof, String> {
-        let model = geometry.model;
+        let model = geometry.model.as_ref();
         let source = &geometry.source;
         let command = self.command;
         let rate = host.sample_rate();
@@ -1729,13 +1841,13 @@ impl AppliedCurve<'_> {
 
     fn verify_end(
         &self,
-        geometry: &SourceGeometry<'_>,
+        geometry: &SourceGeometry,
         observation: &LinkObservation,
         curves: &[AppliedCurve<'_>],
         snapshot: &kithara::link::LinkedSnapshot<kithara::play::TrackSnapshot>,
         deadline: Option<u64>,
     ) -> Result<Vec<String>, String> {
-        let model = geometry.model;
+        let model = geometry.model.as_ref();
         let source = &geometry.source;
         let command = self.command;
         let item = command.item;
@@ -1808,7 +1920,7 @@ impl AppliedCurve<'_> {
 
     fn verify(
         &self,
-        geometry: &SourceGeometry<'_>,
+        geometry: &SourceGeometry,
         observation: &LinkObservation,
         curves: &[AppliedCurve<'_>],
         index: usize,
@@ -2045,13 +2157,15 @@ fn check_commanded_spans(
 }
 
 pub(super) fn executed_law(
-    model: &BeatGridModel,
+    source: &mut DeclaredSource,
     host_grid: &BeatGridSnapshot,
     observation: &LinkObservation,
     snapshot: &kithara::link::LinkedSnapshot<kithara::play::TrackSnapshot>,
     capture_start: SlotSnapshot,
     consumed: SlotSnapshot,
 ) -> Result<LawProof, String> {
+    let model_handle = Arc::clone(&source.model);
+    let model = model_handle.as_ref();
     let rate = observation
         .consumed_rate
         .ok_or_else(|| "law has no consumed evaluation clock".to_owned())?;
@@ -2098,9 +2212,9 @@ pub(super) fn executed_law(
     let (host_history_input, _) = owned_host_history(observation, rate)?;
     let mut reference =
         consumed_cue_law(model, observation, &curves, snapshot, rate, &mut failures)?;
-    let source_grid = declared_source_grid(model, rate)?;
-    let source_beat = grid_beat_at(&source_grid, media_position(media, rate)?)?;
-    let projected_beat = grid_beat_at(&source_grid, media_position(projected, rate)?)?;
+    let source_grid = source.grid(rate)?;
+    let source_beat = grid_beat_at(source_grid, media_position(media, rate)?)?;
+    let projected_beat = grid_beat_at(source_grid, media_position(projected, rate)?)?;
     let host_beat = grid_beat_at(host_grid, MapPosition::Session(mark.session))?;
     let expected_consumed = session_frame_at(host_grid, host_beat + projected_beat - source_beat)?;
     if expected_consumed != mark.session {
@@ -2122,10 +2236,10 @@ pub(super) fn executed_law(
     for group in curves[..active]
         .chunk_by(|first, second| first.command.before.duration == second.command.before.duration)
     {
-        let geometry = SourceGeometry::new(model, rate, group[0].command.before.duration)?;
+        let geometry = source.geometry(rate, group[0].command.before.duration)?;
         for (index, applied) in group.iter().enumerate() {
             let (evidence, anchor) = applied.verify(
-                &geometry,
+                geometry,
                 observation,
                 &curves,
                 group_start + index,
@@ -2181,10 +2295,12 @@ fn source_regions(grid: &BeatGridSnapshot) -> Result<Vec<(MapPosition, MapPositi
 }
 
 fn queue_source_supported(
-    model: &BeatGridModel,
+    source: &mut DeclaredSource,
     rate: NonZeroU32,
     consumed: SlotSnapshot,
 ) -> Result<bool, String> {
+    let model_handle = Arc::clone(&source.model);
+    let model = model_handle.as_ref();
     let (mark, _) = consumed_media(consumed)?;
     let info = consumed
         .source
@@ -2208,12 +2324,12 @@ fn queue_source_supported(
             .ok_or_else(|| "Queue source has no immutable media origin".to_owned())?,
     )
     .ok_or_else(|| "Queue exact source coordinate cannot translate to media".to_owned())?;
-    let grid = declared_source_grid(model, rate)?;
+    let grid = source.grid(rate)?;
     let point = media_seconds_position(media, rate)?;
     match grid.beat_at(MapPoint::new(grid.stamp(), point)) {
         BeatGridQuery::Resolved(_) => Ok(true),
         BeatGridQuery::Uncovered { .. } => {
-            let regions = source_regions(&grid)?;
+            let regions = source_regions(grid)?;
             let MapPosition::Asset(last) = regions
                 .last()
                 .ok_or_else(|| "Queue supplied grid has no regions".to_owned())?
@@ -2238,7 +2354,7 @@ fn queue_source_supported(
 }
 
 pub(super) fn queue_observation(
-    model: &BeatGridModel,
+    source: &mut DeclaredSource,
     host_grid: &BeatGridSnapshot,
     observation: &LinkObservation,
     snapshot: &kithara::link::LinkedSnapshot<kithara::play::TrackSnapshot>,
@@ -2248,9 +2364,9 @@ pub(super) fn queue_observation(
     let rate = observation
         .consumed_rate
         .ok_or_else(|| "Queue observation has no native clock".to_owned())?;
-    if queue_source_supported(model, rate, consumed)? {
+    if queue_source_supported(source, rate, consumed)? {
         return executed_law(
-            model,
+            source,
             host_grid,
             observation,
             snapshot,
@@ -4743,7 +4859,8 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     let ArtifactSource::Value(model) = synthetic_grid() else {
         panic!("declared source grid");
     };
-    let geometry = SourceGeometry::new(&model, rate, None).expect("declared source geometry");
+    let geometry =
+        SourceGeometry::new(Arc::clone(&model), rate, None).expect("declared source geometry");
     let host = TempoTrajectory::new(
         TempoStep {
             frame: SessionFrame::new(0),
@@ -4808,7 +4925,8 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     raw.downbeats.clear();
     raw.meter = None;
     let model = BeatGridModel::try_from(raw).expect("two source slopes");
-    let geometry = SourceGeometry::new(&model, rate, None).expect("source crossing geometry");
+    let geometry =
+        SourceGeometry::new(Arc::new(model.clone()), rate, None).expect("source crossing geometry");
     let source_grid = sync_source_grid(&model, rate, None).expect("native source geometry");
     let host = TempoTrajectory::new(
         TempoStep {

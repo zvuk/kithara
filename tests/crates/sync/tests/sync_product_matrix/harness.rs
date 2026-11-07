@@ -1480,6 +1480,7 @@ impl ProductHarness {
                     continue;
                 }
             }
+            let mut declared = super::binding::DeclaredSource::new(Arc::clone(&model));
             let law = deck.observe(|observation| -> Result<_, String> {
                 let mut history_failures = Vec::new();
                 super::binding::published_host_history(
@@ -1489,7 +1490,7 @@ impl ProductHarness {
                     &mut history_failures,
                 )?;
                 let (speed, mut law_failures, evidence, reference) = super::binding::executed_law(
-                    &model,
+                    &mut declared,
                     &host_grid,
                     observation,
                     &snapshot,
