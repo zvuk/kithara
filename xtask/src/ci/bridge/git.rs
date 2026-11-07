@@ -341,6 +341,8 @@ impl GitRepo {
                 "user.name=kithara-bridge",
                 "-c",
                 "user.email=kithara-bridge@localhost",
+                "-c",
+                "diff.ignoreSubmodules=none",
                 "commit",
                 "--no-gpg-sign",
                 "--quiet",
