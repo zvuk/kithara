@@ -3,13 +3,15 @@ use std::fmt;
 use kithara_audio::TrackFailureKind;
 use kithara_command::{Protocol, Seq, Target};
 use kithara_derive::Ranged;
-use kithara_effects::{DeckEffect, FxParamChange, GainDb, eq::EqLayout};
+use kithara_dsp::filter::FilterError;
+use kithara_effects::{DeckEffect, FxParamChange, GainDb, eq::EqLayout, filter::FilterEffect};
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_signal::{SegmentId, SessionFrame};
 
 use super::{
-    DeckMixSettingsChange, EqBinding, EqGainProgram, SlotBinding, SlotGainProgram, SlotMark,
+    DeckFilterChange, DeckMixSettingsChange, EqBinding, EqGainProgram, FilterBinding, SlotBinding,
+    SlotGainProgram, SlotMark,
 };
 use crate::{CrossfadeSettings, rt::track::PlayerResource};
 
@@ -65,6 +67,15 @@ pub enum DeckRefusal {
     },
     Deferral,
     AxisRestarted,
+    /// A part names an FX unit the deck was not built with.
+    MissingFxUnit {
+        unit: usize,
+    },
+    /// A part changes a parameter the effect in `unit` does not have or cannot
+    /// take.
+    RefusedFxParam {
+        unit: usize,
+    },
     EqOutdated {
         band: usize,
     },
@@ -75,15 +86,10 @@ pub enum DeckRefusal {
         band: usize,
     },
     EqProgramCapacity,
-    /// A part names an FX unit the deck was not built with.
-    MissingFxUnit {
-        unit: usize,
-    },
-    /// A part changes a parameter the effect in `unit` does not have or cannot
-    /// take.
-    RefusedFxParam {
-        unit: usize,
-    },
+    FilterOutdated,
+    FilterShape,
+    FilterBatch,
+    Filter(FilterError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -154,12 +160,16 @@ pub enum DeckPart {
     },
     Mix(DeckMixSettingsChange),
     Eq(DeckEqChange),
+    Fx(DeckFxChange),
+    Filter {
+        binding: FilterBinding,
+        change: DeckFilterChange,
+    },
     EqProgram {
         binding: EqBinding,
         authority: Option<Seq>,
         program: EqGainProgram,
     },
-    Fx(DeckFxChange),
     GainProgram {
         slot: Slot,
         binding: SlotBinding,
@@ -176,6 +186,7 @@ pub enum Returned {
         pcm: Box<PlayerResource>,
     },
     Eq(Box<EqLayout>),
+    Filter(Option<Box<FilterEffect>>),
     Stopped {
         slot: Slot,
         resume: Option<SlotMark>,
@@ -328,6 +339,12 @@ impl fmt::Debug for DeckPart {
                 .finish(),
             Self::Mix(change) => formatter.debug_tuple("Mix").field(change).finish(),
             Self::Eq(change) => formatter.debug_tuple("Eq").field(change).finish(),
+            Self::Fx(change) => formatter.debug_tuple("Fx").field(change).finish(),
+            Self::Filter { binding, change } => formatter
+                .debug_struct("Filter")
+                .field("binding", binding)
+                .field("change", change)
+                .finish(),
             Self::EqProgram {
                 binding,
                 authority,
@@ -338,7 +355,6 @@ impl fmt::Debug for DeckPart {
                 .field("authority", authority)
                 .field("program", program)
                 .finish(),
-            Self::Fx(change) => formatter.debug_tuple("Fx").field(change).finish(),
             Self::GainProgram {
                 slot,
                 binding,
@@ -365,6 +381,7 @@ impl fmt::Debug for Returned {
                 .field("src", pcm.src())
                 .finish(),
             Self::Eq(_) => formatter.write_str("Eq"),
+            Self::Filter(_) => formatter.write_str("Filter"),
             Self::Stopped { slot, resume } => formatter
                 .debug_struct("Stopped")
                 .field("slot", slot)

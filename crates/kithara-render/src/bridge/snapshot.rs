@@ -2,7 +2,10 @@ use kithara_command::Seq;
 use kithara_effects::GainDb;
 use kithara_signal::AudioChunkInfo;
 
-use super::{EqBinding, RtMetricsSnapshot, SlotBinding, SlotMark, SlotOutputSnapshot, SlotState};
+use super::{
+    EqBinding, FilterSnapshot, RtMetricsSnapshot, SlotBinding, SlotMark, SlotOutputSnapshot,
+    SlotState,
+};
 use crate::rt::DeckMixerConfig;
 
 /// What a deck's mixer last published of each slot and of itself, once per block.
@@ -17,6 +20,7 @@ pub struct DeckSnapshot {
     /// The mixer's real-time counters.
     pub metrics: RtMetricsSnapshot,
     pub eq: EqSnapshot,
+    pub filter: FilterSnapshot,
 }
 
 impl DeckSnapshot {

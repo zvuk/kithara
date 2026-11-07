@@ -100,6 +100,9 @@ impl Deck {
                 })
             }
             DeckPart::Fx(change) => self.render.change_fx(change, self.sample_rate),
+            DeckPart::Filter { .. } => {
+                unreachable!("filter operations use single-command admission")
+            }
             DeckPart::GainProgram {
                 slot,
                 binding,
