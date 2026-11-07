@@ -15,7 +15,7 @@ use std::fs;
 const MAX_THREADS: usize = 128;
 
 /// One line per live thread: name, id, scheduler state, CPU ticks, nice,
-/// wait channel and schedstat (runtime ns, runnable wait ns, timeslices).
+/// wait channel, syscall state and schedstat (runtime ns, runnable wait ns, timeslices).
 /// Name first because readings join engine holders by name before truncation.
 ///
 /// Empty on targets without `/proc`, and on any thread whose files vanish
@@ -43,8 +43,10 @@ fn describe(tid: &str) -> Option<String> {
         read_trimmed(&format!("/proc/self/task/{tid}/wchan")).unwrap_or_else(|| "-".to_owned());
     let schedstat =
         read_trimmed(&format!("/proc/self/task/{tid}/schedstat")).unwrap_or_else(|| "-".to_owned());
+    let syscall =
+        read_trimmed(&format!("/proc/self/task/{tid}/syscall")).unwrap_or_else(|| "-".to_owned());
     Some(format!(
-        "name={name} tid={tid} state={state} cpu_ticks={cpu_ticks} nice={nice} wchan={wchan} schedstat={schedstat:?}"
+        "name={name} tid={tid} state={state} cpu_ticks={cpu_ticks} nice={nice} wchan={wchan} schedstat={schedstat:?} syscall={syscall:?}"
     ))
 }
 
@@ -96,7 +98,8 @@ mod tests {
                 && line.contains(" state=")
                 && line.contains(" cpu_ticks=")
                 && line.contains(" nice=")
-                && line.contains(" schedstat=")),
+                && line.contains(" schedstat=")
+                && line.contains(" syscall=")),
             "every line carries the full reading: {lines:?}"
         );
     }
