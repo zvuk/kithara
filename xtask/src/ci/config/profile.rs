@@ -3,6 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::{host::CiHost, pins::CiPins};
+#[cfg(test)]
+use crate::testing::workspace::root as workspace_root;
 
 /// One CI machine described by its own profile plus the reviewed build pins.
 #[derive(Clone, Debug)]
@@ -31,16 +33,9 @@ impl CiConfig {
 }
 
 #[cfg(test)]
-pub(crate) fn workspace_root() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask lives inside the workspace")
-}
-
-#[cfg(test)]
 pub(crate) fn fixture() -> CiConfig {
     CiConfig::load(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-mac-host.toml"),
+        &workspace_root().join("xtask/tests/fixtures/ci-mac-host.toml"),
         &workspace_root().join(".config/ci-pins.toml"),
     )
     .expect("fixture host profile and tracked pins must load")
@@ -48,10 +43,42 @@ pub(crate) fn fixture() -> CiConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{env, fs, path::PathBuf, process::Command};
 
     use super::*;
     use crate::consts;
+
+    #[test]
+    fn workspace_paths_follow_the_running_package() {
+        let package = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package"));
+        if package != Path::new(env!("CARGO_MANIFEST_DIR")) {
+            assert_eq!(
+                workspace_root(),
+                package.parent().expect("workspace directory")
+            );
+            return;
+        }
+        let workspace = tempfile::tempdir().expect("relocated workspace");
+        let output = Command::new(env::current_exe().expect("current test binary"))
+            .args([
+                "--exact",
+                "ci::config::profile::tests::workspace_paths_follow_the_running_package",
+                "--nocapture",
+            ])
+            .env("CARGO_MANIFEST_DIR", workspace.path().join("xtask"))
+            .output()
+            .expect("run the cached CI tests in another workspace");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stdout.contains("running 1 test"),
+            "child did not execute: {stdout} {stderr}"
+        );
+        assert!(
+            output.status.success(),
+            "relocated CI root failed: {stdout} {stderr}"
+        );
+    }
 
     #[test]
     fn the_ci_junit_report_lands_where_the_lanes_collect_it() {
@@ -74,7 +101,7 @@ mod tests {
             );
         }
 
-        let ext = crate::config::KitharaExt::load(workspace_root()).unwrap();
+        let ext = crate::config::KitharaExt::load(&workspace_root()).unwrap();
         for lane in ["apple-test", "apple-test-flash-off"] {
             for step in &ext.ci.lanes[lane].steps {
                 assert!(

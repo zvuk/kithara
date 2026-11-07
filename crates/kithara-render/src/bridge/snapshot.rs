@@ -1,7 +1,7 @@
 use kithara_effects::GainDb;
 use kithara_signal::AudioChunkInfo;
 
-use super::{RtMetricsSnapshot, SlotMark, SlotState};
+use super::{RtMetricsSnapshot, SlotBinding, SlotMark, SlotOutputSnapshot, SlotState};
 use crate::rt::DeckMixerConfig;
 
 /// What a deck's mixer last published of each slot and of itself, once per block.
@@ -59,6 +59,8 @@ impl EqSnapshot {
 /// One slot as its mixer last published it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SlotSnapshot {
+    pub binding: Option<SlotBinding>,
+    pub output: SlotOutputSnapshot,
     pub state: SlotState,
     pub mark: Option<SlotMark>,
     /// Raw decoded-source position in seconds.

@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     env,
     ffi::OsString,
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::Read,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
@@ -10,7 +10,10 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand};
-use kithara_devtools::lease;
+use kithara_devtools::{
+    lease,
+    lock::{FileLock, Wait},
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
@@ -44,6 +47,8 @@ impl Sources {
     /// Records which layer a `CARGO_HOME` already carries, so a job that
     /// already has it neither downloads it again nor unpacks over a live one.
     const MARKER: &str = ".kithara-source-snapshot";
+    /// Cargo download and garbage-collection operations take this lock exclusively.
+    const LOCK: &str = ".package-cache";
     /// The directories carried, relative to `CARGO_HOME`. `registry` holds the
     /// index, the downloaded `.crate` files and their unpacked sources; `git`
     /// holds the bare databases and the checkouts cargo builds from.
@@ -185,6 +190,7 @@ pub(crate) fn restore_sources(
     verify_archive(archive.path())?;
     fs::create_dir_all(cargo_home)
         .with_context(|| format!("create cargo home {}", cargo_home.display()))?;
+    let _sources = lock_sources(cargo_home)?;
     run_command(
         Command::new("tar")
             .args(["--extract", "--zstd", keep_existing()?, "--file"])
@@ -218,25 +224,28 @@ pub(crate) fn publish_sources(
             .env("CARGO_HOME", cargo_home),
         "fetch locked dependency sources",
     )?;
-    let present: Vec<&str> = Sources::PATHS
-        .into_iter()
-        .filter(|path| cargo_home.join(path).is_dir())
-        .collect();
-    ensure!(
-        !present.is_empty(),
-        "cargo home carries no sources to publish"
-    );
     let archive = staged_archive(build)?;
-    let mut command = Command::new("tar");
-    command
-        .args(["--create", "--zstd", "--file"])
-        .arg(archive.path())
-        .arg("--directory")
-        .arg(cargo_home);
-    for path in present {
-        command.arg(path);
+    {
+        let _sources = lock_sources(cargo_home)?;
+        let present: Vec<&str> = Sources::PATHS
+            .into_iter()
+            .filter(|path| cargo_home.join(path).is_dir())
+            .collect();
+        ensure!(
+            !present.is_empty(),
+            "cargo home carries no sources to publish"
+        );
+        let mut command = Command::new("tar");
+        command
+            .args(["--create", "--zstd", "--file"])
+            .arg(archive.path())
+            .arg("--directory")
+            .arg(cargo_home);
+        for path in present {
+            command.arg(path);
+        }
+        run_command(&mut command, "archive source snapshot")?;
     }
-    run_command(&mut command, "archive source snapshot")?;
     let checksum = sha256(archive.path())?;
     let object = Sources::object(&fingerprint, &checksum);
     if client.exists(&object)? {
@@ -250,13 +259,32 @@ pub(crate) fn publish_sources(
     Ok(())
 }
 
+/// Freezes Cargo source mutations while allowing compiler readers to continue.
+fn lock_sources(cargo_home: &Path) -> Result<FileLock> {
+    let path = cargo_home.join(Sources::LOCK);
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("open Cargo source lock {}", path.display()))?;
+    FileLock::exclusive(
+        file,
+        &Wait {
+            subject: "Cargo dependency source cache",
+            holder: "dependency source snapshot",
+        },
+    )
+    .with_context(|| format!("lock Cargo sources at {}", cargo_home.display()))
+}
+
 /// The extraction flag that leaves a file already on disk alone.
 ///
 /// Nothing in this archive is worth overwriting: a registry entry is named by
 /// its content, so a file that is already there already holds the right bytes.
-/// Leaving it is also what keeps the restore safe beside a neighbour, because
-/// the two jobs this host runs at once share one cargo home and this untar does
-/// not hold the package-cache lock the neighbour's compile respects. The two
+/// Leaving it keeps restore safe beside compiler readers, which share the
+/// Cargo home while source mutations are locked out. The two
 /// tars disagree on which flag says it: the BSD one errors on `--skip-old-files`
 /// and the GNU one treats `--keep-old-files` as a demand that nothing collide.
 fn keep_existing() -> Result<&'static str> {
@@ -1006,6 +1034,9 @@ mod tests {
 
 #[cfg(all(test, unix))]
 mod client_tests {
+    use fs4::TryLockError;
+    use kithara_devtools::lock::FileLock;
+
     use super::*;
     use crate::testing::install_script;
 
@@ -1097,6 +1128,21 @@ esac
     #[test]
     fn the_source_layer_travels_through_the_jobs_own_bucket() {
         const CHILD: &str = "KITHARA_SOURCE_LAYER_TEST";
+        const PROBE: &str = "KITHARA_SOURCE_LAYER_LOCK_PROBE";
+        if let Some(home) = env::var_os(PROBE) {
+            let file = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(Path::new(&home).join(".package-cache"))
+                .unwrap();
+            assert!(
+                matches!(FileLock::try_exclusive(file), Err(TryLockError::WouldBlock)),
+                "Cargo source mutation must be fenced while tar reads or restores sources"
+            );
+            return;
+        }
         let Some(directory) = env::var_os(CHILD).map(PathBuf::from) else {
             let directory = tempfile::tempdir().unwrap();
             let output = Command::new(env::current_exe().unwrap())
@@ -1110,6 +1156,14 @@ esac
                 .env("SCCACHE_ENDPOINT", "http://cache:9000")
                 .env("AWS_ACCESS_KEY_ID", "key")
                 .env("AWS_SECRET_ACCESS_KEY", "secret")
+                .env(
+                    "PATH",
+                    env::join_paths(
+                        std::iter::once(directory.path().join("bin"))
+                            .chain(env::split_paths(&env::var_os("PATH").unwrap())),
+                    )
+                    .unwrap(),
+                )
                 .output()
                 .unwrap();
             assert!(
@@ -1120,6 +1174,32 @@ esac
             );
             return;
         };
+        let real_tar = env::split_paths(&env::var_os("PATH").unwrap())
+            .map(|path| path.join("tar"))
+            .find(|path| path.is_file())
+            .expect("system tar");
+        let bin = directory.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        install_script(
+            &bin.join("tar"),
+            &format!(
+                r#"#!/bin/sh
+set -eu
+directory=''
+next=''
+for argument in "$@"; do
+  if [ "$next" = directory ]; then directory="$argument"; next='';
+  elif [ "$argument" = --directory ]; then next=directory; fi
+done
+if [ -n "$directory" ]; then
+  {PROBE}="$directory" '{test}' --exact ci::cache::snapshot::client_tests::the_source_layer_travels_through_the_jobs_own_bucket --nocapture
+fi
+exec '{tar}' "$@"
+"#,
+                test = env::current_exe().unwrap().display(),
+                tar = real_tar.display(),
+            ),
+        );
         let rc = rc(&directory);
         let root = directory.join("checkout");
         fs::create_dir_all(&root).unwrap();

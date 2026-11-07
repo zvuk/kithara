@@ -612,7 +612,7 @@ mod tests {
 
         let (directory, process, pins, _) = nextest_fixture();
         let root = directory.path();
-        let fixture = crate::ci::config::workspace_root()
+        let fixture = crate::testing::workspace::root()
             .join("crates/kithara-devtools/tests/fixtures/nextest-stress");
         for file in ["Cargo.toml", "stress.rs"] {
             std::fs::copy(fixture.join(file), root.join(file)).expect("copy stress contract");

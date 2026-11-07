@@ -49,6 +49,7 @@ kithara-bufpool = { workspace = true }
 kithara-config = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
 kithara-derive = { workspace = true, features = ["patch", "phase"] }
+kithara-dsp = { workspace = true }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }

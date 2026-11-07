@@ -1,13 +1,13 @@
 use std::fmt;
 
 use kithara_audio::TrackFailureKind;
-use kithara_command::{Protocol, Target};
+use kithara_command::{Protocol, Seq, Target};
 use kithara_effects::{GainDb, eq::EqLayout};
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_signal::{SegmentId, SessionFrame};
 
-use super::{DeckMixSettingsChange, SlotMark};
+use super::{DeckMixSettingsChange, SlotBinding, SlotGainProgram, SlotMark};
 use crate::{CrossfadeSettings, rt::track::PlayerResource};
 
 /// One scoped deck's commands, clock and verdicts.
@@ -70,6 +70,17 @@ pub enum FadeDir {
     Out,
 }
 
+/// Which clock a track keeps through a PCM dropout.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TrackClock {
+    /// The track resumes on the frame it stopped on.
+    #[default]
+    Media,
+    /// The track drops the frames the dropout missed and resumes where the
+    /// session stands.
+    Session,
+}
+
 /// Parts are applied in order after validation against the whole batch.
 pub enum DeckPart {
     Attach {
@@ -108,8 +119,19 @@ pub enum DeckPart {
         from: Slot,
         to: Slot,
     },
+    /// Sets the clock of the track seated in `slot`; an empty slot ignores it.
+    Clock {
+        slot: Slot,
+        clock: TrackClock,
+    },
     Mix(DeckMixSettingsChange),
     Eq(DeckEqChange),
+    GainProgram {
+        slot: Slot,
+        binding: SlotBinding,
+        authority: Option<Seq>,
+        program: SlotGainProgram,
+    },
     Returned(Returned),
 }
 
@@ -221,8 +243,25 @@ impl fmt::Debug for DeckPart {
                 .field("from", from)
                 .field("to", to)
                 .finish(),
+            Self::Clock { slot, clock } => formatter
+                .debug_struct("Clock")
+                .field("slot", slot)
+                .field("clock", clock)
+                .finish(),
             Self::Mix(change) => formatter.debug_tuple("Mix").field(change).finish(),
             Self::Eq(change) => formatter.debug_tuple("Eq").field(change).finish(),
+            Self::GainProgram {
+                slot,
+                binding,
+                authority,
+                program,
+            } => formatter
+                .debug_struct("GainProgram")
+                .field("slot", slot)
+                .field("binding", binding)
+                .field("authority", authority)
+                .field("program", program)
+                .finish(),
             Self::Returned(returned) => formatter.debug_tuple("Returned").field(returned).finish(),
         }
     }

@@ -551,8 +551,13 @@ fn bench_render_buffers(c: &mut Criterion) {
     }
     group.finish();
 }
+#[path = "support/slot_gain.rs"]
+mod slot_gain;
+
 criterion_group!(
     benches,
+    slot_gain::host_curve,
+    slot_gain::gain_shape,
     bench_resampler_process,
     bench_audio_file_new_and_read,
     bench_hls_stream_seek_read,

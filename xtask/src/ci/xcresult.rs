@@ -167,7 +167,8 @@ mod tests {
     use super::*;
 
     fn fixture() -> Value {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/xcresult-tests.json");
+        let path =
+            crate::testing::workspace::root().join("xtask/tests/fixtures/xcresult-tests.json");
         serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
     }
 

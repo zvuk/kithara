@@ -6,7 +6,12 @@ use kithara_warp::RenderContext;
 use num_traits::ToPrimitive;
 
 use super::{PlayerTrack, ReadOutcome, RtSink};
-use crate::bridge::{DeckEvent, PlaybackFault, RtMetrics, SlotState};
+use crate::bridge::{DeckEvent, ParameterCurve, PlaybackFault, RtMetrics, SlotState};
+
+pub(crate) struct TrackBuffers<'block, 'scratch, 'bus> {
+    pub(crate) scratch: &'block mut [&'scratch mut [f32]],
+    pub(crate) bus: &'block mut [&'bus mut [f32]],
+}
 
 /// Result of an exact packet-backed render range.
 #[derive(Debug)]
@@ -85,12 +90,13 @@ impl PlayerTrack {
     pub(crate) fn render(
         &mut self,
         context: Option<&RenderContext>,
-        scratch: &mut [&mut [f32]],
-        bus: &mut [&mut [f32]],
+        buffers: TrackBuffers<'_, '_, '_>,
         range: Range<usize>,
         budget: &mut usize,
         sink: &mut RtSink<'_>,
+        curve: Option<&ParameterCurve>,
     ) -> TrackReadOutcome {
+        let TrackBuffers { scratch, bus } = buffers;
         if self.state == SlotState::Ended {
             return TrackReadOutcome::Eof;
         }
@@ -128,10 +134,16 @@ impl PlayerTrack {
             range.len()
         };
         let requested = range.start..range.start.saturating_add(limit);
+        if let Some(end) = self.pay_owed(budget) {
+            return end;
+        }
         let recovery_position = self.media_position();
-        let outcome = self
-            .resource
-            .read(context, scratch, requested.clone(), budget);
+        let outcome = if self.owed() == 0 {
+            self.resource
+                .read(context, scratch, requested.clone(), budget)
+        } else {
+            ReadOutcome::Full { frames: 0 }
+        };
         let frames = match outcome {
             ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
             ReadOutcome::Eof => return TrackReadOutcome::Eof,
@@ -142,6 +154,8 @@ impl PlayerTrack {
         if frames > 0 {
             self.end_underrun(range.start, recovery_position, true, sink);
             let written = range.start..range.start.saturating_add(frames);
+            self.output
+                .apply(curve, sink.start, scratch, written.clone());
             self.gate.apply(scratch, written.clone());
             self.fade.mix_range(scratch, bus, written);
         }
@@ -161,6 +175,26 @@ impl PlayerTrack {
             },
             ReadOutcome::Eof | ReadOutcome::Failed(_) => unreachable!(),
         }
+    }
+
+    /// Drops the lane frames a session-time dropout missed before any plays;
+    /// a debt PCM cannot cover yet keeps the track silent.
+    fn pay_owed(&mut self, budget: &mut usize) -> Option<TrackReadOutcome> {
+        let owed = usize::try_from(self.owed()).unwrap_or(usize::MAX);
+        if owed == 0 {
+            return None;
+        }
+        let dropped = match self.resource.discard(owed, budget) {
+            ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
+            ReadOutcome::Eof => return Some(TrackReadOutcome::Eof),
+            ReadOutcome::Failed(kind) => {
+                return Some(TrackReadOutcome::Failed(PlaybackFault::Source(kind.into())));
+            }
+        };
+        self.paid = self
+            .paid
+            .saturating_add(u32::try_from(dropped).unwrap_or(u32::MAX));
+        None
     }
 
     fn media_position(&self) -> Option<Duration> {
@@ -183,6 +217,7 @@ impl PlayerTrack {
         recovered: bool,
         sink: &mut RtSink<'_>,
     ) {
+        self.paid = 0;
         if self.gap > 0 {
             sink.report(DeckEvent::UnderrunEnded {
                 slot: sink.slot,
@@ -212,9 +247,8 @@ impl PlayerTrack {
                     position: self.media_position(),
                 });
             }
-            self.gap = self
-                .gap
-                .saturating_add(u32::try_from(limit - frames).unwrap_or(u32::MAX));
+            let missing = u32::try_from(limit - frames).unwrap_or(u32::MAX);
+            self.gap = self.gap.saturating_add(missing);
         }
     }
 
@@ -235,7 +269,12 @@ impl PlayerTrack {
         if self.state != SlotState::Playing || length == 0 {
             return 0;
         }
-        let gain = self.gain();
+        let gain = self.gain()
+            * self
+                .output
+                .gain()
+                .to_f32()
+                .expect("prepared output gain fits f32");
         let mut buffers = [&mut left[..length], &mut right[..length]];
         let written =
             match self

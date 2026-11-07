@@ -8,7 +8,7 @@ use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_render::{
     CrossfadeSettings, LaneCommand, LaneFrame,
-    bridge::{FadeDir, PlaybackFault, Slot, SlotMark},
+    bridge::{FadeDir, PlaybackFault, Slot, SlotMark, TrackClock},
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
@@ -21,6 +21,7 @@ pub type Position = Duration;
 
 /// What a track is told to do.
 pub enum TrackCommand<S> {
+    GainProgram(kithara_render::bridge::SlotGainProgram),
     Load {
         item: ResourceLoad<S>,
         position: Position,
@@ -62,6 +63,9 @@ pub enum TrackCommand<S> {
     PlayAfter {
         track: Slot,
     },
+    /// Sets the clock the track keeps through a PCM dropout, for its seated
+    /// slot and every later seat.
+    Clock(TrackClock),
     /// Supersedes scheduled slot batches without stopping the sounding segment.
     Supersede,
     Release,
@@ -108,6 +112,7 @@ pub enum TrackStatus {
 /// ```
 #[derive(Clone)]
 pub struct TrackSnapshot {
+    pub output: kithara_render::bridge::SlotOutputSnapshot,
     pub item: TrackId,
     /// None while a background load holds the track off the deck.
     pub slot: Option<Slot>,
@@ -133,6 +138,7 @@ impl std::fmt::Debug for TrackSnapshot {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("TrackSnapshot")
+            .field("output", &self.output)
             .field("item", &self.item)
             .field("slot", &self.slot)
             .field("status", &self.status)

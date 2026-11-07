@@ -1111,10 +1111,7 @@ publishes_sources = true
     /// reporting a verdict.
     #[test]
     fn the_shipped_ci_config_validates() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask sits beside the workspace root")
-            .to_path_buf();
+        let root = crate::testing::workspace::root();
         KitharaExt::load(&root)
             .expect("parse the shipped kithara extension")
             .ci

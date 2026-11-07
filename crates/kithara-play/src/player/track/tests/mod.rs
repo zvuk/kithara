@@ -1,6 +1,8 @@
 mod batch;
+mod clock;
 mod core;
 mod fade_events;
+mod gain;
 mod legacy_lifecycle;
 mod legacy_metrics;
 mod legacy_rate;

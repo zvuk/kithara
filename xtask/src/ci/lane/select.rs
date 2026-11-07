@@ -616,10 +616,8 @@ mod tests {
     /// is never judged whole before a release.
     #[test]
     fn a_main_push_runs_every_test_lane_a_github_lane_names_once() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask has a workspace root");
-        let ext = KitharaExt::load(root).expect("the project config parses");
+        let root = crate::testing::workspace::root();
+        let ext = KitharaExt::load(&root).expect("the project config parses");
         let mut carriers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         for role in ["gate", "deep", "platforms", "quality"] {
             let selection = render(&ext.ci.lanes, &args(role, PipelineKind::Main, &["all"]))

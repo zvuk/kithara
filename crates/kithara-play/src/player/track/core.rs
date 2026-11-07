@@ -7,11 +7,10 @@ use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_render::{
     LaneCommand, LaneFrame, LaneId, LaneProtocol, ServiceClass,
-    bridge::{DeckPart, Fade, Slot, SlotMark},
+    bridge::{DeckPart, Fade, Slot, SlotMark, TrackClock},
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
-use num_traits::ToPrimitive;
 
 use super::{
     super::{
@@ -31,6 +30,7 @@ pub struct PlayerImpl<S> {
     pub(super) lane: Option<Sender<LaneProtocol>>,
     pub(super) lane_id: Option<LaneId>,
     pub(super) settings: Live<TrackSettings, LaneProtocol>,
+    pub(super) output: kithara_render::bridge::SlotOutputSnapshot,
     pub(super) status: TrackStatus,
     pub(super) loading: Option<Loading>,
     pub(super) attaching: Option<Attaching>,
@@ -45,6 +45,10 @@ pub struct PlayerImpl<S> {
     pub(super) segment_speed: f32,
     pub(super) play: Option<When<SessionFrame>>,
     pub(super) repeat: bool,
+    /// The clock the track keeps through a dropout.
+    pub(super) clock: TrackClock,
+    /// The clock its seated RT track was last sent.
+    pub(super) seated_clock: TrackClock,
     pub(super) releasing: bool,
     pub(super) resume: Option<SlotMark>,
     pub(super) mark: Option<SlotMark>,
@@ -79,6 +83,7 @@ impl<S> PlayerImpl<S> {
             lane: None,
             lane_id: None,
             settings: Live::new(config.settings)?,
+            output: kithara_render::bridge::SlotOutputSnapshot::default(),
             status: TrackStatus::Idle,
             loading: None,
             attaching: None,
@@ -93,6 +98,8 @@ impl<S> PlayerImpl<S> {
             segment_speed: config.settings.speed(),
             play: None,
             repeat: false,
+            clock: TrackClock::Media,
+            seated_clock: TrackClock::Media,
             releasing: false,
             resume: None,
             mark: None,
@@ -174,6 +181,11 @@ impl<S> PlayerImpl<S> {
             && let Some(slot) = pass.deck.slots.get(seat.index())
         {
             self.mark = slot.mark;
+            if slot.binding.is_some_and(|binding| {
+                binding.item() == self.item && binding.segment() == self.segment
+            }) {
+                self.output = slot.output;
+            }
             if let Some(source) = slot.source.filter(|info| info.segment == self.segment)
                 && self.attach_at.is_some()
                 && !matches!(self.status, TrackStatus::Released)
@@ -194,90 +206,6 @@ impl<S> PlayerImpl<S> {
                 self.position = position;
             }
         }
-    }
-
-    pub(super) fn planned_changes(
-        &self,
-        segment: SegmentId,
-        future: bool,
-    ) -> Result<Vec<(u64, Seq, PlannedChange<'_>)>, PlayError> {
-        let mut commands: Vec<(u64, Seq, PlannedChange<'_>)> = Vec::new();
-        for operation in &self.lane_commands {
-            if operation.applied() == Some(false) {
-                continue;
-            }
-            let frame = match &operation.command {
-                LaneCommand::Segment { id, .. } if *id == segment => 0,
-                _ => match operation.when {
-                    When::At(frame) if frame.segment == segment => frame.frame,
-                    When::Next | When::Deferred
-                        if operation.segment == segment
-                            && matches!(
-                                operation.command,
-                                LaneCommand::SetSpeed(_) | LaneCommand::Jump { .. }
-                            ) =>
-                    {
-                        if future {
-                            return Err(PlayError::NotReady);
-                        }
-                        continue;
-                    }
-                    When::At(_) | When::Next | When::Deferred => continue,
-                },
-            };
-            match &operation.command {
-                LaneCommand::SetSpeed(curve) | LaneCommand::Segment { speed: curve, .. } => {
-                    commands.push((frame, operation.seq, PlannedChange::Speed(curve)));
-                }
-                LaneCommand::Jump { to } => {
-                    let landing = frame
-                        .checked_add(self.declick.get() as u64)
-                        .ok_or(PlayError::Untimed)?;
-                    let superseded = self.lane_commands.iter().any(|next| next.seq != operation.seq && next.applied() != Some(false)
-                        && matches!(next.command, LaneCommand::Jump { .. })
-                        && matches!(next.when, When::At(at) if at.segment == segment && (at.frame > frame || at.frame == frame && next.seq > operation.seq) && at.frame < landing));
-                    if !superseded {
-                        commands.push((landing, operation.seq, PlannedChange::Jump(*to)));
-                    }
-                }
-                _ => {}
-            }
-        }
-        commands.sort_by_key(|&(frame, seq, _)| (frame, seq));
-        Ok(commands)
-    }
-
-    pub(super) fn consumed_speed(&self) -> Result<f32, PlayError> {
-        let frame = match self
-            .resume
-            .or(self.mark)
-            .filter(|mark| mark.lane.segment == self.segment)
-        {
-            Some(mark) => mark.lane.frame,
-            None if matches!(
-                self.status,
-                TrackStatus::Loading | TrackStatus::Loaded | TrackStatus::Paused { .. }
-            ) =>
-            {
-                0
-            }
-            None => return Err(PlayError::Untimed),
-        };
-        let commands = self.planned_changes(self.segment, false)?;
-        let base = SpeedCurve::Constant(self.segment_speed);
-        let mut curve = &base;
-        let mut origin = f64::from(self.segment_speed);
-        let mut start = 0;
-        for (at, _, change) in commands.into_iter().filter(|(at, _, _)| *at <= frame) {
-            if let PlannedChange::Speed(next) = change {
-                origin = curve_speed(curve, origin, at.saturating_sub(start))?;
-                curve = next;
-                start = at;
-            }
-        }
-        curve_speed(curve, origin, frame.saturating_sub(start))?
-            .to_f32()
-            .ok_or(PlayError::Untimed)
     }
 
     pub(super) fn check_when(

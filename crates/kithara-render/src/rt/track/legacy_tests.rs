@@ -121,7 +121,14 @@ fn render_track(
     )
     .expect("output block");
     let context = RenderContext::new_linear(output, None).expect("render context");
-    let outcome = track.render(Some(&context), scratch, bus, range.clone(), &mut 8, sink);
+    let outcome = track.render(
+        Some(&context),
+        TrackBuffers { scratch, bus },
+        range.clone(),
+        &mut 8,
+        sink,
+        None,
+    );
     if matches!(
         outcome,
         TrackReadOutcome::Eof | TrackReadOutcome::Partial { .. }

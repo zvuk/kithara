@@ -25,7 +25,7 @@ pub(crate) const SYNTHETIC_BEATS: u32 = 24;
 pub(crate) const SECONDS_PER_MINUTE: f64 = 60.0;
 /// A start well inside every track, off its downbeat, for a case that needs
 /// no musical entry.
-pub(crate) const CUE: Start = Start::Seconds(5.25);
+pub(crate) const CUE: Start = Start::Seconds(3.25);
 
 /// The beat grid every synthetic rhythm fixture was rendered on.
 pub(crate) fn synthetic_grid() -> ArtifactSource<BeatGridModel> {

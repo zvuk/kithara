@@ -1608,12 +1608,8 @@ tooling_paths = ["crates/kithara-devtools/**"]
 
     #[test]
     fn style_keeps_the_tooling_globs_this_repo_excludes_from_architecture() {
-        let config = ProjectConfig::load(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../..")
-                .as_path(),
-        )
-        .expect("the repo config loads");
+        let config = ProjectConfig::load(crate::testing::package().join("../..").as_path())
+            .expect("the repo config loads");
 
         assert!(
             !config

@@ -62,12 +62,9 @@ pub struct OfflinePlayerOptions {
     gapless_mode: GaplessMode,
     #[builder(default)]
     mix: DeckMixSettings,
-    /// Make audio-thread reads block on a producer-ring underrun instead of
-    /// zero-filling. Suites that read the rendered PCM itself opt in, because
-    /// a zero-filled range is indistinguishable from rendered silence:
-    /// blocking trades an underrun for waiting on decode, so under a tight
-    /// `hang_timeout_secs` a slow decode becomes a hang panic instead of
-    /// inserted silence.
+    /// Await producer PCM during offline preparation, before graph processing.
+    /// PCM suites opt in so decoder underruns cannot appear as rendered silence.
+    /// Decoder stalls still fail the existing no-progress watchdog.
     #[builder(default)]
     block_on_underrun: bool,
     warp: Option<WarpConfig>,

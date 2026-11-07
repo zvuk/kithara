@@ -34,8 +34,18 @@ use super::{cache, consts};
 pub fn statistics(command: &mut Command, runtime: &Path) -> io::Result<String> {
     let deadline = Instant::now() + consts::COMMAND_TIMEOUT;
     command.args(["daemon", "start"]);
-    cache::output(command)?;
-    query(runtime, deadline)
+    cache::output(command).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("start compiler-cache daemon: {error}"),
+        )
+    })?;
+    query(runtime, deadline).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("read compiler-cache statistics: {error}"),
+        )
+    })
 }
 
 #[cfg(unix)]
@@ -64,10 +74,17 @@ fn query(runtime: &Path, deadline: Instant) -> io::Result<String> {
 /// and the deadline bounds the wait for its answer.
 #[cfg(windows)]
 fn query(runtime: &Path, deadline: Instant) -> io::Result<String> {
+    let path = pipe_path(&runtime.join("daemon.sock"));
     let mut pipe = OpenOptions::new()
         .read(true)
         .write(true)
-        .open(pipe_path(&runtime.join("daemon.sock")))?;
+        .open(&path)
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("open compiler-cache pipe {}: {error}", path.display()),
+            )
+        })?;
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let exchange = pipe.write_all(consts::STATS_REQUEST).and_then(|()| {

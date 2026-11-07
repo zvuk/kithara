@@ -2,4 +2,5 @@
 
 pub mod ci {
     pub mod bootstrap;
+    pub mod github;
 }
