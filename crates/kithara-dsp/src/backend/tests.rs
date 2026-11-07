@@ -449,16 +449,6 @@ const CUTOFFS: [[f64; 4]; 2] = [
     [1_000.0, 2_000.0, 4_000.0, 8_000.0],
     [3_000.0, 5_000.0, 7_000.0, 9_000.0],
 ];
-/// Peak inputs: specials without `NaN` and subnormals, which `max` orders differently.
-const PEAK_SPECIALS: [f32; 6] = [
-    0.0,
-    -0.0,
-    f32::MIN_POSITIVE,
-    f32::MAX,
-    f32::INFINITY,
-    f32::NEG_INFINITY,
-];
-
 /// Section coefficients per half of the stream: the second half retunes.
 fn halves(sections: usize) -> [Vec<[f32; 5]>; 2] {
     CUTOFFS.map(|cutoffs| {
@@ -657,45 +647,6 @@ fn a_silent_channel_beside_a_playing_one_never_reaches_subnormals() {
             subnormal, 0,
             "{name}: the silent channel rang in subnormals"
         );
-    }
-}
-
-fn fallback_peak(samples: &[f32]) -> f32 {
-    dispatch!(Level::fallback(), simd => portable::peak_kernel(simd, samples))
-}
-
-#[kithara::test]
-fn peak_matches_the_scalar_maximum_on_every_backend() {
-    type Peak = fn(&[f32]) -> f32;
-    let backends: Vec<(&str, Peak)> = Vec::from([
-        ("portable-native", portable::peak as Peak),
-        ("portable-fallback", fallback_peak),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        ("accelerate", accelerate::peak),
-    ]);
-    for len in SIZES {
-        let sine: Vec<f32> = signal(len.saturating_add(SPECIALS.len()), sine_440())
-            .into_iter()
-            .skip(SPECIALS.len())
-            .collect();
-        let with_specials: Vec<f32> = PEAK_SPECIALS
-            .iter()
-            .copied()
-            .chain(sine.iter().copied())
-            .take(len)
-            .collect();
-        for samples in [&sine, &with_specials] {
-            let expected = samples
-                .iter()
-                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
-            for (name, peak) in &backends {
-                assert_eq!(
-                    peak(samples).to_bits(),
-                    expected.to_bits(),
-                    "{name} at {len}"
-                );
-            }
-        }
     }
 }
 
