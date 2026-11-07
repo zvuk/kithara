@@ -6010,6 +6010,7 @@ dependencies = [
  "kithara-command",
  "kithara-devtools-trace-format",
  "kithara-integration-tests",
+ "kithara-render",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
