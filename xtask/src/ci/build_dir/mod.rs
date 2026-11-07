@@ -18,5 +18,5 @@ mod timings;
 
 pub(crate) use entry::BuildDir;
 pub(crate) use garbage::collect as collect_garbage;
-pub(crate) use sources::{Claim, claim_beside_alias};
+pub(crate) use sources::{Claim, claim as claim_sources, claim_beside_alias};
 pub(crate) use target::{LaneTarget, Target};

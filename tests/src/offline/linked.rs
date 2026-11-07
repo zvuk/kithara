@@ -198,8 +198,14 @@ pub struct LinkOwnerInput {
 pub enum LinkOwnerInputKind {
     Retime,
     Realign,
-    Sync { on: bool },
-    Grid { answer: Box<GridAnswer> },
+    /// A sounding deck renewed its speed plan on its own pass.
+    Renewal,
+    Sync {
+        on: bool,
+    },
+    Grid {
+        answer: Box<GridAnswer>,
+    },
 }
 
 #[derive(Debug)]
@@ -232,6 +238,10 @@ impl<S> ObservedFactory<S> {
 pub struct ObservedTrack<S> {
     inner: PlayerImpl<S>,
     observation: Arc<Mutex<LinkObservation>>,
+    /// The owner inputs recorded when this track last ticked: the linked
+    /// owner ticks its track first in its own pass, so a timed speed change
+    /// sent before any further input renews the owner's plan.
+    ticked: Option<usize>,
 }
 
 impl<S> TrackFactory<S> for ObservedFactory<S>
@@ -244,6 +254,7 @@ where
         Ok(ObservedTrack {
             inner: PlayerFactory.track(config)?,
             observation: self.observation.clone(),
+            ticked: None,
         })
     }
 }
@@ -366,6 +377,26 @@ impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
         }
     }
 
+    fn record_renewal(
+        ticked: &mut Option<usize>,
+        observation: &mut LinkObservation,
+        item: TrackId,
+        at: When<SessionFrame>,
+        landing: Option<(Position, SessionFrame)>,
+    ) {
+        if let (When::At(at), None) = (at, landing)
+            && *ticked == Some(observation.owner_inputs.len())
+        {
+            observation.owner_inputs.push(LinkOwnerInput {
+                item: Some(item),
+                at: Some(at),
+                trajectory: None,
+                kind: LinkOwnerInputKind::Renewal,
+            });
+            *ticked = Some(observation.owner_inputs.len());
+        }
+    }
+
     fn record(&self, settled: &Settled, origin: Option<LinkReceiptOrigin>) {
         if !matches!(settled, Settled::Pending) {
             let item = self.inner.snapshot().item;
@@ -408,6 +439,7 @@ where
 
     fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
         self.inner.tick(now, out);
+        self.ticked = Some(self.observation.lock().owner_inputs.len());
         let item = self.inner.snapshot().item;
         let pending_seeks: Vec<_> = {
             let observation = self.observation.lock();
@@ -604,6 +636,7 @@ where
                 Some((curve, at, landing, before, consumed, sample_rate, planned)),
             ) = (&result, speed)
             {
+                Self::record_renewal(&mut self.ticked, &mut observation, before.item, at, landing);
                 let input = observation
                     .owner_inputs
                     .iter()

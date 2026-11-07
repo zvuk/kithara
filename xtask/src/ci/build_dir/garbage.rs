@@ -150,17 +150,20 @@ fn read_profile(profile: &Path, units: &mut Vec<UnitDir>, builds: &mut Vec<Build
             if kind.ends_with(".json") || !record.is_file() {
                 continue;
             }
-            builds.push(read_build(unit, kind, &file, &record)?);
+            builds.extend(read_build(unit, kind, &file, &record)?);
         }
     }
     Ok(())
 }
 
-fn read_build(unit: usize, kind: &str, file: &Path, record: &Path) -> Result<Build> {
-    let fingerprint = fs::read_to_string(file)
-        .with_context(|| format!("reading {}", file.display()))?
-        .trim()
-        .to_owned();
+fn read_build(unit: usize, kind: &str, file: &Path, record: &Path) -> Result<Option<Build>> {
+    let fingerprint =
+        fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
+    // Cargo clears the hash before rebuilding, leaving the previous JSON until success.
+    if fingerprint.is_empty() {
+        return Ok(None);
+    }
+    let fingerprint = fingerprint.trim().to_owned();
     if !is_hash(&fingerprint, 16) {
         bail!(unknown(file, "a fingerprint of 16 hex digits"));
     }
@@ -171,7 +174,7 @@ fn read_build(unit: usize, kind: &str, file: &Path, record: &Path) -> Result<Bui
     let built = fs::metadata(file)
         .and_then(|metadata| metadata.modified())
         .with_context(|| format!("reading when {} was built", file.display()))?;
-    Ok(Build {
+    Ok(Some(Build {
         unit,
         kind: kind.to_owned(),
         features: parsed.features,
@@ -182,7 +185,7 @@ fn read_build(unit: usize, kind: &str, file: &Path, record: &Path) -> Result<Bui
             .map(|(_, _, _, dep)| fingerprint_hex(*dep))
             .collect(),
         built,
-    })
+    }))
 }
 
 /// The units some build still asks for: the newest build of each unit kind,
@@ -669,6 +672,61 @@ mod tests {
         collect(dir.path(), consts::GARBAGE_WINDOW).unwrap();
 
         assert!(exist(&flash_off) && exist(&flash));
+    }
+
+    #[test]
+    fn an_invalidated_build_does_not_replace_a_completed_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("debug");
+        let completed = Unit {
+            package: "kithara-stream",
+            hash: "00000000000000b1",
+            fingerprint: 12,
+            features: "[]",
+            deps: &[],
+            built: at(0),
+        }
+        .write(&profile);
+        let invalidated = Unit {
+            package: "kithara-stream",
+            hash: "00000000000000b2",
+            fingerprint: 22,
+            features: "[]",
+            deps: &[],
+            built: at(48),
+        }
+        .write(&profile);
+        fs::write(invalidated[0].join("lib-kithara_stream"), "").unwrap();
+
+        collect(dir.path(), consts::GARBAGE_WINDOW).unwrap();
+
+        assert!(exist(&completed));
+        assert!(gone(&invalidated));
+    }
+
+    #[test]
+    fn a_malformed_nonempty_fingerprint_removes_nothing() {
+        for fingerprint in [" ", "1234", "not-a-cargo-hash"] {
+            let dir = tempfile::tempdir().unwrap();
+            let profile = dir.path().join("debug");
+            let paths = Unit {
+                package: "kithara-stream",
+                hash: "00000000000000b1",
+                fingerprint: 12,
+                features: "[]",
+                deps: &[],
+                built: at(0),
+            }
+            .write(&profile);
+            fs::write(paths[0].join("lib-kithara_stream"), fingerprint).unwrap();
+            fs::create_dir_all(dir.path().join("tmp/run")).unwrap();
+
+            let error = collect(dir.path(), consts::GARBAGE_WINDOW).unwrap_err();
+
+            assert!(format!("{error:#}").contains("a fingerprint of 16 hex digits"));
+            assert!(exist(&paths));
+            assert!(dir.path().join("tmp/run").is_dir());
+        }
     }
 
     /// The format is Cargo's own and may change under a toolchain update; a

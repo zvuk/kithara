@@ -255,7 +255,8 @@ impl Deck {
                         }
                     }
                 }
-                DeckPart::Mix(_)
+                DeckPart::Clock { .. }
+                | DeckPart::Mix(_)
                 | DeckPart::Eq(_)
                 | DeckPart::GainProgram { .. }
                 | DeckPart::Returned(_) => {}

@@ -47,10 +47,19 @@ fn eviction_max_assets_skips_pinned_assets(
     temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
+    let store = asset_scope_with_root(&temp_dir, "asset-0", Some(max_assets))
+        .store()
+        .clone();
 
     for i in 0..create_count {
         let asset_root = format!("asset-{}", i);
-        let scope = asset_scope_with_root(&temp_dir, &asset_root, Some(max_assets));
+        let scope = store
+            .scope::<LiteralLayout>(&source(&asset_root))
+            .expect("scope");
+        assert!(
+            scope.store().is_same(&store),
+            "one store owns the fixture's disk root"
+        );
         let key = scope.key(&resource(format!("media/{}.bin", i))).unwrap();
 
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
@@ -81,7 +90,9 @@ fn eviction_max_assets_skips_pinned_assets(
             }
 
             let trigger_root = format!("asset-trigger-{}", i);
-            let trigger_scope = asset_scope_with_root(&temp_dir, &trigger_root, Some(max_assets));
+            let trigger_scope = store
+                .scope::<LiteralLayout>(&source(&trigger_root))
+                .expect("scope");
             let key_trigger = trigger_scope.key(&resource("media/trigger.bin")).unwrap();
             let writer_trigger = pending(
                 trigger_scope
@@ -127,10 +138,15 @@ fn eviction_ignores_missing_index(
     temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
+    let store = asset_scope_with_root(&temp_dir, "asset-0", Some(2))
+        .store()
+        .clone();
 
     for i in 0..asset_count {
         let asset_root = format!("asset-{}", i);
-        let scope = asset_scope_with_root(&temp_dir, &asset_root, Some(2));
+        let scope = store
+            .scope::<LiteralLayout>(&source(&asset_root))
+            .expect("scope");
         let key = scope.key(&resource(format!("data/{}.bin", i))).unwrap();
 
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
@@ -139,6 +155,10 @@ fn eviction_ignores_missing_index(
         let _res = writer.commit(Some(data.len() as u64)).unwrap();
     }
 
+    store
+        .checkpoint()
+        .expect("close the first persistent owner before corrupting its index");
+    drop(store);
     let index_path = dir.join("_index/lru.bin");
     if index_path.exists() {
         fs::write(&index_path, b"corrupted json").unwrap();
@@ -155,10 +175,15 @@ fn eviction_ignores_missing_index(
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn eviction_with_zero_byte_assets(temp_dir: kithara_test_utils::TestTempDir) {
     let dir = temp_dir.path().to_path_buf();
+    let store = asset_scope_with_root(&temp_dir, "zero-asset-0", Some(2))
+        .store()
+        .clone();
 
     for i in 0..3 {
         let asset_root = format!("zero-asset-{}", i);
-        let scope = asset_scope_with_root(&temp_dir, &asset_root, Some(2));
+        let scope = store
+            .scope::<LiteralLayout>(&source(&asset_root))
+            .expect("scope");
         let key = scope.key(&resource("empty.bin")).unwrap();
 
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
@@ -196,11 +221,20 @@ fn eviction_respects_max_assets_limit(
     temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
+    let store = asset_scope_with_root(&temp_dir, "asset-0", Some(max_assets))
+        .store()
+        .clone();
 
     let mut pinned_handles = Vec::new();
     for i in 0..create_count {
         let asset_root = format!("asset-{}", i);
-        let scope = asset_scope_with_root(&temp_dir, &asset_root, Some(max_assets));
+        let scope = store
+            .scope::<LiteralLayout>(&source(&asset_root))
+            .expect("scope");
+        assert!(
+            scope.store().is_same(&store),
+            "one store owns the fixture's disk root"
+        );
         let key = scope.key(&resource(format!("media/{}.bin", i))).unwrap();
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         writer.write_at(0, b"DATA").unwrap();

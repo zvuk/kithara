@@ -14,6 +14,7 @@ use tracing::{info, warn};
 use super::declared;
 use crate::{
     ci::{
+        build_cache,
         build_dir::{BuildDir, LaneTarget, Target},
         config::CiPins,
         environment::{ci_in, job_owner, process_var, scratch_root},
@@ -106,6 +107,9 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
         },
         var,
     )?;
+    if let Target::Alias { alias, build } = &target {
+        ask_for_room(alias, build, var)?;
+    }
     let text = |name: &str| var(name).and_then(|value| value.into_string().ok());
     let wrapped = ci_in(var) || var("RUSTC_WRAPPER").is_some_and(|wrapper| !wrapper.is_empty());
     // The container names kache's host layer, its remote and store; the
@@ -148,6 +152,35 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
         publish_timings(build, var);
     }
     result
+}
+
+/// Admits this job once the volume it builds on has the room the executor
+/// names, taking back the idle builds in the runner's build root and in its
+/// slots first. The build is entered before asking, so its lease keeps this
+/// job's own build out of that reclaim.
+///
+/// The executor that names the build root names the room too. A job told one
+/// without the other has no room to ask for, and asking for none would admit
+/// every job onto a full volume.
+fn ask_for_room(
+    alias: &Path,
+    build: &BuildDir,
+    var: &dyn Fn(&str) -> Option<OsString>,
+) -> Result<()> {
+    let mut searched: Vec<&Path> = Vec::new();
+    for directory in [alias.parent(), build.path().parent()]
+        .into_iter()
+        .flatten()
+    {
+        if !searched.contains(&directory) {
+            searched.push(directory);
+        }
+    }
+    let roots: Vec<PathBuf> = searched
+        .iter()
+        .map(|directory| directory.to_path_buf())
+        .collect();
+    build_cache::admit_for_job(build.path(), &searched, &|| Ok(roots.clone()), var)
 }
 
 /// Publishes while the slot is still held. The job owns `RUNNER_TEMP`, which
@@ -195,9 +228,9 @@ mod tests {
     use kithara_devtools::{common::project::TestCommandConfig, lease};
 
     use super::*;
-    use crate::ci::{
-        build_dir::fixture::git,
-        config::{fixture, workspace_root},
+    use crate::{
+        ci::{build_dir::fixture::git, config::fixture},
+        testing::workspace::root as workspace_root,
     };
 
     /// A lane builds where the executor said. These runners are ephemeral and
@@ -432,6 +465,8 @@ label = "run"
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),
                 ),
+                (consts::JOB_ROOM_BYTES_ENV, "0"),
+                (consts::JOB_ROOM_WAIT_ENV, "0"),
                 (
                     "GITHUB_ENV",
                     github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
@@ -483,6 +518,8 @@ label = "run"
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),
                 ),
+                (consts::JOB_ROOM_BYTES_ENV, "0"),
+                (consts::JOB_ROOM_WAIT_ENV, "0"),
                 (
                     "GITHUB_ENV",
                     github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
@@ -527,6 +564,8 @@ label = "run"
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),
                 ),
+                (consts::JOB_ROOM_BYTES_ENV, "0"),
+                (consts::JOB_ROOM_WAIT_ENV, "0"),
                 (
                     "GITHUB_ENV",
                     github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
@@ -578,6 +617,8 @@ label = "run"
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),
                 ),
+                (consts::JOB_ROOM_BYTES_ENV, "0"),
+                (consts::JOB_ROOM_WAIT_ENV, "0"),
                 (
                     "GITHUB_ENV",
                     github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
@@ -629,6 +670,8 @@ label = "run"
                     "CARGO_TARGET_DIR",
                     builds.to_str().expect("a UTF-8 build root"),
                 ),
+                (consts::JOB_ROOM_BYTES_ENV, "0"),
+                (consts::JOB_ROOM_WAIT_ENV, "0"),
                 (
                     "GITHUB_ENV",
                     github_env_a.to_str().expect("a UTF-8 GITHUB_ENV"),
@@ -662,6 +705,8 @@ label = "run"
                     "CARGO_TARGET_DIR",
                     builds.to_str().expect("a UTF-8 build root"),
                 ),
+                (consts::JOB_ROOM_BYTES_ENV, "0"),
+                (consts::JOB_ROOM_WAIT_ENV, "0"),
                 (
                     "GITHUB_ENV",
                     github_env_b.to_str().expect("a UTF-8 GITHUB_ENV"),
@@ -726,6 +771,8 @@ label = "run"
                     "CARGO_TARGET_DIR",
                     builds.to_str().expect("a UTF-8 build root"),
                 ),
+                (consts::JOB_ROOM_BYTES_ENV, "0"),
+                (consts::JOB_ROOM_WAIT_ENV, "0"),
                 (
                     "GITHUB_ENV",
                     github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
@@ -764,21 +811,16 @@ label = "run"
     #[cfg(unix)]
     #[test]
     fn a_rebuild_check_fails_a_suite_the_next_job_would_build_again() {
-        use std::os::unix::fs::PermissionsExt as _;
-
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let status = temp.path().join("status");
-        let just = temp.path().join("just");
-        fs::write(
-            &just,
-            format!(
-                "#!/bin/sh\ncase \"$*\" in *--no-run*) cat '{}' >&2 ;; esac\n",
+        let just = crate::testing::install_scripted_double(
+            temp.path(),
+            "just",
+            &format!(
+                "case \"$*\" in *--no-run*) cat '{}' >&2 ;; esac\n",
                 status.display()
             ),
-        )
-        .expect("write the just double");
-        fs::set_permissions(&just, fs::Permissions::from_mode(0o755))
-            .expect("make the just double runnable");
+        );
         let (mut ctx, args) = lane_running(
             temp.path(),
             "just",
@@ -808,8 +850,6 @@ label = "run"
     /// the default and `tooling` owns `xtask/`.
     #[cfg(unix)]
     fn touched_lane(root: &Path, changed: &str) -> (Ctx, LaneArgs, PathBuf) {
-        use std::os::unix::fs::PermissionsExt as _;
-
         let (mut ctx, args) = lane_running(
             root,
             "just",
@@ -851,13 +891,11 @@ label = "run"
         commit("change");
 
         let called = root.join("called");
-        let just = root.join("just");
-        fs::write(
-            &just,
-            format!("#!/bin/sh\nprintf ran > '{}'\n", called.display()),
-        )
-        .unwrap();
-        fs::set_permissions(&just, fs::Permissions::from_mode(0o755)).unwrap();
+        let just = crate::testing::install_scripted_double(
+            root,
+            "just",
+            &format!("printf ran > '{}'\n", called.display()),
+        );
         let mut tools = cache_doubles(root).0;
         tools.extend(
             toml::from_str::<toml::Table>(&format!("[just]\nprogram = \"{}\"\n", just.display()))
@@ -905,6 +943,8 @@ cargo.packages = ["tools"]
                     "CARGO_TARGET_DIR",
                     builds.to_str().expect("a UTF-8 build root"),
                 ),
+                (consts::JOB_ROOM_BYTES_ENV, "0"),
+                (consts::JOB_ROOM_WAIT_ENV, "0"),
                 (
                     "GITHUB_ENV",
                     github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
@@ -959,6 +999,9 @@ cargo.packages = ["tools"]
 
     /// A recording double for each compiler cache, so a lane's questions to
     /// them are answered here rather than by the machine's own daemons.
+    ///
+    /// A test and `lane_running` both ask for them on one root, so each is
+    /// installed once.
     #[cfg(unix)]
     fn cache_doubles(root: &Path) -> (toml::Table, PathBuf) {
         let socket_tool = root.join("cache-double").join("fake-tool");
@@ -978,21 +1021,24 @@ cargo.packages = ["tools"]
             ),
         ] {
             let program = root.join(name);
-            let start = if name == "kache" {
-                format!(
-                    "if [ \"$1 $2\" = \"daemon start\" ] && [ -n \"$KACHE_RUNTIME_DIR\" ]; then\nKITHARA_TEST_STDOUT='{answer}' exec '{}' --kache-start\nfi\n",
-                    socket_tool.display()
-                )
-            } else {
-                String::new()
-            };
-            crate::testing::install_script(
-                &program,
-                &format!(
-                    "#!/bin/sh\necho \"{name} $@\" >> '{}'\n{start}printf '{answer}'\n",
-                    asked.display()
-                ),
-            );
+            if !program.exists() {
+                let start = if name == "kache" {
+                    format!(
+                        "if [ \"$1 $2\" = \"daemon start\" ] && [ -n \"$KACHE_RUNTIME_DIR\" ]; then\nKITHARA_TEST_STDOUT='{answer}' exec '{}' --kache-start\nfi\n",
+                        socket_tool.display()
+                    )
+                } else {
+                    String::new()
+                };
+                crate::testing::install_scripted_double(
+                    root,
+                    name,
+                    &format!(
+                        "echo \"{name} $@\" >> '{}'\n{start}printf '{answer}'\n",
+                        asked.display()
+                    ),
+                );
+            }
             tools.insert(
                 name.to_owned(),
                 toml::Table::from_iter([(
@@ -1092,6 +1138,112 @@ cargo.packages = ["tools"]
         );
     }
 
+    /// A CI job is admitted only once the volume it builds on has the room
+    /// its executor names; short of it, the lane refuses before its first
+    /// step and names that volume.
+    #[cfg(unix)]
+    #[test]
+    fn a_ci_lane_without_room_for_a_job_refuses_before_its_first_step() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let seen = temp.path().join("seen");
+        let step = format!(r#"args = ["-c", "touch '{}'"]"#, seen.display());
+        let (ctx, args) = lane_running(temp.path(), "sh", &step);
+        let required = u64::MAX.to_string();
+
+        let error = run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                ("CI", "true"),
+                (
+                    "CARGO_TARGET_DIR",
+                    builds.path().to_str().expect("a UTF-8 build root"),
+                ),
+                (consts::JOB_ROOM_BYTES_ENV, &required),
+                (consts::JOB_ROOM_WAIT_ENV, "0"),
+            ]),
+        )
+        .expect_err("no volume has u64::MAX bytes free");
+
+        assert!(
+            format!("{error:#}").contains(&builds.path().display().to_string()),
+            "the refusal names the volume the lane builds on: {error:#}"
+        );
+        assert!(!seen.exists(), "a refused lane runs none of its steps");
+    }
+
+    /// The executor that names a job's build root names its room too; a job
+    /// told only the first has no room to ask for and refuses rather than
+    /// admitting itself onto whatever the volume has left.
+    #[cfg(unix)]
+    #[test]
+    fn a_ci_lane_told_no_room_refuses_before_its_first_step() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let seen = temp.path().join("seen");
+        let step = format!(r#"args = ["-c", "touch '{}'"]"#, seen.display());
+        let (ctx, args) = lane_running(temp.path(), "sh", &step);
+
+        let error = run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                ("CI", "true"),
+                (
+                    "CARGO_TARGET_DIR",
+                    builds.path().to_str().expect("a UTF-8 build root"),
+                ),
+            ]),
+        )
+        .expect_err("a job told no room has none to ask for");
+
+        assert!(
+            format!("{error:#}").contains(consts::JOB_ROOM_BYTES_ENV),
+            "the refusal names the room the executor did not tell: {error:#}"
+        );
+        assert!(!seen.exists(), "a refused lane runs none of its steps");
+    }
+
+    /// Short of room, a job first takes back the builds no job holds beside
+    /// its own. It enters its build before asking, so its own lease keeps
+    /// that one out of the reclaim.
+    #[cfg(unix)]
+    #[test]
+    fn a_ci_lane_short_of_room_reclaims_idle_builds_but_not_its_own() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let builds = tempfile::tempdir().expect("create the runner's build root");
+        let (ctx, args) = trivial_lane(temp.path());
+        let idle = builds.path().join("other-0");
+        fs::create_dir_all(idle.join("debug")).expect("create an idle build");
+        fs::write(idle.join("debug/artifact"), vec![0_u8; 400_000]).expect("fill the idle build");
+        let required = u64::MAX.to_string();
+
+        run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                ("CI", "true"),
+                (
+                    "CARGO_TARGET_DIR",
+                    builds.path().to_str().expect("a UTF-8 build root"),
+                ),
+                (consts::JOB_ROOM_BYTES_ENV, &required),
+                (consts::JOB_ROOM_WAIT_ENV, "0"),
+            ]),
+        )
+        .expect_err("no volume has u64::MAX bytes free");
+
+        assert!(
+            !idle.exists(),
+            "an idle build is reclaimed before a refusal"
+        );
+        assert!(
+            builds.path().join("trivial-0").is_dir(),
+            "the job's own build survives the reclaim its lease kept it out of"
+        );
+    }
+
     /// Outside a CI job a directory named like an alias is still just where
     /// Cargo was told to build: nothing is linked, and the checkout's own
     /// `target`, a developer's build, is left alone.
@@ -1145,6 +1297,8 @@ cargo.packages = ["tools"]
                     "CARGO_TARGET_DIR",
                     builds.path().to_str().expect("a UTF-8 build root"),
                 ),
+                (consts::JOB_ROOM_BYTES_ENV, "0"),
+                (consts::JOB_ROOM_WAIT_ENV, "0"),
                 (
                     "GITHUB_ENV",
                     github_env.to_str().expect("a UTF-8 GITHUB_ENV"),

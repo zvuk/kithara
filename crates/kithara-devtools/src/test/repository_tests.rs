@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::Command,
 };
 
@@ -12,7 +12,45 @@ use super::{NextestAction, request::TestRequest, resolve, selection::requested};
 use crate::common::project::{ProjectConfig, TestCargoOptions, TestRunner};
 
 pub(crate) fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    crate::testing::package().join("../..")
+}
+
+#[test]
+fn repository_readers_follow_the_running_checkout() {
+    let checkout = tempfile::tempdir().expect("relocated checkout");
+    let package = checkout.path().join("crates/kithara-devtools");
+    fs::create_dir_all(&package).expect("relocated package");
+    fs::create_dir(checkout.path().join(".config")).expect("relocated configuration");
+    fs::write(
+        checkout.path().join(".config/xtask.toml"),
+        "[project]\nname = 'relocated'\n",
+    )
+    .expect("relocated project policy");
+    let output = Command::new(std::env::current_exe().expect("current test binary"))
+        .args(crate::common::child_test_args(
+            module_path!(),
+            "read_relocated_project",
+        ))
+        .env("CARGO_MANIFEST_DIR", package)
+        .output()
+        .expect("run configuration reader in relocated package");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("running 1 test"),
+        "configuration reader did not execute: {stdout} {stderr}"
+    );
+    assert!(
+        output.status.success(),
+        "configuration reader used another checkout: {stdout} {stderr}"
+    );
+}
+
+#[test]
+#[ignore = "executed by the relocation subprocess"]
+fn read_relocated_project() {
+    let config = ProjectConfig::load(&root()).expect("executing checkout configuration");
+    assert_eq!(config.project.name, "relocated");
 }
 
 pub(crate) fn this_workspace() -> Metadata {
@@ -397,7 +435,7 @@ fn the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives() {
 
 #[test]
 fn the_pinned_nextest_rejects_an_earlier_failed_stress_iteration() {
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nextest-stress");
+    let fixture = crate::testing::package().join("tests/fixtures/nextest-stress");
     let temp = TempDir::new().expect("isolated stress fixture");
     for name in ["Cargo.toml", "stress.rs"] {
         fs::copy(fixture.join(name), temp.path().join(name)).expect("copy stress fixture");

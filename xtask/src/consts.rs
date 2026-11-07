@@ -5,6 +5,109 @@ use std::{
 
 pub(crate) const INPUT_BYTES: usize = 32 * 1024 * 1024;
 
+pub(crate) const WINDOWS_DIAGNOSTIC_REPORTS: usize = 64;
+pub(crate) const WINDOWS_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const WINDOWS_DIAGNOSTIC_OUTPUT_BYTES: usize = 64 * 1024;
+#[cfg(windows)]
+pub(crate) const WINDOWS_REPARSE_POINT: u32 = 0x400;
+
+pub(crate) const WINDOWS_DIAGNOSTIC_SYSTEM: &str = r#"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+[ordered]@{
+  Drives = @(Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free)
+  Memory = Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize, FreePhysicalMemory, TotalVirtualMemorySize, FreeVirtualMemory
+  Processors = @(Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors)
+  Processes = @(Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 16 ProcessName, Id, CPU, WorkingSet64)
+} | ConvertTo-Json -Depth 4
+"#;
+
+pub(crate) const WASM_TEST_ARGS: &[&str] = &[
+    "test",
+    "--profile",
+    "test-release",
+    "--target",
+    "wasm32-unknown-unknown",
+    "-Z",
+    "build-std=std,panic_abort,core,alloc",
+    "-Z",
+    "build-std-features=optimize_for_size",
+];
+
+pub(crate) const WASM_ENCODER_TEST: &[&str] = &[
+    "-p",
+    "kithara-encode",
+    "--no-default-features",
+    "--features",
+    "client-reqwest,tls-rustls",
+    "--test",
+    "session",
+];
+
+pub(crate) const WASM_OBSERVER_TEST: &[&str] = &[
+    "-p",
+    "kithara-ffi",
+    "--test",
+    "web-observer",
+    "--test",
+    "web-bootstrap",
+    "--no-default-features",
+    "--features",
+    "wasm",
+];
+
+pub(crate) const WASM_LAYOUT_TEST: &[&str] = &[
+    "-p",
+    "kithara-dsp",
+    "--test",
+    "layout",
+    "--features",
+    "spectrum",
+];
+
+pub(crate) const WASM_ANALYSIS_TEST: &[&str] = &[
+    "-p",
+    "kithara-ffi-web-analysis-tests",
+    "--features",
+    "browser",
+    "--test",
+    "web-analysis",
+];
+
+pub(crate) const WASM_INTEGRATION_TEST: &[&str] = &[
+    "-p",
+    "kithara-ffi-web-tests",
+    "-p",
+    "kithara-integration-tests",
+    "--no-default-features",
+    "--features",
+    "kithara-integration-tests/wasm",
+    "--test",
+    "ffi_web",
+    "--test",
+    "suite_heavy",
+];
+
+pub(crate) const WASM_LIVE_GRAPH_TEST: &[&str] = &[
+    "-p",
+    "kithara-integration-tests",
+    "--no-default-features",
+    "--features",
+    "kithara-integration-tests/wasm",
+    "--test",
+    "suite_live_web_audio",
+];
+
+pub(crate) const WASM_WEBCODECS_TEST: &[&str] = &[
+    "-p",
+    "kithara-decode",
+    "--no-default-features",
+    "--features",
+    "symphonia,webcodecs,client-reqwest,tls-rustls",
+    "--test",
+    "webcodecs_browser",
+];
+
 pub(crate) const PATCH_BYTES: usize = 16 * 1024 * 1024;
 
 pub(crate) const PATCH_OPERATIONS: usize = 4096;
@@ -281,6 +384,13 @@ pub(crate) const OPEN_FILES: u64 = 65536;
 /// is a neighbouring job ending, so it re-asks on the scale a job finishes
 /// on rather than the scale a compiler writes files on.
 pub(crate) const JOB_ROOM_POLL: Duration = Duration::from_secs(15);
+
+/// The bytes a CI job needs free on the volume it builds on, told by the
+/// executor that names its build root.
+pub(crate) const JOB_ROOM_BYTES_ENV: &str = "KITHARA_CI_JOB_ROOM_BYTES";
+
+/// How many seconds a CI job waits for that room before refusing to start.
+pub(crate) const JOB_ROOM_WAIT_ENV: &str = "KITHARA_CI_JOB_ROOM_WAIT_SECONDS";
 
 #[cfg(test)]
 #[cfg(unix)]

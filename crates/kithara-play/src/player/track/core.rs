@@ -7,7 +7,7 @@ use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_render::{
     LaneCommand, LaneFrame, LaneId, LaneProtocol, ServiceClass,
-    bridge::{DeckPart, Fade, Slot, SlotMark},
+    bridge::{DeckPart, Fade, Slot, SlotMark, TrackClock},
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
@@ -46,6 +46,10 @@ pub struct PlayerImpl<S> {
     pub(super) segment_speed: f32,
     pub(super) play: Option<When<SessionFrame>>,
     pub(super) repeat: bool,
+    /// The clock the track keeps through a dropout.
+    pub(super) clock: TrackClock,
+    /// The clock its seated RT track was last sent.
+    pub(super) seated_clock: TrackClock,
     pub(super) releasing: bool,
     pub(super) resume: Option<SlotMark>,
     pub(super) mark: Option<SlotMark>,
@@ -95,6 +99,8 @@ impl<S> PlayerImpl<S> {
             segment_speed: config.settings.speed(),
             play: None,
             repeat: false,
+            clock: TrackClock::Media,
+            seated_clock: TrackClock::Media,
             releasing: false,
             resume: None,
             mark: None,

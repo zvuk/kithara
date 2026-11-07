@@ -297,7 +297,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::ci::config::{fixture, workspace_root};
+    use crate::{ci::config::fixture, testing::workspace::root as workspace_root};
 
     fn declared_arguments(dockerfile: &str) -> BTreeSet<String> {
         let text = fs::read_to_string(workspace_root().join(dockerfile)).unwrap();
