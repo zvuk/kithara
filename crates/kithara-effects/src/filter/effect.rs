@@ -134,9 +134,7 @@ impl FilterEffect {
                 .expect("admitted smoothing box has stable f32 coefficients");
         }
     }
-}
 
-impl FilterEffect {
     /// Summarize the pending manual transitions without advancing their clocks.
     /// # Errors
     /// Refuses an unrepresentable changing-frame bound.
@@ -163,11 +161,11 @@ impl FilterEffect {
     ) -> Result<FilterMotion, FilterError> {
         let field = FilterParameter::of(change);
         let current = match prior {
-            Some(point) if FilterParameter::of(point) == field => point.value(),
+            Some(point) if FilterParameter::of(point) == field => f64::from(point),
             Some(_) => return Err(FilterError::Parameters),
             None => self.parameter(field).current_value(),
         };
-        parameter_motion(field, transition(current, change.value(), rate), rate)
+        parameter_motion(field, transition(current, f64::from(change), rate), rate)
     }
 
     fn parameter(&self, field: FilterParameter) -> SmoothedParam64 {
