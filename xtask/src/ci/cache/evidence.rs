@@ -208,7 +208,7 @@ fn observations(
         "schema_version": 1,
         "kache": {
             "schema_version": primary["schema_version"].as_u64(),
-            "counts": numbers(&primary, "local_hits prefetch_hits remote_hits dups misses total_elapsed_ms hit_elapsed_ms miss_elapsed_ms time_saved_ms"),
+            "counts": numbers(&primary, "local_hits prefetch_hits remote_hits dups misses errors total_elapsed_ms hit_elapsed_ms miss_elapsed_ms time_saved_ms"),
             "daemon_connected": primary["daemon_connected"].as_bool(),
             "remote_s3": primary["remote"].as_str().map(|remote| remote.starts_with("s3://")),
             "remote_sha256": primary["remote"].as_str().map(|remote| hex::encode(Sha256::digest(remote.as_bytes()))),
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn cache_evidence_drops_secrets_even_in_known_fields() {
         let secret = "AWS_SECRET_ACCESS_KEY=synthetic-secret";
-        let input = json!({"schema_version": 1, "local_hits": 4, "misses": secret,
+        let input = json!({"schema_version": 1, "local_hits": 4, "misses": secret, "errors": secret,
             "remote": secret, "disk": {"store_bytes": secret},
             "summary": {"errors": 2, "store_failures": secret},
             "causes": [{"why": format!("compiled but not cached: {secret}"), "fix": secret, "count": 3, "compile_ms": secret, "failure": true}],
@@ -377,14 +377,24 @@ mod tests {
             "store_failed"
         );
         assert!(report["kache"]["counts"]["misses"].is_null());
+        assert!(report["kache"]["counts"]["errors"].is_null());
         assert!(report["kache"]["disk"]["store_bytes"].is_null());
         assert!(report["sccache"]["write_errors"].is_null());
+    }
+
+    #[test]
+    fn daemon_errors_remain_visible_without_full_inventory() {
+        let report = observations(Some(json!({"errors": 3})), None, None, None);
+        assert_eq!(report["kache"]["counts"]["errors"], 3);
+        assert!(report["kache"]["summary"]["errors"].is_null());
+        assert!(report["kache"]["summary"]["store_failures"].is_null());
     }
 
     #[test]
     fn unavailable_cache_observations_stay_unknown() {
         let report = observations(None, None, None, None);
         assert!(report["kache"]["counts"]["misses"].is_null());
+        assert!(report["kache"]["counts"]["errors"].is_null());
         assert!(report["kache"]["explain"]["counts"]["earlier_misses"].is_null());
         assert!(report["kache"]["gc"]["bytes_held"].is_null());
         assert!(report["actual_linker"].is_null());
