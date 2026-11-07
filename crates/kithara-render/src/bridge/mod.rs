@@ -16,12 +16,9 @@ pub use gain::{SlotBinding, SlotGainProgram, SlotOutputSnapshot};
 pub use kithara_dsp::curve::{CurveShape, CurveShapeError};
 pub use mark::SlotMark;
 pub use metrics::{RtMetrics, RtMetricsSnapshot};
-pub use mix::{
-    DeckMixSettings, DeckMixSettingsChange, DeckMixSettingsPatch, DeckMixSettingsPatchError,
-    InvalidMixLevel,
-};
+pub use mix::{CrossfaderGain, DeckMixSettings, DeckMixSettingsChange, DeckMixSettingsPatch, Trim};
 pub use protocol::{
-    DeckEqChange, DeckEvent, DeckPart, DeckProtocol, DeckRefusal, Fade, FadeDir, PlaybackFault,
-    Returned, Slot, SlotState,
+    DeckEqChange, DeckEvent, DeckFxChange, DeckPart, DeckProtocol, DeckRefusal, Fade, FadeDir,
+    FxMix, PlaybackFault, Returned, Slot, SlotState, TrackClock,
 };
 pub use snapshot::{DeckSnapshot, EqSnapshot, SlotSnapshot};

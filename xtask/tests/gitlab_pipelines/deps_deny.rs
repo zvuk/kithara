@@ -4,7 +4,7 @@ use super::{GitlabConfig, mapping, workspace_root};
 
 #[test]
 fn dependency_audit_publishes_raw_evidence_on_every_job_outcome() {
-    let config = GitlabConfig::load(workspace_root());
+    let config = GitlabConfig::load(&workspace_root());
     assert_eq!(
         config.effective_value("deps:deny", "script"),
         Some(Value::Sequence(vec![Value::String(

@@ -360,6 +360,22 @@ impl SeleniumHarness {
             None => None,
         };
         let requested_port = config.test_server_port.unwrap_or(0);
+        println!("[selenium] building test server");
+        let mut build = Command::new("cargo");
+        build.current_dir(repo_root()).args([
+            "build",
+            "-p",
+            "kithara-integration-tests",
+            "--bin",
+            "test_server",
+        ]);
+        let status = tokio::task::spawn_blocking(move || build.status())
+            .await
+            .map_err(|err| format!("test server build task failed: {err}"))?
+            .map_err(|err| format!("failed to build test server: {err}"))?;
+        if !status.success() {
+            return Err(format!("test server build failed: {status}"));
+        }
         println!("[selenium] starting test server on port {requested_port}");
         let mut cmd = Command::new("cargo");
         cmd.current_dir(repo_root())
@@ -1859,6 +1875,54 @@ async fn selenium_teardown(session: WasmPlayerSelenium, name: &str, result: Resu
     if let Err(err) = result {
         panic!("{name} failed: {err}");
     }
+}
+
+#[kithara::test(selenium)]
+async fn selenium_playlist_rows_survive_refresh(
+    #[future(awt)] selenium_setup: (SeleniumHarness, WasmPlayerSelenium),
+) {
+    let (_harness, session) = selenium_setup;
+    let result = async {
+        session.open_player_page().await?;
+        session.clear_playlist().await?;
+        session.add_track(&session.endpoints.mp3_url()).await?;
+        let row = session
+            .driver
+            .find(By::Css("#playlist li"))
+            .await
+            .map_err(|err| format!("playlist row not found: {err}"))?;
+
+        session.add_track(&session.endpoints.hls_url()).await?;
+        session
+            .driver
+            .execute("window.renderPlaylist();", Vec::<Value>::new())
+            .await
+            .map_err(|err| format!("playlist refresh failed: {err}"))?;
+        row.click().await.map_err(|err| {
+            format!("playlist refresh invalidated the native click target: {err}")
+        })?;
+        session
+            .wait_for(
+                "retained playlist row selected and playing",
+                session.config.wait_timeout,
+                consts::CHECK_INTERVAL,
+                |snap| snap.active_index == Some(0) && snap.status.contains("Playing"),
+            )
+            .await?;
+
+        session.clear_playlist().await?;
+        let rows = session
+            .driver
+            .find_all(By::Css("#playlist li"))
+            .await
+            .map_err(|err| format!("cleared playlist query failed: {err}"))?;
+        if !rows.is_empty() {
+            return Err("cleared playlist retained rows".to_owned());
+        }
+        Ok(())
+    }
+    .await;
+    selenium_teardown(session, "playlist_rows_survive_refresh", result).await;
 }
 
 #[kithara::test(selenium)]

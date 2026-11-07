@@ -3,9 +3,10 @@ use kithara_command::{Mailbox, Postbox, Seq, When};
 use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_play::{
-    DeckEqChange, DeckMixSettingsChange, EqBandConfig, GainDb, InterruptionKind, Outbox,
-    OutputSnapshot, PlayError, Player, Position, SeekBatch, Track, TrackCommand, TrackFactory,
-    TrackSettings, TrackSettingsChange, TrackStatus as PlayingStatus,
+    CrossfaderGain, DeckEqChange, DeckFxChange, DeckMixSettingsChange, EqBandConfig, GainDb,
+    InterruptionKind, Outbox, OutputSnapshot, PlayError, Player, Position, SeekBatch, Track,
+    TrackCommand, TrackFactory, TrackSettings, TrackSettingsChange, TrackStatus as PlayingStatus,
+    Trim,
 };
 use kithara_signal::{FaderValue, SessionFrame};
 
@@ -67,7 +68,8 @@ where
     SetPlaybackOrder(PlaybackOrder),
     SetRepeat(RepeatMode),
     SetVolume(f32),
-    SetLevel(f32),
+    SetTrim(Trim),
+    SetCrossfader(CrossfaderGain),
     SetMuted(bool),
     SetEqGain {
         band: usize,
@@ -75,6 +77,10 @@ where
     },
     SetEqLayout(Vec<EqBandConfig>),
     ResetEq,
+    Fx {
+        at: When<SessionFrame>,
+        changes: Vec<DeckFxChange>,
+    },
     NotifyInterruption(InterruptionKind),
     Tick,
     Close,
@@ -131,7 +137,8 @@ where
             | QueueCommand::SetPlaybackOrder(_)
             | QueueCommand::SetRepeat(_)
             | QueueCommand::SetVolume(_)
-            | QueueCommand::SetLevel(_)
+            | QueueCommand::SetTrim(_)
+            | QueueCommand::SetCrossfader(_)
             | QueueCommand::SetMuted(_)
             | QueueCommand::SetEqGain { .. }
             | QueueCommand::SetEqLayout(_)
@@ -175,6 +182,7 @@ where
             QueueCommand::Pause { at } => self.pause_at(at, out),
             QueueCommand::Seek { to } => self.seek_to(to, out),
             QueueCommand::ConfigureTrack(change, at) => self.configure_tracks(change, at, out),
+            QueueCommand::Fx { at, changes } => out.fx(at, changes).map_err(Into::into),
             QueueCommand::GainProgram { item, program } => {
                 let index = self
                     .active
@@ -307,8 +315,12 @@ where
                 )
                 .map(Some)
                 .map_err(Into::into),
-            QueueCommand::SetLevel(level) => out
-                .mix(When::Next, DeckMixSettingsChange::Level(level))
+            QueueCommand::SetTrim(trim) => out
+                .mix(When::Next, DeckMixSettingsChange::Trim(trim))
+                .map(Some)
+                .map_err(Into::into),
+            QueueCommand::SetCrossfader(gain) => out
+                .mix(When::Next, DeckMixSettingsChange::Crossfader(gain))
                 .map(Some)
                 .map_err(Into::into),
             QueueCommand::SetMuted(muted) => out

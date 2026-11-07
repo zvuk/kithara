@@ -7,7 +7,10 @@ use kithara::{
     hls::AbrMode,
     host::{HostConfig, HostSettings, Tap},
     platform::time::{self, Duration},
-    play::{CrossfadeSettings, PlayWorker, PlayWorkerConfig, ResourcePrep, TrackSettings},
+    play::{
+        CrossfadeSettings, CrossfaderGain, PlayWorker, PlayWorkerConfig, ResourcePrep,
+        TrackSettings,
+    },
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     signal::{SessionFrame, TransportRevision},
     warp::{StretchKind, WarpConfig},
@@ -1100,10 +1103,11 @@ async fn set_levels(
         .map(|deck| deck.player.control().clone())
         .collect();
     host.run(move || {
-        players
-            .iter()
-            .zip(levels)
-            .try_for_each(|(player, level)| player.set_level(level))
+        players.iter().zip(levels).try_for_each(|(player, level)| {
+            player.set_crossfader(
+                CrossfaderGain::checked(level).expect("matrix levels are crossfader gains"),
+            )
+        })
     })
     .await
 }

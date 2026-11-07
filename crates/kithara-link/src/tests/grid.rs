@@ -7,7 +7,7 @@ use kithara_sync::{Slew, SlewCause, slew};
 use kithara_test_utils::{bufpool::TestPools, kithara};
 
 use super::fixtures::{
-    Command, answer, grid, load, loaded, position, sounding, source_grid, trajectory,
+    Command, answer, grid, horizon, load, loaded, position, sounding, source_grid, trajectory,
 };
 use crate::{GridAnswer, LinkConfig, LinkedPlayer, SyncStatus};
 
@@ -283,6 +283,7 @@ fn repeating_the_same_grid_does_not_restart_a_correction() {
                 from,
                 limit: LinkConfig::default().slew_limit(),
             },
+            horizon(),
         ),
         Some(Slew::Relocate),
         "the served grid puts the deck past the slew limit"

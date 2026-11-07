@@ -121,6 +121,7 @@ impl DeckRecord {
         let prep = ResourcePrep::builder()
             .worker(config.worker.clone())
             .warp(config.warp.clone())
+            .block_on_underrun(host.is_offline())
             .cancel(cancel.child())
             .build();
 
@@ -365,11 +366,13 @@ impl DeckSet {
         edit: impl Fn(&DeckRecord) -> MixStrip,
     ) -> Result<(), QueueError> {
         for record in &self.records {
-            mix.level(edit(record))?;
+            mix.gains(edit(record))?;
         }
 
         for record in &self.records {
-            record.queue.set_level(mix.level(edit(record))?)?;
+            let (trim, crossfader) = mix.gains(edit(record))?;
+            record.queue.set_trim(trim)?;
+            record.queue.set_crossfader(crossfader)?;
         }
 
         for record in &mut self.records {

@@ -66,9 +66,15 @@ impl Deck {
                 Some(self.replace_track(slot, track, context_valid, wait_for_pcm))
             }
             DeckPart::Chain { from, to } => Some(self.chain_tracks(from, to)),
+            DeckPart::Clock { slot, clock } => {
+                if let Some(track) = self.tracks.at_mut(slot) {
+                    track.set_clock(clock);
+                }
+                Some(DeckPart::Clock { slot, clock })
+            }
             DeckPart::Mix(change) => {
                 self.mix.apply_change(change);
-                self.render.set_gain(self.mix.gain());
+                self.render.set_mix(self.mix);
                 Some(DeckPart::Mix(change))
             }
             DeckPart::Eq(DeckEqChange::Gain { band, gain }) => {
@@ -93,6 +99,7 @@ impl Deck {
                     program,
                 })
             }
+            DeckPart::Fx(change) => self.render.change_fx(change, self.sample_rate),
             DeckPart::GainProgram {
                 slot,
                 binding,

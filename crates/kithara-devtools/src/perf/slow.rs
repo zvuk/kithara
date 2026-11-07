@@ -5,13 +5,12 @@ use std::{
     path::Path,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    common::project::ProjectConfig,
-    junit::{CaseTiming, parse_junit},
-    perf::lanes::{RunPaths, primary_lane_name},
+use super::{
+    evidence::{self, LaneCases},
+    lanes::RunPaths,
 };
 
 type TestKey = (String, String);
@@ -57,7 +56,7 @@ pub(crate) fn median_ms(sorted_secs: &[f64]) -> f64 {
 }
 
 pub(crate) fn aggregate(
-    runs: &[(String, Vec<CaseTiming>)],
+    runs: &[LaneCases],
     run_id: &str,
     threshold_ms: f64,
     primary_lane: &str,
@@ -71,7 +70,7 @@ pub(crate) fn aggregate(
                 .entry(lane.clone())
                 .or_insert_with(|| (Vec::new(), 0));
             entry.0.push(case.secs);
-            if case.failed {
+            if case.failing() {
                 entry.1 += 1;
             }
         }
@@ -94,7 +93,7 @@ pub(crate) fn aggregate(
         }
         let over = lanes
             .values()
-            .filter(|stat| stat.median_ms >= threshold_ms)
+            .filter(|stat| stat.max_ms >= threshold_ms)
             .count();
         if over == 0 {
             continue;
@@ -125,7 +124,7 @@ pub(crate) fn render_md(report: &SlowReport) -> String {
     let mut out = String::new();
     let _ = write!(
         out,
-        "# Slow tests (median >= {:.0}ms in any lane) - {}\n\n",
+        "# Slow tests (maximum >= {}ms in any lane) - {}\n\nSelection, source, host and invocation configuration: [matrix.json](matrix.json).\n\nThis report covers the declared selection; clock classification and timing exemptions require separate evidence.\n\n",
         report.threshold_ms, report.run_id
     );
     let lane_names: Vec<String> = report
@@ -183,48 +182,69 @@ pub(crate) fn render_md(report: &SlowReport) -> String {
     out
 }
 
-pub(crate) fn run(
-    project: &ProjectConfig,
-    data_dir: &Path,
-    run_id: &str,
-    threshold_ms: f64,
-) -> Result<()> {
-    let primary_lane = primary_lane_name(&project.perf)?;
+pub(crate) fn run(data_dir: &Path, run_id: &str, threshold_ms: f64, check: bool) -> Result<()> {
+    validate_threshold(threshold_ms)?;
     let paths = RunPaths::new(data_dir, run_id);
-    let matrix_dir = paths.matrix_dir();
-    if !matrix_dir.is_dir() {
-        bail!("no matrix data at {}", matrix_dir.display());
-    }
-    let mut runs = Vec::new();
-    for lane_entry in fs::read_dir(&matrix_dir).context("read matrix dir")? {
-        let lane_dir = lane_entry.context("lane entry")?.path();
-        let lane = lane_dir
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if !lane_dir.is_dir() {
-            continue;
-        }
-        for rep_entry in fs::read_dir(&lane_dir).context("read lane dir")? {
-            let junit = rep_entry.context("rep entry")?.path().join("junit.xml");
-            if !junit.is_file() {
-                continue;
-            }
-            let xml =
-                fs::read_to_string(&junit).with_context(|| format!("read {}", junit.display()))?;
-            runs.push((lane.clone(), parse_junit(&xml)?));
-        }
-    }
-    let report = aggregate(&runs, run_id, threshold_ms, &primary_lane);
+    let (plan, runs) = evidence::read_matrix(&paths, run_id)?;
+    let report = aggregate(&runs, run_id, threshold_ms, &plan.primary_lane);
     fs::write(paths.slow_json(), serde_json::to_vec_pretty(&report)?).context("write slow.json")?;
     fs::write(paths.slow_md(), render_md(&report)).context("write slow.md")?;
     println!(
-        "[perf slow] {} tests >= {:.0}ms -> {}",
+        "[perf slow] complete declared selection: {} lanes, {} invocations per lane; {} tests reached {}ms -> {}",
+        plan.lanes.len(),
+        plan.repeats,
         report.tests.len(),
         threshold_ms,
         paths.slow_md().display()
     );
+    println!(
+        "[perf slow] selection and provenance: {}",
+        paths.run_dir.join("matrix.json").display()
+    );
+    if check {
+        for test in &report.tests {
+            for (lane, stat) in &test.lanes {
+                if stat.max_ms >= threshold_ms {
+                    println!(
+                        "[perf check] {} {} in {}: maximum {:.6}ms",
+                        test.suite, test.name, lane, stat.max_ms
+                    );
+                }
+            }
+        }
+        ensure!(
+            report.tests.is_empty(),
+            "selected measurement threshold was reached or exceeded"
+        );
+    }
     Ok(())
+}
+
+fn validate_threshold(threshold_ms: f64) -> Result<()> {
+    ensure!(
+        threshold_ms.is_finite() && threshold_ms > 0.0,
+        "performance threshold must be finite and greater than zero"
+    );
+    Ok(())
+}
+
+pub(crate) fn load_report(paths: &RunPaths, run_id: &str) -> Result<SlowReport> {
+    evidence::component(run_id)?;
+    let cached: SlowReport = serde_json::from_str(&crate::stress_report::read_bounded_utf8(
+        &paths.slow_json(),
+        crate::consts::MAX_JUNIT_BYTES,
+        "slow report",
+    )?)
+    .context("parse slow report settings")?;
+    ensure!(cached.run_id == run_id, "slow report run identity mismatch");
+    validate_threshold(cached.threshold_ms)?;
+    let (plan, runs) = evidence::read_matrix(paths, run_id)?;
+    Ok(aggregate(
+        &runs,
+        run_id,
+        cached.threshold_ms,
+        &plan.primary_lane,
+    ))
 }
 
 #[cfg(test)]
@@ -280,5 +300,52 @@ mod tests {
     fn median_even_count_averages() {
         assert!((median_ms(&[1.0, 3.0]) - 2000.0).abs() < 1e-6);
         assert!((median_ms(&[1.0, 2.0, 4.0]) - 2000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_slow_repetition_is_retained_behind_a_fast_median() {
+        let lane = "flash-on-http";
+        let runs =
+            [0.1, 0.1, 1.5].map(|seconds| (lane.to_owned(), vec![case("s", "outlier", seconds)]));
+        let report = aggregate(&runs, "run-1", 1000.0, lane);
+
+        assert_eq!(report.tests.len(), 1);
+        let measured = &report.tests[0].lanes[lane];
+        assert_eq!(measured.repeats, 3);
+        assert_eq!(measured.min_ms, 100.0);
+        assert_eq!(measured.median_ms, 100.0);
+        assert_eq!(measured.max_ms, 1500.0);
+    }
+
+    #[test]
+    fn an_exact_threshold_repetition_is_retained() {
+        let lane = "flash-on-http";
+        let runs =
+            [0.1, 0.1, 1.0].map(|seconds| (lane.to_owned(), vec![case("s", "boundary", seconds)]));
+        let report = aggregate(&runs, "run-1", 1000.0, lane);
+
+        assert_eq!(report.tests.len(), 1);
+        assert_eq!(report.tests[0].lanes[lane].max_ms, 1000.0);
+    }
+
+    #[test]
+    fn a_retried_slow_case_is_not_counted_as_clean() {
+        let lane = "flash-on-http";
+        let mut retried = case("s", "retried", 2.0);
+        retried.flaky = true;
+        let report = aggregate(&[(lane.to_owned(), vec![retried])], "run-1", 1000.0, lane);
+
+        assert_eq!(report.tests[0].lanes[lane].failed, 1);
+    }
+
+    #[test]
+    fn an_empty_matrix_does_not_establish_complete_evidence() {
+        let temp = tempfile::tempdir().expect("matrix fixture");
+        let paths = RunPaths::new(temp.path(), "empty");
+        fs::create_dir_all(paths.matrix_dir()).expect("empty matrix directory");
+        let outcome = run(temp.path(), "empty", 1000.0, false);
+
+        assert!(outcome.is_err(), "an empty matrix must not look complete");
+        assert!(!paths.slow_json().exists());
     }
 }

@@ -28,8 +28,10 @@ pub(in crate::rt) fn shifted_slot(part: &DeckPart) -> Option<Slot> {
         | DeckPart::EqProgram { .. }
         | DeckPart::GainProgram { .. }
         | DeckPart::Chain { .. }
+        | DeckPart::Clock { .. }
         | DeckPart::Mix(_)
         | DeckPart::Eq(_)
+        | DeckPart::Fx(_)
         | DeckPart::Returned(_) => None,
     }
 }

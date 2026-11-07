@@ -110,7 +110,7 @@ impl<E: SessionInbox> DeckMixer<E> {
                 recycle: vec![0; slots.get()],
                 declick_frames,
                 evict_frames,
-                render: RenderPass::new(pools, shape, mix.gain(), config)?,
+                render: RenderPass::new(pools, shape, config)?,
                 eq_programs: EqPrograms::new(scope, config.eq_bands()),
                 mix,
                 events,
@@ -494,6 +494,7 @@ impl Deck {
                 sounded = true;
             }
         }
+        sounded |= self.render.ringing();
         self.finish_range(
             level,
             start,
