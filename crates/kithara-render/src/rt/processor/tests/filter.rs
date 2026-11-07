@@ -78,12 +78,16 @@ pub(super) fn bits(pcm: &[f32]) -> Vec<u32> {
 }
 
 #[kithara::test]
-#[case::rate(2, 48_000)]
-#[case::channels(1, 44_100)]
-#[case::rate_and_channels(1, 48_000)]
+#[case::rate(2, 48_000, 128)]
+#[case::rate_split(2, 48_000, 127)]
+#[case::channels(1, 44_100, 128)]
+#[case::channels_split(1, 44_100, 127)]
+#[case::rate_and_channels(1, 48_000, 128)]
+#[case::rate_and_channels_split(1, 48_000, 127)]
 fn source_format_changes_preserve_pcm_metadata_and_the_deck_filter_rate(
     #[case] channels: u16,
     #[case] rate: u32,
+    #[case] prefix: usize,
 ) {
     let (mut mixer, mut ends) = mixer_with_config(DeckMixerConfig::default(), 32);
     assert_eq!(stereo_frames(&mut mixer, 0, 1), [vec![0.0], vec![0.0]]);
@@ -154,14 +158,16 @@ fn source_format_changes_preserve_pcm_metadata_and_the_deck_filter_rate(
         .enumerate()
     {
         let start = 1 + index * 128;
-        let mut actual = stereo_frames(&mut mixer, start, 127);
-        {
-            let snapshot = ends.deck.snapshot.read();
-            assert_eq!(snapshot.slots[A.index()].source, Some(meta));
-        }
-        let last = stereo_frames(&mut mixer, start + 127, 1);
-        for (output, suffix) in actual.iter_mut().zip(last) {
-            output.extend(suffix);
+        let mut actual = stereo_frames(&mut mixer, start, prefix);
+        if prefix < 128 {
+            {
+                let snapshot = ends.deck.snapshot.read();
+                assert_eq!(snapshot.slots[A.index()].source, Some(meta));
+            }
+            let last = stereo_frames(&mut mixer, start + prefix, 128 - prefix);
+            for (output, suffix) in actual.iter_mut().zip(last) {
+                output.extend(suffix);
+            }
         }
         let mut expected = [vec![value; 128], vec![value; 128]];
         reference

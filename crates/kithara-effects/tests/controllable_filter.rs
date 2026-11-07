@@ -65,8 +65,8 @@ fn manual_cutoff_follows_the_f64_smoothing_law_across_odd_blocks(eq_sine_1000: V
     reference
         .process(&mut [warmup.as_mut_slice()], 0..4096)
         .expect("reference warmup");
-    for mut filter in [&mut whole, &mut split] {
-        processed(&mut filter, 1, &eq_sine_1000[..4096]).expect("warmup");
+    for filter in [&mut whole, &mut split] {
+        processed(filter, 1, &eq_sine_1000[..4096]).expect("warmup");
         filter
             .configure(FilterSettingsChange::CutoffHz(
                 Cutoff::checked(200.0).expect("admitted target"),
