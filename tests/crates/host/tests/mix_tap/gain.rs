@@ -13,8 +13,11 @@ use kithara_test_fixtures::assets;
 use num_traits::ToPrimitive;
 
 use super::cases::{BLOCK_FRAMES, ROOMY_CAPACITY, SAMPLE_RATE, load_source, render_effect_window};
+use crate::underrun;
 
-#[kithara::test(tokio)]
+const CALLBACK_FRAMES: usize = 64;
+
+#[kithara::test(tokio, tracing("render_refill=trace"))]
 async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
     let options = OfflinePlayerOptions::builder()
         .block_on_underrun(false)
@@ -26,6 +29,7 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
         )
         .build();
     let harness = OfflinePlayer::with_sample_rate(options, SAMPLE_RATE).await;
+    let mut underruns = underrun::Underruns::new(&harness);
     let config = ResourceConfig::for_src(
         ResourceSrc::parse(asset_source(&assets::fixed_constant_wav_cd_half_44100()))
             .expect("fixture URI parses"),
@@ -35,8 +39,10 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
     .audio_buffer_chunks(NonZeroUsize::new(2).expect("nonzero packet count"))
     .build();
     let harness = load_source(harness, TrackSource::Config(Box::new(config))).await;
-    let _ = render_effect_window(&harness, BLOCK_FRAMES).await;
-    let warm = render_effect_window(&harness, 4096).await;
+    let _ = render_gain_window(&harness, BLOCK_FRAMES, &mut underruns).await;
+    underruns.checkpoint(harness.metrics(), false, "gain initial playback");
+    let warm = render_gain_window(&harness, 4096, &mut underruns).await;
+    underruns.checkpoint(harness.metrics(), false, "gain ready playback");
     assert!(warm[warm.len() - 128..].iter().all(|sample| *sample == 0.5));
     let item = harness
         .with_queue(|queue| queue.current().expect("loaded current item").id)
@@ -68,7 +74,8 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
         .attach_tap(Tap::Master, ROOMY_CAPACITY)
         .await
         .expect("master tap");
-    let take = render_effect_window(&harness, 1024).await;
+    let take = render_gain_window(&harness, 1024, &mut underruns).await;
+    underruns.checkpoint(harness.metrics(), false, "gain program playback");
     assert_eq!(tap.drain(), take);
     assert_eq!(tap.drops(), 0);
     for (index, &channels) in take.as_chunks::<2>().0.iter().enumerate() {
@@ -94,4 +101,21 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
     assert!(sounding.output.program().is_some());
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;
+}
+
+async fn render_gain_window(
+    harness: &OfflinePlayer,
+    frames: usize,
+    underruns: &mut underrun::Underruns,
+) -> Vec<f32> {
+    let mut output = Vec::new();
+    for start in (0..frames).step_by(CALLBACK_FRAMES) {
+        let at = harness.host().position();
+        output.extend_from_slice(
+            &render_effect_window(harness, CALLBACK_FRAMES.min(frames - start)).await,
+        );
+        underruns.checkpoint(harness.metrics(), false, "gain callback");
+        assert_eq!(harness.metrics().underruns(), 0, "callback at {at}");
+    }
+    output
 }
