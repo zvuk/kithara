@@ -8,7 +8,6 @@ pub(crate) mod mock;
 #[cfg(all(test, feature = "mock"))]
 pub(crate) use node::mock as node_fixture;
 mod node;
-mod preparation;
 mod reader;
 #[cfg(any(test, feature = "mock"))]
 pub(crate) use node::fixture as source_fixture;

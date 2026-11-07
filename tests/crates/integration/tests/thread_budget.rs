@@ -48,7 +48,7 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
 }
 
 #[kithara::test(serial)]
-fn thread_budget_audio_worker_has_two_fixed_owners() {
+fn thread_budget_audio_worker_is_one_thread() {
     let before = active_named_thread_count();
     let pools = pools();
     let worker = PlayWorker::new(
@@ -68,9 +68,8 @@ fn thread_budget_audio_worker_has_two_fixed_owners() {
     // state for the next serial test (state-driven, not a fixed sleep).
     wait_for_named_threads(before, Duration::from_secs(30));
     assert_eq!(
-        delta, 2,
-        "PlayWorker must spawn exactly 2 shared threads: playback and cold preparation \
-         (got delta={delta}, before={before}, after={after})"
+        delta, 1,
+        "PlayWorker must spawn exactly 1 thread (got delta={delta}, before={before}, after={after})"
     );
 }
 
@@ -126,8 +125,8 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     wait_thread_count_quiesced(QUIESCE_WATCHDOG).await;
 
     assert!(
-        delta <= 3,
-        "Single pipeline budget: at most 3 kithara threads (playback, preparation, flush), got delta={delta} \
+        delta <= 2,
+        "Single pipeline budget: ≤2 kithara threads, got delta={delta} \
          (before={before}, after={after})"
     );
 }
@@ -159,7 +158,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     );
     let shared_hub = FlushHub::new(cancel.child(), FlushPolicy::default());
 
-    // Baseline gate: include the shared playback and preparation owners, but measure before
+    // Baseline gate: include the eager shared playback worker, but measure before
     // the store registers with the flush hub and starts its worker.
     let before = wait_thread_count_quiesced(QUIESCE_WATCHDOG).await;
     let shared_store = AssetStore::builder(pools.clone())
