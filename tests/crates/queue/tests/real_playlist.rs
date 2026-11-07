@@ -369,7 +369,7 @@ where
 /// so DRM regressions surface as a list instead of killing the whole
 /// test at the first bad entry.
 // flash(false): real-CDN e2e; sleeps are wall-clock pause/gain windows racing real sockets.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, tracing("kithara_test::playlist_progress=info"))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -386,6 +386,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .tracks()
         .to_vec();
     assert!(urls.len() >= 3, "need ≥3 tracks for scenario");
+    tracing::info!(target: "kithara_test::playlist_progress", phase = "setup", tracks = urls.len());
 
     ctx.queue
         .run(|q| {
@@ -423,6 +424,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .await
         .expect("first track position");
 
+    tracing::info!(target: "kithara_test::playlist_progress", phase = "first_playing", current = ?ctx.queue.current_index(), position = ?ctx.queue.position_seconds());
     let before_pause = ctx.queue.position_seconds().unwrap_or(0.0);
     ctx.queue.run(move |q| q.pause()).await;
     sleep(Duration::from_secs(2)).await;
@@ -445,6 +447,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         "resume didn't advance position: {during_pause:.2} → {after_resume:.2}"
     );
 
+    tracing::info!(target: "kithara_test::playlist_progress", phase = "resumed", current = ?ctx.queue.current_index(), position = ?ctx.queue.position_seconds());
     let duration_0 = ctx
         .queue
         .duration_seconds()
@@ -488,8 +491,10 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     .await
     .expect("CurrentTrackChanged to track 1 after crossfade");
 
+    tracing::info!(target: "kithara_test::playlist_progress", phase = "crossfade_complete", current = ?ctx.queue.current_index(), position = ?ctx.queue.position_seconds());
     let mut per_track: Vec<(String, Result<(), String>)> = Vec::new();
     for i in 1..urls.len() {
+        tracing::info!(target: "kithara_test::playlist_progress", phase = "track_begin", index = i, item = ?ids[i], current = ?ctx.queue.current_index(), position = ?ctx.queue.position_seconds());
         let url = &urls[i];
         let result: Result<(), String> =
             async {
@@ -501,6 +506,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
                 )
                 .await
                 .map_err(|e| format!("load: {e}"))?;
+                tracing::info!(target: "kithara_test::playlist_progress", phase = "track_loaded", index = i, current = ?ctx.queue.current_index(), position = ?ctx.queue.position_seconds());
                 wait_for_position_at_least(&ctx.queue, 2.0, Duration::from_secs(15))
                     .await
                     .map_err(|e| format!("play: {e}"))?;
@@ -511,6 +517,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
                         .duration_seconds()
                         .ok_or_else(|| "duration unknown".to_string())?;
                     let near_end = (dur - f64::from(xf_duration) - 2.0).max(0.0);
+                    tracing::info!(target: "kithara_test::playlist_progress", phase = "seek_end", index = i, duration = dur, target = near_end);
                     ctx.queue
                         .run(move |q| q.seek(near_end))
                         .await
@@ -536,9 +543,11 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
                 Ok(())
             }
             .await;
+        tracing::info!(target: "kithara_test::playlist_progress", phase = "track_complete", index = i, passed = result.is_ok(), current = ?ctx.queue.current_index(), position = ?ctx.queue.position_seconds());
         per_track.push((url.to_string(), result));
     }
 
+    tracing::info!(target: "kithara_test::playlist_progress", phase = "last_track", current = ?ctx.queue.current_index(), position = ?ctx.queue.position_seconds());
     let last_result: Result<(), String> = async {
         let dur = ctx
             .queue
