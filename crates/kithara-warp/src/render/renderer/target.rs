@@ -86,11 +86,11 @@ where
             .as_ref()
             .map_or(0, |resident| resident.replacement.capacity() / channels);
         let measured = (|| -> Result<(), ElasticError> {
-            for backend in StretchKind::all().iter().filter(|backend| {
-                measure_capabilities && backend.capabilities().contains(BackendCapabilities::RATE)
-            }) {
+            for backend in
+                StretchKind::supporting(BackendCapabilities::RATE).filter(|_| measure_capabilities)
+            {
                 let capabilities =
-                    Self::config_for(*backend, backends, source_block_frames, spec, pools)
+                    Self::config_for(backend, backends, source_block_frames, spec, pools)
                         .and_then(build_engine)
                         .map(|engine| engine.capabilities())?;
                 {

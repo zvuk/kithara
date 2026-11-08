@@ -1,5 +1,5 @@
 use Control::{Backend, Keylock, Speed};
-use kithara_stretch::StretchKind;
+use kithara_stretch::{BackendCapabilities, StretchKind};
 use kithara_sync::SpeedCurve;
 use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
@@ -148,7 +148,7 @@ fn assert_continuous(tone: &[f32], scenario: &Scenario) {
         .expect("a keylock side off unity");
     assert!(
         IN_FADE < fade,
-        "a press after IN_FADE lands inside the fade"
+        "{scenario:?}: a press after IN_FADE lands inside the fade"
     );
     let peak = tone
         .iter()
@@ -168,12 +168,15 @@ fn assert_continuous(tone: &[f32], scenario: &Scenario) {
 /// inside the fade, keylock off inside a speed change's fade, and entry to
 /// and exit from keylocked unity.
 #[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn retirement_keeps_the_tone_continuous(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
+fn retirement_keeps_the_tone_continuous(warp_sine: Vec<f32>) {
+    let backends: Vec<_> = StretchKind::supporting(BackendCapabilities::KEYLOCK).collect();
+    assert!(!backends.is_empty(), "the build compiles a keylock backend");
+    for scenario in backends.into_iter().flat_map(retirement_scripts) {
+        assert_continuous(&warp_sine, &scenario);
+    }
+}
+
+fn retirement_scripts(backend: StretchKind) -> Vec<Scenario> {
     let press = |frame, batch: &[Control]| Press {
         frame,
         batch: batch.to_vec(),
@@ -220,72 +223,69 @@ fn retirement_keeps_the_tone_continuous(#[case] backend: StretchKind, warp_sine:
             vec![press(PRESSES[0], &[Keylock(true), Speed(1.08)])],
         ),
     ]);
-    for scenario in &scenarios {
-        assert_continuous(&warp_sine, scenario);
-    }
+    scenarios
 }
 
 /// A keylock backend change fades the source-supported prefix of the old
 /// engine's tail into the new engine.
-#[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 fn keylock_backend_change_keeps_the_tone_continuous(warp_sine: Vec<f32>) {
-    assert_continuous(
-        &warp_sine,
-        &Scenario {
-            backend: StretchKind::Signalsmith,
-            keylock: true,
-            speed: 1.08,
-            presses: vec![Press {
-                frame: PRESSES[0],
-                batch: vec![Backend(StretchKind::Bungee)],
-            }],
-        },
-    );
+    let backends: Vec<_> = StretchKind::supporting(BackendCapabilities::KEYLOCK).collect();
+    assert!(!backends.is_empty(), "the build compiles a keylock backend");
+    for pair in backends.windows(2) {
+        assert_continuous(
+            &warp_sine,
+            &Scenario {
+                backend: pair[0],
+                keylock: true,
+                speed: 1.08,
+                presses: vec![Press {
+                    frame: PRESSES[0],
+                    batch: vec![Backend(pair[1])],
+                }],
+            },
+        );
+    }
 }
 
 /// Batches the lane applies before one render sound as their net batch: two
 /// speed changes that leave and reenter a keylock speed, and a speed change
 /// then keylock on from vinyl unity.
 #[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn batches_before_a_render_sound_as_their_net_batch(
-    #[case] backend: StretchKind,
-    warp_sine: Vec<f32>,
-) {
-    let at_press = |keylock, speed, batches: &[&[Control]]| Scenario {
-        backend,
-        keylock,
-        speed,
-        presses: batches
-            .iter()
-            .map(|batch| Press {
-                frame: PRESSES[0],
-                batch: batch.to_vec(),
-            })
-            .collect(),
-    };
-    let (on, tempo) = (Keylock(true), Speed(1.08));
-    for (batches, net) in [
-        (
-            at_press(true, 1.08, &[&[Speed(1.0)], &[tempo]]),
-            at_press(true, 1.08, &[&[tempo]]),
-        ),
-        (
-            at_press(false, 1.0, &[&[tempo], &[on]]),
-            at_press(false, 1.0, &[&[on, tempo]]),
-        ),
-    ] {
-        let net_output = net.played(&warp_sine);
-        let departure = batches
-            .played(&warp_sine)
-            .iter()
-            .zip(&net_output)
-            .position(|(split, joined)| split != joined);
-        assert_eq!(departure, None, "{batches:?} departs from {net:?}");
+fn batches_before_a_render_sound_as_their_net_batch(warp_sine: Vec<f32>) {
+    let backends: Vec<_> = StretchKind::supporting(BackendCapabilities::KEYLOCK).collect();
+    assert!(!backends.is_empty(), "the build compiles a keylock backend");
+    for backend in backends {
+        let at_press = |keylock, speed, batches: &[&[Control]]| Scenario {
+            backend,
+            keylock,
+            speed,
+            presses: batches
+                .iter()
+                .map(|batch| Press {
+                    frame: PRESSES[0],
+                    batch: batch.to_vec(),
+                })
+                .collect(),
+        };
+        let (on, tempo) = (Keylock(true), Speed(1.08));
+        for (batches, net) in [
+            (
+                at_press(true, 1.08, &[&[Speed(1.0)], &[tempo]]),
+                at_press(true, 1.08, &[&[tempo]]),
+            ),
+            (
+                at_press(false, 1.0, &[&[tempo], &[on]]),
+                at_press(false, 1.0, &[&[on, tempo]]),
+            ),
+        ] {
+            let net_output = net.played(&warp_sine);
+            let departure = batches
+                .played(&warp_sine)
+                .iter()
+                .zip(&net_output)
+                .position(|(split, joined)| split != joined);
+            assert_eq!(departure, None, "{batches:?} departs from {net:?}");
+        }
     }
 }
