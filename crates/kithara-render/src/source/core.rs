@@ -212,7 +212,7 @@ where
         }
         input.truncate(staged_samples);
         self.render_input = Some(input);
-        if frames == 0 {
+        if frames == 0 && staged == 0 {
             self.staged_meta = Self::span_meta(meta, 0, 0);
         }
         self.prepared_frames = Some(frames);

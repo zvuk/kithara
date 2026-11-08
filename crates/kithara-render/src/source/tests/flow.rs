@@ -622,6 +622,73 @@ fn projected_backend_switch_keeps_pending_input_during_resident_output(quarter: 
     assert!(!source.quantum_failed);
 }
 
+#[kithara::test(native)]
+#[cfg(feature = "stretch-signalsmith")]
+fn a_keylock_release_over_a_partly_staged_window_keeps_the_source_playing(quarter: Vec<f32>) {
+    let pools = pools();
+    let (mut source, mut lane) = lane_over(
+        &pools,
+        8,
+        |_| &quarter,
+        0.8,
+        (StretchKind::Signalsmith, true),
+    );
+    let mut staged_end = None;
+    let mut release = None;
+    let mut previous_end = None;
+    let mut produced = 0;
+    let mut played_past = false;
+    for _ in 0..1024 {
+        flush_deferred(&mut source);
+        match source.step_track() {
+            TrackStep::Produced(Fetch::Data { data, .. }) => {
+                let span = data.meta.source_span.expect("rendered source mapping");
+                assert!(
+                    previous_end.is_none_or(|end| span.start() == end),
+                    "the output source jumps from {previous_end:?} to {}",
+                    span.start()
+                );
+                previous_end = Some(span.end());
+                produced += 1;
+                if staged_end.is_some_and(|end| span.end() > end) {
+                    played_past = true;
+                    break;
+                }
+            }
+            TrackStep::StateChanged | TrackStep::Blocked(_) => {}
+            TrackStep::Failed(failure) => panic!(
+                "the source failed with {failure:?}; keylock released over a window \
+                 staged up to {staged_end:?}"
+            ),
+            _ => panic!("the source must keep playing"),
+        }
+        if staged_end.is_none()
+            && produced >= 4
+            && source.pending_input.is_none()
+            && source
+                .render_input
+                .as_ref()
+                .is_some_and(|input| !input.is_empty())
+        {
+            staged_end = Some(source.source.head.load(Ordering::Acquire));
+            release = Some(
+                lane.send(When::Next, command_batch(LaneCommand::SetKeylock(false)))
+                    .expect("the lane has room for the release"),
+            );
+        }
+    }
+    let release = release.expect("a decoded chunk's tail must sit in a partly staged window");
+    assert!(
+        lane.receipts().any(|receipt| receipt.seq() == release
+            && matches!(receipt.outcome(), Outcome::Applied { .. })),
+        "the lane applies the release over the partly staged window"
+    );
+    assert!(
+        played_past,
+        "the released source must render past the partly staged window"
+    );
+}
+
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
