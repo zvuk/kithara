@@ -3269,3 +3269,33 @@ fn the_host_provisions_itself_only_when_someone_asks_it_to() {
         "a second pass would rebuild what the first is installing against"
     );
 }
+
+#[test]
+fn the_host_can_build_the_toolchain_without_provisioning_services() {
+    let workflow = github_workflow("host.yml");
+    let operation = &workflow["on"]["workflow_dispatch"]["inputs"]["operation"];
+    assert_eq!(operation["type"].as_str(), Some("choice"));
+    assert_eq!(operation["default"].as_str(), Some("provision"));
+    assert_eq!(
+        operation["options"],
+        serde_yaml_ng::from_str::<Value>("[provision, toolchain-image]").unwrap()
+    );
+    let job = workflow_job(workflow_jobs(&workflow), "provision");
+    let steps = mapping_field(job, "steps").as_sequence().unwrap();
+    for (command, condition) in [
+        (
+            "just ci host provision",
+            "${{ inputs.operation == 'provision' }}",
+        ),
+        (
+            "just ci host linux image toolchain",
+            "${{ inputs.operation == 'toolchain-image' }}",
+        ),
+    ] {
+        let step = steps
+            .iter()
+            .find(|step| step["run"].as_str() == Some(command))
+            .expect("explicit host operation");
+        assert_eq!(step["if"].as_str(), Some(condition));
+    }
+}
