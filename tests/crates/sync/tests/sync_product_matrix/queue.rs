@@ -862,10 +862,10 @@ impl QueueMusic {
             };
             let entry = Position::from_secs_f64(start.seconds(Some(&model)));
             let pinned_cue = match *name {
-                "library_flac_newtechno" => Some((64, 27.623621013)),
-                "library_flac_ryabina" if self.forward_oracle => Some((128, 38.8)),
+                "library_flac_newtechno" => Some((64, 28.045344540)),
+                "library_flac_ryabina" if self.forward_oracle => Some((128, 38.829567771)),
                 "library_flac_ryabina" => Some((96, 43.63635416666666)),
-                "library_flac_song1" => Some((64, 31.232696078)),
+                "library_flac_song1" => Some((64, 31.233890663)),
                 _ => None,
             };
             if let Some((ordinal, seconds)) = pinned_cue {
