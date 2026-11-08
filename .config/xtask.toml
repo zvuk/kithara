@@ -1584,6 +1584,24 @@ kinds = ["weekly"]
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 
+[ext.ci.lanes.crates-publish]
+cache_group = "linux"
+label = "publication"
+os = "linux"
+tools = ["cargo", "just", "sccache", "kache"]
+program = "just"
+steps = [
+  { args = [
+    "release",
+    "crates",
+    "--dry-run",
+  ], label = "crates.io publication dry run", env = { CARGO_BUILD_JOBS = "2" } },
+]
+role = "gate"
+kinds = ["weekly", "quarantine"]
+kinds_github = ["main", "branch", "merge-request", "nightly"]
+timeout_minutes = 60
+
 # Its own lane, and off the push gate: `cargo shear` reads what the source
 # actually imports, so a dependency reachable only under a `cfg` this build
 # does not enable reads as unused. The workspace has dozens - wasm-only and

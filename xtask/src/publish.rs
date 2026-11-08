@@ -9,23 +9,52 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::{DependencyKind, MetadataCommand};
-use kithara_devtools::{Ctx, util::check_tool};
+use kithara_devtools::Ctx;
 
 use crate::{
     config::{KitharaExt, PublishConfig},
     consts,
 };
 
+fn checked_publish_manifest(manifest: &str) -> Result<toml::Table> {
+    let table: toml::Table = manifest.parse().context("parse publish manifest")?;
+    if table
+        .get("patch")
+        .and_then(|patch| patch.get("crates-io"))
+        .is_some()
+    {
+        bail!("[patch.crates-io] is forbidden: declare publish-compatible dependencies directly");
+    }
+    Ok(table)
+}
+
+fn check_publish_manifest_file(path: &Path) -> Result<()> {
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("read publish input {}", path.display()))?;
+    checked_publish_manifest(&contents)
+        .with_context(|| format!("invalid publish input {}", path.display()))?;
+    Ok(())
+}
+
+fn check_publish_manifests(ctx: &Ctx) -> Result<()> {
+    check_publish_manifest_file(&ctx.root.join("Cargo.toml"))?;
+    for config in [".cargo/config.toml", ".cargo/config"] {
+        let path = ctx.root.join(config);
+        if path.try_exists()? {
+            check_publish_manifest_file(&path)?;
+        }
+    }
+    for package in ctx.metadata()?.workspace_packages() {
+        check_publish_manifest_file(package.manifest_path.as_std_path())?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, clap::Args)]
 pub(crate) struct PublishArgs {
     /// Perform a dry run (pass --dry-run to cargo publish).
     #[arg(long)]
     dry_run: bool,
-
-    /// During dry-run, verify publishable crates whose workspace deps are
-    /// already available on crates.io using `cargo publish --dry-run`.
-    #[arg(long, requires = "dry_run")]
-    verify_registry: bool,
 
     /// Delay in seconds between publishes. Skipped during dry-run. New crates
     /// additionally keep to the registry's pace from `[ext.publish]`.
@@ -41,13 +70,7 @@ pub(crate) struct PublishArgs {
 }
 
 pub(crate) fn run(args: &PublishArgs, ctx: &Ctx) -> Result<()> {
-    check_tool(
-        ctx.config.tools.program("cargo-hakari"),
-        &["hakari", "--version"],
-        ctx.config
-            .tools
-            .install_hint("cargo-hakari", "cargo install cargo-hakari"),
-    )?;
+    check_publish_manifests(ctx)?;
 
     let order = resolve_publish_order()?;
 
@@ -65,7 +88,7 @@ pub(crate) fn run(args: &PublishArgs, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     if args.dry_run {
         println!("Mode: dry-run (validate packaging without upload)");
-        run_dry_run(&order, args.verify_registry, &ext.publish)?;
+        run_dry_run(&order, &ext.publish.workspace_hack_crate, args.no_verify)?;
     } else {
         let delay = resolve_delay_secs(args, &ext.publish)?;
         println!("Mode: publish ({delay}s delay between crates)");
@@ -82,7 +105,6 @@ pub(crate) fn publish_release(ctx: &Ctx) -> Result<()> {
     run(
         &PublishArgs {
             dry_run: false,
-            verify_registry: false,
             delay: None,
             no_verify: true,
         },
@@ -131,51 +153,15 @@ fn crates_at_version(versions: HashMap<String, String>, version: &str) -> Result
     Ok(names)
 }
 
-/// Dry-run: disable hakari, validate packaging for each crate, re-enable hakari.
-///
-/// Uses `cargo package --list` to verify that each crate can be packaged
-/// (correct metadata, included files, license). Does not resolve deps from
-/// crates.io, so it works even when workspace deps are not yet published.
-fn run_dry_run(order: &[String], verify_registry: bool, publish: &PublishConfig) -> Result<()> {
-    println!("  Disabling hakari workspace-hack...");
-    run_cargo(&["hakari", "disable"], "cargo hakari disable")?;
-
-    let result = run_dry_run_inner(order);
-
-    println!("  Re-enabling hakari workspace-hack...");
-    run_cargo(&["hakari", "generate"], "cargo hakari generate")?;
-
-    result?;
-
-    if verify_registry {
-        run_registry_dry_run(order, publish)?;
-    }
-
-    Ok(())
-}
-
-fn run_dry_run_inner(order: &[String]) -> Result<()> {
-    println!();
-    for (i, name) in order.iter().enumerate() {
-        let pos = i + 1;
-        let total = order.len();
-        print!("[{pos}/{total}] Packaging {name}... ");
-
-        let output = Command::new("cargo")
-            .args(["package", "-p", name, "--list", "--allow-dirty"])
-            .output()
-            .with_context(|| format!("failed to run cargo package --list for {name}"))?;
-
-        if !output.status.success() {
-            println!("FAILED");
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("cargo package --list failed for {name}:\n{stderr}");
-        }
-
-        let file_count = output.stdout.iter().filter(|&&b| b == b'\n').count();
-        println!("ok ({file_count} files)");
-    }
-    Ok(())
+fn run_dry_run(order: &[String], hack_crate: &str, no_verify: bool) -> Result<()> {
+    let inputs = locate_publish_inputs(order)?;
+    let args = PublishMode::DryRun.cargo_args(no_verify);
+    with_publish_inputs(
+        order.iter().map(|name| &inputs[name]),
+        hack_crate,
+        PublishLockfile::snapshot()?,
+        || run_cargo(&args, "cargo publish --workspace --dry-run"),
+    )
 }
 
 /// Publish each crate with a delay between them.
@@ -232,7 +218,6 @@ fn run_publish(
             name,
             &inputs[name],
             &publish.workspace_hack_crate,
-            PublishMode::Upload,
             no_verify,
         )?;
         if new_crate {
@@ -247,67 +232,6 @@ fn run_publish(
         "Published {published_count} crate(s); {} already on crates.io.",
         order.len() - published_count
     );
-    Ok(())
-}
-
-fn run_registry_dry_run(order: &[String], publish: &PublishConfig) -> Result<()> {
-    let inputs = locate_publish_inputs(order)?;
-    let versions = locate_versions(order)?;
-    let deps = locate_publishable_workspace_deps(order)?;
-    let http_timeout_secs = resolve_http_timeout_secs(publish)?;
-
-    println!();
-    println!("Registry dry-run (cargo publish --dry-run where dependency state allows):");
-
-    for (i, name) in order.iter().enumerate() {
-        let pos = i + 1;
-        let total = order.len();
-        let version = &versions[name];
-
-        if registry_has(name, Some(version), &publish.user_agent, http_timeout_secs)? {
-            println!("[{pos}/{total}] Skipping {name} v{version} (already on crates.io).");
-            continue;
-        }
-
-        let missing_deps = deps
-            .get(name)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|dep| {
-                let dep_version = &versions[dep];
-                match registry_has(
-                    dep,
-                    Some(dep_version),
-                    &publish.user_agent,
-                    http_timeout_secs,
-                ) {
-                    Ok(true) => None,
-                    Ok(false) => Some(Ok(format!("{dep} v{dep_version}"))),
-                    Err(err) => Some(Err(err)),
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        if !missing_deps.is_empty() {
-            println!(
-                "[{pos}/{total}] Skipping registry dry-run for {name} v{version} \
-                 (workspace deps not on crates.io yet: {}).",
-                missing_deps.join(", ")
-            );
-            continue;
-        }
-
-        println!("[{pos}/{total}] Registry dry-run for {name} v{version}...");
-        publish_one(
-            name,
-            &inputs[name],
-            &publish.workspace_hack_crate,
-            PublishMode::DryRun,
-            false,
-        )?;
-    }
-
     Ok(())
 }
 
@@ -483,113 +407,94 @@ fn locate_publish_inputs(order: &[String]) -> Result<HashMap<String, PublishInpu
     Ok(out)
 }
 
-fn locate_publishable_workspace_deps(order: &[String]) -> Result<HashMap<String, Vec<String>>> {
-    let metadata = MetadataCommand::new()
-        .exec()
-        .context("failed to run cargo metadata")?;
-    let workspace_members: HashSet<_> = metadata.workspace_members.iter().collect();
-    let wanted: HashSet<&str> = order.iter().map(String::as_str).collect();
-
-    let mut out = HashMap::new();
-    for pkg in &metadata.packages {
-        if !workspace_members.contains(&pkg.id) {
-            continue;
-        }
-        if !wanted.contains(pkg.name.as_str()) {
-            continue;
-        }
-
-        let deps: BTreeSet<_> = pkg
-            .dependencies
-            .iter()
-            .filter(|dep| dep.path.is_some() && dep.kind != DependencyKind::Development)
-            .map(|dep| dep.name.clone())
-            .filter(|dep_name| wanted.contains(dep_name.as_str()) && dep_name != pkg.name.as_str())
-            .collect();
-        out.insert(pkg.name.to_string(), deps.into_iter().collect());
-    }
-
-    Ok(out)
-}
-
 #[derive(Clone, Copy)]
-enum PublishMode {
+enum PublishMode<'a> {
     DryRun,
-    Upload,
+    Upload(&'a str),
 }
 
-impl PublishMode {
-    fn cargo_args(self, name: &str, no_verify: bool) -> Vec<&str> {
-        let mut args = vec!["publish", "-p", name, "--allow-dirty"];
-        if matches!(self, Self::DryRun) {
-            args.push("--dry-run");
+impl<'a> PublishMode<'a> {
+    fn cargo_args(self, no_verify: bool) -> Vec<&'a str> {
+        let mut args = vec!["publish", "--allow-dirty"];
+        match self {
+            Self::DryRun => args.extend(["--workspace", "--dry-run", "--registry", "crates-io"]),
+            Self::Upload(name) => args.extend(["-p", name]),
         }
         if no_verify {
             args.push("--no-verify");
         }
         args
     }
-
-    fn description(self, name: &str) -> String {
-        match self {
-            Self::DryRun => format!("cargo publish --dry-run -p {name}"),
-            Self::Upload => format!("cargo publish -p {name}"),
-        }
-    }
 }
 
-fn publish_one(
-    name: &str,
-    input: &PublishInput,
+fn publish_one(name: &str, input: &PublishInput, hack_crate: &str, no_verify: bool) -> Result<()> {
+    let args = PublishMode::Upload(name).cargo_args(no_verify);
+    with_publish_inputs([input], hack_crate, PublishLockfile::snapshot()?, || {
+        run_cargo(&args, &format!("cargo publish -p {name}"))
+    })
+}
+
+struct ManifestEdit {
+    path: PathBuf,
+    original: String,
+    prepared: String,
+}
+
+fn with_publish_inputs<'a>(
+    inputs: impl IntoIterator<Item = &'a PublishInput>,
     hack_crate: &str,
-    mode: PublishMode,
-    no_verify: bool,
+    lockfile: PublishLockfile,
+    run: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    let manifest = &input.manifest;
-    let original = fs::read_to_string(manifest)
-        .with_context(|| format!("read {} for {name}", manifest.display()))?;
-    let stripped = publish_manifest(&original, hack_crate, &input.workspace_dev_deps)
-        .with_context(|| format!("rewrite {} for {name}", manifest.display()))?;
-    let did_strip = stripped.is_some();
-    let lockfile = PublishLockfile::snapshot()?;
-
-    if let Some(stripped) = &stripped {
-        fs::write(manifest, stripped)
-            .with_context(|| format!("write stripped manifest {}", manifest.display()))?;
-        println!("  Temporarily removed {hack_crate} and workspace dev-dependencies.");
+    let mut edits = Vec::new();
+    for input in inputs {
+        let original = fs::read_to_string(&input.manifest)
+            .with_context(|| format!("read {}", input.manifest.display()))?;
+        if let Some(prepared) = publish_manifest(&original, hack_crate, &input.workspace_dev_deps)?
+        {
+            edits.push(ManifestEdit {
+                path: input.manifest.clone(),
+                original,
+                prepared,
+            });
+        }
     }
-
-    let args = mode.cargo_args(name, no_verify);
-    let result = run_cargo(&args, &mode.description(name));
-
-    let restore_result = restore_publish_inputs(manifest, &original, did_strip, lockfile);
-    if let Err(restore_err) = restore_result {
+    let result = (|| {
+        for edit in &edits {
+            fs::write(&edit.path, &edit.prepared)
+                .with_context(|| format!("prepare {}", edit.path.display()))?;
+        }
+        run()
+    })();
+    let restored = restore_publish_inputs(
+        edits
+            .iter()
+            .map(|edit| (edit.path.as_path(), edit.original.as_str())),
+        lockfile,
+    );
+    if let Err(restore_error) = restored {
         return match result {
-            Ok(()) => Err(restore_err),
-            Err(run_err) => Err(run_err)
-                .with_context(|| format!("also failed to restore publish inputs: {restore_err}")),
+            Ok(()) => Err(restore_error),
+            Err(run_error) => Err(run_error)
+                .with_context(|| format!("also failed to restore publish inputs: {restore_error}")),
         };
     }
-
     result
 }
 
-fn restore_publish_inputs(
-    manifest: &Path,
-    original_manifest: &str,
-    did_strip: bool,
+fn restore_publish_inputs<'a>(
+    manifests: impl IntoIterator<Item = (&'a Path, &'a str)>,
     lockfile: PublishLockfile,
 ) -> Result<()> {
     let mut errors = Vec::new();
-
-    if did_strip && let Err(err) = fs::write(manifest, original_manifest) {
-        errors.push(format!("restore {}: {err}", manifest.display()));
+    for (path, original) in manifests {
+        if let Err(error) = fs::write(path, original) {
+            errors.push(format!("restore {}: {error}", path.display()));
+        }
     }
-
-    if let Err(err) = lockfile.restore() {
-        errors.push(format!("restore Cargo.lock: {err}"));
+    if let Err(error) = lockfile.restore() {
+        errors.push(format!("restore Cargo.lock: {error}"));
     }
-
     if errors.is_empty() {
         Ok(())
     } else {
@@ -642,7 +547,7 @@ fn publish_manifest(
     hack_crate: &str,
     workspace_dev_deps: &[String],
 ) -> Result<Option<String>> {
-    let mut table: toml::Table = manifest.parse().context("parse manifest")?;
+    let mut table = checked_publish_manifest(manifest)?;
     let mut removed = strip_dependency_tables(&mut table, hack_crate, workspace_dev_deps);
     if let Some(toml::Value::Table(targets)) = table.get_mut("target") {
         for (_, target) in targets.iter_mut() {
@@ -830,6 +735,104 @@ fn topo_sort(graph: &HashMap<String, Vec<String>>) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publish_manifest_refuses_crates_io_patches() {
+        for input in [
+            "[patch.crates-io]\ndemo = { path = '../demo' }\n",
+            "patch = { crates-io = { demo = { git = 'https://example.invalid/demo' } } }\n",
+            "[patch.crates-io]\n",
+        ] {
+            let error = publish_manifest(input, "kithara-workspace-hack", &[])
+                .expect_err("registry patches must fail publication preflight");
+            assert!(error.to_string().contains("[patch.crates-io]"), "{error}");
+        }
+    }
+
+    #[test]
+    fn publication_policy_reads_tables_instead_of_matching_text() {
+        for input in [
+            "# [patch.crates-io]\n[package.metadata]\nnote = '[patch.crates-io]'\n",
+            "[patch.'https://example.invalid/registry']\ndemo = { path = '../demo' }\n",
+        ] {
+            assert_eq!(
+                publish_manifest(input, "kithara-workspace-hack", &[]).unwrap(),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn dry_publication_verifies_the_whole_workspace_without_uploading() {
+        let args = PublishMode::DryRun.cargo_args(false);
+        for required in ["publish", "--workspace", "--dry-run"] {
+            assert!(args.contains(&required), "missing {required}: {args:?}");
+        }
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--registry", "crates-io"])
+        );
+        assert!(!args.contains(&"--no-verify"));
+        assert!(!args.contains(&"--list"));
+        assert!(!args.contains(&"-p"));
+    }
+
+    #[test]
+    fn real_publication_keeps_its_single_crate_scope() {
+        let args = PublishMode::Upload("one-crate").cargo_args(true);
+        assert!(args.windows(2).any(|pair| pair == ["-p", "one-crate"]));
+        assert!(!args.contains(&"--workspace"));
+        assert!(!args.contains(&"--dry-run"));
+        assert!(args.contains(&"--no-verify"));
+    }
+
+    #[test]
+    fn publication_preparation_restores_all_inputs_after_success_or_failure() {
+        let original = "[package]\nname='fixture'\nversion='0.1.0'\n[dependencies]\nkithara-workspace-hack={path='../hack'}\n";
+        for succeeds in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let inputs: Vec<_> = ["first", "second"]
+                .into_iter()
+                .map(|name| {
+                    let manifest = directory.path().join(format!("{name}.toml"));
+                    fs::write(&manifest, original).unwrap();
+                    PublishInput {
+                        manifest,
+                        workspace_dev_deps: Vec::new(),
+                    }
+                })
+                .collect();
+            let lock = directory.path().join("Cargo.lock");
+            fs::write(&lock, "original lock").unwrap();
+            let snapshot = PublishLockfile {
+                path: lock.clone(),
+                contents: Some("original lock".to_owned()),
+            };
+            let mut ran = false;
+            let result =
+                with_publish_inputs(inputs.iter(), "kithara-workspace-hack", snapshot, || {
+                    ran = true;
+                    for input in &inputs {
+                        assert!(
+                            !fs::read_to_string(&input.manifest)?
+                                .contains("kithara-workspace-hack")
+                        );
+                    }
+                    fs::write(&lock, "cargo updated lock")?;
+                    if succeeds {
+                        Ok(())
+                    } else {
+                        bail!("synthetic cargo publication failure")
+                    }
+                });
+            assert!(ran);
+            assert_eq!(result.is_ok(), succeeds, "{result:?}");
+            for input in &inputs {
+                assert_eq!(fs::read_to_string(&input.manifest).unwrap(), original);
+            }
+            assert_eq!(fs::read_to_string(&lock).unwrap(), "original lock");
+        }
+    }
 
     #[test]
     fn a_release_refuses_a_crate_at_another_version() {
@@ -1120,7 +1123,6 @@ kithara-workspace-hack = { version = \"0.0.1-alpha1\", path = \"../kithara-works
     fn publish_delay_uses_config_when_cli_arg_is_absent() {
         let args = PublishArgs {
             dry_run: false,
-            verify_registry: false,
             delay: None,
             no_verify: false,
         };
@@ -1139,7 +1141,6 @@ kithara-workspace-hack = { version = \"0.0.1-alpha1\", path = \"../kithara-works
     fn publish_delay_cli_arg_overrides_config() {
         let args = PublishArgs {
             dry_run: false,
-            verify_registry: false,
             delay: Some(610),
             no_verify: false,
         };
@@ -1158,7 +1159,6 @@ kithara-workspace-hack = { version = \"0.0.1-alpha1\", path = \"../kithara-works
     fn publish_delay_requires_config_when_cli_arg_is_absent() {
         let args = PublishArgs {
             dry_run: false,
-            verify_registry: false,
             delay: None,
             no_verify: false,
         };
