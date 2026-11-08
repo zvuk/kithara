@@ -102,6 +102,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bootstrap_reports_retain_each_owned_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        for ci in ["CI_JOB_ID", "GITHUB_RUN_ID"] {
+            for phase in ["bootstrap", "bootstrap-driver", "bootstrap-refresh"] {
+                assert!(cache_report::path(root.path(), phase, |_| None).is_err());
+                let record = |runtime: &str, misses| {
+                    let environment = |name: &str| match name {
+                        "KACHE_RUNTIME_DIR" => Some(runtime.into()),
+                        "GITHUB_RUN_ATTEMPT" => Some("2".into()),
+                        name if name == ci => Some("17".into()),
+                        _ => None,
+                    };
+                    cache_report::write(
+                        root.path(),
+                        phase,
+                        environment,
+                        observations(Some(json!({"misses": misses})), None, None, None),
+                    )
+                    .unwrap();
+                    cache_report::path(root.path(), phase, environment).unwrap()
+                };
+                let compiled = record("/private/first-runtime", 7);
+                let idle = record("/private/second-runtime", 0);
+                assert_ne!(compiled, idle, "{ci}: {phase}");
+                assert_eq!(record("/private/first-runtime", 9), compiled);
+                for (path, misses) in [(compiled, 9), (idle, 0)] {
+                    let bytes = fs::read(&path).unwrap();
+                    let report: Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(report["lane"], phase);
+                    assert_eq!(report["kache"]["counts"]["misses"], misses);
+                    let digest = report["job"]["cache_runtime_sha256"].as_str().unwrap();
+                    assert_eq!(digest.len(), 64);
+                    assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+                    assert!(!String::from_utf8(bytes).unwrap().contains("/private/"));
+                    let name = path.file_name().unwrap().to_str().unwrap();
+                    assert!(name.contains("-bootstrap"));
+                    assert!(name.ends_with(&format!("-{digest}.json")));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn cleared_ci_identities_select_local_evidence() {
         let root = tempfile::tempdir().unwrap();
         let process = Process::new(

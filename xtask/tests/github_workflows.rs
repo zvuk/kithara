@@ -2516,6 +2516,23 @@ fn a_checkout_never_fetches_every_branch() {
     );
 }
 
+#[test]
+fn lane_uploads_bootstrap_evidence_when_the_lane_has_not_started() {
+    let workflow = github_workflow("lane.yml");
+    let upload = named_step(
+        workflow_job(workflow_jobs(&workflow), "run"),
+        "Upload compiler-cache evidence",
+    );
+    assert_eq!(
+        mapping_field(upload, "if").as_str(),
+        Some(concat!(
+            "${{ always() && hashFiles(",
+            "format('.ci-artifacts/cache/github-{0}-{1}-{2}.json', github.run_id, github.run_attempt, inputs.lane), ",
+            "format('.ci-artifacts/cache/github-{0}-{1}-bootstrap*.json', github.run_id, github.run_attempt)) != '' }}"
+        ))
+    );
+}
+
 /// A runner keeps its checkout for every later job, and checkout turns garbage
 /// collection off in it, so each job's fetch left one more pack behind: up to
 /// 670 of them on one runner. The lane collects that checkout's garbage on

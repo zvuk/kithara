@@ -22,10 +22,10 @@ pub fn parse(input: Option<&str>) -> Option<Value> {
         .flatten()
 }
 
-/// Select the evidence file for a phase and its actual executor identity.
+/// Select evidence by executor and, for bootstrap phases, owned cache runtime.
 ///
 /// # Errors
-/// Returns an error for invalid phases or configured nonnumeric job identities.
+/// Returns an error for invalid identities or bootstrap phases without a runtime.
 pub fn path<F>(root: &Path, lane: &str, environment: F) -> io::Result<PathBuf>
 where
     F: Fn(&str) -> Option<OsString>,
@@ -48,7 +48,7 @@ where
             .parse()
             .map_err(|_| io::Error::other("invalid cache evidence job identity"))
     };
-    let key = if configured("CI_JOB_ID").is_some() {
+    let mut key = if configured("CI_JOB_ID").is_some() {
         format!("gitlab-{}-{lane}", number("CI_JOB_ID")?)
     } else if configured("GITHUB_RUN_ID").is_some() {
         format!(
@@ -59,7 +59,22 @@ where
     } else {
         format!("local-{}-{lane}", std::process::id())
     };
+    if matches!(lane, "bootstrap" | "bootstrap-driver" | "bootstrap-refresh") {
+        let runtime = runtime_sha256(&environment)
+            .ok_or_else(|| io::Error::other("missing bootstrap cache runtime"))?;
+        key.push('-');
+        key.push_str(&runtime);
+    }
     Ok(root.join(".ci-artifacts/cache").join(format!("{key}.json")))
+}
+
+fn runtime_sha256<F>(environment: F) -> Option<String>
+where
+    F: Fn(&str) -> Option<OsString>,
+{
+    environment("KACHE_RUNTIME_DIR")
+        .filter(|value| !value.is_empty())
+        .map(|value| hex::encode(Sha256::digest(value.as_encoded_bytes())))
 }
 
 /// Publish the allowlisted observation with sanitized executor metadata.
@@ -88,6 +103,7 @@ where
         "github_run_id": var("GITHUB_RUN_ID").and_then(|v| v.parse::<u64>().ok()),
         "github_run_attempt": var("GITHUB_RUN_ATTEMPT").and_then(|v| v.parse::<u64>().ok()),
         "github_job_sha256": var("GITHUB_JOB").map(|v| hex::encode(Sha256::digest(v.as_bytes()))),
+        "cache_runtime_sha256": runtime_sha256(&environment),
     });
     let bytes = serde_json::to_vec(&report)?;
     if bytes.len() > 256 * 1024 {

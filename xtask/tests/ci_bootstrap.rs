@@ -15,6 +15,23 @@ fn executable(path: &Path, contents: &str) {
         .expect("make compiler-cache fixture executable runnable");
 }
 
+fn report_bytes(root: &Path, phase: &str) -> Vec<u8> {
+    let prefix = format!("gitlab-42-{phase}-");
+    let reports: Vec<_> = fs::read_dir(root.join(".ci-artifacts/cache"))
+        .expect("cache report directory")
+        .map(|entry| entry.expect("cache report entry").path())
+        .filter(|path| {
+            path.file_name()
+                .expect("cache report filename")
+                .to_str()
+                .expect("UTF-8 cache report filename")
+                .starts_with(&prefix)
+        })
+        .collect();
+    assert_eq!(reports.len(), 1, "one report for the owned runtime");
+    fs::read(&reports[0]).expect("cache report bytes")
+}
+
 #[test]
 fn cache_record_reads_tools_without_parsing_other_command_settings() {
     let temp = tempfile::tempdir().unwrap();
@@ -46,14 +63,8 @@ fn cache_record_reads_tools_without_parsing_other_command_settings() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let report: serde_json::Value = serde_json::from_slice(
-        &fs::read(
-            temp.path()
-                .join(".ci-artifacts/cache/gitlab-42-bootstrap-driver.json"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let report: serde_json::Value =
+        serde_json::from_slice(&report_bytes(temp.path(), "bootstrap-driver")).unwrap();
     assert_eq!(report["lane"], "bootstrap-driver");
     assert_eq!(report["sccache"]["hits"], 7);
 }
@@ -108,11 +119,7 @@ fn bootstrap_retains_evidence_without_a_cached_xtask() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let bytes = fs::read(
-        temp.path()
-            .join(".ci-artifacts/cache/gitlab-42-bootstrap.json"),
-    )
-    .expect("bootstrap retains evidence before cached transport exists");
+    let bytes = report_bytes(temp.path(), "bootstrap");
     let report: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(report["kache"]["counts"]["local_hits"], 7);
     assert_eq!(report["sccache"]["hits"], 3);
