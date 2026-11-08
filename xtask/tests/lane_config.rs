@@ -13,6 +13,14 @@ fn publication_is_a_verified_gate_for_review_main_and_dispatch() {
     let lane = &config["ext"]["ci"]["lanes"]["crates-publish"];
     assert_eq!(lane["role"].as_str(), Some("gate"));
     assert_eq!(lane["program"].as_str(), Some("just"));
+    assert_eq!(lane["cache_group"].as_str(), Some("host"));
+    let os: Vec<_> = lane["os"]
+        .as_array()
+        .expect("both publication executors")
+        .iter()
+        .map(|entry| entry.as_str().unwrap())
+        .collect();
+    assert_eq!(os, ["macos", "linux"]);
     let kinds = lane["kinds_github"]
         .as_array()
         .expect("GitHub publication kinds");

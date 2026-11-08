@@ -1578,9 +1578,9 @@ kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 
 [ext.ci.lanes.crates-publish]
-cache_group = "linux"
+cache_group = "host"
 label = "publication"
-os = "linux"
+os = ["macos", "linux"]
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
