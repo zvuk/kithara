@@ -455,6 +455,7 @@ impl ManualHosts {
         let id = self.id;
         let outgoing_id = self.outgoing_id;
         let incoming_id = self.incoming_id;
+        let mut moved = Vec::new();
         while let Some(receipt) = self
             .state
             .channel
@@ -499,11 +500,12 @@ impl ManualHosts {
                         .expect("the owner settles each real setup receipt");
                 }
                 ScopedReceipt::Root(receipt) => {
-                    crate::session::queue::settle_receipt(&mut self.state, &receipt);
+                    crate::session::queue::settle_receipt(&mut self.state, &receipt, &mut moved);
                 }
                 ScopedReceipt::Closed(_) => panic!("setup keeps its deck registered"),
             }
         }
+        crate::session::queue::place_moved(&mut self.state, moved);
     }
 
     fn capture_outputs(&mut self, plan: &ManualPlan, drops: &Arc<AtomicU64>) -> Vec<HeapCons<f32>> {
@@ -615,6 +617,7 @@ impl ManualHosts {
                 reference_clock, clock,
                 "reference and actual Host render the same block range"
             );
+            let mut moved = Vec::new();
             while let Some(receipt) = self
                 .state
                 .channel
@@ -660,13 +663,18 @@ impl ManualHosts {
                         applied += 1;
                     }
                     ScopedReceipt::Root(receipt) => {
-                        crate::session::queue::settle_receipt(&mut self.state, &receipt);
+                        crate::session::queue::settle_receipt(
+                            &mut self.state,
+                            &receipt,
+                            &mut moved,
+                        );
                     }
                     ScopedReceipt::Closed(_) => {
                         panic!("the sounding deck cannot close during its fade")
                     }
                 }
             }
+            crate::session::queue::place_moved(&mut self.state, moved);
             self.state.owner.begin_pass();
             self.state.owner.pass();
         }
