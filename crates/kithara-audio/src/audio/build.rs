@@ -404,25 +404,31 @@ mod tests {
         let mut decoder = create_initial_decoder(reader, Some(info), factory, None)
             .await
             .expect("resident WAV decoder");
-        assert_eq!(decoder.spec().sample_rate.get(), 44_100);
-        assert_eq!(decoder.spec().channels, 2);
-        let mut frames = 0;
-        loop {
-            match decoder.next_chunk().expect("resident PCM") {
-                DecoderChunkOutcome::Chunk(chunk) => {
-                    assert_eq!(chunk.meta.frame_offset, frames);
-                    assert_eq!(
-                        chunk.samples.len(),
-                        usize::try_from(chunk.meta.frames).expect("chunk frame count") * 2
-                    );
-                    assert!(chunk.samples.iter().all(|sample| *sample == 0.5));
-                    frames += u64::from(chunk.meta.frames);
+        spawn_blocking(move || {
+            assert_eq!(decoder.spec().sample_rate.get(), 44_100);
+            assert_eq!(decoder.spec().channels, 2);
+            let mut frames = 0;
+            loop {
+                match decoder.next_chunk().expect("resident PCM") {
+                    DecoderChunkOutcome::Chunk(chunk) => {
+                        assert_eq!(chunk.meta.frame_offset, frames);
+                        assert_eq!(
+                            chunk.samples.len(),
+                            usize::try_from(chunk.meta.frames).expect("chunk frame count") * 2
+                        );
+                        assert!(chunk.samples.iter().all(|sample| *sample == 0.5));
+                        frames += u64::from(chunk.meta.frames);
+                    }
+                    DecoderChunkOutcome::Pending(reason) => {
+                        panic!("resident WAV pending: {reason:?}")
+                    }
+                    DecoderChunkOutcome::Eof => break,
                 }
-                DecoderChunkOutcome::Pending(reason) => panic!("resident WAV pending: {reason:?}"),
-                DecoderChunkOutcome::Eof => break,
             }
-        }
-        assert_eq!(frames, 1_024);
+            assert_eq!(frames, 1_024);
+        })
+        .await
+        .expect("resident decoder owning thread");
     }
 
     #[kithara::test(native, tokio)]
