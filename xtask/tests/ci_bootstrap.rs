@@ -15,6 +15,49 @@ fn executable(path: &Path, contents: &str) {
         .expect("make compiler-cache fixture executable runnable");
 }
 
+#[test]
+fn cache_record_reads_tools_without_parsing_other_command_settings() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir(temp.path().join(".config")).unwrap();
+    let program = env!("CARGO_BIN_EXE_fake-tool");
+    let config = json!({
+        "tools": {
+            "kache": { "program": program },
+            "sccache": { "program": program }
+        },
+        "stress": { "modes": { "future": { "future_budget": 1 } } }
+    });
+    fs::write(
+        temp.path().join(".config/xtask.toml"),
+        toml::to_string(&config).unwrap(),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["ci", "cache", "record", "bootstrap-driver"])
+        .current_dir(temp.path())
+        .env("CI_JOB_ID", "42")
+        .env_remove("GITHUB_RUN_ID")
+        .env("KACHE_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("KITHARA_TEST_STDOUT", "Cache hits 7\nCache misses 0\n")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            temp.path()
+                .join(".ci-artifacts/cache/gitlab-42-bootstrap-driver.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["lane"], "bootstrap-driver");
+    assert_eq!(report["sccache"]["hits"], 7);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn cache_exec_refuses_a_full_volume_before_starting_the_compiler_cache() {

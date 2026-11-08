@@ -60,7 +60,7 @@ pub(in crate::ci) fn report_path(process: &Process, lane: &str) -> Result<PathBu
 
 pub(super) fn record(phase: &str) -> Result<()> {
     let root = std::env::current_dir()?;
-    let tools = kithara_devtools::common::project::ProjectConfig::load(&root)?.tools;
+    let tools = ToolsConfig::load(&root)?;
     let process = Process::new(&root, std::collections::BTreeMap::new());
     let primary = crate::ci::kache::statistics(&process, &tools);
     let fallback = process.capture_bounded(
