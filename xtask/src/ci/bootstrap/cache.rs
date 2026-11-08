@@ -9,16 +9,17 @@ use std::{
     time::Instant,
 };
 
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::consts;
+use super::{super::cache_report, consts};
 
 /// Require the effective daemon, rather than merely a configured remote URL.
 ///
 /// # Errors
 /// Returns an error for malformed statistics or an unavailable, read-only or non-S3 daemon.
 pub fn require_remote(stats: &str) -> io::Result<()> {
-    let stats: serde_json::Value = serde_json::from_str(stats)
+    let stats: Value = serde_json::from_str(stats)
         .map_err(|_| io::Error::other("invalid compiler-cache remote policy"))?;
     if !stats["remote"]
         .as_str()
@@ -111,6 +112,10 @@ impl Drop for CompilerCache {
 }
 
 pub(super) fn output(command: &mut Command) -> io::Result<String> {
+    output_bounded(command, consts::OUTPUT_LIMIT)
+}
+
+fn output_bounded(command: &mut Command, limit: u64) -> io::Result<String> {
     let mut output = tempfile::tempfile()?;
     command
         .stdin(Stdio::null())
@@ -122,7 +127,7 @@ pub(super) fn output(command: &mut Command) -> io::Result<String> {
         let pending = match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => output.metadata().and_then(|metadata| {
-                if metadata.len() > consts::OUTPUT_LIMIT {
+                if metadata.len() > limit {
                     Err(io::Error::other("compiler-cache output exceeds its bound"))
                 } else if started.elapsed() >= consts::COMMAND_TIMEOUT {
                     Err(io::Error::new(
@@ -147,14 +152,12 @@ pub(super) fn output(command: &mut Command) -> io::Result<String> {
             "compiler-cache command failed ({status})"
         )));
     }
-    if output.metadata()?.len() > consts::OUTPUT_LIMIT {
+    if output.metadata()?.len() > limit {
         return Err(io::Error::other("compiler-cache output exceeds its bound"));
     }
     output.seek(SeekFrom::Start(0))?;
     let mut text = String::new();
-    output
-        .take(consts::OUTPUT_LIMIT)
-        .read_to_string(&mut text)?;
+    output.take(limit).read_to_string(&mut text)?;
     Ok(text)
 }
 
@@ -197,15 +200,82 @@ fn kache_command(runtime: &Path, args: &[&str]) -> Command {
     command
 }
 
+fn record_observation(
+    steps: &mut Vec<Value>,
+    operation: impl FnOnce() -> io::Result<String>,
+) -> io::Result<String> {
+    let started = Instant::now();
+    let result = operation();
+    steps.push(
+        json!({"elapsed_ms": started.elapsed().as_secs_f64() * 1000.0, "ok": result.is_ok()}),
+    );
+    result
+}
+
 fn record(runtime: &Path, phase: &OsStr) {
-    let mut command = Command::new("just");
-    command
-        .args(["_xtask-cached", "strict", "ci", "cache", "record"])
-        .arg(phase);
-    compilation_environment(&mut command, runtime);
-    if output(&mut command).is_err() {
+    let result = (|| {
+        let mut command = Command::new(env::current_exe()?);
+        command.args(["ci", "cache", "record"]).arg(phase);
+        compilation_environment(&mut command, runtime);
+        output(&mut command)
+    })();
+    if result.is_err() {
         eprintln!("compiler-cache evidence could not be recorded");
     }
+}
+
+/// Retain bootstrap observations without requiring a cached CLI generation.
+///
+/// # Errors
+/// Returns an error for a missing runtime or failed evidence publication.
+pub fn record_evidence(phase: &OsStr) -> io::Result<()> {
+    let runtime = env::var_os("KACHE_RUNTIME_DIR")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| io::Error::other("missing bootstrap cache runtime"))?;
+    let runtime = Path::new(&runtime);
+    let phase = phase
+        .to_str()
+        .ok_or_else(|| io::Error::other("invalid cache evidence phase"))?;
+    let limit = u64::try_from(cache_report::INPUT_LIMIT).map_err(io::Error::other)?;
+    let mut steps = Vec::new();
+    let primary = record_observation(&mut steps, || {
+        super::statistics(&mut kache_command(runtime, &[]), runtime)
+    });
+    let full = record_observation(&mut steps, || {
+        output_bounded(
+            &mut kache_command(runtime, &["stats", "--full", "--json"]),
+            limit,
+        )
+    });
+    let explain = record_observation(&mut steps, || {
+        output_bounded(&mut kache_command(runtime, &["explain", "--json"]), limit)
+    });
+    let fallback = record_observation(&mut steps, || {
+        let mut command = Command::new("sccache");
+        command.arg("--show-stats");
+        compilation_environment(&mut command, runtime);
+        output_bounded(&mut command, limit)
+    });
+    let revision = record_observation(&mut steps, || {
+        let mut command = Command::new("git");
+        command.args(["rev-parse", "HEAD"]);
+        output_bounded(&mut command, 64)
+    });
+    let mut report = cache_report::observations(
+        cache_report::parse(primary.as_deref().ok()),
+        cache_report::parse(full.as_deref().ok()),
+        cache_report::parse(explain.as_deref().ok()),
+        fallback.as_deref().ok(),
+    );
+    report["revision"] = json!(revision.as_deref().ok());
+    report["steps"] = json!({"step_count": steps.len(), "steps": steps});
+    report["key_history"] = cache_report::history(runtime).unwrap_or(Value::Null);
+    cache_report::write(
+        &env::current_dir()?,
+        phase,
+        |name| env::var_os(name),
+        report,
+    )
 }
 
 pub(super) fn finish_bootstrap(runtime: &Path) -> io::Result<()> {
