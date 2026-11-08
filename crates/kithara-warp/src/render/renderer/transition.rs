@@ -92,29 +92,45 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .saturating_sub(reach);
         while remaining > 0 {
             hang_tick!();
-            let frames = self.trajectory.output_limit(remaining.min(piece));
-            let span = self.mapping_span(start, self.spec.sample_rate, frames)?;
-            let Some(sampled) = Self::span_until(span, limit)? else {
+            let Some(folded) =
+                self.capture_stateless_piece(start, remaining.min(piece), limit, channels)?
+            else {
                 break;
             };
-            self.render_varispeed(sampled)?;
-            let (resident, output) = self
-                .residency
-                .as_mut()
-                .zip(self.scratch.as_mut())
-                .ok_or(ElasticError::PoolCapacity)?;
-            remaining -= resident.fold_supply(output, channels)?;
-            output.clear();
-            self.advance_trajectory(sampled)?;
+            remaining -= folded;
             hang_reset!();
-            if sampled.output_frames() < span.output_frames() {
-                break;
-            }
         }
         self.residency
             .as_mut()
             .ok_or(ElasticError::PoolCapacity)?
             .finish_fold();
         Ok(())
+    }
+
+    /// Fold the next piece of the stateless tail, at most `frames` long, and
+    /// return the frames folded. Returns `None` once the tail reaches `limit`,
+    /// after folding the part of the piece before it.
+    fn capture_stateless_piece(
+        &mut self,
+        start: u64,
+        frames: usize,
+        limit: u64,
+        channels: usize,
+    ) -> Result<Option<usize>, ElasticError> {
+        let frames = self.trajectory.output_limit(frames);
+        let span = self.mapping_span(start, self.spec.sample_rate, frames)?;
+        let Some(sampled) = Self::span_until(span, limit)? else {
+            return Ok(None);
+        };
+        self.render_varispeed(sampled)?;
+        let (resident, output) = self
+            .residency
+            .as_mut()
+            .zip(self.scratch.as_mut())
+            .ok_or(ElasticError::PoolCapacity)?;
+        let folded = resident.fold_supply(output, channels)?;
+        output.clear();
+        self.advance_trajectory(sampled)?;
+        Ok((sampled.output_frames() >= span.output_frames()).then_some(folded))
     }
 }
