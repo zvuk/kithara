@@ -28,7 +28,7 @@ const STRESS_EXECUTE_COMMAND: &str = r#"args=(
 # that does not exist and fail the run at argument parsing.
 for mode in $MODE; do args+=(--mode "$mode"); done
 for lane in $LANE; do args+=(--lane "$lane"); done
-just ci stress "${args[@]}""#;
+just ci cache-exec stress-execute just ci stress "${args[@]}""#;
 const STRESS_REPORT_COMMAND: &str = r#"args=()
 # One root per shard: each artifact carries its evidence under `shard-<index>`.
 for raw in "$RUNNER_TEMP"/kithara-stress/raw/shard-*; do args+=(--raw "$raw"); done

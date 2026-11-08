@@ -213,7 +213,7 @@ jobs:
           # that does not exist and fail the run at argument parsing.
           for mode in $MODE; do args+=(--mode "$mode"); done
           for lane in $LANE; do args+=(--lane "$lane"); done
-          just ci stress "${args[@]}"
+          just ci cache-exec stress-execute just ci stress "${args[@]}"
 
       - name: Upload the raw stress evidence
         if: always()
