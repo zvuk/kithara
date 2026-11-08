@@ -4,6 +4,7 @@ use std::{
 };
 
 use hls_m3u8::{MasterPlaylist, MediaPlaylist, tags::VariantStream, types::EncryptionMethod};
+use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_platform::time::{Duration, Instant};
 use rayon::prelude::*;
 use reqwest::{StatusCode, blocking::Client, header::HeaderMap};
@@ -15,6 +16,9 @@ use crate::{
     hls_manifest::{Manifest, Resource},
     store,
 };
+
+type Cipher = (Url, [u8; 16]);
+type Part = (Url, Option<Cipher>);
 
 type KeyProcessor = Box<dyn Fn(Vec<u8>) -> Result<Vec<u8>, String> + Send + Sync>;
 
@@ -135,6 +139,10 @@ pub(crate) enum HydrateError {
     Key { url: RedactedUrl, reason: String },
     #[error("AES-128 key from {url} has {actual} bytes, expected 16")]
     KeyLength { url: RedactedUrl, actual: usize },
+    #[error("master playlist {url} names no variant stream")]
+    NoVariant { url: RedactedUrl },
+    #[error("cannot decrypt {url}: {reason}")]
+    Decrypt { url: RedactedUrl, reason: String },
     #[error("cannot build bounded HLS downloader: {0}")]
     Pool(#[from] rayon::ThreadPoolBuildError),
     #[error("cannot store HLS resource: {0}")]
@@ -491,6 +499,142 @@ pub(crate) fn hydrate(
     .into_bytes())
 }
 
+fn parts(playlist: &MediaPlaylist<'_>, base: &Url) -> Result<Vec<Part>, HydrateError> {
+    let mut parts = Vec::with_capacity(playlist.segments.num_elements() + 1);
+    for (index, segment) in playlist.segments.values().enumerate() {
+        let key = segment
+            .keys
+            .iter()
+            .filter_map(|key| key.as_ref())
+            .find(|key| key.method == EncryptionMethod::Aes128);
+        let cipher = |number: usize| -> Result<Option<Cipher>, HydrateError> {
+            key.map(|key| {
+                let iv = match key.iv.to_slice() {
+                    Some(iv) => iv,
+                    None => u128::try_from(number)
+                        .map_err(|_| HydrateError::Decrypt {
+                            url: RedactedUrl::new(base),
+                            reason: "segment sequence number exceeds 128 bits".to_owned(),
+                        })?
+                        .to_be_bytes(),
+                };
+                Ok((resolve(base, key.uri())?, iv))
+            })
+            .transpose()
+        };
+        if index == 0
+            && let Some(map) = &segment.map
+        {
+            parts.push((resolve(base, map.uri())?, cipher(0)?));
+        }
+        parts.push((resolve(base, segment.uri())?, cipher(segment.number())?));
+    }
+
+    Ok(parts)
+}
+
+/// The widest variant of a VOD as one file: its initialization section and
+/// every segment in playlist order, each decrypted with the key and IV that
+/// apply to it.
+pub(crate) fn flatten(master_url: &Url, options: &Options) -> Result<Vec<u8>, HydrateError> {
+    const DOWNLOADS: usize = 4;
+
+    let deadline = Deadline::new(options.timeout);
+    let client = Client::builder()
+        .build()
+        .map_err(|source| HydrateError::Request {
+            url: RedactedUrl::new(master_url),
+            source: source.without_url(),
+        })?;
+    let master_bytes = fetch(
+        &client,
+        master_url,
+        &options.headers,
+        deadline,
+        options.refresh,
+    )?;
+    let master_text = std::str::from_utf8(&master_bytes).map_err(|source| HydrateError::Utf8 {
+        source,
+        url: RedactedUrl::new(master_url),
+    })?;
+    let master = MasterPlaylist::try_from(master_text).map_err(|source| HydrateError::Master {
+        source,
+        url: RedactedUrl::new(master_url),
+    })?;
+    let widest = master
+        .variant_streams
+        .iter()
+        .filter_map(|stream| match stream {
+            VariantStream::ExtXStreamInf { uri, .. } => Some((stream.bandwidth(), uri)),
+            VariantStream::ExtXIFrame { .. } => None,
+        })
+        .max_by_key(|(bandwidth, _)| *bandwidth)
+        .ok_or_else(|| HydrateError::NoVariant {
+            url: RedactedUrl::new(master_url),
+        })?;
+    let playlist_url = resolve(master_url, widest.1)?;
+    let bytes = fetch(
+        &client,
+        &playlist_url,
+        &options.headers,
+        deadline,
+        options.refresh,
+    )?;
+    let text = std::str::from_utf8(&bytes).map_err(|source| HydrateError::Utf8 {
+        source,
+        url: RedactedUrl::new(&playlist_url),
+    })?;
+    let playlist = text
+        .parse::<MediaPlaylist>()
+        .map_err(|source| HydrateError::MediaPlaylist {
+            source,
+            url: RedactedUrl::new(&playlist_url),
+        })?;
+    let mut kinds = BTreeMap::new();
+    collect_media_resources(&playlist, &playlist_url, &mut kinds)?;
+
+    let parts = parts(&playlist, &playlist_url)?;
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(DOWNLOADS)
+        .build()?;
+    let keys = kinds
+        .iter()
+        .filter(|(_, kind)| **kind == Kind::Key)
+        .map(|(url, kind)| {
+            download_resource(&client, url, *kind, options, deadline).map(|key| (url.clone(), key))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let decrypted = pool.install(|| {
+        parts
+            .par_iter()
+            .map(|(url, cipher)| {
+                let bytes = fetch(&client, url, &options.headers, deadline, options.refresh)?;
+                let Some((key_url, iv)) = cipher else {
+                    return Ok(bytes);
+                };
+                let key = keys
+                    .get(key_url)
+                    .and_then(|key| <[u8; 16]>::try_from(key.as_slice()).ok())
+                    .ok_or_else(|| HydrateError::Decrypt {
+                        url: RedactedUrl::new(url),
+                        reason: "no 16-byte key".to_owned(),
+                    })?;
+                let mut context = DecryptContext::new(key, *iv);
+                let mut plain = vec![0; bytes.len()];
+                let written = aes128_cbc_process_chunk(&bytes, &mut plain, &mut context, true)
+                    .map_err(|reason| HydrateError::Decrypt {
+                        url: RedactedUrl::new(url),
+                        reason,
+                    })?;
+                plain.truncate(written);
+                Ok(plain)
+            })
+            .collect::<Result<Vec<_>, HydrateError>>()
+    })?;
+    Ok(decrypted.concat())
+}
+
 #[cfg(all(test, feature = "library"))]
 mod tests {
     use std::{
@@ -511,12 +655,47 @@ mod tests {
     use tiny_http::{Response, Server, StatusCode as TinyStatus};
     use url::Url;
 
-    use super::{HydrateError, Options, hydrate};
+    use super::{HydrateError, Options, flatten, hydrate};
     use crate::{
         context::BuildContext,
         hls_manifest::Manifest,
         remote_file::{RemoteFileError, fetch_verified},
     };
+
+    #[kithara::test(native, flash(false))]
+    fn flatten_decrypts_the_widest_variant_in_playlist_order() {
+        // AES-128-CBC/PKCS7, key "0123456789abcdef": explicit IV 1 for
+        // init and the first segment, then implicit sequence number 8.
+        const INIT: &[u8] = &[
+            0x48, 0xab, 0x79, 0x2e, 0x23, 0x31, 0xa7, 0x05, 0x0d, 0xbc, 0x55, 0xca, 0x73, 0x67,
+            0x05, 0x0b,
+        ];
+        const ONE: &[u8] = &[
+            0x36, 0x20, 0xcd, 0x73, 0xdc, 0x2c, 0xac, 0xe0, 0xe8, 0x81, 0xb1, 0xf2, 0xe2, 0xd5,
+            0x7c, 0x63,
+        ];
+        const TWO: &[u8] = &[
+            0xec, 0x84, 0xc1, 0x8b, 0xdb, 0x4d, 0xd0, 0x41, 0xef, 0x43, 0x55, 0xaa, 0xe7, 0x79,
+            0xf1, 0xc4,
+        ];
+        let server = TestServer::new(HashMap::from([
+            ("/master.m3u8", (200, b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=64000\nlow.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=128000\nhigh.m3u8\n".as_slice())),
+            ("/high.m3u8", (200, b"#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:7\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\",IV=0x00000000000000000000000000000001\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:4,\none.m4s\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\n#EXTINF:4,\ntwo.m4s\n#EXT-X-ENDLIST\n".as_slice())),
+            ("/key.bin", (200, b"0123456789abcdef".as_slice())),
+            ("/init.mp4", (200, INIT)),
+            ("/one.m4s", (200, ONE)),
+            ("/two.m4s", (200, TWO)),
+        ]), 6);
+        let bytes = flatten(
+            &server.url.join("master.m3u8").expect("master URL"),
+            &options(),
+        )
+        .expect("flatten VOD");
+        let counts = server.finish();
+        assert_eq!(bytes, b"initonetwo");
+        assert!(!counts.contains_key("/low.m3u8"));
+        assert_eq!(counts.get("/key.bin"), Some(&1));
+    }
 
     #[kithara::test(native, flash(false))]
     fn remote_file_rejects_truncation_corruption_and_missing_content() {
