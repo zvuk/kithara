@@ -622,7 +622,7 @@ features = ["no-block"]
 
 [test.load]
 default = false
-features = ["load"]
+features = ["kithara-test-utils/load"]
 
 [test.net_backends.none]
 features = []
@@ -864,13 +864,11 @@ default_backend = "none"
 owns = ["crates/kithara-render/"]
 cargo.packages = ["kithara-render"]
 cargo.profile = "test-release"
-undeclared_toggles = ["load"]
 
 # Each domain facade stays in `tests/`, but a branch selects it with the crate
 # that owns the production contract. The full workspace lane remains the
 # fallback and the default-branch proof.
 [test.lanes.abr]
-undeclared_toggles = ["load"]
 owns = ["crates/kithara-abr/"]
 cargo.packages = ["kithara-abr"]
 cargo.profile = "test-release"
@@ -901,7 +899,6 @@ cargo.packages = ["kithara-app", "kithara-app-document", "kithara-app-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.assets]
-undeclared_toggles = ["load"]
 owns = ["crates/kithara-assets/"]
 cargo.packages = ["kithara-assets"]
 cargo.profile = "test-release"
@@ -921,7 +918,7 @@ cargo.profile = "test-release"
 # the virtual clock has nothing to drive. The poll-blocking detector is the same
 # kind of property, and an unqualified feature no selected package declares fails
 # the whole run, so the lane names both as toggles it cannot carry.
-undeclared_toggles = ["flash", "no-block", "load"]
+undeclared_toggles = ["flash", "no-block"]
 
 [test.lanes.effects]
 owns = ["crates/kithara-effects/", "tests/crates/effects/"]
@@ -929,7 +926,6 @@ cargo.packages = ["kithara-effects", "kithara-effects-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.encode]
-undeclared_toggles = ["load"]
 owns = ["crates/kithara-encode/"]
 cargo.packages = ["kithara-encode"]
 cargo.profile = "test-release"
@@ -950,7 +946,6 @@ cargo.packages = ["kithara-host", "kithara-host-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.net]
-undeclared_toggles = ["load"]
 owns = ["crates/kithara-net/"]
 cargo.packages = ["kithara-net"]
 cargo.profile = "test-release"
@@ -960,7 +955,7 @@ cargo.profile = "test-release"
 # no transport on the host.
 [test.lanes.net-host]
 default_backend = "host"
-undeclared_toggles = ["flash", "no-block", "load"]
+undeclared_toggles = ["flash", "no-block"]
 owns = ["crates/kithara-net/src/backend/host/"]
 cargo.packages = ["kithara-net"]
 cargo.profile = "test-release"
@@ -976,7 +971,6 @@ cargo.packages = ["kithara-queue", "kithara-queue-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.storage]
-undeclared_toggles = ["load"]
 owns = ["crates/kithara-storage/"]
 cargo.packages = ["kithara-storage"]
 cargo.profile = "test-release"
@@ -1098,7 +1092,7 @@ default_features = [
 # The UI crates carry neither the virtual clock nor the poll-blocking detector:
 # both are properties of the player, and an unqualified feature no selected
 # package declares fails the whole run.
-undeclared_toggles = ["flash", "no-block", "load"]
+undeclared_toggles = ["flash", "no-block"]
 cargo.packages = [
   "kithara-ui",
   "kithara-ui-gallery",
@@ -1119,7 +1113,7 @@ default_features = [
   "kithara-ui-gallery/masonry",
   "kithara-ui-gallery/perf",
 ]
-undeclared_toggles = ["flash", "load"]
+undeclared_toggles = ["flash"]
 cargo.packages = ["kithara-ui", "kithara-ui-gallery"]
 cargo.profile = "test-release"
 runner.nextest.test_threads = 1
@@ -1237,7 +1231,6 @@ default_flash = false
 owns = ["tests/crates/warp/tests/rate_response.rs"]
 
 [test.lanes.usdt-render-scheduler]
-undeclared_toggles = ["load"]
 cargo.packages = ["kithara-render"]
 cargo.profile = "test-release"
 cargo.lib = true
