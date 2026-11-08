@@ -1297,6 +1297,7 @@ impl DecodedCapture {
         info: consumed::SourceIdentity,
         position: (u128, std::num::NonZeroU128),
     ) -> Result<(u64, SourceSpan), String> {
+        let mut mapped_frame = None::<(SourceInverse, u64)>;
         for candidate in candidates {
             let candidate = candidate.borrow();
             let decoded = candidate.decoded;
@@ -1304,13 +1305,21 @@ impl DecodedCapture {
                 continue;
             }
             let (basis, inverse) = candidate.basis.as_ref().map_err(Clone::clone)?;
-            let Some((frame, denominator)) =
-                inverse.and_then(|inverse| inverse.output_at(position))
-            else {
+            let Some(inverse) = inverse else {
                 continue;
             };
-            let frame =
-                u64::try_from(frame / denominator.get()).map_err(|error| error.to_string())?;
+            let frame = match mapped_frame.as_ref() {
+                Some((previous, frame)) if previous == inverse => *frame,
+                _ => {
+                    let Some((frame, denominator)) = inverse.output_at(position) else {
+                        continue;
+                    };
+                    let frame = u64::try_from(frame / denominator.get())
+                        .map_err(|error| error.to_string())?;
+                    mapped_frame = Some((*inverse, frame));
+                    frame
+                }
+            };
             if decoded.frame_range().contains(&frame) {
                 return Ok((decoded.frame_offset, *basis));
             }
@@ -2288,6 +2297,74 @@ fn physical_basis_preserves_subframe_positions_above_f64_precision() {
             basis.output_ratio_at_source(offset, position),
             Some(expected)
         );
+    }
+}
+
+#[kithara::test(native)]
+fn physical_basis_reuse_preserves_geometry_and_error_order() {
+    let rate = NonZeroU32::new(48_000).expect("sample rate");
+    let fact = |frame_offset, raw: u128| AudioChunkInfo {
+        spec: AudioSpec::new(CHANNELS, rate),
+        source_revision: 7,
+        media_origin: Some(Duration::ZERO),
+        frame_offset,
+        frames: 1,
+        source_span: Some(
+            SourceSpan::try_from((raw, 1, std::num::NonZeroU128::MIN, rate, 1))
+                .expect("exact native source span"),
+        ),
+        ..AudioChunkInfo::default()
+    };
+    let first = fact(0, 0);
+    let identity = consumed::SourceIdentity {
+        spec: first.spec,
+        source_revision: first.source_revision,
+        media_origin: first.media_origin,
+    };
+    let capture = DecodedCapture::default();
+    let half = std::num::NonZeroU128::new(2).expect("half frame");
+    for raw in [1, 10] {
+        let second = fact(1, raw);
+        let candidates = [
+            PhysicalCandidate::new(&first),
+            PhysicalCandidate::new(&second),
+        ];
+        let position = (raw * 2 + 1, half);
+        let (offset, basis) = capture
+            .physical_basis_among(&candidates, identity, position)
+            .expect("the second source chunk covers its own raw origin");
+        assert_eq!(offset, 1);
+        assert_eq!(
+            basis.output_ratio_at_source(offset, position),
+            Some((3, half))
+        );
+    }
+    let second = fact(1, 1);
+    let third = fact(2, 2);
+    let foreign = AudioChunkInfo {
+        source_revision: 8,
+        ..second
+    };
+    for (middle, expected) in [(&second, false), (&foreign, true)] {
+        let candidates = [
+            PhysicalCandidate::new(&first),
+            PhysicalCandidate {
+                decoded: middle,
+                basis: Err("invalid decoded source basis".to_owned()),
+            },
+            PhysicalCandidate::new(&third),
+        ];
+        let found = capture.physical_basis_among(&candidates, identity, (5, half));
+        if expected {
+            assert_eq!(
+                found
+                    .expect("foreign invalid geometry is not this source")
+                    .0,
+                2
+            );
+        } else {
+            assert_eq!(found, Err("invalid decoded source basis".to_owned()));
+        }
     }
 }
 
