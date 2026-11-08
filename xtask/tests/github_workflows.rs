@@ -13,7 +13,7 @@ use syn::{
 
 const STRESS_RAW_DIR: &str = "${{ runner.temp }}/kithara-stress/raw";
 const STRESS_EXECUTE_COMMAND: &str = r#"args=(
-  --subject-root "$GITHUB_WORKSPACE/subject"
+  --subject-root "$RUNNER_TEMP/kithara-stress/subject"
   --output "$RUNNER_TEMP/kithara-stress/raw/shard-$SHARD_INDEX"
   --expected-controller-sha "$CONTROLLER_SHA"
   --expected-subject-sha "$SUBJECT_SHA"
@@ -1129,14 +1129,16 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
         BTreeSet::from([
             "Checkout controller".to_owned(),
             "Checkout subject".to_owned(),
+            "Isolate stress subject".to_owned(),
             "Execute the stress run".to_owned(),
             "Upload the raw stress evidence".to_owned(),
+            "Upload execution compiler-cache evidence".to_owned(),
         ])
     );
 
     assert_checkout(
         named_step(execute, "Checkout controller"),
-        "controller",
+        ".",
         "${{ job.workflow_repository }}",
         "${{ job.workflow_sha }}",
     );
@@ -1153,10 +1155,7 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
     );
 
     let run = named_step(execute, "Execute the stress run");
-    assert_eq!(
-        mapping_field(run, "working-directory").as_str(),
-        Some("controller")
-    );
+    assert_eq!(mapping_field(run, "working-directory").as_str(), Some("."));
     let stress_env = mapping_field(run, "env")
         .as_mapping()
         .expect("run environment is a mapping");
@@ -1197,6 +1196,38 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
     assert_eq!(
         mapping_field(raw_upload_inputs, "if-no-files-found").as_str(),
         Some("error")
+    );
+}
+
+#[test]
+fn stress_subject_is_isolated_and_shard_cache_evidence_is_retained() {
+    let workflow = github_workflow("stress.yml");
+    let execute = workflow_job(workflow_jobs(&workflow), "execute");
+    let isolate = named_step(execute, "Isolate stress subject");
+    assert!(
+        step_position(execute, "Checkout subject")
+            < step_position(execute, "Isolate stress subject")
+    );
+    assert!(
+        step_position(execute, "Isolate stress subject")
+            < step_position(execute, "Execute the stress run")
+    );
+    assert_eq!(
+        isolate["run"].as_str().unwrap().trim(),
+        "mkdir \"$RUNNER_TEMP/kithara-stress\"\nmv \"$GITHUB_WORKSPACE/subject\" \"$RUNNER_TEMP/kithara-stress/subject\""
+    );
+    let upload = named_step(execute, "Upload execution compiler-cache evidence");
+    assert!(upload["if"].as_str().unwrap().contains("always()"));
+    assert!(upload["if"].as_str().unwrap().contains("hashFiles("));
+    assert_eq!(
+        upload["with"]["name"].as_str(),
+        Some(
+            "compiler-cache-stress-execute-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}"
+        )
+    );
+    assert_eq!(
+        upload["with"]["path"].as_str(),
+        Some(".ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json")
     );
 }
 
