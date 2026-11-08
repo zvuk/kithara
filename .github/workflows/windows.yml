@@ -137,9 +137,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: diagnostics-controller
+          persist-credentials: false
+
+      # Cargo must not inherit overrides from the retained checkout.
+      - name: Isolate diagnostics Cargo workspace
+        run: >-
+          [System.IO.Directory]::Move("$env:GITHUB_WORKSPACE/diagnostics-controller", "$env:RUNNER_TEMP/windows-diagnostics-controller")
 
       - name: Capture existing Windows evidence
-        run: just --justfile diagnostics-controller/justfile ci windows-diagnostics --output "$env:RUNNER_TEMP/windows-diagnostics"
+        working-directory: ${{ runner.temp }}/windows-diagnostics-controller
+        run: just ci windows-diagnostics --output "$env:RUNNER_TEMP/windows-diagnostics"
 
       - name: Preserve existing Windows evidence
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -150,12 +157,12 @@ jobs:
 
       - name: Verify probe compiler cache
         if: ${{ (inputs.test-filter || '') != '' }}
-        working-directory: diagnostics-controller
+        working-directory: ${{ runner.temp }}/windows-diagnostics-controller
         run: just ci cache-verify
 
       - name: Run diagnostic test selection
         if: ${{ (inputs.test-filter || '') != '' }}
-        working-directory: diagnostics-controller
+        working-directory: ${{ runner.temp }}/windows-diagnostics-controller
         env:
           RUST_LOG: kithara_test_utils::load=info
           NEXTEST_SUCCESS_OUTPUT: immediate
@@ -172,6 +179,6 @@ jobs:
           name: windows-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/windows-diagnostics
-            diagnostics-controller/target/nextest/ci/junit.xml
-            diagnostics-controller/.ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json
+            ${{ runner.temp }}/windows-diagnostics-controller/target/nextest/ci/junit.xml
+            ${{ runner.temp }}/windows-diagnostics-controller/.ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json
           if-no-files-found: error

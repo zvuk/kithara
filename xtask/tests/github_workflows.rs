@@ -3062,8 +3062,16 @@ fn windows_filtered_probes_route_lane_load_and_repetitions_to_the_harness() {
     let upload = named_step(job, "Upload probe evidence")["with"]["path"]
         .as_str()
         .unwrap();
-    assert!(upload.contains("diagnostics-controller/target/nextest/ci/junit.xml"));
-    assert!(upload.contains("diagnostics-controller/.ci-artifacts/cache/github-"));
+    assert!(
+        upload.contains(
+            "${{ runner.temp }}/windows-diagnostics-controller/target/nextest/ci/junit.xml"
+        )
+    );
+    assert!(
+        upload.contains(
+            "${{ runner.temp }}/windows-diagnostics-controller/.ci-artifacts/cache/github-"
+        )
+    );
 }
 
 #[test]
@@ -3080,17 +3088,26 @@ fn windows_diagnostics_preserve_old_evidence_before_a_scoped_probe() {
     let capture = index("Capture existing Windows evidence");
     let upload = index("Preserve existing Windows evidence");
     let controller = index("Checkout diagnostics controller");
+    let isolate = index("Isolate diagnostics Cargo workspace");
     let probe = index("Run diagnostic test selection");
-    assert!(controller < capture && capture < upload && upload < probe);
+    assert!(controller < isolate && isolate < capture && capture < upload && upload < probe);
     assert_eq!(
         steps[controller]["with"]["path"].as_str(),
         Some("diagnostics-controller")
     );
     assert_eq!(
-        steps[capture]["run"].as_str(),
+        steps[controller]["with"]["persist-credentials"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        steps[isolate]["run"].as_str(),
         Some(
-            "just --justfile diagnostics-controller/justfile ci windows-diagnostics --output \"$env:RUNNER_TEMP/windows-diagnostics\""
+            "[System.IO.Directory]::Move(\"$env:GITHUB_WORKSPACE/diagnostics-controller\", \"$env:RUNNER_TEMP/windows-diagnostics-controller\")"
         )
+    );
+    assert_eq!(
+        steps[capture]["run"].as_str(),
+        Some("just ci windows-diagnostics --output \"$env:RUNNER_TEMP/windows-diagnostics\"")
     );
     assert_eq!(
         steps[probe]["run"].as_str(),
@@ -3107,11 +3124,13 @@ fn windows_diagnostics_preserve_old_evidence_before_a_scoped_probe() {
         "Run tests",
     );
     assert!(acceptance["env"].get("KITHARA_FLASH_SYNC_TRACE").is_none());
-    for index in [index("Verify probe compiler cache"), probe] {
+    for index in [capture, index("Verify probe compiler cache"), probe] {
         assert_eq!(
             steps[index]["working-directory"].as_str(),
-            Some("diagnostics-controller")
+            Some("${{ runner.temp }}/windows-diagnostics-controller")
         );
+    }
+    for index in [index("Verify probe compiler cache"), probe] {
         assert!(
             steps[index]["if"]
                 .as_str()
