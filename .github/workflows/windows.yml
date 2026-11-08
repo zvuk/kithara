@@ -27,7 +27,7 @@ on:
         type: string
         default: workspace
       test-load:
-        description: Built-in kithara test CPU load for a nonempty diagnostic test-filter.
+        description: Built-in CPU load; selected tests run one at a time when enabled.
         type: choice
         options: ["off", "on"]
         default: "off"
@@ -145,6 +145,7 @@ jobs:
       TEST_FILTER: ${{ inputs.test-filter || '' }}
       TEST_LANE: ${{ inputs.test-lane }}
       TEST_LOAD: ${{ inputs.test-load }}
+      TEST_THREADS: ${{ inputs.test-load == 'on' && '1' || 'num-cpus' }}
       TEST_COUNT: ${{ inputs.test-count }}
     steps:
       - name: Checkout diagnostics controller
@@ -184,7 +185,8 @@ jobs:
           KITHARA_HANG_DUMP_DIR: ${{ runner.temp }}/windows-diagnostics/probe-hang
         run: >-
           just ci cache-exec windows-diagnostic just test run --net-backend=none "--narrow=$env:TEST_FILTER"
-          "--lane=$env:TEST_LANE" "--load=$env:TEST_LOAD" "--stress-count=$env:TEST_COUNT" --profile=ci --retries=0
+          "--lane=$env:TEST_LANE" "--load=$env:TEST_LOAD" "--stress-count=$env:TEST_COUNT"
+          "--test-threads=$env:TEST_THREADS" --profile=ci --retries=0
 
       - name: Upload probe evidence
         if: always()

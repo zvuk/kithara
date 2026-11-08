@@ -3078,6 +3078,10 @@ fn windows_filtered_probes_route_lane_load_and_repetitions_to_the_harness() {
             Some(format!("${{{{ inputs.{input} }}}}").as_str())
         );
     }
+    assert_eq!(
+        job["env"]["TEST_THREADS"].as_str(),
+        Some("${{ inputs.test-load == 'on' && '1' || 'num-cpus' }}")
+    );
     let run = named_step(job, "Run diagnostic test selection")["run"]
         .as_str()
         .unwrap();
@@ -3085,11 +3089,20 @@ fn windows_filtered_probes_route_lane_load_and_repetitions_to_the_harness() {
         "\"--lane=$env:TEST_LANE\"",
         "\"--load=$env:TEST_LOAD\"",
         "\"--stress-count=$env:TEST_COUNT\"",
+        "\"--test-threads=$env:TEST_THREADS\"",
         "--profile=ci",
         "--retries=0",
     ] {
         assert!(run.split_whitespace().any(|arg| arg == argument));
     }
+    assert_eq!(
+        named_step(
+            workflow_job(workflow_jobs(&workflow), "windows"),
+            "Run tests"
+        )["run"]
+            .as_str(),
+        Some("just ci cache-exec windows-test just test run --net-backend=none")
+    );
     let upload = named_step(job, "Upload probe evidence")["with"]["path"]
         .as_str()
         .unwrap();
@@ -3143,7 +3156,7 @@ fn windows_diagnostics_preserve_old_evidence_before_a_scoped_probe() {
     assert_eq!(
         steps[probe]["run"].as_str(),
         Some(
-            "just ci cache-exec windows-diagnostic just test run --net-backend=none \"--narrow=$env:TEST_FILTER\" \"--lane=$env:TEST_LANE\" \"--load=$env:TEST_LOAD\" \"--stress-count=$env:TEST_COUNT\" --profile=ci --retries=0"
+            "just ci cache-exec windows-diagnostic just test run --net-backend=none \"--narrow=$env:TEST_FILTER\" \"--lane=$env:TEST_LANE\" \"--load=$env:TEST_LOAD\" \"--stress-count=$env:TEST_COUNT\" \"--test-threads=$env:TEST_THREADS\" --profile=ci --retries=0"
         )
     );
     assert_eq!(

@@ -190,7 +190,15 @@ fn observations(
                     }
                     "no earlier compile in the loaded history" => Some("no_loaded_history"),
                     "unexplained (no key diff recorded)" => Some("unexplained"),
-                    _ if why.starts_with("compiled but not cached: ") => Some("store_failed"),
+                    _ if why.starts_with("compiled but not cached: ") => Some(
+                        if why.ends_with("database is locked")
+                            || why.ends_with("database table is locked")
+                        {
+                            "store_sqlite_locked"
+                        } else {
+                            "store_failed"
+                        },
+                    ),
                     _ if why.starts_with("entry rejected at lookup: ") => Some("lookup_rejected"),
                     _ if why.starts_with("own inputs changed: ") => Some("inputs_changed"),
                     _ if why.starts_with("downstream of ") => Some("dependency_changed"),
@@ -395,6 +403,35 @@ mod tests {
         assert_eq!(report["kache"]["counts"]["errors"], 3);
         assert!(report["kache"]["summary"]["errors"].is_null());
         assert!(report["kache"]["summary"]["store_failures"].is_null());
+    }
+
+    #[test]
+    fn sqlite_store_contention_is_visible_without_the_error_message() {
+        for (message, expected) in [
+            ("database is locked", "store_sqlite_locked"),
+            ("database table is locked", "store_sqlite_locked"),
+            (
+                "secret path/database is locked: Permission denied (os error 13)",
+                "store_failed",
+            ),
+            ("unrecognized failure", "store_failed"),
+        ] {
+            let report = observations(
+                None,
+                None,
+                Some(json!({"causes": [{
+                    "why": format!("compiled but not cached: secret path: {message}"),
+                    "failure": true
+                }]})),
+                None,
+            );
+            assert_eq!(
+                report["kache"]["explain"]["causes"][0]["category"],
+                expected
+            );
+            assert_eq!(report["kache"]["explain"]["causes"][0]["failure"], true);
+            assert!(!report.to_string().contains("secret"));
+        }
     }
 
     #[test]
