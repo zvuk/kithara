@@ -82,7 +82,7 @@ enum LinuxCommand {
     /// Build the Windows guest again when its licence is about to run out and
     /// it runs no job. A daily timer runs this.
     RenewWindows,
-    /// Report what the machine is currently serving.
+    /// Check configured runner services and report the guest state.
     Health,
 }
 

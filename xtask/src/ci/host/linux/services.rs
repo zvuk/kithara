@@ -436,25 +436,43 @@ pub(super) fn env_file(runner: &LinuxRunner) -> String {
     format!("/run/kithara-ci/{}.env", runner.name)
 }
 
-/// Report what the machine is serving. A runner that is up but unregistered
-/// looks identical to a healthy one from the host's side, so the report names
-/// the service state rather than claiming a verdict it cannot reach.
+/// Report local runner services and reject stopped or failed lifecycles.
+/// Successful ephemeral transitions remain healthy between jobs. Service
+/// health alone does not establish GitHub registration readiness.
 pub(super) fn health(process: &Process, host: &LinuxHost) -> Result<()> {
-    // Without this, a missing systemctl would read as every runner being down.
     process.require_tools(&["systemctl"])?;
+    let mut unavailable = Vec::new();
     for runner in &host.runners {
-        let state = process
+        let properties = process
             .capture(
                 "systemctl",
-                &["is-active", &runner.service()],
+                &["show", "--property=ActiveState,Result", &runner.service()],
                 "read a runner service state",
             )
-            .unwrap_or_else(|_| "inactive".to_owned());
+            .with_context(|| format!("reading service state for {}", runner.name))?;
+        let state = properties
+            .lines()
+            .find_map(|line| line.strip_prefix("ActiveState="))
+            .with_context(|| format!("missing ActiveState for {}", runner.name))?;
+        let result = properties
+            .lines()
+            .find_map(|line| line.strip_prefix("Result="))
+            .with_context(|| format!("missing Result for {}", runner.name))?;
         info!(
             runner = runner.name,
             labels = runner.labels(),
             state,
+            last_result = result,
             "runner service"
+        );
+        if result != "success" || !matches!(state, "active" | "activating" | "deactivating") {
+            unavailable.push(format!("{} ({state}, {result})", runner.name));
+        }
+    }
+    if !unavailable.is_empty() {
+        bail!(
+            "CI runner services are unavailable: {}",
+            unavailable.join(", ")
         );
     }
     Ok(())
@@ -467,8 +485,57 @@ mod tests {
     use super::*;
     use crate::{
         Cli,
-        ci::{config::fixture, host::linux::profile::tests::host_fixture},
+        ci::{config::fixture, host::linux::profile::tests::host_fixture, process::Recording},
     };
+
+    #[test]
+    fn health_rejects_failed_or_stopped_services() {
+        let host = host_fixture();
+        for reply in [
+            "ActiveState=activating\nResult=exit-code\n",
+            "ActiveState=failed\nResult=timeout\n",
+            "ActiveState=inactive\nResult=success\n",
+            "ActiveState=deactivating\nResult=oom-kill\n",
+        ] {
+            let process = Process::recording(
+                Path::new("/"),
+                Recording::default().with_reply(&["systemctl"], reply),
+            );
+            let error = health(&process, &host).expect_err("unavailable services fail health");
+            for runner in &host.runners {
+                assert!(
+                    error.to_string().contains(&runner.name),
+                    "missing {} in {error}",
+                    runner.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn health_accepts_successful_ephemeral_transitions() {
+        let host = host_fixture();
+        for state in ["active", "activating", "deactivating"] {
+            let reply = format!("Result=success\nActiveState={state}\n");
+            let process = Process::recording(
+                Path::new("/"),
+                Recording::default().with_reply(&["systemctl"], &reply),
+            );
+            health(&process, &host).expect("successful ephemeral lifecycle");
+        }
+    }
+
+    #[test]
+    fn health_rejects_missing_service_observations() {
+        let host = host_fixture();
+        for reply in ["", "ActiveState=active\n", "Result=success\n"] {
+            let process = Process::recording(
+                Path::new("/"),
+                Recording::default().with_reply(&["systemctl"], reply),
+            );
+            assert!(health(&process, &host).is_err(), "{reply:?}");
+        }
+    }
 
     /// The container must see as many cores as it was given, because that
     /// count is what Cargo turns into concurrent compilations.

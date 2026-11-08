@@ -393,6 +393,9 @@ and is restarted forever, so health checks each `always_on_agents` process, not
 the loaded service: a missing one looks like nothing from outside, its jobs
 sitting `pending` while the pipeline reads as hung.
 
+`ci host linux health` rejects stopped or failed services, accepting successful
+ephemeral transitions. GitHub registration needs a separate check.
+
 Neither scheduler starts a second pass while one is alive, so a wedged pass
 silences cleanup: one hung for over a day inside `opendir` on a volume that had
 stopped answering, and nothing said so. Each host ends a pass at its profile's
