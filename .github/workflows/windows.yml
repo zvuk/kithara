@@ -158,6 +158,7 @@ jobs:
         working-directory: diagnostics-controller
         env:
           RUST_LOG: kithara_test_utils::load=info
+          NEXTEST_SUCCESS_OUTPUT: immediate
           KITHARA_FLASH_SYNC_TRACE: "1"
           KITHARA_HANG_DUMP_DIR: ${{ runner.temp }}/windows-diagnostics/probe-hang
         run: >-
