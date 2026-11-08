@@ -5,6 +5,13 @@ run-name: ${{ (inputs.diagnostics || (inputs.test-filter || '') != '') && 'Windo
 # it runs there is a question only a Windows machine answers.
 on:
   workflow_call:
+    secrets:
+      KITHARA_DRM_PROD_KEY:
+        required: false
+      KITHARA_DRM_PROD_AUTH_TOKEN:
+        required: false
+      KITHARA_DRM_PROD_SP_ZV_TOKEN:
+        required: false
   workflow_dispatch:
     inputs:
       diagnostics:
@@ -93,6 +100,10 @@ jobs:
       # The guest carries the toolchain and says where its libraries are in
       # its own environment, so this installs and sets nothing.
       - name: Check the workspace
+        env:
+          KITHARA_DRM_PROD_KEY: ${{ secrets.KITHARA_DRM_PROD_KEY }}
+          KITHARA_DRM_PROD_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_PROD_AUTH_TOKEN }}
+          KITHARA_DRM_PROD_SP_ZV_TOKEN: ${{ secrets.KITHARA_DRM_PROD_SP_ZV_TOKEN }}
         run: just ci cache-exec windows-check just check
 
       # The default backend is `wreq`, which the Apple desktop app ships and
@@ -102,6 +113,9 @@ jobs:
       - name: Run tests
         env:
           KITHARA_HANG_DUMP_DIR: ${{ runner.temp }}/kithara-windows-hang
+          KITHARA_DRM_PROD_KEY: ${{ secrets.KITHARA_DRM_PROD_KEY }}
+          KITHARA_DRM_PROD_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_PROD_AUTH_TOKEN }}
+          KITHARA_DRM_PROD_SP_ZV_TOKEN: ${{ secrets.KITHARA_DRM_PROD_SP_ZV_TOKEN }}
         run: just ci cache-exec windows-test just test run --net-backend=none
 
       - name: Upload compiler-cache evidence
