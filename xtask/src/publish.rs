@@ -368,6 +368,7 @@ fn resolve_http_timeout_secs(publish: &PublishConfig) -> Result<u64> {
 
 fn locate_versions(order: &[String]) -> Result<HashMap<String, String>> {
     let metadata = MetadataCommand::new()
+        .no_deps()
         .exec()
         .context("failed to run cargo metadata")?;
     let workspace_members: HashSet<_> = metadata.workspace_members.iter().collect();
@@ -446,6 +447,7 @@ struct PublishInput {
 
 fn locate_publish_inputs(order: &[String]) -> Result<HashMap<String, PublishInput>> {
     let metadata = MetadataCommand::new()
+        .no_deps()
         .exec()
         .context("failed to run cargo metadata")?;
 
@@ -485,6 +487,7 @@ fn locate_publish_inputs(order: &[String]) -> Result<HashMap<String, PublishInpu
 
 fn locate_publishable_workspace_deps(order: &[String]) -> Result<HashMap<String, Vec<String>>> {
     let metadata = MetadataCommand::new()
+        .no_deps()
         .exec()
         .context("failed to run cargo metadata")?;
     let workspace_members: HashSet<_> = metadata.workspace_members.iter().collect();
@@ -722,6 +725,7 @@ fn run_cargo(args: &[&str], description: &str) -> Result<()> {
 /// Crates with `publish = false` are excluded.
 fn resolve_publish_order() -> Result<Vec<String>> {
     let metadata = MetadataCommand::new()
+        .no_deps()
         .exec()
         .context("failed to run cargo metadata")?;
 
@@ -860,7 +864,7 @@ mod tests {
         let order = resolve_publish_order().unwrap();
         assert!(!order.is_empty(), "should find publishable crates");
 
-        let metadata = MetadataCommand::new().exec().unwrap();
+        let metadata = MetadataCommand::new().no_deps().exec().unwrap();
         let members: HashSet<_> = metadata.workspace_members.iter().collect();
         let publishable: HashSet<String> = metadata
             .packages
@@ -987,7 +991,7 @@ kithara-test-dylib = { path = \"../dylib\", features = [
 
     #[test]
     fn every_published_manifest_names_only_workspace_crates_published_before_it() {
-        let metadata = MetadataCommand::new().exec().unwrap();
+        let metadata = MetadataCommand::new().no_deps().exec().unwrap();
         let members: HashSet<_> = metadata.workspace_members.iter().collect();
         let workspace: HashSet<String> = metadata
             .packages
