@@ -66,12 +66,9 @@ rustflags = [
 firewheel-web-audio = { git = "https://github.com/gerasim13/bevy_seedling", rev = "016e91daa4fa89dcc61e7b055ba3187ac7d65f66" }
 # The renderer's bump-allocated buffers are hand-picked constants sized for
 # vello's own 8K test scenes, so a window pays 165 MiB on its first frame
-# whatever it draws. The fork derives them from the frame instead and makes
-# `DebugLayers` nameable so the sizes can be checked. Upstream at
+# whatever it draws. The encoding fork derives them from the frame. Upstream at
 # linebender/vello; drop this once it lands.
-vello = { git = "https://github.com/gerasim13/vello", rev = "b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431" }
 vello_encoding = { git = "https://github.com/gerasim13/vello", rev = "b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431" }
-vello_shaders = { git = "https://github.com/gerasim13/vello", rev = "b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431" }
 # Firefox loses a module request when two browser workers load the same
 # module graph at once, so a thread spawned next to another never starts. The
 # fork holds a Web Lock across the worker bootstrap import; drop this once
