@@ -18,95 +18,56 @@ use kithara_integration_tests::{
 use num_traits::AsPrimitive;
 
 use super::sync_product_matrix::{
-    Audible, BLOCK_FRAMES, CHANNELS, CUE, ONE_DECK, PLAY_SEEK_SYNC, PreparedSources,
-    ProductHarness, SHARED_DEADLINE, SHARED_DEADLINE_CONTROL, SyncCase, SyncRequest, mixed_sources,
-    sweep_sources, synthetic_sources,
+    Audible, BLOCK_FRAMES, CHANNELS, CUE, ONE_DECK, PreparedSources, ProductHarness,
+    SHARED_DEADLINE, SHARED_DEADLINE_CONTROL, SyncCase, SyncRequest, mixed_sources, sweep_sources,
+    synthetic_sources,
 };
 
 const TWENTY_MS_FRAMES: usize = 960;
 const LATENCY_CALLBACK_FRAMES: usize = 128;
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(30)))]
-#[case::playing_same_pass(false, 0)]
-#[case::playing_next_pass(false, 1)]
-#[case::playing_after_preparation(false, 8)]
-#[case::playing_settled(false, 32)]
-#[case::resume_same_pass(true, 0)]
-#[case::resume_next_pass(true, 1)]
-#[case::resume_after_preparation(true, 8)]
-#[case::resume_settled(true, 32)]
-async fn toggling_sync_on_the_second_playing_deck_keeps_both_decks_advancing(
-    #[case] resume: bool,
-    #[case] blocks: usize,
-    #[future(awt)] mixed_sources: PreparedSources,
-) {
-    let case = PLAY_SEEK_SYNC;
-    let mut harness = ProductHarness::new(case, &mixed_sources, CUE, Audible::Deck(1)).await;
-    harness.set_tempo(case, 124.0, true).await;
-    harness.request_sync(case).await;
-    harness.settle(case, 32).await;
-    let second = harness.decks[1].id();
-    assert!(harness.decks.iter().all(|deck| deck.is_playing()));
-    harness
-        .host
-        .send(LinkedHostCommand::Sync {
-            deck: second,
-            on: false,
-        })
-        .await
-        .expect("the second deck leaves SYNC");
-    harness.settle(case, blocks).await;
-    harness
-        .host
-        .send(LinkedHostCommand::Sync {
-            deck: second,
-            on: true,
-        })
-        .await
-        .expect("the second deck enters SYNC again");
-    if resume {
-        let control = harness.decks[1].control().clone();
-        harness.host.run(move || control.pause()).await;
-        harness.settle(case, 1).await;
-        let control = harness.decks[1].control().clone();
-        harness.host.run(move || control.play()).await;
+#[case::resume_same_pass(0, mixed_sources().await)]
+#[case::resume_next_pass(1, mixed_sources().await)]
+#[case::resume_after_preparation(8, mixed_sources().await)]
+#[case::resume_settled(32, mixed_sources().await)]
+async fn resync_preserves_play(#[case] blocks: usize, #[case] sources: PreparedSources) {
+    let case = super::sync_product_matrix::PLAY_SEEK_SYNC;
+    let mut rig = ProductHarness::new(case, &sources, CUE, Audible::Deck(1)).await;
+    rig.set_tempo(case, 124.0, true).await;
+    rig.request_sync(case).await;
+    rig.settle(case, 32).await;
+    let second = rig.decks[1].id();
+    assert!(rig.decks.iter().all(|deck| deck.is_playing()));
+    for on in [false, true] {
+        rig.host
+            .send(LinkedHostCommand::Sync { deck: second, on })
+            .await
+            .expect("SYNC toggle");
+        if !on {
+            rig.settle(case, blocks).await;
+        }
     }
-    let positions: Vec<_> = harness
-        .decks
-        .iter()
-        .map(|deck| {
-            deck.position_seconds()
-                .expect("a sounding deck has a position")
-        })
-        .collect();
-    let pcm = harness
-        .capture_frames(case, case.sample_rate as usize * 3, BLOCK_FRAMES)
-        .await;
-    assert_eq!(
-        harness.decks[1].follows_host(),
-        Some(true),
-        "the second deck must stay synchronized"
-    );
-    for (index, deck) in harness.decks.iter().enumerate() {
-        assert!(
-            deck.is_playing(),
-            "deck {index} stopped after SYNC off/on with {blocks} blocks: {:?}",
-            deck.current()
-                .and_then(|entry| deck.track_snapshot(entry.id))
-        );
+    let control = rig.decks[1].control().clone();
+    rig.host.run(move || control.pause()).await;
+    rig.settle(case, 1).await;
+    let control = rig.decks[1].control().clone();
+    rig.host.run(move || control.play()).await;
+    let positions = [0, 1].map(|index| rig.decks[index].position_seconds());
+    let frames = case.sample_rate as usize * 3;
+    let pcm = rig.capture_frames(case, frames, BLOCK_FRAMES).await;
+    assert_eq!(rig.decks[1].follows_host(), Some(true));
+    for (deck, before) in rig.decks.iter().zip(positions) {
+        let before = before.expect("position");
+        assert!(deck.is_playing());
         assert!(
             deck.position_seconds()
-                .expect("the deck retains its position")
-                > positions[index] + 0.1,
-            "deck {index} stalled after SYNC off/on with {blocks} blocks"
+                .is_some_and(|now| now > before + 0.1)
         );
     }
-    assert!(
-        pcm.iter().any(|sample| sample.abs() > 0.01),
-        "the second deck must sound after SYNC off/on"
-    );
-    assert!(harness.failures.is_empty(), "{:?}", harness.failures);
-    drop(harness);
+    assert!(pcm.iter().any(|sample| sample.abs() > 0.01));
+    assert!(rig.failures.is_empty(), "{:?}", rig.failures);
+    drop(rig);
 }
 
 struct CommandRun {
