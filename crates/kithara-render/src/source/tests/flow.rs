@@ -622,6 +622,91 @@ fn projected_backend_switch_keeps_pending_input_during_resident_output(quarter: 
     assert!(!source.quantum_failed);
 }
 
+/// Steps a source like a lane and checks that its rendered source spans
+/// follow one another.
+#[derive(Default)]
+struct ContiguousPlay {
+    backend: StretchKind,
+    end: Option<u64>,
+    produced: usize,
+    staged_end: Option<u64>,
+}
+
+impl ContiguousPlay {
+    /// Steps `source` once and returns the source span it rendered.
+    fn step(&mut self, source: &mut WarpSource<RawSource, TestPools>) -> Option<SourceSpan> {
+        flush_deferred(source);
+        match source.step_track() {
+            TrackStep::Produced(Fetch::Data { data, .. }) => {
+                let span = data.meta.source_span.expect("rendered source mapping");
+                assert!(
+                    self.end.is_none_or(|end| span.start() == end),
+                    "{}: the output source jumps from {:?} to {}",
+                    self.backend,
+                    self.end,
+                    span.start()
+                );
+                self.end = Some(span.end());
+                self.produced += 1;
+                Some(span)
+            }
+            TrackStep::StateChanged | TrackStep::Blocked(_) => None,
+            TrackStep::Failed(failure) => panic!(
+                "{}: the source failed with {failure:?}; keylock released over a window \
+                 staged up to {:?}",
+                self.backend, self.staged_end
+            ),
+            _ => panic!("{}: the source must keep playing", self.backend),
+        }
+    }
+}
+
+#[kithara::test(native)]
+fn a_keylock_release_over_a_partly_staged_window_keeps_the_source_playing(quarter: Vec<f32>) {
+    let backends: Vec<_> = keylock_backends().collect();
+    assert!(!backends.is_empty(), "the build compiles a keylock backend");
+    for backend in backends {
+        let pools = pools();
+        let (mut source, mut lane) = lane_over(&pools, 8, |_| &quarter, 0.8, (backend, true));
+        let mut play = ContiguousPlay {
+            backend,
+            ..ContiguousPlay::default()
+        };
+        let mut steps = 0..1024;
+        let staged = steps.by_ref().any(|_| {
+            play.step(&mut source);
+            play.produced >= 4
+                && source.pending_input.is_none()
+                && source
+                    .render_input
+                    .as_ref()
+                    .is_some_and(|input| !input.is_empty())
+        });
+        assert!(
+            staged,
+            "{backend}: a decoded chunk's tail must sit in a partly staged window"
+        );
+        let staged_end = source.source.head.load(Ordering::Acquire);
+        play.staged_end = Some(staged_end);
+        let release = lane
+            .send(When::Next, command_batch(LaneCommand::SetKeylock(false)))
+            .expect("the lane has room for the release");
+        let played_past = steps.any(|_| {
+            play.step(&mut source)
+                .is_some_and(|span| span.end() > staged_end)
+        });
+        assert!(
+            lane.receipts().any(|receipt| receipt.seq() == release
+                && matches!(receipt.outcome(), Outcome::Applied { .. })),
+            "{backend}: the lane applies the release over the partly staged window"
+        );
+        assert!(
+            played_past,
+            "{backend}: the released source must render past the partly staged window"
+        );
+    }
+}
+
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",

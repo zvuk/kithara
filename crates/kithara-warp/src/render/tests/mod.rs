@@ -12,6 +12,7 @@ mod fixtures;
 mod identity;
 mod playback;
 mod projection;
+mod retirement;
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
