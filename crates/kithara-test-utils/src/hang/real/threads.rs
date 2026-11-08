@@ -15,7 +15,7 @@ use std::fs;
 const MAX_THREADS: usize = 128;
 
 /// One line per live thread: name, id, scheduler state, CPU ticks, nice,
-/// wait channel, syscall state and schedstat (runtime ns, runnable wait ns, timeslices).
+/// wait channel, syscall state, runtime counters and scheduling policy/switches.
 /// Name first because readings join engine holders by name before truncation.
 ///
 /// Empty on targets without `/proc`, and on any thread whose files vanish
@@ -45,9 +45,42 @@ fn describe(tid: &str) -> Option<String> {
         read_trimmed(&format!("/proc/self/task/{tid}/schedstat")).unwrap_or_else(|| "-".to_owned());
     let syscall =
         read_trimmed(&format!("/proc/self/task/{tid}/syscall")).unwrap_or_else(|| "-".to_owned());
+    let sched = read_trimmed(&format!("/proc/self/task/{tid}/sched"))
+        .and_then(|value| parse_sched(&value))
+        .unwrap_or_else(|| "-".to_owned());
     Some(format!(
-        "name={name} tid={tid} state={state} cpu_ticks={cpu_ticks} nice={nice} wchan={wchan} schedstat={schedstat:?} syscall={syscall:?}"
+        "name={name} tid={tid} state={state} cpu_ticks={cpu_ticks} nice={nice} wchan={wchan} schedstat={schedstat:?} syscall={syscall:?} sched={sched:?}"
     ))
+}
+
+fn parse_sched(sched: &str) -> Option<String> {
+    let mut fields = String::new();
+    for line in sched.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim();
+        let value = value.trim();
+        if value.is_empty()
+            || !matches!(
+                name,
+                "policy"
+                    | "prio"
+                    | "se.slice"
+                    | "nr_voluntary_switches"
+                    | "nr_involuntary_switches"
+            )
+        {
+            continue;
+        }
+        if !fields.is_empty() {
+            fields.push(' ');
+        }
+        fields.push_str(name);
+        fields.push('=');
+        fields.push_str(value);
+    }
+    (!fields.is_empty()).then_some(fields)
 }
 
 fn read_trimmed(path: &str) -> Option<String> {
@@ -73,7 +106,21 @@ fn parse_stat(stat: &str) -> Option<(String, u64, i32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_stat, snapshot};
+    use super::{parse_sched, parse_stat, snapshot};
+
+    #[test]
+    fn scheduler_fields_preserve_policy_slice_and_both_switch_causes() {
+        let sched = "worker (7, #threads: 1)\nse.slice : 2800000\n\
+            nr_involuntary_switches: 2\nse.vruntime: 123.5\n\
+            prio: 104\npolicy: 0\nnr_voluntary_switches: 7\n";
+        assert_eq!(
+            parse_sched(sched).as_deref(),
+            Some(
+                "se.slice=2800000 nr_involuntary_switches=2 prio=104 policy=0 nr_voluntary_switches=7"
+            )
+        );
+        assert_eq!(parse_sched("se.vruntime: 123.5\npolicy: \n"), None);
+    }
 
     #[test]
     fn stat_fields_are_counted_from_the_last_paren() {
@@ -99,7 +146,8 @@ mod tests {
                 && line.contains(" cpu_ticks=")
                 && line.contains(" nice=")
                 && line.contains(" schedstat=")
-                && line.contains(" syscall=")),
+                && line.contains(" syscall=")
+                && line.contains(" sched=")),
             "every line carries the full reading: {lines:?}"
         );
     }
