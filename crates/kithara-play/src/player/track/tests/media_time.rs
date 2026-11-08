@@ -528,6 +528,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
                 .ring
                 .scope(fixture.scope)
                 .expect("live source scope");
+            let planned_tempo = mock::planned_tempo();
             let out = Outbox::new(&mut scope, &mut fixture.dispatcher).in_pass(crate::DeckPass {
                 mix: DeckMixSettings::default(),
                 suspended: false,
@@ -536,6 +537,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
                 deck_delivery: FrameCount::new(0),
                 output: &output,
                 deck: &deck,
+                planned_tempo: &planned_tempo,
             });
             track.observe(&out);
             assert_eq!(
@@ -553,6 +555,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
             .ring
             .scope(fixture.scope)
             .expect("live source scope");
+        let planned_tempo = mock::planned_tempo();
         let out = Outbox::new(&mut scope, &mut fixture.dispatcher).in_pass(crate::DeckPass {
             mix: DeckMixSettings::default(),
             suspended: false,
@@ -561,6 +564,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
             deck_delivery: FrameCount::new(0),
             output: &output,
             deck: &deck,
+            planned_tempo: &planned_tempo,
         });
         track.observe(&out);
         assert_eq!(
@@ -1143,6 +1147,7 @@ async fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_positio
         let seek = {
             let fixture = &mut *rig;
             let mut scope = fixture.ring.scope(fixture.scope).expect("live scope");
+            let planned_tempo = mock::planned_tempo();
             let mut out =
                 Outbox::new(&mut scope, &mut fixture.dispatcher).in_pass(crate::DeckPass {
                     mix: DeckMixSettings::default(),
@@ -1152,6 +1157,7 @@ async fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_positio
                     deck_delivery: FrameCount::new(0),
                     output: &output,
                     deck: &deck,
+                    planned_tempo: &planned_tempo,
                 });
             let seek = track
                 .apply(TrackCommand::Seek { to: target }, &mut out)
@@ -1257,6 +1263,7 @@ async fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_
     let repeated = {
         let fixture = &mut *rig;
         let mut scope = fixture.ring.scope(fixture.scope).expect("live scope");
+        let planned_tempo = mock::planned_tempo();
         let mut out = Outbox::new(&mut scope, &mut fixture.dispatcher).in_pass(crate::DeckPass {
             mix: DeckMixSettings::default(),
             suspended: false,
@@ -1265,6 +1272,7 @@ async fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_
             deck_delivery: FrameCount::new(0),
             output: &output,
             deck: &deck,
+            planned_tempo: &planned_tempo,
         });
         track
             .apply(TrackCommand::PlayAfter { track: A }, &mut out)

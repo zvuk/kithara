@@ -3,6 +3,7 @@
 use std::num::{NonZeroU128, NonZeroUsize};
 
 use kithara::{
+    link::LinkedHostCommand,
     platform::time::Duration,
     signal::{FrameCount, SessionFrame},
 };
@@ -24,6 +25,50 @@ use super::sync_product_matrix::{
 
 const TWENTY_MS_FRAMES: usize = 960;
 const LATENCY_CALLBACK_FRAMES: usize = 128;
+
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(30)))]
+#[case::resume_same_pass(0, mixed_sources().await)]
+#[case::resume_next_pass(1, mixed_sources().await)]
+#[case::resume_after_preparation(8, mixed_sources().await)]
+#[case::resume_settled(32, mixed_sources().await)]
+async fn resync_preserves_play(#[case] blocks: usize, #[case] sources: PreparedSources) {
+    let case = super::sync_product_matrix::PLAY_SEEK_SYNC;
+    let mut rig = ProductHarness::new(case, &sources, CUE, Audible::Deck(1)).await;
+    rig.set_tempo(case, 124.0, true).await;
+    rig.request_sync(case).await;
+    rig.settle(case, 32).await;
+    let second = rig.decks[1].id();
+    assert!(rig.decks.iter().all(|deck| deck.is_playing()));
+    for on in [false, true] {
+        rig.host
+            .send(LinkedHostCommand::Sync { deck: second, on })
+            .await
+            .expect("SYNC toggle");
+        if !on {
+            rig.settle(case, blocks).await;
+        }
+    }
+    let control = rig.decks[1].control().clone();
+    rig.host.run(move || control.pause()).await;
+    rig.settle(case, 1).await;
+    let control = rig.decks[1].control().clone();
+    rig.host.run(move || control.play()).await;
+    let positions = [0, 1].map(|index| rig.decks[index].position_seconds());
+    let frames = case.sample_rate as usize * 3;
+    let pcm = rig.capture_frames(case, frames, BLOCK_FRAMES).await;
+    assert_eq!(rig.decks[1].follows_host(), Some(true));
+    for (deck, before) in rig.decks.iter().zip(positions) {
+        let before = before.expect("position");
+        assert!(deck.is_playing());
+        assert!(
+            deck.position_seconds()
+                .is_some_and(|now| now > before + 0.1)
+        );
+    }
+    assert!(pcm.iter().any(|sample| sample.abs() > 0.01));
+    assert!(rig.failures.is_empty(), "{:?}", rig.failures);
+    drop(rig);
+}
 
 struct CommandRun {
     command_index: usize,
