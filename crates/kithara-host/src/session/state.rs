@@ -237,6 +237,8 @@ pub(crate) struct SessionState<T, S> {
     pub(crate) output: SessionOutput,
     pub(crate) session_metronome_node_id: Option<NodeID>,
     pub(crate) ctx: Option<FirewheelContext>,
+    /// Detached contexts awaiting the return of their backend processor.
+    pub(super) retired_contexts: Vec<FirewheelContext>,
     pub(crate) taps: Taps,
     /// The pause/resume fade length the session asks Firewheel for, in frames.
     /// `None` leaves Firewheel's own default in place.
@@ -261,7 +263,7 @@ pub(crate) struct SessionState<T, S> {
     pub(crate) stream_needs_restart: bool,
 }
 
-/// The stream outlives nothing: it is dropped before the context.
+/// Current and retired contexts drop after streams and before other state.
 ///
 /// Firewheel hands the stream its processor and waits, on its own drop, for
 /// that processor to come back. Declaration order would drop the context
@@ -271,6 +273,7 @@ impl<T, S> Drop for SessionState<T, S> {
     fn drop(&mut self) {
         self.stream.take();
         self.ctx.take();
+        self.retired_contexts.clear();
     }
 }
 
@@ -304,6 +307,7 @@ impl<T, S> SessionState<T, S> {
             root_view,
             start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
+            retired_contexts: Vec::new(),
             stream: None,
             channel: None,
             transport_observation: None,
@@ -324,6 +328,7 @@ impl<T, S> SessionState<T, S> {
     }
 
     pub(crate) fn begin_iteration(&mut self) {
+        self.retired_contexts.retain(FirewheelContext::is_active);
         let now = self.ctx.as_ref().and_then(|ctx| {
             let _ = ctx.stream_info()?;
             Some(SessionFrame::new(ctx.audio_clock().samples.0))

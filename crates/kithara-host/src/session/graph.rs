@@ -130,8 +130,8 @@ pub(crate) fn idle<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionEr
     Ok(())
 }
 
-/// Drops an empty, stopped context after every scope is Closed and its owner
-/// has settled the root receipts. Only a retained output keeps the context alive.
+/// Detaches an empty, stopped context after every scope is Closed and its owner
+/// has settled the root receipts. Processor return gates physical reclamation.
 pub(crate) fn drop_idle_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     if !state.deck_nodes.is_empty() || state.stream.is_some() {
         return Err(SessionError::Graph(
@@ -143,7 +143,9 @@ pub(crate) fn drop_idle_context<T, S>(state: &mut SessionState<T, S>) -> Result<
     }
     settle_root_receipts(state);
     state.settings.abandon();
-    state.ctx.take();
+    state
+        .retired_contexts
+        .extend(state.ctx.take().filter(FirewheelContext::is_active));
     state.channel = None;
     state.transport_observation = None;
     state.session_output_node_id = None;
