@@ -71,6 +71,7 @@ where
     }
 
     fn register_deck(&mut self, id: DeckId, deck: Box<D>) -> Result<(), PlayError> {
+        tracing::debug!(?id, "host received deck registration");
         if self.decks.0.iter().any(|(held, _)| *held == id) {
             return Err(SessionError::DeckAttached(id).into());
         }
@@ -119,6 +120,7 @@ where
             .map(|clock| self.session.clock_at(clock.now));
         self.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))?;
         self.publish_root();
+        tracing::debug!(?id, "host completed deck registration");
         Ok(())
     }
 
