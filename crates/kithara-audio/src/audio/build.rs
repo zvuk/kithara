@@ -376,6 +376,55 @@ mod tests {
     use super::*;
     use crate::test_pools::{TestPools, pools};
 
+    #[cfg(feature = "symphonia")]
+    #[kithara::test(native, tokio, timeout(Duration::from_secs(10)))]
+    async fn initial_decoder_preserves_a_resident_wavs_pcm() {
+        use std::io::Cursor;
+
+        use kithara_decode::{DecoderBackend, DecoderChunkOutcome};
+        use kithara_stream::{ConstructionGate, ReaderControl};
+
+        let bytes = assets::fixed_constant_wav_cd_half_1024().bytes();
+        let info = MediaInfo::try_from(bytes).expect("WAV container");
+        let reader = OpenedReader::new(
+            Cursor::new(bytes),
+            Some(u64::try_from(bytes.len()).expect("fixture byte length")),
+            None,
+            Some(ConstructionGate::default()),
+            ReaderControl::new(None),
+            None,
+        );
+        let deps = DecoderDeps {
+            decoder: AudioDecoderConfig::<NoResamplerBackend>::builder()
+                .backend(DecoderBackend::Symphonia)
+                .build(),
+            pools: pools(),
+        };
+        let factory = create_decoder_factory(&deps, None, Some("wav".to_owned()));
+        let mut decoder = create_initial_decoder(reader, Some(info), factory, None)
+            .await
+            .expect("resident WAV decoder");
+        assert_eq!(decoder.spec().sample_rate.get(), 44_100);
+        assert_eq!(decoder.spec().channels, 2);
+        let mut frames = 0;
+        loop {
+            match decoder.next_chunk().expect("resident PCM") {
+                DecoderChunkOutcome::Chunk(chunk) => {
+                    assert_eq!(chunk.meta.frame_offset, frames);
+                    assert_eq!(
+                        chunk.samples.len(),
+                        usize::try_from(chunk.meta.frames).expect("chunk frame count") * 2
+                    );
+                    assert!(chunk.samples.iter().all(|sample| *sample == 0.5));
+                    frames += u64::from(chunk.meta.frames);
+                }
+                DecoderChunkOutcome::Pending(reason) => panic!("resident WAV pending: {reason:?}"),
+                DecoderChunkOutcome::Eof => break,
+            }
+        }
+        assert_eq!(frames, 1_024);
+    }
+
     #[kithara::test(native, tokio)]
     async fn prepares_source_registration_without_worker_activity() {
         let pools = pools();
