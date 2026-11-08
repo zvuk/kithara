@@ -81,6 +81,8 @@ pub(crate) struct DeckSnapshot {
     pub(crate) tempo: TempoPercent,
     pub(crate) speed: f32,
     pub(crate) synced: bool,
+    pub(crate) keylock: bool,
+    pub(crate) holds_pitch: bool,
     pub(crate) playing: bool,
     pub(crate) duration: f64,
     pub(crate) position: f64,
@@ -103,7 +105,9 @@ pub(crate) struct AnalysisView {
     pub(crate) bpm: Option<f32>,
 }
 
+#[bon::bon]
 impl DeckSnapshot {
+    #[builder]
     pub(crate) fn new(
         id: DeckId,
         letter: &'static str,
@@ -111,6 +115,8 @@ impl DeckSnapshot {
         eq_bands: Vec<GainDb>,
         tempo: TempoPercent,
         synced: bool,
+        keylock: bool,
+        holds_pitch: bool,
         state: &UiState,
     ) -> Self {
         Self {
@@ -126,6 +132,8 @@ impl DeckSnapshot {
             tempo,
             speed: state.speed,
             synced,
+            keylock,
+            holds_pitch,
             current_track_index: state.current_track_index,
             duration: state.duration,
             position: state.position,
