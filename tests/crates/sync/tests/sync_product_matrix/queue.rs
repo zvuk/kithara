@@ -3311,11 +3311,17 @@ async fn check_keylock_music(case: &mut QueueMusic, data: CapturedMusic) {
     })
     .await
     .expect("keylocked listening capture analysis must join");
-    for tap in [&mut case.output_wav, &mut case.master_wav]
-        .into_iter()
-        .flatten()
-    {
-        tap.evidence("queue_keylock_listening", final_checks.clone());
+    if case.output_wav.is_some() || case.master_wav.is_some() {
+        let owner_timeline = case
+            .deck
+            .observe(|owner| serde_json::Value::Array(owner.timeline_evidence().collect()));
+        for tap in [&mut case.output_wav, &mut case.master_wav]
+            .into_iter()
+            .flatten()
+        {
+            tap.evidence("queue_keylock_listening", final_checks.clone());
+            tap.evidence("queue_owner_timeline", owner_timeline.clone());
+        }
     }
     assert_eq!(
         final_checks["passed"], true,
