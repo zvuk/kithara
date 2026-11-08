@@ -5,9 +5,6 @@ FROM ${CACHE_CLIENT_IMAGE} AS cache-client
 FROM rust:${RUST_VERSION}-bookworm@sha256:${RUST_BASE_DIGEST} AS ci-base
 
 ARG AST_GREP_VERSION
-ARG BINARYEN_AMD64_SHA256
-ARG BINARYEN_ARM64_SHA256
-ARG BINARYEN_VERSION
 ARG CARGO_CRAP_VERSION
 ARG CARGO_DENY_VERSION
 ARG CARGO_FUZZ_VERSION
@@ -58,7 +55,6 @@ ENV KITHARA_LOCKBUD_TOOLCHAIN=${LOCKBUD_TOOLCHAIN}
 ENV KITHARA_MSRV_TOOLCHAIN=${MSRV_TOOLCHAIN}
 ENV KITHARA_NIGHTLY_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 ENV WASM_SLIM_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
-ENV TRUNK_TOOLS_WASM_OPT=version_${BINARYEN_VERSION}
 
 # Firefox alone is 76 megabytes, which does not fit the two-minute default
 # transfer timeout on a slow mirror, and a build that reaches that point has
@@ -80,20 +76,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && test "$(dpkg-query -W -f='${Version}' chromium)" = \
             "$(dpkg-query -W -f='${Version}' chromium-driver)" \
     && rm -rf /var/lib/apt/lists/*
-
-RUN case "$(dpkg --print-architecture)" in \
-      amd64) slice=x86_64; sum="${BINARYEN_AMD64_SHA256}" ;; \
-      arm64) slice=aarch64; sum="${BINARYEN_ARM64_SHA256}" ;; \
-      *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
-    esac \
- && curl -fsSL \
-      -o /tmp/binaryen.tar.gz \
-      "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-${slice}-linux.tar.gz" \
- && echo "${sum}  /tmp/binaryen.tar.gz" | sha256sum -c - \
- && tar -xzf /tmp/binaryen.tar.gz -C /usr/local/bin --strip-components=2 \
-      "binaryen-version_${BINARYEN_VERSION}/bin/wasm-opt" \
- && rm /tmp/binaryen.tar.gz \
- && test "$(wasm-opt --version | cut -d ' ' -f3)" = "${BINARYEN_VERSION}"
 
 # Debian ships CMake 3.25, and a vendored native dependency requires 3.30 or
 # newer, so `cargo check` could not build the workspace here at all. The 3.31

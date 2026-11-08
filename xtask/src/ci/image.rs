@@ -163,15 +163,6 @@ fn build(
 pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, String)>> {
     let mut args = vec![
         ("RUST_VERSION", pins.stable_toolchain.clone()),
-        ("BINARYEN_VERSION", pins.binaryen_version.clone()),
-        (
-            "BINARYEN_AMD64_SHA256",
-            pins.binaryen_linux_amd64_sha256.clone(),
-        ),
-        (
-            "BINARYEN_ARM64_SHA256",
-            pins.binaryen_linux_arm64_sha256.clone(),
-        ),
         ("KACHE_AMD64_SHA256", pins.kache_linux_amd64_sha256.clone()),
         ("KACHE_ARM64_SHA256", pins.kache_linux_arm64_sha256.clone()),
         ("RUST_BASE_DIGEST", pins.linux_base_digest.clone()),

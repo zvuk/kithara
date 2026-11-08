@@ -20,9 +20,6 @@ pub(crate) struct CiPins {
     pub(crate) android_commandline_tools_version: String,
     pub(crate) android_ndk_version: String,
     pub(crate) android_platform_version: u32,
-    pub(crate) binaryen_linux_amd64_sha256: String,
-    pub(crate) binaryen_linux_arm64_sha256: String,
-    pub(crate) binaryen_version: String,
     pub(crate) brew_casks: Vec<String>,
     /// Two entries name `FFmpeg` because two consumers want different things
     /// from it. The unversioned formula keeps the `ffmpeg` binary on `PATH`
@@ -135,7 +132,6 @@ impl CiPins {
                 self.android_commandline_tools_version.as_str(),
             ),
             ("android_ndk_version", self.android_ndk_version.as_str()),
-            ("binaryen_version", self.binaryen_version.as_str()),
             ("cache_client_image", self.cache_client_image.as_str()),
             ("cache_server_image", self.cache_server_image.as_str()),
             ("cmake_version", self.cmake_version.as_str()),
@@ -198,14 +194,6 @@ impl CiPins {
 
     fn validate_hashes(&self) -> Result<()> {
         for (name, digest) in [
-            (
-                "binaryen_linux_amd64_sha256",
-                self.binaryen_linux_amd64_sha256.as_str(),
-            ),
-            (
-                "binaryen_linux_arm64_sha256",
-                self.binaryen_linux_arm64_sha256.as_str(),
-            ),
             (
                 "kache_linux_amd64_sha256",
                 self.kache_linux_amd64_sha256.as_str(),
