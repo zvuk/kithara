@@ -1,8 +1,4 @@
-use std::{
-    fs,
-    io::Read as _,
-    path::{Path, PathBuf},
-};
+use std::{fs, io::Read as _, path::PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use kithara_devtools::common::tools::ToolsConfig;
@@ -160,6 +156,11 @@ fn hex(text: &str, len: usize) -> Option<&str> {
     (text.len() == len && text.bytes().all(|b| b.is_ascii_hexdigit())).then_some(text)
 }
 
+fn os_error_code(message: &str) -> Option<i32> {
+    let (_, code) = message.rsplit_once("(os error ")?;
+    code.strip_suffix(')')?.parse().ok()
+}
+
 pub(in crate::ci) fn sccache_count(stats: &str, label: &str) -> Option<u64> {
     stats.lines().find_map(|line| {
         let (name, value) = line.trim_end().rsplit_once(char::is_whitespace)?;
@@ -199,6 +200,7 @@ fn observations(
                 let mut safe = numbers(cause, "count compile_ms");
                 safe["category"] = json!(category);
                 safe["failure"] = json!(cause["failure"].as_bool());
+                safe["os_error_code"] = json!(cause["why"].as_str().and_then(os_error_code));
                 safe
             })
             .collect::<Vec<_>>()
@@ -260,10 +262,10 @@ fn costly_units(input: &Value) -> Value {
 }
 
 fn history(process: &Process) -> Option<Value> {
-    let config = fs::read_to_string(process.environment_path("KACHE_CONFIG")?).ok()?;
-    let config: toml::Value = toml::from_str(&config).ok()?;
-    let runtime = config.get("cache")?.get("runtime_dir")?.as_str()?;
-    let file = fs::File::open(Path::new(runtime).join("events.jsonl")).ok()?;
+    let runtime = process
+        .environment_path("KACHE_RUNTIME_DIR")
+        .filter(|path| !path.as_os_str().is_empty())?;
+    let file = fs::File::open(runtime.join("events.jsonl")).ok()?;
     let mut bytes = Vec::new();
     file.take(u64::try_from(consts::CACHE_EVIDENCE_INPUT_LIMIT + 1).ok()?)
         .read_to_end(&mut bytes)
@@ -291,6 +293,10 @@ fn history(process: &Process) -> Option<Value> {
                 safe[field] = json!(event[field].as_str().and_then(|s| hex(s, len)));
             }
             safe["key_externs_recorded"] = json!(event["key_externs_recorded"].as_bool());
+            safe["store_failed"] =
+                json!(event["store_error"].as_str().map(|error| !error.is_empty()));
+            safe["store_os_error_code"] =
+                json!(event["store_error"].as_str().and_then(os_error_code));
             safe["key_diff"] = json!(event["key_diff"].as_array().map(|groups| {
                 groups
                     .iter()
@@ -360,7 +366,7 @@ mod tests {
         let input = json!({"schema_version": 1, "local_hits": 4, "misses": secret, "errors": secret,
             "remote": secret, "disk": {"store_bytes": secret},
             "summary": {"errors": 2, "store_failures": secret},
-            "causes": [{"why": format!("compiled but not cached: {secret}"), "fix": secret, "count": 3, "compile_ms": secret, "failure": true}],
+            "causes": [{"why": format!("compiled but not cached: {secret} (os error 28)"), "fix": secret, "count": 3, "compile_ms": secret, "failure": true}],
             "errors_detail": [{"message": secret}], "env": {"AWS_SECRET_ACCESS_KEY": secret}});
         let report = observations(
             Some(input.clone()),
@@ -372,6 +378,7 @@ mod tests {
         assert_eq!(report["kache"]["counts"]["local_hits"], 4);
         assert_eq!(report["sccache"]["hits"], 9);
         assert_eq!(report["sccache"]["misses"], 8);
+        assert_eq!(report["kache"]["explain"]["causes"][0]["os_error_code"], 28);
         assert_eq!(
             report["kache"]["explain"]["causes"][0]["category"],
             "store_failed"
@@ -415,6 +422,47 @@ mod tests {
         );
         assert!(report["kache"]["top_misses"][1]["crate_name"].is_null());
         assert!(!report.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn bootstrap_history_uses_the_effective_runtime_without_a_config_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let process = Process::new(
+            directory.path(),
+            std::collections::BTreeMap::from([
+                ("KACHE_RUNTIME_DIR".into(), directory.path().into()),
+                ("KACHE_CONFIG".into(), "".into()),
+            ]),
+        );
+        for (error, expected) in [
+            (
+                Some("secret path: Permission denied (os error 13)"),
+                Some(13),
+            ),
+            (Some("secret path: unknown error (os error -1)"), Some(-1)),
+            (Some("secret path: disk full (os error 28)"), Some(28)),
+            (Some("secret path (os error 2147483648)"), None),
+            (Some("secret path (os error invalid)"), None),
+            (Some("secret path"), None),
+            (Some(""), None),
+            (None, None),
+        ] {
+            fs::write(
+                directory.path().join("events.jsonl"),
+                json!({"store_error": error}).to_string(),
+            )
+            .unwrap();
+            let retained = history(&process).expect("bootstrap runtime history");
+            assert_eq!(
+                retained["records"][0]["store_os_error_code"],
+                json!(expected)
+            );
+            assert_eq!(
+                retained["records"][0]["store_failed"],
+                json!(error.map(|error| !error.is_empty()))
+            );
+            assert!(!retained.to_string().contains("secret"));
+        }
     }
 
     #[test]
