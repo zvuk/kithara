@@ -67,6 +67,8 @@ env:
   # is reused, where Linux runners keep it too, and the job leases it for as
   # long as xtask runs.
   KITHARA_XTASK_TARGET: C:\kithara-ci\target\xtask
+  # The lease driver builds before it can protect the xtask target.
+  KITHARA_BOOTSTRAP_TARGET: C:\kithara-ci\target\ci-bootstrap
 
 concurrency:
   group: windows-${{ github.ref }}

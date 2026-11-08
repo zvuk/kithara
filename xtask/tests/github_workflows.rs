@@ -2964,6 +2964,9 @@ fn the_windows_lane_keeps_the_xtask_build_the_guest_keeps() {
     let xtask = mapping_field(env, "KITHARA_XTASK_TARGET")
         .as_str()
         .expect("the lane names where xtask builds itself");
+    let bootstrap = mapping_field(env, "KITHARA_BOOTSTRAP_TARGET")
+        .as_str()
+        .expect("the lane retains the lease-bootstrap build");
 
     assert!(
         xtask
@@ -2972,6 +2975,9 @@ fn the_windows_lane_keeps_the_xtask_build_the_guest_keeps() {
             .is_some_and(|name| !name.is_empty()),
         "xtask builds in `{xtask}`, outside `{kept}`, so the wiped checkout takes it"
     );
+    assert!(bootstrap.starts_with(&format!("{kept}\\")));
+    assert_ne!(bootstrap, xtask);
+    assert!(!bootstrap.starts_with(&format!("{xtask}\\")));
 }
 
 #[test]
