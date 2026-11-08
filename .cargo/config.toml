@@ -62,8 +62,6 @@ rustflags = [
 # Cargo also applies these pins when a tool builds an external manifest from
 # this workspace, including the temporary consumer used by semver-checks.
 [patch.crates-io]
-# wasmtimer replaces the unmaintained pin-utils projection dependency.
-wasmtimer = { git = "https://github.com/gerasim13/wasmtimer-rs", rev = "c5d137cead6335f9398226a1af55ae75bad30d60" }
 # Worklet and worker imports share the same origin-wide bootstrap admission.
 firewheel-web-audio = { git = "https://github.com/gerasim13/bevy_seedling", rev = "016e91daa4fa89dcc61e7b055ba3187ac7d65f66" }
 # The renderer's bump-allocated buffers are hand-picked constants sized for
@@ -84,6 +82,3 @@ btls-sys = { git = "https://github.com/0x676e67/btls", rev = "ac7fe822bb1a3386c0
 # Askama 0.14 config parsing uses the maintained toml parser; remove this
 # patch when UniFFI's Askama dependency drops basic-toml upstream.
 askama_derive = { git = "https://github.com/gerasim13/askama", rev = "8031efd8e5089b654bd9e750cb367a594d6edf7e" }
-
-# The upstream WebSocket TLS adapter still selects the deprecated roots shim.
-tokio-tungstenite = { git = "https://github.com/gerasim13/tokio-tungstenite", rev = "5a3397227ea4bfaca922fda85168ecdc733ac622" }

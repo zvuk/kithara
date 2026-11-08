@@ -10891,7 +10891,8 @@ dependencies = [
 [[package]]
 name = "tokio-tungstenite"
 version = "0.30.0"
-source = "git+https://github.com/gerasim13/tokio-tungstenite?rev=5a3397227ea4bfaca922fda85168ecdc733ac622#5a3397227ea4bfaca922fda85168ecdc733ac622"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17a073bfed563fa236697a068031408a93cd9522e08abf9933ead3e73411bd71"
 dependencies = [
  "futures-util",
  "log",
@@ -11924,8 +11925,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtimer"
-version = "0.4.3"
-source = "git+https://github.com/gerasim13/wasmtimer-rs?rev=c5d137cead6335f9398226a1af55ae75bad30d60#c5d137cead6335f9398226a1af55ae75bad30d60"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c62b7f338e4397a45d054c15a2b36a93d57cccdda7be11a7d7b045d47b5e70ce"
 dependencies = [
  "futures",
  "js-sys",
