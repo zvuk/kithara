@@ -161,6 +161,14 @@ fn os_error_code(message: &str) -> Option<i32> {
     code.strip_suffix(')')?.parse().ok()
 }
 
+fn store_failure_category(message: &str) -> &'static str {
+    if message.ends_with("database is locked") || message.ends_with("database table is locked") {
+        "store_sqlite_locked"
+    } else {
+        "store_failed"
+    }
+}
+
 pub(in crate::ci) fn sccache_count(stats: &str, label: &str) -> Option<u64> {
     stats.lines().find_map(|line| {
         let (name, value) = line.trim_end().rsplit_once(char::is_whitespace)?;
@@ -190,15 +198,9 @@ fn observations(
                     }
                     "no earlier compile in the loaded history" => Some("no_loaded_history"),
                     "unexplained (no key diff recorded)" => Some("unexplained"),
-                    _ if why.starts_with("compiled but not cached: ") => Some(
-                        if why.ends_with("database is locked")
-                            || why.ends_with("database table is locked")
-                        {
-                            "store_sqlite_locked"
-                        } else {
-                            "store_failed"
-                        },
-                    ),
+                    _ if why.starts_with("compiled but not cached: ") => {
+                        Some(store_failure_category(why))
+                    }
                     _ if why.starts_with("entry rejected at lookup: ") => Some("lookup_rejected"),
                     _ if why.starts_with("own inputs changed: ") => Some("inputs_changed"),
                     _ if why.starts_with("downstream of ") => Some("dependency_changed"),
@@ -303,6 +305,12 @@ fn history(process: &Process) -> Option<Value> {
             safe["key_externs_recorded"] = json!(event["key_externs_recorded"].as_bool());
             safe["store_failed"] =
                 json!(event["store_error"].as_str().map(|error| !error.is_empty()));
+            safe["store_failure_category"] = json!(
+                event["store_error"]
+                    .as_str()
+                    .filter(|error| !error.is_empty())
+                    .map(store_failure_category)
+            );
             safe["store_os_error_code"] =
                 json!(event["store_error"].as_str().and_then(os_error_code));
             safe["key_diff"] = json!(event["key_diff"].as_array().map(|groups| {
@@ -471,18 +479,45 @@ mod tests {
                 ("KACHE_CONFIG".into(), "".into()),
             ]),
         );
-        for (error, expected) in [
+        for (error, expected, category) in [
             (
                 Some("secret path: Permission denied (os error 13)"),
                 Some(13),
+                Some("store_failed"),
             ),
-            (Some("secret path: unknown error (os error -1)"), Some(-1)),
-            (Some("secret path: disk full (os error 28)"), Some(28)),
-            (Some("secret path (os error 2147483648)"), None),
-            (Some("secret path (os error invalid)"), None),
-            (Some("secret path"), None),
-            (Some(""), None),
-            (None, None),
+            (
+                Some("secret path: unknown error (os error -1)"),
+                Some(-1),
+                Some("store_failed"),
+            ),
+            (
+                Some("secret path: disk full (os error 28)"),
+                Some(28),
+                Some("store_failed"),
+            ),
+            (
+                Some("secret path (os error 2147483648)"),
+                None,
+                Some("store_failed"),
+            ),
+            (
+                Some("secret path (os error invalid)"),
+                None,
+                Some("store_failed"),
+            ),
+            (Some("secret path"), None, Some("store_failed")),
+            (
+                Some("secret path: database is locked"),
+                None,
+                Some("store_sqlite_locked"),
+            ),
+            (
+                Some("secret path: database table is locked"),
+                None,
+                Some("store_sqlite_locked"),
+            ),
+            (Some(""), None, None),
+            (None, None, None),
         ] {
             fs::write(
                 directory.path().join("events.jsonl"),
@@ -497,6 +532,10 @@ mod tests {
             assert_eq!(
                 retained["records"][0]["store_failed"],
                 json!(error.map(|error| !error.is_empty()))
+            );
+            assert_eq!(
+                retained["records"][0]["store_failure_category"],
+                json!(category)
             );
             assert!(!retained.to_string().contains("secret"));
         }
