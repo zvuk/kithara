@@ -551,6 +551,8 @@ pub(super) struct Rig {
     pub now: SessionFrame,
     pub delivery: FrameCount,
     pub deck_delivery: Option<FrameCount>,
+    /// The accepted tempo map a pass lends the deck.
+    pub planned: TempoTrajectory,
     output: OutputSnapshot,
     observation: DeckSnapshot,
 }
@@ -562,6 +564,7 @@ impl Rig {
             now: SessionFrame::new(now),
             delivery: FrameCount::new(128),
             deck_delivery: None,
+            planned: kithara_play::mock::planned_tempo(),
             output: kithara_play::mock::output(None).get(),
             observation: DeckSnapshot::default(),
         }
@@ -588,6 +591,7 @@ impl Rig {
             deck_delivery: self.deck_delivery.unwrap_or(self.delivery),
             output: &self.output,
             deck: &self.observation,
+            planned_tempo: &self.planned,
         };
         run(
             &mut Outbox::new(&mut port, &mut self.queues.dispatcher).in_pass(pass),

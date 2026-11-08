@@ -71,7 +71,7 @@ impl<P> Linked<P> {
             SpeedOperation::Correction { cause, .. } => self.alignment = Some(cause),
             SpeedOperation::Alignment => {
                 let required = self.inner.snapshot().as_ref().position;
-                self.waiting = Some(Waiting::Sync { required });
+                self.waiting.get_or_insert(Waiting::Sync { required });
             }
             SpeedOperation::Relocation { to } => {
                 self.waiting = Some(Waiting::Seek { required: to });

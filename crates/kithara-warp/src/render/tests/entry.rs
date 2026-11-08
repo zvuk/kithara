@@ -74,6 +74,9 @@ fn entered_renderer(
     renderer
         .set_speed(SpeedCurve::Constant(speed), 1)
         .expect("entry trajectory");
+    renderer
+        .prepare_engine_latency(spec())
+        .expect("entry latency");
     (renderer, entry, cue)
 }
 

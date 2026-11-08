@@ -179,20 +179,6 @@ fn interrupted_backend_crossfades_keep_the_current_curve_and_phase() {
                     .expect("R6 identity transition");
                 assert_eq!(
                     renderer
-                        .retiring_target
-                        .as_ref()
-                        .expect("retiring ramp engine")
-                        .trajectory
-                        .as_ref()
-                        .expect("unsnapped tail trajectory")
-                        .span(0, spec().sample_rate, 1)
-                        .expect("tail phase")
-                        .source_ratio_at(0),
-                    Some(phase),
-                    "R6 preserves the retiring engine's exact 11.5-frame phase"
-                );
-                assert_eq!(
-                    renderer
                         .trajectory
                         .span(0, spec().sample_rate, 1)
                         .expect("identity phase")
@@ -803,21 +789,19 @@ fn switching_to_keylock_retains_the_full_reprime_history(#[case] backend: Stretc
 #[kithara::test]
 #[kithara::hang_watchdog]
 fn native_replacement_is_source_aligned_and_quantum_independent() {
+    let config = WarpConfig::builder()
+        .backend(StretchKind::Signalsmith)
+        .keylock(true)
+        .speed(0.5)
+        .build();
     let mut render = |budgets: &[usize]| {
-        let mut renderer = renderer(
-            &WarpConfig::builder()
-                .backend(StretchKind::Signalsmith)
-                .keylock(true)
-                .speed(0.5)
-                .build(),
-        );
+        let mut renderer = renderer(&config);
         let mut source = 0;
         mapped_render(&mut renderer, &mut source, 31);
         renderer.set_backend(StretchKind::Bungee);
         renderer
             .prepare_engine_latency(spec())
             .expect("replacement");
-        assert!(renderer.retiring_target.is_some());
         let mut frame = 0;
         let mut samples = Vec::new();
         while frame < 257 {
@@ -836,7 +820,50 @@ fn native_replacement_is_source_aligned_and_quantum_independent() {
         }
         samples
     };
-    assert_eq!(render(&[257]), render(&[1, 7, 3, 29]));
+    let mut twin = renderer(&config);
+    mapped_render(&mut twin, &mut 0, 31);
+    let tail = supported_tail(&mut twin);
+    let samples = render(&[257]);
+    assert_fades_from(samples.as_chunks::<2>().0, &tail);
+    assert_eq!(samples, render(&[1, 7, 3, 29]));
+}
+
+/// Output a renderer drains once its source stops, cut to the prefix source
+/// supports. The prefix is measured before the drain consumes cached output.
+pub(super) fn supported_tail(renderer: &mut WarpRenderer) -> Vec<[f32; 2]> {
+    let supported = renderer
+        .supported_tail_frames()
+        .expect("supported tail frames");
+    let mut tail = Vec::new();
+    loop {
+        renderer.prepare(spec());
+        let Some(output) = renderer.drain(1).expect("drained tail") else {
+            tail.truncate(supported);
+            return tail;
+        };
+        tail.extend_from_slice(output.samples.as_chunks::<2>().0);
+    }
+}
+
+/// Every output frame departs from the source-supported prefix of the retired
+/// engine's tail by at most the weight the fade over that prefix gives the
+/// incoming side.
+pub(super) fn assert_fades_from(output: &[[f32; 2]], tail: &[[f32; 2]]) {
+    let peak = output
+        .iter()
+        .chain(tail)
+        .flatten()
+        .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+    let fade = tail.len().to_f32().expect("tail length fits f32");
+    for (frame, (now, old)) in output.iter().zip(tail).enumerate() {
+        let weight = (frame + 1).to_f32().expect("frame fits f32") / fade;
+        for (now, old) in now.iter().zip(old) {
+            assert!(
+                (now - old).abs() <= weight * 2.0 * peak,
+                "output frame {frame} is {now}, beyond fade weight {weight} of the drained tail {old}"
+            );
+        }
+    }
 }
 
 #[kithara::test]
@@ -1209,10 +1236,12 @@ fn resampled_pcm_uses_the_published_fractional_phase() {
     }
 }
 
+/// Retiring a keylocked engine into vinyl Glide fades the source-supported
+/// prefix of its tail into the exact mapped interpolation.
 #[kithara::test]
 #[case::signalsmith(StretchKind::Signalsmith)]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn backend_retirement_does_not_blend_old_control_pcm_into_mapped_output(
+fn backend_retirement_crossfades_the_drained_tail_into_exact_mapped_output(
     #[case] backend: StretchKind,
 ) {
     let config = WarpConfig::builder()
@@ -1220,21 +1249,33 @@ fn backend_retirement_does_not_blend_old_control_pcm_into_mapped_output(
         .keylock(true)
         .speed(0.5)
         .build();
+    let exact = |frame: usize| {
+        let position = 3.5 + frame.to_f32().expect("test frame count fits f32");
+        let first = position.floor() / 4096.0;
+        let second = (position.floor() + 1.0) / 4096.0;
+        (second - first).mul_add(0.5, first)
+    };
+    let mut twin = renderer(&config);
+    mapped_render(&mut twin, &mut 0, 7);
+    let tail = supported_tail(&mut twin);
     let mut renderer = renderer(&config);
     let mut source = 0;
     mapped_render(&mut renderer, &mut source, 7);
+    let latency = renderer.engine_latency().get();
     renderer
         .set_speed(SpeedCurve::Constant(1.0), 2)
         .expect("speed");
     renderer.set_backend(StretchKind::Glide);
     renderer.set_keylock(false);
-    let output = mapped_render(&mut renderer, &mut source, 5);
-    assert_positions(&output, 0, |frame| 3.5 + frame_f64(frame));
-    for (frame, &samples) in output.samples.as_chunks::<2>().0.iter().enumerate() {
-        let position = 3.5 + frame.to_f32().expect("test frame count fits f32");
-        let first = position.floor() / 4096.0;
-        let second = (position.floor() + 1.0) / 4096.0;
-        assert_eq!(samples, [(second - first).mul_add(0.5, first); 2]);
+    let mut output = Vec::new();
+    while output.len() < tail.len() + latency {
+        let quantum = mapped_render(&mut renderer, &mut source, 128);
+        assert_positions(&quantum, output.len(), |frame| 3.5 + frame_f64(frame));
+        output.extend_from_slice(quantum.samples.as_chunks::<2>().0);
+    }
+    assert_fades_from(&output, &tail);
+    for (frame, &samples) in output.iter().enumerate().skip(tail.len()) {
+        assert_eq!(samples, [exact(frame); 2], "output frame {frame}");
     }
 }
 

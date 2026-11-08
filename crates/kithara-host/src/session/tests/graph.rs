@@ -14,7 +14,7 @@ use super::super::{
     dispatch::tick_session,
     graph::{drop_idle_context, idle, install_deck, remove_deck},
     protocol::SessionError,
-    queue::settle_receipt,
+    queue::{place_moved, settle_receipt},
     state::{HostRoot, RootView, SessionState, SessionStream},
     transport::observe_commits,
 };
@@ -134,6 +134,7 @@ impl<T> GraphSession<T> {
     }
 
     fn settle(&mut self) {
+        let mut moved = Vec::new();
         while let Some(receipt) = self
             .state
             .channel
@@ -141,9 +142,10 @@ impl<T> GraphSession<T> {
             .and_then(kithara_command::ScopedSender::receipt)
         {
             if let ScopedReceipt::Root(receipt) = receipt {
-                settle_receipt(&mut self.state, &receipt);
+                settle_receipt(&mut self.state, &receipt, &mut moved);
             }
         }
+        place_moved(&mut self.state, moved);
     }
 
     pub(crate) fn stream_mut(&mut self) -> Option<&mut T> {

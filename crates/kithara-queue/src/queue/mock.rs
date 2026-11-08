@@ -109,6 +109,7 @@ where
         deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
     let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);
@@ -457,6 +458,7 @@ pub(crate) fn tick_fixture(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestP
         deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
     let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);
