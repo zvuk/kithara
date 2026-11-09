@@ -3021,6 +3021,40 @@ fn filtered_android_runs_do_not_claim_baseline_acceptance() {
 }
 
 #[test]
+fn windows_storage_inventory_does_not_require_a_bootstrap_build() {
+    let workflow = github_workflow("windows.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "diagnostics");
+    let storage = first_step(job);
+    assert_eq!(
+        storage["name"].as_str(),
+        Some("Inspect Windows storage without bootstrap")
+    );
+    assert_eq!(storage["if"].as_str(), Some("${{ inputs.diagnostics }}"));
+    let command = storage["run"].as_str().unwrap();
+    assert!(command.contains("Get-PSDrive"));
+    assert!(command.contains("Get-Process"));
+    assert!(command.contains("du.exe"));
+    assert!(command.contains("-P -x -h --max-depth=4 C:/kithara-ci"));
+    assert!(!command.contains("Remove-Item"));
+    for line in command.lines().map(str::trim) {
+        assert!(!line.starts_with("just ") && !line.starts_with("cargo "));
+    }
+    let upload = named_step(job, "Preserve bootstrap storage inventory");
+    assert_eq!(
+        upload["if"].as_str(),
+        Some("${{ always() && inputs.diagnostics }}")
+    );
+    assert_eq!(
+        upload["with"]["path"].as_str(),
+        Some("${{ runner.temp }}/windows-storage.txt")
+    );
+    assert!(
+        step_position(job, "Preserve bootstrap storage inventory")
+            < step_position(job, "Checkout diagnostics controller")
+    );
+}
+
+#[test]
 fn windows_diagnostics_cannot_schedule_the_acceptance_suite() {
     let workflow = github_workflow("windows.yml");
     let inputs = &workflow["on"]["workflow_dispatch"]["inputs"];

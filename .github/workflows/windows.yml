@@ -150,6 +150,24 @@ jobs:
       TEST_THREADS: ${{ inputs.test-load == 'on' && '1' || 'num-cpus' }}
       TEST_COUNT: ${{ inputs.test-count }}
     steps:
+      - name: Inspect Windows storage without bootstrap
+        if: ${{ inputs.diagnostics }}
+        run: |
+          & {
+            Get-PSDrive -PSProvider FileSystem | Select-Object Name, Root, Used, Free | Format-Table -AutoSize
+            Get-Process -Name cargo, rustc, link, xtask, ci-bootstrap, cargo-nextest -ErrorAction SilentlyContinue | Select-Object ProcessName, Id | Format-Table -AutoSize
+            $gitRoot = Split-Path (Split-Path (Get-Command git.exe -ErrorAction Stop).Source -Parent) -Parent
+            & (Join-Path $gitRoot 'usr/bin/du.exe') -P -x -h --max-depth=4 C:/kithara-ci
+          } | Tee-Object -FilePath "$env:RUNNER_TEMP/windows-storage.txt"
+
+      - name: Preserve bootstrap storage inventory
+        if: ${{ always() && inputs.diagnostics }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-storage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-storage.txt
+          if-no-files-found: error
+
       - name: Checkout diagnostics controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
