@@ -141,6 +141,17 @@ jobs:
           export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth"
           just ci lane "${{ inputs.lane }}" --kind "${{ inputs.kind }}" ${NARROW:+--narrow "$NARROW"}
 
+      - name: Upload test audio
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-audio-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: "tests/crates/sync/.ci-artifacts/audio"
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: ignore
+
       - name: Upload compiler-cache evidence
         if: ${{ always() && hashFiles(format('.ci-artifacts/cache/github-{0}-{1}-{2}.json', github.run_id, github.run_attempt, inputs.lane), format('.ci-artifacts/cache/github-{0}-{1}-bootstrap*.json', github.run_id, github.run_attempt)) != '' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

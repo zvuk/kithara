@@ -408,9 +408,11 @@ mod artifact {
         audible: Audible,
         stream: &str,
     ) -> AudioArtifactTap {
-        let default_root = std::env::current_exe()
-            .unwrap_or_else(|error| panic!("{}: locate the test executable: {error}", case.id))
-            .with_file_name("audio-artifacts");
+        let default_root = std::env::current_dir()
+            .unwrap_or_else(|error| {
+                panic!("{}: locate the test working directory: {error}", case.id)
+            })
+            .join(".ci-artifacts/audio");
         let mut tap = AudioArtifactTap::from_env_or(
             &default_root,
             &format!(

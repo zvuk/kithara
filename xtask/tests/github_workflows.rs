@@ -1131,6 +1131,7 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
             "Checkout subject".to_owned(),
             "Isolate stress subject".to_owned(),
             "Execute the stress run".to_owned(),
+            "Upload test audio".to_owned(),
             "Upload the raw stress evidence".to_owned(),
             "Upload execution compiler-cache evidence".to_owned(),
         ])
@@ -2940,6 +2941,58 @@ fn failed_catalog_reads_publish_no_selection_outputs() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[test]
+fn mandatory_audio_captures_are_uploaded_even_when_tests_fail() {
+    for (workflow, job, path) in [
+        ("lane.yml", "run", "tests/crates/sync/.ci-artifacts/audio"),
+        (
+            "windows.yml",
+            "windows",
+            "tests/crates/sync/.ci-artifacts/audio",
+        ),
+        (
+            "windows.yml",
+            "diagnostics",
+            "${{ runner.temp }}/windows-diagnostics-controller/tests/crates/sync/.ci-artifacts/audio",
+        ),
+        (
+            "stress.yml",
+            "execute",
+            "${{ runner.temp }}/kithara-stress/subject/tests/crates/sync/.ci-artifacts/audio",
+        ),
+    ] {
+        let workflow = github_workflow(workflow);
+        let steps = workflow_job(workflow_jobs(&workflow), job)["steps"]
+            .as_sequence()
+            .unwrap();
+        let upload = steps
+            .iter()
+            .find(|step| step["name"].as_str() == Some("Upload test audio"))
+            .expect("mandatory recordings must leave the runner before checkout cleanup");
+        assert_eq!(upload["if"].as_str(), Some("always()"));
+        assert_eq!(upload["with"]["path"].as_str(), Some(path));
+        assert_eq!(upload["with"]["include-hidden-files"].as_bool(), Some(true));
+        assert_eq!(upload["with"]["retention-days"].as_u64(), Some(14));
+    }
+    for (file, job) in [
+        ("apple.yml", "apple:test"),
+        ("apple.yml", "apple:test-flash-off"),
+        ("windows.yml", ".windows-suite"),
+    ] {
+        let text = fs::read_to_string(workspace_root().join(".gitlab/ci").join(file)).unwrap();
+        let pipeline: Value = serde_yaml_ng::from_str(&text).unwrap();
+        let artifacts = &pipeline[job]["artifacts"];
+        assert_eq!(artifacts["when"].as_str(), Some("always"));
+        assert!(
+            artifacts["paths"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .any(|path| path.as_str() == Some("tests/crates/sync/.ci-artifacts/audio/"))
+        );
+    }
 }
 
 /// `wreq` is the backend the Apple desktop app ships, and asking for it

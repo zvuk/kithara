@@ -215,6 +215,17 @@ jobs:
           for lane in $LANE; do args+=(--lane "$lane"); done
           just ci cache-exec stress-execute just ci stress "${args[@]}"
 
+      - name: Upload test audio
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-audio-stress-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/kithara-stress/subject/tests/crates/sync/.ci-artifacts/audio
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: ignore
+
       - name: Upload the raw stress evidence
         if: always()
         id: raw-upload
