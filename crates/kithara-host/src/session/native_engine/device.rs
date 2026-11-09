@@ -26,24 +26,7 @@ impl AcquiredOutput {
         let device = host
             .default_output_device()
             .ok_or("no default output device")?;
-        let default = device
-            .default_output_config()
-            .map_err(|error| error.to_string())?;
-        let mut selected = default.clone();
-        if let Some(rate) = request.output.desired_sample_rate {
-            for candidate in device
-                .supported_output_configs()
-                .map_err(|error| error.to_string())?
-            {
-                if candidate.channels() == default.channels()
-                    && candidate.sample_format() == default.sample_format()
-                    && let Some(candidate) = candidate.try_with_sample_rate(rate)
-                {
-                    selected = candidate;
-                    break;
-                }
-            }
-        }
+        let selected = select_format(&device, request.output.desired_sample_rate)?;
         let mut config = selected.config();
         #[cfg(not(target_os = "ios"))]
         if let Some(frames) = request.output.desired_block_frames
@@ -65,7 +48,6 @@ impl AcquiredOutput {
             cpal::BufferSize::Fixed(frames) => {
                 NonZeroU32::new(frames).ok_or("zero output block")?
             }
-            // A graph processing limit; a default-size callback may contain several blocks.
             cpal::BufferSize::Default => crate::consts::SESSION_OUTPUT_MAX_BLOCK_FRAMES,
         };
         Ok(Self {
@@ -82,4 +64,29 @@ impl AcquiredOutput {
             config,
         })
     }
+}
+
+fn select_format(
+    device: &cpal::Device,
+    requested: Option<u32>,
+) -> Result<cpal::SupportedStreamConfig, String> {
+    let default = device
+        .default_output_config()
+        .map_err(|error| error.to_string())?;
+    let mut selected = default.clone();
+    if let Some(rate) = requested {
+        for candidate in device
+            .supported_output_configs()
+            .map_err(|error| error.to_string())?
+        {
+            if candidate.channels() == default.channels()
+                && candidate.sample_format() == default.sample_format()
+                && let Some(candidate) = candidate.try_with_sample_rate(rate)
+            {
+                selected = candidate;
+                break;
+            }
+        }
+    }
+    Ok(selected)
 }

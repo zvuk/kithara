@@ -209,6 +209,7 @@ where
             .check_install()
             .map_err(|error| NodeError(Box::new(error)))?;
         inputs.prepared = Some(prepared);
+        drop(guard);
         Ok(())
     }
 }
@@ -270,6 +271,7 @@ where
     fn info(&self, _config: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
         Ok(AudioNodeInfo::new()
             .debug_name("Player")
+            .custom_state(self.clone())
             .channel_config(ChannelConfig {
                 num_inputs: ChannelCount::ZERO,
                 num_outputs: ChannelCount::STEREO,
@@ -279,7 +281,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use firewheel::FirewheelConfig;
+    use std::num::NonZeroU32;
+
+    use firewheel::{ActivateInfo, FirewheelConfig, FirewheelContext};
     use kithara_command::{
         Batch, ChannelConfig, LevelInbox, Port, ScopeId, ScopedConfig, ScopedInbox, ScopedSender,
         When, scoped_channel,
@@ -324,17 +328,15 @@ mod tests {
         let (ends, inputs) = scope_channels(scope, config);
         let (node, owner) = PlayerNode::native(inputs, pools());
         node.prepare_stream(StreamShape::new(
-            std::num::NonZeroU32::new(128).expect("block"),
-            std::num::NonZeroU32::new(44_100).expect("rate"),
+            NonZeroU32::new(128).expect("block"),
+            NonZeroU32::new(44_100).expect("rate"),
         ))
         .expect("fixture constructor preparation");
         (node, ends, sender, TestInbox(inbox), owner)
     }
 
-    fn cold_stream(rate: u32) -> firewheel::ActivateInfo {
-        use std::num::NonZeroU32;
-
-        firewheel::ActivateInfo {
+    fn cold_stream(rate: u32) -> ActivateInfo {
+        ActivateInfo {
             sample_rate: NonZeroU32::new(rate).expect("positive test rate"),
             max_block_frames: NonZeroU32::new(128).expect("fixed block"),
             num_stream_in_channels: 0,
@@ -343,10 +345,7 @@ mod tests {
         }
     }
 
-    fn stop(
-        context: &firewheel::FirewheelContext,
-        mut processor: firewheel::processor::FirewheelProcessor,
-    ) {
+    fn stop(context: &FirewheelContext, mut processor: firewheel::processor::FirewheelProcessor) {
         use audioadapter_buffers::direct::InterleavedSlice;
         use firewheel::{backend::BackendProcessInfo, node::StreamStatus};
         processor.process(
@@ -376,6 +375,48 @@ mod tests {
         let (node, _ends, _sender, _inbox, _owner) = make_node();
         let info = node.info(&EmptyConfig);
         let _ = info;
+    }
+
+    #[kithara::test]
+    fn registered_preparation_shares_the_consuming_factory() {
+        let (node, mut ends, _sender, _inbox, mut owner) = make_node();
+        let snapshot = ends.snapshot.read().clone();
+        let mut graph = FirewheelContext::new(FirewheelConfig::default());
+        let node = graph.add_node(node, None).expect("registered deck");
+        graph
+            .connect(node, graph.graph_out_node_id(), &[(0, 0), (1, 1)], false)
+            .expect("real deck output");
+        let info = ActivateInfo {
+            sample_rate: NonZeroU32::new(44_100).expect("rate"),
+            max_block_frames: NonZeroU32::new(128).expect("block"),
+            num_stream_in_channels: 0,
+            num_stream_out_channels: 2,
+            input_to_output_latency_seconds: 0.0,
+        };
+        let shape = StreamShape::new(info.max_block_frames, info.sample_rate);
+        PlayerNode::<TestPools, TestInbox>::prepare_at(&graph, node, shape)
+            .expect("registered factory preparation");
+        assert!(
+            PlayerNode::<TestPools, TestInbox>::prepare_if_initial(&graph, node, shape)
+                .expect("same initial factory")
+        );
+        let processor = graph.activate(info).expect("prepared consuming compile");
+        assert!(
+            !PlayerNode::<TestPools, TestInbox>::prepare_if_initial(&graph, node, shape)
+                .expect("same consumed factory")
+        );
+        let error = PlayerNode::<TestPools, TestInbox>::prepare_at(&graph, node, shape)
+            .expect_err("constructor inputs were consumed once");
+        assert!(
+            error
+                .error
+                .0
+                .downcast_ref::<ProcessorInputsTaken>()
+                .is_some()
+        );
+        assert_eq!(*ends.snapshot.read(), snapshot);
+        stop(&graph, processor);
+        assert!(owner.reclaim_stopped());
     }
 
     #[kithara::test]

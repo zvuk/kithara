@@ -33,6 +33,7 @@ impl OutputCallback {
         }
     }
 
+    /// The acquired paused stream receives its processor before its only play call.
     pub(super) fn process(&mut self, output: &mut [f32], callback: &cpal::OutputCallbackInfo) {
         let now = Instant::now();
         let frames = output.len() / self.channels;
@@ -46,7 +47,6 @@ impl OutputCallback {
         if self.processor.is_none() {
             self.processor = self.incoming.try_pop();
         }
-        // CPAL returns a paused stream; installation precedes its only play call.
         self.processor
             .as_mut()
             .expect("the acquired stream starts only after processor installation")

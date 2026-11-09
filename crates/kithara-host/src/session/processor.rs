@@ -32,7 +32,6 @@ impl SessionProcessor {
     }
 
     pub(crate) fn render(&mut self, output: &mut [f32], info: BackendProcessInfo) {
-        // CPAL and the offline owner supply complete interleaved frames.
         let input = InterleavedSlice::new(&[] as &[f32], 0, 0)
             .expect("zero input frames have zero samples");
         let mut output = InterleavedSlice::new_mut(output, self.channels, info.frames)
@@ -58,6 +57,7 @@ impl SessionProcessor {
         }
     }
 
+    /// Retains the last real timestamp because process0 republishes the shared clock.
     fn settle(&mut self) {
         let Some(processor) = &mut self.processor else {
             return;
@@ -81,7 +81,6 @@ impl SessionProcessor {
 
 impl Drop for SessionProcessor {
     fn drop(&mut self) {
-        // Keep update_instant: process0 republishes the shared sample clock.
         self.settle();
     }
 }
@@ -113,7 +112,9 @@ mod tests {
         info.frames = 4;
         actual.render(&mut [0.0; 8], info);
         let clock = context.heartbeat();
-        let timestamp = context.audio_clock_instant();
+        let timestamp = context
+            .audio_clock_instant()
+            .expect("the running processor publishes its timestamp");
         let node = context
             .add_node(MasterNode, None)
             .expect("real master node");
@@ -123,10 +124,12 @@ mod tests {
         context.update().expect("queued old-geometry schedule");
         drop(actual);
         assert_eq!(context.heartbeat(), clock);
-        assert_eq!(context.audio_clock_instant(), timestamp);
         assert!(!context.is_active());
+        assert!(context.audio_clock_instant().is_none());
         shape.max_block_frames = NonZeroU32::new(64).expect("new geometry");
         let processor = context.activate(shape).expect("same context restart");
+        assert_eq!(context.heartbeat(), clock);
+        assert_eq!(context.audio_clock_instant(), Some(timestamp));
         let (_stop, stopped) = ringbuf::traits::Split::split(ringbuf::HeapRb::new(1));
         let mut actual = SessionProcessor::new(processor, 2, stopped);
         let mut info = actual.last.clone();

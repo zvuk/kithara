@@ -1,7 +1,5 @@
 use std::ops::Deref;
 
-#[cfg(not(target_arch = "wasm32"))]
-use firewheel::error::DeactivateError;
 use firewheel::{
     ActivateInfo, FirewheelConfig, FirewheelContext,
     error::CompileGraphError,
@@ -19,12 +17,12 @@ use crate::session::processor::SessionProcessor;
 
 /// Owns every writer of the Host's framework queue, reserving before graph mutation.
 pub(crate) struct SessionGraph {
-    inner: Option<FirewheelContext>,
+    pub(super) inner: Option<FirewheelContext>,
     credits: Credits,
     reserved: bool,
-    stop: Option<HeapProd<()>>,
+    pub(super) stop: Option<HeapProd<()>>,
     #[cfg(target_arch = "wasm32")]
-    clock: Option<crate::session::web_output::WebClock>,
+    pub(super) clock: Option<crate::session::web_output::WebClock>,
 }
 
 impl SessionGraph {
@@ -98,13 +96,12 @@ impl SessionGraph {
             .map_err(GraphError::from)
     }
 
+    /// Compiles reserved structural edits; Host settings use their scoped command channel.
     pub(crate) fn update(&mut self) -> Result<(), GraphError> {
         #[cfg(target_arch = "wasm32")]
         if let Some(clock) = &mut self.clock {
             clock.publish().map_err(GraphError::Device)?;
         }
-        // Host nodes do not enqueue framework events; settings use their scoped command channel.
-        // Only the reserved structural compile can write a framework message here.
         self.inner
             .as_mut()
             .expect("context is owned until drop")
@@ -140,22 +137,12 @@ impl SessionGraph {
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn install_web_clock(&mut self, clock: crate::session::web_output::WebClock) {
-        self.clock = Some(clock);
-    }
-
     pub(crate) fn output_starting(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
         if let Some(clock) = &self.clock {
             return clock.starting();
         }
         false
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn initial_output(&self) -> bool {
-        self.stop.is_none()
     }
 
     pub(crate) fn has_session_clock(&self) -> bool {
@@ -205,22 +192,6 @@ impl SessionGraph {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn deactivate_blocking(
-        &mut self,
-        timeout: kithara_platform::time::Duration,
-    ) -> Result<(), DeactivateError> {
-        let until = kithara_platform::time::Instant::now() + timeout;
-        self.request_deactivate();
-        while self.is_active() {
-            if kithara_platform::time::Instant::now() >= until {
-                return Err(DeactivateError::TimedOut);
-            }
-            std::thread::yield_now();
-        }
-        Ok(())
-    }
-
     delegate::delegate! {
         to self.inner.as_mut().expect("context is owned until drop") {
             pub(crate) fn cycle_detected(&mut self) -> Result<(), CompileGraphError>;
@@ -233,20 +204,5 @@ impl Deref for SessionGraph {
     type Target = FirewheelContext;
     fn deref(&self) -> &Self::Target {
         self.inner.as_ref().expect("context is owned until drop")
-    }
-}
-
-impl Drop for SessionGraph {
-    fn drop(&mut self) {
-        self.request_deactivate();
-        #[cfg(target_arch = "wasm32")]
-        if let Some(context) = self.inner.take() {
-            wasm_bindgen_futures::spawn_local(async move {
-                while context.is_active() {
-                    kithara_platform::time::sleep(crate::consts::SESSION_PUMP_INTERVAL).await;
-                }
-                drop(context);
-            });
-        }
     }
 }
