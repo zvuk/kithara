@@ -92,7 +92,6 @@ mod tests {
     use firewheel::{ActivateInfo, FirewheelConfig};
     use kithara_test_utils::kithara;
 
-    use super::*;
     use crate::{rt::MasterNode, session::context::SessionGraph};
 
     #[kithara::test]
