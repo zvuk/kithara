@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use firewheel::{ActivateInfo, FirewheelConfig, backend::BackendProcessInfo, node::StreamStatus};
+use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
 use super::{GraphError, SessionGraph};
@@ -34,7 +35,7 @@ fn pressure_retains_the_real_node_until_two_observed_process_polls() {
     let block = || BackendProcessInfo {
         frames: 1,
         process_timestamp: None,
-        duration_since_stream_start: std::time::Duration::ZERO,
+        duration_since_stream_start: Duration::ZERO,
         input_stream_status: StreamStatus::empty(),
         output_stream_status: StreamStatus::empty(),
         dropped_frames: 0,
