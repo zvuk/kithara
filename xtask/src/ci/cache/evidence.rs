@@ -78,6 +78,10 @@ pub(in crate::ci) fn retain(
     report["revision"] = json!(revision.as_deref());
     report["steps"] = json!(process.timing_evidence());
     report["key_history"] = history(process).unwrap_or(Value::Null);
+    report["transfer_history"] = process
+        .environment_path("KACHE_RUNTIME_DIR")
+        .and_then(|runtime| cache_report::transfer_history(&runtime))
+        .unwrap_or(Value::Null);
     Ok(cache_report::write(
         process.root(),
         lane,
@@ -329,7 +333,45 @@ mod tests {
     }
 
     #[test]
-    fn key_history_survives_runtime_cleanup_without_raw_inputs() {
+    fn transfer_history_bounds_failures_and_preserves_unknown_data() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(cache_report::transfer_history(root.path()).is_none());
+        let path = root.path().join("transfers.jsonl");
+        let known = json!({"ok": false, "direction": "download", "outcome": "error",
+            "cache_key": "a".repeat(64), "elapsed_ms": 12});
+        let unknown = json!({"ok": false, "direction": "secret", "outcome": "secret",
+            "cache_key": "secret", "request_ms": "secret", "url": "secret"});
+        let ignored = [
+            json!({"ok": true}),
+            json!({"ok": false, "outcome": "not_found"}),
+            json!({"ok": false, "outcome": "cancelled"}),
+            json!({"ok": false, "outcome": "skipped"}),
+        ];
+        let mut lines = format!("{unknown}\n");
+        for event in ignored {
+            lines.push_str(&format!("{event}\n"));
+        }
+        lines.push_str(&format!("{known}\n").repeat(16));
+        lines.push_str("invalid\n");
+        fs::write(&path, lines).unwrap();
+        let retained = cache_report::transfer_history(root.path()).unwrap();
+        assert_eq!(retained["observed_failures"], 17);
+        assert_eq!(retained["records"].as_array().unwrap().len(), 16);
+        assert_eq!(retained["invalid_records"], 1);
+        assert_eq!(retained["truncated"], true);
+        assert!(retained["records"][0]["outcome"].is_null());
+        assert!(retained["records"][0]["cache_key"].is_null());
+        assert!(retained["records"][0]["request_ms"].is_null());
+        assert_eq!(retained["records"][1]["elapsed_ms"], 12);
+        assert!(!retained.to_string().contains("secret"));
+        fs::write(&path, b"\n".repeat(cache_report::INPUT_LIMIT + 1)).unwrap();
+        let retained = cache_report::transfer_history(root.path()).unwrap();
+        assert_eq!(retained["truncated"], true);
+        assert_eq!(retained["observed_failures"], 0);
+    }
+
+    #[test]
+    fn runtime_history_survives_cleanup_without_raw_inputs() {
         let directory = tempfile::tempdir().unwrap();
         let job =
             crate::ci::kache::KacheJob::prepare(&directory.path().join("kache"), None).unwrap();
@@ -365,6 +407,10 @@ mod tests {
             format!("{}invalid\n", format!("{event}\n").repeat(129)),
         )
         .unwrap();
+        let transfer = json!({"direction": "download", "outcome": "import_error", "ok": false,
+            "cache_key": "d".repeat(64), "elapsed_ms": 5012, "request_ms": 2,
+            "import_lock_wait_ms": 5000, "object_key": "AWS_SECRET_ACCESS_KEY=secret"});
+        fs::write(runtime.join("transfers.jsonl"), format!("{transfer}\n")).unwrap();
         let retained = history(&process).unwrap();
         assert_eq!(retained["records"].as_array().unwrap().len(), 128);
         assert_eq!(retained["truncated"], true);
@@ -386,6 +432,18 @@ mod tests {
         let path = report_path(&process, "test").unwrap();
         let report: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(report["key_history"], retained);
+        assert_eq!(
+            report["transfer_history"]["records"][0]["outcome"],
+            "import_error"
+        );
+        assert_eq!(
+            report["transfer_history"]["records"][0]["cache_key"],
+            "d".repeat(64)
+        );
+        assert_eq!(
+            report["transfer_history"]["records"][0]["import_lock_wait_ms"],
+            5000
+        );
         assert_eq!(report["job"]["gitlab_job_id"], 123);
         assert_eq!(report["revision"], "a".repeat(40));
         assert!(report["job"]["github_run_id"].is_null());

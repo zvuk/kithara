@@ -251,22 +251,7 @@ fn costly_units(input: &Value) -> Value {
 /// Retain bounded sanitized key events from the observed runtime only.
 #[must_use]
 pub fn history(runtime: &Path) -> Option<Value> {
-    let file = fs::File::open(runtime.join("events.jsonl")).ok()?;
-    let mut bytes = Vec::new();
-    file.take(u64::try_from(INPUT_LIMIT + 1).ok()?)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    let truncated = bytes.len() > INPUT_LIMIT;
-    bytes.truncate(INPUT_LIMIT);
-    let events: Vec<Value> = bytes
-        .split(|b| *b == b'\n')
-        .filter_map(|line| serde_json::from_slice(line).ok())
-        .collect();
-    let invalid_records = bytes
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-        .count()
-        .saturating_sub(events.len());
+    let (events, truncated, invalid_records) = read_records(&runtime.join("events.jsonl"))?;
     let records: Vec<_> = retained_records(&events)
         .iter()
         .map(|event| {
@@ -321,6 +306,54 @@ pub fn history(runtime: &Path) -> Option<Value> {
     Some(
         json!({"scope": "job_runtime_only", "prior_jobs": null, "invalid_records": invalid_records, "truncated": truncated || events.len() > records.len() || invalid_records > 0, "records": records}),
     )
+}
+
+/// Retain failed transfer outcomes and timings without remote URLs or raw diagnostics.
+#[must_use]
+pub fn transfer_history(runtime: &Path) -> Option<Value> {
+    let (events, truncated, invalid_records) = read_records(&runtime.join("transfers.jsonl"))?;
+    let failures: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            event["ok"] != true
+                && !matches!(
+                    event["outcome"].as_str(),
+                    Some("not_found" | "cancelled" | "skipped")
+                )
+        })
+        .collect();
+    let records: Vec<_> = failures.iter().take(16).map(|event| {
+        let mut safe = numbers(event, "schema elapsed_ms request_ms body_ms import_ms import_lock_wait_ms timestamp started_at_unix_ms finished_at_unix_ms");
+        safe["cache_key"] = json!(event["cache_key"].as_str().and_then(|key| hex(key, 64)));
+        safe["direction"] = json!(event["direction"].as_str().filter(|direction| matches!(*direction, "upload" | "download")));
+        safe["outcome"] = json!(event["outcome"].as_str().filter(|outcome| matches!(*outcome, "error" | "import_error" | "download_error" | "upload_error")));
+        safe["ok"] = json!(event["ok"].as_bool());
+        safe
+    }).collect();
+    Some(
+        json!({"scope": "job_runtime_only", "invalid_records": invalid_records,
+        "observed_failures": failures.len(), "truncated": truncated || failures.len() > records.len() || invalid_records > 0, "records": records}),
+    )
+}
+
+fn read_records(path: &Path) -> Option<(Vec<Value>, bool, usize)> {
+    let file = fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(u64::try_from(INPUT_LIMIT + 1).ok()?)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    let truncated = bytes.len() > INPUT_LIMIT;
+    bytes.truncate(INPUT_LIMIT);
+    let events: Vec<Value> = bytes
+        .split(|b| *b == b'\n')
+        .filter_map(|line| serde_json::from_slice(line).ok())
+        .collect();
+    let invalid_records = bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .count()
+        .saturating_sub(events.len());
+    Some((events, truncated, invalid_records))
 }
 
 fn retained_records(records: &[Value]) -> &[Value] {

@@ -270,6 +270,7 @@ pub fn record_evidence(phase: &OsStr) -> io::Result<()> {
     report["revision"] = json!(revision.as_deref().ok());
     report["steps"] = json!({"step_count": steps.len(), "steps": steps});
     report["key_history"] = cache_report::history(runtime).unwrap_or(Value::Null);
+    report["transfer_history"] = cache_report::transfer_history(runtime).unwrap_or(Value::Null);
     cache_report::write(
         &env::current_dir()?,
         phase,

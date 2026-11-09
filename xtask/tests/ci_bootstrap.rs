@@ -101,7 +101,7 @@ fn bootstrap_retains_evidence_without_a_cached_xtask() {
     stats["local_hits"] = json!(7);
     stats["remote"] = json!("s3://fixture-private/cache");
     let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
-        .args(["cache", "bootstrap", "sh", "-c", "exit 0"])
+        .args(["cache", "bootstrap", "sh", "-c", "printf '%s\\n' '{\"ok\":false,\"direction\":\"download\",\"outcome\":\"error\",\"elapsed_ms\":23,\"url\":\"secret\"}' > \"$KACHE_RUNTIME_DIR/transfers.jsonl\""])
         .current_dir(temp.path())
         .env("PATH", path)
         .env("TMPDIR", temp.path())
@@ -123,6 +123,9 @@ fn bootstrap_retains_evidence_without_a_cached_xtask() {
     let report: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(report["kache"]["counts"]["local_hits"], 7);
     assert_eq!(report["sccache"]["hits"], 3);
+    assert_eq!(report["transfer_history"]["records"][0]["outcome"], "error");
+    assert_eq!(report["transfer_history"]["records"][0]["elapsed_ms"], 23);
+    assert!(!report.to_string().contains("secret"));
     assert_eq!(report["steps"]["step_count"], 5);
     assert!(
         !String::from_utf8(bytes)
