@@ -47,6 +47,10 @@ where
         if meta.source_span.is_some_and(|span| !span.is_affine()) {
             return Err(crate::WarpRenderError::UnsupportedSourceGeometry);
         }
+        if output_limit > 0 && meta.spec == self.spec && self.unity_retirement_pending() {
+            self.retire_for_reprime()?;
+            self.prepare(meta.spec);
+        }
         if let Some(frames) = self.prepared_source_window(meta, output_limit)? {
             return Ok(frames);
         }
