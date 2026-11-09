@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 
 use bevy_platform::time::Instant;
 use firewheel::{backend::BackendProcessInfo, cpal::cpal, node::StreamStatus};
+use num_traits::AsPrimitive;
 use ringbuf::{HeapCons, traits::Consumer};
 
 use crate::session::processor::SessionProcessor;
@@ -67,7 +68,8 @@ impl OutputCallback {
                             .expect("late callback has a predecessor")
                             .as_secs_f64()
                             * rate)
-                            .round() as u32
+                            .round()
+                            .as_()
                     } else {
                         0
                     },

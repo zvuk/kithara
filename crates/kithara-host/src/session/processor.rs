@@ -89,15 +89,15 @@ impl Drop for SessionProcessor {
 mod tests {
     use std::num::NonZeroU32;
 
-    use firewheel::{ActivateInfo, FirewheelConfig, FirewheelContext};
+    use firewheel::{ActivateInfo, FirewheelConfig};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::rt::MasterNode;
+    use crate::{rt::MasterNode, session::context::SessionGraph};
 
     #[kithara::test]
     fn stopping_settles_the_real_queued_schedule_without_moving_its_clock() {
-        let mut context = FirewheelContext::new(FirewheelConfig::default());
+        let mut context = SessionGraph::new(FirewheelConfig::default());
         let mut shape = ActivateInfo {
             sample_rate: NonZeroU32::new(48_000).expect("rate"),
             max_block_frames: NonZeroU32::new(128).expect("block"),
@@ -105,9 +105,7 @@ mod tests {
             num_stream_out_channels: 2,
             input_to_output_latency_seconds: 0.0,
         };
-        let processor = context.activate(shape).expect("initial graph");
-        let (_stop, stopped) = ringbuf::traits::Split::split(ringbuf::HeapRb::new(1));
-        let mut actual = SessionProcessor::new(processor, 2, stopped);
+        let mut actual = context.activate(shape).expect("initial graph");
         let mut info = actual.last.clone();
         info.frames = 4;
         actual.render(&mut [0.0; 8], info);
@@ -127,11 +125,10 @@ mod tests {
         assert!(!context.is_active());
         assert!(context.audio_clock_instant().is_none());
         shape.max_block_frames = NonZeroU32::new(64).expect("new geometry");
-        let processor = context.activate(shape).expect("same context restart");
+        let mut actual = context.activate(shape).expect("same context restart");
         assert_eq!(context.heartbeat(), clock);
         assert_eq!(context.audio_clock_instant(), Some(timestamp));
-        let (_stop, stopped) = ringbuf::traits::Split::split(ringbuf::HeapRb::new(1));
-        let mut actual = SessionProcessor::new(processor, 2, stopped);
+
         let mut info = actual.last.clone();
         info.frames = 1;
         actual.render(&mut [0.0; 2], info);

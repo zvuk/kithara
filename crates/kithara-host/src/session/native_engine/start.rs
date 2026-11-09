@@ -57,7 +57,7 @@ fn start_stream_cpal(
     decks: &mut [DeckNode],
 ) -> Result<NativeStream, String> {
     debug!(sample_rate, "starting cpal stream");
-    let device = AcquiredOutput::new(cpal_config(sample_rate, output_block_frames))?.open()?;
+    let device = AcquiredOutput::new(&cpal_config(sample_rate, output_block_frames))?.open()?;
     device.reserve_processor()?;
     ctx.cycle_detected().map_err(|error| error.to_string())?;
     if ctx.is_active() {

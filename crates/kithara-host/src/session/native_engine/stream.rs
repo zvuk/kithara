@@ -30,7 +30,7 @@ impl AcquiredOutput {
             SampleFormat::F32 => self.device.build_output_stream(
                 self.config,
                 move |data: &mut [f32], info| callback.process(data, info),
-                report_error,
+                |error| report_error(&error),
                 None,
             ),
             SampleFormat::I8 => converted::<i8>(&self.device, self.config, callback, capacity),
@@ -94,11 +94,11 @@ fn converted<T: SizedSample + FromSample<f32>>(
                 }
             }
         },
-        report_error,
+        |error| report_error(&error),
         None,
     )
 }
 
-fn report_error(error: cpal::Error) {
+fn report_error(error: &cpal::Error) {
     tracing::error!(%error, "native output stream failed");
 }
