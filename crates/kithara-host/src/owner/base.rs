@@ -304,6 +304,7 @@ where
                 deck_delivery: clock.deck_delivery,
                 output: &output,
                 deck: record.snapshot.read(),
+                planned_tempo: self.session.timeline.trajectory(),
             };
             let Some(mut port) = channel.scope(record.scope) else {
                 continue;
@@ -344,6 +345,7 @@ where
             deck_delivery: clock.deck_delivery,
             output: &output,
             deck: record.snapshot.read(),
+            planned_tempo: self.session.timeline.trajectory(),
         };
         let mut port = self
             .session
@@ -457,13 +459,6 @@ where
         }
     }
 
-    fn is_next_tempo(command: &Self::Command) -> bool {
-        matches!(
-            command,
-            HostCommand::Configure(HostSettingsChange::Tempo(_), When::Next)
-        )
-    }
-
     fn begin_pass(&mut self) {
         self.session.begin_iteration();
         let clock = self.clock().unwrap_or_default();
@@ -513,6 +508,7 @@ where
                 deck_delivery: clock.deck_delivery,
                 output: &output,
                 deck: record.snapshot.read(),
+                planned_tempo: self.session.timeline.trajectory(),
             };
             if let Some(mut port) = self
                 .session
@@ -566,11 +562,7 @@ where
         if let Err(error) = tick_session(&mut self.session) {
             tracing::warn!(%error, "host graph pass failed");
         }
-        if let Some(channel) = &mut self.session.channel
-            && let Err(error) = channel.publish()
-        {
-            tracing::warn!(%error, "host publication gate closed");
-        }
+        self.session.publish_staged();
         self.retire_stopped_scopes();
         let clock = self.clock().unwrap_or_default();
         self.route_receipts(clock);
@@ -614,6 +606,7 @@ where
 
     fn route_receipts(&mut self, clock: PassClock) {
         let output = self.session.root_view.output.get();
+        let mut moved = Vec::new();
         loop {
             let Some(receipt) = self
                 .session
@@ -625,7 +618,7 @@ where
             };
             match receipt {
                 ScopedReceipt::Root(receipt) => {
-                    crate::session::queue::settle_receipt(&mut self.session, &receipt);
+                    crate::session::queue::settle_receipt(&mut self.session, &receipt, &mut moved);
                 }
                 ScopedReceipt::Scope(scope, receipt) => {
                     let Some(index) = self
@@ -675,6 +668,7 @@ where
                             deck_delivery: clock.deck_delivery,
                             output: &output,
                             deck: record.snapshot.read(),
+                            planned_tempo: self.session.timeline.trajectory(),
                         };
                         let mut out = Outbox::new(&mut port, &mut self.dispatcher)
                             .lend_mix(&mut record.mix)
@@ -721,6 +715,7 @@ where
                 }
             }
         }
+        crate::session::queue::place_moved(&mut self.session, moved);
     }
 
     fn poll_events(&mut self) {
@@ -740,6 +735,7 @@ where
                     deck_delivery: clock.deck_delivery,
                     output: &output,
                     deck: record.snapshot.read(),
+                    planned_tempo: self.session.timeline.trajectory(),
                 };
                 let Some(mut port) = channel.scope(record.scope) else {
                     continue;

@@ -1,4 +1,8 @@
-use std::{future::Future, num::NonZeroU32, task::Poll};
+use std::{
+    future::Future,
+    num::{NonZeroU16, NonZeroU32},
+    task::Poll,
+};
 
 use firewheel::{
     StreamInfo,
@@ -32,6 +36,7 @@ use kithara_render::{
     },
 };
 use kithara_signal::{FrameCount, OutputContext, SessionEpoch, SessionFrame};
+use kithara_sync::{SessionBeat, Tempo, TempoStep, TempoTrajectory};
 use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;
 use num_traits::ToPrimitive;
@@ -50,6 +55,25 @@ pub const SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
     Some(sample_rate) => sample_rate,
     None => unreachable!(),
 };
+
+/// The session tempo every mock pass lends: the default tempo from frame 0,
+/// four beats to the bar at [`SAMPLE_RATE`].
+#[must_use]
+pub fn planned_tempo() -> TempoTrajectory {
+    const BEATS_PER_BAR: NonZeroU16 = match NonZeroU16::new(4) {
+        Some(beats) => beats,
+        None => unreachable!(),
+    };
+    TempoTrajectory::new(
+        TempoStep {
+            frame: SessionFrame::new(0),
+            beat: SessionBeat::default(),
+            tempo: Tempo::default(),
+        },
+        BEATS_PER_BAR,
+        SAMPLE_RATE,
+    )
+}
 
 /// Observes the cancellation subtree and output rate passed to a fixture open.
 #[must_use]
@@ -754,6 +778,7 @@ impl<S> DeckRig<S> {
             deck_delivery: FrameCount::new(0),
             output: &output,
             deck: &self.observation,
+            planned_tempo: &planned_tempo(),
         };
         Ok(run(
             &mut Outbox::new(&mut scope, &mut self.dispatcher).in_pass(pass)

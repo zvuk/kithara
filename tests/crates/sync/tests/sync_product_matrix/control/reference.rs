@@ -1550,17 +1550,25 @@ impl DecodedCapture {
         let first = i64::try_from(domain.start).map_err(|error| error.to_string())?;
         let last = i64::try_from(domain.end - 1).map_err(|error| error.to_string())?;
         let mut read = self.sampler(info);
+        let mut window = [None::<(i64, [f32; N])>; (2 * SINC_RADIUS + 1) as usize];
         Ok(move |position: SourcePosition, speed: f64| {
             let source =
                 i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
             mapped_samples((position.0, position.1.get()), speed, |offset| {
                 let frame = source
                     .checked_add(offset)
-                    .ok_or_else(|| "fixture sample coordinate overflows".to_owned())?;
+                    .ok_or_else(|| "fixture sample coordinate overflows".to_owned())?
+                    .clamp(first, last);
+                let index = usize::try_from(frame % (2 * i64::from(SINC_RADIUS) + 1))
+                    .expect("bounded sample cache slot");
+                if let Some((_, samples)) = window[index].filter(|(cached, _)| *cached == frame) {
+                    return Ok(samples);
+                }
                 let mut samples = [0.0; N];
                 for (sample, channel) in samples.iter_mut().zip(channels) {
-                    *sample = read(frame.clamp(first, last), channel)?;
+                    *sample = read(frame, channel)?;
                 }
+                window[index] = Some((frame, samples));
                 Ok(samples)
             })
         })
@@ -2177,6 +2185,38 @@ fn check_persistent_physical_sampling(
     capture: &DecodedCapture,
     identity: consumed::SourceIdentity,
 ) {
+    for channels in [[0, 1], [1, 0], [0, 0], [0, 2]] {
+        let bounded = capture.sampler_at_domain(identity, channels, 0..96);
+        if let Ok(mut bounded) = bounded {
+            for frame in (0..96_u128).chain((0..96).rev()) {
+                for speed in [0.5, 1.0, 1.25, 8.0] {
+                    let position = (
+                        frame * 4 + 1,
+                        std::num::NonZeroU128::new(4).expect("quarter-frame phase"),
+                    );
+                    let source = i64::try_from(frame).expect("small fixture coordinate");
+                    let expected =
+                        mapped_samples((position.0, position.1.get()), speed, |offset| {
+                            let at = (source + offset).clamp(0, 95);
+                            Ok([
+                                capture.sample(identity, at, channels[0])?,
+                                capture.sample(identity, at, channels[1])?,
+                            ])
+                        });
+                    assert_eq!(
+                        bounded(position, speed).map(|pcm| pcm.map(f32::to_bits)),
+                        expected.map(|pcm| pcm.map(f32::to_bits)),
+                        "bounded source window: {position:?}, {speed}, {channels:?}",
+                    );
+                }
+            }
+        } else {
+            assert!(
+                capture.rejected,
+                "only a rejected capture has no bounded sampler"
+            );
+        }
+    }
     let mut readers = [
         capture.sampler(identity),
         capture.sampler(identity),

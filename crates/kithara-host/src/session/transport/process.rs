@@ -364,6 +364,10 @@ impl TransportState {
             self.restart()?;
         } else if self.session_grid.epoch() > target.epoch() {
             return Err(TransportProcessError::SessionGridGenerationMismatch);
+        } else {
+            // A stream that stopped on its own ended the axis already; what
+            // the owner published since still names frames on it.
+            self.refuse_ended_axis()?;
         }
         let actual_stamp = self.session_grid.stamp()?;
         if self.session_grid.epoch() == target.epoch()
@@ -412,14 +416,7 @@ impl TransportState {
     /// on it, keeps the ones for the next block, and leaves the beat it
     /// stopped on for the next stream to anchor.
     fn restart(&mut self) -> Result<(), TransportProcessError> {
-        self.acquire_inbox()?;
-        self.inbox
-            .as_mut()
-            .ok_or(TransportProcessError::MissingState)?
-            .refuse_timed(
-                TransportProcessError::SessionAxisRestarted,
-                DeckRefusal::AxisRestarted,
-            );
+        self.refuse_ended_axis()?;
         if let Some(snapshot) = self.snapshot.take() {
             self.reanchor_beat = Some(snapshot.position());
         }
@@ -430,6 +427,20 @@ impl TransportState {
         self.current.anchor = None;
         self.boundary = None;
         generation
+    }
+
+    /// Refuses every change waiting for a frame on the axis that ended, and
+    /// keeps the ones for the next block.
+    fn refuse_ended_axis(&mut self) -> Result<(), TransportProcessError> {
+        self.acquire_inbox()?;
+        self.inbox
+            .as_mut()
+            .ok_or(TransportProcessError::MissingState)?
+            .refuse_timed(
+                TransportProcessError::SessionAxisRestarted,
+                DeckRefusal::AxisRestarted,
+            );
+        Ok(())
     }
 
     /// The block's frame range and the session beats it covers.

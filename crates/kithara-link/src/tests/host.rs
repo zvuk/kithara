@@ -692,7 +692,9 @@ fn a_joining_deck_adopts_the_current_axis_after_missed_epochs() {
 #[kithara::test]
 #[case::late(Rejection::Late)]
 #[case::refused(Rejection::Refused(PlayError::Full("host")))]
-fn rejected_at_tempo_withdraws_the_step_and_restores_decks(#[case] reason: Rejection<PlayError>) {
+fn a_rejected_at_tempo_retimes_decks_on_the_map_without_its_step(
+    #[case] reason: Rejection<PlayError>,
+) {
     let (mut host, clock) = host();
     let (deck, control, _, _) = sounding();
     let (_, probe) = register(&mut host, deck, &control);
@@ -708,6 +710,7 @@ fn rejected_at_tempo_withdraws_the_step_and_restores_decks(#[case] reason: Rejec
         3.0
     );
     clock.at(48_000);
+    clock.unplan(48_000);
     clock.answer(seq, 180.0, Err(reason));
     control.clear();
     let answers = finish(&mut host);
@@ -745,6 +748,7 @@ fn a_terminal_next_tempo_refusal_settles_without_readmission() {
         )
         .expect("tempo")
         .expect("sequence");
+    clock.unplan(128);
     clock.answer(caller, 180.0, Err(Rejection::Refused(PlayError::Closed)));
     assert!(matches!(
         finish(&mut host).as_slice(),
@@ -781,6 +785,7 @@ fn rejected_next_tempo_replans_with_lane_lead_and_keeps_the_caller() {
         When::At(SessionFrame::new(384))
     );
     clock.at(384);
+    clock.unplan(384);
     clock.answer(caller, 180.0, Err(Rejection::Late));
     control.clear();
     assert!(finish(&mut host).is_empty());
@@ -814,6 +819,7 @@ fn a_newer_next_tempo_supersedes_a_rejected_older_one() {
     let newer = next_tempo(&mut host, 90.0)
         .expect("newer")
         .expect("sequence");
+    clock.unplan(128);
     clock.answer(older, 180.0, Err(Rejection::Late));
     assert!(
         matches!(finish(&mut host).as_slice(), [HostSettled::Settings { seq, outcome: Err(_), .. }] if *seq == older)
@@ -873,6 +879,10 @@ fn a_newer_tempo_replaces_what_it_can(#[case] standing: Older, #[case] arriving:
         .expect("older")
         .expect("sequence");
     if !matches!(standing, Older::Planned(_)) {
+        let When::At(refused) = clock.edit(|script| script.sent[0].2) else {
+            panic!("a planned tempo names its frame");
+        };
+        clock.unplan(i64::from(refused));
         clock.answer(older, 180.0, Err(full()));
     }
     if matches!(standing, Older::Parked) {
@@ -904,22 +914,10 @@ fn a_newer_tempo_replaces_what_it_can(#[case] standing: Older, #[case] arriving:
     let (last, admitted) = clock.edit(|script| (script.sent[sent].2, script.sent.len()));
     assert_eq!(admitted, sent + 1);
     assert_eq!(last, When::At(SessionFrame::new(frame)));
-    let target = |probe: &Probe, frame: i64| {
-        probe
-            .trajectory()
-            .anchor_at(SessionFrame::new(frame))
-            .target_beats_per_second()
-    };
     assert_eq!(
         probe.read(|observation| observation.trajectories[0].0),
         SessionFrame::new(frame)
     );
-    let at_step = match standing {
-        _ if frame == step => 1.5,
-        Older::Parked => 2.0,
-        Older::Planned(_) | Older::Replanned => 3.0,
-    };
-    assert_eq!(target(&probe, step), at_step);
     assert!(
         matches!(control.commands().last(), Some((_, Command::Speed(_, When::At(speed))))
             if *speed == SessionFrame::new(frame))
@@ -931,15 +929,25 @@ fn a_newer_tempo_replaces_what_it_can(#[case] standing: Older, #[case] arriving:
         usize::from(matches!(standing, Older::Parked))
     );
     clock.at(frame);
+    // The Host's verdict on the older batch: the newer tempo on its frame
+    // took its step, and a refused step leaves the accepted map.
+    let verdict = |rejection: Option<Rejection<PlayError>>| {
+        if frame == step {
+            return Err(Rejection::Refused(PlayError::Superseded));
+        }
+        rejection.map_or_else(
+            || Ok(SessionFrame::new(step)),
+            |rejection| {
+                clock.unplan(step);
+                Err(rejection)
+            },
+        )
+    };
     match standing {
-        Older::Planned(rejection) => clock.answer(
-            older,
-            180.0,
-            rejection.map_or_else(|| Ok(SessionFrame::new(step)), Err),
-        ),
+        Older::Planned(rejection) => clock.answer(older, 180.0, verdict(rejection)),
         Older::Replanned => {
             assert_ne!(retry, older);
-            clock.answer(retry, 180.0, Err(Rejection::Late));
+            clock.answer(retry, 180.0, verdict(Some(Rejection::Late)));
         }
         Older::Parked => {}
     }
@@ -957,16 +965,40 @@ fn a_newer_tempo_replaces_what_it_can(#[case] standing: Older, #[case] arriving:
         }
     ));
     assert_eq!(clock.edit(|script| script.sent.len()), admitted);
-    let at_step = if frame == step {
-        1.5
-    } else if applied_aside {
-        3.0
-    } else {
-        2.0
-    };
-    assert_eq!(target(&probe, step), at_step);
-    assert_eq!(target(&probe, frame), 1.5);
-    assert_eq!(bpm(&probe, frame + 48_000), 90.0);
+}
+
+#[kithara::test]
+fn a_superseded_tempo_ends_its_request_without_retiming_decks() {
+    let (mut host, clock) = host();
+    let (deck, control, _, _) = sounding();
+    let (_, probe) = register(&mut host, deck, &control);
+    let older = next_tempo(&mut host, 180.0)
+        .expect("older")
+        .expect("sequence");
+    let newer = next_tempo(&mut host, 90.0)
+        .expect("newer")
+        .expect("sequence");
+    let frames = clock.edit(|script| script.sent.iter().map(|sent| sent.2).collect::<Vec<_>>());
+    assert_eq!(frames, [When::At(SessionFrame::new(128)); 2]);
+    clock.answer(older, 180.0, Err(Rejection::Refused(PlayError::Superseded)));
+    probe.clear();
+    control.clear();
+
+    assert!(matches!(
+        finish(&mut host).as_slice(),
+        [HostSettled::Settings {
+            seq,
+            outcome: Err(Rejection::Refused(PlayError::Superseded)),
+            ..
+        }] if *seq == older
+    ));
+    assert!(control.commands().is_empty());
+    probe.read(|observation| assert!(observation.trajectories.is_empty()));
+    clock.answer(newer, 90.0, Ok(SessionFrame::new(128)));
+    assert!(matches!(
+        finish(&mut host).as_slice(),
+        [HostSettled::Settings { seq, outcome: Ok(_), .. }] if *seq == newer
+    ));
 }
 
 #[kithara::test]
