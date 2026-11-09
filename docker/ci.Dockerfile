@@ -312,7 +312,8 @@ RUN mkdir -p /etc/pulse/default.pa.d \
 ARG MONKEYS_AUDIO_SOURCE_URL
 ARG MONKEYS_AUDIO_SOURCE_SHA256
 
-RUN curl -fsSL -o /tmp/monkeys-audio.zip "${MONKEYS_AUDIO_SOURCE_URL}" \
+RUN curl -fsSL -H 'Accept: application/octet-stream' \
+      -o /tmp/monkeys-audio.zip "${MONKEYS_AUDIO_SOURCE_URL}" \
  && echo "${MONKEYS_AUDIO_SOURCE_SHA256}  /tmp/monkeys-audio.zip" | sha256sum -c - \
  && mkdir /tmp/monkeys-audio \
  && cmake -E chdir /tmp/monkeys-audio cmake -E tar xf /tmp/monkeys-audio.zip \
