@@ -3,12 +3,17 @@ use triple_buffer::Input;
 
 use super::{device::OutputLease, worklet::ClockStamp};
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, vis = "pub(crate)")]
 pub(crate) struct WebClock {
     pub(super) lease: OutputLease,
     pub(super) input: Input<ClockStamp>,
+    #[field(get(copy))]
     pub(super) requested: u32,
     pub(super) acknowledged: bool,
+    #[field(get(copy))]
     pub(super) info: firewheel::ActivateInfo,
+    #[field(get(copy))]
     pub(super) initial: bool,
 }
 
@@ -32,16 +37,7 @@ impl WebClock {
     pub(crate) fn starting(&self) -> bool {
         !self.acknowledged
     }
-    pub(crate) fn requested(&self) -> u32 {
-        self.requested
-    }
     pub(crate) fn acknowledge(&mut self) {
         self.acknowledged = true;
-    }
-    pub(crate) fn info(&self) -> firewheel::ActivateInfo {
-        self.info
-    }
-    pub(crate) fn initial(&self) -> bool {
-        self.initial
     }
 }
