@@ -5,31 +5,21 @@
     chrome: Plain,
     parameters: ["deck"],
     root: Row(
-        size: (w: Fixed(124.0), h: Fixed(30.0)),
+        size: (w: Shrink, h: Fill),
         gap: 0.0,
+        frame: (top: false, right: true, bottom: false, left: false),
+        frame_color: LineInner,
         children: [
-            Button(
+            Pressable(
                 id: "down",
-                label: "<",
-                style: Transport,
-                write: Command(id: "deck.key.transpose_down", with: { "deck": "$deck" }),
-                size: (w: Fixed(28.0), h: Fill),
+                press: Command(id: "deck.key.transpose_down", with: { "deck": "$deck" }),
+                child: Glyph(id: "down-icon", icon: ChevronLeft, style: MenuCell, color: Muted, size: (w: Fixed(15.0), h: Fill)),
             ),
-            Button(
-                id: "toggle",
-                label: "@deck.key_lock.label",
-                icon: Some(Lock),
-                style: Transport,
-                read: Model(id: "deck.key.locked", with: { "deck": "$deck" }),
-                write: Command(id: "deck.key.toggle_lock", with: { "deck": "$deck" }),
-                size: (w: Fixed(68.0), h: Fill),
-            ),
-            Button(
+            Include(id: "chip", source: "key-lock-chip.kmodule.ron", with: { "deck": "$deck" }),
+            Pressable(
                 id: "up",
-                label: ">",
-                style: Transport,
-                write: Command(id: "deck.key.transpose_up", with: { "deck": "$deck" }),
-                size: (w: Fixed(28.0), h: Fill),
+                press: Command(id: "deck.key.transpose_up", with: { "deck": "$deck" }),
+                child: Glyph(id: "up-icon", icon: ChevronRight, style: MenuCell, color: Muted, size: (w: Fixed(15.0), h: Fill)),
             ),
         ],
     ),

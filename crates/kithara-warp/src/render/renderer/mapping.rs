@@ -176,7 +176,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         Ok((mapped, end))
     }
 
-    fn span_within_region(
+    pub(super) fn span_until(
         mapped: SourceSpan,
         end: u64,
     ) -> Result<Option<SourceSpan>, ElasticError> {
@@ -224,7 +224,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             return Ok(nominal);
         }
         let (mapped, end) = self.region_span(start, nominal)?;
-        if let Some(span) = Self::span_within_region(mapped, end)? {
+        if let Some(span) = Self::span_until(mapped, end)? {
             return Ok(span);
         }
         let first = fraction(self.mapped_position(start, rate, 0)?);

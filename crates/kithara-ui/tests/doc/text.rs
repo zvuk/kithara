@@ -162,7 +162,6 @@ fn builtin_catalog_holds_exactly_the_declared_entries() {
         ("menu.section.mixing", "MIXING"),
         ("menu.add_folder", "Add folder…"),
         ("menu.settings", "Settings…"),
-        ("deck.key_lock.label", "KEY LOCK"),
         ("menu.module.overview", "OVERVIEW"),
         ("menu.module.mixer", "MIXER"),
         ("menu.module.fx1", "FX 1"),

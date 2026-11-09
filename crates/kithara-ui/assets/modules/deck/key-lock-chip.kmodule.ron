@@ -1,0 +1,28 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "deck-key-lock-chip",
+    chrome: Plain,
+    parameters: ["deck"],
+    root: Pressable(
+        id: "toggle",
+        press: Command(id: "deck.key.toggle_lock", with: { "deck": "$deck" }),
+        child: Row(
+            id: "chip",
+            size: (w: Shrink, h: Fill),
+            pad_x: 6.0,
+            active: Telemetry(id: "deck.key.locked", with: { "deck": "$deck" }),
+            active_background: Accent,
+            children: [
+                Glyph(
+                    id: "icon",
+                    icon: Music2,
+                    style: MenuSmall,
+                    color: Accent,
+                    active_color: Bg,
+                    active: Telemetry(id: "deck.key.locked", with: { "deck": "$deck" }),
+                ),
+            ],
+        ),
+    ),
+)

@@ -27,7 +27,7 @@ pub enum PlayError {
     #[error("the {0} queue has no room")]
     Full(&'static str),
 
-    #[error("a later consecutive tempo change superseded this one")]
+    #[error("a newer change of the same setting took this change's place")]
     Superseded,
 
     #[error("the deck refused a batch: {0:?}")]

@@ -5,7 +5,10 @@ use ::kithara::{
         BeatGridModel, BeatGridState, GRID_SCHEMA_VERSION, GridBeat, GridDownbeat, Meter,
         RawBeatGrid,
     },
-    host::{HostSettingsControl, api::Tempo},
+    host::{
+        HostSettingsControl,
+        api::{SESSION_BEATS_PER_BAR, Tempo},
+    },
     output::{RenderSink, RenderSinkError},
     platform::{
         sync::Arc,
@@ -27,7 +30,9 @@ use super::owner::mock;
 use crate::{
     analysis::{
         AnalysisHandle, Request, TrackArtifacts,
-        fixtures::{self, constant_fifth_wav, constant_tenth_wav, rhythm_a_wav, rhythm_b_wav},
+        fixtures::{
+            self, constant_fifth_wav, constant_tenth_wav, long_wav, rhythm_a_wav, rhythm_b_wav,
+        },
     },
     gui::rig::Rig,
 };
@@ -35,23 +40,33 @@ use crate::{
 mod consts {
     use super::Duration;
 
-    pub(super) const BEATS_PER_BAR: u16 = 4;
+    /// Beats in one bar of the fixture tracks' own grid.
+    pub(super) const TRACK_BEATS_PER_BAR: u16 = 4;
     pub(super) const BEAT: Duration = Duration::from_millis(500);
     pub(super) const BLOCK_FRAMES: u64 = 1_024;
+    pub(super) const CHANGE_BEATS: usize = 4;
     pub(super) const CHANNELS: u16 = 2;
     pub(super) const CROSSFADE: Duration = Duration::from_secs(1);
     pub(super) const GAPLESS_SHARE: f64 = 0.99;
     pub(super) const INCOMING_BEATS: usize = 8;
+    pub(super) const KEYLOCK_SPEED: f32 = 1.08;
     pub(super) const LEVEL_TOLERANCE: f32 = 1e-3;
     pub(super) const MEASURED_BEATS: usize = 16;
     pub(super) const ONSET_THRESHOLD: f32 = 0.15;
     pub(super) const ONSET_TOLERANCE: Duration = Duration::from_millis(5);
     pub(super) const PAUSE: Duration = Duration::from_millis(200);
+    pub(super) const PITCH_MEASURE: Duration = Duration::from_millis(500);
+    pub(super) const PITCH_TOLERANCE: f64 = 0.02;
     pub(super) const PLAY_ANSWER: Duration = Duration::from_secs(4);
     pub(super) const PULSE: Duration = Duration::from_millis(40);
     pub(super) const REFRACTORY: Duration = Duration::from_millis(100);
     pub(super) const REVISION_ANSWER: Duration = Duration::from_secs(2);
     pub(super) const SETTLE: Duration = Duration::from_secs(1);
+    pub(super) const SILENCE_SHARE: f32 = 0.01;
+    pub(super) const SILENT_RUN: Duration = Duration::from_millis(1);
+    pub(super) const STEPPED_BPM: f64 = 122.0;
+    pub(super) const SYNC_BPM: f64 = 126.0;
+    pub(super) const TONE_HZ: f64 = 440.0;
     pub(super) const TRACK_BEATS: i64 = 23;
     pub(super) const TRACK_BPM: f64 = 120.0;
     pub(super) const TRACK_FIRST_BEAT: f64 = 0.5;
@@ -81,7 +96,7 @@ fn rhythm_grid() -> BeatGridModel {
             })
             .collect(),
         downbeats: (0..consts::TRACK_BEATS)
-            .step_by(usize::from(consts::BEATS_PER_BAR))
+            .step_by(usize::from(consts::TRACK_BEATS_PER_BAR))
             .map(|ordinal| GridDownbeat {
                 at: at(ordinal),
                 beat_ordinal: ordinal,
@@ -89,7 +104,7 @@ fn rhythm_grid() -> BeatGridModel {
             })
             .collect(),
         meter: Some(Meter {
-            beats_per_bar: NonZeroU16::new(consts::BEATS_PER_BAR).expect("a bar holds beats"),
+            beats_per_bar: NonZeroU16::new(consts::TRACK_BEATS_PER_BAR).expect("a bar holds beats"),
             origin_beat_ordinal: 0,
         }),
     })
@@ -158,14 +173,14 @@ fn grid_two_beats_off_the_bar() -> BeatGridModel {
     let mut raw = rhythm_grid().as_raw().clone();
     raw.state = BeatGridState::Provisional;
     raw.meter = Some(Meter {
-        beats_per_bar: NonZeroU16::new(consts::BEATS_PER_BAR).expect("a bar holds beats"),
+        beats_per_bar: NonZeroU16::new(consts::TRACK_BEATS_PER_BAR).expect("a bar holds beats"),
         origin_beat_ordinal: 2,
     });
     raw.downbeats = raw
         .beats
         .iter()
         .skip(2)
-        .step_by(usize::from(consts::BEATS_PER_BAR))
+        .step_by(usize::from(consts::TRACK_BEATS_PER_BAR))
         .map(|beat| GridDownbeat {
             at: beat.at,
             beat_ordinal: beat.ordinal,
@@ -218,7 +233,7 @@ fn capture(rig: &mut Rig, length: Duration) -> Rendered {
 
 /// One host bar at `bpm`.
 fn bar(bpm: f64) -> Duration {
-    Duration::from_secs_f64(60.0 / bpm * f64::from(consts::BEATS_PER_BAR))
+    Duration::from_secs_f64(60.0 / bpm * f64::from(SESSION_BEATS_PER_BAR.get()))
 }
 
 fn frames(rig: &mut Rig, length: Duration) -> u64 {
@@ -302,7 +317,7 @@ fn beat_frame(grid: &BeatGridSnapshot, beat: f64) -> i64 {
 fn next_bar(rig: &mut Rig, beats: f64) -> i64 {
     let grid = mock::host(rig).snapshot();
     let now = i64::try_from(rig.rendered_frames).expect("rendered frames fit the session axis");
-    let bar = f64::from(consts::BEATS_PER_BAR);
+    let bar = f64::from(SESSION_BEATS_PER_BAR.get());
     beat_frame(&grid, ((host_beat(&grid, now) + beats) / bar).ceil() * bar)
 }
 
@@ -368,7 +383,7 @@ async fn synced<T: Send + 'static>(
     Synced { rig, served }
 }
 
-/// Deck A plays the rhythm track `url` with its grid served.
+/// Deck A plays `url` with the rhythm grid served.
 async fn synced_one(url: String, host_bpm: f64) -> Synced<watch::Sender<Option<TrackArtifacts>>> {
     synced(vec![url], host_bpm, |requests, tracks| {
         task::spawn(fixtures::serve_grid(requests, tracks[0], rhythm_grid()))
@@ -395,14 +410,14 @@ async fn serve_tracks(
     }
 }
 
-/// Captures `beats` host beats at `host_bpm` and asserts
-/// that deck A plays through them with every click on a host beat and the
-/// accented clicks on the host downbeats.
-fn assert_on_host_beats(rig: &mut Rig, host_bpm: f64, beats: usize) {
+/// Captures `beats` host beats at `host_bpm`, asserts that deck A plays
+/// through them with every click on a host beat and the accented clicks on
+/// the host downbeats, and returns the capture.
+fn assert_on_host_beats(rig: &mut Rig, host_bpm: f64, beats: usize) -> Rendered {
     let period = Duration::from_secs_f64(60.0 / host_bpm);
     let measured = period * u32::try_from(beats).expect("beat count fits u32");
     let played = rig.queues[0].position_seconds();
-    let Rendered { start, pcm } = capture(rig, measured);
+    let rendered = capture(rig, measured);
     let played = rig.queues[0]
         .position_seconds()
         .zip(played)
@@ -411,12 +426,13 @@ fn assert_on_host_beats(rig: &mut Rig, host_bpm: f64, beats: usize) {
         played.is_some_and(|played| played >= consts::GAPLESS_SHARE * measured.as_secs_f64()),
         "deck A plays through the capture of {measured:?}: {played:?}"
     );
-    let found = onsets(rig, start, &pcm);
+    let found = onsets(rig, rendered.start, &rendered.pcm);
     assert!(
         found.len() >= beats - 1,
         "the capture holds the clicks: {found:?}"
     );
     assert_clicks_on_host_beats(rig, &found);
+    rendered
 }
 
 /// Every click of `found` sits on a host beat, the accented ones on the host
@@ -425,8 +441,8 @@ fn assert_clicks_on_host_beats(rig: &mut Rig, found: &[Onset]) {
     let grid = mock::host(rig).snapshot();
     let tolerance =
         i64::try_from(frames(rig, consts::ONSET_TOLERANCE)).expect("tolerance fits i64");
-    let bar = i64::from(consts::BEATS_PER_BAR);
-    let mut loudness = vec![(0.0_f32, 0_u16); usize::from(consts::BEATS_PER_BAR)];
+    let bar = i64::from(SESSION_BEATS_PER_BAR.get());
+    let mut loudness = vec![(0.0_f32, 0_u16); usize::from(SESSION_BEATS_PER_BAR.get())];
     let mut off_beat = Vec::new();
     for onset in found {
         let beat = host_beat(&grid, onset.frame).round();
@@ -493,7 +509,7 @@ async fn a_seek_on_a_synced_deck_shows_the_position_moving_on(rhythm_a_wav: Stri
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
     rig.call(|rig| {
         let _ = capture(rig, consts::SETTLE);
-        let bar = f64::from(consts::BEATS_PER_BAR) * 60.0 / consts::TRACK_BPM;
+        let bar = f64::from(consts::TRACK_BEATS_PER_BAR) * 60.0 / consts::TRACK_BPM;
         let half_bar = bar / 2.0;
         let duration = rig.queues[0]
             .duration_seconds()
@@ -1062,7 +1078,7 @@ async fn play_on_a_synced_deck_paused_before_the_first_beat_sounds(rhythm_a_wav:
             .round()
             .as_();
         assert_eq!(
-            beat.rem_euclid(i64::from(consts::BEATS_PER_BAR)),
+            beat.rem_euclid(i64::from(SESSION_BEATS_PER_BAR.get())),
             0,
             "the first beat sounds on a host downbeat: {found:?}"
         );
@@ -1200,9 +1216,7 @@ async fn master_bpm_steps_add_up_whenever_the_engine_applies_them() {
             for _ in 0..pending {
                 rig.send("bar/tempo", ControlAction::StepScalar(1.0));
             }
-            while let Ok(envelope) = rig.commands.try_recv() {
-                rig.engine.apply(envelope);
-            }
+            rig.apply();
             rig.engine.publish();
             rig.frame();
         }
@@ -1220,4 +1234,245 @@ async fn master_bpm_steps_add_up_whenever_the_engine_applies_them() {
     })
     .await;
     rig.close().await;
+}
+
+/// The steepest step between neighbouring frames of `pcm`, each channel.
+fn steepest(pcm: &[f32]) -> f32 {
+    pcm.iter()
+        .zip(&pcm[usize::from(consts::CHANNELS)..])
+        .map(|(before, after)| (after - before).abs())
+        .fold(0.0, f32::max)
+}
+
+/// Rising zero crossings per second on the left channel of `pcm`.
+fn pitch(rig: &mut Rig, pcm: &[f32]) -> f64 {
+    let rate = f64::from(mock::host(rig).sample_rate().get());
+    let left: Vec<f32> = pcm
+        .iter()
+        .step_by(usize::from(consts::CHANNELS))
+        .copied()
+        .collect();
+    let rising: f64 = left
+        .windows(2)
+        .filter(|pair| pair[0] < 0.0 && pair[1] >= 0.0)
+        .count()
+        .as_();
+    let seconds: f64 = left.len().as_();
+    rising * rate / seconds
+}
+
+fn assert_pitch(heard: f64, want: f64, what: &str) {
+    assert!(
+        (heard - want).abs() <= consts::PITCH_TOLERANCE * want,
+        "{what}: heard {heard:.1} Hz, want {want:.1} Hz"
+    );
+}
+
+/// The longest run of frames of `pcm` whose left sample stays within `floor`.
+fn longest_silence(pcm: &[f32], floor: f32) -> usize {
+    pcm.iter()
+        .step_by(usize::from(consts::CHANNELS))
+        .fold((0, 0), |(longest, run), sample| {
+            let run = if sample.abs() <= floor { run + 1 } else { 0 };
+            (longest.max(run), run)
+        })
+        .0
+}
+
+fn press_keylock(rig: &mut Rig) -> bool {
+    rig.send("deck-a/keylock/toggle", ControlAction::Activate);
+    rig.apply();
+    rig.engine.publish();
+    rig.frame();
+    rig.flag("deck.key.locked@deck=a")
+}
+
+/// Presses deck A's key lock chip, expecting it to show `locked`, and renders
+/// a settle and a measure. Asserts that deck A's position runs on at
+/// `KEYLOCK_SPEED` through them, to within one output frame.
+fn pressed(rig: &mut Rig, locked: bool) -> Rendered {
+    let rate = f64::from(mock::host(rig).sample_rate().get());
+    let speed = f64::from(consts::KEYLOCK_SPEED);
+    rig.queues[0].tick().expect("deck A takes an owner pass");
+    let from = rig.queues[0].position_seconds().expect("deck A plays");
+    let start = rig.rendered_frames;
+    assert_eq!(press_keylock(rig), locked, "the press shows keylock");
+    let _ = capture(rig, consts::SETTLE);
+    let measure = capture(rig, consts::PITCH_MEASURE);
+    rig.queues[0].tick().expect("deck A takes an owner pass");
+    let played = rig.queues[0].position_seconds().expect("deck A plays") - from;
+    let rendered: f64 = (rig.rendered_frames - start).as_();
+    let wanted = speed * rendered / rate;
+    assert!(
+        (played - wanted).abs() <= speed / rate,
+        "deck A advances {wanted:.6} s at {speed}x through the press: {played:.6} s"
+    );
+    measure
+}
+
+/// A playing deck at +8% holds its tone's pitch with the default keylock; the
+/// chip turns keylock off and the tone sounds 8% sharp, then on and it returns.
+#[kithara::test(native, tokio)]
+async fn the_keylock_chip_holds_the_pitch_of_a_playing_deck(long_wav: String) {
+    let rig = OffThread::spawn("engine", || {
+        Ok::<_, Infallible>(Rig::playback().on_device())
+    })
+    .await
+    .expect("rig fixture is infallible");
+    rig.call(move |rig| {
+        rig.queues[0]
+            .append(long_wav.as_str())
+            .expect("deck A takes the tone");
+        rig.send("deck-a/play", ControlAction::Activate);
+        rig.pump();
+        rig.until("deck A plays the tone", Rig::DEADLINE, Rig::frame, |rig| {
+            rig.queues[0].is_playing()
+        });
+        rig.queues[0]
+            .set_rate(consts::KEYLOCK_SPEED)
+            .expect("deck A takes +8%");
+        rig.pump();
+        let _ = capture(rig, consts::SETTLE);
+        let locked = capture(rig, consts::PITCH_MEASURE);
+        let heard = pitch(rig, &locked.pcm);
+        assert_pitch(heard, consts::TONE_HZ, "the default keylock at +8%");
+
+        let unlocked = pressed(rig, false);
+        let heard = pitch(rig, &unlocked.pcm);
+        let sharp = consts::TONE_HZ * f64::from(consts::KEYLOCK_SPEED);
+        assert_pitch(heard, sharp, "keylock off at +8%");
+
+        let relocked = pressed(rig, true);
+        let heard = pitch(rig, &relocked.pcm);
+        assert_pitch(heard, consts::TONE_HZ, "keylock on again at +8%");
+    })
+    .await;
+    rig.close().await;
+}
+
+/// Every deck starts with keylock on and its chip shown, unless the
+/// document's queue section sets the track keylock.
+#[cfg(not(feature = "broadcast"))]
+#[kithara::test(native, tokio, flash(false))]
+#[case::shipped("{}", true)]
+#[case::document_turns_it_off("track:\n  keylock: false\n", false)]
+async fn a_deck_starts_with_keylock_on_unless_the_document_sets_it(
+    #[case] document: &'static str,
+    #[case] locked: bool,
+) {
+    let rig = OffThread::spawn("engine", move || {
+        Ok::<_, Infallible>(Rig::offline_with(|config| {
+            config.queue =
+                serde_yaml_ng::from_str(document).expect("the document parses as a queue");
+        }))
+    })
+    .await
+    .expect("rig fixture is infallible");
+    rig.call(move |rig| {
+        rig.pump();
+        rig.frame();
+        for deck in ["a", "b"] {
+            assert_eq!(
+                rig.flag(&format!("deck.key.locked@deck={deck}")),
+                locked,
+                "deck {deck} with the document {document:?}"
+            );
+            assert!(
+                !rig.flag(&format!("deck.key.lock_hidden@deck={deck}")),
+                "deck {deck} shows its chip"
+            );
+        }
+    })
+    .await;
+    rig.close().await;
+}
+
+/// Deck A's synced output: `steady` with keylock off at `SYNC_BPM`, and
+/// `through`, the run from `steady` across the changes.
+struct Played {
+    steady: Rendered,
+    through: Vec<f32>,
+}
+
+/// Deck A plays synced at `SYNC_BPM`. A chip press turns keylock off before
+/// the steady `measure`; then a press on, a MASTER BPM step to `STEPPED_BPM`
+/// with its settle, and a press off each precede a `measure`.
+fn through_a_step_and_a_toggle(
+    rig: &mut Rig,
+    mut measure: impl FnMut(&mut Rig, f64) -> Rendered,
+) -> Played {
+    assert!(!press_keylock(rig), "the press turns keylock off");
+    let _ = capture(rig, consts::SETTLE);
+    let steady = measure(rig, consts::SYNC_BPM);
+    assert!(press_keylock(rig), "the press turns keylock on");
+    let on = measure(rig, consts::SYNC_BPM);
+    let tempo = Tempo::new(consts::STEPPED_BPM).expect("fixture tempo is in range");
+    mock::host(rig)
+        .set_tempo(tempo)
+        .expect("the host takes the tempo");
+    let settle = capture(rig, consts::SETTLE);
+    let stepped = measure(rig, consts::STEPPED_BPM);
+    assert!(!press_keylock(rig), "the press turns keylock off");
+    let off = measure(rig, consts::STEPPED_BPM);
+    let through = joined(&[&steady, &on, &settle, &stepped, &off]);
+    Played { steady, through }
+}
+
+/// `parts` back to back.
+fn joined(parts: &[&Rendered]) -> Vec<f32> {
+    parts
+        .iter()
+        .flat_map(|part| part.pcm.iter().copied())
+        .collect()
+}
+
+/// Under SYNC, deck A's clicks stay on the host beats right after a press of
+/// the key lock chip on, after a MASTER BPM step settles and right after a
+/// press off.
+#[kithara::test(native, tokio)]
+async fn a_synced_deck_stays_on_the_beat_across_a_tempo_step_and_a_keylock_toggle(
+    rhythm_a_wav: String,
+) {
+    let Synced { rig, served } = synced_one(rhythm_a_wav, consts::SYNC_BPM).await;
+    rig.call(|rig| {
+        let _ = through_a_step_and_a_toggle(rig, |rig, host_bpm| {
+            assert_on_host_beats(rig, host_bpm, consts::CHANGE_BEATS)
+        });
+    })
+    .await;
+    rig.close().await;
+    drop(served);
+}
+
+/// Under SYNC, a tone plays on through a press of the key lock chip on, a
+/// MASTER BPM step and a press off with no silent run and no step between
+/// samples steeper than its steady unlocked tone's.
+#[kithara::test(native, tokio)]
+async fn a_synced_tone_plays_on_without_a_gap_across_a_tempo_step_and_a_keylock_toggle(
+    long_wav: String,
+) {
+    let Synced { rig, served } = synced_one(long_wav, consts::SYNC_BPM).await;
+    rig.call(|rig| {
+        let Played { steady, through } =
+            through_a_step_and_a_toggle(rig, |rig, _| capture(rig, consts::PITCH_MEASURE));
+        let peak = steady
+            .pcm
+            .iter()
+            .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+        let silent = longest_silence(&through, peak * consts::SILENCE_SHARE);
+        let allowed = frames(rig, consts::SILENT_RUN);
+        assert!(
+            u64::try_from(silent).expect("a run fits u64") <= allowed,
+            "the tone sounds on: a silent run of {silent} frames"
+        );
+        let own = steepest(&steady.pcm);
+        let heard = steepest(&through);
+        assert!(
+            heard <= own,
+            "no step steeper than the steady tone's {own}: {heard}"
+        );
+    })
+    .await;
+    rig.close().await;
+    drop(served);
 }
