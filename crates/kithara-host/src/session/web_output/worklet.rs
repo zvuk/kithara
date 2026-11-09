@@ -1,8 +1,9 @@
-use std::{num::NonZeroU32, time::Duration};
+use std::num::NonZeroU32;
 
 use bevy_platform::time::Instant;
 use firewheel::{backend::BackendProcessInfo, node::StreamStatus};
 use js_sys::{Array, Float32Array};
+use kithara_platform::time::Duration;
 use triple_buffer::Output;
 use wasm_bindgen::{JsCast, prelude::*};
 

@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 
 use bevy_platform::time::Instant;
 use firewheel::{backend::BackendProcessInfo, cpal::cpal, node::StreamStatus};
+use kithara_platform::time::Duration;
 use num_traits::AsPrimitive;
 use ringbuf::{HeapCons, traits::Consumer};
 
@@ -14,7 +15,7 @@ pub(super) struct OutputCallback {
     rate: NonZeroU32,
     started: Instant,
     previous: Option<Instant>,
-    predicted: std::time::Duration,
+    predicted: Duration,
 }
 
 impl OutputCallback {
@@ -30,7 +31,7 @@ impl OutputCallback {
             rate,
             started: Instant::now(),
             previous: None,
-            predicted: std::time::Duration::ZERO,
+            predicted: Duration::ZERO,
         }
     }
 
@@ -43,7 +44,7 @@ impl OutputCallback {
         self.previous = Some(now);
         let rate = f64::from(self.rate.get());
         let frame_count = u32::try_from(frames).expect("CPAL callback frame count fits u32");
-        self.predicted = std::time::Duration::from_secs_f64(f64::from(frame_count) / rate * 1.5);
+        self.predicted = Duration::from_secs_f64(f64::from(frame_count) / rate * 1.5);
         let timestamp = callback.timestamp();
         if self.processor.is_none() {
             self.processor = self.incoming.try_pop();
