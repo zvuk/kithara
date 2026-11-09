@@ -502,7 +502,14 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
     state.stream = Some(stream);
     state.channel = Some(channel);
     state.transport_observation = Some(transport_observation);
-    state.stream_needs_restart = state.ctx.as_ref().is_some_and(|ctx| ctx.output_starting());
+    #[cfg(target_arch = "wasm32")]
+    let starting = state
+        .ctx
+        .as_ref()
+        .is_some_and(SessionGraph::output_starting);
+    #[cfg(not(target_arch = "wasm32"))]
+    let starting = false;
+    state.stream_needs_restart = starting;
     state.publish_root();
     trace_stream_info(state, "start-stream");
     debug!(sample_rate, "[KITHARA-ROUTE] firewheel context ready");

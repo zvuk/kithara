@@ -113,7 +113,14 @@ impl SessionGraph {
         Ok(())
     }
 
+    /// Settles returned SDK schedule storage before activation at the admitted geometry.
     pub(crate) fn activate(&mut self, info: ActivateInfo) -> Result<SessionProcessor, GraphError> {
+        if !self.is_active() {
+            self.inner
+                .as_mut()
+                .expect("context is owned until drop")
+                .update()?;
+        }
         self.reserve()?;
         let processor = self
             .inner
@@ -135,14 +142,6 @@ impl SessionGraph {
         if let Some(stop) = &mut self.stop {
             let _ = stop.try_push(());
         }
-    }
-
-    pub(crate) fn output_starting(&self) -> bool {
-        #[cfg(target_arch = "wasm32")]
-        if let Some(clock) = &self.clock {
-            return clock.starting();
-        }
-        false
     }
 
     pub(crate) fn has_session_clock(&self) -> bool {
@@ -167,29 +166,6 @@ impl SessionGraph {
         self.stream_info().map(|info| {
             kithara_render::rt::StreamShape::new(info.max_block_frames, info.sample_rate)
         })
-    }
-
-    pub(crate) fn output_ready(&self) -> Result<bool, GraphError> {
-        #[cfg(target_arch = "wasm32")]
-        if let Some(clock) = &self.clock {
-            return clock.ready().map_err(GraphError::Device);
-        }
-        Ok(true)
-    }
-
-    pub(crate) fn requested_output_rate(&self) -> Option<u32> {
-        #[cfg(target_arch = "wasm32")]
-        if let Some(clock) = &self.clock {
-            return Some(clock.requested());
-        }
-        None
-    }
-
-    pub(crate) fn acknowledge_output(&mut self) {
-        #[cfg(target_arch = "wasm32")]
-        if let Some(clock) = &mut self.clock {
-            clock.acknowledge();
-        }
     }
 
     delegate::delegate! {

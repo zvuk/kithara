@@ -21,7 +21,7 @@ pub(in crate::session::native_engine) struct AcquiredOutput {
 }
 
 impl AcquiredOutput {
-    pub(in crate::session::native_engine) fn new(request: CpalConfig) -> Result<Self, String> {
+    pub(in crate::session::native_engine) fn new(request: &CpalConfig) -> Result<Self, String> {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -73,7 +73,7 @@ fn select_format(
     let default = device
         .default_output_config()
         .map_err(|error| error.to_string())?;
-    let mut selected = default.clone();
+    let mut selected = default;
     if let Some(rate) = requested {
         for candidate in device
             .supported_output_configs()

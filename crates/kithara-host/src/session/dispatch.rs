@@ -142,14 +142,17 @@ fn update_failed(err: &GraphError) -> SessionError {
     SessionError::Graph(format!("{err:?}"))
 }
 
-/// An inactive context without a reserved stopped generation lost its stream.
-/// Firewheel returns the processor when it stops instead of reporting an update error.
+/// A returned stream is lost once transport reaches or passes its reserved generation.
+/// A planned pending restart is handled before this observation.
 pub(super) fn stream_died<T, S>(state: &SessionState<T, S>) -> bool {
     state.reserved_session_grid.is_none_or(|reserved| {
         state
             .transport_observation
             .as_ref()
-            .is_some_and(|observation| observation.output_buffer().session_grid() == reserved)
+            .is_some_and(|observation| {
+                let observed = observation.output_buffer().session_grid();
+                observed == reserved || observed.epoch() > reserved.epoch()
+            })
     }) && !state.stream_needs_restart
         && state.ctx.as_ref().is_some_and(|ctx| !ctx.is_active())
 }
@@ -183,6 +186,7 @@ pub(crate) fn invalidate_audio_route<T, S>(
         return Ok(());
     }
     state.stream_needs_restart = true;
+    #[cfg(target_arch = "wasm32")]
     if state
         .ctx
         .as_ref()
@@ -214,6 +218,7 @@ pub(super) fn restart_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(),
         return Err(SessionError::NoContext);
     }
     let sample_rate = state.settings.config().sample_rate().get();
+    #[cfg(target_arch = "wasm32")]
     if let Some(ctx) = &mut state.ctx
         && ctx.output_starting()
         && ctx.requested_output_rate() == Some(sample_rate)
@@ -244,10 +249,14 @@ pub(super) fn restart_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(),
     let stream = (state.start_stream_fn)(fw_ctx, sample_rate, &mut state.deck_nodes, None)
         .map_err(SessionError::StreamStart)?;
     state.stream = Some(stream);
-    if !fw_ctx.output_starting() {
+    #[cfg(target_arch = "wasm32")]
+    let starting = fw_ctx.output_starting();
+    #[cfg(not(target_arch = "wasm32"))]
+    let starting = false;
+    if !starting {
         state.reserved_session_grid = None;
     }
-    state.stream_needs_restart = fw_ctx.output_starting();
+    state.stream_needs_restart = starting;
     state.publish_root();
     trace_stream_info(state, "restart-stream");
     debug!(
