@@ -182,7 +182,7 @@ impl<N: Net + Clone + 'static> Source<N> {
             client,
             runtime,
             cancel,
-            catalogue: Catalogue::default(),
+            catalogue: Catalogue::new(worded(text, "zvuk.track.unavailable", consts::ID)?),
             load: Load::Idle,
             expanded: false,
             listing: None,

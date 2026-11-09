@@ -164,10 +164,17 @@ impl<N: Net> Client<N> {
         let operation = format!(
             "query KitharaStreams {{ mediaContents(ids: {encoded_ids}) {{ {media_fields} }} }}"
         );
-        let data = self
-            .execute(&self.net, token, &operation, json!({}))
+        let envelope = self
+            .request(&self.net, token, &operation, json!({}))
             .await?;
-        let rows: Vec<MediaTrack> = decode(&data, "/mediaContents")?;
+        let errors = decode_errors(&envelope)?;
+        if errors
+            .iter()
+            .any(|error| !unavailable_stream(error, &envelope))
+        {
+            return Err(Error::GraphQl(errors));
+        }
+        let rows: Vec<MediaTrack> = decode(&envelope, "/data/mediaContents")?;
         let returned: HashSet<&TrackId> = rows.iter().map(|row| &row.id).collect();
         let requested: HashSet<&TrackId> = ids.iter().collect();
         if returned != requested || returned.len() != rows.len() {
@@ -228,21 +235,10 @@ impl<N: Net> Client<N> {
         query: &str,
         variables: Value,
     ) -> Result<Value, Error> {
-        let body = serde_json::to_vec(&json!({ "query": query, "variables": variables }))
-            .map_err(|_| Error::Protocol("request encoding failed"))?;
-        let mut headers = self.headers(Some(token));
-        headers.insert("Content-Type", "application/json");
-        let response = net
-            .post_bytes(self.endpoint.clone(), Bytes::from(body), Some(headers))
-            .await?;
-        let envelope: Value = serde_json::from_slice(&response)
-            .map_err(|_| Error::Protocol("invalid JSON envelope"))?;
-        if let Some(errors) = envelope.get("errors") {
-            let errors: Vec<GraphQlError> = serde_json::from_value(errors.clone())
-                .map_err(|_| Error::Protocol("invalid GraphQL errors"))?;
-            if !errors.is_empty() {
-                return Err(Error::GraphQl(errors));
-            }
+        let envelope = self.request(net, token, query, variables).await?;
+        let errors = decode_errors(&envelope)?;
+        if !errors.is_empty() {
+            return Err(Error::GraphQl(errors));
         }
         envelope
             .get("data")
@@ -250,6 +246,48 @@ impl<N: Net> Client<N> {
             .cloned()
             .ok_or(Error::Protocol("missing data object"))
     }
+
+    async fn request(
+        &self,
+        net: &N,
+        token: &AccessToken,
+        query: &str,
+        variables: Value,
+    ) -> Result<Value, Error> {
+        let body = serde_json::to_vec(&json!({ "query": query, "variables": variables }))
+            .map_err(|_| Error::Protocol("request encoding failed"))?;
+        let mut headers = self.headers(Some(token));
+        headers.insert("Content-Type", "application/json");
+        let response = net
+            .post_bytes(self.endpoint.clone(), Bytes::from(body), Some(headers))
+            .await?;
+        serde_json::from_slice(&response).map_err(|_| Error::Protocol("invalid JSON envelope"))
+    }
+}
+
+fn decode_errors(envelope: &Value) -> Result<Vec<GraphQlError>, Error> {
+    envelope.get("errors").map_or_else(
+        || Ok(Vec::new()),
+        |errors| {
+            serde_json::from_value(errors.clone())
+                .map_err(|_| Error::Protocol("invalid GraphQL errors"))
+        },
+    )
+}
+
+fn unavailable_stream(error: &GraphQlError, envelope: &Value) -> bool {
+    let [field, index, property] = error.path.as_slice() else {
+        return false;
+    };
+    if field != "mediaContents" || property != "streamV3" {
+        return false;
+    }
+    index
+        .as_u64()
+        .and_then(|index| usize::try_from(index).ok())
+        .and_then(|index| envelope.pointer("/data/mediaContents")?.get(index))
+        .and_then(|row| row.get("streamV3"))
+        .is_some_and(Value::is_null)
 }
 
 fn encode<T: serde::Serialize + ?Sized>(value: &T) -> Result<String, Error> {

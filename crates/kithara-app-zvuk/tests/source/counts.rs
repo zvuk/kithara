@@ -1,4 +1,44 @@
+use kithara_ui::render::TableCell;
+
 use super::*;
+
+#[kithara::test]
+async fn an_unavailable_playlist_track_is_marked_without_blocking_its_neighbours() {
+    let mut streams: serde_json::Value = serde_json::from_slice(&stream_reply()).unwrap();
+    streams["data"]["mediaContents"][1]["streamV3"] = serde_json::Value::Null;
+    streams["errors"] = serde_json::json!([{
+        "message": "Content stream unavailable",
+        "path": ["mediaContents", 1, "streamV3"]
+    }]);
+    let net = DelayedNet::new(Unimock::new((
+        NetMock::post_bytes
+            .next_call(matching!(_, _, _))
+            .returns(Ok(playlist_reply())),
+        NetMock::post_bytes
+            .next_call(matching!(_, _, _))
+            .returns(Ok(Bytes::from(streams.to_string()))),
+    )));
+    let mut source = source(net.clone()).await;
+    source.select("playlist:1023");
+    until(&mut *source, PageStatus::Ready).await;
+    assert_eq!(source.read("count"), Some(ReadValue::Text("5 / 215")));
+    assert_eq!(source.read("fault_hidden"), Some(ReadValue::Bool(true)));
+    let rows = source.rows(None);
+    for (index, row) in rows.iter().enumerate() {
+        let unavailable = index == 1;
+        assert_eq!(row.muted(), unavailable);
+        assert_eq!(row.drag().is_none(), unavailable);
+        assert_eq!(source.analysis_key(index).is_none(), unavailable);
+        assert!(row.cells().contains(&TableCell::text(
+            "availability",
+            if unavailable { "Unavailable" } else { "" }
+        )));
+    }
+    source.write("query", &WriteValue::Text("birch".into()));
+    assert_eq!(source.row_key(0), Some("1003"));
+    assert!(source.rows(None)[0].muted());
+    release(source, &net).await;
+}
 
 /// A collection page filters its loaded rows by title or artist, ignoring case
 /// and surrounding space, without a request, and counts them against the

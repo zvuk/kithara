@@ -8,6 +8,8 @@
         "zvuk.node.liked": "Liked tracks",
         "zvuk.node.playlists": "Playlists",
         "zvuk.status.not_connected": "No Zvuk account is connected",
+        "zvuk.track.unavailable": "Unavailable",
+        "zvuk.column.availability": "Status",
         "zvuk.account.label": "Account",
         "zvuk.account.connect": "CONNECT",
         "zvuk.account.awaiting": "AWAITING CONFIRMATION",
