@@ -9,7 +9,7 @@ use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
-    traits::{Consumer, Producer, Split},
+    traits::{Consumer, Observer, Producer, Split},
 };
 
 use super::DeckMixer;
@@ -85,17 +85,29 @@ impl<E: SessionInbox> OfflineDeck<E> {
         Ok(frames)
     }
 
-    /// Transfer the prepared mixer for exactly `frames` graph frames.
+    /// Reserve the prepared mixer for exactly `frames` graph frames.
     ///
     /// # Errors
     /// Returns an error while the processor still owns the previous turn.
-    pub fn begin_render(&mut self, frames: usize) -> Result<(), OfflineDeckError> {
+    pub fn reserve_render(&self, frames: usize) -> Result<(), OfflineDeckError> {
         if !self
             .prepared
             .is_some_and(|prepared| frames > 0 && frames <= prepared)
         {
             return Err(OfflineDeckError::InvalidFrames);
         }
+        if self.mixer.is_none() {
+            return Err(OfflineDeckError::MissingMixer);
+        }
+        if self.to_processor.is_full() {
+            return Err(OfflineDeckError::TurnInFlight);
+        }
+        Ok(())
+    }
+
+    /// Transfers the reserved complete offline turn.
+    pub fn begin_render(&mut self, frames: usize) -> Result<(), OfflineDeckError> {
+        self.reserve_render(frames)?;
         let mixer = self.mixer.take().ok_or(OfflineDeckError::MissingMixer)?;
         if let Err((mixer, _)) = self.to_processor.try_push((mixer, frames)) {
             self.mixer = Some(mixer);
@@ -126,6 +138,14 @@ impl<E: SessionInbox> OfflineDeck<E> {
 }
 
 impl<E: SessionInbox> OfflineProcessor<E> {
+    pub(in crate::rt) fn check_install(&self) -> Result<(), OfflineDeckError> {
+        if self.to_owner.is_full() {
+            Err(OfflineDeckError::TurnInFlight)
+        } else {
+            Ok(())
+        }
+    }
+
     pub(in crate::rt) fn install(
         &mut self,
         mixer: Box<DeckMixer<E>>,

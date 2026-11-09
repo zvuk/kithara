@@ -432,6 +432,8 @@ impl MixerRig {
             .map_err(|error| PlayError::Internal(error.to_string()))?;
         let (ends, inputs) = scope_channels(scope, config);
         let (node, offline) = PlayerNode::offline(inputs, pools.clone());
+        node.prepare_stream(shape)
+            .map_err(|error| PlayError::Internal(error.to_string()))?;
         let stream = StreamInfo {
             sample_rate: shape.sample_rate,
             max_block_frames: shape.max_block_frames,

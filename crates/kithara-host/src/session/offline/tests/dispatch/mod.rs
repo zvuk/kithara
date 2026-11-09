@@ -4,7 +4,6 @@ use std::{
 };
 
 use firewheel::{
-    FirewheelContext,
     channel_config::{ChannelConfig, ChannelCount},
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,

@@ -157,7 +157,7 @@ fn deck_session() -> (Arc<SessionClient<Command>>, JoinHandle<()>, RootView) {
             crate::HostConfig::<TestPools>::builder()
                 .build()
                 .channel_config(),
-            crate::session::offline::mock::start,
+            |ctx, rate, decks, _previous| crate::session::offline::mock::start(ctx, rate, decks),
         );
         ready.send(view).expect("owner thread publishes its view");
         engine_thread(&cmd_rx, mailbox, RigOwner(HostCore::new(state, inbox)));

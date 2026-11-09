@@ -2,10 +2,9 @@ use std::{cell::RefCell, num::NonZeroU32};
 
 use audioadapter_buffers::direct::InterleavedSlice;
 use firewheel::{
-    ActivateInfo, FirewheelContext,
+    ActivateInfo,
     backend::BackendProcessInfo,
     node::{NodeID, StreamStatus},
-    processor::FirewheelProcessor,
 };
 use kithara_command::When;
 use kithara_events::EventBus;
@@ -22,7 +21,9 @@ use crate::{
     consts,
     host::{HostSettingsChange, HostSettingsExec},
     session::{
+        context::SessionGraph,
         dispatch::{invalidate_audio_route, tick_session},
+        processor::SessionProcessor,
         tests::graph::{GraphSession, committed_transport, state as test_state},
     },
 };
@@ -30,8 +31,8 @@ use crate::{
 /// The process-wide output device, held by whichever stream owns it.
 #[derive(Default)]
 struct AudioDevice {
-    processor: Option<FirewheelProcessor>,
-    retired_processors: Vec<FirewheelProcessor>,
+    processor: Option<SessionProcessor>,
+    retired_processors: Vec<SessionProcessor>,
     defer_processor_drop: bool,
     next_stream: u64,
     owner: u64,
@@ -66,7 +67,11 @@ impl Drop for TestStream {
     }
 }
 
-fn start_test_stream(ctx: &mut FirewheelContext, sample_rate: u32) -> Result<TestStream, String> {
+fn start_test_stream(
+    ctx: &mut SessionGraph,
+    sample_rate: u32,
+    _decks: &mut [crate::session::state::DeckNode],
+) -> Result<TestStream, String> {
     let stream = device(|dev| {
         dev.next_stream += 1;
         dev.next_stream

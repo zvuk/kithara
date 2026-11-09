@@ -1,9 +1,6 @@
-use firewheel::{
-    FirewheelContext,
-    node::{
-        AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
-        NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
-    },
+use firewheel::node::{
+    AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
+    NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
 };
 use kithara_command::{ScopedConfig, ScopedSender, scoped_channel};
 use kithara_config::Config;
@@ -23,7 +20,10 @@ use super::{
         restart_transport,
     },
 };
-use crate::{host::HostSettings, session::queue::HostProtocol};
+use crate::{
+    host::HostSettings,
+    session::{context::SessionGraph, queue::HostProtocol},
+};
 
 type InstalledTransport = (
     ScopedSender<HostProtocol, DeckProtocol>,
@@ -31,7 +31,7 @@ type InstalledTransport = (
 );
 
 pub(crate) fn install(
-    ctx: &mut FirewheelContext,
+    ctx: &mut SessionGraph,
     session_grid: SessionGridGeneration,
     settings: HostSettings,
     config: ScopedConfig,
