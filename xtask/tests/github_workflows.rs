@@ -45,52 +45,10 @@ for mode in $MODE; do args+=(--mode "$mode"); done
 for lane in $LANE; do args+=(--lane "$lane"); done
 just ci cache-exec stress-report just ci stress-report "${args[@]}""#;
 
-const AUTHORIZATION_SCRIPT: &str = r#"python3 - <<'PY'
-import json
-import os
-import sys
-
-actor = os.environ["ACTOR"]
-owner = os.environ["OWNER"]
-if actor != owner:
-    print(f"CI may only be started by repository owner {owner!r}, got {actor!r}")
-    sys.exit(1)
-
-raw_labels = os.environ.get("RUNNER_LABELS", "")
-try:
-    labels = json.loads(raw_labels)
-except json.JSONDecodeError as error:
-    print(f"KITHARA_RUNNER_LABELS is not valid JSON: {error}")
-    sys.exit(1)
-if not isinstance(labels, list) or not labels or not all(
-    isinstance(label, str) and label for label in labels
-):
-    print("KITHARA_RUNNER_LABELS must be a non-empty JSON array of non-empty strings")
-    sys.exit(1)
-PY"#;
-
-const REQUIRED_SCRIPT: &str = r#"python3 - <<'PY'
-import json
-import os
-import sys
-
-results = json.loads(os.environ["RESULTS"])
-required_lanes = set(os.environ["REQUIRED_LANES"].split())
-optional_required = bool(required_lanes)
-ui_required = "all" in required_lanes or "deep-ui" in required_lanes or os.environ["TOUCHED_UI_REQUIRED"] == "true"
-android_required = "all" in required_lanes or "android-test" in required_lanes
-incomplete = {
-    name: job["result"]
-    for name, job in results.items()
-    if job["result"] != "success"
-    and not (name in {"deep", "platforms", "quality"} and job["result"] == "skipped" and not optional_required)
-    and not (name == "ui" and job["result"] == "skipped" and not ui_required)
-    and not (name == "android" and job["result"] == "skipped" and not android_required)
-}
-if incomplete:
-    print(f"required CI jobs did not execute successfully: {incomplete}")
-    sys.exit(1)
-PY"#;
+const AUTHORIZATION_COMMAND: &str =
+    "cargo run --locked -p xtask --no-default-features --bin ci-bootstrap -- github authorize";
+const REQUIRED_COMMAND: &str =
+    "cargo run --locked -p xtask --no-default-features --bin ci-bootstrap -- github required";
 
 fn github_workflow(name: &str) -> Value {
     let text = github_workflow_text(name);
@@ -101,11 +59,15 @@ fn github_workflow_text(name: &str) -> String {
     fs::read_to_string(workflows_dir().join(name)).expect("workflow is readable")
 }
 
-fn workflows_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+fn workspace_root() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
         .parent()
         .expect("xtask has a workspace root")
-        .join(".github/workflows")
+        .to_path_buf()
+}
+
+fn workflows_dir() -> PathBuf {
+    workspace_root().join(".github/workflows")
 }
 
 fn workflow_file_names() -> BTreeSet<String> {
@@ -121,6 +83,47 @@ fn workflow_file_names() -> BTreeSet<String> {
         })
         .filter(|name| name.ends_with(".yml"))
         .collect()
+}
+
+#[test]
+fn workflow_reads_follow_the_running_checkout() {
+    if std::env::var_os("KITHARA_WORKFLOW_RELOCATION_TEST").is_some() {
+        assert_eq!(
+            github_workflow_text("relocation.yml"),
+            "workflow from relocated package\n"
+        );
+        return;
+    }
+    let directory = tempfile::tempdir().expect("relocated checkout");
+    let package = directory.path().join("xtask");
+    fs::create_dir(&package).expect("relocated test package");
+    let workflows = directory.path().join(".github/workflows");
+    fs::create_dir_all(&workflows).expect("relocated workflows");
+    fs::write(
+        workflows.join("relocation.yml"),
+        "workflow from relocated package\n",
+    )
+    .expect("relocated workflow");
+    let output = Command::new(std::env::current_exe().expect("current test binary"))
+        .args([
+            "--exact",
+            "workflow_reads_follow_the_running_checkout",
+            "--nocapture",
+        ])
+        .env("CARGO_MANIFEST_DIR", package)
+        .env("KITHARA_WORKFLOW_RELOCATION_TEST", "1")
+        .output()
+        .expect("run the cached binary against a different checkout");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("running 1 test"),
+        "child did not execute: {stdout} {stderr}"
+    );
+    assert!(
+        output.status.success(),
+        "relocated workflow read failed: {stdout} {stderr}"
+    );
 }
 
 fn configured_stress_prekill_secs(root: &Path) -> u64 {
@@ -325,7 +328,23 @@ fn assert_hosted_authorization(job: &Mapping) {
         Some("ubuntu-latest")
     );
 
-    let step = first_step(job);
+    let checkout = first_step(job);
+    assert!(
+        mapping_field(checkout, "uses")
+            .as_str()
+            .expect("hosted gate starts with a checkout action")
+            .starts_with("actions/checkout@")
+    );
+    assert_eq!(
+        mapping_field(
+            mapping_field(checkout, "with")
+                .as_mapping()
+                .expect("checkout options are a mapping"),
+            "persist-credentials"
+        ),
+        &Value::Bool(false)
+    );
+    let step = named_step(job, "Validate actor and runner labels");
     let env = mapping_field(step, "env")
         .as_mapping()
         .expect("authorization environment is a mapping");
@@ -346,7 +365,7 @@ fn assert_hosted_authorization(job: &Mapping) {
             .as_str()
             .expect("authorization step is a script")
             .trim(),
-        AUTHORIZATION_SCRIPT
+        AUTHORIZATION_COMMAND
     );
 }
 
@@ -515,7 +534,10 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     expected.remove("required");
     assert_eq!(job_needs(required), expected);
 
-    let step = first_step(required);
+    let step = named_step(
+        required,
+        "Require every CI job to have executed successfully",
+    );
     let env = mapping_field(step, "env")
         .as_mapping()
         .expect("required environment is a mapping");
@@ -534,7 +556,7 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
             .as_str()
             .expect("required step is a script")
             .trim(),
-        REQUIRED_SCRIPT
+        REQUIRED_COMMAND
     );
 }
 
@@ -772,9 +794,7 @@ fn independent_roles_and_branches_do_not_share_admission() {
 // investigation sets `KITHARA_RTSAN_BACKEND` for itself.
 #[test]
 fn standalone_rtsan_is_fail_closed_before_expanding_every_lane() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
@@ -1072,9 +1092,7 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
         mapping_field(execute, "runs-on").as_str(),
         Some("${{ fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS) }}")
     );
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
@@ -1211,7 +1229,7 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
 
     assert_checkout(
         named_step(report, "Checkout controller"),
-        "controller",
+        ".",
         "${{ job.workflow_repository }}",
         "${{ job.workflow_sha }}",
     );
@@ -1241,7 +1259,7 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
     assert_eq!(
         mapping_field(cache_upload, "if").as_str(),
         Some(
-            "${{ always() && hashFiles(format('controller/.ci-artifacts/cache/github-{0}-{1}-*.json', github.run_id, github.run_attempt)) != '' }}"
+            "${{ always() && hashFiles(format('.ci-artifacts/cache/github-{0}-{1}-*.json', github.run_id, github.run_attempt)) != '' }}"
         ),
     );
     let cache_inputs = mapping_field(cache_upload, "with")
@@ -1249,16 +1267,14 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
         .expect("compiler-cache evidence inputs");
     assert_eq!(
         mapping_field(cache_inputs, "path").as_str(),
-        Some(
-            "controller/.ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json"
-        ),
+        Some(".ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json"),
     );
 
     let verifier = named_step(report, "Verify and render the stress evidence");
     assert_always(verifier);
     assert_eq!(
         mapping_field(verifier, "working-directory").as_str(),
-        Some("controller")
+        Some(".")
     );
     let verifier_env = mapping_field(verifier, "env")
         .as_mapping()
@@ -1340,9 +1356,7 @@ fn stress_dispatch_keeps_its_tiers_and_admission_guards() {
         .expect("scheduled stress names its tier");
     assert_eq!(mapping_field(with, "tier").as_str(), Some(cadence.as_str()));
 
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
@@ -1642,9 +1656,7 @@ fn a_newer_dispatch_of_one_selection_supersedes_the_older() {
 
 #[test]
 fn stress_profile_records_failures_with_a_dump_aware_outer_backstop() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let nextest: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/nextest.toml")).expect("nextest config is readable"),
     )
@@ -1668,7 +1680,7 @@ fn stress_profile_records_failures_with_a_dump_aware_outer_backstop() {
         .and_then(|count| u64::try_from(count).ok())
         .expect("stress termination count is positive");
     let outer = period * terminate_after;
-    let prekill = configured_stress_prekill_secs(root);
+    let prekill = configured_stress_prekill_secs(&root);
     assert!(outer >= prekill + 30);
 
     let junit = stress["junit"].as_table().expect("stress JUnit is a table");
@@ -1678,11 +1690,9 @@ fn stress_profile_records_failures_with_a_dump_aware_outer_backstop() {
 
 #[test]
 fn stress_backstop_covers_every_kithara_test_timeout() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let mut observed_max = 0_u64;
-    let prekill = configured_stress_prekill_secs(root);
+    let prekill = configured_stress_prekill_secs(&root);
     let mut excessive = Vec::new();
     let mut unsupported = Vec::new();
     let mut observed = 0_usize;
@@ -2316,7 +2326,10 @@ fn required_aggregation_requires_an_automatically_selected_ui_verdict() {
     let (selection_name, _) = ui_selection(jobs);
     let required = workflow_job(jobs, "required");
     assert!(job_needs(required).contains(selection_name));
-    let step = first_step(required);
+    let step = named_step(
+        required,
+        "Require every CI job to have executed successfully",
+    );
     let env = mapping_field(step, "env")
         .as_mapping()
         .expect("aggregate has an environment");
@@ -2324,9 +2337,6 @@ fn required_aggregation_requires_an_automatically_selected_ui_verdict() {
         mapping_field(env, "TOUCHED_UI_REQUIRED").as_str(),
         Some(format!("${{{{ vars.KITHARA_GPU_RUNNER_LABELS != '' && needs.{selection_name}.outputs.ui_required == 'true' }}}}").as_str())
     );
-    let verdict = mapping_field(step, "run")
-        .as_str()
-        .expect("aggregate has a verdict script");
     for (selected, lanes, result, accepted) in [
         ("true", "", "skipped", false),
         ("true", "", "failure", false),
@@ -2339,8 +2349,8 @@ fn required_aggregation_requires_an_automatically_selected_ui_verdict() {
         ("false", "deep-ui", "success", true),
     ] {
         let results = serde_json::json!({"ui": {"result": result}});
-        let output = Command::new("bash")
-            .args(["-c", verdict])
+        let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
+            .args(["github", "required"])
             .env("RESULTS", results.to_string())
             .env("REQUIRED_LANES", lanes)
             .env("TOUCHED_UI_REQUIRED", selected)
@@ -2406,9 +2416,7 @@ fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
     // Nothing selects the lane it names, on either provider, so this workflow
     // is the only caller that can start it. A kind appearing here would put a
     // GPU suite on a pool with no graphics device.
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
@@ -2907,6 +2915,176 @@ fn the_windows_lane_runs_the_backend_the_platform_ships() {
     assert_eq!(
         tests, "just ci cache-exec windows-test just test run --net-backend=none",
         "the suite takes the default backend, which this guest cannot build"
+    );
+}
+
+/// xtask builds itself before the lane's first phase. The guest wipes the
+/// checkout on every run, so a build left there compiled xtask from source each
+/// time; inside the build directory the guest keeps, it is reused.
+#[test]
+fn the_windows_lane_keeps_the_xtask_build_the_guest_keeps() {
+    let workflow = github_workflow("windows.yml");
+    let env = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "env")
+        .as_mapping()
+        .expect("workflow env is a mapping");
+    let kept = mapping_field(env, "CARGO_TARGET_DIR")
+        .as_str()
+        .expect("the lane names the build directory the guest keeps");
+    let xtask = mapping_field(env, "KITHARA_XTASK_TARGET")
+        .as_str()
+        .expect("the lane names where xtask builds itself");
+
+    assert!(
+        xtask
+            .strip_prefix(kept)
+            .and_then(|rest| rest.strip_prefix('\\'))
+            .is_some_and(|name| !name.is_empty()),
+        "xtask builds in `{xtask}`, outside `{kept}`, so the wiped checkout takes it"
+    );
+}
+
+#[test]
+fn filtered_android_runs_do_not_claim_baseline_acceptance() {
+    let workflow = github_workflow("android.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "android");
+    for label in [&workflow["run-name"], &job["name"]] {
+        let label = label.as_str().expect("platform run declares its scope");
+        assert!(label.contains("(inputs.filter || '') != ''"));
+        assert!(label.contains("diagnostic"));
+    }
+    assert!(
+        workflow["run-name"]
+            .as_str()
+            .unwrap()
+            .contains("not acceptance")
+    );
+    assert!(
+        job["name"]
+            .as_str()
+            .unwrap()
+            .contains("Android baseline on an emulator")
+    );
+}
+
+#[test]
+fn windows_diagnostics_cannot_schedule_the_acceptance_suite() {
+    let workflow = github_workflow("windows.yml");
+    let inputs = &workflow["on"]["workflow_dispatch"]["inputs"];
+    assert_eq!(inputs["diagnostics"]["type"].as_str(), Some("boolean"));
+    assert_eq!(inputs["diagnostics"]["default"].as_bool(), Some(false));
+    assert_eq!(inputs["test-filter"]["default"].as_str(), Some(""));
+    let suite = workflow_job(workflow_jobs(&workflow), "windows");
+    let condition = suite["if"].as_str().unwrap();
+    assert!(condition.contains("!inputs.diagnostics"));
+    assert!(condition.contains("(inputs.test-filter || '') == ''"));
+    let diagnostic = workflow_job(workflow_jobs(&workflow), "diagnostics");
+    assert_ne!(diagnostic["name"], suite["name"]);
+    let condition = diagnostic["if"].as_str().unwrap();
+    assert!(condition.contains("github.actor == github.repository_owner"));
+    assert!(condition.contains("vars.KITHARA_WINDOWS_RUNNER_LABELS != ''"));
+    assert!(condition.contains("inputs.diagnostics"));
+    assert!(
+        workflow["run-name"]
+            .as_str()
+            .unwrap()
+            .contains("diagnostics")
+    );
+}
+
+#[test]
+fn windows_runner_context_is_bound_only_after_runner_assignment() {
+    let workflow = github_workflow("windows.yml");
+    for job in workflow_jobs(&workflow).values() {
+        if let Some(env) = job.get("env") {
+            assert!(!serde_yaml_ng::to_string(env).unwrap().contains("runner."));
+        }
+    }
+    for (job, step_name) in [
+        ("windows", "Run tests"),
+        ("diagnostics", "Run diagnostic test selection"),
+    ] {
+        let steps = workflow_job(workflow_jobs(&workflow), job)["steps"]
+            .as_sequence()
+            .unwrap();
+        let step = steps
+            .iter()
+            .find(|step| step["name"].as_str() == Some(step_name))
+            .unwrap();
+        assert!(
+            step["env"]["KITHARA_HANG_DUMP_DIR"]
+                .as_str()
+                .unwrap()
+                .contains("runner.temp")
+        );
+    }
+}
+
+#[test]
+fn windows_diagnostics_preserve_old_evidence_before_a_scoped_probe() {
+    let workflow = github_workflow("windows.yml");
+    let diagnostic = workflow_job(workflow_jobs(&workflow), "diagnostics");
+    let steps = diagnostic["steps"].as_sequence().unwrap();
+    let index = |name| {
+        steps
+            .iter()
+            .position(|step| step["name"].as_str() == Some(name))
+            .unwrap()
+    };
+    let capture = index("Capture existing Windows evidence");
+    let upload = index("Preserve existing Windows evidence");
+    let controller = index("Checkout diagnostics controller");
+    let probe = index("Run diagnostic test selection");
+    assert!(controller < capture && capture < upload && upload < probe);
+    assert_eq!(
+        steps[controller]["with"]["path"].as_str(),
+        Some("diagnostics-controller")
+    );
+    assert_eq!(
+        steps[capture]["run"].as_str(),
+        Some(
+            "just --justfile diagnostics-controller/justfile ci windows-diagnostics --output \"$env:RUNNER_TEMP/windows-diagnostics\""
+        )
+    );
+    assert_eq!(
+        steps[probe]["run"].as_str(),
+        Some(
+            "just ci cache-exec windows-diagnostic just test run --net-backend=none \"--narrow=$env:TEST_FILTER\" --retries=0"
+        )
+    );
+    assert_eq!(
+        steps[probe]["env"]["KITHARA_FLASH_SYNC_TRACE"].as_str(),
+        Some("1")
+    );
+    let acceptance = named_step(
+        workflow_job(workflow_jobs(&workflow), "windows"),
+        "Run tests",
+    );
+    assert!(acceptance["env"].get("KITHARA_FLASH_SYNC_TRACE").is_none());
+    for index in [index("Verify probe compiler cache"), probe] {
+        assert_eq!(
+            steps[index]["working-directory"].as_str(),
+            Some("diagnostics-controller")
+        );
+        assert!(
+            steps[index]["if"]
+                .as_str()
+                .unwrap()
+                .contains("inputs.test-filter")
+        );
+    }
+    assert_eq!(
+        steps
+            .iter()
+            .filter(|step| step
+                .get("uses")
+                .and_then(Value::as_str)
+                .is_some_and(|uses| uses.starts_with("actions/checkout@")))
+            .count(),
+        1
+    );
+    assert_eq!(
+        steps[index("Upload probe evidence")]["if"].as_str(),
+        Some("always()")
     );
 }
 

@@ -79,6 +79,7 @@ impl_child_node!(DeckNode<'a>, |this, segment, _scope| {
             shown: this.shown,
             mode: this.eq_mode,
         }),
+        "key" => Box::new(KeyNode { shown: this.shown }),
         "stream" => Box::new(StreamNode {
             shown: this.shown,
             cache: this.cache,
@@ -163,6 +164,22 @@ impl<'a> Node<'a> for TempoNode {
             _ => return None,
         };
         Some(Box::new(Value(value)))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct KeyNode<'a> {
+    shown: &'a DeckSnapshot,
+}
+
+impl<'a> Node<'a> for KeyNode<'a> {
+    fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
+        let value = match segment {
+            "locked" => self.shown.keylock,
+            "lock_hidden" => !self.shown.holds_pitch,
+            _ => return None,
+        };
+        Some(Box::new(Value(ReadValue::Bool(value))))
     }
 }
 

@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn the_release_section_joins_the_player_page() {
         let player = fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/kithara-ffi/index.html"),
+            crate::testing::workspace::root().join("crates/kithara-ffi/index.html"),
         )
         .expect("the player page");
         let latest = section(

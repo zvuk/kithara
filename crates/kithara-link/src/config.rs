@@ -22,6 +22,4 @@ pub struct LinkedConfig<T> {
 pub struct LinkedHostConfig<H> {
     #[config(debug(skip))]
     pub(crate) inner: H,
-    #[config(debug(skip))]
-    pub(crate) trajectory: TempoTrajectory,
 }

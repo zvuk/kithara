@@ -74,6 +74,10 @@ pub(crate) fn prepare_route_restart<T, S>(
         .publish_unavailable(stamp, state.settings.config().sample_rate(), target.epoch());
     state.reserved_session_grid = Some(target);
 
+    // The stream's axis ends here: what the owner staged for it goes to the
+    // transport first, which refuses its frames along with the axis, whether
+    // its stream stops now or already stopped on its own.
+    state.publish_staged();
     if was_running {
         state
             .ctx

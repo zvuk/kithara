@@ -218,15 +218,17 @@ mod tests {
                 .zip(&self.decks)
                 .enumerate()
                 .map(|(at, (letter, (ui, eq_bands, _)))| {
-                    DeckSnapshot::new(
-                        ::kithara::warp::BeatGridId::allocate().expect("a fixture deck id"),
-                        letter,
-                        MixStrip::new(at, count),
-                        eq_bands.clone(),
-                        TempoPercent::DEFAULT,
-                        false,
-                        ui,
-                    )
+                    DeckSnapshot::builder()
+                        .id(::kithara::warp::BeatGridId::allocate().expect("a fixture deck id"))
+                        .letter(letter)
+                        .strip(MixStrip::new(at, count))
+                        .eq_bands(eq_bands.clone())
+                        .tempo(TempoPercent::DEFAULT)
+                        .synced(false)
+                        .keylock(false)
+                        .holds_pitch(true)
+                        .state(ui)
+                        .build()
                 })
                 .collect();
 
@@ -495,6 +497,24 @@ mod tests {
 
         assert_eq!(
             Walk::new(&root).get("broadcast.hidden"),
+            Some(ReadValue::Bool(false))
+        );
+    }
+
+    #[kithara::test]
+    fn the_key_lock_hides_on_a_deck_that_cannot_hold_the_pitch() {
+        let fixture = Fixture::new(["+0.0%", "+0.0%"]);
+        let mut shown = fixture.shown();
+        shown.decks[0].holds_pitch = false;
+        let root = fixture.root(&shown);
+        let walk = Walk::new(&root);
+
+        assert_eq!(
+            walk.get("deck.key.lock_hidden@deck=a"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(
+            walk.get("deck.key.lock_hidden@deck=b"),
             Some(ReadValue::Bool(false))
         );
     }

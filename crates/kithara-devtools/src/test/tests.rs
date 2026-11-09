@@ -106,7 +106,7 @@ fn quoted(arg: &str) -> String {
 /// key becomes an argument shows up as a reviewed diff.
 #[test]
 fn every_typed_lane_key_renders_the_recorded_command() {
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let fixtures = crate::testing::package().join("tests/fixtures");
     let test: TestCommandConfig = toml::from_str(
         &fs::read_to_string(fixtures.join("test-lanes.toml")).expect("the lane fixture exists"),
     )

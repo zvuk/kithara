@@ -9,7 +9,7 @@ use kithara_stretch::{
 use num_traits::ToPrimitive;
 use tracing::warn;
 
-use super::{core::WarpRenderer, residency::SourceResidency, transition::RetiringTarget};
+use super::{core::WarpRenderer, residency::SourceResidency};
 
 #[derive(Default)]
 pub(in crate::render) struct PreparedTarget {
@@ -86,11 +86,11 @@ where
             .as_ref()
             .map_or(0, |resident| resident.replacement.capacity() / channels);
         let measured = (|| -> Result<(), ElasticError> {
-            for backend in StretchKind::all().iter().filter(|backend| {
-                measure_capabilities && backend.capabilities().contains(BackendCapabilities::RATE)
-            }) {
+            for backend in
+                StretchKind::supporting(BackendCapabilities::RATE).filter(|_| measure_capabilities)
+            {
                 let capabilities =
-                    Self::config_for(*backend, backends, source_block_frames, spec, pools)
+                    Self::config_for(backend, backends, source_block_frames, spec, pools)
                         .and_then(build_engine)
                         .map(|engine| engine.capabilities())?;
                 {
@@ -261,6 +261,8 @@ where
             buffers: [first_buffer, second_buffer],
             stages: 1,
             feed: None,
+            audible: None,
+            cached_span: None,
             offset: 0,
         })
     }
@@ -313,13 +315,7 @@ where
     /// Service backend/spec changes and deferred destruction from the
     /// scheduler shell, never from the checked render core.
     pub(in crate::render) fn service_target(&mut self, spec: AudioSpec) {
-        if self
-            .retiring_target
-            .as_ref()
-            .is_some_and(RetiringTarget::complete)
-        {
-            self.retiring_target = None;
-        }
+        drop(self.deferred_trajectory.take());
         self.reprime_pending |= self.active && self.mapped_render && self.keylocked_unity();
         drop(self.retired_engine.take());
         if (self.transition_pending() || self.prepared_quantum.is_some()) && spec == self.spec {
@@ -375,9 +371,7 @@ where
 
     fn rebuild_target(&mut self, spec: AudioSpec, kind: StretchKind, keylock: bool) {
         drop(self.deferred_scratch.take());
-        if spec != self.spec
-            || (self.rebuild_pending && self.retiring_target.is_none() && self.engine.is_none())
-        {
+        if spec != self.spec || (self.rebuild_pending && self.engine.is_none()) {
             self.clear_render_state();
         }
         self.rebuild_pending = false;
@@ -415,9 +409,5 @@ where
         self.applied_pitch = f64::NAN;
         self.spec = spec;
         self.reset_pending = false;
-        let latency = self.engine_latency().get();
-        if let Some(target) = self.retiring_target.as_mut() {
-            target.extend(latency);
-        }
     }
 }

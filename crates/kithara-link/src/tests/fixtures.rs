@@ -15,8 +15,9 @@ use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_play::{
     Bound, DeckMixSettings, DeckPass, HostedDeck, Outbox, OutputSnapshot, PlayError, PlayWorker,
-    Player, Position, ResourceConfig, ResourceLoad, ResourceSrc, Settled, Track, TrackCommand,
-    TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot, TrackStatus, mock::DeckRig,
+    Player, Position, ResourceConfig, ResourceLoad, ResourceSrc, Settled, Track, TrackClock,
+    TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot, TrackStatus,
+    mock::DeckRig,
 };
 use kithara_render::{
     bridge::{DeckPart, DeckProtocol, DeckSnapshot, Slot, SlotMark},
@@ -128,6 +129,10 @@ pub(super) struct Script {
     pub snapshot: TrackSnapshot,
     pub sent: Vec<(Seq, Command)>,
     pub reject: Option<PlayError>,
+    /// The dropout clock the track accepted; kept apart from `sent` because
+    /// SYNC reconciles it on every pass.
+    pub clock: TrackClock,
+    pub clock_refusal: Option<PlayError>,
     pending: Vec<(Seq, Vec<Command>, bool)>,
     speeds: VecDeque<Settled>,
     verdicts: Vec<(Seq, bool)>,
@@ -261,6 +266,15 @@ impl Player<TestPools> for ScriptedTrack {
             }
             TrackCommand::SetHostRate { rate } => Command::Rate(rate),
             TrackCommand::Release => Command::Release,
+            TrackCommand::Clock(clock) => {
+                return self.control.edit(|script| {
+                    if let Some(error) = script.clock_refusal.take() {
+                        return Err(error);
+                    }
+                    script.clock = clock;
+                    Ok(None)
+                });
+            }
             TrackCommand::Supersede
             | TrackCommand::GainProgram(_)
             | TrackCommand::PlayAfter { .. }
@@ -537,6 +551,8 @@ pub(super) struct Rig {
     pub now: SessionFrame,
     pub delivery: FrameCount,
     pub deck_delivery: Option<FrameCount>,
+    /// The accepted tempo map a pass lends the deck.
+    pub planned: TempoTrajectory,
     output: OutputSnapshot,
     observation: DeckSnapshot,
 }
@@ -548,6 +564,7 @@ impl Rig {
             now: SessionFrame::new(now),
             delivery: FrameCount::new(128),
             deck_delivery: None,
+            planned: kithara_play::mock::planned_tempo(),
             output: kithara_play::mock::output(None).get(),
             observation: DeckSnapshot::default(),
         }
@@ -574,6 +591,7 @@ impl Rig {
             deck_delivery: self.deck_delivery.unwrap_or(self.delivery),
             output: &self.output,
             deck: &self.observation,
+            planned_tempo: &self.planned,
         };
         run(
             &mut Outbox::new(&mut port, &mut self.queues.dispatcher).in_pass(pass),
@@ -638,6 +656,8 @@ pub(super) fn ordinary() -> (ScriptedTrack, Control) {
         },
         sent: Vec::new(),
         reject: None,
+        clock: TrackClock::Media,
+        clock_refusal: None,
         pending: Vec::new(),
         speeds: VecDeque::new(),
         verdicts: Vec::new(),
@@ -776,6 +796,12 @@ pub(super) fn consume(control: &Control, frame: u32) {
         mark.lane.frame = u64::from(frame);
         mark.position = position(frame);
     });
+}
+
+/// The default plan horizon in fixture frames.
+pub(super) fn horizon() -> u64 {
+    u64::try_from(LinkConfig::default().horizon().as_nanos() * 48_000 / 1_000_000_000)
+        .expect("fixture horizon")
 }
 
 pub(super) fn source_grid(model: &BeatGridModel) -> kithara_sync::SourceGrid {

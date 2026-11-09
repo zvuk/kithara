@@ -459,7 +459,8 @@ pub(crate) fn slots(part: &DeckPart) -> impl Iterator<Item = Slot> {
         | DeckPart::Adopt { slot, .. }
         | DeckPart::Replace { slot, .. } => (Some(slot), None),
         DeckPart::Chain { from, to } => (Some(from), Some(to)),
-        DeckPart::Mix(_)
+        DeckPart::Clock { .. }
+        | DeckPart::Mix(_)
         | DeckPart::Eq(_)
         | DeckPart::Fx(_)
         | DeckPart::GainProgram { .. }

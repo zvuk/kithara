@@ -2,25 +2,14 @@ use kithara::{
     assets::AssetStore,
     bufpool::{OverallBudget, PoolConfig, PoolConfigPatch, PoolError, PoolRegion, pool_schema},
     host::{Host, HostConfig, HostCore, HostSettings},
-    link::{
-        LinkedConfig, LinkedFactory, LinkedHost, LinkedHostConfig, LinkedHostDeck, TempoStep,
-        TempoTrajectory,
-    },
+    link::{LinkedConfig, LinkedFactory, LinkedHost, LinkedHostConfig, LinkedHostDeck},
     play::{PlayError, PlayWorker, PlayerFactory, ResourceConfig},
     prelude::PlaybackResamplerBackend,
     queue::{Queue, QueueControl, TrackSource},
-    signal::SessionFrame,
-    sync::SessionBeat,
 };
 use serde::Deserialize;
 
 mod consts {
-    use std::num::NonZeroU16;
-
-    pub(super) const BEATS_PER_BAR: NonZeroU16 = match NonZeroU16::new(4) {
-        Some(value) => value,
-        None => unreachable!(),
-    };
     pub(super) const BYTE_MAX_BUFFERS: usize = 32;
     pub(super) const BYTE_MAX_RETAINED_CAPACITY: usize = 2 * 1024 * 1024;
     pub(super) const INITIAL_SAMPLE_BUFFERS: usize = 16;
@@ -70,14 +59,8 @@ pub type AppTrackSource = TrackSource<AppPools>;
 /// # Errors
 /// Returns [`PlayError`] when the host rejects `config` or cannot start.
 pub fn host(config: HostConfig<AppPools>) -> Result<AppHost, PlayError> {
-    let trajectory = trajectory(config.settings());
-    AppHost::layered(config, move |core| {
-        LinkedHost::new(
-            LinkedHostConfig::builder()
-                .inner(core)
-                .trajectory(trajectory)
-                .build(),
-        )
+    AppHost::layered(config, |core| {
+        LinkedHost::new(LinkedHostConfig::builder().inner(core).build())
     })
 }
 
@@ -86,22 +69,8 @@ pub(crate) fn factory(settings: HostSettings) -> LinkedFactory<PlayerFactory> {
     LinkedFactory::new(
         LinkedConfig::builder()
             .inner(PlayerFactory)
-            .trajectory(trajectory(settings))
+            .trajectory(settings.trajectory())
             .build(),
-    )
-}
-
-/// The host tempo plan before the session starts: beat zero on frame zero at
-/// the configured tempo, four beats to the bar.
-fn trajectory(settings: HostSettings) -> TempoTrajectory {
-    TempoTrajectory::new(
-        TempoStep {
-            frame: SessionFrame::new(0),
-            beat: SessionBeat::default(),
-            tempo: settings.tempo(),
-        },
-        consts::BEATS_PER_BAR,
-        settings.sample_rate(),
     )
 }
 

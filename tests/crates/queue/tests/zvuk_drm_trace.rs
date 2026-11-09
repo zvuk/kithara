@@ -6,11 +6,7 @@ use kithara::{
     queue::{QueueControl, QueueEvent, TrackStatus},
 };
 use kithara_app::{pools::AppPools, sources::build_source};
-use kithara_integration_tests::{
-    event::TestEvent,
-    kithara,
-    offline::{LazyAppQueueFixture, app_disk_asset_store},
-};
+use kithara_integration_tests::{event::TestEvent, kithara, offline::LazyAppQueueFixture};
 
 /// Real-network DRM trace harness. Loads a single zvq.me DRM master
 /// playlist and dumps every HLS / stream / net tracing event, so the
@@ -30,9 +26,7 @@ async fn zvuk_drm_master_playlist_trace() {
     let ctx = CTX.get().await;
     let url = "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8";
 
-    let mut config = ctx.config.clone();
-    config.store = app_disk_asset_store(&ctx.config, ctx.cache.path());
-    let source = build_source(url, &config);
+    let source = build_source(url, &ctx.config);
 
     let mut rx = ctx.queue.subscribe();
     let track_id = ctx

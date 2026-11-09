@@ -17,6 +17,6 @@ pub use metrics::{RtMetrics, RtMetricsSnapshot};
 pub use mix::{CrossfaderGain, DeckMixSettings, DeckMixSettingsChange, DeckMixSettingsPatch, Trim};
 pub use protocol::{
     DeckEqChange, DeckEvent, DeckFxChange, DeckPart, DeckProtocol, DeckRefusal, Fade, FadeDir,
-    FxMix, PlaybackFault, Returned, Slot, SlotState,
+    FxMix, PlaybackFault, Returned, Slot, SlotState, TrackClock,
 };
 pub use snapshot::{DeckSnapshot, EqSnapshot, SlotSnapshot};

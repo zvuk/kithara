@@ -4,6 +4,7 @@ mod build_dir;
 mod cache;
 mod command;
 mod config;
+mod cycle;
 mod environment;
 mod host;
 mod image;
@@ -15,11 +16,12 @@ pub(crate) mod process;
 mod release;
 mod run;
 mod verdict;
+mod windows_diagnostics;
 mod xcresult;
 
-pub(crate) use build_cache::hold_target;
+pub(crate) use build_cache::{admit_linux_build, hold_target};
 #[cfg(test)]
 pub(crate) use build_dir::fixture;
-pub(crate) use build_dir::{Claim, claim_beside_alias, collect_garbage};
+pub(crate) use build_dir::{Claim, claim_sources, collect_garbage};
 pub(crate) use command::{CiArgs, is_standalone, run, run_standalone};
 pub(crate) use environment::ci_in;

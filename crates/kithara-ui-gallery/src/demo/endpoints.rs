@@ -65,6 +65,7 @@ fn insert_deck_endpoints(registry: &mut MapEndpoints) {
         ("deck.playback.looping", ValueKind::Bool),
         ("deck.playback.reverse", ValueKind::Bool),
         ("deck.playback.synced", ValueKind::Bool),
+        ("deck.key.locked", ValueKind::Bool),
         ("deck.playback.tempo", ValueKind::Text),
         ("deck.playback.waveform", ValueKind::Waveform),
         ("deck.track.title", ValueKind::Text),
@@ -101,11 +102,6 @@ fn insert_clock_endpoints(registry: &mut MapEndpoints) {
     ] {
         registry.insert(EndpointCategory::Model, id, EndpointDesc::new(kind));
     }
-    registry.insert(
-        EndpointCategory::Model,
-        "deck.key.locked",
-        EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
-    );
     registry.insert(
         EndpointCategory::Parameter,
         "clock.tempo",

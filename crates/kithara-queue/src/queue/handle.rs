@@ -190,6 +190,16 @@ where
         ))
     }
 
+    /// Turns keylock on or off for every active track and every later track.
+    /// # Errors
+    /// Returns the broadcast's refusal or a closed mailbox.
+    pub fn set_keylock(&self, on: bool) -> Result<(), QueueError> {
+        self.call(QueueCommand::ConfigureTrack(
+            TrackSettingsChange::Keylock(on),
+            When::Next,
+        ))
+    }
+
     /// Changes the speed inherited by subsequent tracks.
     /// # Errors
     /// Returns the broadcast's refusal or a closed mailbox.

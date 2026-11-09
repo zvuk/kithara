@@ -1,6 +1,11 @@
-use std::{collections::VecDeque, num::NonZeroU128};
+use std::{
+    collections::VecDeque,
+    mem,
+    num::{NonZeroU128, NonZeroUsize},
+};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+use kithara_dsp::crossfade_linear;
 use kithara_signal::{AudioChunkInfo, SourceSpan};
 use kithara_stretch::{ElasticError, ElasticLatency};
 use num_traits::ToPrimitive;
@@ -114,29 +119,58 @@ impl SourceResidency {
         output: &mut [f32],
         channels: usize,
     ) -> Result<(), ElasticError> {
-        let available = self
+        let channels = NonZeroUsize::new(channels).ok_or(ElasticError::SampleCountOverflow)?;
+        let outgoing = self
             .replacement
-            .len()
-            .saturating_sub(self.replacement_offset);
-        let blend_samples = output.len().min(available);
-        let total_frames = self.replacement.len() / channels;
-        for (offset, sample) in output[..blend_samples].iter_mut().enumerate() {
-            let index = self.replacement_offset + offset;
-            let mix = (index / channels + 1)
-                .to_f32()
-                .ok_or(ElasticError::SampleCountOverflow)?
-                / total_frames
-                    .max(1)
-                    .to_f32()
-                    .ok_or(ElasticError::SampleCountOverflow)?;
-            *sample = self.replacement[index].mul_add(1.0 - mix, *sample * mix);
-        }
-        self.replacement_offset += blend_samples;
+            .get(self.replacement_offset..)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let processed = crossfade_linear(
+            outgoing,
+            output,
+            channels,
+            self.replacement_offset / channels.get() + 1,
+            (self.replacement.len() / channels.get()).max(1),
+        );
+        self.replacement_offset += processed * channels.get();
         if self.replacement_offset == self.replacement.len() {
             self.replacement.clear();
             self.replacement_offset = 0;
         }
         Ok(())
+    }
+
+    /// Append one chunk of a retired side's continuation to
+    /// `next_replacement`, with what still fades out of `replacement` blended
+    /// in under its own fade. Returns the frames appended.
+    pub(in crate::render) fn fold_supply(
+        &mut self,
+        supply: &mut [f32],
+        channels: usize,
+    ) -> Result<usize, ElasticError> {
+        if self.next_replacement.len() + supply.len() > self.next_replacement.capacity() {
+            return Err(ElasticError::PoolCapacity);
+        }
+        self.blend_replacement(supply, channels)?;
+        self.next_replacement
+            .try_extend_from_slice(supply)
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        Ok(supply.len() / channels)
+    }
+
+    /// Whether the replacement holds a fold nothing has played yet.
+    pub(in crate::render) fn fold_unplayed(&self) -> bool {
+        !self.replacement.is_empty() && self.replacement_offset == 0
+    }
+
+    /// Make the folded continuation the replacement; an empty one leaves the
+    /// fade under way running.
+    pub(in crate::render) fn finish_fold(&mut self) {
+        if self.next_replacement.is_empty() {
+            return;
+        }
+        mem::swap(&mut self.replacement, &mut self.next_replacement);
+        self.next_replacement.clear();
+        self.replacement_offset = 0;
     }
 
     pub(in crate::render) fn clear(&mut self) {

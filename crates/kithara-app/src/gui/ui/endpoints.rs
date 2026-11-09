@@ -131,6 +131,24 @@ static ENDPOINTS: &[Endpoint] = &[
         scopes: Endpoint::DECK,
     },
     Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.key.locked",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.key.lock_hidden",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.key.toggle_lock",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
         category: EndpointCategory::Command,
         id: "deck.transport.prev",
         value: ValueKind::Trigger,

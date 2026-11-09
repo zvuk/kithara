@@ -266,7 +266,8 @@ impl Deck {
                         return Err(DeckRefusal::RefusedFxParam { unit });
                     }
                 }
-                DeckPart::Mix(_)
+                DeckPart::Clock { .. }
+                | DeckPart::Mix(_)
                 | DeckPart::Eq(_)
                 | DeckPart::GainProgram { .. }
                 | DeckPart::Returned(_) => {}

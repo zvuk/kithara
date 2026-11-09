@@ -7,7 +7,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use kithara_devtools::lock::{FileLock, Wait};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -25,6 +25,7 @@ pub(super) struct Session {
     pub(super) evidence: PathBuf,
     pub(super) environment: BTreeMap<String, String>,
     pub(super) binaries: BTreeMap<PathBuf, Image>,
+    pub(super) filters: BTreeMap<PathBuf, Vec<String>>,
 }
 
 /// A test image as the instrumentation loads it.
@@ -39,6 +40,10 @@ pub(super) struct Image {
 }
 
 impl Session {
+    pub(super) fn write(&self, path: &Path) -> Result<()> {
+        store(path, &serde_json::to_vec_pretty(self)?)
+    }
+
     pub(super) fn adb(&self) -> Command {
         let mut command = Command::new(&self.adb);
         command.args(["-s", &self.serial]);
@@ -136,6 +141,9 @@ pub(crate) fn run(session_path: &Path, binary: &Path, args: &[String]) -> Result
     let answer = resolve(
         &report_path(&session.evidence, binary),
         test,
+        session.filters.get(binary).with_context(|| {
+            format!("{} is absent from Android test selection", binary.display())
+        })?,
         &mut |args: &[String]| {
             let invocation = invoke(&session, &cancel, binary, image, args)?;
             let Some(libtest) = invocation.libtest else {
@@ -216,8 +224,13 @@ struct Answer {
 fn resolve(
     path: &Path,
     test: &str,
+    filters: &[String],
     invoke: &mut dyn FnMut(&[String]) -> Result<String>,
 ) -> Result<Answer> {
+    ensure!(
+        filters.is_empty() || filters.iter().any(|name| name == test),
+        "{test} is absent from Android test selection"
+    );
     let mut report: report::Report = if path.is_file() {
         serde_json::from_slice(&fs::read(path)?)?
     } else {
@@ -225,7 +238,7 @@ fn resolve(
     };
     while !report.tests.contains_key(test) && !report.finished {
         let reported = report.tests.len();
-        report = extend(report, invoke)?;
+        report = extend(report, filters, invoke)?;
         store(path, &serde_json::to_vec(&report)?)?;
         if !report.finished && report.tests.len() == reported {
             bail!("device batch made no progress toward a verdict for {test}");
@@ -249,15 +262,17 @@ fn resolve(
 /// a verdict; the remainder runs in a fresh process that skips what is known.
 fn extend(
     previous: report::Report,
+    filters: &[String],
     invoke: &mut dyn FnMut(&[String]) -> Result<String>,
 ) -> Result<report::Report> {
-    let mut args = vec!["--test-threads=1".to_owned()];
-    if !previous.tests.is_empty() {
-        args.push("--exact".to_owned());
-        for name in previous.tests.keys() {
-            args.push("--skip".to_owned());
-            args.push(name.clone());
-        }
+    let mut args = vec!["--test-threads=1".to_owned(), "--exact".to_owned()];
+    for name in previous.tests.keys() {
+        args.push("--skip".to_owned());
+        args.push(name.clone());
+    }
+    if !filters.is_empty() {
+        args.push("--".to_owned());
+        args.extend_from_slice(filters);
     }
     let mut next = report::parse(&invoke(&args)?);
     if let Some(name) = next.in_flight.take() {
@@ -471,7 +486,76 @@ fn shell_command(args: &[&str]) -> String {
 mod tests {
     use std::cell::{Cell, RefCell};
 
+    use serde_json::{Deserializer, Value};
+
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_device_receives_the_resolved_exact_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let adb = dir.path().join("adb");
+        let trace = dir.path().join("commands");
+        let binary = dir.path().join("binary");
+        crate::testing::install_script(
+            &adb,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$4\" >> {}\nexit 1\n",
+                shell_command(&[trace.to_str().unwrap()]),
+            ),
+        );
+        let session = Session {
+            adb,
+            serial: "test-device".into(),
+            package: "test.package".into(),
+            directory: String::new(),
+            evidence: dir.path().to_owned(),
+            environment: BTreeMap::new(),
+            binaries: BTreeMap::from([(
+                binary.clone(),
+                Image {
+                    library: "test".into(),
+                    transport: false,
+                    executable: false,
+                },
+            )]),
+            filters: BTreeMap::new(),
+        };
+        let mut session = serde_json::to_value(session).unwrap();
+        session["filters"] = serde_json::to_value(BTreeMap::from([(
+            binary.clone(),
+            vec!["alpha_passes", "delta_passes"],
+        )]))
+        .unwrap();
+        let path = dir.path().join("session.json");
+        fs::write(&path, serde_json::to_vec(&session).unwrap()).unwrap();
+
+        run(
+            &path,
+            &binary,
+            &["--exact", "alpha_passes", "--nocapture"].map(str::to_owned),
+        )
+        .expect_err("the fake adb refuses the invocation after recording its request");
+
+        let commands = fs::read_to_string(trace).unwrap();
+        let command = commands.lines().next().unwrap();
+        let request = Deserializer::from_str(&command[command.find('{').unwrap()..])
+            .into_iter::<Value>()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            request["args"],
+            json!([
+                binary,
+                "--test-threads=1",
+                "--exact",
+                "--",
+                "alpha_passes",
+                "delta_passes",
+            ])
+        );
+    }
 
     #[cfg(unix)]
     #[test]
@@ -497,6 +581,7 @@ mod tests {
             evidence: dir.path().to_owned(),
             environment: BTreeMap::new(),
             binaries: BTreeMap::new(),
+            filters: BTreeMap::new(),
         };
         let recovered = recover(
             &session,
@@ -566,9 +651,9 @@ mod tests {
     }
 
     fn resolved(path: &Path, test: &str, calls: &Cell<usize>, batch: &str) -> Result<Answer> {
-        resolve(path, test, &mut |args: &[String]| {
+        resolve(path, test, &[], &mut |args: &[String]| {
             calls.set(calls.get() + 1);
-            assert_eq!(args, ["--test-threads=1"]);
+            assert_eq!(args, ["--test-threads=1", "--exact"]);
             Ok(batch.to_owned())
         })
     }
@@ -616,6 +701,74 @@ mod tests {
         assert_eq!(calls.get(), 1);
     }
 
+    #[test]
+    fn an_unselected_case_is_refused_before_reading_a_cached_verdict() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.json");
+        fs::write(&path, serde_json::to_vec(&report::parse(BATCH)).unwrap()).unwrap();
+        let filters = vec!["delta_passes".to_owned()];
+
+        let error = resolve(&path, "alpha_passes", &filters, &mut |_| {
+            panic!("an unselected test must not invoke the device")
+        })
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("absent from Android test selection")
+        );
+    }
+
+    #[test]
+    fn an_interrupted_filtered_batch_keeps_its_selection_and_failed_verdict() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.json");
+        let filters = ["aaa_quick", "bbb_slow", "ccc_quick"].map(str::to_owned);
+        let requests = RefCell::new(Vec::new());
+        let mut device = |args: &[String]| {
+            requests.borrow_mut().push(args.to_vec());
+            Ok(if requests.borrow().len() == 1 {
+                INTERRUPTED.to_owned()
+            } else {
+                REMAINDER.to_owned()
+            })
+        };
+
+        let remainder = resolve(&path, "ccc_quick", &filters, &mut device).unwrap();
+        let failed = resolve(&path, "bbb_slow", &filters, &mut device).unwrap();
+
+        assert_eq!(remainder.code, 0);
+        assert_eq!(failed.code, 1);
+        assert_eq!(requests.borrow().len(), 2);
+        assert_eq!(
+            requests.borrow()[0],
+            [
+                "--test-threads=1",
+                "--exact",
+                "--",
+                "aaa_quick",
+                "bbb_slow",
+                "ccc_quick"
+            ]
+        );
+        assert_eq!(
+            requests.borrow()[1],
+            [
+                "--test-threads=1",
+                "--exact",
+                "--skip",
+                "aaa_quick",
+                "--skip",
+                "bbb_slow",
+                "--",
+                "aaa_quick",
+                "bbb_slow",
+                "ccc_quick"
+            ]
+        );
+    }
+
     /// libtest exits 101 on any failure, so the instrumentation reports a
     /// crashed process for every binary holding one.
     #[test]
@@ -651,12 +804,12 @@ mod tests {
             })
         };
 
-        let remainder = resolve(&path, "ccc_quick", &mut device).unwrap();
-        let flight = resolve(&path, "bbb_slow", &mut device).unwrap();
+        let remainder = resolve(&path, "ccc_quick", &[], &mut device).unwrap();
+        let flight = resolve(&path, "bbb_slow", &[], &mut device).unwrap();
 
         assert_eq!(flight.code, 1);
         assert_eq!(remainder.code, 0);
-        assert_eq!(requests.borrow()[0], ["--test-threads=1"]);
+        assert_eq!(requests.borrow()[0], ["--test-threads=1", "--exact"]);
         assert_eq!(
             requests.borrow()[1],
             [

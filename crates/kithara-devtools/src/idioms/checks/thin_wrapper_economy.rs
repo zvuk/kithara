@@ -1595,7 +1595,7 @@ impl Codec {{
 
     fn fixture_findings(sources: &[(&str, &str)]) -> Vec<Finding> {
         let files = fixture_files(sources);
-        analyze(fixture_root(), &files)
+        analyze(&crate::test::repository_tests::root(), &files)
     }
 
     fn fixture_files(sources: &[(&str, &str)]) -> Vec<SourceFile> {
@@ -1609,12 +1609,5 @@ impl Codec {{
                 syntax: syn::parse_file(source).expect("valid Rust fixture"),
             })
             .collect()
-    }
-
-    fn fixture_root() -> &'static Path {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("crate lives below workspace/crates")
     }
 }

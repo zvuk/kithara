@@ -460,7 +460,13 @@ where
     S: HasPool<f32>,
 {
     fn drain_mapped(&mut self, output_limit: usize) -> Result<Option<AudioChunk>, ElasticError> {
-        if !self.active && self.retiring_target.is_none() {
+        if !self.active
+            && self.stateless_tail_owed.is_none()
+            && self
+                .residency
+                .as_ref()
+                .is_none_or(|resident| resident.replacement.is_empty())
+        {
             return Ok(None);
         }
         let Some(meta) = self.last_input_meta else {
@@ -574,6 +580,10 @@ where
         let output_limit = self.trajectory.output_limit(output_limit);
         if output_limit == 0 {
             return Ok(None);
+        }
+        if self.unity_retirement_pending() {
+            self.retire_for_reprime()?;
+            self.prepare(self.spec);
         }
         if self.mapped_render {
             if self.transition_pending() {
@@ -713,7 +723,7 @@ where
         }
         if self.plan.is_none()
             && (!self.requires_staging() || self.trajectory.unity_interval())
-            && self.retiring_target.is_none()
+            && self.stateless_tail_owed.is_none()
             && span.source_ratio_at(0)
                 == Some((
                     u128::from(chunk.meta.frame_offset),
@@ -845,66 +855,89 @@ where
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
-    /// Retire the running engine's tail into the replacement the re-primed
-    /// engine fades from, leaving the held source in the residency.
+    /// Retire the audible side into the replacement the re-primed side fades from.
     pub(in crate::render) fn retire_for_reprime(&mut self) -> Result<(), ElasticError> {
-        let speed_reprime = self.reprime_pending
-            && self.current_keylock
-            && !self.keylocked_unity()
-            && self.stretch_target() == (self.current_kind, self.current_keylock)
-            && self.retiring_target.is_none();
-        if self.mapped_render && !speed_reprime {
-            self.retire_mapped_target()?;
-            let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
-            resident.replacement.clear();
-            resident.next_replacement.clear();
-            resident.replacement_offset = 0;
-            self.output_remainder = 0.0;
-            self.resident_feed = None;
-            self.backend_transition_pending = false;
-            self.reprime_pending = false;
-            self.active = false;
-            self.applied_pitch = f64::NAN;
-            self.rebuild_pending = true;
-            self.reset_pending = false;
-            return Ok(());
+        if self.mapped_render && self.stretch_target().1 && self.keylocked_unity() {
+            self.trajectory.snap_to_frame()?;
         }
-        match self.retain_replacement() {
-            Ok(()) => {
-                if let Some(pending) = self.pending_source.as_mut() {
-                    pending.clear();
-                }
-                self.pending_meta = None;
-                self.output_remainder = 0.0;
-                self.resident_feed = None;
-                self.rebuild_pending |= self.mapped_render && speed_reprime;
-                Ok(())
-            }
-            Err(error) => {
+        if !self.mapped_render || (self.active && self.current_keylock) {
+            if let Err(error) = self.retain_replacement() {
                 self.retire_engine();
                 self.clear_render_state();
-                Err(error)
+                return Err(error);
+            }
+        } else {
+            let captures_stateless = self
+                .residency
+                .as_ref()
+                .is_some_and(|resident| !resident.fold_unplayed());
+            if captures_stateless {
+                self.stateless_tail_owed
+                    .get_or_insert_with(|| self.trajectory.clone());
             }
         }
+        self.clear_pending_source();
+        self.output_remainder = 0.0;
+        self.resident_feed = None;
+        self.backend_transition_pending = false;
+        self.reprime_pending = false;
+        self.active = false;
+        self.applied_pitch = f64::NAN;
+        self.reset_pending = false;
+        Ok(())
     }
 
-    /// Drain the running engine's tail into the replacement the next engine
-    /// fades from. A fade still under way blends into that tail on the way, so
-    /// the next fade starts from what sounds now.
-    #[kithara::hang_watchdog]
-    fn retain_replacement(&mut self) -> Result<(), ElasticError> {
+    /// Output frames of the running engine's tail that source supports: its
+    /// cached projection output plus its output latency.
+    pub(in crate::render) fn supported_tail_frames(&self) -> Result<usize, ElasticError> {
         let channels = usize::from(self.spec.channels.max(1));
-        let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
-        resident.next_replacement.clear();
-        let capacity = resident.next_replacement.capacity() / channels;
-        let quantum = self
+        let cached_frames = self
+            .projection
+            .as_ref()
+            .filter(|projection| self.mapped_render && projection.feed.is_some())
+            .map(|projection| {
+                projection.buffers[0]
+                    .len()
+                    .checked_sub(projection.offset)
+                    .map(|samples| samples / channels)
+                    .ok_or(ElasticError::SampleCountOverflow)
+            })
+            .transpose()?
+            .unwrap_or(0);
+        let output_latency = self
             .engine
             .as_ref()
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities()
             .latency()
-            .second()
-            .max(1);
+            .second();
+        cached_frames
+            .checked_add(output_latency)
+            .ok_or(ElasticError::SampleCountOverflow)
+    }
+
+    /// Drain the running engine's tail and keep its source-supported prefix
+    /// as the replacement the next engine fades from. A fade still under way
+    /// blends into it on the way, so the next fade starts from what sounds
+    /// now and runs over that prefix.
+    #[kithara::hang_watchdog]
+    fn retain_replacement(&mut self) -> Result<(), ElasticError> {
+        let channels = usize::from(self.spec.channels.max(1));
+        let supported_samples = self
+            .supported_tail_frames()?
+            .checked_mul(channels)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let output_latency = self
+            .engine
+            .as_ref()
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
+            .capabilities()
+            .latency()
+            .second();
+        let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
+        resident.next_replacement.clear();
+        let capacity = resident.next_replacement.capacity() / channels;
+        let quantum = output_latency.max(1);
         for _ in 0..=capacity.div_ceil(quantum) {
             hang_tick!();
             self.scratch
@@ -914,28 +947,14 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             let complete = self.drain_tail(channels, quantum)?;
             let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
             let output = self.scratch.as_mut().ok_or(ElasticError::PoolCapacity)?;
-            if resident.next_replacement.len() + output.len() > resident.next_replacement.capacity()
-            {
-                return Err(ElasticError::PoolCapacity);
-            }
-            resident.blend_replacement(output, channels)?;
-            resident
-                .next_replacement
-                .try_extend_from_slice(output)
-                .map_err(|_| ElasticError::PoolCapacity)?;
-            if !output.is_empty() {
+            if resident.fold_supply(output, channels)? > 0 {
                 hang_reset!();
             }
             output.clear();
             if complete {
-                mem::swap(&mut resident.replacement, &mut resident.next_replacement);
-                resident.next_replacement.clear();
-                resident.replacement_offset = 0;
-                self.backend_transition_pending = false;
-                self.reprime_pending = false;
-                self.active = false;
-                self.applied_pitch = f64::NAN;
-                self.reset_pending = false;
+                // Terminal zero-padding has no future source context for a continuing handoff.
+                resident.next_replacement.truncate(supported_samples);
+                resident.finish_fold();
                 return Ok(());
             }
         }

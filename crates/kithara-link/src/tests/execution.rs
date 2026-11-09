@@ -6,8 +6,8 @@ use kithara_command::{Batch, Inbox, Outcome, Receipt, Rejection, Seq, When};
 use kithara_host::HostOwner;
 use kithara_play::{
     Bound, DeckPass, Outbox, PlayWorker, PlayWorkerConfig, Player, PlayerConfig, PlayerImpl,
-    ResourceConfig, ResourceLoad, ResourceSrc, Track, TrackCommand, TrackReceipt, TrackSettings,
-    TrackStatus,
+    ResourceConfig, ResourceLoad, ResourceSrc, Track, TrackClock, TrackCommand, TrackReceipt,
+    TrackSettings, TrackStatus,
     mock::{self, DeckRig},
 };
 use kithara_render::{
@@ -502,6 +502,7 @@ fn native_marked_at<R>(
         deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &snapshot,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut scope = rig.ring.scope(rig.scope).expect("scope");
     run(&mut Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass))
@@ -575,6 +576,19 @@ async fn native_synced(
     native_marked(&mut rig, segment, |out| {
         deck.tick(SessionFrame::new(0), out);
     });
+    for receipt in rig
+        .block(SessionFrame::new(0), 0.0)
+        .expect("the synced clock")
+    {
+        assert!(matches!(
+            receipt.batch().commands.as_slice(),
+            [DeckPart::Clock {
+                clock: TrackClock::Session,
+                ..
+            }]
+        ));
+        native_settle(&mut deck, &mut rig, segment, receipt);
+    }
     assert_eq!(
         deck.entry(Bound::AtOrAfter(SessionFrame::new(0))),
         Some(SessionFrame::new(0))

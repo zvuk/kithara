@@ -17,7 +17,7 @@ pub(crate) use command::run;
 pub use command::{NextestAction, TestArgs, nextest_command_for_lane, selects_any_lane};
 #[cfg(test)]
 pub(crate) use inventory::validate_inventory_case_count;
-pub(crate) use inventory::{TestId, parse_inventory};
+pub(crate) use inventory::{TestId, inventory_args, parse_inventory};
 pub(crate) use resolve::{LaneChoice, ResolvedLane, resolve};
 pub(crate) use selection::{LaneToggles, toggled};
 
