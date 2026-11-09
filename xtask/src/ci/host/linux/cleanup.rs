@@ -192,10 +192,16 @@ fn collect_compiler_store(
 
 fn compiler_stores(host: &LinuxHost) -> Result<BTreeSet<PathBuf>> {
     let mut stores = BTreeSet::new();
-    if !host.cache_root.is_dir() {
+    let compiler_root = host.compiler_cache_root();
+    if !compiler_root.is_dir() {
         return Ok(stores);
     }
-    let root = host.cache_root.canonicalize()?;
+    ensure!(
+        !compiler_root.is_symlink(),
+        "compiler store root is a symlink: {}",
+        compiler_root.display()
+    );
+    let root = compiler_root.canonicalize()?;
     for runner in &host.runners {
         let store = Container::kache(host, runner).join(consts::KACHE_STORE);
         let index = store.join("index.db");
@@ -210,7 +216,7 @@ fn compiler_stores(host: &LinuxHost) -> Result<BTreeSet<PathBuf>> {
         let store = store.canonicalize()?;
         ensure!(
             store.starts_with(&root),
-            "compiler store is outside its owned cache root: {}",
+            "compiler store is outside its owned compiler root: {}",
             store.display()
         );
         stores.insert(store);
@@ -449,6 +455,24 @@ mod tests {
         fs::create_dir_all(&store).unwrap();
         fs::write(store.join("index.db"), []).unwrap();
         assert!(compiler_stores(&host).is_err());
+    }
+
+    #[test]
+    fn collection_uses_the_declared_compiler_volume_without_a_build_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut host = super::super::profile::tests::host_fixture();
+        host.cache_root = directory.path().join("build-cache");
+        host.compiler_cache_root = Some(directory.path().join("compiler-cache"));
+        let mut expected = BTreeSet::new();
+        for runner in &host.runners {
+            let store = Container::kache(&host, runner).join(consts::KACHE_STORE);
+            fs::create_dir_all(&store).unwrap();
+            fs::write(store.join("index.db"), []).unwrap();
+            expected.insert(store.canonicalize().unwrap());
+        }
+
+        assert_eq!(compiler_stores(&host).unwrap(), expected);
+        assert!(!host.cache_root.exists());
     }
 
     #[test]

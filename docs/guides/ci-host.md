@@ -1,18 +1,18 @@
 # Dedicated CI host
 
-The Mac mini is a CI-owned machine. Repository automation has one executable
-owner, `xtask ci`; GitLab YAML and `just` recipes only select a typed command.
+The CI-owned Mac mini uses `xtask ci`; GitLab YAML and `just` select typed commands.
 
-`.config/ci-pins.toml` is the repository's, tracked and reviewed with the code
-it pins; the host profile is the machine's and untracked. Neither repeats the
-other. Lanes reach the profile only through `KITHARA_CI_HOST_CONFIG`, set by
-every executor to `/etc/kithara-ci/mac-host.toml` (`C:/KitharaCI/mac-host.toml`
-on Windows).
+Repository-reviewed versions live in `.config/ci-pins.toml`; untracked machine
+profiles hold host settings. Every executor sets `KITHARA_CI_HOST_CONFIG` to
+`/etc/kithara-ci/mac-host.toml` (`C:/KitharaCI/mac-host.toml` on Windows).
 
 ## Host installation
 
 Write the machine profile first, outside the repository; its fields are in
 `xtask/tests/fixtures/ci-mac-host.toml` (`ci-linux-host.toml` for Linux).
+
+Linux `compiler_cache_root` can place the scoped compiler stores on a separate
+volume from build outputs; when omitted, they live under `cache_root/kache`.
 
 A Linux profile lists each repository served with its own token file, and every
 runner names one. A GitHub registration reaches exactly one repository, so
