@@ -27,10 +27,12 @@ pub(crate) fn run(args: &MeasureChildArgs) -> Result<()> {
         .context("missing child command")?;
     let before = getrusage(UsageWho::RUSAGE_CHILDREN).context("read initial child CPU")?;
     let started = Instant::now();
-    let status = Command::new(program)
+    let mut child = Command::new(program)
         .args(arguments)
-        .status()
+        .spawn()
         .context("execute measured child")?;
+    let child_pid = child.id();
+    let status = child.wait().context("wait for measured child")?;
     let elapsed = started.elapsed();
     let after = getrusage(UsageWho::RUSAGE_CHILDREN).context("read final child CPU")?;
     let user = Duration::from_micros(u64::try_from(
@@ -40,6 +42,7 @@ pub(crate) fn run(args: &MeasureChildArgs) -> Result<()> {
         (after.system_time() - before.system_time()).num_microseconds(),
     )?);
     let metrics = serde_json::json!({
+        "child_pid": child_pid,
         "wall_seconds": elapsed.as_secs_f64(),
         "user_seconds": user.as_secs_f64(),
         "system_seconds": system.as_secs_f64(),

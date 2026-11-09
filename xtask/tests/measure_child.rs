@@ -23,6 +23,7 @@ fn metrics(output: &Output) -> Value {
         .collect();
     assert_eq!(rows.len(), 1, "{stderr}");
     let value: Value = serde_json::from_str(rows[0]).expect("native timing JSON");
+    assert!(value["child_pid"].as_u64().expect("native child PID") > 0);
     for field in ["wall_seconds", "user_seconds", "system_seconds"] {
         let number = value[field].as_f64().expect("numeric duration");
         assert!(number.is_finite() && number >= 0.0, "{value}");
@@ -108,6 +109,7 @@ fn native_cpu_accounts_for_actual_child_work() {
             result = std::hint::black_box(result.wrapping_add(std::hint::black_box(value)));
         }
         assert_eq!(result, 1_999_999_000_000);
+        println!("measured-child-pid={}", std::process::id());
         return;
     }
     let output = observer()
@@ -123,6 +125,14 @@ fn native_cpu_accounts_for_actual_child_work() {
     assert!(output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed;"));
     let value = metrics(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let pid = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("measured-child-pid="))
+        .expect("actual CPU child PID")
+        .parse::<u64>()
+        .expect("numeric CPU child PID");
+    assert_eq!(value["child_pid"].as_u64(), Some(pid));
     assert!(
         value["user_seconds"].as_f64().expect("user CPU")
             + value["system_seconds"].as_f64().expect("system CPU")
