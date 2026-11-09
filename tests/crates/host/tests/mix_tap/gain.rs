@@ -17,7 +17,10 @@ use crate::underrun;
 
 const CALLBACK_FRAMES: usize = 64;
 
-#[kithara::test(tokio, tracing("render_refill=trace"))]
+#[kithara::test(
+    tokio,
+    tracing("warn,render_refill=trace,kithara_test::host_rate_telemetry=info")
+)]
 async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
     let options = OfflinePlayerOptions::builder()
         .block_on_underrun(false)
@@ -39,11 +42,14 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
     .audio_buffer_chunks(NonZeroUsize::new(2).expect("nonzero packet count"))
     .build();
     let harness = load_source(harness, TrackSource::Config(Box::new(config))).await;
+    let loaded_underruns = harness.metrics().underruns();
     let _ = render_gain_window(&harness, BLOCK_FRAMES, &mut underruns).await;
+    let initial_underruns = harness.metrics().underruns();
     underruns.checkpoint(harness.metrics(), false, "gain initial playback");
     let warm = render_gain_window(&harness, 4096, &mut underruns).await;
     underruns.checkpoint(harness.metrics(), false, "gain ready playback");
     assert!(warm[warm.len() - 128..].iter().all(|sample| *sample == 0.5));
+    let warm_underruns = harness.metrics().underruns();
     let item = harness
         .with_queue(|queue| queue.current().expect("loaded current item").id)
         .await;
@@ -99,6 +105,8 @@ async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
         .expect("same sounding attachment");
     assert_eq!(sounding.output.gain(), 0.25);
     assert!(sounding.output.program().is_some());
+    tracing::info!(target: "kithara_test::host_rate_telemetry", loaded_underruns, initial_underruns, warm_underruns, capture_start = start, "cumulative underruns by render phase");
+    underruns.checkpoint(harness.metrics(), true, "checked 1024-frame gain window");
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;
 }

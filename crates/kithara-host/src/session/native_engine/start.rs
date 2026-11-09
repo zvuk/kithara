@@ -54,7 +54,7 @@ fn start_stream_cpal(
     ctx: &mut SessionGraph,
     sample_rate: u32,
     output_block_frames: Option<NonZeroU32>,
-    _decks: &mut [DeckNode],
+    decks: &mut [DeckNode],
 ) -> Result<NativeStream, String> {
     debug!(sample_rate, "starting cpal stream");
     let device = AcquiredOutput::new(cpal_config(sample_rate, output_block_frames))?.open()?;
@@ -63,8 +63,35 @@ fn start_stream_cpal(
     if ctx.is_active() {
         return Err(firewheel::error::ActivateError::AlreadyActive.to_string());
     }
+    let shape =
+        kithara_render::rt::StreamShape::new(device.info.max_block_frames, device.info.sample_rate);
+    for deck in decks
+        .iter_mut()
+        .filter(|deck| ctx.node_info(deck.node).is_some())
+    {
+        deck.owner
+            .reserve_stream()
+            .map_err(|error| error.to_string())?;
+    }
+    for deck in decks
+        .iter_mut()
+        .filter(|deck| ctx.node_info(deck.node).is_some())
+    {
+        deck.owner
+            .prepare_stream(shape)
+            .map_err(|error| error.to_string())?;
+    }
     let processor = ctx
         .activate(device.info)
         .map_err(|error| error.to_string())?;
+    for deck in decks
+        .iter_mut()
+        .filter(|deck| ctx.node_info(deck.node).is_some())
+    {
+        if let Err(error) = deck.owner.resume_stream() {
+            drop(processor);
+            return Err(error.to_string());
+        }
+    }
     device.start(processor)
 }

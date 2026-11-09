@@ -569,7 +569,8 @@ fn the_two_baseline_oracle_still_rejects_a_click_at_the_join(
     native,
     serial,
     timeout(Duration::from_secs(25)),
-    hang_timeout_secs(3)
+    hang_timeout_secs(3),
+    tracing("warn,render_refill=trace")
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]

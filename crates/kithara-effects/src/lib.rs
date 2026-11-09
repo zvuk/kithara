@@ -3,7 +3,6 @@
 
 //! Deck and master audio effects.
 
-mod dsp;
 pub mod eq;
 mod gain_db;
 mod limiter;

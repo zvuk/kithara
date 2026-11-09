@@ -155,14 +155,24 @@ impl WebOutput {
         let info = self.info.ok_or("actual web format is unavailable")?;
         let shape = kithara_render::rt::StreamShape::new(info.max_block_frames, info.sample_rate);
         graph.cycle_detected().map_err(|error| error.to_string())?;
+        let mut retained = Vec::<crate::DeckId>::new();
         for deck in decks
-            .iter()
+            .iter_mut()
             .filter(|deck| graph.node_info(deck.node).is_some())
         {
-            kithara_render::rt::PlayerNode::<S, TransportState>::prepare_if_initial(
+            let initial = kithara_render::rt::PlayerNode::<S, TransportState>::prepare_if_initial(
                 graph, deck.node, shape,
             )
             .map_err(|error| error.to_string())?;
+            if !initial {
+                deck.owner
+                    .reserve_stream()
+                    .map_err(|error| error.to_string())?;
+                deck.owner
+                    .prepare_stream(shape)
+                    .map_err(|error| error.to_string())?;
+                retained.push(deck.id);
+            }
         }
         if !self.lease.acquired() {
             return Ok(());
@@ -171,6 +181,12 @@ impl WebOutput {
             return Err("previous web processor is still active".into());
         }
         let processor = graph.activate(info).map_err(|error| error.to_string())?;
+        for deck in decks.iter_mut().filter(|deck| retained.contains(&deck.id)) {
+            if let Err(error) = deck.owner.resume_stream() {
+                drop(processor);
+                return Err(error.to_string());
+            }
+        }
         let output = self
             .clock
             .take()

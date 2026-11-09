@@ -75,7 +75,7 @@ impl OfflineStream {
                 quantum,
                 &mut output[cursor * CHANNELS..(cursor + quantum) * CHANNELS],
             )?;
-            for deck in decks.iter_mut().filter_map(|deck| deck.offline.as_mut()) {
+            for deck in decks.iter_mut().map(|deck| &mut deck.owner) {
                 deck.end_render()
                     .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
             }
@@ -98,18 +98,18 @@ impl OfflineStream {
             inbox
                 .drain()
                 .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
-            for deck in decks.iter_mut().filter_map(|deck| deck.offline.as_mut()) {
+            for deck in decks.iter_mut().map(|deck| &mut deck.owner) {
                 quantum = quantum.min(
                     deck.prepare(inbox, start, quantum, self.sample_rate)
                         .map_err(|error| OfflineSessionError::Graph(error.to_string()))?,
                 );
             }
         }
-        for deck in decks.iter_mut().filter_map(|deck| deck.offline.as_mut()) {
+        for deck in decks.iter_mut().map(|deck| &mut deck.owner) {
             deck.reserve_render(quantum)
                 .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
         }
-        for deck in decks.iter_mut().filter_map(|deck| deck.offline.as_mut()) {
+        for deck in decks.iter_mut().map(|deck| &mut deck.owner) {
             deck.begin_render(quantum)
                 .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
         }
@@ -170,7 +170,7 @@ impl OfflineStream {
     pub(in crate::session::offline) fn start(
         cx: &mut SessionGraph,
         config: BackendConfig,
-        _decks: &mut [DeckNode],
+        decks: &mut [DeckNode],
     ) -> Result<Self, OfflineSessionError> {
         if cx.is_active() {
             return Err(OfflineSessionError::Graph(
@@ -179,6 +179,15 @@ impl OfflineStream {
         }
         cx.cycle_detected()
             .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
+        let shape = kithara_render::rt::StreamShape::new(config.block_frames, config.sample_rate);
+        for deck in decks
+            .iter_mut()
+            .filter(|deck| cx.node_info(deck.node).is_some())
+            .map(|deck| &mut deck.owner)
+        {
+            deck.prepare_stream(shape)
+                .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
+        }
         let num_stream_out_channels =
             u32::try_from(CHANNELS).map_err(|_| OfflineSessionError::ChannelCountOverflow)?;
         let inbox = cx
@@ -196,6 +205,13 @@ impl OfflineStream {
                 input_to_output_latency_seconds: config.declared_latency.as_secs_f64(),
             })
             .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
+        for deck in decks
+            .iter_mut()
+            .filter(|deck| cx.node_info(deck.node).is_some())
+            .map(|deck| &mut deck.owner)
+        {
+            deck.commit_stream();
+        }
         Ok(Self {
             inbox,
             processor: Box::new(processor),
@@ -226,10 +242,7 @@ mod tests {
         let Some(SessionStream::Offline(stream)) = &mut session.stream else {
             panic!("fixture offline stream");
         };
-        let deck = session.deck_nodes[0]
-            .offline
-            .as_mut()
-            .expect("offline endpoint");
+        let deck = &mut session.deck_nodes[0].owner;
         assert!(matches!(
             deck.begin_render(32),
             Err(OfflineDeckError::InvalidFrames)

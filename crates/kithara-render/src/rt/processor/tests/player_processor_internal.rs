@@ -399,7 +399,6 @@ async fn a_prepared_delayed_final_packet_stitches_its_successor_inside_the_same_
             processor.inbox.0.scope(scope),
             SessionFrame::new(0),
             MAX_BLOCK_FRAMES as usize,
-            RATE,
         );
         processor
     });

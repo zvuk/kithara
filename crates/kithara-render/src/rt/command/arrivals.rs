@@ -5,7 +5,7 @@ use super::{
     super::{processor::Deck, track::PlayerTrack},
     state::*,
 };
-use crate::bridge::{DeckPart, DeckProtocol, DeckRefusal, Slot};
+use crate::bridge::{DeckEqChange, DeckPart, DeckProtocol, DeckRefusal, Slot};
 
 impl Deck {
     pub(in crate::rt) fn arrivals(&mut self, level: &mut LevelInbox<'_, DeckProtocol>) {
@@ -60,6 +60,19 @@ impl Deck {
                 .any(|part| matches!(part, DeckPart::GainProgram { .. }))
         {
             due.refuse(DeckRefusal::AxisRestarted);
+            return;
+        }
+        let preparation = due
+            .commands_mut()
+            .iter_mut()
+            .try_for_each(|part| match part {
+                DeckPart::Eq(DeckEqChange::Layout(layout)) => {
+                    layout.prepare_sample_rate(self.sample_rate)
+                }
+                _ => Ok(()),
+            });
+        if let Err(error) = preparation {
+            due.refuse(DeckRefusal::Eq(error));
             return;
         }
         let at = due.at();

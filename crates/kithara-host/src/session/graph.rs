@@ -38,17 +38,13 @@ where
         .ok_or(SessionError::NoContext)?;
     let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
     #[cfg(feature = "offline")]
-    let (player, offline) = if matches!(state.stream, Some(super::state::SessionStream::Offline(_)))
-    {
-        {
-            let (player, offline) = PlayerNode::<S, TransportState>::offline(inputs, pools);
-            (player, Some(offline))
-        }
+    let (player, owner) = if matches!(state.stream, Some(super::state::SessionStream::Offline(_))) {
+        PlayerNode::<S, TransportState>::offline(inputs, pools)
     } else {
-        (PlayerNode::<S, TransportState>::new(inputs, pools), None)
+        PlayerNode::<S, TransportState>::native(inputs, pools)
     };
     #[cfg(not(feature = "offline"))]
-    let player = PlayerNode::<S, TransportState>::new(inputs, pools);
+    let (player, owner) = PlayerNode::<S, TransportState>::native(inputs, pools);
     let shape = ctx.negotiated_shape().ok_or(SessionError::NoContext)?;
     let node = add_graph_node(ctx, player)?;
     let installed = PlayerNode::<S, TransportState>::prepare_at(ctx, node, shape)
@@ -71,8 +67,7 @@ where
                 id,
                 node,
                 bus,
-                #[cfg(feature = "offline")]
-                offline,
+                owner,
             },
             staged: true,
         });
@@ -82,8 +77,7 @@ where
         id,
         node,
         bus,
-        #[cfg(feature = "offline")]
-        offline,
+        owner,
     });
     Ok(())
 }
@@ -98,11 +92,8 @@ pub(crate) fn remove_deck<T, S>(
         .iter()
         .position(|deck| deck.id == id)
         .ok_or(SessionError::DeckNotFound(id))?;
-    let mut removed = state.deck_nodes.remove(index);
-    #[cfg(feature = "offline")]
-    removed.offline.take();
     state.retired_decks.push(RetiredDeck {
-        deck: removed,
+        deck: state.deck_nodes.remove(index),
         staged: false,
     });
     flush_retired(state)?;
@@ -128,8 +119,10 @@ pub(crate) fn flush_retired<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
     if ctx.quiescent() {
         ctx.update()
             .map_err(|error| SessionError::Graph(error.to_string()))?;
-        state.retired_decks.retain(|retired| !retired.staged);
     }
+    state
+        .retired_decks
+        .retain_mut(|retired| !retired.staged || !retired.deck.owner.reclaim_stopped());
     tap::flush(state)
 }
 

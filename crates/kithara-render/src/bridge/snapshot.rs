@@ -9,7 +9,8 @@ use crate::rt::DeckMixerConfig;
 pub struct DeckSnapshot {
     /// One entry per slot, in slot order.
     pub slots: Vec<SlotSnapshot>,
-    /// Current output sample rate.
+    /// Last mixer-published rate; zero before its first actual render.
+    /// Admitted output geometry comes from the session output observation.
     pub sample_rate: u32,
     /// Blocks the mixer rendered.
     pub blocks: u64,

@@ -104,6 +104,11 @@ impl Biquad {
     pub fn copy_state(&mut self, source: &Self) -> Result<(), FilterError> {
         self.cascade.copy_state_from(&source.cascade)
     }
+
+    /// Clears section history without changing coefficients or allocating.
+    pub fn reset(&mut self) {
+        self.cascade.reset();
+    }
 }
 
 fn peak<P: Deref<Target = [f32]>>(planes: &[P], range: &Range<usize>) -> f32 {

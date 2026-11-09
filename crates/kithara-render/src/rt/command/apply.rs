@@ -83,7 +83,7 @@ impl Deck {
             }
             DeckPart::Eq(DeckEqChange::Layout(layout)) => self
                 .render
-                .take_eq_layout(layout)
+                .take_prepared_eq_layout(layout)
                 .map(|layout| DeckPart::Returned(Returned::Eq(layout))),
             DeckPart::GainProgram {
                 slot,

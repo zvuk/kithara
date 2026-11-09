@@ -2,11 +2,15 @@ use std::{marker::PhantomData, num::NonZeroU32, ops::Range};
 
 use firewheel::{
     StreamInfo,
-    node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
+    node::{
+        AudioNodeProcessor, NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx,
+        ProcessStatus,
+    },
 };
-use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_command::{LevelInbox, ScopeId, Target};
 use kithara_dsp::param::SmootherConfig;
+use kithara_effects::eq::EqError;
 use kithara_signal::{FrameCount, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;
@@ -60,6 +64,10 @@ pub(in crate::rt) struct Deck {
     pub(in crate::rt) epoch: Option<SessionEpoch>,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("the negotiated stream exceeds the deck's prepared buffer capacity")]
+pub(in crate::rt) struct StreamCapacityExceeded;
+
 pub(in crate::rt) struct PreparedDeck {
     pub(in crate::rt) shape: StreamShape,
     scratch: [SampleBuffer; crate::consts::MIN_STEREO],
@@ -73,15 +81,15 @@ pub(in crate::rt) struct PreparedDeck {
 
 impl<E: SessionInbox> DeckMixer<E> {
     /// Allocates every slot tail and the fixed render scratch before stream processing.
-    /// The scope snapshot is published by the first actual render.
+    /// The scope snapshot stays unchanged until the first actual render.
     ///
     /// # Errors
-    /// Returns a pool error if either scratch or any required tail cannot be allocated.
+    /// Returns the design or pool refusal before stream processing.
     pub fn new<S>(
         inputs: MixerInputs,
         shape: StreamShape,
         pools: &PoolRegion<S>,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, EqError>
     where
         S: HasPool<f32>,
     {
@@ -93,7 +101,7 @@ impl<E: SessionInbox> DeckMixer<E> {
         inputs: &MixerInputs,
         shape: StreamShape,
         pools: &PoolRegion<S>,
-    ) -> Result<PreparedDeck, PoolError>
+    ) -> Result<PreparedDeck, EqError>
     where
         S: HasPool<f32>,
     {
@@ -163,8 +171,31 @@ impl<E: SessionInbox> DeckMixer<E> {
         }
     }
 
-    pub(in crate::rt) fn update_sample_rate(&mut self, rate: NonZeroU32) {
-        self.deck.update_host_sample_rate(rate);
+    pub(in crate::rt) fn prepare_stream(&mut self, shape: StreamShape) -> Result<(), NodeError> {
+        self.deck.render.discard_prepared_sample_rate();
+        let capacity = usize::try_from(shape.max_block_frames.get()).unwrap_or(usize::MAX);
+        let declick_frames =
+            super::super::config::declick_frame_count(self.deck.declick, shape.sample_rate).get();
+        if capacity > self.capacity
+            || self
+                .deck
+                .tails
+                .iter()
+                .any(|tail| tail.capacity() < declick_frames.max(self.deck.evict_frames))
+        {
+            return Err(NodeError(Box::new(StreamCapacityExceeded)));
+        }
+        if self.deck.sample_rate != shape.sample_rate {
+            self.deck
+                .render
+                .prepare_sample_rate(shape.sample_rate)
+                .map_err(|error| NodeError(Box::new(EqError::from(error))))?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::rt) fn commit_stream(&mut self) {
+        self.deck.apply_prepared_host_sample_rate();
     }
 
     pub(in crate::rt) fn prepare_offline(
@@ -172,9 +203,7 @@ impl<E: SessionInbox> DeckMixer<E> {
         level: Option<LevelInbox<'_, DeckProtocol>>,
         start: SessionFrame,
         frames: usize,
-        rate: NonZeroU32,
     ) -> usize {
-        self.update_sample_rate(rate);
         let frames = frames.min(self.capacity);
         let Some(mut level) = level.filter(|_| !self.retired) else {
             return frames;
@@ -541,23 +570,22 @@ impl Deck {
         self.tails.iter().all(|tail| !tail.is_sounding())
     }
 
-    fn update_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        if self.sample_rate == sample_rate {
+    fn apply_prepared_host_sample_rate(&mut self) {
+        let Some(sample_rate) = self.render.apply_prepared_sample_rate() else {
             return;
-        }
+        };
         self.sample_rate = sample_rate;
         self.declick_frames =
             super::super::config::declick_frame_count(self.declick, sample_rate).get();
         for (_, track) in self.tracks.iter_mut() {
             track.set_host_sample_rate(sample_rate);
         }
-        self.render.update_sample_rate(sample_rate);
     }
 }
 
 impl<E: SessionInbox> AudioNodeProcessor for DeckMixer<E> {
-    fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
-        self.deck.update_host_sample_rate(stream_info.sample_rate);
+    fn new_stream(&mut self, _stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
+        self.commit_stream();
     }
 
     #[kithara::rtsan_forbid_blocking]

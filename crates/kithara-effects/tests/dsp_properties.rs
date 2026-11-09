@@ -61,7 +61,7 @@ fn eq_with_gain(pools: &Pools, gain_db: GainDb, band_count: usize) -> StereoEq {
     let config = EqConfig::builder(pools.clone()).build();
     let layout = EqLayout::new(&config, &generate_log_spaced_bands(band_count), rate)
         .unwrap_or_else(|error| panic!("test EQ: {error}"));
-    let mut eq = StereoEq::with_layout(&config, rate, Box::new(layout));
+    let mut eq = StereoEq::with_layout(&config, rate, Box::new(layout)).expect("valid test layout");
     for band in 0..band_count {
         eq.set_gain(band, gain_db);
     }
