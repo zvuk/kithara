@@ -7,7 +7,11 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
     queue::ItemEvent,
 };
-use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::DelayRule};
+use kithara_integration_tests::{
+    CreatedHls, TestServerHelper,
+    audio_artifact::{AudioArtifactSet, audio_artifact_path},
+    fixture_protocol::DelayRule,
+};
 use kithara_render::bridge::DeckSnapshot;
 
 use super::*;
@@ -685,6 +689,42 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
             (second, second_control, second_switched),
         ] {
             failures.extend(cold_switch_failures(*transition, &control, &switched));
+        }
+    }
+    if !failures.is_empty() {
+        let (events, overflowed) = kithara_test_utils::test::usdt::recorded();
+        let identity = [
+            "NEXTEST_RUN_ID",
+            "NEXTEST_BINARY_ID",
+            "NEXTEST_TEST_NAME",
+            "NEXTEST_ATTEMPT_ID",
+            "NEXTEST_ATTEMPT",
+            "NEXTEST_TOTAL_ATTEMPTS",
+            "NEXTEST_STRESS_CURRENT",
+        ]
+        .map(|key| (key, std::env::var_os(key)));
+        let evidence = format!(
+            "case=cold_target_variant_switch_keeps_playback_uninterrupted backend={backend:?} pid={} overflowed={overflowed} nextest={identity:?}\n{events:#?}\n",
+            std::process::id(),
+        );
+        let directory = std::env::var_os("KITHARA_HANG_DUMP_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let written = AudioArtifactSet::new(
+            &directory,
+            "cold-target-variant-switch",
+            SAMPLE_RATE,
+            CHANNELS,
+        )
+        .and_then(|artifacts| {
+            let history = artifacts.write_bytes("usdt-history.txt", evidence.as_bytes())?;
+            audio_artifact_path(&history)
+        });
+        match written {
+            Ok(path) => {
+                tracing::error!(path = %path.display(), overflowed, "Cold-switch USDT history saved")
+            }
+            Err(error) => tracing::error!(%error, "Cold-switch USDT history export failed"),
         }
     }
     assert!(
