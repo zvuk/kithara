@@ -40,10 +40,84 @@ impl HostOutput {
             right: [0.0; crate::consts::WEB_RENDER_QUANTUM],
         }
     }
+    fn render_chunk(&mut self, count: usize, now: f64) -> Result<(), JsValue> {
+        let samples = count
+            .checked_mul(2)
+            .ok_or_else(|| JsValue::from_str("web sample count overflow"))?;
+        let stamp = self.clock.read();
+        let delta = now - stamp.audio;
+        let distance = Duration::try_from_secs_f64(delta.abs())
+            .map_err(|_| JsValue::from_str("invalid audio clock offset"))?;
+        let timestamp = if delta < 0.0 {
+            stamp.main.checked_sub(distance)
+        } else {
+            stamp.main.checked_add(distance)
+        }
+        .ok_or_else(|| JsValue::from_str("audio clock offset overflow"))?;
+        let output = self
+            .interleaved
+            .get_mut(..samples)
+            .ok_or_else(|| JsValue::from_str("unprepared web output shape"))?;
+        self.processor.render(
+            output,
+            BackendProcessInfo {
+                frames: count,
+                process_timestamp: Some(timestamp),
+                duration_since_stream_start: Duration::try_from_secs_f64(now)
+                    .map_err(|_| JsValue::from_str("invalid audio context time"))?,
+                input_stream_status: StreamStatus::empty(),
+                output_stream_status: StreamStatus::empty(),
+                dropped_frames: 0,
+                process_to_playback_delay: None,
+            },
+        );
+        for ((left, right), sample) in self
+            .left
+            .iter_mut()
+            .zip(&mut self.right)
+            .zip(output.chunks_exact(2))
+        {
+            *left = *sample.first().expect("a stereo chunk has its left sample");
+            *right = *sample.get(1).expect("a stereo chunk has its right sample");
+        }
+        Ok(())
+    }
+
+    fn copy_chunk(
+        &self,
+        left: &Float32Array,
+        right: &Float32Array,
+        cursor: u32,
+        count: usize,
+    ) -> Result<u32, JsValue> {
+        let end = cursor
+            .checked_add(u32::try_from(count).map_err(|_| JsValue::from_str("web chunk overflow"))?)
+            .ok_or_else(|| JsValue::from_str("web chunk overflow"))?;
+        let left_prefix = self
+            .left
+            .get(..count)
+            .ok_or_else(|| JsValue::from_str("web left prefix overflow"))?;
+        let right_prefix = self
+            .right
+            .get(..count)
+            .ok_or_else(|| JsValue::from_str("web right prefix overflow"))?;
+        if cursor == 0 && end == left.length() {
+            left.copy_from(left_prefix);
+            right.copy_from(right_prefix);
+        } else {
+            left.subarray(cursor, end).copy_from(left_prefix);
+            right.subarray(cursor, end).copy_from(right_prefix);
+        }
+        Ok(end)
+    }
 }
 
 #[wasm_bindgen]
 impl HostOutput {
+    /// Processes complete stereo output through the prepared graph quantum.
+    ///
+    /// # Errors
+    /// Returns invalid channel, geometry or audio clock conversions.
     pub fn process(&mut self, channels: Array, audio_time: f64) -> Result<bool, JsValue> {
         let left = channels.get(0).dyn_into::<Float32Array>()?;
         let right = channels.get(1).dyn_into::<Float32Array>()?;
@@ -58,68 +132,11 @@ impl HostOutput {
                 .checked_sub(offset)
                 .ok_or_else(|| JsValue::from_str("web cursor overflow"))?
                 .min(crate::consts::WEB_RENDER_QUANTUM);
-            let samples = count
-                .checked_mul(2)
-                .ok_or_else(|| JsValue::from_str("web sample count overflow"))?;
             let cursor =
                 u32::try_from(offset).map_err(|_| JsValue::from_str("web cursor overflow"))?;
             let now = audio_time + f64::from(cursor) / f64::from(self.rate.get());
-            let stamp = self.clock.read();
-            let delta = now - stamp.audio;
-            let distance = Duration::try_from_secs_f64(delta.abs())
-                .map_err(|_| JsValue::from_str("invalid audio clock offset"))?;
-            let timestamp = if delta < 0.0 {
-                stamp.main.checked_sub(distance)
-            } else {
-                stamp.main.checked_add(distance)
-            }
-            .ok_or_else(|| JsValue::from_str("audio clock offset overflow"))?;
-            let output = self
-                .interleaved
-                .get_mut(..samples)
-                .ok_or_else(|| JsValue::from_str("unprepared web output shape"))?;
-            self.processor.render(
-                output,
-                BackendProcessInfo {
-                    frames: count,
-                    process_timestamp: Some(timestamp),
-                    duration_since_stream_start: Duration::try_from_secs_f64(now)
-                        .map_err(|_| JsValue::from_str("invalid audio context time"))?,
-                    input_stream_status: StreamStatus::empty(),
-                    output_stream_status: StreamStatus::empty(),
-                    dropped_frames: 0,
-                    process_to_playback_delay: None,
-                },
-            );
-            for ((left, right), sample) in self
-                .left
-                .iter_mut()
-                .zip(&mut self.right)
-                .zip(output.chunks_exact(2))
-            {
-                *left = *sample.first().expect("a stereo chunk has its left sample");
-                *right = *sample.get(1).expect("a stereo chunk has its right sample");
-            }
-            let end = cursor
-                .checked_add(
-                    u32::try_from(count).map_err(|_| JsValue::from_str("web chunk overflow"))?,
-                )
-                .ok_or_else(|| JsValue::from_str("web chunk overflow"))?;
-            let left_prefix = self
-                .left
-                .get(..count)
-                .ok_or_else(|| JsValue::from_str("web left prefix overflow"))?;
-            let right_prefix = self
-                .right
-                .get(..count)
-                .ok_or_else(|| JsValue::from_str("web right prefix overflow"))?;
-            if cursor == 0 && end == left.length() {
-                left.copy_from(left_prefix);
-                right.copy_from(right_prefix);
-            } else {
-                left.subarray(cursor, end).copy_from(left_prefix);
-                right.subarray(cursor, end).copy_from(right_prefix);
-            }
+            self.render_chunk(count, now)?;
+            let end = self.copy_chunk(&left, &right, cursor, count)?;
             offset = usize::try_from(end).map_err(|_| JsValue::from_str("web cursor overflow"))?;
         }
         Ok(self.processor.is_running())

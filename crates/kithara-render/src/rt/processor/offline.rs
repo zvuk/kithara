@@ -106,6 +106,9 @@ impl<E: SessionInbox> OfflineDeck<E> {
     }
 
     /// Transfers the reserved complete offline turn.
+    ///
+    /// # Errors
+    /// Retains the mixer if the prepared turn or its channel reservation is unavailable.
     pub fn begin_render(&mut self, frames: usize) -> Result<(), OfflineDeckError> {
         self.reserve_render(frames)?;
         let mixer = self.mixer.take().ok_or(OfflineDeckError::MissingMixer)?;

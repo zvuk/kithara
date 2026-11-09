@@ -19,11 +19,10 @@ impl Credits {
         self.progress = None;
     }
 
+    /// Poll precedes publication: two observed advances prove a poll after the latest push.
     pub(super) fn observe(&mut self, frame: i64) {
         match self.progress {
             Some((last, first)) if frame > last => {
-                // Poll precedes clock publication. The first observed advance may race the push;
-                // another observed advance proves a subsequent poll consumed every older message.
                 if first {
                     self.sent = 0;
                 }
