@@ -43,7 +43,7 @@ type HlsVariant = super::HlsVariant<crate::test_pools::TestPools>;
 type PlanCtx = super::PlanCtx<crate::test_pools::TestPools>;
 type TestAssetScope = AssetScope<crate::test_pools::TestPools>;
 
-fn test_ctx(prefetch_budget: usize) -> PlanCtx {
+pub(super) fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     ctx_over(
         &AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
@@ -135,7 +135,7 @@ fn make_init(size: u64, scope: &TestAssetScope) -> Option<Segment> {
     }))
 }
 
-fn make_placeholder_init(size: u64, scope: &TestAssetScope) -> Segment {
+pub(super) fn make_placeholder_init(size: u64, scope: &TestAssetScope) -> Segment {
     let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
     let resource_id = scope
         .key(&AssetResource::Url(url.clone()))
@@ -171,7 +171,7 @@ fn make_seg(idx: u32, size: u64, scope: &TestAssetScope) -> Segment {
     make_media_seg(idx, SegmentSize::seed(size), scope)
 }
 
-fn make_placeholder_seg(idx: u32, size: u64, scope: &TestAssetScope) -> Segment {
+pub(super) fn make_placeholder_seg(idx: u32, size: u64, scope: &TestAssetScope) -> Segment {
     make_media_seg(idx, SegmentSize::placeholder(size), scope)
 }
 
