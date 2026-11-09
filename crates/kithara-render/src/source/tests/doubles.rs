@@ -13,23 +13,13 @@ use kithara_platform::sync::{
 use kithara_signal::AudioChunkInfo;
 use kithara_sync::SpeedCurve;
 use kithara_test_utils::{bufpool::TestPools, kithara};
-use kithara_warp::StretchKind;
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-use kithara_warp::WarpCapabilities;
+use kithara_warp::{StretchKind, WarpCapabilities};
 
 use super::{consts, *};
 use crate::{LaneCommand, LaneProtocol};
 
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 pub(in crate::source) fn keylock_backends() -> impl Iterator<Item = StretchKind> {
-    StretchKind::all()
-        .iter()
-        .copied()
-        .filter(|backend| backend.capabilities().contains(WarpCapabilities::KEYLOCK))
+    StretchKind::supporting(WarpCapabilities::KEYLOCK)
 }
 
 pub(in crate::source) fn flush_deferred<S>(source: &mut S)

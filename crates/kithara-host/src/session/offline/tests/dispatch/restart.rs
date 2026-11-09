@@ -1,4 +1,60 @@
+use kithara_command::Rejection;
+use kithara_signal::SessionFrame;
+
 use super::*;
+use crate::HostSettled;
+
+/// One owner pass with no command; the answers it gave.
+fn pass(state: &mut TestState) -> Vec<HostSettled> {
+    kithara_platform::flash::participate_sync(|| {
+        state.owner.begin_pass();
+        state.owner.pass()
+    })
+}
+
+/// The answers among `settled` to tempo changes.
+fn tempo_answers(settled: Vec<HostSettled>) -> Vec<Result<SessionFrame, Rejection<PlayError>>> {
+    settled
+        .into_iter()
+        .filter_map(|answer| match answer {
+            HostSettled::Settings {
+                change: HostSettingsChange::Tempo(_),
+                outcome,
+                ..
+            } => Some(outcome),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Renders one block on the restarted stream's clock, then runs a pass,
+/// `passes` times; the tempo answers the passes gave.
+fn play_restarted_axis(
+    state: &mut TestState,
+    passes: usize,
+) -> Vec<Result<SessionFrame, Rejection<PlayError>>> {
+    let mut clock = 0;
+    let mut answers = Vec::new();
+    for _ in 0..passes {
+        render_left(state, &mut clock, 1);
+        answers.extend(tempo_answers(pass(state)));
+    }
+    answers
+}
+
+/// The Host reads `tempo` and the accepted map ends on it.
+fn assert_tempo_applied(state: &TestState, tempo: Tempo) {
+    assert_eq!(state.settings.config().tempo(), tempo);
+    assert_eq!(
+        state
+            .timeline
+            .trajectory()
+            .anchor_at(SessionFrame::new(i64::MAX))
+            .target_beats_per_second(),
+        tempo.beats_per_second(),
+        "the accepted map carries the tempo the new axis plays"
+    );
+}
 
 #[kithara::test]
 fn explicit_audio_route_invalidation_restarts_stream_without_backend_error() {
@@ -256,7 +312,8 @@ fn two_restarts_with_a_change_between_them_leave_the_render_copy_on_the_host_set
     let enable = HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true));
     assert!(matches!(configure_next(&mut state, enable), Ok(())));
     let mut clock = 0;
-    render_left(&mut state, &mut clock, 1);
+    // The change lands one block of delivery after its pass.
+    render_left(&mut state, &mut clock, 2);
 
     route_loss(|probe| probe.fail_next_start.store(true, Ordering::SeqCst));
     state.stream = None;
@@ -281,4 +338,110 @@ fn two_restarts_with_a_change_between_them_leave_the_render_copy_on_the_host_set
         host.metronome().enabled(),
         "the change the first stream applied is settled before the seed"
     );
+}
+
+#[kithara::test]
+fn a_tempo_staged_in_the_pass_of_a_rate_change_lands_on_the_new_axis_and_its_map() {
+    route_loss(RouteLossProbe::reset);
+
+    let mut state = test_state(start_route_loss_stream);
+    insert(&mut state);
+    let mut clock = 0;
+    render_left(&mut state, &mut clock, 8);
+    let tempo = Tempo::new(90.0).expect("a fixture tempo is in range");
+    let rate = NonZeroU32::new(22_050).expect("a fixture rate is not zero");
+    kithara_platform::flash::participate_sync(|| {
+        state.owner.begin_pass();
+        for change in [
+            HostSettingsChange::Tempo(tempo),
+            HostSettingsChange::SampleRate(rate),
+        ] {
+            assert!(
+                state
+                    .owner
+                    .apply(HostCommand::Configure(change, When::Next))
+                    .is_ok()
+            );
+        }
+        state.owner.pass();
+    });
+    pass(&mut state);
+    assert_eq!(
+        route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
+        2,
+        "the rate change restarts the stream"
+    );
+
+    // The new stream refuses the old axis's frame, the next pass places the
+    // tempo again, and one block of delivery later the stream applies it.
+    let mut clock = 0;
+    for _ in 0..2 {
+        render_left(&mut state, &mut clock, 2);
+        pass(&mut state);
+    }
+
+    assert_tempo_applied(&state, tempo);
+}
+
+#[kithara::test]
+fn a_tempo_staged_in_the_pass_that_finds_the_stream_dead_lands_on_the_restarted_axis() {
+    route_loss(RouteLossProbe::reset);
+
+    let mut state = test_state(start_route_loss_stream);
+    insert(&mut state);
+    let mut clock = 0;
+    render_left(&mut state, &mut clock, 8);
+    pass(&mut state);
+    let tempo = Tempo::new(90.0).expect("a fixture tempo is in range");
+    let staged = kithara_platform::flash::participate_sync(|| {
+        state.owner.begin_pass();
+        assert!(
+            state
+                .owner
+                .apply(HostCommand::Configure(
+                    HostSettingsChange::Tempo(tempo),
+                    When::Next
+                ))
+                .is_ok()
+        );
+        state.stream = None;
+        tempo_answers(state.owner.pass())
+    });
+    assert_eq!(
+        route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
+        2,
+        "the pass restarts the dead stream"
+    );
+
+    let mut answers = staged;
+    answers.extend(play_restarted_axis(&mut state, 3));
+
+    assert!(matches!(answers.as_slice(), [Ok(_)]), "{answers:?}");
+    assert_tempo_applied(&state, tempo);
+}
+
+#[kithara::test]
+fn a_tempo_asked_after_a_rate_change_before_the_new_stream_renders_lands_on_its_axis() {
+    route_loss(RouteLossProbe::reset);
+
+    let mut state = test_state(start_route_loss_stream);
+    insert(&mut state);
+    let mut clock = 0;
+    render_left(&mut state, &mut clock, 8);
+    configure_sample_rate(&mut state, 22_050);
+    assert_eq!(
+        route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
+        2,
+        "the rate change restarts the stream"
+    );
+    let tempo = Tempo::new(90.0).expect("a fixture tempo is in range");
+    assert!(matches!(
+        configure_next(&mut state, HostSettingsChange::Tempo(tempo)),
+        Ok(())
+    ));
+
+    let answers = play_restarted_axis(&mut state, 3);
+
+    assert!(matches!(answers.as_slice(), [Ok(_)]), "{answers:?}");
+    assert_tempo_applied(&state, tempo);
 }

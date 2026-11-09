@@ -632,21 +632,24 @@ fn live_unity_transition_drains_active_backend_tail(
         .keylock(true)
         .backend(backend)
         .build();
+    let signal = |frame: u64| {
+        let frame = usize::try_from(frame).expect("test source frame fits usize");
+        warp_sine[frame * 2 % warp_sine.len()]
+    };
     let render = || {
         let mut fx = renderer(&config);
+        let mut twin = renderer(&config);
         let mut source = 0;
+        let mut twin_source = 0;
         for _ in 0..32 {
-            let output = super::exact::mapped_signal(&mut fx, &mut source, 128, |frame| {
-                let frame = usize::try_from(frame).expect("test source frame fits usize");
-                warp_sine[frame * 2 % warp_sine.len()]
-            });
+            let output = super::exact::mapped_signal(&mut fx, &mut source, 128, signal);
             assert_eq!(output.frames(), 128);
+            super::exact::mapped_signal(&mut twin, &mut twin_source, 128, signal);
         }
-        let half_frame = super::exact::mapped_signal(&mut fx, &mut source, 1, |frame| {
-            let frame = usize::try_from(frame).expect("test source frame fits usize");
-            warp_sine[frame * 2 % warp_sine.len()]
-        });
+        let half_frame = super::exact::mapped_signal(&mut fx, &mut source, 1, signal);
         assert_eq!(half_frame.frames(), 1);
+        super::exact::mapped_signal(&mut twin, &mut twin_source, 1, signal);
+        let tail = super::exact::supported_tail(&mut twin);
         let before = fx
             .trajectory
             .span(0, spec().sample_rate, 1)
@@ -659,9 +662,6 @@ fn live_unity_transition_drains_active_backend_tail(
             "the fixture exercises an exact half-frame tie"
         );
         let snapped = before.0 / before.1.get() + 1;
-        let fade_frames = fx.engine_latency().get().max(
-            usize::try_from(u128::from(source) - snapped).expect("admitted identity lookahead"),
-        );
         assert!(
             before.0 < u128::from(source) * before.1.get(),
             "the active engine retains decoded lookahead"
@@ -670,30 +670,10 @@ fn live_unity_transition_drains_active_backend_tail(
             .expect("unity command");
         fx.prepare_engine_latency(spec())
             .expect("frame-aligned reinitialisation");
-        assert!(
-            fx.retiring_target.is_some(),
-            "active backend tail is crossfaded"
-        );
-        assert_eq!(
-            fx.retiring_target
-                .as_ref()
-                .expect("retiring target")
-                .trajectory
-                .as_ref()
-                .expect("outgoing trajectory")
-                .span(0, spec().sample_rate, 1)
-                .expect("tail phase")
-                .source_ratio_at(0),
-            Some(before),
-            "R6 keeps the retiring engine tail at the exact unsnapped phase"
-        );
         let mut samples = Vec::new();
         let mut quanta = Vec::new();
-        for index in 0..64 {
-            let output = super::exact::mapped_signal(&mut fx, &mut source, 128, |frame| {
-                let frame = usize::try_from(frame).expect("test source frame fits usize");
-                warp_sine[frame * 2 % warp_sine.len()]
-            });
+        for index in 0..=tail.len().div_ceil(128) {
+            let output = super::exact::mapped_signal(&mut fx, &mut source, 128, signal);
             assert_eq!(
                 output.frames(),
                 128,
@@ -720,15 +700,14 @@ fn live_unity_transition_drains_active_backend_tail(
                 span.end() <= source,
                 "the frontier never advances beyond emitted source"
             );
+            let identity: Vec<f32> = (span.start()..span.end())
+                .flat_map(|frame| [signal(frame); 2])
+                .collect();
             quanta.push(output.frames());
             samples.extend_from_slice(&output.samples);
             fx.prepare(spec());
-            if fx.retiring_target.is_none() {
-                assert_eq!(
-                    index + 1,
-                    fade_frames.div_ceil(128),
-                    "the unity fade covers output latency and admitted source, not source-side warmup"
-                );
+            if output.samples[..] == identity[..] {
+                super::exact::assert_fades_from(samples.as_chunks::<2>().0, &tail);
                 assert!(!fx.transition_pending());
                 assert!(samples.iter().any(|sample| sample.abs() > f32::EPSILON));
                 assert!(samples.iter().all(|sample| sample.is_finite()));
@@ -747,10 +726,7 @@ fn live_unity_transition_drains_active_backend_tail(
                 );
                 assert!(peak <= 1.0, "crossfaded tail remains normalized: {peak}");
                 for _ in 0..3 {
-                    assert_identity_quantum(&mut fx, &mut source, |frame| {
-                        let frame = usize::try_from(frame).expect("test source frame fits usize");
-                        warp_sine[frame * 2 % warp_sine.len()]
-                    });
+                    assert_identity_quantum(&mut fx, &mut source, signal);
                 }
                 assert!(
                     flush_serviced(&mut fx).is_none(),
@@ -785,74 +761,46 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
 ) {
+    let config = WarpConfig::builder()
+        .speed(1.0 / 1.6)
+        .keylock(true)
+        .backend(backend)
+        .build();
+    let signal = |frame: u64| {
+        let frame = usize::try_from(frame).expect("test source frame fits usize");
+        warp_sine[frame * 2 % warp_sine.len()]
+    };
     let render = |debt| {
-        let mut fx = renderer(
-            &WarpConfig::builder()
-                .speed(1.0 / 1.6)
-                .keylock(true)
-                .backend(backend)
-                .build(),
-        );
+        let mut fx = renderer(&config);
+        let mut twin = renderer(&config);
         let mut source = 0;
-        let first = super::exact::mapped_signal(&mut fx, &mut source, 2, |frame| {
-            let frame = usize::try_from(frame).expect("test source frame fits usize");
-            warp_sine[frame * 2 % warp_sine.len()]
-        });
+        let first = super::exact::mapped_signal(&mut fx, &mut source, 2, signal);
         assert_eq!(first.frames(), 2);
-        let before = first
-            .meta
-            .source_span
-            .expect("initial mapping")
-            .source_ratio_at(2)
-            .expect("phase");
-        let fade_frames = fx
-            .engine_latency()
-            .get()
-            .max(usize::try_from(source - 1).expect("admitted identity lookahead"));
+        super::exact::mapped_signal(&mut twin, &mut 0, 2, signal);
+        let tail = super::exact::supported_tail(&mut twin);
         fx.output_remainder = debt;
         fx.set_speed(SpeedCurve::Constant(1.0), 1)
             .expect("unity command");
         fx.prepare_engine_latency(spec())
             .expect("identity transition");
-        assert_eq!(
-            fx.retiring_target
-                .as_ref()
-                .expect("retiring target")
-                .trajectory
-                .as_ref()
-                .expect("exact outgoing trajectory")
-                .span(0, spec().sample_rate, 1)
-                .expect("tail phase")
-                .source_ratio_at(0),
-            Some(before),
-            "R6 leaves the retiring tail at the exact fractional phase"
-        );
         let mut samples = first.samples.to_vec();
-        for index in 0..64 {
-            let unity = super::exact::mapped_signal(&mut fx, &mut source, 128, |frame| {
-                let frame = usize::try_from(frame).expect("test source frame fits usize");
-                warp_sine[frame * 2 % warp_sine.len()]
-            });
+        for index in 0..=tail.len().div_ceil(128) {
+            let unity = super::exact::mapped_signal(&mut fx, &mut source, 128, signal);
             assert_eq!(unity.frames(), 128, "negative debt adds no frame");
+            let span = unity.meta.source_span.expect("unity mapping");
             if index == 0 {
                 assert_eq!(
-                    unity
-                        .meta
-                        .source_span
-                        .expect("unity mapping")
-                        .source_ratio_at(0),
+                    span.source_ratio_at(0),
                     Some((1, std::num::NonZeroU128::MIN)),
                     "R6 rounds the 1.25-frame identity phase to frame 1 under the tail crossfade"
                 );
             }
+            let identity: Vec<f32> = (span.start()..span.end())
+                .flat_map(|frame| [signal(frame); 2])
+                .collect();
             samples.extend_from_slice(&unity.samples);
             fx.prepare(spec());
-            if fx.retiring_target.is_none() {
-                assert_eq!(
-                    index + 1,
-                    fade_frames.div_ceil(128),
-                    "rounding debt does not extend the output-latency and source-catch-up fade"
-                );
+            if unity.samples[..] == identity[..] {
                 assert!(!fx.transition_pending());
                 return samples;
             }

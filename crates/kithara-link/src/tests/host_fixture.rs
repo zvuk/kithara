@@ -174,6 +174,10 @@ impl LinkedDeck<TestPools> for ObservedDeck {
 
 pub(super) struct HostScript {
     pub clock: Option<PassClock>,
+    /// The accepted tempo map the scripted Host lends its decks: an accepted
+    /// timed tempo puts its step on it, an accepted tempo without a pass clock
+    /// sets its first tempo, and a new axis starts it from the axis anchor.
+    pub planned: TempoTrajectory,
     pub transport: Option<SessionTransportSnapshot>,
     pub room: usize,
     pub reject: Option<PlayError>,
@@ -204,6 +208,12 @@ impl HostControl {
         )
         .expect("axis anchor");
         self.edit(|script| {
+            if script
+                .transport
+                .is_none_or(|transport| transport.session_epoch() != SessionEpoch::new(epoch))
+            {
+                script.planned.reaxis_observed(anchor);
+            }
             script.transport = Some(SessionTransportSnapshot::new(
                 position,
                 tempo,
@@ -217,6 +227,12 @@ impl HostControl {
             ));
         });
         self.at(frame);
+    }
+
+    /// Takes the step on `frame` off the accepted map, as the Host does for a
+    /// tempo it refuses.
+    pub(super) fn unplan(&self, frame: i64) {
+        self.edit(|script| script.planned.withdraw(SessionFrame::new(frame)));
     }
 
     pub(super) fn answer(
@@ -271,6 +287,17 @@ impl HostSettingsExec<()> for ScriptedHost {
             if let Some(error) = script.reject.take() {
                 return Err(error);
             }
+            match at {
+                When::At(frame) => {
+                    script.planned.withdraw(frame);
+                    script
+                        .planned
+                        .push(frame, value)
+                        .expect("a scripted tempo step fits the accepted map");
+                }
+                When::Next => script.planned.initial_tempo(value),
+                When::Deferred => {}
+            }
             let seq = self.sequence.next();
             script.sent.push((seq, value, at));
             Ok(Some(seq))
@@ -301,9 +328,11 @@ impl HostOwner<TestPools> for ScriptedHost {
         visit: &mut dyn FnMut(DeckId, &mut Self::Deck, &mut Outbox<'_, TestPools>, DeckPass<'_>),
     ) {
         let PassClock { now, delivery, .. } = self.clock().unwrap_or_else(|| fixture_clock(0));
+        let planned = self.control.edit(|script| script.planned.clone());
         for record in &mut self.decks {
             record.rig.now = now;
             record.rig.delivery = delivery;
+            record.rig.planned = planned.clone();
             record
                 .rig
                 .run_pass(|out, pass| visit(record.id, &mut record.deck, out, pass));
@@ -322,6 +351,7 @@ impl HostOwner<TestPools> for ScriptedHost {
             .ok_or(SessionError::DeckNotFound(id))?;
         record.rig.now = now;
         record.rig.delivery = delivery;
+        record.rig.planned = self.control.edit(|script| script.planned.clone());
         record
             .rig
             .run_pass(|out, pass| visit(&mut record.deck, out, pass));
@@ -351,9 +381,6 @@ impl HostOwner<TestPools> for ScriptedHost {
     fn release_id(_command: &Self::Command) -> Option<DeckId> {
         None
     }
-    fn is_next_tempo(_command: &Self::Command) -> bool {
-        false
-    }
     fn pass(&mut self) -> Vec<HostSettled> {
         self.control
             .edit(|script| std::mem::take(&mut script.answers))
@@ -365,6 +392,7 @@ pub(super) type Host = LinkedHost<TestPools, ScriptedHost>;
 pub(super) fn host() -> (Host, HostControl) {
     let control = HostControl(Arc::new(Mutex::new(HostScript {
         clock: Some(fixture_clock(0)),
+        planned: trajectory(120.0, 4),
         transport: None,
         room: 32,
         reject: None,
@@ -379,7 +407,6 @@ pub(super) fn host() -> (Host, HostControl) {
                     decks: Vec::new(),
                     sequence: Sequence::new(),
                 })
-                .trajectory(trajectory(120.0, 4))
                 .build(),
         ),
         control,

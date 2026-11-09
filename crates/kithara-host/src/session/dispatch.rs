@@ -37,16 +37,7 @@ impl OwnerPosts {
         owner: &mut O,
         mailbox: &mut HostMailbox<O::Command>,
     ) {
-        let mut posts = Self::take_posts(mailbox).into_iter().peekable();
-        while let Some(Post { command, answer }) = posts.next() {
-            if O::is_next_tempo(&command)
-                && posts
-                    .peek()
-                    .is_some_and(|post| O::is_next_tempo(&post.command))
-            {
-                answer.answer(Err(PlayError::Superseded));
-                continue;
-            }
+        for Post { command, answer } in Self::take_posts(mailbox) {
             let releasing = O::release_id(&command);
             match run_host_cmd(owner, command) {
                 Ok(_) if releasing.is_some() => {
