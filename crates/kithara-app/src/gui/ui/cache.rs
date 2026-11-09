@@ -354,15 +354,17 @@ mod tests {
     }
 
     fn shown(ui: &UiState) -> DeckSnapshot {
-        DeckSnapshot::new(
-            ::kithara::warp::BeatGridId::allocate().expect("a fixture deck id"),
-            "a",
-            MixStrip::new(0, 1),
-            Vec::new(),
-            TempoPercent::DEFAULT,
-            false,
-            ui,
-        )
+        DeckSnapshot::builder()
+            .id(::kithara::warp::BeatGridId::allocate().expect("a fixture deck id"))
+            .letter("a")
+            .strip(MixStrip::new(0, 1))
+            .eq_bands(Vec::new())
+            .tempo(TempoPercent::DEFAULT)
+            .synced(false)
+            .keylock(false)
+            .holds_pitch(true)
+            .state(ui)
+            .build()
     }
 
     fn ladder() -> Vec<AbrVariant> {
