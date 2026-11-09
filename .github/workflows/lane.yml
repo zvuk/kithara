@@ -148,7 +148,6 @@ jobs:
           name: test-audio-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: "tests/crates/sync/.ci-artifacts/audio"
           include-hidden-files: true
-          compression-level: 0
           retention-days: 14
           if-no-files-found: ignore
 

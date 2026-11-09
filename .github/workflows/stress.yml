@@ -222,7 +222,6 @@ jobs:
           name: test-audio-stress-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/kithara-stress/subject/tests/crates/sync/.ci-artifacts/audio
           include-hidden-files: true
-          compression-level: 0
           retention-days: 14
           if-no-files-found: ignore
 
