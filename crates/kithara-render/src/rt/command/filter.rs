@@ -9,12 +9,11 @@ impl Deck {
         mut due: Due<'_, DeckProtocol>,
         context_valid: bool,
     ) {
-        let binding = match due.commands() {
-            [DeckPart::Filter { binding, .. }] => *binding,
-            _ => {
-                due.refuse(DeckRefusal::FilterBatch);
-                return;
-            }
+        let binding = if let [DeckPart::Filter { binding, .. }] = due.commands() {
+            *binding
+        } else {
+            due.refuse(DeckRefusal::FilterBatch);
+            return;
         };
         if !context_valid || self.epoch != Some(binding.epoch()) {
             due.refuse(DeckRefusal::AxisRestarted);
