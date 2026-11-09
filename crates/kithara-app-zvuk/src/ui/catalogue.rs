@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use kithara_ui::render::{ReadValue, TableCell, TableRow};
+use kithara_ui::render::{ReadValue, TableRow};
 
 use super::{consts, request::Mode, row::Row};
 use crate::{MediaTrack, PlaylistId, TrackId, TrackPage};
@@ -13,11 +13,10 @@ pub(super) struct Catalogue {
     mode: Mode,
     rows: Vec<Row>,
     visible: Vec<usize>,
-    unavailable: String,
 }
 
-impl Catalogue {
-    pub(super) fn new(unavailable: String) -> Self {
+impl Default for Catalogue {
+    fn default() -> Self {
         let mut catalogue = Self {
             query: String::new(),
             count: String::new(),
@@ -25,12 +24,13 @@ impl Catalogue {
             mode: Mode::Search,
             rows: Vec::new(),
             visible: Vec::new(),
-            unavailable,
         };
         catalogue.filter();
         catalogue
     }
+}
 
+impl Catalogue {
     pub(super) fn request(&self) -> Option<(Mode, String)> {
         (self.mode != Mode::Search || !self.query.trim().is_empty())
             .then(|| (self.mode.clone(), self.query.trim().to_owned()))
@@ -148,14 +148,6 @@ impl Catalogue {
             .map(|index| {
                 let row = &self.rows[*index];
                 row.view(selected == Some(row.id.0.as_str()))
-                    .with_cell(TableCell::text(
-                        "availability",
-                        if row.source().is_none() {
-                            &self.unavailable
-                        } else {
-                            ""
-                        },
-                    ))
             })
             .collect()
     }

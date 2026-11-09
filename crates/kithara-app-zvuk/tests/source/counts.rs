@@ -1,5 +1,3 @@
-use kithara_ui::render::TableCell;
-
 use super::*;
 
 #[kithara::test]
@@ -29,10 +27,7 @@ async fn an_unavailable_playlist_track_is_marked_without_blocking_its_neighbours
         assert_eq!(row.muted(), unavailable);
         assert_eq!(row.drag().is_none(), unavailable);
         assert_eq!(source.analysis_key(index).is_none(), unavailable);
-        assert!(row.cells().contains(&TableCell::text(
-            "availability",
-            if unavailable { "Unavailable" } else { "" }
-        )));
+        assert!(row.cells().iter().all(|cell| cell.id() != "availability"));
     }
     source.write("query", &WriteValue::Text("birch".into()));
     assert_eq!(source.row_key(0), Some("1003"));
