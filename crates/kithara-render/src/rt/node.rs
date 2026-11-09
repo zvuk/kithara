@@ -235,7 +235,7 @@ where
             let (recycle, returned) = HeapRb::new(1).split();
             guard.returned = returned;
             drop(guard);
-            return Ok(OfflineProcessor::from_parts(parts, recycle));
+            return Ok(OfflineProcessor::new(parts, recycle));
         }
         let borrowed = guard
             .initial

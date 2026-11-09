@@ -145,15 +145,14 @@ impl WebOutput {
         Ok(acquired)
     }
 
-    fn advance<S>(&mut self, graph: &mut SessionGraph, decks: &mut [DeckNode]) -> Result<(), String>
+    fn prepare_decks<S>(
+        graph: &mut SessionGraph,
+        decks: &mut [DeckNode],
+        shape: kithara_render::rt::StreamShape,
+    ) -> Result<Vec<crate::DeckId>, String>
     where
         S: kithara_bufpool::HasPool<f32> + Send + Sync + 'static,
     {
-        if self.clock.is_none() {
-            return Ok(());
-        }
-        let info = self.info.ok_or("actual web format is unavailable")?;
-        let shape = kithara_render::rt::StreamShape::new(info.max_block_frames, info.sample_rate);
         graph.cycle_detected().map_err(|error| error.to_string())?;
         let mut retained = Vec::<crate::DeckId>::new();
         for deck in decks
@@ -174,6 +173,19 @@ impl WebOutput {
                 retained.push(deck.id);
             }
         }
+        Ok(retained)
+    }
+
+    fn advance<S>(&mut self, graph: &mut SessionGraph, decks: &mut [DeckNode]) -> Result<(), String>
+    where
+        S: kithara_bufpool::HasPool<f32> + Send + Sync + 'static,
+    {
+        if self.clock.is_none() {
+            return Ok(());
+        }
+        let info = self.info.ok_or("actual web format is unavailable")?;
+        let shape = kithara_render::rt::StreamShape::new(info.max_block_frames, info.sample_rate);
+        let retained = Self::prepare_decks::<S>(graph, decks, shape)?;
         if !self.lease.acquired() {
             return Ok(());
         }

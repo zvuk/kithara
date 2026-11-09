@@ -212,7 +212,7 @@ impl<E: SessionInbox> OfflineProcessor<E> {
         self.recycle = Some(recycle);
     }
 
-    pub(in crate::rt) fn from_parts(
+    pub(in crate::rt) fn new(
         parts: ProcessorParts<E>,
         recycle: HeapProd<ProcessorParts<E>>,
     ) -> Self {
