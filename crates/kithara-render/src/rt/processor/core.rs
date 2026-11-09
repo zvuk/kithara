@@ -73,6 +73,7 @@ pub(in crate::rt) struct PreparedDeck {
 
 impl<E: SessionInbox> DeckMixer<E> {
     /// Allocates every slot tail and the fixed render scratch before stream processing.
+    /// The scope snapshot is published by the first actual render.
     ///
     /// # Errors
     /// Returns a pool error if either scratch or any required tail cannot be allocated.
@@ -134,7 +135,7 @@ impl<E: SessionInbox> DeckMixer<E> {
         let declick_frames = config.declick_frames(shape.sample_rate).get();
         let evict_frames = config.evict_fade().get();
         let mix = config.mix();
-        let mut mixer = Self {
+        Self {
             scope,
             snapshot,
             scratch: prepared.scratch,
@@ -159,9 +160,7 @@ impl<E: SessionInbox> DeckMixer<E> {
                 declick: config.declick(),
                 epoch: None,
             },
-        };
-        mixer.publish(SessionFrame::new(0));
-        mixer
+        }
     }
 
     pub(in crate::rt) fn update_sample_rate(&mut self, rate: NonZeroU32) {
