@@ -710,16 +710,19 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
         let directory = std::env::var_os("KITHARA_HANG_DUMP_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(std::env::temp_dir);
-        let written = AudioArtifactSet::new(
-            &directory,
-            "cold-target-variant-switch",
-            SAMPLE_RATE,
-            CHANNELS,
-        )
-        .and_then(|artifacts| {
-            let history = artifacts.write_bytes("usdt-history.txt", evidence.as_bytes())?;
-            audio_artifact_path(&history)
-        });
+        let written = std::path::absolute(directory)
+            .and_then(|directory| {
+                AudioArtifactSet::new(
+                    &directory,
+                    "cold-target-variant-switch",
+                    SAMPLE_RATE,
+                    CHANNELS,
+                )
+            })
+            .and_then(|artifacts| {
+                let history = artifacts.write_bytes("usdt-history.txt", evidence.as_bytes())?;
+                audio_artifact_path(&history)
+            });
         match written {
             Ok(path) => {
                 tracing::error!(path = %path.display(), overflowed, "Cold-switch USDT history saved")
