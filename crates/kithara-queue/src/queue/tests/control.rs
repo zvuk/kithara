@@ -1,9 +1,11 @@
 use std::num::NonZeroU32;
 
 use kithara_effects::eq::generate_log_spaced_bands;
+use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_play::{
-    DeckMixerConfig, DeckPass, EqBandConfig, HostedDeck, Outbox, TrackReceipt, mock,
+    DeckMixerConfig, DeckPass, EqBandConfig, HostedDeck, Outbox, Player, Position, TrackReceipt,
+    mock,
 };
 use kithara_render::rt::StreamShape;
 use kithara_signal::{FrameCount, SessionFrame};
@@ -11,8 +13,12 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use crate::{
-    Queue, QueueConfig, QueueControl, QueueError,
-    mock::{TestPools, answer_loaded, finish, pending_selection, pools},
+    Queue, QueueConfig, QueueControl, QueueError, TrackSource, Transition,
+    mock::{
+        TestPools, answer_loaded, finish, fixture_uri, load_seq, pending_selection, pools,
+        requested_load, selected, with_outbox,
+    },
+    queue::{QueueCommand, state},
 };
 
 fn layout(gains: &[f32]) -> Vec<EqBandConfig> {
@@ -214,21 +220,9 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
         control.clone(),
         move |control| control.seek(target),
         |queue| {
-            let output = mock::output(None).get();
-            let deck = queue.deck.mixer.clone();
-            let pass = DeckPass {
-                mix: queue.deck.mix,
-                suspended: false,
-                now: SessionFrame::new(0),
-                delivery: FrameCount::new(128),
-                deck_delivery: FrameCount::new(128),
-                output: &output,
-                deck: &deck,
-                planned_tempo: &mock::planned_tempo(),
-            };
-            let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
-            let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);
-            HostedDeck::drain(queue, pass, &mut out);
+            state::tests::with_outbox(queue, &mut rig, |queue, pass, out| {
+                HostedDeck::drain(queue, pass, out);
+            });
         },
     );
     assert!(
@@ -244,4 +238,52 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
         expected_frame
     );
     drop(source_packets);
+}
+
+#[kithara::test(tokio)]
+async fn keylock_set_on_a_playing_queue_reads_back_and_reaches_a_track_appended_after_it() {
+    let (mut queue, _, _, mut rig, dir) = selected().await;
+    let control = queue.control();
+    assert!(!control.keylock(), "the queue starts with keylock off");
+
+    drive_call(
+        &mut queue,
+        control.clone(),
+        |control| control.set_keylock(true),
+        |queue| {
+            state::tests::with_outbox(queue, &mut rig, |queue, pass, out| {
+                HostedDeck::drain(queue, pass, out);
+            });
+        },
+    )
+    .expect("keylock accepted");
+    assert!(control.keylock(), "the setting reads back once accepted");
+
+    let next = TrackId::allocate();
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        Player::apply(
+            queue,
+            QueueCommand::Append {
+                position: Position::ZERO,
+                id: next,
+                source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
+            },
+            out,
+        )?;
+        Player::apply(
+            queue,
+            QueueCommand::Select {
+                id: next,
+                transition: Transition::None,
+            },
+            out,
+        )
+    })
+    .expect("append and select the next track");
+    let request = requested_load(&mut rig, load_seq(&queue, next));
+    assert!(
+        request.start.keylock,
+        "the next track starts with keylock: {:?}",
+        request.start
+    );
 }
