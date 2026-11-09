@@ -255,8 +255,12 @@ pub(crate) fn runner_build_args(pins: &CiPins, base: &str) -> Vec<(&'static str,
     vec![
         ("CI_IMAGE", base.to_owned()),
         (
-            "ACTIONS_RUNNER_VERSION",
-            pins.actions_runner_version.clone(),
+            "ACTIONS_RUNNER_AMD64_URL",
+            pins.actions_runner_linux_amd64_url.clone(),
+        ),
+        (
+            "ACTIONS_RUNNER_ARM64_URL",
+            pins.actions_runner_linux_arm64_url.clone(),
         ),
         (
             "ACTIONS_RUNNER_AMD64_SHA256",

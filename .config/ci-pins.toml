@@ -1,5 +1,7 @@
 actions_runner_linux_amd64_sha256 = "baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40"
+actions_runner_linux_amd64_url = "https://api.github.com/repos/actions/runner/releases/assets/678460500"
 actions_runner_linux_arm64_sha256 = "670adb2f268fe21dcbb58b3db0e0aa9d5b3bddfe2c651481336e561ff86de945"
+actions_runner_linux_arm64_url = "https://api.github.com/repos/actions/runner/releases/assets/678461456"
 actions_runner_version = "2.338.2"
 actions_runner_windows_sha256 = "a1f17aa987fc8158bc7521d284912267a0d01b7c2c4684b33c86783b5e8221cc"
 android_avd = "Kithara_CI_API_36"

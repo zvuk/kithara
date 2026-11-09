@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub(crate) struct CiPins {
     pub(crate) actions_runner_linux_amd64_sha256: String,
+    pub(crate) actions_runner_linux_amd64_url: String,
     pub(crate) actions_runner_linux_arm64_sha256: String,
+    pub(crate) actions_runner_linux_arm64_url: String,
     pub(crate) actions_runner_version: String,
     pub(crate) actions_runner_windows_sha256: String,
     pub(crate) android_avd: String,
@@ -121,6 +123,14 @@ impl CiPins {
 
     pub(crate) fn validate(&self) -> Result<()> {
         for (name, value) in [
+            (
+                "actions_runner_linux_amd64_url",
+                self.actions_runner_linux_amd64_url.as_str(),
+            ),
+            (
+                "actions_runner_linux_arm64_url",
+                self.actions_runner_linux_arm64_url.as_str(),
+            ),
             (
                 "actions_runner_version",
                 self.actions_runner_version.as_str(),
