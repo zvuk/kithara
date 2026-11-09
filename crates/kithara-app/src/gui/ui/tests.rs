@@ -1018,14 +1018,59 @@ fn the_app_hides_controls_outside_the_supported_playback_contract() {
     let paths = control_paths(&ui);
     for path in [
         "deck-a/time",
-        "deck-a/keylock",
         "deck-b/time",
-        "deck-b/keylock",
         "mixer/a/mute",
         "mixer/b/mute",
         "mixer/master",
     ] {
         assert!(!paths.contains(&path), "unexpected control `{path}`");
+    }
+}
+
+/// Each deck's key lock chip presses, lights and hides from its own deck.
+#[kithara::test]
+fn every_keylock_chip_binds_to_its_deck() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        for letter in layout.letters() {
+            let path = format!("deck-{letter}/keylock/toggle");
+            let toggle = format!("deck.key.toggle_lock@deck={letter}");
+            assert!(
+                pressables(&ui).contains(&(path.as_str(), toggle.as_str())),
+                "{layout:?}: `{path}` writes {toggle}"
+            );
+            let mut lights = Vec::new();
+            each_node(&ui, &mut |node| {
+                if let ExpandedNode::Pressable {
+                    path: at, child, ..
+                } = node
+                    && ui.resolve(*at) == path
+                {
+                    each_expanded(child, &mut |inner| {
+                        if let ExpandedNode::Row {
+                            active: Some(active),
+                            ..
+                        } = inner
+                        {
+                            lights.push(ui.resolve(active.key));
+                        }
+                    });
+                }
+            });
+            let locked = format!("deck.key.locked@deck={letter}");
+            assert_eq!(
+                lights,
+                [locked.as_str()],
+                "{layout:?}: `{path}` lights from its deck"
+            );
+            let hidden = format!("deck.key.lock_hidden@deck={letter}");
+            let icon = format!("deck-{letter}/keylock/icon");
+            assert_eq!(
+                guarded_by(&ui, &hidden),
+                [path.as_str(), icon.as_str()],
+                "{layout:?}: `{hidden}` hides the chip alone"
+            );
+        }
     }
 }
 
@@ -2166,6 +2211,7 @@ mod answered {
                     && match id {
                         "deck.transport.toggle_play" => matches!(msg, DeckMsg::TogglePlayPause),
                         "deck.transport.toggle_sync" => matches!(msg, DeckMsg::ToggleSync),
+                        "deck.key.toggle_lock" => matches!(msg, DeckMsg::ToggleKeylock),
                         "deck.transport.prev" => matches!(msg, DeckMsg::Prev),
                         "deck.transport.next" => matches!(msg, DeckMsg::Next),
                         "deck.transport.seek_normalized" => matches!(msg, DeckMsg::SeekTo(_)),
