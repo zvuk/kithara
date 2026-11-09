@@ -59,10 +59,11 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         &mut self,
         span: SourceSpan,
     ) -> Result<(), ElasticError> {
-        if mem::take(&mut self.stateless_tail_owed) {
-            let law = self.trajectory.clone();
+        if let Some(retired) = self.stateless_tail_owed.take() {
+            let law = mem::replace(&mut self.trajectory, retired);
             let captured = self.capture_stateless_tail(span.start());
-            self.trajectory = law;
+            debug_assert!(self.deferred_trajectory.is_none());
+            self.deferred_trajectory = Some(mem::replace(&mut self.trajectory, law));
             captured?;
         }
         if self.keylocked_unity() {
@@ -74,7 +75,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         Ok(())
     }
 
-    /// Sample the retired stateless side from `start` on under the current law
+    /// Sample the retired stateless side from `start` on under its captured law
     /// into the replacement, as far as the residency and its capacity hold it.
     #[kithara::hang_watchdog]
     fn capture_stateless_tail(&mut self, start: u64) -> Result<(), ElasticError> {

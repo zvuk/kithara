@@ -17,6 +17,10 @@ pub(in crate::render) struct Projection {
     pub(in crate::render) buffers: [SampleBuffer; 2],
     pub(in crate::render) stages: usize,
     pub(in crate::render) feed: Option<u64>,
+    /// Source frontier represented by the native engine's cached output.
+    pub(in crate::render) audible: Option<u64>,
+    /// Accepted geometry of the cached packet when it fits one source span.
+    pub(in crate::render) cached_span: Option<SourceSpan>,
     pub(in crate::render) offset: usize,
 }
 
@@ -456,6 +460,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         let projection = self.projection.as_mut().ok_or(ElasticError::PoolCapacity)?;
         projection.stages = stages;
         projection.feed = None;
+        projection.audible = None;
+        projection.cached_span = None;
         let first = &mut projection.buffers[0];
         let next = history
             .checked_add(lead)

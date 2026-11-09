@@ -29,6 +29,91 @@ const PITCH_WINDOW: usize = 12_000;
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
+    case::signalsmith_cached(StretchKind::Signalsmith, 4_801, true)
+)]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith_empty(StretchKind::Signalsmith, 4_800, false)
+)]
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee_cached(StretchKind::Bungee, 4_801, true)
+)]
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee_empty(StretchKind::Bungee, 4_800, false)
+)]
+fn native_retarget_rejects_incompatible_cached_source_geometry(
+    #[case] backend: StretchKind,
+    #[case] frames_to_render: usize,
+    #[case] continuous: bool,
+) {
+    let spec = AudioSpec::new(2, NonZeroU32::new(8_000).expect("sample rate"));
+    let config = WarpConfig::builder()
+        .backend(backend)
+        .speed(0.6)
+        .keylock(true)
+        .build();
+    let mut renderer = Warp::new((), &config).renderer(spec, pools());
+    let pcm = vec![0.25; 65_536 * 2];
+    let mut source = 0;
+    let mut rendered = 0;
+    while rendered < frames_to_render {
+        renderer
+            .prepare_engine_latency(spec)
+            .expect("native service");
+        let meta = AudioChunkInfo {
+            spec,
+            frame_offset: source,
+            ..Default::default()
+        };
+        let frames = renderer
+            .prepare_source_window(meta, 65_536, (frames_to_render - rendered).min(480))
+            .expect("prepared source")
+            .get();
+        let first = usize::try_from(source).expect("source offset") * 2;
+        let output = renderer
+            .render_quantum(AudioChunk::new(
+                AudioChunkInfo {
+                    frames: u32::try_from(frames).expect("source count"),
+                    ..meta
+                },
+                sample_buffer(&renderer.pools, &pcm[first..first + frames * 2]),
+            ))
+            .continue_value()
+            .expect("prepared shape")
+            .expect("warm native output");
+        source += u64::try_from(frames).expect("source frames");
+        rendered += output.frames();
+    }
+    let projection = renderer.projection.as_ref().expect("native cache");
+    assert_eq!(projection.offset < projection.buffers[0].len(), continuous);
+    let curve = if continuous {
+        SpeedCurve::Approach(
+            ExponentialApproach::new(f64::from(0.6_f32), 1.9, 1.0)
+                .expect("continuous rapid approach"),
+        )
+    } else {
+        SpeedCurve::Constant(1.05)
+    };
+    let mut replacement = renderer.trajectory.clone();
+    replacement.replace(curve.clone()).expect("new law");
+    assert!(
+        !renderer
+            .can_continue_native(&replacement)
+            .expect("cached geometry admission"),
+        "queued PCM from the old law cannot carry the new source geometry"
+    );
+    renderer.set_speed(curve, 1).expect("accepted retarget");
+    assert!(
+        renderer.transition_pending(),
+        "incompatible queued output must retire"
+    );
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
@@ -133,16 +218,13 @@ fn kick_onset(samples: &[f32], expected: f64) -> f64 {
     (start + onset).to_f64().expect("detected onset")
 }
 
-#[kithara::hang_watchdog]
 fn render_curve(backend: StretchKind, approaching: bool, quantum: usize, pcm: &[f32]) -> Vec<f32> {
-    let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"));
     let config = WarpConfig::builder()
         .backend(backend)
         .speed(INITIAL_SPEED)
         .keylock(true)
         .render_quantum_frames(NonZeroUsize::new(512).expect("prepared quantum"))
         .build();
-    let mut renderer = Warp::new((), &config).renderer(spec, pools());
     let curve = if approaching {
         SpeedCurve::Approach(
             ExponentialApproach::new(
@@ -158,32 +240,52 @@ fn render_curve(backend: StretchKind, approaching: bool, quantum: usize, pcm: &[
             frames: NonZeroU64::new(CURVE_FRAMES).expect("ramp duration"),
         }
     };
-    renderer.set_speed(curve, 1).expect("moving tempo");
-    renderer
-        .prepare_engine_latency(spec)
-        .expect("native engine");
-    let capabilities = renderer
-        .engine
-        .as_ref()
-        .expect("prepared engine")
-        .capabilities();
-    assert!(renderer.trajectory.requires_quanta());
-    assert!(
-        renderer
-            .native_projection_rates(capabilities, true)
-            .expect("native admission")
-            .is_some(),
-        "this moving law must exercise the native engine"
-    );
+    render_controls(&config, [(0, 1, curve)], quantum, pcm, |frame| {
+        source_at(frame, approaching)
+    })
+}
+
+#[kithara::hang_watchdog]
+fn render_controls(
+    config: &WarpConfig,
+    controls: impl IntoIterator<Item = (usize, u64, SpeedCurve)>,
+    quantum: usize,
+    pcm: &[f32],
+    source_at: impl Fn(f64) -> f64,
+) -> Vec<f32> {
+    let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"));
+    let mut renderer = Warp::new((), config).renderer(spec, pools());
+    let mut controls = controls.into_iter().peekable();
     let mut input_frame = 0;
     let mut output_frame = 0;
     let mut capture = Vec::with_capacity(CAPTURE_FRAMES * 2);
     while output_frame < CAPTURE_FRAMES {
         hang_tick!();
-        let budget = quantum.min(CAPTURE_FRAMES - output_frame);
+        while let Some((_, revision, curve)) =
+            controls.next_if(|(frame, _, _)| *frame == output_frame)
+        {
+            renderer.set_speed(curve, revision).expect("accepted tempo");
+            assert!(renderer.trajectory.requires_quanta());
+        }
         renderer
             .prepare_engine_latency(spec)
             .expect("continuous engine");
+        let capabilities = renderer
+            .engine
+            .as_ref()
+            .expect("prepared engine")
+            .capabilities();
+        assert!(
+            renderer
+                .native_projection_rates(capabilities, true)
+                .expect("native admission")
+                .is_some(),
+            "this law must exercise the native engine"
+        );
+        let due = controls
+            .peek()
+            .map_or(quantum, |(frame, _, _)| quantum.min(*frame - output_frame));
+        let budget = due.min(CAPTURE_FRAMES - output_frame);
         let meta = AudioChunkInfo {
             spec,
             frame_offset: u64::try_from(input_frame).expect("input frame"),
@@ -223,10 +325,7 @@ fn render_curve(backend: StretchKind, approaching: bool, quantum: usize, pcm: &[
                 .expect("mapped boundary");
             let actual = numerator.to_f64().expect("source numerator")
                 / denominator.get().to_f64().expect("source denominator");
-            let expected = source_at(
-                (output_frame + offset).to_f64().expect("output boundary"),
-                approaching,
-            );
+            let expected = source_at((output_frame + offset).to_f64().expect("output boundary"));
             assert!((actual - expected).abs() <= 1e-6, "{actual} vs {expected}");
         }
         assert!(output.samples.iter().all(|sample| sample.is_finite()));
@@ -238,13 +337,7 @@ fn render_curve(backend: StretchKind, approaching: bool, quantum: usize, pcm: &[
     capture
 }
 
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn native_moving_keylock_keeps_physical_kicks_on_the_published_curve(#[case] backend: StretchKind) {
+fn physical_source() -> (Vec<f32>, Vec<f64>) {
     let mut source = kithara_test_fixtures::unit_fixtures::stretch_kick_body();
     source.resize((CAPTURE_FRAMES * 2 + 65_536) * 2, 0.0);
     let tone = Wave::sine(TONE_HZ);
@@ -262,6 +355,17 @@ fn native_moving_keylock_keeps_physical_kicks_on_the_published_curve(#[case] bac
             )
         })
         .collect();
+    (source, source_onsets)
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn native_moving_keylock_keeps_physical_kicks_on_the_published_curve(#[case] backend: StretchKind) {
+    let (source, source_onsets) = physical_source();
     for approaching in [false, true] {
         let whole = render_curve(backend, approaching, 512, &source);
         let split = render_curve(backend, approaching, 257, &source);
@@ -292,6 +396,148 @@ fn native_moving_keylock_keeps_physical_kicks_on_the_published_curve(#[case] bac
             assert!(
                 held > shifted * 8.0,
                 "{backend:?}, approach={approaching}, output {first}: held={held}, shifted={shifted}"
+            );
+        }
+    }
+}
+
+struct GestureStep {
+    frame: usize,
+    source: f64,
+    initial: f64,
+    target: f64,
+}
+
+impl GestureStep {
+    const TIME_CONSTANT: f64 = 2_400.0;
+
+    fn source_at(&self, frame: f64) -> f64 {
+        let elapsed = frame - self.frame.to_f64().expect("gesture frame");
+        self.source + self.target * elapsed
+            - (self.initial - self.target)
+                * Self::TIME_CONSTANT
+                * (-elapsed / Self::TIME_CONSTANT).exp_m1()
+    }
+
+    fn rate_at(&self, frame: f64) -> f64 {
+        let elapsed = frame - self.frame.to_f64().expect("gesture frame");
+        self.target + (self.initial - self.target) * (-elapsed / Self::TIME_CONSTANT).exp()
+    }
+}
+
+fn gesture_steps(high: f64) -> Vec<GestureStep> {
+    let initial = f64::from(1.05_f32);
+    let mut steps = vec![GestureStep {
+        frame: 0,
+        source: 0.0,
+        initial,
+        target: initial,
+    }];
+    for index in 0..100 {
+        // Leave native output queued when the first tempo command arrives.
+        let frame = 24_001 + index * 960;
+        let at = frame.to_f64().expect("gesture frame");
+        let previous = steps.last().expect("initial tempo");
+        steps.push(GestureStep {
+            frame,
+            source: previous.source_at(at),
+            initial: previous.rate_at(at),
+            target: if index % 2 == 0 { high } else { 1.05 },
+        });
+    }
+    steps
+}
+
+fn gesture_source_at(steps: &[GestureStep], frame: f64) -> f64 {
+    let index = steps.partition_point(|step| step.frame.to_f64().expect("gesture frame") <= frame);
+    steps[index - 1].source_at(frame)
+}
+
+fn gesture_output_at(steps: &[GestureStep], source: f64) -> f64 {
+    let mut lower = 0.0;
+    let mut upper = CAPTURE_FRAMES.to_f64().expect("capture duration");
+    assert!(gesture_source_at(steps, upper) > source);
+    for _ in 0..64 {
+        let middle = (lower + upper) * 0.5;
+        if gesture_source_at(steps, middle) < source {
+            lower = middle;
+        } else {
+            upper = middle;
+        }
+    }
+    (lower + upper) * 0.5
+}
+
+fn render_gesture(
+    backend: StretchKind,
+    steps: &[GestureStep],
+    quantum: usize,
+    pcm: &[f32],
+) -> Vec<f32> {
+    let config = WarpConfig::builder()
+        .backend(backend)
+        .speed(1.05)
+        .keylock(true)
+        .render_quantum_frames(NonZeroUsize::new(512).expect("prepared quantum"))
+        .build();
+    let controls = steps.iter().enumerate().skip(1).map(|(revision, step)| {
+        let curve = ExponentialApproach::new(step.initial, step.target, GestureStep::TIME_CONSTANT)
+            .expect("continuous accepted tempo");
+        (
+            step.frame,
+            u64::try_from(revision).expect("revision"),
+            SpeedCurve::Approach(curve),
+        )
+    });
+    render_controls(&config, controls, quantum, pcm, |frame| {
+        gesture_source_at(steps, frame)
+    })
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn native_tempo_gestures_keep_physical_kicks_and_pitch_on_the_accepted_curve(
+    #[case] backend: StretchKind,
+) {
+    let (source, source_onsets) = physical_source();
+    for high in [1.10, 1.90] {
+        let steps = gesture_steps(high);
+        let whole = render_gesture(backend, &steps, 512, &source);
+        let split = render_gesture(backend, &steps, 257, &source);
+        assert_eq!(
+            split, whole,
+            "{backend:?}, high={high}: gesture partitions must preserve PCM"
+        );
+        let kicks = deinterleave_left(&whole, 2);
+        for (index, &source) in source_onsets.iter().enumerate() {
+            let expected = gesture_output_at(&steps, source);
+            let actual = kick_onset(&kicks, expected);
+            assert!(
+                (actual - expected).abs() <= ONSET_TOLERANCE,
+                "{backend:?}, high={high}, kick {index}: {actual} vs {expected}"
+            );
+        }
+        let tone: Vec<_> = whole
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|frame| frame[1])
+            .collect();
+        for first in [48_000, 96_000, 144_000] {
+            let end = first + PITCH_WINDOW;
+            let rate = (gesture_source_at(&steps, end.to_f64().expect("pitch end"))
+                - gesture_source_at(&steps, first.to_f64().expect("pitch start")))
+                / PITCH_WINDOW.to_f64().expect("pitch window");
+            let samples = &tone[first..end];
+            let held = goertzel_magnitude(samples, TONE_HZ, SAMPLE_RATE);
+            let shifted = goertzel_magnitude(samples, TONE_HZ * rate, SAMPLE_RATE);
+            assert!(
+                held > shifted * 8.0,
+                "{backend:?}, high={high}, output {first}: held={held}, shifted={shifted}"
             );
         }
     }
