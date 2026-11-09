@@ -1048,7 +1048,8 @@ dependencies = [
 [[package]]
 name = "btls-sys"
 version = "0.5.6"
-source = "git+https://github.com/0x676e67/btls?rev=ac7fe822bb1a3386c0ef0b44b4784a9429ba9903#ac7fe822bb1a3386c0ef0b44b4784a9429ba9903"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b1b8638a2e1c38a5ae4efa90ae57e643baec35a30d03fc5b399b893adc4954b"
 dependencies = [
  "bindgen 0.72.1",
  "cmake",

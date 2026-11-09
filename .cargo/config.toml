@@ -74,7 +74,6 @@ vello_encoding = { git = "https://github.com/gerasim13/vello", rev = "b963c3b2cb
 # fork holds a Web Lock across the worker bootstrap import; drop this once
 # upstream drewcrawford/wasm_safe_thread serialises the bootstrap itself.
 wasm_safe_thread = { git = "https://github.com/gerasim13/wasm_safe_thread", rev = "02470f5b4094773daba114639e0ff02951da5a62" }
-btls-sys = { git = "https://github.com/0x676e67/btls", rev = "ac7fe822bb1a3386c0ef0b44b4784a9429ba9903" }
 
 # Askama 0.14 config parsing uses the maintained toml parser; remove this
 # patch when UniFFI's Askama dependency drops basic-toml upstream.
