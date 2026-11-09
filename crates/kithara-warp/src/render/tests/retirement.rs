@@ -1,4 +1,5 @@
-use Control::{Backend, Keylock, Speed};
+use Control::{Backend, Curve, Keylock, Speed};
+use kithara_signal::ExponentialApproach;
 use kithara_stretch::{BackendCapabilities, StretchKind};
 use kithara_sync::SpeedCurve;
 use kithara_test_fixtures::unit_fixtures::warp_sine;
@@ -25,6 +26,7 @@ const IN_FADE: usize = 512;
 enum Control {
     Keylock(bool),
     Speed(f32),
+    Curve(ExponentialApproach),
     Backend(StretchKind),
 }
 
@@ -81,6 +83,9 @@ fn render(config: &WarpConfig, presses: &[Press], frames: usize, tone: &[f32]) -
                     Speed(speed) => fx
                         .set_speed(SpeedCurve::Constant(speed), fx.render_revision() + 1)
                         .expect("valid speed"),
+                    Curve(curve) => fx
+                        .set_speed(SpeedCurve::Approach(curve), fx.render_revision() + 1)
+                        .expect("valid tempo curve"),
                     Backend(kind) => fx.set_backend(kind),
                 }
             }
@@ -114,6 +119,10 @@ fn assert_continuous(tone: &[f32], scenario: &Scenario) {
         match *control {
             Backend(kind) => backends.push(kind),
             Speed(speed) => speeds.push(speed),
+            Curve(curve) => {
+                speeds.push(curve.initial().to_f32().expect("initial speed fits f32"));
+                speeds.push(curve.target().to_f32().expect("target speed fits f32"));
+            }
             Keylock(_) => {}
         }
     }
@@ -173,6 +182,51 @@ fn retirement_keeps_the_tone_continuous(warp_sine: Vec<f32>) {
     assert!(!backends.is_empty(), "the build compiles a keylock backend");
     for scenario in backends.into_iter().flat_map(retirement_scripts) {
         assert_continuous(&warp_sine, &scenario);
+    }
+}
+
+#[kithara::test]
+fn tempo_gestures_keep_keylocked_tone_continuous(warp_sine: Vec<f32>) {
+    const UPDATE_FRAMES: usize = 882;
+    const TIME_CONSTANT: f64 = 2_205.0;
+
+    let backends: Vec<_> = StretchKind::supporting(BackendCapabilities::KEYLOCK).collect();
+    assert!(!backends.is_empty(), "the build compiles a keylock backend");
+    for backend in backends {
+        let fade = renderer(&config(backend, true, 1.1))
+            .prepare_engine_latency(spec())
+            .expect("native keylock latency")
+            .get();
+        assert!(
+            UPDATE_FRAMES < fade,
+            "each tempo retarget interrupts the previous fade"
+        );
+        for speed in [1.0, 1.05] {
+            let mut rate = f64::from(speed);
+            let presses = (0..12)
+                .map(|index| {
+                    let target = if index % 2 == 0 { 1.10 } else { 1.05 };
+                    let curve = ExponentialApproach::new(rate, target, TIME_CONSTANT)
+                        .expect("continuous tempo gesture");
+                    rate = curve
+                        .rate_at(UPDATE_FRAMES.to_f64().expect("update interval"))
+                        .expect("reached tempo");
+                    Press {
+                        frame: PRESSES[0] + index * UPDATE_FRAMES,
+                        batch: vec![Curve(curve)],
+                    }
+                })
+                .collect();
+            assert_continuous(
+                &warp_sine,
+                &Scenario {
+                    backend,
+                    keylock: true,
+                    speed,
+                    presses,
+                },
+            );
+        }
     }
 }
 

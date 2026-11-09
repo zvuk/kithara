@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_signal::SourceSpan;
 use kithara_stretch::{ElasticCapabilities, ElasticError, ElasticRequest};
@@ -42,22 +44,41 @@ fn copy_source(
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
-    pub(in crate::render) fn native_projection_speed(
+    pub(in crate::render) fn native_projection_rates(
         &self,
         capabilities: ElasticCapabilities,
         keylock: bool,
-    ) -> Result<Option<f64>, ElasticError> {
-        if !keylock || self.plan.is_some() || self.trajectory.requires_quanta() {
+    ) -> Result<Option<(f64, f64)>, ElasticError> {
+        if !keylock || self.plan.is_some() {
             return Ok(None);
         }
-        let speed = f64::from(self.trajectory.speed()?);
-        if speed.recip() >= crate::consts::MAX_NATIVE_STRETCH {
+        let (minimum, maximum) = self.trajectory.speed_bounds()?;
+        let minimum = f64::from(minimum);
+        let maximum = f64::from(maximum);
+        let envelope = capabilities.rate_envelope();
+        if minimum.recip() >= crate::consts::MAX_NATIVE_STRETCH
+            || !envelope.contains_rate(minimum)
+            || !envelope.contains_rate(maximum)
+        {
             return Ok(None);
         }
-        Ok(capabilities
-            .rate_envelope()
-            .contains_rate(speed)
-            .then_some(speed))
+        let source = self
+            .source_block_frames
+            .get()
+            .min(capabilities.max_source_frames());
+        if self.trajectory.requires_quanta()
+            && (capabilities.max_output_frames() <= 1
+                || (source
+                    .saturating_sub(1)
+                    .to_f64()
+                    .ok_or(ElasticError::SampleCountOverflow)?
+                    / maximum)
+                    .floor()
+                    <= 1.0)
+        {
+            return Ok(None);
+        }
+        Ok(Some((minimum, maximum)))
     }
 
     fn native_boundary(&self, span: SourceSpan, output: usize) -> Result<u64, ElasticError> {
@@ -81,7 +102,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .capabilities()
             .rate_envelope()
             .max_source_frames_per_output();
-        let source = if f64::from(self.trajectory.speed()?) == maximum {
+        let (_, maximum_speed) = self.trajectory.speed_bounds()?;
+        let source = if f64::from(maximum_speed) == maximum {
             numerator / denominator.get()
         } else {
             numerator.div_ceil(denominator.get())
@@ -102,7 +124,12 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .source_block_frames
             .get()
             .min(capabilities.max_source_frames());
-        let output = crate::consts::NATIVE_PACKET_FRAMES.min(capabilities.max_output_frames());
+        let output = if self.trajectory.requires_quanta() {
+            crate::consts::NATIVE_CONTROL_PACKET_FRAMES
+        } else {
+            crate::consts::NATIVE_PACKET_FRAMES
+        }
+        .min(capabilities.max_output_frames());
         if let Some(boundary) = [
             envelope.min_source_frames_per_output(),
             envelope.max_source_frames_per_output(),
@@ -126,6 +153,49 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok_or(ElasticError::EmptyOutput)
     }
 
+    fn native_output_advance(
+        &self,
+        span: SourceSpan,
+        output: Range<usize>,
+    ) -> Result<usize, ElasticError> {
+        let boundary = |frame| {
+            let (numerator, denominator) = self.mapped_position(
+                span.start(),
+                self.spec.sample_rate,
+                u64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?,
+            )?;
+            Ok::<_, ElasticError>(numerator / denominator.get())
+        };
+        let first = boundary(output.start)?;
+        boundary(output.end)?
+            .checked_sub(first)
+            .and_then(|frames| usize::try_from(frames).ok())
+            .ok_or(ElasticError::SampleCountOverflow)
+    }
+
+    fn native_request(
+        &self,
+        span: SourceSpan,
+        source: Range<u64>,
+        output: Range<usize>,
+    ) -> Result<ElasticRequest, ElasticError> {
+        let source_frames = usize::try_from(
+            source
+                .end
+                .checked_sub(source.start)
+                .ok_or(ElasticError::SampleCountOverflow)?,
+        )
+        .map_err(|_| ElasticError::SampleCountOverflow)?;
+        let request = ElasticRequest::new(source_frames, output.len())?;
+        if self.trajectory.requires_quanta() {
+            request.with_output_source_frames(self.native_output_advance(span, output)?)
+        } else {
+            Ok(request)
+        }
+    }
+}
+
+impl<S: HasPool<f32>> WarpRenderer<S> {
     fn prepare_native_history(
         &mut self,
         cue: u64,
@@ -322,14 +392,15 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         channels: usize,
     ) -> Result<(), ElasticError> {
         let end = self.native_boundary(span, frame + packet)?;
-        let projection = self.projection.as_mut().ok_or(ElasticError::PoolCapacity)?;
-        let start = projection.feed.ok_or(ElasticError::EmptySource)?;
-        let source_frames = usize::try_from(
-            end.checked_sub(start)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        )
-        .map_err(|_| ElasticError::SampleCountOverflow)?;
+        let start = self
+            .projection
+            .as_ref()
+            .ok_or(ElasticError::PoolCapacity)?
+            .feed
+            .ok_or(ElasticError::EmptySource)?;
+        let request = self.native_request(span, start..end, frame..frame + packet)?;
         let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
+        let projection = self.projection.as_mut().ok_or(ElasticError::PoolCapacity)?;
         let [output, source] = &mut projection.buffers;
         copy_source(
             resident,
@@ -352,7 +423,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.engine
             .as_mut()
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-            .process(ElasticRequest::new(source_frames, packet)?, source, output)?;
+            .process(request, source, output)?;
         projection.feed = Some(end);
         projection.offset = 0;
         Ok(())

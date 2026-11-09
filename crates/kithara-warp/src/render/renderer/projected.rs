@@ -388,7 +388,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .as_ref()
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities();
-        if let Some(speed) = self.native_projection_speed(capabilities, self.current_keylock)? {
+        if let Some((_, speed)) =
+            self.native_projection_rates(capabilities, self.current_keylock)?
+        {
             return self.render_native_projection(span, speed);
         }
         let channels = usize::from(self.spec.channels);

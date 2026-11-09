@@ -851,7 +851,7 @@ where
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
-    /// Retire the audible side into the replacement the rebuilt side fades from.
+    /// Retire the audible side into the replacement the re-primed side fades from.
     pub(in crate::render) fn retire_for_reprime(&mut self) -> Result<(), ElasticError> {
         if self.mapped_render && self.stretch_target().1 && self.keylocked_unity() {
             self.trajectory.snap_to_frame()?;
@@ -876,7 +876,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.active = false;
         self.applied_pitch = f64::NAN;
         self.reset_pending = false;
-        self.rebuild_pending |= self.mapped_render;
         Ok(())
     }
 

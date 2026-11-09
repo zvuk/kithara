@@ -19,14 +19,16 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities();
         let latency = capabilities.latency();
-        if let Some(speed) = self.native_projection_speed(capabilities, self.current_keylock)? {
+        if let Some((speed, maximum)) =
+            self.native_projection_rates(capabilities, self.current_keylock)?
+        {
             (latency
                 .first()
                 .to_f64()
                 .ok_or(ElasticError::SampleCountOverflow)?
                 / speed
                 + self
-                    .native_projection_packet(speed, capabilities)?
+                    .native_projection_packet(maximum, capabilities)?
                     .to_f64()
                     .ok_or(ElasticError::SampleCountOverflow)?)
             .ceil()
