@@ -220,7 +220,7 @@ fn filter_install_is_frame_exact_and_refusal_preserves_settings_and_history() {
     let mut expected = vec![1.0; 5];
     expected.extend_from_slice(&planes[0]);
     assert_eq!(bits(&pcm), bits(&expected));
-    assert_ne!(bits(&pcm), bits(&vec![1.0; 32]));
+    assert_ne!(bits(&pcm), bits(&[1.0; 32]));
     let replies = receipts(&mut ends);
     assert_applied_at(outcome_of(&replies, installed), BLOCK + 5);
     assert!(matches!(
