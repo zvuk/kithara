@@ -68,15 +68,15 @@ impl Deck {
         mut due: Due<'_, DeckProtocol>,
         context_valid: bool,
     ) {
-        let binding = match due.commands() {
-            [DeckPart::Filter { binding, .. } | DeckPart::FilterProgram { binding, .. }] => {
+        let binding =
+            if let [DeckPart::Filter { binding, .. } | DeckPart::FilterProgram { binding, .. }] =
+                due.commands()
+            {
                 *binding
-            }
-            _ => {
+            } else {
                 due.refuse(DeckRefusal::FilterBatch);
                 return;
-            }
-        };
+            };
         if !context_valid || self.epoch != Some(binding.epoch()) {
             due.refuse(DeckRefusal::AxisRestarted);
             return;
