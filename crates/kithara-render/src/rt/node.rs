@@ -1,4 +1,4 @@
-use std::{error::Error, fmt};
+use std::error::Error;
 
 use firewheel::{
     channel_config::{ChannelConfig, ChannelCount},
@@ -102,20 +102,11 @@ struct ProcessorInputsTaken;
 struct StreamNotPrepared;
 
 /// The actual graph node and typed cause of a constructor preparation refusal.
-#[derive(Debug)]
+#[derive(Debug, derive_more::Display)]
+#[display("deck node {node:?} preparation failed: {error}")]
 pub struct PlayerNodePreparationError {
     pub node: NodeID,
     pub error: NodeError,
-}
-
-impl fmt::Display for PlayerNodePreparationError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "deck node {:?} preparation failed: {}",
-            self.node, self.error
-        )
-    }
 }
 
 impl Error for PlayerNodePreparationError {
