@@ -182,7 +182,7 @@ fn unreleased_manifest(manifest: &str, released: &str) -> Option<String> {
     for quote in ['"', '\''] {
         prepared = prepared.replace(
             &format!("{quote}{released}{quote}"),
-            &format!("{quote}{consts::UNRELEASED_VERSION}{quote}"),
+            &format!("{quote}{}{quote}", consts::UNRELEASED_VERSION),
         );
     }
     (prepared != manifest).then_some(prepared)
