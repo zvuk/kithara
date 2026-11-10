@@ -708,8 +708,7 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
             std::process::id(),
         );
         let directory = std::env::var_os("KITHARA_HANG_DUMP_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
+            .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
         let written = std::path::absolute(directory)
             .and_then(|directory| {
                 AudioArtifactSet::new(
@@ -725,7 +724,7 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
             });
         match written {
             Ok(path) => {
-                tracing::error!(path = %path.display(), overflowed, "Cold-switch USDT history saved")
+                tracing::error!(path = %path.display(), overflowed, "Cold-switch USDT history saved");
             }
             Err(error) => tracing::error!(%error, "Cold-switch USDT history export failed"),
         }
