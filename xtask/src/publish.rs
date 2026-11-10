@@ -513,7 +513,9 @@ fn publish_manifest(
     hack_crate: &str,
     workspace_dev_deps: &[String],
 ) -> Result<Option<String>> {
-    let mut table = manifest.parse::<toml::Table>().context("parse publish manifest")?;
+    let mut table = manifest
+        .parse::<toml::Table>()
+        .context("parse publish manifest")?;
     let mut removed = strip_dependency_tables(&mut table, hack_crate, workspace_dev_deps);
     if let Some(toml::Value::Table(targets)) = table.get_mut("target") {
         for (_, target) in targets.iter_mut() {
