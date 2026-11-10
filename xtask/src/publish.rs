@@ -486,7 +486,20 @@ impl<'a> PublishMode<'a> {
     fn cargo_args(self, no_verify: bool) -> Vec<&'a str> {
         let mut args = vec!["publish", "--allow-dirty"];
         match self {
-            Self::DryRun => args.extend(["--workspace", "--dry-run", "--registry", "crates-io"]),
+            // Verification compiles each package, and every compile may run
+            // cargo's daily cache gc. That gc drops the last-use row of any
+            // registry without an index directory under CARGO_HOME, which the
+            // verification overlay never has; the overlay's next last-use save
+            // then re-creates the row under a new id while the invocation still
+            // holds the old one, and cargo aborts on the mismatch.
+            Self::DryRun => args.extend([
+                "--workspace",
+                "--dry-run",
+                "--registry",
+                "crates-io",
+                "--config",
+                "cache.auto-clean-frequency=\"never\"",
+            ]),
             Self::Upload(name) => args.extend(["-p", name]),
         }
         if no_verify {
@@ -819,6 +832,11 @@ mod tests {
         assert!(
             args.windows(2)
                 .any(|pair| pair == ["--registry", "crates-io"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--config", "cache.auto-clean-frequency=\"never\""]),
+            "the overlay's cache rows must outlive every verification compile: {args:?}"
         );
         assert!(!args.contains(&"--no-verify"));
         assert!(!args.contains(&"--list"));
