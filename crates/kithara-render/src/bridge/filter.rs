@@ -1,33 +1,12 @@
 use std::fmt;
 
-use kithara_command::{ScopeId, Seq};
+use kithara_command::Seq;
 use kithara_config::ConfigOwner;
 use kithara_effects::filter::{
     FilterEffect, FilterParameter, FilterSettings, FilterSettingsChange,
 };
-use kithara_signal::SessionEpoch;
 
-/// The deck, installed instance and output stream observed by a control.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(get)]
-pub struct FilterBinding {
-    #[field(get, copy)]
-    scope: ScopeId,
-    #[field(get, copy)]
-    instance: Option<Seq>,
-    #[field(get, copy)]
-    epoch: SessionEpoch,
-}
-
-impl FilterBinding {
-    pub(crate) const fn new(scope: ScopeId, instance: Option<Seq>, epoch: SessionEpoch) -> Self {
-        Self {
-            scope,
-            instance,
-            epoch,
-        }
-    }
-}
+use super::FilterBinding;
 
 /// A prepared replacement or one live operation of the deck's post-FX filter.
 pub enum DeckFilterChange {
