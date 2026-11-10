@@ -2,6 +2,8 @@ mod core;
 #[cfg(all(test, any(feature = "stretch-signalsmith", feature = "stretch-bungee")))]
 mod latency_tests;
 mod mapping_tests;
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+mod native_curves;
 #[cfg(feature = "stretch-signalsmith")]
 mod native_tests;
 mod quantum_tests;

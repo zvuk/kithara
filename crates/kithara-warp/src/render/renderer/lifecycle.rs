@@ -461,7 +461,7 @@ where
 {
     fn drain_mapped(&mut self, output_limit: usize) -> Result<Option<AudioChunk>, ElasticError> {
         if !self.active
-            && !self.stateless_tail_owed
+            && self.stateless_tail_owed.is_none()
             && self
                 .residency
                 .as_ref()
@@ -580,6 +580,10 @@ where
         let output_limit = self.trajectory.output_limit(output_limit);
         if output_limit == 0 {
             return Ok(None);
+        }
+        if self.unity_retirement_pending() {
+            self.retire_for_reprime()?;
+            self.prepare(self.spec);
         }
         if self.mapped_render {
             if self.transition_pending() {
@@ -719,7 +723,7 @@ where
         }
         if self.plan.is_none()
             && (!self.requires_staging() || self.trajectory.unity_interval())
-            && !self.stateless_tail_owed
+            && self.stateless_tail_owed.is_none()
             && span.source_ratio_at(0)
                 == Some((
                     u128::from(chunk.meta.frame_offset),
@@ -851,7 +855,7 @@ where
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
-    /// Retire the audible side into the replacement the rebuilt side fades from.
+    /// Retire the audible side into the replacement the re-primed side fades from.
     pub(in crate::render) fn retire_for_reprime(&mut self) -> Result<(), ElasticError> {
         if self.mapped_render && self.stretch_target().1 && self.keylocked_unity() {
             self.trajectory.snap_to_frame()?;
@@ -863,10 +867,14 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 return Err(error);
             }
         } else {
-            self.stateless_tail_owed |= self
+            let captures_stateless = self
                 .residency
                 .as_ref()
                 .is_some_and(|resident| !resident.fold_unplayed());
+            if captures_stateless {
+                self.stateless_tail_owed
+                    .get_or_insert_with(|| self.trajectory.clone());
+            }
         }
         self.clear_pending_source();
         self.output_remainder = 0.0;
@@ -876,7 +884,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.active = false;
         self.applied_pitch = f64::NAN;
         self.reset_pending = false;
-        self.rebuild_pending |= self.mapped_render;
         Ok(())
     }
 
