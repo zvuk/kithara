@@ -14,7 +14,7 @@ export class HostDevice {
   get sampleRate() { return this.context.sampleRate; }
   get acquired() { return !!this.booted && !this.closed && !this.failure; }
   get currentTime() { return this.context.currentTime; }
-  get ready() { return this.connected && !this.closed && !this.failure && this.context.state !== "closed"; }
+  get ready() { return this.connected && !this.closed && !this.failure && this.context.state === "running"; }
   get error() { return this.failure; }
 
   async initialize(root, script, module, memory, channels) {
