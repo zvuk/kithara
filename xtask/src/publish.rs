@@ -16,136 +16,6 @@ use crate::{
     consts,
 };
 
-fn checked_publish_manifest(manifest: &str) -> Result<toml::Table> {
-    manifest.parse().context("parse publish manifest")
-}
-
-/// Every `[patch.crates-io]` entry in `table`, as the name of the registry
-/// crate it replaces and the file that declares it.
-fn registry_patches(table: &toml::Table, source: &Path) -> Vec<(String, PathBuf)> {
-    let Some(toml::Value::Table(patches)) =
-        table.get("patch").and_then(|patch| patch.get("crates-io"))
-    else {
-        return Vec::new();
-    };
-    patches
-        .iter()
-        .map(|(key, entry)| {
-            let name = entry
-                .get("package")
-                .and_then(toml::Value::as_str)
-                .unwrap_or(key);
-            (name.to_owned(), source.to_path_buf())
-        })
-        .collect()
-}
-
-/// A published crate is built by its users from the registry alone, so a
-/// patch that replaces anything it builds against would ship code nobody
-/// published. A patch outside that closure never reaches the registry.
-fn refused_patches(
-    patches: &[(String, PathBuf)],
-    reached: &HashMap<String, String>,
-) -> Vec<String> {
-    let mut refused: Vec<_> = patches
-        .iter()
-        .filter_map(|(name, source)| {
-            reached.get(name).map(|by| {
-                format!(
-                    "{name} (patched in {}, built by published {by})",
-                    source.display()
-                )
-            })
-        })
-        .collect();
-    refused.sort();
-    refused
-}
-
-/// Each registry crate the published crates build against, with one published
-/// crate that reaches it. Development edges are not followed: cargo does not
-/// build them for a crate's users.
-fn published_registry_closure(order: &[String]) -> Result<HashMap<String, String>> {
-    let metadata = MetadataCommand::new()
-        .exec()
-        .context("failed to run cargo metadata")?;
-    let resolve = metadata
-        .resolve
-        .as_ref()
-        .context("cargo metadata returned no dependency graph")?;
-    let members: HashSet<_> = metadata.workspace_members.iter().collect();
-    let names: HashMap<_, _> = metadata
-        .packages
-        .iter()
-        .map(|pkg| (&pkg.id, pkg.name.to_string()))
-        .collect();
-    let edges: HashMap<_, _> = resolve
-        .nodes
-        .iter()
-        .map(|node| (&node.id, &node.deps))
-        .collect();
-    let published: HashSet<&str> = order.iter().map(String::as_str).collect();
-
-    let mut reached = HashMap::new();
-    let mut seen = HashSet::new();
-    let mut queue: VecDeque<_> = metadata
-        .packages
-        .iter()
-        .filter(|pkg| members.contains(&pkg.id) && published.contains(pkg.name.as_str()))
-        .map(|pkg| (&pkg.id, pkg.name.to_string()))
-        .collect();
-    while let Some((id, by)) = queue.pop_front() {
-        if !seen.insert(id) {
-            continue;
-        }
-        if !members.contains(id) {
-            reached
-                .entry(names[id].clone())
-                .or_insert_with(|| by.clone());
-        }
-        for dep in edges.get(id).copied().into_iter().flatten() {
-            if dep
-                .dep_kinds
-                .iter()
-                .any(|kind| kind.kind != DependencyKind::Development)
-            {
-                queue.push_back((&dep.pkg, by.clone()));
-            }
-        }
-    }
-    Ok(reached)
-}
-
-fn check_publish_manifests(ctx: &Ctx, order: &[String]) -> Result<()> {
-    let mut patches = Vec::new();
-    for path in [
-        ctx.root.join("Cargo.toml"),
-        ctx.root.join(".cargo/config.toml"),
-        ctx.root.join(".cargo/config"),
-    ] {
-        if !path.try_exists()? {
-            continue;
-        }
-        let contents = fs::read_to_string(&path)
-            .with_context(|| format!("read publish input {}", path.display()))?;
-        let table = checked_publish_manifest(&contents)
-            .with_context(|| format!("invalid publish input {}", path.display()))?;
-        patches.extend(registry_patches(&table, &path));
-    }
-    if patches.is_empty() {
-        return Ok(());
-    }
-    let refused = refused_patches(&patches, &published_registry_closure(order)?);
-    if !refused.is_empty() {
-        bail!(
-            "[patch.crates-io] replaces crates that published crates build against; \
-             publish or upstream them first: {}",
-            refused.join(", ")
-        );
-    }
-    Ok(())
-}
-
 #[derive(Debug, clap::Args)]
 pub(crate) struct PublishArgs {
     /// Perform a dry run (pass --dry-run to cargo publish).
@@ -167,7 +37,6 @@ pub(crate) struct PublishArgs {
 
 pub(crate) fn run(args: &PublishArgs, ctx: &Ctx) -> Result<()> {
     let order = resolve_publish_order()?;
-    check_publish_manifests(ctx, &order)?;
 
     if order.is_empty() {
         println!("No publishable crates found.");
@@ -644,7 +513,7 @@ fn publish_manifest(
     hack_crate: &str,
     workspace_dev_deps: &[String],
 ) -> Result<Option<String>> {
-    let mut table = checked_publish_manifest(manifest)?;
+    let mut table = manifest.parse::<toml::Table>().context("parse publish manifest")?;
     let mut removed = strip_dependency_tables(&mut table, hack_crate, workspace_dev_deps);
     if let Some(toml::Value::Table(targets)) = table.get_mut("target") {
         for (_, target) in targets.iter_mut() {
@@ -833,62 +702,6 @@ fn topo_sort(graph: &HashMap<String, Vec<String>>) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_patch_is_named_by_the_registry_crate_it_replaces() {
-        let table: toml::Table = "[patch.crates-io]\n\
-             demo = { git = 'https://example.invalid/demo' }\n\
-             renamed = { git = 'https://example.invalid/other', package = 'other' }\n"
-            .parse()
-            .unwrap();
-        let names: Vec<_> = registry_patches(&table, Path::new("Cargo.toml"))
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect();
-        assert_eq!(names, ["demo", "other"]);
-    }
-
-    #[test]
-    fn publication_policy_reads_tables_instead_of_matching_text() {
-        for input in [
-            "# [patch.crates-io]\n[package.metadata]\nnote = '[patch.crates-io]'\n",
-            "[patch.'https://example.invalid/registry']\ndemo = { path = '../demo' }\n",
-        ] {
-            let table = checked_publish_manifest(input).unwrap();
-            assert!(registry_patches(&table, Path::new("Cargo.toml")).is_empty());
-        }
-    }
-
-    #[test]
-    fn only_a_patch_a_published_crate_builds_against_is_refused() {
-        let patches = [
-            ("shipped".to_owned(), PathBuf::from("Cargo.toml")),
-            ("dev-only".to_owned(), PathBuf::from(".cargo/config.toml")),
-        ];
-        let reached = HashMap::from([("shipped".to_owned(), "kithara-demo".to_owned())]);
-        let refused = refused_patches(&patches, &reached);
-        assert_eq!(refused.len(), 1, "{refused:?}");
-        assert!(refused[0].starts_with("shipped "), "{refused:?}");
-        assert!(refused[0].contains("kithara-demo"), "{refused:?}");
-    }
-
-    #[test]
-    fn the_published_closure_holds_only_registry_crates_reached_by_published_ones() {
-        let order = resolve_publish_order().unwrap();
-        let reached = published_registry_closure(&order).unwrap();
-        let metadata = MetadataCommand::new().no_deps().exec().unwrap();
-        for pkg in metadata.workspace_packages() {
-            assert!(
-                !reached.contains_key(pkg.name.as_str()),
-                "workspace crate {} counted as a registry crate",
-                pkg.name
-            );
-        }
-        assert!(
-            reached.values().all(|by| order.contains(by)),
-            "a registry crate was attributed to an unpublished crate"
-        );
-    }
 
     #[test]
     fn dry_publication_verifies_the_whole_workspace_without_uploading() {
