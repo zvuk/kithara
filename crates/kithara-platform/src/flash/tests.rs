@@ -264,6 +264,30 @@ fn woken_async_task_stays_counted_until_repolled() {
     );
 }
 
+#[kithara::test(native, flash(false))]
+fn dropping_a_participating_task_preserves_its_borrowed_receiver() {
+    let _g = guard();
+    reset();
+    let (sender, receiver) = crate::tokio::broadcast::channel::<u8>(1);
+    let mut task = Box::pin(participate(
+        async move {
+            let mut receiver = receiver;
+            receiver.recv().await.expect("sender stays open")
+        },
+        Location::caller(),
+    ));
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+
+    assert!(task.as_mut().poll(&mut cx).is_pending());
+    drop(task);
+    assert!(
+        sender.send(1).is_err(),
+        "cancelled task released its receiver"
+    );
+    assert_eq!(forward::async_active_count(), 0);
+}
+
 /// A pinning task's spawn site says WHERE it came from, never what it is doing.
 /// A run's nine hangs were all pinned by one task at one spawn site, with
 /// nothing in the dump to separate a task spinning through wake-poll-park from

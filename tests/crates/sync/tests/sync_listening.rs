@@ -3,7 +3,11 @@
 
 use cochlea_features::{Audio, analyze_clipping, analyze_loudness};
 use kithara::platform::time::Duration;
-use kithara_integration_tests::{cochlea::mix_loudness_failures, grid::Start, kithara};
+use kithara_integration_tests::{
+    cochlea::{CochleaReport, mix_loudness_failures},
+    grid::Start,
+    kithara,
+};
 use num_traits::AsPrimitive;
 
 use super::sync_product_matrix::{
@@ -20,6 +24,43 @@ const WEAK_BEAT: Start = Start::Bar { bar: 0, beat: 1 };
 struct Capture {
     pcm: Vec<f32>,
     failures: Vec<String>,
+}
+
+fn listening_diagnostics(decks: &[Audio], mix: &Audio) -> String {
+    let decks: Vec<_> = decks
+        .iter()
+        .map(|audio| CochleaReport::measure(&audio.samples, audio.channels, audio.sample_rate))
+        .collect();
+    let mix = CochleaReport::measure(&mix.samples, mix.channels, mix.sample_rate);
+    format!("decks={decks:?}\nmix={mix:?}")
+}
+
+#[kithara::test(native)]
+fn listening_failure_diagnostics_retain_each_complete_capture_report() {
+    let decks = [0.125, 0.25].map(|level| Audio {
+        samples: vec![level; 48_000],
+        channels: 1,
+        sample_rate: 48_000,
+    });
+    let mut mix = Audio {
+        samples: vec![0.5; 48_000],
+        channels: 1,
+        sample_rate: 48_000,
+    };
+    mix.samples[24_000..].fill(0.0);
+    mix.samples[0] = 1.25;
+    let expected_decks: Vec<_> = decks
+        .iter()
+        .map(|audio| CochleaReport::measure(&audio.samples, audio.channels, audio.sample_rate))
+        .collect();
+    let expected_mix = CochleaReport::measure(&mix.samples, mix.channels, mix.sample_rate);
+    assert_eq!(expected_mix.clipped_samples, 1);
+    assert!(expected_mix.trailing_silence_ms > 400.0);
+    assert_ne!(expected_decks[0], expected_decks[1]);
+    assert_eq!(
+        listening_diagnostics(&decks, &mix),
+        format!("decks={expected_decks:?}\nmix={expected_mix:?}")
+    );
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
@@ -115,16 +156,19 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
 ) {
     let case = REAL_TRACK_SYNC;
     let mut decks = Vec::with_capacity(case.decks());
+    let mut deck_audio = Vec::with_capacity(case.decks());
     for deck in 0..case.decks() {
         hang_tick!(
             "sync_listening_mix_is_not_quieter_than_a_solo_deck: waiting for progress".to_owned()
         );
         let capture = render_solo(case, &provider, start, deck).await;
-        decks.push(analyze_loudness(&Audio {
+        let audio = Audio {
             samples: capture.pcm,
             channels: CHANNELS,
             sample_rate: case.sample_rate,
-        }));
+        };
+        decks.push(analyze_loudness(&audio));
+        deck_audio.push(audio);
         hang_reset!();
     }
     let mix = render_mix(case, &provider, start, None).await;
@@ -133,16 +177,17 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
         channels: CHANNELS,
         sample_rate: case.sample_rate,
     };
-    let mix = analyze_loudness(&audio);
-    let clipping = analyze_clipping(&audio, mix.true_peak_dbtp);
-    let mut failures = mix_loudness_failures(case.id(), &mix, &decks, LOUDNESS_TOLERANCE_LU);
+    let mix_report = analyze_loudness(&audio);
+    let clipping = analyze_clipping(&audio, mix_report.true_peak_dbtp);
+    let mut failures = mix_loudness_failures(case.id(), &mix_report, &decks, LOUDNESS_TOLERANCE_LU);
     if clipping.clipped_samples > 0 || clipping.true_peak_over_0dbtp {
         failures.push(format!("{}: mix clips: {clipping:?}", case.id()));
     }
     assert!(
         failures.is_empty(),
-        "sync listening loudness failed:\n{}\ndecks={decks:?}\nmix={mix:?}",
+        "sync listening loudness failed:\n{}\ndecks={decks:?}\nmix={mix_report:?}\ncomplete reports:\n{}",
         failures.join("\n"),
+        listening_diagnostics(&deck_audio, &audio),
     );
 }
 
@@ -167,15 +212,18 @@ async fn record_sync_listening_wavs(
     #[case] targets: &[Option<f64>],
 ) {
     let mut deck_reports = Vec::with_capacity(case.decks());
+    let mut deck_audio = Vec::with_capacity(case.decks());
     let mut failures = Vec::new();
     for deck in 0..case.decks() {
         hang_tick!("record_sync_listening_wavs: waiting for progress".to_owned());
         let capture = render_solo(case, &provider, start, deck).await;
-        deck_reports.push(analyze_loudness(&Audio {
+        let audio = Audio {
             samples: capture.pcm,
             channels: CHANNELS,
             sample_rate: case.sample_rate,
-        }));
+        };
+        deck_reports.push(analyze_loudness(&audio));
+        deck_audio.push(audio);
         failures.extend(capture.failures);
         hang_reset!();
     }
@@ -200,9 +248,10 @@ async fn record_sync_listening_wavs(
         }
         assert!(
             failures.is_empty(),
-            "{} listening capture target={target_bpm:?} failed:\n{}\ndecks={deck_reports:?}\nmix={mix_report:?}",
+            "{} listening capture target={target_bpm:?} failed:\n{}\ndecks={deck_reports:?}\nmix={mix_report:?}\ncomplete reports:\n{}",
             case.id(),
             failures.join("\n"),
+            listening_diagnostics(&deck_audio, &audio),
         );
     }
 }

@@ -156,7 +156,10 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use kithara_platform::{CancelToken, thread, time::Duration};
+    use kithara_platform::{
+        CancelToken, thread,
+        time::{Duration, WallInstant},
+    };
     use kithara_test_utils::cancel_token;
     use tempfile::TempDir;
 
@@ -597,15 +600,25 @@ mod tests {
     /// grows it to exactly that end and nothing more.
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn a_growth_factor_of_one_grows_to_exactly_the_write() {
+        let started = WallInstant::now();
+        tracing::info!(operation = "begin", elapsed = ?started.elapsed());
         let dir = TempDir::new().unwrap();
+        tracing::info!(operation = "directory_created", elapsed = ?started.elapsed());
         let res = create_resource_growing_by(&dir, 64, 1);
+        tracing::info!(operation = "mapping_opened", elapsed = ?started.elapsed());
 
         res.write_at(0, &[7u8; 100]).unwrap();
+        tracing::info!(operation = "mapping_grown_and_written", elapsed = ?started.elapsed());
 
         assert_eq!(
             fs::metadata(dir.path().join("test.dat")).unwrap().len(),
             100
         );
+        tracing::info!(operation = "length_checked", elapsed = ?started.elapsed());
+        drop(res);
+        tracing::info!(operation = "mapping_closed", elapsed = ?started.elapsed());
+        drop(dir);
+        tracing::info!(operation = "directory_removed", elapsed = ?started.elapsed());
     }
 
     /// Left unset, the default overshoots instead, so the same write leaves
@@ -631,15 +644,27 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn backing_release_preserves_bytes_without_publishing_readiness() {
+        let started = WallInstant::now();
+        tracing::info!(operation = "begin", elapsed = ?started.elapsed());
         let dir = TempDir::new().unwrap();
+        tracing::info!(operation = "directory_created", elapsed = ?started.elapsed());
         let res = create_resource_with_size(&dir, Some(64 * 1024));
+        tracing::info!(operation = "mapping_opened", elapsed = ?started.elapsed());
         res.write_at(0, b"payload").unwrap();
+        tracing::info!(operation = "mapping_written", elapsed = ?started.elapsed());
 
         res.release_backing_in_place(Some(7)).unwrap();
+        tracing::info!(operation = "backing_released", elapsed = ?started.elapsed());
 
         assert_eq!(res.status(), ResourceStatus::Active);
         let bytes = fs::read(dir.path().join("test.dat")).unwrap();
         assert_eq!(&bytes[..7], b"payload");
+        drop(bytes);
+        tracing::info!(operation = "status_and_bytes_checked", elapsed = ?started.elapsed());
+        drop(res);
+        tracing::info!(operation = "resource_dropped", elapsed = ?started.elapsed());
+        drop(dir);
+        tracing::info!(operation = "directory_removed", elapsed = ?started.elapsed());
     }
 
     /// A re-download starts a fresh generation in a rewrite temp file. It

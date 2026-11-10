@@ -128,9 +128,7 @@ impl Container<'_> {
 
     /// Where the runners of one cache scope keep kache's host file and store.
     pub(super) fn kache(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
-        host.cache_root
-            .join(consts::KACHE_DIR)
-            .join(&runner.cache_scope)
+        host.compiler_cache_root().join(&runner.cache_scope)
     }
 
     fn cargo_home(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
@@ -270,6 +268,34 @@ pub(crate) mod tests {
         },
         testing::workspace::root as workspace_root,
     };
+
+    #[test]
+    fn configured_compiler_store_keeps_scope_and_mount_ownership() {
+        let directory = tempfile::tempdir().unwrap();
+        let profile = directory.path().join("host.toml");
+        fs::write(
+            &profile,
+            format!(
+                "compiler_cache_root = \"/compiler-store\"\n{}",
+                toml::to_string(&host_fixture()).unwrap()
+            ),
+        )
+        .unwrap();
+        let host = LinuxHost::load(&profile).expect("separate compiler store volume");
+
+        for runner in &host.runners {
+            let store = Path::new("/compiler-store").join(&runner.cache_scope);
+            assert_eq!(Container::kache(&host, runner), store);
+            assert!(
+                Container::mounts(&host, runner)
+                    .contains(&(store.to_string_lossy().into_owned(), consts::KACHE_MOUNT))
+            );
+            assert_eq!(
+                Container::build_root(&host, runner),
+                host.cache_root.join("target").join(&runner.name)
+            );
+        }
+    }
 
     /// The value a runner's job is told for `name`.
     pub(crate) fn told(host: &LinuxHost, runner: &LinuxRunner, name: &str) -> PathBuf {

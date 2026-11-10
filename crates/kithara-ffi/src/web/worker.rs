@@ -32,8 +32,10 @@ pub(super) fn worker_main(
     analysis_rx: mpsc::Receiver<AnalysisRequest>,
 ) {
     assert_not_main_thread(concat!(module_path!(), "::worker_main"));
+    tracing::debug!("web queue worker entered");
     keep_worker_alive();
     task_spawn(async move {
+        tracing::debug!("web queue owner task started");
         let control = queue.control();
         let mut membership = control.subscribe::<QueueEvent>();
         crate::web::observer::source::spawn(&control);
@@ -45,6 +47,7 @@ pub(super) fn worker_main(
                 return;
             }
         };
+        tracing::debug!("web queue registration returned");
         let mut analysis = AnalysisRuns::new(pools);
         loop {
             tokio::select! {

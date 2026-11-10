@@ -36,6 +36,7 @@ struct Render {
 struct CaptureBlock {
     capture: Range<usize>,
     output: Range<u64>,
+    started: WallInstant,
     started_unix_micros: Option<u128>,
     before: DeckSnapshot,
     after: DeckSnapshot,
@@ -93,12 +94,8 @@ impl CaptureBlock {
 }
 
 impl Render {
-    fn capture_window(&self) -> RangeInclusive<u128> {
-        let mut times = self.blocks.iter().map(|block| {
-            block
-                .started_unix_micros
-                .expect("capture block has a wall timestamp")
-        });
+    fn capture_window(&self) -> RangeInclusive<WallInstant> {
+        let mut times = self.blocks.iter().map(|block| block.started);
         let first = times.next().expect("capture has blocks");
         let last = times.fold(first, |previous, next| {
             assert!(
@@ -168,6 +165,35 @@ impl Render {
             underruns.join("\n"),
         )
     }
+}
+
+#[kithara::test]
+fn capture_window_uses_monotonic_time_when_calendar_time_moves_backwards() {
+    let started = WallInstant::now();
+    let later = started + Duration::from_millis(1);
+    let render = Render {
+        capture_frame: 0,
+        samples: Vec::new(),
+        blocks: [(started, 2_000), (later, 1_000)]
+            .into_iter()
+            .map(|(started, unix_micros)| CaptureBlock {
+                capture: 0..1,
+                output: 0..1,
+                started,
+                started_unix_micros: Some(unix_micros),
+                before: DeckSnapshot::default(),
+                after: DeckSnapshot::default(),
+                item_events: Vec::new(),
+                event_error: None,
+                refill_probes: Vec::new(),
+                admitted: Vec::new(),
+            })
+            .collect(),
+    };
+    assert!(render.blocks[0].started < render.blocks[1].started);
+    assert!(render.blocks[0].started_unix_micros > render.blocks[1].started_unix_micros);
+    let window = render.capture_window();
+    assert_eq!(window, started..=later);
 }
 
 fn target_rebuild_fixture(delay_ms: u64) -> HlsFixtureBuilder {
@@ -347,6 +373,7 @@ async fn capture_tiny_ring(
         let frames = (OBSERVATION_FRAMES - samples.len() / usize::from(CHANNELS)).min(BLOCK_FRAMES);
         let capture_start = samples.len() / usize::from(CHANNELS);
         let output_start = prepared.player.host().position();
+        let started = WallInstant::now();
         let started_unix_micros = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .ok()
@@ -408,6 +435,7 @@ async fn capture_tiny_ring(
             CaptureBlock {
                 capture: capture_start..capture_start + frames,
                 output: output_start..output_end,
+                started,
                 started_unix_micros,
                 before: snapshot_before,
                 after: snapshot_after,

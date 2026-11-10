@@ -88,6 +88,15 @@ deps:unused:
   script:
     - just ci run deps-unused
 
+deps:publish:
+  extends: .deps-job
+  timeout: 60 minutes
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "weekly"
+    - if: $KITHARA_PIPELINE_KIND == "quarantine"
+  script:
+    - just ci run crates-publish
+
 deps:shear:
   extends: .deps-job
   timeout: 30 minutes

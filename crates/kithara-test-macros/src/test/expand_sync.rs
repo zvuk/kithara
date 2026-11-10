@@ -86,7 +86,7 @@ pub(crate) fn emit_one_test(
         return output;
     }
 
-    let modeled = wrap_with_model(&full_held, args);
+    let modeled = wrap_with_model(&full_held, args, fn_name);
     let with_timeout = wrap_with_timeout(&modeled, &args.timeout, false, fn_name);
     let wrapped = finalize_body(&with_timeout, args, fn_name, false);
 
@@ -154,7 +154,7 @@ pub(crate) fn emit_native_only_one(
             serial_attr,
         );
     }
-    let modeled = wrap_with_model(full_held, args);
+    let modeled = wrap_with_model(full_held, args, name);
     let with_timeout = wrap_with_timeout(&modeled, &args.timeout, false, name);
     let wrapped = finalize_body(&with_timeout, args, name, false);
     quote! {

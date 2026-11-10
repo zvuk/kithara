@@ -5,6 +5,13 @@ run-name: ${{ (inputs.diagnostics || (inputs.test-filter || '') != '') && 'Windo
 # it runs there is a question only a Windows machine answers.
 on:
   workflow_call:
+    secrets:
+      KITHARA_DRM_PROD_KEY:
+        required: false
+      KITHARA_DRM_PROD_AUTH_TOKEN:
+        required: false
+      KITHARA_DRM_PROD_SP_ZV_TOKEN:
+        required: false
   workflow_dispatch:
     inputs:
       diagnostics:
@@ -15,6 +22,19 @@ on:
         description: Optional diagnostic Nextest filter. Its result does not qualify the full suite.
         type: string
         default: ""
+      test-lane:
+        description: Configured test lane for a nonempty diagnostic test-filter.
+        type: string
+        default: workspace
+      test-load:
+        description: Built-in CPU load; selected tests run one at a time when enabled.
+        type: choice
+        options: ["off", "on"]
+        default: "off"
+      test-count:
+        description: Positive finite repetition count for a nonempty diagnostic test-filter.
+        type: number
+        default: 1
       fixture-refresh:
         description: >-
           Comma-separated fixture names, or producing-function names, to
@@ -47,6 +67,8 @@ env:
   # is reused, where Linux runners keep it too, and the job leases it for as
   # long as xtask runs.
   KITHARA_XTASK_TARGET: C:\kithara-ci\target\xtask
+  # The lease driver builds before it can protect the xtask target.
+  KITHARA_BOOTSTRAP_TARGET: C:\kithara-ci\target\ci-bootstrap
 
 concurrency:
   group: windows-${{ github.ref }}
@@ -70,14 +92,6 @@ jobs:
           $buildProcesses = @(Get-Process -Name cargo, rustc, link, xtask, ci-bootstrap, cargo-nextest -ErrorAction SilentlyContinue)
           Write-Output ("Active build processes: {0}" -f $buildProcesses.Count)
           $buildProcesses | Select-Object ProcessName, Id | Format-Table -AutoSize
-          $storage = foreach ($ciTree in @('C:\kithara-ci', $env:CARGO_TARGET_DIR)) {
-            Get-ChildItem -LiteralPath $ciTree -Directory -Force | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object {
-              $scanErrors = @()
-              $size = Get-ChildItem -LiteralPath $_.FullName -File -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable scanErrors | Measure-Object -Property Length -Sum
-              [PSCustomObject]@{ Path = $_.FullName; Bytes = $size.Sum; UnreadableEntries = $scanErrors.Count }
-            }
-          }
-          $storage | Sort-Object Bytes -Descending | Format-Table -AutoSize
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -88,6 +102,10 @@ jobs:
       # The guest carries the toolchain and says where its libraries are in
       # its own environment, so this installs and sets nothing.
       - name: Check the workspace
+        env:
+          KITHARA_DRM_PROD_KEY: ${{ secrets.KITHARA_DRM_PROD_KEY }}
+          KITHARA_DRM_PROD_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_PROD_AUTH_TOKEN }}
+          KITHARA_DRM_PROD_SP_ZV_TOKEN: ${{ secrets.KITHARA_DRM_PROD_SP_ZV_TOKEN }}
         run: just ci cache-exec windows-check just check
 
       # The default backend is `wreq`, which the Apple desktop app ships and
@@ -97,7 +115,20 @@ jobs:
       - name: Run tests
         env:
           KITHARA_HANG_DUMP_DIR: ${{ runner.temp }}/kithara-windows-hang
+          KITHARA_DRM_PROD_KEY: ${{ secrets.KITHARA_DRM_PROD_KEY }}
+          KITHARA_DRM_PROD_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_PROD_AUTH_TOKEN }}
+          KITHARA_DRM_PROD_SP_ZV_TOKEN: ${{ secrets.KITHARA_DRM_PROD_SP_ZV_TOKEN }}
         run: just ci cache-exec windows-test just test run --net-backend=none
+
+      - name: Upload test audio
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-audio-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: "tests/crates/sync/.ci-artifacts/audio"
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Upload compiler-cache evidence
         if: ${{ always() && hashFiles(format('.ci-artifacts/cache/github-{0}-{1}-*.json', github.run_id, github.run_attempt)) != '' }}
@@ -124,14 +155,43 @@ jobs:
     timeout-minutes: 180
     env:
       TEST_FILTER: ${{ inputs.test-filter || '' }}
+      TEST_LANE: ${{ inputs.test-lane }}
+      TEST_LOAD: ${{ inputs.test-load }}
+      TEST_THREADS: ${{ inputs.test-load == 'on' && '1' || 'num-cpus' }}
+      TEST_COUNT: ${{ inputs.test-count }}
     steps:
+      - name: Inspect Windows storage without bootstrap
+        if: ${{ inputs.diagnostics }}
+        run: |
+          & {
+            Get-PSDrive -PSProvider FileSystem | Select-Object Name, Root, Used, Free | Format-Table -AutoSize
+            Get-Process -Name cargo, rustc, link, xtask, ci-bootstrap, cargo-nextest -ErrorAction SilentlyContinue | Select-Object ProcessName, Id | Format-Table -AutoSize
+            $gitRoot = Split-Path (Split-Path (Get-Command git.exe -ErrorAction Stop).Source -Parent) -Parent
+            & (Join-Path $gitRoot 'usr/bin/du.exe') -P -x -h --max-depth=4 C:/kithara-ci
+          } | Tee-Object -FilePath "$env:RUNNER_TEMP/windows-storage.txt"
+
+      - name: Preserve bootstrap storage inventory
+        if: ${{ always() && inputs.diagnostics }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-storage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-storage.txt
+          if-no-files-found: error
+
       - name: Checkout diagnostics controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: diagnostics-controller
+          persist-credentials: false
+
+      # Cargo must not inherit overrides from the retained checkout.
+      - name: Isolate diagnostics Cargo workspace
+        run: >-
+          [System.IO.Directory]::Move("$env:GITHUB_WORKSPACE/diagnostics-controller", "$env:RUNNER_TEMP/windows-diagnostics-controller")
 
       - name: Capture existing Windows evidence
-        run: just --justfile diagnostics-controller/justfile ci windows-diagnostics --output "$env:RUNNER_TEMP/windows-diagnostics"
+        working-directory: ${{ runner.temp }}/windows-diagnostics-controller
+        run: just ci windows-diagnostics --output "$env:RUNNER_TEMP/windows-diagnostics"
 
       - name: Preserve existing Windows evidence
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -142,21 +202,39 @@ jobs:
 
       - name: Verify probe compiler cache
         if: ${{ (inputs.test-filter || '') != '' }}
-        working-directory: diagnostics-controller
+        working-directory: ${{ runner.temp }}/windows-diagnostics-controller
         run: just ci cache-verify
 
       - name: Run diagnostic test selection
         if: ${{ (inputs.test-filter || '') != '' }}
-        working-directory: diagnostics-controller
+        working-directory: ${{ runner.temp }}/windows-diagnostics-controller
         env:
+          RUST_LOG: kithara_test_utils::load=info,kithara_storage=info
+          NEXTEST_SUCCESS_OUTPUT: immediate
           KITHARA_FLASH_SYNC_TRACE: "1"
           KITHARA_HANG_DUMP_DIR: ${{ runner.temp }}/windows-diagnostics/probe-hang
-        run: just ci cache-exec windows-diagnostic just test run --net-backend=none "--narrow=$env:TEST_FILTER" --retries=0
+        run: >-
+          just ci cache-exec windows-diagnostic just test run --net-backend=none "--narrow=$env:TEST_FILTER"
+          "--lane=$env:TEST_LANE" "--load=$env:TEST_LOAD" "--stress-count=$env:TEST_COUNT"
+          "--test-threads=$env:TEST_THREADS" --profile=ci --retries=0
+
+      - name: Upload test audio
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-audio-windows-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-diagnostics-controller/tests/crates/sync/.ci-artifacts/audio
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Upload probe evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/windows-diagnostics
+          path: |
+            ${{ runner.temp }}/windows-diagnostics
+            ${{ runner.temp }}/windows-diagnostics-controller/target/nextest/ci/junit.xml
+            ${{ runner.temp }}/windows-diagnostics-controller/.ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json
           if-no-files-found: error
