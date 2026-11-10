@@ -22,5 +22,6 @@ use crate::test_pools::{Pools, pools, sample_buffer};
 
 mod core;
 mod projected;
+mod tempo_perf;
 use core::*;
 pub(crate) use core::{CH, Presented, Projection, Timeline, render_configured_grid_with_updates};

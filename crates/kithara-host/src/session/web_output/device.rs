@@ -223,7 +223,10 @@ impl Drop for WebOutput {
 #[cfg(test)]
 mod tests {
     use firewheel::FirewheelConfig;
-    use kithara_test_utils::bufpool::TestPools;
+    use kithara_platform::time::Duration;
+    use kithara_test_utils::{bufpool::TestPools, wait_until};
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
     use wasm_bindgen_test::wasm_bindgen_test;
 
     use super::*;
@@ -243,5 +246,45 @@ mod tests {
         drop(output);
         assert_eq!(graph.heartbeat(), before);
         assert!(!graph.is_active());
+    }
+
+    #[wasm_bindgen_test]
+    async fn installed_output_is_ready_only_while_its_actual_context_runs() -> Result<(), JsValue> {
+        let mut graph = SessionGraph::new(FirewheelConfig::default());
+        let output = WebOutput::start::<TestPools>(&mut graph, 44_100, &mut [], None)
+            .expect("actual output acquisition");
+        let context = js_sys::Reflect::get(output.lease.as_ref(), &JsValue::from_str("context"))?;
+        let invoke = |name: &str| -> Result<js_sys::Promise, JsValue> {
+            js_sys::Reflect::get(&context, &JsValue::from_str(name))?
+                .dyn_into::<js_sys::Function>()?
+                .call0(&context)?
+                .dyn_into()
+        };
+        JsFuture::from(invoke("resume")?).await?;
+        wait_until(Duration::from_secs(5), "actual worklet acquisition", || {
+            output.lease.acquired()
+        })
+        .await
+        .expect("worklet booted");
+        let output = WebOutput::start::<TestPools>(
+            &mut graph,
+            44_100,
+            &mut [],
+            Some(SessionStream::Realtime { _backend: output }),
+        )
+        .expect("same acquired output installs the real processor");
+        wait_until(
+            Duration::from_secs(5),
+            "actual processor installation",
+            || graph.output_ready().expect("output status"),
+        )
+        .await
+        .expect("processor installed");
+        JsFuture::from(invoke("suspend")?).await?;
+        assert!(!graph.output_ready().expect("suspended output status"));
+        JsFuture::from(invoke("resume")?).await?;
+        assert!(graph.output_ready().expect("resumed output status"));
+        drop(output);
+        Ok(())
     }
 }

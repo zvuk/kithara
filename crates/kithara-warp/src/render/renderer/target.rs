@@ -261,6 +261,8 @@ where
             buffers: [first_buffer, second_buffer],
             stages: 1,
             feed: None,
+            audible: None,
+            cached_span: None,
             offset: 0,
         })
     }
@@ -313,6 +315,7 @@ where
     /// Service backend/spec changes and deferred destruction from the
     /// scheduler shell, never from the checked render core.
     pub(in crate::render) fn service_target(&mut self, spec: AudioSpec) {
+        drop(self.deferred_trajectory.take());
         self.reprime_pending |= self.active && self.mapped_render && self.keylocked_unity();
         drop(self.retired_engine.take());
         if (self.transition_pending() || self.prepared_quantum.is_some()) && spec == self.spec {

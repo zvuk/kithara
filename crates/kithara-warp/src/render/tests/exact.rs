@@ -1330,3 +1330,120 @@ fn terminal_quantum_and_drain_do_not_map_padding_as_source(#[case] backend: Stre
     );
     assert!(renderer.drain(1).expect("completed").is_none());
 }
+
+#[kithara::test]
+#[case::signalsmith(StretchKind::Signalsmith)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn native_moving_curve_eof_preserves_duration_mapping_and_drain_partitions(
+    #[case] backend: StretchKind,
+) {
+    const CURVE_FRAMES: u64 = 65_536;
+
+    let source_at = |frame| {
+        let frame = frame_f64(frame);
+        frame * 1.125 + frame * frame / 1_048_576.0
+    };
+    let render = |short, budget| {
+        let config = WarpConfig::builder()
+            .backend(backend)
+            .keylock(true)
+            .speed(1.125)
+            .build();
+        let mut renderer = renderer(&config);
+        renderer
+            .set_speed(
+                SpeedCurve::Ramp {
+                    to: 1.25,
+                    frames: NonZeroU64::new(CURVE_FRAMES).expect("ramp duration"),
+                },
+                1,
+            )
+            .expect("native tempo ramp");
+        let latency = renderer
+            .prepare_engine_latency(spec())
+            .expect("engine")
+            .get();
+        assert!(renderer.trajectory.requires_quanta());
+        let meta = AudioChunkInfo {
+            spec: spec(),
+            visible_origin: Some(Duration::ZERO),
+            source_revision: 7,
+            ..Default::default()
+        };
+        let required = renderer
+            .prepare_source_window(meta, 65_536, 128)
+            .expect("finite source window")
+            .get();
+        let source_frames = if short { 3 } else { required };
+        if !short {
+            assert!(
+                source_frames > latency,
+                "source extends beyond native latency"
+            );
+        }
+        renderer
+            .prepare_terminal_quantum(source_frames)
+            .expect("true source EOF");
+        let pools = renderer.pools.clone();
+        let mut input = chunk(&pools, &vec![0.25; source_frames * 2]);
+        input.meta = AudioChunkInfo {
+            frames: u32::try_from(source_frames).expect("finite source frames"),
+            ..meta
+        };
+        let first = renderer
+            .render_quantum(input)
+            .continue_value()
+            .expect("terminal quantum")
+            .expect("terminal PCM");
+        assert!(first.frames() > 0 && first.frames() <= 128);
+        assert!(
+            renderer
+                .projection
+                .as_ref()
+                .expect("native projection")
+                .feed
+                .is_some()
+        );
+        assert_positions(&first, 0, source_at);
+        let mut frame = first.frames();
+        let mut samples = first.samples.to_vec();
+        renderer.prepare(spec());
+        assert!(renderer.drain(0).expect("zero drain budget").is_none());
+        for _ in 0..=source_frames {
+            renderer.prepare(spec());
+            let Some(output) = renderer.drain(budget).expect("bounded native drain") else {
+                break;
+            };
+            assert!(output.frames() > 0 && output.frames() <= budget);
+            assert_eq!(output.meta.visible_origin, Some(Duration::ZERO));
+            assert_eq!(output.meta.source_revision, 7);
+            assert_positions(&output, frame, source_at);
+            frame += output.frames();
+            samples.extend_from_slice(&output.samples);
+        }
+        let source_end = frame_f64(source_frames);
+        let expected = (0..source_frames)
+            .take_while(|&frame| source_at(frame) < source_end)
+            .count();
+        assert_eq!(
+            frame, expected,
+            "only source-supported output frames survive EOF"
+        );
+        assert!(frame < usize::try_from(CURVE_FRAMES).expect("ramp duration"));
+        assert!(source_at(frame - 1) < source_end && source_at(frame) >= source_end);
+        assert!(samples.iter().all(|sample| sample.is_finite()));
+        renderer.prepare(spec());
+        assert!(renderer.drain(1).expect("exhausted drain").is_none());
+        (source_frames, samples)
+    };
+    for short in [true, false] {
+        let reference = render(short, 128);
+        for budget in [1, 7] {
+            assert_eq!(
+                render(short, budget),
+                reference,
+                "drain budget={budget}, short={short}"
+            );
+        }
+    }
+}

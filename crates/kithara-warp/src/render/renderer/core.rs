@@ -119,9 +119,10 @@ pub struct WarpRenderer<S> {
     pub(in crate::render) backend_transition_pending: bool,
     /// The audible side retires on the next prepare and the engine re-primes.
     pub(in crate::render) reprime_pending: bool,
-    /// A retired stateless side whose continuation the next mapped render
-    /// samples from the residency into the replacement.
-    pub(in crate::render) stateless_tail_owed: bool,
+    /// Retired stateless law sampled from the residency on the next mapped render.
+    pub(in crate::render) stateless_tail_owed: Option<Trajectory>,
+    /// Retired control metadata awaiting scheduler-side destruction.
+    pub(in crate::render) deferred_trajectory: Option<Trajectory>,
     /// Source frame the engine reads next while it trails the decoded frontier
     /// after a prime; the residency holds every frame from it on.
     pub(in crate::render) resident_feed: Option<u64>,
@@ -202,7 +203,8 @@ where
             requested_keylock,
             backend_transition_pending: false,
             reprime_pending: false,
-            stateless_tail_owed: false,
+            stateless_tail_owed: None,
+            deferred_trajectory: None,
             resident_feed: None,
             pools,
             spec,
@@ -233,14 +235,14 @@ where
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
-    /// Output latency of the installed engine, even before activation.
+    /// Output latency of the installed engine, or zero for unity passthrough.
     ///
     /// Returns zero when no engine is installed. During a transition this is
     /// the outgoing engine's latency; use [`Self::prepare_engine_latency`] for
     /// the requested engine's after-state.
     #[must_use]
     pub fn engine_latency(&self) -> FrameCount {
-        if self.keylocked_unity() && !self.active {
+        if self.keylocked_unity() {
             return FrameCount::new(0);
         }
         FrameCount::new(self.engine.as_ref().map_or(0, |engine| {
@@ -258,8 +260,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 
     /// Prepare the requested engine and report its output latency.
     ///
-    /// Retires an outgoing engine into the crossfade without emitting PCM or
-    /// advancing the rendered source frontier, then installs the target.
+    /// Installs the target without advancing the rendered source frontier.
+    /// A native-to-unity retirement waits for source-window preparation so
+    /// unrendered controls can still replace it without discarding live state.
     ///
     /// # Errors
     /// Returns [`WarpRenderError::NeedsService`] if previously queued unity
@@ -275,6 +278,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.prepare(spec);
         if self.pending_unity_meta.is_some() {
             return Err(WarpRenderError::NeedsService);
+        }
+        if self.unity_retirement_pending() {
+            self.reprime_pending = false;
+            return Ok(FrameCount::new(0));
         }
         if self.reprime_pending || self.backend_transition_pending {
             self.retire_for_reprime()?;
@@ -295,6 +302,18 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             }
         }
         Ok(self.engine_latency())
+    }
+
+    pub(in crate::render) fn unity_retirement_pending(&self) -> bool {
+        self.active
+            && !self.trajectory.requires_quanta()
+            && self.mapped_render
+            && self.current_keylock
+            && self.keylocked_unity()
+            && self.stretch_target() == (self.current_kind, self.current_keylock)
+            && !self.backend_transition_pending
+            && !self.reset_pending
+            && !self.rebuild_pending
     }
 
     /// Whether the renderer can accept another source chunk without dropping it.
@@ -366,6 +385,11 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             scratch.clear();
         }
         self.clear_pending_source();
+        if let Some(projection) = self.projection.as_mut() {
+            projection.feed = None;
+            projection.audible = None;
+            projection.cached_span = None;
+        }
         self.last_input_meta = None;
         self.output_start_meta = None;
         self.applied_pitch = f64::NAN;
@@ -381,7 +405,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.trajectory.reset();
         self.mapped_render = false;
         self.terminal_source_end = None;
-        self.stateless_tail_owed = false;
+        if let Some(retired) = self.stateless_tail_owed.take() {
+            debug_assert!(self.deferred_trajectory.is_none());
+            self.deferred_trajectory = Some(retired);
+        }
     }
 
     /// The single place a render becomes the committed one, so every committed
@@ -746,9 +773,16 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// that exceed the checked rational representation. Rejection changes no state.
     pub fn set_speed(&mut self, curve: SpeedCurve, revision: u64) -> Result<(), WarpRenderError> {
         let was_unity = self.mapped_render && self.keylocked_unity();
-        let target = RateTarget::new(self.trajectory.replace(curve)?, revision);
+        let mut trajectory = self.trajectory.clone();
+        let target = RateTarget::new(trajectory.replace(curve)?, revision);
+        let continues_native = self.can_continue_native(&trajectory)?;
+        if was_unity && !self.active && !trajectory.constant_unity() {
+            self.stateless_tail_owed
+                .get_or_insert_with(|| self.trajectory.clone());
+        }
+        self.trajectory = trajectory;
         let leaves_unity = was_unity && !self.keylocked_unity();
-        self.reprime_pending |= (self.active || leaves_unity)
+        let needs_reprime = (self.active || leaves_unity)
             && (self.mapped_render || !self.unity_passthrough(target.speed()))
             && self
                 .stretch_target()
@@ -759,6 +793,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .engine
                 .as_ref()
                 .is_some_and(|engine| engine.capabilities().latency().first() > 0);
+        self.reprime_pending = !continues_native && (self.reprime_pending || needs_reprime);
         self.rate = target;
         self.prepared_quantum = None;
         Ok(())
