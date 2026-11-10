@@ -346,7 +346,7 @@ fn a_tempo_staged_in_the_pass_of_a_rate_change_lands_on_the_new_axis_and_its_map
     route_loss(RouteLossProbe::reset);
 
     let mut state = test_state(start_route_loss_stream);
-    insert(&mut state);
+    insert_neutral_low_rate(&mut state);
     let mut clock = 0;
     render_left(&mut state, &mut clock, 8);
     let tempo = Tempo::new(90.0).expect("a fixture tempo is in range");
@@ -426,7 +426,7 @@ fn a_tempo_asked_after_a_rate_change_before_the_new_stream_renders_lands_on_its_
     route_loss(RouteLossProbe::reset);
 
     let mut state = test_state(start_route_loss_stream);
-    insert(&mut state);
+    insert_neutral_low_rate(&mut state);
     let mut clock = 0;
     render_left(&mut state, &mut clock, 8);
     configure_sample_rate(&mut state, 22_050);

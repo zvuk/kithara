@@ -1,3 +1,5 @@
+use kithara_play::DeckMixerConfig;
+
 use super::*;
 pub(super) use crate::mock::{
     Command, TestState, ask, constant_fixture, deck_snapshot, fixture_command, fixture_pass,
@@ -128,6 +130,25 @@ pub(super) fn insert(state: &mut TestState) -> BeatGridId {
         Ok(_) => grid_id,
         Err(err) => panic!("the deck failed to start: {err}"),
     }
+}
+
+/// Three neutral bands remain valid at the tempo fixtures' lowest sample rate.
+pub(super) fn insert_neutral_low_rate(state: &mut TestState) -> BeatGridId {
+    let id = BeatGridId::allocate().expect("fixture player grid id");
+    let prep = ResourcePrep::builder()
+        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .build();
+    let mixer = DeckMixerConfig::builder().eq_bands(3).build();
+    let config = QueueConfig::builder().prep(prep).mixer(mixer).build();
+    ask(
+        state,
+        HostCommand::Register {
+            id,
+            deck: Box::new(Queue::new(config)),
+        },
+    )
+    .expect("neutral low-rate deck starts");
+    id
 }
 
 /// Stops the deck `grid_id` and removes it from the session.
