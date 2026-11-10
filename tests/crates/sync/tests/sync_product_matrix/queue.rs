@@ -2817,11 +2817,13 @@ async fn capture_music(
         opens, 5,
         "five Loads correspond to exactly five real source opens"
     );
+    tracing::info!(target: "kithara_test::sync::queue321", phase = "source_open_census_complete");
     assert!(
         data.output_delta > 0.0,
         "Output WAV carries actual Host metronome separately from Master"
     );
     let final_grid = case.host.session_grid().await;
+    tracing::info!(target: "kithara_test::sync::queue321", phase = "host_grid_complete");
     let voices = std::mem::take(&mut case.voices);
     let mixer = case.mixer;
     let metronome = case.metronome;
@@ -2858,6 +2860,7 @@ async fn capture_music(
             })
             .collect::<Vec<_>>()
     });
+    tracing::info!(target: "kithara_test::sync::queue321", phase = "queue_laws_complete");
     data.supplied_grid_shift_rejected = case.deck.observe(|o| {
         let voice = &voices[2];
         let mut displaced = voice.model.as_raw().clone();
@@ -2894,9 +2897,11 @@ async fn capture_music(
         )
         .is_err()
     });
+    tracing::info!(target: "kithara_test::sync::queue321", phase = "negative_grid_complete");
     hang_reset!();
     let (voices, data, capture, interval_count, required_beats, final_checks, failures) =
         kithara::platform::tokio::task::spawn_blocking(move || {
+            tracing::info!(target: "kithara_test::sync::queue321", phase = "reference_task_begin");
             let consumed: BTreeMap<_, _> = voices
                 .iter()
                 .map(|voice| {
