@@ -38,6 +38,7 @@ pub(crate) struct ProductHarness {
     _trace: usdt_trace::Scope,
     output_frames: u64,
     provider: Provider,
+    grids: Vec<Arc<BeatGridModel>>,
     worker: PlayWorker<TestPools>,
     trajectory: TempoTrajectory,
     operation_grid: Option<kithara::warp::BeatGridSnapshot>,
@@ -411,9 +412,11 @@ mod artifact {
         audible: Audible,
         stream: &str,
     ) -> AudioArtifactTap {
-        let default_root = std::env::current_exe()
-            .unwrap_or_else(|error| panic!("{}: locate the test executable: {error}", case.id))
-            .with_file_name("audio-artifacts");
+        let default_root = std::env::current_dir()
+            .unwrap_or_else(|error| {
+                panic!("{}: locate the test working directory: {error}", case.id)
+            })
+            .join(".ci-artifacts/audio");
         let mut tap = AudioArtifactTap::from_env_or(
             &default_root,
             &format!(
@@ -485,9 +488,9 @@ impl ProductHarness {
         block_frames: usize,
         decoder: Option<DecoderBackend>,
     ) -> Self {
-        let provider = prepared.0;
+        let provider = prepared.provider();
         let sources: Vec<_> = prepared
-            .2
+            .paths
             .iter()
             .cycle()
             .take(case.decks)
@@ -559,11 +562,11 @@ impl ProductHarness {
                 ResourceSrc::parse(&source)
                     .unwrap_or_else(|error| panic!("{}: parse source {source}: {error}", case.id)),
             )
-            .downloader(prepared.1.modeled_downloader())
+            .downloader(prepared.server.modeled_downloader())
             .store(memory_asset_store())
             .initial_abr_mode(AbrMode::manual(0))
             .discriminator(format!("{}-{provider:?}-{index}", case.id))
-            .maybe_beat_grid(case.gridded.then(|| provider.beat_grid(index)));
+            .maybe_beat_grid(case.gridded.then(|| prepared.beat_grid(index)));
             let events = EventBus::default();
             decoder_receivers.push(events.subscribe::<DecoderEvent>());
             let config = config.events(events);
@@ -599,6 +602,7 @@ impl ProductHarness {
             master,
             output_frames,
             provider,
+            grids: prepared.grids().to_vec(),
             worker,
             trajectory,
             operation_grid: None,
@@ -609,7 +613,7 @@ impl ProductHarness {
             decoder_backends: Vec::new(),
             decoder_rates: Vec::new(),
             cues: (0..case.decks)
-                .map(|deck| provider.start_seconds(deck, start))
+                .map(|deck| prepared.start_seconds(deck, start))
                 .collect(),
             #[cfg(not(target_os = "android"))]
             tap: artifact::open_tap(case, provider, audible, "output"),
@@ -905,13 +909,13 @@ impl ProductHarness {
         self.settle(case, 2).await;
     }
 
-    delegate::delegate! {
-        to self.provider {
-            #[call(beat_grid)]
-            pub(crate) fn provider_grid(&self, deck: usize) -> ArtifactSource<BeatGridModel>;
-            /// The second deck `deck`'s track opens at for `start`.
-            pub(crate) fn start_seconds(&self, deck: usize, start: Start) -> f64;
-        }
+    pub(crate) fn provider_grid(&self, deck: usize) -> ArtifactSource<BeatGridModel> {
+        ArtifactSource::Value(self.grids[deck % self.grids.len()].clone())
+    }
+
+    pub(crate) fn start_seconds(&self, deck: usize, start: Start) -> f64 {
+        self.provider
+            .start_seconds(start, &self.grids[deck % self.grids.len()])
     }
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
@@ -1053,7 +1057,7 @@ impl ProductHarness {
         for (index, deck) in self.decks.iter().enumerate() {
             hang_tick!(format!("deliver_grids: deck {index}"));
             let item = deck.current().expect("selected item").id;
-            let ArtifactSource::Value(model) = self.provider.beat_grid(index) else {
+            let ArtifactSource::Value(model) = self.provider_grid(index) else {
                 panic!("fixture grid must be materialized")
             };
             let target = deck.id();
@@ -1109,7 +1113,7 @@ impl ProductHarness {
                 "deck {deck}: selected source differs from the requested provider URI"
             ));
         }
-        let ArtifactSource::Value(grid) = self.provider.beat_grid(deck) else {
+        let ArtifactSource::Value(grid) = self.provider_grid(deck) else {
             panic!("physical capture has a declared source grid");
         };
         let marks: Vec<_> = self
@@ -1160,7 +1164,7 @@ impl ProductHarness {
 
         let host_grid = self.host.session_grid().await;
         let source_rate = self.host.spec().await.sample_rate;
-        let ArtifactSource::Value(model) = self.provider.beat_grid(0) else {
+        let ArtifactSource::Value(model) = self.provider_grid(0) else {
             panic!("command has a declared source grid");
         };
         let deck = &self.decks[0];
@@ -1420,7 +1424,7 @@ impl ProductHarness {
                 case.sample_rate,
                 "the consumed DeckPass declares the grid evaluation axis"
             );
-            let ArtifactSource::Value(model) = self.provider.beat_grid(index) else {
+            let ArtifactSource::Value(model) = self.provider_grid(index) else {
                 panic!("materialized supplied source grid");
             };
             let (capture_frame, initial) = self
@@ -1469,6 +1473,7 @@ impl ProductHarness {
                     continue;
                 }
             }
+            let mut declared = super::binding::DeclaredSource::new(Arc::clone(&model));
             let law = deck.observe(|observation| -> Result<_, String> {
                 let mut history_failures = Vec::new();
                 super::binding::published_host_history(
@@ -1478,7 +1483,7 @@ impl ProductHarness {
                     &mut history_failures,
                 )?;
                 let (speed, mut law_failures, evidence, reference) = super::binding::executed_law(
-                    &model,
+                    &mut declared,
                     &host_grid,
                     observation,
                     &snapshot,
@@ -1551,7 +1556,7 @@ impl ProductHarness {
         let stagger_seconds = 3.0 / 8.0 * 60.0 / case.start_bpm();
         for (index, deck) in self.decks.iter().enumerate() {
             let item = deck.current().expect("selected anchor track").id;
-            let ArtifactSource::Value(model) = self.provider.beat_grid(index) else {
+            let ArtifactSource::Value(model) = self.provider_grid(index) else {
                 panic!("declared anchor source grid");
             };
             let stagger: f64 = index.as_();

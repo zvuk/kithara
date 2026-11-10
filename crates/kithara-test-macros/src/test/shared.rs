@@ -5,7 +5,7 @@
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Attribute, Expr, Ident};
+use syn::{Attribute, Expr, Ident, ext::IdentExt as _};
 
 use super::parse::TestArgs;
 
@@ -105,6 +105,19 @@ pub(crate) fn make_ambient_stmt(args: &TestArgs) -> TokenStream2 {
     }
 }
 
+pub(crate) fn make_clock_measurement_stmt(args: &TestArgs, fn_name: &Ident) -> TokenStream2 {
+    let name = fn_name.unraw().to_string();
+    let flash = args.flash.unwrap_or(true);
+    quote! {
+        #[cfg(not(target_arch = "wasm32"))]
+        let __kithara_clock_measurement =
+            ::kithara_test_utils::test::ClockMeasurement::start(
+                concat!(module_path!(), "::", #name),
+                #flash,
+            );
+    }
+}
+
 /// Native synchronous statements own credit after their ambient scope is installed.
 pub(crate) fn wrap_with_sync_participation(body: &TokenStream2, args: &TestArgs) -> TokenStream2 {
     if args.is_loom || args.flash == Some(false) {
@@ -171,13 +184,21 @@ pub(crate) fn make_prekill_guard(fn_name: &Ident) -> TokenStream2 {
     }
 }
 
-pub(crate) fn wrap_with_model(body: &TokenStream2, args: &TestArgs) -> TokenStream2 {
+pub(crate) fn wrap_with_model(
+    body: &TokenStream2,
+    args: &TestArgs,
+    fn_name: &Ident,
+) -> TokenStream2 {
     if !args.is_loom {
         return body.clone();
     }
+    let clock_measurement = make_clock_measurement_stmt(args, fn_name);
     quote! {
         {
-            ::kithara_test_utils::kithara_platform::__private::model(move || { #body })
+            ::kithara_test_utils::kithara_platform::__private::model(move || {
+                #clock_measurement
+                #body
+            })
         }
     }
 }
@@ -394,8 +415,7 @@ pub(crate) fn wrap_with_soft_fail(
     }
 }
 
-/// Combine the hang-budget guard and optional soft-fail wrapping around an
-/// already-timeout-wrapped body.
+/// Combine native clock measurement, hang budget and optional soft-fail wrapping.
 pub(crate) fn finalize_body(
     inner: &TokenStream2,
     args: &TestArgs,
@@ -403,14 +423,17 @@ pub(crate) fn finalize_body(
     is_async: bool,
 ) -> TokenStream2 {
     let hang_budget = make_hang_budget(args.hang_timeout_secs);
-    if !args.soft_fail_patterns.is_empty() {
-        let soft = wrap_with_soft_fail(inner, fn_name, is_async, &args.soft_fail_patterns);
-        quote! { { #hang_budget #soft } }
-    } else if args.hang_timeout_secs.is_some() {
-        quote! { { #hang_budget #inner } }
+    let clock_measurement = if args.is_loom {
+        TokenStream2::new()
     } else {
+        make_clock_measurement_stmt(args, fn_name)
+    };
+    let body = if args.soft_fail_patterns.is_empty() {
         inner.clone()
-    }
+    } else {
+        wrap_with_soft_fail(inner, fn_name, is_async, &args.soft_fail_patterns)
+    };
+    quote! { { #hang_budget #clock_measurement #body } }
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@ use kithara::{
     host::wasm,
     platform::{
         sync::mpsc,
-        thread::{self, assert_not_main_thread, keep_worker_alive},
+        thread::{assert_not_main_thread, keep_worker_alive},
         tokio::{self, sync::broadcast::error::RecvError, task::spawn as task_spawn},
     },
     play::{CrossfadeSettings, PlayError},
@@ -32,14 +32,14 @@ pub(super) fn worker_main(
     analysis_rx: mpsc::Receiver<AnalysisRequest>,
 ) {
     assert_not_main_thread(concat!(module_path!(), "::worker_main"));
+    tracing::debug!("web queue worker entered");
     keep_worker_alive();
-    tracing::debug!(thread = ?thread::current().id(), "Web queue Worker entered");
     task_spawn(async move {
+        tracing::debug!("web queue owner task started");
         let control = queue.control();
         let mut membership = control.subscribe::<QueueEvent>();
         crate::web::observer::source::spawn(&control);
         let mut host = wasm::remote_host(host_sender);
-        tracing::debug!(thread = ?thread::current().id(), "Web queue insertion started");
         let owner = match host.insert(queue) {
             Ok(owner) => owner,
             Err(error) => {
@@ -47,14 +47,13 @@ pub(super) fn worker_main(
                 return;
             }
         };
-        tracing::debug!(thread = ?thread::current().id(), "Web queue insertion returned");
+        tracing::debug!("web queue registration returned");
         let mut analysis = AnalysisRuns::new(pools);
         loop {
             tokio::select! {
                 request = analysis_rx.recv_async() => {
                     let Ok(request) = request else { break };
                     let AnalysisRequest { id, request_id, resources } = request;
-                    tracing::debug!(?id, ?request_id, "Web analysis request received");
                     if let Err(error) = analysis.start_queued(
                         &control, id, request_id, |url| resources.config(url).ok(),
                     ) {

@@ -188,6 +188,20 @@ impl CiLaneStep {
             _ => None,
         }
     }
+
+    pub(crate) fn miri_request<'a>(
+        &self,
+        lane: &CiLaneConfig,
+        args: &'a [String],
+    ) -> Option<&'a [String]> {
+        let program = self.program.as_deref().unwrap_or(lane.program.as_str());
+        match args {
+            [test, miri, request @ ..] if program == "just" && test == "test" && miri == "miri" => {
+                Some(request)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// What a lane leaves for a human or a later lane to read.

@@ -348,6 +348,11 @@ pub(super) fn park_after_outcome(
             *progress_streak += 1;
             if *progress_streak >= budgets.fairness_yield_interval.get() {
                 *progress_streak = 0;
+                kithara::probe_event!(
+                    fairness_yield,
+                    interval = u64::from(budgets.fairness_yield_interval.get()),
+                    audio_feed = u64::from(budgets.thread_class == ThreadClass::AudioFeed)
+                );
                 yield_runnable();
             }
         }

@@ -8,6 +8,47 @@ fn workspace_root() -> PathBuf {
 }
 
 #[test]
+fn publication_is_a_verified_gate_for_review_main_and_dispatch() {
+    let config = xtask_config();
+    let lane = &config["ext"]["ci"]["lanes"]["crates-publish"];
+    assert_eq!(lane["role"].as_str(), Some("gate"));
+    assert_eq!(lane["program"].as_str(), Some("just"));
+    assert_eq!(lane["cache_group"].as_str(), Some("host"));
+    let os: Vec<_> = lane["os"]
+        .as_array()
+        .expect("both publication executors")
+        .iter()
+        .map(|entry| entry.as_str().unwrap())
+        .collect();
+    assert_eq!(os, ["macos", "linux"]);
+    let kinds = lane["kinds_github"]
+        .as_array()
+        .expect("GitHub publication kinds");
+    for kind in ["branch", "merge-request", "main", "nightly"] {
+        assert!(
+            kinds.iter().any(|entry| entry.as_str() == Some(kind)),
+            "{kind}"
+        );
+    }
+    assert!(
+        lane["kinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|kind| kind.as_str() == Some("quarantine"))
+    );
+    let steps = lane["steps"].as_array().expect("publication steps");
+    assert_eq!(steps.len(), 1);
+    let args: Vec<_> = steps[0]["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| arg.as_str().unwrap())
+        .collect();
+    assert_eq!(args, ["release", "crates", "--dry-run"]);
+}
+
+#[test]
 fn config_reads_follow_the_running_checkout() {
     if std::env::var_os("KITHARA_LANE_CONFIG_RELOCATION_TEST").is_some() {
         assert_eq!(xtask_config()["relocated"].as_bool(), Some(true));

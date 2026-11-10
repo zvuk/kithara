@@ -84,7 +84,7 @@ pub(crate) fn run(cmd: WasmCommand, ctx: &Ctx) -> Result<()> {
     match cmd {
         WasmCommand::Test(args) => browser::run(&args, ctx),
         WasmCommand::Build { profile, package } => run_build(profile, package, tools),
-        WasmCommand::SizeCheck { profile } => run_size_check(profile, tools),
+        WasmCommand::SizeCheck { profile } => run_size_check(profile, tools, &ctx.root),
         WasmCommand::Doc => {
             let ext = KitharaExt::from_ctx(ctx)?;
             render_docs(&ctx.root.join(&ext.release.docs_channel("web")?.archive))
@@ -251,11 +251,15 @@ struct SlimConfig {
 /// and the crate declares it for every other one. Trunk already carries the
 /// right selection in `index.html`, so the check builds what ships and weighs
 /// that.
-fn run_size_check(profile: crate::BuildProfile, tools: &ToolsConfig) -> Result<()> {
+fn run_size_check(profile: crate::BuildProfile, tools: &ToolsConfig, root: &Path) -> Result<()> {
+    let report = root.join("target/wasm-slim-result.json");
+    if let Err(error) = fs::remove_file(&report)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(error).with_context(|| format!("removing previous {}", report.display()));
+    }
     run_build(profile, WebPackage::KitharaFfi, tools)?;
 
-    let metadata = MetadataCommand::new().exec().context("cargo metadata")?;
-    let root = metadata.workspace_root.as_std_path();
     let wasm_dir = root.join("crates/kithara-ffi");
     let config_path = wasm_dir.join(".wasm-slim.toml");
     let text = fs::read_to_string(&config_path)
@@ -267,7 +271,6 @@ fn run_size_check(profile: crate::BuildProfile, tools: &ToolsConfig) -> Result<(
     let bytes = directory_bytes(&dist)?;
     let kilobytes = bytes / 1024;
 
-    let report = root.join("target/wasm-slim-result.json");
     if let Some(parent) = report.parent() {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
@@ -413,6 +416,25 @@ fn run_postbuild(staging_dir: &str, package: WebPackage) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_size_build_removes_the_previous_measurement() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let report = root.join("target/wasm-slim-result.json");
+        fs::create_dir_all(report.parent().unwrap()).unwrap();
+        fs::write(&report, "{\"bundle_kb\":4201}").unwrap();
+        let tools: ToolsConfig = serde_json::from_value(serde_json::json!({
+            "trunk": { "program": root.join("missing-trunk") }
+        }))
+        .unwrap();
+
+        assert!(run_size_check(crate::BuildProfile::Release, &tools, root).is_err());
+        assert!(
+            !report.exists(),
+            "failed build retained an earlier size verdict"
+        );
+    }
 
     #[test]
     fn strip_integrity_and_crossorigin_attrs() {

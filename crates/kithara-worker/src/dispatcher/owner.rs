@@ -28,6 +28,8 @@ pub(super) struct DispatcherInner {
     pub(super) runtime: Option<Handle>,
     pub(super) cmd_tx: mpsc::Sender<Command>,
     pub(super) wake: Wake,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) thread: Option<kithara_platform::thread::JoinHandle<()>>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -122,5 +124,14 @@ impl DispatcherInner {
 impl Drop for DispatcherInner {
     fn drop(&mut self) {
         self.shutdown();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(runtime) = &self.runtime
+            && let Some(thread) = self.thread.take()
+        {
+            drop(kithara_platform::tokio::task::spawn_blocking_on(
+                runtime,
+                move || thread.join(),
+            ));
+        }
     }
 }

@@ -72,6 +72,13 @@ export async function holdBootstrapImports() {
 
 export function workletImports() { return moduleCalls; }
 export function bootstrapRequests() { return requests; }
+export async function bootstrapLocks() {
+    const snapshot = await navigator.locks.query();
+    return JSON.stringify({
+        held: snapshot.held.filter(lock => lock.name === key),
+        pending: snapshot.pending.filter(lock => lock.name === key),
+    });
+}
 export function audioContexts() {
     try {
         return JSON.stringify(contexts.map(({ context, transitions }) => ({

@@ -9,8 +9,9 @@ ARG CI_IMAGE
 FROM ${CI_IMAGE}
 
 ARG ACTIONS_RUNNER_AMD64_SHA256
+ARG ACTIONS_RUNNER_AMD64_URL
 ARG ACTIONS_RUNNER_ARM64_SHA256
-ARG ACTIONS_RUNNER_VERSION
+ARG ACTIONS_RUNNER_ARM64_URL
 
 # The runner is a .NET application and needs the ICU libraries at run time.
 #
@@ -36,13 +37,13 @@ USER runner
 WORKDIR /runner
 
 RUN case "$(dpkg --print-architecture)" in \
-      amd64) slice=x64; sum="${ACTIONS_RUNNER_AMD64_SHA256}" ;; \
-      arm64) slice=arm64; sum="${ACTIONS_RUNNER_ARM64_SHA256}" ;; \
+      amd64) url="${ACTIONS_RUNNER_AMD64_URL}"; sum="${ACTIONS_RUNNER_AMD64_SHA256}" ;; \
+      arm64) url="${ACTIONS_RUNNER_ARM64_URL}"; sum="${ACTIONS_RUNNER_ARM64_SHA256}" ;; \
       *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
     esac \
- && curl -fsSL \
+ && curl -fsSL -H 'Accept: application/octet-stream' \
       -o /tmp/runner.tar.gz \
-      "https://github.com/actions/runner/releases/download/v${ACTIONS_RUNNER_VERSION}/actions-runner-linux-${slice}-${ACTIONS_RUNNER_VERSION}.tar.gz" \
+      "${url}" \
  && echo "${sum}  /tmp/runner.tar.gz" | sha256sum -c - \
  && tar -xzf /tmp/runner.tar.gz -C /runner \
  && rm /tmp/runner.tar.gz

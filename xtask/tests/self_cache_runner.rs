@@ -199,6 +199,7 @@ exit 98
             .env("CI", "")
             .env("CI_JOB_ID", "")
             .env("GITHUB_RUN_ID", "")
+            .env_remove("KITHARA_BOOTSTRAP_TARGET")
             .env("PATH", self.fake_path().expect("fixture PATH"))
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
@@ -342,6 +343,7 @@ exit 98
             .env("CI_JOB_ID", "")
             .env("GITHUB_RUN_ID", "")
             .env_remove("KITHARA_XTASK_TARGET")
+            .env_remove("KITHARA_BOOTSTRAP_TARGET")
             .env(
                 "KACHE_HOST_CONFIG",
                 self._temp.path().join("kache-host.toml"),
@@ -803,6 +805,40 @@ fn ci_bootstrap_builds_where_the_executor_names() -> Result<()> {
     assert!(
         fs::read_to_string(&fixture.cargo_log)?.contains(&format!("target={}\n", xtask.display()))
     );
+    Ok(())
+}
+
+#[test]
+fn ci_lease_driver_builds_in_its_executor_owned_cache() -> Result<()> {
+    let host = Command::new("rustc")
+        .args(["--print", "host-tuple"])
+        .output()?;
+    assert_success(&host);
+    let host = String::from_utf8(host.stdout)?;
+    for (args, expected) in [
+        (&["_xtask", "exit-status", "0"][..], 0),
+        (&["_xtask-bootstrap", "--force"][..], 97),
+    ] {
+        let fixture = Fixture::new()?;
+        fixture.install_fake_transport()?;
+        let xtask = fixture._temp.path().join("builds/xtask");
+        let bootstrap = fixture._temp.path().join("builds/bootstrap cache");
+        let output = fixture
+            .just_command(&fixture.root, args)?
+            .env("CI", "true")
+            .env("KITHARA_XTASK_TARGET", &xtask)
+            .env("KITHARA_BOOTSTRAP_TARGET", &bootstrap)
+            .output()?;
+
+        assert_eq!(output.status.code(), Some(expected));
+        assert!(
+            bootstrap
+                .join(host.trim())
+                .join("debug/ci-bootstrap")
+                .is_file()
+        );
+        assert!(!fixture.root.join(".ci-bootstrap").exists());
+    }
     Ok(())
 }
 
