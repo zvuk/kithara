@@ -327,6 +327,58 @@ fn native_end(
         .expect("native terminal frame")
 }
 
+fn native_end_precludes_speed(
+    capture: Option<&LinkCapture>,
+    item: TrackId,
+    when: When<SessionFrame>,
+) -> bool {
+    let (Some(capture), When::At(at)) = (capture, when) else {
+        return false;
+    };
+    capture
+        .faded
+        .iter()
+        .chain(&capture.ended)
+        .any(|(owner, _, end)| *owner == item && at >= *end)
+}
+
+#[kithara::test]
+fn speed_settlement_retains_every_frame_before_the_native_end() {
+    let item = TrackId::allocate();
+    let other = TrackId::allocate();
+    let slot = Slot::new(0);
+    let end = SessionFrame::new(3_232_029);
+    let at = When::At(SessionFrame::new(3_232_283));
+    let mut capture = LinkCapture::default();
+    assert!(!native_end_precludes_speed(None, item, at));
+    capture
+        .fades
+        .push((item, slot, end, CrossfadeSettings::default(), FadeDir::Out));
+    assert!(!native_end_precludes_speed(Some(&capture), item, at));
+    capture.faded.push((other, slot, end));
+    assert!(!native_end_precludes_speed(Some(&capture), item, at));
+    capture.faded.push((item, slot, end));
+    assert!(native_end_precludes_speed(Some(&capture), item, at));
+    assert!(native_end_precludes_speed(
+        Some(&capture),
+        item,
+        When::At(end)
+    ));
+    assert!(!native_end_precludes_speed(
+        Some(&capture),
+        item,
+        When::At(SessionFrame::new(i64::from(end) - 1)),
+    ));
+    assert!(!native_end_precludes_speed(
+        Some(&capture),
+        item,
+        When::Next
+    ));
+    capture.faded.clear();
+    capture.ended.push((item, slot, end));
+    assert!(native_end_precludes_speed(Some(&capture), item, at));
+}
+
 fn voice_intervals(
     index: usize,
     voice: &Voice,
@@ -1405,6 +1457,7 @@ impl QueueMusic {
                                     | kithara::play::Settled::Rejected { seq, .. }
                                     if *seq == speed.seq)
                         })
+                        || native_end_precludes_speed(o.capture.as_ref(), speed.item, speed.at)
                 })
             });
             if !settled {
@@ -1418,7 +1471,34 @@ impl QueueMusic {
             settled
         })
         .await
-        .expect("due Lane commands must settle before checking the consumed boundary");
+        .unwrap_or_else(|error| {
+            let state = self.deck.observe(|observation| {
+                let speeds: Vec<_> = observation
+                    .speeds
+                    .iter()
+                    .map(|speed| {
+                        (
+                            speed.item,
+                            speed.seq,
+                            &speed.at,
+                            &speed.before.status,
+                            speed.consumed.as_ref().and_then(|slot| slot.mark),
+                        )
+                    })
+                    .collect();
+                let fades = observation
+                    .capture
+                    .as_ref()
+                    .map(|capture| (&capture.fades, &capture.faded, &capture.ended));
+                format!(
+                    "frame={now:?}; receipts={:?}; speeds={speeds:?}; fades={fades:?}; consumed={:?}",
+                    observation.placement_receipts, observation.consumed,
+                )
+            });
+            panic!(
+                "due Lane commands must settle before checking the consumed boundary: {error}; {state}"
+            );
+        });
         assert_eq!(
             self.host.position(),
             position,
@@ -3216,11 +3296,17 @@ async fn check_keylock_music(case: &mut QueueMusic, data: CapturedMusic) {
     })
     .await
     .expect("keylocked listening capture analysis must join");
-    for tap in [&mut case.output_wav, &mut case.master_wav]
-        .into_iter()
-        .flatten()
-    {
-        tap.evidence("queue_keylock_listening", final_checks.clone());
+    if case.output_wav.is_some() || case.master_wav.is_some() {
+        let owner_timeline = case
+            .deck
+            .observe(|owner| serde_json::Value::Array(owner.timeline_evidence().collect()));
+        for tap in [&mut case.output_wav, &mut case.master_wav]
+            .into_iter()
+            .flatten()
+        {
+            tap.evidence("queue_keylock_listening", final_checks.clone());
+            tap.evidence("queue_owner_timeline", owner_timeline.clone());
+        }
     }
     assert_eq!(
         final_checks["passed"], true,

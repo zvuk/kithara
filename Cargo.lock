@@ -5668,6 +5668,7 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "nix",
  "num-traits",
  "serde",
  "tracing",

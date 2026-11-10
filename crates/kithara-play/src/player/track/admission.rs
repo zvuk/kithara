@@ -320,6 +320,18 @@ impl<S> PlayerImpl<S> {
             }
             None => return Err(PlayError::Untimed),
         };
+        let at = LaneFrame {
+            segment: self.segment,
+            frame,
+        };
+        let initial_bits = self.segment_speed.to_bits();
+        if let Some(projection) = self.speed_projection.get()
+            && projection.at == at
+            && projection.initial_bits == initial_bits
+            && projection.declick == self.declick
+        {
+            return Ok(projection.speed);
+        }
         let commands = self.planned_changes(self.segment, false)?;
         let commands = &commands[..commands.partition_point(|(at, _, _)| *at <= frame)];
 
@@ -348,9 +360,16 @@ impl<S> PlayerImpl<S> {
                 start = *at;
             }
         }
-        curve_speed(curve, origin, frame.saturating_sub(start))?
+        let speed = curve_speed(curve, origin, frame.saturating_sub(start))?
             .to_f32()
-            .ok_or(PlayError::Untimed)
+            .ok_or(PlayError::Untimed)?;
+        self.speed_projection.set(Some(SpeedProjection {
+            at,
+            initial_bits,
+            declick: self.declick,
+            speed,
+        }));
+        Ok(speed)
     }
 
     pub(super) fn planned_changes(

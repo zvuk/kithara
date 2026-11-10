@@ -388,6 +388,7 @@ impl<S> PlayerImpl<S> {
     }
 
     fn apply_lane(&mut self, seq: Seq, at: LaneFrame, data: &LaneApplied, segment: bool) {
+        self.speed_projection.set(None);
         let operations = self
             .lane_commands
             .iter_mut()
@@ -450,6 +451,7 @@ impl<S> PlayerImpl<S> {
             if let Outcome::Applied { at, data } = receipt.outcome() {
                 self.apply_lane(receipt.seq(), *at, data, segment);
             } else if let Outcome::Rejected(reason) = receipt.outcome() {
+                self.speed_projection.set(None);
                 let mut speed = false;
                 for operation in self
                     .lane_commands

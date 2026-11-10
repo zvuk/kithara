@@ -398,8 +398,11 @@ fn terminal_tick_flushes_deferred_work_before_slot_removal() {
 
 #[kithara::test(flash(false))]
 fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
+    #[cfg(not(target_arch = "wasm32"))]
+    let trace = kithara_test_utils::test::usdt::scope();
     let wake = Wake::default();
     let mut configured = budgets();
+    configured.thread_class = kithara_platform::thread::ThreadClass::AudioFeed;
     configured.fairness_yield_interval = NonZeroU32::new(3).expect("nonzero");
     configured.backpressure_poll_interval = Duration::ZERO;
     configured.idle_timeout = Duration::ZERO;
@@ -419,6 +422,8 @@ fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
         &mut streak,
     );
     assert_eq!(streak, 2);
+    #[cfg(not(target_arch = "wasm32"))]
+    assert!(trace.events_of("fairness_yield").is_empty());
     park_after_outcome(
         &wake,
         &configured,
@@ -426,6 +431,13 @@ fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
         &mut streak,
     );
     assert_eq!(streak, 0);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let firings = trace.events_of("fairness_yield");
+        assert_eq!(firings.len(), 1);
+        assert_eq!(firings[0].field("interval"), Some(3));
+        assert_eq!(firings[0].field("audio_feed"), Some(1));
+    }
 
     for outcome in [
         PassOutcome::Waiting,
@@ -437,6 +449,8 @@ fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
         park_after_outcome(&wake, &configured, pass_report(outcome), &mut streak);
         assert_eq!(streak, 0, "{outcome:?} must reset the progress streak");
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    assert_eq!(trace.events_of("fairness_yield").len(), 1);
 }
 
 #[kithara::test(native, flash(true), timeout(Duration::from_secs(10)))]
