@@ -145,7 +145,7 @@ pub(super) fn bench(c: &mut Criterion) {
                                 prepare(&harness).await;
                                 submit(&harness, shape, frames).await;
                                 let _ = harness.render(PRELUDE).await;
-                            })
+                            });
                         },
                         |()| {
                             last = rt.block_on(harness.render(frames));
