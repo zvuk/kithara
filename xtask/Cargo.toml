@@ -133,6 +133,10 @@ name = "portable_policy"
 required-features = ["cli"]
 
 [[test]]
+name = "measure_child"
+required-features = ["cli"]
+
+[[test]]
 name = "self_cache_runner"
 required-features = ["cli"]
 

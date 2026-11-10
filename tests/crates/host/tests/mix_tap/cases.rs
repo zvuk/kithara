@@ -153,9 +153,167 @@ async fn deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
     deck_eq_format_change(true).await;
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(
+    tokio,
+    tracing(
+        "kithara_render_probe=trace,kithara_decode_probe=trace,kithara_audio_probe=trace,kithara_worker_probe=trace,kithara_test::host_rate_telemetry=info,host_rate_feed_intervals=info,warp_target_cost=debug"
+    )
+)]
 async fn nonblocking_deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
+    #[cfg(not(any(feature = "flash", feature = "no-block", rtsan)))]
+    let sampling = kithara::platform::tokio::task::spawn(trace_native_feeds());
     deck_eq_format_change(false).await;
+    #[cfg(not(any(feature = "flash", feature = "no-block", rtsan)))]
+    {
+        sampling.abort();
+        let _ = sampling.await;
+    }
+}
+
+#[cfg(not(any(feature = "flash", feature = "no-block", rtsan)))]
+async fn trace_native_feeds() {
+    use std::fs;
+
+    use kithara::platform::time::{self, Duration, WallInstant};
+
+    let started = WallInstant::now();
+    for sample in 0..1024 {
+        let Ok(tasks) = fs::read_dir("/proc/self/task") else {
+            return;
+        };
+        for task in tasks.take(128).flatten() {
+            let path = task.path();
+            let Ok(name) = fs::read_to_string(path.join("comm")) else {
+                continue;
+            };
+            if !name.starts_with("kithara-play-") && !name.starts_with("kithara-native-") {
+                continue;
+            }
+            let read = |field| {
+                fs::read_to_string(path.join(field)).map_or_else(
+                    |error| format!("unavailable: {error}"),
+                    |value| value.trim().to_owned(),
+                )
+            };
+            let read_start_ns = started.elapsed().as_nanos();
+            let stat = read("stat");
+            let schedstat = read("schedstat");
+            let syscall = read("syscall");
+            let wchan = read("wchan");
+            let cpu_read_start_ns = started.elapsed().as_nanos();
+            #[cfg(target_os = "linux")]
+            let live_cpu_ns = native_thread_cpu_ns(&task.file_name().to_string_lossy());
+            #[cfg(not(target_os = "linux"))]
+            let live_cpu_ns: Option<u128> = None;
+            let cpu_read_end_ns = started.elapsed().as_nanos();
+            tracing::info!(
+                target: "host_rate_feed_intervals",
+                sample,
+                read_start_ns,
+                elapsed_ns = started.elapsed().as_nanos(),
+                tid = %task.file_name().to_string_lossy(),
+                thread = name.trim(),
+                stat, schedstat, syscall, wchan,
+                cpu_read_start_ns,
+                cpu_read_end_ns,
+                live_cpu_ns = ?live_cpu_ns,
+                "native feed interval snapshot"
+            );
+        }
+        time::sleep(Duration::from_millis(2)).await;
+    }
+    tracing::info!(
+        target: "host_rate_feed_intervals",
+        "native feed interval snapshot limit reached"
+    );
+}
+
+#[cfg(all(
+    target_os = "linux",
+    not(any(feature = "flash", feature = "no-block", rtsan))
+))]
+fn native_thread_cpu_ns(tid: &str) -> Option<u128> {
+    let tid: i32 = tid.parse().ok()?;
+    if tid <= 0 || tid > i32::MAX >> 3 {
+        return None;
+    }
+    // Linux encodes the TID above the per-thread scheduler-clock selector bits.
+    let time = nix::time::ClockId::from_raw((!tid << 3) | 6).now().ok()?;
+    u128::try_from(time.tv_sec())
+        .ok()?
+        .checked_mul(1_000_000_000)?
+        .checked_add(u128::try_from(time.tv_nsec()).ok()?)
+}
+
+#[cfg(all(
+    target_os = "linux",
+    not(any(feature = "flash", feature = "no-block", rtsan))
+))]
+#[kithara::test(native)]
+fn native_cpu_clock_observes_the_selected_worker() {
+    use std::{fs, hint::black_box, sync::mpsc};
+
+    use kithara::platform::{
+        thread,
+        time::{Duration, ThreadTime},
+    };
+
+    let burn_cpu = || {
+        let start = ThreadTime::try_now().expect("current thread CPU clock");
+        while start.elapsed() < Duration::from_millis(20) {
+            black_box(7_u64.wrapping_mul(6_364_136_223_846_793_005));
+        }
+    };
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let worker = thread::spawn_named("cpu-clock-witness", move || {
+        let path = fs::read_link("/proc/thread-self").expect("worker proc identity");
+        let tid = path
+            .file_name()
+            .expect("worker TID")
+            .to_string_lossy()
+            .into_owned();
+        ready_tx.send(tid).expect("publish worker identity");
+        go_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("start worker CPU interval");
+        burn_cpu();
+        done_tx.send(()).expect("worker CPU interval ends");
+        release_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("retain live worker through reading");
+    });
+    let tid = ready_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("worker starts");
+    let parked_start = native_thread_cpu_ns(&tid).expect("live worker CPU clock");
+    burn_cpu();
+    let parked_end = native_thread_cpu_ns(&tid).expect("parked worker CPU clock");
+    assert!(
+        parked_end - parked_start < 2_000_000,
+        "sampler CPU must not enter the worker clock"
+    );
+    let sampler_start = ThreadTime::try_now().expect("sampler CPU clock");
+    go_tx.send(()).expect("start worker CPU use");
+    done_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("worker finishes CPU use");
+    let worker_end = native_thread_cpu_ns(&tid).expect("worker remains live");
+    assert!(
+        worker_end - parked_end >= 20_000_000,
+        "observe actual worker CPU use"
+    );
+    assert!(
+        sampler_start.elapsed() < Duration::from_millis(10),
+        "worker CPU must not enter the sampler clock"
+    );
+    release_tx.send(()).expect("release worker");
+    worker.join().expect("worker exits");
+    for invalid in ["", "0", "-1", "2147483647", "not-a-tid"] {
+        assert_eq!(native_thread_cpu_ns(invalid), None);
+    }
 }
 
 async fn deck_eq_format_change(block_on_underrun: bool) {
@@ -191,8 +349,9 @@ async fn deck_eq_format_change(block_on_underrun: bool) {
     )
     .await;
     let _ = render_effect_window(&harness, 4096).await;
-    assert_eq!(harness.metrics().underruns(), 0, "initial deck playback");
-    underruns.checkpoint(harness.metrics(), true, "initial ready playback");
+    let metrics = harness.metrics();
+    underruns.checkpoint(metrics, true, "initial ready playback");
+    assert_eq!(metrics.underruns(), 0, "initial deck playback");
     assert_eq!(harness.player().eq_gain(1), Some(6.0));
     let mut tap = harness
         .host()
