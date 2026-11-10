@@ -131,13 +131,6 @@ fn run_dry_run(order: &[String], hack_crate: &str, no_verify: bool) -> Result<()
     })
 }
 
-/// The version a dry run gives the workspace. `cargo publish --workspace`
-/// verifies each package against a local overlay of the others, but a version
-/// crates.io already holds resolves to the registry copy, so the branch's own
-/// cross-crate API would be checked against the last release. No release sits
-/// below `0.0.1`, so a requirement on this version only matches the overlay.
-const UNRELEASED_VERSION: &str = "0.0.0-unreleased";
-
 /// The version the publishable members share, and every manifest that can
 /// spell it: the root manifest and each member's.
 fn locate_workspace_versions() -> Result<(String, Vec<PathBuf>)> {
@@ -183,13 +176,13 @@ fn locate_workspace_versions() -> Result<(String, Vec<PathBuf>)> {
 }
 
 /// `manifest` with every quoted `released` version replaced by
-/// [`UNRELEASED_VERSION`], or `None` when it never spells it.
+/// [`consts::UNRELEASED_VERSION`], or `None` when it never spells it.
 fn unreleased_manifest(manifest: &str, released: &str) -> Option<String> {
     let mut prepared = manifest.to_owned();
     for quote in ['"', '\''] {
         prepared = prepared.replace(
             &format!("{quote}{released}{quote}"),
-            &format!("{quote}{UNRELEASED_VERSION}{quote}"),
+            &format!("{quote}{consts::UNRELEASED_VERSION}{quote}"),
         );
     }
     (prepared != manifest).then_some(prepared)
@@ -843,15 +836,15 @@ other = "10.0.1-alpha5"
 "#;
         let prepared = unreleased_manifest(manifest, "0.0.1-alpha5").unwrap();
         assert_eq!(
-            prepared.matches(UNRELEASED_VERSION).count(),
+            prepared.matches(consts::UNRELEASED_VERSION).count(),
             3,
             "{prepared}"
         );
         assert!(prepared.contains(r#""10.0.1-alpha5""#), "{prepared}");
         assert!(unreleased_manifest("[package]\nversion = \"9.9.9\"\n", "0.0.1-alpha5").is_none());
 
-        let unreleased = semver::Version::parse(UNRELEASED_VERSION).unwrap();
-        let requirement = semver::VersionReq::parse(UNRELEASED_VERSION).unwrap();
+        let unreleased = semver::Version::parse(consts::UNRELEASED_VERSION).unwrap();
+        let requirement = semver::VersionReq::parse(consts::UNRELEASED_VERSION).unwrap();
         assert!(requirement.matches(&unreleased));
         for release in ["0.0.1-alpha.0", "0.0.1-alpha5", "0.0.1", "0.1.0"] {
             assert!(!requirement.matches(&semver::Version::parse(release).unwrap()));
@@ -863,7 +856,7 @@ other = "10.0.1-alpha5"
             fs::write(&path, manifest).unwrap();
             let result =
                 with_unreleased_version(std::slice::from_ref(&path), "0.0.1-alpha5", || {
-                    assert!(fs::read_to_string(&path)?.contains(UNRELEASED_VERSION));
+                    assert!(fs::read_to_string(&path)?.contains(consts::UNRELEASED_VERSION));
                     if succeeds {
                         Ok(())
                     } else {
