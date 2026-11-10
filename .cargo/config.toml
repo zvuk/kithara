@@ -62,28 +62,19 @@ rustflags = [
 # Cargo also applies these pins when a tool builds an external manifest from
 # this workspace, including the temporary consumer used by semver-checks.
 [patch.crates-io]
-# wasmtimer replaces the unmaintained pin-utils projection dependency.
-wasmtimer = { git = "https://github.com/gerasim13/wasmtimer-rs", rev = "c5d137cead6335f9398226a1af55ae75bad30d60" }
 # Worklet and worker imports share the same origin-wide bootstrap admission.
 firewheel-web-audio = { git = "https://github.com/gerasim13/bevy_seedling", rev = "016e91daa4fa89dcc61e7b055ba3187ac7d65f66" }
 # The renderer's bump-allocated buffers are hand-picked constants sized for
 # vello's own 8K test scenes, so a window pays 165 MiB on its first frame
-# whatever it draws. The fork derives them from the frame instead and makes
-# `DebugLayers` nameable so the sizes can be checked. Upstream at
+# whatever it draws. The encoding fork derives them from the frame. Upstream at
 # linebender/vello; drop this once it lands.
-vello = { git = "https://github.com/gerasim13/vello", rev = "b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431" }
 vello_encoding = { git = "https://github.com/gerasim13/vello", rev = "b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431" }
-vello_shaders = { git = "https://github.com/gerasim13/vello", rev = "b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431" }
 # Firefox loses a module request when two browser workers load the same
 # module graph at once, so a thread spawned next to another never starts. The
 # fork holds a Web Lock across the worker bootstrap import; drop this once
 # upstream drewcrawford/wasm_safe_thread serialises the bootstrap itself.
 wasm_safe_thread = { git = "https://github.com/gerasim13/wasm_safe_thread", rev = "02470f5b4094773daba114639e0ff02951da5a62" }
-btls-sys = { git = "https://github.com/0x676e67/btls", rev = "ac7fe822bb1a3386c0ef0b44b4784a9429ba9903" }
 
 # Askama 0.14 config parsing uses the maintained toml parser; remove this
 # patch when UniFFI's Askama dependency drops basic-toml upstream.
 askama_derive = { git = "https://github.com/gerasim13/askama", rev = "8031efd8e5089b654bd9e750cb367a594d6edf7e" }
-
-# The upstream WebSocket TLS adapter still selects the deprecated roots shim.
-tokio-tungstenite = { git = "https://github.com/gerasim13/tokio-tungstenite", rev = "5a3397227ea4bfaca922fda85168ecdc733ac622" }

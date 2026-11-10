@@ -408,9 +408,11 @@ mod artifact {
         audible: Audible,
         stream: &str,
     ) -> AudioArtifactTap {
-        let default_root = std::env::current_exe()
-            .unwrap_or_else(|error| panic!("{}: locate the test executable: {error}", case.id))
-            .with_file_name("audio-artifacts");
+        let default_root = std::env::current_dir()
+            .unwrap_or_else(|error| {
+                panic!("{}: locate the test working directory: {error}", case.id)
+            })
+            .join(".ci-artifacts/audio");
         let mut tap = AudioArtifactTap::from_env_or(
             &default_root,
             &format!(
@@ -1466,6 +1468,7 @@ impl ProductHarness {
                     continue;
                 }
             }
+            let mut declared = super::binding::DeclaredSource::new(Arc::clone(&model));
             let law = deck.observe(|observation| -> Result<_, String> {
                 let mut history_failures = Vec::new();
                 super::binding::published_host_history(
@@ -1475,7 +1478,7 @@ impl ProductHarness {
                     &mut history_failures,
                 )?;
                 let (speed, mut law_failures, evidence, reference) = super::binding::executed_law(
-                    &model,
+                    &mut declared,
                     &host_grid,
                     observation,
                     &snapshot,

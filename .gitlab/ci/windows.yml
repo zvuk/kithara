@@ -18,6 +18,7 @@
     paths:
       - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - target/nextest/ci/junit.xml
+      - "tests/crates/sync/.ci-artifacts/audio/"
 
 windows:arm64:
   extends: .windows-suite

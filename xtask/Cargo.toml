@@ -34,7 +34,6 @@ cli = [
     "dep:filetime",
     "dep:fs4",
     "dep:glob",
-    "dep:hex",
     "dep:humantime",
     "dep:plist",
     "dep:regex",
@@ -43,7 +42,6 @@ cli = [
     "dep:rustdoc-types",
     "dep:serde",
     "dep:serde_yaml_ng",
-    "dep:sha2",
     "dep:signal-hook",
     "dep:tiny_http",
     "dep:toml",
@@ -65,7 +63,7 @@ fieldwork = { workspace = true, optional = true }
 filetime = { workspace = true, optional = true }
 fs4 = { workspace = true, optional = true }
 glob = { workspace = true, optional = true }
-hex = { workspace = true, optional = true }
+hex = { workspace = true }
 humantime = { workspace = true, optional = true }
 plist = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
@@ -75,7 +73,7 @@ rustdoc-types = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true, optional = true }
-sha2 = { workspace = true, optional = true }
+sha2 = { workspace = true }
 signal-hook = { workspace = true, optional = true }
 tempfile = { workspace = true }
 tiny_http = { workspace = true, optional = true }

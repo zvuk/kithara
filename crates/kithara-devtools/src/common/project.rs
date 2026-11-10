@@ -901,6 +901,8 @@ pub struct StressModeConfig {
     /// lane's own.
     pub no_block: Option<bool>,
     pub load: Option<bool>,
+    /// Nextest concurrency for this lane mode; unset inherits the run's budget.
+    pub test_threads: Option<String>,
     /// Whether the command performs the run's repeats itself.
     ///
     /// A command that runs its tests under nextest can be handed the count
@@ -1014,7 +1016,11 @@ impl StressConfig {
         require_value("stress.nextest_config", &self.nextest_config)?;
         require_value("stress.nextest_profile", &self.nextest_profile)?;
         require_value("stress.default_filter", &self.default_filter)?;
-        require_value("stress.test_threads", &self.test_threads)?;
+        validate_stress_threads(
+            "stress.test_threads",
+            &self.test_threads,
+            self.max_test_threads,
+        )?;
         validate_relative_path("stress.nextest_config", &self.nextest_config)?;
         validate_relative_path("stress.build_dir", &self.build_dir)?;
         validate_relative_path("stress.raw_output", &self.raw_output)?;
@@ -1028,17 +1034,6 @@ impl StressConfig {
         if self.default_count > self.max_count {
             bail!("stress.default_count cannot exceed stress.max_count");
         }
-        if self.test_threads != "num-cpus" {
-            let test_threads = self
-                .test_threads
-                .parse::<usize>()
-                .with_context(|| "stress.test_threads must be `num-cpus` or a positive integer")?;
-            ensure_positive("stress.test_threads", test_threads)?;
-            if test_threads > self.max_test_threads {
-                bail!("stress.test_threads cannot exceed stress.max_test_threads");
-            }
-        }
-
         self.validate_artifacts()?;
         self.validate_evidence()?;
         let mut removed = BTreeSet::new();
@@ -1050,7 +1045,7 @@ impl StressConfig {
         }
         for (name, mode) in &self.modes {
             require_value("stress mode name", name)?;
-            Self::validate_mode(name, mode)?;
+            Self::validate_mode(name, mode, self.max_test_threads)?;
         }
         require_value("stress.default_tier", &self.default_tier)?;
         if !self.tiers.contains_key(&self.default_tier) {
@@ -1184,9 +1179,7 @@ impl StressConfig {
         Ok(())
     }
 
-    /// A command lane selects nothing through the test runner, so toggles meant for that runner
-    /// would be read by no one; this is stated rather than silently ignored.
-    fn validate_mode(name: &str, mode: &StressModeConfig) -> Result<()> {
+    fn validate_mode(name: &str, mode: &StressModeConfig, max_test_threads: usize) -> Result<()> {
         for key in mode.set_env.keys() {
             require_env_key(&format!("stress.modes.{name}.set_env"), key)?;
             if mode.raw_path_env.contains_key(key) {
@@ -1206,12 +1199,36 @@ impl StressConfig {
             validate_relative_path(&format!("stress.modes.{name}.attempt_junit"), path)?;
         }
         if !mode.command.is_empty()
-            && (mode.flash.is_some() || mode.no_block.is_some() || mode.load.is_some())
+            && (mode.flash.is_some()
+                || mode.no_block.is_some()
+                || mode.load.is_some()
+                || mode.test_threads.is_some())
         {
-            bail!("stress mode `{name}` runs a command, so its toggles reach nothing");
+            bail!("stress mode `{name}` runs a command, so its runner settings reach nothing");
+        }
+        if let Some(threads) = &mode.test_threads {
+            validate_stress_threads(
+                &format!("stress.modes.{name}.test_threads"),
+                threads,
+                max_test_threads,
+            )?;
         }
         Ok(())
     }
+}
+
+fn validate_stress_threads(name: &str, value: &str, maximum: usize) -> Result<()> {
+    require_value(name, value)?;
+    if value != "num-cpus" {
+        let threads = value
+            .parse::<usize>()
+            .with_context(|| format!("{name} must be `num-cpus` or a positive integer"))?;
+        ensure_positive(name, threads)?;
+        if threads > maximum {
+            bail!("{name} cannot exceed stress.max_test_threads");
+        }
+    }
+    Ok(())
 }
 
 fn require_value(name: &str, value: &str) -> Result<()> {
