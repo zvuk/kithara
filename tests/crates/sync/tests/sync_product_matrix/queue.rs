@@ -602,6 +602,9 @@ fn reference(
                 .unwrap_or_else(|error| {
                     panic!("source {:?} session {}: {error}", voice.item, active.start)
                 });
+            let physical_inverse = interval
+                .physical_basis
+                .source_inverse(interval.physical_origin);
             // A frame's endpoint is the next frame's start, so each coordinate is
             // projected once and carried into the following frame.
             let mut carried = None;
@@ -611,17 +614,15 @@ fn reference(
                     let raw = span
                         .source_ratio_at(offset)
                         .expect("physical source coordinate");
-                    interval
-                        .physical_basis
-                        .output_ratio_at_source(interval.physical_origin, raw)
+                    physical_inverse
+                        .and_then(|inverse| inverse.output_at(raw))
                         .expect("actual decoded physical coordinate")
                 });
                 let next = span
                     .source_ratio_at(offset + 1)
                     .expect("physical source endpoint");
-                let endpoint = interval
-                    .physical_basis
-                    .output_ratio_at_source(interval.physical_origin, next)
+                let endpoint = physical_inverse
+                    .and_then(|inverse| inverse.output_at(next))
                     .expect("actual decoded physical endpoint");
                 carried = Some(endpoint);
                 let speed = super::control::physical_source_speed(physical, endpoint)
