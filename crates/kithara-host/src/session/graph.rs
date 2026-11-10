@@ -98,9 +98,13 @@ pub(crate) fn remove_deck<T, S>(
         .iter()
         .position(|deck| deck.id == id)
         .ok_or(SessionError::DeckNotFound(id))?;
-    let mut removed = state.deck_nodes.remove(index);
+    let removed = state.deck_nodes.remove(index);
     #[cfg(feature = "offline")]
-    removed.offline.take();
+    let removed = {
+        let mut removed = removed;
+        removed.offline.take();
+        removed
+    };
     state.retired_decks.push(RetiredDeck {
         deck: removed,
         staged: false,
